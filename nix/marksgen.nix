@@ -82,7 +82,7 @@ let
           # appending `> file` puts the redirection on a line of its own.
           cmd = ''
             gen() {
-              python3 ${./scripts}/gen-marksdb.py \
+              python3 ${./scripts/gen-marksdb.py} \
                 --marks ${marksJson} \
                 --like ${nerdFont} \
                 --reference ${reference} \

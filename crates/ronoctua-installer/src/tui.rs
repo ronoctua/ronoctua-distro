@@ -16,7 +16,7 @@
 //!
 //! # The invariants hold here too
 //!
-//! **8:** no label is a literal; everything comes from `ronoctua_i18n::key`. A
+//! **8:** no label is a literal; everything comes from `crate::key`. A
 //! screenshot of the installer with `[inst-disk]` written on it would be proof
 //! that the invariant had fallen — and that is exactly how it was.
 //!
@@ -37,6 +37,7 @@
 use std::io::Stdout;
 use std::time::Duration;
 
+use crate::key;
 use anyhow::{Context as _, Result};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -54,7 +55,7 @@ use ratatui::symbols::half_block;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Widget, Wrap};
 use ronoctua_belongings::prefs::Auth;
-use ronoctua_i18n::{Texts, key};
+use ronoctua_i18n::Texts;
 use ronoctua_tokens::{Color, color};
 
 use crate::access::{self, Probed, QUIET, Qr};

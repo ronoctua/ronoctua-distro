@@ -15,7 +15,7 @@
 //!
 //! Everything here is synchronous and answers one question about one file.
 //! The caller owns concurrency — the shell runs this on the long-lived named
-//! thread `ronoctua_shell::apps::painter` already uses, and for the same
+//! thread `ronoctua_shell_door::launch::painter` already uses, and for the same
 //! reason: `systemd-run --scope` taught this project once that waiting inside
 //! the loop that draws is how the footer stops responding.
 //!
@@ -77,7 +77,7 @@ pub mod zip;
 /// So this crate does not depend on `ronoctua-render`, which drags in the whole
 /// of wgpu. It is the same boundary — and the same crossing —
 /// `ronoctua_clipboard::image` and `ronoctua_notify::icon` already have, and
-/// the shell splices it in `ronoctua_shell::apps::for_renderer`, which is
+/// the shell splices it in `ronoctua_shell_door::launch::for_renderer`, which is
 /// field for field the same struct.
 ///
 /// Straight and not premultiplied is not a detail: `tiny-skia` delivers
@@ -213,7 +213,7 @@ impl Refusal {
 /// are not exclusive in the way one first assumes: a success has no reason and
 /// a refusal has no pixels, but the host caches this whole value either way.
 /// `rgba: None` is an ANSWER — "this file has no picture" — and not the
-/// absence of one, which is the rule `ronoctua_shell::surface`'s `icons` map
+/// absence of one, which is the rule `ronoctua_shell_footer::surface`'s `icons` map
 /// already learned: without telling the two apart, a file with no preview is
 /// asked for again on every frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,7 +328,7 @@ pub fn step(target: u32) -> u32 {
 ///
 /// # Why mtime and size, and never the dimensions
 ///
-/// `ronoctua_shell::surface` records the defect that taught this: the
+/// `ronoctua_shell_footer::surface` records the defect that taught this: the
 /// clipboard's preview key had to carry a VERSION rather than the dimensions,
 /// because two captures of the same monitor have the same size and are
 /// different images. A file has no version counter, so `mtime` and `bytes`
@@ -362,8 +362,8 @@ impl Stamp {
     /// The cache key, as the texture map wants it.
     ///
     /// The `prev:` prefix is what keeps it out of the way of the clipboard's
-    /// `clip:<version>` and the icons' bare `Icon=` name, which share the same
-    /// map.
+    /// `clipboard:<history>:<entry>` and the icons' bare `Icon=` name, which
+    /// share the same map.
     #[must_use]
     pub fn key(&self) -> String {
         format!(
@@ -378,15 +378,15 @@ impl Stamp {
 
 /// The text keys this crate names.
 ///
-/// # Why they are literals here and not `ronoctua_i18n::key::…`
+/// # Why they are literals here and not a generated `key` module
 ///
-/// Because the generated constants only exist for keys that are already in
-/// `assets/i18n/*.ftl`, and the wave that adds them there is not this one. The
-/// moment they land, every constant in this module becomes a re-export of the
-/// generated one and this block goes away.
+/// Because this crate does not speak: it NAMES the facts it finds, and the
+/// crates that say them own the sentences, in their own fragments
+/// (`crates/<crate>/i18n/`, the file manager's views mostly). A generated
+/// module here would make it the owner of words it never says.
 ///
-/// Until then the guarantee invariant 8 usually gets from the compiler has to
-/// come from a check: `inspect-keys-exist` reads this file's constants and
+/// So the guarantee invariant 8 usually gets from the compiler has to come
+/// from a check: `inspect-keys-exist` reads this file's constants and
 /// asserts every one of them is in both bundles. A key that is in one language
 /// only already takes the build down; a key that is in NEITHER is what this
 /// module can currently produce, and it is the one hole worth naming out loud.

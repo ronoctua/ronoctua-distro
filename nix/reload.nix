@@ -71,7 +71,9 @@ writeShellApplication {
     inotifywait -qmr -e close_write -e moved_to --format '%w%f' "$@" \
     | while read -r file; do
         case "$file" in
-          *.rs | *.wit) ;;
+          # A crate's texts (`crates/<crate>/i18n/<lang>.ftl`) too: the loop
+          # makes them again, and recompiles only when a key's name moved.
+          *.rs | *.wit | *.ftl) ;;
           # It ignores the rest silently: a misplaced `target/` or an editor's
           # `.swp` would fill the terminal with noise.
           *) continue ;;
@@ -113,7 +115,7 @@ writeShellApplication {
   '';
 
   meta = {
-    description = "Watches .rs/.wit and runs a command on every change";
+    description = "Watches .rs/.wit/.ftl and runs a command on every change";
     platforms = lib.platforms.linux;
   };
 }

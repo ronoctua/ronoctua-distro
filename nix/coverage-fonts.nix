@@ -44,7 +44,7 @@ stdenvNoCC.mkDerivation {
 
   buildPhase = ''
     runHook preBuild
-    python3 ${./scripts}/collect-coverage-fonts.py \
+    python3 ${./scripts/collect-coverage-fonts.py} \
       --chain-json ${chainJson} \
       --from ${noto-fonts}/share/fonts \
       --from ${noto-fonts-cjk-sans}/share/fonts \

@@ -72,3 +72,9 @@ ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ]
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_SYSTEMCTL", "RONOCTUA_TONGUES_RS"]
+run-env = ["RONOCTUA_FFMPEG", "RONOCTUA_FONT_REGULAR"]
+beside = ["ronoctua-player"]

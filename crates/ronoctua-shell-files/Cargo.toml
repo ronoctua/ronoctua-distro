@@ -1,0 +1,80 @@
+[package]
+name = "ronoctua-shell-files"
+description = "The file manager: its view, its window, its region of the footer, its archives and its camera."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE FILE MANAGER (the 2026-10-12 wave, lane R5h): the view both doors draw
+# (`files::View`), its window (`files_window`), its region of the footer
+# (`files_region`, a `region::Region` laid out in sections), the one handler
+# of what it asks in either door (`files_manager`), its archives and its
+# camera. A feature crate: the footer names none of it and the binary
+# registers it with one line, so a line of the manager recompiles the manager
+# and the binary — not the footer, not another feature. The git line it draws
+# is below it (`ronoctua-shell-git-line`), and the security centre's flow its
+# window runs on the vault's row is handed in by the binary (`vault::Flow`):
+# it stands on neither feature.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-report = { path = "../ronoctua-shell-report" }
+ronoctua-shell-keep = { path = "../ronoctua-shell-keep" }
+ronoctua-shell-work = { path = "../ronoctua-shell-work" }
+ronoctua-shell-inspect = { path = "../ronoctua-shell-inspect" }
+ronoctua-shell-git-line = { path = "../ronoctua-shell-git-line" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-apps = { path = "../ronoctua-apps" }
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+# THE DISK, for the manager: listings, trash, watches, the sidebar.
+ronoctua-files = { path = "../ronoctua-files" }
+# THE BORDER WITH WHAT IS INSIDE A FILE.
+ronoctua-inspect = { path = "../ronoctua-inspect" }
+# The SCHEMA of a file's tags: no engine (`the-footer-never-links-lofty`).
+ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
+ronoctua-disks = { path = "../ronoctua-disks" }
+ronoctua-archive = { path = "../ronoctua-archive" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+# The history of a repository, found by walking up for `.git`; never cloned.
+ronoctua-git = { path = "../ronoctua-git" }
+ronoctua-private = { path = "../ronoctua-private" }
+# Which drives the installer stick may be written to, without asking GitHub
+# (`net` is the shell binary's).
+ronoctua-stick = { path = "../ronoctua-stick" }
+# What a seal reports: the wire's kinds, WITHOUT `age` (`transfers-never-link-age`).
+ronoctua-pq = { path = "../ronoctua-pq", default-features = false }
+# The verbs of a root gesture, without the sudo door (`sudo-door-is-one`).
+ronoctua-security = { path = "../ronoctua-security" }
+
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
+rustix = { workspace = true, features = [ "process" ] }
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The foundation's guards hold in these tests too (their `test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+ronoctua-shell-inspect = { path = "../ronoctua-shell-inspect", features = [ "test-support" ] }
+# A place the globe is drawn at, in the panels' tests.
+ronoctua-atlas = { path = "../ronoctua-atlas" }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR", "RONOCTUA_PKEXEC", "RONOCTUA_RESCUE_SHELL", "RONOCTUA_XDG_OPEN"]
+run-env-absent = ["RONOCTUA_BUFFER_FORMAT"]

@@ -166,7 +166,6 @@
       glyphdb = pkgs.callPackage ./nix/glyphgen.nix {
         inherit languages;
         inherit fonts;
-        brainGlyphs = brainModules.glyphs;
         iconTokensFile = ./assets/tokens/icons.nix;
         typographyFile = ./assets/tokens/typography.nix;
         trayTableFile = ./assets/icons/tray-glyphs.nix;
@@ -237,15 +236,23 @@
               # browser build from it, and no cache has an unfree source.
               unfreePkgs.google-chrome.src
             ];
-          # The two dependency layers every edit of the workspace builds on,
-          # held while a checkout still asks for them.
-          layers = {
-            release = rust.cargoArtifacts;
-            loop = rust.loopArtifacts;
+          # AND THE COMPILED UNITS of this checkout's tree: the release
+          # graph's, and the loop's third-party ones the tests build on.
+          units = {
+            release = rust.release.keep;
+            loop = rust.loop.keep;
           };
+          keepUnits = pkgs.callPackage ./nix/keep-units.nix { };
           releaseDays = (import ./assets/cache.nix).oldCompilerDays;
         }
       }/bin/ronoctua-keep-sources";
+
+      # HOW MANY COMPILATIONS FIT AT ONCE, and the plan of the heavy units:
+      # one arithmetic for the batteries, `.#sized-build`, `.#quick` and a
+      # machine's own apply. See nix/build-sizing.nix.
+      buildSizing = pkgs.callPackage ./nix/build-sizing.nix { };
+      # `nix build`, sized: the heavy units it reaches one at a time.
+      sizedBuild = buildSizing.sizedBuild rust.heavyUnits;
 
       # The glance's places (`LEADER g`, `leader::GLANCE_KEYS`). One declaration,
       # and the build refuses a zone `zone1970.tab` does not know — see
@@ -305,8 +312,16 @@
       # list from here rather than naming a language of its own.
       languages = import ./assets/i18n/languages.nix;
 
-      i18nRs = pkgs.callPackage ./nix/i18n.nix {
-        i18nDir = ./assets/i18n;
+      # THE TEXTS: one merged, checked `<lang>.ftl` per language, made of
+      # every crate's own fragment (`crates/<crate>/i18n/`), the extension's
+      # and the brain modules', read by every program at RUN TIME
+      # (`RONOCTUA_TEXTS`) — and, as `texts.keys`/`texts.keysOf`, each crate's
+      # `key` module the Rust compiles against, written at evaluation from the
+      # key NAMES of its own fragment alone. A sentence edited rebuilds no
+      # crate. See nix/i18n.nix and nix/text-keys.nix.
+      texts = pkgs.callPackage ./nix/i18n.nix {
+        src = ./.;
+        extensionDir = ./extension/i18n;
         inherit languages;
         brainFragments = brainModules.i18nFragments;
       };
@@ -319,8 +334,19 @@
       # here may take `builtins.head themes` to mean "the default" again.
       themes = themeSpec.order;
       defaultTheme = themeSpec.default;
+      # THE TOKENS' NAMES, read at EVALUATION: the colour roles and the icon
+      # tokens, never a value. The Rust and the WIT are compiled against these
+      # alone, so a seed, a recipe's value or the colour generator can move and
+      # no crate and no buffer is rebuilt. See nix/token-names.nix.
+      tokenNames = import ./nix/token-names.nix {
+        inherit lib;
+        recipesFile = ./assets/tokens/colors.nix;
+        shapedFile = ./assets/tokens/shaped.nix;
+        iconTokensFile = ./assets/tokens/icons.nix;
+      };
       themed = pkgs.callPackage ./nix/themes.nix {
-        inherit themes;
+        inherit themes defaultTheme;
+        roleNames = tokenNames.roles;
         themesDir = ./assets/themes;
         recipesFile = ./assets/tokens/colors.nix;
       };
@@ -329,8 +355,8 @@
       cursors = pkgs.callPackage ./nix/cursors.nix { inherit themed defaultTheme; };
 
       tokensRs = pkgs.callPackage ./nix/tokens.nix {
-        inherit glyphdb themed defaultTheme;
-        brainGlyphs = brainModules.glyphs;
+        inherit glyphdb;
+        roleNames = tokenNames.roles;
         trayTableFile = ./assets/icons/tray-glyphs.nix;
         categoryTableFile = ./assets/icons/category-glyphs.nix;
         typographyFile = ./assets/tokens/typography.nix;
@@ -342,7 +368,6 @@
       # reads the table cannot invent a field that is not in it.
       notificationsRs = pkgs.callPackage ./nix/notifications.nix {
         inherit glyphdb;
-        brainNotifications = brainModules.notifications;
         notificationsFile = ./assets/notifications.nix;
         # AND WHAT SOMEBODY SHARED. The shell writes this file — one filter at
         # a time, by name, after saying on screen that it becomes public — and
@@ -442,7 +467,8 @@
         scrollSrc = inputs.scroll-src;
       };
 
-      # The Rust workspace, built by crane (section 7.12).
+      # The toolchain the Rust workspace is built with (section 7.12): every
+      # unit of `nix/rust.nix`, the devshell and the buffers.
       rustToolchain = pkgs.rust-bin.stable.latest.default.override {
         targets = [ "wasm32-wasip2" ];
       };
@@ -455,7 +481,7 @@
 
       # The WIT directory with the generated token enum inside (section 7.6).
       wit = pkgs.callPackage ./nix/wit.nix {
-        inherit tokensRs;
+        tokensWit = tokenNames.wit;
         staticWit = ./crates/ronoctua-protocol/wit;
       };
 
@@ -494,27 +520,50 @@
       # deliberately not installed.
       potProvider = pkgs.callPackage ./nix/pot-provider.nix { };
 
-      # THE BROWSER EXTENSION, with its texts and colours GENERATED from the
-      # same `assets/i18n` and `assets/tokens` everything else reads. Invariants
-      # 8 and 9 do not stop at the browser's edge.
+      # THE BROWSER EXTENSION, with its texts (its own fragment,
+      # `extension/i18n/`, which the texts merge too) and colours GENERATED
+      # from what everything else reads. Invariants 8 and 9 do not stop at the
+      # browser's edge.
       extension = pkgs.callPackage ./nix/extension.nix {
         # The DEFAULT theme's palette, as a flat `key -> 0xRRGGBBAA` map. The
         # extension cannot see the person's choice, so it wears the default.
         colorsJson = "${themed}/${defaultTheme}.json";
         spaceFile = ./assets/tokens/space.nix;
-        i18nDir = ./assets/i18n;
+        i18nDir = ./extension/i18n;
         inherit languages;
         source = ./extension;
       };
 
       # THE BRAIN'S MODULES, read out of their folders ONCE: the Rust registry
       # below, the checks, the batteries' split, and — handed in by name —
-      # the texts (`i18nRs`), the glyphs (`glyphdb`, `tokensRs`) and the
-      # notifications (`notificationsRs`). Only `nix/modules/brain.nix`
-      # imports the loader again, for `imports`. See `nix/brain-modules.nix`.
+      # the texts (`texts`) and the brain's catalogue (`brainCatalogue`). Only
+      # `nix/modules/brain.nix` imports the loader again, for `imports`. See
+      # `nix/brain-modules.nix`.
       brainModules = import ./nix/brain-modules.nix { inherit lib languages; };
+      # ONE PART PER CRATE OF THE BRAIN: the distro's manifests for the library
+      # the footer links (`ronoctua-brain`), and the registry — every module,
+      # the person's included on a machine — for the daemon
+      # (`ronoctua-brain-daemon`). Two derivations, so a person's module moves
+      # only the second. See `nix/brain-modules-rs.nix`.
+      brainManifestsRs = pkgs.callPackage ./nix/brain-modules-rs.nix {
+        inherit brainModules rustToolchain languages;
+        part = "library";
+      };
       brainModulesRs = pkgs.callPackage ./nix/brain-modules-rs.nix {
         inherit brainModules rustToolchain languages;
+        part = "daemon";
+      };
+      # AND WHAT THE FOOTER DRAWS OF THEM, as data it reads at run time
+      # (`RONOCTUA_BRAIN_CATALOGUE`): every module's marks and their measured
+      # glyphs, notices, actions, events and notifications, reasons and keys.
+      # No crate is compiled against it, so a person's module moves this, the
+      # texts and the daemon, and nothing that draws. See
+      # `nix/brain-catalogue.nix`.
+      brainCatalogue = pkgs.callPackage ./nix/brain-catalogue.nix {
+        inherit brainModules glyphdb;
+        notificationsFile = ./assets/notifications.nix;
+        sharedFile = ./assets/shared/notifications.json;
+        keyNames = texts.allNames;
       };
 
       # THE OFFLINE ENGLISH DICTIONARY: the Open English WordNet as two sorted
@@ -522,12 +571,14 @@
       # `RONOCTUA_WORDS`, which `nix/modules/words.nix` sets on the full profile.
       wordsData = pkgs.callPackage ./nix/wordsgen.nix { };
       # THE ICON TABLES IN ONE DIRECTORY, for `ronoctua-iconset` — read at RUN
-      # time (`RONOCTUA_ICONSET`, `atRunTime` in `nix/rust.nix`). See
-      # `nix/iconset.nix`.
+      # time (`RONOCTUA_ICONSET`, `atRunTime` in `nix/rust.nix`), the glyph
+      # index naming the brain modules' glyph tokens too (`brainGlyphs`, the
+      # catalogue's measured glyphs). See `nix/iconset.nix`.
       iconset = pkgs.callPackage ./nix/iconset.nix {
         glyphdb = glyphdb.db;
         lucidedb = lucidedb.db;
         unicodedb = unicodedb.db;
+        brainGlyphs = brainCatalogue.measured;
       };
       # THE CALCULATOR'S UNITS, generated from `assets/units.nix`: the Rust
       # table `ronoctua-calc` includes, and the refusal of a word that names two
@@ -590,13 +641,15 @@
       # ── anchor: L04 ──
       # ── anchor: L11 ──
       # THE PERSON'S BRAIN MODULES (`my-…`), compiled into their machine: the
-      # chain above — loader, texts, glyphs, WIT, buffers, notifications,
-      # registry, workspace — built again with the person's folder beside the
-      # distro's. A function of that folder (`dir`, the machine directory's
-      # `person/brain/`) and of the folders to read (`only`, the included
-      # ones), for `lib.machine`, whose modules are
-      # `(withPersonModules { dir; only; }).machineModules <approved ids>` and
-      # whose report lists `.refused`. See `nix/person-brain.nix`.
+      # daemon's registry and the data the footer reads — the brain's
+      # catalogue, the texts and the glyph browser's index — built again with
+      # the person's folder beside the distro's, and the workspace given them;
+      # every crate that draws or speaks stays the distro's. A function of
+      # that folder (`dir`, the machine directory's `person/brain/`) and of
+      # the folders to read (`only`, the included ones), for `lib.machine`,
+      # whose modules are `(withPersonModules { dir; only; }).machineModules
+      # <approved ids>` and whose report lists `.refused`. See
+      # `nix/person-brain.nix`.
       withPersonModules =
         {
           dir,
@@ -609,13 +662,11 @@
             dir
             only
             distroModulesFor
-            glyphdb
-            tokensRs
-            wit
-            buffers
-            i18nRs
-            notificationsRs
+            texts
             brainModulesRs
+            brainManifestsRs
+            brainCatalogue
+            iconset
             rust
             ;
         };
@@ -650,7 +701,12 @@
           rustToolchain
           fonts
           tokensRs
-          i18nRs
+          # THE PALETTES, read at run time (`palettes.bin`, `RONOCTUA_THEMES`)
+          # by every binary that paints — the wrappers carry them.
+          themed
+          # THE TEXTS, read at run time (`RONOCTUA_TEXTS`) by every binary
+          # that speaks; only their key NAMES (`texts.keys`) are compiled.
+          texts
           mimeDb
           notificationsRs
           bluetoothProfilesRs
@@ -693,7 +749,10 @@
           ;
         primaryFontFile = "${primaryFont}/NoctuaIosevkaNerdFontMono-Regular.ttf";
 
-        inherit brainModulesRs;
+        inherit brainModulesRs brainManifestsRs;
+        # WHAT THE FOOTER DRAWS OF THE BRAIN'S MODULES, read at run time
+        # (`RONOCTUA_BRAIN_CATALOGUE`, keyed like the palettes and the texts).
+        inherit brainCatalogue;
 
         inherit wordsData iconset unitsRs;
 
@@ -711,6 +770,14 @@
       # Hot reload's watcher. A package of its own so it can be TESTED —
       # see the header of nix/reload.nix.
       reloadApp = pkgs.callPackage ./nix/reload.nix { };
+      # A checkout's text key files for `cargo`, and its texts — the devshell's
+      # hook and the loop's watcher. See nix/keys-checkout.nix.
+      keysCheckout = pkgs.callPackage ./nix/keys-checkout.nix {
+        inherit languages;
+        # THE MODULES' TEXT NAMESPACES, for the texts made from the tree (each
+        # module's own folder there), as the `texts` derivation hands them.
+        textModules = map (f: { inherit (f) id prefixes; }) brainModules.i18nFragments;
+      };
 
       # One footer per session, guaranteed. A package of its own for the same reason as
       # `reloadApp`: it was a function inside `dev.nix` and it did not work — see the
@@ -730,7 +797,7 @@
       # THE SOFTWARE CENTRE'S SEARCH INDEX, evaluated from the system's own
       # nixpkgs — so what the search shows is what `nix profile add nixpkgs#…`
       # installs. RUN-TIME data, handed to the modules and never to the
-      # compilation: a nixpkgs bump must not rebuild the workspace (the
+      # compilation: a nixpkgs bump must not rebuild a unit for it (the
       # `atRunTime` side of `nix/rust.nix`). See `nix/software-index.nix`.
       softwareIndex = import ./nix/software-index.nix {
         inherit pkgs;
@@ -810,6 +877,9 @@
           ronoctua-brain = rust.brain;
           ronoctua-transfers = rust.transfers;
           ronoctua-player = rust.player;
+          # The software CLI the stage's footer is handed: a program of its
+          # own, not a neighbour in the shell's bundle.
+          ronoctua-software = rust.software;
           inherit softwareTools;
         }).driver;
       shotDriver = shotStage false;
@@ -868,6 +938,7 @@
           singleFooter
           rustToolchain
           cargoDirs
+          keysCheckout
           ;
         # What the player runs; the loop's player is started from beside the
         # footer and has no unit to take them from.
@@ -890,6 +961,9 @@
         # exists to measure, and measuring a build nobody installs would answer
         # about the wrong binary.
         ronoctua-shell = rust.loopShell;
+        # The loop's own software CLI (`RONOCTUA_SOFTWARE`): a program of its
+        # own at the loop's profile, never a neighbour in the shell's bundle.
+        ronoctua-software = rust.loop.bins.ronoctua-software;
         # THE WHOLE TABLE THE COMPILATION GETS, and not six values copied out of
         # it: the loop compiles the binary itself, so what it does not export the
         # binary does not have. See `nix/dev.nix`'s `bakedExports`.
@@ -911,6 +985,16 @@
         inherit scroll;
         ronoctua-shell = rust.shell;
         inherit graphicsHost;
+      };
+
+      # `.#profile-bench`: the release profile's variants and their benches
+      # (`nix/profile-bench.nix`). Named only by the app at run time.
+      profileBench = import ./nix/profile-bench.nix {
+        inherit lib pkgs system;
+        inherit (rust) profileVariants releaseHeavyOf;
+        inherit scroll graphicsHost;
+        themes = rust.keyed.RONOCTUA_THEMES;
+        component = "${buffers.brain}/lib/ronoctua_buffer_brain.wasm";
       };
 
       # ---------------------------------------------------------------
@@ -994,19 +1078,19 @@
       gateApp = pkgs.callPackage ./nix/gate.nix {
         inherit system keepSources;
         prefetch = "${prefetchApp}/bin/ronoctua-prefetch";
+        sizing = buildSizing;
         inherit heavy;
+        units = rust.unitIndex;
         targets = builtins.attrNames self.checks.${system};
         alone = slowNames;
       };
 
-      # THE DERIVATIONS THAT COMPILE THE WHOLE WORKSPACE, which both batteries
-      # build one at a time before anything else. The `loop` one is reached
-      # through `.#dev` by three checks.
-      heavy = {
-        inherit (self.checks.${system}) rust-tests rust-clippy;
-        ronoctua-shell = rust.shell;
-        ronoctua-loop = rust.loopWorkspace;
-      };
+      # THE UNITS NO DIVISION DESCRIBES, which both batteries build one at a
+      # time, each after what it is built from (`nix/gate.nix`): their own
+      # compiler was measured past the slot every other compilation is sized
+      # by (`rust.heavyUnits`, `nix/build-sizing.nix`). The bundles are not
+      # among them any more: they copy programs the units already built.
+      heavy = rust.heavyUnits;
 
       # THE MIDDLE BATTERY, derived and not hand-written.
       #
@@ -1023,7 +1107,9 @@
         inherit system keepSources;
         name = "ronoctua-most";
         what = "targets";
+        sizing = buildSizing;
         inherit heavy;
+        units = rust.unitIndex;
         targets = lib.subtractLists slowNames (builtins.attrNames self.checks.${system});
         left = slowNames;
       };
@@ -1199,7 +1285,15 @@
         # The machine's life — the boot trial, the apply the rescue and the
         # software centre start, the migration of the old layout — runs the
         # EXTRACTED `ronoctua-machine`, set next to the module that wraps it.
-        { ronoctua.machine.tool = rust.machine; }
+        {
+          ronoctua.machine = {
+            tool = rust.machine;
+            # HOW ITS SYSTEM IS BUILT: the release graph's heavy units alone,
+            # and the release units kept after a build that worked.
+            heavyUnits = lib.filterAttrs (_: u: u.passthru.flavour == "release") rust.heavyUnits;
+            keptUnits = rust.release.keep.paths;
+          };
+        }
         # ── anchor: L06 ──
         # The person's declarations, copied into the machine directory by a
         # narrow root unit, and a brain module's root part approved through
@@ -1289,10 +1383,17 @@
               # The shell's binary: the compositor module generates the chord
               # binds from its command table.
               #
-              # `rust.shell` and not `rust.workspace`: it is the wrapped one that
+              # `rust.shell`, the bundle under the wrapper: it is the one that
               # knows where the five components are, and the unit's `ExecStart`
               # comes from here. See `nix/rust.nix`.
               shell = rust.shell;
+              # The rescue console on its VT, and NetworkManager's secret agent
+              # and the boot's Wi-Fi console: programs of their own, never
+              # `${shell}/bin/…` — that put the footer's closure into three
+              # units that draw no window (`shell-bundle-is-only-the-shell`).
+              rescue = rust.rescue;
+              networkConsole = rust.networkConsole;
+              networkAgent = rust.networkAgent;
               # The file manager's privileged helper, EXTRACTED from the
               # workspace. The unit that runs it runs as root, and handing it
               # the whole workspace would put wgpu and the wasm runtime there.
@@ -1447,7 +1548,9 @@
         buffer-transfers = buffers.transfers;
         buffer-format = buffers.format;
         buffer-brain = buffers.brain;
-        i18n-rs = i18nRs;
+        # The texts every program reads at run time, buildable on their own:
+        # a sentence edited rebuilds this and the wrappers, and no crate.
+        inherit texts;
 
         # THE HIGHLIGHTER'S TABLE, and its negative fixture: `syntax-negative`
         # is a table in which one language steals another's type and another
@@ -1465,8 +1568,12 @@
         # The shell: the two-line footer.
         ronoctua-shell = rust.shell;
 
-        # The brain's modules as Rust — one manifest per folder and the registry.
+        # The brain's modules as Rust: the registry the daemon compiles, and the
+        # distro's manifests the library (and so the footer) compiles.
         brain-modules-rs = brainModulesRs;
+        brain-manifests-rs = brainManifestsRs;
+        # And what the footer reads of them at run time.
+        brain-catalogue = brainCatalogue;
 
         # The offline English dictionary, buildable on its own: two sorted TSV
         # files out of the Open English WordNet (`nix/wordsgen.nix`).
@@ -1569,10 +1676,10 @@
                   themed
                   defaultTheme
                   ;
-                # `rust.installer`, and NOT `rust.workspace`: the workspace
-                # derivation holds every binary, and a derivation references
-                # what its bytes mention — `ronoctua-shell` was putting Zig,
-                # clang, LLVM and the icon superpack on an ISO with no desktop.
+                # `rust.installer`, the installer's own unit: a derivation
+                # references what its bytes mention, and crane's workspace,
+                # which held every binary, put Zig, clang, LLVM and the icon
+                # superpack on an ISO with no desktop through `ronoctua-shell`.
                 installerCrate = rust.installer;
                 # THE PERSON'S TWO PROGRAMS the installer runs (`nix/installer/iso.nix`):
                 # the belongings' CLI and root's applier of the person's
@@ -1608,17 +1715,24 @@
                   # machine, which is the afternoon this whole list exists to
                   # prevent. `iso-carries-the-seed` is what said so, by name.
                   scroll
-                  # The workspace, and with it — by baked store path —
-                  # `libghostty-vt`. 1,97 GiB of closure that no cache has.
-                  #
-                  # `rust.shell` and NOT `rust.workspace`: the five wasm buffers
-                  # used to arrive by carriage, exactly as the superpack below
-                  # did, and cutting that reference is what stopped a buffer
-                  # edit from recompiling everything (`nix/rust.nix`). What
-                  # carries them now is the wrapper — and if it ever stops,
-                  # `iso-carries-the-seed` names the five one by one.
-                  rust.shell
-                  # NOT in the workspace's closure: the binary embeds only the
+                ]
+                # OUR PROGRAMS, `rust.shipped`: the shell's bundle and every
+                # `ship` program in the form a machine runs it
+                # (`nix/rust/outputs.nix`). No test driver and no benchmark:
+                # crane's workspace brought all fifty programs along with the
+                # shell — and, through the terminal differential (a driver),
+                # `libghostty-vt` and its toolchain, which nothing a machine
+                # runs links.
+                #
+                # The wrapper and NOT the bare program: the five wasm buffers
+                # used to arrive by carriage, exactly as the superpack below
+                # did, and cutting that reference is what stopped a buffer
+                # edit from recompiling everything (`nix/rust.nix`). What
+                # carries them now is the wrapper — and if it ever stops,
+                # `iso-carries-the-seed` names the five one by one.
+                ++ rust.shipped
+                ++ [
+                  # NOT in the shell's closure: the binary embeds only the
                   # primary face. This is the family the system installs, it
                   # comes from a GitHub Release rather than from a cache, and
                   # nothing else in the closure fails the way a release asset
@@ -1711,6 +1825,9 @@
           defaultTheme
           cursors
           ;
+        # THE TOKENS' NAMES and the two generators no package exposes, for
+        # `tests/theme-data.nix`.
+        inherit tokenNames primaryFont atlasData;
         inherit
           pkgs
           lib
@@ -1750,9 +1867,11 @@
           potProvider
           rustToolchain
 
-          i18nRs
+          texts
           brainModules
           brainModulesRs
+          brainManifestsRs
+          brainCatalogue
 
           # ── anchor: L01 ──
           # ── anchor: L02 ──
@@ -1901,19 +2020,21 @@
           # Written here it would be the only copy, and nothing could check it.
           # Coming from a file that `quick-names-exist` also reads, a renamed
           # check is reported instead of dropping out of the loop in silence.
-          nix build --no-link --keep-going -L \
+          # SIZED (`nix/build-sizing.nix`): the shell's test harness and its
+          # clippy, which `rust-tests` and `rust-clippy` reach, one at a time.
+          ${sizedBuild}/bin/ronoctua-sized-build --no-link --keep-going -L \
             ${
               lib.concatMapStringsSep " \\\n            " (n: ".#checks.${system}.${n}") (
                 import ./tests/quick.nix
               )
             } \
             "$@"
-          # The loop's dependency layer exists now (the tests and clippy build
-          # on it), so it is held while it is the current one.
+          # The units the tests and clippy were just built from exist now, so
+          # they are held while they are this checkout's current ones.
           ${keepSources}
           echo
           echo "OK — and this is a SUBSET, not a category."
-          echo "     They are ten chosen for the editing loop. It is not complete and"
+          echo "     They are the ones chosen for the editing loop. It is not complete and"
           echo "     does not aim to be: there are more than a hundred checks, and most of them"
           echo "     also bring up no VM."
           echo
@@ -2443,36 +2564,29 @@
         '';
 
         # Measures performance on real hardware (section 9.3 of the plan: section 5.2's
-        # targets are NEVER measured under lavapipe).
-        bench = mkScriptApp "ronoctua-bench" "measures section 5.2's targets on real hardware" ''
-          echo "ronoctua-bench — section 5.2"
-          echo
-          echo "== the frame's CPU work =="
-          ${rust.workspace}/bin/ronoctua-bench-layout "''${1:-20000}"
-          echo
-          echo "== text shaping =="
-          ${rust.workspace}/bin/ronoctua-bench-shaping
-          echo
-          echo "== component instantiation =="
-          # THE BRAIN'S BUFFER, since the icon browsers left for the native
-          # app: the largest component the session still instantiates.
-          ${rust.workspace}/bin/ronoctua-bench-instance \
-            ${buffers.brain}/lib/ronoctua_buffer_brain.wasm 200
-          echo
-          echo "== the super index: a million names, keystroke by keystroke =="
-          ${rust.workspace}/bin/ronoctua-bench-index
-          echo
-          echo "== frame targets, on real hardware =="
-          # Section 9.3 demands they be measured here and never under lavapipe. It needs a
-          # graphics session; without one, the command says what is missing instead of
-          # inventing a number.
-          if [ -n "''${WAYLAND_DISPLAY:-}''${DISPLAY:-}" ]; then
-            ${benchFrames}/bin/ronoctua-bench-frames "''${2:-6}" "''${3:-15}"
-          else
-            echo "No graphical session: the frame targets were not measured."
-            echo "Run this command from inside a Wayland or X session."
-          fi
-        '';
+        # targets are NEVER measured under lavapipe). The text is
+        # `nix/bench.nix`, which `.#profile-bench` runs over each profile.
+        bench = mkScriptApp "ronoctua-bench" "measures section 5.2's targets on real hardware" (
+          import ./nix/bench.nix {
+            benches = rust.benches;
+            frames = benchFrames;
+            themes = rust.keyed.RONOCTUA_THEMES;
+            component = "${buffers.brain}/lib/ronoctua_buffer_brain.wasm";
+          }
+        );
+
+        # THE RELEASE PROFILE, CHOSEN BY MEASUREMENT (nix-design §3): each
+        # variant of `nix/rust/profiles.nix` built, `.#bench` run over each,
+        # rounds interleaved, and the rule applied. Builds by name at run
+        # time, so evaluating this app builds nothing.
+        profile-bench = {
+          type = "app";
+          program = lib.getExe profileBench.app;
+          meta = {
+            description = "measures the release profile's variants with .#bench and names the one the rule picks";
+            platforms = [ system ];
+          };
+        };
 
         # A BUFFER BECOMES A PNG, WITH NO COMPOSITOR AND NO VM.
         #
@@ -2491,6 +2605,11 @@
         # margins, the cell, the atlas and the font are the production ones, by
         # way of the `paint` module.
         #
+        # THE LOOP'S PROGRAMS, not the release ones: the profile changes how
+        # fast a picture arrives, never its pixels, and an edit of a view is a
+        # loop link of seconds where the release one is a thin-LTO link of
+        # minutes — the same reason `.#dev` runs them.
+        #
         # The graphics environment is the checks' own: lavapipe, Mesa's software
         # Vulkan rasteriser. That is not a performance choice — it is what makes
         # the command answer the same on this machine, on one with no GPU and
@@ -2508,10 +2627,23 @@
           # THE COVERAGE FACES, because this is the tool the working rules
           # point at before the word "ready" — and a screenshot taken without
           # them would show tofu where the installed system shows Japanese.
-          # It is set here and not inherited: `rust.workspace` is deliberately
-          # unwrapped (the wrapper is `rust.shell`, and it wraps the footer
-          # only), so this launcher is one of the nine that has to say it.
+          # It is set here and not inherited: the loop's programs below are
+          # deliberately unwrapped (the wrapper is `rust.shell`'s, and it wraps
+          # the footer only), so this launcher is one of the nine that has to
+          # say it.
           export RONOCTUA_COVERAGE_FONTS=${rust.atRunTime.RONOCTUA_COVERAGE_FONTS}
+          # THE PALETTES, which every picture is painted in: data read at run
+          # time, and SET rather than defaulted, for the wrappers' reason — the
+          # session may hold another build's (`rust.keyed`), and a palette is
+          # refused by a binary it was not written for.
+          export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+          # AND THE TEXTS, for the same reason: a picture is drawn in words read
+          # at run time, and a binary refuses (exit 78) texts that lack a key it
+          # was compiled with.
+          export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+          # AND THE BRAIN'S CATALOGUE, for the same reason: a door draws the
+          # modules' marks and teaches their actions from data read at run time.
+          export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
           # A NATIVE DOOR — the player's window, its column at every size —
           # is not a buffer: `render-png` cannot reach it, so `--door`
           # anywhere in the words is the shell's own camera
@@ -2521,10 +2653,10 @@
             if [ "$word" = "--door" ]; then
               export RONOCTUA_ATLAS=${rust.atRunTime.RONOCTUA_ATLAS}
               export RONOCTUA_ICONSET=${rust.atRunTime.RONOCTUA_ICONSET}
-              exec ${rust.workspace}/bin/ronoctua-shell photograph "$@"
+              exec ${rust.loop.bins.ronoctua-shell}/bin/ronoctua-shell photograph "$@"
             fi
           done
-          exec ${rust.workspace}/bin/ronoctua-render-png "$@"
+          exec ${rust.loop.bins.ronoctua-render-png}/bin/ronoctua-render-png "$@"
         '';
 
         # ── anchor: L04 ──
@@ -2590,6 +2722,162 @@
             platforms = [ system ];
           };
         };
+
+        # THE BUILD PLAN, REGENERATED: cargo's unit graph of this tree
+        # (`nix/rust/planner.nix`), normalised, copied into
+        # `nix/rust/plan.json`. Cargo never runs in the tree — the planner is a
+        # derivation over the manifests and the lock — and the units refuse a
+        # plan made from other manifests, so after a change to a dependency,
+        # a feature, a profile or the set of targets this is the next command.
+        rust-plan = {
+          type = "app";
+          program = lib.getExe (
+            pkgs.writeShellApplication {
+              name = "ronoctua-rust-plan";
+              runtimeInputs = [
+                pkgs.git
+                pkgs.coreutils
+                pkgs.diffutils
+              ];
+              text = ''
+                root=$(git rev-parse --show-toplevel)
+                plan="$root/nix/rust/plan.json"
+                if [ -f "$plan" ] && cmp -s ${rust.planner.plan}/plan.json "$plan"; then
+                  echo "nix/rust/plan.json: already the plan of this tree"
+                  exit 0
+                fi
+                install -D -m 0644 ${rust.planner.plan}/plan.json "$plan"
+                echo "nix/rust/plan.json: written ($(wc -c < "$plan") bytes)"
+              '';
+            }
+          );
+          meta = {
+            description = "regenerates nix/rust/plan.json, the build plan cargo makes of this tree";
+            platforms = [ system ];
+          };
+        };
+
+        # THE TRANSLATOR'S HELP, over the checkout it runs in: `missing
+        # <language>` lists, fragment by fragment, every key the base language
+        # has and that one lacks, with the sentence to translate (and every
+        # orphan), and `where <key>` names the fragment that holds a key. The
+        # sentences live with the crates that say them (`crates/<crate>/i18n/`),
+        # some sixty files; the build refuses an incomplete language, and this
+        # says what to write. See `nix/scripts/texts.py`.
+        texts = {
+          type = "app";
+          program = lib.getExe (
+            pkgs.writeShellApplication {
+              name = "ronoctua-texts";
+              runtimeInputs = [ pkgs.python3 ];
+              text = ''
+                exec python3 ${./nix/scripts/texts.py} --languages ${lib.concatStringsSep "," languages} "$@"
+              '';
+            }
+          );
+          meta = {
+            description = "what a language lacks in the texts' fragments, and where a key lives";
+            platforms = [ system ];
+          };
+        };
+
+        # WHAT AN EDIT COSTS THE RUST BUILD, before anything is built: the
+        # units, layers and aggregates that move (`legacyPackages.<system>.
+        # rustUnits`, two evaluations compared), the programs relinked, the
+        # test runs run again, and the time each moved entry took the last
+        # time it was built — summed, and along the critical path. The working
+        # tree against HEAD, `--against <rev>`, or `-- <file>…` for a one-byte
+        # edit of each file. See `nix/scripts/rebuild-cost.py`.
+        rebuild-cost = {
+          type = "app";
+          program = lib.getExe (
+            pkgs.writeShellApplication {
+              name = "ronoctua-rebuild-cost";
+              runtimeInputs = [
+                pkgs.git
+                pkgs.python3
+                pkgs.nix
+              ];
+              text = ''
+                exec python3 ${./nix/scripts/rebuild-cost.py} --system ${system} "$@"
+              '';
+            }
+          );
+          meta = {
+            description = "says what an edit rebuilds in the Rust build and what it costs, before building";
+            platforms = [ system ];
+          };
+        };
+
+        # `nix build`, SIZED TO THE MACHINE (`nix/build-sizing.nix`): what
+        # it is given evaluated once, the heavy units it reaches built alone
+        # after what each is built from, everything else as many at once as
+        # the memory holds. The command for a build of the unit graph by hand.
+        sized-build = {
+          type = "app";
+          program = "${sizedBuild}/bin/ronoctua-sized-build";
+          meta = {
+            description = "builds what it is given sized to the machine: the heavy units alone, the rest as many as fit";
+            platforms = [ system ];
+          };
+        };
+
+        # WHICH UNITS PEAK PAST THE SLOT: every unit's `metrics/peak-kib` read
+        # from the store, the heaviest listed, and a unit past the slot that
+        # `rust.heavyUnits` does not name is an error — the list the
+        # batteries and a machine's apply size by has fallen behind the
+        # build. See `nix/scripts/rust-peaks.py`.
+        rust-peaks = {
+          type = "app";
+          program =
+            let
+              plain = builtins.unsafeDiscardStringContext;
+              index = rust.unitIndex;
+              idOf = lib.listToAttrs (lib.mapAttrsToList (id: u: lib.nameValuePair u.drv id) index);
+              facts = pkgs.writeText "ronoctua-rust-peaks.json" (
+                builtins.toJSON {
+                  units = lib.mapAttrs (_: u: { inherit (u) kind flavour metrics; }) index;
+                  heavy = lib.mapAttrs (
+                    name: u: idOf.${plain u.drvPath} or (throw "rust.heavyUnits.${name} is no unit of rust.unitIndex")
+                  ) rust.heavyUnits;
+                  peakKiB = buildSizing.numbers.peakMiB * 1024;
+                  shellKiB = buildSizing.numbers.shellMiB * 1024;
+                  besideKiB = buildSizing.numbers.besideMiB * 1024;
+                }
+              );
+            in
+            lib.getExe (
+              pkgs.writeShellApplication {
+                name = "ronoctua-rust-peaks";
+                runtimeInputs = [ pkgs.python3 ];
+                text = ''
+                  exec python3 ${./nix/scripts/rust-peaks.py} ${facts} "$@"
+                '';
+              }
+            );
+          meta = {
+            description = "lists the units that peaked heaviest and refuses one past the slot that is not named heavy";
+            platforms = [ system ];
+          };
+        };
+      };
+
+      # THE RUST BUILD, unit by unit, for whoever builds or measures one:
+      # `nix build .#legacyPackages.<system>.rust.release.bins.ronoctua-zip`.
+      # Not under `packages`: these are hundreds of derivations, most of them
+      # a library nobody installs.
+      legacyPackages.${system} = {
+        inherit rust;
+        # AND AS DATA (`nix/rust/units.nix`, `index`): every unit, layer and
+        # aggregate with its derivation, its measurement and what it is
+        # built from — and the same with files edited by one byte. What
+        # `nix run .#rebuild-cost` compares.
+        rustUnits = rust.unitIndex;
+        rustUnitsWith =
+          files: (rust.override { crateSourceOverrides = rust.oneByteEdits files; }).unitIndex;
+        # Each release profile variant, with `.#bench` over its programs:
+        # what `nix run .#profile-bench` builds by name.
+        profileBench = profileBench.variants;
       };
 
       # =================================================================
@@ -2601,7 +2889,7 @@
         # THE WHOLE TABLE, and not values copied out of it — see the comment on
         # `env` over there.
         inherit (rust) atRunTime generated;
-        inherit iconSuperpack cargoDirs;
+        inherit iconSuperpack cargoDirs keysCheckout;
       };
 
       # THE FORMATTER FORMATS THE TREE — Nix and Rust, in one command.

@@ -1,0 +1,41 @@
+[package]
+name = "ronoctua-shell-git-line"
+description = "The git line: a repository's state read off the loop, watched by its git files, and drawn as one row of fields."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE GIT LINE, UNDER BOTH THAT SHOW IT (the 2026-10-12 wave): the file
+# manager draws it under its path and keeps it read, and the history of a
+# repository (`C-h`) reads its words — the short id, the age, why git said
+# nothing — and watches the same git files. Two features use it, so it came
+# down from either of them: a line of the manager or of the history
+# recompiles the other one not at all, and a line of this one recompiles
+# both and nothing else of the shell.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-report = { path = "../ronoctua-shell-report" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-files = { path = "../ronoctua-files" }
+# The repository's status and its last commit, read; never cloned (`clone`
+# is the shell's).
+ronoctua-git = { path = "../ronoctua-git" }
+
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The kit's guards hold in these tests too (its `test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

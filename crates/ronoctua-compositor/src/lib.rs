@@ -153,7 +153,7 @@ pub struct Trails {
 /// compositor's reply, and "which" would be a walk of the whole tree on every
 /// window that opens.
 ///
-/// A right column belongs to ONE workspace (`crate::column` in the shell),
+/// A right column belongs to ONE workspace (`ronoctua_shell_door::column`),
 /// and is shown on whichever screen shows that workspace: so a workspace also
 /// says whether a screen shows it and which one.
 #[derive(Debug, Clone, PartialEq, Eq)]

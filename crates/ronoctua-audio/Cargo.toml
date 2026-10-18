@@ -27,3 +27,7 @@ ronoctua-store = { path = "../ronoctua-store" }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_AUDIO_NAMES_RS", "RONOCTUA_PW_CAT", "RONOCTUA_PW_DUMP", "RONOCTUA_SETPRIV", "RONOCTUA_WPCTL"]

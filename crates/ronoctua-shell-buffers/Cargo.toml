@@ -1,0 +1,54 @@
+[package]
+name = "ronoctua-shell-buffers"
+description = "The host of the WASM buffers: a native buffer in a window of its own, its display list drawn, its keys and pointer handed in, the machine's facts it is given."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE HOST OF THE BUFFERS (the 2026-10-12 wave, lane R6): a buffer is a
+# window like any other (invariant 4), hosted by a door of the binary's
+# (`ronoctua-shell buffer <component>`), which hands it the queue in words —
+# so it stands on the kit and the door, and a line of it recompiles it and
+# the binary alone.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+# The runtime that hosts the component (wasmtime, with the pooling allocator).
+ronoctua-runtime = { path = "../ronoctua-runtime" }
+# THE TWO RAILS AND THE SCROLLBAR (the host's features: the pixel side).
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-brain = { path = "../ronoctua-brain" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+ronoctua-notify = { path = "../ronoctua-notify" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+ronoctua-files = { path = "../ronoctua-files" }
+# THE DISK BORDER: the rack the formatting buffer is handed.
+ronoctua-disks = { path = "../ronoctua-disks" }
+ronoctua-memory = { path = "../ronoctua-memory" }
+ronoctua-pointers = { path = "../ronoctua-pointers" }
+ronoctua-keyboards = { path = "../ronoctua-keyboards" }
+ronoctua-software = { path = "../ronoctua-software" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

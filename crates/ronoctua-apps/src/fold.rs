@@ -3,7 +3,7 @@
 //! # Why 1:1, and not a actual normalisation
 //!
 //! Because the search returns the **positions** of the letters that matched, and the drawing
-//! lights up exactly those positions (`runs_of`, in `surface.rs`). If the folding
+//! lights up exactly those positions (`runs_of`, in the footer's `surface`). If the folding
 //! changed the length — `ß` → `ss`, `æ` → `ae` — the positions would belong to one
 //! ruler and the text to another, and the highlight would light the wrong letter
 //! **without getting anything else wrong**: the list would still be right and only the emphasis would lie.

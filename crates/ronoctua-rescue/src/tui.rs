@@ -3,7 +3,7 @@
 //! # The two invariants a rescue console has to keep anyway
 //!
 //! **8:** not one sentence is written here. Everything the person reads comes
-//! from `ronoctua_i18n::key`, and the console that would say `[rescue-reboot]`
+//! from `crate::key`, and the console that would say `[rescue-reboot]`
 //! on the day a key went missing is the console nobody could use.
 //!
 //! **9:** not one colour by hand. `to_rgba8()` and never `to_linear()` — the
@@ -21,6 +21,7 @@ use std::io::{Stdout, Write as _};
 use std::path::Path;
 use std::time::Duration;
 
+use crate::key;
 use anyhow::{Context as _, Result};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -35,7 +36,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
-use ronoctua_i18n::{Texts, key};
+use ronoctua_i18n::Texts;
 use ronoctua_tokens::{Color, color};
 
 use crate::view::{Hand, Key, Pane, Step, View, logs, papers};

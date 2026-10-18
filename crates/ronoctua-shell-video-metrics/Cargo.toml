@@ -1,0 +1,66 @@
+[package]
+name = "ronoctua-shell-video-metrics"
+description = "The video catalogue (LEADER v): its view, its window, its region in the footer, its camera and its keys — and its ranking, a page of the player (LEADER p k)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE VIDEO CATALOGUE, ONE CRATE (the 2026-10-12 wave): the view, its window,
+# the region the footer hosts, the camera — and the RANKING, which is a page
+# of the player written above it (the player's seam): a line of the ranking
+# or of the catalogue recompiles this crate and the binary, never the
+# player's transport, its stage or its window.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-player = { path = "../ronoctua-shell-player" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+ronoctua-player = { path = "../ronoctua-player" }
+# THE VIDEO CATALOGUE (`LEADER v`): read through `Catalog::open_ro` and
+# written through `Person` — the two openers a door may use
+# (`video-metrics-readers-are-read-only`); `net` for adding a channel, which
+# asks yt-dlp who it is and lets the hosts a scan asks.
+ronoctua-video-metrics = { path = "../ronoctua-video-metrics", features = [ "net" ] }
+# The names of what yt-dlp answers, which the view says.
+ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
+# A scan asked by name: the brain's module runs it (its declared unit).
+ronoctua-brain = { path = "../ronoctua-brain" }
+# Whether the machine saves power — a scan waits for it.
+ronoctua-power = { path = "../ronoctua-power" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+image.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The foundation's guards and the player's fixtures hold in these tests too
+# (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+ronoctua-shell-player = { path = "../ronoctua-shell-player", features = [ "test-support" ] }
+
+[features]
+# WHAT THIS CRATE KEEPS FOR TESTS — for `[dev-dependencies]` only: the videos
+# a test of the whole player hands the ranking (`player_ranking::fixture`).
+# It brings the player's along.
+test-support = [ "ronoctua-shell-player/test-support" ]
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

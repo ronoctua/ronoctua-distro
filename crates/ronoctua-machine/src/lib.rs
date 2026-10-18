@@ -15,7 +15,9 @@
 //!   only when the new one builds; the old goes to `legacy-<stamp>`.
 //! - `apply [--rehearse]`: build → switch → arm the boot trial; a failed
 //!   build puts back the lock the running system was built from, so the
-//!   directory always describes the running system.
+//!   directory always describes the running system. The build is sized to
+//!   the machine and in the distro's phases, and keeps the compiled units it
+//!   was built from for the next one ([`build`]).
 //! - `bless`: after a good boot, the trial becomes the last good generation;
 //!   after a bad one, back to the last good.
 //! - `disarm`: the profile was rolled back by hand (the rescue console); the
@@ -26,9 +28,10 @@
 //!
 //! Every program this crate starts is named by its store path, through the
 //! environment the units give it ([`System::from_env`]): `nix` (and the
-//! `nix-env` beside it), `bootctl`, the template of a machine flake. Nothing
-//! is looked up on a `PATH`. The words handed to each are built by the pure
-//! functions of [`argv`].
+//! `nix-env` beside it), `bootctl`, the template of a machine flake, the
+//! build sizing and what keeps a build's units. Nothing is looked up on a
+//! `PATH`. The words handed to each are built by the pure functions of
+//! [`argv`].
 //!
 //! # The boot trial
 //!
@@ -51,6 +54,7 @@ pub mod argv;
 mod bless;
 pub mod boot;
 pub mod boots;
+pub mod build;
 mod disarm;
 mod disk;
 pub mod dry;

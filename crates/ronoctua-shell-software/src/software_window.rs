@@ -1,0 +1,1248 @@
+//! The person's own programs, in a window of its own — the second door onto
+//! `crate::software`.
+//!
+//! # What is here and what is not
+//!
+//! The plumbing of a window is `crate::door`'s; what the view reads and the
+//! one handler of what it asks are both doors' (`crate::software_reading`).
+//! What is here is the window around them: its command line's words, the
+//! queue's list it listens to, its data device, its pictures painted, and
+//! its first errands kept for the first turn of its loop. It DECIDES
+//! nothing — which rows exist and what a key does to them is `software.rs`,
+//! and both doors ask the same view the same questions. The view does not
+//! know which door it is in.
+//!
+//! # Its own readings, in its own process
+//!
+//! The footer's region reads for itself; this window is another process, and
+//! reads for itself too: its own threads for the machine, the searches and a
+//! sheet's details, its own pictures, the queue's list for the jobs it gave,
+//! and `software.json` watched, because both doors write it — all of them
+//! waking this door through its one wake.
+//!
+//! # It does what the footer does (the owner's rule)
+//!
+//! **It types.** A letter, `DEL` and `C-v` go to the same view calls the
+//! footer makes (`letter`, `erase`, `pasted`). A question — a new web app's
+//! address, the draft's name and address, an image's path, a file to
+//! install — is asked on this window's header (`door::Ui::ask`), and the
+//! answer goes to the same `View::typed` the footer's minibuffer reaches. The
+//! clipboard is read off the loop (`crate::pasting`): its text into the
+//! search or the line, its image into the icon.
+//!
+//! **It opens.** A web app once, a page, the file manager and the brain's
+//! page start in a scope of their own, by the path every door launches by
+//! (`Ui::launch`, over `foreign::start_in_scope`) — and so does an installed
+//! program, found in the launcher's catalogue off the loop and started as
+//! the footer starts it (`Ui::launch_entry`, `launch::argv_of`). What went
+//! wrong — no such entry yet, a start that failed — is said on this window's
+//! header, never on the footer's line.
+//!
+//! An order goes to the queue through the same client, a preference is
+//! written through the same locked change, and a file dropped on it is taken
+//! through `wl_data_device` (`crate::carry`), the one addition a window may
+//! make to its door.
+
+use crate::door::{Canvas, Content, Door, Ui};
+use crate::software::{Errand, Opening, Press, View};
+use crate::software_feed::{Readings, Taught, Want};
+use crate::software_reading::Reading;
+use anyhow::Result;
+use smithay_client_toolkit::data_device_manager::data_device::DataDeviceData;
+use smithay_client_toolkit::{
+    reexports::calloop::channel,
+    seat::keyboard::{KeyEvent, Modifiers},
+};
+use wayland_client::{
+    Proxy as _, QueueHandle,
+    protocol::{wl_data_device_manager::DndAction, wl_seat::WlSeat},
+};
+
+/// The window's `app_id`.
+pub const APP_ID: &str = "br.ronoctua.software";
+
+/// The levels `ronoctua-shell software <word>` opens on, by their word — the
+/// command line's, so English.
+pub const LEVEL_WORDS: [&str; 7] = [
+    "home",
+    "trials",
+    "maintenance",
+    "android",
+    "advanced",
+    "declared",
+    "declined",
+];
+
+/// The word before a search's own words: `software search <words>` opens on
+/// what a search for them finds — the launcher's words too
+/// (`programs_words::SEARCH_WORD`, where the footer reads it).
+pub const SEARCH_WORD: &str = crate::programs_words::SEARCH_WORD;
+
+/// The word before an address: `software web <address>` opens a new web app's
+/// editor on it — what an address typed into the search offers, with the
+/// address already given.
+pub const WEB_WORD: &str = "web";
+
+/// The opening the words after `software` name, or `None` for words that
+/// name none.
+#[must_use]
+pub fn opening_of(said: &str) -> Option<Opening> {
+    let said = said.trim();
+    // WHAT FOLLOWS ONE OF THE TWO WORDS, when something does.
+    let after = |word: &str| {
+        said.strip_prefix(word)
+            .filter(|rest| rest.starts_with(' '))
+            .map(str::trim)
+            .filter(|rest| !rest.is_empty())
+            .map(str::to_owned)
+    };
+    if let Some(query) = after(SEARCH_WORD) {
+        return Some(Opening::Results(query));
+    }
+    if let Some(address) = after(WEB_WORD) {
+        return Some(Opening::WebNew(address));
+    }
+    Some(match said {
+        "home" => Opening::Home,
+        "trials" => Opening::Trials,
+        "maintenance" => Opening::Maintenance,
+        "android" => Opening::Android,
+        "advanced" => Opening::Advanced,
+        "declared" => Opening::Declared,
+        "declined" => Opening::Declined,
+        _ => return None,
+    })
+}
+
+/// The opening for a file to install — what `ronoctua-shell software-file`
+/// is handed by the file manager's double click. A path given relative is
+/// taken from where the command was run.
+#[must_use]
+pub fn file_opening(given: &std::path::Path) -> Opening {
+    let path = if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        std::env::current_dir().map_or_else(|_| given.to_path_buf(), |d| d.join(given))
+    };
+    Opening::File(path)
+}
+
+/// Opens the software view in a window, on `opening`.
+///
+/// # Errors
+///
+/// When there is no Wayland compositor, or the compositor offers no
+/// `xdg_shell`.
+pub fn host_it(opening: Opening) -> Result<()> {
+    crate::door::run(move |w| {
+        // THE SESSION'S CONTEXT: its tools and its directories. Without a
+        // `$HOME` nothing can be read, and the view says it is still reading —
+        // the footer's arrangement, for the same reason.
+        let context = ronoctua_software::Context::of_session()
+            .map_err(
+                |e| tracing::warn!(error = %e, "no software context; the window reads nothing"),
+            )
+            .ok();
+
+        // THE QUEUE'S LIST: a job of ours that ENDED changed the machine, and
+        // the sheet draws a job's progress while it runs.
+        let (jobs_sender, jobs) = channel::channel::<Vec<ronoctua_transfers::Job>>();
+        crate::queue::listen(jobs_sender);
+        w.handle
+            .insert_source(jobs, |event, (), door: &mut Door<Software>| {
+                if let channel::Event::Msg(jobs) = event {
+                    door.content.jobs_arrived(&mut door.ui, &jobs);
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("could not hang the queue channel: {e}"))?;
+
+        // THE KEYS ITS SENTENCES TEACH are read from the leader's own trees,
+        // from the set every sequence starts in (`bindings::taught`): this
+        // window is a process of its own, and asks the same tables the footer
+        // walks.
+        let mut readings = Readings::fresh(
+            context
+                .as_ref()
+                .map(|c| c.prefs.clone())
+                .unwrap_or_default(),
+            Taught::of_this_leader(),
+        );
+        readings.zone =
+            ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
+        readings.now = crate::when::seconds_now();
+        readings.home = context.as_ref().map(|c| c.roots.home.clone());
+        readings.belongings = ronoctua_belongings::places::Places::from_env();
+
+        // A FILE NO SOURCE INSTALLS opens the first page and says so, rather
+        // than a question whose yes the CLI would refuse.
+        let (opening, refused) = match opening {
+            Opening::File(path) if ronoctua_software::order::file_source(&path).is_none() => (
+                Opening::Home,
+                Some(Errand::Say(
+                    w.texts.t(crate::key::SOFTWARE_NOT_A_PACKAGE_FILE),
+                )),
+            ),
+            other => (other, None),
+        };
+        let (mut view, errand) = View::fresh(opening, &readings, &w.texts);
+        // THE FILE PICKER'S FOLDER, watched through the door's wake — the one
+        // every thread of the view calls (`software_reading`).
+        view.watch_with(w.wake());
+        let reading = Reading::new(readings, context, w.texts.language(), w.wake());
+        let mut me = Software {
+            view,
+            reading,
+            carrying: crate::carry::Carrying::bind(w.globals, w.qh),
+            cursor: 0,
+            first: std::iter::once(errand).chain(refused).collect(),
+        };
+        // EVERY OPENING READS THE MACHINE: what the view says about what is
+        // installed is never older than the view.
+        me.reading.want(Want::Reread);
+        Ok(me)
+    })
+}
+
+/// The window over readings handed in whole — no thread reads, no queue
+/// hears, no file is watched: what the photograph's camera takes
+/// ([`camera`]). The view, the rows and every key are the window's own.
+pub(crate) fn photographed(
+    readings: Readings,
+    opening: Opening,
+    texts: &ronoctua_i18n::Texts,
+) -> Software {
+    let (view, errand) = View::fresh(opening, &readings, texts);
+    Software {
+        view,
+        reading: Reading::new(
+            readings,
+            None,
+            texts.language(),
+            crate::wake::Wake::new(|| {}),
+        ),
+        carrying: None,
+        cursor: 0,
+        first: vec![errand],
+    }
+}
+
+/// The window.
+pub(crate) struct Software {
+    view: View,
+    /// What the view reads, and the one handler of what it asks — the
+    /// footer's region's too.
+    reading: Reading,
+    /// What a file dropped on the window comes through. `None` where the
+    /// compositor has no `wl_data_device_manager` — absence is not an error.
+    carrying: Option<crate::carry::Carrying>,
+    /// Which drawn row the cursor is on, as of the last key, click or reading
+    /// — what the door follows. The view keeps the cursor by IDENTITY, and an
+    /// index needs the rows, which need the width and the words; so it is
+    /// counted where those are at hand.
+    cursor: usize,
+    /// What the opening asked for, done on the first turn of the loop — where
+    /// there is a message line to say it on.
+    first: Vec<Errand>,
+}
+
+impl Software {
+    /// The rows, at this window's width, in its language.
+    fn view_rows(&self, ui: &Ui) -> Vec<crate::software::Row> {
+        self.reading.rows(&self.view, ui.columns, &ui.texts)
+    }
+
+    /// Count the cursor's row again, against the rows as they are now.
+    fn recount(&mut self, ui: &Ui) {
+        self.cursor = View::cursor(&self.view_rows(ui));
+    }
+
+    /// The cursor put back in step with what is drawn, and a frame. The
+    /// offset is only kept inside the list, by the paint.
+    fn settled(&mut self, ui: &mut Ui) {
+        self.reading.settle(&mut self.view, ui.columns, &ui.texts);
+        self.recount(ui);
+        ui.ask_paint();
+    }
+
+    /// The queue's list, as it arrives (`Reading::jobs`).
+    fn jobs_arrived(&mut self, ui: &mut Ui, jobs: &[ronoctua_transfers::Job]) {
+        if self.reading.jobs(Some(&self.view), jobs) {
+            self.settled(ui);
+        }
+    }
+
+    /// One key, from the keyboard or from a click on the header.
+    ///
+    /// THE FOOTER'S ORDER, so the two doors answer one key the same way: the
+    /// view's table first, by notation — `C-RET`, `S-<left>`, `TAB`, the
+    /// arrows, `ESC` — and only then the minibuffer's gestures, where a letter
+    /// is typing and `C-g` is `Esc` (`Reading::stroke`).
+    fn key(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        let Some(key) = crate::door::keys::key_of(event, mods) else {
+            return;
+        };
+        ui.message = None;
+        // THE FILE PICKER'S PAGE, told before a key reaches it.
+        self.view.page_is(ui.room_for_rows());
+        let errand = self.reading.stroke(&mut self.view, key, ui);
+        self.apply(ui, errand);
+    }
+
+    /// A key of the view, read — `RET` from a second click on the row the
+    /// cursor is already on (invariant 19) among them.
+    fn pressed(&mut self, ui: &mut Ui, press: Press) {
+        ui.message = None;
+        self.view.page_is(ui.room_for_rows());
+        let errand = self.reading.pressed(&mut self.view, press, ui);
+        self.apply(ui, errand);
+    }
+
+    /// Files let go over the window: a package to install, or an image for a
+    /// web app's icon — the view says which, and refuses the rest in words.
+    fn dropped(&mut self, ui: &mut Ui, paths: &[std::path::PathBuf]) {
+        tracing::info!(
+            dropped = paths.len(),
+            "files were let go over the software window"
+        );
+        if paths.is_empty() {
+            return;
+        }
+        ui.message = None;
+        let errand = self.reading.dropped(&mut self.view, paths, ui);
+        self.apply(ui, errand);
+    }
+
+    /// Carries out what the view asked for (`Reading::carry_out`, the one
+    /// handler both doors call), and the frame after it.
+    fn apply(&mut self, ui: &mut Ui, errand: Errand) {
+        self.reading.carry_out(errand, ui);
+        self.recount(ui);
+        ui.ask_paint();
+    }
+}
+
+/// Where a row's picture goes: the cell its glyph had, on its line, centred
+/// in the line's height — the footer's arithmetic, in this window's frame.
+fn picture_area(
+    frame: crate::chrome::Frame,
+    column: u16,
+    line: u16,
+    side: f32,
+) -> ronoctua_render::image::Area {
+    ronoctua_render::image::Area {
+        x: frame.x_of(column),
+        // CENTRED ON THE LINE, and not flush with its top: the line's box is
+        // taller than the drawing, and flush the icon would touch the row above.
+        y: frame.y_of(line) + (frame.line() - side) / 2.0,
+        width: side,
+        height: side,
+    }
+}
+
+impl Content for Software {
+    /// A thread of the view's woke the loop — a search's batch, a sheet's
+    /// details, a picture, `software.json` moved, the copied image kept, the
+    /// file picker's folder: take all of it, keep the cursor on its row, and
+    /// draw — a reading never moves the page.
+    fn woken(&mut self, ui: &mut Ui) {
+        let woke = self.reading.woken(&mut self.view, ui);
+        for errand in woke.errands {
+            self.apply(ui, errand);
+        }
+        if woke.changed {
+            self.settled(ui);
+        }
+    }
+    type Hand = ();
+
+    fn app_id(&self) -> &'static str {
+        APP_ID
+    }
+
+    fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
+        format!("*{}*", texts.t(crate::key::SOFTWARE_TITLE))
+    }
+
+    fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+        self.key(ui, event, mods);
+    }
+
+    /// WHAT WAS TYPED ON THE HEADER'S LINE, to the same view call the
+    /// footer's minibuffer reaches (`software_typed`).
+    fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
+        let errand = self.reading.typed(&mut self.view, id, text, ui);
+        self.apply(ui, errand);
+    }
+
+    /// The clipboard's text, read off the loop for `C-v`: into the search.
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        let errand = self.reading.pasted(&mut self.view, text);
+        self.apply(ui, errand);
+    }
+
+    /// THE WAY BACK FIRST, and clickable: `Esc` leaves a level, and a pointer
+    /// that could not leave one would be a pointer that goes in and stays.
+    fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+        crate::chrome::with_the_way_back(
+            self.view
+                .hint(&self.reading.readings, ui.columns, &ui.texts),
+            &ui.texts,
+        )
+    }
+
+    /// THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer draws for
+    /// these rows.
+    fn rows(&self, ui: &Ui) -> Vec<Vec<crate::fields::Field>> {
+        self.view_rows(ui).into_iter().map(|r| r.fields).collect()
+    }
+
+    fn cursor(&self) -> Option<usize> {
+        Some(self.cursor)
+    }
+
+    /// THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a click
+    /// puts the cursor on the row, and a click on the row it is already on
+    /// is that row's `RET`, through the same `pressed` a key goes through.
+    fn clicked(&mut self, ui: &mut Ui, row: usize) {
+        let rows = self.view_rows(ui);
+        if self.view.clicked(row, &rows) {
+            self.pressed(ui, Press::Enter);
+        } else {
+            self.recount(ui);
+        }
+    }
+
+    /// The standard window, and the pictures: a row with one draws it in the
+    /// cell its glyph had, once it is here — the glyph until then, never both.
+    fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
+        crate::door::list::header(self, ui, canvas);
+        let rows = self.view_rows(ui);
+        // THE OFFSET KEPT INSIDE THE LIST before the visible rows are known —
+        // what `list::body` would do first, and which rows those are decides
+        // which pictures are asked for.
+        ui.settle_offset(rows.len());
+        let (offset, room, first) = (ui.offset, ui.room_for_rows(), ui.first_of_list());
+        // THE PICTURE AT THE SCREEN'S OWN PIXELS, and drawn in the window's
+        // logical ones: the key carries the side, so a screen of another
+        // scale asks for another picture instead of stretching this one.
+        let side = crate::launch::pixmap_side();
+        #[allow(clippy::cast_precision_loss)]
+        let scale = ui.scale.max(1) as f32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let pixels_across = (side * scale).ceil() as u32;
+        let mut placed: Vec<(String, u16, u16)> = Vec::new();
+        let mut fields: Vec<Vec<crate::fields::Field>> = Vec::with_capacity(rows.len());
+        for (i, row) in rows.into_iter().enumerate() {
+            let mut f = row.fields;
+            let shown = (offset..offset + room).contains(&i);
+            if shown
+                && let Some(portrait) = row.picture.as_ref()
+                && self.reading.picture_now(portrait, pixels_across).is_some()
+                && let Some(key) = self
+                    .reading
+                    .pictures()
+                    .and_then(|p| p.ready(portrait, pixels_across))
+                && !f.is_empty()
+            {
+                // THE GLYPH'S CELL IS WHERE THE PICTURE GOES, and the glyph
+                // leaves the row the moment the picture takes it.
+                let at = f.remove(0).at;
+                let line = first + u16::try_from(i - offset).unwrap_or(0);
+                placed.push((key, ui.margin + at, line));
+            }
+            fields.push(f);
+        }
+        crate::door::list::body(ui, canvas, &fields);
+        let frame = ui.frame(0);
+        let pool = self.reading.pictures();
+        for (key, column, line) in placed {
+            if canvas.upload(&key, || pool.and_then(|p| p.pixels(&key)).cloned()) {
+                canvas
+                    .pictures
+                    .push((key, picture_area(frame, column, line, side)));
+            }
+        }
+    }
+
+    /// A NOTE WRAPS at the width, so the row the cursor is on moves with it.
+    fn resized(&mut self, ui: &mut Ui) {
+        self.recount(ui);
+    }
+
+    /// A LANGUAGE CHOSEN ELSEWHERE: searches and details ask in it, and the
+    /// rows are counted again in its words.
+    fn language_changed(&mut self, ui: &mut Ui) {
+        self.reading.speak(ui.texts.language());
+        self.settled(ui);
+    }
+
+    /// What the opening asked for, once, where there is a line to say it on.
+    fn each_turn(&mut self, ui: &mut Ui) {
+        for errand in std::mem::take(&mut self.first) {
+            self.apply(ui, errand);
+        }
+    }
+
+    /// THE DATA DEVICE IS THE SEAT'S, and so cannot be made before one arrives.
+    /// Asked on every capability, which is harmless: `took_a_seat` makes one
+    /// device per seat and refuses a second.
+    fn seat_capability(door: &mut Door<Self>, qh: &QueueHandle<Door<Self>>, seat: &WlSeat) {
+        if let Some(c) = door.content.carrying.as_mut() {
+            c.took_a_seat(qh, seat);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// THE DROP — a package to install, or an image for the icon
+// ---------------------------------------------------------------------------
+//
+// The three handlers are the door's, written once in `crate::carry`, and they
+// hand this window what they heard (`carry::Carries`). The window takes files
+// and gives none: it never starts a drag, so what a source hears is nothing
+// to it.
+
+impl crate::carry::Carries for Software {
+    /// A package or an image dropped on the window — see the section above.
+    fn carried(door: &mut Door<Self>, heard: crate::carry::Heard<'_>) {
+        use crate::carry::Heard;
+        match heard {
+            Heard::Entered { device, .. } => {
+                let Some(offer) = device
+                    .data::<DataDeviceData>()
+                    .and_then(DataDeviceData::drag_offer)
+                else {
+                    return;
+                };
+                // WHAT WE CAN TAKE, said out loud: a list of files, and nothing
+                // else.
+                let takeable = offer
+                    .with_mime_types(|kinds| kinds.iter().any(|k| k == crate::carry::URI_LIST));
+                offer.accept_mime_type(
+                    offer.serial,
+                    takeable.then(|| crate::carry::URI_LIST.to_owned()),
+                );
+                // A COPY, ALWAYS. Installing a file reads it; a MOVE would tell
+                // the program it came from that it may delete what was dropped.
+                if takeable {
+                    offer.set_actions(DndAction::Copy, DndAction::Copy);
+                }
+            }
+            Heard::Dropped { device } => {
+                let Some(offer) = device
+                    .data::<DataDeviceData>()
+                    .and_then(DataDeviceData::drag_offer)
+                else {
+                    return;
+                };
+                // READ WITH A DEADLINE: the other end is somebody else's program —
+                // see `carry::read`.
+                let paths = offer
+                    .receive(crate::carry::URI_LIST.to_owned())
+                    .ok()
+                    .and_then(crate::carry::read)
+                    .unwrap_or_default();
+                offer.finish();
+                door.content.dropped(&mut door.ui, &paths);
+            }
+            // NOTHING CHANGES WITH THE POINT: a package is taken anywhere on the
+            // window, and an image on the icon's levels — which the view says on
+            // the drop, in words, for anything else. And a drag of this window's
+            // own does not exist.
+            Heard::Left
+            | Heard::Moved { .. }
+            | Heard::Chosen { .. }
+            | Heard::Asked { .. }
+            | Heard::Cancelled
+            | Heard::Finished => {}
+        }
+    }
+}
+
+pub mod camera {
+    //! THE SOFTWARE CENTRE'S WINDOW IN A PNG — `ronoctua-shell photograph --door
+    //! software`.
+    //!
+    //! # Why a camera of its own
+    //!
+    //! What the window draws is a READING of the machine
+    //! (`ronoctua_software::state::read`): the person's programs, their
+    //! declaration, what the system reported about it, the distro's programs.
+    //! So the picture is taken over a ROOM laid out as a machine lays those out —
+    //! the person's roots (`home/`, `config/`, `data/`, `state/`, `cache/`,
+    //! `runtime/`, the footer camera's own layout, so one room serves both
+    //! doors), the system's launcher entries (`share/applications/`) and the
+    //! machine's side of the declaration (`sys/etc/ronoctua/…`,
+    //! `sys/run/ronoctua-person/…`) — read with no tools at all: nothing runs,
+    //! no list of a package manager is asked, and the photograph is the files.
+    //! What is the SAME is taken as it is: the production window
+    //! (`software_window`), driven through `door::Detached` down the path a key
+    //! and a pointer take, a frame composed by `door::compose`.
+    //!
+    //! # The other door
+    //!
+    //! The footer draws the same view's rows: `photograph --door footer --room
+    //! <the same room>`, with `RONOCTUA_SOFTWARE_SYSROOT=<room>/sys` and
+    //! `XDG_DATA_DIRS=<room>/share`, walked with `--leader --key i`.
+    //!
+    //! Usage: `ronoctua-shell photograph --door software --room <folder>
+    //! [options] [steps]`, `--help` for the list.
+
+    use anyhow::{Context as _, Result, bail, ensure};
+    use ronoctua_tokens as tokens;
+    use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
+
+    use crate::door::{Content as _, Detached, Ui};
+
+    const USAGE: &str = "\
+    usage: ronoctua-shell photograph --door software --room <folder> [options] [steps]
+
+      --room <folder>       a machine laid out under one folder: home/, config/,
+                            data/, state/ (state/ronoctua/person/ is the
+                            person's declaration), cache/, runtime/,
+                            share/applications/ (the system's launcher entries)
+                            and sys/ (sys/etc/ronoctua/person-applied.json,
+                            distro-apps.json, declared-android.json)   (required)
+      --host <name>         this machine's name             (default: noctua)
+      --belongings <folder> the person's belongings laid out as the belongings
+                            camera's `--places` (home/.config/ronoctua/,
+                            home/.local/state/ronoctua/belongings/repo/key.age,
+                            run/ronoctua-belongings/): a change of the
+                            declaration then asks their passphrase as a session
+                            with no identity kept does
+      --opening <words>     where the window opens, as `ronoctua-shell software`
+                            takes it: home, declared, declined, advanced, …
+                                                            (default: home)
+      --now <seconds>       the clock, in seconds since the epoch (default:
+                            1791201600)
+      --out <file>          where to write                  (default: software.png)
+      --columns <n>         the window's width, in cells    (default: 90)
+      --lines <n>           the height, in lines            (default: 32)
+      --language <id>       pt-BR or en-GB                  (default: pt-BR)
+      --theme <id>          a theme of assets/themes        (default: the default)
+      --scale <n>           physical px per logical         (default: 1)
+      --list                prints the frame instead of drawing it
+
+    Steps — walked in the order they appear:
+
+      --key <notation>      a key, as the keymap writes it: <down>, RET, C-d
+      --hover <col,line>    rests the pointer on a cell of the surface
+      --click <col,line>    a press and a release there";
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Step {
+        Key(ronoctua_keymap::Key),
+        Hover(u16, u16),
+        Click(u16, u16),
+    }
+
+    #[derive(Debug)]
+    struct Asked {
+        room: std::path::PathBuf,
+        host: String,
+        belongings: Option<std::path::PathBuf>,
+        opening: String,
+        now: u64,
+        out: std::path::PathBuf,
+        columns: u16,
+        lines: u16,
+        language: String,
+        theme: tokens::theme::Theme,
+        scale: u16,
+        list: bool,
+        steps: Vec<Step>,
+    }
+
+    /// Whatever `photograph --door software` was given, to its end.
+    pub fn taken(rest: &[String]) -> ! {
+        let line: Vec<String> = std::env::args().skip(2).collect();
+        let words = if line.ends_with(rest) {
+            line
+        } else {
+            rest.to_vec()
+        };
+        match parse(&words).and_then(|asked| shoot(&asked)) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("Error: {e:?}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    fn number<T>(flag: &str, raw: &str, range: std::ops::RangeInclusive<T>) -> Result<T>
+    where
+        T: std::str::FromStr + PartialOrd + std::fmt::Display + Copy,
+    {
+        let n: T = raw
+            .trim()
+            .parse()
+            .ok()
+            .with_context(|| format!("`{flag} {raw}` is not a whole number"))?;
+        ensure!(
+            range.contains(&n),
+            "`{flag} {n}` is out of range {}..={}",
+            range.start(),
+            range.end()
+        );
+        Ok(n)
+    }
+
+    fn cell_of(flag: &str, raw: &str) -> Result<(u16, u16)> {
+        let (c, l) = raw
+            .split_once(',')
+            .with_context(|| format!("`{flag}` wants `column,line`, not `{raw}`"))?;
+        Ok((number(flag, c, 0..=999)?, number(flag, l, 0..=999)?))
+    }
+
+    fn parse(words: &[String]) -> Result<Asked> {
+        let mut room = None;
+        let mut me = Asked {
+            room: std::path::PathBuf::new(),
+            host: "noctua".to_owned(),
+            belongings: None,
+            opening: "home".to_owned(),
+            now: NOW,
+            out: std::path::PathBuf::from("software.png"),
+            columns: 90,
+            lines: 32,
+            language: "pt-BR".to_owned(),
+            theme: tokens::theme::default_one(),
+            scale: 1,
+            list: false,
+            steps: Vec::new(),
+        };
+        let mut words = words.iter();
+        while let Some(flag) = words.next() {
+            let mut value = || {
+                words
+                    .next()
+                    .cloned()
+                    .with_context(|| format!("`{flag}` with no value"))
+            };
+            match flag.as_str() {
+                "--help" | "-h" => {
+                    println!("{USAGE}");
+                    std::process::exit(0);
+                }
+                "--door" => {
+                    let said = value()?;
+                    ensure!(
+                        said == "software",
+                        "`--door {said}` is not this camera's door"
+                    );
+                }
+                "--room" => room = Some(std::path::PathBuf::from(value()?)),
+                "--host" => me.host = value()?,
+                "--belongings" => me.belongings = Some(value()?.into()),
+                "--opening" => me.opening = value()?,
+                "--now" => me.now = number("--now", &value()?, 0..=u64::from(u32::MAX))?,
+                "--out" | "-o" => me.out = value()?.into(),
+                "--columns" => me.columns = number("--columns", &value()?, 1..=1000)?,
+                "--lines" => me.lines = number("--lines", &value()?, 1..=1000)?,
+                "--language" => me.language = value()?,
+                "--theme" => {
+                    let id = value()?;
+                    me.theme = tokens::theme::by_id(&id)
+                        .with_context(|| format!("unknown theme `{id}`"))?;
+                }
+                "--scale" => {
+                    let most = u16::try_from(ronoctua_render::MOST_SCALE).unwrap_or(1);
+                    me.scale = number("--scale", &value()?, 1..=most)?;
+                }
+                "--list" => me.list = true,
+                "--key" => {
+                    let notation = value()?;
+                    let key = ronoctua_keymap::Key::parse(&notation)
+                        .map_err(|e| anyhow::anyhow!("`--key {notation}` is not a key: {e}"))?;
+                    me.steps.push(Step::Key(key));
+                }
+                "--hover" => {
+                    let (c, l) = cell_of("--hover", &value()?)?;
+                    me.steps.push(Step::Hover(c, l));
+                }
+                "--click" => {
+                    let (c, l) = cell_of("--click", &value()?)?;
+                    me.steps.push(Step::Click(c, l));
+                }
+                other => bail!("unknown option `{other}`.\n\n{USAGE}"),
+            }
+        }
+        me.room = room.with_context(|| format!("`--room` is required.\n\n{USAGE}"))?;
+        Ok(me)
+    }
+
+    /// The roots of a room: the footer camera's layout, and the machine's side.
+    fn roots_of(room: &std::path::Path) -> ronoctua_software::Roots {
+        ronoctua_software::Roots {
+            home: room.join("home"),
+            config: room.join("config"),
+            data: room.join("data"),
+            state: room.join("state"),
+            cache: room.join("cache"),
+            runtime: Some(room.join("runtime")),
+            data_dirs: vec![room.join("share")],
+            system: ronoctua_software::System::of_machine(Some(&room.join("sys"))),
+        }
+    }
+
+    /// The clock a picture is taken at when none is given: one fixed
+    /// second, so two pictures of one room draw the same dates.
+    pub const NOW: u64 = 1_791_201_600;
+
+    /// The readings of a room, as the machine `host` reads it: the machine
+    /// as its files say it, with no program asked — what both doors are
+    /// photographed over (the footer's camera takes them by `--software`).
+    pub fn readings_of_room(
+        room: &std::path::Path,
+        host: &str,
+        now: u64,
+    ) -> Result<crate::software_feed::Readings> {
+        let roots = roots_of(room);
+        let ctx = ronoctua_software::Context {
+            tools: ronoctua_software::Tools::default(),
+            prefs: ronoctua_software::prefs::read(&roots.config),
+            rehearse: true,
+            roots,
+        };
+        let mut r = crate::software_feed::Readings::fresh(
+            ctx.prefs.clone(),
+            crate::software_feed::Taught::of_this_leader(),
+        );
+        r.snapshot = Some(ronoctua_software::state::read_with(&ctx, host));
+        r.zone = ronoctua_files::when::Zone::utc();
+        r.now = now;
+        r.home = Some(ctx.roots.home);
+        Ok(r)
+    }
+
+    /// The readings of a room, as the machine `host` reads it, at [`NOW`],
+    /// kept for the next opening of the centre's region — where its feed's
+    /// thread would put one: what the footer's camera plants for
+    /// `--software <host>` (its `Plantings`, which the binary hands it), so
+    /// one room is one machine in both doors.
+    ///
+    /// # Errors
+    ///
+    /// The room's files do not read as a machine.
+    pub fn planted_in_the_footer(room: &std::path::Path, host: &str) -> Result<()> {
+        crate::software_region::keep_for_the_next_opening(readings_of_room(room, host, NOW)?);
+        Ok(())
+    }
+
+    fn middle_of(column: u16, line: u16) -> (f64, f64) {
+        let px = tokens::text::size();
+        (
+            (f64::from(column) + 0.5) * f64::from(tokens::metrics::cell_width(px)),
+            (f64::from(line) + 0.5) * f64::from(tokens::metrics::line_height(px)),
+        )
+    }
+
+    /// `ronoctua-shell photograph --door software …`, to its end.
+    fn shoot(asked: &Asked) -> Result<()> {
+        tokens::theme::set(asked.theme);
+        tokens::theme::set_ground(tokens::theme::Ground::Chrome);
+        tokens::text::set(tokens::text::NORMAL);
+        crate::when::prefs::set(crate::when::Choice::default());
+        let texts = ronoctua_i18n::Texts::fresh(&asked.language)
+            .with_context(|| format!("the language `{}` does not exist", asked.language))?;
+        let opening = super::opening_of(&asked.opening).with_context(|| {
+            format!(
+                "`--opening {}` opens nothing; the words are {}",
+                asked.opening,
+                super::LEVEL_WORDS.join(", ")
+            )
+        })?;
+        let mut readings = readings_of_room(&asked.room, &asked.host, asked.now)?;
+        readings.belongings = asked
+            .belongings
+            .as_deref()
+            .map(ronoctua_belongings::places::Places::under);
+        let content = super::photographed(readings, opening, &texts);
+        let ui = Ui::detached(texts, (1, 1), i32::from(asked.scale))?;
+        let mut d = Detached::new(ui, content);
+        let px = tokens::text::size();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let size = (
+            (f32::from(asked.columns + 2 * d.content.margin()) * tokens::metrics::cell_width(px))
+                .ceil() as u32,
+            (f32::from(asked.lines) * tokens::metrics::line_height(px)).ceil() as u32,
+        );
+        d.lay_out_at(size);
+        d.turn();
+        let mut gpu = ronoctua_render::offscreen::Offscreen::new(1, 1)?;
+        let format = ronoctua_render::offscreen::FORMAT;
+        let mut images = ronoctua_render::image::Images::new(&gpu.device, format)?;
+        // A FRAME BEFORE EVERY STEP: a key of the header is grabbed where the
+        // last paint drew it.
+        let mut composed = d.compose(&gpu.device, &gpu.queue, &mut images);
+        let mut entered = false;
+        for step in &asked.steps {
+            match *step {
+                Step::Key(key) => d.press(key),
+                Step::Hover(c, l) | Step::Click(c, l) => {
+                    let event = |kind| {
+                        vec![PointerEvent {
+                            surface: d.ui.surface.clone(),
+                            position: middle_of(c, l),
+                            kind,
+                        }]
+                    };
+                    let first = if std::mem::replace(&mut entered, true) {
+                        PointerEventKind::Motion { time: 0 }
+                    } else {
+                        PointerEventKind::Enter { serial: 0 }
+                    };
+                    let mut frames = vec![event(first)];
+                    if matches!(step, Step::Click(..)) {
+                        for kind in [
+                            PointerEventKind::Press {
+                                time: 0,
+                                button: crate::door::LEFT_BUTTON,
+                                serial: 0,
+                            },
+                            PointerEventKind::Release {
+                                time: 0,
+                                button: crate::door::LEFT_BUTTON,
+                                serial: 0,
+                            },
+                        ] {
+                            frames.push(event(kind));
+                        }
+                    }
+                    for events in frames {
+                        d.pointer(&events);
+                    }
+                }
+            }
+            d.turn();
+            if d.ui.quit {
+                break;
+            }
+            composed = d.compose(&gpu.device, &gpu.queue, &mut images);
+        }
+        let film = crate::photo::Film {
+            list: asked.list,
+            by: asked.scale,
+            language: &asked.language,
+            out: asked.out.clone(),
+        };
+        crate::photo::draw(
+            &mut gpu,
+            &mut images,
+            &composed,
+            (d.ui.width, d.ui.height),
+            &film,
+            i32::from(asked.scale),
+        )?;
+        if let Some(m) = d.ui.message.as_ref() {
+            println!("the message line says: {m}");
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_room_is_required_and_the_words_are_read() {
+            let words = |line: &str| {
+                line.split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            };
+            assert!(parse(&words("--door software")).is_err(), "no room");
+            let asked = parse(&words(
+                "--door software --room /r --opening declined --host lap --key <down> --click 3,4 --list",
+            ))
+            .unwrap();
+            assert_eq!(asked.room, std::path::PathBuf::from("/r"));
+            assert_eq!(asked.opening, "declined");
+            assert_eq!(asked.host, "lap");
+            assert!(asked.list);
+            assert_eq!(asked.steps.len(), 2);
+            assert!(parse(&words("--door files --room /r")).is_err());
+            let roots = roots_of(std::path::Path::new("/r"));
+            assert_eq!(roots.state, std::path::PathBuf::from("/r/state"));
+            assert_eq!(
+                roots.system.reports,
+                std::path::PathBuf::from("/r/sys/etc/ronoctua")
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// EVERY KEY THE VIEW TEACHES reaches it from this door as itself: the
+    /// header's click presses it through `door::keys::event_of`, the keyboard
+    /// through the same reader, and both come back as the notation the table
+    /// has — `C-RET` above all, which a reader that dropped the modifier would
+    /// turn into a plain `RET`.
+    #[test]
+    fn every_key_the_view_teaches_comes_back_as_itself() {
+        for (notation, id, _) in crate::software::OF_THE_VIEW {
+            let key = ronoctua_keymap::Key::parse(notation).expect(notation);
+            let (event, mods) = crate::door::keys::event_of(key);
+            let read = crate::door::keys::key_of(&event, mods).expect(notation);
+            assert_eq!(read.notation(), *notation, "{id}");
+            assert_eq!(
+                crate::software::pressed(&read.notation()),
+                crate::software::press_of(id),
+                "{notation} is not {id} in the window"
+            );
+        }
+        // AND THE WAY BACK, which no table teaches.
+        let (event, mods) =
+            crate::door::keys::event_of(ronoctua_keymap::Key::parse("ESC").expect("ESC"));
+        let read = crate::door::keys::key_of(&event, mods).expect("ESC");
+        assert_eq!(
+            crate::software::pressed(&read.notation()),
+            Some(Press::Escape)
+        );
+    }
+
+    /// A LETTER IS TYPING, here as in the footer: no key of the view's table,
+    /// the minibuffer's gesture, and the view's search takes it — and `DEL`
+    /// and `C-v` reach the same view calls the footer's do.
+    #[test]
+    fn a_letter_del_and_paste_reach_the_search_as_in_the_footer() {
+        use ronoctua_keymap::{Key, Sym};
+        let (event, mods) = crate::door::keys::event_of(Key::parse("g").expect("g"));
+        let read = crate::door::keys::key_of(&event, mods).expect("g");
+        assert_eq!(read.sym, Sym::Char('g'));
+        assert_eq!(crate::software::pressed(&read.notation()), None);
+        assert_eq!(
+            crate::minibuffer::gesture_of(read),
+            crate::minibuffer::Gesture::Insert('g')
+        );
+        assert_eq!(
+            crate::software::stroke_of(read),
+            Some(crate::software::Stroke::Letter('g'))
+        );
+        let (event, mods) = crate::door::keys::event_of(Key::parse("DEL").expect("DEL"));
+        let read = crate::door::keys::key_of(&event, mods).expect("DEL");
+        assert_eq!(crate::software::pressed(&read.notation()), None);
+        assert_eq!(
+            crate::minibuffer::gesture_of(read),
+            crate::minibuffer::Gesture::Delete
+        );
+        assert_eq!(
+            crate::software::stroke_of(read),
+            Some(crate::software::Stroke::Erase)
+        );
+        // `C-g` IS `Esc`, through the same reader.
+        let (event, mods) = crate::door::keys::event_of(Key::parse("C-g").expect("C-g"));
+        let read = crate::door::keys::key_of(&event, mods).expect("C-g");
+        assert_eq!(
+            crate::software::stroke_of(read),
+            Some(crate::software::Stroke::Press(Press::Escape))
+        );
+        for paste in ["C-v", "C-y"] {
+            let (event, mods) = crate::door::keys::event_of(Key::parse(paste).expect(paste));
+            let read = crate::door::keys::key_of(&event, mods).expect(paste);
+            assert_eq!(
+                crate::software::pressed(&read.notation()),
+                Some(Press::Paste),
+                "{paste}"
+            );
+        }
+
+        // AND THE WINDOW'S VIEW TAKES THEM: the letter is a search, drawn on
+        // the search's own row.
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let r = Readings::default();
+        let (mut v, _) = View::fresh(Opening::Home, &r, &texts);
+        assert!(matches!(
+            v.letter('g', &r, &texts),
+            Errand::Feed(Want::Search { .. })
+        ));
+        assert_eq!(v.query(), "g");
+        assert_eq!(v.key(Press::Paste, &r, 100, &texts), Errand::Paste);
+    }
+
+    /// EVERY WORD OF THE COMMAND LINE opens a level, no two the same, and a
+    /// word that names none is refused rather than opening the first page.
+    #[test]
+    fn every_level_word_opens_its_own_level() {
+        let openings: Vec<Opening> = LEVEL_WORDS
+            .iter()
+            .map(|w| opening_of(w).unwrap_or_else(|| panic!("{w} opens nothing")))
+            .collect();
+        for (i, a) in openings.iter().enumerate() {
+            for b in &openings[i + 1..] {
+                assert_ne!(a, b, "two words open one level");
+            }
+        }
+        assert_eq!(opening_of("home"), Some(Opening::Home));
+        assert_eq!(opening_of("sheet"), None);
+        assert_eq!(opening_of(""), None);
+        // AND A SEARCH, whose words are the query — never the word itself.
+        assert_eq!(
+            opening_of("search gimp photo"),
+            Some(Opening::Results("gimp photo".to_owned()))
+        );
+        assert_eq!(opening_of("search"), None, "a search for nothing");
+        assert_eq!(opening_of("search   "), None, "a search for nothing");
+        assert_eq!(opening_of("searchgimp"), None);
+        // AND A NEW WEB APP, whose address the view makes canonical.
+        assert_eq!(
+            opening_of("web https://example.org/mail"),
+            Some(Opening::WebNew("https://example.org/mail".to_owned()))
+        );
+        assert_eq!(opening_of("web"), None, "a web app of nothing");
+    }
+
+    /// A NEW WEB APP OPENED FROM THE COMMAND LINE is the editor, reading the
+    /// page — what the footer's `i b` does once the address is typed.
+    #[test]
+    fn a_web_address_opens_the_editor_in_the_window() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let r = Readings::default();
+        let (v, errand) = View::fresh(
+            opening_of("web https://example.org").expect("an opening"),
+            &r,
+            &texts,
+        );
+        assert!(
+            matches!(errand, Errand::Feed(Want::Site(_))),
+            "the page is not read: {errand:?}"
+        );
+        let rows = v.rows(&r, 100, &texts);
+        assert!(
+            rows.iter()
+                .any(|row| row.fields.iter().any(|f| f.text.contains("example.org"))),
+            "the editor does not show the address"
+        );
+    }
+
+    /// A FILE FROM THE MANAGER is already absolute, and one typed on a
+    /// command line is taken from where it was typed.
+    #[test]
+    fn a_file_to_install_is_an_absolute_path() {
+        let given = std::path::Path::new("/tmp/Some App.AppImage");
+        assert_eq!(file_opening(given), Opening::File(given.to_path_buf()));
+        let Opening::File(p) = file_opening(std::path::Path::new("x.apk")) else {
+            panic!("a file opens a file");
+        };
+        assert!(p.is_absolute(), "{}", p.display());
+        assert!(p.ends_with("x.apk"));
+    }
+
+    /// A window with no session behind it: no feed, no pictures, no data
+    /// device — the view and the door's own channels, which is all a test of
+    /// the wiring needs.
+    fn a_window(opening: Opening) -> (Software, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let readings = Readings::default();
+        let (view, first) = View::fresh(opening, &readings, &texts);
+        let me = Software {
+            view,
+            reading: Reading::new(readings, None, "en-GB", crate::wake::Wake::new(|| {})),
+            carrying: None,
+            cursor: 0,
+            first: vec![first],
+        };
+        (me, Ui::for_tests(texts))
+    }
+
+    /// EVERY QUESTION IS ASKED ON THIS WINDOW'S OWN LINE — none is sent to
+    /// the footer — and its answer reaches the same `View::typed` the
+    /// footer's minibuffer reaches.
+    #[test]
+    fn a_question_is_asked_and_answered_in_the_window() {
+        for ask in [
+            crate::software::Ask::WebNew,
+            crate::software::Ask::WebAddress,
+            crate::software::Ask::WebName,
+            crate::software::Ask::IconPath,
+            crate::software::Ask::FilePath,
+        ] {
+            let (mut w, mut ui) = a_window(Opening::Home);
+            w.apply(
+                &mut ui,
+                Errand::Ask {
+                    ask,
+                    initial: Some("from here".into()),
+                },
+            );
+            let line = ui.asking.as_ref().expect("asked on the window's line");
+            assert_eq!(line.id, ask.command());
+            assert_eq!(line.text, "from here");
+            assert!(
+                ui.orders().is_empty(),
+                "{} went to the footer",
+                ask.command()
+            );
+        }
+        // AND THE ANSWER: a new web app's address opens the editor on it.
+        let (mut w, mut ui) = a_window(Opening::Home);
+        w.answered(&mut ui, "software-web-new", "example.org/mail");
+        let rows = w.reading.rows(&w.view, 100, &ui.texts);
+        assert!(
+            rows.iter()
+                .any(|row| row.fields.iter().any(|f| f.text.contains("example.org"))),
+            "the answer did not reach the view"
+        );
+        // AND A FILE'S PATH that no source installs is refused in words.
+        let (mut w, mut ui) = a_window(Opening::Home);
+        w.answered(&mut ui, "software-file-path", "/tmp/not-a-package.txt");
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(ui.texts.t(crate::key::SOFTWARE_NOT_A_PACKAGE_FILE).as_str())
+        );
+    }
+
+    /// THE WINDOW'S OWN PASTE: `C-v` asks the door for the clipboard — read
+    /// off the loop, never here — and the text it hands back is the search.
+    #[test]
+    fn a_paste_is_asked_of_the_door_and_lands_in_the_search() {
+        let (mut w, mut ui) = a_window(Opening::Home);
+        w.pressed(&mut ui, Press::Paste);
+        assert!(
+            ui.wants_the_clipboard(),
+            "C-v did not ask for the clipboard"
+        );
+        w.pasted(&mut ui, "gimp\nsomething else");
+        assert_eq!(w.view.query(), "gimp");
+        // AN EMPTY CLIPBOARD changes nothing.
+        w.pasted(&mut ui, "");
+        assert_eq!(w.view.query(), "gimp");
+    }
+
+    /// FAILS IF: starting an installed program is handed to the footer —
+    /// whose "not in the launcher yet" and "could not open" were then said on
+    /// the footer's line, in the other door — instead of started from here,
+    /// where the door says both on this window's line.
+    #[test]
+    fn launching_is_this_windows_own_and_no_order_for_the_footer() {
+        let (mut w, mut ui) = a_window(Opening::Home);
+        w.apply(&mut ui, Errand::Launch("org.gimp.GIMP.desktop".into()));
+        assert!(ui.orders().is_empty(), "{:?}", ui.orders());
+        assert_eq!(
+            ui.launches(),
+            [crate::door::Launching::Entry(
+                "org.gimp.GIMP.desktop".to_owned()
+            )]
+        );
+    }
+
+    /// THE PICTURE TAKES ITS GLYPH'S CELL and sits in the middle of its line,
+    /// inside the line's height.
+    #[test]
+    fn a_picture_sits_in_its_glyphs_cell_and_inside_its_line() {
+        let frame = crate::chrome::Frame::of(900.0, 600.0, 0);
+        let side = crate::launch::pixmap_side();
+        let a = picture_area(frame, 3, 5, side);
+        assert!((a.x - frame.x_of(3)).abs() < f32::EPSILON);
+        assert!(a.y >= frame.y_of(5), "above its line");
+        assert!(
+            a.y + a.height <= frame.y_of(6) + f32::EPSILON,
+            "into the next line"
+        );
+        assert!((a.width - side).abs() < f32::EPSILON);
+    }
+}

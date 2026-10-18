@@ -22,3 +22,6 @@ ronoctua-consent = { path = "../ronoctua-consent" }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.

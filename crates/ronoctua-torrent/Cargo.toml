@@ -27,3 +27,8 @@ workspace = true
 # Entirely offline: nothing here touches a tracker, a peer or the DHT.
 name = "ronoctua-test-torrent"
 path = "src/bin/proof.rs"
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_TORRENT_SHIM"]
+bins = { "ronoctua-test-torrent" = "driver" }

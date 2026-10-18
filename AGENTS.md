@@ -25,11 +25,11 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    depender de um WM externo.
 
    Exceções aprovadas pelo dono, uma a uma. São protocolos Wayland padrão (nunca patch), e cada um é
-   usado por um arquivo só (todos em `ronoctua-shell`, menos os dois da captura):
+   usado por um arquivo só (todos nos crates `ronoctua-shell-*`, menos os dois da captura):
 
    | Protocolo | Para quê | Arquivo | Check |
    |---|---|---|---|
-   | `wl_data_device` | arrastar e soltar | `carry.rs` (recebem: `surface.rs`, o rodapé; `files_window.rs`; `software_window.rs`) | — |
+   | `wl_data_device` | arrastar e soltar | `carry.rs` (recebem: `surface/mod.rs`, o rodapé; `files_window.rs`; `software_window.rs`) | — |
    | `ext-image-copy-capture-v1` | captura de tela do estúdio | `ronoctua-studio`, `screen.rs` | — |
    | `zwlr_screencopy_v1` | a mesma captura, quando falta o de cima (2026-10-04) | `ronoctua-studio`, `screen.rs` | — |
    | `zwp_virtual_keyboard_v1` | teclado na tela (2026-09-25) | `virtual_keys.rs` | `one-virtual-keyboard` |
@@ -124,9 +124,9 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta. Só o
    `nix run .#gate` roda tudo.
 8. **Zero string literal em UI.** Todo texto sai de uma `text-key`, completa em todos os idiomas
-   declarados. Exceções aprovadas: a linha do log do brain (2026-09-25), o texto que a pessoa
-   digita num lembrete e a amostra de código que um buffer mostra (o `example`, 2026-10-04) são
-   dado, como o conteúdo de um arquivo; a moldura em volta deles continua em chaves.
+   declarados. Exceções aprovadas: a linha do log do brain (2026-09-25), o texto que a pessoa digita
+   num lembrete e a amostra de código que um buffer mostra (o `example`, 2026-10-04) são dado, como
+   o conteúdo de um arquivo; a moldura em volta deles continua em chaves.
 9. **Zero valor visual escrito à mão** — cor, fonte, tamanho, espaçamento, codepoint: tudo por
    token. (A cor de um efeito de câmera é aritmética sobre a imagem, não interface.)
 10. **Ícone de interface é glifo de fonte.** O superpacote de ícones é só fallback de pixmap para
@@ -180,7 +180,7 @@ nix develop                  ambiente de trabalho (o direnv é opcional e fica n
 nix run .#dev                compositor aninhado + rodapé, com hot reload; leader = Ctrl+Alt+Espaço
 nix run .#png                desenha um buffer, ou uma porta nativa (--door), em PNG em ~0,2 s, sem VM
 nix run .#shot -- <cena.py>  fotografa numa VM (veja "Como trabalhar"); --apps é o palco do Flatpak
-nix run .#quick              dez checks escolhidos (tests/quick.nix), ~1 min
+nix run .#quick              os checks escolhidos (tests/quick.nix), ~1 min
 nix run .#most               tudo menos o que constrói uma instalação, ~16 min
 nix run .#gate               tudo; dimensiona pela RAM (e as VMs pelo que declaram); fecha o inv. 7
 nix run .#vm                 VM completa (-- --pointers --keyboards passa mouses e teclados)
@@ -190,6 +190,10 @@ nix run .#bench              falha se um quadro estourar o orçamento
 nix run .#diagnostics        só lê; rode quando "nenhum atalho funciona"
 nix build .#themes           gera os temas e o report.md (~20 s)
 nix fmt                      formata a árvore (Nix e Rust); nix fmt -- --check só confere
+nix run .#rust-plan          regenera nix/rust/plan.json (o plano do cargo) depois de um Cargo.toml
+nix run .#rebuild-cost       o que a árvore (ou -- <arquivo>) reconstrói, e quanto, sem construir
+nix run .#sized-build -- …   nix build dimensionado à máquina; nix run .#rust-peaks, as mais pesadas
+nix run .#texts -- missing <idioma>   o que falta traduzir, por fragmento (-- where <chave>)
 ```
 
 <!-- anchor: L04 -->
@@ -198,15 +202,13 @@ nix fmt                      formata a árvore (Nix e Rust); nix fmt -- --check 
 nix run .#distro-pins        move os pins dos AppImages e apps Android da distro; o commit é à mão
 ```
 
-Todo programa que a distro instala para a pessoa escolher usar — com lançador ou de terminal — é
-uma entrada `ronoctua.apps.<id>` (`nix/modules/distro-apps.nix`), escrita no módulo dono e **fora de
+Todo programa que a distro instala para a pessoa escolher usar — com lançador ou de terminal — é uma
+entrada `ronoctua.apps.<id>` (`nix/modules/distro-apps.nix`), escrita no módulo dono e **fora de
 qualquer `mkIf`** (a presença é o `when`), e não uma linha solta em `systemPackages`, que nenhuma
-recusa alcançaria. Linha solta só para o que não é escolha da pessoa: o que o NixOS ou a base já
-instalam em toda máquina, o equipamento de uma função da distro e o que só existe para um programa
-(a lista e o porquê estão no `docs/ARCHITECTURE.md`). O que segura um programa (variável, serviço,
-passo da atualização) segue `ronoctua.distroApps.installed.<id>`, não o interruptor do grupo. Um id
-publicado entra no livro-razão de `assets/distro-apps.nix` e só sai dele por `formerly` ou
-`retired`.
+recusa alcançaria. Linha solta só para o que não é escolha da pessoa (a lista e o porquê estão no
+`docs/ARCHITECTURE.md`). O que segura um programa (variável, serviço, passo da atualização) segue
+`ronoctua.distroApps.installed.<id>`, não o interruptor do grupo. Um id publicado entra no
+livro-razão de `assets/distro-apps.nix` e só sai dele por `formerly` ou `retired`.
 
 <!-- anchor: L16 -->
 
@@ -218,16 +220,14 @@ nix run .#apply-here         a máquina com o checkout no lugar do input; o lock
 ```
 
 A branch `release` é o que toda máquina segue: só o `.#release` a move, e o `.#release` é do dono,
-como o `.#gate`. A distro não tem cache binário: o ISO leva sempre a semente. O cache é da PESSOA
-(o Cachix dela): nome, chave e visibilidade no `options.json` (parte em claro, assinada), o token de
-envio só na parte cifrada (`config/binary-cache-keys/push-token`, `0600`), e só
-`nix/modules/binary-cache.nix` declara substituter, chave e netrc — antes do `cache.nixos.org`, a
-partir da cópia validada pelo root (cobra `binary-cache-declared-once`). O token nunca vai em
-argumento, no ambiente de um processo longo nem em log (cobra `binary-cache-token-never-prints`).
-Um cache público recebe só as saídas da própria distro, nunca um caminho da pessoa, um download ou um
-não livre — e por isso um programa não livre nunca é assado no workspace (`generated`): vai no
-`atRunTime`, senão o workspace inteiro fica fora de qualquer cache público (cobra
-`release-cache-holds-only-free-builds`).
+como o `.#gate`. A distro não tem cache binário: o ISO leva sempre a semente. O cache é da PESSOA (o
+Cachix dela): nome, chave e visibilidade no `options.json` (parte em claro, assinada), o token de
+envio só na parte cifrada, e só `nix/modules/binary-cache.nix` declara substituter, chave e netrc
+(cobra `binary-cache-declared-once`). O token nunca vai em argumento, no ambiente de um processo
+longo nem em log (cobra `binary-cache-token-never-prints`). Um cache público recebe só as saídas da
+própria distro, nunca um caminho da pessoa, um download ou um não livre — e por isso um programa não
+livre nunca é assado na compilação (`generated`): vai no `atRunTime`, senão toda unidade que o lê
+fica fora de qualquer cache público (cobra `release-cache-holds-only-free-builds`).
 
 Tudo é app do flake — nunca justfile nem Makefile. Um passo que precise de instrução escrita
 deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "full"` (~29 GiB) ou
@@ -241,20 +241,20 @@ PATH, o KVM e o `nix-direnv`.
 
 - **Compositor**: o Scroll (`dawsers/scroll`, que segue os lançamentos do sway), pinado numa tag —
   nunca `main`. A sessão passa `-c` com o config gerado por nós; o do upstream nunca é lido.
-- **`ronoctua-shell`**: o rodapé (`surface.rs`, tipo `Footer`) e todas as janelas do sistema. É
-  também a linha de comando (`ronoctua-shell leader`, `command <id>`, `capture`, `lifeline`…).
+- **`ronoctua-shell`**: o binário fino que compõe os ~50 crates `ronoctua-shell-*` — a base, uma
+  funcionalidade por crate e o rodapé (`ronoctua-shell-footer`, tipo `Footer`) — e a linha de
+  comando: os subcomandos dele (`leader`, `command <id>`, `photograph`…) e a tabela `DOORS` de cada
+  crate (`capture`, `lifeline`, cada janela).
 - **Daemons de usuário**, para o que tem de sobreviver ao rodapé: `ronoctua-transfers` (a fila),
-  `ronoctua-brain` (o que a máquina faz sozinha, em módulos — veja abaixo),
-  `ronoctua-player` e `ronoctua-studio` (a câmera). Falam com o shell por socket, um JSON por linha,
-  e nunca um delta: cada mensagem vai inteira (o player manda duas, o estado e o contorno da fila).
-  O que é grande e quase ninguém mostra — a folha de um arquivo, a página de uma busca — nunca vai no
-  estado: ele leva a geração, e a porta que mostra pede, fora do laço, quando ela anda.
+  `ronoctua-brain` (o que a máquina faz sozinha, em módulos — veja abaixo), `ronoctua-player` e
+  `ronoctua-studio` (a câmera). Falam com o shell por socket, um JSON por linha, e nunca um delta:
+  cada mensagem vai inteira (o player manda duas, o estado e o contorno da fila). O que é grande e
+  quase ninguém mostra — a folha de um arquivo, a página de uma busca — nunca vai no estado: ele
+  leva a geração, e a porta que mostra pede, fora do laço, quando ela anda.
 - **`ronoctua-software`**: não é daemon. É a biblioteca e a CLI dos programas da pessoa
-  (`LEADER i`); o rodapé a usa para ler e buscar, e toda ordem que muda algo é um
-  `Work::Software` que a fila roda como filho, num escopo próprio da `app.slice`. Instalar só para
-  a pessoa é DECLARAR (`Order::Declare`): instala na hora e grava a entrada no `declared.json` dela,
-  sob a pista da declaração, que a atualização constrói em cada máquina; remover de vez, recusar e
-  trazer de volta reconstroem a máquina (`ronoctua-update-apply.service`).
+  (`LEADER i`); toda ordem que muda algo é um `Work::Software` que a fila roda como filho, e
+  instalar só para a pessoa é DECLARAR (`Order::Declare`): instala na hora e grava a entrada no
+  `declared.json` dela, que a atualização constrói em cada máquina.
 - **`ronoctua-browser`**: o host de native messaging que o Chrome sobe enquanto existe uma janela
   quiosque. Não é daemon nosso: vive e morre com a porta da extensão. Ele conecta no rodapé, que é
   o servidor (`ronoctua[-dev]-browser.sock`), e manda o estado inteiro, um JSON por linha.
@@ -270,84 +270,78 @@ PATH, o KVM e o `nix-direnv`.
   compositor, que roda `ronoctua-shell leader` no socket de controle
   (`$XDG_RUNTIME_DIR/ronoctua-<display>.sock`); só então a superfície expande e pede teclado
   exclusivo. `ronoctua-shell command <id>` roda qualquer comando do registro.
-- A região mostra uma vista por vez (a lista da leader, o gerenciador de arquivos, a rede…).
-  Nenhuma é menu flutuante: é a região crescendo (inv. 14). **A precedência entre vistas mora só
-  em `Footer::view()`**, e toda porta pergunta a ele — teclas, `expansion()` e `region_is_free`
-  (cobra `the-footer-draws-what-the-keyboard-drives`). A única exceção é a pergunta do minibuffer,
-  que é uma linha e não uma região. Uma vista só toma a região se ela estiver livre, e a recusa é
-  dita na tela.
+- A região mostra uma vista por vez, e nenhuma é menu flutuante: é a região crescendo (inv. 14). **A
+  precedência entre vistas mora só em `PRECEDENCE`** (`surface/mod.rs`), que `Footer::view()` lê;
+  todo despachante (teclas, linhas, cliques, dica, comandos, `region_is_free`) é um `match` sobre
+  `view()`, UMA linha por vista (cobra `the-footer-draws-what-the-keyboard-drives`), e só a pergunta
+  do minibuffer, que é uma linha, fica fora. A vista de uma funcionalidade é a região do crate dela,
+  registrada pelo binário (`regions.rs`), e só toma a região livre: a recusa é dita na tela.
 - **`Footer::metric` não pergunta o que a região contém.** Ele transforma largura, altura e a
   primeira linha da região (`first_of_expansion`) num frame, e tudo o que ele alcança e consulta o
   conteúdo vira recursão — a shell já morreu duas vezes assim, de stack overflow e sem diagnóstico.
   O que a região sabe de si é guardado onde foi medido (cobra `the-footer-does-not-ask-itself`, que
   também recusa ciclos novos entre métodos do `Footer`).
 - **Dois modos ocultos** (`hidden.rs`, gravados em `modeline.json`): um toque de `Ctrl` na raiz da
-  leader gira normal → empurra → cobre (`hidden::next_mode`, `footer-bars-cycle`). Empurrando,
-  modeline e minibuffer somem e o que abre empurra as janelas; cobrindo, tudo vai por cima delas.
-  O que empurra veste a página da mesa e fica sobre a cor
-  dela, opaca (texto sobre alfa 0 sai com franja branca); o que sobrepõe leva o véu da página
-  (`surface.veil`); faixa, cérebro e teclado ficam com o deles. A última linha de pixels da tela
-  revela as barras, o minibuffer aparece sempre que tem o que dizer, e a lista da leader aberta por
-  tecla espera 2 s parada. As linhas saem de `hidden::Shape`, que o `apply_geometry` guarda num
-  campo e as somas sob o `metric` leem; o `draw_and_paint` pede geometria quando ele muda. Por cima
-  das janelas o rodapé vai à camada `overlay` com zona `-1` — a largura toda, acima da coluna (inv.
-  14) —, e empurrando continua na `overlay` com zona = altura (`hidden::geometry`): uma camada que
-  muda sob o ponteiro ganha um `leave`, e a borda virava um laço. O teclado na tela empurra em
-  todos os modos (no `Cover`, só as linhas dele).
-- **A modeline se adapta a um programa** (`adapt.rs`; hoje só o Chrome quiosque, `kiosk.rs`): o
-  adaptador toma a janela em foco, tira o título, põe o nome do programa primeiro e os segmentos
-  dele logo depois. O que foi desenhado responde ao ponteiro (`adapter_drawn`, ao lado de
-  `modeline_placed`), e tudo o que um segmento roda é um comando do registro que a vista do
-  adaptador e o grupo `,` também alcançam: a grade da vista gera o `,` (cobra
-  `footer-mouse-reaches-nothing-new`). Liga e desliga em `modeline.json` (ausente é ligado).
+  leader gira normal → empurra → cobre (`hidden::next_mode`, `footer-bars-cycle`). As linhas saem de
+  `hidden::Shape`, que o `apply_geometry` guarda para as somas sob o `metric`. Texto sobre a cor da
+  mesa é opaco (sobre alfa 0 sai com franja branca), e nos dois modos o rodapé fica na camada
+  `overlay` (`hidden::geometry`): uma camada que muda sob o ponteiro ganha um `leave`, e a borda
+  virava um laço.
+- **A modeline se adapta a um programa** (`adapt.rs`; hoje o Chrome quiosque): o que ela desenha
+  responde ao ponteiro, e tudo o que um segmento roda é um comando do registro, que o grupo `,`
+  também alcança (cobra `footer-mouse-reaches-nothing-new`).
 - Se o rodapé morre, o `OnFailure=` levanta a linha de vida (`ronoctua-shell lifeline <unidade>`).
   Os binds de emergência morrem com ele, porque escrevem no socket dele. `Ctrl+Alt+Del` é o resgate.
 
 ### Portas: toda janela é uma `Door`
 
-- Toda janela é um `door::Content` aberto por `door::run` (`crates/ronoctua-shell/src/door/`). A
-  `Door<C>` cuida do resto: registro, assentos, teclados e repetição, ponteiros, toque, escala, GPU,
-  as vigias de tema, idioma, tamanho do texto e forma da data, cabeçalho, lista, barra e roda. A
-  janela escreve só `app_id`, `title` e `typed`; todo outro comportamento tem um padrão, que ela
-  pode sobrescrever (cobra `every-window-is-a-door`). O rodapé e a linha de vida são layer-shell com
-  handlers próprios, montados com as mesmas peças.
-- Uma vista costuma ser **uma `View` com duas portas**: a região do rodapé e uma janela, que
-  desenham as mesmas linhas. Na árvore da leader, a sequência dobrada abre no rodapé e a terminada
-  em `w` abre na janela (`s n n` / `s n w`), e o código lê essa convenção: o grupo que tem as duas
-  vira uma tecla só (`leader::folds`), que no conjunto padrão abre o rodapé (`LEADER s n`) e no
-  `LEADER LEADER` a janela; o `LEADER LEADER LEADER` é a árvore inteira. O
+- Toda janela é um `door::Content` aberto por `door::run` (`crates/ronoctua-shell-door/src/door/`).
+  A `Door<C>` cuida do resto: registro, assentos, teclados e repetição, ponteiros, toque, escala,
+  GPU, as vigias de tema, idioma, tamanho do texto e forma da data, cabeçalho, lista, barra e roda.
+  A janela escreve só `app_id`, `title` e `typed`; o resto tem um padrão, que ela pode sobrescrever
+  (cobra `every-window-is-a-door`). O rodapé e a linha de vida são layer-shell montados com as
+  mesmas peças. Toda janela de um crate está na tabela `DOORS` dele, e toda câmera na `CAMERAS`
+  (cobra `every-door-is-dispatched`).
+- Uma vista costuma ser **uma `View` com duas portas**, a região do rodapé e uma janela, que
+  desenham as mesmas linhas. Na leader, a sequência dobrada abre no rodapé e a terminada em `w` na
+  janela (`s n n` / `s n w`); o grupo que tem as duas vira uma tecla só (`bindings::folds`), e o
   `the_collapsed_groups_are_these` fixa os grupos que dobram.
-- **As duas portas fazem as mesmas coisas** (regra do dono, 2026-09-27): tudo o que a janela
-  suporta o rodapé suporta, e vice-versa — cada nível, cada tecla, colar, soltar arquivo e
-  **digitar** (buscar, responder uma pergunta, senha, caminho, nome). Nenhuma porta manda a pessoa
-  fazer algo na outra; uma lacuna numa porta é defeito — e o que uma porta DIZ (uma recusa, uma
-  falha) é dito nela. Uma janela pergunta com `Ui::ask` (a `line::Line` do minibuffer, no
-  cabeçalho; a resposta chega em `Content::answered`), cola com `Ui::paste` e abre um programa com
-  `Ui::launch`/`Ui::launch_entry`, tudo fora do laço; as duas portas colam a seleção viva
-  (`pasting.rs`), nunca o histórico. Uma mensagem sai como no rodapé, com o prazo da classe dela
-  (`Ui::say`, `Ui::say_for`; `Ui::hold` só para um estado que continua verdadeiro), nunca escrita
-  direto em `Ui::message` (cobra `door-messages-expire`).
+- **A vista com as duas portas é uma região** (`region::Region`, no crate dela): UM tratador de
+  recados (`carry_out`) sobre `&mut dyn region::Doorway`, que a janela e o rodapé implementam (cobra
+  `errands-are-handled-alike`); ela lê o que o rodapé já guarda pelo que ele empresta, sem abrir de
+  novo a thread de um daemon (cobra `regions-order-the-footers-threads`).
+- **As duas portas fazem as mesmas coisas** (regra do dono, 2026-09-27): tudo o que a janela suporta
+  o rodapé suporta, e vice-versa — cada nível, cada tecla, colar, soltar arquivo e **digitar**
+  (buscar, responder uma pergunta, senha, caminho, nome). Nenhuma porta manda a pessoa fazer algo na
+  outra; uma lacuna numa porta é defeito — e o que uma porta DIZ (uma recusa, uma falha) é dito
+  nela. Uma janela pergunta com `Ui::ask` (a resposta chega em `Content::answered`), cola com
+  `Ui::paste` e abre um programa com `Ui::launch`, tudo fora do laço; as duas portas colam a seleção
+  viva (`pasting.rs`), nunca o histórico. Uma mensagem sai com o prazo da classe dela (`Ui::say`,
+  `Ui::say_for`; `Ui::hold`, no rodapé `echo_held`, só para um estado que continua verdadeiro),
+  nunca escrita direto em `Ui::message` (cobra `door-messages-expire`).
 - Toda porta ouve todos os assentos e todos os teclados (`PerSeat` e `Seats::switch_to` em
   `seats.rs`; cobram `every-door-hears-every-seat` e `every-door-hears-every-keyboard`), segue a
   escala da tela em que está (`hidpi.rs`; cobra `every-window-knows-its-scale`) e repete teclas
   (`get_keyboard_with_repeat`; cobra `every-window-repeats` — o rodapé é a exceção, porque repetir
   a leader é erro).
 - As colunas à direita têm uma base só, `column::Column<T>` (`column.rs`), como toda janela tem a
-  `Door`: tamanho (grande, média, pequena e barra), linha de controle (a linha 0), linha de foco e
-  espaço de trabalho são dela, e o inquilino (`column::Tenant`) só desenha na `column::Area` que
-  recebe; o cabeçalho dele desce para a linha 1 (`Content::header_line`, `chrome::Hinted::at`). O
-  slot é um por espaço (`right_column.rs`, um `column-<inquilino>.pid` com `<pid> <tamanho>
-  <espaço>`): quem toma um espaço encerra quem estava nele, e um inquilino aberto em outro espaço
-  sai de onde estava. Fora da tela a coluna fica estacionada (`Shell::Parked`): o processo e o
-  estado ficam, a superfície não.
+  `Door`: tamanho, linha de controle, linha de foco e espaço de trabalho são dela, e o inquilino
+  (`column::Tenant`) só desenha na `column::Area` que recebe. O slot é um por espaço
+  (`right_column.rs`), e fora da tela a coluna fica estacionada (`Shell::Parked`).
 
 ### Módulos do brain
 
 - Uma funcionalidade do brain é uma pasta, `crates/ronoctua-brain/modules/<id>/`: `manifest.nix`
   (o que é, agenda, unidades, prefixos de chave, glifos, marcas, avisos, ações, eventos, `uses`,
   `namedBy`), `module.rs` (`pub fn new(birth) -> impl Module`), `module.nix`, `i18n/<idioma>.ftl`,
-  `checks.nix` e `why.md`, e opcionalmente `tables.nix`. O id é o nome da pasta, e o
-  `nix/brain-modules.nix` recusa pasta incompleta e campo desconhecido.
+  `checks.nix` e `why.md`, e opcionalmente `tables.nix` e `shared.rs` (a metade que o `namedBy` lê).
+  O id é o nome da pasta, e o `nix/brain-modules.nix` recusa pasta incompleta e campo desconhecido.
+- O rodapé linka só a biblioteca `ronoctua-brain` (o fio, a mente, os `shared.rs` e os manifestos da
+  distro: mexer num deles recompila o shell); todo `module.rs` é do `ronoctua-brain-daemon`,
+  `[[bin]]` `ronoctua-brain` (cobram `brain-daemon-is-a-leaf` e `brain-library-links-no-module`). O
+  que o rodapé desenha de um módulo é o catálogo do brain (`RONOCTUA_BRAIN_CATALOGUE`), dado lido em
+  tempo de execução, e glifo de módulo não entra no glyphdb nem no WIT (cobra
+  `brain-catalogue-is-what-the-daemon-compiled`).
 - Núcleo, shell e buffer desenham marcas, avisos, páginas, ações e eventos de qualquer módulo sem
   nomeá-lo; nenhum arquivo de fora cita o id, uma chave, um glifo, uma unidade ou uma ação de um
   módulo, salvo o que o `namedBy` dele lista (cobra `brain-modules-are-sealed`).
@@ -357,7 +351,8 @@ PATH, o KVM e o `nix-direnv`.
 
 ### A fronteira com o compositor
 
-- Só o `ronoctua-scroll` fala IPC; shell, telas e resgate dependem apenas do contrato.
+- Só o `ronoctua-scroll` fala IPC; shell, telas e resgate dependem apenas do contrato, e cada
+  programa abre uma conexão só — a do shell, no kit (`daemon::open_the_compositor`).
 - Os feitos do compositor viram comandos `wm-<nome>`, declarados em `assets/compositor-deeds.nix` e
   gerados de lá; o gerador recusa um verbo que a fonte pinada não tem.
 - Todo atalho do config que o Scroll traz existe aqui, na mesma tecla (`actions::scroll_chords`,
@@ -387,11 +382,17 @@ PATH, o KVM e o `nix-direnv`.
 
 ### Tokens, textos e temas
 
-- Tokens (`assets/tokens/*.nix`) e textos (`assets/i18n/*.ftl`) geram Rust: chave ou cor que não
-  existe é erro de compilação. O layout é aritmética de inteiros em duas fases: a preferência, e
-  depois "nada vaza da tela".
-- `Color` é um papel (`u16`), resolvido em `themes::TABLE[tema][página][papel]` na hora de
-  desenhar; `==` compara papéis.
+- Os NOMES geram Rust (papéis de cor e ícones, `nix/token-names.nix`; as chaves de cada crate,
+  `nix/text-keys.nix`): chave ou cor que não existe é erro de compilação. Os VALORES — frases,
+  paletas, o catálogo do brain — são dado lido em tempo de execução (`RONOCTUA_TEXTS`,
+  `RONOCTUA_THEMES`, `RONOCTUA_BRAIN_CATALOGUE`), e o que falta é recusado numa linha em inglês que
+  nomeia a variável. O layout é aritmética de inteiros em duas fases: a preferência, e depois "nada
+  vaza da tela".
+- **Uma frase pertence ao crate que a diz** (o `i18n/<idioma>.ftl` dele; dita por vários, ao crate
+  mais próximo sobre o qual todos ficam, nunca ao `ronoctua-i18n`), e num checkout o `ronoctua-keys`
+  escreve as chaves e os textos fora da árvore como a avaliação (cobra `keys-agree`).
+- `Color` é um papel (`u16`), resolvido na paleta carregada (`ronoctua_tokens::palettes`,
+  `[tema][página][papel]`) na hora de desenhar; `==` compara papéis.
 - **As faixas seguem o fundo.** Todo tema é resolvido em quatro páginas — o chrome e as mesas
   `backdrop`, `near` e `absolute` —, com texto, faixas e réguas medidos a partir de cada uma. Quem
   fica sobre uma mesa VESTE a página dela (`theme::set_ground`) e pinta como no chrome; nunca ponha
@@ -400,22 +401,20 @@ PATH, o KVM e o `nix-direnv`.
   são iguais em toda página.
 - Nenhuma cor é escrita à mão. `assets/tokens/colors.nix` é receita
   (`text.primary = "neutral.text-strong"`), e os valores saem de `nix/scripts/gen-theme.py` a partir
-  das sementes `assets/themes/<id>.nix` (matiz, croma relativo, shift, torção, `mode`). Toda relação
-  entre cores é um portão (contraste APCA, distância ΔE_ok, matiz), e o `owl` gerado é comparado com
-  `owl.reference.nix`. `order` e `default` são campos separados em `themes.nix`: o primeiro da lista
-  não é o padrão.
+  das sementes `assets/themes/<id>.nix`. Toda relação entre cores é um portão (contraste APCA,
+  distância ΔE_ok, matiz), e o `owl` gerado é comparado com `owl.reference.nix`. `order` e `default`
+  são campos separados em `themes.nix`: o primeiro da lista não é o padrão.
 - Para afinar uma cor, mexa na semente e rode `nix build .#themes --no-link --print-out-paths`
-  direto do shell (~20 s, quatro páginas por tema; dentro do `nix develop` demora mais). No
-  `report.md` impresso, a linha 5 traz o placar dos portões de todas as paletas (`Fail 0`). Mexer
-  no gerador reconstrói o workspace: afine antes de compilar Rust.
-- Papel novo exige família em todas as sementes (menos a `.reference`); sem isso o gerador recusa
-  com `no family '<nome>' in the seed`.
+  direto do shell (~20 s; dentro do `nix develop` demora mais): a linha 5 do `report.md` traz o
+  placar dos portões de todas as paletas (`Fail 0`). Semente, receita, gerador e tema padrão não
+  reconstroem Rust nenhum.
+- Papel novo exige família em todas as sementes (menos a `.reference`) e um nome em `colors.nix` ou
+  `shaped.nix`; sem isso o gerador recusa com `no family '<nome>' in the seed`.
 - As cores das faixas de legenda (`subtitle.*`) são a exceção de página: resolvidas contra uma
-  imagem escura fixa, iguais em todo tema e em toda página (o gerador recusa duas sementes que
-  discordem). No cromo, a cor de uma faixa só aparece dentro de um chip de `subtitle.edge`
-  (`chrome::chip`): sobre uma página ela não foi medida.
-- Hex só existe gerado ou medido (`tokens.rs`, `report.md`, a fixture congelada). Quem escolhe uma
-  cor diz matiz, croma e contraste; o solver resolve.
+  imagem escura fixa, iguais em todo tema e página. No cromo, a cor de uma faixa só aparece dentro
+  de um chip de `subtitle.edge` (`chrome::chip`): sobre uma página ela não foi medida.
+- Hex só existe gerado ou medido (`palettes.bin`, `report.md`, a fixture congelada). Quem escolhe
+  uma cor diz matiz, croma e contraste; o solver resolve.
 - Todo fundo é medido pelos portões (cobra `every-ground-is-measured`), e régua, barra e o texto
   mais quieto sobre ele são escolhidos pelo `Pen` a partir do papel do fundo (cobra
   `a-rule-follows-its-ground`).
@@ -497,115 +496,85 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 
 <!-- anchor: L01 -->
 
-**Cifra nova da pessoa é pós-quântica** (`ronoctua-pq`, o único que conhece o X-Wing): recipiente
-`age1pq1…`, estrofe `mlkem768x25519` do C2SP, que nunca viaja com um recipiente clássico nem é
-trocada por ele — o age recusa a mistura ao selar, o `ronoctua-seal` recusa um trabalho só de
-recipientes clássicos (`corrupt`) e o `ronoctua_pq::open` recusa a mistura ao abrir (`Why::Mixed`).
-Quem decide o formato são os vetores dos três textos que o definem e o `age` do Go ≥ 1.3, nos dois
-sentidos (cobram `pq-xwing-vectors` e `pq-age-interop`). A identidade (`AGE-SECRET-KEY-PQ-1…`) só
-existe num arquivo `0600` ou na memória que se apaga, e nada a imprime: nem o `Debug`, nem resposta
-nenhuma do `ronoctua-seal` (cobra `pq-identity-never-prints`). Assinatura nova da pessoa também é
-pós-quântica: ML-DSA-65 (`ronoctua_pq::sign`), a chave nascida com o repositório dos pertences e
-guardada no `key.age` ao lado da identidade; a semente segue a mesma regra da identidade, e o `Debug`
-diz só a impressão digital (cobra o mesmo check). Ninguém confia na chave pública que o repositório
-traz: a máquina confia na que root fixou (`local/signer.json`) ou na que a senha da pessoa abriu.
-A parte em claro dos pertences viaja assinada (um manifesto com o SHA-256 de cada arquivo e um
-contador que só cresce; os registros das máquinas ficam fora): o que chega validamente assinado entra
-sozinho, módulos do brain e `options.json` inclusive, e o resto fica retido com a frase do motivo,
-um contador menor também (cobram `belongings-tampered-plain-is-held`,
-`belongings-plain-rollback-is-refused`, `person-apply-refuses-unsigned-tree` e
-`brain-unsigned-module-never-compiled`).
+**Cifra e assinatura novas da pessoa são pós-quânticas** (`ronoctua-pq`, o único que conhece o
+X-Wing): recipiente `age1pq1…`, que nunca viaja com um clássico — selar e abrir recusam a mistura —,
+num formato que os vetores e o `age` do Go decidem (cobram `pq-xwing-vectors` e `pq-age-interop`), e
+ML-DSA-65 para assinar. A identidade e a semente só existem num arquivo `0600` ou na memória que se
+apaga, e nada as imprime (cobra `pq-identity-never-prints`). A máquina confia na chave que root
+fixou (`local/signer.json`) ou na que a senha da pessoa abriu, nunca na que o repositório traz. A
+parte em claro dos pertences viaja assinada, com um contador que só cresce: o que chega validamente
+assinado entra sozinho, e o resto fica retido com a frase do motivo (cobram
+`belongings-tampered-plain-is-held`, `belongings-plain-rollback-is-refused`,
+`person-apply-refuses-unsigned-tree` e `brain-unsigned-module-never-compiled`).
 
 <!-- anchor: L02 -->
 
-**Transporte pós-quântico primeiro.** O TLS é o rustls sobre o `aws-lc-rs` com `prefer-post-quantum`,
-o provedor passado ao builder e nunca instalado como padrão do processo (`ronoctua_http::tls::provider`):
-o hello oferece `X25519MLKEM768` antes do X25519, e um host que não o conhece continua alcançado
-(cobra `tls-is-post-quantum-first`). O grupo que cada host acordou fica em `tls-groups.json`
-(`ronoctua_http::groups`, teto `tlsGroupsHosts` no `assets/cache.nix`). O `aws-lc-rs` é o único
-provedor das primitivas que o nosso código chama; `age` e o GCM de nonce de 16 bytes do ClipCascade
-são as exceções escritas (cobra `one-crypto-implementation`). O `Cargo.lock` lista o `ring` sem
-compilá-lo (dependência opcional fraca do `rustls-webpki`): pergunte ao `cargo tree`, não ao lock.
-O SSH do sistema e do ISO negocia pós-quântico primeiro (`assets/ssh.nix`), e um sshd nosso aceita,
-depois dos híbridos, só a lista que o NixOS recomenda (cobra `ssh-kex-is-pq-first`); todo sshd nosso
-tem só a chave de host ed25519 (cobra `no-rsa-host-key`). O transporte dos pertences é SÓ
-pós-quântico (`pq_only`): o SSH diz `-o KexAlgorithms=` (`ronoctua_git::PQ_KEX`) e o HTTPS roda o git
-sob o `OPENSSL_CONF` do `nix/pq-tls.nix`, só com os grupos híbridos; um servidor sem troca
-pós-quântica é `NotPostQuantum` antes de qualquer envio (cobram `belongings-ssh-is-pq-only` e
-`belongings-https-is-pq-only`). O OpenSSL ignora CALADO um `OPENSSL_CONF` que não consegue usar
-(ausente, relativo, grupo desconhecido): só a prova contra um servidor clássico mostra que o
-estreitamento está lá. O sntrup761 fica nas listas enquanto o GitHub depender dele.
+**Transporte pós-quântico primeiro.** O TLS é o rustls sobre o `aws-lc-rs` com
+`prefer-post-quantum`, o provedor passado ao builder e nunca instalado como padrão do processo
+(`ronoctua_http::tls::provider`), e um host que não conhece o híbrido continua alcançado (cobra
+`tls-is-post-quantum-first`). O `aws-lc-rs` é o único provedor das primitivas que o nosso código
+chama, salvo as exceções escritas (cobra `one-crypto-implementation`); o `ring` do `Cargo.lock` não
+compila: pergunte ao `cargo tree`, não ao lock. O SSH negocia pós-quântico primeiro, e todo sshd
+nosso tem só a chave de host ed25519 (cobram `ssh-kex-is-pq-first` e `no-rsa-host-key`). O
+transporte dos pertences é SÓ pós-quântico (`pq_only`, no SSH e no HTTPS do git; cobram
+`belongings-ssh-is-pq-only` e `belongings-https-is-pq-only`), e o OpenSSL ignora CALADO um
+`OPENSSL_CONF` que não consegue usar: só a prova contra um servidor clássico mostra o estreitamento.
+O sntrup761 fica nas listas enquanto o GitHub depender dele.
 
 <!-- anchor: L05 -->
 
 Quem muda o sistema é o `ronoctua-machine apply` — o rebuild de resgate, a atualização e a central
 de programas —: constrói antes, troca depois e arma o ensaio de boot. Nenhum outro crate roda
 `bootctl`, escreve `LoaderEntry*`, mexe no perfil do sistema ou chama `switch-to-configuration`
-(cobra `one-bootctl-driver`); o rollback do resgate chama o `ronoctua-machine disarm`. A pasta da
-máquina descreve o sistema em execução: o que não fez um sistema novo devolve o lock do qual ele foi
-construído, que o sistema carrega em `/etc/ronoctua/machine.lock` (cobra
-`apply-reverts-the-lock-on-build-failure`). O bless pende do alvo padrão do sistema, nunca do
-`graphical.target`, que esta distro não alcança (cobra `update-apply-rule-is-narrow`). Um ensaio é
-julgado pelo primeiro boot depois do que o armou, pela identidade do boot e nunca pelo relógio;
-depois de um bless nenhum `LoaderEntryDefault` fica apontado, o sistema que não subiu não é
-construído de novo (`did-not-boot`), e a aparagem guarda o último bom e o ensaio (cobra
+(cobra `one-bootctl-driver`). O que não fez um sistema novo devolve o lock do sistema em execução
+(cobra `apply-reverts-the-lock-on-build-failure`), o bless pende do alvo padrão, nunca do
+`graphical.target` (cobra `update-apply-rule-is-narrow`), e um ensaio é julgado pela identidade do
+boot, nunca pelo relógio; a aparagem guarda o último bom e o ensaio (cobra
 `generations-keep-the-boot-trial`).
 
 <!-- anchor: L06 -->
 
-Quem escreve o `person/` da máquina, o `local/held.json`, o `local/approved.json` e o
-`local/signer.json` é o binário `ronoctua-person`, como root, e só ele: `apply` (a unidade, que só
-aceita o que a chave fixada assinou), `verify` (a atualização), `approve` e `pin` (a porta do sudo)
-— ler é de todos (cobra `one-person-boundary`). Todo arquivo da pessoa se lê com
-`ronoctua_person::parse` (formato mais novo é recusado antes dos campos) e se escreve com
-`ronoctua_person::to_json`; o que root abre debaixo de uma pasta da pessoa é aberto relativo a ela,
-com `O_NOFOLLOW` (cobram `person-apply-refuses-links` e `person-apply-rule-is-narrow`). Quem mexe
-nesses dados, ou constrói a partir deles, segura `ronoctua_person::root::Lock` — um arquivo `0600`
-de root, nunca uma pasta que qualquer um lê e trava —, e a atualização o segura do `verify` ao
-switch.
+Quem escreve o `person/` da máquina e o `local/` dela (`held.json`, `approved.json`, `signer.json`)
+é o binário `ronoctua-person`, como root, e só ele (`apply`, `verify`, `approve`, `pin`); ler é de
+todos (cobra `one-person-boundary`). Todo arquivo da pessoa se lê com `ronoctua_person::parse`
+(formato mais novo é recusado antes dos campos) e se escreve com `ronoctua_person::to_json`; o que
+root abre debaixo de uma pasta da pessoa é aberto relativo a ela, com `O_NOFOLLOW` (cobram
+`person-apply-refuses-links` e `person-apply-rule-is-narrow`). Quem mexe nesses dados, ou constrói a
+partir deles, segura `ronoctua_person::root::Lock`, um arquivo `0600` de root e nunca uma pasta que
+qualquer um trava.
 
 <!-- anchor: L10 -->
 
 **Os pertences levam as chaves da pessoa, nunca o acesso a eles** (emenda aprovada pelo dono,
-2026-10-05). Os alvos pré-definidos (`targets` em `assets/belongings.nix`: `~/.ssh`, a configuração
-do git com `~/.config/Yubico/u2f_keys`, `~/.gnupg`, `~/.shellrc.local`, o `local.el` do Doom) viajam
-selados para toda máquina, e os privados voltam com os bits do dono só (`kept::kept_mode`, lido igual
-no walk, no push e no pull, senão todo sync empurraria um modo). A chave de implantação nunca viaja,
+2026-10-05): os alvos pré-definidos (`targets` em `assets/belongings.nix`) viajam selados, os
+privados voltam com os bits do dono só (`kept::kept_mode`), e a chave de implantação nunca viaja,
 sob nome nenhum (`crate::sift`). Um alvo nunca fica sobre arquivo do Home Manager (cobra
 `belongings-targets-avoid-home-manager`). A identidade que a senha abre fica, pela sessão, só no
-keyring do kernel; as portas leem o marcador `runtime/unlocked`, nunca o keyring, e o fim da sessão
-e o sono a esquecem.
+keyring do kernel (as portas leem o marcador `runtime/unlocked`), e o fim da sessão e o sono a
+esquecem.
 
-**Uma chave de segurança responde ao sudo, e só a ele** (decisão do dono, 2026-10-11). O `pam_u2f`
-está sempre declarado, sempre `sufficient` (a chave é uma alternativa à senha, que sempre vale),
-só no serviço `sudo` (todo outro nasce com ele desligado), com uma porta de terminal antes, um
-`origin`/`appid` fixo (`u2f::ORIGIN`, o mesmo do cadastro, para a chave valer em toda máquina) e a
-lista do root (`u2f::AUTHFILE`) como `authfile`; nunca `nouserok`. Ligar e desligar é a própria lista: sem linha da pessoa, ele não responde nada, e
-vale na hora, sem rebuild. Só o verbo `u2f-keys` da porta do sudo escreve essa lista; o cadastro
-(`u2f::Enrolment`) roda o `pamu2fcfg` como a pessoa, e o `u2f_keys` dela, que viaja nos pertences, é
-de onde as chaves vêm, nunca o que o PAM lê. O `options.json` não diz nada disso (cobra
-`pam-u2f-is-only-sufficient`). O dedo segue o mesmo molde: só sudo, só num terminal, só para quem
-está na lista.
+**Uma chave de segurança responde ao sudo, e só a ele** (decisão do dono, 2026-10-11): o `pam_u2f`
+está sempre declarado, sempre `sufficient`, só no serviço `sudo`, atrás de uma porta de terminal,
+com um `origin` fixo (`u2f::ORIGIN`) e a lista do root (`u2f::AUTHFILE`) como `authfile`; nunca
+`nouserok`. Ligar e desligar é a própria lista, sem rebuild, e só o verbo `u2f-keys` da porta do
+sudo a escreve; o `u2f_keys` da pessoa nunca é o que o PAM lê, e o `options.json` não diz nada disso
+(cobra `pam-u2f-is-only-sufficient`). O dedo segue o mesmo molde.
 
 <!-- anchor: L12 -->
 
-**`/private` não se toca num laço de eventos.** Suspenso ao dormir com algo em uso (`luksSuspend`),
-quem o tocar espera no kernel até a senha retomá-lo — e a porta que perguntaria a senha é a que
-travou. Listar, fazer `stat` ou vigiar um caminho pergunta antes `ronoctua_private::may_touch`,
-que segue os links sem entrar no cofre (`~/Private -> /private` é o cofre) e lê o `status.json`
-(reescrito pelo root antes de suspender); dentro do cofre aberto, a leitura roda numa thread que
-o laço espera por um instante só (`ronoctua_files::listing`, `Withheld`).
+**`/private` não se toca num laço de eventos.** Suspenso ao dormir com algo em uso, quem o tocar
+espera no kernel até a senha retomá-lo, e a porta que perguntaria a senha é a que travou. Listar,
+fazer `stat` ou vigiar um caminho pergunta antes `ronoctua_private::may_touch`; dentro do cofre
+aberto, a leitura roda numa thread que o laço espera por um instante só.
 
 <!-- anchor: L13 -->
 
 <!-- anchor: L14 -->
 
-O `ronoctua-llm` só EMBRULHA a statusline de uma conta do Claude Code: muda um campo do
-`settings.json` no texto, guarda ao lado o valor da pessoa e o devolve byte a byte, no `unwrap` e
-ao remover a conta; a linha dela roda atrás da nossa com o mesmo stdin (cobra `statusline-chains`).
-O token OAuth é lido só no `usage.rs`, em memória zerada, e nunca renovado; o pedido que o leva é
-montado pelo `ronoctua-http` em memória medida antes e zerada (`request_wiped`), como todo pedido
-TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos ao
+O `ronoctua-llm` só EMBRULHA a statusline de uma conta do Claude Code e devolve a da pessoa byte a
+byte (cobra `statusline-chains`). O token OAuth é lido só no `usage.rs`, em memória zerada, e nunca
+renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória medida antes e zerada
+(cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos ao
 `ronoctua_llm::watched`.
 
 <!-- anchor: L17 -->
@@ -614,11 +583,11 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
 
 ### Cabeçalho, dicas e teclas
 
-- O cabeçalho de uma janela é glifo, rótulo e título (`chrome::Title`) seguidos dos atalhos. Todo
-  atalho é um clique (`press: Option<chrome::Act>`: `Act::Key` aperta a tecla pelo mesmo caminho do
-  teclado, `Act::Run` roda um comando); tecla sem ação é desenhada como inerte (`Register::Inert`);
-  o atalho sob o ponteiro acende (cobra `every-hint-key-is-a-click-or-says-so`). A tecla que um
-  cabeçalho ensina funciona onde é ensinada.
+- O cabeçalho de uma janela é glifo, rótulo e título (`chrome::Title`) seguidos dos atalhos, e todo
+  atalho é um clique (`chrome::Act`: `Act::Key` aperta a tecla pelo mesmo caminho do teclado,
+  `Act::Run` roda um comando); tecla sem ação é desenhada como inerte, e o atalho sob o ponteiro
+  acende (cobra `every-hint-key-is-a-click-or-says-so`). A tecla que um cabeçalho ensina funciona
+  onde é ensinada.
 - O cabeçalho de toda janela abre numa gaveta: chevron na borda, `RCtrl ↑↓` no teclado, e `Esc`
   fecha a gaveta antes de fechar a janela (`chrome::Hinted::head`; cobra
   `every-window-header-opens`).
@@ -628,32 +597,26 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
   rodapé crescesse, sairia de baixo do ponteiro, o hover acabaria e a linha sumiria, em laço.
 - A coluna muda de tamanho com `C-<left>` e `C-<right>`, lidas antes do inquilino
   (`column::OF_THE_COLUMN`). Na linha de controle, a frase do glifo sob o ponteiro vai na própria
-  linha; no tamanho barra, o glifo acende e não se explica: a barra é um controle remoto de glifos
-  conhecidos (decisão do dono, 2026-09-27).
+  linha; no tamanho barra, o glifo acende e não se explica (decisão do dono, 2026-09-27).
 - Toda vista da região ensina `Esc` primeiro, e ele é clicável (`chrome::with_the_way_back`). O
   botão Voltar do mouse sobre o rodapé ou sobre uma janela é o mesmo `Esc`.
-- Tecla nunca é texto no `.ftl`: a sequência sai do código (`leader::taught_keys`, ou uma constante
-  ao lado do binding) mais `crate::leader()`, num `{ $keys }` (cobra `keys-are-never-text`).
+- Tecla nunca é texto no `.ftl`: a sequência sai do código (`bindings::taught`, ou uma constante
+  ao lado do binding) mais `bindings::label()`, num `{ $keys }` (cobra `keys-are-never-text`).
   "LEADER" não é tecla de ninguém: em produção é `SUPER`, no `.#dev` é `CTRL ALT SPC`.
 
 ### Linhas, cores e cursor
 
-- Os tons de uma linha vêm do tipo, nunca de um argumento de cor: `chrome::Kind` (rótulo de fato
-  `text.label.fact`, rótulo de ajuste `text.label.acts`, valor de fato `text.read.strong`, valor de
-  ajuste `text.answer`); do lado WASM, `Role::LabelFact`, `LabelSetting`, `ValueFact` e
-  `ValueSetting` (cobra `labels-say-what-they-are`).
+- Os tons de uma linha vêm do tipo, nunca de um argumento de cor: `chrome::Kind` (rótulo e valor, de
+  fato e de ajuste); do lado WASM, `Role::LabelFact`, `LabelSetting`, `ValueFact` e `ValueSetting`
+  (cobra `labels-say-what-they-are`).
 - O cursor é uma cor (`text.here.*`): o rótulo leva o acento e o valor continua dizendo se a linha
-  age. `Row::focused` não é lido por porta nenhuma — preenchê-lo não desenha cursor (cobra
-  `the-cursor-is-a-colour`). A exceção é o gerenciador de arquivos, cujo cursor é a faixa
-  `surface.selection` mais a régua acesa (`chrome::divider_lit`), estendida a toda GRADE: a célula
-  sob o ponteiro acende sozinha, e a célula do cursor veste `surface.selection`
-  (`chrome::cell_selection`) — a cor de um emoji está dentro do glifo. Qual célula está sob o
-  ponteiro é uma conta só, lida pela pintura e pelo clique: `chrome::in_cell` numa linha de células,
-  `chrome::Shelves` numa grade de figuras (cobra `a-grid-cell-is-lit-alone`).
-- Rótulo e valor têm uma aritmética só (`chrome::field_pair`): o valor começa na coluna
-  `space.view.labelCells`, limitada à metade da linha. Uma seção escrita inteira (as páginas do
-  player) alinha os valores dela depois do rótulo mais largo e quebra o rótulo e o valor que não
-  cabem (`chrome::section_column`, `chrome::aligned_pair`).
+  age; `Row::focused` não é lido por porta nenhuma (cobra `the-cursor-is-a-colour`). A exceção é o
+  gerenciador de arquivos, cujo cursor é a faixa `surface.selection` mais a régua acesa, também numa
+  grade, e a célula sob o ponteiro é uma conta só, lida pela pintura e pelo clique
+  (`chrome::in_cell`, `chrome::Shelves`; cobra `a-grid-cell-is-lit-alone`).
+- Rótulo e valor têm uma aritmética só (`chrome::field_pair`: o valor começa em
+  `space.view.labelCells`, limitada à metade da linha); uma seção escrita inteira alinha os valores
+  depois do rótulo mais largo e quebra o que não cabe (`chrome::aligned_pair`).
 - Título de seção usa `text.heading`; `text.group` é só o submenu da leader (cobra
   `a-heading-is-not-a-submenu`). Título tem o tamanho do corpo: hierarquia é cor e ar
   (`chrome::AIR` antes de todo título), nunca tamanho.
@@ -668,24 +631,24 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
   alguma coisa.
 
 <!-- anchor: L11 -->
-- Exceção aprovada pelo dono (2026-10-05): as marcas das contas LLM, `brain:agent-accounts/claude.<n>`
-  e `brain:agent-accounts/codex.<n>`, ficam na modeline também em repouso, uma por conta, e o tom diz
-  o uso. Elas declaram `resting = true`, e só as listadas em `assets/brain-resting-marks.nix` podem
-  declarar, nunca a de um módulo da pessoa (cobra `resting-marks-are-the-approved-ones`, que mantém
-  este item e aquele arquivo iguais). O núcleo cobra só o tom: descarta a marca publicada em
-  `Tone::Quiet` (a que diz só que está tudo bem) cujo manifesto não declara `resting`. Uma marca em
-  outro tom publicada sem ter o que dizer continua proibida pela regra acima, e nenhum check a pega.
-  Uma marca pode ter instâncias (`instances = N`, de 1 a 9, porque é um dígito; cobra
-  `mark-instances-are-bounded`): cada uma é um segmento `brain:<módulo>/<marca>.<n>`, lidas de 1 a N
-  da esquerda para a direita, o dígito vai um espaço depois do glifo, onde iria a contagem, e o
-  clique entrega o número ao comando de `MarkId::opening`.
+- Exceção aprovada pelo dono (2026-10-05): as marcas das contas LLM,
+  `brain:agent-accounts/claude.<n>` e `brain:agent-accounts/codex.<n>`, ficam na modeline também em
+  repouso, uma por conta, e o tom diz o uso. Elas declaram `resting = true`, e só as listadas em
+  `assets/brain-resting-marks.nix` podem declarar, nunca a de um módulo da pessoa (cobra
+  `resting-marks-are-the-approved-ones`, que mantém este item e aquele arquivo iguais). O núcleo
+  cobra só o tom: descarta a marca publicada em `Tone::Quiet` (a que diz só que está tudo bem) cujo
+  manifesto não declara `resting`. Uma marca em outro tom publicada sem ter o que dizer continua
+  proibida pela regra acima, e nenhum check a pega. Uma marca pode ter instâncias (`instances = N`,
+  de 1 a 9, porque é um dígito; cobra `mark-instances-are-bounded`), cada uma um segmento
+  `brain:<módulo>/<marca>.<n>`, e o clique entrega o número ao comando de `MarkId::opening`.
 - Módulos do brain da pessoa (`$XDG_CONFIG_HOME/ronoctua/brain-modules/<id>/`, na parte em claro dos
   pertences): o id é `my-` mais uma palavra kebab, e `my`/`my-…` são só dela, prefixos de chave
   inclusive (cobra `brain-person-module-ids-are-prefixed`). A pasta precisa só de `manifest.nix`,
   `module.rs` e um `.ftl` por idioma; a metade NixOS entra só aprovada pela porta do sudo
-  (`personNixosModules`), o `checks.nix` não roda, e o `brain-modules-are-sealed` não pergunta nada a
-  elas. O carregador recusa a pasta da pessoa sozinha, com frase (`personRefused`), nunca a avaliação
-  inteira (cobra `brain-person-modules-load`); a máquina compila com `withPersonModules`.
+  (`personNixosModules`), e o `checks.nix` não roda. O carregador recusa a pasta da pessoa sozinha,
+  com frase (`personRefused`), nunca a avaliação inteira (cobra `brain-person-modules-load`); a
+  máquina compila com `withPersonModules`, que muda só o daemon e dados (cobra
+  `person-module-rebuilds-only-the-daemon`).
 
 ### Barras, ponteiro e rolagem
 
@@ -701,7 +664,7 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
   (`Pen::keeping`).
 - Toda janela que rola desenha a própria barra, e a barra é um controle (`chrome::list_bar`; cobra
   `every-list-window-has-a-bar`). A roda tem uma aritmética só: a linha é a unidade, o passo da roda
-  é dividido nela e a sobra fica guardada (`surface::axis_lines`, `wheel_arrived`, `wheel_lines`).
+  é dividido nela e a sobra fica guardada (`wheel::axis_lines`, `wheel_arrived`, `wheel_lines`).
 - Marca contada da borda direita é acertada a partir da borda também (`Span::edge`,
   `chrome::at_the_edge`; cobra `a-mark-at-the-edge-is-drawn-at-the-edge`). Contada da esquerda, a
   sobra da grade vira um vão que muda com a largura.
@@ -724,32 +687,33 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
 - Opção que ainda não faz nada diz isso na tela, em vez de parecer funcionar.
 - Nada que o sistema faça sozinho pode perguntar: não há agente polkit na sessão, toda chamada leva
   `auth.no_user_interaction`, e nenhuma ação automática usa `sudo` ou `pkexec`. Um gesto da pessoa
-  que precisa de root, de qualquer tela, é perguntado na barra do sudo do rodapé (`sudo_bar.rs`,
-  2026-10-11) — a senha, um toque de chave ou um dedo —, e porta nenhuma pergunta a senha de root
-  na própria linha: a janela manda o gesto pelo soquete do rodapé, espera fora do laço e diz o
-  veredito na própria porta (rodapé morto é frase, `Why::NoFooter`). Ele passa pela porta do sudo,
-  e só por ela (`ronoctua_security::authority`, feature `authority`, só do shell, chamada só pelo
-  `sudo_bar.rs`; cobra `sudo-door-is-one`): a senha vai pelo stdin a `sudo -S`
-  sem terminal (`run`), ou a porta conversa com o sudo num terminal dela (`converse`), onde uma
-  chave de segurança ou um dedo respondem antes da senha. Ali ela lê só as próprias sentinelas — o
-  `-p` do sudo, o `cue_prompt` do `pam_u2f` e a linha do `pam_echo` antes do `pam_fprintd` —,
-  nunca o texto de um terceiro, e escreve a senha só depois da sentinela da senha (cobra
-  `sudo-door-reads-its-own-sentinels`).
+  que precisa de root, de qualquer tela, é perguntado na barra do sudo do rodapé (`sudo_bar.rs`) — a
+  senha, um toque de chave ou um dedo —, nunca na linha da porta: a janela manda o gesto pelo
+  soquete do rodapé, espera fora do laço e diz o veredito na própria porta (rodapé morto é frase,
+  `Why::NoFooter`). Ele passa pela porta do sudo, e só por ela: `ronoctua_security::authority`,
+  feature `authority`, ligada só pelo rodapé e pela central de segurança (que pergunta pelo
+  `has_helper`), linkada num programa só, o shell, e chamada só pelo `sudo_bar.rs` (cobra
+  `sudo-door-is-one`). A porta lê só as próprias sentinelas, nunca o texto de um terceiro, e escreve
+  a senha só depois da sentinela da senha (cobra `sudo-door-reads-its-own-sentinels`).
+- O que se digita e não vai ao log é dito pela PERGUNTA (os campos `secret` e `unlogged` da
+  `line::Line`), nunca pela vista que perguntou, que pode fechar antes do `RET`.
 - **Nada fala com a rede antes de a pessoa permitir o host.** Toda requisição leva um `Pass` que só
   o `ronoctua-consent` cunha, a partir do `consent.json`; sem ele, a porta desenha a linha de
   consentimento (`consent_rows`) e não pergunta. Uma fonte que a pessoa configurou é o próprio
   consentimento, e é gravada lá como qualquer outro.
 - Um evento do sistema (privacidade, Bluetooth e redes, carregador, programa instalado) é dito no
-  minibuffer (`events.rs`), e nem a primeira leitura de cada fonte nem uma leitura que não respondeu
-  é evento. Ele vira notificação só quando a linha está ocupada ou a fila dela já tem quatro
-  esperando, e o corpo abre dizendo por quê (`notif-minibuffer-was-busy`); um evento contrário
-  substitui o que ainda está na linha ou na fila.
+  minibuffer (`events.rs`); nem a primeira leitura de cada fonte nem uma leitura que não respondeu é
+  evento. Ele vira notificação só quando a linha está ocupada ou a fila dela já tem quatro, e o
+  corpo abre dizendo por quê (`notif-minibuffer-was-busy`); um evento contrário substitui o que
+  ainda espera.
 
 ### Comandos e teclas
 
 - Todo comando tem id `kebab-case` e chave `cmd-<id>`; o registro recusa os dois divergirem. Os
   feitos do compositor são `wm-<nome>`. Uma sequência não pode ser comando e prefixo ao mesmo tempo
   (`keymap-no-collision` derruba o build). `LEADER :` alcança qualquer comando pelo nome.
+- **As teclas de um crate são dele** (um `bindings::Contribution` ao lado da vista), juntadas só
+  pelo binário (`keymap::CONTRIBUTIONS`; cobra `every-contribution-is-assembled`).
 - Grupos da leader: `s` é o sistema (`s q` as saídas, `s e` a segurança — `s e o`/`s e l` o
   `/private`, `s e c` cifrar, `s e q` o pós-quântico —, `s o` os containers, `s x` o Incus, `s z` o
   pendrive do instalador, `s v` os pertences, `s r` o rodapé), `w` é janela e buffer (são a mesma
@@ -759,14 +723,13 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
   constrói a distro: `/ r`, o redimensionador de tela, e `/ c`, que clona este repositório) e `,` é
   o grupo do buffer em foco. O relance (`world-glance`) é `g`. Numa janela de buffer, a tecla local
   `, r` é o acorde `C-r`; letra sozinha é texto.
-- **Três conjuntos**, e a LEADER repetida na raiz anda por eles: `LEADER` é o padrão, `LEADER
-  LEADER` o das janelas e `LEADER LEADER LEADER` a árvore inteira, e a seguinte volta ao padrão
-  (`leader::Set::next`). Um toque de `Ctrl` (apertar e soltar sozinho, `leader::Tap`) na raiz gira
-  os modos das barras; `Alt` não escolhe nada. Botão, roda ou dedo no meio fazem acorde. A frase
-  que ensina uma sequência a tira de `leader::taught_keys`, que parte do padrão (`LEADER t`,
-  `LEADER LEADER .`, `LEADER LEADER LEADER s b y`). A constante ao lado do binding é da árvore
-  inteira: colada depois de `crate::leader()`, ela ensina, sob um grupo dobrado, uma tecla que faz
-  outra coisa.
+- **Três conjuntos**, e a LEADER repetida na raiz anda por eles: `LEADER` é o padrão,
+  `LEADER LEADER` o das janelas e `LEADER LEADER LEADER` a árvore inteira, e a seguinte volta ao
+  padrão (`bindings::Set::next`). Um toque de `Ctrl` (`leader::Tap`) na raiz gira os modos das
+  barras; `Alt` não escolhe nada, e botão, roda ou dedo no meio fazem acorde. A frase que ensina uma
+  sequência a tira de `bindings::taught`, que parte do padrão; a constante ao lado do binding é da
+  árvore inteira, e colada depois de `bindings::label()` ensina, sob um grupo dobrado, uma tecla que
+  faz outra coisa.
 - Comando de uma vista usa `C-`, nunca `M-`: `M-` é a família dos acordes do compositor e não chega
   à janela.
 - O layout de teclado mora num lugar só (`nix/keyboard-xkb.nix`). O xkb não recusa layout que não
@@ -783,6 +746,28 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
 
 ## Regras de código
 
+- **O cargo planeja, o Nix constrói**: `nix/rust/plan.json` é o grafo de unidades do cargo,
+  commitado (`nix run .#rust-plan` depois de mexer num `Cargo.toml`; um plano velho é recusado), e
+  cada unidade — lib, programa, teste, clippy, rustfmt, terceiro — é uma derivation
+  (`rust.{release,loop,test}`; cobra `our-crates-are-built-unit-by-unit`).
+- **Cada programa é a sua unidade** (`rust.bins.<bin>`, `rust.brain`…), com o papel que o crate
+  declara, e só `ship` chega a uma máquina (cobra `every-bin-has-a-role`); um módulo nomeia o
+  programa que roda, nunca `${rust.shell}/bin/<outro>`. O perfil de release é o medido (cobra
+  `release-profile-is-the-measured-one`): mudá-lo é medir de novo com o `.#profile-bench`.
+- **Um crate declara o que lê** em `[package.metadata.ronoctua]` (`env`, `run-env`, `data`,
+  `beside`, `bins`…): ler um `RONOCTUA_*` não declarado falha, e uma declaração que ninguém lê é
+  recusada (cobra `crate-reads-are-declared`); `data` nomeia o que o crate compila, nunca a pasta.
+- **A base do shell (kit, porta, report, keep, work, inspect) e o rodapé não nomeiam
+  funcionalidade**: o que duas usam desce para a base, e uma funcionalidade fica sobre outra só onde
+  o desenho diz (cobram `the-shell-foundation-names-no-feature`, `footer-names-no-feature` e
+  `a-feature-stands-on-the-foundation`). As palavras de um daemon que a vista e o rodapé dizem ficam
+  numa folha `-words`, nunca no kit.
+- Guarda de teste numa biblioteca do shell é `cfg(any(test, feature = "test-support"))` (`cfg(test)`
+  vale só no próprio crate), e quem fica sobre ela liga `test-support` só nos `[dev-dependencies]`
+  (cobra `shell-tests-keep-the-machine-guards`).
+- Dado a que um binário é chaveado (`rust.keyed`: paleta, textos, catálogo) vai no embrulho com
+  `--set`, nunca `--set-default`; quem roda um programa sem embrulho exporta `rust.keyed`.
+- Caminho num argumento de comando vai por `region::path_argument`, nunca por `to_string_lossy`.
 - Arquivo de preferência da pessoa se escreve pelo `ronoctua-store` (`Store<T>`: escrita atômica,
   com o PID no nome do rascunho, porque duas portas são dois processos). Quem regrava o arquivo
   inteiro lê com `parsed`, nunca com `read`: o padrão que o `read` devolve num erro é certo para
@@ -806,9 +791,8 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
   legível entre as duas chamadas (cobra `stream-key-is-never-an-argument`).
 - Processo filho que segura um dispositivo (microfone, câmera) roda sob `setpriv --pdeathsig KILL`,
   além da guarda de `Drop`.
-- Todo filho que o rodapé sobe (um programa, uma porta, uma coluna) passa por
-  `watchdog::unshared`: nasce sem as variáveis do watchdog do rodapé, que o `NotifyAccess=main`
-  recusaria.
+- Todo filho que o rodapé sobe (um programa, uma porta, uma coluna) passa por `watchdog::unshared`:
+  nasce sem as variáveis do watchdog do rodapé, que o `NotifyAccess=main` recusaria.
 - Grandeza que cruza uma fronteira leva a unidade no nome ou no tipo.
 - Fallback silencioso precisa de check: valor desconhecido é recusado, não vira um padrão plausível.
 - Toda regra polkit nossa é estreita — uma ação, os verbos, uma unidade, um usuário — e tem check
@@ -827,22 +811,28 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
   `nix/cargo-dirs.nix`, sob o cache e com a versão do `rustc` no caminho — o devshell e o `.#dev`
   exportam as duas variáveis, a sessão só o `CARGO_BUILD_BUILD_DIR` (cobram `lean-tree` e
   `deps-layer-is-lean`). Nunca use `${../.}`.
-- **O `build-dir` não é o `target/`.** O `{workspace-path-hash}` vira dois níveis (`ab/cdef…`),
-  com o `CACHEDIR.TAG` na raiz deles, e o executável de teste mora lá; no `target/` só fica o que o
+- **O `build-dir` não é o `target/`.** O `{workspace-path-hash}` vira dois níveis (`ab/cdef…`), com
+  o `CACHEDIR.TAG` na raiz deles, e o executável de teste mora lá; no `target/` só fica o que o
   cargo promove (binários, por hard link). Em `${VAR:-…}` a `}` do template fecha a expansão: use
-  `if`. O crane não exporta `CARGO_TARGET_DIR`, então teste que o lê no Nix cai no fallback. E o
-  `target/` é um só para todo checkout: copie de lado o binário com que vai fotografar ou medir.
-- **Uma derivação referencia o que os bytes dela citam.** Extraia o binário (`rust.installer`,
-  `rust.rescue`, `rust.filesRoot`, `rust.transfers`) em vez de depender do workspace, que punha Zig,
-  clang e LLVM no ISO. Um `option_env!` com caminho do store também é referência, e quem compila a
-  paga: ícones e buffers vêm do ambiente, senão editar um buffer reconstrói o workspace.
+  `if`. As unidades não exportam `CARGO_TARGET_DIR`: teste que o lê no Nix cai no fallback. E o
+  `target/` é um só para todo checkout: copie de lado o binário com que vai fotografar.
+- **Uma derivação referencia o que os bytes dela citam.** Um `option_env!` com caminho do store
+  também é referência, e quem compila a paga: ícones e buffers vêm do ambiente. E bitcode esconde
+  referências: o caminho que uma lib de release assa só aparece no programa ligado, que recebe os
+  valores dos crates dentro dele (`cited`; cobra `programs-hold-what-they-cite`).
+- Um programa que acha outro ao lado de `current_exe()` só acha CÓPIAS no mesmo `bin/`, e uma cópia
+  não cita a unidade de que saiu (cobra `no-loop-build-reaches-a-machine`). O `--shrink-rpath` do
+  fixup tira o RUNPATH de um `dlopen`: ele vai no `postFixup`. O que um build vai construir é o dry
+  run (`will be built:`), não o fecho de `.drv`, e o `nix` do root constrói no cgroup de quem chama.
+- Gerador cita script por arquivo, nunca `${./scripts}` (cobra `generators-cite-their-scripts`).
+  `exportReferencesGraph` de um `.drv` pede as SAÍDAS do grafo; `lib.hasInfix` e `builtins.match`
+  com `.*` estouram a pilha num texto grande; `lib.trim` e `builtins.match` perdem o contexto.
 - **Geração só sai por contagem, e só a do sistema.** `nix-collect-garbage -d` ou
   `--delete-older-than` como root apaga as gerações de TODO perfil, `per-user` inclusive — o que a
-  garantia do dono proíbe. Quem apaga geração é o `ronoctua-system-generations` (as N mais novas,
-  a atual, a em execução, a do boot — especialização inclusive —, a de onde a última troca saiu e
-  toda que o menu de boot lista ficam; nenhum outro perfil), e o menu de boot lista no máximo N
-  (cobra `nix-gc-keeps-generations`). O resto é lixo: o piso do Nix (`min-free`) e a coleta da
-  atualização.
+  garantia do dono proíbe. Quem apaga geração é o `ronoctua-system-generations` (as N mais novas, a
+  atual, a em execução, a do boot — especialização inclusive —, a de onde a última troca saiu e toda
+  que o menu de boot lista ficam; nenhum outro perfil), e o menu de boot lista no máximo N (cobra
+  `nix-gc-keeps-generations`). O resto é lixo: o piso do Nix (`min-free`) e a coleta da atualização.
 - **O Nix pula sem aviso um `!include` que não consegue ler**: um piso em arquivo `0600` é uma
   máquina sem piso, e um arquivo ausente também não é erro (cobra `store-has-a-floor`).
 - **Interruptor que não interrompe**: um `mkIf` desligado não garante que o pacote saiu, porque ele
@@ -860,11 +850,10 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
 - `cannot download … from any mirror` não é arquivo removido: o `fetchurl` repete sem retomar. Os
   arquivos grandes são baixados pelo `nix/prefetch.nix`, que o gate roda antes de compilar.
 - `rustc` morto por `signal: 15` sem diagnóstico é o `earlyoom` do host: o que estoura é jobs ×
-  cores, e o gate limita o produto. Teste de VM segura a memória que declara
-  (`virtualisation.memorySize`) enquanto roda, e as baterias o rodam numa fase própria, somando o
-  declarado. Avaliar também custa: cada teste de VM avaliado segura ~260 MiB até o avaliador sair,
-  e o `nix build` da bateria inteira segurava 8 GiB durante todo o build. As baterias avaliam
-  antes e constroem pelos `.drv` (`nix/gate.nix`).
+  cores, e a conta é uma só (`nix/build-sizing.nix`, o `.#sized-build`, as pesadas sozinhas). Teste
+  de VM segura a memória que declara (`virtualisation.memorySize`) enquanto roda, e as baterias o
+  rodam numa fase própria, somando o declarado; e avaliam antes, construindo pelos `.drv`
+  (`nix/gate.nix`), porque cada teste de VM avaliado segura ~260 MiB.
 - `teste && comando` como última instrução do corpo de um laço derruba o script inteiro sob
   `errexit` + `pipefail` (que o `writeShellApplication` liga); um `ls` sem correspondência faz o
   mesmo. Use um `if` sem `else`. O check de um laço que varre diretório tem de plantar arquivos,
@@ -891,8 +880,13 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
 - A API gráfica mudou muito entre versões: leia a fonte da versão pinada, não suponha.
 - `take` é teto, nunca contagem, e `usize::MAX` é sentinela: uma função que materializava "todas" as
   linhas pediu 2⁶⁴ `Row`, e o `systemd-oomd` matou o cgroup da janela inteira, agente junto.
-- O `tracing` põe aspas em valor `Debug`: procure `engine="alacritty"`, não `engine=alacritty`. E o
-  alvo é o crate do BINÁRIO: o `[[bin]]` `ronoctua-player` loga sob `ronoctua_player::…`.
+- O `tracing` põe aspas em valor `Debug`: procure `engine="alacritty"`, não `engine=alacritty`. O
+  alvo é o crate do código que loga, e um `[[bin]]` é um crate com o nome dele: o núcleo e os
+  módulos do brain logam sob `ronoctua_brain_daemon::…`, a biblioteca e o `main` do daemon sob
+  `ronoctua_brain`.
+- `pub mod key;` inserido entre um `#[cfg(…)]` e o item dele leva o atributo. E o `cargo clippy`
+  local de uma seleção que junta uma biblioteca e quem a liga com `test-support` não vê o lado do
+  produto dela: quem vê é o `rust-clippy`.
 
 ### Renderização e fontes
 
@@ -936,8 +930,8 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
   Super do keymap até isso ser medido neste compositor (veja `docs/PENDING.md`). Não tente
   consertar pelo cliente: o teclado virtual escreve nos clientes, nunca no estado do assento.
 - Repegar o teclado exclusivo manda um `leave` antes do `enter` na mesma superfície. O
-  `KeyboardHold` (`surface.rs`) perdoa um `leave` por aquisição; tratar o primeiro como perda fecha
-  a leader no instante em que ela abre.
+  `KeyboardHold` (`surface/mod.rs`) perdoa um `leave` por aquisição; tratar o primeiro como perda
+  fecha a leader no instante em que ela abre.
 - Superfície escondida (debaixo de uma tela cheia) não recebe callback de quadro: nunca espere um
   quadro para confirmar uma troca de camada, senão o rodapé congela.
 - O `set_buffer_scale` é double-buffered e vai no commit que leva o buffer (o gancho de
@@ -998,20 +992,28 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
 
 ### Testes, checks e fotos
 
-- Três baterias: `quick` (dez checks), `most` (tudo menos o que constrói uma instalação) e `gate`
+- Três baterias: `quick` (os escolhidos), `most` (tudo menos o que constrói uma instalação) e `gate`
   (tudo). O `tests/slow.nix` diz o que sai do `most` (cobra `test-tiers-are-total`).
 - Um check prova o comportamento pedido. Check que confere o código como ele está escrito, ou a
   mensagem que ele imprimiria, passa num marco vazio.
 - `cargo test` precisa dos programas externos: sem as variáveis `RONOCTUA_*`, os testes de ffmpeg
-  saem calados e não testam nada. Elas vão na derivação `tests`, nunca em `commonArgs`.
+  saem calados e não testam nada. O caminho vai na tabela `testEnv` do `nix/rust.nix` (nunca em
+  `generated`, que chega aos programas), e o crate que o lê o declara (`run-env`, `test-env`).
+- **A granularidade é um check** (`tests/build-granularity.nix`): a edição simulada na avaliação
+  (`crateSourceOverrides`) contra o plano, nos dois sentidos. Um check de dado prova que a edição
+  chegou ao build (o embrulho mudou), senão compara o build com ele mesmo.
+- Um teste só, sem recompilar: `rust.testsOf { … }`. Uma unidade que TEM DE FALHAR é ela mesma com o
+  veredito invertido (o `refused` do `tests/brain-split.nix`), o comando do executor sozinho no
+  `if`: numa condição o `errexit` não vale.
 - O programa de mentira de um teste é escrito por um `/bin/sh` filho, nunca por este processo: um
   arquivo que ele tem aberto para escrita quando outra thread de teste faz `fork` fica com o filho
   até o `exec`, e rodar o arquivo nessa janela é `ETXTBSY` ao acaso (`write_executable` no
   `ronoctua-transfers` e no `ronoctua-software`).
 - Check que lê fonte abre com o `pyPrelude` de `tests/checks.nix` (cobra
   `checks-do-not-pass-by-coincidence`): `code_of`, `uncommented`, `hashless`, `body_of`, `scope`,
-  `shut_at`, `floor`/`must` e `without_tests`. E declara a pergunta que faz: `# FILE-WIDE:`,
-  `# PROSE:` ou `# PARSED:`.
+  `shut_at`, `floor`/`must`, `without_tests` e `outside_tests`, e declara a pergunta que faz
+  (`# FILE-WIDE:`, `# PROSE:` ou `# PARSED:`). O shell se lê pelo caminho dentro do `src/`, nunca
+  pela pasta do crate (`shell_file("door/mod.rs")`, `shell_files`, `shell_manifests()`).
 - Na foto de VM, o ponteiro do compositor entra na imagem, e é branco: uma asserção de "há texto
   aqui" já foi respondida pelo mouse. Faça a asserção de fora da tela (um `pgrep` na porta usada),
   sem mover o ponteiro.
@@ -1034,17 +1036,16 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
   `nix run .#shot -- <cena.py>`. O palco (VM, compositor, rodapé e os ajudantes `control`, `notify`,
   `shot`, `crop`, `changed`, `has_colour`…) é o `nix/shot.nix`; as fotos vão para
   `~/.cache/ronoctua-distro/shot`, que é apagada a cada rodada. Nenhuma cena fica no repositório.
-  `--apps` troca o palco pelo `nix/shot-apps.nix`: sem rodapé, com Flatpak, o portal, uma rota para
-  a internet e 16 GiB de disco — é onde se vê um app do Flathub. O disco da VM vai para o cache e
-  não para o `XDG_RUNTIME_DIR`, que é tmpfs: cada byte de um runtime Flatpak seria RAM.
-- **Uma coisa pesada por vez.** Pesado é compilar o workspace (no `cargo` ou no Nix), um teste de
-  VM e uma bateria. A jaula não alcança o `nix build`, que roda no daemon: um `nix build` avulso
-  leva `--max-jobs 1 --option cores 4` (o workspace `release` chega a ~8 GB assim, e o `rustc` do
-  `ronoctua-shell` sozinho a 5 GB), e nenhum `cargo` roda enquanto o Nix compila. Entre agentes vale
-  o mesmo: um compila e o outro espera, e ninguém compila durante o `.#most`.
-- **Itere no `cargo`, não no Nix.** Tocar o `crates/ronoctua-protocol` reconstrói o workspace
-  inteiro no Nix. Lógica nova nasce com `#[cfg(test)]` e roda com `cargo test -p <crate>`; vá ao
-  Nix uma vez, para provar a travessia do WIT e o pixel.
+  `--apps` troca o palco pelo `nix/shot-apps.nix` (sem rodapé, com Flatpak, o portal e a internet):
+  é onde se vê um app do Flathub.
+- **Uma coisa pesada por vez.** Pesado é construir o grafo de unidades no Nix, compilar o shell no
+  `cargo`, um teste de VM e uma bateria. A jaula não alcança o `nix build`, que roda no daemon: o do
+  grafo é `nix run .#sized-build -- …` (o link de release do shell chega a ~3,9 GiB), o de uma
+  derivação pequena leva `--max-jobs 1 --option cores 4`, e nenhum `cargo` roda junto. Entre agentes
+  também: um compila e o outro espera, e ninguém compila durante o `.#most`.
+- **Itere no `cargo`, não no Nix.** Tocar o `crates/ronoctua-protocol` reconstrói no Nix toda
+  unidade acima dele (o `.#rebuild-cost` diz quanto). Lógica nova nasce com `#[cfg(test)]` e roda
+  com `cargo test -p <crate>`; vá ao Nix uma vez, para provar a travessia do WIT e o pixel.
 - **Rode só os checks do que mudou** (os do que você tocou, `nix fmt -- --check` e `english-names`:
   ~3 min). O `.#most` é para antes do commit, e o `.#gate` é do dono. Congele a árvore antes de
   disparar uma bateria, porque o Nix a fotografa na avaliação. Diga no relatório o que rodou e o
@@ -1052,10 +1053,9 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
 - **Clippy nos buffers é à mão**, porque o `cargo clippy --workspace` não os alcança:
   `cd buffers/<id> && cargo clippy --all-targets --target wasm32-wasip2 -- -D warnings`.
 - O perfil `[profile.loop]` do `Cargo.toml` é o do laço (`.#dev`, `rust.tests`, `rust.clippy`) e
-  troca o LTO por velocidade: uma linha editada no `ronoctua-shell` custa 19 s, contra 148 s em
-  `release`.
-  `.#vm`, `.#iso`, `.#install`, `.#bench` e os módulos usam `release` (cobra
-  `the-loop-profile-is-never-installed`).
+  troca o LTO por velocidade: uma linha de uma vista custa ~5 s no laço (do rodapé, ~25 s), contra
+  ~100 s até o programa de `release` no Nix. `.#vm`, `.#iso`, `.#install`, `.#bench` e os módulos
+  usam `release` (cobra `the-loop-profile-is-never-installed`).
 - **Sabotagem é síncrona**: quebre, rode o check e restaure na mesma chamada, nunca com um build em
   segundo plano. Restaure REESCREVENDO o arquivo, nunca com `cp -p`: o mtime antigo faz o cargo tomar
   o build sabotado por fresco, e a rodada "limpa" seguinte testa a sabotagem.
@@ -1070,15 +1070,15 @@ TLS (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os caminhos
 ## Mapa do repositório
 
 ```
-assets/          o que é declarado à mão: tokens/, i18n/ (languages.nix + um .ftl por idioma),
-                 themes/ (as sementes), icons/, lexicon/, e as tabelas de cada feature
-                 (compositor-deeds.nix, notifications.nix, cache.nix, world.nix…)
-crates/          o workspace Rust (grafo: docs/ARCHITECTURE.md, seção "Grafo de crates")
+assets/          o que é declarado à mão: tokens/, i18n/ (só languages.nix), themes/ (as sementes),
+                 icons/, lexicon/ e as tabelas de cada feature (compositor-deeds.nix, cache.nix…)
+crates/          o workspace Rust (grafo: docs/ARCHITECTURE.md, seção "Grafo de crates"), cada crate
+                 que fala com o seu i18n/; o shell em ronoctua-shell-* e o binário ronoctua-shell
 buffers/         os componentes wasip2, um workspace Cargo próprio cada
 extension/       a extensão do navegador
-nix/             derivações e apps do flake; modules/ (NixOS), scripts/ (geradores),
-                 installer/ (o ISO), disko/ (o disco); rust.nix passa os caminhos do store ao Rust;
-                 dev.nix é o laço aninhado (reload.nix observa, footer-single.nix reinicia)
+nix/             derivações e apps do flake; modules/ (NixOS), scripts/ (geradores), installer/
+                 (o ISO), disko/ (o disco); rust/ e rust.nix, o build em unidades; dev.nix é o
+                 laço aninhado (reload.nix observa, footer-single.nix reinicia)
 tests/           checks.nix (os checks), *-vm.nix (testes de VM), quick.nix e slow.nix (as baterias)
 templates/       o flake de uma máquina (templates/machine), com a distro como input
 docs/            ARCHITECTURE, PENDING, DEVELOPMENT, INSTALL

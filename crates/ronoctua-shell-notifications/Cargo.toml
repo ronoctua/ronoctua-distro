@@ -1,0 +1,44 @@
+[package]
+name = "ronoctua-shell-notifications"
+description = "The notification manager (LEADER n n): what happened, what was filtered out and the catalogue, in the footer's region and in a window."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE NOTIFICATION MANAGER (the 2026-10-12 wave): one view, its two doors —
+# the footer's region and a window — and the one handler of what they ask. It
+# holds a cursor and never a record: the queue and the book are the footer's
+# desk, lent to the region and asked by it (`desk`). It stands on the kit and
+# the door, and names nothing of the footer.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-notify = { path = "../ronoctua-notify" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-store = { path = "../ronoctua-store" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

@@ -31,3 +31,10 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_7ZZ", "RONOCTUA_BSDTAR", "RONOCTUA_SETSID"]
+test-env = ["RONOCTUA_UNRAR"]
+env-absent = ["RONOCTUA_UNRAR"]
+run-env = ["RONOCTUA_7ZZ", "RONOCTUA_BSDTAR", "RONOCTUA_SETSID", "RONOCTUA_UNRAR"]

@@ -3,33 +3,35 @@
 # "Tokens defined ONCE in Nix; the build generates (a) the shell's Rust table
 # and (b) a WIT enum of valid names."
 #
-# BOTH come from here, from the same data: `tokens.rs` for the host and
-# `tokens.wit` for the guest. Two lists would diverge, and the divergence
-# would show up as the wrong colour on screen — not as an error.
+# (a) is this derivation, `tokens.rs`; (b) is written at evaluation by
+# `nix/token-names.nix` from the SAME names this one is handed. Two lists
+# would diverge, and the divergence would show up as the wrong colour on
+# screen — not as an error; `invalid-token-fails-build` holds them to one.
+#
+# NO COLOUR VALUE COMES IN. The roles are names read at evaluation, and the
+# bytes are the palettes `nix/themes.nix` writes (`palettes.bin`), read by the
+# binaries at run time (`RONOCTUA_THEMES`): so a seed, a recipe's value, the
+# theme list or the colour generator itself can change without this
+# derivation — and every crate compiled against it — changing at all
+# (`themes-are-data`, `names-are-extracted-at-evaluation`).
 {
   lib,
   stdenvNoCC,
   python3,
   writeText,
   glyphdb,
-  # THE COLOURS, ALREADY SOLVED: `nix/themes.nix` runs the generator over
-  # every theme and this only reads `themes.json` out of it — the ordered list
-  # of `{ id, colors }`.
-  themed,
-  # WHICH OF THEM A FRESH MACHINE SHOWS, by name. It is not the first any
-  # more: see `assets/themes/themes.nix`.
-  defaultTheme,
+  # THE COLOUR ROLES, by name: `nix/token-names.nix`'s `roles`, the attribute
+  # names of `assets/tokens/colors.nix` and `assets/tokens/shaped.nix`.
+  roleNames,
   typographyFile,
   spaceFile,
   trayTableFile,
   categoryTableFile,
-  # THE BRAIN MODULES' GLYPH TOKENS (brain.md §3). They are in the icon table
-  # already — `nix/glyphgen.nix` merges and measures them — and this is only
-  # which of the table's names are a module's, for `icon::brain_mark`: the
-  # modeline draws a mark from a name that crossed the brain's socket, and
-  # only a module's own glyph may answer it. The flake's one loader's `glyphs`.
-  brainGlyphs,
 }:
+
+# NO BRAIN MODULE'S GLYPH COMES IN: a module's mark is data the footer reads at
+# run time (`nix/brain-catalogue.nix`), so a module's glyph — a person's above
+# all — never moves this table, nor any of the crates that include it.
 
 let
   # The Nix -> Python bridge is JSON. There is no Nix parser in Python, and
@@ -46,7 +48,7 @@ let
   # `assets/icons/category-glyphs.nix`.
   categoriesJson = toJson "category-glyphs.json" categoryTableFile;
 
-  brainMarksJson = writeText "brain-marks.json" (builtins.toJSON (builtins.attrNames brainGlyphs));
+  rolesJson = writeText "token-roles.json" (builtins.toJSON roleNames);
 in
 stdenvNoCC.mkDerivation {
   pname = "ronoctua-tokens-rs";
@@ -60,23 +62,20 @@ stdenvNoCC.mkDerivation {
     runHook preBuild
     mkdir -p $out
     python3 ${./scripts/gen-tokens.py} \
-      --themes ${themed}/themes.json \
-      --default-theme ${defaultTheme} \
+      --roles ${rolesJson} \
       --typography ${toJson "typography.json" typographyFile} \
       --space ${toJson "space.json" spaceFile} \
       --icons ${glyphdb.db}/icons.json \
       --tray ${trayJson} \
       --categories ${categoriesJson} \
-      --brain-marks ${brainMarksJson} \
-      --out $out/tokens.rs \
-      --out-wit $out/tokens.wit
+      --out $out/tokens.rs
     runHook postBuild
   '';
 
   dontInstall = true;
 
   meta = {
-    description = "Tokens in Rust and in WIT, generated from assets/tokens/*.nix";
+    description = "The tokens' Rust table, generated from assets/tokens/*.nix: names and layout constants, no colour value";
     platforms = lib.platforms.all;
   };
 }

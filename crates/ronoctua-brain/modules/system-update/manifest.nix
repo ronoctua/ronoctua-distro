@@ -105,7 +105,13 @@
   # narrow` reads the root half's lock and the module's `stateDir` to hold
   # them against `ronoctua-machine`, which takes the same lock.
   namedBy = {
-    "crates/ronoctua-shell/src/update_window.rs" = "*";
+    "crates/ronoctua-shell-update/src/update_window.rs" = "*";
+    # And the update's two doors' one handler and its footer region, which
+    # follow a run the module's door started (`update_region::Open`).
+    "crates/ronoctua-shell-update/src/update_region.rs" = "*";
+    # And the mark the footer draws while a run is under way, with the door
+    # a click on it opens: a leaf under the view and the footer.
+    "crates/ronoctua-shell-update-words/src/update_mark.rs" = "*";
     "tests/checks.nix" = [ "system-update" ];
   };
 }

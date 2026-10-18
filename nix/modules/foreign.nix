@@ -15,7 +15,7 @@
 # IT IS THE DECLARED THEME'S MODE AND NOT THE RUNNING ONE. What `ronoctua.theme`
 # names is what the machine is built with; switching at run time with
 # `LEADER s t` is the shell's half, through dconf, because `/etc/xdg` is in the
-# store and read-only (`crates/ronoctua-shell/src/toolkits.rs`). The two agree
+# store and read-only (`crates/ronoctua-shell-kit/src/toolkits.rs`). The two agree
 # on the first boot and the shell owns every change after it.
 #
 # Three places, because the toolkits ask three questions: GTK 3 and 4 read

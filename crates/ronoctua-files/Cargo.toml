@@ -81,3 +81,7 @@ path = "src/bin/empty-trash.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_CACHE_RS", "RONOCTUA_FSTRIM", "RONOCTUA_KEYS_DIR", "RONOCTUA_MIME_DIR"]

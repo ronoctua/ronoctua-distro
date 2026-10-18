@@ -52,9 +52,13 @@ Abre uma janela com o compositor dentro e o rodapé embaixo. A leader aqui é **
 tudo o mais se descobre por ela; as teclas de emergência são impressas no terminal ao subir.
 
 **Editar recarrega sozinho.** Um `.rs` em `crates/` recompila e reinicia o rodapé, com o compositor
-de pé. Um `.rs` em `buffers/` reconstrói **aquele componente** e reinicia o rodapé apontando para ele —
-um buffer é um componente wasm, e quem constrói componente é o flake. O laço imprime
-`hot reload ligado` na partida; se não imprimir, você não está na raiz do projeto.
+de pé. Um `.ftl` de um crate (`crates/<crate>/i18n/`) refaz os textos e as chaves deste checkout
+(`ronoctua-keys`) e reinicia o rodapé: uma frase editada não compila nada (a primeira da sessão
+compila o rodapé com o `cargo` uma vez, porque o do store é o embrulho que fixa os textos do build),
+e uma chave nova recompila só os crates que a dizem. Um `.rs` em `buffers/` reconstrói **aquele
+componente** e reinicia o rodapé apontando para ele — um buffer é um componente wasm, e quem
+constrói componente é o flake. O laço imprime `hot reload ligado` na partida; se não imprimir, você
+não está na raiz do projeto.
 
 > **Arquivo novo precisa de `git add -N`.** O flake enxerga a árvore do **git**: um arquivo nunca
 > adicionado é invisível para ele, a construção passa e a sua edição simplesmente não está lá. O laço
@@ -149,8 +153,10 @@ grep -l 'RONOCTUA_INSTANCE=dev' /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 |
 | `nix run .#most` | ~16 min | antes de commitar |
 | `nix run .#gate` | horas | antes de publicar — **só ele fecha o invariante 7** |
 
-O **`quick`** são dez nomes escolhidos em `tests/quick.nix` — formatação, clippy, testes e tabelas que
-o compilador não confere. É um **subconjunto**, não uma categoria, e ele diz isso ao terminar.
+O **`quick`** são os nomes escolhidos em `tests/quick.nix` — formatação, clippy, testes, o plano do
+cargo, as leituras declaradas, a granularidade de uma edição e tabelas que o compilador não confere
+—, construídos pelo `ronoctua-sized-build`. É um **subconjunto**, não uma categoria, e ele diz isso
+ao terminar.
 
 O **`most`** é todo check menos os de `tests/slow.nix`, que **constroem uma instalação** (um sistema
 NixOS, uma imagem de disco, o ISO) ou são marcos. As VMs comuns ficam: cada roteiro leva de 17 a 48 s.
@@ -158,18 +164,21 @@ Ao terminar, ele **lista o que não verificou**, pelo nome. `test-tiers-are-tota
 não envelheça, e um check novo entra no `most` sozinho.
 
 O **`gate`** roda o `nix flake check` depois de **medir a memória livre**: ele limita quantas
-compilações correm juntas e constrói as três pesadas uma de cada vez. Sem isso, numa máquina com
-`earlyoom`, o `rustc` morre com `signal: 15` **sem diagnóstico nenhum** — parece defeito de compilação
-e é falta de RAM. Se acontecer mesmo assim, ele diz quem foi morto e por quem — o `earlyoom`, o
-`systemd-oomd` ou o OOM killer do kernel. Numa máquina da distro ele também não passa do teto do
-`nix-daemon` (ver [O que a máquina precisa ter](#o-que-a-máquina-precisa-ter)).
+compilações correm juntas (`nix/build-sizing.nix`, a mesma conta do `ronoctua-machine apply`) e
+constrói as unidades pesadas (`rust.heavyUnits`) uma de cada vez, depois do que elas precisam. Sem
+isso, numa máquina com `earlyoom`, o `rustc` morre com `signal: 15` **sem diagnóstico nenhum** —
+parece defeito de compilação e é falta de RAM. Se acontecer mesmo assim, ele diz quem foi morto e
+por quem — o `earlyoom`, o `systemd-oomd` ou o OOM killer do kernel. Numa máquina da distro ele
+também não passa do teto do `nix-daemon` (ver [O que a máquina precisa
+ter](#o-que-a-máquina-precisa-ter)).
 
 As duas baterias andam em fases: **0** avalia o `.drv` de cada alvo em lotes, antes de construir
-qualquer coisa (um teste de VM avaliado custa ~260 MiB, e todos juntos passam de 8 GiB); **1** as
-quatro pesadas, uma de cada vez; **2** o que as VMs bootam; **3** as VMs, sozinhas, tantas ao mesmo
-tempo quanto cabe na **memória que declaram** (`virtualisation.memorySize`, somada por nó) — cada
-uma aparece com `->` ao começar e `<-` ao acabar; **4** o resto. O gate termina no
-`nix flake check`.
+qualquer coisa (um teste de VM avaliado custa ~260 MiB, e todos juntos passam de 8 GiB); **1** o
+build Rust: o que as pesadas precisam, como unidades Rust (`--max-jobs <fatias> --cores 1`), cada
+pesada sozinha, toda outra unidade, e as execuções de teste por último; **2** o que as VMs bootam;
+**3** as VMs, sozinhas, tantas ao mesmo tempo quanto cabe na **memória que declaram**
+(`virtualisation.memorySize`, somada por nó) — cada uma aparece com `->` ao começar e `<-` ao
+acabar; **4** o resto. O gate termina no `nix flake check`.
 
 > **`nix flake check` sem `-L` não mostra log** — silêncio não é sintoma.
 
@@ -203,9 +212,10 @@ sobre um histórico vazio dela, que teclas e cliques enchem), a do video-metrics
 (`--door stick --scene <arquivo>`), a central de programas (`--door software --room <pasta>`), a do
 Incus (`--door incus --scene <arquivo>`), a das contas LLM (`--door agents --places <pasta>`), a da
 atualização sobre uma cena inteira (`--door update-scene --scene <arquivo>`), e quatro sobre uma
-cena dada inteira (`scene_photograph.rs`): a das telas (`--door display --screens
-one|two|stacked|dark`), a do clipboard (`--door clipboard --entry <texto> --image <png>`), a cortina
-de baixo do redimensionador (`--door curtain --screen <l>x<a> --room <l>x<a>`) e a linha de vida
+cena dada inteira (cada câmera na tabela `CAMERAS` do crate da porta): a das telas
+(`--door display --screens one|two|stacked|dark`), a do clipboard
+(`--door clipboard --entry <texto> --image <png>`), a cortina de baixo do redimensionador
+(`--door curtain --screen <l>x<a> --room <l>x<a>`) e a linha de vida
 (`--door lifeline --result <palavra> [--asking]`) —, e o próprio rodapé (`--door footer`,
 `footer_photograph.rs`: modeline, minibuffer e região sobre um compositor substituto com um monitor;
 `--app`, `--state`, `--tone`, `--states` e `--local` descrevem a janela em foco, `--screens` e
@@ -241,9 +251,10 @@ look.json` pergunta ao player que estiver rodando, e `look` só lê. O contorno 
 jeito: `python3 tests/player-client.py '{"ask":"queue"}' > queue.json`, ou `player({"ask": "queue"})`
 numa cena.
 
-O `.#png -- --door` usa o workspace `release` do Nix, e editar o shell o reconstrói (minutos, e uns
-8 GB de memória). Iterando, a câmera é o mesmo subcomando do binário do laço:
-`cargo build --profile loop -p ronoctua-shell --bin ronoctua-shell` dentro do `nix develop`, e
+O `.#png` roda os programas de LOOP das unidades (`rust.loop.bins.ronoctua-shell`,
+`…ronoctua-render-png`): a primeira foto depois de uma edição numa vista custa a lib dela e o link
+de loop do programa, não o link LTO de release. Iterando, a câmera é o mesmo subcomando do binário
+do laço: `cargo build --profile loop -p ronoctua-shell` dentro do `nix develop`, e
 `ronoctua-shell photograph …` com os mesmos argumentos. Sem GPU, aponte `VK_DRIVER_FILES` para o
 lavapipe do Mesa do flake (`lvp_icd.x86_64.json`), como o app `.#png` faz. O `target/` do cargo é um
 só para todo checkout: com duas árvores abertas, copie de lado o binário com que vai fotografar.
@@ -320,6 +331,97 @@ Cada linha que o ponteiro cruza vira uma medida: do EVENTO até o `present`. É 
 latência. Se ela vier em milissegundos de um dígito, o atraso que se vê está na cadeia — no laço há
 um compositor a mais entre a mão e a tela. Medir a outra metade exige a distro instalada.
 
+## O build em unidades
+
+O `Cargo.toml` é a verdade: o `cargo` local (devshell, `.#dev`, `cargo test -p`) continua igual, e o
+Nix só o lê. O que o Nix constrói é o plano que o cargo faz da árvore (`nix/rust/plan.json`), uma
+derivation por unidade — o porquê está no `docs/ARCHITECTURE.md`, seção 10.
+
+```
+nix run .#rust-plan      regenera nix/rust/plan.json (dependência, feature, perfil ou alvo mudou)
+nix run .#rebuild-cost   o que a árvore reconstrói contra o HEAD, e quanto, sem construir
+nix run .#sized-build -- <instalável>…
+                         nix build dimensionado: as pesadas sozinhas, o resto quantas couberem
+nix run .#rust-peaks     as unidades que mais pesaram; falha se uma passou da fatia e não é pesada
+nix run .#profile-bench  mede cada variante do perfil de release no .#bench (horas; sessão gráfica)
+```
+
+- **Um manifesto mudado sem o plano** deixa toda unidade sem derivation: a avaliação recusa e diz
+  `nix run .#rust-plan`. O `git diff nix/rust/plan.json` diz quais unidades mudaram.
+- **O que uma edição custa, antes de construir**: `nix run .#rebuild-cost` (a árvore contra o
+  `HEAD`; `-- --against <rev>`, ou `-- crates/x/src/a.rs` para uma edição de um byte simulada sem
+  tocar o arquivo; `--json` para script). Uma entrada nunca medida é dita, nunca contada como
+  grátis. O índice inteiro: `nix eval --json .#legacyPackages.x86_64-linux.rustUnits`.
+- **Uma unidade**: `nix run .#sized-build -- .#legacyPackages.x86_64-linux.rust.bins.<programa>
+  --no-link` (o programa de release; `rust.<nome>` é o que o módulo roda, com o embrulho de quem
+  pinta; `rust.loop.bins.<programa>` o de loop; `rust.shell`/`rust.loopShell` o bundle do rodapé), e
+  `rust.test.testRuns.<crate>`, `rust.test.clippy.<crate>`, `rust.release.deps."<chave>"` (um
+  terceiro). `metrics/seconds` e `metrics/peak-kib` dizem quanto custou; o comando de um terceiro
+  está no `nix-support/rustc.json` dele. Os agregados são `rust.tests`, `rust.clippy` e `rust.fmt`
+  (os checks `rust-tests`, `rust-clippy`, `rust-fmt`).
+- **Um programa que saiu do PATH** (os `driver` de teste, as ferramentas de check) roda pelo flake:
+  `nix run .#rust.bins.ronoctua-test-faces`, `nix run .#rust.index -- query …`.
+- **Um teste só, sem recompilar**, num check: `rust.testsOf { name; crate; exact; expect; … }`,
+  sobre o harness que as unidades já construíram.
+- **Quanto cabe nesta máquina agora**: `ronoctua-build-sizing --explain` (está no fecho do
+  `ronoctua-machine`).
+- **As unidades guardadas**: num checkout,
+  `~/.local/state/ronoctua/gcroots/units-<release|loop>-<hash do checkout>@<carimbo>/`; numa
+  máquina, `/var/lib/ronoctua-machine/kept-units/release@<carimbo>/`. Nenhuma raiz é motivo para
+  compilar: só o que o store tem é enraizado.
+- **Um crate novo** declara o que lê em `[package.metadata.ronoctua]` (`env`, `test-env`,
+  `env-absent`, `run-env`, `run-env-absent`, `beside`, `data`, `bins`): a unidade que lê um
+  `RONOCTUA_*` não declarado falha dizendo o nome e a chave. Um programa que é ferramenta de teste
+  declara `bins = { "<nome>" = "driver" }`.
+- **Um check de granularidade que falha** diz a entrada e o porquê: "is built from it and was NOT
+  rebuilt" é um fileset estreito demais; "was rebuilt, and nothing of it is built from that file" é
+  um fileset, um `data` ou uma variável largos demais.
+
+O shell são ~50 crates: `cargo test -p ronoctua-shell-<funcionalidade>` roda os testes de uma
+funcionalidade sem compilar o rodapé (segundos); `cargo test -p ronoctua-shell-footer`, os do
+rodapé; `cargo test -p ronoctua-shell`, os que perguntam a árvore inteira de teclas, as regiões
+registradas e as tabelas de portas e câmeras. `ronoctua-shell check-keymap --dump` imprime o keymap
+inteiro (os três conjuntos, os acordes, o registro, as ações do brain), uma linha por fato, para
+comparar duas montagens. O clippy local de um crate sozinho (`cargo clippy -p <crate>
+--all-targets`) vê o lado do produto dele; junto de quem o liga com `test-support` (`--workspace`),
+não vê — o `rust.test.clippy.<crate>` do Nix vê os dois.
+
+## Onde moram as frases, as cores e o que o brain desenha
+
+Os NOMES compilam; os VALORES são dado lido em tempo de execução, e um programa recusa numa linha em
+inglês que nomeia a variável o que não lê (os textos e o catálogo na partida, com código 78; a
+paleta na primeira cor pedida, num pânico):
+
+- **Uma frase** mora no crate que a diz: `crates/<crate>/i18n/<idioma>.ftl`, nos dois idiomas.
+  Editar um valor não compila nada; no `.#dev` o laço refaz os textos e reinicia o rodapé, no
+  devshell `ronoctua-keys` refaz os textos para onde o `RONOCTUA_TEXTS` dele aponta, e fora dos dois
+  é `nix build .#texts` e `RONOCTUA_TEXTS=<saída>`.
+- **Uma chave nova** vai ao fragmento do crate que a diz (dita por vários, ao crate mais próximo
+  sobre o qual todos ficam) e então `ronoctua-keys`: o `cargo` recompila esse crate e o que o liga,
+  sem reentrar no shell. `nix run .#texts -- missing pt-BR` diz o que falta traduzir, fragmento por
+  fragmento; `nix run .#texts -- where <chave>` acha o fragmento de uma chave.
+- **Um crate novo que fala**: `env = ["RONOCTUA_KEYS_DIR"]` no `[package.metadata.ronoctua]`, um
+  `src/key.rs` (copie de outro), `pub mod key;` no `lib.rs` — fora de qualquer `#[cfg]` — e o
+  `i18n/<idioma>.ftl`.
+- **Uma cor**: mexa na semente (`assets/themes/<id>.nix`), `nix build .#themes --no-link
+  --print-out-paths` (o `report.md` está lá) e `RONOCTUA_THEMES=<saída>` com o binário do `cargo`,
+  ou `nix run .#png` — nenhum crate recompila.
+- **O que o rodapé desenha de um módulo do brain** (marcas e glifos, avisos, ações, eventos,
+  notificações) é o catálogo: `nix build .#brain-catalogue`; depois de mexer num `manifest.nix`,
+  reentre o ambiente (`direnv reload`). O catálogo é dado e não recompila nada, mas o manifesto de
+  um módulo DA DISTRO também é compilado na biblioteca `ronoctua-brain`, que fica sob o shell
+  inteiro: uma marca nova num módulo da distro recompila a biblioteca, a base do shell, o rodapé,
+  todo crate de funcionalidade e quatro programas (quanto, diz
+  `nix run .#rebuild-cost -- crates/ronoctua-brain/modules/<id>/manifest.nix`; ver
+  `docs/PENDING.md`). O de um módulo da pessoa recompila só o daemon.
+- `ronoctua-shell check-texts` (toda chave de todo crate que o binário liga e de todo módulo do
+  brain da distro, em todo idioma) e `ronoctua-shell check-catalogue` dizem se um diretório de
+  textos ou um catálogo serve para o binário; `ronoctua-brain modules --catalogue` imprime o que o
+  daemon compilou, na forma do catálogo.
+- Um `cargo test` fora do devshell precisa de `RONOCTUA_TEXTS`, `RONOCTUA_THEMES` e
+  `RONOCTUA_BRAIN_CATALOGUE`: o primeiro teste que fala, pinta ou desenha uma marca para nomeando a
+  variável que falta.
+
 ## Instalar de verdade
 
 Boot, TPM, hibernação e desempenho gráfico não se provam em VM.
@@ -348,7 +450,7 @@ servindo ali dentro, com o nome próprio que ele tem (ver [`.#dev`](#dev--o-comp
 **O age pós-quântico se confere sem VM.** `cargo test -p ronoctua-pq` responde aos vetores dos três
 textos que definem o `mlkem768x25519` (o X-Wing, o HPKE e o spec do age); `cargo run -p ronoctua-pq
 --bin ronoctua-test-pq -- vectors` os lista um a um. O cruzamento com o `age` do Go, nos dois
-sentidos, é o `pq-age-interop`, que pede o workspace de `release`.
+sentidos, é o `pq-age-interop`, que roda os programas de `release`.
 
 <!-- anchor: L15 -->
 
@@ -366,7 +468,7 @@ outro sistema, confira um a um:
 
 | | o quê | por quê |
 |---|---|---|
-| memória | 14 GiB na máquina de referência | o `rustc` do `ronoctua-shell` em `release` chega a 5 GiB sozinho; o gate mede o que está livre e se encolhe, mas abaixo de ~10 GiB livres as pesadas vão com um núcleo e podem não caber |
+| memória | 14 GiB na máquina de referência | o link de release do programa do shell chega a ~3,9 GiB a doze núcleos (mais ~0,3 GiB por núcleo); o dimensionamento mede o que está livre e dá às pesadas os núcleos que cabem, um só abaixo de ~7,2 GiB livres numa máquina de 14 GiB (`ronoctua-build-sizing --explain` diz esta) |
 | disco | dezenas de GB livres | o diretório de build do cargo (`nix/cargo-dirs.nix`, fora da árvore) passa de 70 GB com os perfis `loop` e `release`; o store cresce a cada bateria |
 | KVM | `/dev/kvm` legível e gravável por você | os testes de VM e o `.#vm` sem aceleração emulam cada instrução |
 | `system-features` | `kvm nixos-test big-parallel benchmark` no `nix.conf` do daemon | um teste de VM pede `kvm` e `nixos-test`; sem eles o Nix recusa construí-lo |
@@ -430,5 +532,5 @@ de boot espera ser julgado e quando a geração nova tiraria do menu de boot a �
 
 **A sessão de torrent vive dentro da fila.** Ela sobe no primeiro magnet e escuta em 6881-6889; o
 estado fica em `$XDG_DATA_HOME/ronoctua/torrent` (no laço, `ronoctua-dev/torrent`). Um `.torrent`
-puramente v2 para experimentar sai de `ronoctua-test-torrent <diretório>`, que cria, verifica e não
-toca a rede.
+puramente v2 para experimentar sai de `nix run .#rust.bins.ronoctua-test-torrent -- <diretório>`,
+que cria, verifica e não toca a rede (é um programa `driver`: nenhuma máquina o leva no PATH).

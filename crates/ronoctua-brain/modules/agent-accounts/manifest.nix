@@ -116,6 +116,6 @@
   namedBy = {
     "assets/belongings.nix" = [ "agent-accounts" ];
     "assets/brain-resting-marks.nix" = [ "agent-accounts" ];
-    "crates/ronoctua-shell/src/agents.rs" = "*";
+    "crates/ronoctua-shell-agents/src/agents.rs" = "*";
   };
 }

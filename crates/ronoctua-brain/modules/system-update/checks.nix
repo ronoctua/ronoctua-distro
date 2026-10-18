@@ -373,7 +373,7 @@ in
         # literals.
         facts = json.load(open("${facts}"))
         root = pathlib.Path("${self}")
-        window = uncommented((root / "crates/ronoctua-shell/src/update_window.rs").read_text())
+        window = uncommented((root / "crates/ronoctua-shell-update/src/update_window.rs").read_text())
         nix = hashless((root / "${folder}/module.nix").read_text())
         person = hashless(pathlib.Path("${runners}/bin/ronoctua-update").read_text())
         floor(len(window), 2000, "characters of update_window.rs")
@@ -697,7 +697,7 @@ in
         # (`body_of`); from the generated script, module-level lines. The
         # needles are strings, so `uncommented`/`hashless` keep them.
         facts = json.load(open("${facts}"))
-        runner = uncommented(pathlib.Path("${self}/crates/ronoctua-brain/src/runner.rs").read_text())
+        runner = uncommented(pathlib.Path("${self}/crates/ronoctua-brain-daemon/src/runner.rs").read_text())
         person = hashless(pathlib.Path("${runners}/bin/ronoctua-update").read_text())
         floor(len(runner), 1000, "characters of runner.rs")
         floor(len(person), 1000, "characters of the person's half")

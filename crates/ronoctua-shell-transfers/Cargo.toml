@@ -1,0 +1,48 @@
+[package]
+name = "ronoctua-shell-transfers"
+description = "The transfer queue's panel in the footer's region (LEADER t t): the jobs, their pages, and what was copied put in."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE TRANSFER QUEUE'S PANEL (the 2026-10-12 wave): the view and its region,
+# a feature of its own — a line of it recompiles it and the binary, and
+# nothing of the footer. It stands on the kit, the door and the work a door
+# hands the queue; the queue itself is `ronoctua-transfers`, which it asks.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-work = { path = "../ronoctua-shell-work" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+# What the tests' jobs carry and what their ends report.
+ronoctua-shell-report = { path = "../ronoctua-shell-report" }
+ronoctua-shell-keep = { path = "../ronoctua-shell-keep" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-software = { path = "../ronoctua-software" }
+ronoctua-archive = { path = "../ronoctua-archive" }
+# The belongings' orders, WITHOUT `age` (`transfers-never-link-age`).
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]
+run-env-absent = ["RONOCTUA_BUFFER_TRANSFERS"]

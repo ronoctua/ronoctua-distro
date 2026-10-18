@@ -1,0 +1,65 @@
+[package]
+name = "ronoctua-shell-software"
+description = "The person's own programs (LEADER i): the view, its readings, the one handler both doors call, its window and its footer region."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE SOFTWARE CENTRE, ONE FEATURE IN ONE CRATE (the 2026-10-12 wave): the
+# view, its feed and its pictures, what both doors do for it, the window, the
+# footer's region and the camera, beside its keys. It stands on the
+# foundation alone — the kit, the door, the work's words and the belongings'
+# keep, which says whether a change of the person's declaration asks their
+# passphrase first — so a line of it recompiles it and the binary, and no
+# other feature.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-work = { path = "../ronoctua-shell-work" }
+ronoctua-shell-keep = { path = "../ronoctua-shell-keep" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+# The one accent folding of the tree (`apps::fold`), which the search folds
+# names with.
+ronoctua-apps = { path = "../ronoctua-apps" }
+# Where a program's icon is found on this machine (`notify::icon::Roots`).
+ronoctua-notify = { path = "../ronoctua-notify" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+# The queue: every order that changes the machine is its work.
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+# THE PERSON'S OWN PROGRAMS: the library for what is quick and read-only — the
+# installed list, the search, a sheet's details, a picture — on the view's own
+# threads; every order that changes the machine goes to the queue, which runs
+# the crate's CLI. `net` is the search and the pictures from the network,
+# `draw` the icon decoder.
+ronoctua-software = { path = "../ronoctua-software", features = [ "net", "draw" ] }
+# The belongings' places, where a change of the declaration is signed from:
+# their SHAPES only (`prefs`) — `age` is the CLI's.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
+
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR", "RONOCTUA_XDG_OPEN"]
+# The brain's page is a window of the buffer this names, which its tests are
+# never handed (the shell's rule).
+run-env-absent = ["RONOCTUA_BUFFER_BRAIN"]

@@ -1,7 +1,7 @@
 // The one surface this extension has, and it is built from tokens and keys.
 //
 // NO TEXT AND NO COLOUR IS WRITTEN HERE. Invariants 8 and 9 do not stop at the
-// browser's edge: every word comes from `assets/i18n/*.ftl` and every colour
+// browser's edge: every word comes from `extension/i18n/*.ftl` and every colour
 // from `assets/tokens/colors.nix`, both of them through `generated.js`, which
 // the flake writes. `popup.html` carries no visible text for the same reason —
 // the DOM is built below, from keys.

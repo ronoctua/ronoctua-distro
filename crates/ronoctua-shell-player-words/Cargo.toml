@@ -1,0 +1,29 @@
+[package]
+name = "ronoctua-shell-player-words"
+description = "The player as the shell says it on the modeline: what a state of the player says, what a door makes of what its watch heard, and the modeline's pair — in the footer and the player's view."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE PLAYER, AS ITS VIEW AND THE FOOTER SAY IT (the 2026-10-12 wave): the
+# footer keeps a copy of the player's state for the whole session — the
+# modeline's pair draws from it whether or not the player's region is open —
+# and names no feature, so the pair and the state's words stand under both,
+# on no other shell crate.
+[dependencies]
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+# The player's CLIENT only: its wire, its queue, its watch's news.
+ronoctua-player = { path = "../ronoctua-player" }
+
+[dev-dependencies]
+ronoctua-render = { path = "../ronoctua-render" }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

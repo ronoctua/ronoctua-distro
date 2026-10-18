@@ -34,3 +34,8 @@ ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ]
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_CACHE_RS"]
+run-env = ["RONOCTUA_WORDS"]

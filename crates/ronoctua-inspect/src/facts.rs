@@ -3,7 +3,7 @@
 //! # What is deliberately NOT here
 //!
 //! Name, size, mode, owner, links, symlink target and the three timestamps.
-//! `ronoctua_shell::files::View::detail_rows` already shows all of them, out of
+//! `ronoctua_shell_files::files::View::detail_rows` already shows all of them, out of
 //! `ronoctua_files::Entry`, `who`, `when` and `mode`, and it does it with no
 //! process and no I/O beyond one `lstat`. A second list of the same facts would
 //! be the "two implementations" this arrangement exists to prevent — the day

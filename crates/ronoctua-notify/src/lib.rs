@@ -17,6 +17,10 @@
 //! The icon chain ([`icon`]) has three steps and starts with a glyph, which is
 //! invariant 10 in the form of code.
 //!
+//! The catalogue ([`catalogue`]) is the distro's generated table and the brain
+//! modules' notifications, read at run time out of the brain's catalogue
+//! ([`brain`]): a module of the person's never recompiles this crate.
+//!
 //! # The shape of the whole thing
 //!
 //! ```text
@@ -39,6 +43,7 @@
 #![warn(missing_docs)]
 
 pub mod action;
+pub mod brain;
 pub mod catalogue;
 pub mod dbus;
 pub mod icon;

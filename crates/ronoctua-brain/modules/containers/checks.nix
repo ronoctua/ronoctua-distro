@@ -28,12 +28,15 @@
           # PARSED: one function's body in the crate (`body_of`, its strings
           # kept by `uncommented`: the variable and the folder ARE strings),
           # the module's code without its tests (`without_tests`), and the
-          # registry's ids as they are written in `leader.rs` (`id: "…"`).
+          # registry's ids as the containers' keymap contribution writes them
+          # (`id: "…"` in `KEYS`, cut at its own closing `};`).
           crate = uncommented(without_tests(pathlib.Path("${../../../ronoctua-containers/src/lib.rs}").read_text()))
           module = uncommented(without_tests(pathlib.Path("${./module.rs}").read_text()))
-          leader = uncommented(pathlib.Path("${../../../ronoctua-shell/src/leader.rs}").read_text())
+          view = uncommented(pathlib.Path("${../../../ronoctua-shell-containers/src/containers.rs}").read_text())
+          keys = view.find("pub const KEYS: crate::bindings::Contribution")
+          registry = view[keys : view.find("\n};\n", keys)] if keys >= 0 else ""
           floor(len(module), 2000, "characters of the module's code")
-          floor(len(leader), 100000, "characters of leader.rs")
+          floor(len(registry), 2000, "characters of the containers' keymap contribution")
           wrong = []
 
           # THE FOLDER IS `runtime_dir`'s ANSWER, asked of its own body: the
@@ -57,7 +60,7 @@
           opens = re.search(r'const OPENS: &str = "([a-z-]+)";', module)
           if not opens:
               wrong.append("the module no longer says which command its mark opens")
-          elif f'id: "{opens.group(1)}"' not in leader:
+          elif f'id: "{opens.group(1)}"' not in registry:
               wrong.append(f"the mark opens `{opens.group(1)}`, which the shell's registry does not have")
 
           if wrong:

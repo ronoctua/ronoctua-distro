@@ -1,0 +1,45 @@
+[package]
+name = "ronoctua-shell-power"
+description = "Power (`LEADER s p`): the battery, the charger, the profile and sleep — the view, its two doors (the footer's region and a window) and the one errand handler both carry out."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE POWER VIEW IN A CRATE OF ITS OWN (the 2026-10-12 wave): its view, its
+# window, its region of the footer and its keys, on the kit and the door only
+# — so a line of it recompiles it and the binary, and nothing of the footer
+# or of any other view. The words the footer says too (a refusal, the
+# battery's mark, how long it has) are `ronoctua-shell-power-words`'s.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-files = { path = "../ronoctua-files" }
+# UPower, power-profiles-daemon and logind: the readings and the orders.
+ronoctua-power = { path = "../ronoctua-power" }
+# Their words and marks, which the footer says too.
+ronoctua-shell-power-words = { path = "../ronoctua-shell-power-words" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+# The width a row is drawn at, which the view's tests measure.
+ronoctua-render = { path = "../ronoctua-render" }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

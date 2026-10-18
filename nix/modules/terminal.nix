@@ -165,7 +165,7 @@ in
         # --- and the size of the text, which is the person's too ----------
         # THIRD, AND IN A FILE OF ITS OWN. `LEADER s d` moves one number and
         # everything the machine draws follows it — this is how it reaches the
-        # terminal. `crates/ronoctua-shell/src/toolkits.rs` writes a single
+        # terminal. `crates/ronoctua-shell-kit/src/toolkits.rs` writes a single
         # `font-size` line here.
         #
         # NOT INSIDE `ghostty-theme.conf`, and that is not tidiness: the theme

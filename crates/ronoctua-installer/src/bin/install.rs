@@ -57,8 +57,9 @@ use std::path::Path;
 use std::process::{Command, ExitCode};
 
 use anyhow::{Context as _, Result, bail};
-use ronoctua_i18n::{Texts, key};
+use ronoctua_i18n::Texts;
 use ronoctua_installer::executor::{Event, run_command};
+use ronoctua_installer::key;
 use ronoctua_installer::model::{ANSWER_PREFIX, Answers, Question, sentence, validate_it};
 use ronoctua_installer::plan::{Origin, host_nix, steps};
 use ronoctua_installer::reach::{Reach, Refused};
@@ -147,7 +148,16 @@ fn main() -> ExitCode {
 
 /// The installation, as the command line asks for it.
 fn install(line: &Line) -> Result<ExitCode> {
-    let texts = Texts::from_env();
+    // THE TEXTS FIRST, and checked: data read at run time (`RONOCTUA_TEXTS`,
+    // which the wrapper sets), and texts that are missing or lack a key this
+    // binary was compiled with are said in one English line, exit 78, before
+    // the first question — never asked in `[inst-…]` brackets.
+    let texts = ronoctua_i18n::texts(&ronoctua_i18n::Keys::of(ronoctua_installer::key::sets))
+        .unwrap_or_else(|missing| ronoctua_i18n::refuse(&missing));
+    // THE PALETTES FIRST: data read at run time (`RONOCTUA_THEMES`, which the
+    // wrapper sets), and a missing file is said before a screen is drawn —
+    // the plan itself names the default theme.
+    ronoctua_tokens::palettes::load();
     // THE THEME FROM THE ENVIRONMENT ONLY: the installer runs as root from the
     // ISO, where nobody has chosen, and a `theme.json` must not reach it.
     if let Some(theme) = ronoctua_tokens::theme::from_env() {

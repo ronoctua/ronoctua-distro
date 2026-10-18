@@ -46,6 +46,9 @@
   themes,
   defaultTheme,
   ronoctua-shell,
+  # The loop's software CLI, a program of its own (`rust.loop.bins`): the
+  # shell's bundle holds only what the footer finds beside itself.
+  ronoctua-software,
   atRunTime,
   generated,
   nix,
@@ -80,6 +83,9 @@
   wayland-utils,
   # `xdpyinfo`, for the X half of the same question. Dev loop only.
   xdpyinfo,
+  # `ronoctua-keys`, the checkout's text key files and its texts
+  # (`nix/keys-checkout.nix`).
+  keysCheckout,
 }:
 
 let
@@ -1059,13 +1065,18 @@ let
           # THE LOOP PROFILE IS THE MARK, and it is a sound one: `[profile.loop]`
           # is never installed on a real system, which `the-loop-profile-is-never-installed`
           # is there to keep true. A daemon built for an installation comes out
-          # of `ronoctua-0.1.0` and does not match. The default for
+          # of a release unit (`ronoctua-brain-0.1.0`) or the release bundle
+          # (`ronoctua-shell`) and does not match; a loop one runs from the loop
+          # bundle's copies (`ronoctua-shell-loop`), from a loop unit
+          # (`<program>-loop-0.1.0`, `nix/rust/units.nix`) or, left by a loop of
+          # before the units, from crane's `ronoctua-loop-0.1.0`. The default for
           # `CARGO_TARGET_DIR` is a path that cannot exist, because this
           # function runs under `set -u` and `rebuild` — which exports it — may
           # never have been called.
           case "$exe" in
             "''${CARGO_TARGET_DIR:-/nonexistent}"/loop/*) kill "$pid" 2>/dev/null || true ;;
             /nix/store/*-ronoctua-loop-*) kill "$pid" 2>/dev/null || true ;;
+            /nix/store/*-ronoctua-*-loop-[0-9]*/bin/*) kill "$pid" 2>/dev/null || true ;;
             /nix/store/*-ronoctua-shell-loop/*) kill "$pid" 2>/dev/null || true ;;
           esac
         done
@@ -1162,8 +1173,9 @@ let
       # opens is a NixOS option on an installed system — here there is no NixOS
       # to read one from, so both sides take it from `nix/files-start.nix`.
       export RONOCTUA_ICONS="${iconSuperpack}/share/icons/noctua"
-      # THE THEME the loop starts in, and where the generator's fragments are —
-      # the same two variables `nix/modules/scroll.nix` exports to the session.
+      # THE THEME the loop starts in, and the generator's output — the palettes
+      # the loop's unwrapped `cargo` binaries read and the fragments — the same
+      # two variables `nix/modules/scroll.nix` exports to the session.
       export RONOCTUA_THEME="${defaultTheme}"
       export RONOCTUA_THEMES="${themed}"
       # AND THE WORLD, for the globe and the address under it. Here for the
@@ -1250,9 +1262,9 @@ let
       # nothing, so trying the screen never touches the host's Nix profile,
       # its Flatpaks or its Android. Searching and reading stay real.
       #
-      # `RONOCTUA_SOFTWARE` is the loop's own CLI, beside the footer in the
-      # same build — the wrapper the system installs is per machine, and there
-      # is no machine here. `RONOCTUA_SHELL` is this loop's footer, because the
+      # `RONOCTUA_SOFTWARE` is the loop's own CLI, built at the loop's profile
+      # like the footer — the wrapper the system installs is per machine, and
+      # there is no machine here. `RONOCTUA_SHELL` is this loop's footer, because the
       # host's `/run/current-system` is not ours (and may not exist at all).
       # `RONOCTUA_ICONS` is not repeated: it is exported above, once.
       #
@@ -1273,7 +1285,7 @@ let
           ]
           // {
             RONOCTUA_SHELL = "${ronoctua-shell}/bin/ronoctua-shell";
-            RONOCTUA_SOFTWARE = "${ronoctua-shell}/bin/ronoctua-software";
+            RONOCTUA_SOFTWARE = "${ronoctua-software}/bin/ronoctua-software";
           }
         )
       )}
@@ -1291,6 +1303,10 @@ let
       # edit contradicts that in practice.
       root_dir="$PWD"
       if [ -f "$root_dir/Cargo.toml" ] && [ -d "$root_dir/crates" ]; then
+        # THE TREE CROSSES TO THE WATCHER BY NAME: `rebuild`, below, runs in
+        # its process, where `root_dir` — a shell variable of this script —
+        # does not exist (see the functions' comment).
+        export RONOCTUA_DEV_TREE="$root_dir"
         # OUTSIDE the tree. With `target/` inside, every evaluation of the flake copies
         # gigabytes into the store — it cost 793 GB to find out. See AGENTS.md.
         # The directories are `nix/cargo-dirs.nix`'s; what the caller already
@@ -1298,6 +1314,22 @@ let
         ${cargoDirs.fallback}
         # EVERYTHING THE BUILD BAKES — see `bakedExports` in this file's `let`.
         ${bakedExports}
+        # THE TEXT KEYS AND THE TEXTS OF THIS CHECKOUT, in place of the
+        # evaluation's (`nix/keys-checkout.nix`): the keys kept in step with
+        # the fragments by rewriting only what changed, so a key added
+        # recompiles the crate that says it and not every crate that speaks;
+        # the texts made from the same fragments, so what cargo builds from
+        # those keys finds every one of them at its start — an untracked
+        # fragment included, which the evaluation never saw. When they cannot
+        # be made (a fragment refused, said above), the evaluation's stay
+        # until a fragment edited makes them (the `.ftl` branch, below).
+        RONOCTUA_DEV_KEYS=$(${keysCheckout}/bin/ronoctua-keys --tree "$root_dir" --dir)
+        RONOCTUA_DEV_TEXTS=$(${keysCheckout}/bin/ronoctua-keys --tree "$root_dir" --texts-dir)
+        export RONOCTUA_DEV_KEYS RONOCTUA_DEV_TEXTS
+        if ${keysCheckout}/bin/ronoctua-keys --tree "$root_dir" > /dev/null; then
+          export RONOCTUA_KEYS_DIR="$RONOCTUA_DEV_KEYS"
+          export RONOCTUA_TEXTS="$RONOCTUA_DEV_TEXTS"
+        fi
         # WHICH BINARY THE FOOTER IS, and it starts as the store's.
         #
         # It used to be `$CARGO_TARGET_DIR/loop/ronoctua-shell`, written into
@@ -1310,7 +1342,9 @@ let
         # what is EXPORTED; a shell variable does not cross a process boundary, and
         # under the watcher's `set -u` a missing variable does not evaluate to false:
         # it gives `unbound variable`, which takes the whole shell down. That is how
-        # hot reload ceased to exist after the first edit, in silence.
+        # hot reload ceased to exist after the first edit, in silence — twice:
+        # once with the footer's pidfile, once with `root_dir` (the tree is
+        # `RONOCTUA_DEV_TREE` here, for that).
         #
         # WHAT CHANGED arrives in `RONOCTUA_RELOAD_FILE`, which the watcher
         # exports before the `eval` — that is the whole contract, and it is what
@@ -1326,6 +1360,34 @@ let
         rebuild() {
           changed="''${RONOCTUA_RELOAD_FILE:-}"
           case "$changed" in
+            */i18n/*.ftl)
+              # A SENTENCE IS DATA, and a key's NAME is what compiles. The
+              # texts are made again from the working tree and the keys
+              # brought in step (`ronoctua-keys`, the texts first: a fragment
+              # the generator refuses writes no key), and only when a key was
+              # added or removed does the footer compile again — a value
+              # edited restarts it on the new texts at once.
+              #
+              # THE STORE'S FOOTER IS A WRAPPER that `--set`s the texts of its
+              # own build (`rust.keyed`), so the first fragment edited in a
+              # session compiles the footer with `cargo` like a `.rs` would:
+              # the binary it leaves reads `RONOCTUA_TEXTS` from here.
+              status=0
+              ${keysCheckout}/bin/ronoctua-keys --tree "$RONOCTUA_DEV_TREE" --written-exit 10 > /dev/null || status=$?
+              if [ "$status" != 0 ] && [ "$status" != 10 ]; then
+                echo "  the texts or the keys were refused (said above); the previous footer is still running"
+                return 0
+              fi
+              # MADE NOW, if the start could not make them: this process's
+              # programs read the tree's from here on.
+              export RONOCTUA_KEYS_DIR="$RONOCTUA_DEV_KEYS"
+              export RONOCTUA_TEXTS="$RONOCTUA_DEV_TEXTS"
+              if [ "$status" = 10 ] || [ "$RONOCTUA_FOOTER_BIN" != "$CARGO_TARGET_DIR/loop/ronoctua-shell" ]; then
+                RONOCTUA_RELOAD_FILE="$RONOCTUA_DEV_TREE/crates/ronoctua-shell/src/main.rs" rebuild
+              else
+                restart_footer
+              fi
+              ;;
             */buffers/*)
               # A BUFFER IS A COMPONENT, and it is `nix` that builds it.
               #
@@ -1340,7 +1402,7 @@ let
               # `stderr` stays on the terminal on purpose: it is where nix puts
               # its progress AND its errors, and this is a loop someone is
               # watching. `stdout` is the store path, alone.
-              if out=$(nix build --no-link --print-out-paths "$root_dir#buffer-$name") \
+              if out=$(nix build --no-link --print-out-paths "$RONOCTUA_DEV_TREE#buffer-$name") \
                  && [ -d "$out/lib" ]; then
                 # The file is whatever came out, and not a name assembled here:
                 # the `.wasm` is named after the crate, and guessing it would
@@ -1401,14 +1463,22 @@ let
               # `dev-rebuilds-what-sits-beside` did not catch it because it
               # greps for the NAME. It checks the packages now.
               #
+              # `ronoctua-seal` is here for the queue's reason, and was missing
+              # too: the queue runs the sealer from beside ITSELF when no
+              # `RONOCTUA_SEAL` names it (only the installed unit does), so
+              # "encrypt anything" stopped working after the first reload. The
+              # check did not see it because the lookup names a `const`, not a
+              # literal; it resolves the constant now.
+              #
               # AND THE PROFILE IS THE LOOP'S, not the one that is installed.
               # See `[profile.loop]` in the root `Cargo.toml` for the
               # measurement: the same edit is 148 s in `release`.
               if cargo build --profile loop -p ronoctua-shell --bin ronoctua-shell \
                    -p ronoctua-rescue --bin ronoctua-rescue \
                    -p ronoctua-transfers --bin ronoctua-transfers \
+                   -p ronoctua-pq --bin ronoctua-seal \
                    -p ronoctua-belongings --bin ronoctua-belongings \
-                   -p ronoctua-brain --bin ronoctua-brain \
+                   -p ronoctua-brain-daemon --bin ronoctua-brain \
                    -p ronoctua-studio --bin ronoctua-studio \
                    -p ronoctua-player-engine --bin ronoctua-player \
                    -p ronoctua-tags --bin ronoctua-tags 2>&1 | tail -20; then
@@ -1432,7 +1502,7 @@ let
         # `reload-command-is-defined` is what fails now if the two drift again.
         RONOCTUA_RELOAD_CMD='rebuild' ${reloadApp}/bin/ronoctua-reload "$root_dir/crates" "$root_dir/buffers" &
         watcher_pid=$!
-        echo "hot reload on: a .rs in crates/ recompiles the footer; in buffers/ it rebuilds the component"
+        echo "hot reload on: a .rs in crates/ recompiles the footer; a .ftl remakes the texts; in buffers/ it rebuilds the component"
       else
         echo "no hot reload: run it from inside the project's tree to switch it on"
       fi

@@ -243,7 +243,10 @@ pkgs.testers.runNixOSTest {
         for a in asked():
             for value in ${builtins.toJSON (builtins.attrValues keys)}:
                 assert value not in a[3], f"a key went in an address: {a[1]}{a[3]}"
-        lines = machine.succeed("for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < $f; echo; done 2>/dev/null")
+        # `|| true` FOR A PROCESS THAT ENDED between the glob and its read: it
+        # has no command line left to carry a key, and the driver's `set -e`
+        # failed the whole subtest on its missing file.
+        lines = machine.succeed("for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < $f || true; echo; done 2>/dev/null")
         for value in ${builtins.toJSON (builtins.attrValues keys)}:
             assert value not in lines, "a key is in a process's command line"
 

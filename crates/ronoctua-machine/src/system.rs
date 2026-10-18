@@ -48,6 +48,12 @@ pub const SYSROOT: &str = "RONOCTUA_MACHINE_SYSROOT";
 pub const NIX: &str = "RONOCTUA_NIX";
 /// systemd's `bootctl`.
 pub const BOOTCTL: &str = "RONOCTUA_BOOTCTL";
+/// How many compilations fit at once on this machine
+/// (`ronoctua-build-sizing`, `nix/build-sizing.nix`).
+pub const BUILD_SIZING: &str = "RONOCTUA_BUILD_SIZING";
+/// What roots the compiled units of a build (`ronoctua-keep-units`,
+/// `nix/keep-units.nix`).
+pub const KEEP_UNITS: &str = "RONOCTUA_KEEP_UNITS";
 
 /// The system profile, inside the system root.
 pub const PROFILE: &str = "/nix/var/nix/profiles/system";
@@ -80,6 +86,8 @@ impl Env {
                 SYSROOT,
                 NIX,
                 BOOTCTL,
+                BUILD_SIZING,
+                KEEP_UNITS,
             ]
             .into_iter()
             .filter_map(|name| {
@@ -140,6 +148,10 @@ pub struct System {
     /// How long the bless waits for root's lock of the person's data, in
     /// seconds, as the variable says it.
     pub bless_wait: Option<String>,
+    /// The build sizing.
+    pub sizing: Option<PathBuf>,
+    /// What roots a build's units.
+    pub keep_units: Option<PathBuf>,
 }
 
 impl System {
@@ -159,6 +171,8 @@ impl System {
                 .filter(|p| is_inside(p))
                 .map(str::to_owned),
             bless_wait: env.get(BLESS_WAIT).map(str::to_owned),
+            sizing: env.path(BUILD_SIZING),
+            keep_units: env.path(KEEP_UNITS),
         }
     }
 

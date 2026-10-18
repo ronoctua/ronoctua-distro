@@ -33,9 +33,15 @@ against, not solved against.
 
 # What comes out
 
+`palettes.bin` — what the binaries draw with, read at run time
+(`ronoctua_tokens::palettes`, `RONOCTUA_THEMES`): a header (the theme ids in
+the chooser's order, the default, each theme's mode, the pages, and an FNV-1a
+hash of the role names) and then every theme's every page's every role as
+RGBA, roles in the order of `--roles` — the list the Rust is compiled against.
+
 `themes.json` — `[{"id", "mode", "colors": {flat key: "0xRRGGBBAA"}}, …]` in
-the order of `assets/themes/themes.nix`, the first being the default; every
-theme has the identical key set or this exits 1. Every theme carries its
+the order of `assets/themes/themes.nix` (the default is declared apart, by
+name); every theme has the identical key set or this exits 1. Every theme carries its
 `pages` too: the same roles solved on each desk (`PAGES`, `Theme.on_page`).
 Per theme: `<id>.json` (the flat map of the base), `<id>.<page>.json` (each
 desk's page), `<id>.primitives.json` (every primitive with L, C, h, its anchor and
@@ -56,6 +62,7 @@ import math
 import os
 import pathlib
 import re
+import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -2346,6 +2353,59 @@ def report_markdown(results: dict[str, dict]) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: THE PALETTES' FILE, as `ronoctua_tokens::palettes` reads it. Little-endian
+#: throughout. A change of shape is a new VERSION: the reader refuses any other
+#: one with a sentence, never a guess.
+PALETTES_FILE = "palettes.bin"
+PALETTES_MAGIC = b"RONOPAL\0"
+PALETTES_VERSION = 1
+
+
+def fnv1a64(data: bytes) -> int:
+    """FNV-1a, 64 bits — the hash the palettes carry of their role names, and
+    the one `ronoctua_tokens::palettes` computes of `color::NAMES` before it
+    reads a byte of colour."""
+    h = 0xCBF29CE484222325
+    for byte in data:
+        h ^= byte
+        h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def palettes_bin(ids: list[str], default: str, modes: dict[str, str], palettes: dict[str, dict[str, dict[str, str]]], roles: list[str]) -> bytes:
+    """`ids` in the chooser's order; `palettes[id][page][role]` the solved
+    token (`0xRRGGBBAA`); `roles` in the order the Rust is compiled with.
+
+    The header, then the data:
+
+        magic          8 bytes, `RONOPAL\\0`
+        version        u16
+        pages          u16, then themes u16, roles u16, the default's index u16
+        role hash      u64, FNV-1a of the role names joined by `\\n`
+        each page      u8 length, its name
+        each theme     u8 (1 when it is light), u8 length, its id
+        data           [theme][page][role] -> R, G, B, A
+    """
+    out = bytearray(PALETTES_MAGIC)
+    out += struct.pack("<HHHHH", PALETTES_VERSION, len(PAGES), len(ids), len(roles), ids.index(default))
+    out += struct.pack("<Q", fnv1a64("\n".join(roles).encode("ascii")))
+    for page in PAGES:
+        out += bytes([len(page)]) + page.encode("ascii")
+    for theme_id in ids:
+        if modes[theme_id] not in ("dark", "light"):
+            raise Refusal(f"the theme {theme_id!r} says its mode is {modes[theme_id]!r}")
+        out += bytes([1 if modes[theme_id] == "light" else 0, len(theme_id)]) + theme_id.encode("ascii")
+    for theme_id in ids:
+        for page in PAGES:
+            for role in roles:
+                token = palettes[theme_id][page][role]
+                m = re.fullmatch(r"0x([0-9A-Fa-f]{8})", token)
+                if not m:
+                    raise Refusal(f"{theme_id} on {page}: `{role}` came out as {token!r}, not 0xRRGGBBAA")
+                out += int(m.group(1), 16).to_bytes(4, "big")
+    return bytes(out)
+
+
 def parse_pairs(items: list[str], what: str) -> dict[str, pathlib.Path]:
     out = {}
     for item in items:
@@ -2361,6 +2421,13 @@ def main() -> int:
     ap.add_argument("--themes", type=pathlib.Path, required=True, help="themes.json: the ordered list of ids")
     ap.add_argument("--seed", action="append", default=[], help="id=seed.json (one per theme)")
     ap.add_argument("--recipes", type=pathlib.Path, required=True, help="colors.json: the recipes")
+    ap.add_argument(
+        "--roles",
+        type=pathlib.Path,
+        required=True,
+        help="token-roles.json from nix/token-names.nix: every role the Rust is compiled with, in its order",
+    )
+    ap.add_argument("--default", required=True, help="the id of the theme a fresh machine shows (assets/themes/themes.nix)")
     ap.add_argument("--reference", action="append", default=[], help="id=reference.json: a frozen palette to regress against")
     ap.add_argument("--out", type=pathlib.Path, required=True)
     ap.add_argument("--report-only", action="store_true", help="write the report and exit 0 even on a Fail (for iterating on seeds)")
@@ -2373,6 +2440,11 @@ def main() -> int:
         for theme_id in ids:
             if not re.fullmatch(r"[a-z][a-z0-9-]*", theme_id):
                 raise Refusal(f"the theme id {theme_id!r} is not kebab-case")
+        if args.default not in ids:
+            raise Refusal(f"--default {args.default!r} is not one of the declared themes: {ids}")
+        declared = json.loads(args.roles.read_text())
+        if not isinstance(declared, list) or not all(isinstance(r, str) for r in declared) or len(set(declared)) != len(declared):
+            raise Refusal(f"{args.roles} is not a list of distinct role names")
         seeds = parse_pairs(args.seed, "seed")
         references = parse_pairs(args.reference, "reference")
         missing = [i for i in ids if i not in seeds]
@@ -2439,6 +2511,26 @@ def main() -> int:
         for theme_id, keys in key_sets.items():
             if keys != first:
                 raise Refusal(f"the theme {theme_id} does not have the same keys as {ids[0]}: {sorted(set(keys) ^ set(first))}")
+        # THE ROLES SOLVED ARE THE ROLES THE RUST IS COMPILED WITH, both ways.
+        # The evaluated list (`nix/token-names.nix`) is the attribute names of
+        # colors.nix and shaped.nix; a role shaped here and named in neither
+        # would be a colour no binary can index, and a name with no role
+        # behind it a constant that draws the wrong bytes.
+        unnamed = sorted(set(first) - set(declared))
+        unsolved = sorted(set(declared) - set(first))
+        if unnamed:
+            raise Refusal(
+                f"the generator solves {', '.join(unnamed)}, which neither assets/tokens/colors.nix nor "
+                "assets/tokens/shaped.nix names: the role list is read at evaluation from those two files — "
+                "a role this generator shapes is named in shaped.nix"
+            )
+        if unsolved:
+            raise Refusal(
+                f"{', '.join(unsolved)} {'is' if len(unsolved) == 1 else 'are'} named at evaluation and solved by nothing here: "
+                "a name in assets/tokens/shaped.nix needs its rule in `shaped_tokens`"
+            )
+        if sorted(declared) != declared:
+            raise Refusal(f"{args.roles} is not in sorted order, which is `color::NAMES`' order")
         # THE ROLES A THEME MUST NOT MOVE (`IDENTICAL_IN_EVERY_THEME`): the
         # same bytes in every theme, or the seeds disagree about a family that
         # has to be one.
@@ -2475,6 +2567,16 @@ def main() -> int:
             )
             write_fragments(args.out / theme_id, theme_id, results[theme_id]["mode"], {page: r["tokens"] for page, r in results[theme_id]["pages"].items()})
         (args.out / "themes.json").write_text(json.dumps(combined, indent=1) + "\n")
+        # THE PALETTES THE BINARIES READ, in the compiled role order.
+        (args.out / PALETTES_FILE).write_bytes(
+            palettes_bin(
+                ids,
+                args.default,
+                {entry["id"]: entry["mode"] for entry in combined},
+                {entry["id"]: {"chrome": entry["colors"], **entry["pages"]} for entry in combined},
+                declared,
+            )
+        )
         (args.out / "report.md").write_text(report_markdown(results))
         (args.out / "report.json").write_text(
             json.dumps({tid: {"pages": {page: [f.row() for f in pr["findings"]] for page, pr in r["pages"].items()}, "cvd": r["cvd"]} for tid, r in results.items()}, indent=1) + "\n"

@@ -74,12 +74,17 @@ let
 
       buildPhase =
         let
-          # The scripts' DIRECTORY, and not the file: the generator imports
-          # `lexicon.py`, the module the three generators share.
           cmd = ''
             unzip -q ${icons} -d set_of
+            # THE SCRIPT AND ITS ONE SIBLING, copied by FILE: the generator
+            # imports `lexicon.py`, so the two sit side by side here — and not
+            # the whole `nix/scripts`, whose every other generator would then be
+            # a reason to build this table again (`generators-cite-their-scripts`).
+            mkdir -p generator
+            cp ${./scripts/gen-lucidedb.py} generator/gen-lucidedb.py
+            cp ${./scripts/lexicon.py} generator/lexicon.py
             gen() {
-              python3 ${./scripts}/gen-lucidedb.py \
+              python3 generator/gen-lucidedb.py \
                 --icons set_of/icons \
                 --font ${lucide}/share/fonts/truetype/Lucide.ttf \
                 --lexicon ${lexiconFile} \

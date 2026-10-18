@@ -91,6 +91,8 @@
   # THE SECURITY CENTRE'S PAGE asks this module for its page by its id, and
   # draws the blocked connections and sudo's uses in its own sections.
   namedBy = {
-    "crates/ronoctua-shell/src/security.rs" = [ "security-watch" ];
+    "crates/ronoctua-shell-security/src/security.rs" = [ "security-watch" ];
+    # Its marks open the centre on their section, for the footer's brain line.
+    "crates/ronoctua-shell-kit/src/security_words.rs" = [ "security-watch" ];
   };
 }

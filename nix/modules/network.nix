@@ -322,7 +322,9 @@ in
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${ronoctua.shell}/bin/ronoctua-network-console";
+        # A program of its own (`rust.networkConsole`): the footer's bundle
+        # would put the desktop in a root unit's closure.
+        ExecStart = "${ronoctua.networkConsole}/bin/ronoctua-network-console";
         # It waits before asking, and the ask itself has a timeout. The margin
         # is what keeps a hung prompt from holding the boot forever.
         TimeoutStartSec = 300;
@@ -349,7 +351,7 @@ in
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${ronoctua.shell}/bin/ronoctua-network-agent";
+        ExecStart = "${ronoctua.networkAgent}/bin/ronoctua-network-agent";
         # ALWAYS RESTARTS, with room between attempts.
         #
         # If it dies, the network does not die with it: NetworkManager falls

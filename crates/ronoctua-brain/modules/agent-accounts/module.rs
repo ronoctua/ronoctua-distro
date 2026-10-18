@@ -13,6 +13,13 @@
 //! its logs (`statusline::limits`) and the usage endpoint's last answer
 //! (`usage::kept`). The module names no file and no folder of the agents'.
 //!
+//! # Two halves
+//!
+//! What the accounts' view reads too — the person's lines, the colour of a
+//! window, the marks the accounts wear and how a photograph reads them — is
+//! `shared.rs`, compiled into the library the footer links. This file is the
+//! daemon's: what it watches, when its run is wanted, and its page.
+//!
 //! # The marks
 //!
 //! One per account, AT REST TOO — the owner's exception
@@ -52,252 +59,32 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use ronoctua_files::notice::{Notice, Pace};
-use ronoctua_llm::statusline::Limits;
-use ronoctua_llm::{Account, Kind as Agent, Watched, Window, usage};
-use serde::{Deserialize, Serialize};
+use ronoctua_llm::{Account, Kind as Agent, Watched, Window};
 
+// THE SHARED HALF (`shared.rs`, compiled into the library beside the
+// manifest): what the accounts' view reads of the same machine.
+use super::{
+    Lines, Seen, Which, accounts_now, lines_store, marked_most, marks_for, most_used, read_lines,
+    tone_of, windows_now, write_line,
+};
 use crate::module::{
-    Act, Acted, Birth, Cell, Ctx, Face, Heard, Look, Manifest, Mark, MarkId, Module, Row, Run,
-    Scheduled, Screen, Section, Source, Tone, Watcher,
+    Act, Acted, Birth, Cell, Ctx, Face, Heard, Look, Manifest, Mark, Module, Row, Run, Scheduled,
+    Screen, Section, Source, Tone, Watcher,
 };
 use crate::moment::Moment;
 use crate::prefs::TaskPrefs;
 use crate::systemd;
 use crate::task::{Due, Outcome};
 
-/// The shell's command a click on a mark runs: the accounts' view, which the
-/// click hands the mark's digit (`MarkId::opening`).
-const OPENS: &str = "agents-open";
-
 /// How long after a start the run is wanted again while the accounts are
 /// used: their numbers move by the minute, and a count every few minutes of
 /// work is what the view needs — never one per answer.
 pub const AGAIN_AFTER_S: i64 = 10 * 60;
 
-/// The person's lines, in the module's configuration folder.
-const LINES_FILE: &str = "lines.json";
-
 /// The entry: the machine's accounts, the lines in the module's folder.
 #[must_use]
 pub fn new(birth: &Birth) -> impl Module + use<> {
     AgentAccounts::of(Box::new(Machine), birth.config_dir(super::ID))
-}
-
-// ---------------------------------------------------------------------------
-// The lines a mark changes colour at — asked by the accounts' view too.
-// ---------------------------------------------------------------------------
-
-/// The two lines, in per cent of a window: a mark turns to a warning from
-/// the first and to danger from the second.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct Lines {
-    /// A warning from this much of a window used.
-    pub warn_percent: u8,
-    /// Danger from this much.
-    pub danger_percent: u8,
-}
-
-impl Default for Lines {
-    /// The distro's: 80 and 95.
-    fn default() -> Self {
-        Self {
-            warn_percent: 80,
-            danger_percent: 95,
-        }
-    }
-}
-
-impl Lines {
-    /// Whether they are two lines: each a whole per cent from 1 to 100, the
-    /// warning below the danger.
-    #[must_use]
-    pub const fn fine(self) -> bool {
-        self.warn_percent >= 1
-            && self.warn_percent < self.danger_percent
-            && self.danger_percent <= 100
-    }
-}
-
-/// The colour a window used this much wears, by the lines: quiet below the
-/// warning, a warning, then danger. Nothing known is quiet — the mark is
-/// there, and says nothing yet.
-#[must_use]
-pub fn tone_of(used_percent: Option<f32>, lines: Lines) -> Tone {
-    match used_percent {
-        Some(p) if p >= f32::from(lines.danger_percent) => Tone::Danger,
-        Some(p) if p >= f32::from(lines.warn_percent) => Tone::Warning,
-        _ => Tone::Quiet,
-    }
-}
-
-/// The most used of `windows` that has not reset at `now_s` — the one an
-/// account's colour follows.
-#[must_use]
-pub fn most_used(windows: &[Window], now_s: i64) -> Option<f32> {
-    windows
-        .iter()
-        .filter(|w| w.resets_at_s > now_s && w.used_percent.is_finite())
-        .map(|w| w.used_percent)
-        .reduce(f32::max)
-}
-
-/// Every window an account's numbers say, reset or not: what its status
-/// line (Claude Code) or its logs (Codex) last said, and the usage
-/// endpoint's last answer with its weekly windows of a model each. Two
-/// readings of one window are its two moments; [`most_used`] takes the
-/// higher, since a window only fills until it resets. What the marks are
-/// coloured from — and what the accounts' view hands this to, to prove its
-/// bars wear the same colour.
-#[must_use]
-pub fn windows_said(limits: Option<Limits>, usage: Option<&usage::Kept>) -> Vec<Window> {
-    let mut out = Vec::new();
-    if let Some(limits) = limits {
-        out.extend(limits.five_hour);
-        out.extend(limits.seven_day);
-    }
-    if let Some(u) = usage.and_then(|k| k.usage) {
-        out.extend(
-            [
-                u.five_hour,
-                u.seven_day,
-                u.seven_day_opus,
-                u.seven_day_sonnet,
-            ]
-            .into_iter()
-            .flatten(),
-        );
-    }
-    out
-}
-
-/// The colour an account's mark wears at `now`: its most used window that
-/// has not reset, by the person's lines.
-#[must_use]
-pub fn mark_tone(windows: &[Window], lines: Lines, now: Moment) -> Tone {
-    tone_of(most_used(windows, now), lines)
-}
-
-/// The person's lines, as the file says them now — the distro's when there
-/// is no file, or one that does not hold two lines.
-#[must_use]
-pub fn lines() -> Lines {
-    read_lines(&lines_store(own_config()))
-}
-
-/// Where the person's lines are kept — what a door watches to repaint its
-/// bars when they change.
-#[must_use]
-pub fn lines_file() -> Option<PathBuf> {
-    lines_store(own_config()).path()
-}
-
-/// One of the two lines, changed alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Which {
-    /// The warning's.
-    Warn,
-    /// The danger's.
-    Danger,
-}
-
-/// Why a line was not kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unkept {
-    /// The warning would not come before the danger.
-    NotInOrder,
-    /// The file is there and does not read: nothing is written over it.
-    Unreadable,
-    /// The file could not be written.
-    Unwritten,
-}
-
-impl Unkept {
-    /// The module's word for it — the page's refusal.
-    #[must_use]
-    pub const fn why(self) -> &'static str {
-        match self {
-            Self::NotInOrder => super::why::NOT_IN_ORDER,
-            Self::Unreadable => super::why::UNREADABLE,
-            Self::Unwritten => super::why::UNKEPT,
-        }
-    }
-}
-
-/// Keeps ONE of the person's lines, laid over what the file says NOW — the
-/// footer's view, the window and the module's page all write it, and a copy
-/// read earlier by one of them must not put back the line another changed.
-///
-/// # Errors
-///
-/// [`Unkept`]: the two lines would cross, the file does not read, or it could
-/// not be written.
-pub fn keep_line(which: Which, percent: u8) -> Result<Lines, Unkept> {
-    write_line(&lines_store(own_config()), which, percent)
-}
-
-/// The mark an agent's accounts wear — its glyph token is what the
-/// accounts' view draws them with.
-#[must_use]
-pub fn mark_of(agent: Agent) -> Option<&'static MarkId> {
-    super::MANIFEST.mark(agent.id())
-}
-
-/// The module's configuration folder, under the machine's roots.
-fn own_config() -> Option<PathBuf> {
-    Birth {
-        zone: Arc::new(crate::moment::Fixed(0)),
-        roots: crate::prefs::Where::of_env(),
-    }
-    .config_dir(super::ID)
-}
-
-/// The lines' store, in a configuration folder.
-fn lines_store(dir: Option<PathBuf>) -> ronoctua_store::Store<Lines> {
-    ronoctua_store::Store::at(dir, LINES_FILE)
-}
-
-/// The marks this module would put on the modeline now, read once from the
-/// machine's files — what a photograph's mind is made of
-/// (`photograph --door footer --accounts-marks`), so a picture never shows a
-/// mark the module cannot draw. The module's own reading and its own
-/// `marks_of`, and no watch.
-#[must_use]
-pub fn marks_read_now(now: Moment) -> Vec<Mark> {
-    let me = AgentAccounts::of(Box::new(Machine), own_config());
-    me.inner.reread_lines();
-    me.inner.reread();
-    marks_of(&me.kept(), now)
-}
-
-/// What a store says, two lines or the distro's.
-fn read_lines(store: &ronoctua_store::Store<Lines>) -> Lines {
-    Some(store.read()).filter(|l| l.fine()).unwrap_or_default()
-}
-
-/// Writes one line over what the file says now — `parsed`, never `read`:
-/// this writes the whole file back, and a file that does not read is
-/// refused, never replaced. A file that reads and does not hold two lines is
-/// the distro's, as every reader takes it.
-fn write_line(
-    store: &ronoctua_store::Store<Lines>,
-    which: Which,
-    percent: u8,
-) -> Result<Lines, Unkept> {
-    let now = store.parsed().ok_or(Unkept::Unreadable)?;
-    let mut lines = if now.fine() { now } else { Lines::default() };
-    match which {
-        Which::Warn => lines.warn_percent = percent,
-        Which::Danger => lines.danger_percent = percent,
-    }
-    if !lines.fine() {
-        return Err(Unkept::NotInOrder);
-    }
-    store.write(&lines).map_err(|e| {
-        tracing::warn!(error = %e, "the LLM accounts' lines could not be written");
-        Unkept::Unwritten
-    })?;
-    Ok(lines)
 }
 
 // ---------------------------------------------------------------------------
@@ -327,19 +114,14 @@ impl Probe for Machine {
     }
 
     fn accounts(&self) -> Option<Vec<Account>> {
-        ronoctua_llm::Accounts::store()
-            .parsed()
-            .map(|list| list.accounts)
+        accounts_now()
     }
 
     fn windows(&self, account: &Account) -> Vec<Window> {
         // THE STATUS LINE'S (Claude Code) OR THE LOGS' (Codex), AND THE
         // ENDPOINT'S LAST ANSWER — put together by the one function the view
-        // asks too.
-        windows_said(
-            ronoctua_llm::statusline::limits(account).ok(),
-            ronoctua_llm::usage::kept(account).as_ref(),
-        )
+        // asks too, the same a photograph reads.
+        windows_now(account)
     }
 
     fn watched(&self, account: &Account) -> Watched {
@@ -350,15 +132,6 @@ impl Probe for Machine {
 // ---------------------------------------------------------------------------
 // What it keeps.
 // ---------------------------------------------------------------------------
-
-/// One account, as the marks need it.
-#[derive(Debug, Clone, PartialEq)]
-struct Seen {
-    id: String,
-    agent: Agent,
-    name: String,
-    windows: Vec<Window>,
-}
 
 /// What the last reading found.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -502,12 +275,7 @@ impl Inner {
         let read = self.probe.accounts().map(|accounts| {
             accounts
                 .iter()
-                .map(|a| Seen {
-                    id: a.id.clone(),
-                    agent: a.kind,
-                    name: a.name.clone(),
-                    windows: self.probe.windows(a),
-                })
+                .map(|a| Seen::of(a, self.probe.windows(a)))
                 .collect::<Vec<_>>()
         });
         self.keep(|k| match read {
@@ -672,36 +440,10 @@ fn nearest_reset(kept: &Kept, now: Moment) -> Option<Moment> {
         .min()
 }
 
-/// How many accounts carry a mark: the instances the manifest declares (one
-/// digit), the same for both agents.
-fn marked_most() -> usize {
-    super::MANIFEST
-        .marks
-        .iter()
-        .map(|m| usize::from(m.instances))
-        .min()
-        .unwrap_or(0)
-}
-
-/// The marks: one per account, by its place in the list.
+/// The marks: one per account, by its place in the list — the shared half's
+/// own (`marks_for`), so a photograph's marks are these.
 fn marks_of(kept: &Kept, now: Moment) -> Vec<Mark> {
-    kept.accounts
-        .iter()
-        .take(marked_most())
-        .enumerate()
-        .filter_map(|(n, seen)| {
-            let declared = mark_of(seen.agent)?;
-            let place = u8::try_from(n + 1).ok()?;
-            Some(Mark {
-                id: declared
-                    .numbered(place, Some(seen.name.clone()))
-                    .opening(OPENS),
-                tone: mark_tone(&seen.windows, kept.lines, now),
-                count: 0,
-                act: None,
-            })
-        })
-        .collect()
+    marks_for(&kept.accounts, kept.lines, now)
 }
 
 /// A text key as a cell.
@@ -995,6 +737,7 @@ impl Watcher for AgentAccounts {
 mod tests {
     use std::path::Path;
 
+    use super::super::{LINES_FILE, OPENS};
     use super::*;
     use crate::pulse::Pulse;
 

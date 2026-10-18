@@ -31,6 +31,9 @@ um compromisso: nada aqui precisa se parecer com nenhum outro programa.
 | i18n | Fluent | gettext |
 | Fontes | assets de um Release, quatro inputs fixados por hash | dentro do repositório |
 | Janelas | uma `Door<C>` genérica com padrões sobrescrevíveis | uma macro por janela; um trait de janela com toda a encanação |
+| Build Rust | o cargo planeja (`plan.json`), o Nix constrói uma derivation por unidade, os terceiros inclusive | o workspace inteiro numa derivation do crane; crate2nix/`buildRustCrate`; cache entre máquinas |
+| Shell | um crate por funcionalidade, o rodapé num crate, um binário fino que compõe | um crate só, de quase 200 mil linhas |
+| Valores | frases, paletas e o catálogo do brain lidos em tempo de execução; só os NOMES compilam | tabelas compiladas em todo crate que fala ou pinta |
 
 ---
 
@@ -279,13 +282,17 @@ consome.
 A correção é a separação `buildBase`/`generated`: a camada recebe o que LINKA (wayland, xkbcommon,
 vulkan) e nada mais. A guarda é `deps-layer-is-lean`, que lê os atributos da derivação gerada — em
 tempo de avaliação, sem build — e recusa qualquer `RONOCTUA_*` ali. **Medido depois:** um `.ftl`
-editado deixa o `.drv` da camada idêntico, e o do shell muda, como tem de mudar.
+editado deixa o `.drv` da camada idêntico, e o do shell muda, como tem de mudar. (A camada do crane
+saiu na leva de 2026-10-12: os terceiros são unidades, cada unidade recebe só as variáveis que o
+crate dela declara, e o `deps-layer-is-lean` virou parte do censo de toda unidade,
+`units-see-only-what-they-read` — seção 10.)
 
-**Os números do laço, medidos:** dependências 4m46 (483 crates), workspace 2m15–5m46, clippy 13–16 s,
-cada roteiro de VM 17–48 s (as vinte). O que sobra é caro por CONSTRUIR UMA INSTALAÇÃO — quatro
-sistemas NixOS e o ISO —, e é essa a linha que separa as três baterias: `#quick` (dez escolhidos,
-~1 min), `#most` (todo o resto) e `#gate` (tudo). Só o gate fecha o invariante 7; ver
-"Três baterias" abaixo.
+**Os números do laço:** com o workspace do crane, toda edição pagava a recompilação do workspace
+inteiro; com as unidades (seção 10, "O que uma edição reconstrói"), uma linha de uma vista custa a
+lib dela e o link do programa. Cada roteiro de VM leva 17–48 s. O que sobra é caro por CONSTRUIR UMA
+INSTALAÇÃO — quatro sistemas NixOS e o ISO —, e é essa a linha que separa as três baterias: `#quick`
+(os escolhidos, ~1 min), `#most` (todo o resto) e `#gate` (tudo). Só o gate fecha o invariante 7;
+ver "Três baterias" abaixo.
 
 #### E a quinta não foi por entrada nenhuma: era o PERFIL, e o laço estava morto
 
@@ -293,16 +300,19 @@ As quatro acima são sobre **o que invalida** um build. A quinta é sobre **quan
 uma linha que fazia o laço não existir.
 
 O `[profile.release]` da raiz é afinado para o binário que roda por meses: `lto = "thin"` e
-`codegen-units = 1`. Uma unidade de codegen é o que dá ao LLVM o crate inteiro para otimizar de uma
-vez — e `crates/ronoctua-shell` tem **178 mil linhas num crate só**, então a geração de código dele
-roda numa THREAD. Medido nesta máquina de 12 núcleos:
+`codegen-units = 1` por crate — uma unidade de codegen dá ao LLVM o crate inteiro para otimizar de
+uma vez —, e o crate do binário do shell ganhou dezesseis por medida (seção 10, "O perfil de
+release, escolhido por medida"; quando o shell era um crate só de quase 200 mil linhas, a geração de
+código dele rodava numa thread). O thin LTO não é incremental: toda edição abaixo do programa religa
+o programa inteiro. Medido depois da leva de 2026-10-12, nesta máquina de 12 núcleos:
 
-| | `release` | `[profile.loop]` |
+| | `release` (a unidade do Nix) | `[profile.loop]` (o `cargo` do laço) |
 |---|---:|---:|
-| uma linha editada no shell, incremental | **148 s** | **19 s** |
-| build FRIO, com os 483 crates de terceiros | — | **139 s** |
+| uma linha do binário fino (`main.rs`) | **92 s** (o link thin LTO) | **3,8 s** |
+| uma linha de uma vista (`stick.rs`) | **98 s** | **5,2 s** |
+| uma linha do rodapé (`surface/mod.rs`) | **157 s** | **24,9 s** |
 
-O build frio no perfil do laço é mais rápido que um incremental no de produção. Nada disso serve para
+O link de produção custa mais que a edição inteira no perfil do laço. Nada disso serve para
 olhar a interface num compositor aninhado; serve para o ISO — e o mesmo perfil era pago pelo `cargo
 test` e pelo `clippy` do hook, que se roda dezenas de vezes por dia contra uma instalação que se faz
 raramente.
@@ -310,9 +320,10 @@ raramente.
 **Nomear o lado RÁPIDO é a decisão.** Um `release` barato com um `dist` para a entrega seria mais
 econômico e faria o esquecimento cair para o lado errado: um binário sem LTO no ISO não tem sintoma
 nenhum além de ser mais lento, na máquina de outra pessoa, meses depois. Assim, quem não pedir o
-perfil do laço recebe o de produção. Cobra o `the-loop-profile-is-never-installed`, que lê o FECHO
-dos sete programas que uma máquina instala. O preço é uma camada de dependências por perfil, paga
-uma vez por `Cargo.lock`.
+perfil do laço recebe o de produção. Cobram o `the-loop-profile-is-never-installed`, que lê o grafo
+de derivations do que se instala, e o `no-loop-build-reaches-a-machine`, que lê o dos sistemas e do
+ISO (seção 10: uma cópia não cita a unidade de que saiu). O preço é um conjunto de unidades por
+perfil, cada uma paga uma vez.
 
 **E o laço estava morto, o que é a metade que ninguém tinha medido.** A linha do hot reload em
 `nix/dev.nix` era `--bin ronoctua-rescue` sem `-p ronoctua-rescue`. `--bin` nomeia um alvo DENTRO dos
@@ -343,10 +354,11 @@ causas, invisíveis pelo mesmo motivo: nenhuma das duas é lida em tempo de comp
 A correção da primeira **não é apagar a referência**. Ela precisa existir: sem ela o ISO deixa de
 levar os componentes e a máquina alvo COMPILA cinco wasm — foi exatamente o que aconteceu com o
 superpacote de ícones, e quem disse foi o `iso-carries-the-seed`. Ela **sobe uma derivação**:
-`rust.shell` é o workspace embrulhado por `makeBinaryWrapper` com os cinco caminhos, e é ele que o
-`ExecStart` do módulo, o laço aninhado e os roteiros de VM executam. Quem compila não conhece buffer
-nenhum; quem executa conhece os cinco. Medido no fecho: o workspace passou a citar **zero** buffers e
-o embrulho cita os cinco — 1,41 GiB contra 1,42.
+`rust.shell` é o programa embrulhado por `makeBinaryWrapper` com os cinco caminhos, e é ele que o
+`ExecStart` do módulo, o laço aninhado e os roteiros de VM executam (hoje o bundle do rodapé feito
+das unidades, seção 10, "Os programas nos seus lugares"). Quem compila não conhece buffer nenhum;
+quem executa conhece os cinco. Medido no fecho: o workspace passou a citar **zero** buffers e o
+embrulho cita os cinco — 1,41 GiB contra 1,42.
 
 Um embrulho e não uma variável em cada lançador porque são **nove lançadores** — a unidade de
 usuário, os binds do compositor, o laço aninhado, seis VMs —, e variável que um deles esquece não dá erro:
@@ -358,7 +370,7 @@ o rodapé com `pgrep -f "bin/ronoctua-shell$"`, e sem ele todo processo aparecer
 
 | derivação | antes | depois |
 |---|---|---|
-| `ronoctua-0.1.0` (workspace) | reconstruía, 2m15–5m46 | **idêntica** |
+| `ronoctua-0.1.0` (o workspace do crane de então) | reconstruía | **idêntica** |
 | `ronoctua-clippy`, `ronoctua-tests` | reconstruíam o workspace de novo | **idênticas** |
 | `ronoctua-shell` (o embrulho) | — | reconstrói, e é o que tem de reconstruir |
 | o buffer | reconstruía | reconstrói |
@@ -481,20 +493,22 @@ os oito `mN` do `most` não tira **nada** dele.
 falha DIZENDO QUAL, em vez de virar linha morta que não exclui nada. É a forma de
 `rescue-polkit-is-narrow`.
 
-**E o dimensionamento é um só.** `nix/gate.nix` passou a receber quais alvos e que texto final, então
-`most` e `gate` são dois usos da mesma aritmética — a que lê `/proc/meminfo` e limita jobs × cores.
-Sem isso o `most` mataria o `rustc` pelo `earlyoom` exatamente como o gate matava antes dela existir.
-Ao terminar, cada bateria **diz o que não verificou, com os nomes**.
+**E o dimensionamento é um só.** A aritmética — a que lê `/proc/meminfo` e limita jobs × cores —
+mora no `nix/build-sizing.nix`, e o gate, o most, o `.#quick`, o `.#sized-build` e o
+`ronoctua-machine apply` constroem por ela (seção 10, "Quantas compilações cabem, e o que a máquina
+guarda"). Sem isso o `most` mataria o `rustc` pelo `earlyoom` exatamente como o gate matava antes
+dela existir. Ao terminar, cada bateria **diz o que não verificou, com os nomes**.
 
 **Uma VM não é um compilador** (2026-09-27). A aritmética dividia a memória por um pico de `rustc`
 (1792 MiB) e dava a todo derivado o mesmo `--max-jobs`. Os testes de VM não cabem nessa conta: cada
 um segura o que os nós declaram (`virtualisation.memorySize`, de 1 a 4 GiB por teste) enquanto o
 roteiro roda, e quatro lado a lado são de 8 a 16 GiB numa máquina de 14. Uma rodada passava quando
 os pequenos coincidiam e outra morria no meio das VMs. Por isso as VMs viraram uma fase própria, em
-quatro passos: as três pesadas; **o que as VMs bootam** (o `driver` de cada teste, que é o sistema
-dele), dimensionado como compilação; **as VMs**, empacotadas pela memória declarada mais 256 MiB de
-QEMU por nó e 128 MiB de driver por teste, e pelos núcleos que declaram; e o resto. Cada VM roda como
-`nix build <o .drv dela>` com tudo já no store, então nada compila ao lado de uma VM.
+quatro passos: o build Rust (as unidades pesadas sozinhas, depois do que elas precisam); **o que as
+VMs bootam** (o `driver` de cada teste, que é o sistema dele), dimensionado como compilação; **as
+VMs**, empacotadas pela memória declarada mais 256 MiB de QEMU por nó e 128 MiB de driver por teste,
+e pelos núcleos que declaram; e o resto. Cada VM roda como `nix build <o .drv dela>` com tudo já no
+store, então nada compila ao lado de uma VM.
 
 **O declarado é o teto, não o típico.** Medido pelo `VmRSS` do QEMU no pico: `footer-vm` declara
 2048 MiB e tocou 582; `camera-vm`, 3072 e 965; `oom-vm`, dois nós e 3072, tocou 910;
@@ -504,11 +518,13 @@ o `memorySize` dos testes para ganhar paralelismo não compensa: mudaria o que `
 `memory-vm` medem, e a fase já cabe três de 2 GiB por vez numa máquina com 10 GiB livres.
 
 **E o `rustc` do shell não se divide.** As pesadas recebiam `--cores` = memória ÷ 1792 MiB, como se
-todo compilador fosse igual. Sob `release` o `ronoctua-shell` é uma unidade de código só, com LTO
-fino: um processo que mediu 5120 MiB sozinho, enquanto o workspace inteiro, com `--cores 4`, fez
-pico de 7658 MiB. O shell se paga uma vez, e cada núcleo a mais paga o que se mediu ao lado dele
-(846 MiB); o gate usa 5632 e 1024 MiB, com margem. E eram quatro pesadas, não três: o workspace
-`loop`, que três checks alcançam pelo `.#dev`, compilava na última fase, quatro de cada vez.
+todo compilador fosse igual. A unidade pesada se paga uma vez, e cada núcleo a mais paga o que se
+mediu ao lado dela: com o shell num crate só, o harness de teste dele mediu 4350 MiB a um núcleo e o
+programa de release 228 MiB por núcleo a mais, e o `nix/build-sizing.nix` usa 4864 e 320 MiB, com
+margem (`shellMiB`, `besideMiB`). Antes das unidades eram workspaces do crane — o shell sob
+`release`, uma unidade de código só com LTO fino, mediu 5120 MiB sozinho. Hoje as pesadas são as que
+o `rust.heavyUnits` nomeia pela medida (o programa de release do shell e as bibliotecas de release e
+de loop do rodapé), e o `.#rust-peaks` falha quando uma unidade acima da fatia não está na lista.
 
 **E avaliar também não é de graça.** Um teste de VM é um sistema NixOS, e avaliá-lo segura ~260 MiB
 até o avaliador sair. O `nix build` da bateria avaliava as 31 VMs num processo só — 8,2 GiB de RSS,
@@ -564,7 +580,7 @@ Três coisas o mantêm honesto:
   por construção, e recusa se a resposta for não.
 
 O `gate-fetches-what-no-cache-has` fecha a outra metade: a ferramenta funciona, o que pode deixar de
-ser verdade em silêncio é o gate CHAMAR ela — e chamá-la **antes** das três pesadas, senão paga-se a
+ser verdade em silêncio é o gate CHAMAR ela — e chamá-la **antes** do build Rust, senão paga-se a
 compilação inteira para então descobrir que o problema é a rede.
 
 ---
@@ -1125,8 +1141,10 @@ sem OCR e sem nomear uma cor ali, que seria uma segunda cópia de um token.
 O ambiente gráfico é o lavapipe, o mesmo dos checks, e não é escolha de desempenho: é o que faz o
 comando responder igual nesta máquina, numa sem GPU e dentro de um check. Seção 9.3 continua valendo
 — aqui **nunca** se mede tempo de quadro. E o PNG sai sem compressão, escrito à mão em quarenta
-linhas: fazer do `png` uma dependência direta custaria uma recompilação de toda a camada de
-dependências do crane, minutos em toda máquina, para poupar essas quarenta.
+linhas: fazer do `png` uma dependência direta custava, com a camada de dependências do crane, uma
+recompilação dela inteira, minutos em toda máquina, para poupar essas quarenta. (Com os terceiros
+por unidade, seção 10, custaria só a unidade dele e o que fica acima; as quarenta linhas ficam
+porque funcionam e o `png-tool-draws` as confere.)
 
 ---
 
@@ -1250,11 +1268,11 @@ listagem do gerenciador pegava `files.gutter` — que é a célula da MARCA e n�
 a mesma linha de arquivo começava a **10,8 px** no rodapé e a **24,0 px** na janela. Fator de 2,2, e
 é exatamente o que foi relatado.
 
-O `crates/ronoctua-shell/src/chrome.rs` é a casa do número, e a regra cabe numa frase: **conteúdo é
-recuado por `chrome::INSET` em toda superfície; a modeline e o minibuffer não são conteúdo e ficam com
-`modeline.edgeLeft`.** A exceção não é um furo, é a outra metade da regra — aquelas duas linhas são
-uma barra de status, e o comentário do token já argumentava que duas células ali "começariam a parecer
-margem".
+O `chrome.rs` (hoje no `ronoctua-shell-kit`) é a casa do número, e a regra cabe numa frase:
+**conteúdo é recuado por `chrome::INSET` em toda superfície; a modeline e o minibuffer não são
+conteúdo e ficam com `modeline.edgeLeft`.** A exceção não é um furo, é a outra metade da regra —
+aquelas duas linhas são uma barra de status, e o comentário do token já argumentava que duas células
+ali "começariam a parecer margem".
 
 Uma linha que já traz a própria calha paga a DIFERENÇA, e isso é `chrome::FIELDS_LEAD`. As duas
 janelas tinham descoberto essa subtração cada uma por si e escrito um comentário explicando; o
@@ -1373,6 +1391,11 @@ teclado.
 ---
 
 ## 3. O rodapé
+
+Desde a leva de 2026-10-12 o rodapé é um crate, o `ronoctua-shell-footer`: o `surface.rs` citado
+nesta seção é o módulo `surface/` dele, cada vista de funcionalidade é a região do crate dela, e a
+precedência mora na tabela `PRECEDENCE` (seção 10, "As vistas do rodapé, a precedência numa tabela e
+o hospedeiro de regiões" e "O rodapé num crate, e o binário que compõe").
 
 ### O rodapé: onde cada linha fica, e o que aparece nelas
 
@@ -2738,8 +2761,10 @@ para os três degraus). `report.md` de `nix build .#themes` traz cada margem; `t
 e `themes-negative` (uma semente com o acento a 165° TEM de falhar) são os checks.
 
 **Uma cor é um PAPEL, e o tema é do processo.** `ronoctua_tokens::Color` é um `u16` — o índice de um
-papel — e `to_rgba8()` lê `themes::TABLE[tema][página][papel]`, uma tabela gerada com TODOS os
-temas, cada um nas suas quatro páginas (ver "As faixas seguem o fundo", abaixo). Os 280 sítios que
+papel — e `to_rgba8()` lê a paleta carregada (`ronoctua_tokens::palettes`, `[tema][página][papel]`),
+o `palettes.bin` que o gerador escreve com TODOS os temas, cada um nas suas quatro páginas (ver "As
+faixas seguem o fundo", abaixo; e por que é dado e não tabela compilada, seção 10, "As cores são
+dado"). Os 280 sítios que
 nomeiam `color::TEXT_DIM` não mudaram: nomeiam o papel, e o papel resolve ao desenhar. Igualdade e
 hash são por papel (`lift_onto_a_band` pergunta "este campo é o dim?", e é isso que sempre quis
 perguntar). A paleta é um `AtomicUsize` (`tema × 4 + página`: `theme::set` muda o tema e guarda a
@@ -2942,9 +2967,10 @@ desenhado sobre uma mesa; a mesa é medida como o `surface.chrome` da própria p
   escreve (`TERMINAL_BACKGROUND`). O `every-ground-is-measured` dispensa as três mesas como papéis
   sem texto, com esse motivo: o texto sobre uma mesa é o da página dela, medido lá como
   `surface.chrome`.
-- **O que sai**: `<id>.json` (a base) e `<id>.<página>.json`; o `report.json` por página; e o
-  `gen-tokens.py` gera `themes::TABLE[tema][página][papel]`, `themes::PAGES`, `counts::PAGES` e o
-  modo de cada tema (`Theme::is_light`, `theme::is_light_at`).
+- **O que sai**: `<id>.json` (a base) e `<id>.<página>.json`; o `report.json` por página; o
+  `palettes.bin`, `[tema][página][papel]` com o modo de cada tema (`Theme::is_light`,
+  `theme::is_light_at`), lido em tempo de execução; e o `gen-tokens.py` gera só o que o código
+  nomeia, os papéis, `themes::PAGES` e `counts::PAGES`.
 
 **Quem veste qual página.** Uma superfície sobre uma mesa não pinta outra cor: VESTE a página da
 mesa (`tokens::theme::set_ground`) e pinta exatamente como pintaria no chrome — nenhum pintor
@@ -3011,6 +3037,11 @@ cada classe de cliente e o `output * bg` da mesa, e `ghostty-<página>.conf` (qu
 ---
 
 ## 4. Teclado, keymap e a leader
+
+O keymap padrão é a soma das teclas de cada crate (`bindings::Contribution`), montada pelo binário e
+instalada na partida; a frase que ensina uma tecla pergunta `bindings::taught` (seção 10, "As teclas
+de cada crate"). Onde esta seção cita `leader::default_of`, `taught_keys` ou `crate::leader()`, são
+os nomes de antes da leva.
 
 ### Um keymap, e um bind só no compositor
 
@@ -3552,9 +3583,10 @@ não carrega mais rótulo: ele sai do registro, pelo id. Uma informação, um lu
 "Zero string literal em UI" é uma regra que ninguém cumpre por vontade. O que a faz valer são duas
 guardas, nenhuma delas um teste:
 
-1. **Build.** `gen-i18n.py` exige o mesmo conjunto de chaves nos dois `.ftl`, **nos dois sentidos**
-   (tradução faltando e tradução órfã são os dois erro) e recusa valor vazio.
-2. **Compilação.** O mesmo gerador emite uma constante por chave. `key::CMD_ARQUIVO_ABRIR` não tem
+1. **Build.** `gen-i18n.py` exige o mesmo conjunto de chaves em todos os `.ftl` de cada fragmento,
+   **nos dois sentidos** (tradução faltando e tradução órfã são os dois erro) e recusa valor vazio.
+2. **Compilação.** Cada crate que fala compila uma constante por chave dele (`nix/text-keys.nix`,
+   os NOMES; os valores são dado, seção 10, "As frases são dado"). `key::CMD_ARQUIVO_ABRIR` não tem
    como estar errada; uma chave inventada não compila.
 
 **O vão entre as duas, que já custou caro.** A guarda 1 vê o que *está* nos arquivos, nunca o que o
@@ -3854,11 +3886,11 @@ closure do sistema já tem.
 Três coleções, um app: os glifos das Nerd Fonts, os ícones Lucide e os caracteres Unicode (emoji
 inclusive). Eram três buffers WASM, cada um com sua busca, sua aritmética de grade, sua ficha e sua
 linha de atalhos; hoje as tabelas, a busca e os formatos de cópia são uma biblioteca
-(`ronoctua-iconset`) e a vista é uma só (`crates/ronoctua-shell/src/icons.rs`), com duas portas: a
-região do rodapé (`LEADER m i`, a dobra de `m i i`) e a janela `br.ronoctua.icons` (`m i w`). Uma
-tela por coleção atrás de três abas (`C-1`…`C-3`, `C-TAB` anda por elas); `m i n|l|u` abre uma
-tela no conjunto `Ctrl`. A página de um ícone é `icons_page.rs`, que o fast-access desenha no seu
-painel de detalhe.
+(`ronoctua-iconset`) e a vista é uma só (`icons.rs`, hoje no `ronoctua-shell-icons`), com duas
+portas: a região do rodapé (`LEADER m i`, a dobra de `m i i`) e a janela `br.ronoctua.icons` (`m i
+w`). Uma tela por coleção atrás de três abas (`C-1`…`C-3`, `C-TAB` anda por elas); `m i n|l|u` abre
+uma tela no conjunto `Ctrl`. A página de um ícone é `icons_page.rs`, que o fast-access desenha no
+seu painel de detalhe.
 
 #### As tabelas são lidas em tempo de execução, e só enquanto uma vista as mostra
 
@@ -7013,7 +7045,8 @@ quanto do limite vale a pena nomear, como chamar o FAT32 na frente de alguém �
 
 #### E o mesmo em TODO menu, pelo TECLADO
 
-O mecanismo já existia e estava pela metade: `files::Field` carrega uma `Explanation`, e o rodapé a
+O mecanismo já existia e estava pela metade: `files::Field` (hoje `fields::Field`, do kit) carrega
+uma `Explanation`, e o rodapé a
 põe na linha de mensagem quando o **ponteiro** repousa sobre o campo. Só o ponteiro — o que
 contradizia a regra do dono de que *o que o mouse faz, o teclado faz*, e deixava toda explicação do
 gerenciador fora do alcance de quem não usa mouse.
@@ -7231,14 +7264,14 @@ medida ela é APERTADA, que é a única resposta honesta quando não há tela pa
 **A roda tinha cinco cópias e as cinco erravam igual.** `(pixels / linha) as i64 * 3`: a divisão
 inteira joga fora a fração de linha, então gesto lento de touchpad não movia NADA até cruzar uma
 linha inteira e então movia TRÊS; e o detente de mouse chega como quinze pixels, que é zero linha,
-então a roda só andava quando dois caíam no mesmo quadro. `surface::axis_lines` faz da LINHA a
-primitiva e do detente a linha dividida; `wheel_arrived` guarda a sobra e `wheel_lines` gasta só o
-inteiro. **O rodapé conta linhas junto**, e a diferença dos seus dois modos foi para onde ela
-pertence: onde a região ROLA, um passo é uma linha; onde ela PAGINA, um passo é uma página e custa
-um detente inteiro — `LINES_PER_DETENT` linhas de dedo, a mesma distância que uma volta da roda
-pede. Antes o acumulador guardava detentes, e o lado que rola gastava três linhas de uma vez: era a
-mesma gagueira que as cinco janelas acabavam de perder, viva na porta sobre a qual o relato foi
-escrito.
+então a roda só andava quando dois caíam no mesmo quadro. `surface::axis_lines` (hoje
+`wheel::axis_lines`, do kit) faz da LINHA a primitiva e do detente a linha dividida; `wheel_arrived`
+guarda a sobra e `wheel_lines` gasta só o inteiro. **O rodapé conta linhas junto**, e a diferença
+dos seus dois modos foi para onde ela pertence: onde a região ROLA, um passo é uma linha; onde ela
+PAGINA, um passo é uma página e custa um detente inteiro — `LINES_PER_DETENT` linhas de dedo, a
+mesma distância que uma volta da roda pede. Antes o acumulador guardava detentes, e o lado que rola
+gastava três linhas de uma vez: era a mesma gagueira que as cinco janelas acabavam de perder, viva
+na porta sobre a qual o relato foi escrito.
 
 **E uma chegada não segue o cursor** (`Footer::settle_region`). Três coisas chegam sozinhas na vista
 de rede — o snapshot do NetworkManager, a leitura de 10 s dos túneis e uma varredura que terminou —
@@ -7575,7 +7608,9 @@ Três coisas precisaram de desenho, e não só de encanamento:
 
 1. **O `face()` é GERADO.** `include_str!` recebe literal e não se põe num laço, então o `match`
    escrito à mão era o último lugar onde um idioma declarado podia ficar sem corpo: o nome estaria em
-   `LANGUAGES`, o arquivo no disco, e `Texts::fresh` responderia `None` calada.
+   `LANGUAGES`, o arquivo no disco, e `Texts::fresh` responderia `None` calada. (Desde a leva de
+   2026-10-12 não há `face()` nem `include_str!`: os textos são lidos em tempo de execução, seção
+   10, "As frases são dado".)
 2. **Três asserções eram pareadas por CONSTRUÇÃO** — `pt != en` no pixel, `grep -c` de um contra o do
    outro, passos do instalador de um contra os do outro. Duas comparadas entre si é a forma que não
    cresce: com três, o par continuaria concordando enquanto o novato não dizia nada. Viraram "todos
@@ -8443,27 +8478,29 @@ engordava a camada de dependências e atrasava o link com LTO; o `.symtab` sobre
 `perf` continua nomeando funções. Cobra `cargo-dev-profile-is-lean`, que também recusa um
 `CARGO_PROFILE_*` no devshell e um `.cargo/config*` na árvore — os dois vencem o manifesto.
 
-**Só a camada fica no store.** O crane arquiva o `target/` inteiro no `$out` de toda derivação que
-não é `buildPackage`. Nas camadas de dependências (`buildDepsOnly`, que força isso) é o produto; nos
-testes, no clippy e no formatador eram gigabytes por edição que ninguém lia, cada um com um link para
-a camada do `loop`. Os três têm `doInstallCargoArtifacts = false` — o `$out` continua existindo,
-porque a instalação padrão do crane é `mkdir -p $out` —, e `leaf-builds-keep-no-artifacts` recusa a
-derivação nova que vier com o padrão (um `cargoTest` ou um `cargoNextest`; o `cargoDoc` já vem
-desligado). O `deps-layer-is-lean` recusa um `CARGO_*_DIR` numa camada ou em quem a usa: a camada
-chega como `./target`, e com o diretório mudado o cargo não olha lá e recompila tudo, calado.
+**Uma unidade guarda o produto dela, e só ele.** O crane arquivava o `target/` inteiro no `$out` de
+toda derivação que não era `buildPackage`: nos testes, no clippy e no formatador eram gigabytes por
+edição que ninguém lia. Desde a leva de 2026-10-12 nada nosso é compilado pelo crane (seção 10, "O
+build é unidades, e só unidades"), e o executor das unidades termina cada uma recusando o que não é
+o produto dela — a lib guarda `lib/`, `out-dir/` e `nix-support/`, o programa `bin/`, a execução de
+teste o `log` e o `verdict` (seção 10, "Uma unidade guarda o produto dela"). O
+`leaf-builds-keep-no-artifacts` pergunta isso ao executor e recusa uma derivação do `nix/rust.nix`
+que arquive o `target/`; o `deps-layer-is-lean` recusa um `CARGO_*_DIR` numa camada do profile bench
+ou numa unidade.
 
-**As camadas em uso têm raiz; as velhas, não.** Nada instalado as referencia, então a coleta as
-leva, e agora a coleta acontece sozinha. O `ronoctua-keep-sources` (`nix/kept-sources.nix`) segura
-a camada que ESTA avaliação construiria quando ela já está no store — nunca é motivo para
-compilar. A raiz leva o nome do caminho que segura (`layer-release-<hash>…`, `sources-<hash>…`), não
-só o da camada: o diretório é da pessoa, e todo checkout deste repositório roda o mesmo script
-nele, então uma raiz por nome seria tomada pelo último checkout que rodou — um worktree com outro
-lockfile soltaria as 483 crates compiladas do checkout principal, e a coleta do piso, durante o
-build do próprio worktree, as levaria. Cada execução renova as suas (`touch -h`), e uma raiz que
-nenhum checkout renovou em `oldCompilerDays` é solta: é assim que a camada de um lockfile antigo
-morre. Roda no `.#dev`, no `.#quick` depois do build e nas baterias depois
-da fase 1. As fases 1 e 2 da bateria constroem com `--out-link` no diretório de trabalho dela, que o
-`trap` apaga: o que elas pagaram fica com raiz enquanto a bateria dura, e nem um minuto a mais.
+**As unidades em uso têm raiz; as velhas, não.** Nada instalado referencia uma lib, então a coleta
+as leva, e agora a coleta acontece sozinha. O `ronoctua-keep-sources` (`nix/kept-sources.nix`)
+segura as fontes e os conjuntos de unidades que ESTA árvore construiria (`rust.release.keep`,
+`rust.loop.keep`), só o que já está no store — nunca é motivo para compilar —, num conjunto por
+checkout (seção 10, "No checkout, por checkout"). A raiz das fontes leva o nome do caminho que
+segura (`sources-<hash>…`), não um nome fixo: o diretório é da pessoa, e todo checkout deste
+repositório roda o mesmo script nele, então uma raiz por nome seria tomada pelo último checkout que
+rodou — um worktree soltaria as unidades compiladas do checkout principal, e a coleta do piso,
+durante o build do próprio worktree, as levaria. Cada execução renova as suas (`touch -h`), e uma
+raiz que nenhum checkout renovou em `oldCompilerDays` é solta: é assim que o conjunto de um checkout
+abandonado morre. Roda no `.#dev`, no `.#quick` depois do build e nas baterias depois da fase 1. As
+fases 1 e 2 da bateria constroem com `--out-link` no diretório de trabalho dela, que o `trap` apaga:
+o que elas pagaram fica com raiz enquanto a bateria dura, e nem um minuto a mais.
 
 #### Quando o disco aperta: o cérebro abre espaço, na hora
 
@@ -8828,7 +8865,8 @@ O que sobrou de comparação honesta: a máquina alvo agora *baixa* onde antes *
 
 #### O ISO carregava 2,94 GiB que não eram dele
 
-Ele instalava `rust.workspace`, a derivação que contém TODOS os binários do workspace. Uma derivação
+Ele instalava `rust.workspace`, a derivação do crane que continha TODOS os binários do workspace
+(hoje cada programa é a sua unidade, seção 10). Uma derivação
 referencia o que os bytes dela citam, e o `ronoctua-shell` cita o `libghostty-vt` — que arrastava
 Zig, clang e LLVM (1,70 GiB) — mais o superpacote de ícones e o mesa, pelos caminhos de
 `option_env!`. Um instalador de console não roda nada disso.
@@ -11644,6 +11682,32 @@ diz com quem cada um fala):
 - **`ronoctua-video-metrics`.** O YouTube por HTTP simples e o catálogo SQLite; o único outro crate
   que linka SQLite é o `ronoctua-broadcast` (`one-sqlite-boundary`).
 
+A leva de 2026-10-12 partiu o shell e o brain (o porquê de cada corte está na seção 10):
+
+- **O shell é ~50 crates `ronoctua-shell-*`.** A base: `-kit` (o vocabulário, sobre nenhum crate do
+  shell), `-door` (as portas e o hospedeiro das regiões, sobre o kit), `-report` e `-keep` (o
+  vocabulário do gerenciador e o dos pertences, pequenos e quase parados), `-work` (o selo, o cofre,
+  a fila em palavras) e `-inspect` (os painéis). As folhas de palavras de um daemon (`-audio-words`,
+  `-power-words`, `-syncthing-words`, `-history-words`, `-camera-words`, `-bluetooth-words`,
+  `-display-words`, `-network-words`, `-player-words`, `-update-words`) ficam sobre o crate de
+  fronteira dele e o `ronoctua-i18n`, nenhum do shell. Cada funcionalidade é um crate sobre a base
+  (e sobre a folha dela). Fora da base, os crates do shell têm só estas arestas: a atualização sobre
+  os pertences; a busca sobre a calculadora e os ícones; o catálogo de canais (`-catalogue`) e o de
+  vídeos sobre o jogador; e o gerenciador e o navegador do git sobre a linha do git (`-git-line`, a
+  metade do git que os dois desenham, que não é funcionalidade). Toda outra aresta entre
+  funcionalidades é recusada (`a-feature-stands-on-the-foundation`), a do Incus sobre os containers
+  inclusive; a lista do check aceita ainda três que o desenho previa e o código dispensou — o
+  gerenciador sobre o git e sobre a central de segurança, a central de programas sobre os pertences
+  (o porquê de cada uma está na seção 10, R5g e R5h). O rodapé (`-footer`) fica sobre a base e as
+  folhas, e sobre nenhuma funcionalidade (`footer-names-no-feature`); o host dos buffers
+  (`-buffers`), a linha de vida, as sobreposições e o terminal são folhas sobre a porta. O
+  `ronoctua-shell` é o binário fino, sobre tudo; o `ronoctua-render-png`, um pacote só sobre o kit.
+- **O brain é três pacotes.** `ronoctua-brain`, a biblioteca que o rodapé linka (o fio, a mente, o
+  vocabulário de um módulo, os manifestos da distro, o catálogo); `ronoctua-brain-daemon`, cujo
+  `[[bin]]` continua `ronoctua-brain` (o núcleo e todo `module.rs`, os da pessoa inclusive); e
+  `ronoctua-test-brain`, o driver do painel. Nada além do binário e do driver fica sobre o daemon
+  (`brain-daemon-is-a-leaf`).
+
 ---
 
 ### Desempenho medido
@@ -11777,15 +11841,16 @@ nomeava, saiu: o módulo conta os dois eventos dele no anel `Mind.events`, como 
 ### Os módulos do brain: da pasta ao Rust
 
 Um módulo do brain é uma pasta, `crates/ronoctua-brain/modules/<id>/`, e o id é o nome dela, escrito
-em nenhum outro lugar. Quem lê as pastas é um só: `nix/brain-modules.nix`, uma função pura de `lib` e
-da pasta. Ele recusa, na avaliação e dizendo qual pasta, o que está incompleto (os cinco arquivos, um
-`.ftl` por idioma) e todo campo do manifesto que não conhece ou que tem a forma errada — um erro de
-digitação num manifesto é um erro, e não um módulo rodando em padrões. O flake o importa uma vez e
-entrega a cada gerador, pelo nome, a parte dele: os textos (o `gen-i18n.py` escreve um `.ftl`
-mesclado por idioma ao lado do `keys.rs`, e o `face()` embute esse), os glifos (entram na tabela
-medida do `glyphgen`, e o `icon::brain_mark` responde só por eles), as notificações (entradas
-`<id>-<evento>` do catálogo), os checks e o JSON do gerador Rust. Só o `nix/modules/brain.nix` o
-importa de novo, porque o `imports` de um módulo NixOS não pode vir de nenhum outro lugar.
+em nenhum outro lugar. Quem lê as pastas é um só: `nix/brain-modules.nix`, uma função pura de `lib`
+e da pasta. Ele recusa, na avaliação e dizendo qual pasta, o que está incompleto (os cinco arquivos,
+um `.ftl` por idioma) e todo campo do manifesto que não conhece ou que tem a forma errada — um erro
+de digitação num manifesto é um erro, e não um módulo rodando em padrões. O flake o importa uma vez
+e entrega a cada gerador, pelo nome, a parte dele: os textos (o fragmento do módulo entra nos
+`<idioma>.ftl` mesclados que todo programa lê em tempo de execução), o catálogo do brain (as marcas
+com os glifos medidos, os avisos, as ações, os eventos e as notificações, lido em tempo de execução
+— seção 10, "O catálogo do brain como dado"; os glifos dos módulos não entram mais no `glyphgen`),
+os checks e o JSON do gerador Rust. Só o `nix/modules/brain.nix` o importa de novo, porque o
+`imports` de um módulo NixOS não pode vir de nenhum outro lugar.
 
 **A metade NixOS é fechada por fora.** O carregador põe o `config` de cada `module.nix` debaixo de
 `ronoctua.brain.modules.<id>.enable`, e o de tudo o que ele importa, descendo a árvore; o módulo
@@ -12267,6 +12332,30 @@ se esquece quando a causa acaba. `alert-dismiss` é o botão pelo `LEADER :`.
 abertura, e o p99 sobre as amostras que houvesse passava com uma só. Agora a contagem de aberturas
 medidas tem de ser a pedida.
 
+**O bench de quadros roda sem janela** (`nix/bench-frames.nix`: `WLR_BACKENDS=headless`,
+`WLR_RENDERER=gles2`, `RONOCTUA_INSTANCE=bench`). Sobre o Wayland do host, o compositor aninhado era
+uma janela dele, e três coisas eram do host: o tamanho (o host a ladrilhava e o `output * mode
+1600x900` era ignorado — medido: 1176×672 lógicos numa aba, ampliados 1,6× na tela), os quadros
+(esse backend desenha quando o host chama de volta, e um host não deve isso a uma janela que não
+mostra) e o foco (a janela nova o tomava, e o que a pessoa digitava caía na sessão medida). Medido
+com o mesmo binário: com janela, o primeiro quadro deu p99 de 229 ms e reprovou o alvo de 200 ms;
+sem janela, de 52 a 64 ms em quatro rodadas de cinco (uma, com a máquina carregada, deu 146 ms: sem
+janela some o host, não a carga). O backend headless desenha na GPU por um render node e respeita o
+modo ao pixel. O `gles2` é nomeado porque, sem nome, o wlroots sobe com o pixman quando nenhum
+renderizador de GPU serve (provado com `WLR_RENDER_DRM_DEVICE=/dev/null`: sem nome subiu, com
+`gles2` recusou) — a CPU, que a seção 9.3 proíbe medir.
+
+A rodada também é isolada da pessoa. A instância própria tira o rodapé medido da fila e do cérebro
+da sessão instalada; as raízes de config, estado e dados ficam na pasta da rodada (`$dir/roots/`), e
+cada rodada mede o rodapé como ele nasce, sem o tema, o tamanho do texto ou o consentimento da
+pessoa — antes, os números andavam com eles, e o rodapé do bench reescrevia os fragmentos de tema e
+de ponteiro da sessão (`~/.config/ronoctua`). E todo processo da rodada leva
+`RONOCTUA_BENCH_ROUND=$dir`: um cliente sobe o daemon que falta ao lado de si
+(`ronoctua_brain::client`, e os da fila e do estúdio igual), e esse daemon sobrevive ao rodapé de
+propósito — o bench deixava um cérebro, uma fila e um estúdio rodando para sempre, o cérebro agindo
+na máquina (um ficou 14,7 h). A limpeza encerra quem tem a marca, nunca pelo nome, e apaga os
+soquetes da instância (servidor morto por sinal deixa o soquete).
+
 ### O catálogo local do player — o núcleo (`ronoctua-broadcast`: `catalog`, `sources`)
 
 Os canais por tema pediam um diretório por página, uma página por máquina: duas portas se
@@ -12728,19 +12817,19 @@ Dois módulos do cérebro sobre o seguidor único do journal que o núcleo roda 
 
 ## O seletor de arquivos
 
-**Um seletor só** (`crates/ronoctua-shell/src/file_picker.rs`, `FilePicker`; o `files::Picker` é o
-de dono e grupo do gerenciador). Antes dele, cinco lugares pediam um caminho de cinco jeitos: o
+**Um seletor só** (`file_picker.rs`, hoje no `ronoctua-shell-door`, `FilePicker`; o `files::Picker`
+é o de dono e grupo do gerenciador). Antes dele, cinco lugares pediam um caminho de cinco jeitos: o
 player tinha uma grade própria de três pastas, e o ícone de um web app, um pacote para instalar, uma
-pasta do Syncthing, o arquivo de um túnel e o fundo da câmera eram uma linha para DIGITAR um
-caminho — uma pergunta que só responde quem já sabe a resposta. O check `one-file-browser` recusa
-uma sexta leitura de pasta para escolher fora do seletor e do gerenciador.
+pasta do Syncthing, o arquivo de um túnel e o fundo da câmera eram uma linha para DIGITAR um caminho
+— uma pergunta que só responde quem já sabe a resposta. O check `one-file-browser` recusa uma sexta
+leitura de pasta para escolher fora do seletor e do gerenciador.
 
 **Um componente, sem porta própria.** O pedido (`Request`) diz o propósito (a chave da pasta
 lembrada), o modo (`Open { many }`, `Folder`, `Save { name, extension }`), o anel de filtros (o
 último é sempre "todo arquivo"), onde começa (`Start`: a lembrada, uma pasta do XDG ou um caminho
 dado), se um endereço da web é resposta, e as respostas a mais da página (`Extra`: tocar ou pôr na
 fila a pasta aberta) e o segundo jeito de responder (`C-RET`, `Alternate`). A porta desenha as
-linhas dele como desenha as suas (`files::Field`), dá a ele toda tecla que ele reivindica
+linhas dele como desenha as suas (`fields::Field`), dá a ele toda tecla que ele reivindica
 (`claims`) e faz o que o `Step` pede. O player o hospeda como página (`PageId::Pick`); as vistas
 dos programas, do Syncthing, da rede e da câmera, por cima das próprias linhas
 (`file_picker::Hosted`) — nas duas portas, o que uma escolhe a outra escolhe.
@@ -14250,8 +14339,9 @@ acima do navegador git, dos ícones, da calculadora e do catálogo de vídeos.
 assunto, e as palavras iam junto.
 
 **Quatro portas a mais no `photograph`**: a janela das telas (sobre cenas da câmera), a do clipboard
-(sobre entradas dadas), a cortina do redimensionador e a linha de vida (`scene_photograph.rs`) —
-a porta de produção, desligada, nada lido desta máquina.
+(sobre entradas dadas), a cortina do redimensionador e a linha de vida (cada câmera ao lado da porta
+que fotografa, sobre o caminhar comum `photo::scenes`/`photo::planted`; hoje a tabela `CAMERAS` de
+cada crate) — a porta de produção, desligada, nada lido desta máquina.
 
 **O rodapé se fotografa** (`photograph --door footer`, `footer_photograph.rs`). Ele não é porta: é
 uma layer-shell por tela, montada só sobre uma conexão viva. Por isso a câmera monta o rodapé de
@@ -14375,9 +14465,9 @@ do `run` existe ali.
   leitura por uma constante não tira a guarda. A troca não é obrigatória; o que não pode é um nome à
   mão sem esse check.
 - **A página de data e hora tem foto**: `photograph --door locale --scene watch-on|watch-asking|
-  watch-system` desenha a vigia do brain nos três estados, e a mesma câmera (`system_photograph.rs`)
-  fotografa a rede (`lan`, `hotspot`, `vpn`), o Bluetooth (`phone`), a moeda e o fuso, e a câmera
-  virtual, sobre leituras plantadas.
+  watch-system` desenha a vigia do brain nos três estados, e a câmera de cada porta (no crate dela,
+  sobre o `photo::planted`) fotografa a rede (`lan`, `hotspot`, `vpn`), o Bluetooth (`phone`), a
+  moeda e o fuso, e a câmera virtual, sobre leituras plantadas.
 
 ### O player depois da varredura (X3)
 
@@ -14630,9 +14720,10 @@ pré-geradas, e o `buildBase` fixa os dois (`AWS_LC_SYS_CMAKE_BUILDER=0`, `AWS_L
 para que outro construtor, ou uma cópia do sistema detectada, seja falha alta e não outra
 biblioteca. O closure de runtime não cresce: no perfil release o construtor aplica
 `-ffile-prefix-map` ao C e ao assembly, e a `.a` medida não carrega nenhum caminho do código
-vendorizado (no perfil `loop`, que não instala nada, carrega 259); e, por baixo disso, o
-`buildPackage` do crane apaga do binário instalado qualquer referência ao diretório vendorizado
-(`removeReferencesToVendoredSources`).
+vendorizado (no perfil `loop`, que não instala nada, carrega 259); e, por baixo disso, nenhum
+programa cita a fonte vendorizada: cada terceiro é compilado de uma cópia em
+`/build/<pacote>-<versão>`, e todo programa recusa referência ao vendor e às unidades abaixo dele
+(`disallowedReferences`, seção 10).
 
 **O provedor é passado ao builder, nunca instalado como padrão do processo**
 (`tls::provider`, `builder_with_provider`). Um padrão de processo é mais uma coisa que outro crate
@@ -16202,28 +16293,30 @@ continua o gesto da pessoa, com a senha dela: o que ela traz passa pela mesma as
 
 **O código da pessoa é compilado no brain da máquina dela, e não carregado.** O contrato de um
 módulo é Rust (`Module`, `Manifest`, o shim por `#[path]`), e Rust não tem ABI estável: um plugin
-carregado em tempo de execução seria um segundo contrato, com a fronteira em `extern "C"`. Os buffers
-WASM são o plugin da interface, mas um módulo do brain fala com o systemd, o journal e o disco da
-pessoa — o que um componente não alcança. Então a máquina compila o módulo da pessoa como compila os
-da distro. O preço é a corrente inteira: o texto que a página traduz está embutido no shell
-(`face()`), o glifo de uma marca é um caso do enum WIT contra o qual os buffers compilam, e o
-registro está no brain. Uma máquina com módulos da pessoa constrói o workspace dela — sem acerto no
-cache binário para ele —, e foi isso que o dono escolheu ("compilado no brain da máquina dela").
+carregado em tempo de execução seria um segundo contrato, com a fronteira em `extern "C"`. Os
+buffers WASM são o plugin da interface, mas um módulo do brain fala com o systemd, o journal e o
+disco da pessoa — o que um componente não alcança. Então a máquina compila o módulo da pessoa como
+compila os da distro. O preço era a corrente inteira: o texto embutido no shell, o glifo de uma
+marca no enum WIT contra o qual os buffers compilam, o registro no brain. Desde a leva de 2026-10-12
+o que uma máquina com módulos da pessoa compila é só o daemon do brain; o resto — os textos, o
+catálogo, o índice do navegador de ícones — é dado (seção 10, "O catálogo do brain como dado"). Foi
+isso que o dono escolheu ("compilado no brain da máquina dela").
 
 **`withPersonModules` sobrescreve cada elo, não escreve outro.** `nix/person-brain.nix` recebe a
-corrente que o flake já monta (carregador, `i18nRs`, `glyphdb`, `tokensRs`, `wit`, `buffers`,
-`notificationsRs`, `brainModulesRs`, `rust`) e chama `.override` em cada uma com a pasta da pessoa ao
-lado da da distro: os mesmos geradores, com os mesmos argumentos, uma pasta a mais. Uma segunda cópia
-da corrente divergiria da primeira no primeiro gerador novo. O `distroModules` passou a ser
-`distroModulesFor rust` — uma função do workspace que os módulos rodam, porque todo `rust.*` da lista
-(o rodapé, o brain, a fila, a CLI dos pertences) tem de ser o da máquina. O que volta é tudo o que o
-`lib.machine` precisa, inteiro: `machineModules <ids aprovados>` (o `distroModulesFor` desse `rust`
-mais a metade NixOS de cada id aprovado, pela portaria do carregador) e `refused` (as pastas que
-ficaram de fora, com a frase de cada uma, para o relatório). Importar o `module.nix` cru pularia a
-portaria: a metade valeria com o brain desligado, e um `imports` fora da pasta ou um
-`disabledModules` deixariam de ser recusados. Quando nenhuma pasta carrega, todo elo é o da distro —
-as mesmas derivações, que o cache tem. A tabela do navegador de ícones e a dos tipos MIME ficam como
-a distro as fez: nenhuma desenha a marca de um módulo, e as duas são dado lido em tempo de execução.
+corrente que o flake já monta e chama `.override` nos elos que dependem das pastas — hoje só o
+registro do daemon (`brainModulesRs`), o catálogo, os textos e o índice do navegador de ícones (B2)
+— com a pasta da pessoa ao lado da da distro: os mesmos geradores, com os mesmos argumentos, uma
+pasta a mais. Uma segunda cópia da corrente divergiria da primeira no primeiro gerador novo. O
+`distroModules` passou a ser `distroModulesFor rust` — uma função do workspace que os módulos rodam,
+porque todo `rust.*` da lista (o rodapé, o brain, a fila, a CLI dos pertences) tem de ser o da
+máquina. O que volta é tudo o que o `lib.machine` precisa, inteiro: `machineModules <ids aprovados>`
+(o `distroModulesFor` desse `rust` mais a metade NixOS de cada id aprovado, pela portaria do
+carregador) e `refused` (as pastas que ficaram de fora, com a frase de cada uma, para o relatório).
+Importar o `module.nix` cru pularia a portaria: a metade valeria com o brain desligado, e um
+`imports` fora da pasta ou um `disabledModules` deixariam de ser recusados. Quando nenhuma pasta
+carrega, todo elo é o da distro — as mesmas derivações, que o cache tem. A tabela dos tipos MIME
+fica como a distro a fez; o índice do navegador de ícones ganha os tokens dos glifos que o catálogo
+da pessoa mediu (B2) — os dois são dado lido em tempo de execução.
 
 **Uma pasta ruim da pessoa sai sozinha, e diz por quê.** As pastas da pessoa chegam da home dela,
 pelos pertences, a toda máquina dela. Um `throw` por uma delas pararia a reconstrução de todas as
@@ -18055,3 +18148,4530 @@ de uso — mora no `why.md` dele; aqui fica o que as duas metades combinam.
   pergunta ao endpoint (o leitor de credenciais, `usage::fetch`, o `refresh`, o rustls e o passe) na
   feature `fetch`, ligada para a CLI e o shell; o brain depende dele com `default-features = false`,
   porque o módulo só lê o que foi guardado — quem pergunta é a unidade.
+
+
+## 10. A leva de 2026-10-12: a granularidade do build
+
+Recompilar a distro inteira porque uma parte pequena de um componente mudou é erro de granularidade
+(palavras do dono). A leva refez o build e o shell para que uma edição reconstrua o que depende
+dela, e só isso — sem cache entre máquinas: a correção é a granularidade, não guardar o resultado de
+outra máquina. As seções abaixo são os passos dela, citados pelo nome da pista que fez cada um
+(N1–N7 o build no Nix, R1–R6 o shell em crates, D1, D2 e T1 os valores como dado, B1 e B2 o brain,
+P0 a linha de base de que toda pista partiu); "esta pista", numa seção, é a dela. Foi uma
+refatoração: toda tela, texto, cor, tecla e comando saíram iguais, provados pela matriz da linha de
+base (P0) em cada passo, e o que mudou de propósito está escrito no passo que mudou.
+
+### O que uma edição reconstrói, antes e depois
+
+Antes, com o workspace do crane, qualquer linha de qualquer crate recompilava os 87 crates em cada
+derivation pesada (`workspace`, `loopWorkspace`, `tests`, `clippy`): ~25 min de máquina, e o mesmo
+para uma frase de um `.ftl`, um matiz de uma semente de tema ou um módulo do brain da pessoa.
+Depois, pelo índice do build (`nix run .#rebuild-cost`, 2 323 entradas: toda unidade dos três
+sabores, os terceiros e os agregados) e pelo `cargo` do laço; os tempos do Nix são de derivations
+medidas (`metrics/seconds`); as edições feitas de verdade no fim da leva estão em "As edições
+medidas (F5)", logo abaixo:
+
+| Edição | O que reconstrói |
+|---|---|
+| uma linha de uma vista (`stick.rs`) | 15 entradas: a lib do pendrive e o programa do shell nos três sabores, os testes, o clippy e o rustfmt dos dois; caminho crítico 98 s (a lib de release → o link do programa); no `cargo` do laço, 5,2 s (R6) |
+| uma linha do rodapé (`surface/mod.rs`) | 15 entradas, 157 s (a lib de release do rodapé, 65 s → o programa); no laço, 24,9 s (R6) |
+| uma linha do binário fino (`main.rs`) | 9 entradas, 92 s — o link thin LTO do programa de release é o piso; no laço, 3,8 s (R6) |
+| uma linha de uma folha de palavras (`bluez_words.rs`) | 27 entradas (a folha, a vista do rádio, o rodapé, o programa), 157 s; no laço, 26,3 s (R6) |
+| uma linha do `ronoctua-protocol` | 457 entradas: toda unidade acima dele nos três sabores — o rodapé inteiro e 22 programas (N7) |
+| um teste de integração (`ronoctua-tags/tests/program.rs`) | só o harness, a execução, o clippy e o rustfmt daquele crate — nenhuma lib nem programa (N3) |
+| um programa (`ronoctua-files/src/bin/empty-trash.rs`) | só ele, nos dois sabores, com os testes e o clippy do crate (N3) |
+| o `module.rs` de um módulo do brain da distro | só o daemon (a lib nos três sabores, o programa, os testes, o clippy) e o rustfmt do crate dono da pasta (N3); o `why.md` dele, nada |
+| o `manifest.nix` de um módulo do brain da distro (uma marca, um glifo, uma ação) | 283 entradas: a biblioteca do brain, que compila todo manifesto da distro, e tudo acima dela — a base do shell, o rodapé, todo crate de funcionalidade e quatro programas; caminho crítico 222 s (W1, `.#rebuild-cost`; o que falta está no `docs/PENDING.md`). O catálogo, que é dado, não pesa nisso |
+| um módulo do brain da pessoa (`withPersonModules`) | 11 entradas que compilam, todas acima do daemon (a lib dele e os programas `ronoctua-brain` e `ronoctua-test-brain` em release e loop; a lib, os harnesses e o clippy de teste), e nenhuma outra; 68 execuções de teste rodam de novo porque recebem os dados (B2, F5) |
+| o valor de uma frase de um `.ftl` | nada que compila; os textos, os embrulhos que os levam e as 67 execuções de teste que os leem (D2, T1, F5) |
+| uma chave nova numa vista / no kit | 13 entradas (o pendrive e o programa) / 258 (o que uma edição do `src/key.rs` do kit move); com um registro só, 444 (T1) |
+| um matiz, uma receita de cor, o gerador de temas, o tema padrão | nada que compila; os temas, os embrulhos que pintam e as execuções de teste que leem as paletas (16 no D1; 65 com o shell em ~50 crates, F5) |
+| um buffer WASM | o componente e os dois embrulhos que o levam (N3) |
+| um terceiro no meio do grafo (o `zeroize`) | ele e os 123 que estão acima dele no plano, e nenhum outro (N6) |
+| um teste, uma dependência entre crates nossos, uma feature nossa | nenhuma unidade de terceiros (N3, N7) |
+
+O que custa, numa edição do shell, é o link do programa de release: o thin LTO não é incremental no
+rustc, e toda edição abaixo do shell o paga (N5 decidiu o perfil por medida). O resto da espera
+saiu — menos num hub, que mede o mesmo de antes (abaixo).
+
+#### As edições medidas (F5)
+
+No fim da leva, cada edição foi feita de verdade na árvore (e desfeita reescrevendo o arquivo), a
+partir de um store quente, e quatro conjuntos foram construídos pelo `.#sized-build`, um depois do
+outro: o Rust do sistema (`rust.shipped` e `rust.release.keep`), o loop (`rust.loopShell` e os 50
+programas de loop), os testes (`rust.tests`) e o clippy com o rustfmt. Nesta máquina (12 CPUs, 14
+GiB, ~11 GiB livres) o dimensionamento deu quatro unidades de um núcleo por vez, e a pesada sozinha
+com doze. Antes, com o crane, qualquer uma destas edições pagava as quatro derivations pesadas
+inteiras — a frase, a semente e o módulo da pessoa também, porque os textos e as paletas eram
+compilados e o `withPersonModules` trocava o workspace. Segundos de relógio:
+
+| Edição | `.#rebuild-cost`: entradas; trabalho; caminho crítico | release | loop | testes | clippy | total |
+|---|---|---:|---:|---:|---:|---:|
+| uma linha do pendrive (`stick.rs`) | 15; 140 s; 100 s | 102,8 | 19,2 | 19,1 | 2,4 | 143,5 |
+| uma linha do binário fino (`main.rs`) | 9; 110 s; 93 s | 97,3 | 10,5 | 10,0 | 2,3 | 120,1 |
+| um teste de integração (`ronoctua-tags/tests/program.rs`) | 7; 53 s; 49 s | 0,3 | 0,3 | 43,4 | 4,3 | 48,3 |
+| o valor de uma frase (o `.ftl` do pendrive) | 68, nenhuma compila; 111 s; 28 s | 1,1 | 1,0 | 35,0 | 0,2 | 37,3 |
+| um matiz de semente (o acento do `cyber`) | 66, nenhuma compila; 112 s; 28 s | 22,2 | 1,1 | 32,9 | 0,2 | 56,4 |
+| um módulo da pessoa (`my-sample`) | 81, 11 compilam; 258 s; 80 s | 66,7 | 23,3 | 88,2 | 6,5 | 184,7 |
+| uma linha do `ronoctua-xdg` | 690; 5 043 s; 247 s | 492,4 | 376,3 | 597,1 | 65,5 | 1 531,3 |
+| antes (crane), qualquer uma delas | o workspace inteiro em cada derivation | 700 | 272 | ~500 | 65 | 1 537 |
+
+Avaliar o flake editado custa mais ~11 s (~20 s quando o hub muda), uma vez por `nix build`. A
+previsão do `.#rebuild-cost` ficou a ≤ 16 % do que as unidades mediram depois (a ≤ 4 % quando o link
+do shell domina). O `-- <arquivo>` dele, que simula um byte a mais, só reescreve fonte de crate: num
+`.ftl` diz 0 e numa semente recusa, e a edição de um dado se prevê comparando a árvore
+(`docs/PENDING.md`).
+
+O hub custa o mesmo de antes, e o porquê é a memória, não o grafo. O caminho crítico do xdg é de
+248 s em release, 182 s em loop e 245 s nos testes; o trabalho, de 1 398, 1 057 e 2 280 s de
+unidade, e quatro fatias de um núcleo (a fatia é o pico do pior `rustc`, 1 792 MiB, num orçamento de
+~8,4 GiB) o dividem em 492, 376 e 597 s. O release caiu 30 %; o loop e os testes subiram, onde o
+cargo, dentro de uma derivation, punha todos os núcleos dela no mesmo grafo e sobrepunha os
+`.rmeta`. Numa folha, numa vista, num programa ou num dado, onde o trabalho é pouco e o que resta é
+o link do shell, a granularidade é o ganho inteiro.
+
+Os fechos (NAR, MB), do `c61c5c0` e da árvore final, os dois construídos no mesmo store:
+
+| | antes | depois |
+|---|---:|---:|
+| bundle do rodapé | 2 931,9 | 2 392,9 |
+| semente do ISO | 5 781,2 | 5 607,5 |
+| conteúdo do ISO (o sistema do instalador e a semente) | 7 858,3 | 7 672,9 |
+| sistema `noctua` (full) | 33 875,9 | 33 571,6 |
+| sistema `minimal` | 13 365,4 | 12 827,9 |
+
+E o bench de quadros, sem janela, três rodadas intercaladas de cada lado (a mediana dos p50 e dos
+p99, em ms):
+
+| shell | 1º quadro p50 / p99 | which-key p50 / p99 |
+|---|---|---|
+| linha de base (crane) | 51,8 / 55,8 | 4,2 / 7,4 |
+| final (`rust.shell`) | 49,4 / 62,6 | 4,3 / 6,5 |
+
+Os alvos (200 e 16,7 ms) passam dos dois lados com folga, e a diferença está dentro do que uma
+rodada varia: o p99 de uma rodada é o pior de seis partidas, e a primeira de cada lado, com o cache
+frio, deu 135,9 e 90,7 ms.
+
+### O cargo planeja, o Nix constrói (N1)
+
+#### Por que um derivation por unidade, e por que o plano vem do cargo
+
+Uma linha mudada em qualquer crate recompilava os 87 crates em cada derivation pesada do crane
+(`workspace`, `loopWorkspace`, `tests`, `clippy`): cerca de 25 minutos. Só a camada de terceiros era
+reaproveitada. A correção é de granularidade, não de cache: cada unidade de compilação do Rust (uma
+lib, um `[[bin]]`, os harnesses de teste de um crate, a execução deles, o clippy e o rustfmt de um
+crate) é uma derivation, e o Nix reconstrói só as que dependem do que mudou.
+
+Quem decide o que é cada unidade é o cargo, uma vez: `cargo build --unit-graph` imprime o plano
+inteiro — as features unificadas no workspace todo, a dependência renomeada ou opcional que vira
+qual `--extern`, o `[[bin]]` que o `required-features` deixa passar, o perfil de cada unidade. O
+`--unit-graph` é instável, e por isso o `RUSTC_BOOTSTRAP=1` existe **só** na derivation do
+planejador (decisão 1 do dono): ela não compila nada, e nada que vai para a máquina é compilado com
+recurso instável. O resultado normalizado é commitado em `nix/rust/plan.json` e regenerado por
+`nix run .#rust-plan`.
+
+Descartados, e o porquê fica aqui para ninguém refazer: crate2nix + `buildRustCrate` resolve
+features por RAIZ (cada binário com o seu conjunto, o contrário de `cargo build --workspace`),
+nomeia os `DEP_*` pelo nome do crate e não pelo `links`, ignora `check-cfg`, fixa `opt-level=3` e
+não faz LTO; o crane por crate encadeando `cargoArtifacts` cai na frescura do cargo, que é por
+mtime, e o Nix põe todo mtime em 1 — um rlib velho seria tomado por fresco. O F1 (o
+`buildRustCrate` dirigido pelo nosso `plan.json`) continua sendo a saída se o executor um dia
+divergir do cargo, mas não foi preciso.
+
+#### O esqueleto e a recusa do plano velho
+
+O planejador roda sobre um esqueleto: cada `Cargo.toml` LIMPO do que não muda o grafo
+(comentários, descrição, `[lints]`, `[package.metadata]`), o `Cargo.lock` e um stub vazio em cada
+raiz de alvo que o cargo descobriria (`src/lib.rs`, `src/main.rs`, `src/bin/*.rs` e
+`src/bin/*/main.rs`, `tests/`, `benches/`, `examples/`, `build.rs`, e todo `path` declarado),
+achados por `readDir` na avaliação. Assim o plano muda quando muda uma dependência, uma feature, um
+perfil ou o conjunto de alvos, e nunca quando muda uma linha de Rust ou o que um crate declara ler.
+(O dummy do crane só cria stubs dos testes DECLARADOS e joga fora o `required-features`, que decide
+o que existe: não serve aqui.) As camadas de terceiros NÃO rodam sobre ele (ver abaixo): o esqueleto
+muda com um teste novo, e uma camada não pode.
+
+O plano guarda o hash exato do que fez o esqueleto (`inputs`), e `nix/rust/units.nix` recusa, na
+avaliação, construir qualquer unidade a partir de um plano cujo hash não é o da árvore — o erro
+diz `nix run .#rust-plan`. Um manifesto mudado sem o plano junto é um erro antes de compilar
+qualquer coisa, nunca uma unidade compilada com as features de ontem. O `rust-plan-is-current`
+(no `quick` e no pre-commit) pergunta o resto: o planejador rodado de novo, com este toolchain,
+escreve exatamente o arquivo commitado (uma troca de toolchain pode mudar o plano sem nenhum
+manifesto mexer).
+
+#### A chave de uma unidade é um nome de Merkle
+
+`<nome>@<versão>/<tipo>:<alvo>/<modo>/o<opt-level>/<hash>`, e o hash cobre as features, o perfil,
+a forma do alvo e as CHAVES de todas as dependências. Duas unidades com a mesma chave são a mesma
+compilação, em qualquer grafo; uma dependência compilada de outro jeito muda a chave de tudo o que
+está acima dela. É isso que deixa a camada do `loop` guardar o grafo do loop e o do teste lado a
+lado (o mesmo crate com as features que as dev-dependencies alargam é outra chave), e que deixa o
+grafo do `check --all-targets` (o clippy) nomear as libs do grafo de teste: uma unidade `check` é
+chaveada como o `build` que seria.
+
+#### Três sabores, porque são três grafos
+
+`release` (o que vai para a máquina), `loop` (o do `.#dev`, perfil `loop`) e `test` (o perfil `loop`
+com as features unificadas junto das dev-dependencies, como `cargo test --workspace`). O `test` não
+é o `loop` porque as dev-dependencies ligam `ronoctua-consent/test-support`, que nunca pode entrar
+num produto. Os nomes no store dizem o sabor: `rust-lib-…`, `rust-loop-lib-…`, `rust-test-lib-…`; um
+programa de release é `<bin>-<versão>`, um de loop `<bin>-loop-<versão>`, e um do grafo de teste
+(linkado contra o `test-support`) `rust-test-bin-<bin>-<versão>` — as marcas que o
+`the-loop-profile-is-never-installed` procura (`-loop-0.1.0`, `-rust-test-`).
+
+#### As camadas de terceiros (fase 1): um workspace só delas, feito da metade de terceiros do plano
+
+(Desde o N6 nenhuma unidade nossa lê camada: cada unidade de terceiros é uma derivation — ver "Os
+terceiros, unidade por unidade". As camadas ficaram só para o `.#profile-bench`, que mede uma
+variante do perfil sobre a camada dela. O porquê de cada escolha abaixo continua sendo o da fase 2:
+a chave, a recusa de uma unidade diferente da do plano, o metadata de `links`.)
+
+
+Os ~480 crates do lock são compilados pelo próprio cargo, uma vez por perfil. Toda unidade nossa lê
+uma camada, então uma camada só pode mudar quando muda uma unidade de terceiros — e nunca quando
+muda algo nosso. Construída sobre o nosso workspace (o esqueleto do planejador), ela mudava a cada
+teste acrescentado, a cada dependência entre dois crates nossos e a cada feature nossa, e com ela
+TODAS as unidades dos três sabores (~25 min de release e ~10 de teste), embora o cargo compilasse os
+mesmos quinhentos crates do mesmo jeito.
+
+Por isso a camada é construída de um workspace feito na avaliação, só com as unidades de terceiros
+do plano:
+
+- `deps-target`, o único membro: uma lib que depende de toda lib de terceiros compilada para o alvo,
+  cada uma presa à sua versão (`=x.y.z`, `default-features = false`) com exatamente as features que
+  o plano lhe dá;
+- `deps-host`, uma proc-macro que depende do mesmo jeito de toda lib compilada para o host (o que
+  build scripts e proc-macros linkam, com o `build-override`). Ela é DEPENDÊNCIA do `deps-target`,
+  nunca membro: o cargo só separa as features das dependências de uma proc-macro das do alvo quando
+  a proc-macro é dependida — um membro é raiz, e as dependências de uma raiz são resolvidas como as
+  do alvo. (O spike que fez isto viu o `syn` e o `semver` do alvo ganharem as features do host
+  enquanto o `deps-host` era membro.)
+- `deps-host-test` (só no `loop`): o mesmo para o lado host do grafo de teste, alcançado só pelas
+  dev-dependencies do `deps-target`, para só o `cargo test` compilá-lo — como só o `cargo test`
+  alarga o que as dev-dependencies alargam. As dev-dependencies do `deps-target` pedem, do mesmo
+  jeito, o lado alvo do grafo de teste.
+
+O lock de onde ele parte é a metade de terceiros do nosso (o cargo acrescenta os pacotes da camada e
+mantém toda versão), e os perfis são os nossos sem o que eles dizem dos nossos pacotes. Pedir cada
+crate com as features que o plano já unificou não muda unificação nenhuma: o resultado é o do plano,
+crate por crate. Medido antes de compilar: os três grafos do workspace das camadas têm as mesmas
+774 chaves de terceiros do plano (chaves de Merkle: features, perfil e dependências iguais) e o
+mesmo LTO de cada unidade. E pela avaliação (`rust.layersWith` com um plano editado): um teste
+acrescentado, uma dependência nova entre dois crates nossos e uma feature nossa não mexem em
+nenhuma das duas camadas; uma feature de terceiro mexe nas duas; uma de terceiro só no grafo de
+teste, só na do `loop`. Um teste acrescentado num crate mexe em duas unidades de 622 (os testes
+daquele crate; com o clippy e o fmt dele, quatro).
+
+A camada guarda só o que uma unidade linka, SEM compressão (cada unidade lê alguns rlibs; o
+`target/` em zstd do crane seria descompactado inteiro por oitocentas derivations): `deps/` com os
+rlibs e proc-macros, `native/` com os diretórios de build script para onde os `-L native=` e o
+metadata de `links` apontam, as mensagens JSON e o log `-v` do cargo (o único lugar onde os
+caminhos de busca e o LTO de cada unidade aparecem), e o metadata de `links` de cada build script
+(que vira `DEP_<links>_<CHAVE>` para o nosso build script que depende dele — o
+`ronoctua-player-engine` depende do `aws-lc-rs`).
+
+O índice (`index.json`) é uma derivation à parte, de segundos, e as entradas dele são só a camada e
+a mesma metade de terceiros do plano, cortada na avaliação (`rust-index.py`, um arquivo próprio
+para uma edição do planejador não reconstruir todas as unidades). Ele nomeia cada unidade pela chave
+do plano e RECUSA a camada cujas unidades não são as do plano, ou cuja lib foi compilada com outro
+LTO (lido do log `-v`: `-C linker-plugin-lto`, `-C embed-bitcode=no`), nomeando cada uma — o spike
+S1 roda a cada build, e uma camada compilada de outro jeito nunca chega a uma unidade. Isso importa
+mais agora: as raízes do workspace das camadas não são as nossas, e uma lib sem o bitcode que o thin
+LTO pede só falharia no link, minutos depois. O `release` roda só `cargo build` (a camada do crane
+rodava também `check --all-targets` e `test --no-run`, ~4m43 que nada lia); o `loop` roda `build` e
+`test --no-run`.
+
+O metadata de `links` que nomeia o `OUT_DIR` de um build script da camada (o `include`, o `libdir`
+e o `root` do aws-lc) é guardado por `rust-layer.py` e escrito no índice como `@LAYER@/native/…`; a
+unidade que o entrega a um build script nosso põe ali a própria camada, e a variável nomeia um
+diretório que existe, como no cargo. Um caminho do sandbox da camada que não foi guardado fica
+marcado, e o build script que o receberia é recusado.
+
+A fase 2 (terceiros por unidade, N6) usa o mesmo executor; o plano já tem `src`, features, perfil
+e dependências de cada unidade de terceiros, e a tabela `links` de todo pacote que tem um.
+
+#### O executor: a parte do cargo que RODA
+
+`nix/scripts/rust-unit.py` não resolve nada — o plano resolveu. Ele faz o que o cargo faz ao
+executar: compila e roda o `build.rs` com o ambiente do cargo (`CARGO_CFG_*` do `rustc --print
+cfg`, `CARGO_FEATURE_*`, `OPT_LEVEL`, `PROFILE` pela raiz do perfil, `DEP_*`…) e lê as linhas
+`cargo::`/`cargo:` de volta; chama o `rustc` com as flags que o cargo passaria para aquela unidade,
+na ordem do `build_base_args` (perfil, `--check-cfg`, lints do workspace, `-C metadata`,
+`--extern`, `-L dependency=` sobre uma fazenda de links das libs abaixo e sobre a camada, `-L
+native=` de todo build script abaixo); entrega um jobserver com `$NIX_BUILD_CORES` fichas
+(`CARGO_MAKEFLAGS`, que o rustc e o crate `cc` leem); e roda os harnesses de teste do diretório do
+crate.
+
+O LTO segue o `lto.rs` do cargo, calculado pelo planejador a partir das raízes de cada grafo: as
+libs de release saem só com bitcode (`-C linker-plugin-lto`), os bins de release fazem o thin LTO
+(`-C lto=thin`), e `loop`/`test` saem com `-C embed-bitcode=no`. Não há LTO incremental no rustc:
+cada edição religa o shell com um passo de LTO do programa inteiro — é o que o N5 decide pela
+medida.
+
+Cada unidade tem duas saídas: `out`, determinística (`lib/`, `out-dir/`, `nix-support/`), e
+`metrics` (`seconds`, `peak-kib`), à parte para não mexer na primeira. Cada uma leva só os perfis
+com que compila (a tabela inteira em toda unidade faria um perfil novo, usado por uma unidade nova
+em outro lugar, reconstruir todas). `dontStrip` nas libs.
+
+**Só um programa pode ser substituído.** Um programa é o que um fecho carrega — o do sistema, a
+semente do ISO, o cache binário da pessoa —, então ele fica com o padrão do Nix: um store que já o
+tem o entrega, e nada abaixo dele é compilado (o `nixos-install` da semente usa o store do ISO como
+substituto; com `allowSubstitutes = false` ele compilaria o build inteiro no alvo). Toda outra
+unidade (lib, build script, harnesses de teste, execução, clippy, fmt) só é entrada de outra na
+mesma máquina: `allowSubstitutes = false`, e nada é buscado nem perguntado a um substituto. Os
+programas do grafo de teste também ficam assim: os testes rodam as cópias de `testBins`.
+
+Um programa não leva nada do build: `disallowedReferences` recusa a camada, o vendor, o toolchain e
+toda unidade de lib abaixo dele. O sysroot que um panic cita é trocado pelo hash `eeee…`, como o
+crane fazia — o `--remap-path-prefix` não alcança caminhos que já vieram gravados no metadata das
+dependências —, e a fonte de um terceiro é compilada de uma cópia em `/build/<pacote>-<versão>`
+(N6), então nenhum caminho do vendor chega a um programa. E o `OUT_DIR` de um pacote fica, em toda
+unidade que o lê, no mesmo caminho do diretório de build (`/build/out-dir/<crate>`), copiado da
+unidade que rodou o build script: código gerado incluído por `include!` que entra em pânico cita o
+próprio caminho, e um caminho do store ali faria todo programa carregar a unidade de lib.
+
+#### O que uma unidade vê
+
+**As fontes do alvo, e só elas.** A lib vê `Cargo.toml`, `build.rs` e `src/` menos `src/bin/**` e
+`src/main.rs`; um programa em `src/bin/x.rs` vê esse arquivo e `src/bin/x/`; um `src/main.rs` vê
+`src/` inteiro; um build de teste soma `tests/`, `fixtures/`, `benches/` e `examples/`. Editar um
+teste ou a raiz de um programa recompila isso, e não a lib embaixo. O `rustFont` global (todo `.rs`,
+`.wit` e `.wgsl` de `crates/`) era o que as folhas do crane compilavam, e saiu com elas (N7).
+
+**As variáveis que o crate declara, e só elas.** `[package.metadata.ronoctua]`, lido pelo Nix com
+`fromTOML`:
+
+| Chave | O que é |
+|---|---|
+| `env` | lidas na compilação (`option_env!`, `env!`, `build.rs`); valores de `generated` |
+| `test-env` | dadas só ao build do grafo de teste; valores de `testEnv` (o que o `tests` do crane sempre deu) |
+| `env-absent` | lidas de propósito com um padrão; nenhum valor |
+| `run-env` | lidas pelos testes enquanto rodam; dadas à execução deste crate e de todo crate acima dele (valor de `generated` ou `testEnv`) |
+| `run-env-absent` | lidas pelo código enquanto roda, e que os testes NUNCA recebem: nomes do `atRunTime` (os componentes WASM, as fontes de cobertura, a lista do xkb), que o embrulho dá ao programa instalado e que os testes do crane nunca tiveram |
+| `beside` | o que o crate procura ao lado do próprio executável |
+| `data` | arquivos fora do conjunto padrão (as referências do segmentador, as pastas do brain, os módulos que o render-png pega por `#[path]`) |
+| `bins` | o papel de cada `[[bin]]`: `ship` (padrão), `driver`, `bench`, `apart`; um papel desconhecido ou dado a um programa que o crate não tem é erro de avaliação |
+
+Antes, todo crate via as oitenta variáveis, e um caminho novo do `btop` reconstruía o gerenciador
+de arquivos. E a declaração não pode ficar para trás do código: depois de cada compilação o
+executor lê o dep-info do rustc (`# env-dep:`) e, depois de cada build script, os
+`rerun-if-env-changed`; uma leitura de `RONOCTUA_*` que o crate não declarou FALHA a unidade,
+dizendo o nome, o crate e a chave onde declarar (`rust-units-refuse-undeclared-reads` prova os dois
+caminhos). Um crate não consegue ler um valor que não recebeu e cair num padrão calado.
+
+O valor de uma variável de execução sai de `generated` ∪ `testEnv` — exatamente o que o `tests` do
+crane deixava no ambiente dos testes (o desenho dizia `testEnv ∪ atRunTime`; os componentes WASM e
+as fontes de cobertura de `atRunTime` nunca estiveram no ambiente dos testes, e dá-los agora mudaria
+o que um teste exercita — e faria uma edição de buffer rodar de novo os testes do shell). Nenhum
+nome cai calado: um nome de `run-env` sem valor nessas duas tabelas é recusado na avaliação (um erro
+de digitação inclusive), e o que os testes não recebem de propósito é declarado em `run-env-absent`,
+que só aceita nomes do `atRunTime` sem valor de teste.
+
+#### Os testes
+
+`testBins.<crate>` compila, num derivation, o harness da lib (`--test`), o de cada programa, cada
+teste de integração, e os programas do crate que um teste de integração roda
+(`CARGO_BIN_EXE_<nome>`, que aponta para `libexec/` da própria saída). `testRuns.<crate>` roda cada
+harness a partir de uma cópia das fontes do crate no MESMO caminho da compilação (os testes do
+software leem `env!("CARGO_MANIFEST_DIR")` em tempo de execução; os dois builds precisam do
+`/build` do sandbox, e a execução diz isso se não for o caso), com `RUST_TEST_THREADS` igual aos
+núcleos, `LD_LIBRARY_PATH` com a libwayland, e as linhas `Running …` que a ferramenta de contagem do
+P0 lê. Não há unidade de doctest: nenhum doctest do workspace roda (são blocos `text`, `json` ou
+`ignore`).
+
+`rust.testsOf { name; crate; target ? "lib"; exact ? null; includeIgnored ? false; expect ? null;
+env ? {}; pre ? ""; post ? ""; }` roda UM teste, ou alguns, do harness que `testBins` já construiu —
+nada recompilado, nem de terceiros nem nosso. É o que os vinte checks que sobrescreviam
+`rust.tests` para rodar `cargo test` de um teste só usam (N2).
+
+A execução recebe também o que o build script do crate pôs com `rustc-env` (o cargo o dá aos
+programas que roda, não só ao rustc) e, no `LD_LIBRARY_PATH`, o diretório de bibliotecas do sysroot,
+como o cargo; e cada harness roda de uma cópia num `target/deps/` gravável, porque um teste pode
+escrever ao lado do próprio executável (o do `ronoctua-transfers` escreve).
+
+`clippy.<crate>` passa o `clippy-driver` por todo alvo do `check --all-targets` (inclusive o
+`build.rs`, que o `cargo clippy` também passa), com `--emit=dep-info,metadata`, os lints do
+workspace, `--check-cfg`, `CARGO_PRIMARY_PACKAGE=1` e `-D warnings` (`CLIPPY_ARGS`), contra as libs
+do grafo de teste e a camada do loop. `fmt.<crate>` é `rustfmt --check` em toda raiz de alvo.
+
+### O perfil de release, escolhido por medida (N5)
+
+#### O que sobrou do custo de uma edição é o perfil
+
+Com uma derivation por unidade, uma linha editada deixou de recompilar o workspace; o que ela
+recompila agora é a unidade dela e o que está acima. O que isso custa num programa de release ficou
+nas mãos do `[profile.release]`. Com thin LTO (`lto = "thin"`), toda lib de release para no bitcode
+(`-C linker-plugin-lto`) e todo programa, ao linkar, roda de novo a otimização do programa inteiro
+— e o rustc não tem thin LTO incremental: uma linha em qualquer crate abaixo do shell religa o shell
+inteiro. Com `codegen-units = 1`, o crate inteiro é um módulo do LLVM, gerado numa thread só; o
+shell, que na medida (2026-10-12) era um crate só e um programa só (`src/main.rs`, sem lib), era a
+maior unidade do grafo.
+
+O perfil era escolha de fé ("o binário que alguém roda por meses merece LTO e uma unidade"). Agora é
+medida: cinco variantes, o mesmo benchmark que o dono roda, e a regra que o desenho escreveu antes
+dos números — com quatro leituras que a pista acrescentou durante a medida, uma delas depois dos
+números da vencedora (ver "A regra, e as leituras que a pista acrescentou").
+
+#### As variantes e como elas chegam ao build
+
+A (thin LTO, cgu 1 — o perfil até 2026-10-12), B (sem LTO, cgu 1), C (sem LTO, cgu 16), D (thin
+LTO, cgu 16) — as quatro do desenho — e E: A com só o crate do shell em dezesseis unidades (um
+override por pacote, que o desenho permite). Cada variante é o manifesto da árvore com a variante
+ESCRITA nele (outro `lto` e outro `codegen-units` no `[profile.release]`, e os
+`[profile.release.package.<crate>]` que ela acrescenta), dado aos dois cargos que leem um perfil: o
+**planejador** (cujo plano dá a cada unidade o perfil e o LTO) e a **camada de release** (que
+compila os terceiros com ele e tira o que o manifesto diz dos nossos pacotes). O manifesto é
+editado na avaliação (`nix/rust/planner.nix` ganhou um `rootManifest` opcional, como a camada já
+tinha), nunca pelo ambiente: assim o esqueleto, o plano e o workspace da camada são, byte a byte, o
+que o manifesto faz quando a vencedora é escrita nele. O plano de uma variante É o plano que o `nix
+run .#rust-plan` vai commitar, e a camada e as unidades dela SÃO as derivations que vão para a
+máquina: escrever a vencedora não reconstrói nada, e o que vai para a máquina é o que foi medido,
+caminho por caminho. A variante escolhida é a própria árvore (`rust.planner`,
+`rust.layers.release`, `rust.release`, os mesmos `.drv`): antes da decisão era A, depois de escrever
+a E é a E (conferido, ver "Medidas"). As variantes são absolutas — o `lto`, o `codegen-units` e a
+tabela de pacotes de cada uma substituem os da árvore —, então A continua sendo o perfil antigo
+depois da decisão (as mesmas derivations que foram medidas), e uma medida nova compara contra ele.
+
+O plano de uma variante difere do commitado só no grafo `release`: `loop` e `test` são idênticos,
+porque o `[profile.loop]` nomeia o próprio `lto` e `codegen-units` (conferido nas quatro). O caminho
+pelo ambiente (`CARGO_PROFILE_RELEASE_*`, o que o desenho dizia) dá o mesmo plano, campo por campo,
+menos o hash do esqueleto — foi a primeira versão, e as unidades que ela construiu são as mesmas
+derivations —, mas não diz o override por pacote de um nome com hífen, e não faz o plano medido ser
+o commitado.
+
+O índice da camada já recusa uma lib de terceiro com outro LTO que o plano; o `.#profile-bench`
+confere ainda o plano (todo perfil do grafo `release` com o `codegen-units` da variante, ou o do
+override no pacote dele; nenhum override de pacote que o grafo não constrói; nenhuma unidade com
+bitcode numa variante sem LTO) e o log `-v` do cargo da camada (toda `-C codegen-units=` igual à da
+variante). Uma variante que não chegou a um dos dois é uma rodada recusada, nunca uma variante
+medida como outra.
+
+#### Por que o plano de uma variante é lido de um build, e só ali
+
+As unidades de uma variante só existem com o plano dela na avaliação, e esse plano é a resposta do
+cargo sob aquele perfil: ler a saída de uma derivation na avaliação é import-from-derivation, que o
+resto do flake nunca faz. Fica confinado ao que `nix/rust/profiles.nix` devolve
+(`rust.profileVariants`, e `legacyPackages.<sistema>.profileBench` sobre ele): nenhum check, pacote,
+sistema ou app força essas derivations na avaliação, e o app as constrói pelo nome do atributo
+quando roda — avaliar o app não constrói nada, e o `nix flake check` nunca espera um planejador. A
+tabela de que elas saem (`nix/rust/profile-variants.nix`: as letras, o `lto`, o `codegen-units`, os
+overrides por pacote e o `chosen`) é dado puro, separado de propósito: é ela que o
+`release-profile-is-the-measured-one` lê e de onde o app tira as letras. Conferido trocando
+`rust.profileVariants` por um `throw`: os dois checks, o `.#profile-bench` e o `.#bench` continuam
+avaliando, com `allow-import-from-derivation false`, e só o `profileBench.<letra>` cai. As
+variantes não são planos commitados: seriam quatro arquivos de 2 MB para manter atuais por uma
+medida tirada uma vez por decisão.
+
+#### O benchmark é o `.#bench`, e as rodadas se alternam
+
+O texto do `.#bench` saiu do `flake.nix` para `nix/bench.nix`, como função dos programas que ele
+mede, e as duas portas o usam: o `.#bench` sobre o que o sistema instala, e o `.#profile-bench`
+sobre o `bundle` de cada variante (todo programa de release, o shell embrulhado como o sistema o
+embrulha e o rpath gráfico, como era o `rust.shell` do crane que o `.#bench` media). A decisão é
+tomada no mesmo benchmark que o dono roda, e os dois não podem divergir.
+
+Cinco rodadas, com as variantes alternadas e a ordem girada a cada rodada (A B C D, B C D A, …):
+o que a máquina fizer ao lado cai sobre todas igualmente, e nenhuma roda sempre primeiro, depois de
+um build, ou por último, com os caches aquecidos pelas outras. Cada rodada é uma sessão própria
+(uma rodada que trava é morta com o compositor aninhado e o rodapé que ela subiu, e o log diz
+`== killed after N s`), anota a carga da máquina no cabeçalho do log, e roda com `TMPDIR` numa pasta
+da própria medida (`t/`, no disco): é ali que o `bench-frames` faz (`mktemp -d -t`) a pasta do
+compositor aninhado, com os logs, o config e o soquete IPC, que sem isso iria para o `/tmp`, a RAM.
+Como o soquete mora debaixo dele, um `--out` longo demais para os 107 bytes de um caminho de soquete
+Unix é recusado antes dos builds, com frase. (O índice do `bench-index` vai para o cache XDG, no
+disco, em qualquer caso.)
+
+#### A regra, e as leituras que a pista acrescentou
+
+A regra é a do desenho, escrita antes de qualquer número. Contra A: toda mediana (um `p50` ou uma
+medida única) com mediana das rodadas ≤ 1,03× a de A; todo `p99` com mediana das rodadas ≤ 1,05×
+a de A; nenhuma rodada com orçamento estourado (um teto do benchmark ou um alvo de quadro). Entre
+as aceitas, vence o menor custo de uma linha editada chegando a um programa de release e, depois, o
+menor build a frio.
+
+Quatro leituras que o desenho não dizia foram escritas pela pista, no script, durante a medida — e
+uma delas, a do programa de A, depois que os números da E já estavam lá. Ficam escritas para
+ninguém tomar a decisão por resultado de uma regra pré-registrada: **sem a terceira, a E é
+recusada** (por dois p99 de binários idênticos aos de A; ver "O resultado").
+
+- **Um dígito impresso não é diferença medida.** O benchmark imprime 0,0035 ms ou 0,1 ms; 0,0034
+  contra 0,0033 é 1,0303× e qualquer dos dois é o arredondamento de qualquer coisa entre eles. Passa
+  quem fica até a tolerância mais uma unidade do último dígito impresso, e o relatório marca esse
+  passe (`~`), nunca o esconde. `p95`, `max` e o tamanho de cada programa são relatados e não
+  julgados: a regra nomeia medianas e p99.
+- **O programa de A não é julgado de novo** (escrita depois dos números da E). Uma métrica cujo
+  programa é, na variante, a própria unidade de A (uma derivation, logo um binário — o `metrics`
+  dela é o mesmo caminho) não mede nada da variante: a diferença é ruído entre duas execuções do
+  mesmo arquivo. Ela é relatada (`=`), não julgada. Só importa num override por pacote: B, C e D
+  mudam todo programa. O ruído é real: na E, o `ronoctua-bench-instance` é o de A e o p99 dele saiu
+  0,011 contra 0,009 ms, com o próprio A indo de 0,008 a 0,016 ms entre rodadas; o p99 das consultas
+  de uma letra do índice, também o binário de A, saiu 1,10× o de A.
+- **Uma rodada que o harness não conseguiu medir fica de fora; uma em que um programa da variante
+  falhou recusa a variante.** `broken` é só o que o harness diz de si — sem sessão gráfica, ou o
+  compositor aninhado (o mesmo programa em toda variante) que não subiu antes de o shell da variante
+  ser iniciado —: fica de fora das medianas e é dita no relatório; com menos de três rodadas válidas
+  (da variante ou de A) não há decisão. `failed` é o resto: um benchmark que parou com `ERROR:`,
+  `Error:` ou pânico (fora as linhas de orçamento), um shell que não subiu (`startup N FAILED`) ou
+  não registrou marco, uma leader aberta menos vezes que as pedidas, uma rodada morta pelo prazo, e
+  uma rodada que parou sem linha nenhuma dizendo que foi o harness. Recusa a variante como um
+  orçamento estourado: o benchmark não distingue a queda do programa da variante da queda da
+  máquina, e recusar é o lado que nunca instala um perfil cujos programas caem; se foi a máquina, a
+  medida roda de novo.
+- **O custo de uma edição** é o caminho crítico das unidades de release que uma linha num crate
+  reconstrói (a lib dele e tudo acima, ou — num crate só de programas, como o shell — os programas
+  dele), pelos `metrics/seconds` medidos no build a frio da própria variante: reconstruir uma
+  unidade depois de uma edição é compilá-la de novo inteira, sem incremental no Nix. A decisão lê a
+  edição no **shell** (a mais comum, e a que toda outra também paga, porque o shell está acima de
+  quase tudo); o relatório mostra também um crate folha (`stick`, `zip`), um do meio (`http`), um
+  hub (`xdg`) e o `brain`. Dois custos a até 5% um do outro são iguais (o tempo de um build numa
+  máquina compartilhada varia mais que isso), e aí decide o build a frio: a camada (o `Finished …
+  in` do cargo, no log dela) mais a soma das unidades. Uma camada sem essa linha é recusada, nunca
+  contada como zero.
+
+E o script lê **todo p50 e p99 que o `.#bench` imprime**: uma linha com mais quantis do que os
+padrões leem recusa o relatório, com a linha. A regra fala de "todo p99"; um número que o benchmark
+ganhar e o script não souber ler nunca fica de fora calado.
+
+#### O que a regra não mede, e fica dito
+
+- **Os núcleos.** As duas medidas foram construídas a `--max-jobs 2 --option cores 2`, a regra da
+  leva antes do `nix/build-sizing.nix` (N4); hoje o `.#profile-bench` constrói cada variante pelo
+  `ronoctua-sized-build` dela, e a decisão ainda não foi medida de novo assim (`docs/PENDING.md`).
+  Com dois núcleos, as dezesseis unidades de código de C e D só geram duas de cada vez; uma máquina
+  que dá mais núcleos à unidade pesada (o desenho do N4: as unidades pesadas uma de cada vez, com
+  `heavy_cores`) ganha mais com C, D e E (o shell em dezesseis módulos) do que com A e B, cujo shell
+  é um módulo só do LLVM. O ranking medido a dois núcleos é, por isso, conservador a favor de A e B.
+- **O shell de então.** O shell ainda era um crate só (o R3–R6 o dividiu): a edição dele recompilava
+  as quase 200 mil linhas no programa. Depois da divisão, uma linha numa funcionalidade recompila um
+  crate pequeno e religa o programa; sem LTO isso é segundos, com thin LTO continua sendo o passo de
+  LTO do programa inteiro. A diferença entre as variantes com e sem LTO só cresce com a divisão.
+
+#### O resultado: E — thin LTO e uma unidade por crate, menos o shell, com dezesseis
+
+Duas rodadas de medida, cada uma com cinco rodadas alternadas do `.#bench` por variante, sob a trava
+pesada (nenhuma compilação pesada ao lado):
+
+- **A, B, C, D.** Só A passa. Sem LTO (B, C), o índice do acesso rápido fica 12–19% mais lento na
+  mediana, 7–10% no p99 e até 16% no p99 das consultas de uma letra, e o p99 da leader 30–36% (8,6 e
+  9,0 contra 6,6 ms): o inlining entre crates que o thin LTO dá vale isso — o tantivy é um punhado
+  de crates, e o shell chama todos. D (thin LTO, dezesseis unidades em todo crate) passa em tudo
+  menos num número: o caminho de fontes de sistema do cosmic-text (`upstream + Monospace`, a
+  referência do `bench-shaping`) fica 9–10% mais lento, em todas as rodadas das duas medidas
+  (499–506 contra 458–459 ms) — não é ruído.
+- **E.** O que D custou estava num terceiro, e o que D ganha está no shell: E é A com dezesseis
+  unidades só no shell (o override por pacote do desenho). Ela não muda nenhum programa
+  além dos dois do crate do shell — a camada é a de A, e os quatro programas de bench são as
+  unidades de A —, então só os números do quadro a julgam: primeiro quadro p50 62,6 contra 62,8 ms
+  (p99 68,9 contra 66,7, 1,033× — moveu, dentro da tolerância), leader p50 4,3 contra 4,3 e p99 6,7
+  contra 6,6 (1,015×). Passa — pela leitura do programa de A: sem ela, o p99 do
+  `ronoctua-bench-instance` (0,011 contra 0,009 ms, 1,22×) e o das consultas de uma letra do índice
+  (4,002 contra 3,633 ms, 1,10×), ambos de binários idênticos aos de A, a recusariam.
+
+Entre as aceitas (A e E), vence a de menor custo de uma linha editada: no shell, 387 s contra 510 s
+a dois núcleos (−24%), e o pico da unidade cai de 5259 para 3984 MiB (−24%). O thin LTO reparte o
+trabalho por módulo do LLVM, e o shell era um módulo de quase 200 mil linhas numa thread; em
+dezesseis, o passo de LTO se divide — e com mais núcleos se divide mais, o que a medida a dois
+núcleos não mostra. O build a frio de E é o de A menos a mesma diferença (1948 contra 2044 s de
+trabalho).
+
+**O preço, que a regra relata e não julga: tamanho.** Em dezesseis unidades, o código que várias
+delas inlinam fica copiado em cada uma, e o binário cresce: o `ronoctua-shell` da E tem 147,5 MB
+contra 133,7 MB (+10,3%, +13,7 MB) em toda máquina e no ISO, e o `ronoctua-render-png` 56,6 contra
+56,4 MB (+0,4%); todo outro programa é a unidade de A, byte a byte. Todo o `bin/` do bundle (testes
+e benches inclusive) cresce 2,6%. Com dezesseis unidades em todo crate (C, D) o total cresce 21–23%
+e o shell 22–24%; sem LTO e com uma unidade (B), +1,9% e −0,5%. A regra do desenho não nomeia
+tamanho, e a pista não o pôs nela: se ele deve julgar (um teto no fecho do sistema, por exemplo), é
+decisão do dono e medida nova.
+
+Com o shell dividido (R3–R6), o crate `ronoctua-shell` é um programa fino (~800 linhas) e as
+funcionalidades moram em crates próprios, cada um o seu módulo: o override passa a valer para quase
+nada, e A e E convergem. Ele não atrapalha; a medida seguinte (`docs/PENDING.md`) decide se o
+override deve nomear os crates grandes que nascerem (o rodapé, o kit) ou sair.
+
+### Os terceiros, unidade por unidade (N6)
+
+#### Por que a fase 2
+
+Com as camadas (fase 1), os ~480 crates do lock eram duas derivations do cargo, e toda unidade
+nossa lia uma delas. Qualquer mudança num terceiro — o lock subindo UM crate, uma feature de UM
+crate de terceiro — refazia a camada inteira (~5–7 min) e, pelo índice, toda unidade dos três
+sabores (o release inteiro, ~23 min a frio aqui). A granularidade parava na fronteira do nosso
+código. Com uma derivation por unidade de terceiros, a mesma mudança refaz aquele crate e o que está
+acima dele no plano — mais nada (`a-third-party-change-rebuilds-only-what-is-above` prova os dois
+sentidos: o `zeroize` do alvo, no meio do grafo, refaz os 123 que estão acima dele e nenhum outro).
+A fase 1 continua no repositório só porque o `.#profile-bench` mede cada variante sobre a camada
+dela (N7); nenhuma unidade nem bateria a constrói, e apagá-la está no `docs/PENDING.md`.
+
+#### A chave é a do plano, e uma chave é uma derivation
+
+A chave de Merkle do N1 (features, perfil, forma do alvo e as chaves de todas as dependências) já
+diz quando duas unidades são a mesma compilação. Por isso uma unidade de terceiros é chaveada pela
+chave, não pelo sabor: o grafo do `loop` e o do `test` dividem todas as 616 unidades de terceiros, e
+cada uma é UMA derivation. O nome diz o perfil: `rust-dep-<pacote>-<versão>` no release,
+`rust-loop-dep-…` no perfil `loop` (as marcas `-rust-loop-` que o
+`the-loop-profile-is-never-installed` procura).
+
+#### A fonte de cada pacote, e só ela
+
+A fonte é o download do crane por pacote (`downloadCargoPackage`), a mesma derivation para onde o
+vendor do lock aponta — nada é baixado de novo. O vendor inteiro como fonte faria um lock novo
+reconstruir tudo; o pacote sozinho faz um lock novo reconstruir só os pacotes que mudaram. A unidade
+copia a fonte para `/build/<pacote>-<versão>` (o que `file!()`, um panic e `CARGO_MANIFEST_DIR`
+nomeiam, como o cargo nomeia `~/.cargo/registry/src/…/<pacote>-<versão>`), e nenhum caminho do store
+entra num programa por ali: o `scrub` do vendor deixou de ser preciso nos programas (o `eeee…` da
+fase 1 virou `/build/…`, e é isso que deixa os programas 0,0–0,6% menores).
+
+A cópia fica SÓ LEITURA, como o vendor que as camadas compilam: o `can_compile` do rustix 0.38
+sonda o rustc com `-o -` a partir da pasta do pacote, e o rustc escreve um temporário ali — numa
+pasta gravável a sonda passa e o rustix ganha `--cfg static_assertions`; no vendor (e nas camadas),
+falha. Foi a única diferença de comando entre as 616 unidades e o cargo, e sumiu com a cópia só
+leitura.
+
+O que o cargo lê do `Cargo.toml` do pacote (`CARGO_PKG_*`, as features declaradas para o
+`--check-cfg`, os `[lints]`) é lido NO BUILD, da fonte: na avaliação seria a saída de uma derivation
+lida pelo Nix (import from derivation). As features declaradas somam, como o cargo, uma feature
+implícita por dependência opcional que nenhuma feature nomeia como `dep:<nome>`; os lints vão na
+ordem do cargo (prioridade, depois o nome DEcrescente — `std::cmp::Reverse`), com o `check-cfg` de
+`unexpected_cfgs` logo depois.
+
+#### O build script roda dentro da unidade da biblioteca
+
+Como nas nossas (o §1.3 diz isso da unidade de lib): o script é compilado, rodado e a lib compilada
+numa derivation só. Contar o script e a execução como unidades à parte seria +158 derivations sem
+nada a ganhar no caminho crítico (a lib espera a execução de qualquer jeito). O preço é um só, e o
+check o escreve: um crate cujo build script lê o metadata de `links` de um pacote (o `DEP_*`) passa
+a estar acima da BIBLIOTECA desse pacote, que rodou o script — uma mudança no `zeroize` refaz a
+unidade do script do `ronoctua-player-engine` (segundos), que o cargo não refaria (o `aws-lc-rs`
+depende do `zeroize`; a execução do script dele, não).
+
+A saída de uma unidade de terceiros guarda o que um dependente lê, e mais nada: `lib/` com o rlib
+(ou a `.so` da proc-macro; o `.rmeta` ao lado é o mesmo metadata e sai), `out-dir/` (o `OUT_DIR`,
+que a própria compilação leu em `/build/out-dir/<pacote>` — o mesmo caminho em todo uso, para o
+código gerado por `include!` não citar o store) e `nix-support/` (`unit.json`, `build-script.json`,
+`rustc.json`). O que o script disse e um dependente usa é relocado ali: um caminho do `OUT_DIR` vira
+`$out/out-dir/…`, um da fonte vira o caminho da fonte no store; um valor de `links` que ainda nomeie
+o diretório de build fica marcado inalcançável, e o script que o receberia é recusado (como no
+índice da fase 1). Os `-L native=` de todo script abaixo seguem por `unit.json`, como nas libs
+nossas.
+
+Um caminho é achado onde quer que comece dentro do valor (`path_spans`): sozinho, numa lista
+(`a:b`, `a;b`, `a,b`, `a b`), depois do `=` de `CHAVE=caminho`, colado numa flag (`-I<caminho>`,
+`-isystem<caminho>`, `@<arquivo>`) ou entre aspas. O que vem colado antes dele, desde o último
+separador, não pode ter uma `/` seguida de nome: aí o casamento está DENTRO de outro caminho
+(`/nix/store/h-foo/build/…` não nomeia `/build`). A regra anterior só aceitava o começo do valor ou
+um separador antes, e um `cflags=-I<OUT_DIR>/include` chegava pendurado ao script do dependente, sem
+ser movido nem marcado. O lado que sobra é o seguro: um relativo `foo/build/…` é lido como `foo`
+colado em `/build/…` e recusado, em vez de entregue. Os caminhos são movidos numa passada só (um
+caminho já movido nunca casa de novo; num mesmo lugar, a raiz mais longa ganha).
+
+#### O que uma unidade de terceiros recebe
+
+Uma lib sem build script recebe o compilador e nada mais (o `cc` do stdenv liga uma proc-macro). Uma
+com script recebe o que as camadas recebiam (`buildBase`: pkg-config, wayland, libxkbcommon, vulkan,
+libGL, SQLite, PAM e o `AWS_LC_SYS_*`), para um `-sys` achar a biblioteca do sistema do mesmo jeito
+— e um SQLite novo refaz essas e o que está acima delas, não todo crate.
+`third-party-units-see-nothing-of-ours` segura a fronteira: nenhum `RONOCTUA_*`, nenhum nome nosso
+declarado, um pacote do crates.io como fonte e nenhuma unidade nossa abaixo, nas 1232 unidades.
+
+#### A paridade com o cargo não é um spike de uma vez
+
+O executor faz a parte do cargo que roda; um toolchain novo pode mudar o que o cargo passa sem nada
+nosso mudar. `third-party-units-are-cargo-s` compila pelo próprio cargo os crates do spike
+(aws-lc-sys e aws-lc-rs, libsqlite3-sys, wayland-sys, rustix, libc, proc-macro2, serde_derive,
+cranelift-codegen, wasmtime) e tudo abaixo deles (~120 libs do release), num workspace feito das
+entradas deles no plano, e confere unidade por unidade: o comando de cada lib e de cada build script
+(palavra por palavra, fora caminhos, hashes de metadata e formato de diagnóstico; o `--extern` como
+conjunto), e o que cada script disse (cfgs, bibliotecas, caminhos de busca, `rustc-env`, metadata de
+`links`).
+
+#### O critério de frio, e por que ele foi lido no build inteiro
+
+O desenho pede "frio ≤ 1,2× a fase 1". Medido de três jeitos (números em "Medidas"):
+
+- **O build de release inteiro a frio** (terceiros, as 136 unidades nossas e os programas): 1,01× a
+  duas derivations de dois núcleos (a configuração da leva) e **1,03× a doze threads** — com a fase
+  1 no arranjo mais favorável a ela: a camada sozinha com os doze núcleos (`-j12`), depois as
+  unidades nossas a quatro de três.
+- **Os terceiros sozinhos, nas mesmas configurações de Nix**: 1,12× (release) e 0,85× (loop + test).
+- **Os terceiros sozinhos, com o mesmo número de threads** que o cargo da camada: 1,48× a duas e
+  1,72× a doze. Aqui a fase 2 perde de verdade: ~0,2 s de Nix por derivation, nenhum pipelining por
+  `.rmeta` (o cargo começa um dependente quando o metadata da dependência existe; uma unidade espera
+  o rlib inteiro), e as crates de host (nível 0, 16 unidades de codegen) sem a segunda thread a
+  `--cores 1`.
+
+A leitura que vale é a primeira, porque é a do produto: o que a máquina paga para ter o build a frio
+(na instalação sem semente, num toolchain novo). Ali a fase 2 empata, porque o que ela perde na
+camada ela ganha começando as unidades nossas assim que os terceiros DELAS existem, em vez de
+esperar a camada inteira. E o que ela compra é o que a leva pediu: um crate de terceiro que muda
+refaz ele e o que está acima, não o build inteiro. A terceira leitura fica escrita, com o caminho
+para fechá-la (PENDING: pipelining), e com a volta de uma linha (`depsFrom = "layers"`) enquanto a
+fase 1 existir.
+
+### Os programas nos seus lugares (N2)
+
+#### Cada programa é a sua unidade, e o papel diz para onde ele vai
+
+Com o workspace do crane, um programa só existia dentro de uma derivation que tinha os cinquenta, e
+tudo o que ia para uma máquina era uma CÓPIA tirada de lá (`cp ${workspace}/bin/X` e `patchelf
+--shrink-rpath`), escrita 27 vezes com o mesmo porquê: uma unidade de root, um daemon que vive a
+sessão inteira ou o host do Chrome não podem carregar o renderizador, o wgpu e o runtime de wasm de
+uma derivation que referencia tudo o que os seus bytes citam. Com uma derivation por `[[bin]]` (N1),
+esse porquê é a forma do build: o programa com nome é a própria unidade, e um fecho é o que o
+programa linka. As cópias saíram; o que mede que um fecho continua estreito são os mesmos checks de
+sempre (`brain-unit-is-narrow`, `rescue-has-no-toolchain`, `transfers-unit-is-narrow`…).
+
+O papel de cada programa é declarado pelo crate (`bins` no `[package.metadata.ronoctua]`, `ship`
+quando não diz): `ship` vai para uma máquina, `driver` é rodado por um check ou um teste de VM,
+`bench` pelo `.#bench`, `apart` é construído fora (o `ronoctua-git-askpass`, porque a lib do git
+assa o caminho dele, e uma unidade do plano não pode ser entrada de uma lib abaixo dela). O papel
+decide o lugar: a semente do ISO (`rust.shipped`) tem os `ship`, o `.#bench` os `bench`, e nenhum
+`driver` ou `bench` é aquilo de que um sistema ou o ISO é construído — o bundle do crane levava os
+cinquenta programas, drivers de teste e benchmarks inclusive, para todo fecho que alcançava o shell
+(`every-bin-has-a-role`).
+
+Um programa que o plano não constrói é recusado NA AVALIAÇÃO, com a frase (a feature que o `[[bin]]`
+pede, quando é o caso), em vez do `cp: cannot stat` minutos depois que o workspace dava.
+
+#### Quem pinta vai embrulhado; quem fica ao lado do shell vai copiado
+
+Instalador, resgate e player pintam com a paleta lida em tempo de execução, e cada um a recebe do
+próprio embrulho (`--set`, a da sua build). O programa com nome deles é o embrulho; a unidade fica
+embaixo.
+
+O bundle do rodapé (`rust.shell`, e o `rust.loopShell` do `.#dev`) tem o shell e o que o código dele
+procura ao lado de `current_exe()` — o `beside` de todo crate cujo código está no programa do shell:
+resgate, `tags`, a fila, o cérebro, o player, o estúdio, e o CLI dos pertences e o selador (estes
+dois, a fila os procura ao lado DELA). Eles são COPIADOS para um `bin/` só, e não ligados: o kernel
+resolve `/proc/self/exe` pelo link, e um programa alcançado por um link procuraria os vizinhos no
+`bin/` da própria unidade, onde está sozinho. Não é teórico: a fila iniciada ao lado do rodapé no
+laço aninhado procura o CLI dos pertences ao lado DELA. Com cópias, cada um acha os outros, como
+achava no `bin/` do workspace. O preço é a cópia dos sete vizinhos que também têm unidade própria
+(57 MB de release, ver Medidas) — contra o workspace inteiro (538 MB, os cinquenta programas) que o
+bundle antigo trazia.
+
+O que entra no bundle é o que os `beside` dizem, e uma lista que esquece um nome deixa o programa
+fora do bundle E do check que confere o bundle, que lê as mesmas listas: os dois concordam, e o
+programa falta. Foi o que aconteceu com o selador (revisão de 2026-10-12): a fila o procura por uma
+`const` (`join(BESIDE)`), a lista da fila não o tinha, e "cifrar qualquer coisa" falhava no `.#dev`
+e no palco do `.#shot` com tudo verde. Por isso a corrente tem três elos, cada um num check: o
+código contra as listas (`siblings-are-beside`, do N3, que lê o literal e a `const`), as listas
+contra o bundle (`shell-bundle-is-only-the-shell`) e o bundle contra o comando de recarga do `.#dev`
+(`dev-rebuilds-what-sits-beside`, que lê os membros do `rust.loopShell`: o que estava ao lado do
+rodapé antes da primeira recarga tem de estar depois dela).
+
+Um programa que só existe no bundle (o próprio shell, o `tags`) entra na semente pela cópia do
+bundle, e não pela unidade: a unidade seria uma segunda cópia que nada na máquina referencia.
+
+Nada roda outro programa a partir do bundle: as três unidades de root que rodavam
+`${shell}/bin/ronoctua-rescue`, `…-network-console` e `…-network-agent` punham o desktop no fecho
+delas; agora cada uma nomeia o programa próprio (`shell-bundle-is-only-the-shell`, que caminha o
+grafo de build dos dois perfis procurando `<bundle>/bin/<programa>`).
+
+#### Uma máquina não é construída do loop, e isso se pergunta ao grafo dela
+
+Um programa de loop roda, desenha e passa em todo teste: é só mais lento, na máquina de alguém. Com
+o bundle que COPIA, o fecho de execução não mostra mais de onde um programa veio — a cópia não cita
+a unidade de que saiu, e um rodapé copiado das unidades de loop, ou um sistema que recebe o
+`rust.loopShell` no lugar do `rust.shell`, não tem caminho de loop nenhum no fecho. As marcas que o
+`the-loop-profile-is-never-installed` procurava no fecho (`-ronoctua-loop-`,
+`-ronoctua-shell-loop-`) também não casavam mais com nome nenhum: os programas de loop são
+`<bin>-loop-<versão>` e o bundle `ronoctua-shell-loop`, sem traço depois.
+
+Por isso a pergunta é feita ao grafo de BUILD do que as máquinas são — os sistemas dos dois perfis e
+o ISO, caminhados `.drv` por `.drv` (o `walk` que o `every-bin-has-a-role` já lia) — e com as
+derivations do loop e do grafo de teste pelo CAMINHO, não por uma marca que um nome pode ou não ter:
+toda lib, build script, programa, harness e unidade de terceiros desses dois sabores, o bundle de
+loop e os agregados `rust.tests` e `rust.clippy` (`no-loop-build-reaches-a-machine`). O check também
+exige que a caminhada alcance a unidade de release do shell, que só o passo de cópia do bundle
+nomeia: se ela não vê através de uma cópia, não prova nada sobre uma. O guarda do N3 faz a mesma
+pergunta, pelo grafo de derivations, aos atributos `rust.*` que se instalam; este a faz aos
+sistemas, que é onde um módulo ou o `flake.nix` trocaria um pelo outro.
+
+#### O RUNPATH gráfico, só onde há gráfico
+
+O wgpu acha o carregador do Vulkan e o EGL por `dlopen`, o `wayland-sys` (com a feature `dlopen`,
+que o workspace liga) acha a libwayland do mesmo jeito, e uma biblioteca que nenhum `DT_NEEDED` cita
+não está no RUNPATH que o linker escreve: sem o passo, o wgpu cai no software calado. O crane punha
+as quatro bibliotecas em TODO programa e cada cópia as tirava de novo com `--shrink-rpath`. Agora a
+tabela `dlopened` (`nix/rust.nix`) diz, por crate, o que ele abre (`wgpu-hal` → Vulkan, libGL e
+libwayland-egl; `ash` → Vulkan; `khronos-egl` → libGL; `wayland-sys` → libwayland; `xkbcommon-dl` →
+libxkbcommon), e um programa de release ou de loop ganha os diretórios dos crates que estão no fecho
+DELE, contado sobre as unidades que entram no programa (nunca as de build script ou proc-macro). São
+sete por sabor: o shell, o render-png, dois benchmarks, dois drivers do renderizador — e o estúdio,
+só com a libwayland, que a captura de tela dele abre e que o crane, ao encolher o RUNPATH da cópia,
+tirava (um defeito que este passo conserta, e não uma mudança de comportamento procurada). A
+libxkbcommon o crate `xkbcommon` LINKA, e o linker já a escreve.
+
+O `--add-rpath` vai no `postFixup`, depois do `--shrink-rpath` que o próprio fixup do stdenv faz em
+todo ELF: antes dele, o passo seria desfeito.
+
+#### O que um programa cita está no fecho dele
+
+O Nix registra como referência de uma saída só um caminho que estava entre as entradas da derivation
+— e acha cada um procurando o hash dele nos bytes. Uma lib de release é bitcode do LLVM (`-C
+linker-plugin-lto`, o thin LTO de cargo), e no bitcode uma string não são bytes que o scanner
+encontre: o caminho que uma lib assa com `option_env!` (o git e o ssh do `ronoctua-git`, o askpass,
+a configuração TLS pós-quântica, o 7zz e o bsdtar do `ronoctua-archive`, o `visudo` e o `pamu2fcfg`
+da segurança, os fatos pós-quânticos) nunca vira referência da unidade da lib. No programa linkado
+ele vira bytes — mas ali não era entrada, e de novo não é referência. Medido: o shell de release
+citava nove caminhos que o fecho dele não tinha, e o fecho do sistema `noctua` não tinha o askpass
+nem a configuração TLS (o git estava lá por outro caminho, e só por acaso). O workspace do crane não
+tinha o problema porque a derivation inteira recebia todo o `generated`.
+
+Por isso cada programa de release e de loop recebe, como entrada (`cited` em `nix/rust/units.nix`),
+os valores com que os crates dentro dele foram compilados: o scanner acha nos bytes do programa o
+que ele cita, e só isso. Uma lib de loop é código de máquina e a unidade dela já referencia o que
+cita; a regra é a mesma para os dois sabores, para não depender do perfil.
+`programs-hold-what-they-cite` lê os bytes de cada programa de release e exige cada caminho do store
+que eles contêm no fecho do programa.
+
+#### O `.#png` roda os programas de loop
+
+O perfil muda quanto demora para a foto chegar, nunca os pixels (o P0 fez a matriz inteira com
+programas de loop). E uma edição numa vista é um link de loop de segundos, contra o link thin LTO de
+minutos do release.
+
+#### Os testes de um só: `rust.testsOf`
+
+Os vinte checks que sobrescreviam o `rust.tests` do crane para rodar `cargo test` de um teste (e
+recompilavam o workspace em modo teste para isso) rodam o harness que as unidades de teste já
+construíram, com `--exact` e a contagem esperada. O que um teste recebe em tempo de execução é o
+`run-env` do crate (e o `env` do check); a guarda "o teste voltaria cedo" passou a olhar os valores
+que o Nix dá à execução (`rust.test.runEnvOf`). Uma execução de vários crates é uma `testsOf` por
+crate, e os logs juntos num `ran.txt` (`testsRanTogether`): cada uma já recusou uma contagem que não
+era a dela.
+
+### A granularidade é perguntada ao grafo (N3)
+
+#### Uma edição é simulada na avaliação, e o grafo responde
+
+Com uma derivation por unidade, o que uma edição reconstrói deixou de ser estimativa: é o conjunto
+de derivations cujo `drvPath` muda. O Nix decide isso na avaliação, sem compilar nada. Então os
+checks de granularidade avaliam o build duas vezes — como está, e com a edição — e comparam
+entrada por entrada:
+
+- **Uma edição de fonte** é simulada pelas próprias unidades (`rust.override { crateSourceOverrides
+  = …; }`): o arquivo editado entra no `src` de toda unidade cujo fileset o contém, e de nenhuma
+  outra. É fiel por construção — é o mesmo fileset que o build usa, perguntado arquivo a arquivo
+  (`lib.fileset.intersection`) — e não copia a árvore: a unidade editada ganha um `src` que é o de
+  sempre com um arquivo trocado. Um caminho de `data` que aponta para outro crate (o daemon do brain
+  compila as pastas da biblioteca) é alcançado porque o arquivo é procurado em toda unidade, não só
+  nas do crate dono.
+- **Uma edição de dado** troca a derivation que o carrega (`rust.override { bufferMemory = …;
+  themed = …; ${texts} = …; }`, `withPersonModules`), pelo mesmo gerador que o flake usa.
+
+`rust.unitIndex` (`legacyPackages.<system>.rustUnits`) é o build como dado: toda unidade, camada e
+agregado por um id estável (`<sabor>/<tipo>/<nome>`, `fmt/<crate>`, `layer/<sabor>`,
+`aggregate/<nome>`), com o `drvPath`, o caminho da saída e o da medida (`metrics`), sem contexto de
+string — ler o índice não constrói nada. É o mesmo índice que o `.#rebuild-cost` compara.
+
+#### O esperado é escrito a partir do plano, nas palavras do check
+
+Comparar o build com ele mesmo não prova nada. O esperado vem do `plan.json`, por um modelo curto
+(`granularityModel`, em Python, dentro do check): uma unidade é reconstruída quando as fontes do
+SEU alvo contêm o arquivo (a lib vê `src/` menos os programas, um `src/bin/x.rs` vê ele e
+`src/bin/x/`, os testes veem `tests/`, `fixtures/`…, mais o `data` de cada crate), ou quando uma
+unidade da qual ela é construída é reconstruída — o grafo do cargo, lido do plano. O check exige as
+duas direções: o que o plano diz que é alcançado e não mudou é um programa com o código velho; o que
+mudou sem ser alcançado é a granularidade perdida. As camadas nunca podem mudar por uma fonte nossa.
+
+E um exemplo pode prometer mais que o plano, porque o plano lê o `data` declarado: um `data` largo
+demais faria o modelo e o build concordarem no erro. O `module.rs` de um módulo do brain promete
+que nada da biblioteca `ronoctua-brain` nem do shell é recompilado; uma edição de teste, que nenhuma
+lib nem programa muda; a de um programa, que só ele é religado.
+
+#### O que os checks acharam
+
+- **A biblioteca do brain via a pasta inteira de cada módulo** (`data = ["modules"]`): uma linha no
+  `module.rs` de um módulo — ou no `why.md`, ou num `.ftl` — reconstruía `ronoctua-brain` e tudo
+  acima dela, o shell inclusive, que o B1 tinha separado justamente para não acontecer. O `data`
+  passou a aceitar padrões, e a biblioteca declara o que compila (`modules/*/manifest.nix`, de que o
+  `build.rs` dela precisa para achar as pastas, e `modules/*/shared.rs`); o daemon, o Rust das
+  pastas (`**/*.rs`). Medido pelo próprio check: um `module.rs` reconstrói 17 entradas, todas do
+  daemon (a lib nos três sabores, o programa, os testes, o clippy, os agregados) mais o rustfmt do
+  crate dono da pasta; um `why.md`, nenhuma.
+- **A fila procura o `ronoctua-seal` ao lado do próprio programa** (o selo no `.#dev`) e não o
+  declarava em `beside`: o pacote do shell (N2) o deixaria de fora. Declarado.
+
+#### Dados não compilam
+
+`buffer-edit-rebuilds-no-rust`, `colour-seeds-rebuild-no-rust`, `text-values-rebuild-no-rust` e
+`person-module-rebuilds-only-the-daemon` fazem a mesma pergunta a quatro dados: depois da troca,
+nenhuma entrada que COMPILA (lib, build script, programa, harness de teste, clippy, fmt, camada)
+pode mudar; uma EXECUÇÃO de teste que lê o dado pode (e para a cor, a do `ronoctua-tokens` tem de);
+e o que leva o dado a um programa (o embrulho do rodapé) tem de mudar — senão a edição não chegou ao
+build e o check compararia o build com ele mesmo. Para o módulo da pessoa, o esperado é tudo o que é
+construído da lib do daemon, e nada mais. Os quatro passam: uma semente reconstrói só o embrulho e
+roda de novo 16 execuções de teste (D1); uma frase não compila nada e roda de novo as execuções que
+recebem os textos (D2, T1); o módulo da pessoa move as 15 entradas do daemon e nenhuma outra que
+compila (B2).
+
+A edição de cor passa pelo gerador (`nix/themes.nix`, `seedEdits`: um campo sobre a semente lida),
+não por um `overrideAttrs` do resultado: o que se pergunta é se a semente alcança o Rust por algum
+caminho, e só o gerador sabe todos. A de texto entrega ao gerador dos textos o texto inteiro de um
+fragmento com um valor mudado — a chave, os argumentos e o resto iguais — (`nix/i18n.nix`,
+`fileEdits`, no molde do `seedEdits`): os nomes das chaves saem dele na avaliação, sem
+import-from-derivation, e o check avalia com `allow-import-from-derivation false`. A de buffer move
+a derivation do componente; o caminho que contornaria a derivation (o `data` de um crate apontando
+para um buffer) é o mesmo `data` que o `crate-reads-are-declared` e o modelo leem.
+
+#### O que uma unidade vê, perguntado por conteúdo
+
+`units-see-only-what-they-read` lê cada unidade INTEIRA (todos os atributos, a descrição da
+unidade inclusive) e procura todo caminho do store que seja valor de uma tabela do build
+(`generated`, `testEnv`): cada um é um motivo de reconstrução, e só pode estar ali se a unidade o
+recebeu por um nome que o crate declara. Os nomes que cada unidade recebe são conferidos contra os
+manifestos lidos pelo leitor de TOML do Python (não pelo do Nix, que é o que o construtor usa), e o
+`run-env` de uma execução de teste contra o fecho do grafo de teste. As camadas não podem ter nenhum
+caminho de tabela, nenhum `RONOCTUA_*`, nenhum diretório do cargo — é o `deps-layer-is-lean`
+generalizado. E não é cego: uma unidade plantada com o caminho dos tokens nos `buildInputs` tem de
+ser achada.
+
+`crate-reads-are-declared` faz a pergunta do lado das fontes, em um segundo, nos dois sentidos: toda
+leitura de compilação (`option_env!`, `env!`, o que um `build.rs` nomeia) está declarada — a de
+produto em `env`/`env-absent`, a de teste também em `test-env` —, e toda declaração é lida (um `env`
+velho é um valor que ninguém lê e que ainda reconstrói o crate). O executor recusa a primeira
+metade quando a unidade compila; a segunda, só aqui. Um arquivo que é de dois crates (o daemon e a
+biblioteca do brain dividem as pastas dos módulos) tem a leitura declarada por qualquer um que o
+compile.
+
+#### Os três sabores não se misturam
+
+`flavours-never-mix` lê cada unidade: o sabor que ela diz, os perfis com que compila (os do grafo
+de release não são nenhum dos outros), o nome no store que diz o sabor (`rust-loop-…`,
+`<bin>-loop-<versão>`, `rust-test-…`, `rust-clippy-…`) e do que ela é CONSTRUÍDA, lido da própria
+derivation: toda derivation que os atributos dela citam (o contexto de `drvAttrs`), que são as
+únicas que o sandbox dela tem, logo as únicas que o executor pode ligar. Cada uma tem de ser uma
+unidade do mesmo sabor ou a camada dele, e nenhuma uma segunda construção de uma unidade (o mesmo
+nome, outro caminho). A declaração (`passthru.unitDeps`, as arestas que o índice, o
+`.#rebuild-cost` e a bateria leem) tem de concordar: tudo o que ela declara é entrada, e toda
+entrada que é unidade é alcançada pelo que ela declara — uma lib recebe a cadeia inteira abaixo
+dela (o `-L dependency=`), uma execução de teste só o harness. A primeira versão lia só a
+declaração: uma unidade construída contra outro sabor com o `passthru` intacto passava (achado da
+revisão).
+
+#### O que se instala é construído de quê
+
+`the-loop-profile-is-never-installed` lia o fecho de EXECUÇÃO do que se instala procurando as
+marcas do loop. Com o bundle do N2, que COPIA os programas, isso ficou cego: a cópia não cita a
+unidade de onde veio, então um rodapé copiado das unidades de loop, com o nome do de release, não
+teria caminho de loop nenhum; e a marca do bundle de loop (`-ronoctua-shell-loop-`, com um traço
+depois) não casava com o nome dele (`…-ronoctua-shell-loop`). Agora o check lê o grafo de
+DERIVATIONS de cada coisa instalada (o fecho do `.drv`, exportado pelo Nix com
+`exportReferencesGraph` sobre os `.drv` que a avaliação escreveu — nada é construído para o check),
+que contém o fecho de execução e também o que foi copiado. E as marcas são provadas dos dois
+lados: toda derivation de loop e de teste do índice tem uma, nenhuma de release tem, e toda marca é
+ACHADA no que o loop e os testes são construídos (o bundle de loop, o programa de loop do shell,
+os agregados de teste e de clippy). Uma marca que não acha nada é recusada.
+
+#### Uma unidade guarda o produto dela, e só ele
+
+O executor termina toda unidade conferindo a saída: a lib guarda `lib/` (só o crate compilado),
+`out-dir/` e `nix-support/`; o programa, `bin/`; os harnesses, `bin/`, `libexec/` e `nix-support/`;
+a execução de teste, o `log` e o `verdict`; clippy e rustfmt, o `verdict`; a medida, dois números.
+Um `deps/` de crates compilados é só de camada. Recusar no executor custa uma reconstrução de toda
+unidade, uma vez; o check (`leaf-builds-keep-no-artifacts`) pergunta, na avaliação, que todo tipo de
+unidade é um que o executor sabe o que guardar, e pergunta ao próprio executor, numa saída plantada
+de cada tipo, que ele guarda o produto e recusa o `deps/`.
+
+#### Uma entrada de `data` nomeia arquivos
+
+O `data` aceita padrões (`modules/*/shared.rs`, `../x/**/*.rs`), e um padrão que anda por pastas que
+existem e não casa nada (o Rust foi para outro lugar; `**/*.rss`) era aceito calado: a unidade não
+via nada novo e a declaração continuava dizendo que via. A recusa agora é perguntada aos ARQUIVOS
+que a entrada junta, não às pastas que o padrão percorreu (`data-entries-name-files` planta quatro
+entradas assim e exige a recusa de cada uma, pelo leitor das próprias unidades).
+
+#### `.#rebuild-cost`
+
+`nix run .#rebuild-cost` diz o que uma mudança reconstrói e quanto custa, antes de construir: a
+árvore de trabalho contra o `HEAD` (ou `--against <rev>`, ou uma referência de flake), ou `--
+<arquivo>…` para uma edição de um byte em cada arquivo (pela mesma simulação dos checks). Diz as
+entradas que mudam por sabor e tipo, os programas religados, as execuções de teste que rodam de novo
+e uma camada que se mova; o tempo é o que cada entrada levou da última vez que foi construída
+(`metrics/seconds` da derivation velha, ou da nova se ela já foi construída — dito à parte), somado
+(o trabalho) e ao longo do caminho crítico (a espera com núcleos ilimitados). Entrada nunca medida é
+dita, nunca contada como grátis. Uma revisão anterior ao build em unidades é dita como tal.
+
+### Quantas compilações cabem, e o que a máquina guarda (N4)
+
+#### Uma aritmética, em todo lugar que constrói o grafo de unidades
+
+O build Rust é uma derivation por unidade de compilação, umas trezentas num sistema. Com o padrão do
+Nix (`max-jobs = auto`, `cores = 0`) isso é um compilador por núcleo, cada um com um fio por núcleo:
+num laptop, a forma que faz o `earlyoom`, o `systemd-oomd` ou o kernel matar um `rustc` sem
+mensagem. As baterias já tinham a conta — a fatia de um compilador (`peakMiB`), o orçamento (o
+disponível menos o piso do `earlyoom` e uma reserva, nunca acima do teto do cgroup onde os builds
+rodam) e o produto `jobs × cores ≤ fatias` —, mas só elas. A máquina que aplica o próprio flake (a
+atualização, o rebuild do resgate, o apply da central de programas) construía sem conta nenhuma. A
+conta saiu do `nix/gate.nix` para o `nix/build-sizing.nix`, e quem constrói o grafo de unidades
+pergunta a ela: o gate e o most (carregam as funções), o `.#quick` e o `.#sized-build` (idem) e o
+`ronoctua-machine apply` (roda o programa e lê os números — a conta fica em Nix e shell; o Rust só
+passa as palavras, inv. 5).
+
+As fatias são gastas de três jeitos: as unidades Rust, quantas couberem, um núcleo cada (uma unidade
+é um `rustc`, quase sempre de um fio; o grafo é feito de muitas pequenas, e o teto de quatro jobs
+das baterias não vale para elas); as unidades pesadas, uma por vez, com os núcleos que o orçamento
+deixa ao lado do próprio compilador; e todo o resto (sistemas, testes de VM, bibliotecas C de
+outros) até quatro de cada vez com as fatias divididas entre eles.
+
+#### Onde o build roda decide o teto
+
+O `nix build` de uma pessoa entrega os builds ao `nix-daemon`, e o teto é o do cgroup dele (o
+`MemoryHigh` do `ronoctua.memory.buildCeiling`). O `nix` do ROOT abre o store sozinho e constrói nos
+próprios filhos: o `ronoctua-machine apply`, dentro da unidade da atualização, constrói no cgroup
+dela, e o teto é o menor `memory.high`/`memory.max` dele para cima (`sizing_cgroup_ceiling`). Medido
+pelo do daemon, o orçamento seria o de um processo onde nada roda.
+
+#### As unidades pesadas, sozinhas, depois do que as constrói
+
+`rust.heavyUnits` nomeia as unidades cujo compilador foi MEDIDO acima da fatia (`metrics/peak-kib`).
+Com o shell num crate só eram quatro: o programa de release, o de loop, o harness de teste e o
+clippy dele. Com o rodapé no crate dele e o binário fino (R6) são três: o programa de release do
+shell (o link thin LTO de tudo, 3,9 GiB a doze núcleos), a biblioteca de loop do rodapé (1,8 GiB) e
+a de release dele, que o R6 mediu abaixo da fatia (1542 MiB) e que passou dela quando os textos e o
+catálogo do brain mudaram (T1, B2): 2279 MiB a um núcleo, em três builds (F5). O harness, o clippy e
+o programa de loop do binário fino mediram abaixo da fatia; a lib de release do jogador, a mais
+perto dela, 1770 MiB. A ordem e o que
+cada uma precisa antes são lidos na avaliação do `passthru.unitDeps` (`heavyPlan`): uma pesada
+abaixo de outra vem antes, e o que uma pesada é construída antes nunca a inclui. Nomear não basta: o
+`--max-jobs 1` de uma pesada vale para tudo o que ela puxa, e o programa do shell puxa centenas de
+unidades; por isso o que ela é construída antes vai primeiro, como unidades Rust, e só então ela. O
+`.#rust-peaks` lê o `peak-kib` de toda unidade construída e falha quando uma unidade acima da fatia
+não está na lista — a lista não envelhece calada.
+
+Os bundles do rodapé (`rust.shell`, `rust.loopShell`) saíram da lista: são cópias de programas que
+as unidades já construíram, e com eles lá a bateria ligava os oito vizinhos um de cada vez.
+
+#### A fase 1 da bateria é o build Rust inteiro
+
+1a tudo abaixo das pesadas (`first`), 1b as pesadas, 1c toda outra unidade do índice
+(`rust.unitIndex`), 1d as execuções de teste e os agregados. As execuções vão depois de toda
+compilação, dimensionadas como o resto (elas usam `$NIX_BUILD_CORES` como fios de teste): um teste
+que mede tempo de parede não mede um compilador ao lado (o PENDING do N1 sobre o teste de 20 ms do
+broadcast). Uma unidade que não compila em 1c é anotada e a bateria segue: os checks que precisam
+dela falham com o nome dela, os outros rodam.
+
+#### A máquina guarda as unidades da versão em uso
+
+Um programa não referencia nenhuma unidade de que foi ligado (`disallowedReferences`): depois de um
+build, toda lib é lixo, e a coleta semanal da atualização (ou o piso do Nix) a leva. A atualização
+seguinte compilaria todas as libs de novo para mudar uma linha — o build inteiro que as unidades
+existem para evitar. Decisão do dono (2026-10-12): a máquina guarda as unidades compiladas da versão
+em uso, numa raiz local; não é cache entre máquinas.
+
+O conjunto é `rust.release.keep`: toda unidade de terceiros, lib, build script e programa `ship` do
+grafo de release. Os programas entram porque o bundle COPIA o shell e o `tags`: o sistema não segura
+essas unidades, e uma atualização que só muda o embrulho (um texto, um tema) religaria o shell
+(minutos num laptop) se a coleta o tivesse levado. Os outros programas já estão no fecho do sistema,
+e o conjunto não custa nada a mais por eles.
+
+De cada unidade se guardam as DUAS saídas, `out` e `metrics` (alguns bytes: o pico e o tempo do
+compilador). As baterias pedem toda saída de toda unidade (`<drv>^*`, `nix/gate.nix`), e o Nix
+constrói de novo, inteira, uma derivação com uma saída faltando: com só o `out` enraizado, a coleta
+levava o `metrics`, e o `.#most` seguinte compilava de novo toda unidade guardada (~7590 s de
+unidades, F5) — e o `.#rebuild-cost` e o `.#rust-peaks` perdiam o que leem.
+
+Só o que o store tem é enraizado (`ronoctua-keep-units`): uma máquina do perfil mínimo nunca
+construiu o que só o completo usa, e enraizar nunca é motivo para compilar. A lista de candidatos é
+TEXTO (`paths`), avaliado com o resto do sistema; o `ronoctua-machine apply` a recebe no JSON das
+fases e a entrega depois de um build que deu certo. Cada vez é uma geração nova do conjunto, e só
+depois a velha sai: o número de raízes nunca cai, nem por um instante; um build que falhou deixa o
+conjunto anterior (o da versão que roda). O conjunto é enraizado depois do BUILD, não do switch: é
+dele que a próxima atualização parte, e um `did-not-boot` não muda isso.
+
+Fica em `/var/lib/ronoctua-machine/kept-units/` (persistido com o registro da máquina), raízes
+indiretas pelo próprio Nix da máquina. Não é configuração fora do flake (inv. 6): nada do que a
+máquina É muda; é a coleta de lixo deixando de levar o que o build dela fez, como as raízes que o
+apply já deixava durante o build — a decisão 4 do dono, e nenhuma emenda de invariante.
+
+#### O apply constrói em fases que a distro descreve
+
+`ronoctua.machine.phases` é o que o apply avalia, uma vez (`nix eval --json`, que escreve todo
+`.drv`): `first`, as pesadas com o `between` de cada, o `.drv` do sistema e as unidades a guardar.
+Os builds depois disso nomeiam `.drv` e não avaliam nada.
+
+De cada fase só se constrói o que o PLANO DO PRÓPRIO NIX para o sistema lista: um dry run do `.drv`
+do sistema (`nix build --dry-run`, os caminhos sob "will be built:", `dry::to_build`). Nunca o fecho
+dos `.drv` (`nix-store --query --requisites`): toda unidade está nele, e um store que já tem o
+consumidor de uma unidade não precisa dela. A semente do ISO leva os programas (o shell na cópia do
+bundle) e nenhuma unidade — elas têm `allowSubstitutes = false` e ficam fora de todo fecho —, e o
+fecho que o cache da pessoa serve também não leva unidade. Construído pelo fecho, o primeiro apply
+depois de instalar (a central de programas removendo um app, uma atualização que não mexe em Rust) e
+toda atualização numa máquina servida pelo cache compilariam as ~680 unidades abaixo do shell e
+religariam o shell (3,8–5 GiB, 4–11 min) para um sistema cujo Rust não mudou — onde o `nix build` de
+uma vez de antes não compilava nada. Lido do dry run, o apply constrói o mesmo que o `--rehearse`
+mede. Um dry run que não responde, ou responde em palavras que o programa não lê (uma contagem que
+não é a dos caminhos listados, um caminho sob nenhum título conhecido), constrói todas as fases, e
+diz: uma fase construída à toa custa tempo, uma pesada deixada para o build do sistema seria ligada
+ao lado de tudo. O `.#sized-build` lê o mesmo plano (`sizing_will_build`, as mesmas regras), e ali
+um plano que não lê é recusa, sem build. Uma distro que não descreve fases (mais velha que elas, ou
+num formato que este programa não lê — `PHASES_FORMAT`) é construída de uma vez, dimensionada como o
+resto, sem guardar unidades, e o diário diz. Um dimensionamento que não responde com contagens é
+recusa, antes de qualquer build e com o lock posto de volta, nunca um padrão plausível.
+
+#### No checkout, por checkout
+
+O `nix/kept-sources.nix` enraizava as duas camadas por hash: uma camada mudava com o lockfile. Um
+conjunto de unidades muda com quase toda edição, e uma raiz por hash seguraria cada versão por
+`oldCompilerDays` — gigabytes por tarde. Então o conjunto é nomeado pelo checkout que rodou (o
+diretório de topo, em hash): cada checkout (a árvore principal, cada pista) segura as unidades da
+própria árvore atual, a rodada seguinte substitui a anterior, e um checkout que ninguém roda há
+`oldCompilerDays` é solto como o resto.
+
+### O build é unidades, e só unidades (N7)
+
+#### O crane não compila mais nada nosso
+
+Até o N7, dois builds do mesmo código viviam lado a lado: as unidades (uma derivation por unidade do
+plano do cargo) e as cinco folhas do crane (`workspace`, `loopWorkspace`, `tests`, `clippy`, `fmt`)
+sobre as duas camadas `buildDepsOnly`. Nada que roda usava mais as folhas desde o N2, mas cada uma
+era uma porta aberta: um programa novo, um check ou um módulo que as nomeasse traria de volta "uma
+linha em qualquer lugar recompila o workspace inteiro", e nada falharia — só ficaria lento de novo.
+Elas saíram, com as camadas em que só elas se apoiavam e com o filtro da árvore inteira (`rustFont`)
+que elas compilavam. O crane fica para o que só ele faz aqui: vendorizar o `Cargo.lock` (o
+planejador e o download de cada pacote, de onde as unidades de terceiros compilam), construir o
+planejador e as duas camadas em que o profile bench mede uma variante, e o check que põe as unidades
+de terceiros ao lado do cargo (`third-party-units-are-cargo-s`).
+
+O que fecha a porta é um check, não um comentário: `our-crates-are-built-unit-by-unit` anda o grafo
+de build de tudo o que uma máquina, o ISO, as baterias (`rust-tests`, `rust-clippy`, `rust-fmt`), o
+laço aninhado, o `.#bench` e o `.#png` são construídos, `.drv` por `.drv`, e recusa uma derivation
+que receba a vendorização do nosso lock — a única maneira de o cargo compilar um crate nosso, e o
+que toda derivation do crane recebe como `cargoVendorDir`. Uma unidade nunca a recebe (um terceiro
+compila a fonte do próprio pacote). O build do crane de um programa de fora (o lanzaboote é um) traz
+a vendorização do lock dele e não é perguntado. Não é cego: a camada de release do profile bench, um
+cargo de verdade sobre o nosso lock, é andada do mesmo jeito e tem de ser achada, e cada raiz tem de
+alcançar uma unidade de que é construída.
+
+#### Os agregados têm os nomes do desenho
+
+`rust.tests`, `rust.clippy` e `rust.fmt` são o link farm das execuções de teste, do clippy e do
+rustfmt de cada crate (nix-design §1.6, §1.7). Construir um constrói só as unidades que ele junta:
+uma linha de um crate roda de novo as unidades daquele crate e das que estão acima dele, nunca o
+workspace. Os checks `rust-tests`, `rust-clippy` e `rust-fmt` (o `quick` e o hook de pre-commit os
+nomeiam) são esses três, e no índice da build (`rustUnits`, o `.#rebuild-cost`) eles se chamam
+`aggregate/rust-tests`, `…/rust-clippy` e `…/rust-fmt`.
+
+#### Um programa cita o que os crates dentro dele foram compilados com
+
+`units-see-only-what-they-read` estava vermelho desde o N2 (861 linhas na base): todo programa de
+release e de laço é construído a partir dos valores com que os crates dentro dele foram compilados
+(`cited`, `nix/rust/units.nix`), porque uma lib de release é bitcode e o caminho que ela assa só
+vira bytes no programa ligado — e o censo, que só aceitava o que o crate do programa declara,
+contava cada um como intruso. O censo aceita agora o `cited` como algo que o programa recebe, e o
+confere nos dois sentidos, sem confiar no construtor: os crates que o programa diz ter dentro são os
+que o plano liga nele (lido do `plan.json` no Python), e o `cited` é exatamente o que as unidades
+desses crates receberam ao compilar (o `unit.env` da lib de cada um). Um valor a mais seria um
+motivo para religar o programa que nada dentro dele lê; um a menos, um caminho que o fecho dele não
+teria.
+
+#### Uma edição de manifesto nossa não move unidade de terceiros
+
+`granularity-of-a-manifest-edit` perguntava só às camadas, e desde a fase 2 (N6) nenhuma unidade se
+apoia nelas: a pergunta que importa é às unidades de terceiros, por chave. Agora ela pergunta às
+duas coisas, sabor por sabor, sobre o plano editado na avaliação: um teste acrescentado a um crate
+nosso, uma dependência entre dois crates nossos e uma feature nossa não movem nenhuma unidade de
+terceiros (nem camada); uma feature de um terceiro move as unidades dele nos grafos que têm a chave
+editada (e as duas camadas); uma feature que só o grafo de teste liga move só as unidades de
+terceiros do grafo de teste (e a camada do laço, que constrói a metade de terceiros do grafo de
+teste).
+
+O caso "só o grafo de teste" é planejado como o cargo planejaria: o laço e o teste dividem cada
+unidade de terceiros pela chave, e hoje os dois grafos têm exatamente o mesmo conjunto de terceiros
+(774 chaves, nenhuma só de teste). Uma feature que só o teste liga muda a chave daquela unidade (a
+chave nomeia as features) e a de todo terceiro acima dela naquele grafo (a chave nomeia as das
+dependências); as unidades nossas não são divididas entre grafos e ficam com as chaves delas, e o
+que nomeia uma chave renomeada (as dependências, os alvos do clippy) é renomeado junto. Editar a
+feature sem trocar a chave descreveria uma derivation de dois jeitos, que o construtor recusa.
+
+#### O cérebro que a biblioteca não compila, provado nas unidades
+
+`brain-library-links-no-module` era um `cargo build -p` dentro do `loopWorkspace` do crane. Agora
+constrói as unidades do grafo de laço sobre fontes plantadas, como uma edição chega a uma unidade
+(`crateSourceOverrides`): o `module.rs` de todo módulo da distro envenenado com `compile_error!`, e
+a pasta da pessoa envenenada (o `module.rs` e o `shared.rs` do `my-sample`) e entregue onde a
+máquina a entrega, no `personModulesDir` do registro do daemon. A unidade da biblioteca sobre esse
+veneno é a própria derivation do build sem veneno (ela nem vê esses arquivos), e é construída; a do
+daemon tem de falhar nas três frases; a da biblioteca com o `shared.rs` de cada módulo envenenado
+também. "Tem de falhar" é a unidade com o veredito invertido (`refused`): o executor roda como
+sempre, com o único comando dele fora dos ganchos (uma lista de comandos numa condição não para no
+primeiro erro), e a derivation só sai quando ele parou na frase plantada.
+
+#### As camadas do profile bench ficam
+
+O desenho do N7 diz "o crane fica para a vendorização e as camadas", e a fase 1 não foi apagada
+(`nix/rust/layers.nix`, `rust-layer.py`, `rust-index.py`, `rust.layersWith`, o `depsFrom = "layers"`
+do `units.nix`), que o N6 deixou "para o N7 ou para quem integrar". Dois motivos: o
+`.#profile-bench` (N5) mede cada variante sobre a camada dela (o tempo do frio e os codegen units no
+log do cargo dela), e portá-lo para as unidades de terceiros é mudar o instrumento de uma decisão
+que ainda vai ser medida de novo depois da divisão do shell; e tirar o caminho da camada do executor
+(`rust-unit.py`, `layer_index`, o `layer = null` de cada descrição) muda a derivation de TODA
+unidade dos três sabores — a fase final reconstruiria tudo por uma limpeza. Nenhuma unidade e
+nenhuma bateria constroem as camadas; elas só existem quando o profile bench as pede.
+
+### O shell em crates: primeiro o grafo (R1)
+
+#### Primeiro o grafo, depois os crates
+
+Extrair um crate de um módulo que ainda nomeia uma vista não compila, e um `use crate::files::Field`
+num módulo da base é exatamente isso. Por isso a ordem: primeiro cada módulo passa a ter UMA casa
+futura (a tabela do §1.1 do desenho), e o grafo de módulos é medido contra o DAG dos crates (§1.2).
+Quem mede é um script fora do repositório, porque a atribuição é da leva: depois do R3, quem recusa
+uma aresta para cima é o próprio cargo, e um check guardando uma atribuição de transição seria um
+segundo lugar para ela.
+
+Um caminho não é a única coisa que deixa de compilar quando os módulos viram crates. Um `impl` só é
+legal no crate do trait ou no de um dos seus tipos (E0117; o `impl` inerente, só no crate do tipo,
+E0116): o gerenciador e a central de programas implementavam os três handlers do arrasto do SCTK
+para a própria porta (`impl DataDeviceHandler for Door<Files>`), o que compila num crate só e é um
+`impl` de trait estrangeiro para tipo estrangeiro quando a porta for um crate — `Door` não é
+`#[fundamental]`, e o parâmetro local não torna o tipo local. Nenhum caminho sobe ali, e o portão
+que só lia caminhos dizia zero. Por isso o portão lê também cada cabeçalho de `impl` e julga onde
+moram o trait, o tipo e os argumentos do trait: a família **ORPHAN** tem de ser zero também.
+
+O portão provou que nenhum ITEM precisava mudar de casa no R3 (que ainda escreveu os manifestos, a
+visibilidade e as guardas de teste). Uma referência era um caminho `crate::…`, um `super::` que sobe
+à raiz ou um nome que um `use crate::…` amarrou, com comentários e literais apagados e os testes
+contados (um `mod tests` vai com o módulo). Duas famílias de aresta ficaram fora dele, nomeadas e
+contadas item a item até as pistas que as cortaram: as teclas e a modeline (o R2 cortou com o
+registro `bindings`) e o rodapé hospedando uma funcionalidade (o `Region` do R4/R5 e as tabelas do
+R6). Listá-las item a item é o que fez aparecer os ajudantes genéricos escondidos entre elas — as
+contas de faixa em pixels do gerenciador (`band_px`, `panel_px`…), o fio do clipboard, o gancho da
+marca do `security-watch` —, que desceram.
+
+#### O que desceu, e por que cada casa
+
+- **`fields` (kit)**: o vocabulário em que toda lista é desenhada — `Field`, `Hit`, `Ink`, `Row`,
+  `Section`, `Pane`, `Panes`, `Panel`, as contas de faixa e de painel — era o começo do `files.rs`
+  porque o gerenciador foi o primeiro a desenhar assim; quarenta módulos o nomeavam. `Hit` carrega
+  `Column` e `Doable` (o que uma linha de fatos oferece), que desceram junto.
+- **`sizes` (kit)** ganhou `size_text`, `clock_of`, `picture_in`/`picture_air` e o `BAR_CELLS` de um
+  medidor. Continua autossuficiente, porque o `render-png` ainda o liga por `#[path]` até o R3; por
+  isso o `extent` (que lê `chrome::INSET`) foi para o `chrome`, e não para cá.
+- **`when` (kit)**: o relógio, a ordem da data, o separador, as unidades, a zona e o segundo de
+  agora — uma preferência que toda porta lê, e que lia pela vista que a escreve.
+- **`wheel`, `glyph`, `wake`, `ipc`, `clipboard_copy`, `doors`, `network_refusal` (kit)**: a roda
+  (era do rodapé), o tamanho de um glifo ao lado do texto (do rodapé), o acordar de uma porta (das
+  legendas do player), o lado que ESCREVE nos sockets (o rodapé continua servindo o dele), copiar
+  para o clipboard (do host de buffers), as palavras que abrem a janela do pendrive, e por que o
+  NetworkManager recusou (que o Bluetooth também diz). O `security_words` ganhou o id da pergunta da
+  chave do VirusTotal e o gancho da marca do `security-watch`.
+- **`launch`, `sudo`, `queue`, `brainlink`, `room`, `photo`, `places`, `tags`, `clipboard_wire`
+  (porta)**: iniciar um programa; a metade que ENTREGA um gesto de root (a que pergunta, e a porta
+  do sudo, ficam com a barra — `sudo-door-is-one`); ouvir a fila; o socket do brain; o estado do
+  redimensionador; o laboratório das câmeras; as três colunas que contêineres e Incus dividem; as
+  tags das notificações que uma vista levanta e o rodapé reconhece; o fio entre o rodapé (que guarda
+  o histórico do clipboard) e a janela que o desenha. O `floating` passou a ser dono dos `app_id`s
+  que a tabela dele nomeia; cada janela guarda o próprio `APP_ID`, que é o da tabela. O
+  `file_picker` ganhou a barra lateral que divide com o gerenciador.
+- **`report` (crate próprio, só vocabulário)**: o passo, o recado e o relatório do gerenciador (que
+  os painéis de inspeção devolvem, que uma leitura do git e uma edição de tag voltam dentro, que a
+  fila produz), com as palavras do selo para o que ele entrega à fila e o que volta (`SealDoing`,
+  `SealReport`, `Opening`, `How`, `With`, que saíram do `seal.rs`) — tipos e as palavras deles,
+  nada que faça alguma coisa.
+- **`keep` (crate próprio)**: os pertences como o resto do shell os toca (o "guardar nos pertences"
+  do gerenciador e o store do `belongings.json`, `keep.rs`) e os diz (`belongings_words`).
+- **`jobs` (work)**: um trabalho da fila em palavras.
+- **`tag_words` (inspect)**: o rótulo de um campo e por que as tags não se leem — três portas.
+
+#### O DAG do desenho, ajustado pelo que o código mostrou
+
+O `work` do desenho não fecha com o código: os painéis de inspeção devolvem o `Step` do gerenciador,
+um `Report` carrega a leitura do git e a edição de tag, a vista dos pertences diz as próprias ordens
+em `belongings_words`, e o buffer da fila diz um trabalho em `jobs` — tudo do `work`. Pôr
+`inspect`, `git`, `belongings` e `buffers` sobre o `work` fecharia o grafo, mas faria de cada linha
+do selo, do cofre, das palavras de um trabalho ou da central de programas uma recompilação dos
+painéis, do player (pelo `inspect`), do locale, do git, dos pertences, da atualização e dos buffers:
+12 crates e ~86 mil linhas, contra as 5 (~31 mil) do desenho. O desenho é que pôs juntas coisas que
+crates diferentes usam.
+
+Então o que esses crates usam saiu do `work` para dois crates pequenos, e o `work` ficou com os
+dependentes do desenho (files, security, software, transfers, fast-access):
+
+```
+kit ← report ← { inspect, git, work }         report: só o vocabulário, 249 linhas
+kit ← keep   ← { belongings, work }           keep: keep + belongings_words, 298 linhas
+door ← work ← files, security, software, transfers, fast-access    (como no §1.2)
+door ← buffers                                (como no §1.2)
+```
+
+O buffer da fila recebe as palavras de quem abre a janela (`buffer::QueueWords`; o binário passa
+`jobs::queue_of`), como o `Gate::footer` recebe o gesto — e o `buffers` volta a ficar só sobre a
+porta. O custo que fica, escrito: uma linha do vocabulário (`report`, uma ação nova do
+gerenciador) recompila os painéis e o player; é o preço de os painéis darem o passo do gerenciador
+e de uma edição de tag voltar no relatório dele. O vocabulário é pequeno e muda pouco; os painéis
+mudam muito, e por isso a seta vai deles para o vocabulário, e não o contrário (`report → inspect`
+faria cada linha de um painel recompilar o `work` e tudo sobre ele).
+
+E cinco casas diferentes da tabela do desenho: `text_area` é do **player** (nomeia os tipos dele),
+`disks` dos **buffers** (só o host o usa), `dev_clone` do **git**, `clipboard_wire` da **porta** (o
+fio que os dois lados falam, como `ipc` e `sudo`) e o `VT_KEY` do **kit** (`security_words`, não
+`work`). A fila partiu em duas: ouvir é da porta, dizer é de `work`.
+
+#### Inversão onde mover não bastava
+
+- O `Gate` da porta fazia a conversa do rodapé com o sudo (`InFooter`) dentro de si. Agora recebe
+  quem faz o gesto (`Gate::footer(make)`), e o `sudo_bar::gate` é quem o dá: a porta não nomeia a
+  barra, e a conversa continua o único chamador da porta do sudo.
+- A linha do brain abria a central de segurança na seção de uma marca perguntando à vista; o gancho
+  virou dado (`security_words::section_of_mark`, com o `WATCH`), e o teste da central amarra as duas
+  palavras às suas seções. O `namedBy` do `security-watch` ganhou o `security_words.rs`.
+- O acesso rápido ensinava a tecla da fila pelo `Taught` da central de programas; agora pergunta
+  `queue::queue_keys`, a mesma conta (o `taught_keys` de `transfers-open` depois da leader).
+- Os três handlers do arrasto (`DataDeviceHandler`, `DataSourceHandler`, `DataOfferHandler`) são da
+  porta, escritos uma vez no `carry.rs` — o único arquivo que fala `wl_data_device` (inv. 3) — para
+  `Door<C: Carries>`; a janela que recebe ou começa um arrasto implementa `carry::Carries` (um
+  método, `carried`, que recebe o que o dispositivo disse, `carry::Heard`) — um trait da porta para
+  um tipo da janela, que é dela implementar. Um trait à parte, e não um método do `Content`, porque
+  uma porta cuja janela não arrasta não tem dispositivo e continua sem os handlers, como antes.
+- O host de buffers recebe as palavras da fila (`buffer::QueueWords`) em vez de nomear o `jobs`.
+
+#### As câmeras por crate
+
+A câmera de quatro portas (`scene_photograph`) e a de quatro janelas de sistema
+(`system_photograph`) eram uma câmera nomeando quatro crates cada. Agora o caminhar é um só
+(`photo::scenes`, `photo::planted`) e cada porta diz só o seu, ao lado da porta que fotografa: as
+palavras dela e a porta que constrói (`display_window::camera`, `clipboard_window::camera`,
+`resizer::camera`, `lifeline::camera`, `network_window::camera`…). Uma invocação válida desenha o
+mesmo (a matriz inteira saiu igual); o `--help` de cada câmera fala só da porta dela, e uma palavra
+de outra porta é recusada (antes era aceita e ignorada). A câmera do player (com as três portas
+nativas que andam no caminhar dele — atualização, configurações do rodapé, calculadora) foi para o
+crate do jogador (R5i), e o binário lhe entrega as que não são dele; as câmeras de todo crate são
+hoje a tabela `CAMERAS` dele (R6).
+
+### As teclas de cada crate (R2)
+
+#### Um keymap que é a soma das contribuições
+
+O keymap padrão era uma função do líder do rodapé, `leader::default_of`, com 619 comandos, 204
+sequências e 38 grupos de todas as vistas, mais a lista `BY_NAME_ONLY` e o `reachable` que somava as
+tabelas de 25 vistas. Por isso o módulo que anda as sequências nomeava todas as funcionalidades, e
+uma linha da tabela do pendrive era uma linha do rodapé: com os crates do desenho, o rodapé
+dependeria de todos eles — o contrário do DAG (o rodapé fica sobre o kit e a porta, e só).
+
+Agora cada crate diz as suas teclas num `bindings::Contribution`, ao lado da vista que as responde:
+`pub const KEYS` em cada funcionalidade, `pub const BASE` no `leader.rs` para o que é do rodapé
+(janela, área de trabalho, buffer, sessão, `M-x`, os três conjuntos do líder, o cérebro, o lançador,
+o tema, o relance, o quiosque, as configurações e os modos ocultos do rodapé, a fileira de mídia, os
+buffers que o rodapé abre). Uma contribuição tem:
+
+- `commands` — os comandos que registra, cada um com o seu `cmd-<id>`;
+- `bindings` — as sequências que os rodam (`(teclas, comando, argumento)`);
+- `groups` — os grupos que nomeia; um grupo pode guardar sequências de outro crate (`s` é do
+  rodapé e `s z z` do pendrive) — o rótulo é de quem nomeia o prefixo;
+- `by_name` — os que só `LEADER :` alcança, cada um com o porquê ao lado (era o `BY_NAME_ONLY`);
+- `generated` — o que se gera na montagem: os dígitos das áreas de trabalho, os níveis do menu da
+  janela (que ADOTAM as teclas já ligadas ao mesmo comando, `Generated::adopting`), os feitos do
+  compositor e as ações dos módulos do brain — tudo do `BASE`;
+- `reached` — o que as teclas e linhas da própria vista rodam (o que o `reachable` somava).
+
+Só o binário as junta (`keymap::CONTRIBUTIONS`, uma por linha, o rodapé primeiro), e
+`bindings::assemble` faz o que `default_of` fazia — registro, ligações, grupos, os três conjuntos e
+todas as recusas — e mais duas: **um crate só liga, e só diz "só por nome", o que ele mesmo
+registra**. Sem essa regra a tecla de uma vista poderia morar em outro crate, longe da vista que a
+responde, e a pergunta "de quem é esta tecla?" não teria resposta. Três seções de comentário que
+estavam no lugar errado da tabela única (a do `m`, a do `s p`, a do `s n`) foram junto com as
+sequências que descrevem.
+
+A ordem das contribuições não muda nada: o registro e a árvore são `BTreeMap`, e o
+`check-keymap --dump` saiu idêntico ao da linha de base, byte a byte.
+
+#### O keymap instalado
+
+Uma frase que ensina uma tecla a lê da árvore que o líder anda, nunca de texto
+(`keys-are-never-text`), e cada porta montava o keymap inteiro para perguntar. Uma vista não pode
+mais montá-lo — ele nomeia todos os crates —, então o `main` instala o construtor na partida, ao
+lado do tema, da forma da data e do tamanho do texto (`bindings::install(keymap::build)`), e:
+
+- `bindings::installed()` é o keymap do processo, construído na primeira pergunta e o mesmo depois —
+  o rodapé guarda referências a ele (`&'static Trees`/`Registry`), e por isso não monta duas vezes
+  quando uma vista sua pergunta uma tecla;
+- `bindings::taught(id, arg)` é o que uma frase ensina (`SUPER t`), `bindings::keys` as teclas
+  depois do líder, `bindings::read(|trees, registry| …)` o resto;
+- `bindings::label()`/`chord_label()` são o antigo `crate::leader()`/`leader_chord()`.
+
+Num binário de teste ninguém instala: um teste lê `None` — a não ser dentro de
+`bindings::with_stub(&[("t t", "transfers-open"), …], || …)` (sequências e prefixos como grupos,
+para os conjuntos dobrarem como os de verdade) ou de `bindings::with_keymap(keymap::build()?, || …)`
+(os testes do binário, sobre a árvore real). Ambos são por thread: testes em paralelo não se veem.
+
+`Set`, `Trees`, `folds`, `collapse` e `taught_keys` desceram do `leader.rs` para o `bindings.rs`
+(kit): são o que `taught` responde, e não nomeiam nada além do próprio keymap. O líder do rodapé
+continua com a máquina de estados (`Leader`, `Tap`, `Patience`), o socket de controle e o `BASE`.
+
+#### Quem garante o quê
+
+- `bindings::assemble` (na partida do rodapé e no `check-keymap` que o `keymap-no-collision` roda):
+  comando duas vezes, ligação para comando que ninguém registra, ligação ou "só por nome" para
+  comando de outro crate, argumento em desacordo, colisão em qualquer conjunto.
+- `every_command_has_an_owner` (teste do binário): cada comando do registro tem exatamente um dono;
+  todo dono tem nome, e nenhum nome se repete; o que a vista de cada crate roda existe; o comando
+  que a linha de uma instalação oferece existe, e todo comando que uma entrada do livro de
+  notificações da distro oferece também (o `events::actions_of` desenha só o que o registro
+  conhece).
+- Os testes de uma funcionalidade que perguntavam ao registro inteiro perguntam a um registro do
+  próprio crate — a contribuição dele, o `BASE`, ou um montado no teste —, porque o keymap inteiro
+  nomeia todos os crates e só o binário o monta. **Um registro montado no teste tem de conter os
+  casos que o nome do teste promete, e o teste diz isso numa asserção de guarda** (a revisão
+  adversarial pegou dois que tinham ficado cegos):
+  - o localizador (`minibuffer.rs`) registra os dois comandos reais que CONTÊM `buffer` sem começar
+    por ele (`minibuffer-fold-open`/`-close`), e `filters_and_a_prefix_beats_a_containment` e
+    `the_prefix_beats_the_subsequence` exigem um prefixo e uma contenção na lista antes de provar a
+    ordem (todo prefixo antes de toda contenção; o primeiro começa pela busca) — com a ordem
+    invertida no `rank`, os dois caem;
+  - as ações de um evento (`events.rs`) se provam sobre um registro que conhece TODO comando que o
+    livro da distro nomeia (`knowing_the_book`): o `actions_of` não esconde nada do livro ali, então
+    uma ação que uma entrada ganha aparece, seja qual for o comando; e o teste prova também que um
+    comando que o registro não conhece fica de fora. Que o registro real conhece os mesmos comandos
+    é o `every_command_has_an_owner`. As duas metades juntas dizem o que o teste antigo dizia sobre
+    o registro real.
+- `every-contribution-is-assembled` (check novo): toda contribuição que o shell declara está na
+  lista do binário, uma vez, e toda entrada da lista é uma contribuição declarada. Dentro de um
+  crate só, o aviso de código morto já pegava uma esquecida; com os crates de biblioteca do R3 ele
+  cala.
+- Os checks que liam o keymap no `leader.rs` leem as contribuições: `run-command-handles-every-key`,
+  `footer-mouse-reaches-nothing-new` e `downloads-do-not-need-the-extension` pelo `keymap_rows` /
+  `keymap_contributions` do prelúdio; os três dos módulos do brain que perguntavam se o comando da
+  marca existe (`belongings-reminder-…`, `containers-watches-…`, `agent-accounts-opens-…`) pelo
+  `KEYS` da vista que o registra (eles leem arquivos do shell por caminho, sem o prelúdio do shell);
+  e os dois que liam os rótulos de uma vista (`labels-of-a-view-are-distinct`,
+  `files-actions-have-text`) passaram a tirar o `KEYS` da conta (`without_keymap`, `sed`) — os
+  rótulos ali são da lista de atalhos (`cmd-<id>`), não linhas da vista, como não eram enquanto
+  moravam no `leader.rs`.
+- `run-command-handles-every-key` continua: lê as `bindings` de todas as contribuições pelo
+  `keymap_rows` do prelúdio e, desde o R5, o `Region::command` e o `closed` de cada região
+  registrada. O desenho mandava o teste do dono substituí-lo; enquanto a lista à mão `WITH_ACTION`
+  (`keymap.rs`) existir, os dois ficam (`docs/PENDING.md`).
+
+#### A modeline foi para o rodapé
+
+`Marks`, `segments`, `minibuffer_at_rest` e `NAMESPACE` moravam no `main.rs`: o rodapé perguntava ao
+binário como desenhar a própria linha. Estão no `modeline.rs` (rodapé), com os testes deles. O
+`repeat_of`, o `region_of` e os `export-*` ficaram no binário.
+
+### A base do shell em crates (R3)
+
+#### O que saiu do binário, e para onde
+
+Dez pacotes novos, todos membros do workspace e nenhum com feature de funcionalidade:
+
+| Crate | Módulos | Fica sobre |
+|---|---|---|
+| `ronoctua-shell-kit` | o vocabulário: `chrome`, `fields`, `paint`, `theme`, `toolkits`, `language`, `seats`, `hidpi`, `wheel`, `glyph`, `bars`, `band`, `fold`, `line`, `minibuffer`, `echo`, `slide`, `text_select`, `sizes`, `when`, `wake`, `ipc`, `bindings`, `actions`, `daemon`, `foreign`, `watchdog`, `keyboard`, `mind_wire`, `consent_rows`, `security_words`, `network_refusal`, `clipboard_copy`, `doors` (34) | nenhum crate do shell |
+| `ronoctua-shell-door` | `door/`, `column`, `right_column`, `carry`, `clipboard`, `clipboard_wire`, `pasting`, `cursor_shape`, `file_picker`, `floating`, `launch`, `sudo`, `queue`, `brainlink`, `room`, `photo`, `places`, `tags` (18) | kit |
+| `ronoctua-shell-report` | `report` | kit |
+| `ronoctua-shell-keep` | `keep`, `belongings_words` | nada do shell |
+| `ronoctua-shell-work` | `seal`, `vault`, `jobs`, `software_words` | door, report, keep |
+| `ronoctua-shell-inspect` | `inspection`, `inspection_edit`, `inspection_sheet`, `thumbs`, `globe`, `motion`, `stage`, `tag_words` | kit, report |
+| `ronoctua-shell-lifeline` | `lifeline` | kit, door |
+| `ronoctua-shell-overlays` | `capture`, `resizer` | kit, door |
+| `ronoctua-shell-terminal` | `terminal` | kit, door |
+| `ronoctua-render-png` | `bin/render-png.rs` (o `[[bin]]` `ronoctua-render-png`) | kit |
+
+O `ronoctua-shell` continuou o binário (`bin/ronoctua-shell` e toda referência do Nix valem), com o
+rodapé, as funcionalidades e o host de buffers, que as pistas seguintes (R4–R6) tiraram dele.
+
+Duas arestas do desenho ficaram de fora porque o código não as usa, e cada aresta a menos é uma
+recompilação a menos: os painéis de inspeção não ficam sobre a porta (o §1.2 punha `door ← inspect`;
+eles leem só o kit e o report), então uma linha da porta não recompila os painéis nem o que está
+sobre eles; e o `work` não fica sobre o kit diretamente (chega a ele pela porta).
+
+#### `crate::chrome` continua resolvendo, e nenhum caminho dentro de um módulo mudou
+
+Cada módulo movido continua com o mesmo arquivo e os mesmos caminhos: na raiz de cada crate que o
+usa há um `use` privado (`use ronoctua_shell_kit::{chrome, fields, …};` no `main.rs` do binário e no
+`lib.rs` de cada crate de cima), e um caminho `crate::chrome::Frame` resolve por ele como resolvia
+pelo `mod`. Um `use` na raiz é visível a todos os módulos descendentes, sem virar API. Assim a
+extração não reescreveu caminho nenhum dentro dos módulos: o que mudou neles foi visibilidade, doc e
+as guardas de teste (abaixo). O R6 apagou as do binário quando ele ficou fino: o `main.rs` e as
+tabelas dele dizem o caminho inteiro; cada crate de cima continua com a sua, no `lib.rs`.
+
+#### O que um crate expõe é o que outro usa, e só isso
+
+`pub(crate)` num módulo de biblioteca que o binário (ou outro crate) usava virou `pub` — e só esse:
+os itens foram achados pelo próprio compilador (o `E0603`/`E0616` de quem os pedia, e o aviso de
+código morto do item que, dentro da biblioteca, ninguém mais chamava), não por uma varredura. Com
+`missing_docs` (aviso do workspace, erro no clippy `-D warnings`), todo item exportado tem doc; os
+que não tinham ganharam (oito itens), e duas docs que estavam coladas no item errado desde antes
+foram devolvidas ao seu (`door::run`, cuja doc estava em cima de `hang_the_echo`, e
+`fields::Column::width`, cuja doc estava em cima de `id`). Um `#[expect(dead_code)]` que só valia
+dentro de um binário (`theme::borders`, exportado agora) virou frase na doc. Cada biblioteca compila
+sozinha, com as features que a raiz dela resolve (`cargo clippy -p <crate>` um a um, sem a
+unificação do workspace): o `render-png` liga o kit com o `ronoctua-lookup` sem `net`, e compila.
+
+#### As guardas de teste valem nos testes de todo crate (`test-support`)
+
+`cfg(test)` é verdadeiro só no build de teste do próprio crate. Dentro de um crate só isso bastava:
+os testes do rodapé e das funcionalidades rodavam dentro das guardas do kit porque eram o mesmo
+crate. Separados, deixariam de valer CALADOS:
+
+- `daemon::about_to_act` — um teste que chega à máquina (abre o compositor de quem roda os testes,
+  aperta o play do filme dela) falha ali mesmo;
+- `clipboard_copy` — uma cópia num teste vai para `COPIED`, nunca para o `wl-copy` sobre o
+  clipboard da pessoa;
+- `file_picker` — um teste não lembra nada no `file-picker.json` da pessoa;
+- `bindings::read` — um teste lê o keymap do `with_stub`/`with_keymap` da própria thread.
+
+Por isso o que uma biblioteca do shell guarda para testes é
+`#[cfg(any(test, feature = "test-support"))]` (no `kit`, na `door` e no `inspect`), e todo crate do
+shell que fica sobre ela (direta ou indiretamente) liga essa feature nos `[dev-dependencies]`; o
+`test-support` da porta e o dos painéis trazem o do kit. É o molde do `ronoctua-consent`: o grafo de
+teste do planejador (`test`) unifica as features das dev-dependencies, nunca entra num produto, e o
+`cargo tree` do binário normal não tem `test-support` nenhum. Os ajudantes que os testes de outro
+crate usam (`Ui::for_tests`, `sudo::Gate::fake`, `sudo::Asker::ALL`, `Completer::Fixed`,
+`Globe::pose`, os do `file_picker` e da coluna) seguem a mesma forma; um ajudante só dos testes do
+próprio crate (`chrome::content_left_px`) continua `cfg(test)`.
+
+Quem garante: os dois testes novos do binário
+(`a_test_of_the_binary_that_reaches_the_machine_fails`,
+`a_copy_in_the_binarys_tests_stays_in_the_tests`) e o check `shell-tests-keep-the-machine-guards`
+(abaixo). A interrupção da pista provou o primeiro sem querer: a guarda ficou em `cfg(test)` e o
+teste do binário caiu.
+
+#### A raiz de composição do shell é o kit
+
+O `daemon::open_the_compositor` (do R1) é a única conexão que o shell abre com o adaptador, e ela
+agora mora no kit; o `actions`, o `fold` e o `minibuffer` falam a gramática dos feitos
+(`ronoctua_scroll::deeds`), que o check não conta de propósito. Então o kit depende do
+`ronoctua-scroll`, como o binário dependia — nenhum arquivo novo nomeia o compositor, só o crate que
+os contém mudou. Uma linha do adaptador recompila o kit e tudo sobre ele, como recompilava o binário
+inteiro.
+
+O `only-the-composition-root-names-the-compositor` contava uma conexão por CRATE, e com o shell num
+crate só isso queria dizer uma por programa. Partido, cada crate do shell poderia abrir a sua — uma
+no kit, outra na linha de vida, outra no terminal — e o check passaria: o mesmo programa com duas
+raízes de composição, que é exatamente o desvio que ele existe para recusar (a revisão plantou um
+`Scroll::open()` na linha de vida e ele disse OK). Agora ele conta por PROGRAMA, e todos os crates
+do shell são um programa só: os achados pelo `_SHELL_CRATE` do prelúdio (`ronoctua-shell`, todo
+`ronoctua-shell-*` e o `ronoctua-render-png`, que era um `[[bin]]` do shell até esta leva), de modo
+que um crate que o R5 tirar entra sozinho, e um piso recusa a varredura que deixar de reconhecê-los
+(com menos de dez, voltaria a contar crate a crate calada). Os outros crates continuam um programa
+cada.
+
+#### O PNG de um buffer é um pacote, e não lê arquivos de outro crate
+
+O `ronoctua-render-png` era o segundo `[[bin]]` do shell e puxava três arquivos dele por `#[path]`
+(`paint.rs`, `mind_wire.rs`, `sizes.rs`): as fontes de uma unidade eram de outro crate (o `data` do
+`[package.metadata.ronoctua]` existia por isso). E ao contrário: a unidade do programa do shell (um
+`src/main.rs`) vê todo o `src/`, `src/bin/` inclusive, então cada linha da ferramenta reconstruía o
+rodapé inteiro no Nix (504 s em release, medido). Agora ela liga o kit — onde os três são compilados
+uma vez — e nada da porta nem do rodapé, e uma linha dela é só ela. O arquivo continua em
+`src/bin/render-png.rs` dentro do pacote novo: os checks acham um arquivo do shell pelo caminho
+dentro do `src/` de um crate do shell (`shell_name`), e esse era, e é, `bin/render-png.rs`; um
+`src/main.rs` seria um segundo `main.rs` ao lado do do binário. Os 19 testes de `paint` (13)
+e `mind_wire` (6) que rodavam duas vezes (no shell e, pelo `#[path]`, na ferramenta) rodam uma
+vez, no kit.
+
+#### O que este passo custa, e o que ele ainda não ganha
+
+A extração sozinha não encurtou a espera de quem edita uma funcionalidade: o binário continuou um
+crate de ~170 mil linhas de produção (eram ~198 mil), e era ele que toda edição do shell
+recompilava. O que ela comprou foi a forma: a base passou a ser crates que nenhuma funcionalidade
+alcança para cima, e as pistas R4–R6 tiraram as funcionalidades do binário uma a uma. Uma
+linha da base, em troca, recompila TODOS os crates do shell (em paralelo) e o binário; uma linha
+de uma folha (linha de vida, sobreposições, terminal, work, painéis) recompila a folha e o binário.
+
+E o binário cresceu: genéricos instanciados em cada crate que os usa (sem `share-generics`, que é
+instável, cada crate de um build otimizado monomorfiza o seu), o que o LTO fino não junta: +4,6 %
+no laço contra a base do R3 (medido) e +4,0 % em release contra a linha de base, que ainda
+embutia os textos (~+4,5 % descontados os 0,6 MB deles) — dentro dos ±5 % da paridade do N1.
+Medido no laço (`nm -C -S`): as cópias de uma mesma função com outro hash somam 18,7 MB, contra
+15,2 MB na linha de base, e o código cresce 3,2 MB; o resto é tabela de símbolos. As
+pistas seguintes partiram mais o binário, e o custo cresce com o número de crates que instanciam a
+mesma coisa: o F5 mede de novo e, se passar do teto, é decisão do dono (o perfil do N5 é o lugar de
+tentar). No R6, o programa de release saiu 163,7 MB (−1,0 % contra a árvore antes dele); no fim
+da leva (F5), 164,6 MB — +23,1 % contra a linha de base, e o de loop 206,5 contra 169,6 MB —,
+fora dos ±5 % da paridade: a decisão é do dono (`docs/PENDING.md`).
+
+#### Os checks perguntam por todos os crates do shell
+
+- `shellCrates`/`_SHELL_CRATE` incluem `ronoctua-render-png` (um binário do shell até esta leva).
+- `shell_manifests()` e `shellManifestPrelude`: o `Cargo.toml` de cada crate do shell, para os
+  checks que perguntam do que o shell DEPENDE (`the-footer-never-links-lofty`,
+  `transfers-never-link-age` liam só o manifesto do binário, e um módulo que levou a dependência
+  para o kit continuaria sendo o rodapé). Um prelúdio à parte, para os checks que leem só fontes não
+  reconstruírem quando um manifesto muda.
+- Vinte e oito checks que ainda varriam `crates/ronoctua-shell` pelo caminho (`rust_sources`,
+  `root / "crates" / "ronoctua-shell" / "src"`, `"ronoctua-shell" in path.parts`) — que a P0 não
+  converteu porque não eram o literal `crates/ronoctua-shell/src` — passaram a `shell_files`,
+  `shell_file`, `shell_dir`, `shell_has` e `shell_name`; os nomes que imprimem continuam os mesmos
+  (`src/chrome.rs`). Sem isso, catorze deles parariam de ver os módulos movidos, calados, e o resto
+  quebraria por arquivo ausente.
+
+#### O prelúdio ganha `outside_tests`
+
+`without_tests` responde "o produto TEM isto?" — corta tudo do primeiro `#[cfg(test)] mod` em
+diante, para o uso de um teste não responder pelo produto —, e é a pergunta errada para "ALGUMA
+linha do produto quebra a regra?": um arquivo cujo produto recomeça depois de um módulo de teste no
+meio esconde tudo o que vem abaixo. `outside_tests` apaga cada módulo de teste pelas chaves
+(contadas só no código: `_masked` troca comentários e literais por espaços no lugar, do mesmo
+tamanho, porque `code_of` encurta o que esvazia e os deslocamentos deixariam de ser os do arquivo;
+comentários de bloco aninhados, strings cruas e um `'{'` não contam), mantém cada linha onde estava
+(o número que o check imprime é o do arquivo) e deixa em pé um módulo declarado fora da linha
+(`#[cfg(test)] mod tests;`). O `without_tests` fica como está para os 194 usos dele, que perguntam o
+outro.
+
+#### O clippy passa também pelo lado do produto das bibliotecas com `test-support`
+
+O plano tira os alvos do clippy do grafo `cargo check --all-targets`, que unifica as features das
+dev-dependencies em todas as unidades de um crate: uma biblioteca que os testes de outro crate
+nomeiam com `test-support` (o kit, a porta, os painéis e, desde antes desta leva, o
+`ronoctua-consent`) era verificada só com ela ligada, como alvo simples e como teste. O que ela
+compila só SEM a feature — o `wl-copy` de verdade do `clipboard_copy`, o braço de produto do
+`daemon::about_to_act`, um `use` que só o produto usa — nunca passava pelo clippy `-D warnings`.
+Antes da partição, o programa do shell era verificado como alvo simples, sem `cfg(test)`, e esse era
+o lado do produto; partido, ninguém o via.
+
+Agora o planejador (`product_twins` em `nix/scripts/rust-plan.py`) dá a cada alvo simples cujas
+features diferem das do grafo `loop` (o do produto) um gêmeo: as features do produto (`"product":
+true` no `plan.json`), contra as MESMAS libs do grafo de teste (features só somam, então o código do
+produto compila contra elas; nenhum sabor se mistura e nenhuma unidade nova é construída), sem as
+dependências que o produto não tem — uma dependência do produto que o check não nomeia é recusada. O
+driver não mudou: ele já verifica cada alvo com as features e as dependências dele. Hoje são quatro
+gêmeos (`ronoctua-consent`, `-shell-kit`, `-shell-door`, `-shell-inspect`), e um crate do R5 que
+ganhar `test-support` ganha o seu sozinho. É a exceção escrita à regra do N1 de que o clippy
+verifica com as features do grafo de teste (nix-design §1.7): o gêmeo verifica com as do produto, e
+só ele.
+
+O `cargo clippy` local continua unificando quando a seleção junta uma biblioteca e quem a nomeia com
+`test-support` (`--workspace`, ou `-p` dos dois); `cargo clippy -p <crate> --all-targets` de um
+crate sozinho verifica o lado do produto dele. Quem garante é a unidade do Nix
+(`rust.test.clippy.<crate>`, o agregado `rust-clippy`).
+
+#### Dois checks novos (`tests/shell-foundation.nix`)
+
+- `shell-tests-keep-the-machine-guards` — todo crate do shell cujos testes alcançam uma biblioteca
+  com `test-support` liga essa feature nos `[dev-dependencies]` (fechada pelo que cada
+  `test-support` traz); nenhum crate a liga em `[dependencies]` nem por padrão; e numa biblioteca do
+  shell, fora dos módulos de teste, nenhum `cfg(not(test))`, nenhum `cfg!(test)`, e `cfg(test)` só
+  antes de um ITEM (um ajudante, um `use`, um módulo de teste) — o que ele tirar de uma instrução,
+  de um braço, de uma variante ou de um campo é uma chave que os testes de outro crate rodariam do
+  lado do produto. Cada módulo de teste sai pelas próprias chaves e o produto que vem DEPOIS dele é
+  varrido (`outside_tests`, ajudante novo do prelúdio, abaixo): o `without_tests` corta do primeiro
+  módulo de teste até o fim do arquivo, e o produto que recomeça depois de um `mod meter_tests` no
+  meio do `chrome.rs` (o `highlight_line` e o resto) ou do primeiro `mod tests` do `door/touch.rs`
+  (o `Fingers<H>`) ficava fora da varredura — uma guarda `#[cfg(test)] return …;` plantada ali
+  passava.
+- `the-shell-foundation-names-no-feature` — a base (kit, porta, report, keep, work, inspect) fica só
+  sobre a base; o kit sobre nenhum crate do shell; o PNG de buffer só sobre o kit; ninguém sobre o
+  binário. O compilador recusa um ciclo, não uma aresta de lado: os painéis sobre a linha de vida
+  compilam, e fariam cada linha da linha de vida recompilar os painéis e tudo sobre eles.
+
+### As vistas do rodapé, a precedência numa tabela e o hospedeiro de regiões (R4)
+
+#### Um módulo, um arquivo por vista
+
+O `surface.rs` (39 840 linhas) virou o módulo `surface/`: o `mod.rs` é o rodapé (a superfície, os
+handlers do Wayland, a modeline, o minibuffer, a leader, a geometria, a pintura e os despachantes) e
+cada vista tem o seu `surface/<vista>.rs` — 30 regiões de funcionalidade (`stick.rs`, `network.rs`,
+`files.rs`, `player.rs`…) e as cinco vistas que são do rodapé (`apps.rs`, `themes.rs`,
+`footer_settings.rs`, `kiosk.rs`, `window_menu.rs`); a leader e o `M-x` ficaram no `mod.rs`. Cada
+arquivo de vista é um `impl Footer` com TUDO o que o rodapé fazia por aquela vista e por nenhuma
+outra — abrir, ouvir as threads, fechar, as teclas, as linhas, os cliques, o cursor, a dica, os
+comandos, os recados (`*_errand`), o colar, o soltar, os toques do ponteiro. São módulos filhos,
+então veem os campos privados do `Footer` sem mudar a visibilidade de nada; os métodos movidos são
+`pub(super)`, que é exatamente o alcance que tinham (o módulo `surface` e seus filhos).
+
+Por que antes de qualquer crate (a compilação não mudou no R4): porque é o que tornou as pistas R5
+paralelas e mecânicas. Converter uma vista em `Region` foi apagar o arquivo dela, o campo e UMA
+linha em cada despachante, e registrá-la — sem tocar no meio de funções de mil linhas que nove
+pistas editariam ao mesmo tempo. Depois do R5 os arquivos de vista de funcionalidade sumiram todos;
+o módulo `surface/` (hoje no `ronoctua-shell-footer`, R6) guarda o `mod.rs`, o hospedeiro
+(`host.rs`), as cinco vistas do próprio rodapé e as metades que ele mantém pela sessão inteira
+(`radio.rs`, `screens.rs`, `lan.rs`, `programs.rs`, `desk.rs`, `studio.rs`, `clipboard_history.rs`,
+`sections.rs`), que não são vistas e não têm `ID`.
+
+#### A precedência numa tabela, `PRECEDENCE`
+
+`ViewState` era um enum de 37 variantes, uma por vista, e `Footer::view()` uma cadeia de `if` sobre
+os campos. Agora uma vista de funcionalidade é `ViewState::Region(&'static str)`, pelo id com que é
+ranqueada, e só as vistas do próprio rodapé têm variante (`Applications`, `Themes`,
+`FooterSettings`, `Kiosk`, `WindowMenu`, `Commands`, `Leader`, e `NoneOf`). A ordem está escrita UMA
+vez, em `const PRECEDENCE: &[Rank]`, com o porquê de cada posição ao lado (os comentários do enum e
+da cadeia antiga, juntos), e `view()` responde o primeiro `Rank` aberto (`is_open`, que para uma
+região pergunta `region_open`: o campo da vista enquanto o rodapé ainda a desenha, uma linha por
+vista, e o hospedeiro para as que ele hospeda). A ordem é EXATAMENTE a de antes, re-derivada da
+cadeia — e a matriz da P0 (os 72 pares de precedência fotografados nas duas ordens) saiu idêntica.
+
+Um id é um texto, e um texto errado não casa nada calado; por isso o id de cada vista está escrito
+uma vez no arquivo dela (`pub const ID: &str = "stick"`, hoje no `<vista>_region.rs` do crate dela),
+e o rodapé RECUSA COMEÇAR (`the_regions`, em `run` e no `photographed` da câmera) quando a soma das
+vistas que ele ainda desenha (`CONCRETE`, vazio depois do R5) e das que hospeda não é exatamente o
+que `PRECEDENCE` ranqueia: região ranqueada duas vezes, região sem posto, posto sem região, vista do
+rodapé esquecida — cada uma numa frase (`ranking_refusals`). O teste do binário
+`every_region_is_ranked` (`regions.rs`) faz a mesma pergunta antes.
+
+Medido: `view()` passou de uma cadeia de testes de campo a uma busca numa tabela com casamento de
+texto — ~90 ns por chamada no pior caso (tudo fechado, ou a última posição aberta), num banco de
+1 000 000 de chamadas que reproduz a forma; mil chamadas num quadro seriam 90 µs.
+
+#### Cada despachante, uma linha por vista
+
+O `run_with`, as teclas (`view_took_the_key`, chamado de `key_arrived`), as linhas (`expansion`), os
+cliques (`click_at`), o cursor (`list_cursor`), a dica (`view_hint`), o colar (`pasted` e o
+`picker_pasted`), o soltar (`takes_a_drop`, `drop_performed`), as perguntas largadas
+(`questions_let_go`) e os toques do ponteiro (`pointer_frame_here`) chamam, por vista, um método do
+arquivo dela — `stick_key`, `stick_expansion`, `stick_click`, `stick_cursor`, `stick_hint`,
+`stick_commands`, `stick_let_go`… — e o rodapé não lê o campo de nenhuma vista dentro de um
+despachante. Três cuidados que valem para quem mexer nisso depois:
+
+- **Os comandos.** Os braços do `match id` de `run_with` foram para o `<vista>_commands` de cada
+  uma, na ordem relativa de antes, e `run_with` pergunta a cada vista numa cadeia de `||` (na ordem
+  da precedência), depois ao hospedeiro, e só então o `match` do próprio rodapé (com o `otherwise`
+  no fim). A ordem só importaria se dois braços de vistas diferentes aceitassem o mesmo id; provado
+  que não: um analisador (fora do repositório, na pasta da pista) resolveu os literais, as
+  constantes (por módulo) e os conjuntos dos guardas (`press_of`, `is_command`, `QUESTIONS`,
+  `asks`…) dos 348 braços — zero interseções entre vistas; os quatro guardas abertos
+  (`history::Question::named`, as ações dos módulos do brain, `agents::is_command` e o `otherwise`)
+  aceitam só os prefixos dos seus donos. Um `return;` de braço virou `return true;`.
+- **A dica.** Era uma closure que o laço de pintura chamava uma vez POR TELA, a cada quadro,
+  montando as frases da vista mostrada; agora a parte da vista é perguntada UMA vez por quadro,
+  antes do laço (`view_hint`), e a closure guarda só a cauda (a leader, o modo do compositor, o
+  "voltar"). Mesmo texto, metade do trabalho com duas telas. O comentário que defendia a closure
+  "porque é o último braço da precedência" estava velho — ela já era chamada sempre — e foi
+  reescrito.
+- **O ponteiro.** A ordem dos testes de um clique é a da TELA e não a da precedência (barras antes
+  de linhas, o gerenciador de arquivos antes do jogador quando os dois estão abertos), e ela foi
+  mantida à risca: cada grupo de testes contíguos de uma vista virou um método dela, chamados na
+  mesma ordem numa cadeia de `||`. Por isso o gerenciador aparece duas vezes (as barras das seções,
+  primeiro; a prévia, o globo e a listagem, depois da barra da própria região) — juntar as duas
+  mudaria qual vista ganha um clique com o gerenciador aberto por baixo de outra.
+
+#### O hospedeiro de regiões e as duas portas
+
+O desenho do §1.4 está no `ronoctua-shell-door/src/region.rs` (`crate::region` em todo o shell):
+
+- `Region` — o que uma funcionalidade escreve: `id`, `rows` (linhas de `Field`s, cada uma dizendo se
+  aceita clique), `hint`, `cursor`, `about`, `key`, `command`, `clicked`, e com padrão `answered`,
+  `unanswered`, `pasted`, `takes_drops`/`dropped`, `woken`, `heard` (`&dyn Any`, o que o rodapé
+  ouviu da máquina, para quem souber o tipo), `shape`, `paint`, `pointer`, `tick` e `closing`.
+- `Doorway` — o que uma vista faz, nas duas portas: as palavras, a largura, se é foto, `say`,
+  `hold`, `ask`, `paste`, `launch`, `open_window`, `queue`, `sudo`, `wake`, `close`, `repaint`,
+  `run`. Implementado pelo `door::Ui` (a janela: cada chamada é o que o `Ui` já fazia — `say_for`,
+  `ask`, `paste`, `launch`, `tell_the_footer`…) e pelo `Recorder` (o rodapé). Um recado
+  (`carry_out`) escrito uma vez sobre `&mut dyn Doorway` passa a ser o mesmo nas duas portas — o R5
+  escreve os de cada vista.
+- `Recorder` só ANOTA (`Effect`) enquanto a região está emprestada; o rodapé faz depois, com a
+  região de volta no slot (`surface/host.rs`, `region_owed`): nada reentra no rodapé de dentro de
+  uma região, e `view()` nunca é perguntado no meio de uma chamada.
+- `Slots` — o hospedeiro genérico: as entradas que o binário registrou (`regions.rs`, `region::Entry
+  { id, closed, open }`), abertas ou fechadas. `closed` diz o que um comando faz com a região
+  fechada (`NotMine`, `Taken` — uma janela, um feito do daemon — ou `Opens`); o rodapé pergunta
+  antes se a região está livre (`region_is_free`), abre (`open`), dá a ela um despertador próprio
+  (um canal do laço por região, removido quando ela fecha) e entrega o próprio comando à região
+  aberta. `call` empresta a região pelo slot e a devolve ao MESMO slot; uma região que abre dizendo
+  outro id não é guardada.
+- O que a geometria sob `Footer::metric` pode ler de uma região são FATOS GUARDADOS: se está aberta
+  e a forma com que voltou da última chamada (`Slots::kept_shape`). Linhas, dica, cursor e pintura
+  são CONTEÚDO, e só quem o `metric` não alcança pergunta (o `the-footer-does-not-ask-itself` conta
+  agora todo método que pergunta algo além disso ao `self.regions` como conteúdo).
+- As formas (`Shape`): `List` (o padrão, linhas de uma coluna que já resolveram os próprios campos),
+  `Whole` e `Cells` (uma página do teto inteiro; `Cells` são linhas em branco que a região pinta por
+  cima — `paint` com um `RegionEasel` de quads, spans e trilhas de barra — e cujo ponteiro ela toma
+  inteiro) e `Stage`, o palco do filme, que passa dos tetos como o do jogador. **`Stage` não leva
+  número** (o desenho tinha `Stage(pct)`): um percentual escolhido por uma região seria valor visual
+  escrito à mão (inv. 9); o palco é o do token `expansion.playerStagePct`, o mesmo do jogador.
+- O "segurar" (`hold`) é o mesmo nas duas portas: um estado que continua verdadeiro fica na linha
+  sem prazo e sem relógio — nada o poria de volta enquanto ainda é verdade —, até a próxima mensagem
+  o substituir. Na janela é o `Ui::hold`; no rodapé, o `echo_held`: o `echo` guarda o prazo como
+  `Option<Instant>`, `None` é o segurado, e o `expire_echo` (o segundo e o timer de cada mensagem)
+  nunca o tira (`echo_expired`, com teste). Os toques da leader, que tiram toda mensagem da linha,
+  tiram este também. Mandado pela classe `Long`, que expira, o `hold` do rodapé faria o mesmo
+  `carry_out` fazer duas coisas nas duas portas. O "Clonando…" do `/ c` do git, que era `Long` com
+  prazo de 24 h, virou um `hold` também (R5f).
+- O que o rodapé ouve da máquina (energia, rede, som, bluetooth, telas, Syncthing, atuin, túneis, a
+  fila, a mente do brain, o estúdio) é contado primeiro às regiões abertas (`hosted_heard`), sem
+  alocar nada quando nenhuma está aberta; a região que mudou pede o quadro (`repaint`).
+
+O hospedeiro nasceu sem região nenhuma (o `REGIONS` vazio, e todo caminho dele voltava antes de
+fazer qualquer coisa); as regiões do R5 o exercitaram de ponta a ponta, com a matriz, e cada uma
+acrescentou ao protocolo o que pediu (ver "Uma funcionalidade, um crate, uma região").
+
+#### Os checks perguntam pelo módulo
+
+Um check que perguntava "o rodapé faz X?" lia o `surface.rs`; o que o rodapé faz agora está no
+módulo inteiro. O prelúdio ganhou `shell_module_files(nome)` (o `mod.rs` e os filhos) e
+`shell_source(nome)`, que devolve o texto de um arquivo do shell ou, quando o nome é um módulo que
+virou pasta (`surface.rs` → `surface/`), o do módulo inteiro: o PRODUTO de cada arquivo primeiro
+(`outside_tests`) e os módulos de teste de todos no fim — assim o `without_tests`, que corta do
+primeiro módulo de teste até o fim, continua deixando o produto do módulo todo (com os filhos). E
+`test_modules`/`_test_spans`, de que o `outside_tests` passou a depender.
+
+#### O que os dois checks do rodapé recusam, e por quê
+
+O `the-footer-draws-what-the-keyboard-drives` existe para um defeito: duas respostas para "qual
+vista é". A tabela única não basta, se um despachante decide por fora dela — e há três jeitos de
+decidir por fora, que o check recusa um por um:
+
+- **Antes ou depois do `match`.** Um `if self.files.is_some() { return self.files_expansion(); }`
+  acima do `match self.view()` desenha o gerenciador enquanto o teclado vai à vista que a tabela
+  ranqueia acima dele. O despachante não pergunta NADA ao rodapé fora do `match` (nem campo, nem
+  método).
+- **No guarda de um braço.** `ViewState::Region(network::ID) if self.files.is_none()` é uma
+  precedência escrita num guarda: com o gerenciador aberto, as linhas da rede caem no braço do
+  hospedeiro, vazias. Um guarda lê só o estado da PRÓPRIA vista (o do `M-x`, `self.mx.asking_for()`,
+  é o único hoje).
+- **No braço.** Um braço é UMA chamada que repassa só o que o despachante recebeu (nada de `self.`
+  nos argumentos), e a chamada é do arquivo da vista (`surface/<vista>.rs`; a do hospedeiro, do
+  `host.rs`) — a linha da rede respondida pelo método do gerenciador é o gerenciador desenhado sob o
+  posto da rede.
+
+Qual campo É uma vista não está escrito no check: sai do código, do `is_open` e do `region_open` — o
+campo com que cada posto diz que está aberto, um por linha, sem condição, nenhum lido por duas
+linhas. A lista à mão que o check antigo guardava ao lado do enum era a segunda cópia das vistas que
+todo o resto deste trabalho apagou. Com esse conjunto, o caminho da tecla é lido elo por elo
+(`typed`, `took_a_key`, `key_arrived` até o despachante): nenhum lê o campo de uma vista — um `if
+self.mx.active()` ali dava ao `M-x` as teclas de toda vista acima dele —, com a pergunta do
+minibuffer (`self.mx.asking_for()`, uma LINHA e não uma região) como a única exceção escrita,
+inteira; depois do despachante só a cauda da leader lê a leader. O `region_is_free` não lê campo de
+vista nenhuma, e a dica é perguntada do que o `view()` ranqueia (o único chamador entrega
+`self.view()`).
+
+O `the-footer-does-not-ask-itself` monta o grafo de chamadas do módulo, e um método que ele não lê é
+um buraco que responde "nenhum ciclo". O cabeçalho era `fn (\w+)\(` e não casava `fn
+with_region<T>(` — justamente o método por onde passa toda chamada a uma região do hospedeiro, a
+superfície de reentrância nova. Agora os parâmetros genéricos são atravessados pelos ângulos (uma
+seta num limite, `impl FnOnce(..) -> T`, não fecha nada), e todo `fn` na indentação de método que o
+grafo não leu faz o check falhar dizendo qual. Com o `with_region` no grafo, o anel de "uma região
+roda um comando" (`hosted_command` → `with_region` → `region_owed` → `run_with`) está declarado com
+o porquê; um anel novo por ele (o recado de uma região contando às regiões abertas o que o rodapé
+ouviu, que chama a região de novo) é recusado. Desde o R5d o check lista TODO ciclo elementar do
+grafo (o algoritmo de Johnson, dentro de cada parte fortemente conexa), e não um por aresta de volta
+de uma busca em profundidade: a busca só achava um anel onde reencontrava um método cinza, e um anel
+feito de arestas que outros anéis já usam passava calado. Cada anel declarado diz por que gira uma
+vez só, e a parte das regiões recusa que o que uma região OUVE (`heard`, `language_changed`,
+`locale_changed`) escreva um arquivo para o rodapé tomar ou rode um comando.
+
+### Uma funcionalidade, um crate, uma região (R5)
+
+Nove famílias (R5a–R5i) converteram as trinta vistas de funcionalidade do rodapé em regiões e
+levaram cada uma — a vista, a janela, a região, a câmera, as palavras e as teclas — para o crate
+dela. O molde é um só: cada vista tem o seu estado (`Open`, ou o nome que a família lhe dá) e UM
+tratador de recados sobre `&mut dyn region::Doorway`, que a janela (o `door::Ui`) e a região (o
+`Recorder` do rodapé) chamam. "As duas portas fazem o mesmo" passou a ser construção, e não
+disciplina (`errands-are-handled-alike` e o check de cada família). Os dois tratadores de antes — o
+`*_errand` do rodapé e o `apply` da janela — tinham se afastado como cópias se afastam; cada
+diferença virou uma decisão (quase sempre a classe da mensagem que a regra pede, ou o cuidado que a
+janela já tinha), e está escrita na família.
+
+As famílias estenderam o protocolo do R4 em paralelo, e a integração deixou um nome por ideia onde
+duas tinham escrito a mesma coisa: o cursor como desenhado é `Region::cursor_in`; a página é
+`Doorway::page(Paging)` e `Doorway::first_page`; as palavras como `Rc`, `Doorway::words`; dar a vez
+a outra porta, `Doorway::give_way`; o que só algumas linhas dizem, `region::Told`; uma figura
+pintada, `region::Painted`/`Source`; uma região que espera trabalho fora fica escondida no próprio
+posto (`Slots::keep_hidden`) e é posta de lado quando o comando que a abre chega
+(`Slots::set_aside`). Os textos abaixo usam esses nomes. Onde duas formas da mesma ideia ficaram — o
+que o ponteiro acende (`hover_span`, `lit`, `band`, `Told::lights`), o estado que sobrevive à região
+(o `Kept` que o rodapé empresta e o `Resident` de uma funcionalidade), os ganchos do quadro,
+`rows_changed` e `resized`, as duas regras da altura depois de uma notícia —, cada uma está
+documentada onde mora, e juntar cada par está no `docs/PENDING.md`: muda o desenho de uma região e
+pede a matriz para provar.
+
+Os caminhos `surface/…` são do módulo do rodapé, que desde o R6 mora em
+`crates/ronoctua-shell-footer/src/surface/`.
+
+#### O pendrive, as contas LLM, o Incus e os containers (R5a)
+
+##### O que saiu do binário
+
+Quatro pacotes novos, cada um sobre o kit e a porta, e só:
+
+| Crate | Módulos |
+|---|---|
+| `ronoctua-shell-stick` | `stick` (a vista, `Open`, `carry_out`, `KEYS`), `stick_window` (a janela e a câmera), `stick_region` |
+| `ronoctua-shell-agents` | `agents` (a vista, `Open`, `carry_out`, `KEYS`), `agents_words`, `agents_window`, `agents_photograph`, `agents_region` |
+| `ronoctua-shell-incus` | `incus` (a vista, `KEYS`), `incus_words`, `incus_feed`, `incus_open` (`Open`, `carry_out`), `incus_window`, `incus_photograph`, `incus_region` |
+| `ronoctua-shell-containers` | `containers` (a vista, `KEYS`), `containers_words`, `containers_feed`, `containers_open` (`Open`, `carry_out`), `containers_window`, `containers_photograph`, `containers_region` |
+
+O rodapé perdeu os quatro `surface/<vista>.rs`, os treze campos (`stick`, `agents`, os seis do Incus
+e os cinco dos containers), as quatro linhas de cada despachante, as variantes de `Click`, os sinos
+no laço e as chamadas do `ledger_arrived`. O binário registra as quatro regiões em `regions.rs`, e o
+keymap, as portas e as câmeras dele as nomeiam pelo caminho do crate
+(`ronoctua_shell_stick::stick::KEYS`). O `PRECEDENCE` não mudou: os quatro postos continuam onde
+estavam, agora respondidos pelo hospedeiro.
+
+O binário largou as dependências que só as vistas usavam: `ronoctua-llm`, `ronoctua-incus`,
+`ronoctua-stick` e `ronoctua-containers` (quem pergunta ao GitHub é o crate do pendrive).
+
+Por que: uma linha do pendrive recompilava o rodapé inteiro (~170 mil linhas de produção). Agora
+recompila o crate do pendrive e o binário que o liga (medido abaixo).
+
+##### Um `Open` por vista, um `carry_out` para as duas portas
+
+Cada vista tem o seu `Open` — a vista, o que ela lê, as threads dela, a zona das datas — e as duas
+portas seguram um: a região do rodapé e a janela. Tudo o que a vista pede depois de uma tecla, um
+clique, uma resposta ou uma thread (o `Errand`) é feito por UMA função do crate, `carry_out(errand,
+&mut Open, &mut dyn Doorway)`, sobre a porta de quem pediu: o `Recorder` do rodapé anota e o rodapé
+faz depois; o `door::Ui` da janela é a janela. Antes, cada vista tinha dois recados —
+`Footer::<vista>_errand` e `<Vista>Window::apply` — e eles tinham se afastado como cópias se
+afastam:
+
+- **A classe da mensagem.** O pendrive dizia as recusas com `Long` no rodapé e com `Normal` na
+  janela; as contas diziam "copiado" com `Normal` no rodapé e `Brief` na janela. A regra do
+  AGENTS.md é que a janela fala com o prazo do rodapé (`Ui::say_for`): ficou o do rodapé.
+- **O shell de um container.** O rodapé caía no `Podman::from_env()` quando o feed não tinha a
+  linha; a janela, não. Ficou o do rodapé, nas duas.
+- **As voltas do assentamento.** A janela dos containers tomava o que chegava em até quatro voltas
+  (`SETTLE_ROUNDS`); o rodapé, uma só. Ficaram as voltas, nas duas (`Open::settle`).
+
+O que REALMENTE difere entre as portas é o que cada porta É, e isso é a `Doorway` que responde —
+dois métodos novos (abaixo): um terminal ou outra vista toma o teclado, e o rodapé devolve a região
+antes (`step_aside`); a janela, que não segura o teclado de ninguém, fica.
+
+O `errands-are-handled-alike` lê isso: para as quatro vistas, a única função que casa as variantes
+do `Errand` é o `carry_out` (sem `_ =>`), e nem a janela nem a região casam uma variante.
+
+**Quatro teclas do Incus têm por id a pergunta que fazem** (`incus-import`, `incus-export`,
+`incus-push`, `incus-pull`), e a ordem dos braços do `closed` e do `command` da região é a do rodapé
+de antes: com texto digitado, o id é a resposta; pelo nome e sem texto (`LEADER :`, `ronoctua-shell
+command`), é a tecla, que abre a vista e pergunta ou diz a recusa; uma pergunta que não é tecla,
+pelo nome e sem texto, não faz nada. Com o braço da pergunta antes do das teclas, os quatro pelo
+nome não faziam nada nem diziam nada, com a vista aberta ou fechada (F6).
+
+##### O que a `Region` e a `Doorway` precisaram, além do R4
+
+Tudo aditivo e com padrão na `Region` (as regiões das outras pistas não mudam):
+
+- `Region::clicked_at(row, cell, way)` — uma linha de vários trechos (uma faixa de tipos, as abas)
+  toma o clique da célula sob o ponteiro; o padrão é o `clicked(row)`. O hospedeiro passa a célula
+  em que o ponteiro está (`here.cell_under_pointer`), como os containers e o Incus liam antes.
+- `Region::lit(row, cell, seen) -> Lit` (`Row`, `Cells(from, to)`, `Nothing`) — o que o ponteiro
+  acende é o que o clique toma (`View::hover_span`, a mesma conta do clique); o rodapé pinta pelo
+  `hosted_band`, que substituiu os dois blocos `containers_hover_px`/`incus_hover_px` da pintura. A
+  linha é a da região (o `Click::Region(n)` da linha desenhada), não a da tela: o código antigo
+  passava o índice VISÍVEL para uma conta sobre todas as linhas, e com a página rolada acendia o
+  trecho da linha errada.
+- `Region::lingers()` — **uma ação do Incus sobrevive à porta**: fechada a vista com um feito no ar
+  (parar uma instância), o feed fica, calado, até a resposta chegar, e a frase dela é dita na linha
+  do rodapé. Antes eram os campos `incus_draining`/`incus_wake` do rodapé; agora o hospedeiro guarda
+  a região viva e escondida no próprio posto (o mecanismo do R5b, `Slots::keep_hidden`) e a solta
+  quando ela diz que não tem mais nada fora. A região fechada não toma comando nem responde
+  pergunta: o comando que a abre chega, ela não o toma, e o hospedeiro a põe de lado
+  (`Slots::set_aside`) e abre uma vista nova, enquanto a velha ainda diz a resposta do feito.
+- `Doorway::follow_if_seen(was)` — **um log seguido no fim continua no fim**: a única vez em que
+  dado move a página, porque a pessoa pediu a cauda. A região diz em que linha o cursor estava antes
+  do que chegou; o rodapé segue o cursor se essa linha estava na página (que nada moveu durante a
+  chamada). Na janela, o `Ui` marca e a `Door` segue no fim da volta (`follow_into`).
+- `Doorway::step_aside()` — um terminal (o shell de um container, o console do Incus, uma sessão de
+  uma conta) ou outra vista (as regras do firewall) toma o teclado: o rodapé fecha a região antes (a
+  regra do lançador: uma vista aberta sobre o terminal fica com o teclado), a janela fica.
+
+**Os dois da `Doorway` NÃO têm padrão, de propósito** (os da `Region` têm). As duas portas respondem
+a eles de jeitos opostos — o rodapé anota, a janela não faz nada —, e um padrão só poderia ser um
+dos dois. Uma `Doorway` que EMBRULHA outra tem de passá-los adiante: toda chamada a uma região passa
+por um `Lending` em volta do `Recorder` (`with_region`, `surface/host.rs`); com o "nada" da janela
+como padrão, um `Lending` que esquecesse compilaria, o `step_aside` sumiria calado e a região
+ficaria aberta sobre o terminal, segurando o teclado. Obrigatórios, o compilador aponta cada
+`Doorway` que ainda não disse (E0046). O custo é escrever duas linhas em cada embrulho (o `Lending`
+do rodapé e o `WindowWay` do gerenciador as escrevem).
+
+##### O que o hospedeiro faz com a página
+
+- **Um clique não move a página** (`after_a_click`), salvo para trazer de volta um cursor que o
+  clique deixou fora dela (o `RET` do segundo clique que entrou noutro nível): a linha está sob o
+  ponteiro, o primeiro clique a seleciona e o segundo, no mesmo lugar, faz o que o `RET` faz (inv.
+  19). Seguindo o cursor com a margem de duas linhas (`SCROLL_MARGIN`), um clique numa das duas
+  últimas linhas a tirava de sob o ponteiro, o segundo clique caía noutra linha — um primeiro clique
+  de novo — e uma linha na borda de baixo não se alcançava com dois cliques
+  (`a_click_leaves_the_row_under_the_pointer`). Vale para toda região.
+- **Um gesto da pessoa pelo nome** (um comando, uma resposta digitada) segue o cursor porque a
+  região PEDE (`Doorway::follow`), e o hospedeiro só segue sozinho depois de uma tecla
+  (`Footer::typed`): as quatro pedem `follow()` depois de um comando que tomam e de uma resposta. Um
+  hospedeiro que seguisse depois de todo comando mudaria as outras regiões (a mesa das notificações
+  não segue o cursor numa ordem pelo nome).
+- **O que chega sozinho** (threads, a fila, o segundo) não move a página — só a aperta
+  (`settle_region`), para uma lista que encolheu não deixar a página vazia. O que o rodapé já ouviu
+  (a lista da fila) é contado à região que abre (`hosted_replay`, `Footer::standing`), senão os
+  containers e o Incus abririam sem os jobs até a fila mudar — e uma fila parada não muda.
+- O relógio das contas LLM, que no rodapé era um `Timer` do calloop, é agora o segundo que o rodapé
+  já bate (`Region::tick` → `Open::ring_if_due`, uma vez por reset): "uma vista não tem relógio
+  próprio". A janela, que não tem segundo, continua com um disparo único.
+
+##### Uma foto não alcança a máquina, em região também
+
+`Doorway::photographing()` é "não há laço": o rodapé de uma foto não tem laço, e a janela destacada
+também não. Então a região do pendrive lê a cena do ambiente (`RONOCTUA_PHOTOGRAPH_STICK_SCENE`) e
+não sobe thread; a dos containers não sobe feed (diz "perguntando ao podman", como antes); a do
+Incus usa o feed destacado sobre a cena (`RONOCTUA_PHOTOGRAPH_INCUS_SCENE`), em UTC; a das contas lê
+no ato. A matriz da P0 inteira saiu igual (abaixo).
+
+##### `has_helper` fora da feature `authority`
+
+O pendrive pergunta, antes da senha, se o ajudante de root existe (`cannot_arm`), e isso morava em
+`ronoctua_security::authority`, atrás da feature que só o binário liga (`sudo-door-is-one`).
+Perguntar se um arquivo existe não é a porta do sudo: `HELPER_VARIABLE` e `has_helper` subiram para
+a raiz do `ronoctua-security` (sem feature; a mesma pergunta — a variável, um caminho absoluto, um
+arquivo), e o `authority` os reexporta — o `security.rs` do binário continua com o caminho de antes.
+Nenhum crate do R5a liga `authority`; o da central (R5b) liga, e o porquê está em "A porta do sudo
+é do programa, não de um crate".
+
+##### Sobre o que um crate de funcionalidade fica
+
+Um check novo, `a-feature-stands-on-the-foundation` (`tests/shell-features.nix`): o crate de cada
+região registrada fica sobre o kit e a porta; sobre outra funcionalidade hospedada só onde o grafo
+do desenho diz (§1.2: o gerenciador sobre git e segurança, a central de programas e a atualização
+sobre os pertences, o acesso rápido sobre a calculadora e os ícones); nunca sobre o que compõe as
+funcionalidades (o binário e o `ronoctua-shell-footer`); e só o binário (e esses poucos) fica sobre
+ele. Uma aresta de lado compila, e faria uma linha de uma vista recompilar a outra. Um crate do
+shell que não é funcionalidade hospedada — o trabalho, a inspeção, uma peça que duas funcionalidades
+dividem (`ronoctua-shell-git-line`, as folhas `-words`) — é base de quem precisa dele. Quais crates
+são funcionalidades sai do `regions.rs`, pelos dois jeitos de escrever uma entrada (o caminho do
+crate, ou o módulo que a raiz do binário toma dele).
+
+O "só a composição nomeia uma funcionalidade" não foi perguntado aqui: enquanto o rodapé era parte
+do binário, as metades que ele guarda pela sessão (a modeline, o rádio, as telas, a LAN, os
+programas) nomeavam vistas por motivo legítimo, e o check só bloquearia a integração. Com o rodapé
+num crate, é o `footer-names-no-feature` do R6 que pergunta, e o compilador recusa o resto.
+
+#### Os pertences, a central de segurança e a atualização (R5b)
+
+##### O que saiu do binário
+
+Três pacotes novos, cada um uma funcionalidade inteira — a vista que as duas portas desenham, a
+janela, a região do rodapé, o recado único das duas portas, a câmera e a contribuição ao keymap:
+
+| Crate | Módulos | Fica sobre |
+|---|---|---|
+| `ronoctua-shell-belongings` | `belongings`, `belongings_window`, `belongings_photograph`, `belongings_region` | kit, porta, keep |
+| `ronoctua-shell-security` | `security` (com `security/seal_tests.rs`, `security/vault_tests.rs`), `security_window`, `security_region` | kit, porta, report, work |
+| `ronoctua-shell-update` | `update_window`, `binary_cache`, `update_region` | kit, porta, pertences |
+
+O binário registra as três regiões numa linha cada (`regions.rs`), e o rodapé perdeu tudo o que
+tinha delas: os três `surface/<vista>.rs`, os campos (`update`, `update_journals`, `update_heard`,
+`update_on_the_step`, `update_followed`, `security`, `security_shown`, `security_scene`,
+`security_sender`, `binary_cache_sender`, `security_watches`, `security_countdown`, `belongings`),
+as variantes `Click::Update/Security/Belongings`, o canal do diário da atualização no `run()`, a
+releitura dos relatórios no segundo do rodapé, o `security_heard`/`update_heard_the_brain` no
+`mind_arrived` e os três casos especiais da atualização na geometria (`grid_full`, `expansion_len`,
+`expansion_window`), que viraram o caso genérico de uma região do hospedeiro. Ficaram no rodapé, e
+são do R6: a marca da atualização na modeline (`update_window::mark`, `frame_of`, o `update_tick`)
+e o fim da janela sem senha (`security::modeline_until`, `window_now`, `end_here`), que a modeline
+desenha sem nenhuma vista aberta.
+
+As variáveis de compilação foram com o código: `RONOCTUA_MACHINE_DIR` é dos pertences,
+`RONOCTUA_JOURNALCTL` da atualização, `RONOCTUA_XDG_OPEN` da central (e continua do binário, que
+ainda tem outras vistas que abrem endereços); o `ronoctua-cachix` saiu do binário para a
+atualização.
+
+Medido: uma linha da central recompila a central, o binário e — depois do R5h — o gerenciador de
+arquivos; uma dos pertences, os pertences, a atualização, a central de programas e o binário; uma da
+atualização, a atualização e o binário. Nunca mais o rodapé inteiro com as outras trinta vistas
+(números em "Medidas").
+
+##### Um recado, duas portas (`carry_out`)
+
+Cada uma das três tem UM tratador do que a vista pede (`belongings_region::carry_out`,
+`security_region::carry_out`, `update_region::carry_out`), escrito sobre `&mut dyn region::Doorway`,
+e as duas portas o chamam: a região do rodapé com o `Recorder`, a janela com o `door::Ui`. O
+estado que as duas guardam é um só (`Open`, em cada `*_region.rs`): a vista, o que ela lê, os
+vigias, as threads. O que cada porta faz por conta própria é o que é dela de verdade — a página: a
+janela pagina a própria lista (`Ui::offset`, `Ui::follow`), o rodapé pagina a região
+(`Doorway::page`); a janela da atualização tem duas metades e o rodapé uma lista só, e o cursor de
+passo e a saída andam em cada uma do seu jeito antes do resto ir ao recado.
+
+As diferenças que existiam entre as duas portas viraram uma decisão cada, sempre para o lado que a
+regra do dono pede (o que uma porta diz é dito nela, e as duas dizem o mesmo):
+
+- "Copiado" dos pertences: `Echo::Brief` nas duas (o rodapé dizia `Normal`; a definição da classe
+  é exatamente "uma palavra que confirma o que a mão fez").
+- O "toque a chave" do cofre `/private` (o passo da obra que espera o toque): SEGURADO nas duas
+  (`Doorway::hold`), até a resposta da obra substituí-lo — o rodapé o deixava `TOUCH_WAIT` e a
+  janela `Long`; é um estado que continua verdadeiro enquanto a unidade espera.
+- A página do cache binário: `Page::Say` e o que uma mudança diz são `Long` nas duas (a janela
+  dizia `Normal`); o netrc do root, pedido por uma mudança, diz nas duas que é perguntado na barra
+  do sudo (só a janela dizia), e o veredito volta à porta que pediu pelo callback da porta do sudo
+  nas duas (a janela relia o arquivo do veredito a cada segundo).
+- O "abre a outra vista" (`Errand::Command` da central, `Errand::OpenBelongings` da atualização)
+  é `Doorway::give_way(rodapé, janela)`: o rodapé deixa a própria região e roda o comando do
+  rodapé; a janela fica e pede ao rodapé o da janela — a central pede a mesma vista do rodapé, a
+  atualização a janela dos pertences, exatamente como antes.
+- A janela da central, ao responder uma pergunta, agora também traz o lugar pedido para a vista,
+  como todo outro caminho dela já fazia.
+- Uma URL sem `RONOCTUA_XDG_OPEN` é um erro no log nas duas portas (o rodapé calava).
+
+O `errands-are-handled-alike` passou a ler, para uma vista que virou região, o lado do rodapé no
+arquivo da região (`arquivo.rs::fn`) — e as três (a atualização entrou na lista) são "uma tabela
+para as duas portas por construção".
+
+##### Uma região que vive escondida
+
+Parte do trabalho de uma vista sobrevive à página. `LEADER s e r` com a central fechada pede root
+na barra do sudo e diz o veredito no rodapé; uma verificação pedida pela leader pergunta no
+minibuffer e abre a página na resposta; a chave do cofre espera o toque; uma execução da atualização
+pedida à mão (`LEADER s u n`) é seguida no `Mind` do cérebro e, segurada por uma rede tarifada,
+abre a página com a pergunta. No rodapé de antes isso morava em campos que viviam com a vista
+fechada (`security` era uma `View` permanente, `update_followed` um campo à parte).
+
+O hospedeiro do R4 só conhecia uma região aberta ou nenhuma. Agora uma região pode viver
+ESCONDIDA: viva — suas threads ouvidas, sua pergunta respondida, o que o rodapé ouve contado a ela —
+mas sem posto na precedência e sem desenho:
+
+- `Closed::Behind`: um comando que age pela vista SEM a página (os toggles da leader, as
+  verificações, as duas chaves do cofre, `LEADER s u n`, o netrc pelo nome) traz a região à vida
+  escondida e lhe entrega o comando; a região que estava na faixa fica onde estava.
+- `Region::lingers`: enquanto uma região diz que espera algo — uma thread dela (contada), uma
+  pergunta na linha, uma obra em voo, um selo que a fila não terminou, uma execução seguida, o
+  netrc —, o hospedeiro a guarda; quando para de dizer, solta-a (depois de cada chamada,
+  `let_a_hidden_region_go`). Uma página fechada com trabalho em voo fica escondida do mesmo jeito,
+  em vez de largar o que espera.
+- `Doorway::show`: a região escondida pede a faixa (uma resposta que precisa ser vista, a pergunta
+  da tarifa, `security-open` com ela escondida); o rodapé a mostra quando a faixa está livre, e diz
+  a recusa quando não está — o mesmo `region_is_free` de toda abertura.
+- `Region::shown`: a região é avisada quando passa a ser vista (aberta ou mostrada): é ali que a
+  central lê a cena e vigia as pastas, e a atualização segue os dois diários — só enquanto a
+  página está na tela, como antes.
+- O que o rodapé já ouviu (o último `Mind`, a última lista da fila) é contado a uma região que
+  nasce (`hosted_replay`), como se tivesse acabado de chegar: a central tem a base da página do
+  vigia, a atualização tem o `Mind` para a resposta da contagem e para seguir uma execução
+  "imediatamente quando o cérebro já a segura".
+
+`is_open`, `open_ids` e a precedência continuam respondendo só pelas MOSTRADAS; `is_live`,
+`is_hidden` e `live_ids` são o resto. O `the-footer-does-not-ask-itself` ganhou dois anéis
+declarados (a resposta à pergunta de uma região, e o "mostre-me" que avisa `shown`), cada um com o
+porquê de girar uma vez.
+
+##### A central guarda UMA vista entre aberturas (`security_region::KEPT`)
+
+O rodapé de antes tinha uma vista da central só, da primeira abertura à última: a linha em que o
+cursor estava, as últimas respostas das verificações online, o dedo que o anel oferece, a pergunta
+da própria página. Uma região vive só enquanto está aberta ou espera algo, e uma vista nova a cada
+abertura poria o cursor, depois de `security-open`, duas setas, `Esc` e `security-open` de novo, na
+primeira linha que age, e não onde ele estava (a matriz não vê: cada caso dela é uma abertura; uma
+sequência de interação vê). Por isso a vista com que uma região da central sai (o `Drop` dela) fica
+num `thread_local` do crate e a próxima abertura a pega (`open`), como a `KEPT` da central de
+programas (R5g) e do gerenciador (R5h): o `Entry::open` é um ponteiro de função sem estado, e o laço
+do rodapé é uma thread (cada teste, a sua). A cena e as vigias NÃO ficam: uma página fechada relê a
+cena quando volta, como antes. Uma vista guardada nunca leva trabalho em voo — uma região só é solta
+quando não espera nada. Os pertences e a atualização não guardam nada: o rodapé de antes também os
+criava a cada abertura (`belongings: Option<Open>`, `update: Option<View>`).
+
+##### A resposta da pergunta de uma região vem primeiro
+
+A pergunta de um selo (`seal::QUESTIONS`) é feita por duas vistas — a central e o gerenciador.
+Antes, a precedência decidia (o braço da central perguntava se ela estava mostrada). Agora a
+resposta à pergunta que uma região fez é entregue a ELA antes de qualquer linha de vista do
+`run_with` (`hosted_answer`, o primeiro elo da cadeia) — a do gerenciador, que também é região
+(R5h), volta a ele pelo mesmo caminho.
+
+##### O que mais o hospedeiro ganhou, e por quê
+
+- **Linhas contadas, não construídas** (`Region::row_count`, `Region::rows_from`): a saída da
+  atualização guarda até duas mil linhas, e o rodapé a contava sem construir e construía só a
+  página (`update_region`). O hospedeiro agora pergunta assim a toda região (`hosted_len`,
+  `hosted_window`), com padrões que contam/cortam `rows`.
+- **Uma frase quebrada em várias linhas é UM controle** (`Region::control_of`): o clique de toda
+  linha dela é o da primeira, e o ponteiro sobre qualquer uma acende todas — o `one_control` da
+  atualização virou genérico no rodapé, sobre os cliques de região.
+- **O cursor que precisa da largura** (`Region::cursor_in`): o da atualização é a linha do passo,
+  depois das linhas da cabeça, que quebram.
+- **A página** (`Doorway::page`, `Paging`): seguir o cursor depois de um gesto que não veio de
+  tecla (`Follow`), trazer um lugar pedido ao topo (`Top`), páginas para cima e para baixo
+  (`Pages`), o fim (`End`) e o fim que acompanha o fim (`Tail(n)`: "estava na última página antes
+  de a lista crescer `n` linhas", o "zero acompanha" do diário da atualização — dado que chega não
+  move a página, exceto o fim de um log para onde a pessoa o levou).
+- **A caixa de entrada das threads** (`region::Inbox`, `Post`): o que as threads de uma vista
+  devolvem, em ordem, com UM despertar enquanto houver algo não lido — uma rajada de milhares de
+  linhas de um rebuild é uma volta do laço, não uma por linha. As duas portas usam a mesma: a
+  janela pelo `Wiring::wake` (`Content::woken`), o rodapé pelo despertar da região. Um `Post` cujo
+  `Inbox` morreu diz `false`, e a thread para (a porta fechou).
+- **O despertar de uma região deve o quadro, não pinta**: `region_woken` aplica a geometria só
+  quando a altura mudou e pede o quadro (`ask_paint`), como o diário da atualização fazia.
+- **Um clique numa região aplica a geometria, como uma tecla** (`hosted_click` →
+  `after_a_region_spoke`, como `hosted_key`): um clique que move o cursor muda o que as linhas dizem
+  dele — a cabeça da página do cache binário quebra em outro número de linhas —, e o ponteiro e o
+  teclado deixam a mesma altura (inv. 19). O rodapé de antes fazia isso pela atualização
+  (`Errand::Moved` e `Page::Edit` → `region_resized`); o hospedeiro do R4, que ainda não hospedava
+  região nenhuma, só pintava.
+- **A primeira página antes de a região falar**: ao abrir ou mostrar, o rodapé volta à primeira
+  página ANTES de `shown`/do comando, para que uma página pedida por eles (o cursor dos pertences
+  que nasce abaixo da primeira página) seja a que fica.
+
+##### Os relógios
+
+A janela não tem segundo, e cada uma continua armando o seu só enquanto precisa (o fim da janela
+sem senha; o momento em que a sessão esquece a senha dos pertences). A região do rodapé usa o
+segundo que o rodapé já bate (`Region::tick`): a releitura dos relatórios da atualização (como já
+era), a contagem da janela sem senha (agora um quadro por segundo enquanto a página mostra uma
+janela com fim, em vez de só quando as linhas do administrador estão na página: a região não sabe
+a página do rodapé — e UM quadro a mais no segundo em que a janela acaba sob a página mostrada, como
+o relógio do rodapé de antes e o da janela fazem: nada vigiado muda nesse instante, e sem ele a
+página ficava em "1 s" até a próxima tecla; a região lembra se o segundo anterior contava,
+`SecurityRegion::counting`), e o "lembrada até" dos pertences (relido no segundo seguinte ao
+momento, em vez de um timer no momento).
+
+##### Uma foto não alcança a máquina
+
+`Doorway::photographing` é verdade no rodapé de uma foto, e as três regiões, ali, não alcançam
+nada: os pertences escrevem as ordens em vez de mandá-las (`Reach::Nowhere`), a atualização as
+guarda (`Reach::Kept`), nenhuma thread começa, nada é vigiado. A câmera do rodapé de antes alcançava
+— o `u` de `LEADER s u u` numa foto COMEÇAVA uma atualização (a frase "The update has started" na
+foto), e um `RET` nos pertences ia à fila. As janelas já eram assim.
+
+##### A porta do sudo é do programa, não de um crate
+
+O `authority` do `ronoctua-security` (a porta do sudo) é ligado por EXATAMENTE dois manifestos,
+cada um pelo nome e com o porquê: o do crate que tem a barra do sudo (o binário até o R6, o
+`ronoctua-shell-footer` depois), que chama a porta, e o da central de segurança
+(`ronoctua-shell-security`), que pergunta se o ajudante de root existe pelo caminho de antes
+(`authority::has_helper`). A pergunta em si não é a porta: `has_helper` e `HELPER_VARIABLE` moram
+na raiz do crate, sem feature (R5a), e o pendrive pergunta por ali (`ronoctua_security::has_helper`)
+sem ligar nada. Como um crate que liga a porta a leva a todo crate que depende dele, o
+`sudo-door-is-one` segue as dependências (normais e de build; a de desenvolvimento só linka um
+teste) de todo PROGRAMA do workspace e recusa o que alcançar um crate que liga a porta, menos o
+binário do shell — a porta sob o `render-png` ou sob um daemon seria a porta num segundo programa.
+Não aceita "todo crate com o nome do shell": o `ronoctua-render-png` tem esse nome e é outro
+programa. E continua exigindo que só o `sudo_bar.rs` chame `run`/`run_with`/`converse`.
+
+##### Uma tecla chega a um braço — também numa região
+
+O `run-command-handles-every-key` lê, além do `run_with` e das linhas das vistas, o
+`Region::command` de toda região registrada (com as constantes nuas resolvidas no próprio arquivo e
+nos `use`) e, do `closed` de cada entrada, SÓ os braços que tomam o comando ali mesmo
+(`Closed::Taken`: uma janela). Um braço do `closed` que abre a região (`Opens`) ou a traz escondida
+(`Behind`) entrega o comando ao `Region::command`; contá-lo como braço deixava passar a tecla que
+abre a página e não faz nada (um `security-relax` tirado do `command` passaria verde). E um braço
+com guarda (`"x" if … =>`) não conta, como na base: a guarda pode ser uma que tecla nenhuma satisfaz
+(`if false`, `if argument.is_some()`), e a tecla diria "does nothing yet" com o braço ali; o id
+conta só onde um braço o toma sem condição.
+
+##### O check novo (`tests/trust-regions.nix`)
+
+- `the-trust-crates-stand-where-the-design-says` — cada um dos três fica sobre o que o grafo do
+  desenho lhe dá (a base; os pertences sob a atualização), e só o binário, a atualização e a central
+  de programas ficam sobre os pertences, só o binário e o gerenciador de arquivos sobre a central,
+  só o binário sobre a atualização (dependências, de desenvolvimento e de build contam: são arestas
+  de recompilação). O compilador recusa um ciclo, não uma aresta de lado, e cada aresta é uma
+  recompilação.
+- E o teste de VM `hidden-region-vm` (`tests/hidden-region-vm.nix`): uma verificação da leader vive
+  escondida, a resposta vem pela pergunta, a página é pedida e dada; uma execução à mão sem cérebro
+  é dita e solta. O comando de `s u n` é lido do `check-keymap --dump` na VM, para o teste não
+  escrever o id do módulo (`brain-modules-are-sealed`).
+
+#### Som, energia, ponteiros, Syncthing e histórico: as linhas que o rodapé empresta (R5c)
+
+##### O que cada crate é
+
+Cada uma das cinco vistas virou um crate de funcionalidade sobre o kit e a porta, e só:
+
+| Crate | Módulos | O que mais lê |
+|---|---|---|
+| `ronoctua-shell-audio` | `audio` (a vista), `audio_window`, `audio_region` | `ronoctua-audio`, `ronoctua-store` |
+| `ronoctua-shell-power` | `power`, `power_window`, `power_region` | `ronoctua-power` |
+| `ronoctua-shell-pointers` | `pointers`, `pointers_window`, `pointers_region` | `ronoctua-pointers`, `ronoctua-compositor` |
+| `ronoctua-shell-syncthing` | `syncthing` (+ `syncthing/tests.rs`), `syncthing_window`, `syncthing_region` | `ronoctua-syncthing`, `ronoctua-store`, `serde_json` |
+| `ronoctua-shell-history` | `history` (+ `history/tests.rs`), `history_window`, `history_region` | `ronoctua-atuin`, `ronoctua-options` |
+| `ronoctua-shell-audio-words` | `audio_words` | só `ronoctua-audio` e `ronoctua-i18n` — nenhum crate do shell |
+| `ronoctua-shell-power-words` | `power_words` | só `ronoctua-power`, `ronoctua-tokens` e `ronoctua-i18n` |
+| `ronoctua-shell-syncthing-words` | `syncthing_words` | só `ronoctua-syncthing` e `ronoctua-i18n` |
+| `ronoctua-shell-history-words` | `history_words` | só `ronoctua-atuin` e `ronoctua-i18n` |
+
+O `<vista>_region.rs` de cada um é a segunda porta da vista: o `impl region::Region`, a
+`region::Entry` que o binário registra (`regions.rs`, uma linha por crate, em ordem) e o recado
+único — `carry_out(errand, …, &mut dyn Doorway)` — que a janela (`apply`) e a região chamam. O
+`surface/<vista>.rs` de cada uma, o campo da vista no `Footer`, as variantes `Click::*`, o id no
+`CONCRETE` e as linhas dos despachantes saíram; o `PRECEDENCE` não mudou (as cinco continuam
+ranqueadas onde estavam, agora respondidas pelo hospedeiro). O `KEYS` de cada uma continua no módulo
+da vista, e o binário o junta pelo caminho do crate (`ronoctua_shell_audio::audio::KEYS`). Só o
+crate do Syncthing lê algo na compilação (`RONOCTUA_XDG_OPEN`, a página do Syncthing), e o declara
+(`env`).
+
+##### Uma região lê a máquina pelas linhas do rodapé — por tipo
+
+As cinco vistas são do sistema: o rodapé mantém, pela sessão inteira e para si, a ligação com cada
+daemon — a marca da bateria e os alarmes, as duas marcas do som e as teclas de volume, a marca do
+Syncthing, o cursor de um mouse novo, o anel do Atuin. A vista aberta no rodapé precisa das MESMAS
+ligações. Três respostas possíveis, e por que a escolhida:
+
+- **A região abre a sua** (como a janela faz): uma segunda ligação ao PipeWire, ao Syncthing, ao
+  logind enquanto a vista está aberta, uma primeira imagem vazia até a leitura dela chegar, e — no
+  caso dos ponteiros — duas threads numerando o mesmo mouse novo, que é a corrida que o rodapé
+  evita. Recusada.
+- **O rodapé chama a vista**: é o acoplamento que a leva desfaz (o rodapé não nomeia
+  funcionalidade).
+- **O rodapé EMPRESTA o que já tem, por tipo**: `region::Kept` é um `Rc<dyn Any>`;
+  `Footer::kept_for_regions` lista, uma linha por coisa, a última leitura (`Rc<Snapshot>`), a linha
+  das ordens (`Rc<Handle>`) e os desejos que o rodapé segue (`Rc<Cell<…>>`), e o `Recorder` de cada
+  chamada os carrega (`Recorder::keeping`). A região pede
+  `region::kept::<ronoctua_power::Handle>(way)` e recebe o MESMO `Rc` do rodapé — a ordem sai pela
+  thread que já existe, cuja recusa o rodapé já diz; nada é copiado (um `Rc` por chamada). A janela
+  não empresta nada (`Doorway::kept` tem padrão `None`): ela tem as suas linhas.
+
+Escolhida a terceira, porque é a única em que o comportamento do rodapé fica o de antes — mesma
+thread, mesma leitura, mesmas recusas — e o rodapé continua sem nomear funcionalidade: ele nomeia os
+TIPOS dos crates de fronteira (`ronoctua-power`, `ronoctua-audio`…), de que ele já dependia para as
+próprias marcas.
+
+Os detalhes que fazem isso dar certo:
+
+- **Leitura nova é notícia, contada pelo tipo nomeado.** O rodapé guarda a leitura num `Rc` e conta
+  às regiões abertas (`hosted_heard::<Rc<ronoctua_power::Snapshot>>(&rc)`), DEPOIS de guardar — a
+  região troca o `Rc` dela e ajusta o cursor (por identidade nos ponteiros; `forget_pending` dos
+  limiares na energia; o medidor do microfone no som). O tipo vai ESCRITO na chamada (o
+  `hosted_heard` é genérico, e o compilador prende o argumento a ele), porque o `heard` da região lê
+  a notícia pelo tipo para o qual faz o downcast, e nada no compilador pareia os dois: contada como
+  um tipo e lida como outro, a vista aberta nunca mais se atualiza, e build, testes e clippy
+  continuam verdes. O check `regions-hear-what-the-footer-tells` pareia as duas pontas (abaixo). O
+  nível do microfone (dez por segundo) é notícia à parte (`ronoctua_audio::Event::Level`), que só
+  pede quadro quando a barra andou uma célula; o perfil escolhido que mudou no arquivo é contado
+  como o `ronoctua_power::Profile` desejado, não como o `Cell` que o guarda.
+- **A região diz o que a notícia mudou.** Uma leitura que pode trazer ou levar linhas (um aparelho
+  tirado, uma pasta acrescentada, um login) pede `Doorway::rows_changed` (`Effect::RowsChanged`: na
+  região mostrada, a página se fixa no que sobrou, `settle_region`, e a altura acompanha,
+  `region_resized`); uma que só muda o que uma linha diz (o nível, uma preferência, o perfil
+  desejado) pede `Doorway::repaint`, um quadro. O hospedeiro não conta linhas para descobrir.
+- **Um desejo é compartilhado, não copiado.** O perfil escolhido (`power.json`), as preferências do
+  som (`audio.json`) e do Syncthing (`syncthing.json`) são `Rc<Cell<…>>` do rodapé. A região os
+  ESCREVE antes de gravar o arquivo — como o rodapé fazia com o próprio campo —, e o vigia do
+  arquivo acha a própria escrita e nada novo: sem isso, uma escolha seria duas ordens (o defeito que
+  o comentário do `power_wanted` já descrevia). Quando o arquivo muda por fora, o rodapé atualiza o
+  `Cell` e conta à região (`hosted_heard(&prefs)`).
+- **Uma linha levantada sob demanda é pedida.** A thread do Atuin só existe depois que alguém abriu
+  a vista (`atuin status` é um processo a cada trinta segundos). A região pede ao abrir
+  (`region::want::<ronoctua_atuin::Hand>(way)` → `Effect::Want(TypeId)`), e o rodapé a levanta
+  (`raise_for_a_region` → `raise_atuin`) e a guarda pela sessão, antes de entregar à região o
+  comando que a abriu.
+- **Comandos com a vista fechada.** `s p e`/`s p b`/`s p s` (um perfil), `s p k`/`s p l` (as
+  travas), `s s p`/`s s r` (pausar e retomar tudo), `s s a` (a página), `s s t` (o estado em uma
+  linha), `s s d` (a pergunta do id de um aparelho e a resposta dela), `s h s` (sincronizar) são o
+  `closed` da `Entry` de cada região, feitos pelas MESMAS linhas emprestadas (o `Recorder` de um
+  comando fechado também empresta). Os que abrem a vista (`power-open`, `power-thresholds`, os
+  quatro armados, `syncthing-add-folder`) respondem `Closed::Opens`, e o comando que abriu é
+  entregue à região recém-aberta, que se mira nele (os limiares, uma ação armada, o seletor de
+  pasta).
+- **As travas continuam do rodapé.** Uma trava pedida por uma linha da vista vai, nas duas portas,
+  como o comando do líder com o estado decidido (`power-keep-awake on`): a janela já mandava assim
+  pelo socket; a região manda pelo `Doorway::run`, e o próprio rodapé a executa pela linha
+  emprestada (`lock` manda a ordem direto, nunca de novo pelo `run`: não há anel) — a trava é um
+  descritor que vive no processo que sobrevive à janela.
+
+Os dois checks novos (`tests/footer-lent-lines.nix`) cobram o que o compilador não vê:
+
+- `regions-ask-what-the-footer-lends`: todo `region::kept::<T>` de uma região nomeia um tipo que
+  `kept_for_regions` empresta, e todo `region::want::<T>` um que `raise_for_a_region` levanta —
+  tipos resolvidos pelos `use` de cada arquivo e os do rodapé pelos campos que `kept_for_regions`
+  empurra, como `struct Footer` os declara. Um tipo que ninguém empresta seria um `None` calado, e a
+  vista diria "o servidor de som não responde" numa máquina em que ele responde.
+- `regions-hear-what-the-footer-tells`: todo tipo para o qual o `heard` de uma região faz o downcast
+  (`downcast_ref`, `downcast`, `is`, dentro do `impl Region`) é um que o rodapé conta pelo nome
+  (`hosted_heard::<T>`, escrito pelo caminho inteiro), e todo tipo contado pelo nome é ouvido por
+  alguma região. Os caminhos de um crate do shell são escritos a partir do módulo (`crate::region` e
+  `ronoctua_shell_door::region` são o mesmo `region`, porque todo crate do shell nomeia os módulos
+  da base na raiz pelos nomes deles e um nome de módulo é um só no shell). Uma chamada sem o tipo
+  (`hosted_heard(&x)`) não pareia com nada, e toda notícia que uma região ouve diz o tipo — também o
+  que o rodapé conta a uma região que abre (`Footer::standing`, cada coisa como `Box::<T>::new`).
+
+##### Quem move a página
+
+Cada `<vista>_press` do rodapé fazia a mesma coisa depois da tecla: a superfície primeiro
+(`region_resized`), depois o cursor (`follow_cursor`); e só o press — um clique que só seleciona,
+uma resposta digitada, um perfil escolhido por comando, uma leitura que chega não moviam a página.
+Numa região, o hospedeiro não sabe qual gesto foi um press. Por isso é a REGIÃO que pede
+(`Doorway::follow` → `Effect::Follow`, que o hospedeiro faz na mesma ordem): no `press` (tecla,
+gesto por nome, o segundo clique, a tecla do seletor de pasta), no comando que abre a vista dada a
+ela já aberta (`power-open`, `audio-open`…, que antes só seguiam o cursor) e quando o Syncthing abre
+o seletor de pasta. Na janela, `follow` não faz nada: a porta da janela segue o cursor depois de
+toda tecla e clique. O hospedeiro continua seguindo depois de uma tecla (`Footer::typed`); ao abrir
+uma região, vai à primeira página, conta o que o rodapé já ouviu (`hosted_replay`,
+`Footer::standing`), avisa `shown` e só então entrega o comando — e as cinco pedem `follow()` em
+todo comando que as abre, porque a vista aberta nos limiares (a trigésima linha) tem de estar na
+página que a mostra.
+
+Um hospedeiro que seguisse o cursor depois de TODO clique, comando e colar faria um primeiro clique
+numa linha perto da borda de baixo rolar a página duas linhas, e a linha sair de baixo do ponteiro
+que acabara de clicá-la. A regra certa é a do press, e só a região sabe
+qual gesto o foi.
+
+`Doorway::first_page` é a outra metade: a vista de energia já aberta e mirada de novo numa linha
+(`s p t`, `s q s`… pelo soquete de controle — com a vista aberta o teclado é dela) é construída de
+novo e mostrada como uma vista recém-aberta naquela linha: primeira página, e o cursor seguido dali.
+Na janela, a lista volta ao topo (ninguém a pede lá hoje).
+
+##### O que o hospedeiro ganhou (`surface/host.rs`), e por quê
+
+O hospedeiro do R4 nunca tinha hospedado uma região de verdade; estas cinco mostraram as lacunas,
+fechadas de forma genérica:
+
+- **A página** (acima): `Effect::Follow` e `Effect::FirstPage`, e o `open_region` seguindo o cursor
+  depois da primeira página.
+- **A altura segue as linhas da região mostrada, quando a região diz** (`Effect::RowsChanged`):
+  quando uma notícia pode ter mudado quantas linhas a região mostrada tem (um aparelho tirado com a
+  linha dele), a página se fixa no que sobrou (`settle_region`) e a altura acompanha
+  (`region_resized`). Uma notícia que só muda o que uma linha diz (o nível do microfone) é um quadro
+  e nada mais. Contar as linhas da região antes e depois de cada notícia seriam duas montagens de
+  todas as linhas a cada notícia, vinte por segundo com o microfone aberto, para uma barra que
+  talvez nem tenha andado uma célula; o rodapé de antes evitava esse caminho de propósito
+  ("um nível não é uma leitura"). Agora uma leitura custa o que custava no rodapé de antes (a
+  geometria e o quadro) mais a fixação da página, e o nível, um quadro quando a barra andou. Uma
+  região que diz quando as linhas mudam responde `Region::says_when_its_rows_change` (as cinco
+  daqui); para as outras, o hospedeiro mede a altura de novo depois do quadro que uma notícia pediu
+  — duas regras que o `docs/PENDING.md` quer uma só.
+- **O seletor de arquivos de uma região sabe a página** (`Region::page_is`, chamado por
+  `pickers_see_the_page` antes de cada tecla, como o rodapé já fazia com os seletores das vistas que
+  ainda desenha): o `PgUp`/`PgDn` do seletor de pasta do Syncthing anda metade das linhas mostradas.
+- **O que o rodapé empresta** (`kept_for_regions`, no `region_way` de toda chamada) e **o que ele
+  levanta** (`Effect::Want` → `raise_for_a_region`).
+
+##### As palavras de um daemon: uma folha embaixo da vista e do rodapé, e não o kit
+
+As palavras que o rodapé diz das PRÓPRIAS linhas — a recusa de uma ordem que a thread dele carregou
+(uma tecla de volume, uma trava, a pausa geral), a palavra do daemon no alarme da bateria, a marca
+da bateria e do perfil na modeline, "quanto tempo a bateria tem" na frase do ponteiro — e que a
+vista diz também, nas duas portas. O rodapé não nomeia funcionalidade, então o que os dois falam
+fica abaixo dos dois (a regra do R1: um ajudante de duas partes desce). `audio_words` e
+`power_words` (o arquivo inteiro, mais `time_left`, `duration_text`, `profile_glyph` e
+`battery_segment`, com os testes deles) saíram do binário; `syncthing_words` (`refusal_key`) e
+`history_words` (`said_when_done`) são novos.
+
+Abaixo dos dois, mas NÃO no kit. A primeira versão os pôs no kit, e o kit, sobre o qual todo crate
+do shell fica, passou a depender de `ronoctua-audio`, `-power`, `-syncthing` e `-atuin`: crates de
+fronteira que mudam com o daemon, que assam na compilação as tabelas de `assets/`
+(`audio-names.nix`, `syncthing-options.nix`, `atuin-options.nix`, por `RONOCTUA_*_RS`) e os caminhos
+do store dos programas que chamam (`pw-dump`, `pw-cat`, `wpctl`, `atuin`, `systemctl`). Uma linha de
+um deles, uma linha de uma dessas tabelas ou a subida de versão do Atuin ou do PipeWire recompilava
+a base inteira do shell — a porta, o trabalho, a inspeção, a linha de vida, as sobreposições, o
+terminal, as cinco vistas, o `render-png` e o binário, e as ~30 vistas das outras pistas R5 quando
+entrarem —, e não só a vista e o binário, como antes da pista: o tipo de regressão que a leva existe
+para tirar. Cada daemon tem a sua folha (`ronoctua-shell-<daemon>-words`), que fica só sobre o crate
+de fronteira dele e o `ronoctua-i18n` — nenhum crate do shell —, embaixo da vista dele e do binário
+(o rodapé), como o `ronoctua-shell-keep` para os pertences e o `ronoctua-shell-camera-words` da R5e
+para o estúdio. Uma por daemon, e não uma da família: uma folha com as quatro faria uma linha do
+Atuin recompilar a vista do som. O que custa, medido, está em "Medidas".
+
+##### As duas portas fazem o mesmo — e onde elas não faziam
+
+O recado único tornou iguais, nas duas portas, coisas que eram diferentes (cada uma escolhida pela
+classe que a mensagem tem, `kit::echo`, como as pistas R5a, R5b e R5d escolheram):
+
+| O quê | Rodapé antes | Janela antes | Agora, nas duas |
+|---|---|---|---|
+| "Copiado: …" (uma linha informativa copiada), nas cinco vistas | `Normal` | `Brief` | `Brief` — uma palavra que confirma o gesto |
+| Preferência do som/Syncthing não gravada (arquivo que não abre) | `Normal` | `Long` | `Long` — uma recusa para ler até o fim |
+| Fechar o som com nenhum microfone aberto | nada | mandava `Listen(None)` | nada (`Meter::stop_listening` só fecha o que abriu) |
+| Abrir a página do Syncthing com `RONOCTUA_XDG_OPEN` vazio | tentava abrir `""` | dizia "parado" | diz "parado" |
+| Um mouse ligado com a vista dos ponteiros aberta (linhas a mais) | a página se fixava, a altura ficava a de antes até o próximo evento de geometria | — | a altura acompanha (a região diz `rows_changed`) |
+
+E uma que continua diferente de propósito: a linha de um ponteiro que roda um comando (o buffer dos
+teclados) FECHA a região antes (a região é da vista enquanto ela está aberta, e o que o comando abre
+acharia a região ocupada); a janela não é região e fica aberta. Está no `press` da região, fora do
+recado.
+
+Uma diferença de comportamento do rodapé, decidida pelo que o código dizia querer: com a vista de
+energia JÁ aberta, `power-thresholds` e os quatro armados (`power-suspend`…) recusavam com "outra
+vista está aberta" — sobre ela mesma: o `region_is_free`, generalizado a toda vista, não excluía a
+própria, e o comentário logo acima dizia "`s p t` abre nos limiares com a vista aberta ou não".
+Agora a vista aberta se mira na linha pedida, da primeira página (acima). Só o soquete de controle
+alcança esse caminho (com a vista aberta, o teclado é dela).
+
+#### O idioma e a região, as telas, o rádio e a rede (R5d)
+
+##### Quatro crates, cinco regiões
+
+| Crate | Módulos | Fica sobre |
+|---|---|---|
+| `ronoctua-shell-locale` | `locale`, `locale_window`, `locale_region`, `geo` (+ `geo/tests.rs`), `geo_window`, `geo_region` | kit, porta, inspect (o globo do catálogo de regiões) |
+| `ronoctua-shell-display` | `display`, `display_words`, `display_window`, `display_region` | kit, porta |
+| `ronoctua-shell-bluetooth` | `bluetooth`, `bluetooth_words`, `bluetooth_window`, `bluetooth_region` | kit, porta |
+| `ronoctua-shell-network` | `network`, `network_words`, `network_window`, `network_region` | kit, porta |
+
+O idioma e as regiões ficam num crate só porque o `KEYS` do idioma traz as teclas das regiões
+(`locale::KEYS` lê `geo::OF_THE_VIEW`) e porque o desenho os pôs juntos (§1.1). Nenhum dos quatro
+fica sobre outra funcionalidade, nem sobre o binário. Uma linha de qualquer um deles recompila ele e
+o binário — não o rodapé inteiro nem as outras vistas (era o crate único).
+
+O binário nomeia os módulos na raiz (`use ronoctua_shell_network::{network, network_region, …}`),
+então `crate::network::…` continua resolvendo onde o binário ainda os nomeia (o keymap, as câmeras
+das janelas, a modeline, as três metades da máquina abaixo). O `regions.rs` registra as cinco
+entradas, ordenadas: `bluetooth`, `display`, `geo`, `locale`, `network`.
+
+##### Uma vista é uma região, e um recado é escrito uma vez
+
+Cada vista é um `region::Region` do seu crate (`<vista>_region.rs`): linhas, dica, cursor, teclas,
+comandos, cliques, respostas, colagem, o que o rodapé ouviu e o segundo do rodapé. O que a vista
+PEDE — dizer uma frase, perguntar na linha da porta, abrir a janela, fechar, uma ordem a uma thread
+— é UM manipulador, `carry_out`, escrito sobre `&mut dyn region::Doorway`, e as duas portas o
+chamam: a janela com o seu `Ui`, a região com o gravador do rodapé. Os dois `match` sobre o mesmo
+`Errand`, um em cada porta (`network_errand` e o `apply` da janela, trinta braços cada), viraram um;
+o `errands-are-handled-alike` passou a cobrar a construção (a janela entrega o recado inteiro, não
+tem `match` próprio, a região chama o mesmo, sem `_ =>`).
+
+O que fica de cada porta é o que a porta é: na janela, o próprio telefone do NetworkManager, as
+próprias threads e a própria linha; e o fim da janela das telas, que espera a thread do leitor
+(`Display::leave`) — por isso o `Doing { close }` é tirado antes de chamar o `carry_out` ali.
+
+As poucas diferenças entre as duas portas que o recado único tinha de decidir foram decididas pela
+da janela, que era a mais cuidadosa (registradas abaixo, em "O que mudou de comportamento").
+
+##### O que o rodapé guarda da máquina, e como a região recebe
+
+O rodapé lê a máquina a sessão inteira, com ou sem vista aberta: o leitor das telas (as teclas de
+brilho o mandam sem vista; cada hotplug o atualiza), o rádio (só um processo pode registrar o agente
+do pareamento — o que sobrevive a toda janela), o NetworkManager e os dois túneis (a modeline
+desenha cinco marcas deles). A região não abre outra thread desses: seria uma segunda verdade sobre
+a mesma máquina — uma prévia de tela que só a thread que a aplicou desfaz, uma modeline uma leitura
+atrasada a cada ordem, dois polls dos mesmos daemons.
+
+Então o rodapé ENTREGA, quando a região abre ou nasce escondida (`hosted_replay` conta o
+`Footer::standing`, antes do comando que a abriu): o catálogo do lançador, a fila, a zona em que
+escreve datas, a mente do brain, a leitura das telas e a LINHA para o leitor
+(`ronoctua_display::Orders`, novo: um clone do remetente, sem o `finish` — só o `Handle` espera a
+thread), e se o `display.json` é vigiado (`toolkits::Unwatched`, novo), a cena do rádio e a linha
+das ordens dele, a pergunta de pareamento em pé, a leitura do NetworkManager, a dos túneis e a linha
+da thread deles (`ronoctua_tunnel::Hand` ficou `Clone`). Depois, cada leitura chega como já chegava
+a toda região (`hosted_heard`). Cada fato é um valor do crate que o lê, e a região pega o que
+conhece pelo tipo (`Region::heard`): o rodapé não nomeia vista nenhuma para contar.
+
+O `regions-order-the-footers-threads` cobra os dois lados: nenhuma região levanta um leitor desses,
+e o `standing` entrega cada linha.
+
+**A linha do leitor das telas tem um preço**: o laço do leitor só termina quando TODO remetente se
+foi (o `Handle` e cada linha). Por isso o rodapé, ao sair, primeiro deixa cada região ir
+(`let_every_region_go`: `Region::closing`, e a região das telas desfaz ali uma prévia em pé pela
+linha), e só então espera o leitor (`Handle::finish`). É o que o `put_a_preview_back` fazia, agora
+nessa ordem.
+
+##### Três metades da máquina continuam no rodapé — e não são vistas
+
+O que o rodapé faz pela máquina com a vista fechada mudou de arquivo, não de dono:
+
+- `surface/screens.rs` — o tamanho do texto mudando no arquivo (a altura do rodapé, os shapers, os
+  pixmaps, as threads do painel), a leitura e a recusa do leitor (a tecla de brilho recusada sem
+  vista diz na linha, e o flash do brilho sai), e a saída do rodapé (as regiões vão primeiro, depois
+  o `finish`).
+- `surface/radio.rs` — o agente do pareamento: a pergunta que chega (abre a vista do rádio, ou vai
+  para o cartão quando a região está ocupada, ou fica com a janela quando a pessoa está nela), os
+  alarmes, o cartão, as duas respostas ao agente (`bluetooth-accept`/`-refuse`, que a vista em
+  qualquer porta manda pelo registro nomeando a pergunta), o que age no rádio inteiro sem vista (`s
+  b s/p/d`, reconectar, largar tudo). Os comandos dele vêm antes do hospedeiro no `run_with`
+  (`radio_commands`), e abrir a vista passa por ali para o cartão sair quando a região recusa
+  (`open_the_radio`).
+- `surface/lan.rs` — a leitura do NetworkManager e a dos túneis (as marcas, os eventos na linha, o
+  arquivo da senha do hotspot que some com ele, a recusa e o login dos túneis — a thread é do
+  rodapé, e a frase também).
+
+Nenhum dos três tem `ID`: não são vistas, e os despachantes não os chamam.
+
+##### O que a vista da rede guarda pelo processo
+
+A rede tinha no rodapé campos que sobreviviam à vista: o telefone com o NetworkManager (nascido no
+primeiro uso), o `/proc` amostrado (as taxas recomeçam a cada abertura), o que a varredura e os
+nomes acharam, a vigia do fim de um scan. Eles não podem morar na região — que vem e vai — e não
+devem morar no rodapé — que não nomeia vista. Moram no crate da rede, por processo: `Kept` (um
+`thread_local`, o laço do rodapé é uma thread) e `network::scans` (a vigia do scan, levantada uma
+vez por processo e acordando quem a segue agora). Assim `LEADER s n l` com a vista fechada varre, e
+o que achou está nas linhas quando ela abre; e os seis comandos da rede que funcionavam sem vista
+(`s n s`, `s n r`, `s n d`, `s n i`, `s n l`, `s n a`) continuam funcionando, numa vista de rascunho
+sobre o que o processo guarda (`network_region::closed`).
+
+**A resposta de uma thread acorda a abertura que está na tela quando ela volta, e não a porta que
+pediu** (`Kept::way_back`, no molde do `network::scans`). O rodapé tinha um canal próprio no laço,
+que lia toda resposta na chegada, com ou sem vista; a região só lê o canal do processo quando abre e
+quando é acordada. Acordar a porta que pediu não basta, porque ela pode ter ido embora: um comando
+com a vista fechada pede pela porta de rascunho do hospedeiro, cujo `wake` não acorda nada, e um
+nome pedido por uma abertura volta depois de `Esc` e de outra abertura, cujo `wake` é outro canal do
+laço. Nos dois casos a resposta ficava no canal a abertura inteira: a prateleira dos vizinhos dizia
+que a varredura corria, o endereço dizia "perguntando", e nenhum nome era perguntado de novo (o
+`Watch::names_wanted` espera o lote que saiu). Agora a abertura se anuncia ao abrir (`Kept::listen`,
+antes de tomar o que já voltou, para uma resposta que chega entre os dois ser lida de um jeito ou do
+outro) e sai ao fechar; a resposta que volta com a vista fechada espera no canal pela abertura
+seguinte, que a toma ao abrir. Uma porta de foto (a câmera do rodapé, um teste) não alcança a
+máquina: aperta contra um telefone sem daemon (`Wire::planted`) que recusa como uma máquina sem
+NetworkManager.
+
+##### O que a região pediu à porta, e o hospedeiro ganhou
+
+Para que as cinco coubessem sem nomear nada no rodapé, a porta e o hospedeiro ganharam (todos
+genéricos, com padrão que não muda as outras regiões):
+
+- `Region::clicked_at(row, cell)` — a célula da linha onde o clique caiu (as duas metades da página
+  de um dispositivo do rádio); `clicked` por padrão.
+- `Region::cursor_in(seen)` — o cursor COMO DESENHADO na largura e nas palavras da porta (o cursor
+  do idioma conta só as linhas em que se para; notas que quebram com a largura ficam no meio);
+  `cursor` por padrão. O hospedeiro o pergunta. (O R5h chegou ao mesmo com esse nome.)
+- `Region::shelves(seen)`/`shelf_scrolled(id, offset)` e `region::Shelf` — uma lista dentro da lista
+  (as prateleiras da rede): o rodapé pinta o fundo, corta a faixa do ponteiro na caixa, desenha a
+  barra e a pega onde a desenhou — o que fazia só para a rede, agora para qualquer região, no
+  `host.rs`.
+- `Region::page_is(lines)` — quantas linhas a região mostra, antes de uma tecla (o seletor de
+  arquivos sobre a vista anda meia página).
+- `Region::take_anchor()` — a linha que a região quer no topo, uma vez (o título da seção depois de
+  `TAB`, o de uma marca da modeline) — `took_the_anchor` pergunta à região mostrada.
+- `Region::language_changed`/`locale_changed` — o espelho do `Content::language_changed`/
+  `locale_changed` da janela (o rodapé chama também o `Region::speak` do R5h, com as palavras novas,
+  quando o idioma muda).
+- `Doorway::follow()` — a página segue o cursor agora (a superfície primeiro): o que as vistas
+  faziam depois de toda tecla, de todo comando por nome e do clique que age. Na janela não faz nada:
+  a porta da janela já segue depois de toda tecla, clique e resposta. (O `Paging::Follow` do R5b
+  segue só o cursor, só com a região na tela; os dois ficaram.)
+- `Doorway::written(Written::Language | Places)` — um arquivo que toda porta vigia acabou de ser
+  escrito pela vista: a porta toma AGORA (o quadro seguinte já sai no idioma novo; o relance já
+  desenha os lugares novos), e a vigia dela toca um instante depois sem achar nada novo.
+- `Doorway::let_go_of(question)` — tira a pergunta da linha da porta quando é aquela (um clique que
+  chega à vista da rede enquanto a linha pergunta a senha leva a linha junto).
+- `Slots::get_mut` — para `take_anchor`, que não precisa de porta.
+- No hospedeiro: o `open_region` dá a primeira página ANTES do comando que abriu (senão jogava fora
+  a página que o comando pôs — a marca do túnel abrindo com o título no topo), conta à região o que
+  o rodapé guarda antes do comando, e o `after_a_region_spoke` também prende a página ao que a
+  região tem agora (`settle_region`: uma varredura que voltou, uma lista que encolheu).
+
+##### O que mudou de comportamento — e por quê
+
+É uma refatoração, e a matriz da P0 é a prova (abaixo). Mas um recado escrito uma vez para as duas
+portas teve de decidir as diferenças que as duas cópias tinham; cada uma foi decidida pela da
+janela, que era a mais cuidadosa, e nenhuma aparece numa foto da matriz:
+
+- **Classes da mensagem**: `RET` numa linha informativa (copiar) é `Brief` nas duas portas (o rodapé
+  dizia `Normal`) no rádio e na rede; "não consegui gravar" do idioma é `Long` (o rodapé dizia
+  `Normal`) — é a recusa que o `Echo::Long` descreve; a senha do hotspot é `Long` (para ser lida).
+- **As regiões instaladas** releem o diretório depois de pôr uma na fila, nas duas portas.
+- **A rede**: um scan não leva mais a página do rodapé ao topo (a janela nunca levou; depois da
+  tecla o rodapé seguia o cursor de qualquer jeito); toda ordem relê a leitura e assenta o cursor,
+  também a pergunta e a colagem; e as três marcas da rede na modeline seguem o sinal do
+  NetworkManager (um instante depois) depois de uma ordem da vista do rodapé, como já seguiam depois
+  de uma ordem da janela — a vista relê pelo próprio telefone, e a cópia da modeline é a da thread
+  do rodapé.
+- **A vigia do relógio no brain**: o interruptor, no rodapé, pergunta fora do laço com as duas
+  perguntas da janela (o interruptor e a leitura da mente depois) e diz a frase da página quando o
+  brain não responde (`locale-watched-unknown`), em vez da genérica; numa foto diz "não sei" na
+  hora, sem tocar o socket.
+- **Um idioma (ou o formato das datas) escolhido em outra porta** relê os ARQUIVOS da vista do
+  idioma (o que a doc da própria vista diz que uma vigia faz nas duas portas); o rodapé relia também
+  o relógio da máquina pelo barramento.
+- **O canal da barra do sudo** é pendurado no laço no primeiro comando que chega ao hospedeiro de
+  regiões (um canal parado), e não no primeiro gesto de root.
+- **Toda região que falou** tem a página presa às linhas que tem agora (`settle_region`), como toda
+  chegada já tinha.
+
+##### Os checks perguntam onde a vista está agora
+
+- `errands-are-handled-alike` — as cinco saíram dos pares (`PAIRS`) e entraram em `SHARED`: a janela
+  entrega o recado ao `carry_out` do crate e não tem `match` próprio; a região chama o mesmo; o
+  `carry_out` nomeia cada variante sem `_ =>`. Conta cada variante como um recado igual nas duas
+  portas (192, piso 150).
+- `run-command-handles-every-key` — lê também os módulos de cada região registrada em `regions.rs`
+  (e o módulo de palavras de onde ela tira os gestos, `press_of`): o braço de um comando de uma
+  região é do crate dela.
+- `every-view-follows-its-cursor` — uma região do hospedeiro segue o cursor pela linha do hospedeiro
+  (`hosted_cursor`); antes o check só conhecia vistas com arquivo em `surface/`.
+- `the-footer-does-not-ask-itself` — os dois anéis do rádio que não existem mais saíram; e o check
+  passou a listar TODO ciclo elementar do grafo de chamadas do rodapé (o algoritmo de Johnson,
+  dentro das partes fortemente conexas), não um por aresta de volta de uma busca em profundidade: a
+  busca só achava um anel onde reencontrava um método cinza, e um anel por métodos que ela já tinha
+  terminado passava calado ("8 recursões declaradas e nenhuma outra" sobre 35). Os 35 estão
+  declarados, cada um com o porquê de girar uma vez, e um anel declarado existe exatamente quando
+  está na lista. E uma parte nova pergunta a metade das regiões do mesmo porquê: o que o `heard`, o
+  `language_changed` e o `locale_changed` de toda região registrada alcançam no módulo dela não
+  escreve um arquivo para o rodapé tomar (`Doorway::written`) nem roda um comando (`Doorway::run`) —
+  é o que faz os anéis do idioma, dos lugares e do rádio girarem uma vez só.
+- `bluetooth-keys-reach-both-doors` — a porta do rodapé é o `bluetooth_region.rs` (`key`,
+  `clicked_at`).
+- `footer-mouse-reaches-nothing-new` — as três marcas de túnel abrem a vista pelo
+  `network_region::opening_on` (o argumento do `network-open` que diz a linha), não mais
+  `open_network_at`.
+
+E dois novos, em `tests/system-regions.nix`:
+
+- `regions-order-the-footers-threads` — nenhum módulo de região registrada levanta o leitor das
+  telas, as threads do rádio, a dos túneis ou a vigia do NetworkManager (pelo caminho,
+  `ronoctua_tunnel::watch`, ou por um `use` dele, agrupado ou não, e chamado nu), nem segura o
+  `Handle` das telas; e o `Footer::standing` entrega as três linhas.
+- `a-view-stands-on-the-foundation` — o crate de toda região registrada fica sobre a base (kit,
+  porta, report, keep, work, inspect) e só sobre as outras vistas que o desenho nomeia (§1.2:
+  arquivos sobre git e segurança, programas e atualização sobre os pertences, a busca sobre a
+  calculadora e os ícones, o Incus sobre os containers). É o que ele aceita, não o que existe: das
+  arestas da lista, a árvore tem só a da atualização e a da busca, e a do Incus o
+  `a-feature-stands-on-the-foundation` recusa (o grafo construído está em "Grafo de crates").
+
+E um teste do binário: `no_two_regions_answer_one_command` (`regions.rs`) — nenhum comando do
+registro é respondido por duas regiões fechadas (o hospedeiro pega a primeira que responde; a ordem
+da lista seria a resposta), perguntado por uma porta de foto (nada da máquina é alcançado).
+
+#### Câmera, manuais, transferências e notificações: as vistas cujo estado é do rodapé (R5e)
+
+##### Quatro vistas saíram do rodapé
+
+A configuração da câmera (`LEADER s c c`), os manuais (`LEADER h`), o painel da fila de
+transferências (`LEADER t t`) e o gerenciador de notificações (`LEADER n n`) eram desenhados pelo
+rodapé com um campo cada (`camera_view`, `manual`, `transfers`, `manager`+`notifications_open`) e um
+arquivo `surface/<vista>.rs`. Agora cada uma é uma `region::Region` do seu crate, registrada pelo
+binário em `regions.rs` (uma linha cada) e hospedada pelo rodapé pelo id com que `PRECEDENCE` já a
+ranqueava. O campo, o arquivo `surface/<vista>.rs`, a linha de cada despachante, o id em `CONCRETE`
+e as variantes de `Click` e `PasteFor` saíram.
+
+| Crate | Módulos | Fica sobre |
+|---|---|---|
+| `ronoctua-shell-camera` | `camera` e `camera_window` (o app do estúdio), `camera_settings` e `camera_settings_window` (a configuração), `camera_region` | kit, porta, `-studio` |
+| `ronoctua-shell-camera-words` | `studio_words` (a frase de cada recusa do estúdio) | nenhum crate do shell |
+| `ronoctua-shell-manual` | `manual`, `manual_window`, `manual_region` | kit, porta |
+| `ronoctua-shell-notifications` | `notifications`, `notifications_window`, `notifications_region` | kit, porta |
+| `ronoctua-shell-transfers` | `transfers`, `transfers_region` | kit, porta, work |
+
+O binário continua nomeando o que é dele: as teclas (`keymap.rs`, `crate::camera::KEYS`…), as
+janelas (`main.rs`) e a câmera de foto da configuração (`photograph.rs`), pela reexportação na raiz
+do `main.rs` — o rodapé não nomeia nenhum desses módulos (cobra
+`a-hosted-region-leaves-the-footer`).
+
+Por que estes quatro juntos: não por afinidade de domínio, mas porque são as vistas cujo estado é do
+rodapé — a lista da fila, o estado do estúdio e as câmeras, a fila de notificações e o livro de
+filtros, o relógio — e que por isso exigiram que o hospedeiro aprendesse a EMPRESTAR o que guarda.
+Cada linha de uma delas agora recompila o crate dela e o binário, e nada do rodapé.
+
+##### O que o rodapé guarda é emprestado; o que muda é contado
+
+Uma região não pode ler o rodapé (ela está emprestada para fora do slot enquanto é chamada, e o
+rodapé não é reentrado), e não deve guardar uma segunda cópia do que o rodapé já guarda — o
+gerenciador de notificações "guarda um cursor, nunca os registros", e a cópia que fica velha é o
+defeito que esse arquivo já pagou uma vez. Então o que o rodapé guarda e uma região lê é EMPRESTADO
+por chamada, por tipo (`region::Lent`): `Seen::lent` nas perguntas (`rows`, `hint`, `cursor_in`…),
+`Doorway::lent()` nos gestos (`key`, `command`, `clicked`…) e `RegionEasel::lent` na pintura. A
+lista do que o rodapé empresta é UMA macro (`held_by_the_footer!`, em `surface/mod.rs`): os jobs da
+fila, o estado do estúdio, as câmeras, a fila de notificações, o livro de filtros e o fuso. Ela
+empresta campo a campo — e não por um método de `&self`, que pegaria o rodapé inteiro — para que o
+`with_region` possa emprestar esses campos enquanto empresta a região do `self.regions` (o
+compilador aceita empréstimos disjuntos de campos dentro de uma função, não através de um método).
+
+O que MUDA continua contado (`Region::heard`), como o R4 desenhou: a lista nova da fila, o estado
+novo do estúdio, as câmeras plugadas. A região que mudou pede o quadro (`Doorway::repaint`), e o
+hospedeiro mede a altura de novo depois do quadro que uma notícia pediu (a regra de toda região que
+não diz quando as linhas mudam, `Region::says_when_its_rows_change` falso), como as vistas com campo
+faziam (`apply_geometry` no `ledger_arrived`, `region_resized` no `camera_reread`): uma câmera
+plugada que acrescenta linhas mudava a altura, e um `owes_paint` sozinho não muda.
+
+O que é aberto ou recebe um comando fechado também é emprestado: o `open_region` e o caminho fechado
+do `hosted_command` emprestam a mesma lista, e é por isso que o painel da fila abre com a lista que
+o rodapé já tem ("um painel que abre vazio parece dizer que nada está rodando no instante em que
+alguém abriu para ver"), a configuração da câmera abre sobre as câmeras e o estúdio que o rodapé
+ouviu, e as teclas do app da câmera funcionam de qualquer lugar com a vista fechada —
+`camera-param-more` precisa saber o efeito atual, e é o estado do estúdio emprestado que diz.
+
+##### A mesa de notificações é do rodapé; o gerenciador pede
+
+A faixa de notificação é do rodapé e vive a sessão inteira, com o gerenciador aberto ou fechado: a
+notificação chega, é desenhada, é clicada, é lida. Por isso a FILA, o LIVRO de filtros, o HISTÓRICO
+e o BARRAMENTO continuam do rodapé (`surface/desk.rs`, "a mesa", que não é vista: nada nela é
+ranqueado), e o gerenciador, uma vista dela, lê a fila e o livro emprestados e PEDE o que muda
+(`Doorway::desk`, `kit::desk::Ask`: ler, desler, ler tudo, esquecer, agir, ajustar, salvar filtro,
+apagar filtro, compartilhar). O rodapé faz o pedido quando a região volta ao slot — o mesmo código
+que fazia antes, a metade "fila" do antigo `manager_errand` — e a faixa pede pelas mesmas palavras:
+o botão de uma ação é o `notif-act` daquele registro (a ordem que a janela manda), o "abrir" é
+`notif-open` com o registro nomeado, e o "lido" é a mesa direto.
+
+Depois de um pedido a lista se mexeu embaixo do cursor (`d` esquece a linha em que ele está), e o
+gerenciador precisa voltar o cursor para uma linha que existe ANTES de a página segui-lo — o antigo
+`settle` no fim de cada recado. O `region_owed` faz isso: logo depois de cada pedido à mesa, e ANTES
+do que a região pediu depois dele, conta à região `desk::Settle { follow: false }` (o cursor volta,
+a página fica) e faz o que essa chamada pediu no lugar dela; um pedido à mesa feito de dentro de um
+settle não é feito — uma volta, sem anel. Se a página segue o cursor é a REGIÃO que pede
+(`Paging::Follow`, depois do pedido à mesa), como o recado da vista fazia: depois de um gesto sobre
+as linhas dela, e nunca pela ordem de um registro nomeado (o botão da faixa, a ordem da janela), que
+o `run_notification_action` antigo fazia sem mexer na página. A ordem é a do cursor: com o `Follow`
+feito antes do settle, o cursor estaria além do fim da lista encolhida (a linha 0, a página no
+topo); e um settle que seguisse o cursor no fim de toda chamada faria todo pedido à mesa mover a
+página, o botão da faixa inclusive. O arquivo de histórico escrito pela janela conta à região
+`Settle { follow: false }` (outro processo escreveu, ninguém moveu a página aqui); o "lido" da
+faixa, `Settle { follow: true }`, como o recado antigo.
+
+O que um botão de notificação faz (`Deed`, `deed_of`, `copy_it`), o fio da ação (`ACT`, `act_order`,
+`act_of`), o nome inteiro de um registro (`record_order`) e o arquivo compartilhado
+(`SHARED_NOTIFICATIONS`) desceram para o kit (`kit::desk`): são as palavras da faixa (rodapé) e do
+gerenciador (funcionalidade), e o que duas pontas dizem desce para a fundação. O gerenciador as
+reexporta com os nomes de antes.
+
+##### Um recado por vista, nas duas portas
+
+- **Manuais**: `manual::carry_out(errand, way) -> Turn`. Abrir a janela, ler o clipboard, pedir o
+  quadro e fechar são da porta (`Doorway`); como a PÁGINA anda é devolvido (`Turn`), porque a página
+  de cada porta é a sua aritmética — o rodapé quebra o manual na sua largura e pagina pela sua
+  grade, a janela na dela. A região traduz para `Doorway::page`/`first_page`; a janela, para o
+  `ui.offset`.
+- **Configuração da câmera**: `camera_settings::carry_in(errand, snap, way) -> Carried`, sobre o
+  `carry_out` puro que já existia; as quatro coisas que eram de cada porta (perguntar na linha da
+  porta, ler o clipboard fora do laço, a porta do app, fechar) são do `Doorway`. A porta do app é
+  `Doorway::give_way`: no rodapé a região fecha antes e o comando roda depois (o teclado vai com a
+  janela); a janela fica e manda o comando ao rodapé.
+- **Notificações**: `notifications::carry_out(errand, typing, desk, way)`, sobre o traço `Desk` —
+  onde cada porta guarda os registros e o livro. A janela é a sua própria mesa (os dois arquivos que
+  o rodapé vigia); a região é `ToTheFooter`, que pede tudo à mesa do rodapé. Qual recado vira qual
+  operação está escrito uma vez.
+- **Transferências**: uma porta nativa só (a outra é o buffer WASM, que compartilha a tabela de
+  teclas da fila); o recado é o `carry_out` da região.
+
+O `errands-are-handled-alike` conta as três como "iguais por construção" (as duas portas chamam a
+mesma função com o recado inteiro) — a câmera inclusive.
+
+##### O que o protocolo da região aprendeu, e por quê cada coisa
+
+O R4 deixou a forma; estas quatro vistas precisaram de mais, e tudo entrou com um padrão que é o do
+rodapé, para as outras pistas não terem de escrever nada — e SEM MUDAR o que o R4 deu: `Row`
+continua `{ fields, takes }`, o `Recorder` continua sem tempo de vida e todo método novo do
+`Doorway` tem padrão. As outras oito pistas R5 escrevem `Row { takes, fields }` e `fn way() ->
+Recorder` às dezenas nos testes, e o `ronoctua-shell-files` implementa o `Doorway` num embrulho da
+janela; um campo novo na `Row` ou um método sem padrão quebraria cada um desses. Por isso o que só
+algumas linhas dizem mora no `Told` (abaixo), e não na `Row`. A única mudança de forma é um campo
+`lent` em `Seen` — o que a região lê emprestado chega pelas perguntas, e não há outro caminho sem um
+estado escondido.
+
+- `Region::told(seen, skip, take)` e `Told { row, about, pair, … }`: a linha COMO DITA ao rodapé — a
+  `Row`, o que ela diz sob o ponteiro (escrito onde a linha é montada: perguntado linha a linha,
+  `Region::about` faria o painel da fila montar a lista uma vez por linha) e, para uma linha que não
+  é tabela de campos, um `Pair` (as DUAS COLUNAS do rodapé — tecla e texto, o dois-pontos na tecla
+  mais larga da lista inteira — que o manual e a linha "nada em andamento" usam). O padrão de `told`
+  é o `rows_from` (que conta e corta sem montar tudo), cada linha sem dizer mais nada
+  (`Told::from`), e o hospedeiro desenha `told`; o `Told` é também onde o jogador e o catálogo de
+  vídeos (R5i) e a central de programas (R5g) dizem o que só as linhas deles têm (chips, caret,
+  capas, figura, luzes). Mais `Shape::Pairs`, que deixa a grade do rodapé medir a coluna em vez de
+  um painel de coluna única.
+- `Picture` (um desenho na coluna da tecla de um `Pair`, com sua caixa em células e linhas) e
+  `Region::pictures`/`picture` (as chaves que sobem antes do quadro e os pixels de uma, rasterizados
+  uma vez para o mapa de ícones do rodapé): os gestos do manual, que o rodapé rasterizava sabendo
+  que eram gestos.
+- `cursor_in(seen)` (o cursor como linha do que a região desenha na largura em que desenha — o
+  painel da fila, cuja pergunta e cuja página são outras linhas), `row_count(seen)` (contar sem
+  montar: o painel conta em cada movimento do ponteiro), `clicked_at(row, cell)` e `about_at(row,
+  cell)` (uma linha que é dois registros lado a lado), `note` (o que a linha do teclado tem a
+  acrescentar), `hover_span` (a faixa do ponteiro dentro de uma metade), `wheel` (a roda numa
+  metade), `text_area` (a varredura numa metade), `grab`/`drag` (as barras que a região pinta), e
+  `paint` passou a valer para qualquer forma (o divisor e as barras das metades).
+- `Grip`: QUAL barra um ponteiro pegou é do PONTEIRO, não da região. O `grab` devolve o número que a
+  região dá à barra (`Option<Grip>`), o rodapé o guarda no assento que apertou
+  (`PerSeat::dragging_hosted: Option<(id, Grip)>`) e o devolve a cada movimento desse ponteiro
+  (`drag(grip, …)`) até o botão subir; a região não guarda nada, e não há `let_go`. Cada assento tem
+  o seu ponteiro, e dois podem segurar as duas barras de uma notificação aberta ao mesmo tempo: com
+  um `held` na região, o ponteiro A arrastaria a metade que B pegou, e o primeiro a soltar pararia o
+  arrasto do outro.
+- `page_is` (quantas linhas a porta mostra, dito antes da tecla: o seletor de arquivos sobre a
+  configuração da câmera pagina por isso) e `closes_without_the_keyboard` (fecha quando o rodapé
+  perde o teclado de verdade: os manuais, como antes; o gerenciador também, R5h).
+- `region::Lending` — a porta do rodapé COM o que ele empresta: embrulha o `Recorder` (que anota) e
+  responde `Doorway::lent`. Um embrulho e não um campo do `Recorder` porque o emprestado é um
+  empréstimo dos campos do rodapé, e um empréstimo é um tempo de vida: no `Recorder` ele estaria em
+  toda porta que o rodapé monta e em todo teste que monta uma (`fn way() -> Recorder`, nos testes de
+  todas as regiões das outras pistas R5), para as poucas chamadas que leem algo emprestado. O
+  `Recorder` ficou exatamente o do R4; o `Lending` derreferencia para ele (`w.owed` continua).
+- `Doorway::page(Paging)` (a página do rodapé, por linhas, páginas, o fim ou seguindo o cursor — o
+  `Paging` do R5b, com o `Lines` dos manuais lidos com as setas; o topo é `Doorway::first_page`),
+  `give_way` (a porta do app da câmera: no rodapé a região fecha e o comando roda depois, o teclado
+  indo com a janela; a janela fica e manda o comando ao rodapé), `queue_copied` (o que foi copiado
+  por último vai para a fila: o histórico do clipboard é do rodapé; a janela, que não tem histórico,
+  manda o comando ao rodapé) e `desk`; `Effect::Page`, `QueueCopied` e `Desk`, todos feitos pelo
+  nome no `region_owed`. `queue_copied` roda o comando por padrão (`Doorway::run` — é o que a janela
+  faz), e `desk` diz no log que a porta não tem mesa.
+
+##### O comando que abriu
+
+O hospedeiro do R4 entrega à região recém-aberta o comando que a abriu. Para as quatro, o MESMO
+comando depois significa outra coisa — o gerenciador alterna (`notif-open` fecha), os manuais e o
+painel dizem que a região está ocupada (`ECHO_VIEW_BUSY`, como o `region_is_free` dizia), a câmera
+segue o cursor — então cada região guarda se já recebeu o comando de abertura (`shown`). A recusa de
+"região ocupada" vinda de dentro da região é EXATAMENTE a de antes: uma região ranqueada acima da
+leader e do `M-x` aberta torna `region_is_free` falso sempre (ela ou algo acima dela está à mostra).
+
+##### Por que a fundação ganhou dois pedaços, e o estúdio um crate-folha
+
+- `kit::desk` (acima).
+- `door::queue::segment`: o segmento da modeline sobre a fila — a modeline é do rodapé e o painel de
+  uma funcionalidade, e os dois leem a mesma lista.
+- `ronoctua-shell-camera-words` (`studio_words::trouble_sentence`; a folha `<crate da vista>-words`
+  do R5c): a frase de uma recusa do estúdio, que a
+  janela da câmera e os GESTOS do rodapé (`hands_heard`) dizem. Uma frase que os dois dizem desce
+  para baixo dos dois; mas NÃO para a porta, embora a porta seja o que os dois têm em comum: o
+  `ronoctua-studio` é a biblioteca do daemon da câmera (motor, fontes, captura de tela, mãos), e
+  muda com ele. Sob a porta, uma linha do motor do estúdio recompilaria a porta e todo crate do
+  shell; num crate-folha só dele (a forma do `ronoctua-shell-keep`, que guarda as palavras dos
+  pertences pelo mesmo motivo), recompila esse crate, a câmera e o binário. O `camera` a reexporta
+  com o nome de antes, e o teste `every_trouble_has_a_sentence` foi junto.
+
+##### O estúdio é do rodapé
+
+`surface/studio.rs` (não é vista) guarda o que o rodapé faz com o estado do estúdio a sessão inteira
+— a marca da câmera e a de gravação, as notificações de foto e de gravação — e conta o estado novo
+às regiões abertas antes de tudo. O antigo `camera_reread` a cada estado novo, com a vista fechada
+inclusive (relia dois arquivos de preferência sem ninguém olhando), saiu: a região relê quando está
+aberta e ouve.
+
+##### A primeira página vem antes do comando que abriu
+
+O hospedeiro do R4 abria a região, entregava a ela o comando que a abriu e SÓ DEPOIS a punha na
+primeira página (`first_page`). Para uma região cuja abertura pede algo da página — a configuração
+da câmera abre com o cursor na primeira linha que age e pede que a página o siga (`Paging::Follow`)
+— a primeira página desfazia o pedido: a matriz da P0 pegou isso (`footer/region-camera`, as doze
+variantes, com a página uma linha acima da de antes). Agora `open_region` põe a região na primeira
+página, conta o que o rodapé já ouviu (`hosted_replay`), avisa `shown` e então entrega o comando; o
+que o comando pede da página é a primeira página como ela é desenhada. Vale para toda região: a
+ordem antiga só coincidia com a de antes para uma região cuja abertura não pede nada da página.
+
+##### O que mudou de propósito (comportamento)
+
+- O clique numa região do hospedeiro agora dá a altura e o quadro (`after_a_region_spoke`), não só o
+  quadro: um clique que abre a página de um job muda o número de linhas, e o painel com campo
+  fazia `apply_geometry`.
+- A frase de um job sob o ponteiro vem da descrição da linha, que na corrente de explicações fica
+  ANTES das frases do gerenciador de arquivos; antes vinha depois. Só muda alguma coisa com o
+  gerenciador aberto POR BAIXO do painel e um menu dele aberto, e então a frase certa é a do job que
+  está sob o ponteiro.
+- Numa FOTO, as teclas do app da câmera com a vista fechada não perguntam ao estúdio (uma foto não
+  alcança a máquina); antes perguntavam ao soquete, que numa foto não existe, e diziam "o estúdio
+  não está rodando".
+- O "lido" da faixa com o gerenciador fechado não segue mais o cursor da vista que estiver à mostra
+  (o `settle` antigo chamava `follow_cursor` sobre qualquer vista); com o gerenciador aberto, segue
+  o dele, como antes. O mesmo vale para `notif-read-all` com o gerenciador fechado (o recado antigo
+  também seguia o cursor de qualquer vista).
+- Depois do botão de uma notificação na faixa (ou da ordem de ação que a janela manda) com o
+  gerenciador aberto, o cursor dele volta para uma linha que existe (o `Settle` depois de todo
+  pedido à mesa); o `run_notification_action` antigo não o voltava. A página não se mexe nos dois.
+  Só se vê quando o histórico encolheu por outro caminho que não o `d` (a poda dos quinze dias ao
+  salvar) enquanto o cursor estava na última linha: antes nenhuma linha acendia até a próxima seta.
+- A nota da linha do teclado e a frase da linha sob o ponteiro do gerenciador (`note`, `about_at`)
+  são ditas só com o gerenciador À MOSTRA — perguntadas ao que `view()` ranqueia, como toda pergunta
+  do hospedeiro. Antes bastava o gerenciador ABERTO, e com a lista da leader por cima a linha sob o
+  ponteiro era da leader e a frase, do gerenciador. O caso que aparece numa foto: escrevendo um
+  filtro (`LEADER n f`, `n`, `RET` no nome), a pergunta do nome vai ao minibuffer, que ranqueia
+  acima do gerenciador; antes a nota do rascunho ("falta um nome e algo com que comparar")
+  continuava na linha e COBRIA a pergunta — a pessoa não via o que estava sendo perguntado; agora a
+  linha mostra "O nome do filtro:" com `ESC`/`RET`, como a janela mostra no cabeçalho dela (os casos
+  extras `notif-filter-draft-name`, as duas variantes; é a única diferença deles).
+
+#### As ferramentas: calculadora, ícones, clipboard e git (R5f)
+
+##### O que cada crate é
+
+| Crate | Módulos | Fica sobre |
+|---|---|---|
+| `ronoctua-shell-calc` | `calc` (a vista, `KEYS`), `calc_convert`, `calc_keypad`, `calc_window`, `calc_region` (`Calc`, `carry_out`, a região) | kit, porta |
+| `ronoctua-shell-icons` | `icons` (a vista, `KEYS`), `icons_page`, `icons_window`, `icons_photograph` (a câmera da janela), `icons_region` (`carry_out`, a região) | kit, porta |
+| `ronoctua-shell-clipboard` | `clipboard_view` (a vista, `KEYS`), `clipboard_window` (a janela e a câmera), `clipboard_region` (`Clip`, `carry_out`, a região) | kit, porta |
+| `ronoctua-shell-git` | `git_browser` (a vista), `git_browser_window`, `git_photograph`, `git_region` (`Git`, `carry_out`, a região, o `LEADER / c`), `dev_clone` (`KEYS`) | kit, porta, git-line |
+| `ronoctua-shell-git-line` | `git_line` (o `Keeper`, a leitura numa thread, o desenho, `HISTORY`) | kit, report |
+
+Só o binário fica sobre eles (`regions.rs` registra as quatro regiões, `main.rs` despacha as
+janelas, `photograph.rs` chama as câmeras, `keymap.rs` junta os `KEYS`). O rodapé os conhece só pelo
+id que a precedência ranqueia (`Rank::Region("calc")`…). Uma linha da calculadora recompila ela, a
+busca (que mostra as respostas dela, R5g) e o binário — nem o rodapé, nem outra vista (cobra
+`the-tools-stand-on-the-foundation`).
+
+**A linha do git fica embaixo dos dois que a usam.** O gerenciador de arquivos a desenha sob o
+caminho; o histórico de um repositório (`C-h`) usa as palavras dela (o id curto, a idade, por que o
+git não respondeu) e vigia os mesmos arquivos do git (`git_line::watch`). Se a linha ficasse no
+crate do git (como o desenho dizia: "files (+git)"), o gerenciador ficaria sobre o histórico inteiro
+e uma linha do histórico recompilaria o gerenciador. O R5h chegou à mesma conclusão pelo outro lado:
+`ronoctua-shell-git-line` fica embaixo dos dois, e o crate do git não depende mais do `report`.
+
+**A câmera da janela da calculadora continua no binário.** `photograph --door calc` é uma porta
+nativa que anda o caminho do jogador (`Native::Calc` em `photograph.rs`, ao lado das do update e das
+preferências do rodapé): a calculadora entrega a janela (`CalcWindow::over(store, Reach::Kept)`) e o
+binário a fotografa com o mesmo andador. Levá-la para o crate exigiria levar o andador junto, que
+é do jogador (R5i): ela é uma das três caronas do `photograph.rs` (ver "O rodapé num crate").
+
+##### Um recado, duas portas
+
+Cada vista tinha dois tratadores dos mesmos pedidos — o `*_errand` do rodapé e o `apply`/`errand` da
+janela — e os dois tinham divergido. Agora cada uma tem UM, sobre `&mut dyn region::Doorway`, que a
+janela (o `Ui`) e a região (o `Recorder` do rodapé) chamam:
+
+| Vista | O que as duas portas guardam | O recado | O que só uma porta faz |
+|---|---|---|---|
+| calculadora | `calc_region::Calc` (a vista, o `calc.json`, o canal das threads) | `calc_region::carry_out` | `Errand::Float`, devolvido à porta: a janela flutua, o rodapé abre a janela (`calc-window`) |
+| ícones | a vista | `icons_region::carry_out` | — |
+| clipboard | `clipboard_region::Clip` (a vista, o histórico mostrado, o código, a figura decodificada, o login a meio) | `clipboard_region::carry_out` | — |
+| git | `git_region::Git` (a vista, o repositório, a vigia, o catálogo de programas, `at_once`) | `git_region::carry_out` e `Git::back` | — |
+
+O check `errands-are-handled-alike` aprendeu essa forma (`SHARED`), e a prova é de que as duas
+portas ENTREGAM todo recado ao tratador, não só de que ele existe: o recado está no módulo da região
+e casa todo `Errand` sem `_ =>`; em cada porta (o arquivo da janela; o `impl Region for`, o `impl`
+próprio, o `closed` e o `open` da região), toda função que FAZ um recado — chama, na vista, um dos
+`pub fn … -> Errand` dela — o entrega na mesma função ao `carry_out`, a um método do que as duas
+portas compartilham que o chama (`Calc::press`, `Clip::pressed`) ou a uma função da porta que recebe
+um `Errand` e o entrega adiante; nenhuma porta nomeia uma variante (`Errand::Copy`…) a não ser como
+argumento do `carry_out` e a sobra excusada (só o `Float` da calculadora); e as duas portas chegam
+ao tratador pelos MESMOS gestos (os fazedores da vista e os métodos compartilhados que cada uma
+chama são um conjunto só). Perguntar só se a janela "alcança o módulo da região" e não tem braço
+`Errand::X =>` deixaria passar uma janela que jogasse fora todo recado (`let _ = errand;`) ou
+fizesse um do jeito dela (`if let Errand::Copy(…)`). As threads de uma vista devolvem pelo canal
+dela e acordam a porta (`Doorway::wake`), cujo laço entrega (`Content::woken` na janela,
+`Region::woken` no rodapé): a calculadora (as taxas e a vigia do `calc.json`), os ícones (as
+tabelas), o git (as leituras, a vigia, o fetch e a versão copiada).
+
+As diferenças que o recado único apagou — cada uma escolhida pelo que a janela já fazia, ou pela
+regra que a outra porta violava:
+
+| O quê | Rodapé antes | Janela antes | Agora, nas duas |
+|---|---|---|---|
+| Resposta da calculadora que não grava (`calc.json` que não lê, disco) | `Normal` | `Long` | `Long` — uma recusa para ler até o fim |
+| Primeiro clique numa linha do histórico do clipboard | copiava (e a página seguia o cursor) | selecionava | seleciona, sem mover a página; o segundo é o `RET` (inv. 19) |
+| Uma versão do git copiada para fora | `open_the_file` do rodapé, e "copiada" escrito por cima de "nada abre" | o abridor do gerenciador (`launch::opener_of`), e "nada abre" quando nada abre | o abridor do gerenciador, escolhido na thread que copia a versão (o tipo lido do arquivo e o catálogo varrido na primeira vez — nunca num laço) |
+| "Clonando…" do `LEADER / c` | `Long` com prazo de 24 h | — | segurado (`Doorway::hold`: sem prazo até a resposta ou outra mensagem) |
+| A chave da figura do clipboard na textura | `clip:<versão>` | `clipboard-window:<geração>:<entrada>` | `clipboard:<geração>:<entrada>` (`clipboard_region::picture_key`) |
+
+O clique do histórico compara com a linha em que o cursor é DESENHADO (`View::here`: o cursor
+assentado numa linha que age), a mesma em que o `RET` age e que as entradas pintam. A regra da
+janela, que as duas portas herdaram, comparava com o cursor cru, que uma vista nova deixa no título
+`Histórico`: um clique no título agia na linha de baixo (copiava a primeira entrada; com o histórico
+vazio, perguntava o servidor), e o primeiro clique na linha do cursor só a selecionava. E as
+entradas pintavam pelo cursor cru, então a janela abria sem cursor desenhado enquanto o `RET`
+copiava a mais nova. Uma linha que não age (título, fato, ar) não toma clique (F6, 2026-10-18).
+
+##### O histórico do clipboard é do rodapé; a vista é da porta
+
+Um vigia do clipboard (`zwlr_data_control`) é um histórico. O rodapé segura o vigia a sessão inteira
+— o histórico existe com a vista fechada, e "pôr na fila o que foi copiado" o lê —, então o
+HISTÓRICO ficou no rodapé, num arquivo de serviço (`surface/clipboard_history.rs`: o histórico, a
+geração, os seguidores, a ClipCascade, a marca da modeline), e a VISTA virou região. As duas portas
+seguem o histórico do mesmo jeito: a janela pelo soquete (como já era), a região pelo que o rodapé
+conta às regiões abertas (`clipboard_wire::Held`, em `Region::heard`, também ao abrir —
+`Footer::standing_readings`). E agem do mesmo jeito: um `clipboard_wire::Act` mirado na geração que
+foi mostrada (`Doorway::clipboard`) — o da janela vai pelo soquete, o da região o rodapé faz quando
+ela volta ao posto (`Effect::Clipboard` → `clipboard_acted`). Um ato para uma geração que já andou é
+recusado com frase nas duas portas (`clipboard-act-stale`). Uma função só faz o ato, venha de onde
+vier (`clipboard_carry_out`, sem `_ =>`; cobra `the-clipboard-history-has-one-keeper`, que também
+recusa o crate do clipboard mudando um histórico ou vigiando o clipboard).
+
+O histórico vai à região COMPARTILHADO, nunca copiado para contar (`Rc<Queue>`): o rodapé só copia
+quando precisa mudá-lo enquanto uma região ainda segura o que foi contado (`clipboard_mut`, cópia na
+escrita) — assim o que a região mostra continua o que ela ouviu até ouvir de novo. O custo é uma
+cópia das entradas por mudança feita com a vista aberta (uma cópia, um remover, um fixar); com a
+vista fechada nada é copiado e nenhum quadro é pago.
+
+##### O que a porta e o hospedeiro ganharam, e por quê
+
+As quatro vistas são as primeiras que desenham por conta própria; o que elas pediram ficou genérico,
+com padrão, no `region.rs` e no `host.rs` (nenhum nomeia funcionalidade;
+`the-slot-host-names-no-feature` continua verde):
+
+- **A faixa sob o ponteiro**: a calculadora acende só o que um clique ali toma (uma tecla, um modo —
+  `calc::Line::band_at`, a mesma régua do clique), pelo `Region::lit` do R5a (`Lit::Cells`,
+  `Lit::Nothing`); o git acende a coluna dele, uma faixa que a região põe ela mesma em pixels e que
+  o `Lit` não sabe dizer (`Region::band` → `Band::Placed`, que precisa da `Area`). E **o que acende
+  entre os campos** (`Region::lights` → `Lights::{Field, Kin, Nothing}`): a calculadora e o git não
+  acendem o campo sob o ponteiro, porque o acento deles é o cursor.
+- **O clique numa célula** (`Region::clicked_at`, com a célula sob o ponteiro): a tecla da
+  calculadora, a coluna do git. **O cursor medido** (`Region::cursor_in`, com o `Seen`): a linha da
+  calculadora depende da largura. **O caret** de uma linha digitada (`Region::caret`).
+- **A roda, as barras e cada mão** (`Region::wheel`, "rolou algo seu"; `grab`/`drag` com um
+  `Grip(usize)` que o rodapé guarda POR MÃO até o botão subir — a pegada do git é o nome da barra, e
+  o arrasto acha a barra de novo entre as desenhadas, lendo só a trilha e o tamanho; o `pointer` e o
+  `rests_on` com o alvo de cada mão; `RegionEasel::lit` com a cor e o alvo de cada uma): a coluna do
+  git sob o ponteiro rola, as barras dele se arrastam onde são desenhadas, e no app de ícones cada
+  mão acende o próprio alvo na própria cor, como na janela.
+- **Figuras** (`RegionEasel::pictures`, `region::Painted` com `Source::Drawn` para a figura do
+  Lucide e `Source::Still` para a prévia do clipboard, a `Arc` que o `Clip` já guardava): sobem para
+  a GPU pelo lote do quadro só quando a chave falta — os pixels são feitos só então (uma captura 4K
+  são 33 MB).
+- **A página e o lugar** (`Doorway::page_shown`, `Doorway::area`, `RegionEasel::offset`): a caixa da
+  prévia do clipboard é medida da página mostrada ("um código que ninguém vê é dito"), e o app de
+  ícones anda uma tecla pela área que a região tem na tela.
+- **Ordens de uma thread** (`Doorway::orders`, `region::Orders`): o clone do `LEADER / c` termina
+  numa thread, que deixa o mesmo comando com a resposta para o laço rodar depois (o rodapé pendura
+  um canal na primeira vez; a janela manda pelo soquete, uma linha só).
+- **As palavras para guardar** (`Doorway::words`) e **a troca de língua** (`Region::speak`, que o
+  rodapé chama em toda região aberta): o histórico do git guarda as palavras com que abriu.
+- **Um caminho num argumento vai inteiro** (`region::path_argument`, `region::argument_path`). Um
+  argumento de comando é texto e um caminho é bytes: a pasta cujo nome não é UTF-8, mandada com
+  perda (`to_string_lossy`), voltaria como outra — o que não era texto vira U+FFFD — e o `C-h`
+  abriria o histórico de uma pasta que não existe (o rodapé de antes passava o `PathBuf` direto, sem
+  texto no meio). O caminho que é texto vai como ele mesmo (o que uma pessoa digita e uma foto passa
+  não mudam); o que não é vai como um NUL — que nenhum caminho tem — e os bytes em hexadecimal. O
+  que vem depois de um NUL e não é isso é recusado (o `closed` do git diz `NotMine`), nunca lido
+  como uma pasta qualquer.
+- **O hospedeiro**: a região do clipboard diz `rows_changed` ao ouvir o histórico (a altura segue e
+  a página fica nas linhas, sem seguir o cursor: dado que chega não move a página); um clique NÃO
+  move a página — o primeiro seleciona a linha sob o ponteiro e o segundo age (inv. 19); uma chamada
+  que não é gesto (o que o rodapé ouviu, o segundo, uma thread, o fechamento) não mede página nem
+  lugar (`region_way_for_news`, `with_region_for_news`), para não montar as linhas a cada leitura da
+  máquina.
+- **O histórico abre POR CIMA do gerenciador.** Um comando que a região MOSTRADA pede
+  (`Effect::Run`) e que abre uma região ranqueada acima dela abre sem a pergunta de região livre —
+  quem segura a região é quem pediu (`Footer::region_free_for`, `region_opener`,
+  `surface::ranks_above`). Fechar o histórico mostra o gerenciador de novo, como estava, sem código
+  nenhum; e o histórico vai com o teclado, como ia com o gerenciador
+  (`closes_without_the_keyboard`). É uma regra genérica, e hoje só o `git-history` a usa: as outras
+  regiões que rodam um comando de outra vista fecham ou se afastam antes.
+- **As linhas de uma região INTEIRA** (`Seen::lines` com `Shape::Whole`) são as do teto MENOS a
+  linha da explicação (`region_lines`, a aritmética do próprio `grid`): o git é uma página que ele
+  mesmo arranja, e as suas linhas, a pintura (`Area::lines`), a faixa, o clique e as teclas
+  (`Doorway::page`) têm de medir a mesma coisa — duas medidas são um controle pego fora de onde foi
+  desenhado. As outras formas continuam recebendo o teto, como o R4 definiu (as notificações e o
+  jogador medem por ele).
+- **`Shape::Whole`** fica com as células LÍQUIDAS das duas margens (`chrome::FIELDS_LEAD`), como o
+  git sempre teve: um ponteiro na margem não está em linha nenhuma dele.
+
+##### Uma foto não alcança a máquina
+
+No rodapé de uma foto (`Doorway::photographing`) a calculadora não busca as taxas (o rodapé de antes
+não tinha laço para isso), o histórico do git lê na hora e não vigia nada (`Git::at_once`, como a
+câmera da janela), e o `LEADER / c` não clona: diz que a resposta não seria ouvida
+(`DEV_CLONE_UNHEARD`), como o rodapé de antes dizia quando não tinha laço — uma foto nunca alcança a
+rede. Por isso **a câmera do rodapé agora fotografa o histórico de um repositório**: antes, o `C-h`
+não abria nada numa foto (o canal do git não tinha laço) e a foto mostrava o gerenciador. São os
+casos `region-git`, `region-git-down`, `display--git.low-first` e `git--icons.high-first` da matriz
+da P0 (ver Medidas), cuja linha de base o F2 tira de novo.
+
+#### A central de programas e a busca (R5g)
+
+##### Os dois crates, e sobre o que cada um fica
+
+| Crate | Módulos | Fica sobre |
+|---|---|---|
+| `ronoctua-shell-software` | `software` (a vista), `software_feed` (as leituras e as threads), `software_pictures`, `software_reading` (o que as duas portas fazem pela vista — novo), `software_region` (a porta do rodapé — novo), `software_window` (a janela e a câmera) | kit, porta, work (as palavras), keep |
+| `ronoctua-shell-fast-access` | `fast_access`, `fast_access_detail`, `fast_access_online`, `fast_access_rows`, `fast_access_search`, `fast_access_videos`, `fast_access_window` (a janela e a coluna), `fast_access_photograph`, `fast_access_region` (a porta do rodapé — novo) | kit, porta, report, work, inspect, **calc, icons** |
+
+Só o binário fica sobre os dois (o `regions.rs` registra as regiões, o `keymap.rs` as teclas, o
+`main.rs` despacha as janelas); o rodapé os conhece pelo id da precedência, e onde ainda os nomeia é
+pelos serviços que vivem com a vista FECHADA (abaixo). Uma linha de qualquer um dos dois recompila
+ele e o binário, e nenhuma outra funcionalidade (até o R6 o rodapé é parte do binário, e recompila
+com ele; depois, fica embaixo e não recompila). O binário largou as duas dependências que eram só da
+busca (`ronoctua-index`, `ronoctua-websearch`): são dela, e é por ela que chegam ao binário.
+
+**A central não fica sobre os pertences.** O desenho a punha sobre o crate dos pertences, mas o que
+ela usava deles eram duas funções — se uma mudança da declaração pede antes a senha dos pertences
+(`signing_asks`) e onde essa senha é escrita para o `sign` (`write_passphrase_to_sign`). São "os
+pertences como outra tela os toca", que é exatamente o `ronoctua-shell-keep` do R1, e desceram para
+lá (`keep.rs`). Uma aresta a menos: uma linha da vista dos pertences não recompila a central.
+
+**A busca fica sobre a calculadora e os ícones**, como o desenho diz: ela mostra a resposta de uma
+conta como a calculadora a diz (`calc::answer_text`, `calc::rates_day`) e a página de um ícone
+(`icons_page`, que é também o TIPO da área em que a busca inteira se desenha). Os dois crates são os
+da calculadora e dos ícones (R5f), e a busca os lê pelos mesmos caminhos (`calc::{answer_text,
+rates_day}`, `icons_page::{…}`).
+
+##### Um tratador de recados para as duas portas (`software_reading`)
+
+A vista da central decide, e uma porta faz o que ela decidiu. Esse "fazer" estava escrito duas vezes
+— o `software_do` do rodapé e o `carry_out` da janela — e as duas cópias tinham divergido. Agora há
+um tratador só, `Reading::carry_out(errand, &mut dyn Doorway)`, e as duas portas o chamam: o
+`door::Ui` da janela e o `Recorder` do rodapé são o `Doorway` de cada uma. O que difere é o que cada
+porta É — a linha da janela ou o minibuffer, a lista da janela ou a página do rodapé, os lançamentos
+da janela ou os do rodapé — e não o que ela faz.
+
+O que as duas cópias faziam diferente, e o que ficou (a escolha foi sempre a da porta que tinha a
+razão escrita ao lado):
+
+| Recado | Janela | Rodapé | Agora, nas duas |
+|---|---|---|---|
+| uma linha copiada (`Copy`) | palavra breve (`Echo::Brief`) | mensagem comum | breve: confirma um gesto |
+| recusa de guardar um consentimento (`Let`) e de escrever o `software.json` (`Tweak`) | longa (`Echo::Long`) | comum | longa: uma recusa é lida até o fim |
+| endereço sem abridor (`Browse` sem `RONOCTUA_XDG_OPEN`) | dito na linha | só no log | dito na linha |
+| o gerenciador de arquivos ao lado, a página do brain (`Run`) | janela aberta por esta porta | janela aberta pelo rodapé, o gerenciador na pasta do gerenciador do rodapé quando ele estava aberto por baixo | janela aberta pela porta em que a vista está (`Doorway::open_window`) |
+| outra página da vista (`Esc`, `RET` que entra) | a lista ficava onde estava | a página voltava ao topo | volta ao topo (`Doorway::first_page`) — "Declarados por você" abria com o próprio título fora da tela |
+
+**O `Run` é janela da porta.** Mandado pelo `Doorway::run`, ele seria na janela uma ordem ao rodapé
+(`command files-window`): com o rodapé morto (a linha de vida no lugar) a ordem se perderia calada,
+e a janela, que abria o gerenciador sozinha, deixaria de abrir. Os dois comandos que a vista nomeia
+são janelas desta shell (`files`, `buffer <brain>`), e uma janela a porta abre por conta própria,
+como as duas sempre abriram.
+
+`Reading` é também o que a vista lê, nas duas portas: as leituras, as threads que as enchem, as
+figuras, o `software.json` vigiado e a imagem copiada guardada. Tudo isso acorda a porta por UM
+despertar — o da porta (`Doorway::wake`) —, e a porta responde com `Reading::woken`, que pega o que
+chegou. A janela tinha um canal do laço para cada coisa; agora usa o despertar da porta, como a
+região.
+
+Os gestos da pessoa (`stroke`, `pressed`, `clicked`, `typed`, `pasted`, `dropped`) também são de
+`Reading` e DEVOLVEM o recado, para a porta fazer: a do rodapé tem uma regra própria —
+**uma vista do rodapé segura o teclado, então o que abre algo em outro lugar a fecha antes**
+(`Errand::opens_elsewhere`: um programa instalado lançado, a página do brain). A janela não precisa
+dessa regra: o compositor dá o teclado à janela nova. É a mesma regra que o rodapé já tinha
+("CLOSE BEFORE LAUNCHING"), agora escrita uma vez e com nome. O gerenciador de arquivos não fecha a
+vista: ele abre AO LADO, para uma imagem arrastada dele cair nela.
+
+O check `software-errands-are-carried-out-once` segura isso: um `fn carry_out` só, que trata todo
+variante de `software::Errand`; as duas portas o chamam; e nenhuma delas, nem outro arquivo do
+shell, tem um braço de `match` próprio sobre os recados da vista. O `errands-are-handled-alike`
+perdeu o par da central: não há mais dois tratadores para comparar.
+
+##### O que sobrevive à vista fechada
+
+**As leituras.** No rodapé, as leituras da central viviam num campo que ficava com a vista fechada,
+e a próxima abertura desenhava na hora o que foi lido por último (os programas, o histórico, a ficha
+de um programa) enquanto relia a máquina. A região nasce e morre com a vista — e as threads com ela,
+como antes —, mas as leituras ficam: `closing` as guarda num `thread_local` do crate (`KEPT`) e a
+próxima abertura as pega, já com o `software.json` como está agora e a lista da fila que o rodapé
+conta à região que abre. Um `thread_local` porque o `Entry::open` de uma região é um ponteiro de
+função sem estado; o laço do rodapé é uma thread, e cada teste a sua. A câmera do rodapé planta as
+leituras de uma sala ali (`keep_for_the_next_opening`), onde a thread do feed as poria.
+
+**Os serviços do rodapé sobre os programas** — as duas marcas da modeline (um teste rodando, o
+Android ligado), o fim de um trabalho de software na fila (a notificação, o evento "abrir", o
+`latest`), a releitura das marcas quando uma janela fecha, o `software-launch-latest` — continuam do
+rodapé, porque vivem com ninguém olhando a vista. Saíram do `surface/software.rs` (apagado) para
+`surface/programs.rs`, um arquivo do rodapé que não é vista (não tem `ID` nem posto). As marcas
+seguem a leitura que a vista fez (`Running::of(snapshot)`): a região diz isso ao rodapé por
+`Doorway::news`, e o rodapé a lê pelo tipo (`Footer::region_news`); a janela, que não tem modeline,
+ignora. O rodapé não vigia mais o `software.json`: quem o lê é a região aberta (e a próxima abertura
+o lê de novo); o contexto da sessão que o rodapé guarda serve às marcas e ao Chrome do quiosque, que
+não leem as preferências.
+
+**O lançador.** O `C-i`/`C-d` do lançador abria a ficha de um programa chamando o rodapé da central
+direto. Agora é um comando da região, só por nome e fora do registro (`software-sheet`,
+`software-sheet-remove`, com o id e o nome da entrada numa linha cada — `sheet_argument`), que abre
+a região quando fechada (`Closed::Opens`) e repete a lógica de antes: só uma leitura que a vista
+ABERTA mantém fresca diz se o programa é da pessoa ou do sistema; sem ela, a vista abre na primeira
+página e a ficha espera a leitura (`waiting`), e abre no topo quando ela chega. Palavras que o
+lançador não escreveu (o comando digitado à mão) não abrem nada: uma região vazia segurando o
+teclado seria um painel que não diz nada. O "procurar para instalar" do lançador é o `software-open
+search <palavras>` que a janela já entendia.
+
+##### A busca no rodapé (`fast_access_region`)
+
+A busca já tinha a sua cola comum às três portas (`fast_access_window::Search`: o feed, o chão dos
+fontes em processo, as threads do painel de arquivo, e os recados da vista virando `Out`). A região
+é a porta do rodapé em volta disso: as linhas em branco sobre as quais a busca se desenha
+(`Shape::Cells`), o ponteiro e as teclas medidos contra o lugar da região, e o que um `Out` é AQUI —
+algo aberto fecha a vista, e o que se pede ao rodapé roda depois de ela fechar (os efeitos `Close` e
+depois `Run`, na ordem), achando a região livre. O que difere entre as portas da busca é a regra de
+fechar de cada uma (a janela só fecha quando o rodapé PEGOU a ordem, `hand_over`; a coluna fica; a
+janela guardada estaciona), e essa diferença é a porta, não o recado.
+
+O que as portas da busca entregam ao rodapé para abrir — uma aplicação pelo id, um arquivo pelo que
+abre o tipo dele, uma pasta no gerenciador, uma página de manual num terminal, a coluna da área em
+foco — continua comando do rodapé (`fast_access_order`, no `run_with`), porque só ele tem o catálogo
+do lançador, o abridor do gerenciador e as áreas de trabalho. Antes elas iam por um canal do laço,
+para rodar no giro seguinte, quando a vista já tinha fechado; agora são efeitos depois do `Close`,
+que já é feito antes delas — o mesmo "a região está livre", sem esperar um giro.
+
+As threads do painel de arquivo eram levantadas uma vez e guardadas (o `Threads::raise` pendura três
+fontes no laço do rodapé e não as tira: levantar a cada abertura vazaria três fontes por abertura).
+A região levanta as suas a cada abertura com `Threads::to(&Out)` (do R5h: as threads do `inspect`
+entregam a um `wake::Out`, que aqui é uma fila da região que chama o despertar dela); fechada a
+região, as três threads perdem o canal de pedidos e terminam — nada fica no laço.
+
+**A foto do rodapé fotografa a busca.** A câmera do rodapé não abria a busca — ela recusava sem laço
+("no loop to hear the search on"), e a linha de base gravou essa recusa. Era uma lacuna da
+ferramenta, e a regra é completar a ferramenta. A região não precisa do laço: numa foto ela abre a
+MESMA busca sobre um feed que responde dentro da chamada que perguntou (`Feed::inline_at`, o da
+câmera da janela) — as fontes em processo como numa tela, o índice no lugar da própria sala, nenhum
+host perguntado — e responde os painéis de um arquivo na hora (`Search::inspect_now`, que desceu da
+janela para a cola comum). O que voltou é tomado antes de a chamada retornar, em rodadas limitadas
+(`settle_the_photograph`, a regra do `settle` da câmera da janela): o quadro depois de uma tecla é o
+que uma tela desenha quando as respostas chegam. A câmera do rodapé ganhou também a mão (`--hover`,
+`--press`; ver DEVELOPMENT), e com ela a busca do rodapé se fotografa aberta, digitada, apontada e
+clicada — e a abertura numa foto segue o caminho de toda abertura, então a região ocupada por outra
+vista continua recusando com a frase de sempre.
+
+##### O que o hospedeiro ganhou (`region.rs`, `surface/host.rs`)
+
+A primeira vista com figuras e a primeira que desenha as próprias células precisavam de coisas que o
+R4 não tinha. Todas com padrão, para nenhuma outra região mudar:
+
+- **Figuras de linha**: `Told::picture` (`RowPicture { key, at }`, a figura na célula do glifo que a
+  região tirou da linha — no `Told`, e não na `Row`, porque um campo novo na `Row` quebraria os `Row
+  { … }` de dez crates), `Region::held_picture(key)` (os pixels emprestados do pool da central,
+  quando o rodapé sobe a textura; o `Region::picture` é outra coisa, um desenho rasterizado uma vez)
+  e `Region::before_frame(&Framing)` (pedir as figuras só da página visível, antes dos empréstimos
+  do quadro — a regra do lançador; o `Framing` diz a primeira linha da página, quantas linhas é uma
+  página, as palavras do quadro e a escala da tela mais nítida, para a qual uma figura é
+  decodificada). O rodapé pergunta antes de desenhar e de novo em cada pintura: uma pintura que veio
+  por outro caminho — um `configure`, o ponteiro — também pede as figuras da página que mostra.
+- **Figuras pintadas**: `RegionEasel::pictures` com `region::Painted`/`Source` (`Still`, `Moving` —
+  o filme no detalhe da busca, que sobe a cada quadro —, `Drawn` — um SVG rasterizado só quando
+  falta a textura), que a busca usa no lugar do `Pic` dela; o rodapé sobe cada uma pela regra que já
+  valia para a busca.
+- **Mãos**: `RegionEasel::lit` (a cor de cada mão e o código do alvo em que ela descansa) e
+  `Region::rests_on` (o código do alvo sob a mão do último quadro de ponteiro, ou "o mesmo" quando o
+  quadro não a moveu — um clique, uma barra segura); o rodapé guarda o código na mão
+  (`row_under_pointer`), como guardava o da busca, e o apaga quando uma região de células fecha. E
+  só o guarda enquanto a região continua aberta depois do quadro: um
+  quadro do Wayland junta o movimento e o clique, e o clique que abre um achado fecha a busca no
+  caminho — o código gravado depois seria lido como uma LINHA da vista que o rodapé mostra em
+  seguida, acesa até o próximo movimento. A busca do rodapé terminava com a mão vazia, e termina
+  assim de novo.
+- **A linha do minibuffer**: `Region::prompt` (o que foi digitado na busca da central, onde o
+  lançador desenha a dele) e `Region::about_the_pointer` (o que o ponteiro diz inteiro, na linha de
+  explicação).
+- **O que a vista pede da porta**: `Doorway::first_page` e `Doorway::follow` (outra página da vista
+  abriu: a lista volta ao topo e o cursor é seguido dali; na janela, o `offset` a zero, e a janela
+  segue o cursor depois da tecla, como sempre), `Doorway::news` (o que só o hospedeiro usa; padrão:
+  largar), `Doorway::area` (onde a região está na tela do ponteiro, medido só para regiões de
+  células) e `Doorway::words` (as palavras como `Rc`, para o painel de arquivo, que as guarda).
+- **O despertar de uma região**: para a central e a busca, o hospedeiro segue o que a região DISSE,
+  e não o fato de ela ter acordado (`Region::says_what_a_wake_brought`, que as duas respondem
+  `true`). Uma thread posta três leituras com um despertar cada, e o primeiro despertar toma as
+  três; uma palavra retransmitida que o painel do arquivo não usou — esses despertares não pedem
+  nada à porta e não custam quadro nem geometria (como uma leitura que a região ignora,
+  `hosted_heard`). A notícia para as marcas do rodapé (`Effect::News`) não conta: as marcas se
+  desenham sozinhas quando mudam. Uma região que mudou tem a altura seguida quando mexeu, a página
+  mantida dentro da lista (`settle_region`) e o quadro DEVIDO (`ask_paint`), nunca pintado no
+  despertar: os quadros de um filme no painel de um arquivo acordam a porta várias vezes antes de um
+  quadro, e um quadro por despertar seria a rajada pintada despertar a despertar. Era assim nas
+  vistas de antes — a central desenhava só quando a leitura mudou algo, e o painel da busca pedia um
+  quadro agrupado. A chamada é a do `with_region`, escrita por extenso no `region_woken` para olhar
+  o que a região pediu antes de fazer. Não vale para toda região: o `came` da central de segurança
+  toma uma cena nova sem pedir nada à porta e conta com o quadro que o hospedeiro deve depois de
+  todo despertar.
+- **O hospedeiro**: a região que abre ouve antes do comando o que o rodapé já sabe (`hosted_replay`,
+  `Footer::standing`: a lista da fila, o catálogo do lançador; o catálogo novo é contado a toda
+  região viva). A página, depois de cada coisa, faz o que cada vista fazia no seu
+  `*_errand`/`*_settled`: depois de um gesto da pessoa que não é tecla nem clique — um comando, uma
+  resposta, um colar, um soltar — a central pede `follow()`; depois de dados, a página só é mantida
+  dentro da lista (`settle_region`); depois de um clique, também só mantida — o clique seleciona a
+  linha em que caiu, e seguir o cursor dali tiraria essa linha de baixo do ponteiro —, e um segundo
+  clique que abre uma página a abre no topo (`first_page`).
+
+#### O gerenciador de arquivos (R5h)
+
+##### Os dois crates, e sobre o que cada um fica
+
+| Crate | Módulos | Fica sobre |
+|---|---|---|
+| `ronoctua-shell-files` | `files` (a vista), `files_archive`, `files_manager` (o tratador único e os painéis — novo), `files_region` (a porta do rodapé — novo), `files_window` (a janela), `files_photograph` (a câmera da janela) | kit, porta, report, keep, work, inspect, **git-line** |
+| `ronoctua-shell-git-line` | `git_line` (a linha do git: o `Keeper`, a leitura numa thread, o desenho) | kit, report |
+
+Só o binário fica sobre o gerenciador (o `regions.rs` registra a região, o `main.rs` despacha a
+janela e a câmera, o `photograph.rs` a chama, o `keymap.rs` junta o `files::KEYS`). O rodapé o
+conhece só pelo id da precedência (`Rank::Region("files")`). Uma linha do gerenciador recompila ele
+e o binário — nem o rodapé, nem outra funcionalidade (cobra
+`the-file-manager-stands-on-the-foundation`).
+
+**O desenho punha o gerenciador sobre o git e a segurança** (`files (+work, inspect, git,
+security)`). O R5h o deixou sobre nenhum dos dois, e cada aresta que sumiu tem um porquê:
+
+- **A linha do git desceu para um crate próprio.** O gerenciador desenha a linha do git do
+  repositório em que a pasta está; o navegador do git (do R5f) é outra funcionalidade que lê as
+  mesmas palavras e vigia os mesmos arquivos. Com a linha dentro de um dos dois, uma linha do
+  navegador recompilaria o gerenciador (~11 mil linhas) ou o contrário. Ela fica sobre o kit e o
+  report, o vocabulário em que é desenhada, e mais nada; os dois ficam sobre ela.
+- **O cofre `/private` é do centro de segurança, e o gerenciador não fica sobre ele.** O `m`/`l` na
+  linha do `/private` da barra lateral roda o fluxo do cofre do centro (`security::View`, a seção
+  privada) — na janela, perguntando a senha NA linha dela (uma porta nunca manda a pessoa para
+  outra). O fluxo virou um contrato no `work` (`vault::Flow`: `gesture`, `answered`, `unanswered`,
+  `woken`, e `Walk::{Stay, Into(caminho)}` para "o cofre abriu, entre nele"), e o binário entrega à
+  janela a implementação do centro (`vault_flow::flow()`, `crates/ronoctua-shell/src/vault_flow.rs`)
+  quando a abre. No rodapé não há fluxo: lá o `m`/`l` roda os dois comandos da leader
+  (`private-open`/`private-lock`), e quem pergunta é o próprio centro — como antes.
+- **"Checar online"** (`Doing::VirusTotal`) abria a janela do centro por uma função do `security.rs`
+  (`window_checking`). Ela desceu para o kit (`doors::security_checking`, ao lado do
+  `stick_window_on`): as palavras com que uma porta abre a janela de outra são do kit, e nenhuma das
+  duas fica sobre a outra.
+
+##### Um tratador para as duas portas (`files_manager::Manager`)
+
+A vista responde a uma tecla, um clique, um colar ou um relatório de thread com um `Step` (dizer uma
+frase, perguntar, abrir um programa, entregar um trabalho à fila). Cada porta tinha o seu tratador
+desses passos — o `apply_files_step` e o `do_about_files` do rodapé, o `apply` da janela —, e dois
+tratadores dos mesmos passos é como as duas portas passaram a fazer coisas diferentes. Agora há um,
+`Manager::carry_out(step, &mut dyn Doorway) -> Carried`, e as duas portas o chamam: a janela pelo
+`Ui` dela (embrulhado num `WindowWay`, que segura também a linha 0 e a rolagem dela), o rodapé pelo
+`Recorder` do R4, que anota o que foi pedido e o faz quando a região volta ao posto. O mesmo
+`Manager` trata os relatórios das threads (`reported`), o que os painéis ouviram (`panels_heard`),
+as respostas às perguntas (`answered`, `unanswered`) e o cofre (`vault_woken`). Por isso o empurrão
+da vigia (`Report::Stirred`) tem um braço só, o do `reported`, e o `files-notices-the-directory`
+pede que toda porta que constrói a vista o ouça num braço dela ou entregando os relatórios a esse
+tratador.
+
+`Manager` é também o que a vista tem ao lado, nas duas portas: o catálogo do lançador, a vigia da
+pasta (`notice`), o `Keeper` da linha do git, os painéis (`Panels`: as threads do inspetor, do filme
+e da forma, as mãos das miniaturas e a que anima o que se move, o player que percorre o filme sob o
+ponteiro e o globo) e o fluxo do cofre quando a porta tem um.
+
+O que difere entre as portas é o que cada uma É, e está escrito com nome (`files_manager::Door`):
+
+- **A história de um repositório** (`C-h`): no rodapé abre o navegador do git na região, ACIMA do
+  gerenciador, que continua aberto no posto dele e volta como estava quando o navegador fecha
+  (`git_line::HISTORY`, uma ordem só por nome — leva a pasta); na janela abre uma janela própria do
+  navegador (`git-browser <raiz>`). Antes o rodapé tirava o gerenciador do campo e o guardava ao
+  lado (`git_behind`); uma região não sai do posto, e a precedência já diz quem é mostrado.
+- **O cofre**: o fluxo na janela, os comandos da leader no rodapé (acima).
+- **Seguir o cursor**: no rodapé é um efeito da porta (`Doorway::follow`, `Effect::Follow`); a
+  janela segue o dela quando o passo diz que moveu a vista (`Carried::Moved`), com os cômodos dela.
+
+O check `the-file-manager-carries-out-once` segura isso: o `carry_out` nomeia todo variante de
+`report::Step`, sem curinga, e pergunta à porta pelo `Doorway`; nem a janela nem a região têm braço
+sobre um passo ou uma operação (`Doing::`) e as duas entregam ao `carry_out`; e o rodapé não nomeia
+passo nem operação do gerenciador.
+
+##### O que acabou na fila é do rodapé (`jobs::Ended`)
+
+O rodapé ouve a fila e compara cada lista com a anterior DELE (`jobs::what_ended`): é a única
+comparação. A falha de um trabalho (as palavras dele são o diagnóstico inteiro) o rodapé diz ele
+mesmo, no minibuffer, seja qual for a vista aberta — como sempre disse —, o fim de um selo vai
+também ao centro de segurança, e todo o resto é contado às regiões abertas do hospedeiro como
+`jobs::Ended` (o gerenciador lê a pasta de novo, guarda o tamanho medido, solta a senha de um
+arquivo compactado).
+
+A região não compara as listas com uma cópia própria, guardada entre as aberturas, porque duas
+coisas erradas sairiam disso: um trabalho que acabou com o gerenciador fechado seria contado de novo
+quando ele abrisse (a cópia seria a da última abertura), e a falha de um trabalho com o gerenciador
+fechado não seria dita por ninguém — a base a dizia sempre. Com a comparação no rodapé, as duas
+portas e a base dizem a mesma coisa (`Ended::split`, com teste).
+
+##### O que a porta ganhou (`region.rs`, `sections.rs`, `wake.rs`)
+
+O gerenciador foi a primeira vista em seções (barra lateral, listagem e os dois painéis lado a lado,
+a faixa presa embaixo, figuras nos painéis, arrastar para fora do rodapé). O que ela pediu, com
+padrão para nenhuma outra região mudar:
+
+- **`Shape::Sections` e `sections::Sectioned`.** A aritmética que põe as seções nas linhas do rodapé
+  — onde está a barra de cada seção, a faixa, o ponteiro sobre qual seção e qual linha, o arrasto —
+  é do rodapé, porque são as linhas, as células e os pixels dele; a região responde nos termos dela
+  (os painéis, as linhas, a seção e a linha sob uma célula). O contrato é o `Sectioned`, que a vista
+  implementa (a região delega a ela), e a metade do rodapé é o `surface/sections.rs`, que não nomeia
+  funcionalidade: só sabe que a região MOSTRADA é em seções (`Region::sections`/`sections_mut`, e o
+  `kept_shape` que o hospedeiro guarda). O `the-slot-host-names-no-feature` lê agora os dois
+  arquivos. O `Room` e o `Target` (o que um ponto resolve: seção, linha, campo) desceram da vista
+  para o `kit::fields`, que já era o vocabulário das seções.
+- **Ganchos do quadro.** `Region::before_frame(&Framing { columns, room, scale })` (antes de
+  desenhar: o que pedir às threads — uma vez por quadro, que é o que impede esquecer um jeito de
+  mover o cursor), `after_paint` (as figuras subiram) e `after_frame` (o que o quadro mediu vai às
+  threads — a caixa do globo). O rodapé os chama nos mesmos pontos em que chamava o `look_again`, o
+  `thumbs_uploaded` e o `follow_the_turn`, sempre depois de vestir a página das figuras
+  (`wear_the_pictures_page`) — inclusive no caminho da mudança do tamanho do texto (`display.rs`).
+- **Ficar depois de fechar** (`Region::lingers`; `Slots::keep_hidden`, `set_aside`, `linger`,
+  `call_lingering`; no hospedeiro `lingering_owed`, `let_go_of_a_region_wake` e o
+  `hang_a_region_wake` que reaproveita o despertar de uma região que ficou): ver a seção abaixo.
+  Padrão `false`.
+- **Um relógio da região** (`Region::clock`/`clocked`): o nome que anda de lado (`slide::STEP`),
+  armado só enquanto a região mostrada quer um (`arm_the_region_clock`, no lugar do `arm_the_walk`).
+- **A língua** (`Region::speak`), **perder o teclado** (`closes_without_the_keyboard`: o gerenciador
+  fecha quando o rodapé perde o teclado, como antes), **se ensina as teclas agora**
+  (`Region::teaches`: filtrando ou com o menu aberto o gerenciador não ensina nada, e a linha diz o
+  que é digitado — sem o `Esc` na frente, como na base; o padrão é ensinar), **a linha da porta**
+  (`Doorway::fold`, `Effect::Fold`) e **seguir o cursor** (`Doorway::follow`, `Effect::Follow`), que
+  o `region_owed` faz.
+- **`Doorway::words()`**, as palavras como `Rc` (a vista as guarda; o `Texts` não é `Clone`).
+- **`kit::wake::Out<T>`**, um ralo: o `Sender` do laço de uma janela ou a fila de uma região com o
+  despertar dela. As threads do `inspect` (miniaturas, animador, player, globo, palco, inspetor)
+  agora recebem `impl Into<Out<T>>`, então as mesmas threads servem à janela e à região.
+- **O hospedeiro**: a região que abre ouve o catálogo do lançador (e ouve de novo quando ele é
+  varrido); a tecla de uma região DEVE o quadro em vez de desenhá-lo (`hosted_key`: uma seta
+  segurada é uma rajada de teclas, e apresentar por tecla travava o laço em cada uma — a base devia
+  o quadro do gerenciador pelo mesmo motivo; para uma tecla só é o mesmo instante); o despertar de
+  uma região aplica a geometria e deve o quadro (`region_woken`: uma pasta que abre devolve dezenas
+  de miniaturas por segundo); `hosted_heard` e o segundo do rodapé aplicam a geometria quando a
+  região pediu pintura (a altura segue as linhas); um comando que reabre uma região já aberta passa
+  pelo `region_is_free` (a mesma recusa, a mesma frase).
+
+##### O que sobrevive à vista fechada (`files_region::Kept`)
+
+O processo do rodapé abre e fecha o gerenciador muitas vezes, e parte do que ele segura vive além de
+cada abertura: a vigia da pasta e o `Keeper` da linha do git DESCANSAM quando ele fecha e são
+apontados de novo quando abre (derrubar as threads para subi-las de novo é rotatividade com algo a
+errar no meio); os discos são vigiados da primeira abertura em diante (um pendrive espetado com a
+vista fechada está lá quando ela abre); e quem são os ids numéricos (`Roster`) e o fuso desta
+máquina são lidos uma vez. Ficam num `thread_local` do crate (`Kept`), como a `KEPT` da central
+(R5g): o `Entry::open` é um ponteiro de função sem estado, e o laço do rodapé é uma thread. Os
+vigias que ficam entregam por um `Reach` (`Arc<Mutex<Option<Out<Came>>>>`) à fila da região aberta,
+e a lugar nenhum com ela fechada.
+
+As threads dos painéis nascem e morrem com a região (`Panels::raise` na abertura, com a fila da
+região como ralo). Antes eram levantadas uma vez, na partida do rodapé, e ficavam para sempre: o
+rodapé que nunca abre o gerenciador não paga mais as threads dele.
+
+##### O que o gerenciador fechado ainda tem a dizer (`Region::lingers`)
+
+Uma operação do gerenciador roda numa thread dela — trancar ou ejetar um disco (o udisks responde
+quando responde), mudar o dono como root (a barra do sudo espera a pessoa), entregar um selo à fila,
+um escritor dos fatos — e a pessoa pode fechar o gerenciador antes da resposta: `Esc`, ou o rodapé
+perdendo o teclado. A base dizia essa resposta no minibuffer com a vista fechada ou aberta, porque o
+canal das threads era do rodapé e vivia para sempre. Com o gerenciador como região, o canal é da
+abertura, e fechar a região jogava fora a resposta que vinha depois (e a que estava na fila quando o
+`Esc` chegou).
+
+A região fechada com uma operação fora FICA (`Region::lingers`): o hospedeiro a guarda viva e
+escondida no próprio posto (`Slots::keep_hidden`, o mecanismo do R5b — nem mostrada nem na
+precedência), guarda o despertar dela e lhe conta o que a fila traz (`Region::woken`). O gerenciador
+fechado não toma comando nem responde pergunta; quando o comando que o abre chega (`LEADER . .`), o
+hospedeiro põe o escondido DE LADO (`Slots::set_aside`, fora do posto: `linger`, `call_lingering`) e
+abre uma vista nova — a reaberta é uma vista nova na pasta de partida, como na base —, e a posta de
+lado continua ouvindo o que as threads dela trazem; do que ela pede, só dizer e segurar uma frase
+são feitos (`lingering_owed`: fechada, ela não tem linha onde perguntar, nada onde colar, página nem
+região a devolver). Quando ela diz que não tem mais nada fora, sai, e o despertar com ela. O Incus
+(R5a) usa o mesmo: uma ação contada ao daemon e ainda sem resposta.
+
+O que o gerenciador fechado diz é o que a base dizia sem vista, e nas mesmas palavras da vista
+aberta (`Manager::reported_closed`, que o `reported` também chama): a falha, a frase, a recusa da
+porta do sudo e o que um escritor dos fatos fez. O resto precisa da vista que foi embora — reler a
+pasta, a recusa do udisks dita a partir da linha dela, a montagem em que entrar, a resposta de um
+arquivo compactado ou de um selo que vira passo — e a base também não dizia.
+
+Saber QUANDO não há mais nada fora é uma conta exata, e não um relógio: o ralo dos relatórios das
+operações (`Errands`) é segurado pelo gerenciador enquanto ele está aberto e por cada thread
+enquanto o trabalho dela roda; ao fechar, o gerenciador solta o dele, e quem o soltar por último
+marca isso e acorda o rodapé (o `Drop` do `Errands`). A fila conta o que está a caminho ANTES de
+mandar (`Outstanding::queued`), então uma thread que soltou o ralo já contou o último relatório
+dela, e "ralo solto e fila vazia" (`Outstanding::settled`, nessa ordem de leitura) quer dizer que
+nada mais vem. As threads dos painéis morrem ao fechar, como antes (`Panels::none()`), e o que a
+fila já tinha quando o `Esc` chegou é dito ao fechar.
+
+##### Uma foto do rodapé não alcança a máquina
+
+A câmera do rodapé não tem laço para ouvir uma thread e desenha o que lhe pediram: a região aberta
+numa foto (`Doorway::photographing`) não levanta thread (`Panels::none`), não vigia pasta nem
+discos, não lê o git e não entrega trabalho nenhum (`Manager::hands_off`). A câmera da janela
+(`files_photograph`, com o fluxo do cofre que o binário entrega) continua fazendo arquivos e membros
+de um arquivo compactado no lugar (`in_place`).
+
+#### O jogador em três crates: a costura das páginas (R5i)
+
+##### Os três crates
+
+| Crate | Módulos | Fica sobre |
+|---|---|---|
+| `ronoctua-shell-player` | `player` (a vista, `Errand`, `carry_out`, `KEYS`), as páginas do jogador (`player_home`, `player_queue`, `player_lane`, `player_timeline`, `player_tracks`, `player_subtitles`, `player_ambience`, `player_layout`, `player_metadata`, `player_find`, `player_suggest`, `player_internet`, `player_directory`, `player_globe`, `player_machines`, `player_website`, `player_translator`), `player_rows`, `player_page`, `player_question`, `player_kinds`, `player_mark`, `player_media`, `player_picture`, `player_stage`, `player_transport`, `player_posters`, `text_area`, `player_window` (janela e coluna), `player_photograph` (a câmera da janela e da coluna), `player_region` (a porta do rodapé) e `player_seam` (a costura) | kit, porta, inspect |
+| `ronoctua-shell-catalogue` | `player_catalog` (canais por tema, a listagem, a trava adulta), `player_sources` (a página das fontes) | kit, **player** |
+| `ronoctua-shell-video-metrics` | `video_metrics` (a vista, `KEYS`), `video_metrics_words`, `video_metrics_feed` (o leitor e o escritor, `carry_out`), `video_metrics_window` (com a câmera, `video_metrics_photograph`), `video_metrics_region`, e `player_ranking` (o ranking, uma página do jogador) | kit, porta, **player** |
+
+Só o binário fica sobre os três: o `regions.rs` registra as duas regiões (`player`,
+`video-metrics`), o `keymap.rs` junta os dois `KEYS`, o `main.rs` despacha as janelas e instala as
+páginas, o `photograph.rs` entrega à câmera do jogador as portas que não são dele. Nenhuma página
+fica sobre a outra, e o jogador não fica sobre nenhuma.
+
+##### Por que três, e não um: a costura (`player_seam`)
+
+O jogador era um ciclo de quarenta módulos: os enums da vista nomeavam as teclas do catálogo, as
+linhas do catálogo eram métodos da vista, e a vista as chamava. Uma linha da listagem do catálogo
+recompilava o transporte, o palco, a janela, a região do rodapé — o jogador inteiro, umas trinta mil
+linhas — e uma linha do transporte, o catálogo.
+
+A costura corta o ciclo num sentido só. O crate do jogador conhece as PALAVRAS das páginas escritas
+acima dele — os `PageId`, os `Target`, as teclas (`ListingKey`, `RankingKey`), os recados e as
+respostas que elas entregam a uma porta (`ranking::Act`, `ranking::Outcome`, `Told::Unlock`) — e
+nada do que elas FAZEM: o que desenham, o que leem, o que uma tecla nelas vira. Isso é de um crate
+de cima, escrito como `player_seam::Page`:
+
+- **Uma página é um valor `&'static`** (`player_catalog::PAGE`, `player_ranking::PAGE`) e o ESTADO
+  dela é uma caixa que cada vista guarda (`Plugged`, feito pela própria página: `Page::state`). A
+  página lê o próprio estado de volta por tipo (`View::plugged::<Catalog>()`), e os métodos da
+  página são escritos sobre a vista num trait do crate dela (`CatalogueView`, `RankingView`) — por
+  isso o `impl` é legal do lado de cima (a regra do órfão).
+- **A vista pergunta às páginas onde perguntava ao catálogo e ao ranking**, na mesma ordem: as
+  linhas de uma página que ela não desenha, a tecla de um alvo que ela não gira, uma pergunta que
+  ela não fez, o que uma resposta de fora do laço quer dizer, uma figura que ela não guarda. Cada
+  método tem o padrão de "não é meu" (`None`/`false`), e a vista segue para a próxima e depois para
+  o que é dela.
+- **O recado que roda fora do laço** (`Page::off_the_loop`: esconder um vídeo, a senha da trava
+  adulta) volta como um `OffTheLoop` — o que vai fazer, o nome da thread, o trabalho, e a frase
+  quando nenhuma thread sobe —, e o `player::carry_out` o roda como rodava os dois casos que
+  conhecia pelo nome. Assim o jogador não liga o SQLite do catálogo nem o PAM da trava.
+- **Quem instala é o binário, uma vez, no começo** (`player_seam::install(PLAYER_PAGES)` em `main`,
+  ao lado do `bindings::install`, antes de ler o subcomando): toda porta de todo processo — o
+  rodapé, a janela, a coluna, uma câmera — guarda as mesmas páginas. A ordem de `PLAYER_PAGES` é a
+  ordem em que a vista perguntava antes (o `look` do ranking antes do do catálogo).
+- **Um teste instala as suas** (`player_seam::with_pages`, de uma thread, e `View::plugging`), atrás
+  de `test-support`, como o `bindings::with_stub` do kit.
+
+O preço está escrito onde se paga: uma linha do `ronoctua-shell-player` recompila os dois crates de
+cima e o binário, porque está embaixo. O que se ganhou é medido em "Medidas": uma linha do catálogo
+ou do ranking recompila o crate dela e o binário, e nada do jogador.
+
+`player_posters` (o pool de figuras das listagens) fica no crate do jogador: as duas páginas o usam
+e nenhuma pode ficar sobre a outra.
+
+##### As duas regiões, e o que fica no rodapé entre uma abertura e outra (`region::Resident`)
+
+O jogador e o catálogo de vídeos viraram `region::Region` dos crates deles (`player_region`,
+`video_metrics_region`), com um tratador de recados para as duas portas: o do jogador é
+`player::carry_out` (o que toda porta faz igual) mais a `Door` da região (o que só o rodapé faz — o
+palco do rodapé, a coluna e a janela levantadas daqui, o que toca em cada tela que ele conhece); o
+do catálogo de vídeos é `video_metrics_feed::carry_out`, que a janela também chama.
+
+As duas precisavam de algo que o R4 não tinha: ESTADO DO RODAPÉ QUE SOBREVIVE À REGIÃO. O último
+estado do jogador e o contorno da fila (um `player-toggle` com a vista fechada é dos sons ambientes
+enquanto só eles tocam), o nome de um pareamento entre as duas perguntas, a figura dobrada (`z`), a
+coluna que este rodapé levantou e ainda está subindo; e, do catálogo de vídeos, as leituras (a
+próxima abertura desenha na hora) e uma varredura pedida com a vista fechada (`video-metrics-scan`),
+cujo feed sobe para ela e vai embora quando ela diz onde foi. Isso é o RESIDENTE
+(`region::Resident`), registrado pelo binário ao lado da entrada (`regions.rs`, `RESIDENTS`,
+`region::Residing`), feito uma vez quando o rodapé começa (`Slots::with_residents`, que recusa um
+residente sem região ou dois para uma). Enquanto a região está aberta, ela ouve o que o rodapé ouviu
+e o despertador dela; enquanto está fechada, o residente ouve. A região e o residente seguram O
+MESMO valor (`region::Residence`: um `Rc<RefCell<…>>` visto como o trait pelo rodapé e como o tipo
+pela funcionalidade) — não há cópia para ficar velha. O despertador de uma região com residente é
+pendurado uma vez, para a sessão.
+
+##### O que mais a porta e o hospedeiro ganharam (`region.rs`, `surface/host.rs`)
+
+Tudo aditivo e com padrão (as outras regiões não mudam):
+
+- **A linha de uma região diz como é desenhada** (`region::Told`, o lugar do "que só algumas linhas
+  dizem", e não a `Row`, que as outras regiões escrevem literalmente): a frase sob o ponteiro
+  (`about`), os chips de cor, o cursor de texto (`caret`), as figuras por cima das linhas (`covers`,
+  com `region::Cover`, `cover_place` e `cropped`, o desenho único que o jogador e o catálogo de
+  vídeos já dividiam), as linhas que continuam a de cima (`continues`), o que o ponteiro acende
+  (`Told::lights` com `region::LineLights`: a faixa, nada, a célula sob o `x`, a célula sob a
+  célula, de uma célula em diante) e a célula do cursor numa grade (`chosen`). O pintor único do
+  rodapé lê isso e mais nada.
+- **O ponteiro sobre os controles da própria região** (`Region::hovered`, `dragged`, `pressed`,
+  `released`, `left`, `takes_the_wheel`, `wheeled`, `owns_point`, `said_under`, `clicked_under`, com
+  `region::Under`: onde o ponteiro está, medido pelo rodapé): o painel do jogador (a figura, o
+  transporte, a barra do tempo), o deck, o globo. O que uma mão segura sobre a região fica COM A MÃO
+  (`PerSeat::region_hand`, uma por ponteiro), nunca na região: dois ponteiros, duas mãos.
+- **O quadro, em quatro tempos**: `before_measuring` (as linhas mudaram antes de a forma ser
+  perguntada), `laid_out` (o que o rodapé mediu — `region::Laid`: onde a região está, a página, as
+  telas), `paint` (agora com as linhas da página onde foram postas, `Placed`, a tela, as figuras —
+  `Painted`/`Source`: `Still` a que sobe só quando falta, `Moving` a de cada quadro, `Drawn` o
+  recorte feito só quando falta a textura —, e a mão deste ponteiro) e `painted`/`after_the_frame`
+  (o globo medido uma vez, a figura pedida no maior tamanho que uma tela desenhou, o controle sob um
+  ponteiro parado relido — uma volta, nunca um laço). E um segundo despertador só de figura
+  (`Doorway::frame_wake`, `Region::framed`): um quadro de filme não é notícia para mais nada.
+- **A porta**: `first_page`, `follow`, `resized`, `take_back` (o que a ordem pôs na linha é tirado:
+  não foi feito e a pergunta está nas linhas), `workspace` e `screens` (o que só o rodapé sabe), e o
+  `residence`.
+- **As telas do rodapé** são contadas às regiões quando mudam (`region::Screens`, pelo `heard`).
+- **Um residente diz o que ouve** (`Resident::hears`, uma pergunta de tipo, padrão "nada"): o
+  `hosted_heard` é o caminho de TODA leitura da máquina — os níveis do som chegam dez vezes por
+  segundo —, e o R4 o deixou sem alocar nada quando nenhuma região está aberta. Com dois residentes
+  registrados para a sessão inteira, montar uma porta (`region_way`: o portão do sudo, o nome do
+  espaço, as telas) para cada um a cada leitura desfazia isso; agora só o residente que ouve aquele
+  tipo ganha porta, e uma leitura que ninguém ouve não aloca (o do jogador ouve só a vigia dele).
+- **A porta diz se tem laço** (`Doorway::has_a_loop`; o `Recorder` responde `self.repeat.is_some()`,
+  a janela sempre `true`). Um rodapé sem laço — a câmera, um teste — não tem quem ouça um
+  despertador. O rodapé de antes só dava à vista do jogador o `player_wake` dentro do `run()`, e na
+  foto a vista lia NO LUGAR (as legendas ao lado do filme, o ranking, a lista de um diretório); a
+  região dava sempre um despertador, a vista lia numa thread cuja resposta não chegava nunca, e a
+  foto desenhava "lendo…" onde antes havia o resultado (60 das 480 fotos do rodapé com um jogador,
+  ver "Medidas"). Agora a região só desperta a vista, levanta a thread de uma figura e a do globo
+  quando a porta tem laço — o que o rodapé de antes fazia (`player_frames`, `files_globe`, só no
+  `run()`).
+- **A primeira leitura é do primeiro comando, seja ele qual for** (o catálogo de vídeos): a vista
+  nova tem uma leitura a pedir ao feed (`View::fresh` devolve o `Look`), e quem abre a região pode
+  ser a abertura, uma pergunta pelo nome ou a resposta de uma pergunta que chegou com a região
+  fechada. A região a guarda (`first`) e a entrega no começo do `command` que a abriu
+  (`first_look`), qualquer que seja; a abertura não tem mais nada a fazer. Antes só a abertura a
+  entregava: aberta por uma pergunta, a vista nunca lia, e uma abertura depois, com página
+  (`video-metrics-open videos`), respondia com a leitura velha da página inicial e ignorava a
+  página.
+- **Primeira página, depois o comando**: a região que abre vai à primeira página ANTES do comando
+  que a abriu, para que um comando que abre uma página funda na vista (o `player-metadata`, o cursor
+  na última seção) mova o cursor e a página o siga. Era o que o rodapé fazia pelo jogador.
+- **O que o primeiro quadro fazia, antes do comando**: o rodapé de antes abria a vista do jogador,
+  DESENHAVA um quadro (que punha o painel ao lado das linhas, `player_room_follows`) e só então
+  entregava o comando da página (`player-radio`). A região abre e recebe o comando sem quadro no
+  meio; por isso o `opened` diz à vista onde está o painel (`room_follows`) antes de devolver a
+  região. Sem isso, numa página de diretório (rádio, TV) o globo ainda estava entre as linhas quando
+  a página foi empurrada, o cursor nasceu na linha certa da conta errada e, desenhado o painel, caiu
+  três linhas abaixo — na linha de consentimento, sem o "RET escolhe" na dica.
+
+##### A câmera do jogador no crate dele (`player_photograph`)
+
+`ronoctua-shell photograph` era um arquivo do binário de 2,4 mil linhas em que o passeio do JOGADOR
+(os passos de uma pessoa, as respostas do daemon `--state`/`--queue`/`--sheet`…, as páginas
+`--open`, o palco, a coluna que muda de tamanho) e o despachante de todas as outras câmeras eram uma
+coisa só, e três portas nativas que não são do jogador (a janela da atualização, as preferências do
+rodapé, a calculadora) andavam de carona no passeio dele. O passeio é do jogador — o `Photographed`
+pergunta `player()` a cada passo — e foi para o crate dele, com os testes; o binário ficou com o que
+não é do jogador e o entrega à câmera num valor (`player_photograph::OtherDoors`):
+
+- **as câmeras próprias** (`--door files`, `git`, `footer`…): a palavra da porta → a função que lê o
+  resto das palavras e encerra o processo (`OwnCamera`);
+- **as portas que andam de carona** (`Rider`: a palavra e o `shoot` dela, que monta a porta e chama
+  o `player_photograph::shoot`), e as PALAVRAS delas (`--modeline`, `--unwritable`, `--report`,
+  `--journal`): a câmera as guarda na ordem dada, com o valor, e a carona as lê (`Asked::given`,
+  `value_of`, `values_of`) — a câmera do jogador não conhece nenhuma;
+- **as recusas dessas palavras**, nos dois pontos em que eram feitas: quando todas foram lidas
+  (`read` — `--report` fora da atualização) e antes de a porta do jogador ser desenhada (`drawing` —
+  `--modeline` fora das preferências), para que uma linha com dois erros diga o mesmo primeiro;
+- **o começo do `--help`** (a lista das portas e as palavras das caronas) e a lista da recusa de uma
+  porta que não existe: o resto do `--help` é da câmera do jogador (`player_photograph::USAGE`), e
+  as duas metades juntas são o texto de antes, byte a byte.
+
+As duas palavras do catálogo de canais (`--make-catalog`, `--handed`) eram o jogador chamando o
+crate de cima pelo nome; agora a câmera pergunta às páginas instaladas, como a vista pergunta
+(`player_seam::Page::write_fixture` e `handed_fixture`, ao lado do `detached` que já era da câmera).
+
+O preço está onde se paga: uma linha da câmera do jogador recompila o jogador, as duas páginas e o
+binário — antes, só o binário. O que se ganhou é que uma porta nova do binário não toca o jogador, e
+que o R6 recebe um despachante pequeno para virar a tabela `CAMERAS`, com o passeio já no crate
+dele. As três caronas continuam no binário (os tipos delas são dele, e a regra do órfão deixa o
+`impl Photographed` lá); quando os crates delas existirem, levar o passeio genérico (passos,
+ponteiro, quadro) para o crate da porta deixa cada uma fotografar sem ficar sobre o jogador.
+
+##### O que se digita e fica fora do log é dito pela pergunta (`line::Line::unlogged`)
+
+O nome de usuário da conta do OpenSubtitles aparece na tela (não é segredo) e ainda assim não vai ao
+journal. O rodapé de antes decidia isso pelo id (`player_question::unlogged`) — o rodapé nomeando o
+jogador. Perguntar à região que fez a pergunta não serve: a região pode fechar entre a pergunta e o
+`RET` (o adeus do daemon, `player-quit` de outra porta), e aí ninguém responderia e o nome iria para
+o log. Quem diz é a LINHA, como o `secret` já dizia: a
+pergunta do jogador sai pelo `Question::line` (nas duas portas), que a marca
+(`kept_out_of_the_log`); o minibuffer guarda a marca ao perguntar (`request_line`) e a lembra na
+resposta (`answered_unlogged`, verdadeira também para um segredo); o rodapé lê só isso.
+
+##### O que ficou no rodapé, e por quê
+
+O par de glifos da modeline e a cópia do estado que o desenha são do rodapé, que o mostra com a
+vista fechada: o R6 desceu os dois para a folha de palavras do jogador
+(`ronoctua-shell-player-words`: `player_mark`, `player_state`), sob o jogador e o rodapé. O rodapé
+conta o que o jogador disse à região primeiro (`hosted_heard`) e depois guarda a cópia da modeline.
+
+##### A câmera do rodapé com um jogador
+
+A câmera do rodapé não tinha estado do jogador: a região do jogador só era fotografada com o jogador
+fora do ar. Agora `--player <state.json>` e `--queue <outline.json>` entregam ao rodapé o que a
+vigia do jogador ouviria, pela porta por onde a thread entrega (`Footer::player_heard`) — o painel,
+o transporte, o deck, o esquema, as páginas, só a figura, a figura dobrada.
+
+### O rodapé num crate, e o binário que compõe (R6)
+
+#### O que saiu do binário, e para onde
+
+| Crate | O que é | Fica sobre |
+|---|---|---|
+| `ronoctua-shell-footer` (novo) | o rodapé inteiro: `surface/` (o `Footer`, o host das regiões, as metades que ele guarda pela sessão: o rádio, as telas, a saída, os programas, o lançador, o estúdio, a mesa de notificações), `leader` (a máquina de estados e o `BASE`), `modeline`, `adapt`, `kiosk`, `kiosk_view`, `hidden`, `window_menu`, `events`, `alert`, `brain` (a linha do cérebro), `osk`, `virtual_keys`, `virtual_pointer`, `gestures`, `keys_link`, `workspaces`, `trails`, `selection`, `sound`, `world` (o relance), `sudo_bar`, `footer_settings` e a janela dele, `theme_chooser`, `apps` (o lançador) e `footer_photograph` (a câmera do rodapé) — ~26,7 mil linhas de produção | kit, porta, work, report e as folhas de palavras (abaixo) |
+| `ronoctua-shell-buffers` (novo) | o host dos buffers WASM (`buffer`, e `disks`, o rack que o buffer de formatar recebe) | kit, porta |
+| `ronoctua-shell` (o binário) | o despacho (`main.rs`), as tabelas (`DOORS` de cada crate, `regions.rs`, `keymap.rs`, `CAMERAS` em `photograph.rs`), as portas que só existem compostas (`files` com o fluxo do cofre, `buffer` com as palavras da fila, `column` com os dois inquilinos, `opener`), os subcomandos de sempre (`leader`, `command`, `buffer-keymap`, `buffer-command`, `export-binds`, `export-window-rules`, `photograph`, `check-texts`, `check-keymap`) e o `vault_flow` — 789 linhas de produção | tudo |
+
+O pacote `ronoctua-shell` continua o binário (`bin/ronoctua-shell`, toda referência do Nix e toda
+linha de comando valem): só o que mora nele mudou. As reexportações da raiz (`use
+ronoctua_shell_kit::{…}` no `main.rs`) saíram; o `main.rs`, o `keymap.rs`, o `photograph.rs`, o
+`regions.rs` e o `vault_flow.rs` dizem o caminho inteiro de cada coisa
+(`ronoctua_shell_stick::stick::KEYS`) ou importam o módulo no próprio arquivo. O rodapé, como todo
+crate de cima, tem a sua (`use ronoctua_shell_kit::{chrome, …}` no `lib.rs`): cada módulo movido
+ficou com os mesmos caminhos (`crate::chrome::…`), e o que mudou dentro deles foi só o que nomeava
+uma funcionalidade.
+
+#### O rodapé não nomeia funcionalidade nenhuma
+
+Entre os crates do shell, o rodapé fica sobre a base (kit, porta, work, report, keep, inspect) e as
+folhas de palavras, e sobre nada mais — nem pelo manifesto, nem dois crates abaixo no grafo do
+cargo, nem por um caminho no código —, e o `footer-names-no-feature` cobra as três coisas. É uma
+lista do que pode, não do que não pode: todo outro crate do shell é uma funcionalidade que o binário
+compõe (uma região, um residente, um `KEYS`, uma tabela de portas ou de câmeras, o host dos buffers,
+a linha do git que duas vistas desenham…) ou o próprio binário, e uma lista tirada das tabelas do
+binário deixaria de fora o que ele compõe de outro jeito. Uma linha de uma vista recompila a vista e
+o binário, nunca o rodapé.
+
+O que o rodapé ainda dizia de uma vista era o que ele guarda pela sessão inteira, aberta a vista ou
+não: o agente de pareamento do Bluetooth e as marcas dos aparelhos, a leitura das telas e o passo do
+brilho, a leitura do NetworkManager e dos túneis (as três marcas, a senha do hotspot, a página de
+login, as palavras com que uma marca abre a vista na linha dela), o par do jogador na modeline, a
+marca da atualização, a marca da janela sem senha, e os programas da pessoa (as duas marcas, o fim
+de um job do motor). Isso não é da vista: é a palavra do daemon que as duas dizem. Desceu para baixo
+das duas, no molde que o R5c fez para o som, a energia, o Syncthing, o histórico e o estúdio
+(`<crate da vista>-words`, uma folha por vista, sobre nenhum crate do shell):
+
+| Folha | O que tem | Quem fica sobre ela |
+|---|---|---|
+| `ronoctua-shell-bluetooth-words` (`bluez_words`) | as recusas do BlueZ em frase, as quatro marcas (`POOL`, `Shown`, `glyph`, `modeline`), a pergunta de pareamento (`ACCEPT`, `REFUSE`, `RENAME`, `Answer`, o arquivo `standing`), o `app_id` da janela e `has_the_person`, e as três teclas do adaptador (`AdapterKey`, `adapter_order`) | a vista do rádio e o rodapé |
+| `ronoctua-shell-display-words` (`screens_words`) | a recusa do leitor das telas em frase, e o `STEP` do brilho | a vista das telas e o rodapé |
+| `ronoctua-shell-network-words` (`link_words`) | a recusa de um túnel, o arquivo da senha do hotspot (`sharing`), o `xdg-open` do login (`OPEN`, o `option_env!` declarado aqui), e as palavras com que uma marca abre a vista na linha do túnel (`tunnel_opening`, `TAILNET_OPENING`, `TOR_OPENING`), que o `network_region::opening_on`/`opened_on` lê também | a vista da rede e o rodapé |
+| `ronoctua-shell-player-words` (`player_mark`, `player_state`) | o par da modeline inteiro (movido do jogador) e as palavras de um estado do jogador que ele usa (`loaded`, `only_ambience`, `toggle_ask`, `name_of`, `now_playing`, `node_of`, `hearing`/`Hearing`, e as saídas de som vistas, `sink_seen`) | o jogador e o rodapé |
+| `ronoctua-shell-update-words` (`update_mark`) | a marca da atualização (`FRAMES`, `frame_of`, `running`, `mark`) e o comando que o clique roda (`WATCH`) | a atualização e o rodapé |
+
+Duas coisas não viraram folha, porque já tinham casa embaixo das duas:
+
+- **A janela sem senha** (a marca, o fim dela no relógio da pessoa, a seção que o clique abre) foi
+  para o `security_words` do kit, que já é "as palavras da central, para a porta do rodapé e a da
+  janela não dizerem uma coisa de dois jeitos". O cômodo da câmera chega como argumento
+  (`window_now(room)`): o kit não fica sobre a porta.
+- **Os programas da pessoa** (como um job do motor terminou e a notificação dele, as duas marcas e a
+  leitura de onde elas saem, as palavras com que o lançador abre a central numa ficha ou numa busca)
+  foram para o `work`, como `programs_words`, ao lado do `software_words` de onde a frase de uma
+  falha parte. Uma folha `ronoctua-shell-software-words` ficaria sobre o `work` — e uma folha de
+  palavras fica sobre nenhum crate do shell (`a-view-stands-on-the-foundation`).
+
+O preço: uma linha de uma folha recompila a folha, a vista, o rodapé e o binário — o vocabulário que
+os dois dizem, e que muda pouco. A alternativa era um registro de marcas no binário (cada
+funcionalidade desenhando a sua marca por um trait que o rodapé chama), que deixaria até a marca
+fora do rodapé; mas a modeline posiciona cada marca com regra própria (prioridade, encolhimento,
+zona do par do jogador, tom inerte), e fazer isso genérico mudaria o desenho. A folha é movimento
+puro, provado pelo compilador e pela matriz.
+
+O que era uma vista de rascunho no rodapé também saiu: as três teclas do rádio com a vista fechada
+(`LEADER s b s`) faziam uma `bluetooth::View::fresh()` só para perguntar a ordem. Agora a ordem é
+uma resposta só (`bluez_words::adapter_order`), que a tecla da vista aberta também lê.
+
+#### O que o binário entrega ao rodapé: `Composition`
+
+O rodapé recebe, ao subir, o que só o binário sabe: as regiões (`regions::REGIONS`), os residentes
+(`regions::RESIDENTS`) e o que a câmera do rodapé planta de uma funcionalidade numa foto
+(`footer_photograph::Plantings`: as marcas das contas LLM feitas pelo módulo delas sobre os arquivos
+do cômodo, `--accounts-marks`; a leitura da central de programas do cômodo, guardada para a próxima
+abertura da região, `--software <host>`). `surface::run(&COMPOSITION)` e
+`footer_photograph::taken(words, &COMPOSITION)`; o `ranks_are_whole` continua recusando uma região
+sem posto. As palavras da câmera continuam do rodapé; o que elas plantam é código da funcionalidade.
+
+#### As tabelas: `DOORS` e `CAMERAS`
+
+Cada crate com janelas diz as suas numa tabela no `lib.rs` (`pub const DOORS:
+&[ronoctua_shell_kit::doors::Door]`, `{ name, run }`, o `run` recebendo as palavras depois do nome),
+e cada um com câmera diz as suas (`pub const CAMERAS: &[ronoctua_shell_door::photo::Camera]`, `{
+door, take }`). O binário despacha nesta ordem: os próprios subcomandos, as tabelas
+(`doors::door_named(DOORS, …)`), e sem palavra conhecida, o rodapé. O `photograph` acha uma câmera
+nas tabelas (`photo::camera_named`), mais as duas do binário (`files`, com o fluxo do cofre;
+`footer`, com a `Composition`); as três caronas (atualização, preferências do rodapé, calculadora)
+continuam no `photograph.rs`, porque andam pelo passeio do jogador.
+
+Cada porta guardou, palavra por palavra, o que o `main.rs` fazia: o mesmo `usage`, o mesmo `bail!`,
+o mesmo `.context`.
+
+**As palavras chegam como o sistema as dá, e cada porta faz texto só das que lê**
+(`kit::doors::Words`, o argumento do `run`). Uma palavra da linha de comando não precisa ser UTF-8 —
+pode ser um nome de arquivo —, e antes das tabelas cada braço do `main` lia as suas: a porta que não
+toma palavra nenhuma não olhava as palavras, a que toma uma lia só aquela (`nth(2)`), a que toma
+todas convertia todas. Converter a lista inteira antes de achar a porta faria uma palavra final que
+não é UTF-8 derrubar todo subcomando, até o `opener`, que lê os nomes como o sistema os dá
+justamente para aceitar um assim. Agora a porta lê `words.first()` ou `words.all()`, e só isso vira
+texto; o `photograph`, a `column` (todas) e o `files` (a primeira) do binário fazem o mesmo, e o
+`opener` continua lendo os nomes crus. Uma palavra que a porta LÊ e não é UTF-8 continua parando o
+programa, como parava (`docs/PENDING.md`).
+
+Uma tabela esquecida não é erro de compilação: o binário tomaria `ronoctua-shell stick` por uma
+palavra que não conhece e subiria um segundo rodapé. Por isso o `every-door-is-dispatched` cobra que
+toda tabela de todo crate esteja na lista do binário (e que a lista não cite uma tabela que não
+existe), que nenhuma palavra seja de duas portas, que nenhuma porta tenha o nome de um subcomando do
+próprio binário (que correria antes) e que nenhuma câmera tenha a palavra de uma das duas câmeras do
+binário (que a lista lê primeiro). Dois testes do binário dizem o mesmo em tempo de execução, sobre
+as tabelas de verdade: `every_door_is_one_word_and_the_dispatch_finds_it` (`main.rs`) e
+`every_camera_is_named_and_one_doors` (`photograph.rs`, que também cobra que toda câmera esteja na
+lista da recusa e na ajuda — o teste de antes só cobrava o sentido contrário).
+
+#### A resposta da captura, entre a sobreposição e o rodapé (`door::capture_wire`)
+
+O rodapé lê de volta como a captura terminou (`saved <caminho>`, `failed <porquê>`,
+`refused outside-the-room`). A sobreposição é uma porta do binário e o rodapé não nomeia porta: as
+palavras que os dois lados falam desceram para a porta (`capture_wire::{Outcome, outcome_of, SAVED,
+FAILED, OUTSIDE_THE_ROOM}`), como o `clipboard_wire`.
+
+#### O que muda para quem lê o log
+
+O alvo de uma linha do `tracing` é o crate de onde ela sai: o rodapé loga como
+`ronoctua_shell_footer::surface`, não mais `ronoctua_shell::surface`. O filtro padrão
+(`ronoctua_shell=info`) casa por prefixo e continua pegando tudo; o `modeline-vm` filtrava as linhas
+por `ronoctua_shell::surface:` e foi ajustado.
+
+### As cores são dado (D1)
+
+#### A paleta é dado: `palettes.bin`, lido em tempo de execução
+
+Até aqui, toda cor de todo tema em toda página era uma tabela compilada (`themes::TABLE` no
+`tokens.rs` gerado). Mexer no matiz de uma semente — um número em `assets/themes/<id>.nix` — mudava
+o `tokens.rs`, e com ele o `ronoctua-tokens` e todo crate acima dele: o workspace inteiro, os testes
+e o clippy, por bytes que nenhuma linha de código nomeia. O código nomeia PAPÉIS
+(`color::TEXT_DIM` é um índice); quais bytes um papel é, numa página de um tema, é dado.
+
+Agora o gerador de cores (`nix/scripts/gen-theme.py`, em `nix/themes.nix`) escreve `palettes.bin` na
+própria saída, e todo binário que pinta lê esse arquivo na primeira vez que alguém pede uma cor ou
+um tema (`ronoctua_tokens::palettes`, num `OnceLock`; depois é uma leitura atômica). O arquivo leva
+um cabeçalho — `RONOPAL\0`, versão, contagens, o índice do tema padrão, um hash FNV-1a de 64 bits
+dos nomes dos papéis na ordem de `color::NAMES`, os nomes das páginas, e cada tema (id e se é claro)
+na ordem do seletor — e depois `[tema][página][papel]` em RGBA. O que era compilado e virou tempo de
+execução: os ids dos temas, a ordem, o padrão, o `LIGHT` e todas as cores. Continua compilado o que
+o código nomeia: os papéis (`Color`, `NAMES`, `color_by_wit_name`), `Ground`/`PAGES`, espaço, fonte,
+marcas, ícones, tray/categoria, `chrome_size`, `ink_across`.
+
+Por que um arquivo errado é RECUSADO, e alto: uma paleta é um vetor indexado por papel; lida por um
+binário compilado com outros papéis, poria os bytes de um papel sob o nome de outro — toda cor
+errada na tela e nada falhando. Por isso o binário confere o hash dos papéis, as páginas e a versão,
+e recusa com uma frase que nomeia `RONOCTUA_THEMES` (também a variável ausente e o arquivo
+ilegível). Não existe paleta de reserva: uma cor adivinhada é a falha que isso impede. As APIs
+públicas ficaram (`to_rgba8`, `to_rgba8_in`, `theme::set`, `set_ground`, `palette()`, `all()`,
+`by_id`, `default_one`…); só perderam o `const` as que agora leem o arquivo (`Theme::id`,
+`Theme::is_light`, `is_light_at`, `default_one`), e sumiram `themes::TABLE`, `themes::IDS`,
+`themes::LIGHT`, `counts::THEMES` e `counts::DEFAULT_THEME` (o número de temas é
+`theme::all().len()`). Ganhou-se `palettes::load()`, que o `main` do instalador, do console de
+resgate e do daemon do player chamam primeiro — para a recusa sair antes da tela crua do terminal
+ou do meio de um filme; no rodapé o primeiro uso já é o `theme::resolve_at_start()`.
+
+#### Os embrulhos `--set` o que um binário é CHAVEADO a ler (`rust.keyed`)
+
+Todo o `atRunTime` vai nos embrulhos com `--set-default`, para dar para trocar um componente na mão.
+A paleta não: ela é escrita para UM conjunto de papéis, e a sessão de login exporta
+`RONOCTUA_THEMES` (`nix/modules/scroll.nix`) e guarda o valor com que entrou. Depois de um switch
+que acrescentou um papel, os binds do compositor e um terminal subiriam o binário NOVO com a paleta
+VELHA — e a recusa derrubaria a leader até o próximo login. Por isso o que está em `rust.keyed` (a
+paleta, os textos da D2 e o catálogo do brain do B2) vai com `--set`: o binário embrulhado sempre lê
+a paleta do próprio build. Nada se perde: o que se troca na mão é uma paleta dos mesmos papéis, e um
+binário do `cargo` (devshell, `.#dev`, `cargo test`) não tem embrulho e lê a variável. Carregam a
+paleta o rodapé e os pintores (`rust.player`, `rust.installer`, `rust.rescue` e as cópias deles no
+bundle do rodapé; o mapa `painters` do `nix/rust.nix` diz o que cada um é chaveado a ler). Quem roda
+um binário sem embrulho exporta `rust.keyed`: o `.#png`, o `.#bench` e os checks que rodam
+`rust.bins.<programa>`. O tema da paleta são 8,7 MiB sem referência nenhuma.
+
+#### Os nomes saem da avaliação (`nix/token-names.nix`)
+
+O Rust e os buffers são compilados contra NOMES — a lista de papéis e a de ícones —, então esses
+nomes são lidos na avaliação, pelo nome dos atributos: `assets/tokens/colors.nix` (as receitas) e
+`assets/tokens/shaped.nix` (novo: os papéis que o gerador MOLDA por regra — os seis de cada
+contexto, os dezesseis do terminal, as oito cores do gráfico, os cursores, os onze degraus do nível)
+para os papéis; `assets/tokens/icons.nix` para os ícones. O valor de uma receita nunca é olhado,
+então editá-lo não muda nada do que a função devolve, e nada compilado contra ela é reconstruído.
+
+Por que os papéis moldados ganharam nome num arquivo Nix: um nome que só o gerador conhecesse só
+existiria depois de um build rodá-lo, e o Rust teria de esperar esse build e ser refeito toda vez
+que ele rodasse de novo (mexer em `gen-theme.py` reconstruiria o workspace). As duas listas ficam
+iguais porque o gerador recebe a lista avaliada (`--roles`) e recusa, com o nome na tela, um papel
+que ele molda e que nenhum dos dois arquivos nomeia, e um nome que ele não molda — a ordem da paleta
+É a ordem compilada, e o hash confere de novo em tempo de execução.
+
+O `tokens.wit` também nasce na avaliação (`builtins.toFile`), dos mesmos nomes, e o `nix/wit.nix`
+deixou de depender do `tokensRs`: a medida de um glifo, um valor de cor ou um glifo de módulo do
+brain não reconstroem mais os seis buffers — só um NOME que um buffer pode soletrar. Os glifos dos
+módulos do brain saíram do WIT (nenhum buffer os desenha; o anfitrião continua com eles, para a
+marca da modeline), então o módulo de uma pessoa não recompila buffer nenhum. A grafia WIT
+(`surface.base` → `surface-base`, `list` → `%list`, recusa de um pedaço que começa com dígito) agora
+existe em dois lugares — `token-names.nix` para o WIT e `gen-tokens.py` para a ponte do anfitrião —,
+e o `invalid-token-fails-build` segura os dois numa resposta só.
+
+#### Gerador cita script por arquivo
+
+`${./scripts}` põe o diretório INTEIRO nas entradas de uma derivação: editar qualquer um dos
+quarenta geradores reconstruía glifos, o corte da fonte, o atlas, a cadeia de fontes e, por
+`generated`, o workspace. Os nove que faziam isso (glyphgen, marksgen, lucidegen, unicodegen,
+chain, width, primary-font, atlas, coverage-fonts) citam agora o script por arquivo, ou copiam o
+script e o único irmão que ele importa (`lexicon.py`) para um diretório do próprio build, como o
+`nix/themes.nix` já fazia; o `colorspace-tests` também.
+
+#### O que reconstrói agora (medido por `drvPath`, avaliação)
+
+| Edição | Muda |
+|---|---|
+| matiz de uma semente | `themes`, o embrulho do rodapé, as execuções de teste que leem a paleta |
+| valor de uma receita | idem |
+| `gen-theme.py` | idem |
+| tema padrão em `themes.nix` | idem |
+| nome de papel novo (`colors.nix`/`shaped.nix`) | `tokens-rs`, o WIT e tudo acima (aceito) |
+| nome de ícone novo | `tokens-rs`, o WIT, os buffers |
+
+`tokens-rs`, o WIT, os buffers, o clippy e unidade nenhuma que compila mudam nas quatro primeiras:
+a paleta é entrada só da EXECUÇÃO dos testes (`run-env` do `ronoctua-tokens`), e só as execuções que
+a leem rodam de novo (16, `colour-seeds-rebuild-no-rust`).
+
+A tabela foi medida uma vez, mas as quatro primeiras linhas são cobradas. O `themes-are-data` anda o
+grafo de build de cada compilação (o `.drv` de `tokens-rs`, do WIT, de todo programa de release e de
+laço, dos harnesses do grafo de teste, do clippy, do rustfmt e dos seis buffers, nunca construídos)
+e procura o dado de tema pelo CONTEÚDO, não pelo nome que a derivação de hoje dá a ele. Uma rota
+nova chama o arquivo e a derivação do jeito que quiser — `${../assets/tokens/colors.nix}`,
+`builtins.path { name = "x"; }`, `${../assets/themes}` inteiro, `writeText "themes.json"`,
+`builtins.toFile` —, e o que ela carrega continua sendo os mesmos bytes. Quatro detectores:
+
+- `palettes`: a derivação das paletas, ou outra resolução delas pelo `pname` do gerador, em
+  qualquer ponto do grafo;
+- `file`: uma fonte cujos bytes, ou os de um arquivo dentro de um diretório-fonte, são uma semente,
+  uma referência, a lista de temas, as receitas ou um dos dois scripts do gerador;
+- `value`: o texto de um desses arquivos, o JSON que o gerador recebe (exposto por `themed.handed`,
+  o mesmo texto que vai para os argumentos) ou os temas na ordem do seletor, em qualquer grafia —
+  nas strings de uma derivação (com os escapes do ATerm desfeitos e o `__json` dos atributos
+  estruturados decodificado) ou no texto de qualquer fonte;
+- `name`: um tema nomeado como palavra — o padrão num código gerado, um arquivo com o nome de um
+  tema — nas strings de uma derivação ou num arquivo ESCRITO NA AVALIAÇÃO (`builtins.toFile`, como
+  o WIT). Esse se distingue de um arquivo copiado pelo caminho no store, que é endereçado pelo texto
+  e é recalculado no check. Um arquivo do repositório não é perguntado: ele pode nomear um tema por
+  razões dele (o teste do seletor, "midnight" no relógio — são 28 arquivos hoje), e editar
+  `assets/themes/themes.nix` não o muda.
+
+Nenhuma das ~380 mil entradas desses grafos (111 raízes) tem um acerto. Os hashes de caminho do
+store e os SRI saem antes de procurar a palavra (`…-cyber.json` começa uma). O limite está escrito
+no check: um valor transformado antes (o matiz copiado como número, um hash do nome do padrão) não é
+visto, e toda rota que carrega o dado em si é. Por isso cada rota é PLANTADA no próprio check, numa
+derivação nunca construída, e tem de ser achada pelo seu detector: o check não passa com um detector
+cego.
+
+O `names-are-extracted-at-evaluation` deixou de afirmar o que não pergunta: os dois fatos que
+comparavam a derivação dos tokens e a do WIT depois de editar um valor eram verdadeiros por
+construção (a lista de papéis não muda, e o `tokens-rs` do flake é feito dela). Saíram; o check
+cobra só a função dos nomes, e quem responde "um valor chega à compilação por outro caminho?" é o
+`themes-are-data`.
+
+### As frases são dado (D2)
+
+#### As frases são dado: `RONOCTUA_TEXTS`, lido em tempo de execução
+
+Até aqui o `nix/scripts/gen-i18n.py` escrevia o `keys.rs` com uma constante por chave e, como doc
+comment de cada uma, o valor em en-GB; e o `face()` gerado embutia os `.ftl` mesclados com
+`include_str!`. Uma vírgula num `.ftl` mudava o `RONOCTUA_I18N_DIR`, e com ele o `ronoctua-i18n` e
+todo crate acima dele — o shell, o `ronoctua-files` (e por ele o brain, a fila, o estúdio, o
+índice), a calculadora, o iconset, o instalador, o resgate —, os testes e o clippy: o workspace
+inteiro por bytes que nenhuma linha de código nomeia. O código nomeia CHAVES; a frase de uma chave
+num idioma é dado.
+
+Agora são duas coisas, separadas de propósito:
+
+- **As frases** (`nix/i18n.nix`, a derivação `texts`): o `gen-i18n.py` confere todo idioma declarado
+  — as mesmas chaves, os mesmos argumentos em cada valor, nenhum vazio, um dono por chave, cada
+  chave de módulo dentro do seu espaço de nomes — e escreve um `<idioma>.ftl` MESCLADO por idioma
+  (os fragmentos dos crates, desde a T1, e o de cada módulo do brain). Todo programa que fala lê
+  esses arquivos em tempo de execução, pela variável `RONOCTUA_TEXTS` (`ronoctua_i18n`): o arquivo
+  de cada idioma é lido e analisado uma vez por processo, num `OnceLock`, e cada `Texts::fresh`
+  depois disso só monta um bundle sobre ele.
+- **As chaves** (`nix/text-keys.nix`): o que o Rust compila é escrito na AVALIAÇÃO, com
+  `builtins.toFile`, a partir só dos NOMES — lidos de cada fragmento pela mesma forma que o `KEY` do
+  gerador (`^([a-z][a-z0-9-]*)\s*=`), com o contexto do caminho descartado. Nenhum valor entra, nem
+  como doc comment: editar uma frase deixa as chaves — e todo crate que fala — como estavam. A D2 as
+  escrevia num registro só (`RONOCTUA_KEYS_RS`); desde a T1 cada crate compila só as do próprio
+  fragmento (ver "As frases moram no crate que as diz").
+
+`LANGUAGES` continua compilado (vem do `assets/i18n/languages.nix`, na avaliação). O carregador não
+tem mais um braço por idioma: lê `$RONOCTUA_TEXTS/<idioma>.ftl` para qualquer idioma declarado,
+então não existe mais o lugar onde um idioma declarado podia ficar sem corpo.
+
+#### Por que uma frase ausente é RECUSADA, e alto
+
+O binário é compilado com as chaves de UM build. Lidas as frases de outro build, uma chave que o
+binário pede e o arquivo não tem vira `[chave]` na tela, sem nada falhando — a falha que o inv. 8
+existe para recusar. Por isso não existe cópia embutida de reserva, e todo programa que fala tem uma
+GUARDA NA PARTIDA: `ronoctua_i18n::Texts::checked(idioma, &keys)` (ou `ronoctua_i18n::texts(&keys)`,
+o idioma do ambiente) lê o arquivo, analisa e confere que toda chave que o programa pode dizer está
+nele — as dos crates que ele liga e, no rodapé e na câmera PNG, as dos módulos do brain da distro
+(T1), e, em tempo de execução, as que o catálogo do brain pede (B2); a recusa é
+`ronoctua_i18n::refuse`: UMA linha em inglês, o nome do programa primeiro e `RONOCTUA_TEXTS` na
+frase, e código de saída 78 (`EX_CONFIG` do `sysexits.h` — o ambiente, nem a pessoa nem um defeito).
+Em inglês e não por chave porque ela existe justamente quando não há chave com que dizer. A guarda
+está:
+
+- no `main` do `ronoctua-shell`, antes do despacho, no idioma que o processo vai falar
+  (`language::resolve()`) — fora os quatro relés que não dizem palavra (`leader`, `command`,
+  `buffer-keymap`, `buffer-command`: escrevem uma linha no soquete do rodapé e saem, e o `leader`
+  está no caminho de uma tecla) e o `check-texts`, que diz por si o que está errado;
+- no `ronoctua-install` (antes da primeira pergunta), no `ronoctua-rescue` (com o terminal ainda
+  terminal) e no `ronoctua-render-png` (no idioma do `--language`).
+
+`ronoctua-shell check-texts` faz a mesma pergunta a TODO idioma e diz tudo: `texts OK: N keys, each
+in 2 languages (…), at <dir>`, ou cada recusa e 78. Depois da guarda, um `Texts::fresh` de um idioma
+declarado cujo arquivo não se lê PANICA com a frase da variável — inalcançável num programa que
+passou pela guarda; é o que um teste sem a variável vê.
+
+A API ficou: `Texts::fresh`, `from_env`, `language`, `has`, `t`, `t_with`, `t_args`, `t_marked`,
+`decimal_mark`, `Arg`, `Marked`, `LANGUAGES`, `DEFAULT`. Sumiu o `face()`. Ganhou-se `ENV`,
+`EXIT_MISSING`, `Missing` (`Unset`, `Unreadable`, `Unparsable` — erro de sintaxe ou mensagem
+declarada duas vezes —, `Keys`), `texts()`, `Texts::checked` e `refuse`.
+
+#### Os embrulhos `--set` os textos (`rust.keyed`)
+
+Pela razão da paleta (D1): a sessão de login guarda o ambiente com que entrou, e depois de um switch
+que acrescentou uma chave um bind do compositor subiria o binário NOVO com frases VELHAS — e a
+guarda derrubaria a leader até o próximo login. `RONOCTUA_TEXTS` entrou em `rust.keyed` (vai com
+`--set`; o binário embrulhado lê sempre as frases do próprio build), e por ele no `atRunTime`
+(devshell, `.#dev`, `cargo test`). Carregam os textos: o rodapé (o embrulho de sempre) e, no mesmo
+pacote, `ronoctua-render-png`, `ronoctua-rescue` e `ronoctua-install`; os extraídos `rust.installer`
+e `rust.rescue` (~1,2 MB no fecho deles). NÃO o `ronoctua-player`: pinta (a paleta) e não diz
+palavra — não liga o `ronoctua-i18n` —, então `painters` virou um mapa binário → o que ele é
+chaveado. As unidades do sistema e o palco do `.#shot` rodam binários embrulhados e não precisam de
+nada; quem roda um binário sem embrulho exporta `rust.keyed.RONOCTUA_TEXTS` (o `.#png`, os checks
+que rodam `rust.bins.<programa>`), e as execuções de teste a recebem (`run-env` do `ronoctua-i18n`),
+como a paleta.
+
+O `every-key-exists-at-run-time` pergunta o `--set` pelo que cada embrulho FAZ, não pelo texto do
+embrulho: os seis rodam sem textos no ambiente e com uma cópia a que falta uma chave em TODO idioma
+(um `--set-default`, ou embrulho sem a variável, entregaria essa cópia, e a guarda diria 78), e cada
+um tem de passar a guarda e dizer, byte a byte, o que o mesmo binário sem embrulho diz com os textos
+do build — `check-texts` no rodapé, a lista de exibição do buffer da fila na câmera PNG, a tela
+`--show network` nos dois instaladores. O console de resgate não diz nada sem terminal: passada a
+guarda, a próxima coisa que ele faz é tomar o terminal, e é lá (`raw mode`, status 1) que os dois
+embrulhos dele têm de chegar, como chega o binário sem embrulho. Um `grep` do caminho no embrulho
+passaria um `--set-default` — por isso ele ficou só para dizer QUAL diretório é (o deste build).
+
+#### Como os checks reconhecem um texto no grafo
+
+`texts-are-data` anda o grafo de build (o `.drv` e as fontes) de todo programa de release e de laço,
+dos harnesses do grafo de teste, do clippy, do rustfmt e dos seis buffers, sem construir nada, e
+reconhece o dado pelo CONTEÚDO (o molde da D1): a derivação dos textos pelo `pname` do gerador; os
+bytes de um `.ftl` (de um crate ou de um módulo) ou do gerador numa fonte ou dentro de um
+diretório-fonte; o texto inteiro de um `.ftl` numa string de derivação ou numa fonte; e FRASES — as
+mais longas e simples de cada arquivo (48 a 100 caracteres, sem placeable, escolhidas na avaliação,
+uma vez) — numa string de derivação ou num arquivo ESCRITO NA AVALIAÇÃO, que é como um valor num doc
+comment voltaria. Um arquivo do repositório não é perguntado por frase: um teste pode comparar um
+desenho com a frase em inglês, e editar o `.ftl` não muda esse arquivo. Doze rotas são plantadas
+(cada detector, a rota nomeada com um `.ftl` de crate dentro) e o embrulho do rodapé tem de ser
+achado construído dos textos: o check não passa cego. Ele também pergunta às chaves na avaliação:
+cada unidade lê um diretório com o arquivo só do seu crate, que é o que `nix/text-keys.nix` escreve
+dos nomes; um valor editado não move os nomes; uma chave nova move; e os nomes são exatamente as
+mensagens de cada arquivo mesclado.
+
+### As frases moram no crate que as diz (T1)
+
+#### Onde mora uma frase
+
+Até aqui os textos eram dois arquivos, `assets/i18n/en-GB.ftl` e `pt-BR.ftl` (8 721 chaves cada),
+mais o fragmento de cada módulo do brain. A D2 tirou os VALORES da compilação, mas o registro de
+chaves continuou um só: `ronoctua_i18n::key`, com as 9 144 constantes. Uma chave nova em qualquer
+lugar mudava esse arquivo, e com ele o `ronoctua-i18n` e todo crate que fala — 444 das 2 323
+entradas do índice do build (medido, abaixo), por uma linha de um `.ftl`.
+
+Agora todo crate que fala tem o seu fragmento, `crates/<crate>/i18n/<idioma>.ftl` (58 fragmentos: 57
+crates e a extensão do navegador, em `extension/i18n/`), e os módulos do brain continuam com o
+deles. Em `assets/i18n/` ficou só o `languages.nix` (inv. 16). A regra de dono: **uma chave mora no
+crate que a diz; dita por vários, no crate mais próximo sobre o qual todos eles ficam** — o que cada
+um alcança por crates que falam, para a reexportação levar a constante até ele. Quando dois
+candidatos não se comparam (uma folha de palavras e a porta, por exemplo), fica o que tem menos
+dependentes, o que menos recompila.
+
+#### A divisão foi feita por script, e provada
+
+O script (`t1-extra/split.py`, fora do repositório) atribuiu cada chave pela evidência que o código
+dá, nesta ordem: as constantes `key::X` que a citam (5 784 chaves), a tabela gerada de onde ela sai,
+quando uma tabela do Nix a nomeia e uma vista a diz (`cmd-wm-*` dos feitos do compositor, os lugares
+do relance: o rodapé), um literal no código de um crate que fala, o id de que ela é feita
+(`cmd-<id>`, `about-<id>`, `ask-<id>`), o prefixo de formato que a constrói (`"player-channels-{}"`,
+de um crate de serviço, vai a quem fala por ele), e só então uma regra pelo nome (`rescue-` ao
+resgate, `atlas-` ao inspetor…). O resultado: 58 donos; o kit ficou com 315 chaves, a porta com 254,
+o `ronoctua-i18n` com uma só (`number-decimal-mark`, que ele mesmo diz). As chaves de dois programas
+que só têm o `ronoctua-i18n` em comum foram ao serviço sobre o qual os dois ficam diretamente: as 25
+recusas do `ronoctua-belongings` (ditas pelo instalador e pelo `keep`) e a pergunta do token do
+cache (`ronoctua-cachix`) — a raiz não é dona de palavra de ninguém, ou toda chave dela recompilaria
+todo crate que fala.
+
+**A prova**: `messages.py` (da P0) sobre todos os fragmentos de cada idioma — e de novo sobre os
+`<idioma>.ftl` que a derivação `texts` escreve — é idêntico, byte a byte, a
+`dumps/messages.<idioma>.tsv` da P0: 9 144 mensagens em cada idioma, chave por chave e valor por
+valor. Os comentários de cada mensagem foram com ela; os títulos `##` só onde ainda dizem o que vem
+(uma faixa `# ----` encerra o título de cima). O que um programa lê (os `<idioma>.ftl` mesclados)
+leva só as mensagens: os comentários são de quem traduz, ficam nos fragmentos, e eram um sexto dos
+bytes que todo programa analisava a cada partida.
+
+#### O módulo `key` de cada crate
+
+Cada crate que fala tem `src/key.rs`:
+
+```rust
+#![allow(missing_docs, unused_imports)]
+include!(concat!(env!("RONOCTUA_KEYS_DIR"), "/", env!("CARGO_PKG_NAME"), ".rs"));
+```
+
+e o arquivo incluído, escrito dos NOMES do fragmento do crate, tem uma constante por chave do crate,
+um `pub use <dep>::key::*;` por crate de que ele depende diretamente e que fala, `ALL` (as chaves do
+crate) e `sets`, que junta as chaves do crate e as de tudo o que ele alcança, cada crate uma vez.
+Por isso `key::X` nomeia toda chave que o crate pode dizer, e os arquivos só trocaram a linha do
+`use` (`use ronoctua_i18n::key;` → `use crate::key;`; num programa ou num teste de integração, o
+`key` da biblioteca do crate). O `unused_imports` é porque um crate alcançado por dois caminhos é
+reexportado duas vezes, e a segunda é redundante; num binário (`ronoctua-shell`,
+`ronoctua-render-png`), também `dead_code`: o que o programa não nomeia continua lá para a guarda.
+
+Um crate FALA quando declara que lê `RONOCTUA_KEYS_DIR` (`[package.metadata.ronoctua] env`), o que
+ele precisa fazer porque o `key.rs` lê. Um `i18n/` num crate que não fala é recusado — na avaliação
+e pelo script —, porque aquelas frases chegariam aos textos e à guarda de programa nenhum. Uma
+dependência opcional, de alvo ou renomeada sobre um crate que fala também é recusada (não existe
+hoje): a reexportação precisaria de um `cfg` ou de outro caminho.
+
+O `ronoctua-inspect` não fala: ele NOMEIA os fatos que acha (o módulo `key` literal dele, com o
+`inspect-keys-exist`), e as frases são dos crates que as dizem, no fragmento deles.
+
+Como todo crate que fala tem um `key`, o nome do módulo não diz mais de quem ele é: o `crate::key`
+do rodapé é o arquivo de chaves do próprio rodapé. Os checks que perguntam se o rodapé nomeia um
+módulo de uma funcionalidade (`a-hosted-region-leaves-the-footer`,
+`the-footer-names-no-file-manager`) descontam, no caminho `crate::`, os módulos que o crate do
+rodapé declara; o caminho do crate da funcionalidade (`ronoctua_shell_<crate>::`) continua recusado
+seja qual for o módulo.
+
+#### Dois escritores dos mesmos bytes
+
+- **A avaliação** (`nix/text-keys.nix`, por `nix/i18n.nix`: `texts.keys`, `texts.keysOf`): lê os
+  manifestos (`fromTOML`) e os nomes de cada fragmento (`nix/text-names.nix`, a mesma forma do `KEY`
+  do `gen-i18n.py`) e escreve o arquivo de cada crate. **Cada unidade recebe um diretório só com o
+  arquivo do seu crate** (`perCrateEnv` em `nix/rust/units.nix`: `RONOCTUA_KEYS_DIR = crate: keysOf
+  crate`), então a derivação de uma unidade depende das chaves do seu crate e de mais nada. O
+  `cargo` de um ambiente sem o hook do devshell (uma pista da leva, `lane env`) recebe o diretório
+  de todos (`generated`).
+- **Um checkout** (`nix/scripts/gen-keys.py`, pelo `ronoctua-keys` de `nix/keys-checkout.nix`): o
+  `cargo` não pode receber um caminho do store por crate, e um caminho para todos mudaria a cada
+  chave nova em qualquer lugar — o `cargo` vê a variável mudar e recompila todo crate que fala.
+  Então o checkout tem um diretório seu, FORA da árvore (`$XDG_CACHE_HOME/ronoctua-distro/keys/<hash
+  do caminho do checkout>`), e o script o mantém em dia reescrevendo só o arquivo cujos bytes
+  mudaram: o `cargo` acompanha o arquivo que o `key.rs` de cada crate inclui e recompila só os
+  crates cujas chaves mudaram. O devshell roda isso na entrada e põe o `ronoctua-keys` no `PATH`; o
+  `.#dev` roda na partida e quando um `.ftl` muda.
+- **E os textos do mesmo checkout**, ao lado (`<dir>.texts`), pelo mesmo `ronoctua-keys`, antes das
+  chaves: um programa que o `cargo` compila dessas chaves pergunta todas elas aos textos na partida,
+  e os textos da avaliação são os da árvore de quando o shell entrou — uma chave somada depois
+  faltaria neles, e todo programa sairia 78 até reentrar. Então o devshell e o `.#dev` apontam
+  `RONOCTUA_TEXTS` para esse diretório, que o `ronoctua-keys` refaz da árvore inteira com o gerador
+  e os argumentos do build (os mesmos bytes do `texts` numa árvore igual), cada idioma escrito
+  inteiro e renomeado por cima. Um fragmento que o gerador recusa não escreve chave nenhuma, e a
+  recusa é a do build.
+
+`keys-agree` cobra que os dois escrevem os mesmos bytes para todo crate (59 hoje), que o script
+rodado de novo não toca em nada, que uma chave plantada num crate reescreve só o arquivo desse crate
+(e diz, pelo `--written-exit`), e que um fragmento num crate que não fala é recusado pelo nome.
+
+#### A guarda na partida pergunta as chaves do programa
+
+O `ronoctua-i18n` está abaixo de todo crate que fala; quem sabe quais crates um programa liga é o
+programa. Por isso a guarda recebe as chaves: `ronoctua_i18n::Keys::of(key::sets)` — o instalador e
+o resgate —, e `Keys::of(every_key)` no rodapé e na câmera PNG, que juntam ao `key::sets` deles as
+chaves dos módulos do brain DA DISTRO (`ronoctua_brain::compiled::key_sets`, abaixo); e
+`Texts::checked(idioma, &keys)`, `texts(&keys)`. O `check-texts` diz `texts OK: 8972 keys of 56
+crates and 16 brain modules, each in 2 languages …` (eram 9 144 no registro global: o shell não liga
+as chaves do instalador, do resgate nem da extensão). O censo saiu do `ronoctua-i18n` em duas
+partes: o crate pergunta aos próprios arquivos de execução (os dois idiomas têm as mesmas chaves,
+cada uma diz algo, metade ao menos difere, nenhuma marca de isolamento) e o binário do shell
+pergunta as chaves de todo crate que ele liga (`every_key_of_every_crate_is_in_every_language`). Os
+testes que usavam chaves do shell como exemplo (`t_marked`, o separador decimal) usam arquivos
+plantados.
+
+`LANGUAGES` continua compilado, de um arquivo escrito na avaliação (`RONOCTUA_LANGUAGES_RS`,
+`texts.languagesRs`); o `build.rs` do `ronoctua-i18n` saiu.
+
+#### As chaves de um módulo do brain
+
+Os fragmentos dos módulos continuam nas pastas deles e são mesclados nos textos de execução. As
+chaves de um módulo NÃO entram no arquivo de crate nenhum: o manifesto gerado do módulo tem o
+próprio `key` (e é por ele que a vista da atualização diz as palavras do `system-update`,
+`module::key::…`, o `namedBy` dele), com `ALL`, todas as chaves do fragmento; e o `distro.rs` da
+biblioteca, `key_sets`, cada módulo da distro uma vez, pelo id. É por aí que a guarda de um programa
+que desenha os módulos (o rodapé, a câmera PNG) pergunta as palavras deles — o rodapé as diz pelo
+manifesto, então são palavras do programa como as dos crates. Um módulo da distro com uma chave nova
+já muda o manifesto dele, e com ele a biblioteca: o `ALL` não move nada a mais. O gerador dos
+manifestos (`gen-brain-modules.py`) recebe agora os NOMES do fragmento, lidos na avaliação (`names`
+no registro, `nix/text-names.nix`), e não a pasta nem o `gen-i18n.py`: o doc comment de uma chave
+sem papel diz `A key of its own texts.`, nunca a frase. Um módulo da pessoa, então, não move a chave
+de crate nenhum (`brain-person-modules-load`, fato `keysStay`).
+
+#### A rota que resta: a gramática dos lembretes
+
+O `tables.nix` do módulo `reminders` compila as palavras com que uma resposta é lida
+(`reminders-grammar-*`, por idioma) a partir do próprio fragmento, com o leitor do `gen-i18n.py` —
+assim as palavras que o build confere em todo idioma e as que o brain lê são uma lista. É um valor
+de texto que vira Rust (no manifesto da biblioteca do brain), e o `texts-are-data` a conta pelo nome
+(`ronoctua-brain-words-rs`) em vez de recusá-la; um `.ftl` de crate ali dentro continua recusado, e
+a exceção expira sozinha no dia em que aquele grafo não ler texto nenhum. A dos manifestos, que a D2
+deixou, saiu.
+
+#### O que reconstrói agora
+
+| Edição | Antes da T1 | Agora |
+|---|---|---|
+| valor de uma frase de um crate | nada compila (D2) | nada compila (`text-values-rebuild-no-rust`: o `texts`, o embrulho e as execuções de teste) |
+| chave nova numa vista (o pendrive) | o registro global: 444 de 2 323 entradas (todo crate que fala) | **13**: a biblioteca do pendrive e o programa do shell, nos três sabores, com os testes e o clippy dos dois (`a-new-key-rebuilds-its-crate`) |
+| chave nova no kit | 444 | **258**: o que uma edição do `key.rs` do kit move (todo crate do shell acima dele) |
+| módulo do brain da pessoa | o registro global (todo crate que fala) | nenhuma chave de crate |
+
+### O brain em dois crates (B1)
+
+#### O brain é dois crates: a biblioteca que o rodapé linka e o daemon que compila os módulos
+
+Quando o brain era um crate só, o rodapé linkava tudo dele: o núcleo do daemon (fila, runner, vigia,
+servidor do soquete) e o `module.rs` de cada módulo — o da pessoa inclusive, numa máquina que tem
+algum. Uma linha em qualquer módulo recompilava o rodapé, e um módulo que a pessoa escrevesse
+recompilava o rodapé em toda máquina dela. O rodapé não precisa de nada disso: ele PERGUNTA ao
+daemon e DESENHA a resposta. Por isso o brain virou dois pacotes:
+
+- **`ronoctua-brain`** (a biblioteca, em `crates/ronoctua-brain`): o que atravessa o soquete e o
+  que um módulo declara, e nada que rode. O fio (`wire`, `client`), a mente com cada linha dela
+  (`mind`, `task`, `prefs`, `pulse`, `tail`), os números e a dobra do log de atividade
+  (`journal::{HISTORY, RECENT, ACTIVITY, schedules, grouped}`), o vocabulário de um módulo (o
+  `Manifest` e o que ele nomeia, o `Face`, marcas, avisos, itens, a página — `module`), `moment`,
+  `systemd` (partir uma unidade pelo caminho no store), `registry::SYSTEM_OFF` e `compiled`: os
+  manifestos dos módulos DA DISTRO e a metade compartilhada dos que um `namedBy` lê. Nenhum
+  `module.rs`, nenhum módulo da pessoa.
+- **`ronoctua-brain-daemon`** (em `crates/ronoctua-brain-daemon`), cujo `[[bin]]` continua se
+  chamando `ronoctua-brain`, para a unidade, o `rust.brain`, o `.#dev` e o `ExecStart` de todo
+  módulo não mudarem: o núcleo (`hub`, `runner`, `serve`, `watch`, `schedule`), o contrato que um
+  módulo implementa (`Module`, `Scheduled`, `Watcher`, `Look`, `Ctx`/`Sink`/`Kept`, `Run`,
+  `Source`/`Heard`, `Act`/`Acted`, o vocabulário do journal reexportado), o estado (o arquivo
+  `Journal`, o `Shared`), o anel do log (`Tail`, `Copier`), o medidor (`Meter`, `Machine`,
+  `disks`, `rooms`), a vigia do relatório (`Report`, `Watched`) e TODO `module.rs` — os da distro,
+  da pasta `crates/ronoctua-brain/modules/`, e os da pessoa, da pasta que a máquina entrega.
+- **`ronoctua-test-brain`**: o driver do painel do brain, que era um binário de
+  `ronoctua-runtime`. É o único driver que precisa do daemon (os passos que desenha são os de um
+  módulo que o daemon REGISTRA, `compiled::all`), e como binário do runtime fazia de toda edição
+  de módulo uma edição do pacote do runtime. Agora o runtime não linka brain nenhum.
+
+O daemon reexporta a biblioteca módulo a módulo — `pub use ronoctua_brain::{client, moment, prefs,
+systemd, wire}` inteiros, e `journal`, `mind`, `module`, `pulse`, `registry`, `tail`, `task` como
+`pub use ronoctua_brain::<nome>::*` com a metade do daemon ao lado —, então todo `crate::x::Y` do
+núcleo e de todo `module.rs` resolve como resolvia com um crate só, e nenhum módulo mudou de
+caminho. Nada além do binário do daemon e do driver depende do daemon (cobra
+`brain-daemon-is-a-leaf`).
+
+O corte segue o que cada um lê, e não o arquivo: um arquivo que tinha as duas metades foi partido
+(`journal.rs`: as constantes e a dobra na biblioteca, o `Journal` no daemon; `mind.rs`: a `Mind`
+na biblioteca, o `Shared` no daemon; idem `pulse`, `tail`, `task`, `registry`, `module`). Um
+`impl` inerente só pode morar no crate do tipo (o Rust recusa um em outro crate), então o que o
+núcleo pede de um tipo da biblioteca ficou lá público: `Prefs::chosen_mut` (era `pub(crate)`,
+usado pelo `Ask::Set` do núcleo) e `module::own_dir` (a regra `<raiz>/brain/<id>`, que o
+`Birth` e o `Ctx` do daemon usam — uma regra só, para o diretório com que o módulo nasce ser o
+em que ele depois escreve), e `journal::schedules`.
+
+#### A metade compartilhada de um módulo (`shared.rs`)
+
+Dois módulos têm código que o rodapé lê: o da atualização (`update_window.rs` lê os passos, a
+carga da bateria como a sequência a pesa, a palavra que segura uma execução numa rede tarifada, os
+registros da máquina) e o das contas LLM (`agents.rs` lê as linhas, a cor de uma janela, as marcas
+e como uma foto as lê). Separar a decisão — "a porta e o módulo leem UMA bateria", "a barra da
+vista e a marca da modeline têm UMA cor" — seria ter duas leituras de uma máquina. Então a pasta do
+módulo pode ter um `shared.rs`: a metade que os leitores do `namedBy` dele precisam, compilada na
+BIBLIOTECA ao lado do manifesto; o `module.rs` (do daemon) a vê por `super::`, como vê o
+manifesto. A pasta continua selada (nada fora dela nomeia o módulo além do `namedBy`), o código
+continua num lugar só, e o rodapé linka só essa metade.
+
+Numa pasta da distro, `shared.rs` é sempre a metade compartilhada. Numa pasta da pessoa é um arquivo
+como outro qualquer ao lado do `module.rs` — um `mod shared;` dele, que o daemon compila com o
+módulo, como compilava antes da divisão —, porque a biblioteca nunca lê uma pasta da pessoa: a
+parte dela recebe só os registros da distro (filtrados no Nix), o carregador marca metade
+compartilhada só numa pasta da distro, e o gerador recusa um registro da pessoa que diga ter uma.
+Recusar a pasta da pessoa que tivesse esse nome estreitaria a interface dela sem proteger nada. E
+toda metade compartilhada da árvore tem de ser lida por um arquivo Rust fora do brain que o
+`namedBy` do módulo lista; senão é código de módulo no crate do rodapé por nada (cobra
+`brain-shared-half-is-the-distros`; o `brain-library-links-no-module` envenena o `shared.rs` do
+módulo de exemplo da pessoa e prova que a biblioteca constrói e o daemon não).
+
+`marks_read_now` (a foto do rodapé, `--accounts-marks`) passou para a metade compartilhada das
+contas LLM como uma leitura pura — `accounts_now`, `windows_now`, `lines` e `marks_for`, as mesmas
+funções que a sonda do módulo e o `marks_of` do daemon chamam. A única diferença é que a foto não
+cria mais as pastas de configuração da conta (o `AgentAccounts::of` criava, como efeito colateral
+de montar o módulo inteiro); o que ela lê e desenha é o mesmo (a matriz da linha de base saiu
+idêntica).
+
+#### O daemon compila o código de uma pasta que não é a dele
+
+Um módulo é UMA pasta (manifesto, código, metade NixOS, textos, checks, o porquê), e ela mora ao
+lado da biblioteca, em `crates/ronoctua-brain/modules/`. O daemon compila o código dela de lá: o
+`build.rs` dele escreve um `#[path]` absoluto para cada `module.rs` (e o rustc acha os irmãos dele,
+`rules.rs`, `book.rs`…), e o piloto vem de `crates/ronoctua-brain/tests/modules/`. São as duas
+únicas pastas fora da própria que o daemon lê; um `shared.rs` nunca é dele (é da biblioteca, que o
+daemon reexporta). Um build que corta a fonte por crate tem de entregá-las junto, e sem elas o
+`build.rs` para com uma frase que diz isso (`not_handed`), em vez do "reentre o ambiente" de uma
+tabela velha.
+
+A alternativa — mover as pastas para dentro do daemon — só troca qual crate lê fora da própria
+pasta: a biblioteca passaria a compilar os dois `shared.rs` de dentro da pasta do daemon. Para
+nenhum crate ler fora da própria pasta, as metades compartilhadas teriam de sair da pasta do módulo
+(para `crates/ronoctua-brain/src/`, listadas no `namedBy`), e aí o código de um módulo mora em dois
+lugares e "um módulo é uma pasta" deixa de valer. Ficou a pasta inteira, e a leitura de fora
+declarada no `data` do daemon (N3).
+
+#### Duas partes geradas, uma por crate
+
+`nix/brain-modules-rs.nix` recebe `part`:
+
+- `"library"` → `RONOCTUA_BRAIN_MODULES_DIR` (`brainManifestsRs` no flake): um `manifest.rs` por
+  módulo DA DISTRO, `distro.rs` (`IDS`, `MANIFESTS`, `ACTIONS`, `EVENTS`, `manifest(id)` e o teste
+  deles; nunca `all`), `ids.txt` e `shared.txt`. Recebe só os registros da distro, filtrados no
+  Nix antes de escrever qualquer coisa — então é a MESMA derivação com ou sem módulo da pessoa.
+- `"daemon"` → `RONOCTUA_BRAIN_REGISTRY_DIR` (`brainModulesRs`): os manifestos dos módulos DA
+  PESSOA, `all.rs` sobre todos (com `all(birth)`) e `ids.txt` com a origem. Os registros da distro
+  chegam sem textos e tabelas (o daemon não escreve manifesto da distro), para uma edição de texto
+  não ser entrada do registro do daemon.
+
+`RONOCTUA_BRAIN_PERSON_MODULES_DIR` continua andando com a parte do daemon. O `nix/person-brain.nix`
+sobrepõe só o registro do daemon e devolve o `brainManifestsRs` intocado (o check
+`brain-person-modules-load` cobra que a variável da biblioteca não se move).
+
+O `build.rs` da biblioteca NÃO vigia `modules/`: um arquivo que o build script vigia é um cuja
+edição o roda de novo, e build script rodado recompila o crate — e com ele o rodapé. Ele vigia a
+tabela (um caminho no store) e o que o compilador lê ele mesmo rastreia; que módulos existem e
+quais têm metade compartilhada, quem decide é o Nix (`shared.txt`), e um `shared.rs` novo chega
+com `git add -N` e o ambiente reentrado. O `build.rs` do daemon vigia a pasta inteira (todo
+`module.rs` é dele), compara as pastas com o registro como antes e também compara as metades
+compartilhadas no disco com o `shared.txt` da biblioteca: é ali que um `shared.rs` acrescentado sem
+reentrar o ambiente é recusado com o que o conserta.
+
+#### O que uma edição recompila agora (cargo, local)
+
+| Edição | Antes | Agora |
+|---|---|---|
+| uma linha no `module.rs` de um módulo | brain + rodapé + driver | daemon + driver |
+| um módulo da pessoa (`withPersonModules`) | brain + rodapé + driver | daemon + driver (no Nix também, com as unidades e o catálogo do B2) |
+| o núcleo (`hub`, `runner`, `watch`, `serve`, `schedule`, o contrato) | brain + rodapé | daemon + driver |
+| o fio, a mente, o vocabulário, uma metade compartilhada, um manifesto da distro | brain + rodapé | biblioteca + rodapé + daemon + driver |
+
+#### O que muda que se vê
+
+- O alvo do `tracing` do núcleo e dos módulos passa de `ronoctua_brain::…` para
+  `ronoctua_brain_daemon::…` (o alvo é o caminho do módulo que loga). O filtro do daemon
+  (`ronoctua_brain=info`, `tail::directives`) casa por prefixo de texto
+  (`tracing_subscriber`: `target().starts_with`), então continua cobrindo os dois; o que muda é o
+  texto de uma linha do log na página do brain (o log é dado, inv. 8).
+- As AÇÕES e os EVENTOS de um módulo da pessoa estavam no `compiled::ACTIONS`/`EVENTS` do crate que
+  o rodapé linkava; o rodapé os conhece agora pelo catálogo do brain, em tempo de execução (B2).
+
+#### As metades compartilhadas fazem E/S na biblioteca
+
+O ajuste "Brain naming" pede que o que o rodapé precisa do código do daemon vá para a biblioteca
+"como dado". As duas metades compartilhadas foram como CÓDIGO que lê e escreve a máquina, não como
+dado: `system-update/shared.rs` lê a bateria (`Charge::read`, `read_at`, por `ronoctua_memory`) e os
+registros da máquina e da pessoa (`Records::read_at`, `std::fs` sobre o diretório da máquina,
+`ronoctua_person::local`, `ronoctua_machine`, e os conflitos da parte em claro dos pertences por
+`ronoctua_belongings`); `agent-accounts/shared.rs` lê as contas e as janelas
+(`accounts_now`, `windows_now`, por `ronoctua_llm`) e lê e ESCREVE as linhas da pessoa (`lines`,
+`keep_line`/`write_line`, `lines.json` por `ronoctua_store`). Por isso a biblioteca depende de
+`ronoctua-memory`, `ronoctua-machine`, `ronoctua-person`, `ronoctua-belongings` e `ronoctua-llm`, e
+uma edição dessa lógica recompila o rodapé.
+
+Por que não como dado: o rodapé chama essas funções direto, e chamava antes da divisão — a janela da
+atualização pesa a bateria e lê os registros na hora de desenhar, mesmo com o brain parado; a vista
+das contas grava a linha que a pessoa mudou e colore as barras pela mesma função que colore as
+marcas. Virar dado seria o daemon publicar isso no fio e o rodapé ler da mente: muda o comportamento
+(a janela vazia com o brain parado, a gravação virando um `Ask`). Mover para os crates de fronteira
+também não serve: as linhas moram na pasta de configuração do módulo
+(`<config>/brain/agent-accounts/`), e o `ronoctua-llm` passaria a nomear um módulo
+(`brain-modules-are-sealed`); e a biblioteca continuaria reexportando tudo, para os caminhos do
+rodapé valerem. Ficou o mínimo: só o que o rodapé alcança (cada item público de um `shared.rs` é
+usado pelo `update_window.rs` ou pelo `agents.rs`, ou por uma função que eles chamam — salvo
+`Records::read`, que já não tinha chamador no `module.rs` de antes e veio junto com o tipo),
+compilado num lugar só para as duas leituras serem uma. Trocar a leitura direta por dado do fio é
+mudança de comportamento, decisão do dono (`docs/PENDING.md`).
+
+### O catálogo do brain como dado (B2)
+
+#### O que o rodapé desenha de um módulo é dado: o catálogo do brain
+
+Depois do B1, o código de um módulo já era só do daemon, mas o que o rodapé DESENHA de um módulo
+ainda era compilado em quatro tabelas que todo crate que desenha ou fala compila: o glifo de cada
+marca ia para a tabela de ícones (`tokens.rs`, com o `icon::brain_mark`), a notificação de cada
+evento para a tabela do `ronoctua-notify` (`notifications.rs`), as chaves de cada módulo para o
+registro global de chaves (antes da T1) e a lista de ações e eventos para a biblioteca
+(`compiled::ACTIONS`, `EVENTS`). Um módulo da pessoa recompilava o rodapé inteiro em toda máquina
+dela — o `person-module-rebuilds-only-the-daemon` do N3 media 154 entradas de fora do daemon — e a
+pessoa nem tinha as ações dela registradas no rodapé (o B1 as deixou só no daemon).
+
+Agora o Nix escreve UM arquivo, `brain-catalogue.json` (`nix/brain-catalogue.nix`,
+`nix/scripts/gen-brain-catalogue.py`), dos mesmos registros que o carregador lê
+(`nix/brain-modules.nix`, `forCatalogue`): por módulo, as marcas (o token do glifo, a chave da
+dica, as instâncias, se descansa), os avisos, as ações (comando, chave do rótulo, se age numa
+linha, a pergunta), os eventos com a notificação de cada um (já na forma do livro de notificações),
+os porquês, os prefixos e TODA chave de que o módulo precisa; e os glifos que as marcas desenham,
+MEDIDOS (codepoint, tamanho ao lado do texto, tinta). O rodapé o lê em tempo de execução: os
+embrulhos põem `RONOCTUA_BRAIN_CATALOGUE` com `--set` (está no `keyed`, como paletas e textos), o
+devshell e o `.#dev` o exportam (`atRunTime`), os testes o recebem quando rodam (`testEnv`, e o
+`run-env` do `ronoctua-brain` e do `ronoctua-notify`).
+
+- `ronoctua_brain::catalogue` (biblioteca) lê o arquivo uma vez por processo (`OnceLock`): o
+  `brainlink::glyph_of` resolve o glifo de uma marca por ele; o `leader::base_generated` registra
+  as ações dele como comandos (as palavras são `'static` porque o catálogo fica para o processo); o
+  `a_module_action`/`module_action` e o `check-keymap --dump` leem dele; os testes que pediam
+  `compiled::EVENTS` pedem os eventos dele.
+- `ronoctua_notify::brain` lê do MESMO arquivo só a metade dele (a notificação de cada evento,
+  na forma serde do `Entry`) e o `Book::distro()` a junta à tabela gerada, em uma ordem por id — a
+  ordem que a tabela tinha quando as duas eram compiladas juntas, que é a ordem em que uma
+  notificação é reconhecida. Cada entrada é lida e escrita de volta, e tem de dar o mesmo objeto (o
+  gerador escreve todo campo, `null` no que fica no padrão): um campo grafado de um jeito que o
+  Rust não conhece é recusa com o id, nunca um `#[serde(default)]` calado.
+- O tamanho de um glifo de módulo (`kit::glyph::chrome_size`) sai do catálogo já lido
+  (`catalogue::loaded`, sem ler): a única porta por onde um codepoint de módulo chega a um pintor é
+  o arquivo (a marca pelo `glyph_of`, a notificação pelo livro), e o início do binário o lê antes
+  de qualquer desenho; o `render-png`, que nunca desenha marca, nunca o lê. O escudo do
+  `security-watch` mede 18, não 22 — sem isso ele cresceria.
+- A biblioteca não lista mais ações nem eventos (`distro.rs` sem `ACTIONS`/`EVENTS`): o rodapé
+  conhece os módulos pelo catálogo, o da pessoa inclusive. O daemon continua com as listas dele
+  (`all.rs`) para o próprio teste.
+
+O catálogo não é compilado por crate nenhum. Um módulo da pessoa muda o catálogo, os textos e o
+índice do navegador de ícones (dados) e o daemon (o registro, o `module.rs`), e o resto é a mesma
+derivação.
+
+#### Os glifos dos módulos saem do glyphdb (e do WIT)
+
+O glyphdb mede só os tokens do chrome; o catálogo mede os dos módulos com O MESMO código
+(`glyphgen.nix`, `measure`, que roda `gen-glyphdb.py --icons-only` sobre os tokens dos módulos:
+sem índice de glifos, sem cobertura). O WIT já não os tinha (D1). Um módulo cujo token fosse também
+de um ícone do chrome é recusado pelo gerador do catálogo (era uma `assertMsg` do `glyphgen`).
+
+O navegador de ícones e o acesso rápido continuam nomeando o glifo de um módulo pelo token dele (a
+linha "token" dos fatos, o filtro `token:`, copiar como `icon.<token>`): o token de módulo deixou de
+ser constante de crate (nenhum crate nomeia `icon::DISK_SPACE_FULL`), mas continua sendo um nome
+que a pessoa escreve — o `icon` da notificação de um manifesto pode dizê-lo, como o do fixture
+`my-sample` diz. O índice que o navegador lê em tempo de execução (`glyphs.json` do
+`RONOCTUA_ICONSET`) não é mais o do glyphdb por link: o `nix/iconset.nix` o ESCREVE, juntando ao
+índice do glyphdb os tokens medidos dos módulos (`brainCatalogue.measured`) pelo
+`nix/scripts/gen-iconset.py`, com a REGRA DO PRÓPRIO GLYPHDB — um glifo é nomeado pelo último
+token, em ordem de nome, dos que o desenham, os do chrome e os dos módulos juntos — e o script
+pergunta primeiro às linhas do glyphdb se elas seguem essa regra sobre os tokens do chrome sozinhos
+(um glyphdb que nomeasse de outro jeito para o build, em vez de o navegador nomear um glifo de dois
+jeitos). Dado juntado a dado: nada compila por isso, e um módulo da pessoa muda esse diretório como
+muda o catálogo (`withPersonModules`, abaixo). O índice escrito não é uma segunda cópia: nada mais
+que um programa carrega se refere ao glyphdb, que deixa o fecho (−72 KB: o `icons.json` e o
+`coverage.md` dele).
+
+#### A chave de um módulo da pessoa não entra em arquivo de chaves nenhum
+
+Chave de módulo não entra no arquivo de chaves de crate nenhum (T1). A de um módulo DA DISTRO está
+no `key` do manifesto gerado dele (a janela da atualização nomeia as frases do módulo dela por
+constante; `compiled::key_sets` é o que a guarda compilada pergunta); a de um módulo DA PESSOA fica
+só nos textos, que são dado, e o rodapé a nomeia pelo catálogo, em tempo de execução. Assim uma
+máquina com módulo da pessoa compila contra as chaves da distro, byte a byte.
+
+E como a chave da pessoa não está em nada compilado, a guarda de partida pergunta também as chaves
+do CATÁLOGO aos textos (abaixo). As duas guardas ficam: a compilada (toda chave de todo módulo da
+distro, T1) e a do catálogo (as que as declarações de cada módulo pedem, os da pessoa inclusive) —
+uma palavra que o rodapé diz pelo manifesto sem que declaração nenhuma a peça só a primeira
+pergunta.
+
+#### A partida recusa o catálogo de outro build
+
+No início de todo subcomando que desenha (os mesmos que a guarda dos textos guarda), o binário lê
+o catálogo e pergunta aos textos que vai falar toda chave dos módulos, e o livro lê as
+notificações: arquivo ausente, ilegível, de outro formato (`VERSION`), chaves que os textos não
+têm (outro build) ou notificação que o livro não lê são UMA linha em inglês nomeando a variável e
+saída 78 (`catalogue::refuse`), nunca um keymap sem as ações dos módulos ou uma marca com o glifo
+do brain. `check-catalogue` diz tudo de uma vez (todo idioma; não guardado, como o
+`check-texts`). A linha de vida não é recusada pelo catálogo: ela sobe porque o rodapé morreu, não
+desenha marca e não monta keymap. Custo medido: +0,33 ms na mediana de um subcomando curto.
+
+#### O daemon e o catálogo dizem a mesma coisa
+
+O catálogo é escrito pelo Nix e o daemon age pelo que COMPILOU. O que os dois têm de concordar —
+marcas, avisos, ações, eventos (nome e tag) e porquês de cada módulo — tem uma forma só,
+`catalogue::Declared`: `ronoctua-brain modules --catalogue` imprime o de cada módulo que o daemon
+FEZ, e o check compara com o arquivo; o teste da biblioteca compara os manifestos da distro que ela
+compila, e o do daemon todos os que ele compila (o da pessoa inclusive, na cadeia da máquina).
+
+#### `withPersonModules` troca só o daemon e dados
+
+`nix/person-brain.nix` sobrepõe quatro elos e nenhum outro: o registro do daemon
+(`brainModulesRs`), o catálogo, os textos e o índice do navegador de ícones (`iconset`, a partir
+dos glifos que o catálogo da pessoa mediu: o token de um glifo da pessoa aparece no navegador da
+máquina dela). O glyphdb, os tokens, a tabela de notificações, o WIT, os seis componentes e a
+biblioteca são os da distro. Ele dá ao carregador os nomes das chaves base
+(`baseKeyNames`): a pasta da pessoa cujos textos não têm uma chave que o manifesto precisa (nome,
+linha, rótulo e pergunta de cada ação, dica de cada marca, cada porquê, as duas linhas de cada
+notificação — no fragmento dela ou na base — e o rótulo de cada ação de notificação, na base) é
+DEIXADA DE FORA e dita na avaliação (`personRefused`), em vez de parar o build do catálogo (ou do
+registro do daemon, que já parava) em toda máquina dela.
+
+### A linha de base, e os checks que perguntam pelo módulo (P0)
+
+#### O check pergunta pelo módulo, não pela pasta do crate
+
+Um check que lia `${../crates/ronoctua-shell/src}/files.rs` teria de ser editado no dia em que o
+`files.rs` fosse para o crate do gerenciador de arquivos — e uma varredura de `src/` de um crate
+só pararia de alcançar, calada, os módulos que saíram dele. Por isso quem lê o shell pergunta pelo
+caminho DENTRO do `src/` de um crate do shell (`surface.rs`, `door/mod.rs`), e o ajudante acha o
+crate:
+
+- `shell_file(name)` — o arquivo em `src/<name>` de qualquer crate `ronoctua-shell` ou
+  `ronoctua-shell-*`; nenhum ou dois é recusa com frase;
+- `shell_files(pattern="**/*.rs")` — o glob relativo a cada `src/` (`*.rs` é a pasta só,
+  `**/*.rs` toda profundidade, `door/*.rs` uma pasta), sobre todos os crates, ordenado. A
+  semântica antiga de cada check foi mantida: `glob("*.rs")` virou `shell_files("*.rs")`,
+  `rglob` virou `**/`;
+- `shell_dir(name)`, `shell_has(name)`, `shell_name(path)` (o nome de um arquivo dentro do `src/`
+  do seu crate, ou `None` fora do shell — o que os checks que varrem o workspace inteiro comparam:
+  `sudo-door-is-one`, `layer-surfaces-are-the-ones-we-know`, `a-column-is-a-column`,
+  `video-metrics-readers-are-read-only`) e `shell_crates()`.
+
+A árvore é `shellSources` (`lib.fileset` de cada `crates/ronoctua-shell*/src`, achados por nome
+no `readDir` na avaliação: um crate novo do shell entra sem edição nenhuma). Ela NÃO está no
+`pyPrelude`: está num arquivo à parte, `shellPrelude`, que o check abre depois do prelúdio
+(`exec(open("${shellPrelude}").read())`), porque um prelúdio que citasse o shell faria todo check
+que o usa depender do shell — e a leva existe para o contrário. O `globals()` no `shellPrelude` é
+porque um prelúdio aberto dentro de uma função põe os nomes nos locais dela. Para script de shell,
+`. ${shellSh}` dá as mesmas duas funções (`shell_file`, `shell_files`).
+
+Ficaram fora, de propósito: a árvore plantada do `brain-modules-are-sealed` (6 linhas: é um
+repositório de mentira montado pelo próprio check; o caminho é dado, não é lugar de módulo) e as
+duas linhas de comentário dos próprios ajudantes. Três comentários em prosa passaram a dizer "o
+`files.rs` do shell" em vez do caminho.
+
+#### A linha de base: como uma refatoração prova que nada mudou
+
+A leva só é refatoração se cada tela, texto, cor, tecla e comando sair igual. "Os testes passam"
+não prova isso (teste de estado não vê pixel), então a prova é comparar o que o sistema DESENHA e
+DIZ antes e depois, byte a byte:
+
+- **A matriz** (`matrix.sh`): 2688 casos — toda câmera `photograph --door` × en-GB/pt-BR × três
+  temas (cyber, owl, papyrus claro) × escala 1 e 2; toda região do rodapé aberta pelo seu comando
+  sobre um quarto plantado, e de novo com `<down>` depois; todo grupo da leader nos três
+  conjuntos; os 36 pares vizinhos da precedência de `Footer::view()` nas duas ordens; as 43
+  páginas do player nas quatro portas; os seis buffers WASM com e sem `--mind`. Cada caso guarda a
+  display list (`--list`), o que a câmera imprimiu, os códigos de saída e a assinatura do PNG
+  (`identify -format %#`).
+- **Por que dá o mesmo resultado em qualquer dia e qualquer pista**: cada caso roda num namespace
+  de montagem próprio (bubblewrap) em que o scratch é sempre o mesmo caminho — o gerenciador de
+  arquivos DESENHA o caminho da home, e um caminho diferente seria pixel diferente —, numa rede
+  própria (a vista de rede lista as portas abertas da máquina, que mudam), sem Wayland, X,
+  compositor nem D-Bus (os dois barramentos apontam para nada), com `LANG=C.UTF-8`, `TZ=UTC`,
+  `XDG_DATA_DIRS` vazio e o relógio de parede congelado em 2026-10-12 12:00 UTC (libfaketime; o
+  monotônico anda, senão timeout nenhum venceria) — "há 42 dias" viraria "há 43" amanhã. Desenho
+  no lavapipe, como o `.#png`. Os fixtures (arquivos com mtime fixo, um repositório git com datas
+  fixas e sem a configuração do dono, um catálogo do video-metrics, um podman de mentira que
+  responde o que o podman 5.8.2 respondeu, o quarto do rodapé) foram feitos uma vez e ficam
+  congelados. Duas rodadas completas dos mesmos binários saíram idênticas em todos os 2688 casos.
+- **Os dumps**: o keymap (`check-keymap --dump`), os binds do compositor, as mensagens
+  mescladas de cada idioma (9144 cada, `id TAB valor`), os bytes da paleta (44880 = 11 temas × 4
+  páginas × 255 papéis × RGBA, lidos tanto do `TABLE` quanto pela API pública — iguais), as ações e
+  os módulos do brain, a contagem de testes por binário e os tamanhos.
+
+Achados da matriz que são limitação da câmera, não do código (ficam na linha de base como são):
+a região do gerenciador de arquivos aberta como último passo sai com 53 px (a listagem chega numa
+thread e a caminhada acaba antes; com uma tecla depois ela cresce — por isso os casos `-down`); o
+menu da janela na câmera do rodapé pergunta ao compositor de verdade (`SCROLLSOCK`) e recusa; o
+acesso rápido no rodapé da câmera diz "no loop to hear the search on"; o quiosque recusa porque o
+Chrome não está ligado.

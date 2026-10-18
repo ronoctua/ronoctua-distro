@@ -26,7 +26,7 @@ stdenvNoCC.mkDerivation {
   buildPhase = ''
     runHook preBuild
     mkdir -p $out
-    python3 ${./scripts}/gen-width.py \
+    python3 ${./scripts/gen-width.py} \
       --east-asian-width ${unicode-character-database}/share/unicode/EastAsianWidth.txt \
       --emoji-data ${unicode-character-database}/share/unicode/emoji/emoji-data.txt \
       --out $out/width.rs

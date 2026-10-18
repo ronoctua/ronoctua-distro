@@ -26,6 +26,8 @@
   lib,
   scroll,
   ronoctua-shell,
+  # The contract's driver (`rust.bins.ronoctua-contract`).
+  contract,
 }:
 
 let
@@ -59,7 +61,7 @@ pkgs.testers.runNixOSTest {
     with subtest("the contract holds against the pinned compositor"):
         start_compositor("compositor", "${scroll}")
         out_text = machine.succeed(
-            f"${ronoctua-shell}/bin/ronoctua-contract {socket_of('compositor')}"
+            f"${contract}/bin/ronoctua-contract {socket_of('compositor')}"
         )
         print(out_text)
         assert "the contract holds" in out_text, out_text

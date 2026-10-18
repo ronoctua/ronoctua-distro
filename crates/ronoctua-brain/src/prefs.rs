@@ -12,7 +12,7 @@
 //!
 //! What HAPPENED — the last run, what it did, what it refused — is state:
 //! machine-written, growing, and worthless to hand-edit. It lives under
-//! `$XDG_STATE_HOME/ronoctua`, in [`crate::journal`].
+//! `$XDG_STATE_HOME/ronoctua`, in the daemon's journal (`journal::Journal`).
 //!
 //! It is the same split `ronoctua-notify`'s store makes, with the same
 //! reasoning, and it is worth repeating because the alternative is seductive:
@@ -77,7 +77,7 @@ impl Where {
     ///
     /// Only `brain.json`. A module that keeps a view of its own preferences
     /// for a unit to read (a file of step switches a script reads) writes it
-    /// in [`crate::module::Module::prefs_saved`], which the core calls after
+    /// in the daemon's `Module::prefs_saved`, which the core calls after
     /// this — the core does not know which module keeps which file.
     ///
     /// # Errors
@@ -172,9 +172,9 @@ impl Prefs {
     /// The person's entry for a module, to change — created from what the
     /// MODULE declared, never from the shared default.
     ///
-    /// For the core's `Ask::Set`, which applies one knob to it; nothing else
-    /// writes an entry.
-    pub(crate) fn chosen_mut(&mut self, manifest: &Manifest) -> &mut TaskPrefs {
+    /// For the core's `Ask::Set` (the daemon's), which applies one knob to
+    /// it; nothing else writes an entry.
+    pub fn chosen_mut(&mut self, manifest: &Manifest) -> &mut TaskPrefs {
         self.tasks
             .entry(manifest.id.to_owned())
             .or_insert_with(|| manifest.defaults())
@@ -282,9 +282,9 @@ pub struct TaskPrefs {
     /// session for a day while the screen said everything was in hand.
     ///
     /// `None` for every task that thinks in days, which is all but one. When
-    /// it is set, [`crate::schedule::next_moment`] counts in minutes and the
-    /// part of the day is not consulted: a watch has no good hour, it has an
-    /// interval.
+    /// it is set, the daemon's `schedule::next_moment` counts in minutes and
+    /// the part of the day is not consulted: a watch has no good hour, it has
+    /// an interval.
     ///
     /// It is NOT a knob. The cadence ladder the screen walks is in days, and a
     /// task that thinks in minutes has nothing on that ladder to walk to —
@@ -369,7 +369,7 @@ impl PartOfDay {
     /// The local hours it covers: from, and up to but not including.
     ///
     /// `Any` is the whole day, which makes the window arithmetic in
-    /// [`crate::schedule`] one case instead of two.
+    /// the daemon's `schedule` one case instead of two.
     #[must_use]
     pub const fn hours(self) -> (u32, u32) {
         match self {
@@ -524,17 +524,33 @@ mod tests {
     use super::*;
 
     /// A module with a cadence of its own: every five days, at night, no
-    /// countdown, half an hour of patience.
+    /// countdown, half an hour of patience — a routine and nothing else, as
+    /// the daemon's fakes declare one. FICTIONAL: the core's fixtures never
+    /// name a real module.
     fn fussy() -> crate::module::Manifest {
-        let mut m = crate::fake::manifest("fussy");
-        m.schedule = Some(crate::module::Schedule {
-            interval_days: 5,
-            part_of_day: PartOfDay::Night,
-            countdown_seconds: 0,
-            runaway_minutes: 30,
-            ..crate::fake::ROUTINE
-        });
-        m
+        crate::module::Manifest {
+            id: "fussy",
+            what: "A module that only exists in a test.",
+            name_key: "brain-task-fussy",
+            does_key: "brain-task-fussy-does",
+            needs: crate::module::Needs::default(),
+            schedule: Some(crate::module::Schedule {
+                kind: crate::module::Kind::Routine,
+                calendar: true,
+                interval_days: 5,
+                part_of_day: PartOfDay::Night,
+                every_minutes: None,
+                countdown_seconds: 0,
+                runaway_minutes: 30,
+                gated: true,
+            }),
+            units: crate::module::Units::default(),
+            whys: &[],
+            marks: &[],
+            notices: &[],
+            actions: &[],
+            events: &[],
+        }
     }
 
     #[test]

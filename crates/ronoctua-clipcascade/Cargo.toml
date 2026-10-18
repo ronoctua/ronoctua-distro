@@ -68,3 +68,6 @@ aes-gcm = "0.10"
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.

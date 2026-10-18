@@ -17,7 +17,9 @@
 {
   pkgs,
   lib,
-  ronoctua-shell,
+  # The agent and the boot's console, programs of their own (`rust.bins`).
+  networkConsole,
+  networkAgent,
 }:
 
 pkgs.testers.runNixOSTest {
@@ -42,11 +44,11 @@ pkgs.testers.runNixOSTest {
       ];
 
       # The network module takes the agent's binary from here, as the rest of the
-      # distro does. Without this the evaluation fails with "attribute 'shell'
-      # missing" — which is the module saying, correctly, that it does not invent
-      # a binary path.
+      # distro does. Without this the evaluation fails with "attribute
+      # 'networkAgent' missing" — which is the module saying, correctly, that it
+      # does not invent a binary path.
       _module.args.ronoctua = {
-        shell = ronoctua-shell;
+        inherit networkConsole networkAgent;
       };
 
       virtualisation = {
@@ -68,7 +70,7 @@ pkgs.testers.runNixOSTest {
 
       environment.systemPackages = [
         pkgs.systemd
-        ronoctua-shell
+        networkAgent
       ];
     };
 

@@ -34,9 +34,9 @@
 //! a refusal, where a host's page is, the QR's modules. Who runs the CLI is
 //! `crate::reach`.
 
+use crate::key;
 use ronoctua_belongings::Why;
 use ronoctua_belongings::prefs::{Auth, Invalid};
-use ronoctua_i18n::key;
 use serde::Deserialize;
 
 /// How a repository is reached — the address's kind decides, as the

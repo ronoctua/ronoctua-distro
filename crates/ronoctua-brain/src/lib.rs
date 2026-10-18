@@ -1,91 +1,61 @@
-//! The brain: what the machine does by itself, when it may do it, and what
-//! happened.
+//! The brain, as the rest of the system speaks to it: what crosses its socket,
+//! what its modules declare, and the half of a module its readers share.
 //!
-//! # Why a crate, and a daemon, of its own
+//! # Why the brain is two crates
 //!
-//! Because the questions it answers outlive every process that asks them. "Has
-//! this machine been updated in the last week" is not a question the footer can
-//! answer, because the footer is restarted on every file edit in the nested
-//! loop and on every crash on the installed one. It is the same argument
-//! `ronoctua-transfers` makes for a copy of forty gibibytes, one level up: a
-//! copy must survive the screen, and so must a decision about when the machine
-//! rebuilds itself.
+//! Because two kinds of reader link it, and only one of them runs it. The
+//! footer, its windows and the brain's buffer ASK the daemon and DRAW what it
+//! answers; the daemon (`ronoctua-brain-daemon`, whose binary is still
+//! `ronoctua-brain`) decides when anything runs, and compiles every module's
+//! code — the distro's and the person's. When one crate held both, a line in
+//! any module recompiled the footer, and a person's own module recompiled it
+//! on every machine of theirs.
 //!
-//! And because three processes want the same answer — the footer's modeline,
-//! the brain's own screen in the expanded region, and the window that screen
-//! opens in. A schedule living inside the footer would be invisible to the
-//! other two, and each would grow its own.
+//! So THIS crate is what both sides of the socket agree on, and nothing that
+//! runs:
+//!
+//! - the WIRE: [`wire`] (one JSON object per line, [`wire::Ask`] and
+//!   [`wire::Say`]), the [`client`] that asks and listens, the [`Mind`] it
+//!   carries with every row of it ([`mind`], [`task`], [`prefs`], [`pulse`],
+//!   [`tail`]), and the numbers and the fold its screens share ([`journal`]);
+//! - the VOCABULARY of a module: what it declares (its [`Manifest`]) and what
+//!   it publishes (marks, notices, items, its page — [`module`]), with the
+//!   moments they are told in ([`moment`]);
+//! - two small doors both sides use: [`systemd`] (start a unit, by store path)
+//!   and [`registry::SYSTEM_OFF`], the word a switched-off module answers with;
+//! - [`compiled`]: the DISTRO's modules as data — each manifest Nix
+//!   generated, and for a module another crate names (its `namedBy`), the
+//!   half those readers need (its `shared.rs`). Never a module's `module.rs`:
+//!   that is the daemon's, and so is every module of the person's;
+//! - and [`catalogue`]: what the footer DRAWS of every module, the person's
+//!   included — marks and their measured glyphs, notices, actions, events —
+//!   read at RUN time from the file the build writes, so a module the person
+//!   writes reaches the footer without compiling it.
 //!
 //! # What it does NOT do
 //!
-//! - **It does not read `/proc`.** [`ronoctua_memory`] is the only crate that
-//!   does, exactly as `ronoctua-scroll` is the only one that speaks to the
-//!   compositor. The pulse arrives through [`pulse::Meter`], already read.
-//! - **It reimplements no Nix logic** (invariant 5). It does not know what an
-//!   update IS; it names a unit and reads what the unit reported.
-//! - **It runs no privileged command.** It asks systemd to start a unit, and
-//!   the unit — and the narrow polkit rule that lets it be started — belong to
-//!   the flake. `systemctl` is found by STORE PATH and never by name: under a
-//!   unit the `PATH` is minimal and a name fails far from its cause.
-//! - **It holds no keyboard and creates no surface** (invariant 14). What is on
-//!   screen is a `wasm32-wasip2` component in `buffers/brain/`, drawn by the
-//!   footer like every other one.
+//! - **It runs nothing.** The queue, the gate, the runner, the watch thread,
+//!   the socket's server, the journal file and the traits a module answers
+//!   are the daemon's.
 //! - **It does not translate.** What crosses is a WORD — a task's id, a hold's
 //!   name — and whoever has the bundle makes a sentence out of it (invariant 8).
-//!
-//! # THE DOOR — how a future feature is added
-//!
-//! This is the point of the crate. The owner asked for a place where "anything
-//! in that space" becomes a feature rather than a new daemon, and a place is
-//! only a place if the steps to use it are written down.
-//!
-//! A feature is a MODULE: a folder under `crates/ronoctua-brain/modules/<id>/`
-//! whose `module.rs` answers the contract in [`module`] — a manifest (what it
-//! is, its schedule, its marks, notices, actions and events), and whichever of
-//! three faces it has: a run on a schedule ([`module::Scheduled`]), a watch on
-//! the journal, a path, a child or a clock ([`module::Watcher`]), and what it
-//! shows ([`module::Module::face`], [`module::Module::screen`]). The folder
-//! carries its texts, its NixOS module, its checks and its `why.md`; the
-//! generator reads the folder, and nothing outside it names the module.
-//!
-//! What a module does **not** have to write, because the core already owns it:
-//! the queue (at most one run at a time, and what comes due meanwhile waits),
-//! the metric gate (busy machine, battery), the announcement and its
-//! countdown, the journal, the one follower of the system journal, the socket,
-//! dismissing and snoozing its notices, and every screen that watches.
-//!
-//! Every feature lives in its own folder under `modules/`; the features that
-//! came before modules moved there too, so nothing is written in place any
-//! more.
+//! - **It reimplements no Nix logic** (invariant 5): a module's manifest is
+//!   generated by Nix and only included here.
 //!
 //! # The shape of it
 //!
 //! ```text
-//!   footer      ──┐
-//!   brain buffer ─┼─→  socket  →  Core: Shared (Mutex + Condvar + version),
-//!   `ronoctua-brain look` ─┘        │     ONE registry, ONE journal
-//!                                   ├─→ ONE runner thread → systemctl start
-//!                                   │        ↑ pulse (ronoctua-memory)
-//!                                   ├─→ ONE watch thread ← journalctl --follow,
-//!                                   │        inotify, children, one clock
-//!                                   └─→ thread per client → the whole mind
+//!   footer       ──┐  ronoctua-brain (this): wire, mind, manifests
+//!   brain buffer ──┼─→  socket  →  ronoctua-brain-daemon: Core, ONE registry,
+//!   `ronoctua-brain look` ─┘        ONE journal, the runner, the watch thread,
+//!                                   every module's code
 //! ```
-//!
-//! # Where the database would go
-//!
-//! Not here, and not yet. What is written today is two small JSON files, for
-//! the reason [`journal`] gives: a few dozen records, rewritten when something
-//! happens. The day the brain keeps a MEASUREMENT per minute — which is the
-//! first feature that needs one — the seam is [`journal::Journal`], whose whole
-//! surface is "give me the last run of this task" and "write this one down".
-//! A store under `$XDG_STATE_HOME/ronoctua/brain/` replaces the file behind
-//! those two calls, and nothing above them changes.
 
 #![forbid(unsafe_code)]
 
+pub mod catalogue;
 pub mod client;
 pub mod compiled;
-pub mod hub;
 pub mod journal;
 pub mod mind;
 pub mod module;
@@ -93,47 +63,20 @@ pub mod moment;
 pub mod prefs;
 pub mod pulse;
 pub mod registry;
-pub mod runner;
-pub mod schedule;
-pub mod serve;
 pub mod systemd;
 pub mod tail;
 pub mod task;
-pub mod watch;
 pub mod wire;
 
-#[cfg(test)]
-mod fake;
-
-/// Every module this build knows, made for one birth: the ones compiled from
-/// their folders under `modules/` ([`compiled`]).
-#[must_use]
-pub fn every_module(birth: &Birth) -> Vec<Box<dyn Module>> {
-    compiled::all(birth)
-}
-
-pub use journal::Journal;
-pub use mind::{Announcement, Mind, Shared, Standing, StepState, TaskState};
-// THE CONTRACT'S DOORS at the root; its vocabulary (`Face`, `Mark`, the
+pub use mind::{Announcement, Mind, Standing, StepState, TaskState};
+// THE VOCABULARY'S DOORS at the root; the rest of it (`Face`, `Mark`, the
 // module's `Notice`…) is named through `module::`, because the root's `Notice`
-// is still the old one-line notice the footer reads.
-pub use hub::Core;
-pub use module::{Birth, Manifest, Module, Scheduled, Watcher};
+// was once the old one-line notice the footer reads.
+pub use module::{Birth, Manifest};
 pub use moment::{Clock, Moment, Offset};
 pub use prefs::{Gate, PartOfDay, Prefs, TaskPrefs, Where};
-pub use pulse::{Meter, Pulse};
-pub use registry::Registry;
-pub use runner::Runner;
+pub use pulse::Pulse;
 pub use task::{
-    Due, Hold, Kind, Outcome, OutcomeKind, Report, RunRecord, Sheet, Step, StepOutcome, Verdict,
-    Watched,
+    Due, Hold, Kind, Outcome, OutcomeKind, RunRecord, Sheet, Step, StepOutcome, Verdict,
 };
 pub use wire::{Ask, Knob, Say};
-
-/// THE `#[path]` PILOT (brain.md §3, "Step 1"): the shim `build.rs` writes for
-/// `tests/modules/pilot-sample`, loading it the way every module is loaded.
-/// Tests only — the sample lives outside `modules/` and is never registered.
-#[cfg(test)]
-mod pilot {
-    include!(concat!(env!("OUT_DIR"), "/pilot.rs"));
-}

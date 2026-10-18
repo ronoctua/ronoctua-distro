@@ -94,15 +94,21 @@ in
 
           # PARSED: the module's code without its tests (`without_tests`),
           # strings kept where the needle is one (`uncommented`); the crate's
-          # `Kind::id` by its body; the registry's ids as `leader.rs` writes
-          # them (`id: "…"`); the manifest as Nix read it.
+          # `Kind::id` by its body; the registry's ids as the accounts' keymap
+          # contribution writes them (`id: "…"` in `KEYS`, cut at its own
+          # closing `};`); the manifest as Nix read it.
           # FILE-WIDE: the view's file, for the test that proves the colours.
-          kept = uncommented(without_tests(pathlib.Path("${./module.rs}").read_text()))
-          leader = uncommented(pathlib.Path("${../../../ronoctua-shell/src/leader.rs}").read_text())
-          view = pathlib.Path("${../../../ronoctua-shell/src/agents.rs}").read_text()
+          # BOTH HALVES OF ITS RUST: `module.rs` (the daemon's) and `shared.rs`
+          # (the library's, where the lines' file and the marks' command are).
+          kept = "\n".join(uncommented(without_tests(pathlib.Path(half).read_text()))
+                            for half in ("${./module.rs}", "${./shared.rs}"))
+          view = pathlib.Path("${../../../ronoctua-shell-agents/src/agents.rs}").read_text()
+          shown = uncommented(view)
+          keys = shown.find("pub const KEYS: crate::bindings::Contribution")
+          registry = shown[keys : shown.find("\n};\n", keys)] if keys >= 0 else ""
           llm = uncommented(without_tests(pathlib.Path("${../../../ronoctua-llm/src/lib.rs}").read_text()))
           floor(len(kept), 4000, "characters of the module's code")
-          floor(len(leader), 100000, "characters of leader.rs")
+          floor(len(registry), 1000, "characters of the accounts' keymap contribution")
           wrong = []
 
           # THE ONE STRING THAT IS A FILE is its own lines'; any other path is
@@ -116,7 +122,7 @@ in
           opens = re.search(r'const OPENS: &str = "([a-z-]+)";', kept)
           if not opens:
               wrong.append("the module no longer says which command its marks open")
-          elif f'id: "{opens.group(1)}"' not in leader:
+          elif f'id: "{opens.group(1)}"' not in registry:
               wrong.append(f"the marks open `{opens.group(1)}`, which the shell's registry does not have")
 
           if "fn a_bar_and_its_mark_wear_one_colour" not in view:

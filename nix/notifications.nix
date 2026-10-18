@@ -25,23 +25,17 @@
   glyphdb,
   notificationsFile,
   sharedFile,
-  # THE BRAIN MODULES' EVENTS that declared a notification (brain.md §3), as
-  # entries of this same catalogue: `<module>-<event>`, recognised by that tag.
-  # The flake's one loader's `notifications`.
-  brainNotifications,
 }:
 
+# THE BRAIN MODULES' NOTIFICATIONS ARE NOT HERE. A module's event that declared
+# one is an entry of this same catalogue, recognised by its own tag — but it is
+# DATA the footer reads at run time (`nix/brain-catalogue.nix`, written by the
+# same rules as this table, `gen-notifications.py`), and `ronoctua_notify`
+# merges it in when the book is made (`Book::distro`). A person's module never
+# compiles this table again; the clash of a module's event with an entry or a
+# filter of the file is refused there.
 let
-  declared = import notificationsFile;
-  # ONE ID, ONE ENTRY: a module's event named like an entry of the file would
-  # be two recognitions of one tag, and the first in the table would win.
-  clashes = builtins.filter (n: builtins.hasAttr n declared.entries) (
-    builtins.attrNames brainNotifications
-  );
-  merged =
-    assert lib.assertMsg (clashes == [ ])
-      "a brain module's event is also an entry of assets/notifications.nix: ${lib.concatStringsSep ", " clashes}";
-    declared // { entries = declared.entries // brainNotifications; };
+  merged = import notificationsFile;
 in
 stdenvNoCC.mkDerivation {
   pname = "ronoctua-notifications-rs";

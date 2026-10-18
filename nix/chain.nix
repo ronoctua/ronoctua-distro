@@ -27,7 +27,7 @@ stdenvNoCC.mkDerivation {
   buildPhase = ''
     runHook preBuild
     mkdir -p $out
-    python3 ${./scripts}/gen-chain.py \
+    python3 ${./scripts/gen-chain.py} \
       --chain-json ${chainJson} \
       --primary-font ${primaryFontFile} \
       --out $out/chain.rs

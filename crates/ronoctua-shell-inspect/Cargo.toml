@@ -1,0 +1,60 @@
+[package]
+name = "ronoctua-shell-inspect"
+description = "The preview and the facts of one file: the inspection panels, the editor of its tags, the globe, the stage, motion, thumbnails."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE PANELS OF A FILE (the 2026-10-12 wave): the preview and the facts, the
+# sheet that edits them, the thumbnails' pool, the globe a place is shown on,
+# the stage and the motion a video plays with. The file manager, fast-access,
+# the player and the locale hold them; they step the manager with its report
+# (`ronoctua-shell-report`) and stand on nothing else of the shell — not even
+# the door, so a line of a window's plumbing recompiles none of them.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-report = { path = "../ronoctua-shell-report" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-files = { path = "../ronoctua-files" }
+# THE BORDER WITH WHAT IS INSIDE A FILE: the preview's pixels and the facts.
+ronoctua-inspect = { path = "../ronoctua-inspect" }
+# The SCHEMA of a file's tags: the sheet edits them through the tag
+# program, never the engine (`the-footer-never-links-lofty`).
+ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
+# The globe's geometry and its packs.
+ronoctua-atlas = { path = "../ronoctua-atlas" }
+ronoctua-atlas-packs = { path = "../ronoctua-atlas-packs" }
+ronoctua-camera = { path = "../ronoctua-camera" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+resvg.workspace = true
+image.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The kit's guards hold in these tests too (its `test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+
+[features]
+# WHAT THIS CRATE KEEPS FOR TESTS, kept for every crate's tests — for
+# `[dev-dependencies]` only, as the kit's: a view that holds the globe asks
+# where it is pointed (`Globe::pose`). It brings the kit's along.
+test-support = [ "ronoctua-shell-kit/test-support" ]
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]
+run-env = ["RONOCTUA_ATLAS"]
+beside = ["ronoctua-tags"]

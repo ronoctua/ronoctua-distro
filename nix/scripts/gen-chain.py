@@ -10,7 +10,8 @@ the whole point of `nix/fontconfig.nix` is that there is one.
 
 This is what closes that: the same attrset that writes fontconfig's `.conf`
 writes this file, and the renderer's `Chain` is generated from it. Editing the
-chain therefore rebuilds the workspace, which is correct — the chain IS code.
+chain therefore rebuilds the renderer and every unit above it, which is correct
+— the chain IS code.
 
 # What it does NOT generate
 

@@ -1,0 +1,53 @@
+[package]
+name = "ronoctua-shell-git"
+description = "A repository's history (the file manager's `C-h`) and `LEADER / c`: the view, the window, its camera and the footer region."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# GIT, AS THE SHELL SHOWS IT (the 2026-10-12 wave): the history's view, its
+# window, its camera and its region of the footer, and the distro's own
+# clone. On the kit, the door and the git line only — the line the file
+# manager draws, whose words and watch the history shares, lives below both
+# (`ronoctua-shell-git-line`), so neither stands on the other.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-git-line = { path = "../ronoctua-shell-git-line" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-apps = { path = "../ronoctua-apps" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-files = { path = "../ronoctua-files" }
+# The cache's bounds (`GIT_VERSIONS_MOST`).
+ronoctua-inspect = { path = "../ronoctua-inspect" }
+ronoctua-syntax = { path = "../ronoctua-syntax" }
+# THE PERSON'S CONSENT: the clone's host, let by the answer.
+ronoctua-consent = { path = "../ronoctua-consent" }
+# THE BORDER WITH GIT: the CLI by its store path, every call hardened,
+# nothing written — and `clone`, for `LEADER / c`, the one call that makes a
+# repository, with a `Pass`.
+ronoctua-git = { path = "../ronoctua-git", features = ["clone"] }
+
+smithay-client-toolkit.workspace = true
+rustix = { workspace = true, features = [ "fs" ] }
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_DISTRO_REPOSITORY", "RONOCTUA_KEYS_DIR"]

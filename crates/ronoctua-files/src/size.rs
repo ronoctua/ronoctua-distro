@@ -18,7 +18,7 @@
 //! `fluent-bundle` formats a number with `format!` unless the embedder installs
 //! an ICU formatter, so `4.2` comes out `4.2` in both languages.
 
-use ronoctua_i18n::key;
+use crate::key;
 
 /// The unit a size is shown in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

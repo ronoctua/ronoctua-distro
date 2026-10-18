@@ -5,9 +5,14 @@
 //!
 //! It shows two of its three seats: the second, and the third under the name
 //! the person gave it — a mark with instances, as a person's module may draw
-//! one.
+//! one. That name lives in a file beside this one (`shared.rs`), the way a
+//! person's module may keep its Rust in more than one file.
 
 use crate::module::{Birth, Face, Look, Manifest, Mark, Module, Tone};
+
+// A FILE BESIDE THIS ONE, resolved by rustc next to it (a file loaded by
+// `#[path]` owns its directory): what a person's module may split itself into.
+mod shared;
 
 /// The entry every module has.
 #[must_use]
@@ -33,7 +38,7 @@ impl Module for Sample {
                     act: None,
                 },
                 Mark {
-                    id: super::mark::SEAT.numbered(3, Some("desk".to_owned())),
+                    id: super::mark::SEAT.numbered(3, Some(shared::DESK.to_owned())),
                     tone: Tone::Warning,
                     count: 0,
                     act: None,

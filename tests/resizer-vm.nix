@@ -1,4 +1,4 @@
-# VM test: the screen resizer (`LEADER / r`, `crates/ronoctua-shell/src/resizer.rs`).
+# VM test: the screen resizer (`LEADER / r`, `crates/ronoctua-shell-overlays/src/resizer.rs`).
 #
 # WHAT ONLY A COMPOSITOR PROVES. The arithmetic of the cut is unit-tested; what
 # no unit test reaches is that the two curtains' exclusive zones actually

@@ -1,0 +1,43 @@
+[package]
+name = "ronoctua-shell-report"
+description = "What a door's errand came to: the file manager's step, the jobs, mounts, archives, seals and git readings it reports."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE FILE MANAGER'S VOCABULARY FOR ITS WORK (the 2026-10-12 wave): types and
+# their words, nothing that does anything. The inspection panels step the
+# manager with it, a git reading and a tag edit come back inside its report,
+# the queue's door turns every job that ends into one — so it stands on the
+# kit alone, under all of them, and a line of the seal or of a job's words
+# (`ronoctua-shell-work`) recompiles none of the panels.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-inspect = { path = "../ronoctua-inspect" }
+# The SCHEMA of a tag edit's answer: no engine (`the-footer-never-links-lofty`).
+ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
+ronoctua-archive = { path = "../ronoctua-archive" }
+ronoctua-disks = { path = "../ronoctua-disks" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+# A git reading's answer, without the clone (`clone` is the shell's).
+ronoctua-git = { path = "../ronoctua-git" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+# What a seal reports: the wire's kinds, WITHOUT `age` (`transfers-never-link-age`).
+ronoctua-pq = { path = "../ronoctua-pq", default-features = false }
+ronoctua-security = { path = "../ronoctua-security" }
+
+[dev-dependencies]
+# The kit's guards hold in these tests too (its `test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

@@ -35,3 +35,6 @@ workspace = true
 [[bin]]
 name = "ronoctua-browser"
 path = "src/bin/host.rs"
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.

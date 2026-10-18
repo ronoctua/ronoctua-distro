@@ -36,7 +36,7 @@ impl Order {
     /// The text key for this order's name.
     #[must_use]
     pub const fn label(self) -> &'static str {
-        use ronoctua_i18n::key;
+        use crate::key;
         match self {
             Self::Name => key::FILES_ORDER_NAME,
             Self::Size => key::FILES_ORDER_SIZE,
@@ -207,7 +207,7 @@ pub fn gathered_from(dir: &Path) -> Result<Vec<Entry>> {
 
 /// The directory's own modification time, for "has this changed since I looked".
 ///
-/// The same shape as `ronoctua_shell::apps::stamp`: one `stat` answers whether
+/// The same shape as `ronoctua_shell_door::launch::stamp`: one `stat` answers whether
 /// a re-read is worth it, and a re-read that finds nothing new is a frame spent
 /// for nothing.
 #[must_use]
@@ -240,8 +240,8 @@ impl Withheld {
     #[must_use]
     pub const fn sentence(self) -> &'static str {
         match self {
-            Self::Shut => ronoctua_i18n::key::FILES_PRIVATE_WITHHELD_SHUT,
-            Self::Silent => ronoctua_i18n::key::FILES_PRIVATE_WITHHELD_SILENT,
+            Self::Shut => crate::key::FILES_PRIVATE_WITHHELD_SHUT,
+            Self::Silent => crate::key::FILES_PRIVATE_WITHHELD_SILENT,
         }
     }
 }

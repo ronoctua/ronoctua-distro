@@ -50,7 +50,7 @@
 
 use std::fmt::Write as _;
 
-use ronoctua_i18n::key;
+use crate::key;
 
 use crate::model::Answers;
 

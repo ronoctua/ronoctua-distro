@@ -1,4 +1,4 @@
-# THE EDITING LOOP — ten chosen checks, and not a category.
+# THE EDITING LOOP — chosen checks, and not a category.
 #
 # WHY THIS LIST IS HAND-WRITTEN, AND WHY THAT IS RIGHT
 # ---------------------------------------------------
@@ -15,7 +15,7 @@
 # THE GUARD
 # ---------
 # `quick-names-exist` demands that every name here exist in `checks`. Without
-# it a renamed check leaves the short loop IN SILENCE — the list still has ten
+# it a renamed check leaves the short loop IN SILENCE — the list still has its
 # lines and one of them stops meaning anything.
 [
   # Formatting in both languages: Nix, the workspace and the five buffers.
@@ -32,4 +32,13 @@
   "buffer-keys-have-text"
   # The dependency layer, which if edited costs 4m46 on the next round.
   "deps-layer-is-lean"
+  # The build plan, which every unit is made from: a stale one is refused at
+  # evaluation, and this asks cargo again with the same toolchain.
+  "rust-plan-is-current"
+  # What a crate reads against what it declares, in the sources: a read the
+  # driver would refuse minutes into a build, said in a second.
+  "crate-reads-are-declared"
+  # And what an edit rebuilds, asked of the build graph at evaluation: the
+  # granularity the whole build is for, kept from drifting back.
+  "granularity-of-an-edit"
 ]

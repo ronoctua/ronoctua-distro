@@ -20,3 +20,6 @@ rustix = { workspace = true, features = [ "net" ] }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.

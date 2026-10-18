@@ -1,0 +1,33 @@
+[package]
+name = "ronoctua-shell-keep"
+description = "The belongings as the rest of the shell touches and says them: what the file manager keeps, and the belongings' words."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE BELONGINGS, AS EVERY OTHER SCREEN TOUCHES THEM (the 2026-10-12 wave):
+# the file manager's "keep" (`belongings.json`, through the belongings
+# crate's own types) and the words of every closed set of that crate. The
+# belongings' view and the work's seal both say them, so they stand under
+# both, and on no other shell crate.
+[dependencies]
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-store = { path = "../ronoctua-store" }
+# THE SHAPES of the belongings only (`prefs`): `age` is the CLI's, behind
+# `crypt`, which the queue runs as a child.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
+# A held tree's reason, read with the person crate's one reader, the data alone.
+ronoctua-person = { path = "../ronoctua-person", default-features = false }
+# A passphrase to sign with that could not be written is logged, as the
+# software centre's gesture asked it (`write_passphrase_to_sign`).
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

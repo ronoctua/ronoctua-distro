@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
-"""Generates the text key registry from the .ftl files — invariant 8.
+"""Checks the .ftl fragments and writes the texts the programs read — invariant 8.
 
 The invariant says "zero string literals in UI; everything through a text-key, with pt-BR
 and en-GB complete". The way to make that hold is not discipline: it is there being no
-way to write a key that does not exist.
+way to write a key that does not exist, and no way to ship a language that lacks one.
 
-This generator reads BOTH files, requires them to have exactly the same
-set of keys, and emits one Rust constant per key. A wrong key
-becomes a COMPILE error in the crate that uses it, and a key present in only one
-language becomes a BUILD error here — before any test runs.
+THE TEXTS ARE IN FRAGMENTS, one per crate that speaks (`crates/<crate>/i18n/<lang>.ftl`),
+the browser extension's (`extension/i18n/`) and each brain module's. This generator reads
+EVERY declared language's file of every fragment, requires each fragment to have exactly
+the same set of keys in every language, no key to be in two fragments, the same arguments
+in each value and no empty value, and writes one MERGED `<language>.ftl` per language into
+`<out-dir>` — the `texts` derivation (`nix/i18n.nix`), which every program reads at run
+time through `RONOCTUA_TEXTS`. A key present in only one language becomes a BUILD error
+here, before any test runs.
+
+THE KEYS ARE NOT WRITTEN HERE. Each crate's Rust constants (its `key` module) are written
+at Nix EVALUATION by `nix/text-keys.nix`, from the key NAMES of its own fragment alone, so
+that editing a sentence rebuilds no crate. That reader and this one look for a key with
+the same pattern (`KEY` below).
 
 It is not a complete Fluent parser, and it should not be: `fluent-bundle` does
 that at runtime. Here we only need the SET of keys, which in Fluent are
@@ -16,25 +25,24 @@ the column-0 lines with `=`. Continuations (indented lines), comments and
 blank lines are ignored.
 
 Usage:
-    gen-i18n.py <ftl-dir> <output.rs> <language>... [--module <id>=<dir> ...]
-                [--prefixes <id>=<prefix>,<prefix> ...]
+    gen-i18n.py <out-dir> <language>... [--fragment <name>=<dir> ...]
+                [--module <id>=<dir> ...] [--prefixes <id>=<prefix>,<prefix> ...]
 
 # The brain's modules (brain.md §3)
 
 A brain module carries its own texts, `modules/<id>/i18n/<lang>.ftl`, and
-`--module` hands one such folder in. Its keys join the registry and the
-bundle — this writes the MERGED `<lang>.ftl`, the base followed by every
-fragment, beside `<output.rs>` — and three things are refused on the way,
-because a key's owner has to be readable from the key:
+`--module` hands one such folder in. Its keys join the bundle — each merged
+`<lang>.ftl` is every fragment, then every module's — and three things are
+refused on the way, because a key's owner has to be readable from the key:
 
-- a module key that is also a base key, or another module's;
+- a module key that is also a crate's key, or another module's;
 - a module key outside its namespace: `(cmd-|notif-|echo-|about-|ask-)?`
   followed by one of its prefixes (`--prefixes`, its id by default), alone or
   with more after a `-`, or `brain-task-<id>` and `brain-task-<id>-does`;
 - two modules whose prefixes overlap (`made` and `made-up`): two owners of
   one name.
 
-A BASE key inside a module's namespace is NOT refused here. The shell's own
+A CRATE's key inside a module's namespace is NOT refused here. The shell's own
 screens may speak in a module's words by design — a page of the same name
 beside the module — and whether a file outside the folder may name the module
 is `brain-modules-are-sealed`'s question (step 5), where the module's
@@ -96,11 +104,6 @@ def keys(file: Path) -> dict[str, str]:
     return out
 
 
-def const_de(key: str) -> str:
-    """`cmd-file-open` -> `CMD_FILE_OPEN`."""
-    return key.upper().replace("-", "_")
-
-
 # The words that open a key belonging to a command, a notification, the
 # minibuffer, a hint and a question — each may come before a module's prefix.
 OPENERS = ("cmd-", "notif-", "echo-", "about-", "ask-")
@@ -136,23 +139,40 @@ def pairs(values: list[str], flag: str) -> dict[str, str]:
     return out
 
 
+def read_fragment(what: str, folder: Path, languages: tuple[str, ...]) -> tuple[dict, dict] | None:
+    """A fragment's table and text by language, or `None` (said) when a language's file is missing."""
+    tables, texts = {}, {}
+    for language in languages:
+        path_of = folder / f"{language}.ftl"
+        if not path_of.exists():
+            print(f"ERROR: {what} has no {language}.ftl ({path_of})", file=sys.stderr)
+            return None
+        tables[language] = keys(path_of)
+        texts[language] = path_of.read_text(encoding="utf-8")
+    return tables, texts
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="The text key registry, from the .ftl files.")
-    ap.add_argument("source", type=Path, help="the base .ftl directory")
-    ap.add_argument("out", type=Path, help="the keys.rs to write; the merged .ftl go beside it")
+    ap = argparse.ArgumentParser(description="The texts the programs read, checked and merged from the .ftl fragments.")
+    ap.add_argument("out", type=Path, help="the directory to write the merged <language>.ftl into")
     ap.add_argument("languages", nargs="+", help="the declared languages, the base first")
+    ap.add_argument("--fragment", action="append", default=[], help="<name>=<dir>: a crate's (or the extension's) texts")
     ap.add_argument("--module", action="append", default=[], help="<id>=<dir>: a brain module's texts")
     ap.add_argument(
         "--prefixes", action="append", default=[], help="<id>=<p>,<p>: a module's key prefixes (default: its id)"
     )
     args = ap.parse_args()
-    source, out_path = args.source, args.out
+    out_dir = args.out
     # MANDATORY languages, and they come from `assets/i18n/languages.nix`
-    # rather than from a constant here. Naming one forces its file to exist and
-    # to be complete — which is the point, and which is why this is a declared
-    # list and not a glob of the directory.
+    # rather than from a constant here. Naming one forces every fragment's
+    # file of it to exist and to be complete — which is the point, and which
+    # is why this is a declared list and not a glob of a directory.
     languages = tuple(args.languages)
+    crates = pairs(args.fragment, "--fragment")
     modules = pairs(args.module, "--module")
+    if not crates:
+        print("ERROR: no --fragment: there would be no texts", file=sys.stderr)
+        return 2
     # THE ID IS ALWAYS A PREFIX: `cmd-<id>-<action>` and `<id>-why-<word>` are
     # built from it, whatever else a module claims.
     prefixes = {i: list(dict.fromkeys([i] + p.split(","))) for i, p in pairs(args.prefixes, "--prefixes").items()}
@@ -163,27 +183,27 @@ def main() -> int:
     for ident in modules:
         prefixes.setdefault(ident, [ident])
 
-    # NOT OVER THE BASE: the merged `.ftl` go beside `<output.rs>`, and there
-    # they would replace the files they were read from. Refused before a byte
-    # is written.
-    if out_path.parent.resolve() == source.resolve():
-        print("ERROR: the merged .ftl would overwrite the base; write keys.rs elsewhere", file=sys.stderr)
-        return 1
-
-    tables: dict[str, dict[str, str]] = {}
-    texts: dict[str, str] = {}
-    for language in languages:
-        path_of = source / f"{language}.ftl"
-        if not path_of.exists():
-            print(f"ERROR: {path_of} is missing", file=sys.stderr)
+    # NOT OVER A FRAGMENT: the merged `.ftl` go into `<out-dir>`, and there
+    # they would replace a file they were read from. Refused before a byte is
+    # written.
+    for folder in [*crates.values(), *modules.values()]:
+        if out_dir.resolve() == Path(folder).resolve():
+            print(f"ERROR: the merged .ftl would overwrite the fragment in {folder}; write them elsewhere", file=sys.stderr)
             return 1
-        tables[language] = keys(path_of)
-        texts[language] = path_of.read_text(encoding="utf-8")
 
     failed = False
+    base_language = languages[0]
 
-    # THE MODULES' FRAGMENTS, each checked on its own first, so a message
-    # names the module's file and not the merged one nobody wrote.
+    # EACH FRAGMENT ON ITS OWN FIRST, so a message names the file somebody
+    # wrote and not the merged one nobody did.
+    crate_tables: dict[str, dict[str, dict[str, str]]] = {}
+    crate_texts: dict[str, dict[str, str]] = {}
+    for name in sorted(crates):
+        read = read_fragment(f"`{name}`", Path(crates[name]), languages)
+        if read is None:
+            failed = True
+            continue
+        crate_tables[name], crate_texts[name] = read
     fragments: dict[str, dict[str, dict[str, str]]] = {}
     fragment_texts: dict[str, dict[str, str]] = {}
     for ident in sorted(modules):
@@ -191,17 +211,45 @@ def main() -> int:
             if p in RESERVED or p.startswith("brain-"):
                 print(f"ERROR: module `{ident}` claims the prefix `{p}`, which is not a module's to own", file=sys.stderr)
                 failed = True
-        fragments[ident], fragment_texts[ident] = {}, {}
-        for language in languages:
-            path_of = Path(modules[ident]) / f"{language}.ftl"
-            if not path_of.exists():
-                print(f"ERROR: module `{ident}` has no {language}.ftl ({path_of})", file=sys.stderr)
-                failed = True
-                continue
-            fragments[ident][language] = keys(path_of)
-            fragment_texts[ident][language] = path_of.read_text(encoding="utf-8")
+        read = read_fragment(f"module `{ident}`", Path(modules[ident]), languages)
+        if read is None:
+            failed = True
+            continue
+        fragments[ident], fragment_texts[ident] = read
     if failed:
         return 1
+
+    # EVERY LANGUAGE OF A FRAGMENT HAS ITS KEYS AND NO OTHER — both ways: only
+    # checking "every en-GB key exists in pt-BR" would let an orphan
+    # translation through, which is dead translation piling up in the file.
+    def parity(what: str, tables: dict[str, dict[str, str]]) -> bool:
+        bad = False
+        mine = tables[base_language]
+        for language in languages[1:]:
+            theirs = tables[language]
+            for c in sorted(set(mine) - set(theirs)):
+                print(f"ERROR: {what}: `{c}` exists in {base_language} and is missing from {language}", file=sys.stderr)
+                bad = True
+            for c in sorted(set(theirs) - set(mine)):
+                print(f"ERROR: {what}: `{c}` exists in {language} and is missing from {base_language}", file=sys.stderr)
+                bad = True
+        return bad
+
+    for name in sorted(crate_tables):
+        failed |= parity(f"`{name}`", crate_tables[name])
+    for ident in sorted(fragments):
+        failed |= parity(f"module `{ident}`", fragments[ident])
+
+    # ONE OWNER PER KEY: a key in two fragments is two sentences for one
+    # name, and which one a program says would be an accident of the order.
+    owner: dict[str, str] = {}
+    for name in sorted(crate_tables):
+        for c in crate_tables[name][base_language]:
+            if c in owner:
+                print(f"ERROR: `{c}` is declared by both `{owner[c]}` and `{name}`", file=sys.stderr)
+                failed = True
+            else:
+                owner[c] = name
 
     # PREFIXES THAT OVERLAP are two owners of one name: `made-up-x` would be
     # both `made`'s and `made-up`'s.
@@ -212,17 +260,8 @@ def main() -> int:
                 print(f"ERROR: the prefixes `{p}` ({a}) and `{q}` ({b}) overlap", file=sys.stderr)
                 failed = True
 
-    base_language = languages[0]
     for ident in sorted(fragments):
         mine = fragments[ident].get(base_language, {})
-        for language in languages[1:]:
-            theirs = fragments[ident].get(language, {})
-            for c in sorted(set(mine) - set(theirs)):
-                print(f"ERROR: module `{ident}`: `{c}` exists in {base_language} and is missing from {language}", file=sys.stderr)
-                failed = True
-            for c in sorted(set(theirs) - set(mine)):
-                print(f"ERROR: module `{ident}`: `{c}` exists in {language} and is missing from {base_language}", file=sys.stderr)
-                failed = True
         for c in sorted(mine):
             if not in_namespace(c, ident, prefixes[ident]):
                 print(
@@ -232,8 +271,8 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 failed = True
-            if c in tables[base_language]:
-                print(f"ERROR: module `{ident}`: `{c}` is also a base key", file=sys.stderr)
+            if c in owner:
+                print(f"ERROR: module `{ident}`: `{c}` is also a key of `{owner[c]}`", file=sys.stderr)
                 failed = True
             for other in sorted(fragments):
                 if other < ident and c in fragments[other].get(base_language, {}):
@@ -242,25 +281,13 @@ def main() -> int:
     if failed:
         return 1
 
-    # ONE TABLE PER LANGUAGE from here on: every rule below holds for the
-    # module keys exactly as for the base's.
-    for ident in sorted(fragments):
-        for language in languages:
-            tables[language].update(fragments[ident][language])
-
-    # The comparison runs BOTH ways. Only checking "every en-GB key
-    # exists in pt-BR" would let an orphan translation through, which is dead
-    # translation piling up in the file.
-    base, *resto = languages
-    for language in resto:
-        missing = sorted(set(tables[base]) - set(tables[language]))
-        extra = sorted(set(tables[language]) - set(tables[base]))
-        for c in missing:
-            print(f"ERROR: `{c}` exists in {base} and is missing from {language}", file=sys.stderr)
-            failed = True
-        for c in extra:
-            print(f"ERROR: `{c}` exists in {language} and is missing from {base}", file=sys.stderr)
-            failed = True
+    # ONE TABLE PER LANGUAGE from here on: every rule below holds for every
+    # fragment's keys alike.
+    tables: dict[str, dict[str, str]] = {language: {} for language in languages}
+    for source in (crate_tables, fragments):
+        for name in sorted(source):
+            for language in languages:
+                tables[language].update(source[name][language])
 
     # AND THE ARGUMENTS EACH VALUE TAKES ARE THE SAME IN EVERY LANGUAGE.
     #
@@ -278,6 +305,7 @@ def main() -> int:
     def arguments_of(value):
         return set(re.findall(r"\{\s*\$([A-Za-z][A-Za-z0-9_-]*)\s*\}", value))
 
+    base, *resto = languages
     for language in resto:
         for c, v in tables[base].items():
             other = tables[language].get(c)
@@ -304,89 +332,33 @@ def main() -> int:
         return 1
 
     every = sorted(tables[base])
-    lines = [
-        "// GENERATED by nix/scripts/gen-i18n.py. Do not edit: it vanishes at the next build.",
-        "//",
-        "// One constant per text key. Referencing a key that does not exist is a",
-        "// compile error — that is how invariant 8 stops depending on",
-        "// discipline (the same shape as the tokens in `ronoctua-tokens`).",
-        "",
-        "/// Known text keys. One per message in the `.ftl` files.",
-        "pub mod key {",
-    ]
-    for c in every:
-        example = tables[base][c].replace("\\", "\\\\").replace('"', '\\"')
-        # A selector collapses onto one line and would run for hundreds of
-        # columns. The doc comment is a reminder of which message this is, not
-        # a copy of it.
-        if len(example) > 110:
-            example = example[:107] + "..."
-        lines.append(f"    /// `{base}`: {example}")
-        lines.append(f'    pub const {const_de(c)}: &str = "{c}";')
-    lines.append("}")
-    lines.append("")
-    lines.append("/// Every existing key, in order. Used by the checks and by `M-x`.")
-    # `static` AND NOT `const`, and the reason is how big this has grown: a
-    # `const` array is INLINED at every use site, so a thousand-odd keys become
-    # a thousand-odd copies of the table in the binary. Clippy started refusing
-    # it when the list crossed its threshold, and it is right — a `static` is
-    # one copy, and every reader here takes it by reference.
-    lines.append(f"pub static ALL_KEYS: [&str; {len(every)}] = [")
-    for c in every:
-        lines.append(f'    "{c}",')
-    lines.append("];")
-    lines.append("")
-    lines.append("/// Mandatory languages. An incomplete `.ftl` fails the build.")
-    lines.append("///")
-    lines.append("/// The FIRST is the base every other is compared against.")
-    lines.append(f"pub const LANGUAGES: [&str; {len(languages)}] = [")
-    for i in languages:
-        lines.append(f'    "{i}",')
-    lines.append("];")
-    lines.append("")
-    # THE BUNDLE LOADER IS GENERATED, and it has to be: `include_str!` takes a
-    # literal, so it cannot be put in a loop. Written by hand this was the one
-    # place a declared language could still be missing its body — the name
-    # would be in `LANGUAGES`, the file would be on disk, and `Texts::fresh`
-    # would answer `None` for it, falling back silently.
-    lines.append("/// Each language's `.ftl`, embedded in the binary.")
-    lines.append("///")
-    lines.append("/// Embedded and not read from disk: the installer runs before any")
-    lines.append("/// filesystem is mounted (section 7.1), and a shell with no text is")
-    lines.append("/// useless. Same reason as the face embedded in the renderer.")
-    lines.append("#[must_use]")
-    lines.append("pub fn face(language: &str) -> Option<&'static str> {")
-    lines.append("    match language {")
-    for i in languages:
-        lines.append(f'        "{i}" => Some(include_str!(concat!(')
-        lines.append('            env!("RONOCTUA_I18N_DIR"),')
-        lines.append(f'            "/{i}.ftl"')
-        lines.append("        ))),")
-    lines.append("        _ => None,")
-    lines.append("    }")
-    lines.append("}")
-    lines.append("")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines), encoding="utf-8")
+    # THE MERGED BUNDLE: what a program reads at run time, one file per
+    # language (`RONOCTUA_TEXTS`) — every fragment by its name, then every
+    # module's, each under a line that says whose it is, its messages as
+    # written and its COMMENTS LEFT OUT: they are the translators', in the
+    # fragments, and every program would parse them at every start (a sixth
+    # of the bytes).
+    def messages_of(text: str) -> str:
+        return "".join(line for line in text.splitlines(keepends=True) if not line.startswith("#"))
 
-    # THE MERGED BUNDLE, beside the registry: `face()` embeds `<lang>.ftl`
-    # from this directory, so the keys above and the texts the binary carries
-    # come out of one run and cannot disagree. The base comes first, whole and
-    # untouched — with no module the file IS the base, byte for byte.
     for language in languages:
-        merged = texts[language]
-        if merged and not merged.endswith("\n"):
-            merged += "\n"
-        for ident in sorted(fragment_texts):
-            merged += f"\n# ── brain module: {ident} ──\n\n" + fragment_texts[ident][language]
+        merged = ""
+        for title, texts in [
+            *((f"{name}", crate_texts[name][language]) for name in sorted(crate_texts)),
+            *((f"brain module: {ident}", fragment_texts[ident][language]) for ident in sorted(fragment_texts)),
+        ]:
+            if merged:
+                merged += "\n"
+            merged += f"# ── {title} ──\n" + messages_of(texts)
             if not merged.endswith("\n"):
                 merged += "\n"
-        (out_path.parent / f"{language}.ftl").write_text(merged, encoding="utf-8")
+        (out_dir / f"{language}.ftl").write_text(merged, encoding="utf-8")
 
     moved = sum(len(f[base]) for f in fragments.values())
     beside = f" ({moved} of them from the brain's modules: {', '.join(sorted(fragments))})" if fragments else ""
-    print(f"OK: {len(every)} keys in {len(languages)} languages -> {out_path}{beside}")
+    print(f"OK: {len(every)} keys of {len(crate_tables)} fragments in {len(languages)} languages -> {out_dir}{beside}")
     return 0
 
 

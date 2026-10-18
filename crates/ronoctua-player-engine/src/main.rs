@@ -30,6 +30,13 @@ fn main() -> Result<()> {
         )
         .init();
 
+    // THE PALETTES, read now and not at the first subtitle: the lanes it
+    // burns into a film are tokens, and the colours are data read at run time
+    // (`RONOCTUA_THEMES`, which the wrapper sets). A missing file stops the
+    // daemon at its start, naming the variable, instead of in the middle of
+    // a film.
+    ronoctua_tokens::palettes::load();
+
     // OPEN THESE, when the daemon is started with paths — which is what the
     // `.desktop` entry does when there is no player yet.
     let items: Vec<String> = std::env::args()

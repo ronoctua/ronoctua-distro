@@ -220,15 +220,18 @@ dia. Cada registro é lido pelo crate que o escreve (`ronoctua-machine`, `ronoct
 `ronoctua-belongings`), e a vista os relê quando o mtime de um deles anda, como já relia os
 relatórios. Um arquivo ausente é uma resposta vazia; um que não lê não diz nada, em vez de inventar.
 Uma frase clicável que quebra em várias linhas é UM controle: o ponteiro sobre qualquer uma acende
-todas, nas duas portas (`update_window::one_control` no rodapé, que acende por linha).
+todas, nas duas portas (no rodapé, `Region::control_of` da região da atualização, que acende por
+linha).
 
 ## As duas portas e a marca
 
-`update_window.rs`, no shell, é a vista que olha uma execução nas duas portas (a região do rodapé e
-uma janela), a marca animada da modeline e a porta que começa uma atualização à mão — pelo cérebro
-quando ele está lá, direto pelo systemd quando não está: o cérebro é um agendador, não um porteiro.
-É o único arquivo de fora que fala deste módulo (`namedBy`), e é dono dos três comandos; o `leader.rs`
-e o rodapé os alcançam pelas tabelas dele, sem nomeá-los. A janela se fotografa (`photograph --door
+`update_window.rs`, no crate `ronoctua-shell-update`, é a vista que olha uma execução nas duas portas
+(a região do rodapé e uma janela), a marca animada da modeline e a porta que começa uma atualização à
+mão — pelo cérebro quando ele está lá, direto pelo systemd quando não está: o cérebro é um agendador,
+não um porteiro. Com o `update_region.rs` (o recado único das duas portas e a região do rodapé, que
+segue a execução pedida mesmo com a página fechada) são os únicos arquivos de fora que falam deste
+módulo (`namedBy`); a vista é dona dos três comandos, e o binário e o rodapé os alcançam pelas tabelas
+dela, sem nomeá-los. A janela se fotografa (`photograph --door
 update`) sobre relatórios e diário dados, nunca os da máquina, e na foto o `u` dela não começa nada:
 diz o que teria pedido. A cena inteira — relatórios, diário, os registros da máquina e a bateria — se
 fotografa com `photograph --door update-scene --scene <arquivo>`, andada por teclas e ponteiro; o sim

@@ -48,14 +48,9 @@ path = "src/bin/keyboard.rs"
 name = "ronoctua-test-transfers"
 path = "src/bin/transfers.rs"
 
-[[bin]]
-# The seventh, for the brain's panel. The criterion only it has: it is the
-# buffer with NO width constant of its own — the widths are numbers inside four
-# `Table`s and half the keys are assembled at run time (`brain-why-{}`), so no
-# reading of the source can pair a key with a budget. The FRAME can, and that
-# is what this drives.
-name = "ronoctua-test-brain"
-path = "src/bin/brain.rs"
+# THE SEVENTH, for the brain's panel, is a package of its own
+# (`crates/ronoctua-test-brain`): it is the one driver that needs the brain's
+# daemon, and the runtime links no brain.
 
 [[bin]]
 # The sixth, for formatting a disk. The criterion only it has: TWO REFUSALS
@@ -68,11 +63,6 @@ path = "src/bin/format.rs"
 
 [dependencies]
 ronoctua-protocol = { path = "../ronoctua-protocol" }
-# THE BRAIN'S COMPILED REGISTRY, for `ronoctua-test-brain` alone: the steps it
-# draws are the ones a module the brain registers declares, with that module's
-# keys, and never a table read by its name. The shell links the brain already,
-# so the workspace compiles nothing new for it.
-ronoctua-brain = { path = "../ronoctua-brain" }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 anyhow.workspace = true
@@ -80,3 +70,7 @@ tracing.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+bins = { "ronoctua-bench-instance" = "bench", "ronoctua-test-format" = "driver", "ronoctua-test-keyboard" = "driver", "ronoctua-test-memory" = "driver", "ronoctua-test-states" = "driver", "ronoctua-test-transfers" = "driver" }

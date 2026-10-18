@@ -152,46 +152,74 @@ def rust_terms(terms: list[dict]) -> str:
     return "vec![" + ", ".join(parts) + "]"
 
 
-def read_verdict(where: str, raw: dict) -> str:
-    """The `Verdict` literal, from whatever the block names."""
-    out = []
+# THE SWITCHES, whose Nix name is the Rust field's with kebab for snake, in
+# the order the Rust literal has always listed them.
+SWITCHES = ("loud", "blink", "vibrate", "audio", "auto-read")
+
+
+def verdict_of(where: str, raw: dict) -> list[tuple[str, object]]:
+    """What the block names, checked: `(field, value)` in the table's order,
+    `glyph` as its codepoint — the one record both the Rust literal and the
+    brain's catalogue (`gen-brain-catalogue.py`) are written from."""
+    out: list[tuple[str, object]] = []
     show = raw.get("show")
     if show is not None:
         if show not in SHOW:
             complain(where, f"`show = {show!r}` does not exist (there are: {', '.join(sorted(SHOW))})")
         else:
-            out.append(f"show: Some(Show::{show.capitalize()})")
+            out.append(("show", show))
     life = raw.get("life")
     if life is not None:
         if life not in LIFE:
             complain(where, f"`life = {life!r}` does not exist (there are: {', '.join(sorted(LIFE))})")
         else:
-            out.append(f"life: Some(Life::{life.capitalize()})")
-    # The switches, whose Nix name is the Rust name with kebab for snake.
-    for name in ("loud", "blink", "vibrate", "audio", "auto-read"):
+            out.append(("life", life))
+    for name in SWITCHES:
         v = raw.get(name)
         if v is not None:
             if not isinstance(v, bool):
                 complain(where, f"`{name}` is a boolean, got {v!r}")
             else:
-                field = name.replace("-", "_")
-                out.append(f"{field}: Some({'true' if v else 'false'})")
+                out.append((name.replace("-", "_"), v))
     level = raw.get("level")
     if level is not None:
         if not isinstance(level, int) or not 0 <= level <= TOP_LEVEL:
             complain(where, f"`level` needs 0..{TOP_LEVEL}, got {level!r}")
         else:
-            out.append(f"level: Some({level})")
+            out.append(("level", level))
     icon = raw.get("icon")
     if icon is not None:
         cp = resolve_glyph(where, icon)
         if cp is not None:
-            out.append(f"glyph: Some('\\u{{{cp:X}}}')")
+            out.append(("glyph", cp))
+    return out
+
+
+def rust_verdict(verdict: list[tuple[str, object]]) -> str:
+    """The `Verdict` literal of a checked verdict."""
+    out = []
+    for field, value in verdict:
+        if field in ("show", "life"):
+            out.append(f"{field}: Some({field.capitalize()}::{value.capitalize()})")
+        elif field == "level":
+            out.append(f"level: Some({value})")
+        elif field == "glyph":
+            out.append(f"glyph: Some('\\u{{{value:X}}}')")
+        else:
+            out.append(f"{field}: Some({'true' if value else 'false'})")
     return "Verdict { " + ", ".join(out + ["..Verdict::default()"]) + " }"
 
 
-def read_actions(where: str, raw: list, keys: set[str]) -> str:
-    parts = []
+def read_verdict(where: str, raw: dict) -> str:
+    """The `Verdict` literal, from whatever the block names."""
+    return rust_verdict(verdict_of(where, raw))
+
+
+def actions_of(where: str, raw: list, keys: set[str]) -> list[dict]:
+    """The actions, checked: `{id, label, doing}` each, `doing` a `{kind, …}`
+    — what the Rust literal and the brain's catalogue are written from. Every
+    label key lands in `keys`."""
+    out = []
     for i, a in enumerate(raw):
         at = f"{where}.actions[{i}]"
         ident = a.get("id")
@@ -215,36 +243,154 @@ def read_actions(where: str, raw: list, keys: set[str]) -> str:
             )
         doing = None
         if "command" in a:
-            doing = f"Doing::Command({rust_str(a['command'])}.to_owned())"
+            doing = {"kind": "command", "command": a["command"]}
         elif "copy-path" in a:
-            doing = "Doing::CopyPath"
+            doing = {"kind": "copy-path"}
         elif "copy-image" in a:
-            doing = "Doing::CopyImage"
+            doing = {"kind": "copy-image"}
         elif "run" in a:
             program = a["run"]
             if program not in PROGRAMS:
                 complain(at, f"`run = {program!r}` does not exist (there are: {', '.join(sorted(PROGRAMS))})")
                 continue
-            args = []
-            for arg in a.get("args", []):
-                if arg in ARGS:
-                    args.append(f"Arg::{arg.capitalize()}")
-                else:
-                    args.append(f"Arg::Literal({rust_str(arg)}.to_owned())")
-            doing = (
-                f"Doing::Run {{ program: Program::{program.capitalize()}, "
-                f"args: vec![{', '.join(args)}] }}"
-            )
+            doing = {"kind": "run", "program": program, "args": list(a.get("args", []))}
         else:
             complain(at, "needs `command`, `run`, `copy-path` or `copy-image`")
             continue
         keys.add(f"notif-action-{ident}")
-        parts.append(
-            f"Action {{ id: {rust_str(ident)}.to_owned(), "
-            f"label: Label::Key({rust_str('notif-action-' + ident)}.to_owned()), "
-            f"doing: {doing} }}"
-        )
+        out.append({"id": ident, "label": f"notif-action-{ident}", "doing": doing})
+    return out
+
+
+def rust_doing(doing: dict) -> str:
+    """The `Doing` literal of a checked action's doing."""
+    kind = doing["kind"]
+    if kind == "command":
+        return f"Doing::Command({rust_str(doing['command'])}.to_owned())"
+    if kind == "copy-path":
+        return "Doing::CopyPath"
+    if kind == "copy-image":
+        return "Doing::CopyImage"
+    args = []
+    for arg in doing["args"]:
+        if arg in ARGS:
+            args.append(f"Arg::{arg.capitalize()}")
+        else:
+            args.append(f"Arg::Literal({rust_str(arg)}.to_owned())")
+    return f"Doing::Run {{ program: Program::{doing['program'].capitalize()}, args: vec![{', '.join(args)}] }}"
+
+
+def rust_actions(actions: list[dict]) -> str:
+    """The `Vec<Action>` literal of checked actions."""
+    parts = [
+        f"Action {{ id: {rust_str(a['id'])}.to_owned(), "
+        f"label: Label::Key({rust_str(a['label'])}.to_owned()), "
+        f"doing: {rust_doing(a['doing'])} }}"
+        for a in actions
+    ]
     return "vec![" + ", ".join(parts) + "]"
+
+
+def read_actions(where: str, raw: list, keys: set[str]) -> str:
+    return rust_actions(actions_of(where, raw, keys))
+
+
+def entry_of(ident: str, e: dict, keys: set[str]) -> dict:
+    """One entry of the catalogue, checked: `{id, when, apply, tags, actions,
+    rewrite}` — the record the Rust table and the brain's catalogue are both
+    written from. Its text keys land in `keys`."""
+    where = f"entries.{ident}"
+    if not ID.match(ident):
+        complain(where, "the id is not English kebab (invariant 18)")
+    terms = read_terms(where, e.get("when", []))
+    if not terms:
+        # An entry with no terms would recognise EVERYTHING, and the first
+        # one in the table would swallow every notification on the machine.
+        complain(where, "an empty `when` would recognise everything; one entry is one notification")
+    keys.add(f"notif-{ident}-summary")
+    keys.add(f"notif-{ident}-body")
+    tags = e.get("tags", [])
+    for t in tags:
+        if not isinstance(t, str) or not ID.match(t):
+            complain(where, f"the tag `{t}` is not English kebab")
+    rewrite = e.get("rewrite", False)
+    if not isinstance(rewrite, bool):
+        complain(where, f"`rewrite` is a boolean, got {rewrite!r}")
+    return {
+        "id": ident,
+        "when": terms,
+        "apply": verdict_of(where, e),
+        "tags": list(tags),
+        "actions": actions_of(where, e.get("actions", []), keys),
+        "rewrite": rewrite,
+    }
+
+
+def rust_entry(r: dict) -> str:
+    """The `Entry` literal of a checked entry."""
+    return (
+        "        Entry {\n"
+        f"            id: {rust_str(r['id'])}.to_owned(),\n"
+        f"            when: {rust_terms(r['when'])},\n"
+        f"            apply: {rust_verdict(r['apply'])},\n"
+        "            tags: vec!["
+        + ", ".join(f"{rust_str(t)}.to_owned()" for t in r["tags"])
+        + "],\n"
+        f"            actions: {rust_actions(r['actions'])},\n"
+        f"            rewrite: {'true' if r['rewrite'] else 'false'},\n"
+        "        },"
+    )
+
+
+# SERDE'S OWN SPELLING of `ronoctua_notify::catalogue::Entry` — the variant's
+# Rust name, every field present — for the entries that reach the footer as
+# DATA (the brain modules' events, `gen-brain-catalogue.py`). Every field is
+# written, `null` for one the entry leaves to the default: the notify crate's
+# test re-serialises what it read and demands the same object, so a field
+# spelt here in a way the Rust does not know is a failure and never a field
+# silently left at its default.
+VERDICT_FIELDS = ("show", "life", "loud", "level", "glyph", "blink", "vibrate", "audio", "auto_read")
+TEST_VARIANTS = {"is": "Is", "contains": "Contains", "starts-with": "StartsWith", "at-least": "AtLeast", "at-most": "AtMost"}
+
+
+def serde_doing(doing: dict):
+    kind = doing["kind"]
+    if kind == "command":
+        return {"Command": doing["command"]}
+    if kind == "copy-path":
+        return "CopyPath"
+    if kind == "copy-image":
+        return "CopyImage"
+    args = [arg.capitalize() if arg in ARGS else {"Literal": arg} for arg in doing["args"]]
+    return {"Run": {"program": doing["program"].capitalize(), "args": args}}
+
+
+def serde_entry(r: dict) -> dict:
+    """The entry as `serde_json` reads it into the notify crate's `Entry`."""
+    apply = {f: None for f in VERDICT_FIELDS}
+    for field, value in r["apply"]:
+        if field in ("show", "life"):
+            apply[field] = value.capitalize()
+        elif field == "glyph":
+            apply[field] = chr(value)
+        else:
+            apply[field] = value
+    return {
+        "id": r["id"],
+        "when": [
+            {
+                "field": "".join(p.capitalize() for p in t["field"].split("-")),
+                "test": {TEST_VARIANTS[t["kind"]]: t["value"]},
+            }
+            for t in r["when"]
+        ],
+        "apply": apply,
+        "tags": r["tags"],
+        "actions": [
+            {"id": a["id"], "label": {"Key": a["label"]}, "doing": serde_doing(a["doing"])} for a in r["actions"]
+        ],
+        "rewrite": r["rewrite"],
+    }
 
 
 def main() -> int:
@@ -288,36 +434,7 @@ def main() -> int:
 
     entries = []
     for ident in sorted(source.get("entries", {})):
-        where = f"entries.{ident}"
-        e = source["entries"][ident]
-        if not ID.match(ident):
-            complain(where, "the id is not English kebab (invariant 18)")
-        terms = read_terms(where, e.get("when", []))
-        if not terms:
-            # An entry with no terms would recognise EVERYTHING, and the first
-            # one in the table would swallow every notification on the machine.
-            complain(where, "an empty `when` would recognise everything; one entry is one notification")
-        keys.add(f"notif-{ident}-summary")
-        keys.add(f"notif-{ident}-body")
-        tags = e.get("tags", [])
-        for t in tags:
-            if not isinstance(t, str) or not ID.match(t):
-                complain(where, f"the tag `{t}` is not English kebab")
-        rewrite = e.get("rewrite", False)
-        if not isinstance(rewrite, bool):
-            complain(where, f"`rewrite` is a boolean, got {rewrite!r}")
-        entries.append(
-            "        Entry {\n"
-            f"            id: {rust_str(ident)}.to_owned(),\n"
-            f"            when: {rust_terms(terms)},\n"
-            f"            apply: {read_verdict(where, e)},\n"
-            "            tags: vec!["
-            + ", ".join(f"{rust_str(t)}.to_owned()" for t in tags)
-            + "],\n"
-            f"            actions: {read_actions(where, e.get('actions', []), keys)},\n"
-            f"            rewrite: {'true' if rewrite else 'false'},\n"
-            "        },"
-        )
+        entries.append(rust_entry(entry_of(ident, source["entries"][ident], keys)))
 
     rules = []
     seen: set[str] = set(source.get("entries", {}))

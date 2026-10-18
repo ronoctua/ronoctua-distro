@@ -1,6 +1,6 @@
 //! Interface text — invariant 8, section 7.6.
 //!
-//! **Zero string literals in UI.** Every sentence comes from `assets/i18n/*.ftl`, through
+//! **Zero string literals in UI.** Every sentence comes from a `.ftl` file, through
 //! a key. What this crate does is resolve a key into a sentence in the active
 //! language.
 //!
@@ -11,10 +11,32 @@
 //! 1. **Build.** `nix/scripts/gen-i18n.py` requires `pt-BR` and `en-GB` to have
 //!    exactly the same set of keys, and none of them empty. A missing translation
 //!    takes the build down before any test runs.
-//! 2. **Compilation.** The same generator emits one constant per key in
-//!    [`key`]. Whoever writes `key::CMD_BUFFER_CLOSE` cannot get it wrong;
-//!    whoever writes the string by hand loses the guarantee, and that is why the project's
-//!    code uses the constants.
+//! 2. **Compilation.** Every key is one constant in [`key`]. Whoever writes
+//!    `key::CMD_BUFFER_CLOSE` cannot get it wrong; whoever writes the string by
+//!    hand loses the guarantee, and that is why the project's code uses the
+//!    constants.
+//!
+//! # The names are compiled, the sentences are data
+//!
+//! Every crate that speaks owns its sentences (`crates/<crate>/i18n/<lang>.ftl`)
+//! and has a `key` module of its own, written at Nix EVALUATION by
+//! `nix/text-keys.nix` from the key NAMES of its fragment alone — no value
+//! reaches it, not even as a doc comment — which also re-exports the `key` of
+//! every crate it stands on that speaks. This crate's own [`key`] holds the few
+//! it says itself; [`LANGUAGES`] comes from `assets/i18n/languages.nix`, at
+//! evaluation too. The sentences are read at RUN TIME from the directory
+//! [`ENV`] names — one merged `<language>.ftl` per declared language, the
+//! `texts` derivation of `nix/i18n.nix`, which every wrapper sets. So editing a
+//! sentence rebuilds no crate; adding a key rebuilds the crate that says it.
+//!
+//! There is NO embedded copy to fall back to. A program whose texts are
+//! missing, unreadable, or written by another build (a key it was compiled
+//! with is not in them) is refused at its start by [`texts`] /
+//! [`Texts::checked`] and [`refuse`]: one English line naming [`ENV`], and
+//! [`EXIT_MISSING`]. A fallback would be a screen of `[key]` brackets, or the
+//! wrong build's words, with nothing saying why. WHICH keys a program was
+//! compiled with only the program knows — this crate is below every crate
+//! that speaks — so it hands them in: [`Keys::of`] over its own `key::sets`.
 //!
 //! # Why Fluent, and not gettext
 //!
@@ -26,18 +48,19 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::ffi::OsString;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+
 use fluent_bundle::{FluentBundle, FluentResource};
 use unic_langid::LanguageIdentifier;
 
-// The key registry, the language list AND the bundle loader, all generated
-// from `assets/i18n/*.ftl` by `nix/scripts/gen-i18n.py`.
-//
-// `face` is generated rather than written because `include_str!` takes a
-// literal and cannot be looped over. Written by hand it was the one place a
-// declared language could still be missing its body: the name would be in
-// `LANGUAGES`, the file would be on disk, and `Texts::fresh` would answer
-// `None` and fall back without a word.
-include!(concat!(env!("OUT_DIR"), "/keys.rs"));
+pub mod key;
+
+// The language list, written at evaluation by `nix/text-keys.nix` out of
+// `assets/i18n/languages.nix` (see the crate's header).
+include!(env!("RONOCTUA_LANGUAGES_RS"));
 
 /// Default language when the environment says nothing useful.
 ///
@@ -51,10 +74,273 @@ include!(concat!(env!("OUT_DIR"), "/keys.rs"));
 /// are the same decision, and `assets/i18n/languages.nix` is where it is made.
 pub const DEFAULT: &str = LANGUAGES[0];
 
+/// The variable naming the directory the sentences are in: the `texts`
+/// derivation (`nix/i18n.nix`), one `<language>.ftl` per declared language,
+/// which the wrappers set.
+pub const ENV: &str = "RONOCTUA_TEXTS";
+
+/// What a program exits with when its texts cannot be had: `EX_CONFIG` of
+/// `sysexits.h`, "something was found in an unconfigured or misconfigured
+/// state" — the environment, not the person and not a bug.
+pub const EXIT_MISSING: u8 = 78;
+
+/// Why the texts could not be had. Each one says so naming [`ENV`], which is
+/// the one thing a person can fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Missing {
+    /// The variable is not set, or is empty.
+    Unset,
+    /// A language's file could not be read.
+    Unreadable {
+        /// The file asked for.
+        file: PathBuf,
+        /// What the system answered.
+        why: String,
+    },
+    /// A language's file is not Fluent this program can load: a syntax error,
+    /// or a message declared twice.
+    Unparsable {
+        /// The file read.
+        file: PathBuf,
+        /// What is wrong with it, as the parser said it.
+        why: String,
+    },
+    /// The file lacks keys this program was compiled with: the program and its
+    /// texts come from different builds.
+    Keys {
+        /// The file read.
+        file: PathBuf,
+        /// The keys it lacks, in the order of the program's [`Keys`].
+        keys: Vec<&'static str>,
+        /// How many keys the program was compiled with.
+        of: usize,
+    },
+}
+
+/// How many of the lacking keys a refusal names before it only counts them.
+const NAMED: usize = 5;
+
+impl fmt::Display for Missing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let dir = |file: &Path| {
+            file.parent()
+                .map_or_else(String::new, |d| d.display().to_string())
+        };
+        match self {
+            Self::Unset => write!(
+                f,
+                "{ENV} is not set: the interface's sentences are data the build writes \
+                 beside the program (one `<language>.ftl` in the texts' generated \
+                 directory), and nothing here can say a word without them — run the \
+                 program through its wrapper or the session, or inside `nix develop`"
+            ),
+            Self::Unreadable { file, why } => write!(
+                f,
+                "{ENV} points at {}, and {} cannot be read: {why}",
+                dir(file),
+                file.display()
+            ),
+            Self::Unparsable { file, why } => write!(
+                f,
+                "{ENV} points at {}, and {} is not Fluent this program can load: {why}",
+                dir(file),
+                file.display()
+            ),
+            Self::Keys { file, keys, of } => {
+                let named: Vec<&str> = keys.iter().take(NAMED).copied().collect();
+                let more = keys.len().saturating_sub(NAMED);
+                write!(
+                    f,
+                    "{ENV} points at {}, and {} lacks {} of the {} keys this program was \
+                     compiled with ({}{}): the program and its texts come from different builds",
+                    dir(file),
+                    file.display(),
+                    keys.len(),
+                    of,
+                    named.join(", "),
+                    if more > 0 {
+                        format!(" and {more} more")
+                    } else {
+                        String::new()
+                    }
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for Missing {}
+
+/// One crate's keys, as its generated `key::sets` hands them in: the crate's
+/// name and its `key::ALL`.
+pub type Set = (&'static str, &'static [&'static str]);
+
+/// Every key a program was compiled with: the keys of each crate it links
+/// that speaks, collected by the program's own `key::sets` (written by
+/// `nix/text-keys.nix`), each crate once.
+///
+/// # Why the program hands them in
+///
+/// Because this crate is BELOW every crate that speaks: each owns its keys
+/// (`crates/<crate>/i18n/`), and only the program above them all knows which
+/// it links. A list kept here would make every crate's new key an input of
+/// this crate — and with it of every crate that speaks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Keys {
+    sets: Vec<Set>,
+}
+
+impl Keys {
+    /// The keys `collect` gathers: a program's `key::sets`.
+    #[must_use]
+    pub fn of(collect: fn(&mut Vec<Set>)) -> Self {
+        let mut sets = Vec::new();
+        collect(&mut sets);
+        Self { sets }
+    }
+
+    /// Every key, crate by crate.
+    pub fn iter(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.sets.iter().flat_map(|(_, keys)| keys.iter().copied())
+    }
+
+    /// How many keys.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.sets.iter().map(|(_, keys)| keys.len()).sum()
+    }
+
+    /// No key at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The crates that said them, in the order they were collected.
+    pub fn crates(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.sets.iter().map(|(by, _)| *by)
+    }
+}
+
+/// Each declared language's file, parsed — read the first time anything asks
+/// for that language, and never again: the directory is a store path, and
+/// what it holds cannot change under a running process. A refusal is kept
+/// too, so every later ask says the same thing.
+static PARSED: [OnceLock<Result<Parsed, Missing>>; LANGUAGES.len()] =
+    [const { OnceLock::new() }; LANGUAGES.len()];
+
+/// A language's file, and what it parsed into.
+#[derive(Clone)]
+struct Parsed {
+    file: PathBuf,
+    resource: Arc<FluentResource>,
+}
+
+/// The file of `language` in the directory `dir` names.
+fn file_in(dir: Option<OsString>, language: &str) -> Result<PathBuf, Missing> {
+    let dir = PathBuf::from(dir.filter(|d| !d.is_empty()).ok_or(Missing::Unset)?);
+    Ok(dir.join(format!("{language}.ftl")))
+}
+
+/// One language's file in the directory `dir` names, parsed. Pure in what it
+/// is handed: the tests point it at files they planted.
+fn read(dir: Option<OsString>, language: &str) -> Result<Parsed, Missing> {
+    let file = file_in(dir, language)?;
+    let source = std::fs::read_to_string(&file).map_err(|e| Missing::Unreadable {
+        file: file.clone(),
+        why: e.to_string(),
+    })?;
+    match FluentResource::try_new(source) {
+        Ok(resource) => Ok(Parsed {
+            file,
+            resource: Arc::new(resource),
+        }),
+        // EVERY ERROR REFUSES, as the embedded bundle's did (`ok()?`): a
+        // resource with junk in it loads the rest silently, and the junk is
+        // a message that comes out as `[key]`.
+        Err((resource, errors)) => {
+            let first = errors.first();
+            let line = first.map_or(0, |e| {
+                resource.source()[..e.pos.start.min(resource.source().len())]
+                    .matches('\n')
+                    .count()
+                    + 1
+            });
+            Err(Missing::Unparsable {
+                file,
+                why: format!(
+                    "line {line}: {}",
+                    first.map_or_else(String::new, ToString::to_string)
+                ),
+            })
+        }
+    }
+}
+
+/// The parsed file of a declared language, from [`ENV`]; `None` for a
+/// language that is not declared.
+fn parsed(language: &str) -> Option<Result<Parsed, Missing>> {
+    let at = LANGUAGES.iter().position(|l| *l == language)?;
+    Some(
+        PARSED[at]
+            .get_or_init(|| read(std::env::var_os(ENV), language))
+            .clone(),
+    )
+}
+
+/// The language the environment names — `LC_ALL`, `LC_MESSAGES` and `LANG`,
+/// in that order, as POSIX does — or [`DEFAULT`]. Always a declared one.
+fn environment_language() -> String {
+    for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        let Ok(v) = std::env::var(var) else { continue };
+        // `pt_BR.UTF-8` -> `pt-BR`.
+        let base = v.split('.').next().unwrap_or("").replace('_', "-");
+        if LANGUAGES.contains(&base.as_str()) {
+            return base;
+        }
+    }
+    DEFAULT.to_owned()
+}
+
+/// The texts of the environment's language ([`Texts::from_env`]'s choice),
+/// with every key this program was compiled with in them (`keys`, the
+/// program's [`Keys::of`] over its own `key::sets`).
+///
+/// THE START GUARD of a program that speaks: called before its first word,
+/// so a missing directory, an unreadable file or another build's texts are
+/// said at once ([`refuse`]) rather than as a `[key]` on a screen or a panic
+/// in the middle of a door.
+///
+/// # Errors
+///
+/// [`Missing`], which says why naming [`ENV`].
+pub fn texts(keys: &Keys) -> Result<Texts, Missing> {
+    let language = environment_language();
+    Texts::checked(&language, keys)
+        .map(|texts| texts.unwrap_or_else(|| unreachable!("`{language}` is a declared language")))
+}
+
+/// Says why the texts could not be had — one English line on stderr, the
+/// program's name first — and exits with [`EXIT_MISSING`].
+///
+/// English and not a key: the line exists precisely because there are no
+/// keys to say it with.
+pub fn refuse(missing: &Missing) -> ! {
+    let program = std::env::args_os()
+        .next()
+        .map(PathBuf::from)
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    eprintln!("{program}: {missing}");
+    std::process::exit(i32::from(EXIT_MISSING))
+}
+
 /// One language's texts.
 pub struct Texts {
-    bundle: FluentBundle<FluentResource>,
+    bundle: FluentBundle<Arc<FluentResource>>,
     language: String,
+    /// The file they were read from, for a refusal to name.
+    file: PathBuf,
 }
 
 impl std::fmt::Debug for Texts {
@@ -95,11 +381,63 @@ impl Texts {
     ///
     /// Returns `None` for a language that does not exist — the caller decides whether to fall back
     /// to the default or complain. [`Texts::from_env`] falls back to the default.
+    ///
+    /// The file is read and parsed once per process (see [`ENV`]); every later
+    /// call only builds a bundle over it.
+    ///
+    /// # Panics
+    ///
+    /// When a DECLARED language's texts cannot be had ([`Missing`], with a
+    /// sentence naming [`ENV`]). A program's start guard ([`texts`],
+    /// [`Texts::checked`]) has said so already, with [`EXIT_MISSING`], before
+    /// anything got here.
     #[must_use]
     pub fn fresh(language: &str) -> Option<Self> {
-        let ftl = face(language)?;
-        let id: LanguageIdentifier = language.parse().ok()?;
-        let resource = FluentResource::try_new(ftl.to_owned()).ok()?;
+        Self::loaded(language).unwrap_or_else(|missing| panic!("{missing}"))
+    }
+
+    /// [`Texts::fresh`], and every key this program was compiled with (`keys`)
+    /// is in it — the start guard's question, asked of the language the
+    /// program is about to speak. `Ok(None)` for a language that is not
+    /// declared.
+    ///
+    /// # Errors
+    ///
+    /// [`Missing`]: the texts cannot be read, do not parse, or lack keys of
+    /// `keys` (another build's).
+    pub fn checked(language: &str, keys: &Keys) -> Result<Option<Self>, Missing> {
+        let Some(texts) = Self::loaded(language)? else {
+            return Ok(None);
+        };
+        let lacking = texts.lacking(keys);
+        if lacking.is_empty() {
+            return Ok(Some(texts));
+        }
+        Err(Missing::Keys {
+            file: texts.file,
+            keys: lacking,
+            of: keys.len(),
+        })
+    }
+
+    /// The keys of `keys` these texts have no sentence for.
+    fn lacking(&self, keys: &Keys) -> Vec<&'static str> {
+        keys.iter().filter(|k| !self.has(k)).collect()
+    }
+
+    /// [`Texts::fresh`], saying why instead of panicking.
+    fn loaded(language: &str) -> Result<Option<Self>, Missing> {
+        let Some(parsed) = parsed(language) else {
+            return Ok(None);
+        };
+        Self::over(language, parsed?)
+    }
+
+    /// A bundle of `language` over an already parsed file.
+    fn over(language: &str, parsed: Parsed) -> Result<Option<Self>, Missing> {
+        let Ok(id) = language.parse::<LanguageIdentifier>() else {
+            return Ok(None);
+        };
         let mut bundle = FluentBundle::new(vec![id]);
         // ISOLATION MARKS STAY ON, and `format` is what takes them off.
         //
@@ -118,27 +456,32 @@ impl Texts {
         // would be a second copy of it, and it would go wrong the day a
         // language put the same word somewhere else in the line.
         bundle.set_use_isolating(true);
-        bundle.add_resource(resource).ok()?;
-        Some(Self {
+        // A MESSAGE DECLARED TWICE is refused like a syntax error: the bundle
+        // keeps the first and drops the second, and which sentence a key says
+        // would be an accident of the file's order.
+        if let Err(errors) = bundle.add_resource(parsed.resource) {
+            return Err(Missing::Unparsable {
+                file: parsed.file,
+                why: errors.first().map_or_else(String::new, ToString::to_string),
+            });
+        }
+        Ok(Some(Self {
             bundle,
             language: language.to_owned(),
-        })
+            file: parsed.file,
+        }))
     }
 
     /// Loads the environment's language, falling back to [`DEFAULT`].
     ///
     /// It reads `LC_ALL`, `LC_MESSAGES` and `LANG`, in that order — the same as POSIX.
+    ///
+    /// # Panics
+    ///
+    /// As [`Texts::fresh`]: when the texts cannot be had.
     #[must_use]
     pub fn from_env() -> Self {
-        for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-            let Ok(v) = std::env::var(var) else { continue };
-            // `pt_BR.UTF-8` -> `pt-BR`.
-            let base = v.split('.').next().unwrap_or("").replace('_', "-");
-            if let Some(t) = Self::fresh(&base) {
-                return t;
-            }
-        }
-        Self::fresh(DEFAULT).expect("the default language has to exist")
+        Self::fresh(&environment_language()).expect("the default language has to exist")
     }
 
     /// The loaded language.
@@ -176,7 +519,9 @@ impl Texts {
     /// **It never fails.** An unknown key becomes `[key]`, visible on screen and
     /// obvious in a screenshot. Taking the shell down over a missing text
     /// would trade a wrong sentence for no interface at all — and the two build
-    /// guards already make that case unreachable from the project's code.
+    /// guards, with the start guard over the texts read at run time
+    /// ([`Texts::checked`]), already make that case unreachable from the
+    /// project's code.
     #[must_use]
     pub fn t(&self, key: &str) -> String {
         self.t_with(key, &[])
@@ -238,8 +583,8 @@ impl Texts {
     /// One number with the separator this language writes.
     ///
     /// Two languages, two separators, and a table of two is the honest size of
-    /// the problem: this bundle ships `en-GB` and `pt-BR` and `face` refuses
-    /// anything else, so a third would fail to load long before it got here.
+    /// the problem: the build declares `en-GB` and `pt-BR` and an undeclared
+    /// language never loads, so a third would fail long before it got here.
     /// One decimal place, which is what every measurement this is used for
     /// wants — a volume to a tenth of a cubic centimetre, a side to a tenth of
     /// a millimetre.
@@ -416,19 +761,58 @@ impl Marked {
 mod tests {
     use super::*;
 
+    /// Every message id of a language's file, in file order: what the merged
+    /// texts hold, read off their own source — the census needs no list of
+    /// keys from the crates above this one.
+    fn ids(language: &str) -> Vec<String> {
+        let parsed = parsed(language)
+            .unwrap_or_else(|| panic!("{language} is a declared language"))
+            .unwrap_or_else(|missing| panic!("{missing}"));
+        parsed
+            .resource
+            .source()
+            .lines()
+            .filter_map(|line| {
+                let (id, _) = line.split_once('=')?;
+                let id = id.trim_end();
+                (id.starts_with(|c: char| c.is_ascii_lowercase())
+                    && id
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+                .then(|| id.to_owned())
+            })
+            .collect()
+    }
+
+    /// A language's texts over a file planted with `text`, for the tests that
+    /// need sentences of their own (the real ones belong to the crates above).
+    fn planted_texts(name: &str, language: &str, text: &str) -> Texts {
+        let dir = planted(name, &[(&format!("{language}.ftl"), text)]);
+        let parsed = read(Some(dir.clone().into_os_string()), language).expect("it parses");
+        let _ = std::fs::remove_dir_all(&dir);
+        Texts::over(language, parsed)
+            .expect("it loads")
+            .expect("a declared language")
+    }
+
     #[test]
-    fn both_languages_load_and_have_every_key() {
-        // The generator already guarantees this at build time. This test guarantees that what
-        // was GENERATED and what is EMBEDDED are the same set — they are two
-        // different paths (keys.rs and include_str!) and nothing else ties them together.
+    fn both_languages_load_and_have_the_same_keys() {
+        // The generator already guarantees this at build time, over every
+        // fragment. This guarantees it of what is READ AT RUN TIME
+        // (`RONOCTUA_TEXTS`, the merged files): every language has the base's
+        // keys and no other, and each one says something.
+        let base = ids(DEFAULT);
+        assert!(base.len() > 1000, "only {} keys in {DEFAULT}", base.len());
+        let mut sorted = base.clone();
+        sorted.sort();
         for language in LANGUAGES {
             let t = Texts::fresh(language).unwrap_or_else(|| panic!("{language} did not load"));
-            for key in ALL_KEYS {
+            let mut mine = ids(language);
+            mine.sort();
+            assert_eq!(mine, sorted, "{language} has other keys than {DEFAULT}");
+            for key in &base {
                 let s = t.t(key);
-                assert!(
-                    !s.starts_with('['),
-                    "{language}: the key `{key}` is in the registry and missing from the .ftl"
-                );
+                assert!(!s.starts_with('['), "{language}: `{key}` did not resolve");
                 assert!(!s.is_empty(), "{language}: `{key}` resolved to empty");
             }
         }
@@ -440,11 +824,12 @@ mod tests {
         // which passes every set check.
         let en = Texts::fresh("en-GB").unwrap();
         let pt = Texts::fresh("pt-BR").unwrap();
-        let different = ALL_KEYS.iter().filter(|c| en.t(c) != pt.t(c)).count();
+        let every = ids(DEFAULT);
+        let different = every.iter().filter(|c| en.t(c) != pt.t(c)).count();
         assert!(
-            different >= ALL_KEYS.len() / 2,
+            different >= every.len() / 2,
             "only {different} of {} keys differ between the languages",
-            ALL_KEYS.len()
+            every.len()
         );
     }
 
@@ -463,39 +848,33 @@ mod tests {
         assert!(Texts::fresh("pt_BR.UTF-8").is_none());
     }
 
+    /// A hint with three keys in it, which the two languages place differently
+    /// — the shape of the theme chooser's.
+    const HINT_EN: &str = "hint = { $apply } applies · { $left } { $right } turn\n";
+    const HINT_PT: &str = "hint = girar com { $left } { $right } · { $apply } aplica\n";
+
     #[test]
     fn a_marked_sentence_says_where_its_arguments_are() {
         // The whole point of `t_marked`: the pieces concatenate back to the
         // sentence, and the ones flagged `true` are exactly what was passed in.
-        // THE THEME CHOOSER'S HINT, which is still a SENTENCE with keys in
-        // it. The file manager's and the transfer panel's used to be the
-        // example here and are not any more: both are generated out of their
-        // key tables now, one shortcut per chunk, and nothing about them
-        // passes through Fluent's arguments.
-        let t = Texts::fresh("en-GB").unwrap();
+        let t = planted_texts("marked", "en-GB", HINT_EN);
         let arg = [("apply", "C-a"), ("left", "C-h"), ("right", "C-l")];
-        let m = t.t_marked(key::THEME_HINT, &arg);
-        assert_eq!(m.text, t.t_with(key::THEME_HINT, &arg));
+        let m = t.t_marked("hint", &arg);
+        assert_eq!(m.text, t.t_with("hint", &arg));
         let pieces = m.pieces();
         let rebuilt: String = pieces.iter().map(|(s, _)| *s).collect();
         assert_eq!(rebuilt, m.text, "the pieces have to be the sentence");
         let keys: Vec<&str> = pieces.iter().filter(|(_, k)| *k).map(|(s, _)| *s).collect();
-        // THREE, and not four: the chooser's own `Esc` left the sentence — the
-        // way back the region prepends to every hint is the one `Esc` a line
-        // shows (`chrome::with_the_way_back`).
         assert_eq!(keys, vec!["C-a", "C-h", "C-l"]);
     }
 
     #[test]
     fn an_argument_at_either_end_still_has_a_range() {
-        // `files-fact-says` is `{ $label }: { $value }` — one argument opens the
-        // sentence and one closes it. An off-by-one in the strip shows up here
-        // and nowhere else, because every other value has prose on both sides.
-        let t = Texts::fresh("en-GB").unwrap();
-        let m = t.t_marked(
-            key::FILES_FACT_SAYS,
-            &[("label", "path"), ("value", "/tmp")],
-        );
+        // `{ $label }: { $value }` — one argument opens the sentence and one
+        // closes it. An off-by-one in the strip shows up here and nowhere else,
+        // because every other value has prose on both sides.
+        let t = planted_texts("ends", "en-GB", "says = { $label }: { $value }\n");
+        let m = t.t_marked("says", &[("label", "path"), ("value", "/tmp")]);
         assert_eq!(m.text, "path: /tmp");
         assert_eq!(m.at, vec![0..4, 6..10]);
         assert_eq!(
@@ -506,8 +885,8 @@ mod tests {
 
     #[test]
     fn a_sentence_with_no_arguments_has_no_ranges() {
-        let t = Texts::fresh("en-GB").unwrap();
-        let m = t.t_marked(key::FILES_UP, &[]);
+        let t = planted_texts("bare", "en-GB", "up = up\n");
+        let m = t.t_marked("up", &[]);
         assert!(m.at.is_empty());
         assert_eq!(m.pieces(), vec![(m.text.as_str(), false)]);
     }
@@ -517,11 +896,11 @@ mod tests {
         // The reason the boundary comes from the localiser and not from a
         // search: the two languages put the same argument at different byte
         // offsets, and both are right.
-        let en = Texts::fresh("en-GB").unwrap();
-        let pt = Texts::fresh("pt-BR").unwrap();
+        let en = planted_texts("order-en", "en-GB", HINT_EN);
+        let pt = planted_texts("order-pt", "pt-BR", HINT_PT);
         let arg = [("apply", "C-a"), ("left", "C-h"), ("right", "C-l")];
-        let a = en.t_marked(key::THEME_HINT, &arg);
-        let b = pt.t_marked(key::THEME_HINT, &arg);
+        let a = en.t_marked("hint", &arg);
+        let b = pt.t_marked("hint", &arg);
         assert_ne!(a.at, b.at, "the two languages cannot agree on every offset");
         for m in [&a, &b] {
             assert_eq!(m.at.len(), 3);
@@ -549,14 +928,12 @@ mod tests {
         // strip is the only door out of this crate. The call WITH arguments is
         // the one that matters: a sentence resolved with none never had a mark
         // to lose.
-        let t = Texts::fresh("pt-BR").unwrap();
-        let with_args = t.t_with(
-            key::FILES_FACT_SAYS,
-            &[("label", "path"), ("value", "/tmp")],
-        );
+        let planted = planted_texts("bidi", "pt-BR", "says = { $label }: { $value }\n");
+        let with_args = planted.t_with("says", &[("label", "path"), ("value", "/tmp")]);
         assert_eq!(with_args, "path: /tmp");
-        for key in ALL_KEYS {
-            let s = t.t(key);
+        let t = Texts::fresh("pt-BR").unwrap();
+        for key in ids("pt-BR") {
+            let s = t.t(&key);
             assert!(
                 !s.contains('\u{2068}') && !s.contains('\u{2069}'),
                 "`{key}` came with an isolation mark"
@@ -569,19 +946,184 @@ mod tests {
     // over as a float would have carried Rust's full stop into pt-BR, where the
     // separator is a comma. Nothing else in the bundle would have said so.
     fn a_measurement_wears_the_separator_of_its_language() {
-        let en = Texts::fresh("en-GB").expect("en-GB");
-        let pt = Texts::fresh("pt-BR").expect("pt-BR");
-        let key = "files-value-cubic-centimetres";
+        let volume = "volume = { $n } cm³\n";
+        let en = planted_texts(
+            "measure-en",
+            "en-GB",
+            &format!("{volume}number-decimal-mark = .\n"),
+        );
+        let pt = planted_texts(
+            "measure-pt",
+            "pt-BR",
+            &format!("{volume}number-decimal-mark = ,\n"),
+        );
         assert!(
-            en.t_args(key, &[("n", Arg::Fraction(15.6))])
+            en.t_args("volume", &[("n", Arg::Fraction(15.6))])
                 .contains("15.6"),
             "en-GB should keep the full stop"
         );
         assert!(
-            pt.t_args(key, &[("n", Arg::Fraction(15.6))])
+            pt.t_args("volume", &[("n", Arg::Fraction(15.6))])
                 .contains("15,6"),
             "pt-BR should use a comma: {}",
-            pt.t_args(key, &[("n", Arg::Fraction(15.6))])
+            pt.t_args("volume", &[("n", Arg::Fraction(15.6))])
         );
+    }
+
+    #[test]
+    fn the_real_separators_are_the_languages() {
+        // The planted files above say what the arithmetic does; this says the
+        // real texts carry the separator each language writes.
+        assert_eq!(Texts::fresh("en-GB").unwrap().decimal_mark(), '.');
+        assert_eq!(Texts::fresh("pt-BR").unwrap().decimal_mark(), ',');
+    }
+
+    /// A directory of its own under the system's temporary one, holding
+    /// `files` and nothing else. Removed by the caller.
+    fn planted(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-i18n-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        for (file, text) in files {
+            std::fs::write(dir.join(file), text).expect("a planted file");
+        }
+        dir
+    }
+
+    #[test]
+    fn no_variable_is_refused_naming_it() {
+        // Unset and empty are the same absence: an empty value would
+        // otherwise be read as the current directory.
+        for dir in [None, Some(OsString::new())] {
+            let refused = read(dir, DEFAULT).err().expect("refused");
+            assert_eq!(refused, Missing::Unset);
+            assert!(
+                refused.to_string().starts_with("RONOCTUA_TEXTS is not set"),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_file_is_refused_naming_the_variable_and_the_file() {
+        let dir = planted("missing", &[]);
+        let refused = read(Some(dir.clone().into_os_string()), "pt-BR")
+            .err()
+            .expect("refused");
+        let said = refused.to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(refused, Missing::Unreadable { .. }), "{refused:?}");
+        assert!(said.contains(ENV) && said.contains("pt-BR.ftl"), "{said}");
+    }
+
+    #[test]
+    fn junk_is_refused_with_its_line() {
+        // The embedded bundle refused a resource with junk in it (`ok()?`);
+        // the file read at run time is refused the same way, and says where.
+        let dir = planted(
+            "junk",
+            &[("en-GB.ftl", "hello = Hello\n\nthis is not fluent\n")],
+        );
+        let refused = read(Some(dir.clone().into_os_string()), "en-GB")
+            .err()
+            .expect("refused");
+        let _ = std::fs::remove_dir_all(&dir);
+        let Missing::Unparsable { why, .. } = &refused else {
+            panic!("{refused:?}")
+        };
+        assert!(why.starts_with("line 3:"), "{why}");
+        assert!(refused.to_string().contains(ENV), "{refused}");
+    }
+
+    #[test]
+    fn a_message_declared_twice_is_refused() {
+        let dir = planted("twice", &[("en-GB.ftl", "hello = Hello\nhello = Again\n")]);
+        let parsed = read(Some(dir.clone().into_os_string()), "en-GB").expect("it parses");
+        let _ = std::fs::remove_dir_all(&dir);
+        let refused = Texts::over("en-GB", parsed).expect_err("refused");
+        assert!(matches!(refused, Missing::Unparsable { .. }), "{refused:?}");
+        assert!(refused.to_string().contains("\"hello\""), "{refused}");
+    }
+
+    /// A program's keys, as a crate's generated `key::sets` would hand them in:
+    /// two crates, one of them reached twice and collected once.
+    static FIRST: [&str; 2] = ["files-up", "first-two"];
+    static SECOND: [&str; 7] = ["s-1", "s-2", "s-3", "s-4", "s-5", "s-6", "s-7"];
+    fn first(into: &mut Vec<Set>) {
+        if into.iter().any(|(by, _)| *by == "first") {
+            return;
+        }
+        into.push(("first", &FIRST));
+    }
+    fn program(into: &mut Vec<Set>) {
+        if into.iter().any(|(by, _)| *by == "program") {
+            return;
+        }
+        into.push(("program", &SECOND));
+        first(into);
+        first(into);
+    }
+
+    #[test]
+    fn a_programs_keys_are_its_crates_each_once() {
+        let keys = Keys::of(program);
+        assert_eq!(keys.crates().collect::<Vec<_>>(), vec!["program", "first"]);
+        assert_eq!(keys.len(), FIRST.len() + SECOND.len());
+        assert!(keys.iter().any(|k| k == "files-up"));
+        assert!(!Keys::of(|_| {}).iter().any(|_| true));
+        assert!(Keys::of(|_| {}).is_empty());
+    }
+
+    #[test]
+    fn another_builds_texts_are_refused_saying_which_keys() {
+        // One message stands for texts written by another build: every key
+        // this program was compiled with but that one is missing from them,
+        // and the refusal names the first few and counts the rest.
+        let texts = planted_texts("other-build", "en-GB", "files-up = Up\n");
+        let keys = Keys::of(program);
+        let lacking = texts.lacking(&keys);
+        assert_eq!(lacking.len(), keys.len() - 1);
+        assert!(!lacking.contains(&"files-up"));
+        let said = Missing::Keys {
+            file: texts.file.clone(),
+            keys: lacking.clone(),
+            of: keys.len(),
+        }
+        .to_string();
+        assert!(said.contains(ENV), "{said}");
+        assert!(said.contains("different builds"), "{said}");
+        assert!(said.contains(lacking[0]), "{said}");
+        assert!(
+            said.contains(&format!("of the {} keys", keys.len())),
+            "{said}"
+        );
+        assert!(
+            said.contains(&format!(" and {} more", lacking.len() - NAMED)),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn the_start_guard_passes_on_the_real_texts() {
+        // `RONOCTUA_TEXTS` of the tests' environment is the build's own
+        // directory: the guard every program runs first lets it through, over
+        // this crate's own keys.
+        let keys = Keys::of(key::sets);
+        assert!(keys.iter().any(|k| k == key::NUMBER_DECIMAL_MARK));
+        let texts = texts(&keys).unwrap_or_else(|missing| panic!("{missing}"));
+        assert!(LANGUAGES.contains(&texts.language()));
+    }
+
+    #[test]
+    fn an_undeclared_language_is_none_and_reads_nothing() {
+        // `None` is still the answer for a language that does not exist: it
+        // is asked before any file is, so no directory can turn it into a
+        // refusal.
+        assert!(Texts::fresh("xx-XX").is_none());
+        assert!(matches!(
+            Texts::checked("xx-XX", &Keys::of(key::sets)),
+            Ok(None)
+        ));
     }
 }

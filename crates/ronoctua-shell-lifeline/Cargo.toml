@@ -1,0 +1,39 @@
+[package]
+name = "ronoctua-shell-lifeline"
+description = "The line that outlives the footer: two lines of what happened and what can be done, raised by systemd when it fails."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE LINE THAT OUTLIVES THE FOOTER (the 2026-10-12 wave): its own crate so
+# the one screen that exists when the footer is dead depends on nothing of
+# the footer's — only the kit and the door.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
+# THE WINDOW HANDLES wgpu takes the line's surface by (its one `unsafe` block).
+raw-window-handle.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_JOURNALCTL", "RONOCTUA_KEYS_DIR", "RONOCTUA_SYSTEMCTL"]

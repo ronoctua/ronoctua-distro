@@ -26,3 +26,8 @@ ronoctua-apps = { path = "../ronoctua-apps" }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]
+run-env = ["RONOCTUA_ICONSET"]

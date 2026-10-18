@@ -1,0 +1,67 @@
+[package]
+name = "ronoctua-shell-security"
+description = "The security centre (LEADER s e): the view, its window, its region in the footer, its camera and its keys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE SECURITY CENTRE, ONE CRATE (the 2026-10-12 wave): the view both doors
+# draw, the window, the footer's region and the one errand handler both carry
+# out, the camera and the keymap's contribution. It stands on the kit, the
+# door, the report and the work (the seal and the vault it hands the queue
+# and the vault's root unit) — and the file manager stands on it.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-report = { path = "../ronoctua-shell-report" }
+ronoctua-shell-work = { path = "../ronoctua-shell-work" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+ronoctua-brain = { path = "../ronoctua-brain" }
+ronoctua-network = { path = "../ronoctua-network" }
+ronoctua-memory = { path = "../ronoctua-memory" }
+ronoctua-containers = { path = "../ronoctua-containers" }
+ronoctua-disks = { path = "../ronoctua-disks" }
+# Whose keys a seal is for (`prefs`) and the security keys a sync brought
+# that root's list lacks (`offers`) — no `age` of the belongings.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs", "offers" ] }
+ronoctua-pq = { path = "../ronoctua-pq", default-features = false }
+ronoctua-private = { path = "../ronoctua-private" }
+ronoctua-http = { path = "../ronoctua-http", default-features = false, features = [ "tls" ] }
+# THE THREE CHECKS (a file's hash to VirusTotal, an address to XposedOrNot,
+# five digits of a password's hash to Pwned Passwords), asked by the door the
+# person pressed, on its thread, with the person's pass for the host: `net`.
+ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false, features = [ "net" ] }
+# THE SUDO DOOR's crate: the firewall's settings and status, fingerprints,
+# the device's facts — and `authority`, for whether its helper is there
+# (`authority::has_helper`). The door itself is called by the sudo bar alone
+# (`sudo-door-is-one`); this crate is the shell's, one program.
+ronoctua-security = { path = "../ronoctua-security", features = [ "authority" ] }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR", "RONOCTUA_XDG_OPEN"]

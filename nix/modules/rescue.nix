@@ -184,7 +184,10 @@ in
       serviceConfig = {
         Type = "idle";
         User = user;
-        ExecStart = "${ronoctua.shell}/bin/ronoctua-rescue";
+        # The console as a program of its own (`rust.rescue`, the palettes'
+        # wrapper over its unit): the footer's bundle would put the whole
+        # desktop in this unit's closure (`shell-bundle-is-only-the-shell`).
+        ExecStart = "${ronoctua.rescue}/bin/ronoctua-rescue";
         # `+` runs as root: switching a VT needs a capability the person does
         # not have, and the rest of the unit stays unprivileged.
         ExecStartPre = "+${pkgs.writeShellScript "ronoctua-rescue-enter" ''

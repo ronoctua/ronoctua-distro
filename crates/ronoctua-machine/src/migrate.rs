@@ -203,11 +203,16 @@ fn make_next(
     std::fs::create_dir_all(&m.places.run).map_err(|e| disk::failed(&m.places.run, &e))?;
     let out = m.places.run.join("migrated");
     let _ = disk::remove(&out);
-    let built = run::status(nix, &argv::build(next, attr, &out))?;
+    // Sized and in phases, as an apply builds it ([`crate::build`]); its
+    // units are kept by the apply that follows, which builds the same system.
+    let built = crate::build::system(m, nix, next, attr, &out);
     let _ = disk::remove(&out);
-    if built != Some(0) {
+    if let Err(refused) = built {
         say(3, "the new machine flake does not build (build-failed)");
-        return Err(Refusal::of(Why::BuildFailed));
+        return Err(Refusal::of(match refused.why {
+            Why::Failed => Why::Failed,
+            _ => Why::BuildFailed,
+        }));
     }
     Ok(())
 }

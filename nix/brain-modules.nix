@@ -13,11 +13,18 @@
 #   checks.nix        `{ <arguments> }: { checks = { … }; slow = [ … ]; }`
 #   why.md            its paragraph of documentation, in pt-BR
 #   tables.nix        (optional) Rust tables other generators make for it
+#   shared.rs         (optional) in a DISTRO folder, the half of its Rust that
+#                     a crate its `namedBy` lists reads — compiled into the
+#                     library the footer links (`ronoctua-brain`), beside its
+#                     manifest, while `module.rs` is the daemon's; in a
+#                     person's folder, a file like any other beside
+#                     `module.rs`, which the daemon alone compiles
 #
 # THIS FILE IS A PURE FUNCTION of `lib` and the folder. Nothing here builds:
 # it reads, refuses, and hands every generator what it needs — the text
-# fragments to `nix/i18n.nix`, the glyphs to the measured icon table, the
-# notifications to the catalogue, the NixOS modules to `nix/modules/brain.nix`,
+# fragments to `nix/i18n.nix`, the marks, glyphs, actions, events and
+# notifications the footer reads at run time to the brain's catalogue
+# (`nix/brain-catalogue.nix`), the NixOS modules to `nix/modules/brain.nix`,
 # the checks to `tests/checks.nix`, and the manifests, as JSON, to
 # `nix/scripts/gen-brain-modules.py`. The flake imports it ONCE and hands each
 # generator its part; `nix/modules/brain.nix` imports it again only because a
@@ -38,7 +45,9 @@
 # module. A person's folder needs only `manifest.nix`, `module.rs` and its
 # texts — its `module.nix` reaches root, so the machine imports it only once
 # approved through the sudo door (`personNixosModules`, by id), and its
-# `checks.nix` is not the distro's to run. It may not draw at rest. And a
+# `checks.nix` is not the distro's to run. It may not draw at rest, and its
+# texts must hold every key its manifest needs — asked here, at evaluation,
+# where the distro's are asked by the generators in the build. And a
 # person's folder this refuses is LEFT OUT and said (`personRefused`), never
 # a `throw`: it travels to every machine of theirs, and one bad folder must
 # not stop them all.
@@ -69,9 +78,17 @@
   # The marks the owner approved to be drawn at rest, `<module>/<mark>`. A
   # test passes its own list.
   restingApproved ? import ../assets/brain-resting-marks.nix,
+  # THE BASE TEXTS' KEY NAMES, or `null`: what a PERSON's notification may
+  # name outside its own fragment (`notif-action-<id>`, the label of a
+  # notification's action, is one of the base's). Handed in by the machine's
+  # chain (`nix/person-brain.nix`), so a person's folder that names a key no
+  # text has is left out and said here, at evaluation — never a build of the
+  # brain's catalogue stopped on every machine of theirs.
+  baseKeyNames ? null,
 }:
 
 let
+  textNames = import ./text-names.nix { inherit lib; };
   inherit (builtins)
     attrNames
     concatMap
@@ -105,6 +122,10 @@ let
   isUnit = s: isString s && match "[a-z0-9@_.-]+\\.(service|timer|socket|path|target)" s != null;
 
   snakeOf = id: replaceStrings [ "-" ] [ "_" ] id;
+
+  # THE BASE LANGUAGE, whose `.ftl` names a person's fragment's keys
+  # (`textNames`, the reader every fragment's names come from).
+  baseLanguage = builtins.head languages;
 
   # THE FIELDS A MANIFEST MAY HAVE. A field outside this list is refused, so a
   # typo (`schedul`) is an error and not a module quietly on its defaults.
@@ -244,6 +265,7 @@ let
     "languages"
     "brainModules"
     "brainModulesRs"
+    "brainManifestsRs"
     "module"
     "dir"
   ];
@@ -263,6 +285,9 @@ let
       i18nFiles,
       manifest,
       origin ? "distro",
+      # The key names of its base fragment (`i18n/<base>.ftl`), or `null`:
+      # read by `read` for a PERSON's folder, whose keys are asked here.
+      fragmentKeys ? null,
     }:
     let
       m = manifest;
@@ -591,6 +616,73 @@ let
       whatProblems = lib.optional (
         !(isString what && what != "" && match ".*\n.*" what == null)
       ) "what is one English line";
+
+      # A PERSON'S KEYS, asked of its texts at evaluation — and only once the
+      # manifest's shape holds, since the keys are built from its fields.
+      # What the generators demand of every module in the build
+      # (`gen-brain-modules.py`'s `needed`, `gen-brain-catalogue.py`'s keys):
+      # its name, its line, each action's label and question, each mark's
+      # hint and each why in its own fragment; each notification's summary
+      # and body there or in the base texts, and each of its actions' labels
+      # (`notif-action-<id>`, never a module's to own) in the base. Asked here
+      # for a person's folder so the folder is left out and said, and the
+      # build never sees it.
+      ownKeys = [
+        "brain-task-${id}"
+        "brain-task-${id}-does"
+      ]
+      ++ map (a: "cmd-${id}-${a}") (attrNames actions)
+      ++ lib.filter isString (lib.mapAttrsToList (_: a: a.asks or null) actions)
+      ++ lib.mapAttrsToList (_: mk: mk.hint) marks
+      ++ map (w: "${id}-why-${w}") whys;
+      notifying = lib.filterAttrs (_: e: (e.notification or null) != null) events;
+      notificationKeys = lib.concatMap (e: [
+        "notif-${id}-${e}-summary"
+        "notif-${id}-${e}-body"
+      ]) (attrNames notifying);
+      notificationActionKeys = lib.concatMap (
+        e:
+        map (a: "notif-action-${a.id}") (
+          lib.filter (a: isAttrs a && isString (a.id or null)) (
+            if isList (notifying.${e}.notification.actions or null) then
+              notifying.${e}.notification.actions
+            else
+              [ ]
+          )
+        )
+      ) (attrNames notifying);
+      inBase = k: baseKeyNames != null && elem k baseKeyNames;
+      keyProblemsOf =
+        own:
+        map (k: "i18n/${baseLanguage}.ftl has no `${k}`, which the manifest needs") (
+          filter (k: !(elem k own)) ownKeys
+        )
+        ++ map (k: "i18n/${baseLanguage}.ftl has no `${k}`, and neither have the base texts") (
+          filter (k: !(elem k own) && !(inBase k)) notificationKeys
+        )
+        ++ lib.optionals (baseKeyNames != null) (
+          map (k: "the base texts have no `${k}`, the label of a notification's action") (
+            filter (k: !(inBase k)) notificationActionKeys
+          )
+        );
+      shape =
+        whatProblems
+        ++ needsProblems
+        ++ scheduleProblems
+        ++ unitProblems
+        ++ keyProblems
+        ++ whyProblems
+        ++ glyphProblems
+        ++ markProblems
+        ++ noticeProblems
+        ++ actionProblems
+        ++ eventProblems
+        ++ usesProblems
+        ++ namedByProblems
+        ++ polkitProblems;
+      textProblems = lib.optionals (
+        person && fragmentKeys != null && unknown == [ ] && absent == [ ] && shape == [ ]
+      ) (keyProblemsOf fragmentKeys);
     in
     lib.optional (!(isWord id)) "the folder's name is the id, and `${id}` is not an English kebab word"
     # WHOSE IT IS, by its first word: `my-` is the person's, and only theirs.
@@ -623,22 +715,8 @@ let
           f: "manifest.nix: `${f}` is not a field (${lib.concatStringsSep ", " (required ++ optional)})"
         ) unknown
         ++ map (f: "manifest.nix: `${f}` is missing") absent
-        ++ map (p: "manifest.nix: ${p}") (
-          whatProblems
-          ++ needsProblems
-          ++ scheduleProblems
-          ++ unitProblems
-          ++ keyProblems
-          ++ whyProblems
-          ++ glyphProblems
-          ++ markProblems
-          ++ noticeProblems
-          ++ actionProblems
-          ++ eventProblems
-          ++ usesProblems
-          ++ namedByProblems
-          ++ polkitProblems
-        )
+        ++ map (p: "manifest.nix: ${p}") shape
+        ++ textProblems
     );
 
   # ---------------------------------------------------------------------
@@ -721,6 +799,13 @@ let
         else
           [ ];
       manifest = if elem "manifest.nix" files then import (dir + "/manifest.nix") else null;
+      # A PERSON'S BASE FRAGMENT, by its key names: its texts are asked at
+      # evaluation (`problemsOf`), the distro's by the generators.
+      fragmentKeys =
+        if origin == "person" && elem "${baseLanguage}.ftl" i18nFiles then
+          textNames.namesIn (builtins.readFile (dir + "/i18n/${baseLanguage}.ftl"))
+        else
+          null;
       problems = problemsOf {
         inherit
           id
@@ -728,6 +813,7 @@ let
           i18nFiles
           manifest
           origin
+          fragmentKeys
           ;
       };
     in
@@ -737,6 +823,12 @@ let
         inherit dir;
         hasTables = elem "tables.nix" files;
         hasNixos = elem "module.nix" files;
+        # A SHARED HALF IS A DISTRO FOLDER'S `shared.rs` alone. In a person's
+        # folder the same name is a file like any other — a `mod shared;` of
+        # its `module.rs`, compiled with it by the daemon — because the library
+        # the footer links never reads a person's folder: what it compiles is
+        # the distro's, and a person's module stays on the daemon's side.
+        hasShared = origin == "distro" && elem "shared.rs" files;
       };
     };
 
@@ -931,42 +1023,43 @@ let
     ) every
   );
 
-  # THE NOTIFICATIONS, as entries of `assets/notifications.nix`: recognised by
-  # the event's own tag, tagged with it and with the module's id, and saying
-  # what the manifest says. Only the events that declared one.
+  # ONE EVENT'S NOTIFICATION, as an entry of `assets/notifications.nix`:
+  # recognised by the event's own tag, tagged with it and with the module's
+  # id, and saying what the manifest says.
+  notificationOf =
+    m: event: n:
+    let
+      tag = "${m.id}-${event}";
+    in
+    {
+      when = [
+        {
+          field = "tag";
+          is = tag;
+        }
+      ];
+      rewrite = false;
+      actions = [ ];
+    }
+    // removeAttrs n [ "tags" ]
+    // {
+      tags = lib.unique (
+        [
+          tag
+          m.id
+        ]
+        ++ (n.tags or [ ])
+      );
+    };
+
+  # THE NOTIFICATIONS, by their tag: every event that declared one.
   notifications = listToAttrs (
     concatMap (
       m:
-      lib.mapAttrsToList (
-        event: e:
-        let
-          tag = "${m.id}-${event}";
-          n = e.notification;
-        in
-        {
-          name = tag;
-          value = {
-            when = [
-              {
-                field = "tag";
-                is = tag;
-              }
-            ];
-            rewrite = false;
-            actions = [ ];
-          }
-          // removeAttrs n [ "tags" ]
-          // {
-            tags = lib.unique (
-              [
-                tag
-                m.id
-              ]
-              ++ (n.tags or [ ])
-            );
-          };
-        }
-      ) (lib.filterAttrs (_: e: e.notification != null) m.events)
+      lib.mapAttrsToList (event: e: {
+        name = "${m.id}-${event}";
+        value = notificationOf m event e.notification;
+      }) (lib.filterAttrs (_: e: e.notification != null) m.events)
     ) every
   );
 
@@ -1131,9 +1224,11 @@ let
     )).slow;
 
   # ---------------------------------------------------------------------
-  # WHAT THE RUST GENERATOR READS, one record per module. The text fragment
-  # and the tables are copied into the store ON THEIR OWN, so an edit of a
-  # module's Rust does not regenerate its manifest.
+  # WHAT THE RUST GENERATOR READS, one record per module. The tables are
+  # copied into the store ON THEIR OWN, so an edit of a module's Rust does not
+  # regenerate its manifest; and of its texts it reads the key NAMES alone,
+  # read here at evaluation (`nix/text-names.nix`) — a sentence edited leaves
+  # the manifest, and the brain's crates, as they were.
   # ---------------------------------------------------------------------
   forGenerator =
     tablesOf:
@@ -1143,15 +1238,17 @@ let
         "dir"
         "hasTables"
         "hasNixos"
+        "hasShared"
         "uses"
         "namedBy"
       ]
       // {
-        i18n = "${builtins.path {
-          path = m.dir + "/i18n";
-          name = "brain-${m.id}-i18n";
-        }}";
+        names = textNames.namesIn (builtins.readFile (m.dir + "/i18n/${builtins.head languages}.ftl"));
         tables = if m.hasTables then tablesOf m else { };
+        # WHETHER THE LIBRARY COMPILES A SHARED HALF of it, beside its
+        # manifest — a word in the table (`shared.txt`), so the library's
+        # `build.rs` watches only the files it is told of.
+        shared = m.hasShared;
       }
     ) every;
 in
@@ -1195,13 +1292,38 @@ builtins.deepSeq (attrNames glyphs ++ attrNames eventTags ++ attrNames commands)
   personModulesSource = personModulesDir;
 
   # WHAT `nix/i18n.nix` HANDS `gen-i18n.py`: each module's text folder, alone
-  # in the store, and the prefixes its keys may begin with.
+  # in the store, the prefixes its keys may begin with, and whose it is — a
+  # person's keys are data the footer reads at run time, never names the
+  # registry is compiled with.
   i18nFragments = map (m: {
-    inherit (m) id prefixes;
+    inherit (m) id prefixes origin;
     dir = builtins.path {
       path = m.dir + "/i18n";
       name = "brain-${m.id}-i18n";
     };
+  }) every;
+
+  # WHAT THE BRAIN'S CATALOGUE IS WRITTEN FROM (`nix/brain-catalogue.nix`):
+  # one record per module (the generator orders them by id, as the daemon's
+  # registry does), with what the footer reads of it at run time — its marks,
+  # notices, actions, events and their notifications, its whys, its glyphs
+  # and its text prefixes. Never its code, its NixOS half or its prose.
+  forCatalogue = map (m: {
+    inherit (m)
+      id
+      origin
+      prefixes
+      glyphs
+      marks
+      notices
+      actions
+      whys
+      ;
+    # Each event with the entry its notification is — `notifications`'
+    # own, so the catalogue and that table cannot tell two stories.
+    events = lib.mapAttrs (event: e: {
+      notification = if e.notification == null then null else notificationOf m event e.notification;
+    }) m.events;
   }) every;
 
   # THE WHOLE VIEW, for a check that reads every manifest at once.
@@ -1212,6 +1334,7 @@ builtins.deepSeq (attrNames glyphs ++ attrNames eventTags ++ attrNames commands)
         "dir"
         "hasTables"
         "hasNixos"
+        "hasShared"
       ]
     ) every
   );

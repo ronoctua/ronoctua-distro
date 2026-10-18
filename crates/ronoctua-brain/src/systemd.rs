@@ -23,7 +23,7 @@
 //! `systemctl start` on a oneshot waits for the job, and waiting is a thread
 //! held for the length of a rebuild. `--no-block` returns as soon as systemd
 //! has taken the job, and what the run did comes back through the report file
-//! the unit writes ([`crate::task::Report`]) — one `stat` per beat, instead of
+//! the unit writes (the daemon's `task::Report`) — one `stat` per beat, instead of
 //! `journalctl` spawned on a clock to parse prose upstream is free to reword.
 
 use std::process::Command;

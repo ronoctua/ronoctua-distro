@@ -12,8 +12,21 @@
 //! The tokens are defined **once**, in `assets/tokens/*.nix` (section 7.6) —
 //! the colours as RECIPES that `nix/themes.nix` solves into one palette per
 //! theme in `assets/themes/themes.nix`. The build generates this crate's Rust
-//! table: every theme's values, and one constant per role. Editing the
-//! generated code is pointless: it disappears at the next build.
+//! table from the NAMES: one constant per role, the spacing, the sizes, the
+//! icons' codepoints. Editing the generated code is pointless: it disappears
+//! at the next build.
+//!
+//! # The palettes are data
+//!
+//! Not one colour's bytes is compiled in. They are the palettes the colour
+//! generator writes (`palettes.bin`), read at run time from
+//! [`palettes::ENV`] the first time anything asks a colour or a theme
+//! ([`palettes`]): every theme's id, its order, the default, which way it
+//! climbs, and every role's RGBA on every page. A seed, a recipe's value, the
+//! theme list and the generator itself can change without one crate being
+//! compiled again. A binary refuses a file written for other roles, loudly —
+//! a palette read through the wrong index is every colour wrong with nothing
+//! failing.
 //!
 //! # A colour is a role; the theme is the process's
 //!
@@ -66,10 +79,13 @@ impl Color {
     ///
     /// Not `const`: it reads which palette the process is in, and that is the
     /// whole point.
+    ///
+    /// # Panics
+    ///
+    /// When the palettes cannot be read — see [`palettes::load`].
     #[must_use]
     pub fn to_rgba8(self) -> [u8; 4] {
-        let (t, g) = theme::index();
-        themes::TABLE[t][g][self.0 as usize]
+        self.to_rgba8_in(theme::palette())
     }
 
     /// Raw components, in RGBA order, in the palette `palette` names — a
@@ -86,9 +102,10 @@ impl Color {
     ///
     /// On a number no palette has. It only ever comes from
     /// [`theme::palette`], so a guessed one is a defect to see, not a colour.
+    /// And when the palettes cannot be read — see [`palettes::load`].
     #[must_use]
     pub fn to_rgba8_in(self, palette: usize) -> [u8; 4] {
-        themes::TABLE[palette / counts::PAGES][palette % counts::PAGES][self.0 as usize]
+        palettes::get().rgba(palette, usize::from(self.0))
     }
 
     /// Components in `[0.0, 1.0]` in RGBA order, in **LINEAR** space.
@@ -201,10 +218,11 @@ pub mod theme {
     }
 
     impl Theme {
-        /// The id, as `assets/themes/themes.nix` spells it: `owl`.
+        /// The id, as `assets/themes/themes.nix` spells it: `owl`. Read from
+        /// the palettes' header (`super::palettes`).
         #[must_use]
-        pub const fn id(self) -> &'static str {
-            super::themes::IDS[self.index]
+        pub fn id(self) -> &'static str {
+            super::palettes::get().id(self.index)
         }
 
         /// Where it sits in the declared order; the default is `0`.
@@ -214,12 +232,12 @@ pub mod theme {
         }
 
         /// A LIGHT theme: the paper is its ground and its ladder walks toward
-        /// black. Declared in the seed (`mode`), carried here by the
-        /// generator beside the colours — a colour cannot be asked which side
-        /// of the ladder it is on.
+        /// black. Declared in the seed (`mode`), carried by the generator in
+        /// the palettes beside the colours — a colour cannot be asked which
+        /// side of the ladder it is on.
         #[must_use]
-        pub const fn is_light(self) -> bool {
-            super::themes::LIGHT[self.index]
+        pub fn is_light(self) -> bool {
+            super::palettes::get().is_light(self.index)
         }
     }
 
@@ -239,25 +257,26 @@ pub mod theme {
     /// On an index that names no theme — an index is only ever a position a
     /// `Theme` gave, and a guessed one is a defect to see, not a dark theme.
     #[must_use]
-    pub const fn is_light_at(index: usize) -> bool {
-        super::themes::LIGHT[index]
+    pub fn is_light_at(index: usize) -> bool {
+        super::palettes::get().is_light(index)
     }
 
-    /// Every theme, in `assets/themes/themes.nix` order. The first is the default.
+    /// Every theme, in `assets/themes/themes.nix` order — the chooser's order,
+    /// which is not the default's ([`default_one`]).
     pub fn all() -> impl ExactSizeIterator<Item = Theme> {
-        (0..super::counts::THEMES).map(|index| Theme { index })
+        (0..super::palettes::get().themes()).map(|index| Theme { index })
     }
 
     /// What a process starts in before anything says otherwise.
     ///
     /// NOT the first declared theme, which it was until the owner asked for
     /// the chooser's ORDER and the system's DEFAULT to stop being one fact —
-    /// see `assets/themes/themes.nix`. The index is generated from the name
-    /// declared over there.
+    /// see `assets/themes/themes.nix`. The palettes' header carries the
+    /// index of the name declared over there.
     #[must_use]
-    pub const fn default_one() -> Theme {
+    pub fn default_one() -> Theme {
         Theme {
-            index: super::counts::DEFAULT_THEME,
+            index: super::palettes::get().default_theme(),
         }
     }
 
@@ -488,17 +507,337 @@ pub mod text {
 
 include!(concat!(env!("OUT_DIR"), "/tokens.rs"));
 
-// The table has to hold every theme, and every theme the same number of roles;
-// the generator refuses anything else, and this is the wall behind it.
-const _: () = assert!(counts::THEMES >= 1, "no theme was generated");
-const _: () = assert!(
-    themes::IDS.len() == counts::THEMES && themes::TABLE.len() == counts::THEMES,
-    "the theme table and its ids disagree"
-);
+// Every role has a name, and the palettes are indexed by both; the generator
+// writes them from one list, and this is the wall behind it.
 const _: () = assert!(
     color::NAMES.len() == counts::COLORS,
-    "the role names and the table disagree"
+    "the role names and the role count disagree"
 );
+const _: () = assert!(
+    themes::PAGES.len() == counts::PAGES && theme::Ground::ALL.len() == counts::PAGES,
+    "the pages, their count and the grounds disagree"
+);
+
+/// The palettes: every theme's colours, read at RUN time.
+///
+/// # Why they are not compiled in
+///
+/// They were, as a table in the generated `tokens.rs`, and so a seed's hue —
+/// a number in `assets/themes/<id>.nix` — rebuilt this crate and every crate
+/// above it, the whole workspace, for bytes that no line of code names. The
+/// code names ROLES ([`color`]); which bytes a role is on a given page of a
+/// given theme is data, and data is read when the program runs.
+///
+/// The colour generator (`nix/scripts/gen-theme.py`, `nix/themes.nix`) writes
+/// [`FILE`] into its output, and every binary that paints is pointed at it by
+/// [`ENV`] — its wrapper sets it, as the session and `nix develop` do. It is
+/// read ONCE, the first time a colour or a theme is asked for, into memory that
+/// lives as long as the process; asking again costs an atomic load.
+///
+/// # Why a wrong file is refused, and loudly
+///
+/// A palette is an array indexed by role, so a file written for another set of
+/// roles would put one role's bytes under another's name: every colour on
+/// screen wrong, and nothing failing. The file carries a hash of the role
+/// names it was written for (FNV-1a over [`color`]'s names, in order), its
+/// pages and its version, and a binary that was compiled with other ones
+/// REFUSES it, naming the variable — as it refuses a missing variable or an
+/// unreadable file. There is no fallback palette: a guessed colour is the
+/// failure this guards against.
+pub mod palettes {
+    use std::ffi::OsString;
+    use std::fmt;
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+
+    /// The variable naming the directory the palettes are in: the colour
+    /// generator's output (`nix/themes.nix`), which the wrappers set.
+    pub const ENV: &str = "RONOCTUA_THEMES";
+
+    /// The file in that directory.
+    pub const FILE: &str = "palettes.bin";
+
+    /// What the file starts with.
+    const MAGIC: [u8; 8] = *b"RONOPAL\0";
+
+    /// The one shape this crate reads; another is refused, never guessed at.
+    const VERSION: u16 = 1;
+
+    /// The magic, the version, four counts and the role hash.
+    const HEADER: usize = MAGIC.len() + 2 * 5 + 8;
+
+    /// FNV-1a, 64 bits, over `names` joined by `\n` — what a file written
+    /// for those roles carries, by the arithmetic of `fnv1a64` in
+    /// `nix/scripts/gen-theme.py`. Asked once per process, of
+    /// [`super::color`]'s names.
+    pub(crate) fn roles_hash(names: &[&str]) -> u64 {
+        names
+            .join("\n")
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+            })
+    }
+
+    /// Every theme's palettes, as read.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) struct Palettes {
+        ids: Vec<Box<str>>,
+        light: Vec<bool>,
+        default: usize,
+        /// `[theme][page][role]`, flattened.
+        rgba: Vec<[u8; 4]>,
+        /// Roles per page.
+        roles: usize,
+        /// Pages per theme.
+        pages: usize,
+    }
+
+    impl Palettes {
+        /// How many themes there are.
+        pub(crate) fn themes(&self) -> usize {
+            self.ids.len()
+        }
+
+        /// The id of the theme at `theme`.
+        pub(crate) fn id(&self, theme: usize) -> &str {
+            &self.ids[theme]
+        }
+
+        /// Whether the theme at `theme` is a light one.
+        pub(crate) fn is_light(&self, theme: usize) -> bool {
+            self.light[theme]
+        }
+
+        /// The index of the theme a fresh machine shows.
+        pub(crate) fn default_theme(&self) -> usize {
+            self.default
+        }
+
+        /// The bytes of `role` in `palette` — `theme * pages + page`, the
+        /// number [`super::theme::palette`] gives.
+        pub(crate) fn rgba(&self, palette: usize, role: usize) -> [u8; 4] {
+            assert!(
+                palette < self.ids.len() * self.pages && role < self.roles,
+                "palette {palette}, role {role}: the palettes hold {} palettes of {} roles",
+                self.ids.len() * self.pages,
+                self.roles
+            );
+            self.rgba[palette * self.roles + role]
+        }
+
+        /// Every colour as the file lays it out, `[theme][page][role]`.
+        #[cfg(test)]
+        pub(crate) fn flat(&self) -> &[[u8; 4]] {
+            &self.rgba
+        }
+    }
+
+    /// Why the palettes could not be had. Each one says so naming [`ENV`],
+    /// which is the one thing a person can fix.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Refusal {
+        /// The variable is not set, or is empty.
+        Unset,
+        /// The file could not be read.
+        Unreadable {
+            /// The file asked for.
+            file: PathBuf,
+            /// What the system answered.
+            why: String,
+        },
+        /// The file is not palettes this program can read.
+        Invalid {
+            /// The file read.
+            file: PathBuf,
+            /// What is wrong with it, as a clause.
+            why: String,
+        },
+    }
+
+    impl fmt::Display for Refusal {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Unset => write!(
+                    f,
+                    "{ENV} is not set: the colours are data the build writes beside \
+                     the program (`{FILE}` in the themes' generated directory), and \
+                     nothing here can draw one without them — run the program \
+                     through its wrapper or the session, or inside `nix develop`"
+                ),
+                Self::Unreadable { file, why } => write!(
+                    f,
+                    "{ENV} points at {}, and {} cannot be read: {why}",
+                    file.parent()
+                        .map_or_else(String::new, |d| d.display().to_string()),
+                    file.display()
+                ),
+                Self::Invalid { file, why } => write!(
+                    f,
+                    "{ENV} points at {}, and its {FILE} {why}",
+                    file.parent()
+                        .map_or_else(String::new, |d| d.display().to_string())
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Refusal {}
+
+    static LOADED: OnceLock<Palettes> = OnceLock::new();
+
+    /// The palettes, read the first time anything asks.
+    pub(crate) fn get() -> &'static Palettes {
+        LOADED.get_or_init(|| {
+            read(std::env::var_os(ENV)).unwrap_or_else(|refusal| panic!("{refusal}"))
+        })
+    }
+
+    /// Reads the palettes NOW, so that a missing or wrong file is said before
+    /// anything is drawn — a program's `main` calls it first. Every colour and
+    /// every theme asked for reads them anyway; this only chooses the moment.
+    ///
+    /// # Panics
+    ///
+    /// When [`ENV`] is not set, its [`FILE`] cannot be read, or it was written
+    /// for other colour roles, other pages or another version — with a
+    /// sentence that names the variable ([`Refusal`]).
+    pub fn load() {
+        let _ = get();
+    }
+
+    /// The palettes in the directory `dir` names.
+    pub(crate) fn read(dir: Option<OsString>) -> Result<Palettes, Refusal> {
+        let dir = PathBuf::from(dir.filter(|d| !d.is_empty()).ok_or(Refusal::Unset)?);
+        let file = dir.join(FILE);
+        let bytes = std::fs::read(&file).map_err(|e| Refusal::Unreadable {
+            file: file.clone(),
+            why: e.to_string(),
+        })?;
+        parse(&bytes, &super::color::NAMES, &super::themes::PAGES)
+            .map_err(|why| Refusal::Invalid { file, why })
+    }
+
+    /// The file's bytes, for a program compiled with `roles` and `pages`.
+    /// `Err` is a clause saying what is wrong.
+    pub(crate) fn parse(bytes: &[u8], roles: &[&str], pages: &[&str]) -> Result<Palettes, String> {
+        let different = "the program and its palettes come from different builds";
+        if bytes.len() < HEADER || bytes[..MAGIC.len()] != MAGIC {
+            return Err("is not a palettes file the colour generator wrote".to_owned());
+        }
+        let mut at = MAGIC.len();
+        let u16_at = |at: &mut usize| {
+            let v = u16::from_le_bytes([bytes[*at], bytes[*at + 1]]);
+            *at += 2;
+            usize::from(v)
+        };
+        let version = u16_at(&mut at);
+        if version != usize::from(VERSION) {
+            return Err(format!(
+                "is version {version}, and this program reads version {VERSION}: {different}"
+            ));
+        }
+        let (n_pages, n_themes, n_roles, default) = (
+            u16_at(&mut at),
+            u16_at(&mut at),
+            u16_at(&mut at),
+            u16_at(&mut at),
+        );
+        let mut hash = [0_u8; 8];
+        hash.copy_from_slice(&bytes[at..at + 8]);
+        at += 8;
+        let hash = u64::from_le_bytes(hash);
+        if n_roles != roles.len() || hash != roles_hash(roles) {
+            return Err(format!(
+                "was written for {n_roles} other colour roles (hash {hash:#018x}; this \
+                 program's {} roles are {:#018x}): {different}",
+                roles.len(),
+                roles_hash(roles)
+            ));
+        }
+        // A NAME, `len` bytes after a length byte, read with every bound said.
+        let name = |at: &mut usize, what: &str| -> Result<String, String> {
+            let len = usize::from(
+                *bytes
+                    .get(*at)
+                    .ok_or_else(|| format!("ends inside its {what}"))?,
+            );
+            let text = bytes
+                .get(*at + 1..*at + 1 + len)
+                .ok_or_else(|| format!("ends inside its {what}"))?;
+            *at += 1 + len;
+            String::from_utf8(text.to_vec()).map_err(|_| format!("has a {what} that is not text"))
+        };
+        let mut found = Vec::with_capacity(n_pages);
+        for _ in 0..n_pages {
+            found.push(name(&mut at, "page names")?);
+        }
+        if found.iter().map(String::as_str).ne(pages.iter().copied()) {
+            return Err(format!(
+                "is solved on the pages {found:?}, and this program draws on {pages:?}: {different}"
+            ));
+        }
+        if n_themes == 0 {
+            return Err("holds no theme".to_owned());
+        }
+        let mut ids: Vec<Box<str>> = Vec::with_capacity(n_themes);
+        let mut light = Vec::with_capacity(n_themes);
+        for _ in 0..n_themes {
+            let mode = *bytes.get(at).ok_or("ends inside its themes")?;
+            at += 1;
+            let id = name(&mut at, "theme ids")?;
+            let kebab = id.starts_with(|c: char| c.is_ascii_lowercase())
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+            if !kebab {
+                return Err(format!("names a theme {id:?}, which is not a theme id"));
+            }
+            if ids.iter().any(|known| &**known == id.as_str()) {
+                return Err(format!("names the theme {id:?} twice"));
+            }
+            light.push(match mode {
+                0 => false,
+                1 => true,
+                other => return Err(format!("says the theme {id:?} is of mode {other}")),
+            });
+            ids.push(id.into_boxed_str());
+        }
+        if default >= n_themes {
+            return Err(format!(
+                "names theme {default} the default, and it holds {n_themes}"
+            ));
+        }
+        let wanted = n_themes * n_pages * n_roles * 4;
+        let data = &bytes[at..];
+        if data.len() != wanted {
+            return Err(format!(
+                "holds {} bytes of colour where {n_themes} themes of {n_pages} pages of \
+                 {n_roles} roles are {wanted}",
+                data.len()
+            ));
+        }
+        let rgba = data
+            .chunks_exact(4)
+            .map(|c| [c[0], c[1], c[2], c[3]])
+            .collect();
+        Ok(Palettes {
+            ids,
+            light,
+            default,
+            rgba,
+            roles: n_roles,
+            pages: n_pages,
+        })
+    }
+
+    /// The palettes the tests run against: the real ones, from [`ENV`] in
+    /// the tests' environment.
+    #[cfg(test)]
+    pub(crate) fn load_for_tests() -> &'static Palettes {
+        get()
+    }
+}
 
 // An empty or truncated generation takes COMPILATION down, not a test.
 //
@@ -590,8 +929,8 @@ mod tests {
         // THE DEFAULT IS NOT THE FIRST, and this assertion said it was. The
         // chooser's order and the system's default are two declarations now
         // (`assets/themes/themes.nix`), so what is left to guard is that the
-        // generated index names a theme that exists.
-        assert!(theme::default_one().position() < counts::THEMES);
+        // palettes' default names a theme that exists.
+        assert!(theme::default_one().position() < theme::all().len());
         assert_eq!(
             theme::by_id(theme::default_one().id()),
             Some(theme::default_one())
@@ -612,12 +951,18 @@ mod tests {
             (theme::Ground::Near, color::SURFACE_NEAR),
             (theme::Ground::Absolute, color::SURFACE_ABSOLUTE),
         ];
+        let palettes = palettes::load_for_tests();
         for t in theme::all() {
-            let pages = &themes::TABLE[t.position()];
+            let page = |g: theme::Ground, role: Color| {
+                palettes.rgba(
+                    t.position() * counts::PAGES + g.position(),
+                    usize::from(role.0),
+                )
+            };
             for (g, desk) in desks {
                 assert_eq!(
-                    pages[g.position()][usize::from(color::SURFACE_CHROME.0)],
-                    pages[0][usize::from(desk.0)],
+                    page(g, color::SURFACE_CHROME),
+                    page(theme::Ground::Chrome, desk),
                     "{} on {g:?}",
                     t.id()
                 );
@@ -633,10 +978,11 @@ mod tests {
                         "surface.backdrop" | "surface.near" | "surface.absolute"
                     );
                 if fixed {
+                    let role = Color(u16::try_from(role).expect("a role fits"));
                     for g in theme::Ground::ALL {
                         assert_eq!(
-                            pages[g.position()][role],
-                            pages[0][role],
+                            page(g, role),
+                            page(theme::Ground::Chrome, role),
                             "{name} moved on {g:?} in {}",
                             t.id()
                         );
@@ -645,11 +991,12 @@ mod tests {
             }
         }
         // THE GENERATOR'S PAGES ARE THE ENUM'S, in the enum's order: the
-        // table is indexed by `Ground::position`, and a generator that wrote
-        // its pages in another order would put every desk's palette under
-        // another desk's name with nothing failing to build. Said against the
-        // words themselves — `Ground::id` reads `themes::PAGES`, so comparing
-        // the two would compare one expression with itself.
+        // palettes are indexed by `Ground::position`, and a generator that
+        // wrote its pages in another order would put every desk's palette
+        // under another desk's name — the file's header names its pages, and
+        // the loader refuses others than these. Said against the words
+        // themselves — `Ground::id` reads `themes::PAGES`, so comparing the
+        // two would compare one expression with itself.
         assert_eq!(themes::PAGES, ["chrome", "backdrop", "near", "absolute"]);
         assert_eq!(theme::Ground::ALL.len(), counts::PAGES);
         assert_eq!(
@@ -667,8 +1014,10 @@ mod tests {
     fn a_colour_asked_in_a_palette_is_that_palettes_bytes() {
         // THE WORKER'S READ (`Color::to_rgba8_in`): the bytes of the palette
         // it names, and never the one the process happens to wear — every
-        // theme on every page, measured against the table itself so no test
-        // has to move the process-wide palette (`set` belongs to one test).
+        // theme on every page, measured against the file's own layout
+        // (`[theme][page][role]`, four bytes each) so no test has to move the
+        // process-wide palette (`set` belongs to one test).
+        let palettes = palettes::load_for_tests();
         for t in theme::all() {
             for g in theme::Ground::ALL {
                 let palette = t.position() * counts::PAGES + g.position();
@@ -676,7 +1025,7 @@ mod tests {
                     let c = Color(u16::try_from(role).expect("a role fits"));
                     assert_eq!(
                         c.to_rgba8_in(palette),
-                        themes::TABLE[t.position()][g.position()][role],
+                        palettes.flat()[(palette * counts::COLORS) + role],
                         "{name} in {} on {g:?}",
                         t.id()
                     );
@@ -692,9 +1041,8 @@ mod tests {
         // extreme a theme climbs AWAY from, so it is black exactly when the
         // theme is dark and white exactly when it is light. A mode read
         // wrong would name a white desk "black" on the chooser's row.
-        let absolute = usize::from(color::SURFACE_ABSOLUTE.0);
         for t in theme::all() {
-            let bytes = themes::TABLE[t.position()][0][absolute];
+            let bytes = color::SURFACE_ABSOLUTE.to_rgba8_in(t.position() * counts::PAGES);
             let expected = if t.is_light() {
                 [0xFF, 0xFF, 0xFF, 0xFF]
             } else {
@@ -719,7 +1067,7 @@ mod tests {
                 assert_eq!(handle.name(), *name);
                 assert_eq!(
                     handle.to_rgba8(),
-                    themes::TABLE[t.position()][0][role],
+                    palettes::load_for_tests().rgba(t.position() * counts::PAGES, role),
                     "{name} in {}",
                     t.id()
                 );
@@ -744,7 +1092,10 @@ mod tests {
             let role = color::SURFACE_CHROME;
             assert_eq!(
                 role.to_rgba8(),
-                themes::TABLE[t.position()][g.position()][usize::from(role.0)],
+                palettes::load_for_tests().rgba(
+                    t.position() * counts::PAGES + g.position(),
+                    usize::from(role.0)
+                ),
                 "{g:?}"
             );
         }
@@ -802,6 +1153,231 @@ mod tests {
         // fell into phantom families before the correction).
         assert!(font::FAMILY_MONO.contains("Nerd Font Mono"));
         assert_eq!(font::FAMILY_MONO, font::FAMILY_UI);
+    }
+}
+
+#[cfg(test)]
+mod palettes_file {
+    //! THE FILE'S SHAPE, against bytes written here the way
+    //! `nix/scripts/gen-theme.py`'s `palettes_bin` writes them — and the
+    //! refusals, each a sentence naming the variable. Three roles and two
+    //! pages, so a test reads every byte it wrote.
+
+    use super::palettes::{self, ENV, Refusal};
+
+    const ROLES: [&str; 3] = ["a.one", "a.two", "b"];
+    const PAGES: [&str; 2] = ["chrome", "desk"];
+    const THEMES: [(&str, u8); 2] = [("night", 0), ("paper", 1)];
+
+    /// The header and the data, every byte its own coordinates:
+    /// `[theme, page, role, 0xFF]`. `version`, `hash` and the lists are the
+    /// knobs a test turns.
+    fn file(
+        version: u16,
+        pages: &[&str],
+        themes: &[(&str, u8)],
+        default: u16,
+        roles: &[&str],
+        hash: u64,
+    ) -> Vec<u8> {
+        let mut out = b"RONOPAL\0".to_vec();
+        for n in [
+            version,
+            u16::try_from(pages.len()).unwrap(),
+            u16::try_from(themes.len()).unwrap(),
+            u16::try_from(roles.len()).unwrap(),
+            default,
+        ] {
+            out.extend_from_slice(&n.to_le_bytes());
+        }
+        out.extend_from_slice(&hash.to_le_bytes());
+        for page in pages {
+            out.push(u8::try_from(page.len()).unwrap());
+            out.extend_from_slice(page.as_bytes());
+        }
+        for (id, mode) in themes {
+            out.push(*mode);
+            out.push(u8::try_from(id.len()).unwrap());
+            out.extend_from_slice(id.as_bytes());
+        }
+        for t in 0..themes.len() {
+            for p in 0..pages.len() {
+                for r in 0..roles.len() {
+                    out.extend_from_slice(&[t as u8, p as u8, r as u8, 0xFF]);
+                }
+            }
+        }
+        out
+    }
+
+    fn good() -> Vec<u8> {
+        file(1, &PAGES, &THEMES, 1, &ROLES, palettes::roles_hash(&ROLES))
+    }
+
+    fn refusal(bytes: &[u8]) -> String {
+        palettes::parse(bytes, &ROLES, &PAGES).expect_err("a refused file")
+    }
+
+    /// FAILS IF: a file written for this program's roles does not read back
+    /// every byte at its `[theme][page][role]`, or the header's ids, modes and
+    /// default are not the ones written.
+    #[test]
+    fn a_file_for_these_roles_reads_back_every_byte() {
+        let p = palettes::parse(&good(), &ROLES, &PAGES).expect("the palettes");
+        assert_eq!(p.themes(), 2);
+        assert_eq!((p.id(0), p.id(1)), ("night", "paper"));
+        assert_eq!((p.is_light(0), p.is_light(1)), (false, true));
+        assert_eq!(p.default_theme(), 1);
+        for t in 0..2 {
+            for g in 0..2 {
+                for r in 0..3 {
+                    assert_eq!(p.rgba(t * 2 + g, r), [t as u8, g as u8, r as u8, 0xFF]);
+                }
+            }
+        }
+    }
+
+    /// FAILS IF: a file written for other roles — another name, another
+    /// order, one more — is read through this program's index instead of
+    /// being refused as another build's.
+    #[test]
+    fn a_file_for_other_roles_is_another_builds() {
+        for roles in [
+            &["a.one", "a.two", "c"][..],
+            &["a.two", "a.one", "b"][..],
+            &["a.one", "a.two", "b", "b.more"][..],
+        ] {
+            let why = refusal(&file(
+                1,
+                &PAGES,
+                &THEMES,
+                0,
+                roles,
+                palettes::roles_hash(roles),
+            ));
+            assert!(
+                why.contains("other colour roles") && why.contains("different builds"),
+                "{why}"
+            );
+        }
+        // AND THE COUNT ALONE IS NOT ENOUGH: three roles under a hash of
+        // three others.
+        let why = refusal(&file(
+            1,
+            &PAGES,
+            &THEMES,
+            0,
+            &ROLES,
+            palettes::roles_hash(&["x", "y", "z"]),
+        ));
+        assert!(why.contains("other colour roles"), "{why}");
+    }
+
+    /// FAILS IF: a file of another version, other pages or another shape is
+    /// read instead of refused with what is wrong.
+    #[test]
+    fn every_other_shape_is_refused_with_what_is_wrong() {
+        let hash = palettes::roles_hash(&ROLES);
+        let cases: [(Vec<u8>, &str); 9] = [
+            (b"PNG\r\n".to_vec(), "is not a palettes file"),
+            (good()[..20].to_vec(), "is not a palettes file"),
+            (file(2, &PAGES, &THEMES, 0, &ROLES, hash), "is version 2"),
+            (
+                file(1, &["desk", "chrome"], &THEMES, 0, &ROLES, hash),
+                "is solved on the pages",
+            ),
+            (file(1, &PAGES, &[], 0, &ROLES, hash), "holds no theme"),
+            (
+                file(1, &PAGES, &THEMES, 2, &ROLES, hash),
+                "names theme 2 the default",
+            ),
+            (
+                file(1, &PAGES, &[("night", 0), ("night", 1)], 0, &ROLES, hash),
+                "twice",
+            ),
+            (
+                file(1, &PAGES, &[("Night", 0)], 0, &ROLES, hash),
+                "not a theme id",
+            ),
+            (
+                file(1, &PAGES, &[("night", 2)], 0, &ROLES, hash),
+                "of mode 2",
+            ),
+        ];
+        for (bytes, said) in cases {
+            let why = refusal(&bytes);
+            assert!(why.contains(said), "wanted {said:?}, got {why:?}");
+        }
+        // A BYTE TOO FEW OR TOO MANY is a file cut or grown, never a palette.
+        let mut short = good();
+        short.pop();
+        assert!(refusal(&short).contains("bytes of colour"));
+        let mut long = good();
+        long.push(0);
+        assert!(refusal(&long).contains("bytes of colour"));
+        // AND A FILE CUT INSIDE ITS NAMES says so, never panics.
+        let mut cut = good();
+        cut.truncate(26 + 3);
+        assert!(
+            refusal(&cut).contains("ends inside its page names"),
+            "{}",
+            refusal(&cut)
+        );
+    }
+
+    /// FAILS IF: the role hash is not FNV-1a, 64 bits, over the names joined
+    /// by a newline — the arithmetic `gen-theme.py` writes the file with.
+    #[test]
+    fn the_role_hash_is_fnv1a_over_the_names_joined() {
+        // The published vectors.
+        assert_eq!(palettes::roles_hash(&[""]), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(palettes::roles_hash(&["a"]), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(palettes::roles_hash(&["foobar"]), 0x8594_4171_f739_67e8);
+        // The separator is part of it: two names are not their concatenation.
+        assert_ne!(
+            palettes::roles_hash(&["foo", "bar"]),
+            palettes::roles_hash(&["foobar"])
+        );
+        assert_eq!(palettes::roles_hash(&[]), palettes::roles_hash(&[""]));
+    }
+
+    /// FAILS IF: a refusal does not name the variable — the one thing a
+    /// person can set — or a missing or empty one is read as some directory.
+    #[test]
+    fn every_refusal_names_the_variable() {
+        assert_eq!(palettes::read(None), Err(Refusal::Unset));
+        assert_eq!(palettes::read(Some("".into())), Err(Refusal::Unset));
+        let nowhere = std::env::temp_dir().join(format!(
+            "ronoctua-tokens-no-palettes-{}",
+            std::process::id()
+        ));
+        let unreadable =
+            palettes::read(Some(nowhere.clone().into_os_string())).expect_err("no file there");
+        assert!(
+            matches!(unreadable, Refusal::Unreadable { ref file, .. } if *file == nowhere.join(palettes::FILE))
+        );
+        let invalid = Refusal::Invalid {
+            file: nowhere.join(palettes::FILE),
+            why: refusal(&file(2, &PAGES, &THEMES, 0, &ROLES, 0)),
+        };
+        for r in [Refusal::Unset, unreadable, invalid] {
+            let said = r.to_string();
+            assert!(said.starts_with(ENV), "{said}");
+        }
+        assert!(Refusal::Unset.to_string().contains(palettes::FILE));
+    }
+
+    /// FAILS IF: the palettes the tests run against are not this program's
+    /// own — read again from the variable, they are the same.
+    #[test]
+    fn the_palettes_in_the_environment_are_this_programs() {
+        let loaded = palettes::load_for_tests();
+        assert!(loaded.themes() >= 1);
+        assert_eq!(
+            palettes::read(std::env::var_os(ENV)).as_ref(),
+            Ok(loaded),
+            "the environment's palettes read twice disagree"
+        );
     }
 }
 

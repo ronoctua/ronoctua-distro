@@ -40,12 +40,13 @@
   # instead of against `glyphnames.json` and the Nerd Font — and is checked
   # just as hard, against the real cmap of the real face.
   marksdb,
-  # THE BRAIN MODULES' GLYPHS (brain.md §3), `<module>-<name>` -> glyph name,
-  # merged into the SAME table and measured like every other token: a mark on
-  # the modeline sits beside the chrome's own glyphs and has to answer the same
-  # band. The flake's one loader's `glyphs`.
-  brainGlyphs,
 }:
+
+# THE BRAIN MODULES' GLYPHS ARE NOT HERE. A module's mark is data the footer
+# reads at run time (`nix/brain-catalogue.nix`), so its glyph is measured by
+# `measure` below — the same code, over the module's tokens alone — and never
+# joins this table: the table is compiled into every crate that draws
+# (`nix/tokens.nix`), and a person's module would rebuild them all.
 
 let
   # It has to match the font's `nameID 5` AND the JSON's own METADATA.version.
@@ -62,15 +63,7 @@ let
   # The tokens live in Nix (source of truth, section 7.6) but the generator is
   # Python. The bridge is JSON, generated here — there is no Nix parser in Python, and
   # writing one would be reimplementing Nix logic (invariant 5).
-  #
-  # A module's token that is also a chrome token would be one name for two
-  # drawings, and the second would win in silence — refused here, by name.
-  iconTokens = import iconTokensFile;
-  clashes = builtins.filter (t: builtins.hasAttr t iconTokens) (builtins.attrNames brainGlyphs);
-  iconTokensJson =
-    assert lib.assertMsg (clashes == [ ])
-      "a brain module's glyph token is also one of assets/tokens/icons.nix: ${lib.concatStringsSep ", " clashes}";
-    writeText "icon-tokens.json" (builtins.toJSON (iconTokens // brainGlyphs));
+  iconTokensJson = writeText "icon-tokens.json" (builtins.toJSON (import iconTokensFile));
   trayJson = writeText "tray-glyphs.json" (builtins.toJSON (import trayTableFile));
   typographyJson = writeText "typography.json" (builtins.toJSON (import typographyFile));
 
@@ -79,6 +72,10 @@ let
       name,
       tokens,
       expectFailure ? false,
+      # ONLY THE ICON TABLE (`icons.json`) of `tokens`, measured: the brain
+      # modules' glyphs (`measure`). No glyph index and no coverage — those are
+      # the glyph browser's, and the chrome's table already pays for them.
+      iconsOnly ? false,
     }:
     stdenvNoCC.mkDerivation {
       inherit name;
@@ -93,21 +90,26 @@ let
           # on a SEPARATE line — it does not apply to the command, and `$?` ends up
           # capturing the empty line instead of the python. It cost a build.
           cmd = ''
+            # THE SCRIPT AND ITS ONE SIBLING, copied by FILE: the generator
+            # imports `lexicon.py`, so the two sit side by side here — and not
+            # the whole `nix/scripts`, whose every other generator would then be
+            # a reason to build this table again (`generators-cite-their-scripts`).
+            mkdir -p generator
+            cp ${./scripts/gen-glyphdb.py} generator/gen-glyphdb.py
+            cp ${./scripts/lexicon.py} generator/lexicon.py
             gen() {
-              # The DIRECTORY, and not the file: the generator imports `lexicon.py`,
-              # the sibling module the two generators share. With the
-              # bare file path, `sys.path[0]` would be the store's root
-              # and the import would fail.
-              python3 ${./scripts}/gen-glyphdb.py \
+              python3 generator/gen-glyphdb.py \
                 --font ${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf \
                 --font-unpatched ${fonts.corrected}/TTF/NoctuaIosevka-Regular.ttf \
                 --glyphnames ${glyphnames} \
                 --tokens ${tokens} \
-                --tray ${trayJson} \
+                ${
+                  if iconsOnly then
+                    "--icons-only"
+                  else
+                    "--tray ${trayJson} --lexicon ${lexiconFile} --languages ${lib.escapeShellArgs languages} --overlay ${overlayFile}"
+                } \
                 --typography ${typographyJson} \
-                --lexicon ${lexiconFile} \
-                --languages ${lib.escapeShellArgs languages} \
-                --overlay ${overlayFile} \
                 --marks ${marksdb.db}/marks.json \
                 --marks-font ${marksdb.db}/NoctuaMarks.ttf \
                 --nf-version ${version} \
@@ -154,7 +156,11 @@ let
       dontInstall = true;
 
       meta = {
-        description = "Icon token table and glyph database, generated from the real font file";
+        description =
+          if iconsOnly then
+            "Glyph tokens measured against the real font file, outside the chrome's table"
+          else
+            "Icon token table and glyph database, generated from the real font file";
         platforms = lib.platforms.all;
       };
     };
@@ -198,4 +204,18 @@ in
     tokens = badMark;
     expectFailure = true;
   };
+
+  # GLYPH TOKENS MEASURED OUTSIDE THE CHROME'S TABLE: `{ <token> = "<glyph
+  # name>"; }` -> `icons.json` holding those tokens alone, each resolved and
+  # measured exactly as a chrome token is (codepoint, the size beside the
+  # text, the ink across). What the brain's catalogue asks for its modules'
+  # marks (`nix/brain-catalogue.nix`); a token that does not resolve stops the
+  # build, as one of `assets/tokens/icons.nix` does.
+  measure =
+    tokens:
+    mkGen {
+      name = "ronoctua-measured-glyphs";
+      tokens = writeText "measured-tokens.json" (builtins.toJSON tokens);
+      iconsOnly = true;
+    };
 }

@@ -44,3 +44,11 @@ path = "src/bin/test-icons.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_NOTIFICATIONS_RS"]
+# The brain modules' notifications, read at run time (`src/brain.rs`): the
+# tests that make the book read the build's own.
+run-env = ["RONOCTUA_BRAIN_CATALOGUE"]
+bins = { "ronoctua-test-icons" = "driver" }

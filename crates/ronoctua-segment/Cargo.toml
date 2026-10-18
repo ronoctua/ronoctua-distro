@@ -25,3 +25,8 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+run-env = ["RONOCTUA_HAND_MODELS", "RONOCTUA_SEGMENT_MODEL"]
+data = ["src/reference.txt", "src/reference-hands.txt"]

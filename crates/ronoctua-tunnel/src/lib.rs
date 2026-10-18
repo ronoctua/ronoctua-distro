@@ -295,6 +295,12 @@ pub enum Event {
 
 /// The handle a door keeps: it sends orders, and the thread answers on the
 /// channel the door gave to [`watch`].
+///
+/// `Clone`, because a door hands it to the view it hosts: the footer's
+/// network view orders the footer's own thread — the one the modeline's two
+/// marks are read from — and a second thread of its own would poll the two
+/// daemons twice and leave the marks a reading behind every order.
+#[derive(Clone)]
 pub struct Hand {
     orders: std::sync::mpsc::Sender<Order>,
 }

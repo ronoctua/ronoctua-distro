@@ -253,7 +253,7 @@ pub fn by_id(id: &str) -> Option<&'static Action> {
 /// gives: a key assembled at runtime is invisible to grep and to the check that
 /// compares this list against both `.ftl` files.
 pub mod key {
-    pub use ronoctua_i18n::key::{
+    pub use crate::key::{
         SIDEBAR_DOES_EJECT, SIDEBAR_DOES_FORMAT, SIDEBAR_DOES_INFORMATION, SIDEBAR_DOES_LOCK,
         SIDEBAR_DOES_MOUNT, SIDEBAR_DOES_OPEN, SIDEBAR_DOES_UNMOUNT, SIDEBAR_DOES_UNPIN,
         SIDEBAR_DOES_WRITE_INSTALLER, SIDEBAR_EJECT, SIDEBAR_FORMAT, SIDEBAR_INFORMATION,

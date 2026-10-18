@@ -123,7 +123,7 @@ pub fn local_hour(at: Moment, zone: &dyn Offset) -> u32 {
 ///
 /// It can still land on an hour that does not exist (the spring forward skips
 /// one) or on one that happens twice (the autumn back). The caller is
-/// [`crate::schedule`], which asks for a WINDOW and not for an instant, so a
+/// the daemon's `schedule`, which asks for a WINDOW and not for an instant, so a
 /// missing hour simply means the window opens at the next one that exists.
 #[must_use]
 pub fn at_local_hour(day: i64, hour: u32, zone: &dyn Offset) -> Moment {

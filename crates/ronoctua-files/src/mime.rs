@@ -16,7 +16,7 @@
 //! panel, "open with", and the case where the name says nothing at all.
 //!
 //! Doing magic for every row of a listing would be two hundred opens inside the
-//! frame that draws it, which is the shape of defect `ronoctua_shell::apps`
+//! frame that draws it, which is the shape of defect `ronoctua_shell_door::launch`
 //! already paid for once with icon lookups.
 
 use std::path::Path;

@@ -44,7 +44,7 @@ stdenvNoCC.mkDerivation {
 
   buildPhase = ''
     runHook preBuild
-    python3 ${./scripts}/strip-emoji.py \
+    python3 ${./scripts/strip-emoji.py} \
       --primary ${fonts.noctua-iosevka-core}/share/fonts/truetype/noctua-iosevka/${file} \
       --emoji ${noto-fonts-color-emoji}/share/fonts/noto/NotoColorEmoji.ttf \
       --emoji-data ${unicode-character-database}/share/unicode/emoji/emoji-data.txt \

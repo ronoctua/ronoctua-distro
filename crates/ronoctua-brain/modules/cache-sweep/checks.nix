@@ -60,7 +60,7 @@ in
         # FILE-WIDE: one constant of the runner, comments off and strings kept
         # (`uncommented`) — the needle IS a string.
         facts = json.load(open("${facts}"))
-        runner = uncommented(pathlib.Path("${../../src/runner.rs}").read_text())
+        runner = uncommented(pathlib.Path("${../../../ronoctua-brain-daemon/src/runner.rs}").read_text())
         floor(len(runner), 1000, "characters of runner.rs")
         wrong = []
 

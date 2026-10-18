@@ -107,5 +107,10 @@
     "nix/cache.nix"
   ];
 
-  namedBy = { };
+  # WHO NAMES IT FROM OUTSIDE: the granularity checks take this module as
+  # their sample of a brain module edited (`granularity-of-an-edit`) and of a
+  # data entry that names no file (`data-entries-name-files`).
+  namedBy = {
+    "tests/build-granularity.nix" = [ "disk-space" ];
+  };
 }

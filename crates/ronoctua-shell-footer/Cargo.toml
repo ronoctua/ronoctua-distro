@@ -1,0 +1,161 @@
+[package]
+name = "ronoctua-shell-footer"
+description = "The footer: the layer-shell surface with its modeline and minibuffer, the leader, the region that hosts every view by its id, and what the footer keeps for the session."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE FOOTER IN A CRATE OF ITS OWN (the 2026-10-12 wave, lane R6): the one
+# `wlr-layer-shell` surface — modeline, minibuffer, the region above them —
+# the leader's state machine and the base keymap, the modeline's adapters and
+# the kiosk, the brain's line, the sudo bar, the on-screen keyboard and the
+# hands, the glance, and the slot host every view of a feature is a region of.
+#
+# IT NAMES NO FEATURE (`footer-names-no-feature`): a view is hosted by its
+# id, registered by the binary, which hands the footer its regions and its
+# residents when it starts (`Composition`). What the footer says of a view's
+# daemon for the whole session — a refusal its thread carried, a mark on the
+# modeline, the pairing question — is that view's words leaf, under both. So
+# a line of a view recompiles the view and the binary, never this.
+[dependencies]
+# THE FOUNDATION: the vocabulary, every window's plumbing, the queue's jobs
+# and the file manager's report it tells the regions of.
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-report = { path = "../ronoctua-shell-report" }
+ronoctua-shell-work = { path = "../ronoctua-shell-work" }
+# THE WORDS OF A VIEW THE FOOTER SAYS TOO, one leaf per view, under the view
+# and this crate: a refusal of an order its own line carried, a mark of the
+# modeline, the radio's question, the studio's refusals.
+ronoctua-shell-audio-words = { path = "../ronoctua-shell-audio-words" }
+ronoctua-shell-bluetooth-words = { path = "../ronoctua-shell-bluetooth-words" }
+ronoctua-shell-camera-words = { path = "../ronoctua-shell-camera-words" }
+ronoctua-shell-display-words = { path = "../ronoctua-shell-display-words" }
+ronoctua-shell-history-words = { path = "../ronoctua-shell-history-words" }
+ronoctua-shell-network-words = { path = "../ronoctua-shell-network-words" }
+ronoctua-shell-player-words = { path = "../ronoctua-shell-player-words" }
+ronoctua-shell-power-words = { path = "../ronoctua-shell-power-words" }
+ronoctua-shell-syncthing-words = { path = "../ronoctua-shell-syncthing-words" }
+ronoctua-shell-update-words = { path = "../ronoctua-shell-update-words" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-compositor = { path = "../ronoctua-compositor" }
+ronoctua-scroll = { path = "../ronoctua-scroll" }
+# The ONLY border with NetworkManager: the modeline's three marks and the
+# events of a network coming and going.
+ronoctua-network = { path = "../ronoctua-network" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-notify = { path = "../ronoctua-notify" }
+ronoctua-apps = { path = "../ronoctua-apps" }
+ronoctua-clipboard = { path = "../ronoctua-clipboard" }
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+# THE TWO RAILS AND THE SCROLLBAR, from the crate that owns the vocabulary
+# (the host's features: the pixel side).
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-store = { path = "../ronoctua-store" }
+ronoctua-files = { path = "../ronoctua-files" }
+# The ONLY border with /proc: the camera held open, the process a mark names.
+ronoctua-memory = { path = "../ronoctua-memory" }
+# THE POWER BORDER — UPower, power-profiles-daemon, logind — for the
+# modeline's battery and profile marks, the three battery alarms and the
+# locks the footer holds.
+ronoctua-power = { path = "../ronoctua-power" }
+# The screens: the brightness keys, the text's size, the hotplug.
+ronoctua-display = { path = "../ronoctua-display" }
+# The pointing devices and the seat each is on: the colour every cursor's
+# hover band is painted in.
+ronoctua-pointers = { path = "../ronoctua-pointers" }
+# THE ONE BOUNDARY WITH PIPEWIRE. The modeline draws two marks off it at
+# rest and the bare volume keys act through it with no view open, so the
+# footer holds its threads for the whole session.
+ronoctua-audio = { path = "../ronoctua-audio" }
+# THE CAMERA: the cameras plugged in, and the studio's state and wire — the
+# modeline's marks and the hand gestures.
+ronoctua-camera = { path = "../ronoctua-camera" }
+ronoctua-studio = { path = "../ronoctua-studio" }
+# What a pose of the hands means (`gestures.rs`).
+ronoctua-gestures = { path = "../ronoctua-gestures" }
+# The player's CLIENT only: the footer's watch of its socket — the modeline's
+# pair and what the player's region is told. The engine never reaches here.
+ronoctua-player = { path = "../ronoctua-player" }
+ronoctua-syncthing = { path = "../ronoctua-syncthing" }
+# The ONLY border with BlueZ: the pairing agent, which only the process that
+# outlives every window may register, and the radio's alarms and marks.
+ronoctua-bluetooth = { path = "../ronoctua-bluetooth" }
+ronoctua-keyboards = { path = "../ronoctua-keyboards" }
+# Independent keyboards: the remapper's rules and the socket its leader
+# comes through. The shell never opens a device; the daemon does.
+ronoctua-keys = { path = "../ronoctua-keys" }
+# The diverted keyboard's keys, translated with ITS layout — the same crate
+# SCTK compiles every Wayland keymap with.
+xkbcommon = "0.8"
+# THE TWO TUNNELS — Tailscale's local API and Tor's control socket — for the
+# modeline's two marks.
+ronoctua-tunnel = { path = "../ronoctua-tunnel" }
+# CLIPCASCADE, SPOKEN NATIVELY: the footer's own history is what syncs.
+ronoctua-clipcascade = { path = "../ronoctua-clipcascade" }
+# THE SHELL HISTORY's mark and its thread.
+ronoctua-atuin = { path = "../ronoctua-atuin" }
+# The glance (`LEADER g`): the world's clocks and weather, as read.
+ronoctua-world = { path = "../ronoctua-world" }
+# The queue. The footer asks it for work and listens for the list; it never
+# copies anything itself.
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+# WHEN the machine does something to itself: the brain's line and its marks.
+ronoctua-brain = { path = "../ronoctua-brain" }
+# THE PERSON'S OWN PROGRAMS: the context the modeline's two marks are read
+# with, and the kiosk's Chrome profiles.
+ronoctua-software = { path = "../ronoctua-software" }
+# THE PERSON'S RUNNING CHROME — the kiosk's bridge. The footer is its
+# socket's SERVER.
+ronoctua-browser = { path = "../ronoctua-browser" }
+# THE SUDO DOOR (`authority`, which the footer's sudo bar alone calls —
+# `sudo-door-is-one`), the passwordless window and the fingers.
+ronoctua-security = { path = "../ronoctua-security", features = [ "authority" ] }
+# What the sudo bar asks for: a vault's request, a key root pins, a
+# password held as a `Secret`.
+ronoctua-private = { path = "../ronoctua-private" }
+ronoctua-person = { path = "../ronoctua-person", default-features = false }
+ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
+# THE SUDO BAR's password line, wiped when answered, cancelled or dropped.
+zeroize.workspace = true
+
+# Integration with the compositor through wlr-layer-shell and IPC (invariant
+# 3), and the virtual keyboard and pointer the owner approved as its
+# exceptions — `virtual_keys.rs` and `virtual_pointer.rs`, the only files
+# that name them.
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
+wayland-protocols-wlr.workspace = true
+wayland-protocols-misc.workspace = true
+raw-window-handle.workspace = true
+wgpu.workspace = true
+rustix = { workspace = true, features = [ "process" ] }
+anyhow.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# WHAT THE FOUNDATION KEEPS FOR TESTS, in these tests too (`test-support`):
+# the guards that keep a test off the machine — the clipboard, the
+# compositor, the file picker's memory — and the stubs a test reads the keymap
+# through.
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_BOTTOM", "RONOCTUA_BTOP", "RONOCTUA_KEYS_DIR"]
+run-env = ["RONOCTUA_BOTTOM", "RONOCTUA_BTOP", "RONOCTUA_ZONEINFO"]
+run-env-absent = ["RONOCTUA_BUFFER_BRAIN", "RONOCTUA_BUFFER_EXAMPLE", "RONOCTUA_BUFFER_FORMAT", "RONOCTUA_BUFFER_KEYBOARD", "RONOCTUA_BUFFER_MEMORY"]
+beside = ["ronoctua-rescue"]

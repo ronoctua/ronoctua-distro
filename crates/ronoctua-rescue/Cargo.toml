@@ -39,3 +39,8 @@ crossterm = "0.28"
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_BTOP", "RONOCTUA_FC_CACHE", "RONOCTUA_JOURNALCTL", "RONOCTUA_KEYS_DIR", "RONOCTUA_MACHINE_DIR", "RONOCTUA_PKTTYAGENT", "RONOCTUA_RESCUE_SHELL", "RONOCTUA_SYSTEMCTL"]
+run-env = ["RONOCTUA_FC_CACHE", "RONOCTUA_RESCUE_SHELL", "RONOCTUA_SYSTEMCTL"]

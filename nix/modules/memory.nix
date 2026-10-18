@@ -326,7 +326,7 @@ in
     # 2. What it may kill inside the session
     # -----------------------------------------------------------------
     # `app.slice` is where `systemd-run --user --scope` puts every foreign
-    # buffer (see `crates/ronoctua-shell/src/foreign.rs`, which now names it
+    # buffer (see `crates/ronoctua-shell-kit/src/foreign.rs`, which now names it
     # explicitly). Its candidates are the leaves below it — one scope per
     # application — so what dies is an application, whole, and never a piece of
     # one.

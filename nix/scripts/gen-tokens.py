@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
-"""Generates the Rust token table AND the WIT enum — sections 7.6 and 7.8.
+"""Generates the Rust token table — sections 7.6 and 7.8.
 
 "Tokens defined ONCE in Nix; the build generates (a) the shell's Rust table and
 (b) a WIT enum of valid names. A non-existent token becomes a compile error in the
 guest." (section 7.6)
 
-Both come from here, from the SAME data. Two lists would diverge, and the divergence
-would show up as the wrong colour on screen — not as an error.
+(a) is this script; (b) is written at EVALUATION by `nix/token-names.nix`, from
+the same names this script is handed (`--roles`, and the icon tokens of the
+glyph table). `invalid-token-fails-build` holds the two to one set of names
+and one spelling of each.
+
+# What this table holds, and what it no longer does
+
+NAMES, and constants the layout is arithmetic on (spacing, sizes, marks, icon
+codepoints). Not one colour VALUE: a colour is a role here (`Color::at(i)`), and
+its bytes are the palettes the colour generator writes (`palettes.bin`,
+`nix/themes.nix`), read by the binaries at run time through `RONOCTUA_THEMES`.
+That is what lets a seed, a recipe or the generator's arithmetic move without
+rebuilding one crate: this file's inputs do not contain them.
 
 # Why the WIT enum matters more than it seems
 
@@ -82,14 +93,6 @@ def wit_ident(name: str) -> str:
     return f"%{id}" if id in WIT_RESERVED else id
 
 
-def parse_color(v: str) -> tuple[int, int, int, int]:
-    m = re.fullmatch(r"0x([0-9A-Fa-f]{8})", v)
-    if not m:
-        raise SystemExit(f"ERROR: malformed colour: {v!r} (expected 0xRRGGBBAA)")
-    n = int(m.group(1), 16)
-    return (n >> 24) & 0xFF, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF
-
-
 def flatten(prefix: str, obj, out: dict) -> None:
     for k, v in obj.items():
         key = f"{prefix}.{k}" if prefix else k
@@ -99,76 +102,35 @@ def flatten(prefix: str, obj, out: dict) -> None:
             out[key] = v
 
 
-#: The pages each theme is solved on, in the order of the runtime table's
-#: second index (`ronoctua_tokens::theme::Ground`): the base first.
+#: The pages each theme is solved on, in the order of the palettes' second
+#: index (`ronoctua_tokens::theme::Ground`): the base first. The palettes'
+#: own header names them again (`nix/scripts/gen-theme.py`), and a binary
+#: refuses a file whose pages are not these.
 PAGES = ("chrome", "backdrop", "near", "absolute")
 
 
-def load_themes(path: pathlib.Path) -> list[dict]:
-    """`themes.json` from `nix/themes.nix`: the ordered list of themes, each
-    `{"id": …, "mode": "dark" | "light", "colors": {key: "0xRRGGBBAA"}}`.
+def load_roles(path: pathlib.Path) -> list[str]:
+    """`token-roles.json` from `nix/token-names.nix`: every colour role's
+    dotted name, read at evaluation out of `assets/tokens/colors.nix` and
+    `assets/tokens/shaped.nix`.
 
-    Every theme has to name exactly the same colours. The generator over
-    there already guarantees it; it is checked again here because a table
-    with a hole in it would be the wrong colour on screen, never an error."""
+    Refused when it is not a non-empty list of distinct names: a hole or a
+    repeat here would put one role's index under another's name."""
     raw = json.loads(path.read_text())
-    if not isinstance(raw, list) or not raw:
-        raise SystemExit(f"ERROR: {path} is not a non-empty list of themes")
-    themes = []
-    for entry in raw:
-        if not isinstance(entry, dict) or "id" not in entry or "colors" not in entry:
-            raise SystemExit(f"ERROR: a theme in {path} is not {{id, colors}}: {entry!r:.80}")
-        if not re.fullmatch(r"[a-z][a-z0-9-]*", entry["id"]):
-            raise SystemExit(f"ERROR: the theme id {entry['id']!r} is not kebab-case")
-        # THE MODE IS REFUSED WHEN IT IS NOT ONE OF THE TWO, never read as
-        # dark: a light theme generated as dark would name its white desk
-        # "black" on screen, and nothing would fail.
-        if entry.get("mode") not in ("dark", "light"):
-            raise SystemExit(f"ERROR: the theme {entry['id']!r} says its mode is {entry.get('mode')!r}")
-        flat: dict = {}
-        flatten("", entry["colors"], flat)
-        # AND ONE PALETTE PER PAGE, in `PAGES` order after the base's: the
-        # same roles solved on each desk (`gen-theme.py`, `Theme.on_page`).
-        # A page that is missing, or one that names other roles than the
-        # base, is refused: a hole in the table is the wrong colour on screen.
-        pages = entry.get("pages")
-        if not isinstance(pages, dict) or sorted(pages) != sorted(PAGES[1:]):
-            raise SystemExit(f"ERROR: the theme {entry['id']!r} does not carry the pages {PAGES[1:]}")
-        palettes = [flat]
-        for page in PAGES[1:]:
-            colours: dict = {}
-            flatten("", pages[page], colours)
-            if set(colours) != set(flat):
-                raise SystemExit(f"ERROR: the theme {entry['id']!r} on {page} names other roles than its base: {sorted(set(colours) ^ set(flat))}")
-            palettes.append(colours)
-        themes.append({"id": entry["id"], "mode": entry["mode"], "colors": flat, "palettes": palettes})
-    first = set(themes[0]["colors"])
-    for theme in themes[1:]:
-        if set(theme["colors"]) != first:
-            print(
-                f"ERROR: the theme `{theme['id']}` does not name the same colours as `{themes[0]['id']}`:",
-                sorted(set(theme["colors"]) ^ first),
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-    ids = [t["id"] for t in themes]
-    if len(set(ids)) != len(ids):
-        raise SystemExit(f"ERROR: a theme id repeats: {ids}")
-    return themes
+    if not isinstance(raw, list) or not raw or not all(isinstance(r, str) and r for r in raw):
+        raise SystemExit(f"ERROR: {path} is not a non-empty list of role names")
+    if len(set(raw)) != len(raw):
+        raise SystemExit(f"ERROR: a role repeats in {path}: {sorted({r for r in raw if raw.count(r) > 1})}")
+    return raw
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
-        "--themes",
+        "--roles",
         type=pathlib.Path,
         required=True,
-        help="themes.json from nix/themes.nix: [{id, mode, colors}], in the chooser's order",
-    )
-    ap.add_argument(
-        "--default-theme",
-        required=True,
-        help="the id of the theme a fresh machine shows; see assets/themes/themes.nix",
+        help="token-roles.json from nix/token-names.nix: every colour role's name",
     )
     ap.add_argument("--typography", type=pathlib.Path, required=True)
     ap.add_argument("--space", type=pathlib.Path, required=True)
@@ -185,36 +147,17 @@ def main() -> int:
         required=True,
         help="category-glyphs.json: an ORDERED list of {category, token}",
     )
-    ap.add_argument(
-        "--brain-marks",
-        type=pathlib.Path,
-        help="brain-marks.json: the icon tokens that are a brain module's glyphs",
-    )
     ap.add_argument("--out", type=pathlib.Path, required=True)
-    ap.add_argument(
-        "--out-wit",
-        type=pathlib.Path,
-        required=True,
-        help="WIT enum of valid token names (section 7.6's (b))",
-    )
     args = ap.parse_args()
 
-    themes = load_themes(args.themes)
+    role_names = load_roles(args.roles)
     typo = json.loads(args.typography.read_text())
     space_raw = json.loads(args.space.read_text())
     icons = json.loads(args.icons.read_text())
-    brain_marks = json.loads(args.brain_marks.read_text()) if args.brain_marks else []
-    strays = sorted(t for t in brain_marks if t not in icons)
-    if strays:
-        # `nix/glyphgen.nix` merges them into the table it measures, so a
-        # token missing here is the two derivations reading different lists.
-        print(f"ERROR: brain module glyphs missing from the icon table: {strays}", file=sys.stderr)
-        return 1
 
-    # The names are the FIRST theme's: every theme has the same set (checked
-    # in `load_themes`), so the constants, the bridge and the WIT enum come
-    # out identical whichever theme is looked at.
-    colors: dict = themes[0]["colors"]
+    # THE NAMES, and nothing else: which bytes a role is belongs to the
+    # palettes, at run time.
+    colors = role_names
     spaces: dict = {}
     flatten("", space_raw, spaces)
 
@@ -240,11 +183,12 @@ def main() -> int:
     A("// Editing here means losing the change at the next build.")
     A("")
 
-    # --- colours: one ROLE per key, and the values in a table per theme ------
+    # --- colours: one ROLE per key ------------------------------------------
     #
     # The constant is an index, not bytes: `Color::to_rgba8` looks it up in the
-    # theme the process is in. Sorted, so the index is stable across generator
-    # runs and the WIT enum (also sorted) lists the same names in the same order.
+    # palette the process wears, loaded at run time. Sorted, so the index is
+    # stable across generator runs, and it is the order the palettes are
+    # written in (`gen-theme.py`, from the same list) and the WIT enum lists.
     roles = sorted(colors)
     A("/// Design system colours: one constant per ROLE, resolved through the")
     A("/// current theme (`theme::set`) when drawn.")
@@ -488,45 +432,11 @@ def main() -> int:
     A("            _ => None,")
     A("        }")
     A("    }")
-    # THE BRAIN'S MARKS, by token NAME.
-    # A mark crosses the brain's socket as the token of its glyph
-    # (`made-up-full`), and the modeline draws it from that. Only a module's
-    # own tokens answer: a name that happened to match a chrome token would be a
-    # module drawing a glyph it never declared.
-    A("")
-    A("    /// A BRAIN MODULE'S GLYPH, by its token name (`<module>-<name>`), and")
-    A("    /// only a module's: a name that is not one of their glyphs is `None`,")
-    A("    /// even when the chrome has a token of that name.")
-    A("    #[must_use]")
-    A("    pub fn brain_mark(token: &str) -> Option<char> {")
-    if brain_marks:
-        A("        match token {")
-        for k in sorted(brain_marks):
-            A(f'            "{k}" => Some({ident(k)}),')
-        A("            _ => None,")
-        A("        }")
-    else:
-        # NO MODULE DECLARES A GLYPH YET, and a `match` with only a wildcard
-        # arm is `clippy::match_single_binding` — `chrome_size`'s reason.
-        A("        let _ = token;")
-        A("        None")
-    A("    }")
-    # AND A TEST OF THE ANSWER, generated with it: every module's token finds
-    # its own glyph, and a CHROME token's name finds nothing — which is the
-    # half that holds, and is proved, while no module declares a glyph yet.
-    chrome = sorted(k for k in icons if k not in brain_marks)
-    A("")
-    A("    #[cfg(test)]")
-    A("    mod brain_mark_answers {")
-    A("        #[test]")
-    A("        fn only_a_modules_own_glyph_answers() {")
-    if chrome:
-        A(f'            assert_eq!(super::brain_mark("{chrome[0]}"), None);')
-    A('            assert_eq!(super::brain_mark(""), None);')
-    for k in sorted(brain_marks):
-        A(f'            assert_eq!(super::brain_mark("{k}"), Some(super::{ident(k)}));')
-    A("        }")
-    A("    }")
+    # NO BRAIN MODULE'S GLYPH IS HERE. A mark crosses the brain's socket as
+    # the token of its glyph (`made-up-full`), and the footer resolves it in
+    # the brain's catalogue, data it reads at run time (`nix/brain-catalogue.nix`,
+    # `ronoctua_brain::catalogue`): this table is compiled into every crate
+    # that draws, and a person's module would rebuild them all.
     A("}")
     A("")
 
@@ -597,49 +507,19 @@ def main() -> int:
     A("}")
     A("")
 
-    # --- the themes' VALUES ------------------------------------------------
+    # --- the pages ------------------------------------------------------------
     #
-    # `[theme][role]`, in the order of `assets/themes/themes.nix` and the sorted
-    # order of the roles above. Every theme has every role (`load_themes`
-    # checked), so the table is rectangular by construction.
-    ids = [t["id"] for t in themes]
-    if args.default_theme not in ids:
-        raise SystemExit(
-            f"ERROR: --default-theme {args.default_theme!r} is not one of the declared themes: {ids}"
-        )
-    default_index = ids.index(args.default_theme)
-    A("/// The themes' VALUES, in `assets/themes/themes.nix` order. Only `Color`")
-    A("/// reads the table.")
-    A("///")
-    A("/// THE ORDER IS NOT THE DEFAULT. It was, for as long as the owner wanted")
-    A("/// the theme at the top of the chooser to be the one a fresh machine")
-    A("/// shows; the two are separate declarations now, and `DEFAULT` is the")
-    A("/// index of the one that is named `default` over there.")
+    # COMPILE TIME, because a page is a `Ground` variant the code names. The
+    # themes themselves — their ids, their order, the default, which way each
+    # climbs — and every colour's bytes are RUN TIME: the palettes' header
+    # (`nix/scripts/gen-theme.py`, read by `ronoctua_tokens::palettes`).
+    A("/// The themes' compile-time half: the pages each is solved on. The rest")
+    A("/// — the ids, their order, the default, the modes and every colour — is")
+    A("/// read at run time from `palettes.bin` (`ronoctua_tokens::palettes`).")
     A("pub mod themes {")
-    A("    /// The ids, in order.")
-    A(f"    pub const IDS: [&str; {len(themes)}] = [{', '.join(repr(t['id']) for t in themes).replace(chr(39), chr(34))}];")
-    A("    /// Which way each theme's ladder climbs, in the same order: `true` for")
-    A("    /// a LIGHT theme (the paper is the ground and the rungs walk toward")
-    A("    /// black). A colour cannot be asked which side it is on, and the shell")
-    A("    /// has to know: the absolute desk is black in one and white in the other.")
-    A(f"    pub const LIGHT: [bool; {len(themes)}] = [{', '.join('true' if t['mode'] == 'light' else 'false' for t in themes)}];")
-    A("    /// The pages each theme is solved on, in the table's second index:")
+    A("    /// The pages each theme is solved on, in the palettes' second index:")
     A("    /// the base (the chrome), then each desk (`theme::Ground`).")
     A(f"    pub const PAGES: [&str; {len(PAGES)}] = [{', '.join(chr(34) + p + chr(34) for p in PAGES)}];")
-    A("    /// `[theme][page][role]` -> RGBA, roles in `color`'s order.")
-    A(f"    pub static TABLE: [[[[u8; 4]; super::counts::COLORS]; {len(PAGES)}]; {len(themes)}] = [")
-    for theme in themes:
-        A(f"        // {theme['id']}")
-        A("        [")
-        for page, palette in zip(PAGES, theme["palettes"]):
-            A(f"            // {theme['id']} on {page}")
-            A("            [")
-            for k in roles:
-                r, g, b, a = parse_color(palette[k])
-                A(f"                [{r}, {g}, {b}, {a}], // {k}")
-            A("            ],")
-        A("        ],")
-    A("    ];")
     A("}")
     A("")
 
@@ -686,59 +566,17 @@ def main() -> int:
     A(f"    pub const SPACES: usize = {len(spaces)};")
     A(f"    /// The number of icon tokens.")
     A(f"    pub const ICONS: usize = {len(icons)};")
-    A("    /// The number of themes.")
-    A(f"    pub const THEMES: usize = {len(themes)};")
     A("    /// The number of pages each theme is solved on: the base and the desks.")
     A(f"    pub const PAGES: usize = {len(PAGES)};")
-    A("    /// The index of the theme a fresh machine shows.")
-    A("    ///")
-    A("    /// NOT nought. See `themes::IDS`, and `assets/themes/themes.nix` for")
-    A("    /// why the order and the default stopped being one fact.")
-    A(f"    pub const DEFAULT_THEME: usize = {default_index};")
     A("}")
     A("")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("\n".join(L))
 
-    # --- (b) the WIT enum --------------------------------------------------
-    #
-    # WIT names are `kebab-case` and do not accept dots: `color.surface.base`
-    # becomes `surface-base`. The conversion is the same on both sides, so the host
-    # knows how to go back without an extra table.
-    W = []
-    B = W.append
-    B("// GENERATED by nix/scripts/gen-tokens.py. DO NOT EDIT BY HAND.")
-    B("//")
-    B("// Section 7.6's (b): 'a WIT enum of valid names; a non-existent token")
-    B("// becomes a compile error in the guest'. From the same data as the Rust.")
-    B("")
-    B("package ronoctua:tokens@0.1.0;")
-    B("")
-    B("interface tokens {")
-    B("    /// Design system colours, by NAME. The host resolves the value.")
-    B("    ///")
-    B("    /// A buffer cannot name a colour that does not exist: a name")
-    B("    /// that is not here does not compile.")
-    B("    enum color {")
-    for k in sorted(colors):
-        B(f"        // color.{k}")
-        B(f"        {wit_ident(k)},")
-    B("    }")
-    B("")
-    B("    /// UI icons — glyphs from the font (invariant 10).")
-    B("    enum icon {")
-    for k in sorted(icons):
-        B(f"        {wit_ident(k)},")
-    B("    }")
-    B("}")
-    B("")
-    args.out_wit.parent.mkdir(parents=True, exist_ok=True)
-    args.out_wit.write_text("\n".join(W))
-
     print(
-        f"OK: {len(colors)} colours in {len(themes)} theme(s) × {len(PAGES)} pages, {len(spaces)} spacings, "
-        f"{len(icons)} icons -> {args.out.name} and {args.out_wit.name}"
+        f"OK: {len(colors)} colour roles × {len(PAGES)} pages, {len(spaces)} spacings, "
+        f"{len(icons)} icons -> {args.out.name} (the values are the palettes', at run time)"
     )
     print("OK: no shadow/elevation token (invariant 15)")
     return 0

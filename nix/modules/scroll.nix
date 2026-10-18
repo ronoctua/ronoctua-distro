@@ -432,7 +432,7 @@ in
     #
     # The ordering is made the other way round, by raising the APPLICATIONS,
     # which needs no privilege: see `choom` in
-    # `crates/ronoctua-shell/src/foreign.rs`. Apps 500, these two 100.
+    # `crates/ronoctua-shell-kit/src/foreign.rs`. Apps 500, these two 100.
     # THE SESSION TARGET, which exists because the compositor cannot say it is
     # ready.
     #
@@ -678,10 +678,12 @@ in
       description = "ronoctua — the line that outlives the footer";
       environment = {
         # THE THEME, because this process is not the footer's child and
-        # inherits nothing from it. Without these two the line would draw in
-        # the fallback palette on a machine that chose another — a message
-        # about the interface being gone is the one place the colours must not
-        # be assumed.
+        # inherits nothing from it. Without the first the line would draw in
+        # the default theme on a machine that chose another — a message about
+        # the interface being gone is the one place the colours must not be
+        # assumed. The second, the palettes, is what the program is keyed to:
+        # its wrapper sets its own build's (`keyed` in `nix/rust.nix`), and with
+        # none it refuses to draw rather than guess (`ronoctua_tokens::palettes`).
         RONOCTUA_THEME = config.ronoctua.theme;
         RONOCTUA_THEMES = "${ronoctua.themed}";
         # WHAT "ASK AN AI" SHOWS THE REPORT IN — a pager in the rescue
@@ -728,11 +730,14 @@ in
       # and that is why the screen needs both variables instead of deriving one
       # from the other.
       RONOCTUA_LEADER_CHORD = "SUPER";
-      # THE THEME the machine comes up in, and where the generator's fragments
-      # are. The shell reads the first as the floor under the person's own
-      # `theme.json`, and copies from the second when the theme changes. Both
-      # places, for the reason `RONOCTUA_ICONS` gives: the footer is a user
-      # unit and inherits the manager's environment, not a login shell's.
+      # THE THEME the machine comes up in, and the generator's output: the
+      # palettes and the compositor's fragments. The shell reads the first as
+      # the floor under the person's own `theme.json`, and the second for the
+      # colours and the fragments it copies when the theme changes — a wrapped
+      # program reads its own build's (`keyed` in `nix/rust.nix`), and this one
+      # is for what runs unwrapped. Both places, for the reason
+      # `RONOCTUA_ICONS` gives: the footer is a user unit and inherits the
+      # manager's environment, not a login shell's.
       RONOCTUA_THEME = config.ronoctua.theme;
       RONOCTUA_THEMES = "${ronoctua.themed}";
       # THE CAPTURE: where it goes, and what takes it.

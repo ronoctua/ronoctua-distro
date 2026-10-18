@@ -24,7 +24,7 @@
 //! [`gate`] is pure over `ronoctua-network`'s [`Snapshot`] (the one crate
 //! that talks to NetworkManager); `crate::reach` connects and reads it.
 
-use ronoctua_i18n::key;
+use crate::key;
 use ronoctua_network::{Snapshot, Way};
 
 /// What the gate says.

@@ -523,8 +523,9 @@ mod tests {
         // Never `temp_dir` — `/tmp` can be a RAM filesystem — and never a
         // variable with a fallback: it read `CARGO_TARGET_DIR` and fell back
         // to `target`, relative to the crate, which is a directory INSIDE the
-        // source tree. crane does not set that variable, so every Nix run took
-        // the fallback, and so did every `cargo test` outside the devshell.
+        // source tree. Nix's builds do not set that variable (crane's did not,
+        // and the units do not), so every Nix run took the fallback, and so did
+        // every `cargo test` outside the devshell.
         let dir = std::env::current_exe()
             .expect("a test knows its own executable")
             .parent()

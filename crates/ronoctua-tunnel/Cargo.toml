@@ -36,3 +36,8 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_SYSTEMCTL", "RONOCTUA_TOR_FRAGMENT", "RONOCTUA_TOR_OPTIONS_RS", "RONOCTUA_TOR_SOCKS"]
+env-absent = ["RONOCTUA_TAILSCALE_SOCKET", "RONOCTUA_TOR_CONTROL", "RONOCTUA_TOR_COOKIE"]

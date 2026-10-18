@@ -1,0 +1,24 @@
+[package]
+name = "ronoctua-shell-update-words"
+description = "The update's mark as the shell draws it: the modeline's breathing glyph while a run is under way, and the door a click on it opens — in the footer and the update's view."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE UPDATE'S MARK, AS ITS VIEW AND THE FOOTER DRAW IT (the 2026-10-12
+# wave): the footer's modeline draws it while a run is under way and names no
+# feature, so the mark and the command its click runs stand under both, on no
+# other shell crate.
+[dependencies]
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+# WHEN the machine does something to itself: the update module's id, which
+# the mark asks the mind about.
+ronoctua-brain = { path = "../ronoctua-brain" }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.

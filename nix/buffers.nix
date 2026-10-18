@@ -1,6 +1,6 @@
 # Builds the native buffers for `wasm32-wasip2` — sections 7.8 and 7.9.
 #
-# A derivation of its own, and not one more crane target of the host, because
+# A derivation of its own, and not one more unit of the host's plan, because
 # each buffer is a SEPARATE WORKSPACE: a component cannot be a member of the
 # host's workspace — `rust-lld` rejects the component model's symbols. See the
 # `exclude` in the root `Cargo.toml`.
@@ -80,8 +80,9 @@ let
   # corner (`lean-tree` measures the FLAKE's tree and would not see it, because
   # this path is copied on its own).
   #
-  # The same criterion as `nix/rust.nix`'s `rustFont`: the sources, the manifest
-  # and the lockfile. Nothing else is read by the build below.
+  # The criterion of a unit's fileset (`nix/rust/units.nix`: the crate's
+  # sources and manifest), and the buffer's lockfile. Nothing else is read by
+  # the build below.
   onlySources =
     src:
     lib.fileset.toSource {

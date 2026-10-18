@@ -53,3 +53,7 @@ ronoctua-consent = { path = "../ronoctua-consent", optional = true }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_CACHE_RS"]

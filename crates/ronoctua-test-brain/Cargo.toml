@@ -1,0 +1,41 @@
+[package]
+name = "ronoctua-test-brain"
+description = "The brain's panel, driven through the WIT and measured against every language."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE DRIVER OF THE BRAIN'S PANEL, a package of its own. It was a binary of
+# `ronoctua-runtime`, and it is the one driver that needs the brain's daemon:
+# the steps it draws are the ones a module the daemon REGISTERS declares
+# (`compiled::all`), with that module's keys. As a binary of the runtime it
+# made every edit of a brain module — a person's included — an edit of the
+# runtime's package; here it is the one other crate that compiles them, and
+# the runtime links no brain at all.
+[[bin]]
+# The seventh, for the brain's panel. The criterion only it has: it is the
+# buffer with NO width constant of its own — the widths are numbers inside four
+# `Table`s and half the keys are assembled at run time (`brain-why-{}`), so no
+# reading of the source can pair a key with a budget. The FRAME can, and that
+# is what this drives.
+name = "ronoctua-test-brain"
+path = "src/main.rs"
+
+[dependencies]
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+# The host's half of a buffer, and the driven tests' helpers (`driven`).
+ronoctua-runtime = { path = "../ronoctua-runtime" }
+# THE BRAIN'S COMPILED REGISTRY, which only the daemon makes: the steps this
+# draws are a registered module's own, never a table read by its name.
+ronoctua-brain-daemon = { path = "../ronoctua-brain-daemon" }
+wasmtime.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+bins = { "ronoctua-test-brain" = "driver" }

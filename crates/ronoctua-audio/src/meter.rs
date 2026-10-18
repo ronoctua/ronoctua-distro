@@ -2,7 +2,7 @@
 //!
 //! # Why a child spitting raw samples
 //!
-//! It is the film player's shape (`ronoctua-shell/src/motion.rs`), and for the
+//! It is the film player's shape (`ronoctua-shell-inspect/src/motion.rs`), and for the
 //! same reason: a live child writing raw frames down a pipe is a clock the
 //! reading thread does not have to keep. Measured here — `pw-cat` at 8 kHz,
 //! one channel, signed 16-bit delivers **16 KB/s** and the first sample lands

@@ -16,7 +16,7 @@
 //! uses Fluent), and what crosses from here is a KEY plus arguments, never a
 //! sentence (invariant 8).
 
-use ronoctua_i18n::key;
+use crate::key;
 
 use crate::Kind;
 

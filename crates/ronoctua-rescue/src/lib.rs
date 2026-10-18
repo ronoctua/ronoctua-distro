@@ -5,7 +5,7 @@
 //! The footer is this system's ONLY chrome (invariant 14). When it dies there is
 //! no modeline, no minibuffer and no leader; when the compositor dies there is
 //! nothing at all. The three binds that live outside the leader
-//! (`crates/ronoctua-shell/src/actions.rs`) cover three cases, and all three ask
+//! (`crates/ronoctua-shell-kit/src/actions.rs`) cover three cases, and all three ask
 //! the COMPOSITOR to spawn — so all three are gone exactly when the compositor
 //! is the thing that broke.
 //!
@@ -41,6 +41,7 @@
 
 pub mod action;
 pub mod edit;
+pub mod key;
 pub mod tui;
 pub mod view;
 

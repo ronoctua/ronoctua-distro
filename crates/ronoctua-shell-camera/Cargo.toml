@@ -1,0 +1,48 @@
+[package]
+name = "ronoctua-shell-camera"
+description = "The camera: the studio's app window, and its settings in the footer's region and in a window."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE CAMERA (the 2026-10-12 wave): the studio's app (`camera`, its window),
+# and the camera's settings — one view, two doors (the footer's region and a
+# window) and the one handler of what they ask. They stand on the kit and the
+# door, and name nothing of the footer.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+# The studio's refusals in words, which the footer's hands say too.
+ronoctua-shell-camera-words = { path = "../ronoctua-shell-camera-words" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+ronoctua-render = { path = "../ronoctua-render" }
+# THE CAMERA: the V4L2 boundary (the settings' list of cameras and their
+# controls), the studio's wire and preview, and the effect table the rings
+# walk.
+ronoctua-camera = { path = "../ronoctua-camera" }
+ronoctua-studio = { path = "../ronoctua-studio" }
+ronoctua-effects = { path = "../ronoctua-effects" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+ronoctua-files = { path = "../ronoctua-files" }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

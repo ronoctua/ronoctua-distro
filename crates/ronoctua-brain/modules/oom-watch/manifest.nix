@@ -55,7 +55,7 @@
   uses = [
     "crates/ronoctua-journal"
     "crates/ronoctua-notify/src/oom.rs"
-    "crates/ronoctua-shell/src/surface.rs"
+    "crates/ronoctua-shell-footer/src/surface/mod.rs"
     "assets/notifications.nix"
     # Its machine subtest arms oomd as the distro does.
     "nix/modules/memory.nix"

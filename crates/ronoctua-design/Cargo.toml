@@ -78,3 +78,6 @@ missing_docs = "warn"
 [lints.clippy]
 needless_collect = "warn"
 redundant_clone = "warn"
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.

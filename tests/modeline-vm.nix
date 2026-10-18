@@ -30,6 +30,8 @@
   scroll,
   ronoctua-shell,
   player,
+  # The contract's driver (`rust.bins.ronoctua-contract`).
+  contract,
   fonts,
 }:
 
@@ -191,7 +193,7 @@ pkgs.testers.runNixOSTest {
             # problem is ours. Without this the two hypotheses stay tied.
             print("--- what the compositor says exists ---")
             print(machine.execute(
-                f"${ronoctua-shell}/bin/ronoctua-contract {sock}")[1])
+                f"${contract}/bin/ronoctua-contract {sock}")[1])
             print("--- client ---")
             print(machine.execute("systemctl status client --no-pager")[1])
             print(machine.execute("journalctl -u client --no-pager")[1])
@@ -285,9 +287,10 @@ pkgs.testers.runNixOSTest {
         columns = field("columns")
         placed = {}
         # THE FOOTER'S OWN LINES: a column the footer started lives in its
-        # unit and logs into the same journal, between the segments.
+        # unit and logs into the same journal, between the segments. The
+        # footer's crate is the log's target (`ronoctua_shell_footer`, lane R6).
         for l in lines[at + 1:]:
-            if "ronoctua_shell::surface:" not in l:
+            if "ronoctua_shell_footer::surface:" not in l:
                 continue
             m = _re.search(r'id="([a-z-]+)" column=(\d+)', l)
             if not m:

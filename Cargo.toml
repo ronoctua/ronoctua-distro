@@ -55,6 +55,11 @@ members = [
   "crates/ronoctua-world",
   "crates/ronoctua-lan",
   "crates/ronoctua-brain",
+  # THE BRAIN'S DAEMON AND THE DRIVER OF ITS PANEL (the 2026-10-12 wave): the
+  # library above is what the footer links; these two are the only crates that
+  # compile a module's code.
+  "crates/ronoctua-brain-daemon",
+  "crates/ronoctua-test-brain",
   "crates/ronoctua-files",
   "crates/ronoctua-camera",
   "crates/ronoctua-effects",
@@ -105,6 +110,94 @@ members = [
   # THE 2026-10-11 WAVE: the person's binary cache (Cachix) — a boundary of
   # its own (AGENTS.md's table).
   "crates/ronoctua-cachix",
+  # THE SHELL IN CRATES (the 2026-10-12 wave): the foundation below the
+  # binary — the kit, the door, the report, the keep, the work, the inspection
+  # panels — and the leaves that stand on it alone, the lifeline, the overlays,
+  # the terminal and the PNG camera of a buffer.
+  "crates/ronoctua-shell-kit",
+  "crates/ronoctua-shell-door",
+  "crates/ronoctua-shell-report",
+  "crates/ronoctua-shell-keep",
+  "crates/ronoctua-shell-work",
+  "crates/ronoctua-shell-inspect",
+  "crates/ronoctua-shell-lifeline",
+  "crates/ronoctua-shell-overlays",
+  "crates/ronoctua-shell-terminal",
+  # AND THE FEATURES, one crate each: the belongings, the security centre,
+  # the update with the person's binary cache.
+  "crates/ronoctua-shell-belongings",
+  "crates/ronoctua-shell-security",
+  "crates/ronoctua-shell-update",
+  # THE VIEWS IN CRATES OF THEIR OWN (the same wave): each feature's view,
+  # window, region of the footer, words, camera and keys, on the foundation —
+  # and the words of a daemon that a view and the footer both say, one leaf
+  # per daemon under both and on no other shell crate.
+  "crates/ronoctua-shell-bluetooth",
+  "crates/ronoctua-shell-display",
+  "crates/ronoctua-shell-locale",
+  "crates/ronoctua-shell-network",
+  "crates/ronoctua-shell-audio-words",
+  "crates/ronoctua-shell-history-words",
+  "crates/ronoctua-shell-power-words",
+  "crates/ronoctua-shell-syncthing-words",
+  "crates/ronoctua-shell-audio",
+  "crates/ronoctua-shell-history",
+  "crates/ronoctua-shell-pointers",
+  "crates/ronoctua-shell-power",
+  "crates/ronoctua-shell-syncthing",
+  # THE FEATURES, each a crate of its own: its view, its doors, its region of
+  # the footer's slot host, its keys — and the studio's refusals in words,
+  # which the camera's doors and the footer's hands both say.
+  "crates/ronoctua-shell-camera-words",
+  "crates/ronoctua-shell-camera",
+  "crates/ronoctua-shell-manual",
+  "crates/ronoctua-shell-notifications",
+  "crates/ronoctua-shell-transfers",
+  # THE TOOLS' FAMILY, each a view of its own crate (its window and its region
+  # of the footer): the clipboard's history and git (the history `C-h` opens,
+  # `LEADER / c`) — over the git line the file manager draws and the history
+  # reads, below both (with the file manager, below). The calculator and the
+  # icons app are listed with the search that shows them.
+  "crates/ronoctua-shell-clipboard",
+  "crates/ronoctua-shell-git",
+  "crates/ronoctua-render-png",
+  # THE FILE MANAGER, a feature crate of its own (lane R5h): its view, its
+  # window, its region of the footer and its camera — and the git line it
+  # draws, which the history shares, in one below both.
+  "crates/ronoctua-shell-git-line",
+  "crates/ronoctua-shell-files",
+  # THE FEATURES, each a crate of its own above the foundation (the R5 lanes).
+  "crates/ronoctua-shell-calc",
+  "crates/ronoctua-shell-fast-access",
+  "crates/ronoctua-shell-icons",
+  "crates/ronoctua-shell-software",
+  # THE SHELL'S FEATURES, one crate each (the 2026-10-12 wave): a view, its
+  # window, its region in the footer, its cameras and its keys, on the kit and
+  # the door alone — a line of one recompiles it and the binary.
+  "crates/ronoctua-shell-agents",
+  "crates/ronoctua-shell-containers",
+  "crates/ronoctua-shell-incus",
+  "crates/ronoctua-shell-stick",
+  # THE PLAYER (R5i): the player, and the two pages written above it — the
+  # catalogue's channels by theme and the video catalogue with its ranking.
+  "crates/ronoctua-shell-player",
+  "crates/ronoctua-shell-catalogue",
+  "crates/ronoctua-shell-video-metrics",
+  # THE WORDS OF A VIEW THE FOOTER SAYS TOO (lane R6): the footer keeps a
+  # line, a mark or a reading of these views for the whole session and names
+  # no feature, so what it shares with each view stands under both — one leaf
+  # per view, on no other shell crate but the foundation.
+  "crates/ronoctua-shell-bluetooth-words",
+  "crates/ronoctua-shell-display-words",
+  "crates/ronoctua-shell-network-words",
+  "crates/ronoctua-shell-player-words",
+  "crates/ronoctua-shell-update-words",
+  # THE FOOTER (lane R6): the surface, the leader, the modeline and the slot
+  # host every view is a region of — a crate on the foundation and those
+  # words, naming no feature — and the host of the WASM buffers, a door of
+  # the binary's of its own.
+  "crates/ronoctua-shell-footer",
+  "crates/ronoctua-shell-buffers",
   "crates/ronoctua-shell",
 ]
 
@@ -121,7 +214,7 @@ publish = false
 # 3), plus the standard protocols the owner approved one by one: the data
 # device, screen capture, the virtual keyboard below, and the virtual pointer
 # (`zwlr_virtual_pointer_v1`, from `wayland-protocols-wlr`: the hand gestures'
-# one door, `ronoctua-shell/src/virtual_pointer.rs`).
+# one door, `ronoctua-shell-footer/src/virtual_pointer.rs`).
 # The `system` feature swaps the pure-Rust backend for the libwayland one (FFI).
 # It is NOT optional: only it exposes `display_ptr` and `as_ptr`, the C pointers
 # wgpu needs to create the Surface. With the default backend those
@@ -130,7 +223,7 @@ smithay-client-toolkit = { version = "0.21", features = [ "system" ] }
 wayland-client = { version = "0.31", features = [ "system" ] }
 wayland-protocols-wlr = "0.3"
 # THE VIRTUAL KEYBOARD, and nothing else from this crate: the on-screen
-# keyboard's one door (`ronoctua-shell/src/virtual_keys.rs`). Already in the
+# keyboard's one door (`ronoctua-shell-footer/src/virtual_keys.rs`). Already in the
 # lock through the toolkit; named here so the shell can bind the manager.
 wayland-protocols-misc = { version = "0.3", features = [ "client" ] }
 raw-window-handle = "0.6"
@@ -367,6 +460,29 @@ ruzstd = { version = "0.9", default-features = false, features = [ "std" ] }
 # ── anchor: L17 ──
 # ── anchor: L22 ──
 
+[workspace.metadata.ronoctua]
+# THE FEATURES EVERY BUILD TURNS ON — the plan, both third-party layers and
+# every unit of `nix/rust/units.nix`, and the crane leaves of `nix/rust.nix`.
+#
+# `ronoctua-software`'s `[[bin]]` requires `net` and `draw`, and a workspace
+# build compiles a target only when some member ENABLES its required
+# features — so without them the software CLI simply is not built, and
+# nothing says so until something looks for it. On every command and not
+# only the release build: the layers then build `image` with the ICO decoder
+# the CLI links (one layer, not a second compilation of it), and the tests
+# and clippy reach the code the CLI ships instead of skipping the half of the
+# crate behind the two features. The video-metrics scanner's `net` for the
+# same reason: its binary requires it, and without it the tests and clippy
+# stop at the catalogue and never reach the scanner.
+#
+# The ORDER is the command line's: crane's leaves still pass these, joined,
+# and the string is part of their derivations.
+build-features = [
+  "ronoctua-software/net",
+  "ronoctua-software/draw",
+  "ronoctua-video-metrics/net",
+]
+
 [workspace.lints.rust]
 unsafe_code = "warn"
 missing_docs = "warn"
@@ -404,6 +520,39 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# THE RELEASE PROFILE, CHOSEN BY MEASUREMENT: variant E of
+# `nix/rust/profile-variants.nix` (`nix run .#profile-bench`, 2026-10-12).
+# Thin LTO and one codegen unit per crate, as before, except the shell's own
+# crate, which gets sixteen.
+#
+# The design fixed the rule before any number: every median of `.#bench`
+# within 3% and every p99 within 5% of the old profile's (variant A), every
+# budget passing, five interleaved rounds; among those that pass, the
+# cheapest edited line wins. The lane added four readings the design did not
+# spell out (`nix/scripts/profile-bench.py`), and one of them, added after
+# E's numbers were in, decides: a number measured with A's very program (the
+# same derivation, so the same file) is noise and is not judged. Without it
+# E fails on two p99s of binaries it shares with A byte for byte — the
+# component bench, 0.011 against 0.009 ms (A itself went from 0.008 to 0.016
+# ms between rounds), and the index's one-letter queries, 1.10×.
+#
+# Dropping LTO (B, C) slowed the fast-access index by 12–19% and the
+# leader's p99 by 30–36%: cross-crate inlining is worth it. Sixteen units in
+# EVERY crate (D) slowed a third-party font path by 9–10% in every round.
+# Sixteen in the shell alone (E) moves only the shell's own two programs:
+# its frame numbers moved inside the tolerance (first frame p99 1.033×,
+# leader p99 1.015×), and one line under the shell — the edit everything
+# pays, since the shell is above nearly every crate — reaches a release
+# shell in 387 s instead of 510 s at two cores, with a peak of 3.9 GiB
+# instead of 5.1 (thin LTO splits its work by module, and the shell was one
+# 178-thousand-line module on one thread). The price, which the rule reports
+# and does not judge: the shell's binary is 10% bigger (147.5 MB against
+# 133.7 MB) on every machine and in the ISO, and `ronoctua-render-png` 0.4%.
+# The numbers are in docs/ARCHITECTURE.md.
+#
+# `release-profile-is-the-measured-one` holds this table and the override
+# below to the variant `chosen` in `nix/rust/profile-variants.nix`: changing
+# either is measuring again.
 [profile.release]
 lto = "thin"
 codegen-units = 1
@@ -413,6 +562,9 @@ codegen-units = 1
 # binaries), so the only thing it bought was a bigger dependency layer and a
 # slower LTO link. The symbol table survives the strip — `-S` removes debug
 # sections, not `.symtab` — so `perf` still names functions.
+
+[profile.release.package.ronoctua-shell]
+codegen-units = 16
 
 # THE LOOP'S PROFILE — never the one that is installed.
 #
@@ -424,10 +576,11 @@ codegen-units = 1
 # right for the ISO.
 #
 # They are wrong for the nested loop, which exists to LOOK at the interface and
-# is the most-run command in the project. `crates/ronoctua-shell` is 178 thousand
-# lines in one crate, so `codegen-units = 1` gives its code generation a single
-# thread — measured on this machine, eleven of twelve cores idle, and one edited
-# line costs 148 seconds.
+# is the most-run command in the project. Thin LTO optimises the whole program
+# again at every link, and rustc has no incremental thin LTO; one codegen unit
+# gave the shell's 178 thousand lines a single thread — measured on this
+# machine, eleven of twelve cores idle, and one edited line cost 148 seconds.
+# (`release` itself now splits the shell, by measurement: above.)
 #
 # # Why the FAST side is the one with a name
 #

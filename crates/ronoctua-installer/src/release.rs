@@ -45,7 +45,7 @@
 //! test. Who asks the release is `crate::reach`, through `nix` — the distro's
 //! flake reference is the template's, never spelled here (invariant 16).
 
-use ronoctua_i18n::key;
+use crate::key;
 use serde::Deserialize;
 
 /// The variable naming where the ISO keeps the distro's tree it was built

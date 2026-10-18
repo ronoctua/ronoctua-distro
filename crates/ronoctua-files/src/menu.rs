@@ -23,7 +23,7 @@
 //! what the owner asked for when they said specific features for specific
 //! formats would come.
 
-use ronoctua_i18n::key;
+use crate::key;
 
 use crate::{Entry, Kind, mime};
 

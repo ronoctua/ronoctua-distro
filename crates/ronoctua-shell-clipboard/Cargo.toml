@@ -1,0 +1,43 @@
+[package]
+name = "ronoctua-shell-clipboard"
+description = "The clipboard's history (`LEADER c`): the view both doors draw, its window and its footer region — the history itself is the footer's."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE CLIPBOARD'S VIEW (the 2026-10-12 wave): its rows, its window, its
+# region of the footer and the one errand handler the two share. The HISTORY
+# is the footer's (one watcher, one history), followed by both doors over
+# `clipboard_wire`. On the kit and the door only.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-clipboard = { path = "../ronoctua-clipboard" }
+# ClipCascade's reading and its settings, as the history carries them.
+ronoctua-clipcascade = { path = "../ronoctua-clipcascade" }
+# The colours of a line of code in the entry's text.
+ronoctua-syntax = { path = "../ronoctua-syntax" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

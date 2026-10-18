@@ -35,6 +35,7 @@
 #![forbid(unsafe_code)]
 
 pub mod closure;
+pub mod key;
 pub mod netrc;
 pub mod push;
 pub mod record;

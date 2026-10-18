@@ -70,7 +70,7 @@ stdenvNoCC.mkDerivation {
   buildPhase = ''
     runHook preBuild
     mkdir -p $out
-    python3 ${./scripts}/gen-atlas.py \
+    python3 ${./scripts/gen-atlas.py} \
       --countries ${countries} \
       --regions ${regions} \
       --lakes ${lakes} \

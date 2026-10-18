@@ -62,7 +62,7 @@
 //!
 //! # And the machine's load is NOT this crate's question
 //!
-//! It is answered before this is ever started, by `ronoctua_brain::runner::judge`
+//! It is answered before this is ever started, by `ronoctua_brain_daemon::runner::judge`
 //! against a gate the person configured in one place. A second opinion here
 //! would be a second policy that drifts from the first — the same refusal
 //! the update's brain module writes out about itself.

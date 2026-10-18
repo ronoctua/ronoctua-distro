@@ -20,3 +20,6 @@ ronoctua-zip = { path = "../ronoctua-zip" }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.

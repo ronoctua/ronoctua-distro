@@ -56,19 +56,19 @@
   # module mention the VM test (`containers-vm`) and the image option
   # (`containers-image`), and the icon table holds the view's glyphs.
   namedBy = {
-    "assets/i18n/en-GB.ftl" = "*";
-    "assets/i18n/pt-BR.ftl" = "*";
+    "crates/ronoctua-shell-containers/i18n/en-GB.ftl" = "*";
+    "crates/ronoctua-shell-containers/i18n/pt-BR.ftl" = "*";
     "assets/tokens/icons.nix" = "*";
     "crates/ronoctua-containers/src/fixtures.rs" = [ "containers-vm" ];
     "crates/ronoctua-containers/src/lib.rs" = [ "containers-vm" ];
     "nix/modules/containers.nix" = [ "containers-image" ];
-    "crates/ronoctua-shell/src/containers.rs" = "*";
-    "crates/ronoctua-shell/src/containers_feed.rs" = "*";
-    "crates/ronoctua-shell/src/containers_photograph.rs" = "*";
-    "crates/ronoctua-shell/src/leader.rs" = "*";
-    "crates/ronoctua-shell/src/main.rs" = "*";
-    "crates/ronoctua-shell/src/photograph.rs" = "*";
-    "crates/ronoctua-shell/src/surface.rs" = "*";
+    "crates/ronoctua-shell-containers/src/lib.rs" = "*";
+    "crates/ronoctua-shell-containers/src/containers.rs" = "*";
+    "crates/ronoctua-shell-containers/src/containers_feed.rs" = "*";
+    "crates/ronoctua-shell-containers/src/containers_photograph.rs" = "*";
+    "crates/ronoctua-shell-containers/src/containers_region.rs" = "*";
+    "crates/ronoctua-shell/src/keymap.rs" = "*";
+    "crates/ronoctua-shell-footer/src/surface/mod.rs" = "*";
     "tests/checks.nix" = "*";
     "tests/containers-vm.nix" = "*";
   };

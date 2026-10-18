@@ -1,0 +1,106 @@
+[package]
+name = "ronoctua-shell-player"
+description = "The player (LEADER p): its view and every page of what plays, the transport and the stage, the window, the column, its region in the footer, its camera, its keys — and the seam the pages above it plug into."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE PLAYER, ONE CRATE (the 2026-10-12 wave): the view, its pages, the
+# window and the column, the region the footer hosts and the camera stand on
+# the kit, the door and the inspection panels — so a line of the player
+# recompiles this crate, the two crates of the pages written above it and the
+# binary, never the footer or another view. THE SEAM (`player_seam`) is why
+# the catalogue and the video catalogue's ranking are crates of their own
+# ABOVE this one: a line of either recompiles that crate and the binary,
+# never the transport.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+# The globe of the directories' pages, and the words of a file's tags.
+ronoctua-shell-inspect = { path = "../ronoctua-shell-inspect" }
+# What a state of the player says, and the modeline's pair the footer draws
+# from it: a leaf under this view and the footer.
+ronoctua-shell-player-words = { path = "../ronoctua-shell-player-words" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-store = { path = "../ronoctua-store" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+ronoctua-compositor = { path = "../ronoctua-compositor" }
+ronoctua-display = { path = "../ronoctua-display" }
+ronoctua-apps = { path = "../ronoctua-apps" }
+ronoctua-atlas = { path = "../ronoctua-atlas" }
+# Which files are playlists, and how many entries one may hold.
+ronoctua-inspect = { path = "../ronoctua-inspect" }
+# The player's CLIENT only: its socket, its words and its frames. The engine is
+# `ronoctua-player-engine`, a crate of its own, so libmpv never reaches here.
+ronoctua-player = { path = "../ronoctua-player" }
+# The words of what the player says about a file (`Say::Sheet`: fields,
+# covers, streams, why a change is refused), of its online lookups (a
+# service, why it gave nothing, the person's keys) and of its directories
+# (a source, why it gave nothing, the favourites' kinds): SCHEMA only, each
+# without its default features — lofty, the programs, TLS and the caches are
+# the daemon's, and a door never reads a tag nor asks a host itself.
+ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
+ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
+# The catalogue's words a view names its pages by (a store, a scope, a
+# trouble, a row): the SCHEMA — the SQLite that reads it is the catalogue
+# crate's (`ronoctua-shell-catalogue`).
+ronoctua-broadcast = { path = "../ronoctua-broadcast", default-features = false }
+# How the adult catalogue's password check ended (`Told::Unlock`).
+ronoctua-pam = { path = "../ronoctua-pam" }
+# THE LYRICS' TRANSLATOR: the host the daemon asks (`MYMEMORY_HOST`), named
+# where it is decided, and the person's keys — without `net`: the daemon asks.
+ronoctua-words = { path = "../ronoctua-words", default-features = false }
+# A video of the ranking by its id, and why a write of it was refused — the
+# words the view names the ranking's rows and errands by; the catalogue itself
+# is read by the ranking's own crate (`ronoctua-shell-video-metrics`).
+ronoctua-video-metrics = { path = "../ronoctua-video-metrics" }
+# THE POLL THE PLAYER READS ITS PIPE WITH — `rustix` and not `libc` because its
+# API is SAFE. A blocking `read_exact` on a child that has stopped writing
+# hangs the player's thread for the rest of the session, with nothing on
+# screen saying so, and that is the hole the owner asked not to exist.
+rustix = { workspace = true, features = [ "event", "process" ] }
+
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The foundation's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+ronoctua-shell-inspect = { path = "../ronoctua-shell-inspect", features = [ "test-support" ] }
+
+[features]
+# WHAT THIS CRATE KEEPS FOR TESTS, kept for the tests of the crates above it —
+# for `[dev-dependencies]` only, as the kit's: the states and outlines the
+# player sends (`player::fixture`), a view holding a page a test names
+# (`View::plugging`, `player_seam::with_pages`) and what a test's view is
+# handed of the machine (the fixtures of the metadata, the suggestions, the
+# globe and the ambient sounds). It brings the foundation's along.
+test-support = [
+  "ronoctua-shell-kit/test-support",
+  "ronoctua-shell-door/test-support",
+  "ronoctua-shell-inspect/test-support",
+]
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

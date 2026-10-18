@@ -1,34 +1,64 @@
 #!/usr/bin/env python3
 """The brain's modules, from their manifests to Rust — brain.md §3.
 
-`nix/brain-modules.nix` reads every folder under `crates/ronoctua-brain/modules/`,
-refuses what is malformed and hands this script one record per module: the
-manifest with every optional field filled, the store path of its text folder
-and the tables its `tables.nix` generated. What comes out, under `--out`:
+`nix/brain-modules.nix` reads every folder under `crates/ronoctua-brain/modules/`
+(and the person's, on a machine that has some), refuses what is malformed and
+hands this script one record per module: the manifest with every optional field
+filled, whose it is, whether it carries a shared half, the store path of its
+text folder and the tables its `tables.nix` generated.
+
+THE BRAIN IS TWO CRATES, and this writes one part for each (`--part`):
+
+  library   for `ronoctua-brain`, what the footer links — the DISTRO's modules
+            only, as data (a person's record is refused):
 
     <id>/manifest.rs   ID, the key, mark, notice, action, event, why and unit
-                       constants, and MANIFEST — `include!`d beside the
-                       module's own `module.rs` by the crate's `build.rs`
+                       constants, and MANIFEST — `include!`d by the library's
+                       `build.rs`, beside the module's `shared.rs` when it has
+                       one
     <id>/<table>.rs    each table, copied, and a `tables` module including it
+    distro.rs          IDS, MANIFESTS, `manifest(id)` and `key_sets` (every
+                       module's `key::ALL`, for a program's start guard) of
+                       the distro's modules, with its own test — never their
+                       actions or events: what the footer registers and
+                       recognises of a module is the brain's catalogue, read
+                       at run time (`gen-brain-catalogue.py`), the person's
+                       included
+    ids.txt            `<id> <snake> distro` per line: what the library's
+                       `build.rs` writes one shim for, and compares with the
+                       folders
+    shared.txt         the ids whose folder carries a shared half
+                       (`shared.rs`), one per line
+
+  daemon    for `ronoctua-brain-daemon`, which compiles every module's code:
+
+    <id>/manifest.rs   the same, for each PERSON's module alone — the
+                       distro's are the library's, and the daemon re-exports
+                       them
+    <id>/<table>.rs    a person's module's tables
     all.rs             IDS, MANIFESTS, ACTIONS, EVENTS, `manifest(id)` and
-                       `all(birth)`: the registry the daemon, the footer and
-                       the leader read without naming any module, with its own
-                       test
+                       `all(birth)` over EVERY module, the person's included:
+                       the registry the daemon makes, with its own test
     ids.txt            `<id> <snake> <origin>` per line, the origin `distro`
-                       or `person`: what `build.rs` compares with the folders
-                       (the distro's under the crate, the person's under
-                       `RONOCTUA_BRAIN_PERSON_MODULES_DIR`) and writes one shim
-                       for
+                       or `person`: what the daemon's `build.rs` compares with
+                       the folders (the distro's under the library's crate,
+                       the person's under `RONOCTUA_BRAIN_PERSON_MODULES_DIR`)
+                       and writes one shim for
+
+So a person's module never reaches the library's part: the footer's crate is
+the same with or without one.
 
 WHY A GENERATOR AND NOT A MACRO: invariant 5. The manifest is Nix, and the
 Rust side reading it back would be a second parser of the same data; here it
 is read once, by Nix, and what crosses is the finished table.
 
-THE TEXT KEYS come from the module's OWN base `.ftl`, read by `gen-i18n.py`'s
-parser — the one that builds the registry — so a key constant here is a key
-the bundle has. A key the manifest needs (its name, its line, an action's
-label or question, a mark's hint, a why) and the fragment lacks is refused
-here, by name, rather than becoming a missing constant in the compiler.
+THE TEXT KEYS are the NAMES of the module's OWN base `.ftl`, read at Nix
+evaluation (`nix/text-names.nix`, the reader of every crate's `key` module) and
+handed in with the record (`names`) — never its sentences, so editing one
+regenerates nothing here and compiles nothing. A key the manifest needs (its
+name, its line, an action's label or question, a mark's hint, a why) and the
+fragment lacks is refused here, by name, rather than becoming a missing
+constant in the compiler.
 
 The Rust is written plainly and formatted afterwards by the pinned `rustfmt`
 (`nix/brain-modules-rs.nix`), so what lands is what `cargo fmt` would leave —
@@ -36,14 +66,13 @@ and the golden sample, `crates/ronoctua-brain/tests/modules/pilot-sample/
 manifest.rs`, can be compared byte for byte below its header.
 
 Usage:
-    gen-brain-modules.py --modules <modules.json> --parser <gen-i18n.py>
+    gen-brain-modules.py --part library|daemon --modules <modules.json>
                          --language <base> --out <dir>
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import shutil
 import sys
@@ -53,10 +82,11 @@ HEADER = """\
 // GENERATED by `nix/scripts/gen-brain-modules.py` out of `modules/{id}/manifest.nix`.
 // Do not edit: it vanishes at the next build.
 //
-// It is `include!`d into `pub mod {snake}`, beside `mod module;`, so the
-// module names everything here through `super::`. Paths into the brain are
-// absolute (`crate::module::…`): inside the shim `module` is the module's own
-// file, not the contract.
+// It is `include!`d into `pub mod {snake}` — by the library for a distro
+// module, beside its `shared.rs` when it has one; by the daemon for a
+// person's, beside its `module.rs` — so the module names everything here
+// through `super::`. Paths into the brain are absolute (`crate::module::…`):
+// inside the shim `module` is the module's own file, not the contract.
 
 """
 
@@ -64,11 +94,25 @@ ALL_HEADER = """\
 // GENERATED by `nix/scripts/gen-brain-modules.py`. Do not edit: it vanishes at
 // the next build.
 //
-// The crate's `build.rs` writes `modules.rs` — one shim per module, then this
-// file — and `src/compiled.rs` includes it, so every `<snake>::` below is a
-// sibling module and `IDS` and `all` are `crate::compiled::IDS` and
-// `crate::compiled::all`, the two items that file promises. Nothing here names
-// a module by hand: the list is the folders.
+// The daemon's `build.rs` writes `modules.rs` — one shim per module, then this
+// file — and its `src/compiled.rs` includes it, so every `<snake>::` below is
+// a sibling module (a distro's re-exports the library's manifest and shared
+// half beside its own `module.rs`) and `IDS` and `all` are
+// `crate::compiled::IDS` and `crate::compiled::all`, the two items that file
+// promises. Nothing here names a module by hand: the list is the folders.
+
+"""
+
+DISTRO_HEADER = """\
+// GENERATED by `nix/scripts/gen-brain-modules.py`. Do not edit: it vanishes at
+// the next build.
+//
+// The library's `build.rs` writes `manifests.rs` — one shim per DISTRO module
+// (its manifest, and its shared half when it has one), then this file — and
+// its `src/compiled.rs` includes it, so every `<snake>::` below is a sibling
+// module. No module's code is here, and no person's module: the daemon makes
+// the modules (`all`). Nothing here names a module by hand: the list is the
+// folders.
 
 """
 
@@ -91,14 +135,6 @@ def rust_str(s: str) -> str:
     """A Rust string literal. Not JSON's: `\\uXXXX` is not Rust."""
     out = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     return f'"{out}"'
-
-
-def load_parser(path: Path):
-    """`gen-i18n.py`'s own `keys()`: one reader of a `.ftl`, not two."""
-    spec = importlib.util.spec_from_file_location("gen_i18n", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.keys
 
 
 def roles(m: dict) -> dict[str, str]:
@@ -140,11 +176,11 @@ def needed(m: dict) -> list[tuple[str, str]]:
     return out
 
 
-def manifest_rs(m: dict, texts: dict[str, str], language: str, tables: list[str]) -> str:
+def manifest_rs(m: dict, names: list[str], language: str, tables: list[str]) -> str:
     ident, snake = m["id"], m["snake"]
-    key_of = {k: const(k) for k in texts}
+    key_of = {k: const(k) for k in names}
     for k, what in needed(m):
-        if k not in texts:
+        if k not in key_of:
             fail(ident, f"its i18n/{language}.ftl has no `{k}` ({what})")
     role = roles(m)
     L: list[str] = []
@@ -155,17 +191,25 @@ def manifest_rs(m: dict, texts: dict[str, str], language: str, tables: list[str]
     A(f"pub const ID: &str = {rust_str(ident)};")
     A("")
 
+    # `ALL` is the list's name below, and a key spelling it would be a second
+    # item of that name: refused by the key, never a compiler error.
+    if "ALL" in key_of.values():
+        fail(ident, f"its i18n/{language}.ftl names the key `all`, which is the name of the list of its keys")
     A(f"/// The module's text keys, from its own `i18n/{language}.ftl`.")
     A("pub mod key {")
-    for k in sorted(texts):
-        doc = role.get(k)
-        if doc is None:
-            example = texts[k].replace("\\", "\\\\")
-            if len(example) > 100:
-                example = example[:97] + "..."
-            doc = f"`{language}`: {example}"
+    for k in sorted(key_of):
+        # WHAT A KEY IS FOR, where the manifest says it; never its sentence,
+        # which is data read at run time.
+        doc = role.get(k, "A key of its own texts.")
         A(f"    /// {doc}")
         A(f"    pub const {key_of[k]}: &str = {rust_str(k)};")
+    # EVERY KEY, for the start guard of a program that draws the module: its
+    # words are said through this manifest, so a program's texts are asked
+    # for them as for its crates' (`distro.rs`, `key_sets`). A `static`, as a
+    # crate's `ALL` is: a `const` array is inlined at every use site.
+    A("")
+    A("    /// Every key of the module's own texts, in order.")
+    A(f"    pub static ALL: [&str; {len(key_of)}] = [{', '.join(key_of[k] for k in sorted(key_of))}];")
     A("}")
     A("")
 
@@ -323,8 +367,13 @@ def manifest_rs(m: dict, texts: dict[str, str], language: str, tables: list[str]
     return "\n".join(L) + "\n"
 
 
-def all_rs(modules: list[dict]) -> str:
-    L: list[str] = [ALL_HEADER]
+def registry_rs(modules: list[dict], makes: bool) -> str:
+    """The registry's views over `modules`: `all.rs` for the daemon, which
+    MAKES them (`all`) and answers their actions and events, or `distro.rs`
+    for the library, which only declares them — the footer registers a
+    module's actions and recognises its events from the brain's catalogue,
+    data it reads at run time, so the library holds no list of either."""
+    L: list[str] = [ALL_HEADER if makes else DISTRO_HEADER]
     A = L.append
     actions = [(m, a) for m in modules for a in sorted(m["actions"])]
     events = [(m, e) for m in modules for e in sorted(m["events"])]
@@ -332,7 +381,7 @@ def all_rs(modules: list[dict]) -> str:
     # SLICES, NOT ARRAYS: `IDS: &[&str]` is the type `src/compiled.rs` declares
     # for the build with no module, and the type does not change with the count.
     A("/// Every module id the build compiled, in the order of their folders under")
-    A("/// `crates/ronoctua-brain/modules/`.")
+    A("/// `crates/ronoctua-brain/modules/`" + (" and the person's, by id." if makes else "."))
     A(f"pub const IDS: &[&str] = &[{', '.join(m['snake'] + '::ID' for m in modules)}];")
     A("")
     A("/// Every module's manifest, in the order of [`IDS`].")
@@ -341,55 +390,89 @@ def all_rs(modules: list[dict]) -> str:
         f"&[{', '.join('&' + m['snake'] + '::MANIFEST' for m in modules)}];"
     )
     A("")
-    A("/// Every action a module answers, with its module's id: the leader")
-    A("/// registers each as the command `<module>-<action>`, by name only.")
-    A(
-        "pub static ACTIONS: &[(&str, &crate::module::Action)] = &["
-        + ", ".join(f"({m['snake']}::ID, &{m['snake']}::action::{const(a)})" for m, a in actions)
-        + "];"
-    )
-    A("")
-    A("/// Every event a module may tell, with its module's id: the footer")
-    A("/// recognises each by its tag, and the catalogue has one entry for each")
-    A("/// that declared a notification.")
-    A(
-        "pub static EVENTS: &[(&str, &crate::module::EventKind)] = &["
-        + ", ".join(f"({m['snake']}::ID, &{m['snake']}::event::{const(e)})" for m, e in events)
-        + "];"
-    )
-    A("")
+    if makes:
+        A("/// Every action a module answers, with its module's id: the commands")
+        A("/// `<module>-<action>` the footer registers by name, from the brain's")
+        A("/// catalogue (which `ronoctua-brain modules --catalogue` answers for).")
+        A(
+            "pub static ACTIONS: &[(&str, &crate::module::Action)] = &["
+            + ", ".join(f"({m['snake']}::ID, &{m['snake']}::action::{const(a)})" for m, a in actions)
+            + "];"
+        )
+        A("")
+        A("/// Every event a module may tell, with its module's id: the footer")
+        A("/// recognises each by its tag, and the catalogue has one entry for each")
+        A("/// that declared a notification.")
+        A(
+            "pub static EVENTS: &[(&str, &crate::module::EventKind)] = &["
+            + ", ".join(f"({m['snake']}::ID, &{m['snake']}::event::{const(e)})" for m, e in events)
+            + "];"
+        )
+        A("")
     A("/// One module's manifest, by its id.")
     A("#[must_use]")
     A("pub fn manifest(id: &str) -> Option<&'static crate::module::Manifest> {")
     A("    MANIFESTS.iter().copied().find(|m| m.id == id)")
     A("}")
     A("")
-    A("/// One of each compiled module, made for this birth: what the daemon")
-    A("/// registers.")
-    A("#[must_use]")
-    if modules:
-        A("pub fn all(birth: &crate::module::Birth) -> Vec<Box<dyn crate::module::Module>> {")
-        A("    vec![")
-        for m in modules:
-            A(f"        Box::new({m['snake']}::new(birth)) as Box<dyn crate::module::Module>,")
-        A("    ]")
-    else:
-        A("pub fn all(_birth: &crate::module::Birth) -> Vec<Box<dyn crate::module::Module>> {")
-        A("    Vec::new()")
-    A("}")
-    A("")
+    if not makes:
+        # THE DISTRO'S MODULES' KEYS, for the start guard of a program that
+        # links this library: the footer says a module's words through its
+        # manifest (`<snake>::key::…`), so they are the program's words as
+        # much as its crates' are, and its texts are asked for them beside
+        # its `key::sets` (`ronoctua_i18n::Keys::of`). Never a person's
+        # module: those are not here, and the program is the same with or
+        # without one.
+        A("/// Every distro module's text keys, each module once, by its id: beside")
+        A("/// a program's own `key::sets`, what its start guard asks of its texts.")
+        A("pub fn key_sets(into: &mut Vec<(&'static str, &'static [&'static str])>) {")
+        if modules:
+            A("    for set in [")
+            for m in modules:
+                A(f"        ({m['snake']}::ID, &{m['snake']}::key::ALL[..]),")
+            A("    ] {")
+            A("        if !into.iter().any(|(by, _)| *by == set.0) {")
+            A("            into.push(set);")
+            A("        }")
+            A("    }")
+        else:
+            A("    let _ = into;")
+        A("}")
+        A("")
+    if makes:
+        A("/// One of each compiled module, made for this birth: what the daemon")
+        A("/// registers.")
+        A("#[must_use]")
+        if modules:
+            A("pub fn all(birth: &crate::module::Birth) -> Vec<Box<dyn crate::module::Module>> {")
+            A("    vec![")
+            for m in modules:
+                A(f"        Box::new({m['snake']}::new(birth)) as Box<dyn crate::module::Module>,")
+            A("    ]")
+        else:
+            A("pub fn all(_birth: &crate::module::Birth) -> Vec<Box<dyn crate::module::Module>> {")
+            A("    Vec::new()")
+        A("}")
+        A("")
     # THE REGISTRY'S OWN TEST TRAVELS WITH IT: wherever this file is included,
     # the test is compiled beside it — so the test cannot be left behind in a
     # file the include moved away from.
     A("#[cfg(test)]")
     A("mod the_registry {")
-    A("    use super::{ACTIONS, EVENTS, IDS, MANIFESTS, all, manifest};")
-    A("    use crate::module::Birth;")
-    A("")
-    A("    /// THE FOUR VIEWS OF THE REGISTRY ARE ONE LIST: the ids, the manifests,")
-    A("    /// the modules `all` makes, and the actions and events, each found")
-    A("    /// again by its module's id. With no module it holds vacuously; the")
-    A("    /// first folder makes every line of it count.")
+    if makes:
+        A("    use super::{ACTIONS, EVENTS, IDS, MANIFESTS, all, manifest};")
+        A("    use crate::module::Birth;")
+        A("")
+        A("    /// THE FOUR VIEWS OF THE REGISTRY ARE ONE LIST: the ids, the manifests,")
+        A("    /// the modules `all` makes, and the actions and events, each found")
+        A("    /// again by its module's id. With no module it holds vacuously; the")
+        A("    /// first folder makes every line of it count.")
+    else:
+        A("    use super::{IDS, MANIFESTS, manifest};")
+        A("")
+        A("    /// THE TWO VIEWS OF THE DISTRO'S MODULES ARE ONE LIST: the ids and the")
+        A("    /// manifests, each found again by its module's id. With no module it")
+        A("    /// holds vacuously; the first folder makes every line of it count.")
     A("    #[test]")
     A("    fn is_one_list() {")
     A("        assert_eq!(IDS.len(), MANIFESTS.len());")
@@ -399,19 +482,34 @@ def all_rs(modules: list[dict]) -> str:
     A("        }")
     A('        assert!(manifest("no-such-module").is_none());')
     A("")
-    A("        let made = all(&Birth::detached());")
-    A('        assert_eq!(made.len(), IDS.len(), "a module is listed and not made");')
-    A("        for (module, id) in made.iter().zip(IDS) {")
-    A("            assert_eq!(module.manifest().id, *id);")
-    A("        }")
-    A("        for (id, action) in ACTIONS {")
-    A('            let owner = manifest(id).expect("an action of a module that is not listed");')
-    A("            assert!(owner.action(action.id).is_some());")
-    A('            assert_eq!(action.command, format!("{id}-{}", action.id));')
-    A("        }")
-    A("        for (id, event) in EVENTS {")
-    A('            assert_eq!(event.tag, format!("{id}-{}", event.name));')
-    A("        }")
+    if makes:
+        A("        let made = all(&Birth::detached());")
+        A('        assert_eq!(made.len(), IDS.len(), "a module is listed and not made");')
+        A("        for (module, id) in made.iter().zip(IDS) {")
+        A("            assert_eq!(module.manifest().id, *id);")
+        A("        }")
+        A("        for (id, action) in ACTIONS {")
+        A('            let owner = manifest(id).expect("an action of a module that is not listed");')
+        A("            assert!(owner.action(action.id).is_some());")
+        A('            assert_eq!(action.command, format!("{id}-{}", action.id));')
+        A("        }")
+        A("        for (id, event) in EVENTS {")
+        A('            assert_eq!(event.tag, format!("{id}-{}", event.name));')
+        A("        }")
+    else:
+        # THE KEYS A GUARD ASKS FOR ARE EVERY MODULE'S, once each: asked
+        # twice, nothing is added; and each module's holds the words its
+        # manifest says itself by.
+        # `with_capacity`, never `new`: the library makes no module, and
+        # `brain-modules-match-the-golden` refuses a `::new(` in its views.
+        A("        let mut sets = Vec::with_capacity(IDS.len());")
+        A("        super::key_sets(&mut sets);")
+        A("        super::key_sets(&mut sets);")
+        A('        assert_eq!(sets.len(), IDS.len(), "a module\'s keys are missing or collected twice");')
+        A("        for ((by, keys), m) in sets.iter().zip(MANIFESTS) {")
+        A("            assert_eq!(*by, m.id);")
+        A("            assert!(keys.contains(&m.name_key) && keys.contains(&m.does_key));")
+        A("        }")
     A("    }")
     A("}")
     return "\n".join(L) + "\n"
@@ -419,13 +517,17 @@ def all_rs(modules: list[dict]) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="The brain's modules, from their manifests to Rust.")
+    ap.add_argument(
+        "--part",
+        choices=("library", "daemon"),
+        required=True,
+        help="`library`: the distro's manifests, for ronoctua-brain; `daemon`: the person's and the registry",
+    )
     ap.add_argument("--modules", type=Path, required=True, help="the loader's records, as JSON")
-    ap.add_argument("--parser", type=Path, required=True, help="gen-i18n.py, whose `keys()` reads a .ftl")
     ap.add_argument("--language", required=True, help="the base language, whose .ftl names the keys")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 
-    keys = load_parser(args.parser)
     modules = sorted(json.loads(args.modules.read_text(encoding="utf-8")), key=lambda m: m["id"])
     # WHOSE EACH MODULE IS, before a byte is written: the loader says it of
     # every record, and a record that does not — or says something else — is
@@ -433,6 +535,20 @@ def main() -> int:
     for m in modules:
         if m.get("origin") not in ("distro", "person"):
             fail(m["id"], f"its origin is {m.get('origin')!r}; a module is the distro's or the person's")
+        if not isinstance(m.get("shared", False), bool):
+            fail(m["id"], f"its `shared` is {m.get('shared')!r}; a module has a shared half or not")
+        # A PERSON'S MODULE HAS NO SHARED HALF: that half is compiled into the
+        # library the footer links, and nothing outside the brain reads a
+        # person's module. The loader never says one has (a `shared.rs` in a
+        # person's folder is a file beside its `module.rs`, the daemon's);
+        # this refuses the record, should one ever say otherwise.
+        if m["origin"] == "person" and m.get("shared", False):
+            fail(m["id"], "a person's module has no shared half: the library is the distro's,"
+                 " and a person's `shared.rs` is compiled with its `module.rs` by the daemon")
+        # AND THE LIBRARY IS THE DISTRO'S: a person's record handed to its
+        # part would put a person's module in the footer's crate.
+        if args.part == "library" and m["origin"] != "distro":
+            fail(m["id"], "the library's part holds the distro's modules alone; a person's is the daemon's")
     args.out.mkdir(parents=True, exist_ok=True)
 
     seen: set[str] = set()
@@ -441,10 +557,16 @@ def main() -> int:
         if m["snake"] in seen:
             fail(ident, f"its Rust name `{m['snake']}` is another module's")
         seen.add(m["snake"])
-        fragment = Path(m["i18n"]) / f"{args.language}.ftl"
-        if not fragment.exists():
-            fail(ident, f"no i18n/{args.language}.ftl")
-        texts = keys(fragment)
+        # THE MANIFESTS THIS PART COMPILES: every one the library's (all the
+        # distro's), and in the daemon's only the person's — a distro
+        # module's manifest is the library's, and the daemon re-exports it.
+        if args.part == "daemon" and m["origin"] == "distro":
+            continue
+        names = m.get("names")
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            fail(ident, f"its record carries no key names (`names`) of its i18n/{args.language}.ftl")
+        if len(set(names)) != len(names):
+            fail(ident, f"its i18n/{args.language}.ftl names a key twice")
         here = args.out / ident
         here.mkdir(parents=True, exist_ok=True)
         tables = []
@@ -457,15 +579,28 @@ def main() -> int:
             destination.unlink(missing_ok=True)
             shutil.copyfile(source, destination)
             tables.append(name)
-        (here / "manifest.rs").write_text(manifest_rs(m, texts, args.language, tables), encoding="utf-8")
+        (here / "manifest.rs").write_text(manifest_rs(m, names, args.language, tables), encoding="utf-8")
 
-    (args.out / "all.rs").write_text(all_rs(modules), encoding="utf-8")
-    # WHOSE EACH MODULE IS rides beside its names: `build.rs` loads a
-    # person's `module.rs` from the person's folder, never from the crate's.
+    if args.part == "library":
+        (args.out / "distro.rs").write_text(registry_rs(modules, makes=False), encoding="utf-8")
+        # WHICH CARRY A SHARED HALF, from the loader and never from a look at
+        # the folders here: the library's `build.rs` watches only what this
+        # lists, so a module's `module.rs` edit never re-runs it.
+        (args.out / "shared.txt").write_text(
+            "".join(f"{m['id']}\n" for m in modules if m.get("shared", False)), encoding="utf-8"
+        )
+    else:
+        (args.out / "all.rs").write_text(registry_rs(modules, makes=True), encoding="utf-8")
+    # WHOSE EACH MODULE IS rides beside its names: the daemon's `build.rs`
+    # loads a person's `module.rs` from the person's folder, never from the
+    # crate's.
     (args.out / "ids.txt").write_text(
         "".join(f"{m['id']} {m['snake']} {m['origin']}\n" for m in modules), encoding="utf-8"
     )
-    print(f"OK: {len(modules)} brain modules -> {args.out}" + (f" ({', '.join(m['id'] for m in modules)})" if modules else ""))
+    print(
+        f"OK: {len(modules)} brain modules, the {args.part}'s part -> {args.out}"
+        + (f" ({', '.join(m['id'] for m in modules)})" if modules else "")
+    )
     return 0
 
 

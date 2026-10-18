@@ -34,7 +34,7 @@
 # AND THE CALCULATOR, LAST
 # ------------------------
 # The same generated rules open the calculator's window FLOATING and compact
-# (`crates/ronoctua-shell/src/floating.rs`), and its header's control — `C-f`,
+# (`crates/ronoctua-shell-door/src/floating.rs`), and its header's control — `C-f`,
 # typed into it — asks the compositor, through the contract
 # (`back_in_the_layout`, `float_centred`), to tile it and to float it again.
 # Only a real compositor says whether the window it found by its own pid and

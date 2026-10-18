@@ -1,7 +1,8 @@
 # The browser extension, assembled — and its texts and colours GENERATED.
 #
 # Invariants 8 and 9 do not stop at the browser's edge. Every word the popup
-# shows comes from `assets/i18n/*.ftl` and every colour from
+# shows comes from its own fragment, `extension/i18n/*.ftl` (which the
+# interface's texts merge too, `nix/i18n.nix`), and every colour from
 # `assets/tokens/colors.nix`, both of them arriving here as JSON — the same
 # Nix-to-Python bridge `nix/tokens.nix` uses, and for the same reason: there is
 # no Nix parser in Python and writing one would be reimplementing Nix logic

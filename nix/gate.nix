@@ -9,46 +9,18 @@
 # the only way written steps fail: it was there, it was correct, and the gate was
 # still run without it.
 #
-# # Why `rustc` dies with no message
+# # The arithmetic is not here
 #
-# It is not the build and it is not memory pressure inside the sandbox. It is
-# `earlyoom` on the HOST, which sends SIGTERM when available memory falls below
-# its threshold and has `rustc` in its `--prefer` list — so `rustc` is chosen
-# first, by configuration. Nix reports the signal, the compiler never gets to
-# print anything, and the failure looks like a compiler bug.
-#
-# `--max-jobs` alone does not save it: that caps DERIVATIONS in parallel, and one
-# derivation of ours starts one `rustc` per core. What has to be capped is the
-# product.
-#
-# # The arithmetic, from measurements and not from taste
-#
-# The peak comes from `earlyoom`'s own log on this project: 1577 MiB, 958 MiB and
-# 857 MiB of `VmRSS` for the three `rustc` processes it killed. `peak_kb` is the
-# worst of those with margin.
-#
-# The floor is `earlyoom`'s trigger — 10% of total memory in the configuration
-# seen here, which is also its default — plus a reserve, because the browser and
-# the editor go on allocating while the gate runs.
-#
-# What is left over, divided by the peak, is how many compilers may run at once.
-#
-# # The heavy ones are paid once, not per core
-#
-# The four derivations that compile the whole workspace have one compiler that
-# no division describes: `ronoctua-shell`'s own `rustc`. Under `release` it is
-# one codegen unit with thin LTO, the whole crate in one LLVM module, and it
-# measured 5120 MiB on its own (2026-09-27, `--cores 4`, `VmRSS` sampled every
-# second in the daemon's cgroup). It does not split across cores, so it is paid
-# once, and every OTHER core pays what was measured beside it: the whole build
-# peaked at 7658 MiB, which is the shell plus 846 MiB a core. `shell_kb` and
-# `beside_kb` are those two numbers with margin, and the cores a heavy build
-# gets are what they leave room for. (Under `loop` the same workspace peaked at
-# 2460 MiB, its shell at 2293: the `release` numbers cover both.)
+# Why `rustc` dies with no message (`earlyoom`, `systemd-oomd`, the kernel),
+# how many compilations fit at once, how many cores a heavy unit gets and
+# where the ceiling is are `nix/build-sizing.nix`'s, sourced below: the same
+# answer a machine's own apply builds by (`ronoctua-machine apply`) and
+# `.#sized-build` gives. What stays here is what only a battery has: the
+# phases, the VM tests and the evaluators.
 #
 # # A VM is not a compiler
 #
-# The first version sized everything by that one number, and the VM tests
+# The first version sized everything by the compiler's peak, and the VM tests
 # broke it. A VM test holds what its nodes declare (`virtualisation.memorySize`,
 # 1 to 4 GiB a test) for as long as its script runs, and `--max-jobs 4` put
 # four of them side by side: 8 to 16 GiB on a machine with 14. It passed when
@@ -81,7 +53,15 @@
 # # The order
 #
 #   0. the `.drv` of every target, evaluated in batches;
-#   1. the heavy ones, one at a time;
+#   1. the Rust build, unit by unit (`nix/rust/units.nix`):
+#      a. everything the heavy units are built from, as Rust units
+#         (`--max-jobs <slots> --cores 1`);
+#      b. the heavy units, one at a time, each with the cores the budget
+#         leaves beside its own compiler (`rust.heavyUnits`);
+#      c. every other unit, as Rust units again;
+#      d. the test runs and the aggregates, sized as everything else is —
+#         after every compilation, so a test that measures time does not
+#         measure a compiler beside it;
 #   2. what the VMs BOOT — each test's driver, which is its systems — sized as
 #      compilations, because that is what they are;
 #   3. the VMs, as many at once as their declared memory and their cores fit;
@@ -117,9 +97,16 @@
   alone ? [ ],
   # What is left out, so the battery can say what it did not verify.
   left ? [ ],
-  # The derivations that compile the whole workspace, by name. They go one at
-  # a time, before anything else.
+  # THE SIZING (`nix/build-sizing.nix`): its shell functions and its plan of
+  # the heavy units.
+  sizing,
+  # The units whose own compiler no division describes, by name
+  # (`rust.heavyUnits`). They go one at a time, each after what it is built
+  # from (`sizing.heavyPlan`).
   heavy ? { },
+  # EVERY UNIT OF THE RUST BUILD, as data (`rust.unitIndex`: `kind` and
+  # `drv` by id), or `null`: phase 1 builds them all, the test runs last.
+  units ? null,
   # The downloader that resumes, or `null`. See `nix/prefetch.nix`.
   prefetch ? null,
   # Roots the flake's downloads first, or `null`. See `nix/kept-sources.nix`.
@@ -130,9 +117,28 @@ let
   # NOTHING STARTS OVER A BUILD INSIDE THE TREE (`nix/tree-guard.nix`).
   treeGuard = callPackage ./tree-guard.nix { };
   quoted = lib.concatMapStringsSep " " (n: "\"${n}\"");
-  heavyDrvs = lib.concatMapStringsSep " " (
-    d: "\"${builtins.unsafeDiscardStringContext d.drvPath}^*\""
-  ) (lib.attrValues heavy);
+  plain = builtins.unsafeDiscardStringContext;
+  # EVERY OUTPUT of a unit (`^*`): its `metrics` too, which `.#rust-peaks`
+  # and `.#rebuild-cost` read. A derivation with one output gone is built
+  # again whole, so the kept units are rooted with both (`keptUnits`,
+  # `nix/rust.nix`): rooted by `out` alone, a collection took their
+  # `metrics` and this phase compiled every kept unit again.
+  drvOf = d: "${plain d.drvPath}^*";
+  # THE HEAVY UNITS IN THE ORDER THEY ARE BUILT, and what they are built
+  # from — read off the units' own `passthru.unitDeps`, at evaluation.
+  plan = sizing.heavyPlan heavy;
+  heavyDrvs = quoted (map (s: drvOf s.unit) plan.steps);
+  heavyNames = quoted (map (s: s.name) plan.steps);
+  heavyBetween = quoted (map (s: lib.concatMapStringsSep " " drvOf s.between) plan.steps);
+  firstDrvs = quoted (map drvOf plan.first);
+  # EVERY OTHER UNIT, and the test runs (with the aggregates over them) apart.
+  heavyPaths = map (s: plain s.unit.drvPath) plan.steps;
+  entries = if units == null then [ ] else lib.attrValues units;
+  isRun = e: e.kind == "testRuns" || e.kind == "aggregate";
+  restDrvs = quoted (
+    map (e: "${e.drv}^*") (lib.filter (e: !isRun e && !(lib.elem e.drv heavyPaths)) entries)
+  );
+  runDrvs = quoted (map (e: "${e.drv}^*") (lib.filter isRun entries));
 
   # WHAT PHASE 0 ASKS THE FLAKE, as functions of the names. The text goes
   # through the shell inside double quotes, so it has none of its own and no
@@ -218,6 +224,9 @@ let
 in
 writeShellApplication {
   inherit name;
+  # The numbers come from the sizing's functions, which shellcheck cannot
+  # follow into (`sizing_measure` sets them).
+  excludeShellChecks = [ "SC2154" ];
   runtimeInputs = [
     coreutils
     gawk
@@ -245,91 +254,32 @@ writeShellApplication {
     ''}
     # THE HEAVY ONES, and they go one at a time.
     #
-    # Named by the flake rather than discovered, because "heavy" is not a
-    # property Nix exposes: it is the ones that compile the whole workspace.
-    # The fourth, the `loop` workspace, was missing for months: three checks
-    # reach it through `.#dev`, and it compiled in the last phase, four at a
-    # time, beside whatever else was building.
+    # Named by the flake rather than discovered (`rust.heavyUnits`), because
+    # "heavy" is not a property Nix exposes: it is the units whose own
+    # compiler was MEASURED past the slot (`metrics/peak-kib`; `.#rust-peaks`
+    # says when the list is wrong). The `loop` workspace was missing for
+    # months: three checks reach it through `.#dev`, and it compiled in the
+    # last phase, four at a time, beside whatever else was building.
     heavy=(${heavyDrvs})
-    heavy_name=(${quoted (lib.attrNames heavy)})
+    heavy_name=(${heavyNames})
+    heavy_between=(${heavyBetween})
+    first=(${firstDrvs})
+    units_rest=(${restDrvs})
+    runs=(${runDrvs})
 
     names=(${quoted targets})
     alone=(${quoted alone})
 
-    total_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
-    available_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
-    cpus=$(nproc)
-
-    # `earlyoom -m 10,5` sends SIGTERM at 10% of total. That is both the
-    # configuration measured on this host and earlyoom's own default, so it is
-    # the right floor even where earlyoom is absent — there the number is simply
-    # unused headroom.
-    floor_kb=$(( total_kb / 10 ))
-    # AND A RESERVE ON TOP, because the floor is where the killing STARTS. The
-    # gate runs for hours; a browser tab opened halfway through must not be what
-    # decides whether it finishes.
-    reserve_kb=$(( 1024 * 1024 ))
-    peak_kb=$(( 1792 * 1024 ))
-
-    budget_kb=$(( available_kb - floor_kb - reserve_kb ))
-    # AND NEVER PAST THE DAEMON'S OWN CEILING. On this distro the builds run in
-    # `nix-daemon.service`, whose `MemoryHigh` is `ronoctua.memory.buildCeiling`
-    # (half the RAM by default): past it the kernel throttles every compiler,
-    # the stall grows, and `systemd-oomd` — watching `system.slice` — kills
-    # the build. Sized by what is FREE alone, the gate planned for more than
-    # the daemon is let to hold. `infinity`, an empty answer or no systemd
-    # (another distro, a container) leave the budget as it was.
-    # Read ONCE, and every budget below (the builds' here, the VMs' in phase
-    # 3, which QEMU spends inside the same daemon) is clamped by it.
-    ceiling_b=$(systemctl show -p MemoryHigh --value nix-daemon.service 2>/dev/null || true)
-    ceiling_kb=""
-    if [[ "$ceiling_b" =~ ^[0-9]+$ ]]; then
-      ceiling_kb=$(( ceiling_b / 1024 - reserve_kb ))
-      printf 'nix-daemon MemoryHigh: %s MiB, and every budget follows it\n' "$(( ceiling_b / 1048576 ))"
-    fi
-    # `under_the_ceiling <kB>`: the smaller of what is free and the ceiling.
-    under_the_ceiling() {
-      if [ -n "$ceiling_kb" ] && [ "$ceiling_kb" -lt "$1" ]; then
-        echo "$ceiling_kb"
-      else
-        echo "$1"
-      fi
-    }
-    budget_kb=$(under_the_ceiling "$budget_kb")
-    if [ "$budget_kb" -lt "$peak_kb" ]; then
-      slots=1
-    else
-      slots=$(( budget_kb / peak_kb ))
-    fi
-    [ "$slots" -le "$cpus" ] || slots=$cpus
-
-    # For the batteries the slots are split between derivations and the cores
-    # inside each. Four is the ceiling because past that the wall-clock gain is
-    # small and the memory cost is not.
-    jobs=$slots
-    [ "$jobs" -le 4 ] || jobs=4
-    cores=$(( slots / jobs ))
-    [ "$cores" -ge 1 ] || cores=1
-
-    # THE HEAVY ONES: the shell's compiler once, and what each other core
-    # was measured to add beside it. See the head of this file.
-    shell_kb=$(( 5632 * 1024 ))
-    beside_kb=$(( 1024 * 1024 ))
-    if [ "$budget_kb" -le "$shell_kb" ]; then
-      heavy_cores=1
-    else
-      heavy_cores=$(( 1 + (budget_kb - shell_kb) / beside_kb ))
-    fi
-    [ "$heavy_cores" -le "$cpus" ] || heavy_cores=$cpus
-
-    # MiB and not GiB: the division truncates, and a floor of 1466 MiB shown as
-    # "1 GiB" is a number that argues with the arithmetic beside it.
-    printf 'memory: %s MiB in total, %s MiB available\n' \
-      "$(( total_kb / 1024 ))" "$(( available_kb / 1024 ))"
-    printf 'earlyoom floor: %s MiB;  reserve: %s MiB;  peak per rustc: %s MiB\n' \
-      "$(( floor_kb / 1024 ))" "$(( reserve_kb / 1024 ))" "$(( peak_kb / 1024 ))"
-    printf '%s compilations fit at once -> heavy: --cores %s;  the rest: --max-jobs %s --cores %s\n\n' \
-      "$slots" "$heavy_cores" "$jobs" "$cores"
+    # HOW MANY FIT (`nix/build-sizing.nix`): every number below comes from
+    # it, measured once, here, before anything builds.
+    # shellcheck source=/dev/null
+    . ${sizing.functions}
+    sizing_measure || exit 1
+    sizing_say
+    echo ""
+    # What every heavy build is also handed (`sized_heavy`): nothing here.
+    # shellcheck disable=SC2034
+    sized_flags=()
 
     started=$(date '+%Y-%m-%d %H:%M:%S')
     failures=0
@@ -462,21 +412,46 @@ writeShellApplication {
     # `nix/modules/store.nix`), and a collection during a later phase would
     # take what this one paid for — and the phases after it, whose systems
     # carry the shell and whose last step builds every check, would compile
-    # the workspace again.
+    # the units again.
     # So each result is an out-link in `$work`, which the `EXIT` trap removes:
     # a root for exactly as long as the battery lasts.
-    echo "== 1. the ''${#heavy[@]} heavy ones, one at a time =="
+    echo "== 1. the Rust build: ''${#first[@]} units below the ''${#heavy[@]} heavy ones, the heavy ones alone, ''${#units_rest[@]} more units, ''${#runs[@]} test runs =="
+    if [ "''${#first[@]}" -gt 0 ]; then
+      echo "-- a. what the heavy units are built from"
+      if ! nix build --out-link "$work/first" --max-jobs "$rust_jobs" --cores "$rust_cores" "''${first[@]}"; then
+        blame_memory
+        exit 1
+      fi
+    fi
+    echo "-- b. the heavy units, one at a time"
     for i in "''${!heavy[@]}"; do
-      echo "-- ''${heavy_name[i]}"
-      if ! nix build --out-link "$work/heavy-$i" --max-jobs 1 --cores "$heavy_cores" "''${heavy[i]}"; then
+      read -r -a between <<< "''${heavy_between[i]}"
+      if ! sized_heavy "$work/heavy-$i" "''${heavy_name[i]}" "''${heavy[i]}" "''${between[@]}"; then
         blame_memory
         exit 1
       fi
     done
+    if [ "''${#units_rest[@]}" -gt 0 ]; then
+      echo "-- c. every other unit"
+      # `--keep-going` and no exit: a unit that does not compile fails the
+      # checks that need it, by name, and every other check still runs.
+      if ! nix build --out-link "$work/units" --keep-going \
+           --max-jobs "$rust_jobs" --cores "$rust_cores" "''${units_rest[@]}"; then
+        blame_memory
+        fail "phase 1c (the units that failed are named above)"
+      fi
+    fi
+    if [ "''${#runs[@]}" -gt 0 ]; then
+      echo "-- d. the test runs"
+      if ! nix build --out-link "$work/runs" --keep-going \
+           --max-jobs "$jobs" --cores "$cores" "''${runs[@]}"; then
+        blame_memory
+        fail "phase 1d (the test runs that failed are named above)"
+      fi
+    fi
     ${lib.optionalString (keepSources != null) ''
-      # AND THE DEPENDENCY LAYERS, which the heavy ones were built on and now
-      # exist: they keep a root of their own past the battery, while they are
-      # the current ones (`nix/kept-sources.nix`).
+      # AND THE UNITS, which now exist: the current ones keep a root of their
+      # own past the battery (`nix/kept-sources.nix`).
       ${keepSources}
     ''}
     echo ""
@@ -504,7 +479,7 @@ writeShellApplication {
     # Measured again here, because phases 1 and 2 left the page cache full and
     # it is `MemAvailable`, which counts that cache as free, that says what fits.
     available_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
-    vm_budget_mib=$(( $(under_the_ceiling $(( available_kb - floor_kb - reserve_kb ))) / 1024 ))
+    vm_budget_mib=$(( $(sizing_under_ceiling $(( available_kb - floor_kb - reserve_kb ))) / 1024 ))
     # QEMU itself, per node, and the driver and the builder around a test.
     vm_node_mib=256
     vm_test_mib=128

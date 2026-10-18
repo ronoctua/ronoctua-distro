@@ -7,10 +7,70 @@
 //! these 12 paths will be fetched (34.56 MiB download, 120.00 MiB unpacked):
 //! ```
 //!
-//! — the size in the unit Nix chose (`KiB`, `MiB`, `GiB`…). A heading that is
+//! — the size in the unit Nix chose (`KiB`, `MiB`, `GiB`…) — each followed by
+//! its store paths, one a line, two spaces in (a third, "don't know how to
+//! build these paths:", lists what nothing can make). A heading that is
 //! absent is nothing to do: no build, no download.
 
+use std::collections::BTreeSet;
+
 use crate::Rehearsal;
+
+/// The derivations the dry run says will be built: the `.drv`s listed under
+/// its "will be built:" heading. That is Nix's own plan — a derivation whose
+/// consumer the store already holds is not in it, though it is in the
+/// `.drv` closure. `None` for words this program does not read: a heading
+/// whose count is not the paths under it, a path there that is not a
+/// `.drv`, or a store path under no heading it knows. Never a set smaller
+/// than the one Nix said.
+#[must_use]
+pub fn to_build(text: &str) -> Option<BTreeSet<String>> {
+    /// The heading the lines below belong to.
+    enum Under {
+        /// None, or a line that is no heading (a warning).
+        Nothing,
+        /// What will be built: the count said and the paths listed.
+        Built { said: u64, listed: u64 },
+        /// What will be fetched, or what nothing can build.
+        Other,
+    }
+    let complete = |under: &Under| match under {
+        Under::Built { said, listed } => said == listed,
+        Under::Nothing | Under::Other => true,
+    };
+    let mut built = BTreeSet::new();
+    let mut under = Under::Nothing;
+    for line in text.lines() {
+        let item = line.trim();
+        if line.starts_with(char::is_whitespace) && item.starts_with("/nix/store/") {
+            match &mut under {
+                Under::Built { listed, .. }
+                    if item.ends_with(".drv") && !item.contains(char::is_whitespace) =>
+                {
+                    *listed += 1;
+                    built.insert(item.to_owned());
+                }
+                Under::Other => {}
+                Under::Built { .. } | Under::Nothing => return None,
+            }
+            continue;
+        }
+        if !complete(&under) {
+            return None;
+        }
+        under = if item.ends_with("will be built:") {
+            Under::Built {
+                said: count(item),
+                listed: 0,
+            }
+        } else if item.contains("will be fetched") || item.contains("know how to build") {
+            Under::Other
+        } else {
+            Under::Nothing
+        };
+    }
+    complete(&under).then_some(built)
+}
 
 /// The rehearsal `text` describes.
 #[must_use]
@@ -81,6 +141,50 @@ mod tests {
         assert_eq!((one.builds, one.download_bytes), (1, 1536));
         let big = rehearsal("these 2 paths will be fetched (1.25 GiB download, 4 GiB unpacked):");
         assert_eq!(big.download_bytes, 1_342_177_280);
+    }
+
+    /// FAILS IF: what Nix says it will build is read as anything but the
+    /// `.drv`s it listed — a list of fetched paths taken for builds, a
+    /// listed derivation left out, or a plan in words this does not read
+    /// taken for "nothing to build".
+    #[test]
+    fn what_will_be_built_is_what_nix_listed() {
+        // Nix 2.35.1's own words (the names shortened), for a derivation and
+        // its one input.
+        let two = "these 2 derivations will be built:\n  /nix/store/04fbsbvycsh2x8rnak9jvi5jcasf6gjc-n4-probe-dep.drv\n  /nix/store/ij2y37vfjigsxrh3hm36wlv2cxx459vg-n4-probe-top.drv\n";
+        assert_eq!(
+            to_build(two).unwrap().into_iter().collect::<Vec<_>>(),
+            [
+                "/nix/store/04fbsbvycsh2x8rnak9jvi5jcasf6gjc-n4-probe-dep.drv",
+                "/nix/store/ij2y37vfjigsxrh3hm36wlv2cxx459vg-n4-probe-top.drv"
+            ]
+        );
+        let mixed = "warning: Git tree '/etc/nixos' is dirty\n\
+                     this derivation will be built:\n  /nix/store/a-nixos-system.drv\n\
+                     these 2 paths will be fetched (1.00 MiB download, 2.00 MiB unpacked):\n  /nix/store/x-glibc\n  /nix/store/y-ffmpeg\n";
+        assert_eq!(
+            to_build(mixed).unwrap().into_iter().collect::<Vec<_>>(),
+            ["/nix/store/a-nixos-system.drv"]
+        );
+        assert_eq!(
+            to_build("").unwrap().len(),
+            0,
+            "a consumer the store holds: nothing below it is built"
+        );
+        assert_eq!(
+            to_build("these 2 paths will be fetched (1 KiB download, 2 KiB unpacked):\n  /nix/store/x\n  /nix/store/y\n").unwrap().len(),
+            0
+        );
+        for unread in [
+            "these 3 derivations will be built:\n  /nix/store/a.drv\n  /nix/store/b.drv\n",
+            "this derivation will be built:\n  /nix/store/a.drv\n  /nix/store/b.drv\n",
+            "these many derivations will be built:\n  /nix/store/a.drv\n",
+            "this derivation will be built:\n  /nix/store/a-not-a-derivation\n",
+            "these derivations are on their way:\n  /nix/store/a.drv\n",
+            "  /nix/store/a.drv\n",
+        ] {
+            assert_eq!(to_build(unread), None, "{unread:?}");
+        }
     }
 
     #[test]

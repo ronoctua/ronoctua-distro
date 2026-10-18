@@ -92,7 +92,7 @@
 
 use std::io::{BufRead as _, Read as _, Write as _};
 use std::os::fd::OwnedFd;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -105,8 +105,10 @@ use crate::{Refusal, Why, refused};
 
 /// sudo: NixOS's setuid wrapper.
 pub const SUDO: &str = "/run/wrappers/bin/sudo";
-/// The variable naming the root helper's store path.
-pub const HELPER_VARIABLE: &str = "RONOCTUA_SECURITY_ROOT";
+// THE HELPER'S PLACE AND WHETHER IT IS THERE are the crate's, outside this
+// feature: a view asks before a gesture whether root can be asked at all,
+// and that question links no door.
+pub use crate::{HELPER_VARIABLE, has_helper};
 /// The most the door keeps of what the helper and sudo print.
 const SAID_MOST_BYTES: usize = 64 * 1024;
 
@@ -835,13 +837,6 @@ fn the_password(rx: &Receiver<Heard>) -> Option<Secret> {
             Ok(_) => {}
         }
     }
-}
-
-/// Whether the helper exists where the session says, for a door that should
-/// say so before asking for a password.
-#[must_use]
-pub fn has_helper() -> bool {
-    Door::here().is_ok_and(|door| Path::new(&door.helper).is_file())
 }
 
 #[cfg(test)]

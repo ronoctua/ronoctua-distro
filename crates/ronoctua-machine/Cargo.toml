@@ -28,3 +28,7 @@ path = "src/bin/machine.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+run-env = ["RONOCTUA_MACHINE_DIR", "RONOCTUA_NIX"]

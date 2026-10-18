@@ -21,9 +21,9 @@ use std::path::Path;
 /// FROM THE ENVIRONMENT AND NOT `option_env!`, which is the trap
 /// `RONOCTUA_ICONS` and `RONOCTUA_SWAPPY` both carry a comment about: a store
 /// path compiled in is a reference the BINARY carries, so a nmap release
-/// would rebuild the whole workspace for a table nothing else reads. Unset,
-/// the table is empty and the column stays blank — which is what an
-/// unregistered prefix looks like anyway.
+/// would rebuild every unit that reads it, and every one above, for a table
+/// nothing else reads. Unset, the table is empty and the column stays blank —
+/// which is what an unregistered prefix looks like anyway.
 pub const VARIABLE: &str = "RONOCTUA_NMAP_MAC_PREFIXES";
 
 /// The table's path, from the environment.

@@ -30,3 +30,8 @@ ronoctua-store = { path = "../ronoctua-store" }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_SETPRIV"]
+run-env = ["RONOCTUA_FFMPEG"]

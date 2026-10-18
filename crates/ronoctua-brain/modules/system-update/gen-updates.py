@@ -129,7 +129,7 @@ NEEDS |= {"file", "power", "free-space", "not-held"}
 FREE_SPACE_FIELDS = {"at", "percent", "cap-gib"}
 
 # WHERE THE BRAIN LOOKS, and it is spelled in exactly two places for this
-# sequence: here, and `ronoctua_brain::runner::REPORTS_LEAF`. This module's
+# sequence: here, and `ronoctua_brain_daemon::runner::REPORTS_LEAF`. This module's
 # check `…-writes-where-the-brain-reads` reads the runner's constant and the
 # script this writes, and refuses a disagreement — they disagreed once, and
 # every run the brain started came back `runaway` on work that had succeeded.

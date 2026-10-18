@@ -1210,7 +1210,7 @@ mod tests {
     /// lane would differ between the film and a door's chip.
     #[test]
     fn a_lane_s_colour_is_the_same_in_every_palette() {
-        use ronoctua_tokens::counts;
+        use ronoctua_tokens::{counts, theme};
         for c in [
             color::SUBTITLE_LANE_ONE,
             color::SUBTITLE_LANE_TWO,
@@ -1221,7 +1221,7 @@ mod tests {
             color::SUBTITLE_EDGE,
         ] {
             let first = c.to_rgba8_in(0);
-            for palette in 0..counts::THEMES * counts::PAGES {
+            for palette in 0..theme::all().len() * counts::PAGES {
                 assert_eq!(c.to_rgba8_in(palette), first, "{c:?} in palette {palette}");
             }
         }

@@ -67,6 +67,22 @@ pub mod u2f;
 pub mod users;
 pub mod verb;
 
+/// The variable naming the root helper's store path — the session's
+/// (`nix/modules/security.nix`), read by the sudo door (`authority`) to run
+/// it and by [`has_helper`] to say whether it is there.
+pub const HELPER_VARIABLE: &str = "RONOCTUA_SECURITY_ROOT";
+
+/// Whether the root helper exists where the session says — for a door that
+/// should say so before asking for a password. It reads a variable and asks
+/// whether a file is there: nothing runs, and no sudo door is linked, so a
+/// view that only asks this needs no `authority`.
+#[must_use]
+pub fn has_helper() -> bool {
+    std::env::var_os(HELPER_VARIABLE)
+        .map(std::path::PathBuf::from)
+        .is_some_and(|p| p.is_absolute() && p.is_file())
+}
+
 /// Why the centre could not do or read something, as a closed set
 /// (`security-refusal-<id>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

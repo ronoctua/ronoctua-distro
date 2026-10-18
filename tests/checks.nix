@@ -62,6 +62,11 @@
   # file for why the order and the default stopped being one fact.
   defaultTheme,
   themed,
+  # THE TOKENS' NAMES, read at evaluation (`nix/token-names.nix`), and the two
+  # generators no package exposes — for `tests/theme-data.nix`.
+  tokenNames,
+  primaryFont,
+  atlasData,
   # The Xcursor themes, one per cursor colour: `scroll.nix` installs them, so
   # every machine that imports it needs them.
   cursors,
@@ -102,16 +107,24 @@
   # none of them — it would have been complete in the `.ftl`, present in the
   # menu, and silently unverified everywhere else.
   languages,
-  # THE TEXTS AS THE BINARY CARRIES THEM (`nix/i18n.nix`): the key registry and
-  # one MERGED `<lang>.ftl` per language — the base followed by every brain
-  # module's own fragment. A check asking whether a key has a text reads this
-  # (`texts`, below); only the checks about the base files themselves read
-  # `assets/i18n`.
-  i18nRs,
+  # THE TEXTS AS THE BINARIES READ THEM (`nix/i18n.nix`): one MERGED
+  # `<lang>.ftl` per language — every crate's fragment, the extension's and
+  # every brain module's — which every program reads at run time
+  # (`RONOCTUA_TEXTS`), and `texts.keys`, each crate's key file written at
+  # evaluation from the names of its own fragment. A check asking whether a
+  # key has a text reads this; only the checks about the fragments themselves
+  # read them (`texts.fragments`).
+  texts,
   # The brain's modules, read out of their folders (`nix/brain-modules.nix`),
-  # and their generated Rust (`nix/brain-modules-rs.nix`).
+  # and their generated Rust (`nix/brain-modules-rs.nix`): the daemon's part
+  # (the registry, the person's manifests) and the library's (the distro's
+  # manifests, which the footer links).
   brainModules,
   brainModulesRs,
+  brainManifestsRs,
+  # What the footer draws of the brain's modules, read at run time
+  # (`nix/brain-catalogue.nix`).
+  brainCatalogue,
   # THE 2026-10-05 WAVE: one region per package, after its anchor.
   # ── anchor: L01 ──
   # ── anchor: L02 ──
@@ -150,10 +163,15 @@
 }:
 
 let
-  # THE MERGED TEXTS — see `i18nRs` above.
-  texts = i18nRs;
-  # AND WHAT MAKES THEM: every brain module's text folder and its prefixes, as
-  # `nix/i18n.nix` hands them to `gen-i18n.py`.
+  # WHAT MAKES THE TEXTS: every crate's fragment (and the extension's), and
+  # every brain module's text folder and its prefixes, as `nix/i18n.nix` hands
+  # them to `gen-i18n.py`.
+  fragmentDirs = pkgs.writeText "text-fragments.json" (
+    builtins.toJSON (lib.mapAttrs (_: dir: "${dir}") texts.fragments)
+  );
+  fragmentTextArgs = lib.concatStringsSep " " (
+    lib.mapAttrsToList (name: dir: "--fragment ${lib.escapeShellArg "${name}=${dir}"}") texts.fragments
+  );
   brainTextArgs = lib.concatMapStringsSep " " (
     f:
     "--module ${lib.escapeShellArg "${f.id}=${f.dir}"} --prefixes ${lib.escapeShellArg "${f.id}=${lib.concatStringsSep "," f.prefixes}"}"
@@ -421,6 +439,121 @@ let
         m = _re.search(r"#\[cfg\(test\)\]\s*(?:pub\s+)?mod\b", text)
         return text if m is None else text[: m.start()]
 
+    def _masked(text):
+        # The text with every comment and literal blanked IN PLACE: each of
+        # their characters a space, the newlines kept. The same length as the
+        # text, so an offset found in it is an offset of the text — what
+        # `code_of` cannot give, since it shortens what it empties. Rust's
+        # block comments nest, and a character literal may be a brace.
+        out, i, n = list(text), 0, len(text)
+
+        def blank(a, b):
+            for k in range(a, b):
+                if out[k] != "\n":
+                    out[k] = " "
+
+        while i < n:
+            c = text[i]
+            if c == "r" or (c == "b" and text[i + 1 : i + 2] == "r"):
+                j = i + (2 if c == "b" else 1)
+                h = j
+                while h < n and text[h] == "#":
+                    h += 1
+                if h < n and text[h] == '"' and not text[i - 1 : i].isalnum() and text[i - 1 : i] != "_":
+                    close = '"' + "#" * (h - j)
+                    end = text.find(close, h + 1)
+                    end = n if end == -1 else end + len(close)
+                    blank(i, end)
+                    i = end
+                    continue
+            if c == '"':
+                j = i + 1
+                while j < n:
+                    if text[j] == "\\":
+                        j += 2
+                        continue
+                    if text[j] == '"':
+                        j += 1
+                        break
+                    j += 1
+                blank(i, j)
+                i = j
+                continue
+            if c == "'":
+                m = _re.match(r"'(?:\\u\{[0-9a-fA-F_]*\}|\\.|[^\\'\n])'", text[i:])
+                if m:
+                    blank(i, i + m.end())
+                    i += m.end()
+                    continue
+            if text[i : i + 2] == "//":
+                j = text.find("\n", i)
+                j = n if j == -1 else j
+                blank(i, j)
+                i = j
+                continue
+            if text[i : i + 2] == "/*":
+                depth, j = 1, i + 2
+                while j < n and depth:
+                    if text[j : j + 2] == "/*":
+                        depth, j = depth + 1, j + 2
+                    elif text[j : j + 2] == "*/":
+                        depth, j = depth - 1, j + 2
+                    else:
+                        j += 1
+                blank(i, j)
+                i = j
+                continue
+            i += 1
+        return "".join(out)
+
+    def outside_tests(text):
+        # The file with EACH `#[cfg(test)]` module blanked and the code after
+        # it kept, every line where it was — so a line a check prints is the
+        # file's own.
+        #
+        # `without_tests` cuts from the first test module to the END, which is
+        # right for a check asking whether the product HAS something (a test's
+        # use of it must not answer for it) and wrong for one asking whether
+        # ANY line of the product breaks a rule: a file whose product resumes
+        # after a mid-file `mod meter_tests` keeps everything below it out of
+        # the sweep, and a breach there passes. This blanks each module by its
+        # braces, counted in the code alone (`_masked`); a module declared out
+        # of line (`#[cfg(test)] mod tests;`) is a declaration, and stays.
+        out, at = [], 0
+        for start, end in _test_spans(text):
+            out.append(text[at:start])
+            out.append("\n" * text.count("\n", start, end))
+            at = end
+        out.append(text[at:])
+        return "".join(out)
+
+    def _test_spans(text):
+        # Where each `#[cfg(test)]` module of the text starts and ends, by its
+        # braces counted in the code alone (`_masked`).
+        masked = _masked(text)
+        opened = _re.compile(r"#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+        spans, at = [], 0
+        while True:
+            m = opened.search(masked, at)
+            if m is None:
+                break
+            depth, end = 0, len(masked)
+            for k in range(m.end() - 1, len(masked)):
+                if masked[k] == "{":
+                    depth += 1
+                elif masked[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = k + 1
+                        break
+            spans.append((m.start(), end))
+            at = end
+        return spans
+
+    def test_modules(text):
+        # The text's `#[cfg(test)]` modules, one after another.
+        return "".join(text[s:e] + "\n" for s, e in _test_spans(text))
+
     def whose(text, at):
         # Which function a hit at `at` is inside — the `walls` idiom.
         walls = [(m.start(), m.group(1)) for m in _re.finditer(r"\n\s*(?:pub )?fn (\w+)", text)]
@@ -469,6 +602,335 @@ let
             if (crate / "Cargo.toml").is_file():
                 found += rust_sources(crate)
         return found
+
+    # THE SHELL'S SOURCES, WHEREVER A MODULE OF IT LIVES.
+    #
+    # The shell is one crate today and a family of them tomorrow
+    # (`ronoctua-shell`, `ronoctua-shell-kit`, `ronoctua-shell-door`…): a check
+    # that names `crates/ronoctua-shell/src/files.rs` would have to be edited
+    # the day `files.rs` moves to the file manager's own crate, and a sweep of
+    # one crate's `src/` would silently stop reaching the modules that left
+    # it. So a check asks for a module by its path INSIDE a shell crate's
+    # `src/` — `surface.rs`, `door/mod.rs` — and these find it in whichever
+    # crate holds it. Every crate named `ronoctua-shell` or `ronoctua-shell-*`
+    # is the shell, found by name in the tree: a crate split off joins with no
+    # edit here. And `ronoctua-render-png`, the buffer's PNG camera: a binary
+    # of the shell until the 2026-10-12 wave, still at `bin/render-png.rs`
+    # inside its own `src/`, so every sweep that reached it reaches it.
+    #
+    # The tree is `shellSources` (every shell crate's `src/`, laid out as in
+    # the repository), which a check opens with
+    # `exec(open("''${shellPrelude}").read())` after this prelude; a check
+    # over another tree (`''${self}`, a planted one) passes `root=`.
+    _SHELL_CRATE = _re.compile(r"ronoctua-shell(?:-[a-z0-9-]+)?|ronoctua-render-png")
+
+    def shell_crates(root=None):
+        # Every shell crate's folder under `root` (a tree holding `crates/`),
+        # sorted; a tree with none is refused, never an empty sweep.
+        import pathlib as _pathlib
+        if root is None:
+            root = globals().get("SHELL_SOURCES")
+            if root is None:
+                print("ERROR: no shell tree; open with the shell prelude or pass root=",
+                      file=_sys.stderr)
+                raise SystemExit(1)
+        crates = _pathlib.Path(root) / "crates"
+        found = sorted(c for c in crates.iterdir()
+                       if _SHELL_CRATE.fullmatch(c.name) and (c / "src").is_dir())
+        if not found:
+            print("ERROR: no shell crate under " + str(crates), file=_sys.stderr)
+            raise SystemExit(1)
+        return found
+
+    def shell_files(pattern="**/*.rs", root=None):
+        # Every file of the shell matching `pattern`, a glob relative to a
+        # shell crate's `src/` (`*.rs` is that folder alone, `**/*.rs` every
+        # depth, `door/*.rs` one folder), over every shell crate, sorted.
+        found = []
+        for crate in shell_crates(root):
+            found += (crate / "src").glob(pattern)
+        return sorted(found)
+
+    def shell_file(name, root=None):
+        # THE one file of the shell at `src/<name>` — whichever shell crate
+        # holds it. Absent, or in two crates at once, is refused by name.
+        hits = [c / "src" / name for c in shell_crates(root) if (c / "src" / name).is_file()]
+        if len(hits) != 1:
+            print("ERROR: the shell has " + str(len(hits)) + " files at src/" + name
+                  + " (" + ", ".join(str(h) for h in hits) + "); a check reads exactly one",
+                  file=_sys.stderr)
+            raise SystemExit(1)
+        return hits[0]
+
+    def shell_has(name, root=None):
+        # Whether some shell crate holds `src/<name>`.
+        return any((c / "src" / name).is_file() for c in shell_crates(root))
+
+    def shell_module_files(name, root=None):
+        # THE FILES OF ONE MODULE OF THE SHELL: `src/<name>.rs` or
+        # `src/<name>/mod.rs`, then every file under `src/<name>/`, sorted — in
+        # whichever shell crate holds it. A module split into files (the
+        # footer: `surface/mod.rs` and one `surface/<view>.rs` per view) is
+        # still ONE module: its children see its private fields and its
+        # methods are one `impl`. Absent, or in two crates, is refused.
+        hits = []
+        for c in shell_crates(root):
+            src = c / "src"
+            head = [f for f in (src / (name + ".rs"), src / name / "mod.rs") if f.is_file()]
+            if head:
+                rest = sorted(f for f in (src / name).rglob("*.rs") if f not in head) if (src / name).is_dir() else []
+                hits.append(head + rest)
+        if len(hits) != 1:
+            print("ERROR: the shell has " + str(len(hits)) + " modules named " + name
+                  + "; a check reads exactly one", file=_sys.stderr)
+            raise SystemExit(1)
+        return hits[0]
+
+    def shell_source(name, root=None):
+        # THE TEXT OF `src/<name>` — a file of the shell, as `shell_file` finds
+        # it — or, when `<name>` is a module that became a folder
+        # (`surface.rs` → `surface/mod.rs` and its children), the text of the
+        # whole module, its files one after another: what the module DOES is
+        # in all of them, and a check that asks "does the footer do X" asks
+        # the module. One line names each file (a comment, so `code_of` and
+        # `uncommented` drop it and nothing it says can satisfy a rule).
+        #
+        # THE PRODUCT FIRST, THE TESTS LAST: every file's code with its test
+        # modules taken out (`outside_tests`), and then every file's test
+        # modules — so `without_tests`, which cuts from the first test module
+        # to the end, still leaves the whole product of the module, children
+        # included, and the raw text still holds everything.
+        stem = name[:-3] if name.endswith(".rs") else name
+        if shell_has(name, root) and not shell_has(stem + "/mod.rs", root):
+            return shell_file(name, root).read_text()
+        texts = [(shell_name(f) or f.name, f.read_text()) for f in shell_module_files(stem, root)]
+        return "".join(
+            "\n// -- " + n + " --\n" + outside_tests(x) for n, x in texts
+        ) + "".join(test_modules(x) for _, x in texts)
+
+    def shell_dir(name, root=None):
+        # THE one folder of the shell at `src/<name>` (`door`), as
+        # `shell_file` finds a file.
+        hits = [c / "src" / name for c in shell_crates(root) if (c / "src" / name).is_dir()]
+        if len(hits) != 1:
+            print("ERROR: the shell has " + str(len(hits)) + " folders at src/" + name
+                  + "; a check reads exactly one", file=_sys.stderr)
+            raise SystemExit(1)
+        return hits[0]
+
+    def shell_name(path):
+        # A path's name inside its shell crate's `src/` (`surface.rs`,
+        # `door/mod.rs`), or None for a path in no shell crate — what a check
+        # prints, and what it compares with a module's name.
+        parts = list(_pathlib_parts(path))
+        for i in range(len(parts) - 2, 0, -1):
+            if parts[i] == "src" and _SHELL_CRATE.fullmatch(parts[i - 1]):
+                return "/".join(parts[i + 1 :])
+        return None
+
+    def _pathlib_parts(path):
+        import pathlib as _pathlib
+        return _pathlib.PurePath(path).parts
+
+    def shell_manifests(root=None):
+        # Every shell crate's `Cargo.toml`, sorted — opened with the
+        # manifests' prelude (`shellManifestPrelude`), or under `root` (a
+        # tree holding `crates/`). A check about what the shell DEPENDS on
+        # reads all of them: a dependency a module took with it to its new
+        # crate is still the shell's. None is refused, never an empty sweep.
+        import pathlib as _pathlib
+        if root is None:
+            root = globals().get("SHELL_MANIFESTS")
+            if root is None:
+                print("ERROR: no shell manifests; open with the manifests' prelude or pass root=",
+                      file=_sys.stderr)
+                raise SystemExit(1)
+        crates = _pathlib.Path(root) / "crates"
+        found = sorted(c / "Cargo.toml" for c in crates.iterdir()
+                       if _SHELL_CRATE.fullmatch(c.name) and (c / "Cargo.toml").is_file())
+        if not found:
+            print("ERROR: no shell manifest under " + str(crates), file=_sys.stderr)
+            raise SystemExit(1)
+        return found
+
+    # THE LEADER'S KEYMAP, WHEREVER A CRATE SAYS ITS KEYS.
+    #
+    # Each crate declares its keys in a `bindings::Contribution` beside its
+    # view — a `pub const KEYS`, the footer's `pub const BASE` — and the
+    # binary assembles them (`keymap::CONTRIBUTIONS`). A check that read the
+    # keymap in one file would stop seeing a crate's keys, silently, the day
+    # that crate said them itself; these find every one, in the shell's
+    # product code (tests cut, comments off, strings kept).
+    _CONTRIBUTION = _re.compile(
+        r"pub const ([A-Z_]+):\s*(?:crate::bindings::)?Contribution\s*=\s*"
+        r"(?:crate::bindings::)?Contribution\s*\{"
+    )
+
+    def _matched(text, at):
+        # The text inside the bracket opening at `at` (`{` or `[`) up to the
+        # one that closes it — a bracket inside a string literal (`"TAB ["`)
+        # is no bracket.
+        opening = text[at]
+        closing = "}" if opening == "{" else "]"
+        depth, k = 0, at
+        while k < len(text):
+            c = text[k]
+            if c == '"':
+                k += 1
+                while k < len(text) and text[k] != '"':
+                    k += 2 if text[k] == "\\" else 1
+            elif c == opening:
+                depth += 1
+            elif c == closing:
+                depth -= 1
+                if depth == 0:
+                    return text[at + 1 : k]
+            k += 1
+        return text[at + 1 :]
+
+    def hosted_regions(root=None):
+        # The views the binary registers with the footer's slot host
+        # (`regions.rs`, `<crate>::<module>::ENTRY` a line — by its whole
+        # path, or `crate::<module>` through the binary's root): each region's id,
+        # as its module ranks it (`pub const ID: &str = "…"`), and the
+        # module's file — what a check about a view asks once the view is a
+        # region of its own crate. Refused by name when an entry's module has
+        # no id, or two entries one.
+        text = uncommented(without_tests(shell_file("regions.rs", root).read_text()))
+        at = text.find("pub const REGIONS")
+        if at < 0:
+            print("ERROR: regions.rs declares no `REGIONS`", file=_sys.stderr)
+            raise SystemExit(1)
+        table = text[at : text.index("];", at)]
+        found = {}
+        for module in _re.findall(r"\b(?:crate|ronoctua_shell_\w+)::(\w+)::ENTRY\b", table):
+            f = shell_file(module + ".rs", root)
+            m = _re.search(r'pub const ID: &str = "([a-z-]+)";', uncommented(f.read_text()))
+            if m is None or m.group(1) in found:
+                print("ERROR: the region of " + module + ".rs has no `ID` of its own", file=_sys.stderr)
+                raise SystemExit(1)
+            found[m.group(1)] = f
+        return found
+
+    def keymap_contributions(root=None):
+        # Every contribution: (file, the constant's name, its body).
+        found = []
+        for f in shell_files("**/*.rs", root):
+            text = uncommented(without_tests(f.read_text()))
+            for m in _CONTRIBUTION.finditer(text):
+                found.append((f, m.group(1), _matched(text, m.end() - 1)))
+        return found
+
+    def keymap_rows(root=None):
+        # Every WRITTEN sequence of every contribution — its `bindings`
+        # field — as (file, keys, command): the keys a literal's text or a
+        # constant's name (`SOFTWARE_KEYS`), the command a literal's id or a
+        # constant's path as written (`OPEN`, `crate::binary_cache::OPEN`).
+        # A field that names a constant (`bindings: BINDINGS`) is that
+        # constant's slice, declared in the same file.
+        rows = []
+        for f, _, body in keymap_contributions(root):
+            m = _re.search(r"\bbindings:\s*(&\[|[A-Z_]+)", body)
+            if not m:
+                continue
+            if m.group(1) == "&[":
+                table = _matched(body, m.end() - 1)
+            else:
+                text = uncommented(without_tests(f.read_text()))
+                d = _re.search(r"pub const " + m.group(1) + r"\b[^=]*=\s*&\[", text)
+                table = _matched(text, d.end() - 1) if d else ""
+            for r in _re.finditer(
+                r'\(\s*("[^"]*"|[A-Za-z_:]+)\s*,\s*("[a-z0-9-]+"|[A-Za-z_:]+)\s*,\s*(?:None|Some\()',
+                table,
+            ):
+                rows.append((f, r.group(1).strip('"'), r.group(2).strip('"')))
+        return rows
+
+    def without_keymap(text):
+        # The text with every keymap contribution cut out. A view's file holds
+        # its crate's `KEYS` beside the view, and the labels there are the
+        # shortcut list's — `cmd-<id>`, `group-…` — and not rows the view
+        # draws, as they were not while they lived in `leader.rs`.
+        out, at = [], 0
+        for m in _CONTRIBUTION.finditer(text):
+            if m.start() < at:
+                continue
+            out.append(text[at : m.start()])
+            at = m.end() + len(_matched(text, m.end() - 1)) + 1
+        out.append(text[at:])
+        return "".join(out)
+  '';
+
+  # THE SHELL'S CRATES, by name: `ronoctua-shell`, every `ronoctua-shell-*`
+  # under `crates/`, and `ronoctua-render-png` (a binary of the shell until
+  # the 2026-10-12 wave, still `bin/render-png.rs` in its `src/`). Read from
+  # the tree at evaluation, so a crate split off is reached with no edit.
+  shellCrates =
+    builtins.filter
+      (
+        name:
+        name == "ronoctua-shell" || lib.hasPrefix "ronoctua-shell-" name || name == "ronoctua-render-png"
+      )
+      (builtins.attrNames (lib.filterAttrs (_: kind: kind == "directory") (builtins.readDir ../crates)));
+
+  # EVERY SHELL CRATE'S `src/`, and nothing else, laid out as in the
+  # repository (`crates/<crate>/src/…`): what a check about the shell reads,
+  # through `shell_file`/`shell_files` (Python) or the same two names in a
+  # shell script (`shellSh`). A check that read `../crates/ronoctua-shell/src`
+  # would have to be edited each time a module moved to another shell crate.
+  shellSources = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions (map (crate: ../crates + "/${crate}/src") shellCrates);
+  };
+
+  # WHERE THE PRELUDE'S SHELL HELPERS LOOK, in a file of its own: the prelude
+  # stays free of any source, so a check that reads no shell file does not
+  # depend on the shell. A check reading the shell opens with
+  # `exec(open("''${pyPrelude}").read())` and then
+  # `exec(open("''${shellPrelude}").read())`. `globals()`, because a prelude
+  # opened inside a function puts its names in that function's locals, and
+  # the helpers look the tree up in the module's.
+  shellPrelude = pkgs.writeText "ronoctua-check-shell.py" ''
+    globals()["SHELL_SOURCES"] = "${shellSources}"
+  '';
+
+  # EVERY SHELL CRATE'S `Cargo.toml`, and nothing else, as `shellSources` holds
+  # their `src/`: what a check about what the shell DEPENDS on reads, through
+  # `shell_manifests()`, opened with `shellManifestPrelude` after the prelude.
+  # A prelude of its own, so the checks that read only the sources do not
+  # rebuild when a manifest moves.
+  shellManifests = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions (map (crate: ../crates + "/${crate}/Cargo.toml") shellCrates);
+  };
+  shellManifestPrelude = pkgs.writeText "ronoctua-check-shell-manifests.py" ''
+    globals()["SHELL_MANIFESTS"] = "${shellManifests}"
+  '';
+
+  # THE SAME TWO HELPERS FOR A SHELL SCRIPT, sourced with `. ''${shellSh}`:
+  # `shell_file NAME` prints the one file at a shell crate's `src/NAME` (and
+  # fails, naming it, on none or two); `shell_files PATTERN` prints every file
+  # matching the glob under each shell crate's `src/`, one a line, sorted.
+  shellSh = pkgs.writeText "ronoctua-check-shell.sh" ''
+    shell_file() {
+      local hits=() crate
+      for crate in ${lib.concatMapStringsSep " " (c: "${shellSources}/crates/${c}") shellCrates}; do
+        if [ -f "$crate/src/$1" ]; then hits+=("$crate/src/$1"); fi
+      done
+      if [ "''${#hits[@]}" -ne 1 ]; then
+        echo "ERROR: the shell has ''${#hits[@]} files at src/$1; a check reads exactly one" >&2
+        return 1
+      fi
+      echo "''${hits[0]}"
+    }
+    shell_files() {
+      local crate f
+      for crate in ${lib.concatMapStringsSep " " (c: "${shellSources}/crates/${c}") shellCrates}; do
+        for f in "$crate"/src/$1; do
+          if [ -e "$f" ]; then echo "$f"; fi
+        done
+      done | sort
+    }
   '';
 
   # A check that runs a script and passes if it exits 0.
@@ -526,6 +988,8 @@ let
     ronoctua-shell = rust.shell;
     # The player, for the pair it draws on the modeline (its four clicks).
     inherit (rust) player;
+    # The contract's driver, for what the compositor says exists.
+    contract = rust.bins.ronoctua-contract;
   };
 
   # The default keymap closes: no collision and every shortcut pointing at a
@@ -711,7 +1175,14 @@ let
     '';
 
   keymap-no-collision = mkCheck "keymap-no-collision" [ ] ''
-    ${rust.workspace}/bin/ronoctua-shell check-keymap
+    # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+    # one, and the colours and the words are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+    # And the brain's catalogue (`rust.keyed`): the modules' marks and the
+    # keymap's actions are data it reads at run time, refused (78) without it.
+    export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
+    ${rust.bins.ronoctua-shell}/bin/ronoctua-shell check-keymap
   '';
 
   # THE ICON PAGE'S TAG ROW EXISTS FOR EVERY LANGUAGE.
@@ -755,10 +1226,18 @@ let
   # So this builds one. `zz-ZZ` is a synthetic language whose every value is the
   # base language's, PADDED to roughly 120% — which is about what German or
   # French cost against English, and rather more than the 6.8% pt-BR costs. It
-  # exercises the generator's key parity, the `LANGUAGES` constant, the
-  # generated `face()`, and the arithmetic of every check that used to name a
-  # pair. It never reaches an installed system: it is built here, used here, and
-  # thrown away with the derivation.
+  # exercises the generator's key parity, the merged file a program reads at
+  # run time, the `LANGUAGES` constant of the registry written at evaluation
+  # (`nix/text-keys.nix`), and the arithmetic of every check that used to name
+  # a pair. It never reaches an installed system: it is built here, used here,
+  # and thrown away with the derivation.
+  #
+  # THE LOADER HAS NO ARM PER LANGUAGE ANY MORE. It used to be a generated
+  # `face()` with one `include_str!` per language — the one place a declared
+  # language could still be missing its body. Now a program reads
+  # `$RONOCTUA_TEXTS/<language>.ftl` for whichever declared language it is
+  # asked, so the registry must name no file at all; a binary compiled with
+  # three languages is not built here.
   #
   # `zz` is reserved by ISO 639-2 for local use, so it cannot collide with a
   # real language somebody adds later.
@@ -782,18 +1261,27 @@ let
           ]
         )
       );
+      # EVERY CRATE'S FRAGMENT (and the extension's), each grown the same way.
+      crateFolders = pkgs.writeText "third-language-fragments.json" (
+        builtins.toJSON (lib.mapAttrs (_: dir: "${dir}") texts.fragments)
+      );
+      # THE LANGUAGES A THIRD WOULD COMPILE AGAINST, and every crate's keys:
+      # the functions the build writes them with, at evaluation.
+      thirdKeys =
+        (import ../nix/text-keys.nix {
+          inherit lib;
+          src = ../.;
+          languages = languages ++ [ "zz-ZZ" ];
+          inherit (pkgs) writeTextDir linkFarm;
+        }).languagesRs;
+      keyFiles = pkgs.writeText "third-language-key-files.json" (builtins.toJSON texts.textKeys.files);
     in
     mkCheck "third-language-costs-nothing" [ pkgs.python3 ] ''
       python3 - <<'END'
       import json, pathlib, re, subprocess, sys, tempfile
 
-      source = pathlib.Path("${../assets/i18n}")
       base = "${builtins.head languages}"
       root = pathlib.Path(tempfile.mkdtemp())
-      work = root / "i18n"
-      work.mkdir(parents=True)
-      for f in source.glob("*.ftl"):
-          (work / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
 
       # THE VALUE GROWS, THE KEY DOES NOT. A key that changed would be testing
       # the generator's tolerance for a typo, which is a different check
@@ -809,8 +1297,23 @@ let
                   grown.append(line)
           return grown
 
-      grown = grown_from(source / f"{base}.ftl")
-      (work / "zz-ZZ.ftl").write_text("\n".join(grown) + "\n", encoding="utf-8")
+      # ONE FILE MORE IN EVERY CRATE'S FRAGMENT.
+      crates = []
+      grown = []
+      for name, folder in sorted(json.load(open("${crateFolders}")).items()):
+          mine = root / "crates" / name
+          mine.mkdir(parents=True)
+          for f in pathlib.Path(folder).glob("*.ftl"):
+              (mine / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+          lines = grown_from(mine / f"{base}.ftl")
+          grown += lines
+          (mine / "zz-ZZ.ftl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          crates += ["--fragment", f"{name}={mine}"]
+      if len(crates) // 2 < 30:
+          print(f"ERROR: only {len(crates) // 2} crate fragments were grown", file=sys.stderr)
+          raise SystemExit(1)
+      # The largest fragment, the one an incomplete third language is cut from below.
+      work = max((root / "crates").iterdir(), key=lambda d: (d / f"{base}.ftl").stat().st_size)
 
       # AND ONE FILE MORE IN EVERY MODULE'S FOLDER, grown the same way.
       folders = json.load(open("${folders}"))
@@ -829,11 +1332,11 @@ let
           print("ERROR: the sample module's folder is not among the ones grown", file=sys.stderr)
           raise SystemExit(1)
 
-      out = root / "out" / "keys.rs"
+      out = root / "out"
       def generate():
           return subprocess.run(
-              [sys.executable, "${../nix/scripts/gen-i18n.py}", str(work), str(out),
-               *"${lib.concatStringsSep " " languages}".split(), "zz-ZZ", *modules],
+              [sys.executable, "${../nix/scripts/gen-i18n.py}", str(out),
+               *"${lib.concatStringsSep " " languages}".split(), "zz-ZZ", *crates, *modules],
               capture_output=True, text=True,
           )
 
@@ -843,24 +1346,32 @@ let
           print(r.stderr, file=sys.stderr)
           raise SystemExit(1)
 
-      body = out.read_text(encoding="utf-8")
-      # The three things a third language has to reach: the list, the loader,
-      # and the count the generator reports.
-      if 'pub const LANGUAGES: [&str; 3]' not in body:
+      # PARSED: the languages and every crate's keys are Rust written by
+      # `nix/text-keys.nix`, and the two facts asked of them are the
+      # `LANGUAGES` item and the absence of any file they would read.
+      body = open("${thirdKeys}", encoding="utf-8").read()
+      keys = json.load(open("${keyFiles}"))
+      if len(keys) < 30:
+          print(f"ERROR: only {len(keys)} crates' key files were read", file=sys.stderr)
+          raise SystemExit(1)
+      # The three things a third language has to reach: the list, the file a
+      # program reads, and the count the generator reports.
+      if 'pub const LANGUAGES: [&str; 3]' not in body or '    "zz-ZZ",' not in body:
           print("ERROR: LANGUAGES did not grow to three.", file=sys.stderr)
           raise SystemExit(1)
-      if '"zz-ZZ" => Some(include_str!' not in body:
-          print("ERROR: the generated face() has no arm for the third language —", file=sys.stderr)
-          print("       Texts::fresh would answer None and fall back in silence.", file=sys.stderr)
+      if any("include_str!" in t or "include_bytes!" in t for t in [body, *keys.values()]):
+          print("ERROR: the key registry embeds a file again — a language's sentences are", file=sys.stderr)
+          print("       compiled in, and a declared language can be missing its body.", file=sys.stderr)
           raise SystemExit(1)
       if "in 3 languages" not in r.stdout:
           print(f"ERROR: the generator did not report three: {r.stdout!r}", file=sys.stderr)
           raise SystemExit(1)
-      # AND THE BUNDLE IT EMBEDS HAS EVERY MODULE'S THIRD TEXT: the merged
-      # `zz-ZZ.ftl` beside `keys.rs` is what `face()` includes.
-      merged = (out.parent / "zz-ZZ.ftl").read_text(encoding="utf-8")
+      # AND THE FILE A PROGRAM READS HAS EVERY MODULE'S THIRD TEXT: the merged
+      # `zz-ZZ.ftl` is what `RONOCTUA_TEXTS` would hand it.
+      merged = (out / "zz-ZZ.ftl").read_text(encoding="utf-8")
       sample = grown_from(root / "modules" / "pilot-sample" / f"{base}.ftl")
-      if not all(l in merged for l in sample if " = " in l):
+      # Its MESSAGES: the merged file leaves the fragments' comments out.
+      if not all(l in merged for l in sample if " = " in l and not l.startswith("#")):
           print("ERROR: the merged zz-ZZ.ftl does not carry the sample module's third texts", file=sys.stderr)
           raise SystemExit(1)
 
@@ -909,24 +1420,46 @@ let
   # worst of the three states.
   languages-are-declared = mkCheck "languages-are-declared" [ pkgs.coreutils pkgs.gnused ] ''
     declared=$(printf '%s\n' ${lib.escapeShellArgs languages} | sort)
-    present=$(cd ${../assets/i18n} && ls *.ftl | sed 's/\.ftl$//' | sort)
+    base=${builtins.head languages}
 
-    if [ "$declared" != "$present" ]; then
-      echo "ERROR: the declared languages and the .ftl files on disk differ." >&2
-      echo "  declared in assets/i18n/languages.nix:" >&2
-      printf '    %s\n' $declared >&2
-      echo "  present in assets/i18n:" >&2
-      printf '    %s\n' $present >&2
-      echo "      A file that is present and undeclared is worse than a missing" >&2
-      echo "      one: it gets copied and linted, and then nothing reads it." >&2
+    # EVERY FRAGMENT — each crate's that speaks and the extension's — holds
+    # exactly the declared languages. And the base has to be among them,
+    # because that is what the generator compares every other against and
+    # what each crate's keys are read from.
+    fragments=0
+    for named in ${
+      lib.concatStringsSep " " (lib.mapAttrsToList (name: dir: "${name}=${dir}") texts.fragments)
+    }; do
+      name=''${named%%=*}
+      dir=''${named#*=}
+      fragments=$((fragments + 1))
+      present=$(cd "$dir" && ls *.ftl | sed 's/\.ftl$//' | sort)
+      if [ "$declared" != "$present" ]; then
+        echo "ERROR: the declared languages and the .ftl files of $name's fragment differ." >&2
+        echo "  declared in assets/i18n/languages.nix:" >&2
+        printf '    %s\n' $declared >&2
+        echo "  present in its i18n/:" >&2
+        printf '    %s\n' $present >&2
+        echo "      A file that is present and undeclared is worse than a missing" >&2
+        echo "      one: it gets copied and linted, and then nothing reads it." >&2
+        exit 1
+      fi
+      test -f "$dir/$base.ftl" || {
+        echo "ERROR: $name's fragment has no .ftl of the base language $base" >&2; exit 1; }
+    done
+    [ "$fragments" -gt 30 ] || {
+      echo "ERROR: only $fragments fragments were found — did the list of crates that speak change?" >&2
+      exit 1
+    }
+
+    # AND `assets/i18n/` HOLDS THE LIST ALONE: a `.ftl` there is read by
+    # nothing — every sentence lives in the fragment of the crate that says it.
+    stray=$(cd ${../assets/i18n} && ls | grep -v '^languages\.nix$' || true)
+    if [ -n "$stray" ]; then
+      echo "ERROR: assets/i18n holds more than languages.nix: $stray" >&2
+      echo "      A sentence lives in crates/<crate>/i18n/<lang>.ftl, of the crate that says it." >&2
       exit 1
     fi
-
-    # And the base has to be first, because that is what the generator
-    # compares every other against and what the installer's menu opens on.
-    base=${builtins.head languages}
-    test -f ${../assets/i18n}/$base.ftl || {
-      echo "ERROR: the base language $base has no .ftl" >&2; exit 1; }
 
     # AND EVERY BRAIN MODULE'S TEXT FOLDER IS THE SAME SET, file for file.
     #
@@ -953,15 +1486,16 @@ let
       exit 1
     }
 
-    echo "OK: $(printf '%s\n' $declared | wc -l) languages, declared and present, base $base, and in $folders module folders"
+    echo "OK: $(printf '%s\n' $declared | wc -l) languages, declared and present, base $base, in $fragments fragments and $folders module folders"
   '';
 
-  # Every language has exactly the same keys, none of them empty. It is the
-  # generator that runs in the build; here it runs again as a named check —
-  # with every brain module's fragment, as `nix/i18n.nix` runs it.
+  # Every language has exactly the same keys, none of them empty, and no key is
+  # in two fragments. It is the generator that runs in the build; here it runs
+  # again as a named check — with every crate's fragment and every brain
+  # module's, as `nix/i18n.nix` runs it.
   i18n-complete = mkCheck "i18n-complete" [ pkgs.python3 ] ''
-    python3 ${../nix/scripts/gen-i18n.py} ${../assets/i18n} $TMPDIR/keys.rs \
-      ${lib.escapeShellArgs languages} ${brainTextArgs}
+    python3 ${../nix/scripts/gen-i18n.py} $TMPDIR/texts \
+      ${lib.escapeShellArgs languages} ${fragmentTextArgs} ${brainTextArgs}
   '';
 
   # THE NESTED SESSION'S `FONTCONFIG_FILE` RESOLVES A REAL FONT.
@@ -1058,7 +1592,7 @@ let
   # Because the defect is the ends DRIFTING, not any one of them being wrong
   # alone. `nix/user-dirs.nix` is what makes the directory (through
   # `xdg.userDirs`, whose `createDirectories` covers `extraConfig` too); the
-  # module is what hands the footer the path; and `surface.rs` is what turns it
+  # module is what hands the footer the path; and `capture.rs` is what turns it
   # into a file name. Checking only that the variable exists would go green on
   # a path pointing anywhere at all.
   #
@@ -1075,6 +1609,7 @@ let
       python3 - <<'END'
       import pathlib, re, sys
       exec(open("${pyPrelude}").read())
+      exec(open("${shellPrelude}").read())
 
       # THE UNIT'S OWN VALUE, forced by Nix above and pasted in here. An
       # absent one arrives as the empty string rather than as an evaluation
@@ -1123,7 +1658,7 @@ let
       #
       # `body_of`, because the question IS about one function.
       rust = body_of(
-          pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text(),
+          shell_file("capture.rs").read_text(),
           "capture_path",
       )
       floor(len(rust), 200, "characters of capture_path")
@@ -2118,14 +2653,14 @@ let
   # And the other way round: a key in only one language BRINGS THE BUILD DOWN.
   # Without this fixture, the check above would pass with the generator broken.
   i18n-missing-key-fails = mkCheck "i18n-missing-key-fails" [ pkgs.python3 ] ''
-    cp -r ${../assets/i18n} bad && chmod -R +w bad
-    # The BASE language is the victim, because it is the one every other is
-    # compared against — an orphan there has to be caught whichever way the
-    # generator walks the list.
+    # ONE CRATE'S FRAGMENT, the foundation's, copied: its BASE language is the
+    # victim, because it is the one every other is compared against — an
+    # orphan there has to be caught whichever way the generator walks the list.
+    cp -r ${texts.fragments.ronoctua-shell-kit} bad && chmod -R +w bad
     echo 'only-in-english = orphan' >> bad/${builtins.head languages}.ftl
 
-    if python3 ${../nix/scripts/gen-i18n.py} bad $TMPDIR/keys.rs \
-      ${lib.escapeShellArgs languages} 2>errors.txt; then
+    if python3 ${../nix/scripts/gen-i18n.py} $TMPDIR/texts \
+      ${lib.escapeShellArgs languages} --fragment ronoctua-shell-kit=bad 2>errors.txt; then
       echo "ERROR: the generator ACCEPTED a key that exists in only one language" >&2
       exit 1
     fi
@@ -2196,13 +2731,24 @@ let
     # 2b. THE SAME, FOR `icon`.
     #
     # Colour has a hand-written bridge in the host, so a divergence there is a
-    # human mistake. Icons do NOT: the WIT enum and the Rust constants are both
-    # emitted by `gen-tokens.py` from one dictionary, which is exactly why this
-    # went unchecked — "same source, cannot diverge".
+    # human mistake. Icons were thought safe: the WIT enum and the Rust
+    # constants came out of one dictionary, which is exactly why this went
+    # unchecked — "same source, cannot diverge". Since 2026-10-12 they are two
+    # generators: the WIT is written at evaluation from the NAMES
+    # (`nix/token-names.nix`), and the Rust by `gen-tokens.py` from the glyph
+    # table.
     #
     # A generator can still drop one side. And the symptom would be the `?`
     # glyph the host draws for an unknown token: visible only on the screen that
     # happens to use it, and looking like a font problem.
+    #
+    # AND NO BRAIN MODULE'S GLYPH IS IN EITHER. A mark is drawn from the
+    # brain's catalogue, data the footer reads at run time
+    # (`nix/brain-catalogue.nix`): a module's token in the host's table would
+    # be compiled into every crate that draws, and in the WIT into every
+    # buffer — so a person's module would rebuild them all. The modules'
+    # tokens are named by the loader (`brainModules.glyphs`), and no
+    # `brain_mark` answers them in the host any more.
     block = re.search(r"enum icon \{(.*?)\n    \}", wit, re.S)
     if block is None:
         print("ERROR: `icon` stopped being an enum in the WIT", file=sys.stderr)
@@ -2218,6 +2764,19 @@ let
         raise SystemExit(1)
     icon_rs = {n.lower().replace("_", "-")
                for n in re.findall(r"pub const ([A-Z0-9_]+):", mod_icon.group(1))}
+    if "fn brain_mark" in mod_icon.group(1):
+        print("ERROR: the host's table answers a brain module's glyph again (`icon::brain_mark`):"
+              " a mark's glyph is the catalogue's, read at run time", file=sys.stderr)
+        raise SystemExit(1)
+    modules = set(${builtins.toJSON (builtins.attrNames brainModules.glyphs)})
+    if len(modules) < 1:
+        print("ERROR: no brain module declares a glyph, and the half below proves nothing", file=sys.stderr)
+        raise SystemExit(1)
+    for where, names in (("the WIT", icon_wit), ("the host's table", icon_rs)):
+        for n in sorted(modules & names):
+            print(f"ERROR: the brain module glyph `{n}` is in {where}: a person's module would rebuild it", file=sys.stderr)
+        if modules & names:
+            raise SystemExit(1)
 
     only_wit, only_rs = icon_wit - icon_rs, icon_rs - icon_wit
     if only_wit or only_rs:
@@ -2226,7 +2785,7 @@ let
         for n in sorted(only_rs):
             print(f"ERROR: the icon `{n}` is in the Rust and not in the WIT", file=sys.stderr)
         raise SystemExit(1)
-    print(f"OK: {len(icon_wit)} icons, the same in both generated artefacts")
+    print(f"OK: {len(icon_wit)} icons, the same in both generated artefacts, and none of the {len(modules)} module glyphs in either")
     PY
 
     # 3. The host's bridge must have no default arm: `_ =>` has to give back
@@ -2333,6 +2892,8 @@ let
       inherit cursors;
 
       shell = rust.shell;
+      # The agent and the boot's console, programs of their own.
+      inherit (rust) networkConsole networkAgent;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
     };
   };
@@ -2410,7 +2971,7 @@ let
   # INDEPENDENT of the GPU that the CI gates. It does not fall under the ban on
   # measuring performance under lavapipe, which is about rasterization.
   instance-fast = mkCheck "instance-fast" [ ] ''
-    ${rust.workspace}/bin/ronoctua-bench-instance \
+    ${rust.bins.ronoctua-bench-instance}/bin/ronoctua-bench-instance \
       ${buffers.brain}/lib/ronoctua_buffer_brain.wasm 200
   '';
 
@@ -2660,7 +3221,7 @@ let
   # arms, another key disarms, the same key fires — and closing points at the
   # ROW of the last survey, never at a pid, because a scope has none.
   memory-driven = mkCheck "memory-driven" [ ] ''
-    ${rust.workspace}/bin/ronoctua-test-memory \
+    ${rust.bins.ronoctua-test-memory}/bin/ronoctua-test-memory \
       ${buffers.memory}/lib/ronoctua_buffer_memory.wasm \
       ${texts}
   '';
@@ -2678,7 +3239,7 @@ let
   # remap is the first choice and a ring that only goes forwards is a ring
   # somebody has to walk nine times to leave.
   keyboard-driven = mkCheck "keyboard-driven" [ ] ''
-    ${rust.workspace}/bin/ronoctua-test-keyboard \
+    ${rust.bins.ronoctua-test-keyboard}/bin/ronoctua-test-keyboard \
       ${buffers.keyboard}/lib/ronoctua_buffer_keyboard.wasm \
       ${texts}
   '';
@@ -2712,8 +3273,8 @@ let
   # caught. The steps it draws are the first compiled module's that has any,
   # with the keys that module declared.
   brain-driven = mkCheck "brain-driven" [ ] ''
-    ${rust.workspace}/bin/ronoctua-brain modules > modules.txt
-    ${rust.workspace}/bin/ronoctua-test-brain \
+    ${rust.bins.ronoctua-brain}/bin/ronoctua-brain modules > modules.txt
+    ${rust.bins.ronoctua-test-brain}/bin/ronoctua-test-brain \
       ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
       ${texts} --modules modules.txt
   '';
@@ -2723,7 +3284,7 @@ let
   # here is loose on purpose — what it guards is a regression in the RUNTIME,
   # which would show up first on the component that has the least to load.
   memory-instance-fast = mkCheck "memory-instance-fast" [ ] ''
-    ${rust.workspace}/bin/ronoctua-bench-instance \
+    ${rust.bins.ronoctua-bench-instance}/bin/ronoctua-bench-instance \
       ${buffers.memory}/lib/ronoctua_buffer_memory.wasm 200
   '';
 
@@ -2736,7 +3297,7 @@ let
   # the frame and the key, which is the one place both sides of the WIT are
   # visible at once.
   transfers-driven = mkCheck "transfers-driven" [ ] ''
-    ${rust.workspace}/bin/ronoctua-test-transfers \
+    ${rust.bins.ronoctua-test-transfers}/bin/ronoctua-test-transfers \
       ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm \
       ${texts}
   '';
@@ -2763,6 +3324,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: what a mark DOES is a command id written where that mark is
     # handled, and `enum Hit` is module-level in three files. `segment_clicked`
@@ -2772,13 +3334,17 @@ let
     # mark id in a string literal. Emptying the strings would leave a check
     # that finds nothing and says so about nothing.
     root = pathlib.Path("${self}")
-    shell = root / "crates" / "ronoctua-shell" / "src"
-    def read(path):
-        text = uncommented(path.read_text())
-        floor(len(text), 500, "characters of " + path.name)
+    def read(what):
+        # A PATH, or a file of the shell by its name — or a module of it split
+        # into files, the footer's (`shell_source`).
+        if isinstance(what, pathlib.PurePath):
+            text, name = uncommented(what.read_text()), what.name
+        else:
+            text, name = uncommented(shell_source(what)), what
+        floor(len(text), 500, "characters of " + name)
         return text
-    surface = read(shell / "surface.rs")
-    buffer_host = read(shell / "buffer.rs")
+    surface = read("surface.rs")
+    buffer_host = read("buffer.rs")
     gaps = []
 
     # 1) WHAT A CLICK ON THE MODELINE CAN DO.
@@ -2894,15 +3460,26 @@ let
     # The update's commands are its window's (`update_window::COMMANDS`,
     # `BINDINGS`), and neither the footer nor the leader spells their ids: the
     # click runs the window's `WATCH`, and that same `WATCH` has a key in the
-    # window's table, which the leader takes whole.
-    keymap = read(shell / "leader.rs")
-    window = read(shell / "update_window.rs")
-    if "update_window::WATCH" not in clicked:
+    # window's table, which the update's contribution takes whole.
+    #
+    # THE KEYMAP IS EVERY FILE THAT SAYS KEYS (`keymap_contributions`): each
+    # crate declares its own beside its view, the footer's are `leader::BASE`.
+    keymap = "\n".join(read(f) for f in sorted({f for f, _, _ in keymap_contributions()}))
+    floor(len(keymap_contributions()), 20, "contributions to the keymap")
+    window = read("update_window.rs")
+    # THE MARK IS THE UPDATE'S WORDS, under the footer and the view (lane
+    # R6): the click runs `update_mark::WATCH`, and the window's `WATCH` —
+    # which its table binds — is that one.
+    if ("update_mark::WATCH" not in clicked
+            or not re.search(r"\bpub const WATCH: &str = crate::update_mark::WATCH;", window)
+            or not re.search(r'\bpub const WATCH: &str = "[a-z][a-z-]*";', read("update_mark.rs"))):
         gaps.append("clicking the update's mark does not open the window")
     # THE TABLE, from its name to its closing bracket — a slice, not braces.
     table = re.search(r"pub const BINDINGS\b[^=]*=\s*&\[(.*?)\];", window, re.S)
     bindings = must(table and table.group(1), "the update window's `BINDINGS`")
-    if "update_window::BINDINGS" not in keymap or not re.search(r'\(\s*"[^"]+",\s*WATCH,', bindings):
+    taken = [body for f, _, body in keymap_contributions() if shell_name(f) == "update_window.rs"]
+    if (len(taken) != 1 or not re.search(r"\bbindings:\s*BINDINGS\b", taken[0])
+            or not re.search(r'\(\s*"[^"]+",\s*WATCH,', bindings)):
         gaps.append("the update's mark has no equivalent key")
     if '"power-open"' not in keymap:
         gaps.append("the battery's mark has no equivalent key")
@@ -2917,7 +3494,14 @@ let
     # THE TAILNET'S AND TOR'S MARKS open the view on their own section, which
     # is the same view `LEADER s n n` opens — and every switch there is a ROW,
     # reached by the same `RET` the keyboard presses.
-    if clicked.count("open_network_at") < 3:
+    #
+    # The words a mark opens the view with are the way out's, under the
+    # footer and the view (`link_words`, lane R6): the click hands them, and
+    # the view's region reads the same three back (`opened_on`).
+    openings = ("link_words::tunnel_opening", "link_words::TAILNET_OPENING", "link_words::TOR_OPENING")
+    opened = must(body_of(read("network_region.rs"), "opened_on"), "the network region's `opened_on`")
+    if (any(o not in clicked for o in openings)
+            or any(o.split("::")[-1] not in opened for o in ("tunnel_opened", "TAILNET_OPENING", "TOR_OPENING"))):
         gaps.append("a tunnel mark does not open the view on its own row")
     # THE DEVICE MARKS, which this check cannot see the way it sees the rest.
     #
@@ -2926,8 +3510,9 @@ let
     # asserted by name — the pool is looked up rather than compared, the
     # command it runs is the one `RET` on the row runs, and that command is
     # in the keymap. Four devices, one door, and the keyboard reaches it too.
-    view = read(shell / "bluetooth.rs")
-    if 'pub const POOL: [&str; 4] = ["bt-1", "bt-2", "bt-3", "bt-4"];' not in view:
+    view = read("bluetooth.rs")
+    # THE POOL IS THE RADIO'S WORDS, under the footer and the view (lane R6).
+    if 'pub const POOL: [&str; 4] = ["bt-1", "bt-2", "bt-3", "bt-4"];' not in read("bluez_words.rs"):
         gaps.append("the bluetooth pool is not the four ids this check knows")
     if "POOL.iter().position" not in clicked:
         gaps.append("a click on a device mark reaches nothing")
@@ -2988,19 +3573,19 @@ let
     # `drawer-open`, `trail-open` and `selection-open` are the menu at a
     # level, and under the leader each level IS a group of `LEADER w`,
     # because `w` is generated from the menu.
-    menu = read(shell / "window_menu.rs")
+    menu = read("window_menu.rs")
     for letter, level in (("g", "Drawer"), ("y", "Trail"), ("v", "Selection")):
         if not re.search(r'group\("' + letter + r'", key::\w+, Level::' + level + r'\)', menu):
             gaps.append(f"`LEADER w {letter}` no longer opens the {level} level the mark opens")
     if "window_menu::leader_bindings()" not in keymap:
         gaps.append("`LEADER w` is no longer generated from the window menu")
-    actions = read(shell / "actions.rs")
+    actions = read("actions.rs")
     if 'd("z", "z", "wm-scratchpad-show")' not in actions:
         gaps.append("the drawer's right button runs `wm-scratchpad-show`, and no chord does")
     # THE TRAIL NUMBERS, by name for the reason the devices give: `trail-1`
     # to `trail-9` carry a digit. A number puts that trail in use, which the
     # trail mode's digits do too, and `LEADER w y <n>` in the menu.
-    trails = read(shell / "trails.rs")
+    trails = read("trails.rs")
     if 'pub const POOL: [&str; 9] = [' not in trails or '"trail-9"' not in trails or '"trail-10"' in trails:
         gaps.append("the trail pool is not the nine ids this check knows")
     if "trails::number_of(id)" not in clicked:
@@ -3014,7 +3599,7 @@ let
     # never a tenth. The left button goes to the number drawn and the right one
     # opens the overview — and both are keys: `LEADER 1`…`9`, `LEADER 0` and
     # `TAB TAB`.
-    places = read(shell / "workspaces.rs")
+    places = read("workspaces.rs")
     if 'pub const POOL: [&str; 9] = [' not in places or '"ws-9"' not in places or '"ws-10"' in places:
         gaps.append("the workspace pool is not the nine ids this check knows")
     if "workspaces::number_of(id)" not in clicked:
@@ -3032,7 +3617,7 @@ let
     # through `brain-open` — and both are doors the keyboard has: `brain-open`
     # is `LEADER b`, and `brain-act` is by name (`LEADER :`) and the brain's
     # own `, n`.
-    brain_src = read(shell / "brain.rs")
+    brain_src = read("brain.rs")
     if 'pub const MARK_PREFIX: &str = "brain:";' not in brain_src:
         gaps.append("the brain's marks are no longer the `brain:` segments this check knows")
     if "crate::brain::drawn_mark(id)" not in clicked or "crate::brain::click_of(" not in clicked:
@@ -3063,10 +3648,10 @@ let
         gaps.append("`segment_clicked` no longer hands an adapter's segment to its adapter")
     elif asked and min(asked) < handed:
         gaps.append("`segment_clicked` asks a mark of its own before the adapter")
-    kiosk = read(shell / "kiosk.rs")
+    kiosk = read("kiosk.rs")
     # THE PRODUCT ONLY: the tests name the commands they expect a row to run,
     # and a test's literal would answer for a mapping the product lost.
-    kiosk_view = without_tests(read(shell / "kiosk_view.rs"))
+    kiosk_view = without_tests(read("kiosk_view.rs"))
     acts = set()
     for fn in ("clicked", "wheeled", "dropped"):
         body = must(body_of(kiosk, fn), "the kiosk adapter's `" + fn + "`")
@@ -3119,7 +3704,7 @@ let
     # manager's levels already teach a dozen keys and will teach more, so a
     # letter owned by a notification collides with one of them sooner or later
     # — invisibly, because the person presses it and something else happens.
-    band = read(shell / "band.rs")
+    band = read("band.rs")
     # EVERY variant of the enum, and not only the two we hoped to find: a check
     # that looks for what it expects passes on a THIRD target nobody gave a key
     # to, which is the whole defect. Planted, and the first version passed.
@@ -3135,7 +3720,7 @@ let
     # own half — one read, because two would be two things to keep in step.
     if '"notif-dismiss"' not in keymap:
         gaps.append("the band's circle has no equivalent key")
-    manager = read(shell / "notifications.rs")
+    manager = read("notifications.rs")
     # `Open`: the keyboard reaches the same record by opening the manager
     # (`LEADER n n`) and pressing `RET` on its row, which opens it whole.
     if '"notif-open"' not in keymap:
@@ -3159,7 +3744,7 @@ let
     # the two answers are on the line. If either of them were mouse-only, a
     # person at the keyboard could watch the countdown run out with no way to
     # stop it.
-    brain = read(shell / "brain.rs")
+    brain = read("brain.rs")
     brain_enum = scope(brain, r"pub enum Hit\b")
     if not brain_enum:
         sys.exit("ERROR: `brain::Hit` went away or changed shape")
@@ -3279,7 +3864,7 @@ let
         "notifications.rs",
         "notifications_window.rs",
     ):
-        text = read(shell / name)
+        text = read(name)
         for word in forbidden:
             if word in text:
                 gaps.append(name + ": " + word + " — invariant 14")
@@ -3311,7 +3896,7 @@ let
   # all of them and most were written in a single pass — which is the pass
   # whose mistakes land in whichever file the writer got tired on.
   states-driven = mkCheck "states-driven" [ ] ''
-    ${rust.workspace}/bin/ronoctua-test-states \
+    ${rust.bins.ronoctua-test-states}/bin/ronoctua-test-states \
       ${buffers.memory}/lib/ronoctua_buffer_memory.wasm \
       ${buffers.keyboard}/lib/ronoctua_buffer_keyboard.wasm \
       ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm \
@@ -3329,11 +3914,11 @@ let
   #
   # `crates/ronoctua-inspect/src/lib.rs` names this check in its own `key`
   # module docstring and it did not exist. The keys there are LITERALS rather
-  # than `ronoctua_i18n::key::*` constants, and they have to be: the generated
-  # constants only exist for keys already in the bundles, so a crate adding a
-  # key cannot name it that way until after somebody has written it. That is
-  # the one hole in invariant 8's "a missing key does not compile", and this is
-  # what closes it.
+  # than a generated `key` module's constants, and they have to be: the crate
+  # does not speak — it names facts whose sentences live in the fragments of
+  # the crates that say them — so no constant of its own can stand for one.
+  # That is the one hole in invariant 8's "a missing key does not compile",
+  # and this is what closes it.
   #
   # The update's brain module does the same job for its sequence, against the
   # list its generator derives. This one has no generator, so it reads the
@@ -3349,6 +3934,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # PARSED: the declaration's `id = "…";` and `group = "…";` fields, which
     # the build reads the same way (`nix/ambience.nix`), comments taken out.
@@ -3376,7 +3962,7 @@ let
 
     # THE GLYPHS, by the arms of `glyph_of` — narrowed to that function, so a
     # group's id written anywhere else in the file is not taken for its arm.
-    page = uncommented((root_dir / "crates/ronoctua-shell/src/player_ambience.rs").read_text())
+    page = uncommented(shell_file("player_ambience.rs").read_text())
     arms = set(re.findall(r'"([a-z0-9-]+)"\s*=>', must(body_of(page, "glyph_of"), "`player_ambience::glyph_of`")))
     for g in groups:
         if g not in arms:
@@ -3532,8 +4118,10 @@ let
   manager-builds-its-own-rows = mkCheck "manager-builds-its-own-rows" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import re, sys
+    exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    src = open("${self}/crates/ronoctua-shell/src/surface.rs", encoding="utf-8").read()
+    src = shell_source("surface.rs")
 
     # The function, from its signature to the first line that is back at
     # `impl`-level indentation — the shape every other reader in this file uses.
@@ -3569,18 +4157,18 @@ let
 
     # AND IT IS THE ONE IN THE `else`. A single call in the wrong place is the
     # same defect with a smaller number.
-    guard = re.search(r"let Some\(files\) = &self\.files else \{(.*?)\n        \};", body, re.S)
+    guard = re.search(r"let Some\(files\) = self\.sections\(\) else \{(.*?)\n        \};", body, re.S)
     if not guard:
-        sys.exit("ERROR: the `let Some(files) = &self.files else` guard is gone")
+        sys.exit("ERROR: the `let Some(files) = self.sections() else` guard is gone")
     if "self.expansion()" not in guard.group(1):
         sys.exit(
             "ERROR: the only call to `expansion` is outside the `else` that runs\n"
-            "       when there is no manager — which is the one place it cannot\n"
-            "       come back. See the note above this check."
+            "       when no region in sections is shown — which is the one place it\n"
+            "       cannot come back. See the note above this check."
         )
 
-    print("OK: the manager's rows are built here, and `expansion` is only asked")
-    print("    for the views that are not the manager")
+    print("OK: the sections' rows are built here, and `expansion` is only asked")
+    print("    for the views that are not laid out in sections")
     PY
   '';
 
@@ -3610,13 +4198,14 @@ let
   # that the line taking it budgets from the measured width.
   ink-is-not-a-count = mkCheck "ink-is-not-a-count" [ pkgs.gnugrep pkgs.coreutils ] ''
     failed=0
-    icons="${../crates/ronoctua-shell/src}"
+    . ${shellSh}
+    icons=$(shell_files 'icons*.rs')
 
     # 1) THE DRAWN CHARACTER NEVER REACHES THE COUNTER.
     #    `drawn()` is the method that hands out the character itself — the
     #    one string in the three tables that can hold a cluster of six
     #    codepoints.
-    if counted=$(grep -nE '(wide|cells|width)\(&?[a-z_.]*\.drawn\(\)' "$icons"/icons*.rs); then
+    if counted=$(grep -nE '(wide|cells|width)\(&?[a-z_.]*\.drawn\(\)' $icons); then
       echo "ERROR: the drawn character was measured with the cluster count:" >&2
       echo "$counted" >&2
       echo "      The count answers HOW MANY THINGS; an emoji is one thing and" >&2
@@ -3627,8 +4216,8 @@ let
     # 2) AND THE LINE THAT TAKES IT BUDGETS FROM THE MEASURED WIDTH — the
     #    method (`c.ink(scale)`) or the field (`c.width`). Without this half,
     #    deleting the budget altogether would pass part 1.
-    drawn=$(cat "$icons"/icons*.rs | grep -c '\.drawn()' || true)
-    inked=$(cat "$icons"/icons*.rs | grep '\.drawn()' | grep -cE '\.ink\(|\.width' || true)
+    drawn=$(cat $icons | grep -c '\.drawn()' || true)
+    inked=$(cat $icons | grep '\.drawn()' | grep -cE '\.ink\(|\.width' || true)
     if [ "$drawn" -eq 0 ]; then
       echo "ERROR: the icons app draws no character any more — this check proves nothing now." >&2
       failed=1
@@ -3763,15 +4352,15 @@ let
     python3 - <<'PY'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a second home for the number is a FIELD or a call written
     # anywhere in one of the three files — none of them a question about the
     # inside of a function. The strip is what stops the comment that explains
     # this rule, and names all four dead spellings, from answering for them.
-    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
-    files = code_of((home / "files.rs").read_text())
-    window = code_of((home / "files_window.rs").read_text())
-    surface = code_of((home / "surface.rs").read_text())
+    files = code_of(shell_file("files.rs").read_text())
+    window = code_of(shell_file("files_window.rs").read_text())
+    surface = code_of(shell_source("surface.rs"))
     floor(len(files), 10000, "characters of files.rs")
     floor(len(window), 10000, "characters of files_window.rs")
     floor(len(surface), 100000, "characters of surface.rs")
@@ -3822,12 +4411,13 @@ let
     python3 - <<'PY'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    files = code_of(pathlib.Path("${self}/crates/ronoctua-shell/src/files.rs").read_text())
+    files = code_of(shell_file("files.rs").read_text())
     # AND THE PANELS', which scroll themselves: the view hands its preview and
     # its facts to `inspection::Panel::wheel` and `Panel::drag_down`, and a
     # panel answering "not mine" there is the same defect one module along.
-    panels = code_of(pathlib.Path("${self}/crates/ronoctua-shell/src/inspection.rs").read_text())
+    panels = code_of(shell_file("inspection.rs").read_text())
     wrong = []
     # THE TWO THAT MAY SAY `false`, each for a reason of its own — see below.
     MAY_REFUSE = ("Preview", "Fold")
@@ -3971,6 +4561,17 @@ let
         print(f"ERROR: only {module_checks} checks in the brain modules' folders; the "
               "sweep stopped reaching them.", file=sys.stderr)
         raise SystemExit(1)
+    # AND EVERY OTHER FILE OF CHECKS UNDER `tests/` (2026-10-12): a wave's new
+    # checks go in a file of their own, joined into this set by one line, and
+    # a check there reads source as one here does. Each file is its own text,
+    # named in what is said about its checks.
+    for f in sorted(pathlib.Path("${self}/tests").glob("*.nix")):
+        if f.name == "checks.nix":
+            continue
+        other = f.read_text()
+        found = starts_of(other)
+        if found:
+            sources.append((other, found, "tests/" + f.name))
 
     def script_of(text, at, until):
         # The check's own script, with the NEXT one's prose taken off the end.
@@ -4014,7 +4615,9 @@ let
             if ".read_text()" not in body:
                 continue
             reads.append(name)
-            if module is not None:
+            if module is not None and module.startswith("tests/"):
+                name = f"{name} ({module})"
+            elif module is not None:
                 module_reads += 1
                 name = f"{name} (brain module {module})"
             if name in READS_NIX:
@@ -4257,7 +4860,7 @@ let
     # attribute set finds `surface.mesh.of` and misses the token itself.
     #
     # PARSED: `tokens.wit` carries the dotted path of every token in a comment
-    # above its variant, one per line, written by `gen-tokens.py`. It is read
+    # above its variant, one per line, written by `nix/token-names.nix`. It is read
     # by the line and not searched, which is why there is nothing here for a
     # stripper to take off.
     wit = pathlib.Path("${wit}/deps/tokens/tokens.wit").read_text()
@@ -4383,13 +4986,13 @@ let
     import pathlib, re, sys
 
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: what is asked of a content is about every line of its file —
     # no loop of its own, no debt it keeps from the door — and the fence at the
     # end sweeps whole files for a pointer handler that paints. The door's
     # model is narrowed by name: `ask_paint`, `settle`, and the paint's span.
-    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
-    door_dir = home / "door"
+    door_dir = shell_dir("door")
     wrong = []
 
     # 1) THE MODEL IS THE DOOR'S, WRITTEN ONCE (258b8ad).
@@ -4426,7 +5029,7 @@ let
     # Column<T>` is the content every right column goes through, and the
     # census that wanted `impl` right before a space walked past it.
     contents = [
-        f for f in sorted(home.rglob("*.rs"))
+        f for f in sorted(shell_files("**/*.rs"))
         if door_dir not in f.parents
         and re.search(r"impl(?:<[^>]*>)?\s+(?:[\w:]+::)?Content\s+for\s+\w+", code_of(f.read_text()))
     ]
@@ -4451,7 +5054,7 @@ let
                 wrong.append(f"{f.name} keeps a debt of its own and does not hand it to the door in `each_turn`")
     # THE BUFFER HOST, where the lag came back the third time: the component
     # is asked for a frame only inside the frame.
-    host = code_of(without_tests((home / "buffer.rs").read_text()))
+    host = code_of(without_tests(shell_file("buffer.rs").read_text()))
     if "std::mem::take(&mut self.owed)" not in host:
         wrong.append("buffer.rs no longer keeps the component's debt apart from the door's")
     draw = must(body_of(host, "draw"), "buffer.rs: `draw`")
@@ -4461,7 +5064,7 @@ let
 
     # 4) THE LIFELINE is not a door (it is `every-window-is-a-door`'s own
     # exception) and keeps the model in full, in its own file.
-    life = code_of((home / "lifeline.rs").read_text())
+    life = code_of(shell_file("lifeline.rs").read_text())
     floor(len(life), 2000, "characters of lifeline.rs")
     if not re.search(r"\bfn\s+ask_paint\b", life):
         wrong.append("lifeline.rs has no `ask_paint`")
@@ -4478,10 +5081,11 @@ let
             wrong.append(f"lifeline.rs:{line} paints where it stands")
 
     # 5) THE FENCE: no file that handles the pointer and paints is outside all
-    # of these. `surface.rs` is the footer, declared apart and not discovered.
-    DECLARED_APART = {"surface.rs", "lifeline.rs"}
-    for f in sorted(home.rglob("*.rs")):
-        if door_dir in f.parents or f in contents or f.name in DECLARED_APART:
+    # of these. `surface/mod.rs` is the footer, declared apart and not
+    # discovered.
+    DECLARED_APART = {"surface/mod.rs", "lifeline.rs"}
+    for f in sorted(shell_files("**/*.rs")):
+        if door_dir in f.parents or f in contents or shell_name(f) in DECLARED_APART:
             continue
         text = code_of(f.read_text())
         if re.search(r"impl(?:<[^>]*>)?\s+PointerHandler\s+for", text) and "self.paint()" in text:
@@ -4529,9 +5133,9 @@ let
     # it is written, and the `let` it is bound in IS the narrowing — the
     # pattern below reads one binding at a time.
     #
-    # EVERY SOURCE OF THE CRATE, `door/` and the other subdirectories with
-    # them (`rust_sources`): an edge is as wrong one directory down.
-    shell_crate = pathlib.Path("${self}/crates/ronoctua-shell")
+    # EVERY SOURCE OF EVERY SHELL CRATE, `door/` and the other subdirectories
+    # with them (`shell_files`): an edge is as wrong one directory down, or one
+    # crate over. A name is the path in its crate (`src/chrome.rs`).
     swept = 0
     # `chrome.rs` DEFINES the conversion, and `files.rs` states the one rule
     # about which band may take the residue — with the reasoning beside it.
@@ -4556,8 +5160,8 @@ let
     a_count = re.compile(r"\b(?:lines|rows|tall|room|height)\w*\b")
     a_multiple = re.compile(r"\*\s*line(?:_px|_height)?\b")
 
-    for f in rust_sources(shell_crate):
-        where = str(f.relative_to(shell_crate))
+    for f in shell_files("**/*.rs", root="${self}"):
+        where = "src/" + shell_name(f)
         if where in allowed:
             continue
         # PRODUCTION ONLY. A test builds a surface that is deliberately NOT a
@@ -4748,7 +5352,7 @@ let
     exec(open("${pyPrelude}").read())
 
     root = pathlib.Path("${self}")
-    host = code_of((root / "crates" / "ronoctua-shell" / "src" / "buffer.rs").read_text())
+    host = code_of(shell_file("buffer.rs", root=root).read_text())
     gaps = []
 
     # THE HOST'S HALF. A state is a SCREEN: the modeline names it, so
@@ -4823,8 +5427,7 @@ let
     exec(open("${pyPrelude}").read())
 
     root = pathlib.Path("${self}")
-    shell = root / "crates" / "ronoctua-shell" / "src"
-    host = code_of((shell / "buffer.rs").read_text())
+    host = code_of(shell_file("buffer.rs", root=root).read_text())
     gaps = []
 
     # `pointer_here`: the door makes the pointer that spoke `here`, and
@@ -4942,9 +5545,8 @@ let
         exec(open("${pyPrelude}").read())
 
         root = pathlib.Path("${self}")
-        shell = root / "crates" / "ronoctua-shell" / "src"
-        paint = code_of((shell / "paint.rs").read_text())
-        host = code_of((shell / "buffer.rs").read_text())
+        paint = code_of(shell_file("paint.rs", root=root).read_text())
+        host = code_of(shell_file("buffer.rs", root=root).read_text())
         gaps = []
 
         # 1) ONE PLACEMENT, and this is it.
@@ -5221,7 +5823,7 @@ let
     exec(open("${pyPrelude}").read())
 
     root = pathlib.Path("${self}")
-    paint = code_of((root / "crates" / "ronoctua-shell" / "src" / "paint.rs").read_text())
+    paint = code_of(shell_file("paint.rs", root=root).read_text())
     gaps = []
 
     # 1) IT REFUSES WHAT IT CANNOT SHOW, AND SAYS SO.
@@ -5325,7 +5927,7 @@ let
             gaps.append("`Role::" + role + "` no longer resolves to `" + token + "`")
     # And the host's own hint line still draws them, which is what makes them
     # the SAME colour rather than a second family that resembles it.
-    chrome = code_of((root / "crates" / "ronoctua-shell" / "src" / "chrome.rs").read_text())
+    chrome = code_of(shell_file("chrome.rs", root=root).read_text())
     for token in ("TEXT_SUBTLE_STRONG", "TEXT_SUBTLE_DEFAULT", "TEXT_SUBTLE_FAINT"):
         if token not in chrome:
             gaps.append("the minibuffer's hint line no longer draws `" + token + "`")
@@ -5417,34 +6019,33 @@ let
     # point is that it may appear in one that does not exist yet. `has_bar` is
     # narrowed by name at the end.
     #
-    # EVERY SOURCE OF THE CRATE is swept (`rust_sources`), `door/` and the
-    # other subdirectories with it: a second bar one directory down is as
-    # much a second bar. A name is the crate-relative path.
-    shell_crate = pathlib.Path("${self}/crates/ronoctua-shell")
-    home = shell_crate / "src"
+    # EVERY SOURCE OF EVERY SHELL CRATE is swept (`shell_files`), `door/` and
+    # the other subdirectories with it: a second bar one directory down, or
+    # one crate over, is as much a second bar. A name is the path in its crate.
     def rel(f):
-        return str(f.relative_to(shell_crate))
-    files = code_of((home / "files.rs").read_text())
-    floor(len(files), 10000, "characters of files.rs")
+        return "src/" + shell_name(f)
+    # The rectangle is `Section`'s, in the vocabulary every list draws in.
+    files = code_of(shell_file("fields.rs", root="${self}").read_text())
+    floor(len(files), 10000, "characters of fields.rs")
     wrong = []
     swept = 0
 
     # THE RECTANGLE HAS ONE DEFINITION.
     if len(re.findall(r"\bfn\s+bar_box\b", files)) != 1:
-        wrong.append("files.rs does not have exactly one `bar_box`")
+        wrong.append("fields.rs does not have exactly one `bar_box`")
     # THE TWO THAT WERE DELETED, by name. `Panes::listing_bar` is NOT one of
     # them and is not a bar: it answers which COLUMN the bar goes in, which is
     # a `u16`. The rectangle test below is what catches a real second one.
     for gone in ("facts_bar", "panel_bar"):
-        for f in rust_sources(shell_crate):
+        for f in shell_files("**/*.rs", root="${self}"):
             if re.search(r"\bfn\s+" + gone + r"\b", code_of(f.read_text())):
                 wrong.append(f"{rel(f)} grew a second bar, `{gone}`")
 
     # AND NOBODY ELSE BUILDS ONE. A thumb is a rectangle whose height is a
     # fraction of a track; whoever writes that sum has written a second bar.
     thumb = re.compile(r"(?:lines|room|shown)\w*\s*/\s*(?:total|amount)\w*\s*\*")
-    for f in rust_sources(shell_crate):
-        if rel(f) == "src/files.rs":
+    for f in shell_files("**/*.rs", root="${self}"):
+        if rel(f) == "src/fields.rs":
             continue
         text = code_of(f.read_text())
         swept += 1
@@ -5468,7 +6069,7 @@ let
     # name alone. Its callers are held to the same question — and `chrome.rs`,
     # which defines it, answers it through `band_bar`.
     painter = re.compile(r"(?<![\w.])thumb\(")
-    for f in rust_sources(shell_crate):
+    for f in shell_files("**/*.rs", root="${self}"):
         text = code_of(f.read_text())
         if "RULE_STRONG" not in text and not painter.search(text):
             continue
@@ -5488,10 +6089,10 @@ let
     # paint and grab what it answers. The name counts only while it IS
     # `chrome::band_bar`, which is `Scroll::track` and `Scroll::bar` — so the
     # chain is proved here rather than trusted.
-    notes = code_of((home / "notifications.rs").read_text())
+    notes = code_of(shell_file("notifications.rs", root="${self}").read_text())
     if "band_bar(" not in must(body_of(notes, "bar_boxes"), "`notifications::bar_boxes`"):
         wrong.append("notifications.rs: `bar_boxes` no longer asks `chrome::band_bar`")
-    chrome = code_of((home / "chrome.rs").read_text())
+    chrome = code_of(shell_file("chrome.rs", root="${self}").read_text())
     if "scroll.bar(" not in must(body_of(chrome, "band_bar"), "`chrome::band_bar`"):
         wrong.append("chrome.rs: `band_bar` no longer asks `Scroll::bar`")
 
@@ -5504,21 +6105,22 @@ let
     #
     # The first draft looked for `right - cell` instead, and a plant that
     # assembled the rectangle out of `thumb` by hand walked straight past it.
-    for f in rust_sources(shell_crate):
+    for f in shell_files("**/*.rs", root="${self}"):
         text = code_of(f.read_text())
         for m in re.finditer(r"\.thumb\(", text):
             line = text.count("\n", 0, m.start()) + 1
             wrong.append(f"{rel(f)}:{line} builds a bar out of `thumb` instead of asking `bar`")
 
     # AND THE TWO CANNOT DRAW AT ONCE: the footer's generic bar closes over
-    # the manager being shut. Without this the manager gets two.
+    # a region laid out in sections being shown — the manager's, which draws
+    # a bar per section (`sections_bars`). Without this the manager gets two.
     # COMMENTS STRIPPED FIRST. `has_bar`'s own comment names the call it
     # makes, so a plant that replaced the CODE with `false` and left the call
     # quoted beside it left this check green.
-    surface = code_of((home / "surface.rs").read_text())
+    surface = code_of(shell_source("surface.rs", root="${self}"))
     floor(len(surface), 100000, "characters of surface.rs")
-    if "files.is_some()" not in must(body_of(surface, "has_bar"), "`has_bar`"):
-        wrong.append("surface.rs: `has_bar` no longer stands down for the manager")
+    if "sectioned().is_some()" not in must(body_of(surface, "has_bar"), "`has_bar`"):
+        wrong.append("surface.rs: `has_bar` no longer stands down for a region in sections (the manager)")
 
     if wrong:
         print("ERROR: the scrollbar has more than one arithmetic again.", file=sys.stderr)
@@ -5714,15 +6316,14 @@ let
     # FILE-WIDE: a second map anywhere in a door is the offence, and the `Role`
     # enum is module-level in the crate. `syntax_color` is narrowed by name.
     #
-    # The last sweep reads EVERY SOURCE OF THE CRATE (`rust_sources`), `door/`
-    # and the other subdirectories with it: a second map one directory down
-    # is as much a second map. A name there is the crate-relative path.
-    shell_crate = pathlib.Path("${self}/crates/ronoctua-shell")
-    home = shell_crate / "src"
+    # The last sweep reads EVERY SOURCE OF EVERY SHELL CRATE (`shell_files`),
+    # `door/` and the other subdirectories with it: a second map one directory
+    # down, or one crate over, is as much a second map. A name there is the
+    # path in its crate.
     mine = "chrome.rs"
     failed = 0
 
-    src = code_of((home / mine).read_text())
+    src = code_of(shell_file(mine, root="${self}").read_text())
     floor(len(src), 20000, "characters of chrome.rs")
     block = body_of(src, "syntax_color")
     if not block:
@@ -5824,14 +6425,14 @@ let
     # AND IT IS THE ONLY MAP. Anywhere else that matches on a syntax role is a
     # second answer waiting to disagree.
     swept = 0
-    for f in rust_sources(shell_crate):
-        if f == home / mine:
+    for f in shell_files("**/*.rs", root="${self}"):
+        if shell_name(f) == mine:
             continue
         text = code_of(f.read_text())
         swept += 1
         if syntax_arm(text) or ("ronoctua_syntax" in text and re.search(heads(text) + r"\w+\s*=>", text)):
             print(
-                f"ERROR: {f.relative_to(shell_crate)} turns a syntax role into something itself.\n"
+                f"ERROR: src/{shell_name(f)} turns a syntax role into something itself.\n"
                 "       Call `chrome::syntax_color`; two maps is the two panels colouring\n"
                 "       the same code differently.",
                 file=sys.stderr,
@@ -5921,16 +6522,14 @@ let
     # FILE-WIDE: a rectangle assembled by hand anywhere in a door is the
     # offence, and the nine lines after each `Quad {` are the narrowing.
     #
-    # EVERY SOURCE OF THE CRATE (`rust_sources`), `door/` and the other
-    # subdirectories with it; a name is the crate-relative path.
-    shell_crate = pathlib.Path("${self}/crates/ronoctua-shell")
-    home = shell_crate / "src"
+    # EVERY SOURCE OF EVERY SHELL CRATE (`shell_files`), `door/` and the
+    # other subdirectories with it; a name is the path in its crate.
     # The one file allowed to build one: it is the definition.
     mine = "chrome.rs"
     bad = []
     swept = 0
-    for f in rust_sources(shell_crate):
-        if f == home / mine:
+    for f in shell_files("**/*.rs", root="${self}"):
+        if shell_name(f) == mine:
             continue
         lines = code_of(f.read_text()).split("\n")
         swept += 1
@@ -5939,7 +6538,7 @@ let
                 continue
             block = "\n".join(lines[i : i + 9])
             if re.search(r"width: 1\.0|height: 1\.0|RULE_THICKNESS", block):
-                bad.append(f"{f.relative_to(shell_crate)}:{i + 1}")
+                bad.append(f"src/{shell_name(f)}:{i + 1}")
     if bad:
         print("ERROR: a rule or a divider assembled by hand, outside chrome.rs:", file=sys.stderr)
         for b in bad:
@@ -5954,12 +6553,12 @@ let
     # focus line, which the person's choice of discreet borders would not
     # reach.
     lines = []
-    for f in rust_sources(shell_crate):
-        if f == home / mine:
+    for f in shell_files("**/*.rs", root="${self}"):
+        if shell_name(f) == mine:
             continue
         code = without_tests(code_of(f.read_text()))
         if "theme::focus_line()" in code or "COLUMN_FOCUSLINE" in code:
-            lines.append(str(f.relative_to(shell_crate)))
+            lines.append("src/" + shell_name(f))
     if lines:
         print("ERROR: a focus line built outside chrome::focus_line:", file=sys.stderr)
         for l in lines:
@@ -5969,7 +6568,7 @@ let
     # AND THE DEFINITION STILL DEFINES. A check that only forbids would pass
     # on the day somebody deleted the two functions and went back to hand.
     floor(swept, 20, "doors swept for a hand-made rule")
-    src = code_of((home / mine).read_text())
+    src = code_of(shell_file(mine, root="${self}").read_text())
     floor(len(src), 20000, "characters of chrome.rs")
     # AND THE PLAYER'S: the deck's band and its ghost, its playhead and its
     # ticks, and the layout schematic's tile are rectangles too, and they are
@@ -6007,19 +6606,27 @@ let
     python3 - <<'PY'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: `struct Section` and the three functions are module-level, and
     # the offence — a flattening function coming back — is one appearing
-    # anywhere in the file.
-    home = pathlib.Path("${self}/crates/ronoctua-shell/src")
-    files = code_of((home / "files.rs").read_text())
-    floor(len(files), 10000, "characters of files.rs")
+    # anywhere in the two files: the manager's (`files.rs`) and the vocabulary
+    # every list draws in, where `Section` lives (`fields.rs`).
+    manager = code_of(shell_file("files.rs").read_text())
+    vocabulary = code_of(shell_file("fields.rs").read_text())
+    floor(len(manager), 10000, "characters of files.rs")
+    floor(len(vocabulary), 10000, "characters of fields.rs")
+    files = manager + "\n" + vocabulary
 
     # THE BUILDER IS THE ONLY ONE. `Section` has to exist and carry its own
     # content, or this check is guarding nothing.
-    for needed in ("pub struct Section", "pub content: Vec<Row>", "pub fn sections("):
-        if needed not in files:
-            print(f"ERROR: files.rs lost `{needed}` — the sections stopped being the source.",
+    for needed, where in (
+        ("pub struct Section", vocabulary),
+        ("pub content: Vec<Row>", vocabulary),
+        ("pub fn sections(", manager),
+    ):
+        if needed not in where:
+            print(f"ERROR: files.rs and fields.rs lost `{needed}` — the sections stopped being the source.",
                   file=sys.stderr)
             sys.exit(1)
 
@@ -6041,7 +6648,7 @@ let
     hit = banned.search(files)
     if hit:
         line = files[: hit.start()].count("\n") + 1
-        print(f"ERROR: files.rs:{line} gives back the region's lines flattened"
+        print(f"ERROR: files.rs + fields.rs, line {line}, gives back the region's lines flattened"
               f" (`{hit.group(1)}`).", file=sys.stderr)
         print("       The manager has FOUR sections; each door draws them one by one.",
               file=sys.stderr)
@@ -6049,7 +6656,7 @@ let
 
     # AND THE DOORS DRAW SECTIONS.
     for door in ("surface.rs", "files_window.rs"):
-        src = code_of((home / door).read_text())
+        src = code_of(shell_source(door))
         floor(len(src), 10000, "characters of " + door)
         if ".sections(" not in src:
             print(f"ERROR: {door} does not draw by section.", file=sys.stderr)
@@ -6146,7 +6753,7 @@ let
   '';
 
   transfers-instance-fast = mkCheck "transfers-instance-fast" [ ] ''
-    ${rust.workspace}/bin/ronoctua-bench-instance \
+    ${rust.bins.ronoctua-bench-instance}/bin/ronoctua-bench-instance \
       ${buffers.transfers}/lib/ronoctua_buffer_transfers.wasm 200
   '';
 
@@ -6155,13 +6762,13 @@ let
   # The two things it proves are the two the host cannot see: from out there a
   # refusal and a crashed component both look like no plan arriving.
   format-driven = mkCheck "format-driven" [ ] ''
-    ${rust.workspace}/bin/ronoctua-test-format \
+    ${rust.bins.ronoctua-test-format}/bin/ronoctua-test-format \
       ${buffers.format}/lib/ronoctua_buffer_format.wasm \
       ${texts}
   '';
 
   format-instance-fast = mkCheck "format-instance-fast" [ ] ''
-    ${rust.workspace}/bin/ronoctua-bench-instance \
+    ${rust.bins.ronoctua-bench-instance}/bin/ronoctua-bench-instance \
       ${buffers.format}/lib/ronoctua_buffer_format.wasm 200
   '';
 
@@ -6245,7 +6852,7 @@ let
   # is already where the torrent says it is, so the session checks it against
   # the Merkle tree of SHA-256 hashes and goes straight to seeding.
   torrent-speaks-v2 = mkCheck "torrent-speaks-v2" [ ] ''
-    ${rust.workspace}/bin/ronoctua-test-torrent "$TMPDIR/torrent"
+    ${rust.bins.ronoctua-test-torrent}/bin/ronoctua-test-torrent "$TMPDIR/torrent"
   '';
 
   # ===================================================================
@@ -6392,6 +6999,7 @@ let
         python3 - <<'PY'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         # FILE-WIDE: what the extension OFFERS is a set of literals scattered
         # through two scripts, and what the keyboard binds is a module-level
@@ -6409,9 +7017,9 @@ let
             wanted |= set(re.findall(r"want:\s*'([a-z]+)'", text))
             kinds |= set(re.findall(r"kind:\s*'([a-z-]+)'", text))
 
-        leader = uncommented(pathlib.Path("${../crates/ronoctua-shell/src/leader.rs}").read_text())
-        floor(len(leader), 10000, "characters of leader.rs")
-        bound = set(re.findall(r'\(\s*"[a-z ]+"\s*,\s*"(transfers-[a-z-]+)"', leader))
+        # THE KEYMAP IS EVERY CRATE'S CONTRIBUTION (`keymap_rows`): the queue
+        # says its keys beside its view.
+        bound = {command for _, _, command in keymap_rows() if command.startswith("transfers-")}
         floor(len(bound), 4, "transfer commands the keyboard binds")
 
         failed = 0
@@ -6487,9 +7095,10 @@ let
   # AND NO TEXT AND NO COLOUR WRITTEN BY HAND.
   #
   # Invariants 8 and 9 do not stop at the browser's edge. Every word comes from
-  # `assets/i18n/*.ftl` and every colour from `assets/tokens/colors.nix`, both
-  # through the generated table — so a hex code or a sentence in the extension's
-  # own sources is a value outside the design system.
+  # the extension's own fragment (`extension/i18n/*.ftl`) and every colour from
+  # `assets/tokens/colors.nix`, both through the generated table — so a hex code
+  # or a sentence in the extension's own sources is a value outside the design
+  # system.
   extension-has-no-literal = mkCheck "extension-has-no-literal" [ pkgs.python3 ] ''
     python3 - <<'PY'
     import pathlib, re, sys
@@ -6507,7 +7116,8 @@ let
     failed = 0
     swept = 0
     for entry in sorted(source.iterdir()):
-        if entry.name == "generated.js":
+        # The generated table, and the fragment the words come from.
+        if entry.name == "generated.js" or entry.is_dir():
             continue
         text = uncommented(entry.read_text())
         swept += 1
@@ -6527,7 +7137,7 @@ let
                 row = text[: m.start()].count("\n") + 1
                 print(
                     f"ERROR: {entry.name}:{row} writes text straight onto the screen."
-                    " Every text comes from assets/i18n (invariant 8).",
+                    " Every text comes from extension/i18n (invariant 8).",
                     file=sys.stderr,
                 )
                 failed = 1
@@ -6833,13 +7443,16 @@ let
   # wrong symbol. The day that changes, the check fails and someone re-reads the
   # decision instead of rediscovering it through the screen.
   renderer-loads-four-faces = mkCheck "renderer-loads-four-faces" [ ] ''
+    # The palettes (`rust.keyed`): this binary is the unwrapped one, and the
+    # colours are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
     # THE COVERAGE FACES ARE SET HERE, and that is what makes this check the
     # guard for the declared chain rather than only for the four embedded
     # faces. Without the variable the binary says SKIPPED and passes, which is
     # correct for the installer and useless as a check — so the check supplies
     # it, exactly as the wrapper supplies it to the footer.
     export RONOCTUA_COVERAGE_FONTS=${rust.atRunTime.RONOCTUA_COVERAGE_FONTS}
-    ${rust.workspace}/bin/ronoctua-test-faces
+    ${rust.bins.ronoctua-test-faces}/bin/ronoctua-test-faces
   '';
 
   # The OTHER half of the GPU-independent metrics of section 9.3: the CPU work
@@ -6850,7 +7463,10 @@ let
   # MAGNITUDE (measuring text instead of counting columns, allocating per
   # segment) shows up here and not in a bisection of stutter six months later.
   layout-fast = mkCheck "layout-fast" [ ] ''
-    ${rust.workspace}/bin/ronoctua-bench-layout 5000
+    # The palettes (`rust.keyed`): this binary is the unwrapped one, and the
+    # colours are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    ${rust.bins.ronoctua-bench-layout}/bin/ronoctua-bench-layout 5000
   '';
 
   # Text shaping must not go back to the regime of SECONDS.
@@ -6861,7 +7477,10 @@ let
   # (300 ms against a floor of 0.1 ms) because what it catches is the return of
   # the regime, not variation between machines.
   shaping-fast = mkCheck "shaping-fast" [ ] ''
-    ${rust.workspace}/bin/ronoctua-bench-shaping
+    # The palettes (`rust.keyed`): this binary is the unwrapped one, and the
+    # colours are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    ${rust.bins.ronoctua-bench-shaping}/bin/ronoctua-bench-shaping
   '';
 
   # A SURFACE THE SIZE OF A MONITOR HAS TO FIT.
@@ -6881,10 +7500,13 @@ let
   # Comparing numbers from `Limits` would be checking our arithmetic against
   # itself; here whoever answers is the driver.
   large-monitor-surface = mkCheck "large-monitor-surface" [ ] ''
+    # The palettes (`rust.keyed`): this binary is the unwrapped one, and the
+    # colours are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
     export VK_DRIVER_FILES=${xvfb.icd}
     export VK_ICD_FILENAMES=${xvfb.icd}
     export LIBGL_ALWAYS_SOFTWARE=1
-    ${rust.workspace}/bin/ronoctua-test-large-surface
+    ${rust.bins.ronoctua-test-large-surface}/bin/ronoctua-test-large-surface
   '';
 
   # THE TOOL THAT MAKES "OPEN IT ON THE SCREEN" AFFORDABLE HAS TO KEEP WORKING.
@@ -6917,12 +7539,16 @@ let
   # Under lavapipe, like `large-monitor-surface`: hermetic, no GPU. Section 9.3
   # forbids measuring frame time here, and nothing here measures time.
   png-tool-draws = mkCheck "png-tool-draws" [ pkgs.python3 ] ''
+    # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+    # one, and the colours and the words are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
     export VK_DRIVER_FILES=${xvfb.icd}
     export VK_ICD_FILENAMES=${xvfb.icd}
     export LIBGL_ALWAYS_SOFTWARE=1
 
     for language in ${lib.concatStringsSep " " languages}; do
-      ${rust.workspace}/bin/ronoctua-render-png \
+      ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
         ${buffers.format}/lib/ronoctua_buffer_format.wasm \
         --columns 60 --lines 10 --language "$language" \
         --out "$PWD/$language.png" | tee "$PWD/$language.txt"
@@ -6934,7 +7560,7 @@ let
     # of a picture past the GPU's ceiling, and not the invariant the tool is
     # for — the same picture with more pixels in it, and the SAME number of
     # cells. A tool nobody tests is a proof nobody has.
-    ${rust.workspace}/bin/ronoctua-render-png \
+    ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
       ${buffers.format}/lib/ronoctua_buffer_format.wasm \
       --columns 60 --lines 10 --language en-GB --scale 2 \
       --out "$PWD/twice.png" | tee "$PWD/twice.txt"
@@ -6942,7 +7568,7 @@ let
     # AND A SCALE NO SCREEN HAS IS REFUSED, with a sentence rather than a
     # picture. `|| true` because a refusal is a non-zero exit, which is the
     # point.
-    ${rust.workspace}/bin/ronoctua-render-png \
+    ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
       ${buffers.format}/lib/ronoctua_buffer_format.wasm \
       --columns 60 --lines 10 --scale 9 --out "$PWD/never.png" \
       >"$PWD/refused.txt" 2>&1 || true
@@ -7429,6 +8055,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: the table of types and the `enum Kind` are module-level, and
     # the variables a unit sets are lines of a Nix module. The three functions
@@ -7442,7 +8069,7 @@ let
     module = uncommented((src / "document.rs").read_text())
     # THE SHELL'S HALF IS THE INSPECTOR'S BODY, `inspection::look` — it left
     # `files.rs` with the panels it fills.
-    shell = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/inspection.rs").read_text())
+    shell = uncommented(shell_file("inspection.rs").read_text())
     floor(len(module), 2000, "characters of document.rs")
     floor(len(shell), 10000, "characters of inspection.rs")
     bad = []
@@ -7597,7 +8224,7 @@ let
         )
 
     inspect = code(src)
-    shell_said = code(ROOT / "crates/ronoctua-shell/src")
+    shell_said = "\n".join(uncommented(f.read_text()) for f in shell_files())
     # AND THE CHILD THE FOOTER RUNS: the files panel's `ronoctua-tags` program
     # inherits the unit's environment, so a Matroska tool it reads is read by
     # the footer's own process tree.
@@ -7776,7 +8403,7 @@ let
 
   # THE VIEW'S KEYS ARE NOT THE COMPOSITOR'S, AND NOTHING ABOVE US CLAIMS `Ctrl`.
   #
-  # `crates/ronoctua-shell/src/files.rs` says, above its own table: *"`Ctrl` is
+  # The shell's `files.rs` says, above its own table: *"`Ctrl` is
   # the family nothing above us claims … the check
   # `files-keys-are-not-the-compositors` is what keeps it that way"*.
   #
@@ -7795,6 +8422,7 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         # FILE-WIDE: `OF_THE_VIEW` is a module-level table, and the `re.search`
         # for it below is the narrowing.
@@ -7802,7 +8430,7 @@ let
         # `uncommented` and not `code_of`, because a CHORD is a string literal
         # and emptying it would leave a list of bindings with no keys in it —
         # every assertion below would then be about nothing.
-        raw = pathlib.Path("${../crates/ronoctua-shell/src/files.rs}").read_text()
+        raw = shell_file("files.rs").read_text()
         files = uncommented(raw)
         floor(len(files), 10000, "characters of files.rs")
         bad = []
@@ -7867,13 +8495,13 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: the census is "how many sites in this crate build a
     # `Label::Named`", and one anywhere is the offence. There is no function to
     # narrow to — the point is that there is exactly ONE function, and the
     # sweep is what finds out.
     src = pathlib.Path("${../crates/ronoctua-inspect/src}")
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     bad = []
 
     def code_only(text):
@@ -7910,7 +8538,7 @@ let
     # AND THE ONE PLACE THAT RESOLVES ONE must still tell the two apart, or a
     # key reaches the screen as itself. It is the sheet's (`inspection_sheet::
     # content_facts`), which every door that shows a file's facts reads.
-    sheet = code_of(without_tests((shell / "inspection_sheet.rs").read_text()))
+    sheet = code_of(without_tests(shell_file("inspection_sheet.rs").read_text()))
     floor(len(sheet), 2000, "characters of inspection_sheet.rs")
     said = must(body_of(sheet, "content_facts"), "inspection_sheet.rs's `content_facts`")
     if "Label::Named(name) => name.clone()" not in said:
@@ -8172,7 +8800,11 @@ let
         # THE EXEMPTION IS ONLY VALID WHILE THE RESOLVER IS, so it is checked
         # rather than trusted: delete `strong_meaning` and the four ids are
         # demanded again, loudly, on the next build.
-        grep -q 'fn strong_meaning' ${../crates/ronoctua-shell/src}/files.rs || {
+        . ${shellSh}
+        files_rs=$(shell_file files.rs)
+        inspection_rs=$(shell_file inspection.rs)
+        sheet_rs=$(shell_file inspection_sheet.rs)
+        grep -q 'fn strong_meaning' "$files_rs" || {
           echo "ERROR: files.rs no longer resolves the shifted arrows, so" >&2
           echo "       files-strong-* would reach the screen with no name." >&2
           failed=1
@@ -8181,9 +8813,10 @@ let
         # (`inspection::Panel::key`) and name their sentences there. A
         # QUESTION'S id is named by its prompt, `ask-<id>` (`line::Line`) —
         # the sudo door's password, asked for a change of owner.
-        view=$(grep -ohE '"files-[a-z0-9-]+"' ${../crates/ronoctua-shell/src}/files.rs \
-          ${../crates/ronoctua-shell/src}/inspection.rs \
-          ${../crates/ronoctua-shell/src}/inspection_sheet.rs \
+        # NOT THE CRATE'S KEYMAP CONTRIBUTION (`pub const KEYS`): its ids are
+        # commands, named `cmd-<id>` — the registry refuses any other label.
+        view=$( (sed '/^pub const KEYS: /,/^};/d' "$files_rs"; cat "$inspection_rs" "$sheet_rs") \
+          | grep -oE '"files-[a-z0-9-]+"' \
           | tr -d '"' | grep -vE -- '-$' | grep -vE '^files-strong-' | sort -u)
         for k in $view; do
           for language in ${lib.concatStringsSep " " languages}; do
@@ -8217,11 +8850,14 @@ let
       ]
       ''
         menu=${../crates/ronoctua-files/src}/menu.rs
-        view=${../crates/ronoctua-shell/src}/files.rs
+        . ${shellSh}
+        view=$(shell_file files.rs)
         # THE PANELS PRODUCE HALF THE TARGETS — the transport's, the globe's,
         # a fact's bits and names — since they left the view for
-        # `inspection.rs`; the enum and the table stay in the view.
-        panels=${../crates/ronoctua-shell/src}/inspection.rs
+        # `inspection.rs`; the table stays in the view, and the enum is the
+        # vocabulary every list draws in (`fields.rs`).
+        panels=$(shell_file inspection.rs)
+        vocabulary=$(shell_file fields.rs)
         failed=0
 
         # --- every menu row has a key, and the keys do not collide ----------
@@ -8237,7 +8873,7 @@ let
         #
         # The variants come from the enum itself, so a new one is caught the day
         # it is added rather than the day somebody notices it has no key.
-        variants=$(sed -n '/^pub enum Hit {/,/^}/p' "$view" \
+        variants=$(sed -n '/^pub enum Hit {/,/^}/p' "$vocabulary" \
           | grep -oE '^ {4}[A-Z][A-Za-z]*' | tr -d ' ')
         [ -n "$variants" ] || { echo "ERROR: could not find the Hit enum" >&2; exit 1; }
 
@@ -8328,7 +8964,8 @@ let
       ]
       ''
         probe=${../crates/ronoctua-inspect/src}/motion.rs
-        player=${../crates/ronoctua-shell/src}/motion.rs
+        . ${shellSh}
+        player=$(shell_file motion.rs)
         failed=0
 
         # --- the size is stated, on both sides of the filter ----------------
@@ -8467,8 +9104,9 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    player = code_of(without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/motion.rs").read_text()))
+    player = code_of(without_tests(shell_file("motion.rs").read_text()))
     frames = code_of(without_tests(pathlib.Path("${../crates/ronoctua-camera/src}/frames.rs").read_text()))
     floor(len(player), 8000, "characters of code in motion.rs")
     floor(len(frames), 1200, "characters of code in frames.rs")
@@ -9051,6 +9689,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: the `Drop` guard, the two functions and the two orders are
     # each a thing that is either in its file or not; none is a question about
@@ -9060,7 +9699,7 @@ let
     # the `--pdeathsig` flag and the variable that names `setpriv`.
     crates = pathlib.Path("${../crates}")
     meter = crates / "ronoctua-audio" / "src" / "meter.rs"
-    view = crates / "ronoctua-shell" / "src" / "audio.rs"
+    view = shell_file("audio.rs")
     wrong = []
 
     body = uncommented(meter.read_text())
@@ -9099,14 +9738,34 @@ let
     if "pub const fn listening" not in seen:
         wrong.append("`View::listening` is gone; the doors would have to guess")
 
-    # THE DOORS SEND THE ORDER, and both of them send the closing one.
-    for door in ("surface.rs", "audio_window.rs"):
-        text = uncommented((crates / "ronoctua-shell" / "src" / door).read_text())
-        floor(len(text), 1000, "characters of " + door)
-        if "Order::Listen(None)" not in text:
-            wrong.append(f"{door} never closes the microphone")
-        if "follow_the_microphone" not in text:
-            wrong.append(f"{door} does not move the meter with the cursor")
+    # THE DOORS SEND THE ORDER, and both of them send the closing one —
+    # through the one meter both doors open a microphone with
+    # (`audio_region::Meter`): `follow_the_microphone` sends the source the
+    # cursor is on, `stop_listening` the closing `Listen(None)`.
+    shared = uncommented(shell_file("audio_region.rs").read_text())
+    floor(len(shared), 1000, "characters of audio_region.rs")
+    if "Order::Listen(want)" not in (body_of(shared, "follow_the_microphone") or ""):
+        wrong.append("the meter no longer moves with the cursor (`Meter::follow_the_microphone`)")
+    if "Order::Listen(None)" not in (body_of(shared, "stop_listening") or ""):
+        wrong.append("the meter never closes the microphone (`Meter::stop_listening`)")
+    # AND EACH DOOR REACHES IT: both follow the cursor with it, and both close
+    # it — the window through the one errand handler (`carry_out`, whose
+    # `Close` stops listening), the footer's region through the same handler
+    # and as the footer closes it (`closing`).
+    if ".stop_listening(" not in (body_of(shared, "carry_out") or ""):
+        wrong.append("`carry_out` closes the view and leaves the microphone open")
+    region = scope(shared, r"impl Region for \w+") or ""
+    floor(len(region), 1000, "characters of the sound region")
+    if ".follow_the_microphone(" not in region:
+        wrong.append("the footer's region does not move the meter with the cursor")
+    if ".stop_listening(" not in (body_of(region, "closing") or ""):
+        wrong.append("the footer's region closes and leaves the microphone open")
+    window = uncommented(shell_file("audio_window.rs").read_text())
+    floor(len(window), 1000, "characters of audio_window.rs")
+    if ".follow_the_microphone(" not in window:
+        wrong.append("audio_window.rs does not move the meter with the cursor")
+    if "audio_region::carry_out(" not in (body_of(window, "apply") or ""):
+        wrong.append("audio_window.rs carries out its errands itself, and its `Close` may leave the microphone open")
 
     for w in wrong:
         print(f"ERROR: {w}", file=sys.stderr)
@@ -9184,6 +9843,7 @@ let
       python3 - <<'END'
       import json, pathlib, re, sys
       exec(open("${pyPrelude}").read())
+      exec(open("${shellPrelude}").read())
 
       # PARSED: the evaluated system arrives as JSON — the merged polkit rules
       # and the names of the declared units.
@@ -9195,7 +9855,7 @@ let
       crate = uncommented(pathlib.Path("${../crates/ronoctua-files/src}/act.rs").read_text())
       helper = uncommented(pathlib.Path("${../crates/ronoctua-security/src/bin/root.rs}").read_text())
       module = hashless(pathlib.Path("${../nix/modules/files.nix}").read_text())
-      shell = code_of(without_tests(pathlib.Path("${../crates/ronoctua-shell/src/files.rs}").read_text()))
+      shell = code_of(without_tests(shell_file("files.rs").read_text()))
       wrong = []
 
       def const(text, name, where):
@@ -9259,11 +9919,11 @@ let
   #     to carry `n h` as words, and it went on teaching `n h` after the key
   #     became `n n`. The shape this check demands: the keys arrive as a
   #     `{ $keys }` argument built from a constant beside the binding
-  #     (`leader::PAIRING_YES_KEYS`, which the pairing card names).
+  #     (`bluetooth::PAIRING_YES_KEYS`, which the pairing card names).
   #   - THE WORD "LEADER" IS NOBODY'S KEY. `nix/modules/scroll.nix` sets
   #     `RONOCTUA_LEADER` to `SUPER` and `nix/dev.nix` to `CTRL ALT SPC`; that
   #     file's own comment says why two truths would be a screen saying `SPC`
-  #     while the key is something else. Every surface renders `crate::leader()`
+  #     while the key is something else. Every surface renders `bindings::label()`
   #     — except, until this check, a sentence of the power window, which said
   #     the literal word in both languages.
   #
@@ -9306,7 +9966,7 @@ let
             print("       " + w, file=sys.stderr)
         print("", file=sys.stderr)
         print("       The keys are an ARGUMENT: a constant beside the binding, plus", file=sys.stderr)
-        print("       `crate::leader()`, interpolated into a `{ $keys }`. A sequence", file=sys.stderr)
+        print("       `bindings::label()`, interpolated into a `{ $keys }`. A sequence", file=sys.stderr)
         print("       written here goes stale the day the key moves, and the word", file=sys.stderr)
         print("       LEADER is not a key on anybody's keyboard.", file=sys.stderr)
         raise SystemExit(1)
@@ -9317,14 +9977,19 @@ let
 
   # EVERY KEY REACHES AN ARM THAT EXISTS.
   #
-  # `leader::reachable(&tree)` is every id some key in this system can run.
-  # What HANDLES an id is the `match` inside `surface::run_with`, plus the two
+  # `bindings::reachable(&tree, …)` is every id some key in this system can
+  # run. What HANDLES an id is the `match` inside `surface::run_with` and each
+  # view's line of it, the regions of the footer's slot host (`regions.rs`:
+  # each one's `Region::command`, in its feature's crate, and the arms of its
+  # entry's `closed` that take the command themselves — `Closed::Taken`, a
+  # window; an arm that only opens the region, or brings it behind, hands the
+  # command on to `Region::command`, and is no arm of its own), plus the two
   # generated families (`actions::kdl_of` for the compositor's mirrored
   # actions, `actions::with_argument` for the two that carry a number).
   #
-  # THE UNIT TEST BESIDE THE TABLE COMPARES AGAINST A HAND-KEPT LIST
-  # (`leader::WITH_ACTION`), and its own comment says the repetition is on
-  # purpose. The repetition is exactly what let `network-lan` through: the id
+  # THE UNIT TEST OVER THE WHOLE TREE COMPARES AGAINST A HAND-KEPT LIST
+  # (`WITH_ACTION`, in the binary's `keymap.rs`), and its own comment says the
+  # repetition is on purpose. The repetition is exactly what let `network-lan` through: the id
   # was in the registry, in the tree, in the list — and in no arm of the
   # `match`. `LEADER s n l` printed "network-lan does nothing yet" while the
   # letter `l` inside the open view worked, so the feature existed and only
@@ -9335,38 +10000,148 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     # FILE-WIDE: the keymap and the generated actions are module-level tables.
     # `run_with` is narrowed by name below.
     #
     # `uncommented` and never `code_of`: a command id is a string literal on
     # every one of the three sides, and emptying them would leave three empty
     # sets that agree with each other perfectly.
-    surface = uncommented((shell / "surface.rs").read_text())
-    keymap = uncommented((shell / "leader.rs").read_text())
-    actions = uncommented((shell / "actions.rs").read_text())
+    surface = uncommented(shell_source("surface.rs"))
+    actions = uncommented(shell_file("actions.rs").read_text())
     floor(len(surface), 100000, "characters of surface.rs")
-    floor(len(keymap), 10000, "characters of leader.rs")
     floor(len(actions), 1000, "characters of actions.rs")
+    # THE KEYMAP IS EVERY CRATE'S CONTRIBUTION (`keymap_rows`, the prelude):
+    # each says its keys beside its view, and the binary assembles them.
+    rows = keymap_rows()
+    floor(len(keymap_contributions()), 20, "contributions to the keymap")
 
     # 1) WHAT THE `match` HANDLES. Arms are `"id" => …` and `"a" | "b" => …`,
     #    at the arm's own indentation inside `run_with`.
     # BY NAME AND BRACES. The signature was written out here, and the capture
     # ran to the next `\n    }` — which a nested block closes early, hiding
     # every arm below it and letting a key that leads nowhere pass.
-    body = must(body_of(surface, "run_with"), "`run_with`")
-    floor(len(body), 1000, "characters of `run_with`")
+    # THE COMMAND DISPATCH IS `run_with` AND EACH VIEW'S LINE OF IT: the
+    # footer's own commands are its `match`, and every view's are the view's
+    # own (`<view>_commands`, in its `surface/<view>.rs`), each reached by one
+    # line of `run_with` — read together, as the one table they are.
+    own = must(body_of(surface, "run_with"), "`run_with`")
+    floor(len(own), 1000, "characters of `run_with`")
+    lines = re.findall(r"\bfn (\w+_commands)\(&mut self, id: &str", surface)
+    # SIX, and falling: each view that becomes a region of the slot host
+    # takes its line with it (18 after the camera, the manuals, the panel
+    # and the manager left; 12 after the installer stick, the LLM accounts,
+    # Incus and the containers did; 8 after the calculator, the icons app,
+    # the clipboard and git) — the floor says the pattern still reads them.
+    floor(len(lines), 6, "views' lines of `run_with`")
+    for name in lines:
+        if "self." + name + "(id, argument)" not in own:
+            print(f"ERROR: `{name}` is a view's line of the commands, and `run_with` never asks it", file=sys.stderr)
+            raise SystemExit(1)
+    body = "\n".join([own] + [must(body_of(surface, n), "`" + n + "`") for n in lines])
+
+    # AND THE REGIONS OF THE SLOT HOST (`regions.rs`): a region's commands are
+    # its `Region::command`, in its own crate's file, which the footer asks
+    # last (`hosted_command`) — and the arms of its entry's `closed` (what a
+    # command does to it closed) that TAKE the command there (`Closed::Taken`:
+    # a window opened). An arm of `closed` that opens the region or brings it
+    # behind hands the command to `Region::command`, and a command `command`
+    # does not take is a key that opens a page and does nothing: such an arm
+    # handles nothing by itself. Each is read as `run_with` is, its arms
+    # resolved in its own file (`regions` holds the file each body is read
+    # in, and whether only its taking arms count).
+    hosted = re.findall(r"(\w+)::ENTRY\b", uncommented(shell_file("regions.rs").read_text()))
+    regions = []
+    for module in hosted:
+        text = uncommented(shell_file(module + ".rs").read_text())
+        entry = must(scope(text, r"pub const ENTRY\b[^=]*="), f"`{module}::ENTRY`")
+        closed = re.search(r"\bclosed\s*(?::\s*(\w+))?\s*,", entry)
+        impl = must(scope(text, r"impl\s+(?:crate::region::)?Region\s+for\s+\w+"), f"the `Region` of {module}")
+        regions.append((module, must(body_of(text, (closed and closed.group(1)) or "closed"), f"`{module}::closed`"), True))
+        command = must(body_of(impl, "command"), f"`{module}::command`")
+        regions.append((module, command, False))
+        # AND EVERY OTHER `fn command` OF ITS FILE — a door of the region's
+        # own that its `Region::command` and its `closed` both hand the command
+        # to (the player's footer door, `Door::command`): its arms are the
+        # region's too.
+        for at in [m.start() for m in re.finditer(r"\bfn command\(", text)]:
+            other = body_of(text[at:], "command")
+            if other is not None and other != command:
+                regions.append((module, other, False))
+        # AND WHAT `command` ASKS BY A BARE NAME in its own file — a table
+        # from a command's id to the view's gesture (`press_of_command`): an
+        # id it answers there is a command `command` takes.
+        for name in sorted(set(re.findall(r"(?<![.:\w])([a-z_]\w*)\(", command))):
+            asked = body_of(code_of(text), name) and body_of(text, name)
+            if name != "command" and asked:
+                regions.append((module, asked, False))
+    floor(len(regions), 2 * len(hosted), "bodies of the regions' commands")
+    body = "\n".join([body] + [b for _, b, only_taken in regions if not only_taken])
+    # AND THE WORDS MODULE A REGION READS ITS GESTURES FROM (`press_of`): the
+    # arm of a gesture's command is there, in the region's own crate.
+    for module in hosted:
+        text = uncommented(without_tests(shell_file(module + ".rs").read_text()))
+        for words in sorted(set(re.findall(r"crate::(\w+)::press_of\b", text))):
+            body += "\n" + uncommented(without_tests(shell_file(words + ".rs").read_text()))
+
+    # AN ARM'S PATTERN, over one line or several: string literals, a
+    # constant's path (`crate::belongings::OPEN_COMMAND`) or a bare constant
+    # (`HOME`, one of the file's own or one it imports), joined by `|`. A
+    # `match` on something else has no such head and gives nothing.
+    #
+    # A GUARDED ARM (`"x" if … =>`) HANDLES NOTHING: its guard may be one a
+    # key never meets (`if false`, `if argument.is_some()`), and the key then
+    # prints "does nothing yet" with an arm right there. The id counts only
+    # where an arm takes it with no condition — its unguarded sibling.
+    #
+    # A PAIR OF THE ID AND ITS ARGUMENT (`("x" | "y", _)`) is the id's arm
+    # when the argument is any (`_`); one that asks for an argument
+    # (`("x", Some(_))`) is a condition, as a guard is.
+    PIECE = r'(?:"[a-z0-9-]+"|crate::\w+::[A-Z][A-Z0-9_]*|[A-Z][A-Z0-9_]*)'
+    PAIR = r"\(\s*" + PIECE + r"(?:\s*\|\s*" + PIECE + r")*\s*,\s*_\s*\)"
+    ONE = r"(?:" + PIECE + r"|" + PAIR + r")"
+    HEAD = re.compile(r"\|?\s*" + ONE + r"(?:\s*\|\s*" + ONE + r")*\s*")
+    # EACH ARM: its pattern, and its right-hand side — the rest of the `=>`
+    # line and every line under it indented deeper than the arm's first.
+    def arms(text):
+        lines = text.splitlines()
+        pending, first = "", None
+        for at, line in enumerate(lines):
+            stripped = line.strip()
+            if "=>" not in stripped:
+                if HEAD.fullmatch(stripped):
+                    first = at if not pending else first
+                    pending = pending + " " + stripped
+                else:
+                    pending, first = "", None
+                continue
+            start = first if pending else at
+            head = (pending + " " + stripped.split("=>", 1)[0]).strip()
+            pending, first = "", None
+            if not HEAD.fullmatch(head):
+                continue
+            indent = len(lines[start]) - len(lines[start].lstrip())
+            rhs = [stripped.split("=>", 1)[1]]
+            for later in lines[at + 1:]:
+                if later.strip() and len(later) - len(later.lstrip()) <= indent:
+                    break
+                rhs.append(later)
+            yield head, "\n".join(rhs)
+    def heads(text, only_taken=False):
+        for head, rhs in arms(text):
+            if not only_taken or re.search(r"\bClosed::Taken\b", rhs):
+                yield head
     handled = set()
-    for line in body.splitlines():
-        stripped = line.strip()
-        head = stripped.split("=>", 1)[0] if "=>" in stripped else ""
-        if not head:
-            continue
-        # Only a run of string literals joined by `|` is an arm's pattern; a
-        # `match` on something else inside the body has no bare literals here.
-        if re.fullmatch(r'(\s*"[a-z0-9-]+"\s*\|?)+', head):
-            handled |= set(re.findall(r'"([a-z0-9-]+)"', head))
+    for head in heads(body):
+        handled |= set(re.findall(r'"([a-z0-9-]+)"', head))
+    taking = 0
+    for _, b, only_taken in regions:
+        if only_taken:
+            for head in heads(b, only_taken=True):
+                taking += 1
+                handled |= set(re.findall(r'"([a-z0-9-]+)"', head))
+    floor(taking, 1, "arms of the regions' `closed` that take a command")
 
     # AND THE ARMS AN APP SPELLS IN ITS OWN FILE — a constant
     # (`crate::video_metrics::OPEN_COMMAND`) or a table a guard walks
@@ -9374,37 +10149,130 @@ let
     # bargain below: the id is the app's to spell, and this resolves it there,
     # so an arm naming a constant that is not a command's id answers nothing.
     def spelled(module, name):
-        src = shell / (module + ".rs")
-        if not src.is_file():
+        if not shell_has(module + ".rs"):
             return set()
+        src = shell_file(module + ".rs")
         text = uncommented(src.read_text())
         one = re.search(r"pub const " + name + r':\s*&str\s*=\s*"([a-z0-9-]+)";', text)
         if one:
             return {one.group(1)}
         table = re.search(r"pub const " + name + r"\b[^=]*=\s*\[(.*?)\];", text, re.S)
         return set(re.findall(r'\(\s*"([a-z0-9-]+)"', table.group(1))) if table else set()
+    # A BARE CONSTANT, in the file it is written in: its own `const`, or one
+    # it imports by name (`use crate::security::{HOME, …}`).
+    def bare(text, name):
+        own = re.search(r"\bconst " + name + r':\s*&str\s*=\s*"([a-z0-9-]+)";', text)
+        if own:
+            return {own.group(1)}
+        for module, names in re.findall(r"\buse crate::(\w+)::\{([^}]*)\}", text):
+            if name in re.findall(r"\b[A-Z][A-Z0-9_]*\b", names):
+                return spelled(module, name)
+        for module in re.findall(r"\buse crate::(\w+)::" + name + r"\b", text):
+            return spelled(module, name)
+        return set()
     resolved = 0
-    # A HEAD OVER SEVERAL LINES — `crate::a::B` / `| crate::a::C` / `| … =>` —
-    # is gathered until its `=>`.
-    pending = ""
-    for line in body.splitlines():
-        stripped = line.strip()
-        if "=>" not in stripped:
-            pending = pending + " " + stripped if re.fullmatch(r"\|?\s*crate::\w+::[A-Z_]+", stripped) else ""
-            continue
-        head = (pending + " " + stripped.split("=>", 1)[0]).strip()
-        pending = ""
-        named = re.fullmatch(r"\|?\s*((?:\|?\s*crate::\w+::[A-Z_]+\s*)+)", head)
-        walked = re.match(r"_ if crate::(\w+)::([A-Z_]+)\.iter\(\)", stripped)
-        found = set()
-        if named:
-            for module, name in re.findall(r"crate::(\w+)::([A-Z_]+)", named.group(1)):
+    for where, text, only_taken in [(surface, own, False)] + [(uncommented(shell_file(m + ".rs").read_text()), b, t) for m, b, t in regions] + [(surface, must(body_of(surface, n), n), False) for n in lines]:
+        for head in heads(text, only_taken):
+            found = set()
+            for module, name in re.findall(r"crate::(\w+)::([A-Z][A-Z0-9_]*)", head):
                 found |= spelled(module, name)
-        if walked:
-            found |= spelled(walked.group(1), walked.group(2))
-        resolved += len(found)
-        handled |= found
+            for name in re.findall(r"(?<![:\w])([A-Z][A-Z0-9_]*)\b", head):
+                found |= bare(where, name)
+            resolved += len(found)
+            handled |= found
+        for module, name in re.findall(r"_ if crate::(\w+)::([A-Z_]+)\.iter\(\)", text):
+            found = spelled(module, name)
+            resolved += len(found)
+            handled |= found
     floor(resolved, 5, "arms of `run_with` an app spells in its own file")
+
+    # AND THE REGIONS OF THE SLOT HOST. A view that became a `region::Region`
+    # answers its commands in its own crate — `Region::command` while it is
+    # open, and its entry's `closed` while it is not (`region::Entry`) — and
+    # `run_with` hands every command it does not know to the host
+    # (`hosted_command`). An id is answered there when an ARM's pattern names
+    # it: a literal (`"power-open" =>`, `("syncthing-web", _) =>`), or a table
+    # of ids the arm's guard walks (`id if GESTURES.contains(&id)`), or a
+    # table an `if let` walks before the `match` (`PROFILES.iter().find(..)`).
+    # A literal anywhere else in the handler — a window's name, a question's
+    # line — answers nothing. In `closed`, only what TAKES the command there
+    # (`Closed::Taken`) answers it, as above: an arm that opens the region
+    # hands the command to `Region::command`, and handles nothing by itself.
+    def arm_heads(body, only_taken=False):
+        # The pattern (and guard) of every arm of every `match` in `body`,
+        # split at the commas and braces at the match's own depth — only the
+        # arms whose right side takes the command, when `only_taken`.
+        heads = []
+        def keep(piece):
+            head, rhs = piece.split("=>", 1)
+            if not only_taken or re.search(r"\bClosed::Taken\b", rhs):
+                heads.append(head)
+        for at in re.finditer(r"\bmatch\b[^{;]*\{", body):
+            i, depth, start = at.end(), 0, at.end()
+            while i < len(body):
+                c = body[i]
+                if c in "([{":
+                    depth += 1
+                elif c in ")]}":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                    if depth == 0 and c == "}" and "=>" in body[start:i]:
+                        keep(body[start : i + 1])
+                        start = i + 1
+                elif c == "," and depth == 0:
+                    piece = body[start:i]
+                    if "=>" in piece:
+                        keep(piece)
+                    start = i + 1
+                i += 1
+            piece = body[start:i]
+            if "=>" in piece:
+                keep(piece)
+        return heads
+    def walked(body, only_taken=False):
+        # The tables an `if let` walks before the `match`, each with the block
+        # it guards — only those whose block takes the command, when
+        # `only_taken`.
+        out = []
+        for at in re.finditer(r"\bif let [^=]*=\s*([A-Z][A-Z0-9_]+)\s*\.\s*iter\(\)[^{]*\{", body):
+            i, depth = at.end(), 1
+            while i < len(body) and depth:
+                depth += {"{": 1, "}": -1}.get(body[i], 0)
+                i += 1
+            if not only_taken or re.search(r"\bClosed::Taken\b", body[at.end() : i]):
+                out.append(at.group(1))
+        return out
+    hosted_handled, regions_read = set(), 0
+    REGION_IMPL = r"\bimpl\s+(?:crate::region::|region::)?Region\s+for\s+\w+"
+    for f in shell_files():
+        text = uncommented(without_tests(f.read_text()))
+        if not re.search(REGION_IMPL, text):
+            continue
+        tables = {
+            name: set(re.findall(r'"([a-z0-9-]+)"', table))
+            for name, table in re.findall(r"\bconst ([A-Z][A-Z0-9_]*)\s*:[^=]*=\s*&\[(.*?)\];", text, re.S)
+        }
+        entry = re.search(r"\bEntry\s*\{([^}]*)\}", text)
+        closed_fn = None
+        if entry:
+            named = re.search(r"\bclosed\s*(?::\s*(\w+))?\s*[,}]?", entry.group(1))
+            closed_fn = (named.group(1) or "closed") if named else None
+        # Each with whether only what takes the command counts (`closed`).
+        bodies = [(must(body_of(scope(text, REGION_IMPL) or "", "command"), shell_name(f) + "'s `Region::command`"), False)]
+        bodies.append((must(body_of(text, closed_fn) if closed_fn else None, shell_name(f) + "'s entry's `closed`"), True))
+        # `handler`, never `body`: `body` is `run_with`'s join, which the
+        # update's part below still reads.
+        for handler, only_taken in bodies:
+            for head in arm_heads(handler, only_taken):
+                hosted_handled |= set(re.findall(r'"([a-z0-9-]+)"', head))
+                for name in re.findall(r"\b([A-Z][A-Z0-9_]+)\b", head):
+                    hosted_handled |= tables.get(name, set())
+            for name in walked(handler, only_taken):
+                hosted_handled |= tables.get(name, set())
+        regions_read += 1
+    floor(regions_read, 1, "regions of the slot host whose commands were read")
+    handled |= hosted_handled
 
     floor(len(handled), 100, "arms of `run_with`")
 
@@ -9433,11 +10301,12 @@ let
     # runs, because that arrives with no view open and this `match` is the
     # only thing between it and nothing at all.
     #
-    # Each row of `BINDINGS` is `("s n l", "network-lan", …)` — or, where the
-    # sequence is TAUGHT somewhere else too, a constant in its place:
-    # `(PAIRING_YES_KEYS, "bluetooth-accept", …)`. A row the pattern did not
-    # read was a key this check could not see lead nowhere.
-    bound = set(re.findall(r'^\s*\((?:"[^"]*"|[A-Z_]+), "([a-z0-9-]+)"', keymap, re.M))
+    # Each row of a contribution's `bindings` is `("s n l", "network-lan", …)`
+    # — or, where the sequence is TAUGHT somewhere else too, a constant in its
+    # place: `(PAIRING_YES_KEYS, "bluetooth-accept", …)`. A row the pattern did
+    # not read was a key this check could not see lead nowhere. A command
+    # written as a constant is the update's, asked of its window below.
+    bound = {command for _, _, command in rows if re.fullmatch(r"[a-z0-9-]+", command)}
     floor(len(bound), 60, "bindings in the keymap")
 
     gaps = sorted(bound - handled - generated)
@@ -9446,12 +10315,70 @@ let
     # in `bound` at all; the filter is the belt to that brace.
     gaps = [g for g in gaps if not g.startswith("wm-")]
 
-    # 4) AND THE UPDATE'S, which the leader takes whole from its window
-    #    (`update_window::BINDINGS`) and `run_with` dispatches by asking the
-    #    window (`update_window::order_of`): the ids are the window's to spell,
-    #    so what is read there is that every row it binds is one `order_of`
+    # 3b) AND THE REGIONS OF THE SLOT HOST ANSWER THEIR OWN. A view that
+    #     became a region (`region::Region`, in a crate of its own) answers
+    #     its commands in `Region::command` and, closed, in its
+    #     `Entry::closed`, and no arm of `run_with` names them. What proves
+    #     that each one reaches its region is the binary's own test, which
+    #     hands every command of every registered region's contribution to
+    #     its closed entry and refuses `NotMine`
+    #     (`every_hosted_command_reaches_its_region`, `regions.rs`) — the code
+    #     as it RUNS, which reading the region's matches would only guess at.
+    #     So a command bound in the crate of a region the test asks
+    #     (`ANSWERED_CLOSED`: the ones whose closed entry answers every
+    #     command of their crate) leaves the gaps, and only while that test
+    #     asks it; every other region's commands are read in its sources,
+    #     above.
+    #
+    #     BUT NOT ONE THE FOOTER ANSWERS ITSELF: the test lists those
+    #     (`THE_FOOTERS` — the band's `notif-dismiss`, bound in the manager's
+    #     crate) and asserts the region does NOT take them, which proves
+    #     nothing reaches them. They keep needing their arm in `run_with`.
+    registry = uncommented(shell_file("regions.rs").read_text())
+    proof = body_of(registry, "every_hosted_command_reaches_its_region")
+    asked = proof and re.search(r"\bconst\s+ANSWERED_CLOSED\s*:\s*&\[&str\]\s*=\s*&\[([^\]]*)\]", proof)
+    asked = set(re.findall(r'"([a-z-]+)"', asked.group(1))) if asked else set()
+    hosted = set()
+    for c, module in re.findall(r"\bronoctua_shell_(\w+)::(\w+)::ENTRY\b", registry):
+        m = re.search(r'pub const ID: &str = "([a-z-]+)";', uncommented(shell_file(module + ".rs").read_text()))
+        if m and m.group(1) in asked:
+            hosted.add("ronoctua-shell-" + c.replace("_", "-"))
+    if asked and len(hosted) < len(asked):
+        print(f"ERROR: `ANSWERED_CLOSED` names {sorted(asked)}, and only {len(hosted)} of them are", file=sys.stderr)
+        print("       registered regions (`regions.rs`) the check can find a crate for.", file=sys.stderr)
+        raise SystemExit(1)
+    if hosted:
+        # AND IT REFUSES `NotMine` for a command of the crate: the assertion
+        # itself, not only the word somewhere in the test.
+        refuses = proof is not None and re.search(
+            r"assert_ne!\(\s*\w+\s*,\s*(?:\w+::)*Closed::NotMine\b", proof
+        )
+        if not refuses or not all(w in proof for w in ("REGIONS", ".closed)", ".commands")):
+            print("ERROR: regions are registered (`regions.rs`) and the test that hands each one", file=sys.stderr)
+            print("       every command of its crate (`every_hosted_command_reaches_its_region`) is", file=sys.stderr)
+            print("       gone or asks less: nothing proves their keys lead anywhere.", file=sys.stderr)
+            raise SystemExit(1)
+    def crate_of(f):
+        parts = pathlib.Path(f).parts
+        return next((parts[i + 1] for i in range(len(parts) - 1) if parts[i] == "crates"), "")
+    owned = {cmd for f, _, cmd in rows if crate_of(f) in hosted}
+    if hosted:
+        floor(len(owned), 1, "bindings of the hosted regions' crates")
+        footers = re.search(r"\bconst\s+THE_FOOTERS\s*:\s*&\[&str\]\s*=\s*&\[([^\]]*)\]", proof)
+        if footers is None:
+            print("ERROR: `every_hosted_command_reaches_its_region` no longer lists the commands", file=sys.stderr)
+            print("       the footer answers itself (`THE_FOOTERS`): which of the hosted crates'", file=sys.stderr)
+            print("       commands still need an arm in `run_with` cannot be told.", file=sys.stderr)
+            raise SystemExit(1)
+        owned -= set(re.findall(r'"([a-z0-9-]+)"', footers.group(1)))
+    gaps = [g for g in gaps if g not in owned]
+
+    # 4) AND THE UPDATE'S, whose contribution takes its window's table whole
+    #    (`bindings: BINDINGS`) and `run_with` dispatches by asking the window
+    #    (`update_window::order_of`): the ids are the window's to spell, so
+    #    what is read there is that every row it binds is one `order_of`
     #    answers, and that `run_with` asks it.
-    window = uncommented((shell / "update_window.rs").read_text())
+    window = uncommented(shell_file("update_window.rs").read_text())
     floor(len(window), 2000, "characters of update_window.rs")
     table = re.search(r"pub const BINDINGS\b[^=]*=\s*&\[(.*?)\];", window, re.S)
     rows = re.findall(r'\(\s*"[^"]*",\s*([A-Z_]+|"[a-z0-9-]+"),', must(table and table.group(1), "`update_window::BINDINGS`"))
@@ -9461,20 +10388,21 @@ let
     for row in rows:
         if row not in answered:
             gaps.append(f"{row} (the update window's binding, which `order_of` does not answer)")
-    if "update_window::BINDINGS" not in keymap:
-        gaps.append("the update window's bindings (the leader no longer takes them)")
+    taken = [body for f, _, body in keymap_contributions() if shell_name(f) == "update_window.rs"]
+    if len(taken) != 1 or not re.search(r"\bbindings:\s*BINDINGS\b", taken[0]):
+        gaps.append("the update window's bindings (its contribution no longer takes them)")
     if "update_window::order_of" not in body:
-        gaps.append("the update window's commands (`run_with` no longer asks `order_of`)")
+        gaps.append("the update window's commands (neither `run_with` nor its region asks `order_of`)")
     if gaps:
         print("ERROR: a key that leads nowhere.", file=sys.stderr)
         print("", file=sys.stderr)
         for g in gaps:
-            print(f"       `{g}` has a key and no arm in `surface::run_with`", file=sys.stderr)
+            print(f"       `{g}` has a key and no arm in `surface::run_with`, in a region's `command`, nor in a `closed` arm that takes it", file=sys.stderr)
         print("", file=sys.stderr)
         print("       From the leader it prints \"<id> does nothing yet\" and logs", file=sys.stderr)
         print("       a command with no registered action. The hand-kept list in", file=sys.stderr)
-        print("       `leader::WITH_ACTION` cannot see this: it is a claim about", file=sys.stderr)
-        print("       the code, and this reads the code.", file=sys.stderr)
+        print("       `keymap.rs` (`WITH_ACTION`) cannot see this: it is a claim", file=sys.stderr)
+        print("       about the code, and this reads the code.", file=sys.stderr)
         raise SystemExit(1)
 
     print(f"OK: {len(bound)} ids a leader sequence runs, {len(handled)} arms, no gap")
@@ -9500,14 +10428,23 @@ let
   # instead. Three reviewers found the same defect in three different views,
   # which is what a rule kept by hand in three places looks like.
   #
-  # THE FIX IS STRUCTURAL, and this is what pins it: `view()` is the ONE place
-  # the precedence is written, and every branch of the other two asks it. Then
-  # at most one branch can match and the ORDER the branches happen to appear
-  # in stops being an answer at all.
+  # THE FIX IS STRUCTURAL, and this is what pins it: `PRECEDENCE` is the ONE
+  # table the precedence is written in, `view()` its one reader, and every
+  # dispatcher of the footer — the keys, the rows, the cursor, the hint, and
+  # the precedence's own "is it open" — is one `match` on `view()` with ONE
+  # delegating line per view (the view's half of the footer lives in its own
+  # `surface/<view>.rs`; a region of the slot host is answered by one line
+  # for all of them). Then at most one line can match and the ORDER the lines
+  # happen to appear in stops being an answer at all.
   #
-  # Which is why this check is about the GUARDS and not about the order: it
-  # refuses any top-level branch of the two functions that reads a view's own
-  # field, and it demands that every view `view()` can return is named in both.
+  # Which is why this check is about the DISPATCHERS and not about the order:
+  # it demands that every rank is named in each, that nothing but `view()`
+  # decides which line runs (nothing asked outside the `match`, no guard
+  # reading another view's state), that each line delegates (a call into the
+  # view's own file, never a view's own field read in the dispatcher), and
+  # that the key reaches the dispatcher before anything asks a view by its
+  # field. Which field IS a view is read from the code — the one each rank is
+  # open by, in `is_open` and `region_open` — and never listed here.
   the-footer-draws-what-the-keyboard-drives =
     mkCheck "the-footer-draws-what-the-keyboard-drives" [ pkgs.python3 ]
       ''
@@ -9515,194 +10452,362 @@ let
         import pathlib, re, sys
 
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
-        # FILE-WIDE: what is asked is that every view the keyboard can drive is
-        # NAMED in each of four branches — a question about the whole of each
-        # branch, and the branches themselves are narrowed by name below.
+        # FILE-WIDE: the footer is ONE module split into files — its own
+        # (`surface/mod.rs`) and one per view (`surface/<view>.rs`) — and what
+        # is asked is about the whole of it: the one table the precedence is
+        # written in, and that every dispatcher of it answers that table and
+        # nothing else. The dispatchers themselves are narrowed by name below.
         #
-        # STRIPPED ONCE, AT THE TOP. The rules below used to read a mixture:
-        # two of them stripped and one searched the raw text, and a rule a
-        # SENTENCE can satisfy is worse than no rule — writing
-        # `// ViewState::Display draws through its own window` above a branch
-        # that has been turned off was enough to make the view count as named
-        # in both places, while the keyboard drove it and nothing drew it.
-        # `uncommented` and never `code_of`: rule 4 counts the doors by the ID
-        # each one passes to `region_is_free`, and those ids are STRING
-        # literals — emptied, every door disappears and the floor fails on a
-        # correct file. What is being refused here is a COMMENT answering for
-        # the code, and taking the comments off is the whole of that.
-        src = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
-        floor(len(src), 100000, "characters of surface.rs")
+        # `uncommented` and never `code_of`: the ranks are STRING literals
+        # (`Rank::Region("stick")`) and so are the views' ids (`ID: &str =
+        # "stick"`), and the doors are counted by the id each passes to
+        # `region_is_free`. What is refused is a COMMENT answering for the
+        # code, and taking the comments off is the whole of that.
+        files = shell_module_files("surface")
+        src = uncommented("\n".join(f.read_text() for f in files))
+        floor(len(src), 100000, "characters of the footer's module")
         wrong = []
 
-
         def span_of(name):
-            """One method's body, as lines.
+            return must(body_of(src, name), "`" + name + "`")
 
-            It counted braces PER LINE and matched a whole SIGNATURE, so a
-            brace inside a string ended a body early and adding a parameter
-            reported that the method had gone away. `body_of` walks the
-            characters and takes the bare name; the lines are what the
-            indentation rule below reads.
-            """
-            return must(body_of(src, name), "`" + name + "`").splitlines()
-
-        # 1) THE ORDER, from the one place it is written.
-        order = re.findall(r"ViewState::([A-Z]\w*)", "\n".join(span_of("view")))
-        order = [v for v in dict.fromkeys(order)]
-        # NOT A FLOOR — THE ENUM ITSELF. A number written here is a number
-        # that goes stale: it said twelve for two rounds after the screens'
-        # view arrived, which was two views' worth of slack. And a floor could
-        # never have caught the shape that actually happens, which is a
-        # FIFTEENTH view added to the enum and forgotten in `view()` — the
-        # sweep below iterates `order`, so a view that never enters it is
-        # invisible to every rule in this check.
-        declared = re.findall(
-            r"^\s{4}([A-Z]\w*),",
-            must(scope(src, r"enum ViewState\b"), "`enum ViewState`"),
-            re.M,
-        )
-        missing = [v for v in declared if v not in order]
-        if missing:
-            wrong.append(
-                "`view()` does not rank " + ", ".join(missing)
-                + " — a view outside the precedence is drawn by nothing and "
-                "driven by nothing, and every rule below iterates what "
-                "`view()` names"
-            )
-
-        # 2) NO BRANCH READS A VIEW'S OWN FIELD.
-        #
-        # The fields are listed rather than inferred, because that is the list that
-        # has to be maintained beside the enum, and a new view that forgets to add
-        # its field here still gets caught by check 3.
-        # BY NAME, AND NOT BY SPELLING. This list held one written-out
-        # expression per view — `self\.display\.is_some\(\)` and so on — so it
-        # matched the way the branch happened to be written that day and
-        # nothing else. `if let Some(_) = self.display.as_ref()` is the
-        # IDIOMATIC Rust for the same question, reads the view's own field at
-        # the top level of `typed`, and no entry in the old list touched it;
-        # `as_mut()` and a bare `match self.display` escaped it too.
-        #
-        # Naming the FIELD catches every spelling there can be, and it is also
-        # the shorter list to keep beside the enum.
-        FIELDS = [
-            r"self\.%s\b" % name
-            for name in (
-                "files",
-                "clipboard_open",
-                "transfers",
-                "manual",
-                "apps",
-                "network",
-                "theme_chooser",
-                "bluetooth",
-                "power",
-                "audio",
-                "pointer_view",
-                "display",
-                "notifications_open",
-                "software",
-                "mx",
-                "leader",
-                "fast_access",
-            )
-        ]
-        # THE KEY BRANCH IS `took_a_key`, AND NOT `typed`.
-        #
-        # `typed` is a two-line wrapper now — take the key, then follow the
-        # cursor if the page moved — and the dispatch moved down into
-        # `took_a_key` on the day the scroll learned to follow a person's key.
-        # This check went on reading `typed`, found not one view named inside
-        # it, and reported all eighteen as missing: loud, but about the wrong
-        # thing, and it would have been just as loud on a tree with nothing
-        # wrong with it.
-        #
-        # So the DISPATCHER is named here and the wrapper is checked to still
-        # reach it. A third name would otherwise be the same drift again, and
-        # the next reader would be told eighteen lies instead of one truth.
-        #
-        # AND THE DISPATCH IS `key_arrived` NOW, one step further down: the
-        # event's half (the tap, the right Ctrl, the grab, the translation)
-        # stayed in `took_a_key`, and what a translated key does moved into the
-        # method the footer's camera walks too (`footer_photograph.rs`). The
-        # chain is checked link by link, so a fourth name is the same loud
-        # failure as a third.
-        wrapper = "\n".join(span_of("typed"))
-        if "self.took_a_key(event)" not in wrapper:
-            wrong.append(
-                "`typed` no longer hands the key to `took_a_key`, so the branch "
-                "this check reads is not the one the keyboard drives"
-            )
-        if "self.key_arrived(key)" not in "\n".join(span_of("took_a_key")):
-            wrong.append(
-                "`took_a_key` no longer hands the translated key to "
-                "`key_arrived`, so the branch this check reads is not the one "
-                "the keyboard drives"
-            )
-
-        for name, room in (
-            ("key_arrived", "the key branch"),
-            ("expansion", "the region"),
-        ):
-            lines = span_of(name)
-            for n, line in enumerate(lines):
-                # Top level of the method body is eight spaces; anything deeper is
-                # inside a branch that has already asked.
-                if len(line) - len(line.lstrip()) != 8:
-                    continue
-                stripped = line.strip()
-                if not (stripped.startswith("if ") or stripped.startswith("} else if ")):
-                    continue
-                # THE ONE WRITTEN EXCEPTION, and it is in AGENTS.md: the
-                # minibuffer's QUESTION is a LINE and not a region, so it is
-                # deliberately outside the precedence `view()` ranks. It is
-                # named here rather than left to a narrow pattern — the old
-                # list spelled this field `self.mx.active()`, which let
-                # `asking_for()` through by accident and would have let a real
-                # second door through the same way.
-                if "self.mx.asking_for()" in stripped:
-                    continue
-                for field in FIELDS:
-                    if re.search(field, stripped):
-                        wrong.append(
-                            f"{room}: `{stripped[:60]}` reads a view's own field "
-                            "instead of asking `view()`"
-                        )
-
-        # 3) AND EVERY VIEW IS NAMED IN BOTH.
-        #
-        # A view with no branch in one of them is a view that is drawn and not
-        # driven, or driven and not drawn — the same defect from the other side.
-        keys = "\n".join(span_of("key_arrived"))
-        region = "\n".join(span_of("expansion"))
-        for view in order:
-            if view == "NoneOf":
+        # 1) THE ORDER, from the ONE table it is written in.
+        opened = re.search(r"const PRECEDENCE: &\[Rank\] = &\[", src)
+        if not opened:
+            print("ERROR: no `const PRECEDENCE: &[Rank]` in the footer", file=sys.stderr)
+            raise SystemExit(1)
+        depth, k = 1, opened.end()
+        while depth:
+            depth += {"[": 1, "]": -1}.get(src[k], 0)
+            k += 1
+        table = src[opened.end() : k - 1]
+        ranks = re.findall(r'Rank::(Region\("([a-z-]+)"\)|[A-Z]\w*)', table)
+        order = [("Region", rid) if kind.startswith("Region") else (kind, None) for kind, rid in ranks]
+        floor(len(order), 20, "ranks in `PRECEDENCE`")
+        regions = [rid for kind, rid in order if kind == "Region"]
+        own = [kind for kind, _ in order if kind != "Region"]
+        for rid in sorted(set(regions)):
+            if regions.count(rid) > 1:
+                wrong.append(f"the region `{rid}` is ranked {regions.count(rid)} times")
+        # THE FOOTER'S OWN VIEWS ARE THE ENUM'S: every variant of `Rank` but
+        # `Region` is ranked once, and `ViewState` is `Rank` and `NoneOf`.
+        rank_enum = re.findall(r"^\s{4}([A-Z]\w*)\b", must(scope(src, r"enum Rank\b"), "`enum Rank`"), re.M)
+        view_enum = re.findall(r"^\s{4}([A-Z]\w*)\b", must(scope(src, r"enum ViewState\b"), "`enum ViewState`"), re.M)
+        if set(view_enum) != set(rank_enum) | {"NoneOf"}:
+            wrong.append("`ViewState` is not `Rank` and `NoneOf`: " + ", ".join(sorted(set(view_enum) ^ (set(rank_enum) | {"NoneOf"}))))
+        for variant in rank_enum:
+            if variant == "Region":
                 continue
-            # THE LEADER IS THE TAIL, not a branch: a key that no view claimed
-            # falls through to `leader.key(&tree, key)` at the end of `typed`,
-            # which is what makes the sequence reachable from every view that
-            # does not want the key. A branch for it would be a second door.
-            if f"ViewState::{view}" not in keys and view != "Leader":
-                wrong.append(f"the key branch never names ViewState::{view}")
-            if f"ViewState::{view}" not in region:
-                wrong.append(f"the region never names ViewState::{view}")
+            if own.count(variant) != 1:
+                wrong.append(f"`Rank::{variant}` is ranked {own.count(variant)} times in `PRECEDENCE`")
+        # NO SECOND TABLE: a precedence written twice is two answers.
+        if len(re.findall(r":\s*&\[Rank\]\s*=", src)) != 1:
+            wrong.append("a second `&[Rank]` table — the precedence is written in more than one place")
 
-        # 4) AND THE DOOR ASKS ABOUT EVERY VIEW, not about one of them.
-        if "self.leader.key(&self.tree, key)" not in keys:
-            wrong.append(
-                "the key branch no longer falls through to the leader, so exempting "
-                "ViewState::Leader from the branch rule is no longer valid"
-            )
+        # 2) `view()` ANSWERS THE TABLE, and only the table.
+        view = span_of("view")
+        if "PRECEDENCE" not in view or "self.is_open(" not in view:
+            wrong.append("`view()` no longer answers the first open rank of `PRECEDENCE`")
+        if re.search(r"self\.(?!is_open\b)\w+", view):
+            wrong.append("`view()` reads something of the footer's own besides `is_open`")
 
-        guard = "\n".join(span_of("region_is_free"))
+        # 3) WHICH FILE IS WHICH REGION, by the id each view's file ranks
+        # itself under — `surface/<view>.rs`, `pub(super) const ID`.
+        ids = {}
+        for f in files:
+            m = re.search(r'pub\(super\) const ID: &str = "([a-z-]+)";', uncommented(f.read_text()))
+            if m:
+                ids[f.stem] = m.group(1)
+        for stem, rid in sorted(ids.items()):
+            if rid not in regions:
+                wrong.append(f"surface/{stem}.rs is the region `{rid}`, and `PRECEDENCE` does not rank it")
+        def rid_of(pattern):
+            m = re.fullmatch(r"ViewState::Region\((\w+)::ID\)", pattern)
+            if m:
+                return ids.get(m.group(1), "?" + m.group(1))
+            return None
+
+        # A `match` OF A BODY, taken apart: the text before it, its arms as
+        # (patterns, guard, outcome), and the text after it — split at the
+        # commas and the closing braces that are at the match's own depth, so
+        # a call's arguments or a block's lines are never taken for two arms.
+        def match_of(body, scrutinee):
+            at = re.search(r"\bmatch " + scrutinee + r" \{", body)
+            if not at:
+                return None
+            i, depth, start, out = at.end(), 0, at.end(), []
+            while i < len(body):
+                c = body[i]
+                if c in "([{":
+                    depth += 1
+                elif c in ")]}":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                    if depth == 0 and c == "}" and "=>" in body[start:i] and body[start:i].split("=>", 1)[1].strip().startswith("{"):
+                        out.append(body[start : i + 1]); start = i + 1
+                elif c == "," and depth == 0:
+                    out.append(body[start:i]); start = i + 1
+                i += 1
+            out.append(body[start:i])
+            arms = []
+            for a in out:
+                a = " ".join(a.split())
+                if not a or "=>" not in a:
+                    continue
+                head, outcome = a.split("=>", 1)
+                guard = None
+                if " if " in head:
+                    head, guard = head.split(" if ", 1)
+                arms.append((head.strip(), guard and guard.strip(), outcome.strip().strip(",").strip()))
+            return body[: at.start()], arms, body[i + 1 :]
+
+        # What a piece of code asks the footer: the FIELDS it reads
+        # (`self.files`, and `self.mx` in `self.mx.cursor()`) and the
+        # footer's METHODS it calls (`self.view()`).
+        def reads(text):
+            return (set(re.findall(r"\bself\.(\w+)\b(?!\s*\()", text)),
+                    set(re.findall(r"\bself\.(\w+)\s*\(", text)))
+
+        # 4) WHAT EACH RANK IS: the one field of the footer's that says its
+        # view is open, read from the two methods `view()` asks of a rank —
+        # `is_open` (a view of the footer's own, by its variant) and
+        # `region_open` (a region, by its id). Each line reads ONE field, its
+        # view's own, on no condition, and no two lines read the same one.
+        # That field IS the view to every rule below, which refuse it
+        # anywhere but in its own view's line. DERIVED, and never listed
+        # here: the list this check kept beside the enum went stale the way
+        # every second copy of the views did.
+        owner = {}
+        def owned(where, rank, outcome):
+            m = re.fullmatch(r"self\.(\w+)(?:\.\w+\(\w*\))?", outcome)
+            if not m:
+                wrong.append(f"{where}: `{rank}` is open by `{outcome[:60]}` — a rank's line reads its own view's field and nothing else")
+                return
+            if m.group(1) in owner:
+                wrong.append(f"{where}: `self.{m.group(1)}` says both `{owner[m.group(1)]}` and `{rank}` are open")
+            owner[m.group(1)] = rank
+
+        asked = match_of(span_of("is_open"), r"\w+")
+        if asked is None:
+            wrong.append("`is_open` is no longer one `match` on the rank")
+        else:
+            before, arms, after = asked
+            if "self." in before + after:
+                wrong.append("`is_open` asks the footer something outside its `match`")
+            delegated = False
+            for pats, guard, out in arms:
+                if guard:
+                    wrong.append(f"`is_open`: `{pats} if {guard[:50]}` — a rank is open by its own field, never on a condition")
+                region = re.fullmatch(r"Rank::Region\((\w+)\)", pats)
+                if region:
+                    delegated = delegated or out == f"self.region_open({region.group(1)})"
+                    continue
+                own_view = re.fullmatch(r"Rank::([A-Z]\w*)", pats)
+                if not own_view:
+                    wrong.append(f"`is_open`: `{pats}` is no rank")
+                    continue
+                owned("`is_open`", own_view.group(1), out)
+            if not delegated:
+                wrong.append("`is_open` no longer asks `region_open` whether a region is open")
+
+        # AND THE REGIONS, by the id each view's file ranks itself under — or
+        # the slot host's, for every region it hosts (`self.regions`). With no
+        # view left that the footer draws with a field of its own (lane R5i
+        # took the last two), the slot host's answer is the whole body.
+        region_body = span_of("region_open")
+        asked = match_of(region_body, r"\w+")
+        hosted_line = False
+        plain = re.fullmatch(r"self\.regions\.is_open\((\w+)\)", region_body.strip(" \n{}"))
+        if asked is None and plain:
+            hosted_line = True
+            owned("`region_open`", "hosted", plain.group(0))
+        elif asked is None:
+            wrong.append("`region_open` is no longer one `match` on the id")
+        else:
+            before, arms, after = asked
+            if "self." in before + after:
+                wrong.append("`region_open` asks the footer something outside its `match`")
+            for pats, guard, out in arms:
+                if guard:
+                    wrong.append(f"`region_open`: `{pats} if {guard[:50]}` — a region is open by its own field, never on a condition")
+                by_id = re.fullmatch(r"(\w+)::ID", pats)
+                if by_id:
+                    owned("`region_open`", ids.get(by_id.group(1), "?" + by_id.group(1)), out)
+                elif re.fullmatch(r"[a-z_]+", pats) and out == f"self.regions.is_open({pats})":
+                    hosted_line = True
+                    owned("`region_open`", "hosted", out)
+                else:
+                    wrong.append(f"`region_open`: `{pats} => {out[:50]}` is neither a view's line nor the slot host's")
+        for rid in regions:
+            if rid in ids.values() and rid not in owner.values():
+                wrong.append(f"`region_open`: `{rid}` is ranked and never asked whether it is open")
+        if not hosted_line:
+            wrong.append("`region_open`: no line asks the slot host")
+        VIEW_FIELDS = set(owner)
+        # 18 once the software centre and the search became regions (R5g), 14
+        # once the installer stick, the LLM accounts, Incus and the containers
+        # did (R5a), 8 once the player and the video catalogue did (R5i): the
+        # footer's seven views of its own and the slot host. The floor fell as
+        # each view the footer drew with a field of its own became a region.
+        floor(len(VIEW_FIELDS), 8, "fields that say a view is open")
+
+        # 5) EVERY DISPATCHER IS ONE `match` ON `view()`, ONE LINE PER VIEW,
+        # and NOTHING ELSE.
+        #
+        # A rank is NAMED in each: a footer view by its variant, a region by
+        # its file's id — or, for a region of the slot host, by the one arm
+        # that hands every hosted region to the host (`ViewState::Region(x)`
+        # with a binding). And nothing but `view()` decides which line runs:
+        #
+        #   - OUTSIDE THE `match`, the dispatcher asks the footer nothing. A
+        #     `if self.files.is_some() { return self.files_expansion(); }`
+        #     above it is the second answer this check exists to refuse:
+        #     with the clipboard open over the manager, the region drew the
+        #     manager while the keys went to the clipboard.
+        #   - A GUARD reads only its own view's state — the `M-x`'s cursor is
+        #     the `M-x`'s while it asks nothing. `Region(network::ID) if
+        #     self.files.is_none()` is a precedence written in a guard: the
+        #     network's rows fell to the host's line, empty.
+        #   - A LINE DELEGATES: a call that passes on only what the
+        #     dispatcher was given, or nothing at all (`None`, `Vec::new()`,
+        #     `return false`) — never a view's own field read in the
+        #     dispatcher, and never another view's handed to the call.
+        #
+        # The hint's dispatcher is handed what `view()` ranks by its one
+        # caller, the paint, once a frame; that link is checked below.
+        DISPATCHERS = {
+            "view_took_the_key": ("the keys", r"self\.view\(\)"),
+            "expansion": ("the rows", r"self\.view\(\)"),
+            "list_cursor": ("the cursor", r"self\.view\(\)"),
+            "view_hint": ("the hint", r"showing"),
+        }
+        NOTHING = ("None", "Vec::new()", "return false", "{}", "{ None }")
+        # WHERE EACH METHOD IS WRITTEN, and which file each region's is: its
+        # own (`ID`), and `host.rs` for the slot host's.
+        defined = {}
+        for f in files:
+            for m in re.finditer(r"\n    (?:pub(?:\([a-z]+\))? )?fn (\w+)", uncommented(f.read_text())):
+                defined.setdefault(m.group(1), set()).add(f.stem)
+        stems = {rid: stem for stem, rid in ids.items()}
+        stems["hosted"] = "host"
+        for name, (what, scrutinee) in DISPATCHERS.items():
+            body = span_of(name)
+            taken = match_of(body, scrutinee)
+            if taken is None:
+                wrong.append(f"{what} (`{name}`) is no longer one `match` on `view()`")
+                continue
+            before, arms, after = taken
+            for side, text in (("before", before), ("after", after)):
+                fields, calls = reads(text)
+                for x in sorted(fields | calls):
+                    wrong.append(f"{what} (`{name}`) asks `self.{x}` {side} its `match` — nothing but `view()` decides which view's line runs")
+            named = set()
+            hosted = False
+            for pats, guard, out in arms:
+                here = set()
+                for pattern in re.split(r"\s*\|\s*", pats):
+                    if not pattern:
+                        continue
+                    rid = rid_of(pattern)
+                    if rid:
+                        named.add(("Region", rid)); here.add(rid)
+                    elif re.fullmatch(r"ViewState::Region\([a-z_]+\)", pattern):
+                        hosted = True; here.add("hosted")
+                    elif re.fullmatch(r"ViewState::[A-Z]\w*", pattern):
+                        variant = pattern.split("::")[1]
+                        named.add((variant, None)); here.add(variant)
+                    else:
+                        wrong.append(f"{what}: `{pattern}` is no view")
+                mine = {f for f, r in owner.items() if r in here}
+                if guard:
+                    fields, calls = reads(guard)
+                    if calls or not fields <= mine:
+                        wrong.append(f"{what}: `{pats} if {guard[:50]}` — a guard reads its own view's state and nothing else")
+                call = re.fullmatch(r"self\.(\w+)\(([^;{}]*)\)", out)
+                if call:
+                    if "self." in call.group(2):
+                        wrong.append(f"{what}: `{pats} => {out[:50]}` hands its call something of the footer's — a view's line passes on what the dispatcher was given")
+                    # A REGION'S LINE CALLS ITS OWN FILE — the view's half of
+                    # the footer, `surface/<view>.rs` — and the host's line
+                    # the host: the network's line answered by the manager's
+                    # method is the manager drawn under the network's rank.
+                    files_of = {stems[r] for r in here if r in stems}
+                    if files_of and not defined.get(call.group(1), set()) & files_of:
+                        wrong.append(f"{what}: `{pats} => {out[:50]}` calls `{call.group(1)}`, which is not that view's own (`surface/" + "`, `surface/".join(sorted(f + ".rs" for f in files_of)) + "`)")
+                elif out not in NOTHING and out != "Some(self.mx.cursor())":
+                    wrong.append(f"{what}: `{pats} => {out[:50]}` does not delegate — a view's line is a call")
+            for kind, rid in order:
+                if kind == "Region":
+                    # A REGION THE FOOTER STILL DRAWS (its own file) is named
+                    # by its line; only the slot host's fall to the host's.
+                    if rid in ids.values() and ("Region", rid) not in named:
+                        wrong.append(f"{what} (`{name}`) never names the region `{rid}`")
+                    elif rid not in ids.values() and not hosted:
+                        wrong.append(f"{what} (`{name}`) leaves the hosted region `{rid}` to nobody")
+                elif (kind, None) not in named:
+                    wrong.append(f"{what} (`{name}`) never names `ViewState::{kind}`")
+            if not hosted:
+                wrong.append(f"{what} (`{name}`) has no line for the slot host's regions")
+            if ("NoneOf", None) not in named:
+                wrong.append(f"{what} (`{name}`) never says what the closed region does")
+
+        # THE HINT IS ASKED OF WHAT `view()` RANKS: every call hands it
+        # `self.view()`, or a name bound to `self.view()` just before.
+        hinted = list(re.finditer(r"self\.view_hint\(([^)]*\)?)\)", src))
+        floor(len(hinted), 1, "calls of `view_hint`")
+        for call in hinted:
+            arg = call.group(1).strip()
+            if arg == "self.view()":
+                continue
+            bound = list(re.finditer(r"\blet " + re.escape(arg) + r"\b[^=;]*=([^;]*);", src[: call.start()]))
+            if not re.fullmatch(r"\w+", arg) or not bound or bound[-1].group(1).strip() != "self.view()":
+                wrong.append(f"the hint (`view_hint`) is handed `{arg}`, which is not what `view()` ranks")
+
+        # 6) THE KEY REACHES THE DISPATCHER, link by link, and what no view
+        # takes falls through to the leader.
+        typed = span_of("typed")
+        took = span_of("took_a_key")
+        keys = span_of("key_arrived")
+        if "self.took_a_key(event)" not in typed:
+            wrong.append("`typed` no longer hands the key to `took_a_key`")
+        if "self.key_arrived(key)" not in took:
+            wrong.append("`took_a_key` no longer hands the translated key to `key_arrived`")
+        if "self.view_took_the_key(key)" not in keys:
+            wrong.append("`key_arrived` no longer hands the key to the view `view()` ranks")
+        if "self.leader.key(self.tree, key)" not in keys:
+            wrong.append("the key no longer falls through to the leader, so no view taking it ends nowhere")
+        # AND NOTHING ON THE WAY ASKS A VIEW BY ITS OWN FIELD: not in `typed`,
+        # not in `took_a_key`, not in `key_arrived` before the dispatcher —
+        # an `if self.mx.active()` there gave the `M-x` the keys of every view
+        # ranked above it. The minibuffer's question (a LINE, not a region —
+        # AGENTS.md) is the one written exception, named whole: the field
+        # alone would let every other question of the `M-x` through with it.
+        # After the dispatcher, no view took the key, and the leader's tail
+        # reads the leader.
+        head, _, tail = keys.partition("self.view_took_the_key(key)")
+        for where, text, allowed in (
+            ("`typed`", typed, set()),
+            ("`took_a_key`", took, set()),
+            ("`key_arrived`, before the dispatcher", head.replace("self.mx.asking_for()", ""), set()),
+            ("`key_arrived`, after the dispatcher", tail, {"leader"}),
+        ):
+            fields, _ = reads(text)
+            for field in sorted((fields & VIEW_FIELDS) - allowed):
+                wrong.append(f"{where} reads the view's own field `self.{field}` instead of asking `view()`")
+
+        # 7) THE DOOR ASKS ABOUT EVERY VIEW, not about one of them.
+        guard = span_of("region_is_free")
         if "self.view()" not in guard:
             wrong.append("`region_is_free` no longer asks `view()`")
-        if "self.files" in guard:
-            wrong.append("`region_is_free` is back to asking about the file manager alone")
+        for field in sorted(reads(guard)[0] & VIEW_FIELDS):
+            wrong.append(f"`region_is_free` reads the view's own field `self.{field}` instead of asking `view()`")
         doors = set(re.findall(r'region_is_free\("([a-z-]+)"\)', src))
-        # ELEVEN with the screens' own door — a floor, like the one above.
-        floor(len(doors), 11, "doors that ask whether the region is free")
+        # EIGHT once the calculator, the icons app, the clipboard and git
+        # became regions of the slot host (R5f), whose openings ask it there.
+        floor(len(doors), 5, "doors that ask whether the region is free")
 
         if wrong:
             print("ERROR: the footer would draw one view and drive another.", file=sys.stderr)
@@ -9710,13 +10815,13 @@ let
             for w in wrong:
                 print("       " + w, file=sys.stderr)
             print("", file=sys.stderr)
-            print("       `Footer::view()` is the one place the precedence is written.", file=sys.stderr)
-            print("       Every branch of the key dispatch and of the region asks it,", file=sys.stderr)
-            print("       so at most one can match and the order they are written in", file=sys.stderr)
-            print("       is not a second answer.", file=sys.stderr)
+            print("       `PRECEDENCE` is the one place the precedence is written, and", file=sys.stderr)
+            print("       `Footer::view()` its one reader. Every dispatcher of the footer", file=sys.stderr)
+            print("       is one `match` on it, one delegating line per view, so at most", file=sys.stderr)
+            print("       one view can match and the order of the lines is not an answer.", file=sys.stderr)
             raise SystemExit(1)
 
-        print(f"OK: {len(order)} views, one order, {len(doors)} doors that ask")
+        print(f"OK: {len(order)} ranks in one table, each open by its own field, {len(DISPATCHERS)} dispatchers that name each, {len(doors)} doors that ask")
         END
       '';
 
@@ -9766,50 +10871,68 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    src = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
-    floor(len(src), 100000, "characters of surface.rs")
+    # FILE-WIDE over the footer's module: the views are what `PRECEDENCE`
+    # ranks, and each view's line of the hint is in `view_hint` — the region's
+    # half of the footer lives in its own file (`surface/<view>.rs`), which
+    # says the id it is ranked under. `uncommented`, because both the ranks and
+    # the ids are string literals.
+    files = shell_module_files("surface")
+    src = uncommented("\n".join(without_tests(f.read_text()) for f in files))
+    floor(len(src), 100000, "characters of the footer's module")
 
-    # This counted braces PER LINE, which a brace inside a string or a
-    # character literal defeats. `scope` walks the characters, and it takes a
-    # PATTERN for the header — so the two blocks below are found by what opens
-    # them and not by a line that has to start with the right words.
-    def block(header, what):
-        return must(scope(src, header), what)
+    # THE RANKS ITSELF, and not a list written here: a view added to the
+    # precedence and forgotten everywhere else is exactly the shape this is
+    # for.
+    opened = re.search(r"const PRECEDENCE: &\[Rank\] = &\[", src)
+    if opened is None:
+        print("ERROR: no `PRECEDENCE` in the footer", file=sys.stderr)
+        raise SystemExit(1)
+    table = src[opened.end() : src.index("];", opened.end())]
+    declared = [m.group(1) or m.group(2) for m in re.finditer(r'Rank::(?:Region\("([a-z-]+)"\)|([A-Z]\w*))', table)]
+    floor(len(declared), 10, "views ranked by `PRECEDENCE`")
+    ids = {}
+    for f in files:
+        m = re.search(r'pub\(super\) const ID: &str = "([a-z-]+)";', uncommented(f.read_text()))
+        if m:
+            ids[m.group(1)] = f.stem
 
-    # THE ENUM ITSELF, and not a list written here: a view added to it and
-    # forgotten everywhere else is exactly the shape this is for.
-    declared = re.findall(
-        r"^\s{4}([A-Z]\w*),", block(r"enum ViewState\b", "`enum ViewState`"), re.M
-    )
-    floor(len(declared), 10, "views declared by `ViewState`")
-
-    # THE THREE THAT OWE NOTHING, each for a reason that is about the view and
+    # THE FIVE THAT OWE NOTHING, each for a reason that is about the view and
     # not about the work:
     #
-    #   NoneOf    the region is closed. There is nothing on screen to teach.
     #   Leader    the which-key IS the teaching — a second line under a list of
     #             keys would be a hint about a hint.
     #   Commands  the `M-x` is a prompt, and its line is the prompt.
-    #   Manual    it is a list of every key in the system. A line teaching five
+    #   manual    it is a list of every key in the system. A line teaching five
     #             of them under it would be the smallest of its own rows.
     #   Applications
     #             the locator is a FILTER: what is on its line is what you
     #             typed, and the one key it has beyond typing is `RET`. It is
     #             the `M-x`'s case with a different list underneath.
-    owes_nothing = {"NoneOf", "Leader", "Commands", "Manual", "Applications"}
+    # (The closed region is no rank, and has nothing on screen to teach.)
+    owes_nothing = {"Leader", "Commands", "manual", "Applications"}
 
-    hint = block(r"let hint = move \|\|", "the hint closure")
-    missing = [
-        v
-        for v in declared
-        if v not in owes_nothing and f"ViewState::{v}" not in hint
-    ]
+    hint = must(body_of(src, "view_hint"), "`view_hint`, the views' lines of the hint")
+    hosted = re.search(r"ViewState::Region\([a-z_]+\)\s*=>\s*self\.\w+\(", hint) is not None
+    missing = []
+    for v in declared:
+        if v in owes_nothing:
+            continue
+        if v in ids:
+            arm = re.search(r"ViewState::Region\(" + ids[v] + r"::ID\)\s*=>\s*self\.\w+\(", hint)
+        elif v[0].isupper():
+            arm = re.search(r"ViewState::" + v + r"\s*=>\s*self\.\w+\(", hint)
+        else:
+            # A REGION OF THE SLOT HOST teaches through the host's one line.
+            arm = hosted
+        if not arm:
+            missing.append(v)
     if missing:
         for v in missing:
             print(
-                f"ERROR: `ViewState::{v}` has no arm in the hint match, so it "
-                "falls through to `_ => None` and teaches none of its keys",
+                f"ERROR: the view `{v}` has no line in `view_hint`, so it falls "
+                "through to `None` and teaches none of its keys",
                 file=sys.stderr,
             )
         print("", file=sys.stderr)
@@ -9828,13 +10951,13 @@ let
     import pathlib, re, sys
 
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: the bar is drawn, pressed and dragged in ONE place now — the
     # door's standard list (`door/list.rs`) — and what is asked of a window is
     # whether it keeps that list or, overriding it, keeps the bar with it.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    listed = code_of((shell / "door" / "list.rs").read_text())
-    door = code_of((shell / "door" / "mod.rs").read_text())
+    listed = code_of(shell_file("door/list.rs").read_text())
+    door = code_of(shell_file("door/mod.rs").read_text())
     wrong, windows = [], 0
 
     # THE STANDARD LIST HAS THE BAR, all four halves of it — and the column it
@@ -9864,9 +10987,9 @@ let
     # `chrome::band_bar` over a `Scroll`), and the window presses and drags
     # them through the same layout (`View::target_at`, `View::dragged`).
     # PROVED here, so the day it stops is the day it is refused.
-    icons = code_of((shell / "icons.rs").read_text())
-    page = code_of((shell / "icons_page.rs").read_text())
-    icons_window = code_of((shell / "icons_window.rs").read_text())
+    icons = code_of(shell_file("icons.rs").read_text())
+    page = code_of(shell_file("icons_page.rs").read_text())
+    icons_window = code_of(shell_file("icons_window.rs").read_text())
     for what, where, why in (
         ("chrome::band_bar(", must(body_of(icons, "grid_bar"), "`View::grid_bar`"), "the grid has no bar"),
         ("chrome::band_bar(", must(body_of(page, "bar"), "`Page::bar`"), "the page's list has no bar"),
@@ -9884,9 +11007,9 @@ let
     # draw_rows`), and the window presses and drags them through the same
     # layout (`Lay::target_at`, `fast_access_rows::held`). PROVED, as the
     # icons app is.
-    fa_rows = code_of((shell / "fast_access_rows.rs").read_text())
-    fa_detail = code_of((shell / "fast_access_detail.rs").read_text())
-    fa_window = code_of((shell / "fast_access_window.rs").read_text())
+    fa_rows = code_of(shell_file("fast_access_rows.rs").read_text())
+    fa_detail = code_of(shell_file("fast_access_detail.rs").read_text())
+    fa_window = code_of(shell_file("fast_access_window.rs").read_text())
     for what, where, why in (
         ("chrome::band_bar(", must(body_of(fa_rows, "bar"), "`Lay::bar`"), "the results have no bar"),
         ("chrome::band_bar(", must(body_of(fa_detail, "draw_rows"), "`draw_rows`"), "the detail's rows have no bar"),
@@ -9897,7 +11020,7 @@ let
         if what not in where:
             wrong.append(f"fast-access: {why} (`{what}` is not there)")
 
-    for f in sorted(list(shell.rglob("*_window.rs")) + [shell / "terminal.rs"]):
+    for f in sorted(list(shell_files("**/*_window.rs")) + [shell_file("terminal.rs")]):
         body = code_of(f.read_text())
         content = scope(body, r"impl\s+Content\s+for\s+\w+")
         if content is None:
@@ -9998,9 +11121,9 @@ let
     import pathlib, sys
 
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    view = code_of(without_tests((shell / "files.rs").read_text()))
+    view = code_of(without_tests(shell_file("files.rs").read_text()))
     floor(len(view), 10000, "characters of files.rs")
     body = must(body_of(view, "sections_of"), "files.rs's `sections_of`")
     wrong = []
@@ -10093,9 +11216,9 @@ let
         import pathlib, sys
 
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
-        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-        view = without_tests((shell / "files.rs").read_text())
+        view = without_tests(shell_file("files.rs").read_text())
         wrong = []
 
         # THE BAND: one function says what it covers, and the selection reads it.
@@ -10118,7 +11241,7 @@ let
 
         # AND NEITHER DOOR KEEPS ANY OF IT. The doors convert; the view measures.
         for name in ("surface.rs", "files_window.rs"):
-            body = code_of(without_tests((shell / name).read_text()))
+            body = code_of(without_tests(shell_source(name)))
             floor(len(body), 10000, f"characters of {name}")
             if "sweep_px(" not in body:
                 wrong.append(f"{name}: does not draw the pointer's claim at all")
@@ -10176,12 +11299,12 @@ let
         import pathlib, re, sys
 
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
-        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
         wrong = []
 
         # THE WINDOW: everything drawn on top lives in one braced block.
-        window = code_of(without_tests((shell / "files_window.rs").read_text()))
+        window = code_of(without_tests(shell_file("files_window.rs").read_text()))
         over = scope(window, r"let over = ")
         floor(len(over or ""), 200, "characters of the window's over-the-pictures group")
         if "sweep_px(" not in (over or ""):
@@ -10190,8 +11313,8 @@ let
             wrong.append("files_window.rs: a claim is drawn somewhere other than on top")
 
         # THE FOOTER: the same group is a named list, appended last.
-        footer = code_of(without_tests((shell / "surface.rs").read_text()))
-        body = body_of(footer, "files_transport") or ""
+        footer = code_of(without_tests(shell_source("surface.rs")))
+        body = body_of(footer, "sections_transport") or ""
         floor(len(body), 200, "characters of the footer's transport")
         for owed, why in (
             ("transport_now.push(", "the claim is not appended to the over-the-pictures list"),
@@ -10233,9 +11356,9 @@ let
         # layer's length taken BEFORE it, kept in `Composed` — and
         # `Composed::draw` draws it, the first range ending at that split and
         # the second starting there, the pictures between them. `Door::paint`
-        # and the photograph (`photograph.rs`) both go through the two, so a
-        # photograph is drawn in the order a window is.
-        door = code_of(without_tests((shell / "door" / "mod.rs").read_text()))
+        # and the photograph (the player's camera, `player_photograph.rs`) both
+        # go through the two, so a photograph is drawn in the order a window is.
+        door = code_of(without_tests(shell_file("door/mod.rs").read_text()))
         compose = must(body_of(door, "compose"), "door/mod.rs: `compose`")
         floor(len(compose), 400, "characters of the door's `compose`")
         bound = re.search(r"let (\w+) = [^;]*\bunder\.len\(\)", compose)
@@ -10256,9 +11379,9 @@ let
         present = must(body_of(doors, "present"), "door/mod.rs: `Door::present`")
         if "compose(" not in paint or ".draw(" not in present:
             wrong.append("door/mod.rs: the door's frame is not the one `compose` lays out and `Composed::draw` draws")
-        photo = code_of(without_tests((shell / "photograph.rs").read_text()))
+        photo = code_of(without_tests(shell_file("player_photograph.rs").read_text()))
         if ".compose(" not in photo or "composed.draw(" not in photo:
-            wrong.append("photograph.rs: a photograph is not composed and drawn as a door's frame is")
+            wrong.append("player_photograph.rs: a photograph is not composed and drawn as a door's frame is")
 
         # AND THE FOOTER, which is not a door, still splits its own.
         if footer.count("draw_range(") < 2:
@@ -10306,14 +11429,14 @@ let
     import pathlib, sys
 
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: the header is drawn, opened and walked in the DOOR now, once
     # for every window (`door/`); what a window is asked is whether it keeps
     # the door's header or, drawing its own frame, still draws it through
     # `chrome::Hinted`.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     door = _re.sub(r"\s+", "", "".join(
-        code_of(p.read_text()) for p in sorted((shell / "door").glob("*.rs"))
+        code_of(p.read_text()) for p in sorted(shell_files("door/*.rs"))
     ))
     wrong, windows = [], 0
     for what, why in (
@@ -10335,7 +11458,7 @@ let
     EXCEPT = "files_window.rs"
     NO_HEADER = {"terminal.rs"}
 
-    for f in sorted(list(shell.rglob("*_window.rs")) + [shell / "terminal.rs"]):
+    for f in sorted(list(shell_files("**/*_window.rs")) + [shell_file("terminal.rs")]):
         body = _re.sub(r"\s+", "", code_of(f.read_text()))
         if "implContentfor" not in body:
             continue
@@ -10405,27 +11528,27 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a handler is an `impl` anywhere in a file, and the question is
     # whether any file but the door's own answers one.
     #
-    # EVERY SOURCE OF THE CRATE (`rust_sources`); a name is the crate-relative
-    # path. The windows' own census below stays a glob of `src/`: a window is
-    # a `*_window.rs` at the top by the tree's rule, and a sweep for them one
-    # level down would be a sweep for a file that may not exist.
-    shell_crate = pathlib.Path("${../crates/ronoctua-shell}")
-    shell = shell_crate / "src"
-    door = shell / "door"
+    # EVERY SOURCE OF EVERY SHELL CRATE (`shell_files`); a name is the path
+    # in its crate. The windows' own census below stays a glob of each
+    # crate's `src/`: a window is a `*_window.rs` at the top by the tree's
+    # rule, and a sweep for them one level down would be a sweep for a file
+    # that may not exist.
+    door = shell_dir("door")
     # THE TWO LAYER SURFACES THAT ARE NOT WINDOWS keep their own handlers, and
     # the reason is written where they are: the footer is the desktop, with a
     # surface per screen and a keyboard it takes and gives back; the lifeline
     # is drawn when the footer is dead, and may not depend on what died.
-    OWN = {"src/surface.rs", "src/lifeline.rs"}
+    OWN = {"src/surface/mod.rs", "src/lifeline.rs"}
     HANDLERS = r"(WindowHandler|SeatHandler|KeyboardHandler|PointerHandler|TouchHandler|CompositorHandler|OutputHandler|LayerShellHandler|ProvidesRegistryState)"
     wrong, windows = [], 0
     swept = 0
-    for f in rust_sources(shell_crate):
-        name = str(f.relative_to(shell_crate))
+    for f in shell_files("**/*.rs"):
+        name = "src/" + shell_name(f)
         if door in f.parents or name in OWN:
             continue
         swept += 1
@@ -10434,15 +11557,20 @@ let
             wrong.append(f"{name}: implements `{m.group(1)}` for `{m.group(2)}` — a window's handlers are the door's")
         if re.search(r"delegate_(dispatch2|registry)!", code):
             wrong.append(f"{name}: delegates dispatch of its own")
-        # THE DRAG'S THREE HANDLERS are the one thing a window may add, and
-        # only for the door it is (`Door<Files>`, `Door<Software>`): the
-        # generic dispatch hands them to it. The trait may be written by its
-        # full path (`smithay_client_toolkit::…::DataDeviceHandler`), and a
-        # pattern that only knew the bare name read straight past those.
-        for m in re.finditer(r"impl\s+(?:[\w:]+::)?(Data\w+Handler)\s+for\s+([\w<>:]+)", code):
-            if not m.group(2).startswith("Door<"):
-                wrong.append(f"{name}: `{m.group(1)}` for `{m.group(2)}`, and not for its door")
-    for f in sorted(list(shell.glob("*_window.rs")) + [shell / "terminal.rs", shell / "buffer.rs"]):
+        # THE DRAG'S THREE HANDLERS are the door's too, written once in
+        # `carry.rs` — the one file that speaks `wl_data_device` (invariant 3)
+        # — for every door whose window `Carries`, and a window answers what
+        # they heard in `Carries::carried`. A window that wrote them for its
+        # own door (`impl … for Door<Files>`) compiled while the shell was one
+        # crate and stops compiling once the door is a crate of its own: an
+        # `impl` of a foreign trait for a foreign type (E0117). The trait may
+        # be written by its full path (`smithay_client_toolkit::…::
+        # DataDeviceHandler`), and a pattern that only knew the bare name read
+        # straight past those.
+        if f.name != "carry.rs":
+            for m in re.finditer(r"impl(?:<[^>]*>)?\s+(?:[\w:]+::)?(Data\w+Handler)\s+for\s+([\w<>:]+)", code):
+                wrong.append(f"{name}: implements `{m.group(1)}` for `{m.group(2)}` — the drag's handlers are the door's, in carry.rs")
+    for f in sorted(shell_files("*_window.rs") + [shell_file("terminal.rs"), shell_file("buffer.rs")]):
         code = code_of(f.read_text())
         windows += 1
         if "crate::door::run(" not in code:
@@ -10461,6 +11589,10 @@ let
         wrong.append("door/handlers.rs: a finger is not played through the pointer's own code")
     if not re.search(r"delegate_dispatch2!\(@<C:\s*Content>\s+Door<C>\)", handlers):
         wrong.append("door/handlers.rs: the dispatch is not the door's, generic")
+    carry = code_of(without_tests(shell_file("carry.rs").read_text()))
+    for trait in ("DataDeviceHandler", "DataSourceHandler", "DataOfferHandler"):
+        if not re.search(r"impl<C:\s*Carries>\s+(?:[\w:]+::)?" + trait + r"\s+for\s+Door<C>", carry):
+            wrong.append(f"carry.rs: the door does not hear the drag (`{trait}` for `Door<C: Carries>`)")
 
     floor(windows, 19, "windows found")
     floor(swept, 100, "sources of the shell swept for a handler of their own")
@@ -10497,10 +11629,10 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a bar can be drawn anywhere in a painter's file, and the
     # question is whether that file records what it drew.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     buffers = pathlib.Path("${../buffers}")
     wrong, painters = [], 0
 
@@ -10512,12 +11644,12 @@ let
                 wrong.append(f"{where}: `{name}` does not ask `{n}`")
 
     # THE REGISTRY, and what it cuts: every band colour and nothing else.
-    bars = code_of((shell / "bars.rs").read_text())
+    bars = code_of(shell_file("bars.rs").read_text())
     must_ask("bars.rs", bars, "is_a_band", ["SURFACE_SELECTION", "SURFACE_HOVER", "is_a_cursor_hover"])
     must_ask("bars.rs", bars, "clip", ["is_a_band("])
     # THE DOOR READS IT for the pointer and for the bands, and records the
     # header's drawer itself — the header is the door's.
-    door = code_of((shell / "door" / "mod.rs").read_text())
+    door = code_of(shell_file("door/mod.rs").read_text())
     # THE DOOR'S POINTER IS `pointer_into`, which a door on the screen and a
     # detached one (`door::Detached`, the photograph's) both go through.
     must_ask("door/mod.rs", door, "pointer_frame_here", ["pointer_into("])
@@ -10527,28 +11659,33 @@ let
     for n in ("bars.clip(&mut under)", "bars.clip(&mut over)", "drawer_track("):
         if n not in door:
             wrong.append(f"door/mod.rs: the door's paint does not ask `{n}`")
-    listed = code_of((shell / "door" / "list.rs").read_text())
+    listed = code_of(shell_file("door/list.rs").read_text())
     must_ask("door/list.rs", listed, "body", ["canvas.bar(", "list_track("])
     # THE FOOTER IS NOT A DOOR, and keeps the same registry for itself.
-    footer = code_of((shell / "surface.rs").read_text())
+    footer = code_of(shell_source("surface.rs"))
     for n in ("bars_drawn.clip(", "screen.bars = bars_drawn", "on_a_drawn_bar("):
         if n not in footer:
             wrong.append(f"surface.rs: the footer does not keep the registry (`{n}`)")
 
     # THE SEARCH draws into a `fast_access_rows::Drawing`, whose tracks its
-    # window records (`canvas.bar` in `paint_drawing`) and the footer records
-    # (`bars.record` in `fast_access_drawn`). Its painters are held FUNCTION
-    # BY FUNCTION, never by the file: every function of theirs that draws a
-    # thumb (`chrome::thumb`, a page's `thumbs`) hands that bar's track to the
-    # drawing in the same body — so a second bar drawn beside a first cannot
-    # pass on the first one's line.
+    # window records (`canvas.bar` in `paint_drawing`) and its footer region
+    # records on the footer's registry (`bars.record` in its `paint`). Its
+    # painters are held FUNCTION BY FUNCTION, never by the file: every
+    # function of theirs that draws a thumb (`chrome::thumb`, a page's
+    # `thumbs`) hands that bar's track to the drawing in the same body — so a
+    # second bar drawn beside a first cannot pass on the first one's line.
     DRAWINGS = {"fast_access_detail.rs", "fast_access_rows.rs"}
-    fa_window = code_of((shell / "fast_access_window.rs").read_text())
+    fa_window = code_of(shell_file("fast_access_window.rs").read_text())
     must_ask("fast_access_window.rs", fa_window, "paint_drawing", ["canvas.bar("])
-    must_ask("surface.rs", footer, "fast_access_drawn", ["bars.record("])
+    must_ask(
+        "fast_access_region.rs",
+        code_of(shell_file("fast_access_region.rs").read_text()),
+        "paint",
+        ["bars.record("],
+    )
     drawn_thumbs = 0
     for name in sorted(DRAWINGS):
-        code = code_of(without_tests((shell / name).read_text()))
+        code = code_of(without_tests(shell_source(name)))
         for fn in sorted(set(re.findall(r"\bfn\s+(\w+)", code))):
             body = body_of(code, fn) or ""
             if not re.search(r"chrome::thumb\(|\.thumbs\b", body):
@@ -10559,8 +11696,17 @@ let
     floor(drawn_thumbs, 4, "functions of the search that draw a bar's thumb")
     # AND EVERY PAINTER THAT DRAWS A BAR RECORDS IT.
     DRAWS = re.compile(r"(?<!fn )\b(list_bar|shelf_bar|region_bar|fold_bar|section_bars|files_bars|bar_box)\(|scroll\.bar\(")
-    for f in sorted(shell.rglob("*.rs")):
-        if f.name in ("chrome.rs", "bars.rs", "paint.rs") or "door" in f.parts:
+    # THE FOOTER'S MODULE IS ONE PAINTER: a view's half of it
+    # (`surface/<view>.rs`) builds a bar, and the footer's paint
+    # (`surface/mod.rs`) records every one — asked of the module whole, below.
+    footer_files = set(shell_module_files("surface"))
+    module = "\n".join(code_of(without_tests(f.read_text())) for f in sorted(footer_files))
+    if DRAWS.search(module):
+        painters += 1
+        if not re.search(r"bars_drawn\.record", module):
+            wrong.append("the footer: draws a bar and does not record its track (`bars_drawn.record`)")
+    for f in sorted(shell_files("**/*.rs")):
+        if f.name in ("chrome.rs", "bars.rs", "paint.rs") or "door" in f.parts or f in footer_files:
             continue
         code = code_of(without_tests(f.read_text()))
         if not DRAWS.search(code):
@@ -10604,11 +11750,11 @@ let
         python3 - <<'END'
         import pathlib, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
-        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-        chrome = code_of((shell / "chrome.rs").read_text())
-        door = code_of((shell / "door" / "mod.rs").read_text())
-        footer = code_of((shell / "surface.rs").read_text())
+        chrome = code_of(shell_file("chrome.rs").read_text())
+        door = code_of(shell_file("door/mod.rs").read_text())
+        footer = code_of(shell_source("surface.rs"))
         brain = code_of(pathlib.Path("${../buffers/brain/src/lib.rs}").read_text())
         wrong, asked = [], 0
         for where, text, name, needles in (
@@ -10657,13 +11803,13 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a tone picked by hand can be anywhere in a view.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     design = pathlib.Path("${../crates/ronoctua-design/src}")
     TONES = r"TEXT_(LABEL_ACTS|LABEL_FACT|ANSWER|READ_STRONG|READ_WEAK)\b"
     wrong, files = [], 0
-    for f in sorted(shell.rglob("*.rs")):
+    for f in sorted(shell_files("**/*.rs")):
         files += 1
         code = code_of(without_tests(f.read_text()))
         if f.name == "chrome.rs":
@@ -10672,7 +11818,7 @@ let
             code = code.replace(tones, " ")
         for m in re.finditer(TONES, code):
             wrong.append(f"{f.name}: picks `{m.group(0)}` by hand — say the row's `chrome::Kind`")
-    chrome = code_of((shell / "chrome.rs").read_text())
+    chrome = code_of(shell_file("chrome.rs").read_text())
     pair = scope(chrome, r"pub fn field_pair\(")
     signature = chrome[chrome.index("pub fn field_pair("):chrome.index("pub fn field_pair(") + 300]
     if "kind: Kind" not in signature:
@@ -10783,26 +11929,63 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    # FILE-WIDE: this builds the CALL GRAPH of one file — every method of it,
-    # and what each one calls — so the file is the unit by construction. The
-    # cut at `mod tests` and the brace walk below are the narrowing.
+    # FILE-WIDE: this builds the CALL GRAPH of one module — the footer, its
+    # own file (`surface/mod.rs`) and one per view (`surface/<view>.rs`), one
+    # `impl Footer` among all of them — every method of it, and what each one
+    # calls; so the module is the unit by construction. And the same of each
+    # module the binary registers as a region (`regions.rs`), for what its
+    # told methods reach (THREE). The cut at each file's test modules and the
+    # brace walks below are the narrowing.
     #
     # `code_of` matters more here than almost anywhere: the walk counts braces,
     # and a `{` inside a string literal or a comment would end a method's body
     # in the wrong place, giving the graph an edge nobody wrote.
-    src = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
-    floor(len(src), 100000, "characters of surface.rs")
-    # THE TRAILING TEST MODULE IS NOT THE DOOR. A call in an assertion is a
-    # thing the test does, not a thing the footer does.
-    stop = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", src, re.M)
-    code = src[: stop.start()] if stop else src
+    files = shell_module_files("surface")
+    # THE TEST MODULES ARE NOT THE DOOR. A call in an assertion is a thing the
+    # test does, not a thing the footer does.
+    code = "\n".join(code_of(without_tests(f.read_text())) for f in files)
+    floor(len(code), 100000, "characters of the footer's module")
+    # SEVENTEEN once the calculator, the icons app, the clipboard and git left
+    # it for crates of their own (R5f), and falling with each view that does.
+    floor(len(files), 12, "files of the footer's module")
 
     # EVERY METHOD, BY BRACE MATCHING. A regex for the body would stop at the
-    # first `}` in a string or a comment; this counts.
+    # first `}` in a string or a comment; this counts. `pub(super)` too: a
+    # view's half of the footer is a child module, and its methods are the
+    # footer's methods.
+    #
+    # AND A GENERIC ONE TOO. The header was `fn (\w+)\(`, which never matched
+    # `fn with_region<T>(` — the method every call into a region of the slot
+    # host goes through — so it was not in the graph, and a ring through it
+    # (a region's errand telling the open regions what the footer heard,
+    # which calls the region again) passed as "no others". The parameters
+    # are walked past by their angles, and an arrow inside a bound
+    # (`impl FnOnce(..) -> T`) is no closing angle.
+    def opens_at(at):
+        if code.startswith("<", at):
+            depth, k = 0, at
+            while k < len(code):
+                if code.startswith("->", k):
+                    k += 2
+                    continue
+                if code[k] == "<":
+                    depth += 1
+                elif code[k] == ">":
+                    depth -= 1
+                    if depth == 0:
+                        at = k + 1
+                        break
+                k += 1
+        return at if code.startswith("(", at) else None
+
     bodies = {}
-    for m in re.finditer(r"\n    (?:pub )?(?:const )?fn (\w+)\(", code):
-        start = code.find("{", m.end())
+    for m in re.finditer(r"\n    (?:pub(?:\([a-z]+\))? )?(?:const )?(?:unsafe )?fn (\w+)", code):
+        opened = opens_at(m.end())
+        if opened is None:
+            continue
+        start = code.find("{", opened)
         if start < 0:
             continue
         depth, i = 0, start
@@ -10817,14 +12000,37 @@ let
         bodies[m.group(1)] = bodies.get(m.group(1), "") + code[start : i + 1]
 
     floor(len(bodies), 200, "methods found in surface.rs")
+    # A METHOD THE WALK COULD NOT READ is a method whose edges are missing,
+    # and a graph with a hole in it answers "no cycle" for the hole: every
+    # `fn` at a method's indentation is in it, or the check says which.
+    unread = sorted(set(re.findall(r"\n    [^\n{;]*?\bfn (\w+)", code)) - set(bodies))
+    if unread:
+        print("ERROR: methods of the footer this check cannot read: " + ", ".join(unread), file=sys.stderr)
+        raise SystemExit(1)
 
-    edges = {n: sorted(set(re.findall(r"self\.(\w+)\(", b)) & set(bodies)) for n, b in bodies.items()}
+    # A CALL WITH ITS TYPE NAMED (`self.hosted_heard::<T>(…)`) is a call: the
+    # footer tells its regions by naming the type, and an edge read only off
+    # `self.name(` would lose every ring through it.
+    edges = {n: sorted(set(re.findall(r"self\.(\w+)(?:::<[^()]*?>)?\(", b)) & set(bodies)) for n, b in bodies.items()}
     bad = []
 
     # --- ONE. Nothing under `metric` asks what the region CONTAINS ---------
     #
     # `grid`/`grid_full` size the region, `expansion*` count and build it.
+    # AND A REGION OF THE SLOT HOST IS CONTENT: every method that asks one
+    # anything (`self.regions.get(`, `.call(`, `.lend(`…, so `with_region`,
+    # which calls one, and every method that reaches it) — all but the stored
+    # facts the host keeps of each, whether it is open and the shape it came
+    # back with, which the rows' arithmetic may read like any other stored
+    # flag.
     CONTENT = ["expansion", "expansion_len", "expansion_rows", "expansion_window", "grid", "grid_full"]
+    STORED = {"is_open", "open_ids", "ids", "kept_shape", "entry"}
+    asks_a_region = sorted(
+        n for n, b in bodies.items()
+        if any(m not in STORED for m in re.findall(r"self\.regions\.(\w+)\(", b))
+    )
+    floor(len(asks_a_region), 3, "methods that ask a region of the slot host what it holds")
+    CONTENT += asks_a_region
     if "metric" not in bodies:
         bad.append("`Footer::metric` is gone — this check no longer measures anything")
     else:
@@ -10847,92 +12053,392 @@ let
     # --- TWO. The cycles are the ones we know ------------------------------
     #
     # Each is a DISPATCH that recurses on purpose and terminates on a condition,
-    # and each carries the reason it is allowed.
+    # and each carries the reason it is allowed. EVERY ELEMENTARY CYCLE is one
+    # of them, named by its members: a ring that passes through methods
+    # another ring passes through too is a ring of its own — another way
+    # round — and needs a reason of its own.
     KNOWN = {
         # One branch of `expansion_window` asks `expansion` back, and only the
-        # branch with no manager — `manager-builds-its-own-rows` counts it.
-        ("expansion", "expansion_window"),
+        # branch with no region in sections — `manager-builds-its-own-rows`
+        # counts it; the host's line of `expansion` (`hosted_expansion`) asks
+        # the window for the whole region when the shown one is in sections.
+        ("expansion", "expansion_window", "hosted_expansion"),
         # `expansion_len` falls through to `expansion().len()` for the views
-        # that keep no count of their own.
-        ("expansion", "expansion_len"),
-        # A bluetooth answer can raise an errand, and an errand answers.
-        ("bluetooth_answer", "bluetooth_errand"),
-        # A radio's errand can name a command of the registry, and one of those
-        # commands — disconnecting every device — gives errands back. It turns
-        # once: the command orders the thread and names no command. The ring
-        # the answers used to close through `run_with` now passes through
-        # `bluetooth_ordered`, which holds a window's answer to its question,
-        # and the search meets this one first.
-        ("bluetooth_disconnect_all", "bluetooth_errand", "run_with"),
-        # A command can run a command: the clipboard's errand goes back through
-        # the registry, which is the one door every command enters by.
-        ("clipboard_errand", "run_command", "run_with"),
+        # that keep no count of their own, and the host's line asks it how
+        # long a region in sections is.
+        ("expansion", "expansion_len", "hosted_expansion"),
         # A view's row can name a command, and the view CLOSES before running
-        # it (`camera_view`, `pointer_view` set to `None`), while `run_with`
-        # only presses back into a view that is open — so the ring turns once
-        # and stops, which is the clipboard's shape above. The player's rows
-        # name no command at all: its pages open inside the view, and the swap
-        # goes through `player_door`, which opens without the registry.
-        ("camera_settings_press", "run_with"),
-        ("pointers_press", "run_with"),
-        # The file manager's `m` and `l` on the `/private` vault's row run the
-        # vault's two leader commands (`Doing::Vault`), whose arms go to the
-        # security centre and never back to a files step: it turns once, the
-        # clipboard's shape.
-        ("apply_files_step", "do_about_files", "run_command", "run_with"),
+        # it, while `run_with` only presses back into a view that is open — so
+        # the ring turns once and stops. The player's rows name no command at
+        # all: its pages open inside the view, and the swap goes through
+        # `player_door`, which opens without the registry. (The camera's
+        # settings had the same ring, as the pointers', the file manager's and
+        # the containers' did — the containers' row that names another view,
+        # the firewall's rules — and the clipboard's errand, which ran a
+        # command through the registry; they are regions of the slot host
+        # now, and their rows' commands run through the host's.)
+        # `RET` on a row of the footer's settings runs that setting's command
+        # (`Setting::command`: the bars' cycle, the hours, the kiosk), which
+        # writes its file and presses no row of the view: it turns once.
+        ("footer_settings_commands", "footer_settings_press", "run_command", "run_with"),
+        # A REGION'S ACT ON THE CLIPBOARD'S HISTORY (`Effect::Clipboard`), done
+        # once the region is back in its slot, moves the history, and every
+        # door following it is told — the region among them (`hosted_heard`,
+        # a call that is no gesture: `with_region_for_news`). What a region
+        # hears is a reading, and its answer to one is a frame: it turns once,
+        # and a region that acted on the history it was told would be its own
+        # bug, as a command that ran itself is.
+        ("clipboard_acted", "clipboard_carry_out", "clipboard_moved", "clipboard_told", "hosted_heard", "region_owed", "with_region_for_news"),
+        # And straight, for an act that moved no entry — the sync's switch, a
+        # setting — or one aimed at a history that moved: told at once.
+        ("clipboard_acted", "clipboard_told", "hosted_heard", "region_owed", "with_region_for_news"),
+        # A REGION OF THE SLOT HOST asks to close (`Effect::Close`), and what
+        # its `closing` asked is done in turn: the region has left its slot
+        # by then, so a second `Close` finds nothing — the ring turns once.
+        ("close_region", "region_owed"),
+        # WHAT WAS JUST INSTALLED, opened (`software-launch-latest`: the
+        # event's "open it", the notification's, by name) gives the keyboard
+        # back first: the software centre's region, when it is up, closes
+        # (`close_region`), and what its `closing` asked is done in turn — it
+        # asks nothing (its readings are kept for the next opening), so the
+        # ring turns once: the ring above, entered by a command. The
+        # notification's button reaches it through the desk too
+        # (`desk_asked` → `run_notification_action` → `run_command`).
+        ("close_region", "region_owed", "run_with", "software_launch_latest"),
+        ("close_region", "desk_asked", "region_owed", "run_command", "run_notification_action", "run_with", "software_launch_latest"),
+        # A region may run a command (`Doorway::run`), which goes in by the
+        # one door every command enters by — the clipboard's shape, above: it
+        # turns as often as a region asks, and a region whose command ran
+        # itself would be its own bug, as a command that ran itself is. Its
+        # command comes back to it through the call (`with_region`, the
+        # region lent and back in its slot before what it asked is done) —
+        # the call that `open_region` makes too, handing a closed region the
+        # command that opened it — or, for a CLOSED region's answer
+        # (`Slots::closed_command`), what it asked is done right where it
+        # answered.
+        ("hosted_command", "region_owed", "run_with"),
+        ("hosted_command", "open_region", "region_owed", "run_with"),
+        ("hosted_command", "region_owed", "run_with", "with_region"),
+        ("hosted_command", "open_region", "region_owed", "run_with", "with_region"),
+        # The answer to a region's own question is asked FIRST of the
+        # commands (`hosted_answer`, before any view's line: a seal's question
+        # is asked by two views), and goes to the region through the call —
+        # the ring above, entered by the answer: what the region asks in turn
+        # is a command like any other.
+        ("hosted_answer", "region_owed", "run_with", "with_region"),
+        # A HIDDEN REGION asks to be shown (`Effect::Show`), and is told it is
+        # (`Region::shown`) through the call: a second `Show` from there finds
+        # it shown already and does nothing — the ring turns once.
+        ("region_owed", "show_region", "with_region"),
+        # A REGION THAT WROTE THE LANGUAGE OR THE PLACES asks the footer to take
+        # them now (`Written::Language`, `Written::Places`), and the footer
+        # tells every open region (`Region::language_changed`, `Region::heard`)
+        # through the call, which does what each asks in turn. It turns once:
+        # a region TOLD re-reads, and asks nothing back (THREE, below).
+        ("adopt_the_language", "hosted_language_changed", "region_owed", "with_region"),
+        # (What the footer HEARS is told through the news doorway, which
+        # measures no page: `with_region_for_news`.)
+        ("adopt_the_places", "hosted_heard", "region_owed", "with_region_for_news"),
+        # THE RADIO'S COMMANDS come before the host (`radio_commands`): they
+        # open the radio's region through it (`open_the_radio`, the card when
+        # it refuses) and tell the open regions where the agent's question
+        # stands (`hosted_heard`, from the answer and from the question's end
+        # — `bluetooth_answer`, `bluetooth_unasked`), and a region may run a
+        # command: the radio's view sends the person's answer by name
+        # (`bluetooth-accept`/`-refuse`, `bluetooth_ordered`). It turns once:
+        # the radio's region runs nothing as it opens (`bluetooth-open` and
+        # `bluetooth-device` only follow), a region told of the question runs
+        # nothing (THREE, below) — the answer is a person's key, click or
+        # digits — and an answer for a question that is over is not given.
+        ("hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with"),
+        ("hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_with"),
+        ("hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region"),
+        ("hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "hosted_heard", "radio_commands", "region_owed", "run_with", "with_region_for_news"),
+        ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "hosted_heard", "radio_commands", "region_owed", "run_with", "with_region_for_news"),
+        # A REGION BROUGHT TO LIFE HIDDEN (`Closed::Behind`) is handed its
+        # command through the call (`with_region_held`), as `open_region` hands
+        # a region the command that opened it — the ring above, entered by a
+        # command that acts without the page: what the region asks in turn is
+        # a command like any other, and one that ran itself would be its own
+        # bug. And every region that comes to life is first told what the
+        # footer holds (`hosted_replay`, `Footer::standing`) through the same
+        # call, which asks nothing back: a region TOLD re-reads, and runs
+        # nothing (THREE, below). The radio's commands and the person's
+        # answer to the agent reach these as they reach the ones above.
+        ("bring_a_region_behind", "hosted_command", "region_owed", "run_with"),
+        ("bring_a_region_behind", "hosted_command", "region_owed", "run_with", "with_region_held"),
+        ("bring_a_region_behind", "hosted_command", "hosted_replay", "region_owed", "run_with", "with_region_held"),
+        ("hosted_command", "hosted_replay", "open_region", "region_owed", "run_with", "with_region_held"),
+        ("bring_a_region_behind", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with"),
+        ("bring_a_region_behind", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region_held"),
+        ("bring_a_region_behind", "hosted_command", "hosted_replay", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region_held"),
+        ("hosted_command", "hosted_replay", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region_held"),
+        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region_held"),
+        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "hosted_command", "hosted_replay", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region_held"),
+        ("bluetooth_answer", "bluetooth_ordered", "hosted_command", "hosted_replay", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region_held"),
+        # THE ANSWER TO A REGION'S QUESTION is asked of the host too, before
+        # the open regions' commands (`hosted_command` → `hosted_answer`), and
+        # the radio's commands come before the host — the answer's ring
+        # above, entered by those: once.
+        ("hosted_answer", "hosted_command", "region_owed", "run_with", "with_region"),
+        ("hosted_answer", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "hosted_answer", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_with", "with_region"),
+        # A NOTIFICATION'S BUTTON IS A COMMAND (`Deed::Command`, put on the
+        # card by its sender), and a region asks it of the footer's desk — the
+        # manager's `a` on a record, a window's order by name, the band's
+        # button through `notif-act` (`Effect::Desk`, `desk_asked` →
+        # `run_notification_action` → `run_command`): the region's own
+        # `Effect::Run` by a longer road, so every ring a region's run closes
+        # (above) it closes too, once — the card's command is its sender's,
+        # and one that pressed its own button again would be the sender's bug.
+        # What the desk's settle asks is done in the ask's place, and an ask of
+        # the desk from inside a settle is not done (`region_owed`).
+        ("desk_asked", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("desk_asked", "hosted_answer", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("desk_asked", "hosted_command", "open_region", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("desk_asked", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        ("desk_asked", "hosted_answer", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("desk_asked", "hosted_command", "open_region", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "hosted_replay", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("desk_asked", "hosted_command", "hosted_replay", "open_region", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        ("desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_for_news"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        ("desk_asked", "hosted_answer", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_for_news"),
+        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "hosted_replay", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        ("desk_asked", "hosted_command", "hosted_replay", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_answer", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "desk_asked", "hosted_command", "hosted_replay", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "hosted_replay", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        # The launcher's "search to install" and its `C-i`/`C-d` open the
+        # software centre — a region of its own crate, which the footer names
+        # only by its commands — through the one door every command enters
+        # by. The launcher CLOSES first (`self.apps = None`) and no software
+        # command is the launcher's, so the ring turns once: the camera's
+        # shape above.
+        ("apply_app_action", "apps_commands", "run_with"),
+        ("apply_app_action", "apps_commands", "open_software_for", "run_with"),
+        # And a CLOSED region's command asks the footer's door too — its
+        # resident's (the player's transport with the view closed, a scan
+        # asked by name): what it asked is done after the answer, with no
+        # region lent, the same ring without the call.
+        ("hosted_command", "region_owed", "run_with"),
+        # AND WHAT THE FOOTER HEARD, told to a CLOSED region's resident
+        # (`Resident::heard`, the player's last state with the view closed):
+        # what it asks is done after, with no region lent — the rings above
+        # through the news doorway (`with_region_for_news`), without the call.
+        # They turn once, as those do: a resident told re-reads, and runs
+        # nothing.
+        ("adopt_the_places", "hosted_heard", "region_owed"),
+        ("bluetooth_answer", "bluetooth_ordered", "hosted_heard", "radio_commands", "region_owed", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "hosted_heard", "radio_commands", "region_owed", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("clipboard_acted", "clipboard_told", "hosted_heard", "region_owed"),
+        ("clipboard_acted", "clipboard_carry_out", "clipboard_moved", "clipboard_told", "hosted_heard", "region_owed"),
     }
+    # A RING IS ITS MEMBERS, in any order: the same methods calling round are
+    # one fact, whichever of them a reader starts from.
+    KNOWN = {tuple(sorted(ring)) for ring in KNOWN}
 
-    WHITE, GREY, BLACK = 0, 1, 2
-    colour = dict.fromkeys(bodies, WHITE)
-    stack, found = [], set()
+    # EVERY ELEMENTARY CYCLE, AND NOT ONE PER BACK EDGE OF A WALK.
+    #
+    # The walk this used to be — depth first, marking a method grey on the way
+    # in and black on the way out — finds a ring only where it meets a GREY
+    # method again. A ring through a method the walk had already finished is
+    # never met: the places' ring went round through `with_region` and
+    # `region_owed` after the language's had blackened them, the radio's
+    # through `run_with` after the clipboard's, and the check said "8
+    # declared recursions and no others" over thirty-five. Johnson's
+    # algorithm lists every one, inside the strongly connected parts of the
+    # graph — no cycle leaves one — so a declared ring exists exactly when
+    # it is in the list.
+    def strongly_connected(nodes):
+        index, low, on, stack, parts = {}, {}, set(), [], []
 
-    def walk(n):
-        colour[n] = GREY
-        stack.append(n)
-        for m in edges[n]:
-            if colour[m] == GREY:
-                # THE CYCLE AS A SET, so the same ring reported from two entry
-                # points is one fact and not two.
-                found.add(tuple(sorted(stack[stack.index(m) :])))
-            elif colour[m] == WHITE:
-                walk(m)
-        stack.pop()
-        colour[n] = BLACK
+        def visit(n):
+            index[n] = low[n] = len(index)
+            stack.append(n)
+            on.add(n)
+            for m in edges[n]:
+                if m not in nodes:
+                    continue
+                if m not in index:
+                    visit(m)
+                    low[n] = min(low[n], low[m])
+                elif m in on:
+                    low[n] = min(low[n], index[m])
+            if low[n] == index[n]:
+                part = set()
+                while True:
+                    m = stack.pop()
+                    on.discard(m)
+                    part.add(m)
+                    if m == n:
+                        break
+                parts.append(part)
 
+        for n in sorted(nodes):
+            if n not in index:
+                visit(n)
+        return [p for p in parts if len(p) > 1 or any(n in edges[n] for n in p)]
+
+    # A GRAPH WITH MORE RINGS THAN ANYONE COULD DECLARE is a tangle to cut,
+    # not a list to write: past this the check stops counting and says so.
+    CEILING = 2000
     sys.setrecursionlimit(10_000)
-    for n in sorted(bodies):
-        if colour[n] == WHITE:
-            walk(n)
+    found, turns = set(), [0]
+    rest = set().union(*strongly_connected(set(edges)))
+    while rest:
+        parts = strongly_connected(rest)
+        if not parts:
+            break
+        start = min(min(p) for p in parts)
+        part = next(p for p in parts if start in p)
+        blocked, held, path = set(), {n: set() for n in part}, [start]
 
-    # A DECLARED RING EXISTS when its members still call round among
-    # THEMSELVES — asked of the graph, not of the walk: which back edge the
-    # walk meets first depends on the order it visits, and a new ring through
-    # `run_with` once hid the clipboard's from it while the clipboard's was
-    # still there.
-    def still_a_ring(ring):
-        members = set(ring)
-        if not members <= set(edges):
-            return False
-        def reached(forward):
-            start = min(members)
-            seen, todo = {start}, [start]
+        def unblock(n):
+            todo = [n]
             while todo:
-                n = todo.pop()
-                for m in members:
-                    if m not in seen and (m in edges[n] if forward else n in edges[m]):
-                        seen.add(m)
-                        todo.append(m)
-            return seen
-        return reached(True) == members and reached(False) == members
+                m = todo.pop()
+                if m in blocked:
+                    blocked.discard(m)
+                    todo.extend(held[m])
+                    held[m].clear()
 
+        def circuit(n):
+            closed = False
+            blocked.add(n)
+            for m in sorted(set(edges[n]) & part):
+                if m == start:
+                    found.add(tuple(sorted(path)))
+                    turns[0] += 1
+                    if turns[0] > CEILING:
+                        print("ERROR: the footer calls round in more than " + str(CEILING)
+                              + " rings; cut the tangle before declaring it", file=sys.stderr)
+                        raise SystemExit(1)
+                    closed = True
+                elif m not in blocked:
+                    path.append(m)
+                    closed = circuit(m) or closed
+                    path.pop()
+            if closed:
+                unblock(n)
+            else:
+                for m in set(edges[n]) & part:
+                    held[m].add(n)
+            return closed
+
+        circuit(start)
+        rest.discard(start)
+
+    floor(len(found), 10, "rings of the footer's call graph")
     for ring in sorted(found - KNOWN):
         bad.append("a cycle nobody declared: " + " <-> ".join(ring))
-    for ring in sorted(KNOWN):
-        if not still_a_ring(ring):
-            bad.append(
-                "the declared cycle " + " <-> ".join(ring) + " no longer exists; a line "
-                "excluding nothing excludes nothing"
-            )
+    for ring in sorted(KNOWN - found):
+        bad.append(
+            "the declared cycle " + " <-> ".join(ring) + " no longer exists; a line "
+            "excluding nothing excludes nothing"
+        )
+
+    # --- THREE. What a region is TOLD asks nothing back --------------------
+    #
+    # The rings through `hosted_heard`, `hosted_language_changed` and
+    # `hosted_locale_changed` — the footer telling every open region what it
+    # read — turn once only because a region TOLD something re-reads and asks
+    # nothing that comes back round: no file written for the footer to take
+    # (`Doorway::written`, which tells every open region again), no command
+    # run (`Doorway::run`, which reaches the radio's commands and the host
+    # again), no ask of the notification desk (`Doorway::desk`, whose card's
+    # button is a command run). The graph above is the footer's half of that
+    # reason; this is the regions' half, asked of every region the binary
+    # registers: what its `heard`, `language_changed` and `locale_changed`
+    # reach in its own module — its methods by `self.`/`Self::` and its free
+    # functions by a bare name — never writes, runs nor asks the desk.
+    TOLD = ("heard", "language_changed", "locale_changed")
+    ASKS_BACK = (".written(", ".run(", ".desk(")
+    hosted = re.findall(r"(\w+)::ENTRY\b", uncommented(shell_file("regions.rs").read_text()))
+    floor(len(hosted), 5, "regions the binary registers")
+    told = 0
+    for module in hosted:
+        text = code_of(without_tests(shell_file(module + ".rs").read_text()))
+        # EVERY FUNCTION OF THE MODULE, a method or free, by its body: from
+        # its name past the signature — an array's `;` and a bound's
+        # parentheses are not its end — to the brace that closes the body. A
+        # declaration with no body has none. Two of one name are one: a call
+        # by that name may reach either.
+        def body_after(at):
+            depth, i = 0, at
+            while i < len(text):
+                c = text[i]
+                if c in "([":
+                    depth += 1
+                elif c in ")]":
+                    depth -= 1
+                elif depth == 0 and c == ";":
+                    return None
+                elif depth == 0 and c == "{":
+                    break
+                i += 1
+            start = i
+            depth = 0
+            while i < len(text):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start : i + 1]
+                i += 1
+            return None
+
+        functions = {}
+        for m in re.finditer(r"\bfn (\w+)", text):
+            body = body_after(m.end())
+            if body is not None:
+                functions[m.group(1)] = functions.get(m.group(1), "") + body
+        def calls(body):
+            named = set(re.findall(r"\b(?:self\.|Self::)(\w+)\s*\(", body))
+            named |= set(re.findall(r"(?<![\w.:])(\w+)\s*\(", body))
+            return named & set(functions)
+        for entry in TOLD:
+            if entry not in functions:
+                continue
+            told += 1
+            how, todo = {entry: [entry]}, [entry]
+            while todo:
+                n = todo.pop()
+                for needle in ASKS_BACK:
+                    if needle in functions[n]:
+                        bad.append(
+                            "`" + module + "`'s `" + entry + "` asks back (`" + needle + "…)`) "
+                            "through " + " -> ".join(how[n]) + ": a region told what the "
+                            "footer read would send the footer round its own ring again"
+                        )
+                for m in calls(functions[n]):
+                    if m not in how:
+                        how[m] = how[n] + [m]
+                        todo.append(m)
+    floor(told, 5, "methods by which a region is told what the footer read")
 
     if bad:
         print("ERROR: the footer can ask itself a question it is the answer to.", file=sys.stderr)
@@ -10949,7 +12455,8 @@ let
         raise SystemExit(1)
     print(
         f"OK: {len(bodies)} methods of `Footer`, {len(found)} declared recursions and no "
-        f"others, and nothing under `metric` asks what the region holds"
+        f"others, nothing under `metric` asks what the region holds, and the {told} "
+        f"ways a region is told what the footer read ask nothing back"
     )
     END
   '';
@@ -10988,18 +12495,20 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         root_dir = pathlib.Path("${self}")
         bad = []
 
         # FILE-WIDE: every question here is about a UNIT — a `systemd.user`
-        # block in a Nix module, a subcommand in `main.rs`, a word in a shell
+        # block in a Nix module, a door of the binary, a word in a shell
         # script. None of them lives in a function, and the three `re.search`es
         # for the unit blocks are the narrowing.
         #
         # `hashless` for the Nix and the shell, because `#` is their comment;
         # `uncommented` for the Rust, because the needle there is the string
-        # literal `Some("lifeline")` and `code_of` would empty it.
+        # literal `"lifeline"` — the door's word in its crate's table — and
+        # `code_of` would empty it.
 
         module = hashless((root_dir / "nix/modules/scroll.nix").read_text())
         floor(len(module), 4000, "characters of nix/modules/scroll.nix")
@@ -11052,10 +12561,18 @@ let
                 bad.append("the lifeline unit is `wantedBy` something; it must be raised only by the failure")
 
         # --- AND THE SUBCOMMAND IT NAMES IS REACHABLE -------------------------
-        main = uncommented((root_dir / "crates/ronoctua-shell/src/main.rs").read_text())
+        # A door of the lifeline's crate, by its word in the crate's table
+        # (`DOORS`), which the binary dispatches by — its list of tables names
+        # the crate's (`every-door-is-dispatched` holds every table listed).
+        main = uncommented(without_tests(shell_file("main.rs").read_text()))
         floor(len(main), 2000, "characters of main.rs")
-        if 'Some("lifeline")' not in main:
-            bad.append("`ronoctua-shell` has no `lifeline` subcommand for the unit to run")
+        lifeline_lib = root_dir / "crates/ronoctua-shell-lifeline/src/lib.rs"
+        lib = uncommented(without_tests(lifeline_lib.read_text())) if lifeline_lib.is_file() else ""
+        table = re.search(r"\bpub const DOORS:[^=]*=\s*&\[(.*?)\];", lib, re.S)
+        if table is None or not re.search(r'\bname:\s*"lifeline"', table.group(1)):
+            bad.append("no crate's table of doors has the `lifeline` subcommand for the unit to run")
+        if "ronoctua_shell_lifeline::DOORS" not in main:
+            bad.append("`ronoctua-shell` does not dispatch the lifeline's doors (`DOORS` in main.rs)")
 
         # --- THREE. And the nested loop raises it too -------------------------
         #
@@ -11109,6 +12626,7 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         # FILE-WIDE: what is asked is "what does the rescue line OFFER", and the
         # offer is a module-level table — `const OFFERED`, found below, is the
@@ -11117,7 +12635,7 @@ let
         #
         # `uncommented`: every needle here is a string literal — the key a row
         # is pressed by, and the `"ESC"` that `Escape` resolves to.
-        src = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/lifeline.rs").read_text())
+        src = uncommented(shell_file("lifeline.rs").read_text())
         floor(len(src), 4000, "characters of lifeline.rs")
         i18n = pathlib.Path("${texts}")
         bad = []
@@ -11129,7 +12647,7 @@ let
             print("       this check is the only thing that says every option has a key.", file=sys.stderr)
             raise SystemExit(1)
 
-        rows = re.findall(r'\("([^"]+)",\s*ronoctua_i18n::key::(\w+),\s*Doing::(\w+)\)', table.group(2))
+        rows = re.findall(r'\("([^"]+)",\s*(?:crate|ronoctua_i18n)::key::(\w+),\s*Doing::(\w+)\)', table.group(2))
         if len(rows) != int(table.group(1)):
             bad.append(f"the table says {table.group(1)} options and {len(rows)} were read")
 
@@ -11174,7 +12692,7 @@ let
         # of its own (`const ASKED`, "no" first): its answers are offered
         # there, each by a key, and drawn through the same registers.
         asked = re.search(r"const ASKED: \[\(&str, &str, Doing\); (\d+)\] = \[(.*?)\n\];", src, re.S)
-        answers = re.findall(r'\("([^"]+)",\s*ronoctua_i18n::key::(\w+),\s*Doing::(\w+)\)', asked.group(2)) if asked else []
+        answers = re.findall(r'\("([^"]+)",\s*(?:crate|ronoctua_i18n)::key::(\w+),\s*Doing::(\w+)\)', asked.group(2)) if asked else []
         if asked and len(answers) != int(asked.group(1)):
             bad.append(f"the question says {asked.group(1)} answers and {len(answers)} were read")
         if len({a[0] for a in answers}) != len(answers):
@@ -11241,10 +12759,10 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    chrome = code_of((shell / "chrome.rs").read_text())
-    fold = code_of((shell / "fold.rs").read_text())
+    chrome = code_of(shell_file("chrome.rs").read_text())
+    fold = code_of(shell_file("fold.rs").read_text())
     floor(len(chrome), 20000, "characters of chrome.rs")
     floor(len(fold), 4000, "characters of fold.rs")
     bad = []
@@ -11351,12 +12869,12 @@ let
     python3 - <<'END'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: "is every `band_belongs` in this door asked about something
     # `band_row` produced" is a question about every site in the file, and the
     # twelve lines above each site are the narrowing — the offence is a site
     # anywhere, so there is no one function to walk.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     bad = []
     doors = 0
     for name in ("surface.rs", "files_window.rs"):
@@ -11367,7 +12885,7 @@ let
         # `code_of` in place of the hand-written strip, which only caught a
         # comment that began a line: a `band_belongs` named in prose AFTER code
         # on the same line still counted as a site.
-        text = code_of((shell / name).read_text())
+        text = code_of(shell_source(name))
         floor(len(text), 10000, "characters of " + name)
         lines = text.split("\n")
         sites = [n for n, l in enumerate(lines) if "band_belongs" in l]
@@ -11427,10 +12945,11 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # THE PREVIEW IS THE PANEL'S, and the panel left `files.rs` for
     # `inspection.rs` (`inspection::Panel`), where all three live.
-    body = code_of((pathlib.Path("${../crates/ronoctua-shell/src}") / "inspection.rs").read_text())
+    body = code_of(shell_file("inspection.rs").read_text())
     floor(len(body), 10000, "characters of inspection.rs")
     bad = []
 
@@ -11515,6 +13034,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: `OF_THE_*` tables are module-level, and the census is of every
     # one of them in every door. The two `means` functions and `strong_of` are
@@ -11523,11 +13043,10 @@ let
     # `uncommented` and never `code_of`: an id IS a string literal, and there
     # would be no ids at all to check if the strings were emptied.
     #
-    # THE TABLES ARE LOOKED FOR IN EVERY SOURCE OF THE CRATE (`rust_sources`),
-    # `door/` and the other subdirectories with it: a table one level down
-    # draws a hint line as much as one at the top. A name is crate-relative.
-    shell_crate = pathlib.Path("${../crates/ronoctua-shell}")
-    shell = shell_crate / "src"
+    # THE TABLES ARE LOOKED FOR IN EVERY SOURCE OF EVERY SHELL CRATE
+    # (`shell_files`), `door/` and the other subdirectories with it: a table
+    # one level down, or one crate over, draws a hint line as much as one at
+    # the top. A name is the path in its crate.
     i18n = pathlib.Path("${texts}")
 
     # BOTH SPELLINGS OF THE ROW. The tables are `&str` where the ids are only
@@ -11543,8 +13062,8 @@ let
     ROW = re.compile(r'\(\s*"[^"]*"\s*,\s*"([a-z0-9-]+)"')
 
     ids, tables = {}, []
-    for f in rust_sources(shell_crate):
-        name = str(f.relative_to(shell_crate))
+    for f in shell_files("**/*.rs"):
+        name = "src/" + shell_name(f)
         for m in TABLE.finditer(uncommented(f.read_text())):
             found = ROW.findall(m.group(2))
             tables.append((name, m.group(1), len(found)))
@@ -11562,7 +13081,7 @@ let
     MEANS = [("files.rs", "strong_meaning"), ("notifications.rs", "means")]
     answered = 0
     for name, head in MEANS:
-        body = uncommented((shell / name).read_text())
+        body = uncommented(shell_source(name))
         m = body_of(body, head)
         if not m:
             print(f"ERROR: {name}: the `means` function this check reads is gone;", file=sys.stderr)
@@ -11585,7 +13104,7 @@ let
         re.findall(
             r'"([a-z0-9-]+)"\s*=>\s*Some\(',
             must(
-                body_of(uncommented((shell / "files.rs").read_text()), "strong_of"),
+                body_of(uncommented(shell_file("files.rs").read_text()), "strong_of"),
                 "`files::strong_of`",
             ),
         )
@@ -11618,7 +13137,7 @@ let
 
     LITERAL = re.compile(r'^"([a-z0-9-]+)"$')
     abouts, unread = {}, []
-    for f in sorted(shell.glob("*.rs")):
+    for f in shell_files("*.rs"):
         text = without_tests(uncommented(f.read_text()))
         for m in re.finditer(r"\.heading_(with|controls)\(", text):
             # THE ONE CALL THAT PASSES AN `about` ON is `heading_with`'s own
@@ -11786,11 +13305,15 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    # EVERY SOURCE OF THE CRATE (`rust_sources`), `door/` and the other
-    # subdirectories with it: a view one level down draws rows as much as one
-    # at the top. A view's name is its crate-relative path (`src/network.rs`).
-    shell_crate = pathlib.Path("${../crates/ronoctua-shell}")
+    # EVERY SOURCE OF EVERY SHELL CRATE (`shell_files`), `door/` and the
+    # other subdirectories with it: a view one level down, or one crate over,
+    # draws rows as much as one at the top. A view's name is its path in its
+    # crate (`src/network.rs`), and a part is read by that name in whichever
+    # crate holds it (`in_shell`).
+    def in_shell(part):
+        return shell_file(part.removeprefix("src/"))
 
     # THE VIEWS ARE FOUND BY THEIR `struct View`, never by a list typed here.
     # `labels-of-a-view-are-distinct` scanned a hand-written six while eight
@@ -11800,8 +13323,8 @@ let
     # `<view>_*.rs` that writes its rows — and the colour it names may be
     # named anywhere in them. The cut at `mod tests` is the narrowing.
     VIEWS = sorted(
-        str(f.relative_to(shell_crate))
-        for f in rust_sources(shell_crate)
+        "src/" + shell_name(f)
+        for f in shell_files("**/*.rs")
         if re.search(r"^(?:pub )?struct View\b", code_of(f.read_text()), re.M)
     )
     floor(len(VIEWS), 12, "views found by their `struct View`")
@@ -11813,7 +13336,7 @@ let
     def census(name):
         stem = name[: -len(".rs")]
         parts = [name]
-        for f in sorted(shell_crate.glob(stem + "_*.rs")):
+        for f in shell_files(stem.removeprefix("src/") + "_*.rs"):
             theirs = without_tests(code_of(f.read_text()))
             if re.search(r"^(?:pub )?struct View\b", theirs, re.M):
                 continue
@@ -11823,7 +13346,7 @@ let
             # that way left both censuses without a word. A thread's builder
             # is not the view's.
             if re.search(r"(?<!thread::)\bBuilder\b|^impl View\b", theirs, re.M):
-                parts.append(str(f.relative_to(shell_crate)))
+                parts.append("src/" + shell_name(f))
         return parts
 
     HERE = re.compile(r"\bTEXT_HERE_[A-Z]+\b")
@@ -11875,7 +13398,7 @@ let
     for name in VIEWS:
         code = ""
         for part in census(name):
-            body = code_of((shell_crate / part).read_text())
+            body = code_of(in_shell(part).read_text())
             # THE TRAILING TEST MODULE IS NOT THE SCREEN. A colour named in an
             # assertion is a thing the test says, not a thing the view draws.
             cut = re.search(r"^#\[cfg\(test\)\]\s*\nmod tests", body, re.M)
@@ -11890,7 +13413,7 @@ let
             # THE REASON IS RE-MEASURED, never taken on trust. If the band and
             # the lit rule have gone, the excuse has gone with them.
             for door in EXCUSED[name]:
-                said = code_of((shell_crate / door).read_text())
+                said = code_of(in_shell(door).read_text())
                 for mark in (BAND, LIT):
                     if mark not in said:
                         wrong.append(
@@ -11962,15 +13485,18 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    # EVERY SOURCE OF THE CRATE (`rust_sources`), `door/` and the other
-    # subdirectories with it: a heading one level down is drawn as much as
-    # one at the top. A source is named from `src/` (`door/list.rs`).
-    shell_crate = pathlib.Path("${../crates/ronoctua-shell}")
-    shell = shell_crate / "src"
-    SOURCES = rust_sources(shell_crate)
+    # EVERY SOURCE OF EVERY SHELL CRATE (`shell_files`), `door/` and the
+    # other subdirectories with it: a heading one level down, or one crate
+    # over, is drawn as much as one at the top. A source is named from its
+    # crate's `src/` (`door/list.rs`).
+    SOURCES = shell_files("**/*.rs")
+    # THE FOOTER IS ONE MODULE in several files (`surface/mod.rs` and a file
+    # per view): a name in any of them is the footer's.
+    FOOTER = set(shell_module_files("surface"))
     def rel(f):
-        return str(f.relative_to(shell if shell in f.parents else shell_crate))
+        return "the footer" if f in FOOTER else shell_name(f)
     floor(len(SOURCES), 25, "sources in the shell")
 
     wrong = []
@@ -11982,7 +13508,7 @@ let
     # and narrowing to a function would be asking about the place the mistake is
     # not. The narrowing that does apply is `without_tests`: an assertion naming
     # the token is a thing a test says, not a thing a view draws.
-    HOME = "surface.rs"
+    HOME = "the footer"
     homes = []
     for f in SOURCES:
         code = code_of(without_tests(f.read_text()))
@@ -11999,13 +13525,13 @@ let
     # THE SECOND ARM'S EXCUSE IS RE-MEASURED, never taken on trust: the day the
     # leader stops generating `w` from the menu, its groups are no longer the
     # leader's submenus, and the tone there is a drift like any other.
-    home_code = code_of(without_tests((shell / HOME).read_text()))
-    keymap = code_of(without_tests((shell / "leader.rs").read_text()))
+    home_code = code_of(without_tests(shell_source("surface.rs")))
+    keymap = code_of(without_tests(shell_file("leader.rs").read_text()))
     if not re.search(r"=\s*crate::window_menu::leader_bindings\(\)", keymap):
         wrong.append("`LEADER w` is no longer generated from the window menu"
                      " (`window_menu::leader_bindings`), so its groups are not the"
                      " leader's submenus and may not wear `TEXT_GROUP`")
-    menu = must(scope(home_code, r"ViewState::WindowMenu\s*&&\s*let Some\(v\) = self\.window_menu\.as_ref\(\)"),
+    menu = must(scope(home_code, r"fn window_menu_expansion\b"),
                 "the window menu's rows in " + HOME)
     if not re.search(r"let group = e\.is_group\(\);", menu):
         wrong.append("the window menu's `group` is no longer the entry's `is_group()`")
@@ -12115,6 +13641,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a view is its FILE and the sibling files that build its rows
     # — the census is "every source with a `struct View`", and beside it each
@@ -12122,13 +13649,13 @@ let
     # asks for may be named anywhere in them. The cut at `mod tests` is the
     # narrowing.
 
-    # EVERY SOURCE OF THE CRATE (`rust_sources`), `door/` and the other
-    # subdirectories with it: a view one level down is a list as much as one
-    # at the top. A source is named from `src/` (`door/list.rs`).
-    shell_crate = pathlib.Path("${../crates/ronoctua-shell}")
-    shell = shell_crate / "src"
+    # EVERY SOURCE OF EVERY SHELL CRATE (`shell_files`), `door/` and the
+    # other subdirectories with it: a view one level down, or one crate over,
+    # is a list as much as one at the top. A source is named from its crate's
+    # `src/` (`door/list.rs`), and read by that name in whichever crate holds
+    # it.
     def rel(f):
-        return str(f.relative_to(shell if shell in f.parents else shell_crate))
+        return shell_name(f)
 
     # A VIEW IS ITS FILE AND THE SIBLINGS THAT BUILD ITS ROWS.
     #
@@ -12149,13 +13676,13 @@ let
         # view holding a `crate::<m>::Panel` reads `<m>.rs` and every
         # `<m>_*.rs` beside it as its own, or the labels it draws there would
         # be checked by nobody.
-        own = without_tests(code_of((shell / name).read_text()))
+        own = without_tests(code_of(shell_source(name)))
         for held in sorted(set(re.findall(r"\bcrate::([a-z_]+)::Panel\b", own))):
-            if (shell / f"{held}.rs").exists():
+            if shell_has(f"{held}.rs"):
                 parts.append(f"{held}.rs")
-                parts += [f.name for f in sorted(shell.glob(held + "_*.rs"))]
+                parts += [shell_name(f) for f in shell_files(held + "_*.rs")]
 
-        for f in sorted(shell.glob(stem + "_*.rs")):
+        for f in shell_files(stem + "_*.rs"):
             theirs = without_tests(code_of(f.read_text()))
             if re.search(r"^(?:pub )?struct View\b", theirs, re.M):
                 continue
@@ -12243,7 +13770,7 @@ let
     # allowed.
     VIEWS = sorted(
         rel(f)
-        for f in rust_sources(shell_crate)
+        for f in shell_files("**/*.rs")
         if re.search(r"^(?:pub )?struct View\b", code_of(f.read_text()), re.M)
     )
     floor(len(VIEWS), 8, "views found by their `struct View`")
@@ -12255,8 +13782,9 @@ let
         for part in parts:
             # `code_of` and not the raw text: a `key::SOMETHING` named in a
             # comment is a MENTION of a key, and it used to count as the view
-            # asking for one.
-            body = code_of((shell / part).read_text())
+            # asking for one. And without the crate's keymap contribution
+            # (`without_keymap`): its labels are the shortcut list's.
+            body = without_keymap(code_of(shell_file(part).read_text()))
             # ONLY WHAT IS DRAWN AS A LABEL. A key named inside the trailing
             # test module is an assertion about the screen, not a row on it.
             #
@@ -12281,9 +13809,9 @@ let
         # (`use crate::<module>::`) read as its own.
         if re.search(r"\btext_key\b", code):
             for module in sorted(set(re.findall(r"\buse crate::([a-z_]+)::", code))):
-                other = shell / f"{module}.rs"
-                if not other.exists():
+                if not shell_has(f"{module}.rs"):
                     continue
+                other = shell_file(f"{module}.rs")
                 theirs = without_tests(code_of(other.read_text()))
                 for fn in re.finditer(r"\bfn text_key\b", theirs):
                     said = must(scope(theirs[fn.start():], r"fn text_key\b"), f"{module}.rs's `fn text_key`")
@@ -12347,11 +13875,11 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a door is a FILE here — the census is "every source with an
     # `impl CompositorHandler`" — and inside one the questions are narrowed
     # twice over, by `span_of` for a function and by `shut_at` for a call.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     wrong, doors = [], 0
 
     # COMMENTS COME OFF FIRST, for the reason `every-list-window-has-a-bar`
@@ -12392,12 +13920,12 @@ let
     # THE DOOR IS ONE DOOR, written over several files: its handlers are
     # generic (`impl<C: Content> CompositorHandler for Door<C>`), and its
     # configure is `configured`, the one function both `configure`s call.
-    door_dir = shell / "door"
+    door_dir = shell_dir("door")
     units = [(
         door_dir,
         "\n".join(code_of(p.read_text()) for p in sorted(door_dir.glob("*.rs"))),
     )]
-    units += [(f, code_of(f.read_text())) for f in sorted(shell.rglob("*.rs"))
+    units += [(f, code_of(f.read_text())) for f in sorted(shell_files("**/*.rs"))
               if door_dir not in f.parents]
 
     for f, body in units:
@@ -12764,8 +14292,8 @@ let
     # opened. That is where the round-3 defect sat: `followed` called `resized`
     # and dropped the answer, and ten doors that each passed every rule above
     # went on drawing against a size the buffer no longer had.
-    rule = shell / "hidpi.rs"
-    if not rule.is_file():
+    rule = shell_file("hidpi.rs") if shell_has("hidpi.rs") else None
+    if rule is None:
         wrong.append("hidpi.rs is not there; the rule has no one place")
     else:
         text = code_of(rule.read_text())
@@ -12854,6 +14382,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a door is a file, and the question is whether ANY pointer it
     # is offered is dropped — about the file, not one function. The frame is
@@ -12861,7 +14390,7 @@ let
     # are handled and not merely somewhere in the file.
     wrong = []
     doors = 0
-    for path in sorted(pathlib.Path("${../crates/ronoctua-shell/src}").rglob("*.rs")):
+    for path in sorted(shell_files("**/*.rs")):
         code = code_of(without_tests(path.read_text()))
         if not re.search(r"impl(?:<[^>]*>)?\s+SeatHandler\s+for\s+\w+", code):
             continue
@@ -12907,13 +14436,14 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a door is a file, and the question is whether ANY keyboard it
     # is offered is dropped. The handlers are narrowed with `body_of`, because
     # the switch has to be where the events are handled.
     wrong = []
     doors = 0
-    for path in sorted(pathlib.Path("${../crates/ronoctua-shell/src}").rglob("*.rs")):
+    for path in sorted(shell_files("**/*.rs")):
         code = code_of(without_tests(path.read_text()))
         if not re.search(r"impl(?:<[^>]*>)?\s+KeyboardHandler\s+for\s+\w+", code):
             continue
@@ -13015,6 +14545,7 @@ let
     python3 - <<'END'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: whether ANY other file names the protocol, anywhere in it.
     # `code_of` because the needle is a path in CODE; the prose around the
@@ -13023,17 +14554,18 @@ let
     wrong, looked = [], 0
     for path in sorted(crates.rglob("*.rs")):
         looked += 1
-        if path.name == "virtual_keys.rs" and "ronoctua-shell" in path.parts:
+        # THE ONE FILE, in whichever shell crate holds it (`shell_name`).
+        if shell_name(path) == "virtual_keys.rs":
             continue
         if "zwp_virtual_keyboard" in code_of(path.read_text()):
             wrong.append(str(path.relative_to(crates)))
     floor(looked, 300, "Rust files read")
-    door = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/virtual_keys.rs").read_text())
+    door = code_of(shell_file("virtual_keys.rs").read_text())
     if "create_virtual_keyboard" not in door:
         print("ERROR: virtual_keys.rs no longer makes the keyboard where this looks", file=sys.stderr)
         sys.exit(1)
     if wrong:
-        print("ERROR: a file other than ronoctua-shell/src/virtual_keys.rs names the virtual keyboard:", file=sys.stderr)
+        print("ERROR: a file other than the shell's virtual_keys.rs names the virtual keyboard:", file=sys.stderr)
         for w in wrong:
             print("       " + w, file=sys.stderr)
         sys.exit(1)
@@ -13052,6 +14584,7 @@ let
     python3 - <<'END'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: whether ANY other file names the protocol, anywhere in it.
     # `code_of` because the needles are names in CODE.
@@ -13060,22 +14593,21 @@ let
     wrong, looked = [], 0
     for path in sorted(crates.rglob("*.rs")):
         looked += 1
-        if path.name == "cursor_shape.rs" and "ronoctua-shell" in path.parts:
+        if shell_name(path) == "cursor_shape.rs":
             continue
         code = code_of(path.read_text())
         if any(n in code for n in needles):
             wrong.append(str(path.relative_to(crates)))
     floor(looked, 300, "Rust files read")
     if wrong:
-        print("ERROR: a file other than ronoctua-shell/src/cursor_shape.rs names the cursor shape:", file=sys.stderr)
+        print("ERROR: a file other than the shell's cursor_shape.rs names the cursor shape:", file=sys.stderr)
         for w in wrong:
             print("       " + w, file=sys.stderr)
         sys.exit(1)
 
-    src = pathlib.Path("${../crates/ronoctua-shell/src}")
     silent = []
     for name in ("door/handlers.rs", "surface.rs", "lifeline.rs"):
-        frame = body_of(code_of((src / name).read_text()), "pointer_frame")
+        frame = body_of(code_of(shell_source(name)), "pointer_frame")
         if "shapes.entered" not in frame:
             silent.append(name)
     if silent:
@@ -13091,6 +14623,7 @@ let
     python3 - <<'END'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: whether ANY other file names the protocol, anywhere in it —
     # the twin of `one-virtual-keyboard`. `code_of` because the needles are
@@ -13101,18 +14634,19 @@ let
     wrong, looked = [], 0
     for path in sorted(crates.rglob("*.rs")):
         looked += 1
-        if path.name == "virtual_pointer.rs" and "ronoctua-shell" in path.parts:
+        # THE ONE FILE, in whichever shell crate holds it (`shell_name`).
+        if shell_name(path) == "virtual_pointer.rs":
             continue
         code = code_of(path.read_text())
         if any(n in code for n in needles):
             wrong.append(str(path.relative_to(crates)))
     floor(looked, 300, "Rust files read")
-    door = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/virtual_pointer.rs").read_text())
+    door = code_of(shell_file("virtual_pointer.rs").read_text())
     if "create_virtual_pointer" not in door:
         print("ERROR: virtual_pointer.rs no longer makes the pointer where this looks", file=sys.stderr)
         sys.exit(1)
     if wrong:
-        print("ERROR: a file other than ronoctua-shell/src/virtual_pointer.rs names the virtual pointer:", file=sys.stderr)
+        print("ERROR: a file other than the shell's virtual_pointer.rs names the virtual pointer:", file=sys.stderr)
         for w in wrong:
             print("       " + w, file=sys.stderr)
         sys.exit(1)
@@ -13193,12 +14727,12 @@ let
     python3 - <<'END'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a door asks for its keyboard wherever it builds its seat, and
     # the question is whether the call is in the file at all. The strip is what
     # stops a comment ABOUT `get_keyboard_with_repeat` — and the two excused
     # doors have one — from answering for the call.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     # TWO DOORS ARE EXCUSED, AND EACH ONE PROVES ITS OWN EXCUSE.
     #
     # A name on a list is a hole: the reason stops being true and nobody
@@ -13206,7 +14740,7 @@ let
     # file manager and re-measures its excuse rather than trusting it, and these
     # two are re-measured here.
     #
-    #   surface.rs   the footer creates BOTH — one keyboard that repeats for
+    #   surface/mod.rs  the footer creates BOTH — one keyboard that repeats for
     #                the views and a plain one for the leader, because
     #                repeating the leader is an error. So it has to contain
     #                both calls; one of them gone and the excuse is gone.
@@ -13216,7 +14750,7 @@ let
     #                the interface four times. So it has to contain no list at
     #                all: no bar to drag, no wheel, no offset to move.
     EXCUSED = {
-        "surface.rs": {"must": ["get_keyboard_with_repeat", "get_keyboard("], "must_not": []},
+        "surface/mod.rs": {"must": ["get_keyboard_with_repeat", "get_keyboard("], "must_not": []},
         "lifeline.rs": {
             "must": [],
             "must_not": ["list_bar", "PointerEventKind::Axis", "offset"],
@@ -13225,43 +14759,43 @@ let
     wrong = []
     handlers = 0
 
-    for f in sorted(shell.rglob("*.rs")):
+    for f in sorted(shell_files("**/*.rs")):
         body = code_of(f.read_text())
         if not _re.search(r"impl(?:<[^>]*>)?\s+KeyboardHandler\s+for", body):
             continue
         handlers += 1
-        if f.name in EXCUSED:
+        if shell_name(f) in EXCUSED:
             # THE REASON IS RE-MEASURED, never taken on trust.
-            for word in EXCUSED[f.name]["must"]:
+            for word in EXCUSED[shell_name(f)]["must"]:
                 if word not in body:
                     wrong.append(
-                        f"{f.name} is excused from repeating, and the reason was that it "
+                        f"{shell_name(f)} is excused from repeating, and the reason was that it "
                         f"names `{word}` — it does not any more"
                     )
-            for word in EXCUSED[f.name]["must_not"]:
+            for word in EXCUSED[shell_name(f)]["must_not"]:
                 if word in body:
                     wrong.append(
-                        f"{f.name} is excused from repeating because it walks no list, "
+                        f"{shell_name(f)} is excused from repeating because it walks no list, "
                         f"and it now names `{word}`"
                     )
             # AND IT STILL HAS THE METHOD. The trait is not optional, and a
             # door that lost it would not compile — this is here so the excuse
             # cannot quietly become "it has no keyboard at all".
             if "fn repeat_key" not in body:
-                wrong.append(f"{f.name}: has no `repeat_key` at all")
+                wrong.append(f"{shell_name(f)}: has no `repeat_key` at all")
             continue
         if "get_keyboard_with_repeat" not in body:
             wrong.append(
-                f"{f.name}: implements KeyboardHandler and asks for a keyboard "
+                f"{shell_name(f)}: implements KeyboardHandler and asks for a keyboard "
                 "that does NOT repeat"
             )
         if "fn repeat_key" not in body:
-            wrong.append(f"{f.name}: has no `repeat_key` at all")
+            wrong.append(f"{shell_name(f)}: has no `repeat_key` at all")
 
     # AND THE EXCUSED ONES EXIST AT ALL. A renamed file would leave its name
     # here excusing nothing, and the door it names swept by nobody.
     for name in sorted(EXCUSED):
-        if not (shell / name).is_file():
+        if not shell_has(name):
             wrong.append(f"{name} is excused and is not there any more")
 
     # AND THE CHECK ITSELF IS NOT VACUOUS: it has to have found the windows.
@@ -13737,27 +15271,42 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    src = code_of(pathlib.Path("${../crates/ronoctua-shell/src/surface.rs}").read_text())
-    floor(len(src), 100000, "characters of surface.rs")
+    # THE FOOTER'S MODULE, whole: its own file and one per view.
+    src = code_of(shell_source("surface.rs"))
+    floor(len(src), 100000, "characters of the footer's module")
     bad = []
 
-    # THE VIEWS ARE READ FROM THE ENUM, never from a list typed here: a list
-    # would be one more place to forget the next view.
-    enum = must(scope(src, r"enum ViewState\b"), "`enum ViewState`")
-    views = re.findall(r"^    (\w+),", enum, re.M)
-    floor(len(views), 12, "views declared by `ViewState`")
+    # THE VIEWS ARE READ FROM THE PRECEDENCE, never from a list typed here: a
+    # list would be one more place to forget the next view. A region by the
+    # id its file ranks itself under (`surface/<view>.rs`), read with the
+    # strings kept.
+    said = uncommented(shell_source("surface.rs"))
+    opened = re.search(r"const PRECEDENCE: &\[Rank\] = &\[", said)
+    if opened is None:
+        print("ERROR: no `PRECEDENCE` in the footer", file=sys.stderr)
+        raise SystemExit(1)
+    table_of_ranks = said[opened.end() : said.index("];", opened.end())]
+    views = [m.group(1) or m.group(2) for m in re.finditer(r'Rank::(?:Region\("([a-z-]+)"\)|([A-Z]\w*))', table_of_ranks)]
+    views.append("NoneOf")
+    floor(len(views), 12, "views ranked by `PRECEDENCE`")
+    stems = {}
+    for f in shell_module_files("surface"):
+        m = re.search(r'pub\(super\) const ID: &str = "([a-z-]+)";', uncommented(f.read_text()))
+        if m:
+            stems[f.stem] = m.group(1)
 
     # THE FOUR THAT HAVE NO CURSOR, and each is a claim about what it is.
     #
-    #   `Manual`     — the shortcut list is READ, and paged by its own keys.
+    #   `manual`     — the shortcut list is READ, and paged by its own keys.
     #   `Leader`     — a sequence under way draws a table, not a list.
     #   `WindowMenu` — the leader's grid for one window (`window_menu.rs`,
     #                  9ab8042): every cell is its own key or click, nothing
     #                  walks between cells, and a new level starts on its
     #                  first page (`window_menu_errand`).
     #   `NoneOf`     — the region is closed.
-    WITHOUT = {"Manual", "Leader", "WindowMenu", "NoneOf"}
+    WITHOUT = {"manual", "Leader", "WindowMenu", "NoneOf"}
 
     # THE TWO GRIDS' EXCUSE IS RE-MEASURED, never taken on trust: a grid
     # PAGES, and the day one of them scrolls, or the menu grows a cursor, there
@@ -13783,7 +15332,7 @@ let
         first = re.search(r"ViewState::" + v + r"\b[^=]*=>\s*Navigation::(\w+)", nav)
         if first and first.group(1) != "Page":
             bad.append(f"ViewState::{v} is excused as a grid that pages, and its first arm in `navigation` answers {first.group(1)}")
-    menu = code_of(pathlib.Path("${../crates/ronoctua-shell/src/window_menu.rs}").read_text())
+    menu = code_of(shell_file("window_menu.rs").read_text())
     floor(len(menu), 10000, "characters of window_menu.rs")
     if "cursor" in menu:
         bad.append("the window menu has a cursor now; it is no longer excused from following it")
@@ -13791,14 +15340,14 @@ let
     # click, and the footer's two menu paths are where one would be: the key
     # goes to the menu whole (`Esc` up a level, every other key a cell), and a
     # click runs the cell it lands on.
-    keys = must(scope(src, r"if self\.view\(\) == ViewState::WindowMenu(?=\s*\{)"), "the footer's window-menu key path")
+    keys = must(scope(src, r"fn window_menu_key\b"), "the footer's window-menu key path")
     own = set(re.findall(r"Sym::(\w+)", keys)) - {"Esc", "Backspace"}
     if "cursor" in keys or ".pressed(" not in keys or own:
         bad.append(
             f"the footer's window-menu key path keeps {sorted(own) or 'a cursor'} for itself "
             "instead of handing every key to the menu; it may be walking a cursor"
         )
-    click = must(scope(src, r"Some\(Click::WindowMenu\(\w+\)\)\s*=>"), "the footer's window-menu click")
+    click = must(scope(src, r"fn window_menu_click\b"), "the footer's window-menu click")
     if "cursor" in click or ".choose(" not in click:
         bad.append("a click on the window menu no longer runs the cell it lands on; it may be selecting")
 
@@ -13807,17 +15356,51 @@ let
     # absent. `body_of` counts the braces.
     table = must(body_of(src, "list_cursor"), "`list_cursor`")
     floor(len(table), 200, "characters of `list_cursor`")
-    named = set(re.findall(r"ViewState::(\w+)", table))
+    # EACH ARM, AND WHAT IT ANSWERS: a view whose line delegates follows its
+    # cursor; an excused one answers `None`.
+    named, follows = set(), set()
+    arms = re.sub(r"=>\s*\{\s*None\s*\}", "=> None", table)
+    for m in re.finditer(r"((?:ViewState::\w+(?:\([a-z_]+::ID\))?\s*\|?\s*)+)(?:if [^=]*)?=>\s*([^,\n]+)", arms):
+        delegates = m.group(2).strip() != "None"
+        for v in re.findall(r"ViewState::(\w+)(?:\(([a-z_]+)::ID\))?", m.group(1)):
+            name = stems.get(v[1], v[1]) if v[0] == "Region" else v[0]
+            named.add(name)
+            if delegates:
+                follows.add(name)
+    # A REGION OF THE SLOT HOST follows its cursor through the host's one
+    # line (`hosted_cursor`, which asks the region), for every region
+    # `regions.rs` registers — by the id its module ranks it under. One the
+    # list above excuses (the manuals, a region now) is RE-MEASURED instead:
+    # its `cursor` still answers `None`, or the excuse is stale.
+    if re.search(r"ViewState::Region\((\w+)\)\s*=>\s*self\.hosted_cursor\(\1\)", arms):
+        for module in re.findall(r"(\w+)::ENTRY\b", uncommented(shell_file("regions.rs").read_text())):
+            text = uncommented(shell_file(module + ".rs").read_text())
+            m = re.search(r'pub const ID: &str = "([a-z-]+)";', text)
+            if not m:
+                continue
+            named.add(m.group(1))
+            if m.group(1) in WITHOUT:
+                cursor = body_of(without_tests(text), "cursor")
+                if cursor is None or cursor.strip(" \n{}") != "None":
+                    bad.append(f"the region `{m.group(1)}` is excused from following and its `cursor` answers something; the excuse is stale")
+                continue
+            follows.add(m.group(1))
+    # A REGION OF THE SLOT HOST — ranked, and drawn by no file of the
+    # footer's own — follows its cursor through the host's one line, which
+    # asks the region where its cursor is drawn.
+    hosted_line = re.search(r"ViewState::Region\([a-z_]+\)\s*=>\s*self\.hosted_cursor\(", arms) is not None
     for v in views:
         if v in WITHOUT or v in named:
             continue
+        if v[0].islower() and v not in stems.values() and hosted_line:
+            continue
         bad.append(
-            f"ViewState::{v} is not in `list_cursor`, so its page never follows "
+            f"the view `{v}` is not in `list_cursor`, so its page never follows "
             "its cursor — the arrow walks off the bottom of the region"
         )
     for v in sorted(WITHOUT):
-        if v in named:
-            bad.append(f"ViewState::{v} is excused from following and now does; the excuse is stale")
+        if v in follows:
+            bad.append(f"the view `{v}` is excused from following and now does; the excuse is stale")
 
     # AND THE ONE CALLER THAT MAKES IT HAPPEN. `typed` is the human-key path;
     # if the call leaves it, every view stops following at once and no test of
@@ -13987,6 +15570,10 @@ let
   # and they close the rest of the chain in one comparison — component,
   # display list, i18n, tokens, wgpu, pixel.
   the-brain-is-photographable = mkCheck "the-brain-is-photographable" [ pkgs.python3 ] ''
+    # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+    # one, and the colours and the words are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
     export VK_DRIVER_FILES=${xvfb.icd}
     export VK_ICD_FILENAMES=${xvfb.icd}
     export LIBGL_ALWAYS_SOFTWARE=1
@@ -14041,20 +15628,20 @@ let
 
     : > runs.txt
     for language in ${lib.concatStringsSep " " languages}; do
-      ${rust.workspace}/bin/ronoctua-render-png \
+      ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
         ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
         --mind mind.json --columns 100 --lines 30 --language "$language" \
         --out "$PWD/$language.png" | tee -a runs.txt
       # AND THE PAGE BEHIND ONE, which is the half a mind is needed for twice:
       # without a task there is nothing to open. THE PAGE OPENS ON ITS
       # NOTICES when it has any, so `Tab` takes the keyboard to the tasks.
-      ${rust.workspace}/bin/ronoctua-render-png \
+      ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
         ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
         --mind mind.json --columns 100 --lines 30 --language "$language" \
         --key tab --key enter --out "$PWD/$language-task.png" | tee -a runs.txt
       # AND A MODULE'S OWN PAGE, which only the host pushes, and only while
       # its task's page is open: the watch's, a calendar it does not keep.
-      ${rust.workspace}/bin/ronoctua-render-png \
+      ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
         ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
         --mind mind.json --columns 100 --lines 30 --language "$language" \
         --key tab --key down --key enter --screen screen.json \
@@ -14063,7 +15650,7 @@ let
       # not reach. The wall carries a hover now, and a screen this tool cannot
       # drive is a screen nobody reviews — the hole is in the photographer,
       # never in the buffer.
-      ${rust.workspace}/bin/ronoctua-render-png \
+      ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
         ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
         --mind mind.json --columns 100 --lines 30 --language "$language" \
         --hover 30,5 --out "$PWD/$language-hover.png" | tee -a runs.txt
@@ -14073,7 +15660,7 @@ let
     # list's own title — and a row the CURSOR is not on: the two are
     # different questions and wear different grounds. Asked of the display
     # list, because a tone this close is not a thing to assert from pixels.
-    ${rust.workspace}/bin/ronoctua-render-png \
+    ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
       ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
       --mind mind.json --columns 100 --lines 30 --language en-GB \
       --hover 30,5 --list > hovered.txt
@@ -14229,7 +15816,7 @@ let
 
   # THE BRAIN READS WHERE THE UNITS WRITE, and it did not.
   #
-  # `ronoctua_brain::runner::reports_dir` said `/run/ronoctua-brain` and
+  # `ronoctua_brain_daemon::runner::reports_dir` said `/run/ronoctua-brain` and
   # NOTHING ON THE MACHINE EVER WROTE THERE: the person's units write into
   # `%t`, which for them is `$XDG_RUNTIME_DIR`, and the update's script kept a
   # TSV in a third place. `Report::watch` polls one path's mtime, so a path
@@ -14307,7 +15894,7 @@ let
       # knows that a `//` inside a string is not a comment, which matters
       # here because every needle below is a PATH.
 
-      runner = uncommented((root / "crates" / "ronoctua-brain" / "src" / "runner.rs").read_text())
+      runner = uncommented((root / "crates" / "ronoctua-brain-daemon" / "src" / "runner.rs").read_text())
       floor(len(runner), 1000, "characters of runner.rs")
       wrong = []
 
@@ -14435,7 +16022,7 @@ let
         )
 
     # AND IT NEVER SAYS WHETHER THE MACHINE IS BUSY. That question has one
-    # answer in this tree — `ronoctua_brain::runner::judge`, against a gate the
+    # answer in this tree — `ronoctua_brain_daemon::runner::judge`, against a gate the
     # person configured in one file — and it is asked before this is started.
     # A second opinion here would be a second policy that drifts from the first,
     # which is the refusal the update's brain module already writes out about itself.
@@ -15665,9 +17252,9 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         crate = pathlib.Path("${../crates/ronoctua-syncthing/src}")
-        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
         # FILE-WIDE: the `#[default]` attribute and the footer's call are
         # module-level facts. `shows` and `syncthing_mark` are narrowed by name.
         prefs = code_of((crate / "prefs.rs").read_text())
@@ -15696,9 +17283,9 @@ let
 
         # 3. AND THE FOOTER ASKS THE PREFERENCE BEFORE IT DRAWS. A modeline that
         #    read the snapshot alone would draw the mark for everybody.
-        surface = code_of((shell / "surface.rs").read_text())
+        surface = code_of(shell_source("surface.rs"))
         floor(len(surface), 100000, "characters of surface.rs")
-        if "self.syncthing_prefs.mark.shows(syncing)" not in surface:
+        if not re.search(r"self\.syncthing_prefs\s*\.get\(\)\s*\.mark\s*\.shows\(syncing\)", surface):
             wrong.append("the footer draws the mark without asking the preference")
 
         # 4. AND IT WAITS FOR A READING. With no snapshot at all the arithmetic
@@ -15894,12 +17481,12 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
-        shell = pathlib.Path("${../crates/ronoctua-shell/src}")
         wrong = []
 
         # THE PLACEMENT IS ONE FUNCTION, and the pointer's reading is its twin.
-        chrome = code_of((shell / "chrome.rs").read_text())
+        chrome = code_of(shell_file("chrome.rs").read_text())
         for name in ("pub const fn from_the_edge", "pub fn at_the_edge"):
             if name not in chrome:
                 wrong.append(f"`{name}` is gone from chrome.rs; the placement has no single answer")
@@ -15915,7 +17502,7 @@ let
         EDGE_AT = ("crate::chrome::from_the_edge(", "right,", "start,", "start +")
         seen, anchored = 0, 0
         for name in ("band.rs", "brain.rs", "world.rs", "sound.rs"):
-            text = without_tests((shell / name).read_text())
+            text = without_tests(shell_source(name))
             for m in re.finditer(r"Piece \{", text):
                 deep, i = 0, text.index("{", m.start())
                 j = i
@@ -15953,7 +17540,7 @@ let
         # the two that answer a CONTROL, and each has to branch on the piece's own
         # anchoring rather than comparing everything against one reading.
         for name in ("band.rs", "brain.rs"):
-            body = body_of(without_tests((shell / name).read_text()), "at") or ""
+            body = body_of(without_tests(shell_source(name)), "at") or ""
             floor(len(body), 60, f"characters of {name}'s hit test")
             if "p.edge" not in body:
                 wrong.append(f"{name}: `at` does not read the piece's own anchoring")
@@ -15961,7 +17548,7 @@ let
                 wrong.append(f"{name}: `at` is not given the cell counted from the border")
 
         # AND THE DOOR HANDS BOTH READINGS OVER.
-        surface = code_of((shell / "surface.rs").read_text())
+        surface = code_of(shell_source("surface.rs"))
         if "at_the_edge(" not in surface:
             wrong.append("surface.rs: the pointer is never resolved from the border")
         if surface.count("piece.edge") < 3:
@@ -16000,8 +17587,9 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    text = without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/world.rs").read_text())
+    text = without_tests(shell_file("world.rs").read_text())
     code = code_of(text)
     wrong = []
 
@@ -16054,13 +17642,13 @@ let
     python3 - <<'END'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    root = pathlib.Path("${../crates/ronoctua-shell/src}")
     wrong = []
 
     # THE ONE FUNCTION THE SEVEN VIEWS SHARE. A ceiling and a wrap, and the
     # answer is never empty — see `chrome::note_lines`.
-    chrome = code_of(body_of(without_tests((root / "chrome.rs").read_text()), "note_lines") or "")
+    chrome = code_of(body_of(without_tests(shell_file("chrome.rs").read_text()), "note_lines") or "")
     floor(len(chrome), 60, "characters of the note wrapper")
     if "layout::wrap(" not in chrome:
         wrong.append("chrome::note_lines does not wrap")
@@ -16085,7 +17673,7 @@ let
         # `code_of` ON EACH BODY, and never the raw file: these files discuss
         # `elide_end` at length, and a check that searched their comments would
         # be answered by the paragraph explaining why it is gone.
-        text = without_tests((root / name).read_text())
+        text = without_tests(shell_source(name))
         body = code_of(body_of(text, builder) or "")
         floor(len(body), 60, f"characters of {name}'s note builder")
         if "note_lines(" not in body:
@@ -16554,12 +18142,12 @@ let
     # identifier and is meant to be there: our own 'save_sidebar' writes that
     # file, so an unconditional re-read would throw the sidebar's cursor away
     # every time something is pinned.
-    arms = 0
+    arms = set()
     for f, text in files.items():
         arm = scope(text, r"Report::Stirred\s*=>")
         if arm is None:
             continue
-        arms += 1
+        arms.add(f)
         where = f.relative_to(crates)
         if "reread(" not in arm:
             bad.append(f"{where}: the Stirred arm does not re-read")
@@ -16568,10 +18156,27 @@ let
                 f"{where}: the Stirred arm asks View::stale — that is the "
                 "directory's mtime, which a file rewritten in place does not move"
             )
-    if arms != len(doors):
-        bad.append(
-            f"{arms} doors answer Report::Stirred, but {len(doors)} build a view"
-        )
+    floor(len(arms), 1, "arms that answer Report::Stirred")
+
+    # AND EVERY DOOR THAT BUILDS A VIEW HEARS THE NUDGE: in an arm of its own,
+    # or by handing its reports to the one handler both doors share — the
+    # manager's `reported`, in its own crate (one carry-out for the two
+    # doors). The handler holds the arm in that function, and the door calls
+    # it; a door that stopped calling it, or a handler that lost the arm,
+    # would leave that door's listing deaf to the watch.
+    handlers = [
+        f for f in arms
+        if re.search(r"Report::Stirred\s*=>", body_of(files[f], "reported") or "")
+    ]
+    for f in doors:
+        if f in arms:
+            continue
+        hands_on = re.search(r"\bmanager\.reported\(", files[f])
+        if not (hands_on and any(h.parent == f.parent for h in handlers)):
+            bad.append(
+                f"{f.relative_to(crates)}: builds a files::View, answers no "
+                "Report::Stirred and hands its reports to no handler that does"
+            )
 
     if bad:
         print("ERROR: the directory watch is not wired the way it is meant to be.", file=sys.stderr)
@@ -16740,7 +18345,8 @@ let
   '';
 
   files-columns-degrade = mkCheck "files-columns-degrade" [ pkgs.gnugrep ] ''
-    view=${../crates/ronoctua-shell/src}/files.rs
+    . ${shellSh}
+    view=$(shell_file files.rs)
     order=$(sed -n '/^pub const GIVE_WAY/,/^];/p' "$view" | grep -oE 'Column::[A-Za-z]+' | tr -d ' ')
     first=$(echo "$order" | head -1)
     [ "$first" = "Column::Group" ] || {
@@ -16929,15 +18535,25 @@ let
 
   # WHATEVER THE SHELL LOOKS FOR NEXT DOOR, THE DEV LOOP HAS TO BUILD.
   #
-  # Two binaries are found by ASKING THE FILESYSTEM rather than by a store path
-  # in a variable — `ronoctua-rescue` and `ronoctua-transfers` — and they have
-  # to be: they come out of the same build as the shell, so a path baked into
-  # one would be that derivation referencing itself.
+  # Programs are found by ASKING THE FILESYSTEM rather than by a store path in
+  # a variable — the rescue console, the queue's daemon and the sealer it runs,
+  # the brain's, the player's, the studio's… — and they have to be: a path baked
+  # into one would be a derivation naming its own output.
   #
-  # Installed, they are next door: `rust.shell` is a `symlinkJoin` over the
-  # whole workspace. In the nested loop they are next door too — until the FIRST
+  # Installed, they are next door: `rust.shell` copies them into its `bin/`
+  # (`nix/rust/outputs.nix`, by the crates' `beside`). In the nested loop they
+  # are next door too, in `rust.loopShell` — until the FIRST
   # edit, when `RONOCTUA_FOOTER_BIN` moves to `$CARGO_TARGET_DIR/loop/` and
   # only what `cargo build` named is there.
+  #
+  # SO THE NAMES ARE THE LOOP BUNDLE'S MEMBERS: what was beside the footer
+  # before the first reload has to be beside it after. The bundle is made from
+  # the crates' `beside` lists, which `siblings-are-beside` holds against the
+  # code that looks (a literal or a `const`), and `shell-bundle-is-only-the-shell`
+  # holds the bundle against the lists. This check swept six crates for
+  # `join("literal")` instead, and did not read the queue's `join(BESIDE)`: the
+  # sealer was missing from the loop's command, and "encrypt anything" stopped
+  # working after the first reload, with every check green.
   #
   # AND THE LINE HAS TO BE A COMMAND CARGO ACCEPTS, which is the second half and
   # was not here. `--bin` names a target inside the packages `-p` selected, so
@@ -16965,67 +18581,15 @@ let
         pkgs.python3
       ]
       ''
-        failed=0
-
-        # The names come from the CODE that looks them up, never from a list
-        # written here: a list would be a third place to keep in step.
+        # The names are the loop bundle's members, from evaluation — never a
+        # list written here, which would be a third place to keep in step.
         #
-        # EVERY SOURCE OF THE FIVE CRATES (`rust_sources`), however deep — the
-        # brain's module folders with them: a module that starts a binary from
-        # beside the daemon is as much a thing the loop has to build, and the
-        # `grep` of `src/` this was could not see one.
-        beside=$(python3 - <<'PY'
-        import pathlib, re
-        exec(open("${pyPrelude}").read())
-
-        # FILE-WIDE: the lookup is a call anywhere in a crate, and the question
-        # is which names it is ever made with. `uncommented`, because the name
-        # is a STRING and a lookup quoted in a comment is not one made.
-        found, swept = set(), 0
-        for crate in (
-            "ronoctua-shell",
-            "ronoctua-transfers",
-            # AND THE BRAIN'S, for the same reason the queue's is here: it looks
-            # its own daemon up beside `current_exe()`, so the nested loop has to
-            # build that binary or the footer would find yesterday's one and
-            # nothing would say so.
-            "ronoctua-brain",
-            # AND THE STUDIO'S: the camera app and the settings view start it
-            # from beside themselves when nobody answers its socket.
-            "ronoctua-studio",
-            # AND THE PLAYER'S, for the same reason: its client starts the
-            # daemon from beside whoever asked.
-            "ronoctua-player",
-        ):
-            for f in rust_sources(pathlib.Path("${../crates}") / crate):
-                swept += 1
-                found |= set(re.findall(r"parent\(\)\?\.join\(\"([a-z-]+)\"", uncommented(f.read_text())))
-        floor(swept, 100, "sources of the five crates swept for a binary beside them")
-        print("\n".join(sorted(found)))
-        PY
-        )
-        [ -n "$beside" ] || {
-          echo "ERROR: nobody looks for a binary beside it — what does the grep match?" >&2
-          exit 1
-        }
-
-        for b in $beside; do
-          grep -q -- "--bin $b" ${../nix/dev.nix} || {
-            echo "ERROR: the footer looks for $b beside it, and the dev loop does not build it." >&2
-            echo "      After the FIRST edit it goes away, in silence." >&2
-            failed=1
-          }
-        done
-
-        [ "$failed" = 0 ] || exit 1
-        echo "ok: $(echo "$beside" | wc -l) binaries beside it, and the loop names them all"
-
         # AND EVERY `--bin` IS INSIDE A PACKAGE THE SAME LINE SELECTED.
         #
         # Which package owns a binary comes from the MANIFESTS, never from a
         # list here: `[[bin]] name = "x"` in a crate, or the crate's own name
         # when the binary is the package's default.
-        python3 - <<'PY'
+        python3 - ${lib.escapeShellArgs rust.loopShell.passthru.members} <<'PY'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
 
@@ -17048,6 +18612,19 @@ let
         wanted = [w for f, w in zip(words, words[1:]) if f == "--bin"]
         floor(len(chosen), 1, "packages the loop's command selects")
         floor(len(wanted), 1, "binaries the loop's command names")
+
+        # WHAT WAS BESIDE THE FOOTER BEFORE THE FIRST RELOAD IS BUILT FOR AFTER
+        # IT. Read off the parsed command, not grepped from the file: a
+        # `--bin` named in a comment builds nothing.
+        members = sys.argv[1:]
+        floor(len(members), 5, "programs in the loop's bundle")
+        gone = [b for b in members if b not in wanted]
+        if gone:
+            for b in gone:
+                print(f"ERROR: the footer looks for {b} beside it, and the dev loop does not build it.")
+            print("       After the FIRST edit it goes away, in silence.")
+            sys.exit(1)
+        print(f"ok: {len(members)} programs beside the footer, and the loop builds them all")
 
         # Every binary the tree declares, and which package declares it.
         owner, seen = {}, 0
@@ -17100,53 +18677,175 @@ let
   # profile a program was built at, and `nix why-depends` is not run on a
   # Tuesday.
   #
-  # It reads the CLOSURE of the seven things a machine actually installs: the
-  # wrapper the unit starts and the six extracted binaries. A loop-profile path
-  # in any of them is the mistake, whether it arrived by an edited `flake.nix`,
-  # a module, or an `overrideAttrs` nobody read.
+  # It reads what the things a machine installs are BUILT FROM: the wrapper
+  # the unit starts, the six extracted programs and, where the outputs name
+  # it, every program in the form a machine runs it (`rust.shipped`). Not
+  # what their bytes still cite — the closure of each one's DERIVATION, every
+  # `.drv` that went into it. A bundle that COPIES a program cites nothing of
+  # the unit it copied (2026-10-12): a footer copied out of the loop's units,
+  # under the release's own name, would carry no loop path at all. A loop or
+  # test-graph derivation anywhere in that graph is the mistake, whether it
+  # arrived by an edited `flake.nix`, a module, or an `overrideAttrs` nobody
+  # read. Only derivation files are read, which evaluation wrote: nothing is
+  # built for this check.
+  #
+  # # The marks are proven on both sides
+  #
+  # A mark that matches nothing proves nothing — the loop's bundle is
+  # `…-ronoctua-shell-loop`, and a mark with a dash after it found no bundle
+  # for a day. So every derivation of the loop's and the test graph's
+  # flavours in the build's index carries a mark and no release one does,
+  # and every mark is FOUND in what the loop and the tests are themselves
+  # built from — the same reading, on the side that must have them.
   the-loop-profile-is-never-installed =
     let
-      installed = pkgs.closureInfo {
-        rootPaths = [
-          rust.shell
-          rust.installer
-          rust.rescue
-          rust.transfers
-          rust.brain
-          rust.filesRoot
-          rust.formatDisk
-        ];
+      installed = {
+        inherit (rust)
+          shell
+          installer
+          rescue
+          transfers
+          brain
+          filesRoot
+          formatDisk
+          ;
+      }
+      // lib.listToAttrs (map (d: lib.nameValuePair "shipped-${d.name}" d) (lib.toList rust.shipped));
+      # What the loop and the tests are built from, where every mark has to
+      # be found.
+      loopBuilt = {
+        inherit (rust) loopShell tests clippy;
+        loopShellUnit = rust.loop.bins.ronoctua-shell;
       };
-    in
-    mkCheck "the-loop-profile-is-never-installed"
-      [
-        pkgs.gnugrep
-        pkgs.coreutils
-      ]
-      ''
-        # THE TWO PROFILES HAVE TO BE TWO. Without this the check would pass on
-        # the day somebody made them the same thing — the closure would be clean
-        # because there would be nothing left to find.
-        loop=${rust.loopWorkspace.drvPath}
-        plain=${rust.workspace.drvPath}
-        [ "$loop" != "$plain" ] || {
-          echo "ERROR: the loop's workspace and the installed one are one derivation." >&2
-          echo "      Then this check proves nothing — see the root Cargo.toml." >&2
-          exit 1
+      # Each one's derivation FILE, and nothing built: a `.drv` taken as a
+      # plain path brings into the check's sandbox every `.drv` and source it
+      # is made from, and no output.
+      drvOf = d: builtins.unsafeDiscardOutputDependency d.drvPath;
+      facts = pkgs.writeText "the-loop-profile-is-never-installed.json" (
+        builtins.toJSON {
+          installed = lib.mapAttrs (_: drvOf) installed;
+          loopBuilt = lib.mapAttrs (_: drvOf) loopBuilt;
+          marks = {
+            # A unit of the loop's or the test graph's flavour is named from
+            # one of these (`storeName` in `nix/rust/units.nix`; a third-party
+            # unit of their profile is `rust-loop-dep-…`), and the loop's layer
+            # and its index too (`nix/rust/layers.nix`) while units are built
+            # on it (`rust.loop.layer`, null once they are built on
+            # third-party units of their own and nothing stands on the layer).
+            prefixes = [
+              "rust-loop-"
+              "rust-test-"
+              "rust-clippy-"
+            ]
+            ++ lib.optional ((rust.loop.layer or null) != null) "ronoctua-rust-deps-loop-";
+            # The loop's programs, `<bin>-loop-<version>`.
+            programs = map (d: d.name) (lib.attrValues rust.loop.bins);
+            # The loop's bundle (`rust.loopShell`), by its name.
+            names = [ rust.loopShell.name ];
+          };
+          # Every unit, layer and aggregate, with its flavour.
+          index = lib.mapAttrs (_: e: { inherit (e) flavour drv; }) rust.unitIndex;
+          # What a machine runs that the index does not hold, and must carry
+          # no mark.
+          release = [ rust.shell.name ];
         }
+      );
+    in
+    mkCheck "the-loop-profile-is-never-installed" [ pkgs.python3 ] ''
+      python3 - ${facts} <<'END'
+      import json, re, sys
+      exec(open("${pyPrelude}").read())
 
-        failed=0
-        for mark in -ronoctua-loop- -ronoctua-shell-loop- -ronoctua-deps-loop-; do
-          if found=$(grep -e "$mark" ${installed}/store-paths); then
-            echo "ERROR: something installed was built at the loop's profile:" >&2
-            echo "$found" >&2
-            echo "      It runs, and it is slower, and nothing on a screen says so." >&2
-            failed=1
-          fi
-        done
-        [ "$failed" = 0 ] || exit 1
-        echo "OK: the seven installed programs carry no loop-profile build"
-      '';
+      # PARSED: the marks and the index as Nix evaluated them, and each root's
+      # derivation graph walked through the `.drv` files themselves — the
+      # input derivations of a `.drv` are the tuples that open with a store
+      # path (`("/nix/store/….drv",["out"])`); an output or a variable opens
+      # with its name.
+      facts = json.load(open(sys.argv[1]))
+      marks = facts["marks"]
+      PREFIXES, PROGRAMS, NAMES = tuple(marks["prefixes"]), set(marks["programs"]), set(marks["names"])
+
+
+      def store_name(path):
+          base = path.rsplit("/", 1)[-1]
+          return base[33:].removesuffix(".drv")
+
+
+      def mark_of(name):
+          if name in NAMES:
+              return name
+          if name in PROGRAMS:
+              return "a loop program"
+          return next((p for p in PREFIXES if name.startswith(p)), None)
+
+
+      INPUT = re.compile(r'\("(/nix/store/[0-9a-z]{32}-[^"/]+\.drv)",')
+      inputs_of = {}
+
+
+      def graph(root):
+          seen, todo = set(), [root]
+          while todo:
+              d = todo.pop()
+              if d in seen:
+                  continue
+              seen.add(d)
+              if d not in inputs_of:
+                  inputs_of[d] = INPUT.findall(open(d).read())
+              todo += inputs_of[d]
+          return seen
+
+
+      wrong = []
+      # THE MARKS ARE WHOLE: every loop and test-graph derivation of the index
+      # carries one, and no release one does (aggregates and the formatting
+      # verdicts have no flavour).
+      counted = {"release": 0, "loop": 0, "test": 0}
+      for entry, e in sorted(facts["index"].items()):
+          f = e["flavour"]
+          if f not in counted:
+              continue
+          counted[f] += 1
+          name = store_name(e["drv"])
+          if f != "release" and mark_of(name) is None:
+              wrong.append(f"{entry} ({name}) is of the {f} flavour and carries no mark")
+          if f == "release" and mark_of(name) is not None:
+              wrong.append(f"{entry} ({name}) is a release build and carries the mark {mark_of(name)}")
+      for name in facts["release"]:
+          if mark_of(name) is not None:
+              wrong.append(f"{name} is installed and carries the mark {mark_of(name)}")
+      floor(counted["release"], 100, "release derivations of the index")
+      floor(counted["loop"], 50, "loop derivations of the index")
+      floor(counted["test"], 200, "test-graph derivations of the index")
+
+      # AND EVERY MARK IS FOUND in what the loop and the tests are built from.
+      found = set()
+      for key, root in sorted(facts["loopBuilt"].items()):
+          found |= {mark_of(store_name(p)) for p in graph(root)}
+      for m in sorted((set(PREFIXES) | NAMES | {"a loop program"}) - found):
+          wrong.append(f"the mark {m!r} is in nothing the loop or the tests are built from: it would find nothing")
+
+      # THE QUESTION: nothing a machine installs is built from one.
+      read = 0
+      for key, root in sorted(facts["installed"].items()):
+          paths = graph(root)
+          read += len(paths)
+          floor(len(paths), 50, f"derivations {key} is built from")
+          hits = sorted({store_name(p) for p in paths if mark_of(store_name(p))})
+          if hits:
+              wrong.append(f"{key} is built from {len(hits)} loop or test-graph derivations: " + ", ".join(hits[:8]))
+      floor(len(facts["installed"]), 7, "installed things read")
+
+      if wrong:
+          print("ERROR: something installed is built at the loop's profile, or the marks prove nothing:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          print("      It runs, and it is slower, and nothing on a screen says so.", file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: the {len(facts['installed'])} installed things are built from no loop or test-graph derivation "
+            f"({read} derivations of their graphs read); every mark found in the loop's and the tests' own builds")
+      END
+    '';
 
   # THE QUEUE'S UNIT IS A COPY, NOT A DESKTOP.
   #
@@ -17456,7 +19155,7 @@ let
       ]
       ''
         export HOME=$TMPDIR
-        mkdir -p obs
+        mkdir -p obs/i18n
         : > obs/initial.rs
 
         # The command records WHAT changed, and not just that it fired: the
@@ -17504,7 +19203,23 @@ let
         echo 'I am not code' > obs/README.txt
         sleep 2
         [ ! -s marker ] || {
-          echo "ERROR: a file that is neither .rs nor .wit fired the rebuild." >&2
+          echo "ERROR: a file that is neither .rs, .wit nor .ftl fired the rebuild." >&2
+          exit 1
+        }
+
+        # AND A CRATE'S TEXTS DO FIRE, saying which file: the loop makes the
+        # texts again from the working tree, and recompiles only when a key's
+        # name moved (`nix/dev.nix`, the `*/i18n/*.ftl` branch).
+        : > marker
+        echo 'hello = Hello' > obs/i18n/en-GB.ftl
+        ok=no
+        for _ in $(seq 50); do
+          [ -s marker ] && { ok=yes; break; }
+          sleep 0.2
+        done
+        [ "$ok" = yes ] && grep -q "fired .*obs/i18n/en-GB.ftl" marker || {
+          echo "ERROR: changing a crate's .ftl did not fire the command with its path." >&2
+          cat marker >&2
           exit 1
         }
 
@@ -17543,7 +19258,7 @@ let
           exit 1
         }
 
-        echo "OK: .rs fires, the rest does not, and it dies when told"
+        echo "OK: .rs and a crate's .ftl fire, the rest does not, and it dies when told"
       '';
 
   # ONE FOOTER PER SESSION — the second replaces the first, it does not add to it.
@@ -17876,7 +19591,7 @@ let
   # packed the same way and had the same defect.
   #
   # So the rule is not "count the gap" and not "do not count it": it is that
-  # ONE walk answers both questions. `files::lit_field` is that walk, and this
+  # ONE walk answers both questions. `fields::lit_field` is that walk, and this
   # check is what keeps both doors asking it.
   the-pointer-lights-what-the-click-takes =
     mkCheck "the-pointer-lights-what-the-click-takes" [ pkgs.python3 ]
@@ -17884,25 +19599,26 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         # FILE-WIDE: for the two doors, the offence is a `covers` asked per
         # field ANYWHERE a row is painted, and there were two such loops in
         # two different methods. `lit_field` itself is narrowed by name.
-        home = pathlib.Path("${../crates/ronoctua-shell/src}")
         bad = []
 
         # THE ONE WALK, and it is a free function because two different types
         # carry the same fields: the manager's `Row` and the footer's expansion
         # row. A method on either would have been a second ruler for the other.
-        files = code_of((home / "files.rs").read_text())
-        floor(len(files), 10000, "characters of files.rs")
+        # Both live with the vocabulary every list draws in (`fields.rs`).
+        files = code_of(shell_file("fields.rs").read_text())
+        floor(len(files), 10000, "characters of fields.rs")
         # BY NAME AND BRACES. The whole signature was written out here, so
         # adding a parameter to `lit_field` reported that it had been deleted —
         # and `rposition` was looked for in the WHOLE FILE, where any other
         # backwards walk answered for it.
         lit = body_of(files, "lit_field")
         if lit is None:
-            bad.append("files.rs no longer defines lit_field; there is nothing for "
+            bad.append("fields.rs no longer defines lit_field; there is nothing for "
                        "the two doors to agree through")
         elif "rposition" not in lit:
             bad.append("lit_field no longer walks from the RIGHT; with `position` "
@@ -17918,7 +19634,7 @@ let
         # inside the loop that paints a row's fields — the shape the defect had
         # in both doors.
         for door, what in [("files_window.rs", "the window"), ("surface.rs", "the footer")]:
-            src = code_of((home / door).read_text())
+            src = code_of(shell_source(door))
             floor(len(src), 10000, "characters of " + door)
             for hit in re.finditer(r"for \(?[^\n]*\bfields\b[^\n]*\{\n((?:[^\n]*\n){0,6})", src):
                 if ".covers(" in hit.group(1):
@@ -18024,6 +19740,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a hand-written colour anywhere in the crate is the offence, so
     # the file is the question. `ink_color` and `enum Ink` are narrowed by name
@@ -18033,7 +19750,6 @@ let
     # LITERAL, and `code_of` would empty every string in the crate — leaving a
     # check that can no longer find the thing it exists to refuse.
     crate = pathlib.Path("${../crates/ronoctua-atlas}")
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     bad = []
     swept = 0
 
@@ -18049,7 +19765,7 @@ let
 
     # --- AND THE WALL IS ONE `match`, and exhaustive ---------------------
     floor(swept, 3, "sources of ronoctua-atlas swept for a colour")
-    wall = uncommented((shell / "globe.rs").read_text())
+    wall = uncommented(shell_file("globe.rs").read_text())
     floor(len(wall), 4000, "characters of globe.rs")
     # BY NAME, not by the signature: adding a parameter to `ink_color` used to
     # be reported as the function having been deleted.
@@ -18087,8 +19803,8 @@ let
   # `generated`. The difference is measured and written in `nix/rust.nix`: a
   # store path in `generated` is a compilation INPUT, so re-baking the table —
   # a newer Natural Earth tag, a fresher GeoNames dump, `cities1000` instead of
-  # `cities500` — would rebuild all thirty-three crates at the 2m15–5m46 that
-  # file records, and make both dependency layers wait on it.
+  # `cities500` — would rebuild every unit that reads it and every one above,
+  # for a value no compilation reads.
   #
   # It is `deps-layer-is-lean`'s argument turned on one variable, plus the half
   # that check cannot see: that `nix/dev.nix` exports it BEFORE the footer
@@ -18098,6 +19814,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: for the Rust half, what is asked is whether `globe.rs` — and
     # the player's `directory.rs` — reaches for the path through `option_env!`
@@ -18121,12 +19838,12 @@ let
         if "RONOCTUA_ATLAS" in block(wrong):
             bad.append(
                 f"RONOCTUA_ATLAS is a {wrong} input: re-baking the atlas would "
-                "rebuild 33 crates (2m15-5m46 measured), for a value no "
-                "compilation reads"
+                "rebuild every unit that reads it and every one above, for a "
+                "value no compilation reads"
             )
 
     # AND THE READER ASKS THE ENVIRONMENT, never the compiler.
-    globe = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text())
+    globe = uncommented(shell_file("globe.rs").read_text())
     floor(len(globe), 4000, "characters of globe.rs")
     if 'option_env!("RONOCTUA_ATLAS")' in globe:
         bad.append("globe.rs bakes the atlas path in with option_env!; the store "
@@ -18293,6 +20010,7 @@ let
     python3 - <<'END'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a fill rule is named where the path is built, and the parity
     # test is one line of one function — but the offence is either of them
@@ -18300,7 +20018,7 @@ let
     # question. The strip is what stops the prose explaining the rule from
     # answering for the rule.
     bad = []
-    painter = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text())
+    painter = code_of(shell_file("globe.rs").read_text())
     floor(len(painter), 4000, "characters of globe.rs")
     if "FillRule::Winding" in painter:
         bad.append("globe.rs fills with the winding rule — a shapefile does not "
@@ -18339,10 +20057,11 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: `Globe::new`'s signature and the absence of a `Default` are
     # module-level facts. `texture_key` is narrowed by name below.
-    globe = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/globe.rs").read_text())
+    globe = code_of(shell_file("globe.rs").read_text())
     floor(len(globe), 4000, "characters of globe.rs")
     bad = []
 
@@ -18387,12 +20106,13 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: `CEILING` and the `Painted` struct are module-level — neither
     # is inside a function — and the `re.search` for the constant below is the
     # narrowing that matters.
     image = code_of(pathlib.Path("${../crates/ronoctua-render/src}/image.rs").read_text())
-    window = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files_window.rs").read_text())
+    window = code_of(shell_file("files_window.rs").read_text())
     floor(len(image), 4000, "characters of image.rs")
     floor(len(window), 10000, "characters of files_window.rs")
     bad = []
@@ -18425,13 +20145,14 @@ let
                        ("PLAYER_COVERS", "the Metadata's two covers")):
         if ceiling is None or name not in ceiling.group(1):
             bad.append(f"the image ceiling does not count {what} ({name})")
-    rows = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/player_rows.rs").read_text())
+    rows = code_of(shell_file("player_rows.rs").read_text())
     floor(len(rows), 10000, "characters of player_rows.rs")
-    pictures = must(scope(rows, r"pub\(crate\) fn pictures\b"), "player_rows.rs's `pictures`")
+    # `pub` since the player is a crate of its own, `pub(crate)` before.
+    pictures = must(scope(rows, r"pub(?:\(crate\))? fn pictures\b"), "player_rows.rs's `pictures`")
     if "PLAYER_COVERS" not in pictures:
         bad.append("`Builder::pictures` no longer stops at `PLAYER_COVERS`: a door could "
                    "lay out more covers than the ceiling counts")
-    layout = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/player_layout.rs").read_text())
+    layout = code_of(shell_file("player_layout.rs").read_text())
     floor(len(layout), 3000, "characters of player_layout.rs")
     bond = re.search(
         r"const _: \(\) = assert!\(\s*ronoctua_render::image::PLAYER_PICTURES\s*>=\s*"
@@ -18465,13 +20186,17 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: "does any function outside the named ones divide by `across`"
     # is a question about the whole file by construction — the offence is a
     # SECOND arithmetic appearing anywhere. `whose` is what says which function
     # each hit landed in, and it is the prelude's copy of the `walls` idiom
     # this check used to carry by hand.
-    files = pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text()
+    files = shell_file("files.rs").read_text()
+    # AND THE VOCABULARY IT DRAWS IN (`fields.rs`), where a section's cells
+    # meet the grid (`Section::row_at`).
+    fields = shell_file("fields.rs").read_text()
     grid = code_of(pathlib.Path("${../crates/ronoctua-design/src}/grid.rs").read_text())
     floor(len(grid), 1000, "characters of grid.rs")
     bad = []
@@ -18488,8 +20213,8 @@ let
       ("g.index_at(", "finds the row a cell is on"),
       ("Grid::fitted(", "works out how many fit"),
     ):
-      if name not in files:
-        bad.append(f"files.rs no longer asks `{name}` to be what {why}")
+      if name not in files and name not in fields:
+        bad.append(f"files.rs and fields.rs no longer ask `{name}` to be what {why}")
 
     # AND NOBODY WORKS A SHELF OUT BY HAND.
     #
@@ -18512,6 +20237,14 @@ let
     files = files[: cut[-1]] if cut else files
     code = code_of(files)
     floor(len(code), 10000, "characters of files.rs before its tests")
+    # `fields.rs` has no shelf of its own to convert to, so no division by
+    # `across` belongs there at all.
+    cut = [m.start() for m in re.finditer(r"^#\[cfg\(test\)\]", fields, re.M)]
+    vocabulary = code_of(fields[: cut[-1]] if cut else fields)
+    floor(len(vocabulary), 10000, "characters of fields.rs before its tests")
+    for m in re.finditer(r"[/%]\s*(?:usize::from\()?\s*(?:g\.)?across\b", vocabulary):
+      bad.append(f"fields.rs: `{whose(vocabulary, m.start())}` divides by `across`; "
+                 "that is a second grid arithmetic")
     named = ("listing_room", "visual_cursor", "follow", "wheel", "thumb_shape",
              "shelf_rows", "moving_thumbs", "grid_pictures", "wants_thumbs",
              "sections_of")
@@ -18549,34 +20282,56 @@ let
     python3 - <<'END'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: the question is whether a DOOR calls a thing at all, and a
     # door may call it from any of its handlers — there is no one function to
     # narrow to. What the strip buys is that the list of calls in this check's
     # own prose, quoted in a comment in either door, cannot answer for it.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     bad = []
 
     # WHAT A DOOR HAS TO DO to draw a grid, and what each one is for. A door
     # that did five of the six would look like a folder of documents.
+    #
+    # THE DRAWING is each door's: the window's file and the footer's module.
     OWED = {
-      "thumbs::pool(": "start the workers that make thumbnails",
-      "wants_thumbs(": "ask for the ones on screen",
       "grid_pictures(": "work out where each one goes",
       "thumb_pixels(": "upload them",
-      "thumbs::animator(": "start the thread that walks what moves",
       "hover_thumb(": "start a film under the pointer",
     }
     for door in ("files_window.rs", "surface.rs"):
-      body = code_of((shell / door).read_text())
+      body = code_of(shell_source(door))
       floor(len(body), 10000, "characters of " + door)
       for call, why in OWED.items():
         if call not in body:
           bad.append(f"{door} does not `{call}` — it cannot {why}")
+    # THE WORKERS AND THE ASKING are the manager's panels, which both doors
+    # hold (`files_manager::Panels`): they make the pictures, and once a frame
+    # they are asked for the ones on screen.
+    panels = code_of(shell_file("files_manager.rs").read_text())
+    floor(len(panels), 4000, "characters of files_manager.rs")
+    for call, why in (
+      ("thumbs::pool(", "start the workers that make thumbnails"),
+      ("thumbs::animator(", "start the thread that walks what moves"),
+      ("wants_thumbs(", "ask for the ones on screen"),
+    ):
+      if call not in panels:
+        bad.append(f"files_manager.rs does not `{call}` — the panels cannot {why}")
+    # AND EACH DOOR RAISES THEM, and asks them once a frame: the window with
+    # its loop's own channels, the footer's region with its queue.
+    for door, raised in (
+      ("files_window.rs", ("thumbs::pool(", "thumbs::animator(")),
+      ("files_region.rs", ("Panels::raise(",)),
+    ):
+      body = code_of(shell_file(door).read_text())
+      floor(len(body), 4000, "characters of " + door)
+      for call in raised + ("panels.look(",):
+        if call not in body:
+          bad.append(f"{door} does not `{call}` — its door draws no thumbnail")
 
     # AND THE VIEW STILL OFFERS THEM, so a check that only reads the doors
     # cannot be satisfied by deleting the feature.
-    files = code_of((shell / "files.rs").read_text())
+    files = code_of(shell_file("files.rs").read_text())
     floor(len(files), 10000, "characters of files.rs")
     for name in ("pub fn wants_thumbs", "pub fn grid_pictures", "pub fn hover_thumb",
                  "pub fn moving_thumbs", "pub fn thumb_pixels"):
@@ -18607,12 +20362,13 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: for the renderer's half, `CEILING` and the buffer sized by it
     # are module-level, not inside a function. The manager's half is narrowed
     # to `thumb_item` by name.
     image = code_of(pathlib.Path("${../crates/ronoctua-render/src}/image.rs").read_text())
-    files = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text())
+    files = code_of(shell_file("files.rs").read_text())
     floor(len(image), 4000, "characters of image.rs")
     floor(len(files), 10000, "characters of files.rs")
     bad = []
@@ -18654,7 +20410,7 @@ let
   # `Area::centre` then SHRINKS whatever it is handed to fit what is left — so a
   # picture decoded at the box's outer size is always drawn a little smaller
   # than it was decoded. The owner photographed exactly that twice, as a map
-  # that changed size between two scroll positions, and `files::globe_texture`
+  # that changed size between two scroll positions, and `fields::globe_texture`
   # is where the subtraction was put so it could not be forgotten again.
   a-thumbnail-is-asked-at-the-size-it-is-drawn =
     mkCheck "a-thumbnail-is-asked-at-the-size-it-is-drawn" [ pkgs.python3 ]
@@ -18662,8 +20418,9 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
-        files = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text())
+        files = code_of(shell_file("files.rs").read_text())
         floor(len(files), 10000, "characters of files.rs")
         bad = []
 
@@ -18685,8 +20442,8 @@ let
         # AND THE GLOBE'S OWN SUBTRACTION IS STILL THERE, which is what this one
         # was copied from: a check that only guards the copy would pass the day
         # the original went.
-        if "pub fn globe_texture(" not in files:
-          bad.append("files.rs no longer has `globe_texture`")
+        if "pub fn globe_texture(" not in code_of(shell_file("fields.rs").read_text()):
+          bad.append("fields.rs no longer has `globe_texture`")
 
         if bad:
             for b in bad:
@@ -18707,8 +20464,9 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    files = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text())
+    files = code_of(shell_file("files.rs").read_text())
     floor(len(files), 10000, "characters of files.rs")
     bad = []
 
@@ -18745,11 +20503,12 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: "does anything in this file collect a film's frames" is a
     # question about the FILE — a collect anywhere costs the memory — and the
     # sweep below reports the line it found. `retune` is narrowed by name.
-    thumbs = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/thumbs.rs").read_text())
+    thumbs = code_of(shell_file("thumbs.rs").read_text())
     floor(len(thumbs), 4000, "characters of thumbs.rs")
     bad = []
 
@@ -18785,8 +20544,9 @@ let
     python3 - <<'END'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    files = code_of(pathlib.Path("${../crates/ronoctua-shell/src}/files.rs").read_text())
+    files = code_of(shell_file("files.rs").read_text())
     floor(len(files), 10000, "characters of files.rs")
     bad = []
 
@@ -18817,7 +20577,7 @@ let
             bad.append(f"{who}() works the row out itself instead of asking row_of_line()")
     # THE FACTS' ROOM IS THE PANEL'S, and the panel is `inspection::Panel`:
     # the paging key, the wheel and the grid ask it there.
-    panels = code_of(without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/inspection.rs").read_text()))
+    panels = code_of(without_tests(shell_file("inspection.rs").read_text()))
     floor(len(panels), 10000, "characters of inspection.rs")
     if "pub fn info_room(&self)" not in panels:
         bad.append("there is no one answer for how many ROWS the info panel has")
@@ -18916,11 +20676,15 @@ let
   # divergence of interpretation. It is the degradation risk R1 prescribes, and
   # the binary itself says so in its output so nobody confuses the two.
   term-differential = mkCheck "term-differential" [ ] ''
-    ${rust.workspace}/bin/ronoctua-term-diff \
+    ${rust.bins.ronoctua-term-diff}/bin/ronoctua-term-diff \
       ${../tests/corpus-vt} ${../tests/golden-vt}
   '';
 
   installer-dryrun = mkCheck "installer-dryrun" [ ] ''
+    # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+    # one, and the colours and the words are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
     # THE SECRETS ARE NAMED ONCE, and the grep below reads the same variables.
     #
     # They used to be typed twice — once in the `export` and once in the `grep`
@@ -18955,7 +20719,7 @@ let
     export RONOCTUA_INST_BELONGINGS_ACCESS=/run/keys/deploy
     export RONOCTUA_INST_BELONGINGS_PASSPHRASE="$belongings_passphrase"
 
-    out_text=$(${rust.workspace}/bin/ronoctua-install)
+    out_text=$(${rust.bins.ronoctua-install}/bin/ronoctua-install)
     echo "$out_text"
 
     # Neither the `host.nix` nor any step may carry a secret (section 9): the
@@ -19050,7 +20814,7 @@ let
     howmany=""
     for language in ${lib.concatStringsSep " " languages}; do
       locale=$(echo "$language" | tr '-' '_').UTF-8
-      n=$(LANG=$locale ${rust.workspace}/bin/ronoctua-install | grep -c '^[! ] [0-9]')
+      n=$(LANG=$locale ${rust.bins.ronoctua-install}/bin/ronoctua-install | grep -c '^[! ] [0-9]')
       steps="$steps $language=$n"
       if [ -z "$howmany" ]; then howmany=$n; fi
       [ "$n" = "$howmany" ] || {
@@ -19124,6 +20888,8 @@ let
       inherit cursors;
       inherit scroll;
       shell = rust.shell;
+      # The console itself, the program the unit runs.
+      rescue = rust.rescue;
       # `ronoctua-machine`, extracted: the rescue's rebuild and rollback run it.
       machine = rust.machine;
     };
@@ -19237,6 +21003,14 @@ let
     ronoctua-shell = rust.shell;
   };
 
+  # A region of the footer living hidden, end to end: a leader command acting
+  # without its page (the 2026-10-12 wave). `tests/hidden-region-vm.nix`.
+  hiddenRegionVm = import ./hidden-region-vm.nix {
+    inherit pkgs lib fonts;
+    inherit scroll;
+    ronoctua-shell = rust.shell;
+  };
+
   # The app finder, and the footer that must not freeze when opening one.
   appsVm = import ./apps-vm.nix {
     inherit pkgs lib fonts;
@@ -19287,6 +21061,9 @@ let
   compositorContract = import ./compositor-contract.nix {
     inherit pkgs lib scroll;
     ronoctua-shell = rust.shell;
+    # The contract's driver, a program of its own (`rust.bins`): the shell's
+    # bundle holds only the footer and what it finds beside itself.
+    contract = rust.bins.ronoctua-contract;
   };
 
   # -------------------------------------------------------------------
@@ -19313,37 +21090,70 @@ let
   # stops a TRACKED build from being lost in the tree: the cost is invisible
   # day to day and only shows up when the disk fills.
   #
-  # THE DEPENDENCY LAYER SEES ONLY WHAT IT USES.
+  # A THIRD-PARTY LAYER SEES ONLY WHAT IT USES.
   #
-  # `buildDepsOnly` compiles the 483 third-party crates against stubs — crane
-  # replaces every crate of ours, `build.rs` included. So it reads none of the
+  # crane's `buildDepsOnly` layer (the 483 third-party crates against stubs,
+  # gone with crane's whole-workspace builds on 2026-10-12) read none of the
   # generated inputs; and yet all 31 `RONOCTUA_*` were in its environment,
-  # because it was handed the whole of `commonArgs`.
+  # because it was handed the whole of what our crates are compiled with.
   #
   # Nix addresses a derivation by its inputs. With `RONOCTUA_BUFFER_MEMORY` in
   # there, editing a buffer changed the layer's hash and paid 4m46 of
   # compilation for a value nothing in it reads — and made the layer WAIT for
   # five wasm builds it never consumes. A `.ftl` or a token did the same.
   #
-  # This reads the attributes of the generated derivation, at evaluation time:
-  # no build, no import-from-derivation. It is the environment that is checked
-  # because the environment is how they got in — the five buffers were never
-  # named in `nix/rust.nix`'s deps call, they arrived carried by a variable.
+  # The layers that remain are the two the profile bench measures a variant
+  # on (`nix/rust/layers.nix`, phase 1 of nix-design §1.4), each three
+  # derivations — the layer's own workspace, cargo over it, the index. This
+  # reads their attributes at evaluation time: no build, no
+  # import-from-derivation. It is the environment that is checked because the
+  # environment is how a value gets in. The third-party UNITS the build is
+  # made of are `third-party-units-see-nothing-of-ours`' question, and what
+  # each unit of ours is given is `units-see-only-what-they-read`.
   #
-  # AND NO CARGO DIRECTORY, in a layer or in anything built on one. crane hands
-  # a layer on as its `target/`: the next derivation unpacks it there and cargo
-  # finds every dependency already compiled. A `CARGO_TARGET_DIR` or a
-  # `CARGO_BUILD_BUILD_DIR` (`nix/cargo-dirs.nix` is where they belong) sends
-  # cargo to look somewhere else — the layer is still unpacked, nothing reads
-  # it, and every leaf compiles the 483 crates again, with no error at all.
+  # AND NO CARGO DIRECTORY, in a layer or in any unit. A `CARGO_TARGET_DIR`
+  # or a `CARGO_BUILD_BUILD_DIR` (`nix/cargo-dirs.nix` is where they belong)
+  # sends cargo — the layer's, or a build script's — to write and look
+  # somewhere else than the build hands it, with no error at all.
   deps-layer-is-lean =
     let
-      # BOTH LAYERS, because there are two: one per cargo profile, and the
-      # loop's is the one the tests, clippy and `nix run .#dev` all wait on.
-      # Checking only the first would leave the layer that is rebuilt most
-      # often unguarded.
+      # BOTH LAYERS, one per cargo profile, with what each is made of.
       of = layer: lib.filter (lib.hasPrefix "RONOCTUA_") (lib.attrNames layer.drvAttrs);
-      leaked = of rust.cargoArtifacts ++ of rust.loopArtifacts;
+      unitLayers = {
+        release = rust.layers.release;
+        release-raw = rust.layers.release.raw;
+        release-workspace = rust.layers.release.raw.workspace;
+        loop = rust.layers.loop;
+        loop-raw = rust.layers.loop.raw;
+        loop-workspace = rust.layers.loop.raw.workspace;
+      };
+      leaked = lib.concatMap of (lib.attrValues unitLayers);
+      # Every unit, by flavour and kind.
+      units =
+        lib.concatMap
+          (
+            flavour:
+            lib.concatMap
+              (
+                kind:
+                lib.mapAttrsToList (name: d: lib.nameValuePair "${flavour}.${kind}.${name}" d) (
+                  rust.${flavour}.${kind} or { }
+                )
+              )
+              [
+                "libs"
+                "scripts"
+                "bins"
+                "testBins"
+                "testRuns"
+                "clippy"
+              ]
+          )
+          [
+            "release"
+            "loop"
+            "test"
+          ];
       # A variable reaches cargo as an attribute or through `env`; both count.
       dirsOf =
         name: d:
@@ -19352,20 +21162,22 @@ let
             lib.attrNames d.drvAttrs ++ lib.attrNames (d.drvAttrs.env or { })
           )
         );
-      # The layers, and every derivation that takes one.
-      onALayer = {
-        layer = rust.cargoArtifacts;
-        loop-layer = rust.loopArtifacts;
-      }
-      // lib.filterAttrs (_: d: (d.drvAttrs.cargoArtifacts or null) != null) rustDerivations;
+      # The layers, every derivation of `nix/rust.nix` that takes a crane
+      # layer (none since crane's whole-workspace builds went; one that came
+      # back is asked too), and every unit.
+      onALayer =
+        unitLayers
+        // lib.filterAttrs (_: d: (d.drvAttrs.cargoArtifacts or null) != null) rustDerivations
+        // lib.filterAttrs (_: d: d.drvAttrs ? unit) (lib.listToAttrs units);
       redirected = lib.concatLists (lib.mapAttrsToList dirsOf onALayer);
       # The census has to reach the builds that matter, or an empty list
-      # proves nothing: the tests and clippy are the two every edit waits on.
-      reached = onALayer ? tests && onALayer ? clippy;
+      # proves nothing: the shell's test harnesses and its clippy are the two
+      # an edit of the footer waits on.
+      reached = onALayer ? "test.testBins.ronoctua-shell" && onALayer ? "test.clippy.ronoctua-shell";
     in
     mkCheck "deps-layer-is-lean" [ ] ''
       if [ "${lib.boolToString reached}" != true ]; then
-        echo "ERROR: the census of nix/rust.nix no longer reaches the tests and clippy;" >&2
+        echo "ERROR: the census of nix/rust.nix no longer reaches the shell's test harnesses and clippy;" >&2
         echo "      finding no cargo directory there would prove nothing." >&2
         exit 1
       fi
@@ -19374,25 +21186,24 @@ let
         echo "ERROR: a dependency layer was given variables it does not use:" >&2
         for v in $leaked; do echo "  $v" >&2; done
         echo >&2
-        echo "      They come in through \`commonArgs\`; the layer has to take the" >&2
-        echo "      \`buildBase\`. Each one of those costs 4m46 of recompilation" >&2
-        echo "      every time its value changes — and a .wasm changes every time" >&2
-        echo "      somebody edits the buffer." >&2
+        echo "      A layer takes \`buildBase\` and nothing of \`generated\` (nix/rust.nix)." >&2
+        echo "      Each one of those costs a layer's recompilation every time its value" >&2
+        echo "      changes — and a .wasm changes every time somebody edits the buffer." >&2
         exit 1
       fi
       redirected=${lib.escapeShellArg (lib.concatStringsSep "\n" redirected)}
       if [ -n "$redirected" ]; then
-        echo "ERROR: a crane build names a cargo directory of its own:" >&2
+        echo "ERROR: a layer or a unit names a cargo directory of its own:" >&2
         echo "$redirected" | sed 's/^/  /' >&2
         echo >&2
-        echo "      The layer arrives as ./target; with the directory moved, cargo" >&2
-        echo "      never looks there and compiles every dependency again, silently." >&2
-        echo "      The cargo directories belong to nix/cargo-dirs.nix, which only" >&2
-        echo "      the devshell, the loop and the session read." >&2
+        echo "      With the directory moved, cargo writes and looks where the build" >&2
+        echo "      does not hand it, silently. The cargo directories belong to" >&2
+        echo "      nix/cargo-dirs.nix, which only the devshell, the loop and the" >&2
+        echo "      session read." >&2
         exit 1
       fi
-      echo "OK: neither dependency layer carries a RONOCTUA_* at all, and" \
-        "the ${toString (lib.length (lib.attrNames onALayer))} builds on a layer name no cargo directory"
+      echo "OK: no dependency layer carries a RONOCTUA_* at all, and" \
+        "the ${toString (lib.length (lib.attrNames onALayer))} builds on a layer or a unit name no cargo directory"
     '';
 
   # EVERY DERIVATION `nix/rust.nix` MAKES, by name, for the checks that ask the
@@ -19409,37 +21220,133 @@ let
   # A LEAF BUILD KEEPS NOTHING BUT ITS VERDICT.
   #
   # crane's default, for everything that is not `buildPackage`, is to tar and
-  # zstd the whole `target/` into `$out`. For a dependency layer that IS the
-  # product — the next build unpacks it. For the tests, clippy and the
-  # formatter it is gigabytes per edit that nothing reads (a check needs the
+  # zstd the whole `target/` into `$out`. For crane's dependency layers that
+  # was the product — the next build unpacked it. For its tests, clippy and
+  # formatter it was gigabytes per edit that nothing read (a check needs the
   # build to succeed, not its objects), each one holding a link to the loop's
-  # layer as well — and clippy is what the pre-commit hook builds on every
-  # commit. `nix/rust.nix` turns it off in all three.
+  # layer as well. Those builds went on 2026-10-12, with their layers, and
+  # nothing of `nix/rust.nix` is a crane build of our crates any more.
   #
-  # The day somebody adds a `cargoDoc`, a `cargoNextest` or a second
-  # `cargoTest`, it comes with the default again. So this asks every
-  # derivation of `nix/rust.nix` whether it archives its build, and only the
-  # two layers may. Read from the attributes, at evaluation time: no build.
+  # The day somebody adds a `cargoDoc`, a `cargoNextest` or a `cargoTest`
+  # back, it comes with the default again. So this asks every derivation of
+  # `nix/rust.nix` whether it archives its build, and none may. Read from
+  # the attributes, at evaluation time: no build.
+  #
+  # AND THE UNITS KEEP ONLY THEIR PRODUCT (2026-10-12). A unit is built by
+  # the driver (`nix/scripts/rust-unit.py`), which ends every build by
+  # refusing anything beyond what that kind of unit IS: a library its rlib,
+  # its build script's `OUT_DIR` and `nix-support/`; a program its `bin/`;
+  # the test harnesses theirs; a test run, clippy and rustfmt a verdict (and
+  # the run's log); a measurement two numbers; a third-party unit what a
+  # library keeps. Only a third-party layer holds a `deps/` of compiled crates. This asks every unit, at evaluation, that
+  # its kind (`passthru.kind`) is the mode the driver runs it in and one the
+  # driver knows what to keep of — and asks the driver itself, on a planted
+  # output of each kind, that it keeps the product and refuses a `deps/`.
   leaf-builds-keep-no-artifacts =
     let
-      layers = [
-        rust.cargoArtifacts.drvPath
-        rust.loopArtifacts.drvPath
+      archivingOf = lib.filterAttrs (_: d: d.drvAttrs.doInstallCargoArtifacts or false);
+      leaves = lib.attrNames (archivingOf rustDerivations);
+      # And the question is not blind: a derivation that archives, as a crane
+      # leaf does by default, is found (planted, never built).
+      plantedFound =
+        (archivingOf {
+          planted = pkgs.runCommand "planted-crane-leaf" { doInstallCargoArtifacts = true; } "";
+        }) ? planted;
+      # The census reaches `nix/rust.nix`'s derivations, or finding no leaf
+      # proves nothing: the named programs a module runs are among them.
+      reached = lib.all (n: rustDerivations ? ${n}) [
+        "installer"
+        "rescue"
+        "brain"
+        "transfers"
+        "shell"
+        "tests"
+        "clippy"
+        "fmt"
       ];
-      archiving = lib.filterAttrs (_: d: d.drvAttrs.doInstallCargoArtifacts or false) rustDerivations;
-      isLayer = d: builtins.elem d.drvPath layers;
-      leaves = lib.attrNames (lib.filterAttrs (_: d: !(isLayer d)) archiving);
-      layersSeen = lib.length (lib.filter isLayer (lib.attrValues archiving));
+      units =
+        lib.concatMap
+          (
+            flavour:
+            lib.concatMap (kind: lib.attrValues (rust.${flavour}.${kind} or { })) [
+              "deps"
+              "libs"
+              "scripts"
+              "bins"
+              "testBins"
+              "testRuns"
+              "clippy"
+            ]
+          )
+          [
+            "release"
+            "loop"
+            "test"
+          ]
+        ++ lib.attrValues rust.test.fmt;
+      unitKinds = pkgs.writeText "unit-kinds.json" (
+        builtins.toJSON (
+          map (d: {
+            inherit (d) name;
+            kind = d.passthru.kind or null;
+            mode = d.drvAttrs.unit.mode or null;
+            archives = d.drvAttrs.doInstallCargoArtifacts or false;
+          }) units
+        )
+      );
     in
-    mkCheck "leaf-builds-keep-no-artifacts" [ ] ''
-      # THE FLOOR: the census has to see the two layers archiving, which is
-      # what they are for. Seeing neither is a census that stopped reaching
-      # crane's derivations — and it would then report no leaf, and pass.
-      if [ "${toString layersSeen}" != 2 ]; then
-        echo "ERROR: ${toString layersSeen} of the 2 dependency layers archive their build." >&2
-        echo "      Either a layer stopped handing its target/ on (every build on it" >&2
-        echo "      would compile the dependencies again), or this census no longer" >&2
-        echo "      reaches nix/rust.nix's derivations and proves nothing." >&2
+    mkCheck "leaf-builds-keep-no-artifacts" [ pkgs.python3 ] ''
+      # THE UNITS: each kind the driver's own, and the driver's refusal.
+      python3 - ${unitKinds} ${../nix/scripts/rust-unit.py} <<'END'
+      import importlib.util, json, os, sys, tempfile
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the units' attributes as Nix evaluated them, and the driver,
+      # imported and asked.
+      units = json.load(open(sys.argv[1]))
+      spec = importlib.util.spec_from_file_location("rust_unit", sys.argv[2])
+      driver = importlib.util.module_from_spec(spec)
+      spec.loader.exec_module(driver)
+      floor(len(units), 600, "units")
+      wrong = []
+      kinds = set()
+      for u in units:
+          kinds.add(u["kind"])
+          if u["kind"] not in driver.KEEPS:
+              wrong.append(f"{u['name']} is a {u['kind']} unit, which the driver keeps nothing of")
+          if u["mode"] != u["kind"]:
+              wrong.append(f"{u['name']} is a {u['kind']} unit run in the driver's {u['mode']} mode")
+          if u["archives"]:
+              wrong.append(f"{u['name']} archives its build")
+      floor(len(kinds), 7, "kinds of unit")
+      for kind in sorted(kinds & set(driver.KEEPS)):
+          with tempfile.TemporaryDirectory() as d:
+              out = os.path.join(d, "out")
+              for entry in sorted(driver.KEEPS[kind]):
+                  os.makedirs(os.path.join(out, entry))
+              if driver.kept_beyond(kind, out, None):
+                  wrong.append(f"the driver refuses a {kind} unit's own product: {driver.kept_beyond(kind, out, None)}")
+              os.makedirs(os.path.join(out, "deps"), exist_ok=True)
+              open(os.path.join(out, "deps", "libserde-0123.rlib"), "w").close()
+              if not any("deps/" in w for w in driver.kept_beyond(kind, out, None)):
+                  wrong.append(f"the driver keeps a deps/ in a {kind} unit")
+      if wrong:
+          print("ERROR: a unit keeps more than its product:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: {len(units)} units in {len(kinds)} kinds, each kept to its product by the driver")
+      END
+
+      # THE FLOOR: the census has to reach `nix/rust.nix`'s derivations, or
+      # it would report no leaf, and pass.
+      if [ "${lib.boolToString reached}" != true ]; then
+        echo "ERROR: the census no longer reaches nix/rust.nix's derivations (the named" >&2
+        echo "      programs, the shell's bundle, the three aggregates) and proves nothing." >&2
+        exit 1
+      fi
+      if [ "${lib.boolToString plantedFound}" != true ]; then
+        echo "ERROR: a planted derivation that archives its target/ was not found: this census is blind" >&2
         exit 1
       fi
       leaves="${lib.concatStringsSep " " leaves}"
@@ -19448,12 +21355,12 @@ let
         for l in $leaves; do echo "  rust.$l" >&2; done
         echo >&2
         echo "      crane defaults \`doInstallCargoArtifacts\` to true for everything" >&2
-        echo "      that is not buildPackage. Only a dependency layer is read again;" >&2
-        echo "      set it to false where the build is only a verdict." >&2
+        echo "      that is not buildPackage. The build is one derivation per unit" >&2
+        echo "      (nix/rust/units.nix), and a unit keeps only its product." >&2
         exit 1
       fi
-      echo "OK: only the 2 dependency layers archive a target/, out of" \
-        "${toString (lib.length (lib.attrNames rustDerivations))} rust derivations"
+      echo "OK: none of the" \
+        "${toString (lib.length (lib.attrNames rustDerivations))} rust derivations archives a target/"
     '';
 
   # THE LOCAL `cargo` BUILDS LEAN.
@@ -19947,7 +21854,6 @@ let
       python3 - <<'PY'
       import pathlib, re, sys
 
-      shell = pathlib.Path("${../crates/ronoctua-shell/src}")
       # BOTH SPELLINGS OF THE ONE ANSWER. `surface::chrome_size` takes the run's
       # text and `chrome_size_of` takes a `char` — the two chevrons hold one
       # already, and making them build a `String` for it to be taken apart again
@@ -19971,9 +21877,10 @@ let
       # reason: the icon on its page is the SUBJECT, drawn at the size the
       # person chose on the page and grown from its centre
       # (`the-icon-grows-from-its-centre`) — not a glyph of the chrome.
-      EXCEPT = {("files.rs", "run_size"), ("icons_page.rs", "centred_run")}
+      EXCEPT = {("fields.rs", "run_size"), ("icons_page.rs", "centred_run")}
 
       exec(open("${pyPrelude}").read())
+      exec(open("${shellPrelude}").read())
 
       # FILE-WIDE: a glyph centred in its cell with a loose size is an offence
       # wherever it is written — there is no function to narrow to, because the
@@ -20011,7 +21918,7 @@ let
           return [p for p in parts if p]
 
       loose, sources, made = [], 0, 0
-      for f in sorted(shell.rglob("*.rs")):
+      for f in sorted(shell_files("**/*.rs")):
           body = code_of(f.read_text())
           sources += 1
           bound = []  # (where an `OnTheCell(<name>)` pattern shuts, <name>)
@@ -20083,11 +21990,11 @@ let
       from fontTools.pens.boundsPen import BoundsPen
       import json, pathlib, re, sys
       exec(open("${pyPrelude}").read())
+      exec(open("${shellPrelude}").read())
 
       # FILE-WIDE: a glyph may be asked about from any file of the shell; each
       # call's argument is narrowed by its parentheses (`shut_at`), and a
       # size's glyph through `Size::glyph`'s own arms (`body_of`).
-      shell = pathlib.Path("${../crates/ronoctua-shell/src}")
       icons = json.load(open("${glyphdb.db}/icons.json"))
       faces = []
       for path in ("${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf",
@@ -20106,12 +22013,12 @@ let
                   return [round(pen.bounds[0] / em, 4), round(pen.bounds[2] / em, 4)]
           raise SystemExit(f"U+{cp:05X} is in no face this check knows")
 
-      column = code_of((shell / "column.rs").read_text())
+      column = code_of(shell_file("column.rs").read_text())
       floor(len(column), 20000, "characters of column.rs")
       sizes = re.findall(r"tokens::icon::([A-Z_]+)", must(body_of(column, "glyph"), "`column::Size::glyph`"))
       asked = set()
       swept = 0
-      for f in sorted(shell.rglob("*.rs")):
+      for f in sorted(shell_files("**/*.rs")):
           body = code_of(without_tests(f.read_text()))
           swept += 1
           for m in re.finditer(r"\b(?:ink_across|ink_of)\s*\(", body):
@@ -20223,6 +22130,7 @@ let
     import pathlib, re, sys
 
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: the generator's sets and the generated table are both
     # module-level. `impl <enum>` and its `id()` are narrowed by `scope` and by
@@ -20307,9 +22215,12 @@ let
     # sides with no compiler between them. Diverging, the notification arrives
     # as a stranger: quiet, short, with no action and no explanation of why a
     # window disappeared.
-    surface = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/surface.rs").read_text())
-    floor(len(surface), 100000, "characters of surface.rs")
-    stamped = set(re.findall(r'pub const [A-Z_]+: &str = "([a-z-]+)";', surface))
+    #
+    # The tags are one module of the shell's (`tags.rs`): the views that raise
+    # them and the footer's events that recognise them both read it.
+    tags = uncommented(shell_file("tags.rs").read_text())
+    stamped = set(re.findall(r'pub const [A-Z_]+: &str = "([a-z-]+)";', tags))
+    floor(len(stamped), 16, "tags stamped by the shell (tags.rs)")
     known = set(re.findall(r'Test::Is\("([a-z-]+)"\.to_owned\(\)\)', table))
     for tag in stamped:
         if tag not in known:
@@ -20346,6 +22257,7 @@ let
     python3 - <<'PY'
     import pathlib, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: the offence is a NAME being absent from a whole
     # file, or present in the wrong one. There is no function to narrow to —
@@ -20356,7 +22268,7 @@ let
     #
     # PROSE: and the subject IS the words — which name a path arrives under —
     # rather than the shape of any function.
-    capture = uncommented(pathlib.Path("${../crates/ronoctua-shell/src}/capture.rs").read_text())
+    capture = uncommented(shell_file("capture.rs").read_text())
     built = hashless(pathlib.Path("${../nix/rust.nix}").read_text())
     module = hashless(pathlib.Path("${../nix/modules/scroll.nix}").read_text())
     floor(len(capture), 1000, "characters of capture.rs")
@@ -20412,9 +22324,9 @@ let
     python3 - <<'PY'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     notify = pathlib.Path("${../crates/ronoctua-notify/src}")
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     # FILE-WIDE: `INERT` and the fields of `Presentation` are module-level,
     # and what is asked of each door is whether it draws the reason anywhere.
     #
@@ -20422,7 +22334,7 @@ let
     # it are string literals inside the `INERT` table, and emptying them would
     # leave a check with nothing to read.
     presentation = uncommented((notify / "presentation.rs").read_text())
-    manager = uncommented((shell / "notifications.rs").read_text())
+    manager = uncommented(shell_file("notifications.rs").read_text())
     floor(len(presentation), 500, "characters of presentation.rs")
     floor(len(manager), 1000, "characters of notifications.rs")
 
@@ -20472,12 +22384,34 @@ let
     if "pub fn note(" not in manager:
         print("ERROR: the manager has no way of saying the reason")
         failed = True
-    for door, name in (("footer", "surface.rs"), ("window", "notifications_window.rs")):
-        drawn = uncommented((shell / name).read_text())
-        floor(len(drawn), 1000, "characters of " + name)
-        if "manager.note(" not in drawn and "view.note(" not in drawn:
-            print(f"ERROR: the {door} does not draw the reason on the message line")
-            failed = True
+    # THE WINDOW draws the view's note on its own line.
+    drawn = uncommented(shell_source("notifications_window.rs"))
+    floor(len(drawn), 1000, "characters of notifications_window.rs")
+    if "manager.note(" not in drawn and "view.note(" not in drawn:
+        print("ERROR: the window does not draw the reason on the message line")
+        failed = True
+    # THE FOOTER'S DOOR IS TWO HALVES now, and both have to be there: the
+    # manager's region of the slot host SAYS the reason (`Region::note`, which
+    # asks `View::note`), and the FOOTER DRAWS what the shown region says on
+    # the line it explains things on — the host asks it (`hosted_note`) and
+    # the explanation's chain in `Footer::paint` puts the answer there. A
+    # region that says it to a footer that never asks says it to nobody.
+    region = uncommented(without_tests(shell_source("notifications_region.rs")))
+    floor(len(region), 1000, "characters of notifications_region.rs")
+    says = body_of(region, "note")
+    if says is None or "view.note(" not in says:
+        print("ERROR: the manager's region does not say the reason (`Region::note`)")
+        failed = True
+    footer = uncommented(without_tests(shell_source("surface.rs")))
+    floor(len(footer), 100000, "characters of the footer's module")
+    asks = body_of(footer, "hosted_note")
+    if asks is None or not re.search(r"\.note\(\s*&", asks):
+        print("ERROR: the footer does not ask the shown region what its row has to add (`hosted_note`)")
+        failed = True
+    painted = must(body_of(footer, "paint"), "`Footer::paint`")
+    if not re.search(r"self\.hosted_note\(\)\s*\.map\(\s*\|(\w+)\|\s*vec!\[\s*crate::chrome::Piece::said\(\1\)", painted):
+        print("ERROR: the footer does not draw what the shown region has to add on the line it explains things on")
+        failed = True
 
     # (c) and every knob it draws is either inert-with-a-reason or does
     #     something. A knob nobody can find in either list is the defect.
@@ -20717,8 +22651,15 @@ let
   #
   # # What this counts, and what it deliberately does not
   #
-  # It counts CONNECTIONS and allows exactly one per crate, which is that
-  # crate's composition root. Everything downstream holds a `dyn Compositor`.
+  # It counts CONNECTIONS and allows exactly one per program, which is that
+  # program's composition root. Everything downstream holds a `dyn Compositor`.
+  # A program is its crate, and THE SHELL IS ONE PROGRAM IN MANY CRATES
+  # (`_SHELL_CRATE`, the prelude's: `ronoctua-shell`, every
+  # `ronoctua-shell-*`, the buffer's PNG camera): counted crate by crate, the
+  # 2026-10-12 split would let each of them open its own, one opener in the
+  # kit and one in the lifeline, and pass — the very drift this exists for,
+  # in a family that grows to some forty crates. So they are counted together,
+  # as they were while the shell was one crate.
   #
   # It does NOT count the deeds table (`ronoctua_scroll::deeds`,
   # `ronoctua_scroll::wire`). That is a different kind of naming: the table is
@@ -20744,44 +22685,61 @@ let
         root = pathlib.Path("${../crates}")
         OPENS = re.compile(r"ronoctua_scroll::Scroll::(open|connect|connect_at)\b")
 
+        # ONE PROGRAM, ONE ROOT: every shell crate is the shell
+        # (`_SHELL_CRATE`, found by name, so a crate split off joins with no
+        # edit here), and any other crate is a program of its own.
+        SHELL = "the shell (ronoctua-shell, ronoctua-shell-*, ronoctua-render-png)"
+
+        def program_of(crate):
+            return SHELL if _SHELL_CRATE.fullmatch(crate) else crate
+
         seen = {}
         total = 0
+        shell_crates_seen = set()
         for f in sorted(root.rglob("*.rs")):
             crate = f.relative_to(root).parts[0]
             # THE ADAPTER ITSELF IS THE EXCEPTION, and it is the whole point:
             # it is where knowing which compositor this is belongs.
             if crate == "ronoctua-scroll":
                 continue
+            if _SHELL_CRATE.fullmatch(crate):
+                shell_crates_seen.add(crate)
             hits = OPENS.findall(code_of(f.read_text()))
             total += len(hits)
             if hits:
-                seen.setdefault(crate, []).append((str(f.relative_to(root)), len(hits)))
+                seen.setdefault(program_of(crate), []).append((str(f.relative_to(root)), len(hits)))
+
+        # AND THE SHELL'S CRATES ARE THERE TO BE COUNTED: a family this check
+        # stopped recognising would be counted crate by crate again, silently.
+        floor(len(shell_crates_seen), 10, "shell crates counted as the shell")
 
         # A FLOOR, because zero would mean this check had stopped seeing the
         # tree — three crates talk to a compositor and each needs its one root.
         floor(total, 3, "connections opened outside the adapter")
 
         wrong = []
-        for crate, files in sorted(seen.items()):
+        for program, files in sorted(seen.items()):
             count = sum(n for _, n in files)
             if count > 1:
                 where = ", ".join(f"{q} ({n})" for q, n in files)
-                wrong.append(f"{crate} opens {count} connections: {where}")
+                wrong.append(f"{program} opens {count} connections: {where}")
 
         if wrong:
-            print("ERROR: a crate names the adapter in more than one place.", file=sys.stderr)
+            print("ERROR: a program names the adapter in more than one place.", file=sys.stderr)
             for w in wrong:
                 print(f"  {w}", file=sys.stderr)
             print(file=sys.stderr)
-            print("       One per crate, and everything below it holds a", file=sys.stderr)
-            print("       `dyn Compositor`. Invariant 3 says no crate but the", file=sys.stderr)
-            print("       adapter knows which compositor this is; a second", file=sys.stderr)
-            print("       opener is how that stops being true.", file=sys.stderr)
+            print("       One per program — the shell's crates are one — and", file=sys.stderr)
+            print("       everything below it holds a `dyn Compositor`.", file=sys.stderr)
+            print("       Invariant 3 says no crate but the adapter knows which", file=sys.stderr)
+            print("       compositor this is; a second opener is how that stops", file=sys.stderr)
+            print("       being true.", file=sys.stderr)
             sys.exit(1)
 
-        print(f"OK: {len(seen)} crates reach a compositor, one composition root each")
-        for crate, files in sorted(seen.items()):
-            print(f"    {crate}: {files[0][0]}")
+        print(f"OK: {len(seen)} programs reach a compositor, one composition root each"
+              f" ({len(shell_crates_seen)} shell crates counted as one)")
+        for program, files in sorted(seen.items()):
+            print(f"    {program}: {files[0][0]}")
         PY
       '';
 
@@ -21256,8 +23214,8 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     tokens = pathlib.Path("${../crates/ronoctua-tokens/src}/lib.rs").read_text()
     wrong = []
 
@@ -21279,7 +23237,7 @@ let
 
     seen_files = 0
     asks = 0
-    for f in sorted(shell.rglob("*.rs")):
+    for f in sorted(shell_files("**/*.rs")):
         seen_files += 1
         body = f.read_text()
         asks += body.count("tokens::text::size()")
@@ -21288,7 +23246,7 @@ let
             # and then `SIZE_BASE` reads the anchor without ever writing the
             # path, which the first version of this let through.
             if re.search(r"\bSIZE_BASE\b", code(line)):
-                rest = f.relative_to(shell)
+                rest = shell_name(f)
                 wrong.append(
                     f"{rest}:{n} draws at `font::SIZE_BASE`, which the person cannot move. "
                     "Ask `ronoctua_tokens::text::size()`."
@@ -21307,7 +23265,9 @@ let
         if name not in tokens:
             wrong.append(f"`font::{name}` is not read by the tokens crate any more")
 
-    # 3. EVERY OTHER SIZE MOVES WITH IT, and only two files may name one.
+    # 3. EVERY OTHER SIZE MOVES WITH IT, and only two files may name one —
+    #    the painter's scale and the glyph beside the text (`glyph.rs`, which
+    #    was the footer's until every door came to lead a run with a glyph).
     #
     #    `font.size.small` is 15 against a base of 18. Left unscaled it
     #    becomes the TALLER of the two below 84%, a small run takes two cells
@@ -21317,10 +23277,10 @@ let
     #    is the number of PLACES a fixed size can be read from at all.
     # THE WHOLE PATH, not the file's name: keyed on the name, a new
     # `src/anywhere/paint.rs` would have been exempt by being called that.
-    resolvers = {"paint.rs", "surface.rs"}
-    for f in sorted(shell.rglob("*.rs")):
+    resolvers = {"paint.rs", "glyph.rs"}
+    for f in sorted(shell_files("**/*.rs")):
         body = f.read_text()
-        here = str(f.relative_to(shell))
+        here = str(shell_name(f))
         names = [
             n
             for n, line in enumerate(body.splitlines(), 1)
@@ -21328,7 +23288,7 @@ let
         ]
         if names and here not in resolvers:
             wrong.append(
-                f"{f.relative_to(shell)}:{names[0]} reads a fixed size. Only "
+                f"{shell_name(f)}:{names[0]} reads a fixed size. Only "
                 + " and ".join(sorted(resolvers))
                 + " resolve one, and they scale it."
             )
@@ -21357,7 +23317,7 @@ let
                 elif text.startswith("font::SIZE_", at) and not scaled_at:
                     line = text.count("\n", 0, at) + 1
                     wrong.append(
-                        f"{f.relative_to(shell)}:{line} names a fixed size outside a "
+                        f"{shell_name(f)}:{line} names a fixed size outside a "
                         "`text::scaled(…)`, so it does not move with the size"
                     )
                 at += 1
@@ -21494,7 +23454,7 @@ let
                 without_prose,
             ):
                 wrong.append(
-                    f"{f.relative_to(shell)}: `{fn}({m.group(1)})` puts a number "
+                    f"{shell_name(f)}: `{fn}({m.group(1)})` puts a number "
                     "where the chosen size goes, so that piece of the screen "
                     "ignores the setting"
                 )
@@ -21515,8 +23475,8 @@ let
     #     drawing 18 px textures stretched into 36 px boxes for the life of the
     #     footer — the sentence the rule above describes, surviving the rule
     #     above.
-    for where, fn in (("apps.rs", "pixmap_key"), ("buffer.rs", "svg_key")):
-        src = (shell / where).read_text()
+    for where, fn in (("launch.rs", "pixmap_key"), ("buffer.rs", "svg_key")):
+        src = shell_file(where).read_text()
         m = re.search(r"fn " + fn + r"\(([^)]*)\)", "\n".join(code(l) for l in src.splitlines()))
         if not m:
             wrong.append(
@@ -21553,7 +23513,7 @@ let
     #     well as comments — right for the rules that hunt for identifiers, and
     #     wrong here, where the KEY NAMES and the dconf verbs are the evidence.
     #     Comments still go, so a sentence cannot satisfy any of this.
-    toolkits = (shell / "toolkits.rs").read_text()
+    toolkits = shell_file("toolkits.rs").read_text()
     plain = "\n".join(
         (l if (cut := l.find("//")) < 0 else l[:cut]) for l in toolkits.splitlines()
     )
@@ -21613,8 +23573,8 @@ let
 
     loud = sorted(
         f.name
-        for f in shell.rglob("*.rs")
-        if "bin/" not in str(f.relative_to(shell)) and setters_in_tests(f.read_text())
+        for f in shell_files("**/*.rs")
+        if "bin/" not in str(shell_name(f)) and setters_in_tests(f.read_text())
     )
     if len(loud) > 1:
         wrong.append(
@@ -21966,8 +23926,8 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
     crate = pathlib.Path("${../crates/ronoctua-power/src}")
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     wrong = []
     swept = 0
     # FILE-WIDE: what is asked of each file is whether a name appears in it at
@@ -21991,7 +23951,9 @@ let
     for verb, arg in calls:
         if arg.strip() != "false":
             wrong.append(f"lib.rs: `{verb}` is called with `{arg}`, which may ask")
-    for f in list(crate.glob("*.rs")) + [shell / "power.rs", shell / "power_window.rs", shell / "power_words.rs"]:
+    # THE VIEW'S TWO DOORS AND ITS ONE ERRAND HANDLER (`power_region.rs`,
+    # the footer's half since the view became a region) are swept as well.
+    for f in list(crate.glob("*.rs")) + [shell_file(n) for n in ("power.rs", "power_window.rs", "power_region.rs", "power_words.rs")]:
         body = uncommented(f.read_text())
         swept += 1
         for word in ("sudo", "pkexec", "pkttyagent", "systemd-run"):
@@ -22278,6 +24240,7 @@ let
     python3 - <<'PY'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: `OF_THE_VIEW` and the id-to-press map are module-level; the
     # reader, the footer's branch, the window's `typed` and the two click
@@ -22286,13 +24249,14 @@ let
     # `uncommented` and never `code_of`: a NOTATION is a string literal and so
     # is a command id. Emptying them would leave every table in this check
     # reading back as empty, and empty tables agree with each other.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    view = uncommented((shell / "bluetooth.rs").read_text())
-    words = uncommented((shell / "bluetooth_words.rs").read_text())
-    window = uncommented((shell / "bluetooth_window.rs").read_text())
-    footer = uncommented((shell / "surface.rs").read_text())
+    view = uncommented(shell_file("bluetooth.rs").read_text())
+    words = uncommented(shell_file("bluetooth_words.rs").read_text())
+    window = uncommented(shell_file("bluetooth_window.rs").read_text())
+    # THE FOOTER'S DOOR IS THE VIEW'S REGION of the slot host
+    # (`bluetooth_region.rs`): its key and its click.
+    footer = uncommented(without_tests(shell_file("bluetooth_region.rs").read_text()))
     for name, text in (("bluetooth.rs", view), ("bluetooth_words.rs", words),
-                       ("bluetooth_window.rs", window), ("surface.rs", footer)):
+                       ("bluetooth_window.rs", window), ("bluetooth_region.rs", footer)):
         floor(len(text), 2000, "characters of " + name)
     gaps = []
 
@@ -22319,8 +24283,9 @@ let
     if re.search(r"\bMods\s*\{", reader) or "Key::simple" in reader:
         gaps.append("`press_of_key` rebuilds the key with fewer modifiers — a chord would be read as its letter")
 
-    # 3) THE FOOTER HANDS IT THE KEY, and reads nothing itself.
-    branch = scope(footer, r"if self\.view\(\) == ViewState::Bluetooth")
+    # 3) THE FOOTER HANDS IT THE KEY, and reads nothing itself — the region's
+    # `key`, which the footer's dispatcher hands every key while it is shown.
+    branch = scope(footer, r"fn key\b")
     if branch is None:
         sys.exit("ERROR: the footer's bluetooth key branch went away or changed shape")
     if "crate::bluetooth_words::press_of_key(key)" not in branch:
@@ -22342,7 +24307,7 @@ let
     #    exception. A pairing question opens over whatever was on the screen; a
     #    door that acted on a click there would put `yes` about an unknown
     #    device one movement of a hand away.
-    arm = scope(footer, r"Some\(Click::Bluetooth\(n\)\)\s*=>")
+    arm = scope(footer, r"fn clicked_at\b")
     block = body_of(window, "clicked")
     if not arm or not block:
         sys.exit("ERROR: the click path of one of the two doors went away or changed shape")
@@ -22734,7 +24699,7 @@ let
   # that rasterizes empty gives an invisible smudge on the dark background —
   # which is indistinguishable from "the icon has not arrived yet".
   apps-icon-from-superpack = mkCheck "apps-icon-from-superpack" [ ] ''
-    ${rust.workspace}/bin/ronoctua-test-icons \
+    ${rust.bins.ronoctua-test-icons}/bin/ronoctua-test-icons \
       ${iconSuperpack}/share/icons/noctua
   '';
 
@@ -22768,7 +24733,7 @@ let
   # eliminates.
   wifiTpmVm = import ./wifi-tpm-vm.nix {
     inherit pkgs lib;
-    ronoctua-shell = rust.shell;
+    inherit (rust) networkConsole networkAgent;
   };
 
   network-tuned = mkCheck "network-tuned" [ ] ''
@@ -22902,7 +24867,12 @@ let
   # would still BUILD with any of those broken; the defect would be a colour
   # nobody could trace back.
   colorspace-tests = mkCheck "colorspace-tests" [ pkgs.python3 ] ''
-    cd ${../nix/scripts}
+    # The module and its tests, by FILE: the whole `nix/scripts` would make
+    # every other generator's edit a reason to run this again
+    # (`generators-cite-their-scripts`).
+    mkdir generator && cd generator
+    cp ${../nix/scripts/colorspace.py} colorspace.py
+    cp ${../nix/scripts/test_colorspace.py} test_colorspace.py
     # No pipe: under `set -o pipefail` a failing unittest ends the check at
     # once, with its whole log, which is what a failure should look like.
     python3 -m unittest -v test_colorspace
@@ -23027,6 +24997,8 @@ let
           --themes ${json "themes.json" [ "bad" ]} \
           --seed bad=${json "bad.seed.json" bad} \
           --recipes ${json "colors.json" (import ../assets/tokens/colors.nix)} \
+          --roles ${json "token-roles.json" tokenNames.roles} \
+          --default bad \
           --out out > log 2>&1; then
         echo "ERROR: a seed with the accent at 165° built; the gates are not biting." >&2
         cat log >&2
@@ -23044,7 +25016,11 @@ let
   # invariant 9 with one wall fewer. The frozen reference is a FIXTURE the
   # report compares against, and nothing but `nix/themes.nix` may import it —
   # a second reader would make it a second palette. And nobody imports
-  # `colors.nix` at evaluation any more: its values do not exist there.
+  # `colors.nix` at evaluation for its values: they do not exist there.
+  # `nix/token-names.nix` reads its attribute NAMES (a parameter, not this
+  # path); `tests/theme-data.nix` reads its TEXT, to edit copies and to know
+  # its bytes, and is held to this like any other file — an `import` of it
+  # there fails here too.
   colours-are-computed = mkCheck "colours-are-computed" [ pkgs.gnugrep ] ''
     seeds=$(ls ${../assets/themes}/*.nix | grep -v '\.reference\.nix$')
     if grep -nE '0x[0-9A-Fa-f]{8}' ${../assets/tokens/colors.nix} $seeds; then
@@ -23261,7 +25237,9 @@ let
     # version of this grepped the file for "USR2" and passed while the shell
     # sent USR1 — because the paragraph explaining the signal says USR2 four
     # times. A rule a sentence can satisfy is worse than no rule.
-    sed 's|//.*||' ${../crates/ronoctua-shell/src/toolkits.rs} | grep -q '"-USR2"' || {
+    . ${shellSh}
+    toolkits=$(shell_file toolkits.rs)
+    sed 's|//.*||' "$toolkits" | grep -q '"-USR2"' || {
       echo "ERROR: the shell does not send SIGUSR2, so open terminals keep their size" >&2
       exit 1; }
 
@@ -23971,8 +25949,11 @@ let
     # this repository has run: the class stopped at `fontconfig`, the `=` was
     # never reached, and the line simply did not match. Python has no hyphen in
     # an identifier, so widening the class costs that half nothing.
+    # AND A PYTHON CLASS, which the build's own scripts declare (a unit
+    # test's `class Keeps`, 2026-10-12): a name other code sees, like a `def`.
     DEF = re.compile(
         r"^\s*(?:def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\("
+        r"|class\s+([A-Za-z_][A-Za-z0-9_]*)\s*[(:]"
         r"|([A-Za-z_][A-Za-z0-9_-]*)\s*=(?!=))"
     )
     for suf in ("*.nix", "*.py"):
@@ -23988,10 +25969,39 @@ let
                 m = DEF.match(line)
                 if not m:
                     continue
-                got = m.group(1) or m.group(2)
+                got = m.group(1) or m.group(2) or m.group(3)
                 item_name = re.sub(r"(?<!^)(?=[A-Z])", "-", got).lower().replace("_", "-")
                 if portuguese(item_name):
                     gaps.append(f"def: {f.relative_to(root_dir)}:{n}: {got}")
+
+    # 4b) THE MANIFESTS' NAMES. A TOML key is a name a build reads — the
+    # build's own metadata (`[package.metadata.ronoctua]`: `env`, `run-env`,
+    # `beside`, `data`, `bins` and the roles it gives, `[workspace.metadata.
+    # ronoctua] build-features`), a feature, a profile, a dependency's alias —
+    # and a role is a word the units' builder reads. Every table header,
+    # every key (an inline table's too) and every role, in every `.toml`.
+    TOML_HEADER = re.compile(r"^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*$")
+    TOML_KEY = re.compile(r'(?:^|[{,])\s*"?([A-Za-z0-9_.-]+)"?\s*=')
+    ROLE = re.compile(r'"[^"]+"\s*=\s*"([a-z-]+)"')
+    tomls = 0
+    for f in sorted(root_dir.rglob("*.toml")):
+        if any(x in f.parts for x in (".git", "result", "target", ".direnv")):
+            continue
+        # The lexicon is search vocabulary (an English word and its pt-BR
+        # tags), which invariant 18 leaves in both languages: no name.
+        if f.relative_to(root_dir).parts[:2] == ("assets", "lexicon"):
+            continue
+        tomls += 1
+        for n, line in enumerate(hashless(f.read_text(errors="replace")).splitlines(), 1):
+            h = TOML_HEADER.match(line)
+            names = [p.strip('"') for p in h.group(1).split(".")] if h else TOML_KEY.findall(line)
+            if not h and line.lstrip().startswith("bins"):
+                names += ROLE.findall(line)
+            for name in names:
+                for part in name.split("."):
+                    if portuguese(part.lower().replace("_", "-")):
+                        gaps.append(f"toml: {f.relative_to(root_dir)}:{n}: {part}")
+    floor(tomls, 80, "TOML files swept for a name")
 
     # 5) THE CLI'S SUBCOMMANDS
     #
@@ -24569,6 +26579,11 @@ let
         # the code. (No example is written out here on purpose — an f-string in
         # a comment is an f-string this very scanner reads.)
         re.compile(r"^\s*from\s+[A-Za-z_.][A-Za-z0-9_.]*\s+import\s+(.+)$", re.M),
+        # A CHAINED ASSIGNMENT binds every target, and the first pattern above
+        # stops at the first `=`: two counters started at zero on one line
+        # (`nix/scripts/texts.py`) had the second reported as an orphan, which
+        # was this check being wrong rather than the code.
+        re.compile(r"^\s*((?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*){2,})(?!=)", re.M),
     ]
     DRIVER = {"machine", "subtest", "start_all", "nodes", "t", "polling_condition"}
 
@@ -24671,7 +26686,12 @@ let
   '';
 
   # The crates: tests, clippy and formatting, each in its own derivation so it
-  # says WHAT broke instead of "Rust failed".
+  # says WHAT broke instead of "Rust failed" — and each the aggregate of the
+  # units (`nix/rust/units.nix`): one test run, one clippy and one rustfmt
+  # per crate, so an edit runs again what it reaches and nothing else.
+  # crane's three leaves of these names compiled the whole workspace for one
+  # line (gone on 2026-10-12); the names stayed, for the editing loop
+  # (`tests/quick.nix`) and the pre-commit hook.
   rust-tests = rust.tests;
   rust-clippy = rust.clippy;
   rust-fmt = rust.fmt;
@@ -24680,7 +26700,14 @@ let
   # asserted here is what can be asserted without one: that the binary exists,
   # runs and loads the embedded face.
   shell-binary = mkCheck "shell-binary" [ ] ''
-    bin=${rust.workspace}/bin/ronoctua-shell
+    # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+    # one, and the colours and the words are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+    # And the brain's catalogue (`rust.keyed`): the modules' marks and the
+    # keymap's actions are data it reads at run time, refused (78) without it.
+    export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
+    bin=${rust.bins.ronoctua-shell}/bin/ronoctua-shell
     test -x "$bin" || { echo "ERROR: the binary is missing" >&2; exit 1; }
 
     # With no WAYLAND_DISPLAY it must fail with a CLEAR message, not with a
@@ -24724,8 +26751,11 @@ let
         failed=0
 
         # ---- WHAT THE RUST READS ----
+        . ${shellSh}
+        # EVERY FILE OF THE SHELL'S CRATES, a module's folder included
+        # (`surface/`, `door/`): `shell_files '*.rs'` is the top of `src/`.
         lidas=$(grep -oh 'RONOCTUA_BUFFER_[A-Z_]*' \
-          ${../crates/ronoctua-shell/src}/*.rs | sort -u)
+          $(shell_files '*.rs') $(shell_files '*/*.rs') $(shell_files '*/*/*.rs') | sort -u)
         [ -n "$lidas" ] || {
           echo "ERROR: no RONOCTUA_BUFFER_* in the shell's code — what does the grep match?" >&2
           exit 1
@@ -24957,6 +26987,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     root_dir = pathlib.Path("${self}")
     ID = re.compile(r'^\s+(name|mode):\s*"([a-z][a-z0-9-]*)"')
@@ -25009,7 +27040,7 @@ let
     # next one.
     APP_ID = re.compile(r'pub const APP_ID[A-Z_]*: &str = "br\.ronoctua\.([a-z][a-z0-9-]*)"')
     native = 0
-    for rs in sorted((root_dir / "crates/ronoctua-shell/src").rglob("*.rs")):
+    for rs in shell_files("**/*.rs"):
         for ident in APP_ID.findall(uncommented(rs.read_text())):
             wanted.add(("mode", ident))
             native += 1
@@ -25232,15 +27263,50 @@ let
   # is theirs, and this ISO knows no person), so the seed never leaves the
   # medium. `binary-cache-declared-once` holds the list to it at evaluation;
   # this reads what the ISO's closure holds.
+  #
+  # EVERY SHIPPED PROGRAM BY ITS STORE PATH (2026-10-12), where crane's whole
+  # workspace (`ronoctua-0.1.0`) used to be the one name to look for: every
+  # entry of `rust.shipped` (`nix/rust/outputs.nix`), the shell's bundle and
+  # every `ship` program in the form a machine runs it. The path and not a
+  # name: the bundle holds COPIES of the shell's and the tag writer's units,
+  # so a unit's name says nothing of what the ISO carries, and a second
+  # build under the same name would answer for a path the target does not
+  # have. Which `ship` program is an entry or inside one is
+  # `seed-holds-every-shipped-bin`'s question.
   iso-carries-the-seed =
     let
       seed = pkgs.closureInfo {
         rootPaths = self.nixosConfigurations.installer.config.isoImage.storeContents;
       };
+      plain = builtins.unsafeDiscardStringContext;
+      shipped = lib.toList rust.shipped;
+      ofShipped =
+        if !(rust ? shipped) then
+          ''
+            echo "ERROR: the build names no rust.shipped, what ships in the form a machine runs it" >&2
+            failed=1
+          ''
+        else if !(lib.elem (plain rust.shell.drvPath) (map (d: plain d.drvPath) shipped)) then
+          ''
+            echo "ERROR: rust.shipped does not hold the footer's bundle (rust.shell): it is not what ships" >&2
+            failed=1
+          ''
+        else
+          lib.concatMapStrings (d: ''
+            grep -qxF ${lib.escapeShellArg (plain d.outPath)} ${seed}/store-paths || {
+              echo "ERROR: ${d.name} (rust.shipped) does not go into the ISO — the target machine will compile it" >&2
+              failed=1
+            }
+          '') shipped;
     in
     mkCheck "iso-carries-the-seed" [ pkgs.gnugrep pkgs.coreutils ] ''
       failed=0
-      for ours in -ronoctua-0.1.0 -scroll- -libghostty-vt- -ronoctua-iconset \
+      ${ofShipped}
+      # NOT libghostty-vt any more: it was on this list for crane's
+      # workspace's sake, and the only program that links it is the terminal
+      # differential (a driver), so nothing a machine runs needs it and the
+      # target never builds it.
+      for ours in -scroll- -ronoctua-iconset \
                   -ronoctua-buffer-memory- \
                   -ronoctua-buffer-keyboard- \
                   -ronoctua-buffer-transfers- \
@@ -25357,7 +27423,7 @@ let
       #
       # AND WORKING ON THE DISTRO (2026-10-05): the devshell's rust, QEMU and
       # OVMF kept for `nix develop`, and the two coding agents.
-      for kept in -scroll- -ronoctua-0.1.0 -noctua-iosevka-ttf-nerdfonts- -ghostty- \
+      for kept in -scroll- -noctua-iosevka-ttf-nerdfonts- -ghostty- \
                   -networkmanager- -systemd- -ffmpeg-full- -exiftool- -flatpak- \
                   -rustc-1 -rust-std-1.*-wasm32-wasip2 -qemu-1 -OVMF- \
                   -claude-code- -codex- \
@@ -25370,6 +27436,19 @@ let
           failed=1
         }
       done
+
+      # THE FOOTER, by its store path: `rust.shell`, what the modules run —
+      # crane's workspace under a wrapper once, the shell and its neighbours
+      # copied into one `bin/` now. Its path and not its programs' names: a
+      # copy cites nothing of the unit it came from. The other shipped
+      # programs are not asked here: a reduced machine leaves out on purpose
+      # the ones of the modules it turns off (the player's daemon, the
+      # browser's host, the Incus job), and the ISO is what has to carry
+      # them all (`iso-carries-the-seed`).
+      grep -qxF ${lib.escapeShellArg (builtins.unsafeDiscardStringContext rust.shell.outPath)} ${minimal}/store-paths || {
+        echo "ERROR: the minimal profile lost the footer (${rust.shell.name}, rust.shell), which is part of the distro" >&2
+        failed=1
+      }
 
       [ "$failed" = 0 ] || exit 1
 
@@ -25742,6 +27821,7 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         # FILE-WIDE: a door draws the sentence wherever it lays out its hint
         # line, and what bounds the question is the 900 characters after the
@@ -25767,10 +27847,9 @@ let
         # hand instead of asking `Hinted` — announce itself, which is how the
         # twelfth door announced itself when it was written by copying one of
         # these.
-        src = pathlib.Path("${../crates/ronoctua-shell/src}")
         bad = []
         doors = []
-        for f in sorted(src.rglob("*.rs")):
+        for f in sorted(shell_files("**/*.rs")):
             body = code_of(f.read_text())
             # WHERE THE SENTENCE IS TAKEN OUT, in its three spellings: the shared
             # painter asks its own `said()` (which is what hides it with the line
@@ -25802,7 +27881,7 @@ let
         # is gated against both registers of the hint and all three steps of the
         # content ramp — and this is the half that says the shell ASKS for it.
         floor(len(doors), 3, "places drawing the pointer's sentence")
-        chrome = code_of((src / "chrome.rs").read_text())
+        chrome = code_of(shell_file("chrome.rs").read_text())
         floor(len(chrome), 20000, "characters of chrome.rs")
         if "Self::Explain => tokens::color::TEXT_SUBTLE_EXPLAIN," not in chrome:
             bad.append("`Register::Explain` no longer resolves to `text.subtle.explain`")
@@ -26332,6 +28411,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
     exec(open("${softwarePy}").read())
 
     src = pathlib.Path("${../crates/ronoctua-software/src}")
@@ -26438,9 +28518,8 @@ let
     #    names `launch::argv` and writes no argument of its own: no literal
     #    that starts with `-`. The kiosk's own modules, product-wide, carry
     #    none of the four either.
-    shell_src = pathlib.Path("${../crates/ronoctua-shell/src}")
     launching = must(
-        body_of(product((shell_src / "surface.rs").read_text()), "kiosk_launch"),
+        body_of(product(shell_source("surface.rs")), "kiosk_launch"),
         "`Footer::kiosk_launch`",
     )
     if "ronoctua_browser::launch::argv(" not in uncommented(launching):
@@ -26450,7 +28529,7 @@ let
             wrong.append(f"`kiosk_launch` adds `{s}` to the vector Chrome runs")
     kswept = 0
     for name in ("kiosk.rs", "kiosk_view.rs", "adapt.rs"):
-        text = product((shell_src / name).read_text())
+        text = product(shell_source(name))
         kswept += 1
         for at, _, s in strings_of(text):
             for flag in FLAGS:
@@ -27429,16 +29508,93 @@ let
         languages
         brainModules
         brainModulesRs
+        brainManifestsRs
         ;
     }).checks;
+  # The Rust build's own checks (`tests/rust-units.nix`).
+  rustUnitChecks = import ./rust-units.nix {
+    inherit
+      pkgs
+      lib
+      rust
+      mkCheck
+      ;
+  };
+  # The build's granularity and its guards (`tests/build-granularity.nix`).
+  granularity = import ./build-granularity.nix {
+    inherit
+      pkgs
+      lib
+      self
+      rust
+      mkCheck
+      pyPrelude
+      buffers
+      themed
+      defaultTheme
+      texts
+      withPersonModules
+      ;
+  };
+  # The third-party units' checks (`tests/third-party-units.nix`).
+  thirdPartyChecks = import ./third-party-units.nix {
+    inherit
+      pkgs
+      lib
+      rust
+      mkCheck
+      ;
+  };
+  # The programs in their places (`tests/build-outputs.nix`).
+  outputChecks = import ./build-outputs.nix {
+    inherit
+      pkgs
+      lib
+      self
+      system
+      rust
+      mkCheck
+      pyPrelude
+      ;
+  };
   raw =
     let
       clashes = builtins.filter (n: builtins.hasAttr n core) (builtins.attrNames brainModuleChecks);
+      buildClashes = builtins.filter (n: builtins.hasAttr n (core // brainModuleChecks)) (
+        builtins.attrNames rustUnitChecks
+      );
+      granularityClashes = builtins.filter (
+        n: builtins.hasAttr n (core // brainModuleChecks // rustUnitChecks)
+      ) (builtins.attrNames granularity.checks);
+      thirdPartyClashes = builtins.filter (
+        n: builtins.hasAttr n (core // brainModuleChecks // rustUnitChecks // granularity.checks)
+      ) (builtins.attrNames thirdPartyChecks);
+      outputClashes = builtins.filter (
+        n:
+        builtins.hasAttr n (
+          core // brainModuleChecks // rustUnitChecks // granularity.checks // thirdPartyChecks
+        )
+      ) (builtins.attrNames outputChecks);
+      all =
+        core
+        // brainModuleChecks
+        // rustUnitChecks
+        // granularity.checks
+        // thirdPartyChecks
+        // outputChecks;
     in
     if clashes != [ ] then
       throw "a brain module declares a check tests/checks.nix already has: ${lib.concatStringsSep ", " clashes}"
+    else if buildClashes != [ ] then
+      throw "tests/rust-units.nix declares a check tests/checks.nix already has: ${lib.concatStringsSep ", " buildClashes}"
+    else if granularityClashes != [ ] then
+      throw "tests/build-granularity.nix declares a check the others already have: ${lib.concatStringsSep ", " granularityClashes}"
+    else if thirdPartyClashes != [ ] then
+      throw "tests/third-party-units.nix declares a check the others already have: ${lib.concatStringsSep ", " thirdPartyClashes}"
+    else if outputClashes != [ ] then
+      throw "tests/build-outputs.nix declares a check the others already have: ${lib.concatStringsSep ", " outputClashes}"
     else
-      core // brainModuleChecks;
+      all;
 
   # THE SAMPLE MODULE, read by the same loader as a real one — the fixture
   # every check below proves its half on, on the day no real module exists.
@@ -27465,9 +29621,18 @@ let
   # that slipped through.
   brain-modules-match-the-golden =
     let
+      # BOTH PARTS, on the sample: the library's (the manifest the golden file
+      # is, `distro.rs`, `ids.txt`, `shared.txt`) and the daemon's (`all.rs`,
+      # which makes the modules, and no distro manifest of its own).
       generated = pkgs.callPackage ../nix/brain-modules-rs.nix {
         brainModules = brainSample;
         inherit rustToolchain languages;
+        part = "library";
+      };
+      registry = pkgs.callPackage ../nix/brain-modules-rs.nix {
+        brainModules = brainSample;
+        inherit rustToolchain languages;
+        part = "daemon";
       };
       complete = {
         id = "made-up";
@@ -27681,38 +29846,62 @@ let
           import difflib
           wrong.append("the generated manifest.rs is not the golden one:\n"
                        + "".join(difflib.unified_diff(golden, made, "golden", "generated")))
-      if pathlib.Path("${generated}/ids.txt").read_text() != "pilot-sample pilot_sample distro\n":
-          wrong.append("ids.txt is not `pilot-sample pilot_sample distro`")
-      registry = uncommented(pathlib.Path("${generated}/all.rs").read_text())
+      for part in ("${generated}", "${registry}"):
+          if pathlib.Path(part, "ids.txt").read_text() != "pilot-sample pilot_sample distro\n":
+              wrong.append(f"{part}/ids.txt is not `pilot-sample pilot_sample distro`")
+      if pathlib.Path("${generated}/shared.txt").read_text() != "":
+          wrong.append("the sample carries no shared half, and shared.txt lists one")
+      # THE DAEMON'S PART COMPILES NO DISTRO MANIFEST: the library's is
+      # re-exported, so a second one would be two `MANIFEST`s of one module.
+      if pathlib.Path("${registry}/pilot-sample").exists():
+          wrong.append("the daemon's part wrote a distro module's manifest; it is the library's")
+      registry = uncommented(pathlib.Path("${registry}/all.rs").read_text())
       floor(len(registry), 500, "characters of the generated all.rs")
-      # THE TWO ITEMS `src/compiled.rs` PROMISES, with its signatures, and
-      # the registry's own test beside them.
+      # THE TWO ITEMS THE DAEMON'S `src/compiled.rs` PROMISES, with their
+      # signatures, and the registry's own test beside them.
       for owed in ("pub const IDS: &[&str] = &[pilot_sample::ID];",
                    "pub fn all(birth: &crate::module::Birth) -> Vec<Box<dyn crate::module::Module>>",
                    "Box::new(pilot_sample::new(birth))",
                    "#[cfg(test)]\nmod the_registry {"):
           if owed not in registry:
               wrong.append(f"all.rs has no `{owed}`")
+      # AND THE LIBRARY'S VIEWS DECLARE AND NEVER MAKE: the footer's crate
+      # holds no `all`, and so links no module's code — and no list of the
+      # modules' actions or events, which the footer reads from the brain's
+      # catalogue at run time (the person's included).
+      views = uncommented(pathlib.Path("${generated}/distro.rs").read_text())
+      floor(len(views), 300, "characters of the generated distro.rs")
+      for owed in ("pub const IDS: &[&str] = &[pilot_sample::ID];",
+                   "pub static MANIFESTS: &[&crate::module::Manifest]",
+                   "pub fn manifest(id: &str) -> Option<&'static crate::module::Manifest>",
+                   "#[cfg(test)]\nmod the_registry {"):
+          if owed not in views:
+              wrong.append(f"distro.rs has no `{owed}`")
+      for refused in ("fn all(", "::new(", "crate::module::Module", "crate::module::Birth"):
+          if refused in views:
+              wrong.append(f"distro.rs says `{refused}`: the library would make modules")
+      for refused in ("ACTIONS", "EVENTS"):
+          if refused in views:
+              wrong.append(f"distro.rs lists `{refused}`: what the footer registers of a module is the catalogue's")
 
       # AND THE GENERATOR'S OWN REFUSAL AND ITS TABLES, on records made here:
       # a fragment without a key the manifest needs is refused by the key's
       # name, and a table lands beside the manifest with a module including it.
       work = pathlib.Path(tempfile.mkdtemp())
       record = json.loads(pathlib.Path("${record}").read_text())[0]
-      texts = work / "i18n"
-      texts.mkdir()
-      sample_texts = pathlib.Path(record["i18n"]) / "${builtins.head languages}.ftl"
-      kept = [l for l in sample_texts.read_text().splitlines() if not l.startswith("cmd-pilot-sample-forget")]
-      (texts / "${builtins.head languages}.ftl").write_text("\n".join(kept) + "\n")
+      kept = [n for n in record["names"] if n != "cmd-pilot-sample-forget"]
+      if len(kept) != len(record["names"]) - 1:
+          wrong.append("the sample's record does not name `cmd-pilot-sample-forget`: the refusal below asks nothing")
       table = work / "steps.rs"
       table.write_text("pub const STEPS: usize = 3;\n")
       def run(r):
           (work / "records.json").write_text(json.dumps([r]))
           return subprocess.run(
-              [sys.executable, "${../nix/scripts/gen-brain-modules.py}", "--modules", str(work / "records.json"),
-               "--parser", "${../nix/scripts/gen-i18n.py}", "--language", "${builtins.head languages}",
+              [sys.executable, "${../nix/scripts/gen-brain-modules.py}", "--part", "library",
+               "--modules", str(work / "records.json"),
+               "--language", "${builtins.head languages}",
                "--out", str(work / "out")], capture_output=True, text=True)
-      r = run(dict(record, i18n=str(texts)))
+      r = run(dict(record, names=kept))
       if r.returncode == 0 or "cmd-pilot-sample-forget" not in r.stderr:
           wrong.append("a fragment missing an action's label was not refused by the key's name")
       r = run(dict(record, tables={"steps.rs": str(table)}))
@@ -27726,16 +29915,16 @@ let
               wrong.append("the manifest does not include its table")
 
       # AND THE TEXT GENERATOR (`gen-i18n.py`) ON THE SAMPLE'S FRAGMENT, beside
-      # a base written here: its three refusals, each by its sentence — and
-      # the one thing it must NOT refuse, a base key inside the module's
-      # namespace. Whether a file outside the folder may speak in the module's
+      # a crate's fragment written here: its three refusals, each by its
+      # sentence — and the one thing it must NOT refuse, a crate's key inside
+      # the module's namespace. Whether a file outside the folder may speak in the module's
       # words is `brain-modules-are-sealed`'s question (step 5, where `namedBy`
       # answers it); refused here, it would stop every build instead.
       LANGS = "${lib.concatStringsSep " " languages}".split()
       def fragment(lines):
           d = pathlib.Path(tempfile.mkdtemp())
           for l in LANGS:
-              own = (pathlib.Path(record["i18n"]) / f"{l}.ftl").read_text() if lines is None else ""
+              own = (pathlib.Path("${../crates/ronoctua-brain/tests/modules/pilot-sample/i18n}") / f"{l}.ftl").read_text() if lines is None else ""
               (d / f"{l}.ftl").write_text(own + "\n".join(lines or []) + "\n")
           return d
       sample_texts = fragment(None)
@@ -27748,8 +29937,8 @@ let
           for ident, (folder, prefixes) in modules.items():
               given += ["--module", f"{ident}={folder}", "--prefixes", f"{ident}={prefixes}"]
           return subprocess.run(
-              [sys.executable, "${../nix/scripts/gen-i18n.py}", str(d / "base"), str(d / "out" / "keys.rs"),
-               *LANGS, *given], capture_output=True, text=True)
+              [sys.executable, "${../nix/scripts/gen-i18n.py}", str(d / "out"),
+               *LANGS, "--fragment", f"base={d / 'base'}", *given], capture_output=True, text=True)
       alone = {"pilot-sample": (sample_texts, "pilot-sample")}
       r = run_texts(["hello = Hello"], alone)
       if r.returncode != 0:
@@ -27760,7 +29949,7 @@ let
           wrong.append("gen-i18n refused base keys inside a module's namespace: " + r.stderr)
       for what, base, modules, said in (
           ("a module key that is also a base key", ["hello = Hello", "cmd-pilot-sample-forget = Forget"],
-           alone, "is also a base key"),
+           alone, "is also a key of `base`"),
           ("a module key outside its namespace", ["hello = Hello"],
            dict(alone, **{"made-up": (fragment(["somebody-elses = Stray"]), "made-up")}),
            "is outside its namespace"),
@@ -27810,9 +29999,12 @@ let
   #      listed file or a `uses` path that is gone, and a listed name that no
   #      longer occurs, are refused as stale;
   #   6. the ids the brain COMPILED (`ronoctua-brain modules`) are the loader's;
-  #   7. no `crates/ronoctua-brain/src/tasks/` remains — OFF until the six
-  #      tasks have moved into folders (brain.md §7, S5), and proved below;
-  #   8. the core's own tests use made-up ids, never a module's.
+  #   7. no `src/tasks/` remains in either crate of the brain (the library,
+  #      `crates/ronoctua-brain`, and the daemon, `crates/ronoctua-brain-daemon`)
+  #      — OFF until the six tasks had moved into folders (brain.md §7, S5),
+  #      and proved below;
+  #   8. the core's own tests — the library's and the daemon's — use made-up
+  #      ids, never a module's.
   #
   # A PERSON'S MODULE (`origin = "person"`, `my-…`) IS SKIPPED: its folder is
   # in the person's home and reaches a machine as a store copy, so none of
@@ -27904,6 +30096,9 @@ let
           # here can be asked of it — and a distro file never names it.
           modules = [m for m in modules if m.get("origin", "distro") == "distro"]
           home = root / "crates" / "ronoctua-brain"
+          # THE CORE IS TWO CRATES: the library (what crosses, the manifests)
+          # and the daemon (what runs). Steps 7 and 8 ask both.
+          cores = [home, root / "crates" / "ronoctua-brain-daemon"]
           folders = {m["id"]: home / "modules" / m["id"] for m in modules}
           texts = {}
           for m in modules:
@@ -28004,13 +30199,13 @@ let
           # 6) THE IDS IT COMPILED ARE THE LOADER'S.
           if compiled is not None and sorted(compiled) != sorted(m["id"] for m in modules):
               problems.append((6, f"the brain compiled {sorted(compiled)}, and the folders are {sorted(folders)}"))
-          # 7) THE SIX TASKS HAVE LEFT `src/tasks/`.
-          if tasks_gone and (home / "src" / "tasks").exists():
-              problems.append((7, "crates/ronoctua-brain/src/tasks/ still exists"))
-          # 8) THE CORE'S TESTS USE MADE-UP IDS.
-          for f in rust_sources(home):
-              if (home / "src") not in f.parents:
-                  continue
+          # 7) THE SIX TASKS HAVE LEFT `src/tasks/`, in both crates.
+          for core in cores:
+              if tasks_gone and (core / "src" / "tasks").exists():
+                  problems.append((7, f"{core.relative_to(root)}/src/tasks/ still exists"))
+          # 8) THE CORE'S TESTS USE MADE-UP IDS, in both crates.
+          for f in [f for core in cores if core.is_dir() for f in rust_sources(core)
+                    if (core / "src") in f.parents]:
               text = f.read_text()
               cut = re.search(r"#\[cfg\(test\)\]", text)
               if not cut:
@@ -28051,8 +30246,8 @@ let
               "pub fn core() {}\n#[cfg(test)]\nmod tests {\n    const ID: &str = \"made-up\";\n}\n")
           (t / "crates/ronoctua-shell/src").mkdir(parents=True)
           (t / "crates/ronoctua-shell/src/main.rs").write_text("fn main() {}\n")
-          (t / "assets/i18n").mkdir(parents=True)
-          (t / "assets/i18n/en-GB.ftl").write_text("hello = Hello\n")
+          (t / "crates/ronoctua-shell/i18n").mkdir(parents=True)
+          (t / "crates/ronoctua-shell/i18n/en-GB.ftl").write_text("hello = Hello\n")
           return t, folder
       clean, _ = tree()
       # The tree made here: a handful of files, one of each suffix it plants.
@@ -28088,9 +30283,9 @@ let
           "use ronoctua_audio::chime;\n" + (f / "module.rs").read_text()))
       plant(5, "a shell file naming it", lambda t, f: (t / "crates/ronoctua-shell/src/main.rs").write_text(
           "fn main() { run(\"pilot-sample\"); }\n"))
-      plant(5, "a base text in its namespace", lambda t, f: (t / "assets/i18n/en-GB.ftl").write_text(
+      plant(5, "a crate's text in its namespace", lambda t, f: (t / "crates/ronoctua-shell/i18n/en-GB.ftl").write_text(
           "hello = Hello\npilot-sample-extra = Extra\n"))
-      plant(5, "a base hint in its namespace, behind an opener", lambda t, f: (t / "assets/i18n/en-GB.ftl").write_text(
+      plant(5, "a crate's hint in its namespace, behind an opener", lambda t, f: (t / "crates/ronoctua-shell/i18n/en-GB.ftl").write_text(
           "hello = Hello\nabout-pilot-sample-extra = Extra\n"))
       plant(5, "a stale namedBy", lambda t, f: None,
             manifest=[dict(sample[0], namedBy={"crates/ronoctua-shell/src/main.rs": ["pilot-sample"]})])
@@ -28098,6 +30293,14 @@ let
       plant(7, "a src/tasks/ left behind", lambda t, f: (t / "crates/ronoctua-brain/src/tasks").mkdir())
       plant(8, "a core test naming it", lambda t, f: (t / "crates/ronoctua-brain/src/lib.rs").write_text(
           "#[cfg(test)]\nmod tests {\n    const ID: &str = \"pilot-sample\";\n}\n"))
+      # AND IN THE DAEMON'S CRATE, which holds the rest of the core.
+      def daemon_file(t, path, text):
+          (t / "crates/ronoctua-brain-daemon/src").mkdir(parents=True, exist_ok=True)
+          (t / "crates/ronoctua-brain-daemon/src" / path).write_text(text)
+      plant(7, "a src/tasks/ left behind in the daemon", lambda t, f: (
+          t / "crates/ronoctua-brain-daemon/src/tasks").mkdir(parents=True))
+      plant(8, "a daemon test naming it", lambda t, f: daemon_file(
+          t, "hub.rs", "#[cfg(test)]\nmod tests {\n    const ID: &str = \"pilot-sample\";\n}\n"))
       # AND AN ALLOWANCE THAT IS USED IS NOT A PROBLEM.
       t, _ = tree()
       (t / "crates/ronoctua-shell/src/main.rs").write_text("fn main() { run(\"pilot-sample\"); }\n")
@@ -28105,15 +30308,15 @@ let
                        ["pilot-sample"], True, SAMPLE)
       if allowed:
           problems.append((0, f"a file its namedBy lists, saying what is listed, was refused: {allowed}"))
-      # AND A BASE TEXT IN ITS NAMESPACE, ALLOWED: the shell's own page may
+      # AND A CRATE'S TEXT IN ITS NAMESPACE, ALLOWED: the shell's own page may
       # speak in the module's words when the module says so — the question
       # `gen-i18n.py` leaves to this step.
       t, _ = tree()
-      (t / "assets/i18n/en-GB.ftl").write_text("hello = Hello\ncmd-pilot-sample-open = Open\n")
-      allowed = sealed(t, [dict(sample[0], namedBy={"assets/i18n/en-GB.ftl": ["cmd-pilot-sample-open"]})],
+      (t / "crates/ronoctua-shell/i18n/en-GB.ftl").write_text("hello = Hello\ncmd-pilot-sample-open = Open\n")
+      allowed = sealed(t, [dict(sample[0], namedBy={"crates/ronoctua-shell/i18n/en-GB.ftl": ["cmd-pilot-sample-open"]})],
                        ["pilot-sample"], True, SAMPLE)
       if allowed:
-          problems.append((0, f"a base text its namedBy allows was refused: {allowed}"))
+          problems.append((0, f"a crate's text its namedBy allows was refused: {allowed}"))
 
       if problems:
           print("ERROR: a brain module is not sealed in its folder.", file=sys.stderr)
@@ -28175,7 +30378,8 @@ let
   #
   # `atlas-is-at-run-time`'s argument on the icons' ~9 MB: in `generated` a
   # store path is a compilation INPUT, and a Nerd Fonts release or a lexicon
-  # edit would rebuild the workspace for data no compilation reads. The crate
+  # edit would rebuild every unit that reads it, and every one above, for data
+  # no compilation reads. The crate
   # reads the directory from the environment, the wrapper sets it, the nested
   # loop exports it (`bakedExports` is `generated // atRunTime`), the PNG
   # tool's door exports it, and the tests search the real tables with it.
@@ -28200,13 +30404,26 @@ let
         bad.append("RONOCTUA_ICONSET is not in atRunTime; the wrapper would not set it")
     for wrong in ("generated", "buildBase"):
         if "RONOCTUA_ICONSET" in block(wrong):
-            bad.append(f"RONOCTUA_ICONSET is a {wrong} input: a new font release would rebuild the workspace")
-    tests = must(scope(rust, r"\n  tests = craneLib\.cargoTest"), "the tests derivation")
-    if "RONOCTUA_ICONSET" not in tests:
-        bad.append("rust.tests does not set RONOCTUA_ICONSET: the iconset tests would fail, or be skipped")
+            bad.append(f"RONOCTUA_ICONSET is a {wrong} input: a new font release would rebuild every unit above the crate")
+    # PARSED: the iconset's test run itself, at evaluation — it takes the
+    # variable by its crate's `run-env`.
+    if "${
+      lib.boolToString (rust.test.testRuns.ronoctua-iconset.unit.runEnv ? RONOCTUA_ICONSET)
+    }" != "true":
+        bad.append("the iconset's test run is not given RONOCTUA_ICONSET: its tests would fail, or be skipped")
 
     src = pathlib.Path("${../crates/ronoctua-iconset/src}")
-    text = "".join(uncommented(f.read_text()) for f in sorted(src.glob("*.rs")))
+    # THE CRATE'S KEY NAMES are not a table: a crate that speaks includes
+    # `$RONOCTUA_KEYS_DIR/<crate>.rs` (`src/key.rs`, `nix/text-keys.nix`),
+    # written from its fragment's names alone. That file, in exactly that
+    # shape, is not asked; anything else in it is, like every other file.
+    keys_include = 'include!(concat!(env!("RONOCTUA_KEYS_DIR"),"/",env!("CARGO_PKG_NAME"),".rs"));'
+    def asked(f):
+        body = uncommented(f.read_text())
+        if f.name == "key.rs" and re.sub(r"\s+", "", re.sub(r"#!\[[^\]]*\]", "", body)) == keys_include:
+            return ""
+        return body
+    text = "".join(asked(f) for f in sorted(src.glob("*.rs")))
     floor(len(text), 8000, "characters of ronoctua-iconset")
     for baked in ("include_str!", "include_bytes!", "option_env!", "env!("):
         if baked in text.replace("var_os(", ""):
@@ -28345,7 +30562,7 @@ let
     # forms differ, and no key for a unit that does not exist.
     ids = {u["id"] for u in units}
     for language in ${builtins.toJSON languages}:
-        ftl = hashless(pathlib.Path("${../assets/i18n}/" + language + ".ftl").read_text())
+        ftl = hashless(pathlib.Path("${texts}/" + language + ".ftl").read_text())
         keys = dict(re.findall(r"^(unit-[a-z0-9-]+) = (.*)$", ftl, re.M))
         for i in sorted(ids):
             if "unit-" + i not in keys:
@@ -29071,6 +31288,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: what types, what asks for the clipboard and where the text
     # lands are three functions of one view — its key reader, its table and
@@ -29078,7 +31296,6 @@ let
     # the question is asked of the FILE, with its tests cut off
     # (`without_tests`): a test that pastes proves nothing about the product.
     # `uncommented` and not `code_of`: a key table's `"C-v"` is a string.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     # A LETTER TAKEN IN HAND AND TYPED: an arm that binds the character a key
     # carries — `Gesture::Insert(c)`, `Stroke::Letter(c)`, `Sym::Char(c)` —
     # and, a few lines on, pushes it onto a string, encodes it into one, or
@@ -29103,7 +31320,7 @@ let
     LANDS = re.compile(r"\bfn paste(?:d)?\s*\(")
     inputs = []
     wrong = []
-    for path in sorted(shell.glob("*.rs")):
+    for path in sorted(shell_files("*.rs")):
         text = without_tests(uncommented(path.read_text()))
         if not types(text):
             continue
@@ -29121,7 +31338,7 @@ let
         if must_be not in inputs:
             wrong.append(f"{must_be}.rs no longer types letters, and this census cannot see it")
     # AND EVERY WINDOW THAT HOSTS ONE hands the clipboard to it.
-    for path in sorted(shell.glob("*_window.rs")):
+    for path in sorted(shell_files("*_window.rs")):
         text = without_tests(uncommented(path.read_text()))
         hosted = [m for m in inputs if re.search(r"crate::" + m + r"::View\b", text)]
         if hosted and not re.search(r"\bfn pasted\s*\(", text):
@@ -29154,13 +31371,13 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # PARSED: the helpers are read item by item (`scope`, `body_of`), and
     # the census is a sweep of the code of every source the shell compiles
     # (`code_of` after `without_tests`): a test that measures a box by hand
     # is not a door that lights one.
-    shell = pathlib.Path("${../crates/ronoctua-shell}")
-    chrome = code_of((shell / "src" / "chrome.rs").read_text())
+    chrome = code_of(shell_file("chrome.rs").read_text())
     wrong = []
 
     def calls(body, needle, what):
@@ -29198,13 +31415,13 @@ let
     # NOR BY TESTING EVERY BOX: a `cell_box` measured against the pointer.
     HUNT = re.compile(r"\bholds\(\s*[\w:.]*cell_box\(|cell_box\([^;]*\)\.is_some_and\(\|r\|\s*holds\(")
     users = 0
-    for path in rust_sources(shell):
+    for path in shell_files("**/*.rs"):
         if path.name == "tests.rs" or path.name == "chrome.rs":
             continue
         text = code_of(without_tests(path.read_text()))
         if re.search(r"\b(?:in_cell|hover_cells|cell_selection|cell_under)\(|\bShelves\b", text):
             users += 1
-        name = str(path.relative_to(shell))
+        name = "src/" + shell_name(path)
         for m in HAND.finditer(text):
             line = text.count("\n", 0, m.start()) + 1
             wrong.append(f"{name}:{line}: a cell's containment written by hand (`chrome::in_cell`)")
@@ -29237,27 +31454,27 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # PARSED: every assignment to a door's `message` field, read in the code
     # (`code_of`: a comment that quotes one does not count) of every source
     # the shell compiles, tests cut off (`without_tests`, and a `tests.rs`
     # file is a test module of its own): a test that puts a line there to
     # draw it is not a window saying something.
-    shell = pathlib.Path("${../crates/ronoctua-shell}")
-    door = shell / "src" / "door" / "mod.rs"
+    door = shell_file("door/mod.rs")
     # A WRITE that is not a clearing: `= None` takes a message off, which is
     # what a key does; `==` is a comparison.
     WRITE = re.compile(r"\.message\s*=(?!=)(?!\s*None\b)")
     wrong = []
     seen = 0
-    for path in rust_sources(shell):
+    for path in shell_files("**/*.rs"):
         if path.name == "tests.rs":
             continue
         text = code_of(without_tests(path.read_text()))
         seen += 1
         for m in WRITE.finditer(text):
             line = text.count("\n", 0, m.start()) + 1
-            name = str(path.relative_to(shell))
+            name = "src/" + shell_name(path)
             if path == door and whose(text, m.start()) in ("say_for", "hold"):
                 continue
             wrong.append(f"{name}:{line} (in `{whose(text, m.start())}`)")
@@ -30460,13 +32677,14 @@ let
   };
 
   # ONE FILE BROWSER: a folder is listed FOR CHOOSING in one place — the
-  # file picker (`crates/ronoctua-shell/src/file_picker.rs`) and the file
+  # file picker (the shell's `file_picker.rs`) and the file
   # manager it shares its reading with — and every view that asks a person for
   # a file, a folder or a name to save under hosts that picker.
   one-file-browser = mkCheck "one-file-browser" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # PARSED: every call that lists a folder in the shell's sources — tests cut
     # off (`without_tests`), comments off (`uncommented`: the needle is a call,
@@ -30474,8 +32692,6 @@ let
     # (`whose`). A read is allowed in the picker and the file manager's family
     # whole, and elsewhere only in the functions named below, each for a reason
     # that is not choosing.
-    shell_crate = pathlib.Path("${../crates/ronoctua-shell}")
-    shell = shell_crate / "src"
     READS = re.compile(r"\bread_dir(?:_at)?\s*\(")
 
     def browser(name):
@@ -30487,7 +32703,7 @@ let
     # second read in the same file, for choosing, is the defect this refuses.
     NOT_CHOOSING = {
         # The desktop entries' directories, walked for the launcher's catalogue.
-        ("apps.rs", "subdirectories"),
+        ("launch.rs", "subdirectories"),
         # The runtime directory's own files: which stage windows are up.
         ("player_stage.rs", "end_every_window"),
         ("player_stage.rs", "screen_holders"),
@@ -30507,8 +32723,8 @@ let
     }
 
     wrong, swept, reads, allowed = [], 0, 0, set()
-    for f in rust_sources(shell_crate):
-        name = str(f.relative_to(shell))
+    for f in shell_files("**/*.rs"):
+        name = shell_name(f)
         text = uncommented(without_tests(f.read_text()))
         swept += 1
         for m in READS.finditer(text):
@@ -30533,20 +32749,20 @@ let
     # name anywhere in the code that runs (a view hosts it in several of its
     # functions), not in a comment, and never in its tests.
     for host in ("player.rs", "software.rs", "syncthing.rs", "network.rs", "camera_settings.rs"):
-        code = code_of(without_tests((shell / host).read_text()))
+        code = code_of(without_tests(shell_file(host).read_text()))
         if "file_picker::" not in code:
             wrong.append(f"{host} asks for a file and does not host the picker (`file_picker::`)")
 
     # AND THE PLAYER'S KINDS ARE KINDS: the listing that lived there is gone —
     # anywhere in the file, which is what a listing coming back would be.
-    kinds = code_of(without_tests((shell / "player_kinds.rs").read_text()))
+    kinds = code_of(without_tests(shell_file("player_kinds.rs").read_text()))
     for gone in ("struct Listing", "fn list", "fn places"):
         if gone in kinds:
             wrong.append(f"player_kinds.rs has `{gone}` again: the player lists folders in the picker")
 
     # AND THE PICKER READS THROUGH THE FILE MANAGER'S READING: one order, one
     # rule for hidden entries.
-    picker = code_of(without_tests((shell / "file_picker.rs").read_text()))
+    picker = code_of(without_tests(shell_file("file_picker.rs").read_text()))
     if "listing::read_dir_at" not in picker:
         wrong.append("file_picker.rs no longer reads through `ronoctua_files::listing::read_dir_at`")
 
@@ -30579,6 +32795,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: an exiftool write may be spelled in any source of any crate.
     crates = pathlib.Path("${../crates}")
@@ -30601,18 +32818,17 @@ let
     # AND IN THE SHELL, ONE CALLER OF EACH: the inspector's `look` reads, the
     # panel's module writes. A door that ran the tools itself would be a
     # panel that says something else about the same file.
-    shell = crates / "ronoctua-shell"
     CALLS = {
         r"\bfacts::facts\(": "inspection.rs",
         r"\bamend::(?:set|remove_location|read)\(": "inspection_edit.rs",
     }
-    for f in rust_sources(shell):
+    for f in shell_files("**/*.rs"):
         code = code_of(without_tests(f.read_text()))
         for pattern, home in CALLS.items():
             if re.search(pattern, code) and f.name != home:
-                wrong.append(f"ronoctua-shell/{f.relative_to(shell)} calls `{pattern}`; only {home} does")
+                wrong.append(f"{shell_name(f)} calls `{pattern}`; only {home} does")
     for pattern, home in CALLS.items():
-        if not re.search(pattern, code_of(without_tests((shell / "src" / home).read_text()))):
+        if not re.search(pattern, code_of(without_tests(shell_file(home).read_text()))):
             wrong.append(f"{home} no longer calls `{pattern}`: the one caller went away")
     if wrong:
         print("ERROR: a second inspector or a second exiftool writer.", file=sys.stderr)
@@ -30637,10 +32853,10 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # PARSED: the panel's row builders, by name, and the kind's one rule.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    panel = code_of(without_tests((shell / "inspection.rs").read_text()))
+    panel = code_of(without_tests(shell_file("inspection.rs").read_text()))
     wrong = []
     facts = must(body_of(panel, "fact_fields"), "inspection.rs: `fact_fields`")
     if "field_pair(" not in facts:
@@ -30654,11 +32870,13 @@ let
     # AND THE RULE ITSELF: a row edits unless it is read (`Nothing`) or a walk
     # (`Measure`). Every other variant is a writer, and adding one that does
     # not edit would have to say so here.
-    sheet = code_of(without_tests((shell / "inspection_sheet.rs").read_text()))
-    edits = must(body_of(sheet, "edits"), "inspection_sheet.rs: `Doable::edits`")
+    # `Doable` lives with the vocabulary a field's click is written in
+    # (`fields.rs`), since `Hit::Amend` carries it.
+    sheet = code_of(without_tests(shell_file("fields.rs").read_text()))
+    edits = must(body_of(sheet, "edits"), "fields.rs: `Doable::edits`")
     if re.sub(r"\s+", "", edits) != "!matches!(self,Self::Nothing|Self::Measure)":
         wrong.append(f"`Doable::edits` changed its rule: {edits.strip()}")
-    doable = must(scope(sheet, r"pub enum Doable\b"), "inspection_sheet.rs: `enum Doable`")
+    doable = must(scope(sheet, r"pub enum Doable\b"), "fields.rs: `enum Doable`")
     variants = re.findall(r"^\s*([A-Z]\w*)", doable, re.M)
     floor(len(variants), 9, "variants of `Doable`")
     if wrong:
@@ -30685,13 +32903,13 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         # FILE-WIDE: an order may be built in any source of the shell.
-        shell = pathlib.Path("${../crates/ronoctua-shell}")
         wrong, built = [], 0
-        for f in rust_sources(shell):
+        for f in shell_files("**/*.rs"):
             code = code_of(without_tests(f.read_text()))
-            name = str(f.relative_to(shell / "src"))
+            name = shell_name(f)
             for m in re.finditer(r"amend::remove_location\(", code):
                 if name != "inspection_edit.rs" or whose(code, m.start()) != "remove_locations":
                     wrong.append(f"{name}: `amend::remove_location` called from `{whose(code, m.start())}`")
@@ -30707,7 +32925,7 @@ let
 
         # AND THE QUESTION'S FIRST ANSWER IS `no` — a literal, read with the
         # strings kept.
-        files = uncommented(without_tests((shell / "src" / "files.rs").read_text()))
+        files = uncommented(without_tests(shell_file("files.rs").read_text()))
         ask = must(body_of(files, "ask"), "files.rs: `View::ask`")
         arm = ask[ask.find("Asking::Location(_) =>"):] if "Asking::Location(_) =>" in ask else ""
         first = re.search(r'id:\s*"([a-z-]+)"', arm)
@@ -30747,25 +32965,34 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
+    exec(open("${shellManifestPrelude}").read())
 
-    # FILE-WIDE: the two binaries are read whole, and the shell's manifest.
+    # FILE-WIDE: the two binaries are read whole, and every shell crate's manifest.
     NEEDLE = re.compile(rb"lofty-0\.[0-9.]+/src/[a-z0-9_/]+\.rs")
-    shell = pathlib.Path("${rust.workspace}/bin/ronoctua-shell").read_bytes()
-    tags = pathlib.Path("${rust.workspace}/bin/ronoctua-tags").read_bytes()
+    shell = pathlib.Path("${rust.bins.ronoctua-shell}/bin/ronoctua-shell").read_bytes()
+    tags = pathlib.Path("${rust.bins.ronoctua-tags}/bin/ronoctua-tags").read_bytes()
     wrong = []
     control = sorted(set(NEEDLE.findall(tags)))
     floor(len(control), 10, "lofty sources traced in the program that links it (the needle's control)")
     linked = sorted(set(NEEDLE.findall(shell)))
     if linked:
         wrong.append(f"the shell binary carries {len(linked)} of lofty's sources, e.g. {linked[0].decode()}")
-    manifest = hashless((pathlib.Path("${../crates/ronoctua-shell}") / "Cargo.toml").read_text())
-    line = next((l for l in manifest.splitlines() if l.startswith("ronoctua-tags")), "")
-    if "default-features = false" not in line:
-        wrong.append(f"the shell depends on ronoctua-tags with its engine: {line.strip()!r}")
+    # EVERY SHELL CRATE that names the tags' crate names its schema alone: a
+    # module that took the dependency to a crate of its own (the kit, the
+    # report, the panels) is still the shell.
+    naming = 0
+    for m in shell_manifests():
+        line = next((l for l in hashless(m.read_text()).splitlines() if l.startswith("ronoctua-tags")), None)
+        if line is None:
+            continue
+        naming += 1
+        if "default-features = false" not in line:
+            wrong.append(f"{m.parent.name} depends on ronoctua-tags with its engine: {line.strip()!r}")
+    floor(naming, 1, "shell crates that name ronoctua-tags")
     # AND THE PANEL RUNS THE PROGRAM: the sheet and the write go through
     # `inspection_edit`'s child, never through the engine's functions.
-    src = pathlib.Path("${../crates/ronoctua-shell/src}")
-    for f in sorted(src.rglob("*.rs")):
+    for f in sorted(shell_files("**/*.rs")):
         code = code_of(without_tests(f.read_text()))
         for m in re.finditer(r"ronoctua_tags::(read|write|Tools)\b", code):
             wrong.append(f"{f.name} reaches `ronoctua_tags::{m.group(1)}`, the engine")
@@ -30812,9 +33039,9 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     crates = pathlib.Path("${../crates}")
-    shell = crates / "ronoctua-shell" / "src"
     wrong = []
 
     # PARSED: the subcommands of the boundary's reading methods.
@@ -30846,7 +33073,7 @@ let
 
     # PARSED: the shell reads through the reading methods only.
     touched = 0
-    for f in sorted(shell.glob("*.rs")):
+    for f in shell_files("*.rs"):
         code = code_of(without_tests(f.read_text()))
         if "ronoctua_git" not in code:
             continue
@@ -30856,16 +33083,23 @@ let
                 wrong.append(f"{f.name} reaches git past its reading methods (`{needle}`)")
     floor(touched, 5, "shell sources that use ronoctua_git")
 
-    # FILE-WIDE: no clock, and git off the loop.
-    for name in ("git_line.rs", "git_browser.rs", "git_browser_window.rs"):
-        code = code_of(without_tests((shell / name).read_text()))
+    # FILE-WIDE: no clock, and git off the loop — the history's region and
+    # the errand handler both its doors share included (`git_region.rs`).
+    for name in ("git_line.rs", "git_browser.rs", "git_browser_window.rs", "git_region.rs"):
+        code = code_of(without_tests(shell_source(name)))
         floor(len(code), 2000, f"characters of {name}")
         for needle in ("thread::sleep", "Timer::", "timer::"):
             if needle in code:
                 wrong.append(f"{name} arms a clock (`{needle}`); the repository reports itself")
-    line = code_of(without_tests((shell / "git_line.rs").read_text()))
+    line = code_of(without_tests(shell_file("git_line.rs").read_text()))
     if "Notice::on_dirs" not in line:
         wrong.append("git_line.rs no longer watches the git directory")
+    # AND THE HISTORY'S READINGS ARE THREADS, in both doors: what the view
+    # wants is read off the loop (`Git::ask`), the photograph's alone at once.
+    history = code_of(without_tests(shell_file("git_region.rs").read_text()))
+    asked = must(body_of(history, "ask"), "git_region::Git::ask")
+    if "spawn" not in asked or "git_browser::read(" not in asked:
+        wrong.append("the history's readings are no longer made on threads of their own (`Git::ask`)")
     ask = must(body_of(line, "ask"), "git_line::ask")
     if "spawn" not in ask or "read(&repo)" not in ask:
         wrong.append("the git line is no longer read on a thread of its own")
@@ -30895,11 +33129,13 @@ let
   #      with `encrypt.type = luks2`, and in no argument of any program (it
   #      runs none);
   #   5. PARSED: the file manager's own questions for a password or a
-  #      passphrase are asked on the door's secret line in both doors.
+  #      passphrase are asked on the door's secret line in both doors — by
+  #      the one handler both call, and handed whole to each door's line.
   luks-passphrase-stays-on-the-host = mkCheck "luks-passphrase-stays-on-the-host" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # THE TWO TREES IT READS, and not the whole repository: a path to the
     # repository's root would copy all of it into the store to read six files.
@@ -30928,7 +33164,7 @@ let
             wrong.append(f"the format component's code names `{word}`: the passphrase is the host's")
 
     # 3. THE HOST'S TWO QUESTIONS, on a secret line, compared.
-    host = uncommented(without_tests((crates / "ronoctua-shell" / "src" / "buffer.rs").read_text()))
+    host = uncommented(without_tests(shell_file("buffer.rs").read_text()))
     ask = must(body_of(host, "format_with"), "Host::format_with")
     if "Line::new(PASSPHRASE, true" not in ask:
         wrong.append("`format_with` does not ask the passphrase on a SECRET line")
@@ -30947,13 +33183,21 @@ let
     if "Command::new(" in disks:
         wrong.append("ronoctua-disks starts a program: a passphrase could reach an argument")
 
-    # 5. THE FILE MANAGER'S QUESTIONS, masked in both doors.
-    window = uncommented(without_tests((crates / "ronoctua-shell" / "src" / "files_window.rs").read_text()))
-    if not re.search(r"Step::Secret\(id\)\s*=>\s*\{\s*ui\.ask\(crate::line::Line::new\(id, true, None\)\)", window):
-        wrong.append("the files window does not ask a secret on its masked line")
-    footer = uncommented(without_tests((crates / "ronoctua-shell" / "src" / "surface.rs").read_text()))
-    if not re.search(r"Step::Secret\(id\)\s*=>\s*\{\s*self\.mx\.request\(id, true\)", footer):
-        wrong.append("the footer does not ask a secret on the minibuffer's masked line")
+    # 5. THE FILE MANAGER'S QUESTIONS, masked in both doors: its one handler
+    # (`files_manager::Manager::carry_out`, which both doors call) asks a
+    # secret on a SECRET line over the doorway, and each door hands that line
+    # whole to its own — the footer's host to the minibuffer, the window's
+    # doorway to its `Ui`, which keeps it as it came.
+    manager = uncommented(without_tests(shell_file("files_manager.rs").read_text()))
+    carry = must(body_of(manager, "carry_out"), "Manager::carry_out")
+    if not re.search(r"Step::Secret\(id\)\s*=>\s*\{\s*way\.ask\(crate::line::Line::new\(id, true, None\)\)", carry):
+        wrong.append("the file manager does not ask a secret on the door's masked line")
+    window = uncommented(without_tests(shell_file("files_window.rs").read_text()))
+    if not re.search(r"fn ask\(&mut self, line: crate::line::Line\)\s*\{\s*crate::region::Doorway::ask\(self\.ui, line\)", window):
+        wrong.append("the files window does not hand the manager's line to its door whole")
+    footer = uncommented(without_tests(shell_source("surface.rs")))
+    if not re.search(r"Effect::Ask\(line\)\s*=>\s*\{[^}]*self\.mx\.request_line\(line\)", footer):
+        wrong.append("the footer does not ask a region's line on the minibuffer as it came")
 
     for w in wrong:
         print(f"ERROR: {w}", file=sys.stderr)
@@ -30979,13 +33223,20 @@ let
   # a glyph and for a Lucide figure. The box must grow, and its centre, the
   # picture's and the run's size must follow it exactly.
   the-icon-grows-from-its-centre = mkCheck "the-icon-grows-from-its-centre" [ pkgs.python3 ] ''
+    # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+    # one, and the colours and the words are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+    # And the brain's catalogue (`rust.keyed`): the modules' marks and the
+    # keymap's actions are data it reads at run time, refused (78) without it.
+    export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
     export VK_DRIVER_FILES=${xvfb.icd}
     export VK_ICD_FILENAMES=${xvfb.icd}
     export LIBGL_ALWAYS_SOFTWARE=1
     export RONOCTUA_ICONSET=${rust.atRunTime.RONOCTUA_ICONSET}
     shoot() {
       name=$1; shift
-      ${rust.workspace}/bin/ronoctua-shell photograph --door icons --list \
+      ${rust.bins.ronoctua-shell}/bin/ronoctua-shell photograph --door icons --list \
         --language en-GB --columns 100 --lines 30 "$@" > "$PWD/$name.txt"
     }
     more=""
@@ -31104,22 +33355,24 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a second `floating enable` in any source of the shell is the
     # offence. PARSED: the table, the export and the control are read by their
     # bodies. `uncommented` and not `code_of`: a rule IS a string literal.
-    shell_crate = pathlib.Path("${../crates/ronoctua-shell}")
-    home = shell_crate / "src"
-    table = without_tests(uncommented((home / "floating.rs").read_text()))
+    table = without_tests(uncommented(shell_file("floating.rs").read_text()))
     floor(len(table), 1000, "characters of floating.rs")
     wrong = []
 
     rows = re.search(r"pub const FLOATING: \[Floating; \d+\] = \[(.*?)\];", table, re.S)
     rows = must(rows.group(1) if rows else None, "floating.rs: the `FLOATING` table")
-    for app in ("crate::terminal::APP_ID_MONITOR", "crate::terminal::APP_ID_RESCUE",
-                "crate::camera::APP_ID", "crate::calc_window::APP_ID"):
-        if app not in rows:
+    # THE TABLE OWNS THE `app_id`s IT NAMES: a row reads the table's own
+    # constant, which the window's `APP_ID` is, never a window's module.
+    for app in ("APP_ID_MONITOR", "APP_ID_RESCUE", "APP_ID_CAMERA", "APP_ID_CALC"):
+        if not re.search(r"\brow\(" + app + r",", rows):
             wrong.append(f"floating.rs: `{app}` has no row of `FLOATING`")
+        if not re.search(r'pub const ' + app + r': &str = "br\.ronoctua\.[a-z-]+";', table):
+            wrong.append(f"floating.rs: `{app}` is not the table's own `app_id`")
     rules = must(body_of(table, "rules"), "floating.rs: `rules`")
     if "FLOATING" not in rules or "floating enable" not in rules or "ppt" not in rules:
         wrong.append("floating.rs: `rules` no longer prints the table's rows as floating rules")
@@ -31127,12 +33380,12 @@ let
     if "FLOATING" not in portion:
         wrong.append("floating.rs: `portion_of` no longer reads the table")
 
-    terminal = without_tests(uncommented((home / "terminal.rs").read_text()))
+    terminal = without_tests(uncommented(shell_file("terminal.rs").read_text()))
     export = must(body_of(terminal, "window_rules"), "terminal.rs: `window_rules`")
     if "crate::floating::rules()" not in export:
         wrong.append("terminal.rs: the export no longer prints `floating::rules`")
 
-    window = without_tests(uncommented((home / "calc_window.rs").read_text()))
+    window = without_tests(uncommented(shell_file("calc_window.rs").read_text()))
     control = must(body_of(window, "toggle_place"), "calc_window.rs: `toggle_place`")
     for needle, why in (("crate::floating::portion_of(APP_ID)", "reads a size that is not its row"),
                         ("float_centred(", "floats it by something other than the contract's verb"),
@@ -31155,12 +33408,12 @@ let
         wrong.append("ronoctua-scroll: `centred_command` sizes in pixels; the rule speaks `ppt`")
 
     swept = 0
-    for f in rust_sources(shell_crate):
-        if f == home / "floating.rs":
+    for f in shell_files("**/*.rs"):
+        if shell_name(f) == "floating.rs":
             continue
         swept += 1
         if "floating enable" in without_tests(uncommented(f.read_text())):
-            wrong.append(f"{f.relative_to(shell_crate)} writes a floating rule of its own")
+            wrong.append(f"src/{shell_name(f)} writes a floating rule of its own")
     floor(swept, 100, "sources of the shell swept for a floating rule")
 
     if wrong:
@@ -31197,14 +33450,14 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: for the renderer, `CEILING` and `TEXTURE_CEILING` are module
     # constants, not inside a function. The listing's half is narrowed to
     # `rows_asked` and the grid's to the product before its tests.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
     image = code_of(pathlib.Path("${../crates/ronoctua-render/src}/image.rs").read_text())
-    catalog = code_of(without_tests((shell / "player_catalog.rs").read_text()))
-    posters = code_of(without_tests((shell / "player_posters.rs").read_text()))
+    catalog = code_of(without_tests(shell_file("player_catalog.rs").read_text()))
+    posters = code_of(without_tests(shell_file("player_posters.rs").read_text()))
     floor(len(image), 4000, "characters of image.rs")
     floor(len(catalog), 20000, "characters of player_catalog.rs before its tests")
     floor(len(posters), 4000, "characters of player_posters.rs before its tests")
@@ -31277,6 +33530,7 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         # FILE-WIDE: a call is a defect wherever it is written, so the file is
         # the question — comments and strings emptied (`code_of`), so a
@@ -31379,7 +33633,7 @@ let
                          "to `http`")
 
         # AND THE DOOR SAYS IT, beside the source.
-        sources = code_of(without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/player_sources.rs").read_text()))
+        sources = code_of(without_tests(shell_file("player_sources.rs").read_text()))
         rows = must(body_of(sources, "source_rows"), "`player_sources::source_rows`")
         if "status.plain" not in rows or "PLAYER_SOURCE_PLAIN" not in rows:
             wrong.append("the sources' page no longer says a plain source is not encrypted")
@@ -31408,7 +33662,7 @@ let
   # sign would be a `database is locked` far from its cause.
   #
   # So: outside the crate, `person` is named only by the door
-  # (`ronoctua-shell/src/video_metrics*.rs`), and `scan`, `feed` and `thumbs`
+  # (the shell's `video_metrics*.rs`), and `scan`, `feed` and `thumbs`
   # by nobody; no alias or glob hides a path from this sweep. Inside it,
   # `Catalog` is built over `db::open_ro` alone, `open_ro` opens READ-ONLY with
   # `query_only`, its one writer (a migration) is dropped before the reader
@@ -31419,6 +33673,7 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         # PARSED: a crate's paths into `ronoctua_video_metrics` are read out
         # of its code (`code_of`: comments and strings emptied) — every
@@ -31429,11 +33684,11 @@ let
         # offence, so the file is the question.
         crates = pathlib.Path("${../crates}")
         own = crates / "ronoctua-video-metrics"
-        DOOR = re.compile(r"ronoctua-shell/src/video_metrics[a-z_]*\.rs")
+        DOOR = re.compile(r"video_metrics[a-z_]*\.rs")
         # THE SEARCH'S PICTURES OF YOUTUBE keep a folder of their OWN through
         # the same bounded writer (`Thumbs::at`, `fast-access/thumbs` under
         # `webThumbsMiB`) — never the catalogue's: proved below.
-        WEB_THUMBS = re.compile(r"ronoctua-shell/src/fast_access_videos\.rs")
+        WEB_THUMBS = re.compile(r"fast_access_videos\.rs")
         # THE WRITERS, and who may name them: `None` is nobody outside.
         WRITERS = {"person": DOOR, "scan": None, "feed": None, "thumbs": WEB_THUMBS}
         CRATE = "ronoctua_video_metrics"
@@ -31481,15 +33736,15 @@ let
             readers[rel] = named
             for name in sorted(named & set(WRITERS)):
                 door = WRITERS[name]
-                if door is None or not door.fullmatch(rel):
+                if door is None or not door.fullmatch(shell_name(rel) or ""):
                     wrong.append(
                         f"{rel} names `{CRATE}::{name}`, a writer's: "
                         + ("only the video-metrics door may" if door else "only the scanner's unit may")
                     )
         # AND THE SEARCH'S FOLDER IS ITS OWN: named by its own constant, and
         # never the catalogue's (`thumbs::DIR`, `Thumbs::of_this_instance`).
-        web = code_of((crates / "ronoctua-shell/src/fast_access_videos.rs").read_text())
-        web_text = uncommented((crates / "ronoctua-shell/src/fast_access_videos.rs").read_text())
+        web = code_of(shell_file("fast_access_videos.rs").read_text())
+        web_text = uncommented(shell_file("fast_access_videos.rs").read_text())
         if 'THUMBS_DIR: &str = "fast-access/thumbs"' not in web_text:
             wrong.append("fast_access_videos.rs keeps YouTube's pictures somewhere that is not its own folder")
         for theirs in ("thumbs::DIR", "of_this_instance"):
@@ -31641,7 +33896,9 @@ let
 
       # WHAT THE UNIT RUNS: the extracted helper's `shields-up`, and only it.
       shields = os.environ["RONOCTUA_SHIELDS"]
-      if not re.fullmatch(r"/nix/store/[a-z0-9]{32}-ronoctua-security-root/bin/ronoctua-security-root shields-up", shields):
+      # The derivation is the program's own (`rust.securityRoot`), named with
+      # the crate's version.
+      if not re.fullmatch(r"/nix/store/[a-z0-9]{32}-ronoctua-security-root(-[0-9]+\.[0-9]+\.[0-9]+)?/bin/ronoctua-security-root shields-up", shields):
           wrong.append(f"the shields' unit runs {shields!r}, and may run the helper's shields-up")
 
       # AND WHAT `shields-up` DOES: the helper's arm calls `shields_up`, and
@@ -31682,17 +33939,19 @@ let
   # stdin or to the door's terminal and appears in no `.arg`, `.args` or
   # `.env`; the environment is emptied first; the one file that calls the
   # door (`run`, `run_with`, `converse`) is the sudo bar's — every view and
-  # every window reaches root through it — and the one manifest that may turn
-  # the `authority` feature on is the shell's: the brain and the daemons
-  # never link the door.
+  # every window reaches root through it — and only two manifests may turn
+  # the `authority` feature on, each by name (the shell's binary and the
+  # security centre's crate), and only one program links it, the shell's
+  # binary: the brain, the daemons and `render-png` never link the door.
   sudo-door-is-one = mkCheck "sudo-door-is-one" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys, tomllib
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     root = pathlib.Path("${self}")
     door = "crates/ronoctua-security/src/authority.rs"
-    bar = "crates/ronoctua-shell/src/sudo_bar.rs"
+    bar = "sudo_bar.rs"
     wrong = []
     callers = []
 
@@ -31728,10 +33987,10 @@ let
         # the file manager and the belongings hand their root gesture to it.
         if re.search(r"\bauthority::(?:SUDO|run|run_with|converse)\b", code_of(text)):
             callers.append(rel)
-            if rel != bar:
+            if shell_name(rel) != bar:
                 wrong.append(f"{rel} reaches the door, and only the sudo bar ({bar}) may")
     floor(swept, 300, "Rust files read")
-    if callers != [bar]:
+    if [shell_name(c) for c in callers] != [bar]:
         wrong.append(f"the door is called from {callers}; it is called from the sudo bar alone")
 
     # THE DOOR ITSELF. Every attempt with no terminal is given its flags as a
@@ -31829,9 +34088,53 @@ let
             default = data.get("features", {}).get("default", [])
             if "authority" in default:
                 wrong.append("ronoctua-security turns `authority` on by default")
+    # TWO MANIFESTS TURN THE DOOR ON, EACH BY NAME: the footer's crate, whose
+    # sudo bar calls it (`sudo_bar.rs`, in the shell's one program), and the
+    # security centre's crate, which asks whether the door's helper is there
+    # (`authority::has_helper`). Not every crate with the shell's name:
+    # `ronoctua-render-png` is one and is a program of its own, and a kit or
+    # door crate is linked into it. Which FILE may call the door is held
+    # above, by name, whatever crate links it.
+    allowed = {
+        "crates/ronoctua-shell-footer/Cargo.toml": "the footer, whose sudo bar calls the door",
+        "crates/ronoctua-shell-security/Cargo.toml": "the security centre, which asks whether its helper is there",
+    }
     for manifest in turned_on:
-        if manifest != "crates/ronoctua-shell/Cargo.toml":
-            wrong.append(f"{manifest} links the sudo door, and only the shell may")
+        if manifest not in allowed:
+            wrong.append(f"{manifest} links the sudo door, and only {sorted(allowed)} may")
+    if "crates/ronoctua-shell-footer/Cargo.toml" not in turned_on:
+        wrong.append("the footer does not link the sudo door its bar calls")
+    # AND ONE PROGRAM LINKS IT. A crate that turns the door on brings it into
+    # every crate that depends on it, so every PROGRAM (a package with a
+    # binary) whose dependencies reach one must be the shell's binary: the
+    # security centre's crate under `render-png`, or under a daemon, is the
+    # door in a second program. Dependencies and build-dependencies count —
+    # a build script is a program too; a dev-dependency links a test only.
+    def path_deps(data):
+        tables = [data.get("dependencies", {}), data.get("build-dependencies", {})]
+        for target in data.get("target", {}).values():
+            tables += [target.get("dependencies", {}), target.get("build-dependencies", {})]
+        return {pathlib.PurePath(d["path"]).name for t in tables for d in t.values() if isinstance(d, dict) and "path" in d}
+    graph, programs = {}, []
+    for manifest in manifests:
+        data = tomllib.loads(manifest.read_text())
+        graph[manifest.parent.name] = path_deps(data)
+        if data.get("bin") or (manifest.parent / "src" / "main.rs").is_file() or (manifest.parent / "src" / "bin").is_dir():
+            programs.append(manifest.parent.name)
+    floor(len(programs), 10, "programs among the manifests")
+    doors = {pathlib.PurePath(m).parent.name for m in turned_on}
+    for program in programs:
+        if program == "ronoctua-shell":
+            continue
+        seen, todo = set(), [program]
+        while todo:
+            crate = todo.pop()
+            if crate not in seen:
+                seen.add(crate)
+                todo += sorted(graph.get(crate, ()))
+        reached = sorted(seen & doors)
+        if reached:
+            wrong.append(f"the program {program} links the sudo door through {reached}, and only the shell's binary may")
 
     if wrong:
         print("ERROR: the sudo door is not one.", file=sys.stderr)
@@ -32458,6 +34761,10 @@ let
         pkgs.coreutils
       ]
       ''
+        # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+        # one, and the colours and the words are data it reads at run time.
+        export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+        export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
         export RONOCTUA_INST_DISK=/dev/nvme0n1
         export RONOCTUA_INST_HOSTNAME=noctua-teste
         export RONOCTUA_INST_PASSWORD=test-password
@@ -32468,7 +34775,7 @@ let
         target=/mnt/home/noctua/.config/ronoctua/belongings.json
 
         # NO REPOSITORY IS NO INSTALLATION: refused, naming the variable.
-        if ${rust.workspace}/bin/ronoctua-install > none.txt 2>&1; then
+        if ${rust.bins.ronoctua-install}/bin/ronoctua-install > none.txt 2>&1; then
           echo "ERROR: with no repository the installer went on" >&2
           cat none.txt >&2
           exit 1
@@ -32479,7 +34786,7 @@ let
         }
 
         # `said` and not `out`: `$out` is the derivation's, and `mkCheck` touches it.
-        said=$(RONOCTUA_INST_BELONGINGS="$address" ${rust.workspace}/bin/ronoctua-install)
+        said=$(RONOCTUA_INST_BELONGINGS="$address" ${rust.bins.ronoctua-install}/bin/ronoctua-install)
         echo "$said"
         host=$(echo "$said" | sed -n '/^--- host.nix ---$/,/^--- /p')
         [ -n "$host" ] || { echo "ERROR: the dry run no longer prints host.nix" >&2; exit 1; }
@@ -32506,7 +34813,7 @@ let
 
         # A PASSWORD IN THE ADDRESS is refused before any step.
         if RONOCTUA_INST_BELONGINGS='https://me:pw@example.org/b.git' \
-          ${rust.workspace}/bin/ronoctua-install > refused.txt 2>&1; then
+          ${rust.bins.ronoctua-install}/bin/ronoctua-install > refused.txt 2>&1; then
           echo "ERROR: an address with a password in it was taken" >&2
           cat refused.txt >&2
           exit 1
@@ -32569,6 +34876,13 @@ let
       modelsInMinimal == [ ]
     ) "models-open-in-orca: the minimal profile names a default for ${toString modelsInMinimal}";
     mkCheck "models-open-in-orca" [ pkgs.coreutils pkgs.gnugrep ] ''
+      # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+      # one, and the colours and the words are data it reads at run time.
+      export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+      export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+      # And the brain's catalogue (`rust.keyed`): the modules' marks and the
+      # keymap's actions are data it reads at run time, refused (78) without it.
+      export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
       root=$PWD/root
       mkdir -p "$root/home" "$root/etc/xdg" "$root/share/applications" "$root/models"
       cp ${mimeapps} "$root/etc/xdg/mimeapps.list"
@@ -32586,8 +34900,9 @@ let
       asked() {
         env -i HOME="$root/home" XDG_CONFIG_HOME="$root/home/.config" \
           XDG_DATA_HOME="$root/home/.local/share" XDG_CONFIG_DIRS="$1" \
-          XDG_DATA_DIRS="$root/share" \
-          ${rust.workspace}/bin/ronoctua-shell opener \
+          XDG_DATA_DIRS="$root/share" RONOCTUA_THEMES="$RONOCTUA_THEMES" \
+          RONOCTUA_TEXTS="$RONOCTUA_TEXTS" RONOCTUA_BRAIN_CATALOGUE="$RONOCTUA_BRAIN_CATALOGUE" \
+          ${rust.bins.ronoctua-shell}/bin/ronoctua-shell opener \
           "$root/models/part.stl" "$root/models/plate.3mf" \
           "$root/models/bracket.step" "$root/models/bracket.stp"
       }
@@ -32650,16 +34965,17 @@ let
         python3 - <<'END'
         import pathlib, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         # FILE-WIDE: a layer surface made ANYWHERE is the question, so every
         # source of every crate is read; `code_of`, because the name is a call.
         crates = pathlib.Path("${../crates}")
         KNOWN = {
-            "ronoctua-shell/src/surface.rs": "the footer",
-            "ronoctua-shell/src/lifeline.rs": "the lifeline",
-            "ronoctua-shell/src/column.rs": "the right column",
-            "ronoctua-shell/src/capture.rs": "the capture's overlay",
-            "ronoctua-shell/src/resizer.rs": "the resizer's curtains",
+            "surface/mod.rs": "the footer",
+            "lifeline.rs": "the lifeline",
+            "column.rs": "the right column",
+            "capture.rs": "the capture's overlay",
+            "resizer.rs": "the resizer's curtains",
         }
         # BY CALL, NOT BY FILE: each of the five makes its surface at ONE
         # site (the footer one per screen, the curtains one per process), so a
@@ -32670,7 +34986,7 @@ let
             read += 1
             n = code_of(f.read_text()).count("create_layer_surface(")
             if n:
-                name = str(f.relative_to(crates))
+                name = shell_name(f) or str(f.relative_to(crates))
                 found.add(name)
                 calls[name] = n
         floor(read, 300, "Rust files read")
@@ -32707,15 +35023,16 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: the namespace is a string, so `uncommented` and never
     # `code_of` (which empties strings); the cut at `mod tests` is the
     # narrowing — a test may name it.
     crates = pathlib.Path("${../crates}")
-    home = "ronoctua-shell/src/column.rs"
+    home = "column.rs"
     wrong, read = [], 0
     for f in sorted(crates.rglob("*.rs")):
-        name = str(f.relative_to(crates))
+        name = shell_name(f) or str(f.relative_to(crates))
         if name == home:
             continue
         read += 1
@@ -32723,7 +35040,7 @@ let
         if '"ronoctua-column"' in code or "column::NAMESPACE" in code:
             wrong.append(f"{name} names the column's namespace: a column made outside `column.rs`")
     floor(read, 300, "Rust files read")
-    own = uncommented((crates / home).read_text())
+    own = uncommented(shell_file(home).read_text())
     if 'pub const NAMESPACE: &str = "ronoctua-column";' not in own:
         wrong.append("column.rs no longer declares the namespace")
     if not re.search(r"create_layer_surface\([^;]*Some\(NAMESPACE\)", own, re.S):
@@ -32745,51 +35062,44 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    home = pathlib.Path("${../crates/ronoctua-shell/src}")
     wrong = []
     # PARSED: the view's own module computes no line at all — it answers
     # rows; `code_of`, because the offence is in code.
-    view = without_tests(code_of((home / "clipboard_view.rs").read_text()))
+    view = without_tests(code_of(shell_file("clipboard_view.rs").read_text()))
     floor(len(view), 5000, "characters of clipboard_view.rs")
     for name in ("first_of_expansion", "line_height", "end -", "end.saturating_sub("):
         if name in view:
             wrong.append(f"clipboard_view.rs computes a line (`{name}`): the view answers rows, the region places them")
     if "pub fn rows(" not in view:
         wrong.append("clipboard_view.rs lost `rows` — what does the region place?")
-    # PARSED: the footer's paint, within the clipboard's own block — a line
-    # counted back from the region's end by a NUMBER is the old defect.
-    paint = must(body_of(code_of((home / "surface.rs").read_text()), "paint"), "surface.rs: `paint`")
-    floor(len(paint), 50000, "characters of the footer's paint")
-    def braced(text, opened):
-        # The block from just after its `{` to the matching `}` — by
-        # BRACES, the way `body_of` walks an item.
-        deep = 0
-        for k in range(opened, len(text)):
-            if text[k] == "{":
-                deep += 1
-            elif text[k] == "}":
-                if deep == 0:
-                    return text[opened:k]
-                deep -= 1
-        return text[opened:]
-
-    blocks = [m.start() for m in re.finditer(r"if self\.clipboard_open \{", paint)]
-    floor(len(blocks), 1, "clipboard blocks in the footer's paint")
-    for at in blocks:
-        block = braced(paint, paint.index("{", at) + 1)
-        for m in re.finditer(r"\bend\s*-\s*\d|\bend\.saturating_sub\(\s*\d", block):
-            wrong.append(f"the footer's clipboard block counts a line back from `end`: `{m.group(0)}`")
+    # PARSED: the region's paint — the clipboard's view is a region of its
+    # own crate (`clipboard_region.rs`), and what it draws over its rows is
+    # its own — a line counted back from the region's end by a NUMBER is the
+    # old defect.
+    region = code_of(without_tests(shell_file("clipboard_region.rs").read_text()))
+    paint = must(body_of(region, "paint"), "clipboard_region.rs: `paint`")
+    floor(len(paint), 500, "characters of the clipboard region's paint")
+    for m in re.finditer(r"\bend\s*-\s*\d|\bend\.saturating_sub\(\s*\d", paint):
+        wrong.append(f"the clipboard's region counts a line back from `end`: `{m.group(0)}`")
     # PARSED: the entry's picture and code go in the box the VIEW left
     # (`picture_area`), in both doors — the footer painted its preview over
     # the item's own facts, and the window under the last row, where a real
     # history pushed it off the screen. And the preview's text is rows of
     # the view, never painted over them.
-    if not any("clipboard_view::picture_area(" in braced(paint, paint.index("{", at) + 1) for at in blocks):
-        wrong.append("the footer's clipboard block does not draw the picture in the box the view left (`picture_area`)")
-    if any("highlight_line(" in braced(paint, paint.index("{", at) + 1) for at in blocks):
-        wrong.append("the footer's clipboard block paints the preview's text itself, over the view's rows")
-    window = must(body_of(code_of((home / "clipboard_window.rs").read_text()), "paint"),
+    if "clipboard_view::picture_area(" not in paint:
+        wrong.append("the clipboard's region does not draw the picture in the box the view left (`picture_area`)")
+    if "highlight_line(" in paint:
+        wrong.append("the clipboard's region paints the preview's text itself, over the view's rows")
+    # AND THE FOOTER PAINTS NOTHING OF IT: a view of the slot host is drawn
+    # by its region, and a second drawing in the footer's paint would be two
+    # answers to where its box is.
+    footer = must(body_of(code_of(shell_source("surface.rs")), "paint"), "surface.rs: `paint`")
+    floor(len(footer), 50000, "characters of the footer's paint")
+    if "clipboard_view::" in footer:
+        wrong.append("the footer's paint draws the clipboard's view itself, beside its region")
+    window = must(body_of(code_of(shell_file("clipboard_window.rs").read_text()), "paint"),
                   "clipboard_window.rs: `paint`")
     if "clipboard_view::picture_area(" not in window:
         wrong.append("the clipboard window does not draw the picture in the box the view left (`picture_area`)")
@@ -32806,7 +35116,7 @@ let
   # TEXT KEYS ARE CONSTANTS. `.t("literal")` is a key the compiler cannot
   # check: a typo, or a key renamed in the `.ftl`, draws `[the-key]` on the
   # screen with every check green — invariant 8 buys exactly the guarantee that
-  # a missing text is a build error, and only `ronoctua_i18n::key::*` has it.
+  # a missing text is a build error, and only a crate's `key::*` has it.
   text-keys-are-constants = mkCheck "text-keys-are-constants" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -32880,7 +35190,7 @@ let
     for w in wrong:
         print("ERROR: " + w, file=sys.stderr)
     if wrong:
-        print("       Use `ronoctua_i18n::key::*`: a key that does not exist is then a build error.", file=sys.stderr)
+        print("       Use the crate's `key::*`: a key that does not exist is then a build error.", file=sys.stderr)
         sys.exit(1)
     print("OK: every text is asked for by a constant")
     END
@@ -32897,9 +35207,9 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
-    home = pathlib.Path("${../crates/ronoctua-shell/src}")
-    surface = code_of((home / "surface.rs").read_text())
+    surface = code_of(shell_source("surface.rs"))
     floor(len(surface), 100000, "characters of surface.rs")
     wrong = []
 
@@ -32908,7 +35218,7 @@ let
     # the warning's token.
     # `uncommented` where the needle is a STRING the code matches on — the
     # segment's id, the state's id — and `code_of` everywhere else.
-    seg = must(body_of(uncommented((home / "surface.rs").read_text()), "segment_color"),
+    seg = must(body_of(uncommented(shell_source("surface.rs")), "segment_color"),
                "surface.rs: `segment_color`")
     if not re.search(r'"state"\s*=>\s*state_paint', seg):
         wrong.append("segment_color does not draw the state in the colour its tone gave it")
@@ -32923,17 +35233,17 @@ let
 
     # PARSED: the tone CROSSES — the report a window sends and the line the
     # footer reads both carry it.
-    leader = code_of((home / "leader.rs").read_text())
+    leader = code_of(shell_file("leader.rs").read_text())
     listen = must(body_of(leader, "listen_on"), "leader.rs: `listen_on`")
     if "tone_of(" not in listen:
         wrong.append("the control socket reads a state without its tone")
-    door = code_of((home / "door/mod.rs").read_text())
+    door = code_of(shell_file("door/mod.rs").read_text())
     if "fn state(&self)" not in door or "state_order(" not in must(body_of(door, "settle"), "door: `settle`"):
         wrong.append("a door does not tell the footer its state")
 
     # PARSED: the first state with a tone of its own — the file manager's
     # permission question, in `Warning`.
-    files = uncommented((home / "files.rs").read_text())
+    files = uncommented(shell_file("files.rs").read_text())
     state = must(body_of(files, "state"), "files.rs: `View::state`")
     if not re.search(r"Asking::Mode\(\.\.\)[^=]*=>\s*\{?\s*\(\s*\"permission\"\s*,\s*Tone::Warning", state, re.S):
         wrong.append("the file manager's permission question is not a state in Tone::Warning")
@@ -32953,21 +35263,21 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # PARSED: every `default_size` that answers in pixels, product code only,
     # by braces from its signature; `code_of`, because a number in a comment
     # is not a size.
-    home = pathlib.Path("${../crates/ronoctua-shell/src}")
     SIG = re.compile(r"\bfn\s+default_size\s*\(\s*&self\s*\)\s*->\s*\(\s*u32\s*,\s*u32\s*\)")
     wrong, bodies = [], 0
-    for f in sorted(home.rglob("*.rs")):
+    for f in sorted(shell_files("**/*.rs")):
         code = without_tests(code_of(f.read_text()))
         for m in SIG.finditer(code):
             body = body_of(code[m.start():], "default_size") or ""
             bodies += 1
             for n in re.finditer(r"(?<![\w.])\d[\d_]*(?:\.\d+)?\b", body):
                 line = code[: m.start()].count("\n") + 1
-                wrong.append(f"{f.relative_to(home)}:{line} default_size writes the number {n.group(0)}")
+                wrong.append(f"{shell_name(f)}:{line} default_size writes the number {n.group(0)}")
     floor(bodies, 6, "default_size bodies in pixels")
     for w in wrong:
         print("ERROR: " + w, file=sys.stderr)
@@ -33058,44 +35368,70 @@ let
   # painting, paging, the registry's router — is not the errand's). An arm the
   # window hands to the footer (`tell_the_footer`) or to the door's launcher
   # (`ui.launch`) is the footer's or the door's to word, and is not compared.
+  # A view that became a region of the footer's slot host carries its
+  # errands out in its own crate: its footer side is named `file::fn`.
   errands-are-handled-alike = mkCheck "errands-are-handled-alike" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # PARSED: each door's `match` over one view's `Errand`, narrowed with
     # `body_of` to the function that carries it out, and cut into arms at the
     # variant names; the comments and literals are off (`code_of`).
-    src = pathlib.Path("${../crates/ronoctua-shell/src}")
-    surface = code_of((src / "surface.rs").read_text())
+    surface = code_of(shell_source("surface.rs"))
     PAIRS = [
-        ("network", "network_window.rs", "apply", "network_errand"),
-        ("bluetooth", "bluetooth_window.rs", "apply", "bluetooth_errand"),
-        ("locale", "locale_window.rs", "apply", "locale_errand"),
-        ("geo", "geo_window.rs", "apply", "geo_errand"),
-        ("display", "display_window.rs", "apply", "display_errand"),
-        ("power", "power_window.rs", "apply", "power_errand"),
-        ("audio", "audio_window.rs", "apply", "audio_errand"),
-        ("history", "history_window.rs", "apply", "history_errand"),
-        ("syncthing", "syncthing_window.rs", "apply", "syncthing_errand"),
-        ("notifications", "notifications_window.rs", "apply", "manager_errand"),
-        ("manual", "manual_window.rs", "apply", "manual_errand"),
-        ("git_browser", "git_browser_window.rs", "apply", "git_errand"),
-        ("icons", "icons_window.rs", "apply", "icons_errand"),
-        ("calc", "calc_window.rs", "errand", "calc_errand"),
-        ("video_metrics", "video_metrics_window.rs", "apply", "video_metrics_errand"),
-        ("security", "security_window.rs", "errand", "security_errand"),
-        ("containers", "containers_window.rs", "apply", "containers_errand"),
-        ("incus", "incus_window.rs", "apply", "incus_errand"),
-        ("belongings", "belongings_window.rs", "apply", "belongings_errand"),
-        ("software", "software_window.rs", "carry_out", "software_do"),
-        ("player", "player_window.rs", "apply", "player_errand"),
+        # A VIEW THAT IS A REGION OF THE SLOT HOST carries its errands out in
+        # its own file (`<file>::<function>`), not in the footer's module.
+        ("power", "power_window.rs", "apply", "power_region.rs::press"),
+        ("audio", "audio_window.rs", "apply", "audio_region.rs::press"),
+        ("history", "history_window.rs", "apply", "history_region.rs::carried"),
+        ("syncthing", "syncthing_window.rs", "apply", "syncthing_region.rs::carried"),
+        ("pointers", "pointers_window.rs", "apply", "pointers_region.rs::press"),
+        ("notifications", "notifications_window.rs", "apply", "notifications_region.rs::carry"),
+        ("manual", "manual_window.rs", "apply", "manual_region.rs::carry"),
+        ("camera_settings", "camera_settings_window.rs", "apply", "camera_region.rs::press"),
+        ("video_metrics", "video_metrics_window.rs", "apply", "video_metrics_region.rs::errand"),
+        ("security", "security_window.rs", "errand", "security_region.rs::carry"),
+        ("belongings", "belongings_window.rs", "apply", "belongings_region.rs::carry"),
+        ("update_window", "update_window.rs", "apply", "update_region.rs::errand"),
+        ("player", "player_window.rs", "apply", "player_region.rs::errand"),
+    ]
+    # A VIEW THAT IS A REGION has no pair to compare: its window and its
+    # region call ONE handler over a `region::Doorway` (the software centre's
+    # `software_reading::Reading::carry_out`), and `software-errands-are-carried-out-once`
+    # holds both doors to it.
+    # A VIEW WHOSE TWO DOORS HAND EVERY ERRAND TO ONE HANDLER — `carry_out`,
+    # in the module of its region, which its window and its region both
+    # call — is alike by construction, as long as both doors DO hand it every
+    # errand. So what is read, in each door (the window's file; the region's
+    # `impl Region for`, its own `impl`, its `closed` and its `open`):
+    # - every function that MAKES an errand — calls one of the view's
+    #   `pub fn … -> Errand` on the view — hands it on in that function: to
+    #   `carry_out`, to a method of what the two doors share that calls it
+    #   (`Calc::press`, `Clip::pressed`), or to a function of the door's own
+    #   that takes an `Errand` and itself hands that errand on;
+    # - no `Errand::<variant>` is named but as `carry_out`'s argument and the
+    #   door's own leftover (`EXCUSED`): naming one is doing that errand some
+    #   other way than the handler's;
+    # - and the two doors reach the handler by the SAME gestures — the view's
+    #   errand-makers and the shared methods each door calls are one set: a
+    #   window whose key, click or paste stopped reaching it drops what the
+    #   other door does.
+    # The handler matches every errand with no `_ =>`; its arms count as
+    # compared.
+    HANDED_ON = [
+        ("git_browser", "git_browser_window.rs", "git_region.rs"),
+        ("icons", "icons_window.rs", "icons_region.rs"),
+        ("calc", "calc_window.rs", "calc_region.rs"),
+        ("clipboard_view", "clipboard_window.rs", "clipboard_region.rs"),
     ]
     # THE VARIANTS WHOSE DIFFERENCE IS THE DOOR ITSELF, and why.
     EXCUSED = {
         ("manual", "Window"): "the footer opens the manual's window; the window is that window",
         ("calc", "Float"): "the footer opens the calculator's floating window; the window floats "
-                           "itself, and only it can find that the compositor did not answer",
+                           "itself, and only it can find that the compositor did not answer — "
+                           "the one errand `calc_region::carry_out` hands back to its door",
     }
     # WHAT ONLY THE FOOTER'S REGION CAN SAY: a region already taken. A
     # window has no region to be refused.
@@ -33181,12 +35517,24 @@ let
             out[name] = (was[0] | keys, was[1] or handed)
         return out
 
+    # HOW MANY ERRANDS A VIEW HAS — what one table both doors hand the errand
+    # to compares at once, by construction: every variant of its `Errand`.
+    def errands_of(view):
+        if not shell_has(view + ".rs"):
+            return 1
+        enum = scope(code_of(shell_file(view + ".rs").read_text()), r"pub enum Errand\b") or ""
+        return max(1, len(re.findall(r"^\s{4}([A-Z]\w*)\b", enum, re.M)))
+
     wrong, compared = [], 0
     for view, window, wfn, ffn in PAIRS:
-        wtext = code_of((src / window).read_text())
-        wbody, fbody = body_of(wtext, wfn), body_of(surface, ffn)
+        wtext = code_of(shell_file(window).read_text())
+        ftext, ffile = surface, "surface.rs"
+        if "::" in ffn:
+            ffile, ffn = ffn.split("::", 1)
+            ftext = code_of(shell_file(ffile).read_text())
+        wbody, fbody = body_of(wtext, wfn), body_of(ftext, ffn)
         if wbody is None or fbody is None:
-            wrong.append(f"{view}: the window's `{wfn}` or the footer's `{ffn}` went away")
+            wrong.append(f"{view}: the window's `{wfn}` or the footer's `{ffn}` ({ffile}) went away")
             continue
         for door, body in (("window", wbody), ("footer", fbody)):
             if wildcard(body):
@@ -33194,13 +35542,13 @@ let
         # ONE TABLE FOR BOTH DOORS is alike by construction — the screens'
         # `display::doing`, the player's `carry_out` — which each door hands
         # the errand to, whole, and only carries out what comes back.
-        shared_w = set(re.findall(r"\b(\w+)\(errand\b", wbody))
-        shared_f = set(re.findall(r"\b(\w+)\(errand\b", fbody))
+        shared_w = set(re.findall(r"\b(\w+)\(\s*errand\b", wbody))
+        shared_f = set(re.findall(r"\b(\w+)\(\s*errand\b", fbody))
         if shared_w & shared_f:
-            compared += 1
+            compared += errands_of(view)
             continue
         a = arms(wbody, view, wtext, window)
-        b = arms(fbody, view, surface, "surface.rs")
+        b = arms(fbody, view, ftext, ffile)
         floor(len(a), 2, f"errands of the {view} window")
         for v in sorted(set(a) | set(b)):
             if (view, v) in EXCUSED:
@@ -33218,11 +35566,220 @@ let
                     f"{view}: `Errand::{v}` is said differently — the window names "
                     f"{sorted(said_w)}, the footer {sorted(said_f)}"
                 )
+    # THE VIEWS WHOSE TWO DOORS SHARE ONE HANDLER — a region of the footer's
+    # slot host (`region::Region`, in the view's own crate) and its window,
+    # each handing the errand to the one `carry_out` written over the door's
+    # `region::Doorway`. Alike by construction, so what is held here is the
+    # construction: the window hands the errand over and keeps no `match` of
+    # its own over it, the region calls the same handler, and the handler
+    # names every variant with no `_ =>`. Each variant it names is an errand
+    # handled alike in both doors.
+    SHARED = [
+        # (view, window's file, the window's function, the region's file)
+        ("network", "network_window.rs", "apply", "network_region.rs"),
+        ("bluetooth", "bluetooth_window.rs", "apply", "bluetooth_region.rs"),
+        ("locale", "locale_window.rs", "apply", "locale_region.rs"),
+        ("geo", "geo_window.rs", "apply", "geo_region.rs"),
+        ("display", "display_window.rs", "doing", "display_region.rs"),
+    ]
+    for view, window, wfn, region in SHARED:
+        module = region[: -len(".rs")]
+        wtext = code_of(shell_file(window).read_text())
+        rtext = code_of(without_tests(shell_file(region).read_text()))
+        wbody, handler = body_of(wtext, wfn), body_of(rtext, "carry_out")
+        if wbody is None or handler is None:
+            wrong.append(f"{view}: the window's `{wfn}` or the region's `carry_out` went away")
+            continue
+        if f"{module}::carry_out(" not in wbody:
+            wrong.append(f"{view}: the window's `{wfn}` does not hand the errand to `{module}::carry_out`")
+        if re.search(r"\bmatch\s+errand\b", wbody):
+            wrong.append(f"{view}: the window's `{wfn}` keeps a `match` over the errand of its own")
+        if not re.search(r"\bcarry_out\(", rtext.replace(handler, "")):
+            wrong.append(f"{view}: the region never hands an errand to its own `carry_out`")
+        if wildcard(handler):
+            wrong.append(f"{view}: the shared handler's match has a `_ =>` arm, and a new errand would fall into it in silence")
+        compared += max(len(set(re.findall(r"\bErrand::(\w+)\b", handler))), 1)
+    # ONE HANDLER FOR BOTH DOORS — a view that became a region of the slot
+    # host carries its errands out in ONE function of its crate
+    # (`carry_out`, over each door's `region::Doorway`), which its window and
+    # its region both reach: alike by construction, every variant. What is
+    # read is that the function handles every variant of the view's `Errand`
+    # by name, with no `_ =>`, and that neither door's file carries one out
+    # itself (an arm `Errand::<variant> … =>` there would be a second handler).
+    ONE_HANDLER = [
+        ("stick", "stick.rs", "stick.rs"),
+        ("agents", "agents.rs", "agents.rs"),
+        ("containers", "containers.rs", "containers_open.rs"),
+        ("incus", "incus.rs", "incus_open.rs"),
+    ]
+    for view, defined, handler in ONE_HANDLER:
+        text = code_of(shell_file(handler).read_text())
+        body = body_of(text, "carry_out")
+        if body is None or not re.search(r"\bfn carry_out\(\s*errand: Errand\b", text):
+            wrong.append(f"{view}: `{handler}` has no `carry_out(errand: Errand, …)`, the one handler both doors reach")
+            continue
+        if wildcard(body):
+            wrong.append(f"{view}: `carry_out` has a `_ =>` arm, and a new errand would fall into it in silence")
+        enum = must(scope(code_of(shell_file(defined).read_text()), r"pub enum Errand\b"), f"{view}'s `Errand`")
+        variants = re.findall(r"^\s{4}([A-Z]\w*)\b", enum, re.M)
+        floor(len(variants), 5, f"variants of {view}'s `Errand`")
+        for v in variants:
+            if not re.search(r"\bErrand::" + v + r"\b", body):
+                wrong.append(f"{view}: `Errand::{v}` is not carried out by `carry_out`")
+        for door in (view + "_window.rs", view + "_region.rs"):
+            arms = re.findall(r"\bErrand::(\w+)\b[^;{}]*=>", code_of(shell_file(door).read_text()))
+            if arms:
+                wrong.append(f"{view}: {door} carries out `Errand::{arms[0]}` itself, beside `carry_out`")
+        compared += len(variants)
+    def fns_of(text):
+        # Every function of `text` with a body: its name, its signature and
+        # its body — by position, so two of one name (the `clicked` of two
+        # `impl`s) are two.
+        out = []
+        for m in re.finditer(r"\bfn\s+(\w+)\b", text):
+            start, semi = text.find("{", m.end()), text.find(";", m.end())
+            if start < 0 or 0 <= semi < start:
+                continue
+            depth = 0
+            for k in range(start, len(text)):
+                depth += {"{": 1, "}": -1}.get(text[k], 0)
+                if depth == 0:
+                    out.append((m.group(1), text[m.end():start], text[start + 1:k]))
+                    break
+        return out
+
+    def item_of(text, name):
+        # One free function, whole: its signature and its braces.
+        m = re.search(r"\bfn\s+" + name + r"\b", text)
+        body = body_of(text, name)
+        return "" if m is None or body is None else text[m.start():text.find("{", m.end())] + "{" + body + "}"
+
+    def makers_of(vtext):
+        # The view's `pub fn`s that answer an `Errand`: what a door calls to
+        # learn what to do.
+        out = set()
+        for m in re.finditer(r"\bpub(?:\([^)]*\))?\s+fn\s+(\w+)\b", vtext):
+            opened = vtext.find("(", m.end())
+            if opened < 0:
+                continue
+            after = vtext[opened + 2 + len(shut_at(vtext, opened + 1)):]
+            if re.match(r"\s*->\s*(?:crate::\w+::)?Errand\b(?!::)", after):
+                out.add(m.group(1))
+        return out
+
+    def shared_of(rtext):
+        # Each type of the region's module with methods that hand an errand
+        # to `carry_out` — themselves, or through another of their own
+        # (`Clip::clicked` by `Clip::pressed`) — and those methods.
+        out = {}
+        for m in re.finditer(r"\bimpl\s+(\w+)\s*\{", rtext):
+            bodies = {}
+            for name, _, body in fns_of(scope(rtext[m.start():], r"\bimpl\s+" + m.group(1) + r"\b(?=\s*\{)") or ""):
+                bodies[name] = bodies.get(name, "") + body
+            hands = {n for n, b in bodies.items() if re.search(r"(?<![\w.:])carry_out\s*\(", b)}
+            grew = bool(hands)
+            while grew:
+                grew = False
+                calls = re.compile(r"\b(?:self\.|Self::)(?:" + "|".join(sorted(hands)) + r")\s*\(")
+                for n, b in bodies.items():
+                    if n not in hands and calls.search(b):
+                        hands.add(n)
+                        grew = True
+            if hands:
+                out.setdefault(m.group(1), set()).update(hands)
+        return out
+
+    def reached(door, text, view, module, fields, shared, makers):
+        # The gestures by which one door reaches the handler — the view's
+        # errand-makers it calls, and the shared methods — with what drops
+        # an errand on the way reported.
+        methods = [(f, s, h) for f, s in sorted(fields.items()) for h in sorted(shared.get(s, ()))]
+        hand = r"(?<![\w.:])carry_out\s*\(|\b(?:crate::)?" + module + r"::carry_out\s*\("
+        hand += "".join(r"|\bself\." + f + r"\." + h + r"\s*\(" for f, _, h in methods)
+        fns = fns_of(text)
+        # THE DOOR'S OWN FUNCTIONS TAKING AN ERRAND, and those that hand it on.
+        takers = {}
+        for name, signature, body in fns:
+            p = re.search(r"\b(\w+)\s*:\s*(?:crate::\w+::)?Errand\s*[,)]", signature)
+            if p:
+                takers[name] = (p.group(1), body)
+        handing, grew = set(), True
+        while grew:
+            grew = False
+            onward = re.compile(hand + "".join(r"|\b(?:self\.|Self::)" + n + r"\s*\(" for n in sorted(handing)))
+            for name, (param, body) in takers.items():
+                if name not in handing and any(
+                        re.search(r"\b" + param + r"\b", shut_at(body, c.end())) for c in onward.finditer(body)):
+                    handing.add(name)
+                    grew = True
+        for name in sorted(set(takers) - handing):
+            wrong.append(f"{view}: the {door}'s `{name}` takes an errand and hands it to no one — never to `{module}::carry_out`")
+        onward = re.compile(hand + "".join(r"|\b(?:self\.|Self::)" + n + r"\s*\(" for n in sorted(handing)))
+        gestures = set()
+        for name, _, body in fns:
+            # THE VIEW, as this function names it: `self.view`, a field's
+            # (`self.git.view`), or a local bound to one (`let v = &mut self.view;`).
+            aliases = re.findall(r"\blet\s+(\w+)\s*=\s*&?\s*(?:mut\s+)?self\.(?:\w+\.)*view\s*;", body)
+            on_view = r"(?:\bself\.(?:\w+\.)*view" + "".join(r"|\b" + a for a in sorted(set(aliases))) + r")"
+            made = set(re.findall(on_view + r"\.(" + "|".join(sorted(makers)) + r")\s*\(", body))
+            gestures |= {("view", p) for p in made}
+            gestures |= {(s, h) for f, s, h in methods if re.search(r"\bself\." + f + r"\." + h + r"\s*\(", body)}
+            if made and not onward.search(body):
+                wrong.append(f"{view}: the {door}'s `{name}` makes an errand ({', '.join(sorted(made))}) and hands it to no one")
+        # NO VARIANT IS THE DOOR'S OWN but its excused leftover: a door that
+        # names one does that errand some other way than the handler's.
+        for m in re.finditer(r"\bErrand::(\w+)", text):
+            if (view.split("_")[0], m.group(1)) in EXCUSED:
+                continue
+            if re.search(r"carry_out\s*\(\s*(?:crate::\w+::)?$", text[max(0, m.start() - 80):m.start()]):
+                continue
+            wrong.append(f"{view}: the {door} names `Errand::{m.group(1)}` itself, beside `{module}::carry_out`")
+        return gestures
+
+    made_by_views = 0
+    for view, window, region in HANDED_ON:
+        module = region[: -len(".rs")]
+        rtext = code_of(without_tests(shell_file(region).read_text()))
+        wtext = code_of(without_tests(shell_file(window).read_text()))
+        vtext = code_of(without_tests(shell_file(view + ".rs").read_text()))
+        carry = body_of(rtext, "carry_out")
+        if carry is None:
+            wrong.append(f"{view}: `{module}::carry_out`, the one handler of both doors, went away")
+            continue
+        if wildcard(carry):
+            wrong.append(f"{view}: `{module}::carry_out` has a `_ =>` arm, and a new errand would fall into it in silence")
+        # AN ARM, whatever its pattern binds — a unit variant, a tuple
+        # (`Errand::Copy(text) =>`) or a struct (`Errand::Keep { .. } =>`).
+        arm = r"\bErrand::(\w+)\s*(?:\([^()]*\)|\{[^{}]*\})?\s*=>"
+        handled = set(re.findall(arm, carry))
+        floor(len(handled), 4, f"errands `{module}::carry_out` handles")
+        makers = makers_of(vtext)
+        floor(len(makers), 1, f"functions of the {view} view that make an errand")
+        made_by_views += len(makers)
+        shared = shared_of(rtext)
+        # THE REGION'S DOOR: what the footer calls of it.
+        ids = re.findall(r"\bimpl\s+Region\s+for\s+(\w+)", rtext)
+        if not ids:
+            wrong.append(f"{view}: `{region}` has no `impl Region for`, so the footer has no door to it")
+            continue
+        heads = [r"\bimpl\s+Region\s+for\s+" + i + r"\b" for i in ids] + [r"\bimpl\s+" + i + r"\b(?=\s*\{)" for i in ids]
+        rdoor = "\n".join(scope(rtext, h) or "" for h in heads) + item_of(rtext, "closed") + item_of(rtext, "open")
+        rfields = {f: s for f, s in re.findall(r"\b(\w+)\s*:\s*(?:crate::" + module + r"::)?(\w+)\s*[,}]", rtext) if s in shared}
+        wfields = {f: s for f, s in re.findall(r"\b(\w+)\s*:\s*crate::" + module + r"::(\w+)\b", wtext) if s in shared}
+        by_region = reached("region", rdoor, view, module, rfields, shared, makers)
+        by_window = reached("window", wtext, view, module, wfields, shared, makers)
+        floor(len(by_region), 2, f"gestures by which the {view} region reaches `{module}::carry_out`")
+        for side, mine, theirs in (("region", by_region, by_window), ("window", by_window, by_region)):
+            for kind, name in sorted(mine - theirs):
+                other = "window" if side == "region" else "region"
+                wrong.append(f"{view}: the {side} reaches `{module}::carry_out` by `{kind}::{name}` and the {other} does not — a gesture one door drops")
+        compared += len(handled)
+    floor(made_by_views, 8, "functions of the shared views that make an errand")
     floor(compared, 150, "errands compared across the two doors")
     if wrong:
         print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
         sys.exit(1)
-    print(f"OK: {compared} errands of {len(PAIRS)} views are handled alike in both doors")
+    print(f"OK: {compared} errands of {len(PAIRS) + len(SHARED) + len(ONE_HANDLER) + len(HANDED_ON)} views are handled alike in both doors")
     END
   '';
 
@@ -33233,6 +35790,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a boundary is broken by a NAME anywhere outside it, so the
     # file is the question; the product's, cut at `mod tests` (`without_tests`).
@@ -33256,12 +35814,11 @@ let
             wrong.append(f"ronoctua-resolve no longer names `{name}` — has the boundary moved?")
     # AND ITS ANSWERS ARE ASKED OFF THE LOOP: the shell reaches it only from
     # the network view's thread (`network::spawn`).
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    callers = [f.name for f in sorted(shell.glob("*.rs"))
+    callers = [f.name for f in sorted(shell_files("*.rs"))
                if "ronoctua_resolve::names" in code_of(without_tests(f.read_text()))]
     if callers != ["network.rs"]:
         wrong.append(f"the shell asks resolved from {callers}, and only network.rs's thread may")
-    elif "ronoctua_resolve::names" not in must(body_of(code_of((shell / "network.rs").read_text()), "spawn"), "network::spawn"):
+    elif "ronoctua_resolve::names" not in must(body_of(code_of(shell_file("network.rs").read_text()), "spawn"), "network::spawn"):
         wrong.append("network::spawn no longer asks resolved; who does, and on which thread?")
     if wrong:
         print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
@@ -34290,14 +36847,13 @@ let
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
     exec(open("${offeredHelpers}").read())
+    exec(open("${shellPrelude}").read())
 
     # FILE-WIDE: a second placement may be born in any file, so every one is
     # the question; each assignment found is narrowed to its own right-hand
     # side, and the test modules are cut (a test builds a room by hand).
     crates = pathlib.Path("${../crates}")
-    shell = crates / "ronoctua-shell" / "src"
     arrange = crates / "ronoctua-player" / "src" / "arrange.rs"
-    layout = shell / "player_layout.rs"
 
 
     PLACE = re.compile(r"\barrange::place\s*\(")
@@ -34316,9 +36872,9 @@ let
             continue
         code = code_of(product(f.read_text()))
         swept += 1
-        if f != layout and PLACE.search(code):
+        if shell_name(f) != "player_layout.rs" and PLACE.search(code):
             wrong.append(f"{rel} calls `arrange::place` itself: a door asks `player_layout::placed`, which hands it the door's air")
-        if shell not in f.parents:
+        if shell_name(f) is None:
             continue
         for m in MAKES.finditer(code):
             if (f.name, m.group(1)) not in MAKERS:
@@ -34347,7 +36903,7 @@ let
     floor(assigned, 3, "writes of a placement a door keeps")
     for maker in sorted(MAKERS - makers):
         wrong.append(f"`{maker[0]}`: `fn {maker[1]}` no longer hands a door its placement — has it moved?")
-    if not PLACE.search(code_of(layout.read_text())):
+    if not PLACE.search(code_of(shell_file("player_layout.rs").read_text())):
         wrong.append("player_layout.rs no longer calls `arrange::place`: where do the doors' pictures go?")
 
     for w in wrong:
@@ -34371,13 +36927,13 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
     exec(open("${offeredHelpers}").read())
 
     # FILE-WIDE: time arithmetic or a second layout may appear anywhere in a
     # door, so each door file is the question; the timeline's own layout is
     # narrowed to `lay`, `quads` and `hit` by name.
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    timeline = code_of(product((shell / "player_timeline.rs").read_text()))
+    timeline = code_of(product(shell_file("player_timeline.rs").read_text()))
     floor(len(timeline), 20000, "characters of player_timeline.rs")
     wrong = []
 
@@ -34393,10 +36949,12 @@ let
     for name in ("hit", "quads"):
         must(body_of(deck, name), f"`Deck::{name}`")
 
-    # 2. EVERY DOOR THAT HOLDS A DECK PAINTS IT AND HITS IT through it.
-    DOORS = ("player_window.rs", "surface.rs")
+    # 2. EVERY DOOR THAT HOLDS A DECK PAINTS IT AND HITS IT through it — the
+    # window and the column, and the footer's region (`player_region.rs`, the
+    # player's own since its view became a region of the slot host).
+    DOORS = ("player_window.rs", "player_region.rs")
     for door in DOORS:
-        code = code_of(product((shell / door).read_text()))
+        code = code_of(product(shell_source(door)))
         floor(len(code), 20000, f"characters of {door}")
         if not re.search(r"\.quads\s*\(", code):
             wrong.append(f"{door} holds a deck and does not paint it with `Deck::quads`")
@@ -34407,7 +36965,7 @@ let
     # that build their rows; the timeline is where that arithmetic lives.
     TIME = re.compile(r"\bduration\s*\*|\*\s*duration\b|/\s*span\b|/\s*duration\b")
     swept = 0
-    for f in sorted(shell.glob("*.rs")):
+    for f in sorted(shell_files("*.rs")):
         if f.name == "player_timeline.rs":
             continue
         if not (f.name.startswith("player") or f.name in DOORS):
@@ -35724,7 +38282,7 @@ let
       if failed:
           print("", file=sys.stderr)
           print("A language with no name is shown as its raw code; add `tongue-<code>`", file=sys.stderr)
-          print("to every assets/i18n/<language>.ftl.", file=sys.stderr)
+          print("to every language's fragment of the crate that says it (crates/<crate>/i18n/).", file=sys.stderr)
           sys.exit(1)
       print(f"OK: {len(keys)} languages of content, named in every language, and the player reads them")
       PY
@@ -36147,6 +38705,13 @@ let
   # which is elided at its far end by design (`chrome::with_the_way_back`:
   # the way back first, the rest in the header's drawer, `RCtrl ↑↓`).
   player-pages-fit-every-size = mkCheck "player-pages-fit-every-size" [ pkgs.python3 ] ''
+    # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+    # one, and the colours and the words are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+    # And the brain's catalogue (`rust.keyed`): the modules' marks and the
+    # keymap's actions are data it reads at run time, refused (78) without it.
+    export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
     export VK_DRIVER_FILES=${xvfb.icd}
     export VK_ICD_FILENAMES=${xvfb.icd}
     export LIBGL_ALWAYS_SOFTWARE=1
@@ -36155,7 +38720,7 @@ let
     export RONOCTUA_COVERAGE_FONTS=${rust.atRunTime.RONOCTUA_COVERAGE_FONTS}
     export HOME=$PWD/home XDG_CONFIG_HOME=$PWD/home/.config XDG_STATE_HOME=$PWD/home/.local/state
     mkdir -p "$HOME" places/Music places/Videos
-    ${rust.workspace}/bin/ronoctua-shell photograph --make-catalog "$PWD/catalog"
+    ${rust.bins.ronoctua-shell}/bin/ronoctua-shell photograph --make-catalog "$PWD/catalog"
     python3 - <<'END'
     import pathlib, re, subprocess, sys, unicodedata
     exec(open("${pyPrelude}").read())
@@ -36166,7 +38731,7 @@ let
     # module-level texts.
     # FILE-WIDE: the token file, for `deckNames` — one assignment in a table
     # of numbers, with no function to narrow to (`hashless`).
-    shell = "${rust.workspace}/bin/ronoctua-shell"
+    shell = "${rust.bins.ronoctua-shell}/bin/ronoctua-shell"
     fixtures = pathlib.Path("${../tests/fixtures/player-pages}")
     listed = subprocess.run([shell, "photograph", "--list-pages"], capture_output=True, text=True, check=True)
     keys = [k for k in listed.stdout.split() if k]
@@ -36265,6 +38830,13 @@ let
   # column is photographed at its three sizes with a control line, and the
   # two gaps are measured on the PIXELS: within one pixel of each other.
   column-rule-has-equal-air = mkCheck "column-rule-has-equal-air" [ pkgs.python3 ] ''
+    # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+    # one, and the colours and the words are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+    # And the brain's catalogue (`rust.keyed`): the modules' marks and the
+    # keymap's actions are data it reads at run time, refused (78) without it.
+    export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
     export VK_DRIVER_FILES=${xvfb.icd}
     export VK_ICD_FILENAMES=${xvfb.icd}
     export LIBGL_ALWAYS_SOFTWARE=1
@@ -36273,9 +38845,9 @@ let
     export HOME=$PWD/home
     mkdir -p "$HOME"
     for size in large medium small; do
-      ${rust.workspace}/bin/ronoctua-shell photograph --door column --size "$size" \
+      ${rust.bins.ronoctua-shell}/bin/ronoctua-shell photograph --door column --size "$size" \
         --language en-GB --out "$PWD/$size.png" > /dev/null
-      ${rust.workspace}/bin/ronoctua-shell photograph --door column --size "$size" \
+      ${rust.bins.ronoctua-shell}/bin/ronoctua-shell photograph --door column --size "$size" \
         --language en-GB --list > "$PWD/$size.txt"
     done
     python3 - <<'END'
@@ -36562,9 +39134,9 @@ let
       '';
 
   # TWO TESTS THAT NEED WHAT A PLAIN `cargo test` DOES NOT HAVE, each run on
-  # its own over the loop's dependency layer — the `rust-tests` derivation
-  # with its check phase narrowed to the one test, so the variables and the
-  # profile are that derivation's, never a second copy of them.
+  # its own out of the harness the test units already built (`rust.testsOf`):
+  # nothing compiled again, and the variables are the ones the crate's tests
+  # are given (its `run-env`), never a second copy of them.
   #
   # Each asks for its test by its full path with `--exact`, and refuses a run
   # that did not execute exactly one test: a filter that matched nothing is
@@ -36577,24 +39149,23 @@ let
   # lane at the top. `the_lanes_stack_in_libass` draws a three-lane merge with
   # the pinned ffmpeg's libass and reads each lane's colour back from the
   # frame; here it is given the program and the face it needs.
-  subtitles-stack-in-libass = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-subtitles-stack-in-libass";
-    RONOCTUA_FFMPEG = "${pkgs.ffmpeg-full}/bin/ffmpeg";
-    checkPhase = ''
-      runHook preCheck
-      test -x "$RONOCTUA_FFMPEG" && test -f "$RONOCTUA_FONT_REGULAR" || {
-        echo "ERROR: the test would return early: no ffmpeg or no face" >&2
-        exit 1
-      }
-      cargoWithProfile test --locked -p ronoctua-player --lib -- \
-        subtitles::merge::tests::the_lanes_stack_in_libass --exact 2>&1 | tee ran.txt
-      grep -q 'test result: ok. 1 passed' ran.txt || {
-        echo "ERROR: the libass test did not run exactly once" >&2
-        exit 1
-      }
-      runHook postCheck
-    '';
-  });
+  subtitles-stack-in-libass =
+    let
+      # What the player's tests are given while they run (its `run-env`).
+      given = rust.test.runEnvOf "ronoctua-player";
+    in
+    rust.testsOf {
+      name = "ronoctua-subtitles-stack-in-libass";
+      crate = "ronoctua-player";
+      exact = "subtitles::merge::tests::the_lanes_stack_in_libass";
+      expect = "test result: ok. 1 passed";
+      pre = ''
+        test -x "${given.RONOCTUA_FFMPEG or ""}" && test -f "${given.RONOCTUA_FONT_REGULAR or ""}" || {
+          echo "ERROR: the test would return early: no ffmpeg or no face" >&2
+          exit 1
+        }
+      '';
+    };
 
   # OPENSUBTITLES' PUBLISHED MOVIEHASH VECTOR, on the published file. The
   # fingerprint is the subtitles' search key (`opensubtitles::moviehash`);
@@ -36607,20 +39178,14 @@ let
     let
       vectors = import ../nix/test-vectors.nix { inherit (pkgs) fetchurl; };
     in
-    rust.tests.overrideAttrs (old: {
-      pname = "ronoctua-moviehash-published-vectors";
-      RONOCTUA_OSHASH_BREAKDANCE = "${vectors.breakdance}";
-      checkPhase = ''
-        runHook preCheck
-        cargoWithProfile test --locked -p ronoctua-lookup --lib -- \
-          opensubtitles::tests::the_breakdance_vector_holds --exact --ignored 2>&1 | tee ran.txt
-        grep -q 'test result: ok. 1 passed' ran.txt || {
-          echo "ERROR: the published vector's test did not run exactly once" >&2
-          exit 1
-        }
-        runHook postCheck
-      '';
-    });
+    rust.testsOf {
+      name = "ronoctua-moviehash-published-vectors";
+      crate = "ronoctua-lookup";
+      exact = "opensubtitles::tests::the_breakdance_vector_holds";
+      includeIgnored = true;
+      env.RONOCTUA_OSHASH_BREAKDANCE = "${vectors.breakdance}";
+      expect = "test result: ok. 1 passed";
+    };
 
   # THE OFFERED VM TESTS (each file says what only it proves).
   #
@@ -36736,7 +39301,7 @@ let
   # recipient and stanza. Sabotaged once each, the X-Wing label, the HPKE info,
   # the KEM id and ML-KEM's d/z order each broke their own family.
   pq-xwing-vectors = mkCheck "pq-xwing-vectors" [ pkgs.gnugrep pkgs.coreutils ] ''
-    if ! ${rust.workspace}/bin/ronoctua-test-pq vectors > answers.txt; then
+    if ! ${rust.bins.ronoctua-test-pq}/bin/ronoctua-test-pq vectors > answers.txt; then
       cat answers.txt >&2
       echo "ERROR: a known answer of the PQ stanza is wrong (above)" >&2
       exit 1
@@ -36814,7 +39379,7 @@ let
     in
     mkCheck "pq-age-interop" [ goAge pkgs.coreutils pkgs.gnugrep pkgs.diffutils ] ''
       seal=${rust.seal}/bin/ronoctua-seal
-      pq=${rust.workspace}/bin/ronoctua-test-pq
+      pq=${rust.bins.ronoctua-test-pq}/bin/ronoctua-test-pq
       w=$PWD
       fail() {
         echo "ERROR: $*" >&2
@@ -36931,7 +39496,7 @@ let
   # nothing of the seed.
   pq-identity-never-prints = mkCheck "pq-identity-never-prints" [ pkgs.coreutils pkgs.gnugrep ] ''
     seal=${rust.seal}/bin/ronoctua-seal
-    pq=${rust.workspace}/bin/ronoctua-test-pq
+    pq=${rust.bins.ronoctua-test-pq}/bin/ronoctua-test-pq
     w=$PWD
     fail() {
       echo "ERROR: $*" >&2
@@ -37022,22 +39587,15 @@ let
   # `prefer-post-quantum`) shakes hands, in process, with three servers — one
   # that knows `X25519MLKEM768` (agreed), one that knows only X25519 (agreed,
   # classically), one that knows only P-384 (a retry, then agreed). What the
-  # hello offers first is asserted too. Over the loop's dependency layer, like
+  # hello offers first is asserted too. Out of the harness the test units
+  # built (the test graph turns `tls` and `ws` on), like
   # `subtitles-stack-in-libass`; exactly one test, or nothing was proved.
-  tls-is-post-quantum-first = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-tls-is-post-quantum-first";
-    checkPhase = ''
-      runHook preCheck
-      cargoWithProfile test --locked -p ronoctua-http --features tls,ws --lib -- \
-        tls::tests::the_hello_offers_the_hybrid_first_and_a_classical_host_is_still_reached \
-        --exact 2>&1 | tee ran.txt
-      grep -q 'test result: ok. 1 passed' ran.txt || {
-        echo "ERROR: the post-quantum handshake test did not run exactly once" >&2
-        exit 1
-      }
-      runHook postCheck
-    '';
-  });
+  tls-is-post-quantum-first = rust.testsOf {
+    name = "ronoctua-tls-is-post-quantum-first";
+    crate = "ronoctua-http";
+    exact = "tls::tests::the_hello_offers_the_hybrid_first_and_a_classical_host_is_still_reached";
+    expect = "test result: ok. 1 passed";
+  };
 
   # ONE PROVIDER OF THE CRYPTOGRAPHY OUR CODE AND OUR TLS CALL: `aws-lc-rs`.
   #
@@ -37050,6 +39608,10 @@ let
   # graph at all, while rustls must stand on `aws-lc-rs` with
   # `prefer-post-quantum` on. And no second TLS library may arrive under
   # another name.
+  #
+  # AND THE PLAN (`nix/rust/plan.json`, 2026-10-12), which is what every unit
+  # and both third-party layers are built from: no graph of it — release,
+  # loop, test — has a `ring` unit, and each has `aws-lc-rs`.
   one-crypto-implementation =
     let
       vendored = rust.craneLib.vendorCargoDeps { cargoLock = ../Cargo.lock; };
@@ -37059,6 +39621,7 @@ let
         rustToolchain
         pkgs.gnugrep
         pkgs.coreutils
+        pkgs.python3
       ]
       ''
         export CARGO_HOME="$TMPDIR/cargo-home"
@@ -37088,6 +39651,24 @@ let
           echo "ERROR: rustls is built with its ring provider" >&2
           failed=1
         fi
+        # PARSED: the plan, by its graphs' units.
+        python3 - ${../nix/rust/plan.json} <<'END' || failed=1
+        import json, sys
+        plan = json.load(open(sys.argv[1]))
+        bad = False
+        for g, graph in sorted(plan["graphs"].items()):
+            pkgs = {u["pkg"] for u in graph["units"].values()}
+            if "ring" in pkgs:
+                print(f"ERROR: the {g} graph of nix/rust/plan.json builds ring", file=sys.stderr)
+                bad = True
+            if "aws-lc-rs" not in pkgs:
+                print(f"ERROR: the {g} graph of nix/rust/plan.json has no aws-lc-rs: what is this reading?", file=sys.stderr)
+                bad = True
+        if len(plan["graphs"]) < 3:
+            print(f"ERROR: the plan has {len(plan['graphs'])} graphs, not release, loop and test", file=sys.stderr)
+            bad = True
+        sys.exit(1 if bad else 0)
+        END
         # AND NO OTHER TLS LIBRARY UNDER ANOTHER NAME.
         for other in openssl-sys boring-sys native-tls mbedtls-sys aws-lc-fips-sys; do
           if grep -qx "name = \"$other\"" ${../Cargo.lock}; then
@@ -37096,7 +39677,7 @@ let
           fi
         done
         [ "$failed" = 0 ] || exit 1
-        echo "OK: ring is built nowhere; rustls and our own code stand on aws-lc-rs, post-quantum first"
+        echo "OK: ring is built nowhere, nor planned in any graph; rustls and our own code stand on aws-lc-rs, post-quantum first"
       '';
 
   # SSH AGREES ITS KEYS POST-QUANTUM FIRST, on both profiles and on the ISO —
@@ -37225,33 +39806,40 @@ let
   # exchange. The Rust list is held to `assets/ssh.nix`. Then the belongings'
   # own test: the deploy key's credentials are `pq_only`, and git's refusal
   # becomes the belongings' sentence.
-  belongings-ssh-is-pq-only = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-belongings-ssh-is-pq-only";
-    RONOCTUA_SSHD = "${pkgs.openssh}/bin/sshd";
-    RONOCTUA_SSH_KEYGEN = "${pkgs.openssh}/bin/ssh-keygen";
-    RONOCTUA_SSH_PQ_KEX = lib.concatStringsSep "," (import ../assets/ssh.nix).postQuantum;
-    checkPhase = ''
-      runHook preCheck
-      test -x "$RONOCTUA_SSHD" && test -x "$RONOCTUA_SSH" || {
-        echo "ERROR: the test would not run: no sshd or no ssh" >&2
-        exit 1
-      }
-      cargoWithProfile test --locked -p ronoctua-git --lib -- \
-        tests::a_post_quantum_only_session_refuses_a_classical_server --exact --ignored \
-        2>&1 | tee ran.txt
-      grep -q 'test result: ok. 1 passed' ran.txt || {
-        echo "ERROR: the sshd test did not run exactly once" >&2
-        exit 1
-      }
-      cargoWithProfile test --locked -p ronoctua-belongings --lib -- \
-        engine::tests::the_belongings_ssh_is_post_quantum_only --exact 2>&1 | tee ran.txt
-      grep -q 'test result: ok. 1 passed' ran.txt || {
-        echo "ERROR: the belongings' credentials test did not run exactly once" >&2
-        exit 1
-      }
-      runHook postCheck
+  belongings-ssh-is-pq-only =
+    let
+      sshd = "${pkgs.openssh}/bin/sshd";
+      # `ronoctua-git`'s tests are given its programs while they run.
+      ssh = (rust.test.runEnvOf "ronoctua-git").RONOCTUA_SSH or "";
+      git = rust.testsOf {
+        name = "ronoctua-belongings-ssh-is-pq-only-git";
+        crate = "ronoctua-git";
+        exact = "tests::a_post_quantum_only_session_refuses_a_classical_server";
+        includeIgnored = true;
+        env = {
+          RONOCTUA_SSHD = sshd;
+          RONOCTUA_SSH_KEYGEN = "${pkgs.openssh}/bin/ssh-keygen";
+          RONOCTUA_SSH_PQ_KEX = lib.concatStringsSep "," (import ../assets/ssh.nix).postQuantum;
+        };
+        expect = "test result: ok. 1 passed";
+        pre = ''
+          test -x ${sshd} && test -x "${ssh}" || {
+            echo "ERROR: the test would not run: no sshd or no ssh" >&2
+            exit 1
+          }
+        '';
+      };
+      belongings = rust.testsOf {
+        name = "ronoctua-belongings-ssh-is-pq-only-belongings";
+        crate = "ronoctua-belongings";
+        exact = "engine::tests::the_belongings_ssh_is_post_quantum_only";
+        expect = "test result: ok. 1 passed";
+      };
+    in
+    pkgs.runCommand "ronoctua-belongings-ssh-is-pq-only" { } ''
+      mkdir -p $out
+      cat ${git}/log ${belongings}/log > $out/ran.txt
     '';
-  });
 
   # THE BELONGINGS' HTTPS IS POST-QUANTUM ONLY, against a real TLS server.
   #
@@ -37265,31 +39853,36 @@ let
   # refusal is the narrowing's) — and ones with `X25519MLKEM768` and
   # `SecP384r1MLKEM1024` alone, reached. Then the belongings' own test: the
   # token's credentials are `pq_only`.
-  belongings-https-is-pq-only = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-belongings-https-is-pq-only";
-    RONOCTUA_OPENSSL = "${pkgs.openssl.bin}/bin/openssl";
-    checkPhase = ''
-      runHook preCheck
-      test -x "$RONOCTUA_OPENSSL" && test -f "$RONOCTUA_GIT_PQ_TLS" || {
-        echo "ERROR: the test would not run: no openssl or no narrowing" >&2
-        exit 1
-      }
-      cargoWithProfile test --locked -p ronoctua-git --lib -- \
-        tests::a_post_quantum_only_token_refuses_a_classical_tls_server --exact --ignored \
-        2>&1 | tee ran.txt
-      grep -q 'test result: ok. 1 passed' ran.txt || {
-        echo "ERROR: the TLS server test did not run exactly once" >&2
-        exit 1
-      }
-      cargoWithProfile test --locked -p ronoctua-belongings --lib -- \
-        engine::tests::the_belongings_https_is_post_quantum_only --exact 2>&1 | tee ran.txt
-      grep -q 'test result: ok. 1 passed' ran.txt || {
-        echo "ERROR: the belongings' token test did not run exactly once" >&2
-        exit 1
-      }
-      runHook postCheck
+  belongings-https-is-pq-only =
+    let
+      openssl = "${pkgs.openssl.bin}/bin/openssl";
+      # The narrowing `ronoctua-git`'s tests are given while they run.
+      narrowing = (rust.test.runEnvOf "ronoctua-git").RONOCTUA_GIT_PQ_TLS or "";
+      git = rust.testsOf {
+        name = "ronoctua-belongings-https-is-pq-only-git";
+        crate = "ronoctua-git";
+        exact = "tests::a_post_quantum_only_token_refuses_a_classical_tls_server";
+        includeIgnored = true;
+        env.RONOCTUA_OPENSSL = openssl;
+        expect = "test result: ok. 1 passed";
+        pre = ''
+          test -x ${openssl} && test -f "${narrowing}" || {
+            echo "ERROR: the test would not run: no openssl or no narrowing" >&2
+            exit 1
+          }
+        '';
+      };
+      belongings = rust.testsOf {
+        name = "ronoctua-belongings-https-is-pq-only-belongings";
+        crate = "ronoctua-belongings";
+        exact = "engine::tests::the_belongings_https_is_post_quantum_only";
+        expect = "test result: ok. 1 passed";
+      };
+    in
+    pkgs.runCommand "ronoctua-belongings-https-is-pq-only" { } ''
+      mkdir -p $out
+      cat ${git}/log ${belongings}/log > $out/ran.txt
     '';
-  });
 
   # NO RSA HOST KEY, anywhere an sshd of ours could start.
   #
@@ -37697,6 +40290,10 @@ let
       );
     in
     mkCheck "host-nix-golden-evaluates" [ pkgs.python3 ] ''
+      # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+      # one, and the colours and the words are data it reads at run time.
+      export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+      export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
       export RONOCTUA_INST_DISK=/dev/disk/by-id/reference-machine-not-a-disk
       export RONOCTUA_INST_HOSTNAME=noctua-reference
       export RONOCTUA_INST_PASSWORD=fixture-password
@@ -37705,7 +40302,7 @@ let
       export RONOCTUA_INST_BELONGINGS=git@example.org:someone/belongings.git
       export RONOCTUA_INST_BELONGINGS_ACCESS=/run/keys/deploy
       export RONOCTUA_INST_BELONGINGS_PASSPHRASE=fixture-belongings-passphrase
-      ${rust.workspace}/bin/ronoctua-install > said.txt
+      ${rust.bins.ronoctua-install}/bin/ronoctua-install > said.txt
       python3 - said.txt ${./fixtures/machine/host.nix} ${facts} <<'END'
       import json, sys
       said, golden, facts = sys.argv[1:]
@@ -39558,6 +42155,7 @@ let
       # whole content, byte for byte.
       PY = "${pkgs.python3}/bin/python3"
       MACHINE = "${rust.machine}/bin/ronoctua-machine"
+      SIZING = "${vm.config.ronoctua.machine.environment.RONOCTUA_BUILD_SIZING}"
       LOCK_A = '{"nodes":{"root":{"inputs":{"ronoctua":"r"}},"r":{"locked":{"rev":"' + "a" * 40 + '"}}},"root":"root","version":7}\n'
       LOCK_B = LOCK_A.replace("a" * 40, "b" * 40)
       FACTS = json.load(open("${facts}"))
@@ -39577,6 +42175,12 @@ let
           if os.path.lexists(out):
               os.remove(out)
           os.symlink((root / "build-result").read_text(), out)
+      """
+      FAKE_KEEP = """
+      import os, pathlib, sys
+      root = pathlib.Path(os.environ["FAKE_ROOT"])
+      with open(root / "calls", "a") as f:
+          f.write("keep-units " + " ".join(sys.argv[1:]) + "\\n")
       """
       FAKE_NIX_ENV = """
       import os, pathlib, sys
@@ -39626,6 +42230,7 @@ let
           program(root / "bin/nix", FAKE_NIX)
           program(root / "bin/nix-env", FAKE_NIX_ENV)
           program(root / "bin/bootctl", FAKE_BOOTCTL)
+          program(root / "bin/keep-units", FAKE_KEEP)
           store = root / "nix/store"
           store.mkdir(parents=True)
           (store / "kernel").write_text("kernel")
@@ -39677,6 +42282,10 @@ let
               "RONOCTUA_MACHINE_SYSTEM_LOCK": INSIDE,
               "RONOCTUA_NIX": str(root / "bin/nix"),
               "RONOCTUA_BOOTCTL": str(root / "bin/bootctl"),
+              # The machine's own sizing; what keeps the units writes down
+              # that it was asked.
+              "RONOCTUA_BUILD_SIZING": SIZING,
+              "RONOCTUA_KEEP_UNITS": str(root / "bin/keep-units"),
           }
           return subprocess.run([MACHINE, "apply"], env=env, capture_output=True, text=True)
 
@@ -40166,7 +42775,7 @@ let
   # key and signs a staged tree as the belongings sign one.
   person-apply-refuses-links = mkCheck "person-apply-refuses-links" [ pkgs.diffutils ] ''
     bash ${./person-apply-refuses-links.sh} ${rust.person}/bin/ronoctua-person \
-      ${rust.workspace}/bin/ronoctua-test-pq
+      ${rust.bins.ronoctua-test-pq}/bin/ronoctua-test-pq
   '';
 
   # THE APPLIER'S ONE POLKIT RULE, AND HOW WIDE IT IS.
@@ -40540,29 +43149,33 @@ let
     inherit pkgs lib;
     person = rust.person;
     securityRoot = rust.securityRoot;
-    testPq = rust.workspace;
+    testPq = rust.bins.ronoctua-test-pq;
   };
   # ── anchor: L07 ──
   # THE LENIENT STORES AND THE BELONGINGS' HYGIENE (the store-resilience
   # package). Each check is ONE named test of the crate that holds the
-  # behaviour, run over the loop's dependency layer the way
+  # behaviour, run out of the harness the test units built the way
   # `subtitles-stack-in-libass` is — and a run that did not execute exactly
   # that test, and pass, is refused: a filter that matched nothing is a green
   # build that tested nothing.
   storeResilienceTest =
     name: crate: test:
-    rust.tests.overrideAttrs (old: {
-      pname = "ronoctua-${name}";
-      checkPhase = ''
-        runHook preCheck
-        cargoWithProfile test --locked -p ${crate} --lib -- ${test} --exact 2>&1 | tee ran.txt
-        grep -q 'test result: ok. 1 passed' ran.txt || {
-          echo "ERROR: ${test} did not run exactly once and pass" >&2
-          exit 1
-        }
-        runHook postCheck
-      '';
-    });
+    rust.testsOf {
+      name = "ronoctua-${name}";
+      inherit crate;
+      exact = test;
+      expect = "test result: ok. 1 passed";
+    };
+
+  # SEVERAL NARROWED RUNS AS ONE: every run's libtest lines, one after the
+  # other, in `$out/ran.txt` — what the checks that ask a run for THEIR tests
+  # by name read. Each run already refused a count that was not its own.
+  testsRanTogether =
+    name: runs:
+    pkgs.runCommand name { } ''
+      mkdir -p $out
+      cat ${lib.concatMapStringsSep " " (r: "${r}/log") runs} > $out/ran.txt
+    '';
 
   # ONE UNKNOWN VARIANT, ONE WRONG TYPE AND ONE BAD ELEMENT OF A LIST cost
   # those three: the rest of the file is read through a `Store` under the
@@ -40612,43 +43225,49 @@ let
   # post-quantum keyring, the format refused when it is not this one, the
   # compaction and the consent of the git transport.
   #
-  # ONE RUN OF THE TESTS THAT PROVE THEM, over the `rust-tests` derivation
-  # with its check phase narrowed to these tests (`--exact`, and
+  # ONE RUN OF THE TESTS THAT PROVE THEM, out of the harness the test units
+  # built, narrowed to these tests (`rust.testsOf`: `--exact`, and
   # `--include-ignored`: the 300 MiB and 64 MiB ones are too heavy for every
   # `cargo test`), and the repository the recovery is followed on, kept in
   # `$out/recover`. Each check below asks this run for ITS tests by name, so a
   # test renamed or gone is a red check and never a filter that matched
   # nothing. The recovery with Go `age` is a derivation of its own
   # (`belongingsRecovered`): one property failing never hides the others.
-  belongingsFormat2 = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-belongings-format-2";
-    checkPhase = ''
-      runHook preCheck
-      mkdir -p $out
-      export RONOCTUA_RECOVER_FIXTURE=$TMPDIR/recover
-      cargoWithProfile test --locked -p ronoctua-belongings --lib -- \
-        --include-ignored --exact \
-        engine::tests::no_file_reaches_the_limit \
-        engine::tests::an_edit_moves_few_chunks \
-        engine::tests::chunk_ids_are_keyed \
-        crypt::tests::chunk_ids_are_keyed \
-        engine::tests::a_format_not_its_own_is_refused \
-        tests::only_this_format_is_read \
-        crypt::tests::only_a_post_quantum_identity_opens \
-        engine::tests::belongings_compaction_is_safe \
-        engine::tests::belongings_compaction_loses_no_race \
-        engine::tests::a_clone_shrinks_after_a_compaction_beat_its_push \
-        engine::tests::nothing_to_compact_is_said_and_never_recommended \
-        engine::tests::a_host_not_let_is_never_asked \
-        engine::tests::a_repository_for_the_recovery_check 2>&1 | tee $out/ran.txt
-      grep -q 'test result: ok. 13 passed' $out/ran.txt || {
-        echo "ERROR: the belongings' format-2 tests did not run exactly once, green" >&2
+  belongingsFormat2 = rust.testsOf {
+    name = "ronoctua-belongings-format-2";
+    crate = "ronoctua-belongings";
+    includeIgnored = true;
+    exact = [
+      "engine::tests::no_file_reaches_the_limit"
+      "engine::tests::an_edit_moves_few_chunks"
+      "engine::tests::chunk_ids_are_keyed"
+      "crypt::tests::chunk_ids_are_keyed"
+      "engine::tests::a_format_not_its_own_is_refused"
+      "tests::only_this_format_is_read"
+      "crypt::tests::only_a_post_quantum_identity_opens"
+      "engine::tests::belongings_compaction_is_safe"
+      "engine::tests::belongings_compaction_loses_no_race"
+      "engine::tests::a_clone_shrinks_after_a_compaction_beat_its_push"
+      "engine::tests::nothing_to_compact_is_said_and_never_recommended"
+      "engine::tests::a_host_not_let_is_never_asked"
+      "engine::tests::a_repository_for_the_recovery_check"
+    ];
+    expect = "test result: ok. 13 passed";
+    # WHERE THE RECOVERY'S REPOSITORY IS WRITTEN: in the build directory, the
+    # sandbox's `/build` — the one a test run needs anyway (its harnesses
+    # were compiled there, and they read `CARGO_MANIFEST_DIR` back).
+    env.RONOCTUA_RECOVER_FIXTURE = "/build/recover";
+    pre = ''
+      [ "$NIX_BUILD_TOP" = /build ] || {
+        echo "ERROR: the recovery's repository is written under /build, and this build is in $NIX_BUILD_TOP" >&2
         exit 1
       }
-      cp -R "$RONOCTUA_RECOVER_FIXTURE" $out/recover
-      runHook postCheck
     '';
-  });
+    post = ''
+      cp $out/log $out/ran.txt
+      cp -R /build/recover $out/recover
+    '';
+  };
 
   # `RECOVER.md` FOLLOWED AS WRITTEN, with Go `age` (1.3 reads a post-quantum
   # identity), `jq` and a shell — no distro. The passphrase goes to `age`'s
@@ -40841,6 +43460,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # PARSED: the engine's functions, read by their bodies, comments off and
     # strings KEPT (a git subcommand is a string).
@@ -40909,7 +43529,7 @@ let
     # host nobody let (an address from before the consent) is read from the
     # same `consent.json` the CLI mints from — the config root the view reads
     # — and draws the consent row under Sync, whose press lets it there.
-    door = code_of(pathlib.Path("${../crates/ronoctua-shell/src/belongings.rs}").read_text())
+    door = code_of(shell_file("belongings.rs").read_text())
     answered = must(body_of(door, "answered"), "the belongings view's `answered`")
     arm = answered[answered.find("Ask::Repository =>"):]
     arm = arm[: arm.find("Ask::User =>")]
@@ -40942,66 +43562,72 @@ let
   # the repository only what that key signed (and not older than it saw), and
   # root's applier taking from a staging only what the key it PINNED signed.
   #
-  # ONE RUN OF THE TESTS THAT PROVE THEM, over the `rust-tests` derivation
-  # narrowed to them by name (`--exact`) — the belongings against a real git
+  # ONE RUN OF THE TESTS THAT PROVE THEM, out of the harnesses the test units
+  # built, narrowed to them by name (`--exact`) — the belongings against a real git
   # and a `file://` remote, the person crate's pure rules, root's binary
   # against real folders, and the signature itself. Each check below asks
   # this run for ITS tests, so a test renamed or gone is a red check.
-  belongingsSigned = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-belongings-signed";
-    checkPhase = ''
-      runHook preCheck
-      mkdir -p $out
-      # $1: how many must pass, $2: whose, the rest: cargo's words.
-      run_tests() {
-        n=$1
-        what=$2
-        shift 2
-        cargoWithProfile test --locked "$@" 2>&1 | tee $out/last.txt
-        cat $out/last.txt >> $out/ran.txt
-        grep -q "test result: ok. $n passed" $out/last.txt || {
-          echo "ERROR: the plain signature's tests ($what) did not run exactly once, green" >&2
-          exit 1
-        }
-      }
-      run_tests 12 belongings -p ronoctua-belongings --lib -- --exact \
-        engine::tests::plain::belongings_tampered_plain_is_held \
-        engine::tests::plain::belongings_plain_rollback_is_refused \
-        engine::tests::plain::a_signature_never_vouches_for_what_it_held \
-        engine::tests::plain::a_push_of_signed_files_waits_for_an_unlock \
-        engine::tests::plain::the_installer_pins_the_key_the_passphrase_opened \
-        engine::tests::plain::belongings_brain_modules_travel \
-        engine::tests::plain::the_options_arrive_as_the_person_signed_them \
-        engine::signing::tests::a_change_holds_only_as_signed \
-        engine::signing::tests::a_signature_never_vouches_for_a_held_change \
-        crypt::tests::the_signing_key_travels_in_key_age_beside_the_identity \
-        plain::tests::the_signature_covers_the_persons_data_but_the_machines_records \
-        plain::tests::a_counter_is_of_its_key
-      run_tests 5 person -p ronoctua-person --lib -- --exact \
-        tree::tests::an_unsigned_module_never_reaches_the_machine \
-        tree::tests::a_document_not_as_signed_is_kept_back_and_the_rest_arrives \
-        tree::tests::with_no_key_pinned_only_the_declarations_arrive \
-        tree::tests::a_staging_as_signed_arrives_whole \
-        tree::tests::the_signature_covers_the_persons_data_but_the_machines_records
-      run_tests 7 root -p ronoctua-person --bin ronoctua-person -- --exact \
-        apply::tests::a_tree_not_signed_by_the_pinned_key_is_refused \
-        apply::tests::a_rollback_is_refused \
-        apply::tests::an_unsigned_module_never_reaches_the_machine \
-        apply::tests::a_document_not_as_signed_is_kept_back \
-        pin::tests::a_key_is_pinned_once_from_its_owners_file \
-        pin::tests::a_pin_root_cannot_read_trusts_nothing \
-        pin::tests::the_pins_shape_is_the_keys
-      run_tests 6 signature -p ronoctua-pq --lib -- --exact \
-        sign::tests::a_key_is_its_seed_and_comes_back_from_it \
-        sign::tests::the_signing_key_never_prints \
-        sign::tests::a_public_key_is_written_one_way \
-        sign::tests::a_manifest_opens_only_as_its_key_signed_it \
-        sign::tests::a_manifest_that_is_not_whole_is_neither_signed_nor_opened \
-        sign::tests::a_sha256_is_written_lower_case
-      rm $out/last.txt
-      runHook postCheck
-    '';
-  });
+  belongingsSigned = testsRanTogether "ronoctua-belongings-signed" [
+    (rust.testsOf {
+      name = "ronoctua-belongings-signed-belongings";
+      crate = "ronoctua-belongings";
+      exact = [
+        "engine::tests::plain::belongings_tampered_plain_is_held"
+        "engine::tests::plain::belongings_plain_rollback_is_refused"
+        "engine::tests::plain::a_signature_never_vouches_for_what_it_held"
+        "engine::tests::plain::a_push_of_signed_files_waits_for_an_unlock"
+        "engine::tests::plain::the_installer_pins_the_key_the_passphrase_opened"
+        "engine::tests::plain::belongings_brain_modules_travel"
+        "engine::tests::plain::the_options_arrive_as_the_person_signed_them"
+        "engine::signing::tests::a_change_holds_only_as_signed"
+        "engine::signing::tests::a_signature_never_vouches_for_a_held_change"
+        "crypt::tests::the_signing_key_travels_in_key_age_beside_the_identity"
+        "plain::tests::the_signature_covers_the_persons_data_but_the_machines_records"
+        "plain::tests::a_counter_is_of_its_key"
+      ];
+      expect = "test result: ok. 12 passed";
+    })
+    (rust.testsOf {
+      name = "ronoctua-belongings-signed-person";
+      crate = "ronoctua-person";
+      exact = [
+        "tree::tests::an_unsigned_module_never_reaches_the_machine"
+        "tree::tests::a_document_not_as_signed_is_kept_back_and_the_rest_arrives"
+        "tree::tests::with_no_key_pinned_only_the_declarations_arrive"
+        "tree::tests::a_staging_as_signed_arrives_whole"
+        "tree::tests::the_signature_covers_the_persons_data_but_the_machines_records"
+      ];
+      expect = "test result: ok. 5 passed";
+    })
+    (rust.testsOf {
+      name = "ronoctua-belongings-signed-root";
+      crate = "ronoctua-person";
+      target = "bin:ronoctua-person";
+      exact = [
+        "apply::tests::a_tree_not_signed_by_the_pinned_key_is_refused"
+        "apply::tests::a_rollback_is_refused"
+        "apply::tests::an_unsigned_module_never_reaches_the_machine"
+        "apply::tests::a_document_not_as_signed_is_kept_back"
+        "pin::tests::a_key_is_pinned_once_from_its_owners_file"
+        "pin::tests::a_pin_root_cannot_read_trusts_nothing"
+        "pin::tests::the_pins_shape_is_the_keys"
+      ];
+      expect = "test result: ok. 7 passed";
+    })
+    (rust.testsOf {
+      name = "ronoctua-belongings-signed-signature";
+      crate = "ronoctua-pq";
+      exact = [
+        "sign::tests::a_key_is_its_seed_and_comes_back_from_it"
+        "sign::tests::the_signing_key_never_prints"
+        "sign::tests::a_public_key_is_written_one_way"
+        "sign::tests::a_manifest_opens_only_as_its_key_signed_it"
+        "sign::tests::a_manifest_that_is_not_whole_is_neither_signed_nor_opened"
+        "sign::tests::a_sha256_is_written_lower_case"
+      ];
+      expect = "test result: ok. 6 passed";
+    })
+  ];
 
   # Whether `belongingsSigned` ran these tests green, by name.
   belongingsSignedRan =
@@ -41131,55 +43757,54 @@ let
   # a base kept sealed; the installer's restore, probe, verify and init.
   #
   # ONE RUN OF THE TESTS THAT PROVE THEM — real git, a `file://` bare remote,
-  # two or three machines — over the `rust-tests` derivation narrowed to
-  # these tests (`--exact`), and `ronoctua-git`'s own `merge-file` test.
+  # two or three machines — out of the harnesses the test units built,
+  # narrowed to these tests (`rust.testsOf`, `--exact`), and `ronoctua-git`'s
+  # own `merge-file` test.
   # Each check below asks this run for ITS tests by name, so a test renamed
   # or gone is a red check and never a filter that matched nothing.
-  belongingsPlainMerge = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-belongings-plain-merge";
-    checkPhase = ''
-      runHook preCheck
-      mkdir -p $out
-      cargoWithProfile test --locked -p ronoctua-belongings --lib -- --exact \
-        engine::tests::plain::belongings_plain_needs_no_passphrase \
-        engine::tests::plain::belongings_plain_is_only_plain \
-        kept::tests::a_plain_root_beats_its_tree_and_keeps_its_drafts_out \
-        engine::tests::plain::belongings_brain_modules_travel \
-        merge_json::tests::belongings_json_merges_by_field \
-        merge_json::tests::the_persons_lists_settle_pins_by_time_and_deletions_win \
-        plan::tests::merged_decisions_and_fields_settle_what_a_merge_reached \
-        engine::tests::plain::belongings_json_merges_by_field_in_a_sync \
-        engine::tests::plain::the_persons_declarations_settle_their_pins_without_asking \
-        engine::tests::plain::a_plain_conflict_waits_for_a_sync_with_the_person \
-        engine::tests::plain::belongings_text_merges_clean_hunks \
-        engine::tests::plain::belongings_merge_needs_a_base \
-        engine::tests::plain::belongings_base_cache_is_sealed \
-        engine::tests::plain::belongings_restore_makes_a_home \
-        engine::tests::plain::a_restore_refuses_a_format_not_its_own \
-        engine::tests::plain::a_probe_says_read_write_and_empty \
-        engine::tests::plain::init_makes_an_empty_repository_and_verify_touches_nothing \
-        engine::tests::plain::the_plain_part_is_copied_out_as_the_repository_lays_it \
-        engine::tests::plain::a_push_is_the_base_of_what_it_sent \
-        engine::tests::plain::a_file_written_meanwhile_is_never_landed_over \
-        engine::tests::plain::an_empty_repository_again_at_the_same_address_takes_every_plain_file \
-        engine::tests::plain::a_plain_run_speaks_only_where_no_door_has \
-        engine::tests::plain::the_installers_copy_of_the_plain_part_leaves_no_clone_behind \
-        engine::tests::plain::the_installers_probe_takes_the_credential_it_names \
-        engine::tests::plain::the_installers_questions_keep_the_passphrase_through_the_network \
-        engine::restore::tests::only_a_refusal_about_the_passphrase_takes_it 2>&1 | tee $out/ran.txt
-      grep -q 'test result: ok. 26 passed' $out/ran.txt || {
-        echo "ERROR: the belongings' plain and merge tests did not run exactly once, green" >&2
-        exit 1
-      }
-      cargoWithProfile test --locked -p ronoctua-git --lib -- --exact \
-        tests::merge_file_joins_hunks_and_counts_the_clashes 2>&1 | tee -a $out/ran.txt
-      grep -q 'test result: ok. 1 passed' $out/ran.txt || {
-        echo "ERROR: git's merge-file test did not run exactly once, green" >&2
-        exit 1
-      }
-      runHook postCheck
-    '';
-  });
+  belongingsPlainMerge = testsRanTogether "ronoctua-belongings-plain-merge" [
+    (rust.testsOf {
+      name = "ronoctua-belongings-plain-merge-belongings";
+      crate = "ronoctua-belongings";
+      exact = [
+        "engine::tests::plain::belongings_plain_needs_no_passphrase"
+        "engine::tests::plain::belongings_plain_is_only_plain"
+        "kept::tests::a_plain_root_beats_its_tree_and_keeps_its_drafts_out"
+        "engine::tests::plain::belongings_brain_modules_travel"
+        "merge_json::tests::belongings_json_merges_by_field"
+        "merge_json::tests::the_persons_lists_settle_pins_by_time_and_deletions_win"
+        "plan::tests::merged_decisions_and_fields_settle_what_a_merge_reached"
+        "engine::tests::plain::belongings_json_merges_by_field_in_a_sync"
+        "engine::tests::plain::the_persons_declarations_settle_their_pins_without_asking"
+        "engine::tests::plain::a_plain_conflict_waits_for_a_sync_with_the_person"
+        "engine::tests::plain::belongings_text_merges_clean_hunks"
+        "engine::tests::plain::belongings_merge_needs_a_base"
+        "engine::tests::plain::belongings_base_cache_is_sealed"
+        "engine::tests::plain::belongings_restore_makes_a_home"
+        "engine::tests::plain::a_restore_refuses_a_format_not_its_own"
+        "engine::tests::plain::a_probe_says_read_write_and_empty"
+        "engine::tests::plain::init_makes_an_empty_repository_and_verify_touches_nothing"
+        "engine::tests::plain::the_plain_part_is_copied_out_as_the_repository_lays_it"
+        "engine::tests::plain::a_push_is_the_base_of_what_it_sent"
+        "engine::tests::plain::a_file_written_meanwhile_is_never_landed_over"
+        "engine::tests::plain::an_empty_repository_again_at_the_same_address_takes_every_plain_file"
+        "engine::tests::plain::a_plain_run_speaks_only_where_no_door_has"
+        "engine::tests::plain::the_installers_copy_of_the_plain_part_leaves_no_clone_behind"
+        "engine::tests::plain::the_installers_probe_takes_the_credential_it_names"
+        "engine::tests::plain::the_installers_questions_keep_the_passphrase_through_the_network"
+        "engine::restore::tests::only_a_refusal_about_the_passphrase_takes_it"
+      ];
+      expect = "test result: ok. 26 passed";
+    })
+    (rust.testsOf {
+      name = "ronoctua-belongings-plain-merge-git";
+      crate = "ronoctua-git";
+      exact = [
+        "tests::merge_file_joins_hunks_and_counts_the_clashes"
+      ];
+      expect = "test result: ok. 1 passed";
+    })
+  ];
 
   # Whether `belongingsPlainMerge` ran these tests green, by name.
   belongingsPlainRan =
@@ -41570,51 +44195,50 @@ let
   # brought them; the identity kept in the kernel's keyring for the session.
   #
   # ONE RUN OF THE TESTS THAT PROVE THEM — real git, a `file://` bare remote,
-  # two machines — over the `rust-tests` derivation narrowed to these tests
-  # (`--exact`), and `ronoctua-git`'s own `set_global` test. Each check
+  # two machines — out of the harnesses the test units built, narrowed to
+  # these tests (`rust.testsOf`, `--exact`), and `ronoctua-git`'s own
+  # `set_global` test. Each check
   # below asks this run for ITS tests by name: a test renamed or gone is a
   # red check, never a filter that matched nothing.
-  belongingsTargetsUnlock = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-belongings-targets-unlock";
-    checkPhase = ''
-      runHook preCheck
-      mkdir -p $out
-      cargoWithProfile test --locked -p ronoctua-belongings --lib -- --exact \
-        engine::tests::targets::belongings_targets_come_back_private \
-        kept::target_tests::a_target_is_its_own_verdict_and_skips_what_it_names \
-        kept::target_tests::a_private_target_keeps_its_owners_bits_alone \
-        kept::target_tests::a_target_merges_by_its_own_rule \
-        engine::targets::tests::the_folders_of_a_private_target_are_the_ones_above_the_file \
-        engine::tests::targets::belongings_dropped_everywhere_is_forgotten_elsewhere \
-        requests::tests::one_answer_per_target_and_only_what_was_done_is_consumed \
-        requests::tests::the_file_crosses_whole_and_goes_when_empty \
-        engine::tests::targets::a_sync_that_brings_a_key_offers_what_it_makes_possible \
-        offers::tests::only_what_arrived_and_is_not_on_yet_is_offered \
-        offers::tests::yes_writes_only_what_this_process_may \
-        offers::tests::yes_to_signing_makes_git_sign_with_the_persons_key \
-        offers::tests::yes_never_replaces_another_signing_setup \
-        engine::tests::targets::a_yes_to_signing_travels_with_the_key_alone \
-        engine::tests::targets::belongings_identity_never_touches_disk \
-        engine::tests::targets::belongings_a_second_sync_asks_nothing \
-        engine::tests::targets::forgetting_takes_this_instance_or_every_one \
-        prefs::tests::the_session_keeps_the_identity_unless_the_person_says_no \
-        unlock::tests::a_key_names_its_instance_and_hides_its_repository \
-        unlock::tests::the_marker_says_which_repository_and_until_when \
-        unlock::tests::the_kernel_keeps_takes_and_forgets 2>&1 | tee $out/ran.txt
-      grep -q 'test result: ok. 21 passed' $out/ran.txt || {
-        echo "ERROR: the belongings' targets and unlock tests did not run exactly once, green" >&2
-        exit 1
-      }
-      cargoWithProfile test --locked -p ronoctua-git --lib -- --exact \
-        tests::a_global_setting_is_the_persons_and_replaces_itself \
-        tests::an_included_file_counts_and_is_added_once 2>&1 | tee -a $out/ran.txt
-      grep -q 'test result: ok. 2 passed' $out/ran.txt || {
-        echo "ERROR: git's global configuration tests did not run exactly once, green" >&2
-        exit 1
-      }
-      runHook postCheck
-    '';
-  });
+  belongingsTargetsUnlock = testsRanTogether "ronoctua-belongings-targets-unlock" [
+    (rust.testsOf {
+      name = "ronoctua-belongings-targets-unlock-belongings";
+      crate = "ronoctua-belongings";
+      exact = [
+        "engine::tests::targets::belongings_targets_come_back_private"
+        "kept::target_tests::a_target_is_its_own_verdict_and_skips_what_it_names"
+        "kept::target_tests::a_private_target_keeps_its_owners_bits_alone"
+        "kept::target_tests::a_target_merges_by_its_own_rule"
+        "engine::targets::tests::the_folders_of_a_private_target_are_the_ones_above_the_file"
+        "engine::tests::targets::belongings_dropped_everywhere_is_forgotten_elsewhere"
+        "requests::tests::one_answer_per_target_and_only_what_was_done_is_consumed"
+        "requests::tests::the_file_crosses_whole_and_goes_when_empty"
+        "engine::tests::targets::a_sync_that_brings_a_key_offers_what_it_makes_possible"
+        "offers::tests::only_what_arrived_and_is_not_on_yet_is_offered"
+        "offers::tests::yes_writes_only_what_this_process_may"
+        "offers::tests::yes_to_signing_makes_git_sign_with_the_persons_key"
+        "offers::tests::yes_never_replaces_another_signing_setup"
+        "engine::tests::targets::a_yes_to_signing_travels_with_the_key_alone"
+        "engine::tests::targets::belongings_identity_never_touches_disk"
+        "engine::tests::targets::belongings_a_second_sync_asks_nothing"
+        "engine::tests::targets::forgetting_takes_this_instance_or_every_one"
+        "prefs::tests::the_session_keeps_the_identity_unless_the_person_says_no"
+        "unlock::tests::a_key_names_its_instance_and_hides_its_repository"
+        "unlock::tests::the_marker_says_which_repository_and_until_when"
+        "unlock::tests::the_kernel_keeps_takes_and_forgets"
+      ];
+      expect = "test result: ok. 21 passed";
+    })
+    (rust.testsOf {
+      name = "ronoctua-belongings-targets-unlock-git";
+      crate = "ronoctua-git";
+      exact = [
+        "tests::a_global_setting_is_the_persons_and_replaces_itself"
+        "tests::an_included_file_counts_and_is_added_once"
+      ];
+      expect = "test result: ok. 2 passed";
+    })
+  ];
 
   # Whether `belongingsTargetsUnlock` ran these tests green, by name.
   belongingsTargetsRan =
@@ -41968,20 +44592,33 @@ let
   #
   # A machine compiles the person's own modules (`my-…`) beside the distro's:
   # the loader reads a second folder (`personModulesDir`) and says whose each
-  # module is, the generator writes `<id> <snake> <origin>`, and the brain
-  # crate's `build.rs` loads a person's `module.rs` from
-  # `RONOCTUA_BRAIN_PERSON_MODULES_DIR`. This builds the BRAIN, alone, with the
-  # fixture `crates/ronoctua-brain/tests/person/my-sample` exactly as a machine
-  # would hand it in, and asks the binary which modules it MADE
+  # module is, the generator writes `<id> <snake> <origin>` (the daemon's
+  # part), and the daemon's `build.rs` loads a person's `module.rs` from
+  # `RONOCTUA_BRAIN_PERSON_MODULES_DIR`. This builds the DAEMON
+  # (`ronoctua-brain-daemon`), alone, with the fixture
+  # `crates/ronoctua-brain/tests/person/my-sample` exactly as a machine would
+  # hand it in, and asks the binary which modules it MADE
   # (`ronoctua-brain modules` builds each one) — the fixture's among the
   # distro's, none missing. It proves at evaluation that the fixture is the
   # person's, that its NixOS half is offered by id and gated by the brain's
   # switch alone (the distro's halves untouched), and that the chain a machine
-  # builds (`withPersonModules`) threads the folder through every link the
-  # footer reads: the texts, the tokens, the notifications, the registry and
-  # the six components the WIT enum is compiled into — and that it hands the
-  # machine its modules whole (`machineModules`: the distro's, plus the
-  # approved halves only).
+  # builds (`withPersonModules`) threads the folder through the daemon's
+  # registry and the DATA the footer reads at run time — the brain's catalogue
+  # and the texts — and NOT through anything a crate that draws compiles: the
+  # tokens, the notification table, the key registry, the six components (the
+  # WIT holds no module glyph) and the library's part
+  # (`RONOCTUA_BRAIN_MODULES_DIR`, the distro's manifests the footer's crate
+  # compiles) stay the distro's, and so does the footer's program; and that it
+  # hands the machine its modules whole (`machineModules`: the distro's, plus
+  # the approved halves only).
+  #
+  # AND THE FOOTER READS THE PERSON'S MODULE AT RUN TIME (2026-10-12, B2): the
+  # distro's own footer program, handed the person's catalogue and texts,
+  # passes its start's question (`check-catalogue`, every key in every
+  # language, the notification read) and registers the person's action in its
+  # keymap; the person's daemon declares exactly what the person's catalogue
+  # says (`modules --catalogue`); and a person's folder whose texts lack a key
+  # it needs is left out and said at evaluation, never a build stopped.
   #
   # ONE BAD FOLDER IS LEFT OUT, NEVER THE MACHINE STOPPED: on
   # `tests/person-refused/`, the loader loads the good folder and says why
@@ -41991,10 +44628,13 @@ let
   # it is not asked for (`only`). With none loading, every link is the
   # distro's own.
   #
-  # AND THE BUILD ITSELF: `build.rs`'s two refusals are planted before the
-  # good build (a table listing the person's module with the variable unset;
-  # a folder in the person's copy the table does not list), each must stop it
-  # with its sentence; and the fixture's own test runs.
+  # AND THE BUILD ITSELF, unit by unit (2026-10-12): the daemon's program as
+  # the person's chain builds it (`rust.loop.bins.ronoctua-brain`);
+  # `build.rs`'s two refusals planted in the daemon's library unit, run by
+  # the driver outside its derivation (a table listing the person's module
+  # with the variable unset; a folder in the person's copy the table does not
+  # list), each must stop it with its sentence; and the fixture's own test,
+  # alone, out of the person's chain's harness (`rust.testsOf`).
   brain-person-modules-load =
     let
       dir = ../crates/ronoctua-brain/tests/person;
@@ -42021,64 +44661,68 @@ let
         only = [ "stray" ];
       };
       drvOf = d: builtins.unsafeDiscardStringContext d.drvPath;
-      # THE BRAIN ALONE: the workspace's build narrowed to one crate, with the
+      # THE DAEMON ALONE, as a machine builds it: the units of the person's
+      # chain (`withPersonModules`), the daemon's library compiled with the
       # person's table and folder — what `build.rs` and the generated shims
-      # are asked to do on a machine. At the loop's profile, as `rust.tests`:
-      # what is proved is what the build script and the shims do, which no
-      # profile changes.
-      brain = rust.loopWorkspace.overrideAttrs (_: {
-        pname = "ronoctua-brain-person";
-        RONOCTUA_BRAIN_MODULES_DIR = "${registry}";
-        RONOCTUA_BRAIN_PERSON_MODULES_DIR = "${registry.personModulesDir}";
-        buildPhase = ''
-          runHook preBuild
-          # A PLANT `build.rs` MUST REFUSE, by its sentence. Before the good
-          # build, whose log is the one installed from.
-          refused() {
-            local what=$1 needle=$2
-            shift 2
-            if "$@" >"$TMPDIR/plant.log" 2>&1; then
-              echo "ERROR: build.rs built the brain with $what" >&2
-              exit 1
-            fi
-            if ! grep -qF "$needle" "$TMPDIR/plant.log"; then
-              echo "ERROR: build.rs refused $what, but not with \`$needle\`:" >&2
-              tail -40 "$TMPDIR/plant.log" >&2
-              exit 1
-            fi
-            echo "plant refused: $what"
-          }
-          unset_variable() (
-            unset RONOCTUA_BRAIN_PERSON_MODULES_DIR
-            cargoWithProfile build --locked -p ronoctua-brain --bin ronoctua-brain
+      # are asked to do on a machine — and its program linked. At the loop's
+      # flavour: what is proved is what the build script and the shims do,
+      # which no profile changes. The library's part stays the distro's: a
+      # person's module is the daemon's alone.
+      daemonLib = person.rust.loop.libs.ronoctua-brain-daemon;
+      brain = person.rust.loop.bins.ronoctua-brain;
+      # A PLANT `build.rs` MUST REFUSE, by its sentence: the daemon's library
+      # unit run by the driver here, outside its derivation, its description
+      # edited — the variable unset with the person's module in the table,
+      # or pointed at a copy of the person's folder holding one folder more
+      # (`@PLANT@`, put in place where it is run).
+      plant =
+        edit:
+        let
+          attrs = pkgs.writeText "brain-plant-attrs.json" (builtins.toJSON { unit = edit daemonLib.unit; });
+        in
+        ''
+          rm -rf work && mkdir -p work/top work/out work/metrics
+          cp -r --no-preserve=mode ${daemonLib.src} work/top/source
+          sed "s|@PLANT@|$PWD/person-plus|g" ${attrs} > plant-attrs.json
+          (
+            cd work/top/source
+            NIX_ATTRS_JSON_FILE=$PWD/../../../plant-attrs.json NIX_BUILD_TOP=$PWD/.. \
+              out=$PWD/../../out metrics=$PWD/../../metrics \
+              python3 ${../nix/scripts/rust-unit.py} lib
           )
-          cp -r "$RONOCTUA_BRAIN_PERSON_MODULES_DIR" "$TMPDIR/person-plus"
-          chmod -R u+w "$TMPDIR/person-plus"
-          mkdir "$TMPDIR/person-plus/my-stray"
-          unlisted_folder() (
-            export RONOCTUA_BRAIN_PERSON_MODULES_DIR="$TMPDIR/person-plus"
-            cargoWithProfile build --locked -p ronoctua-brain --bin ronoctua-brain
-          )
-          refused "the person's module listed and the variable unset" \
-            "the table lists the person's modules (my-sample)" unset_variable
-          refused "a person's folder the table does not list" \
-            "that Nix did not list: my-stray" unlisted_folder
-
-          cargoBuildLog=$(mktemp cargoBuildLogXXXX.json)
-          cargoWithProfile build --message-format json-render-diagnostics --locked \
-            -p ronoctua-brain --bin ronoctua-brain >"$cargoBuildLog"
-
-          # THE FIXTURE'S OWN TEST, compiled into the brain as a machine
-          # compiles it — `rust.tests` builds without the person's folder.
-          cargoWithProfile test --locked -p ronoctua-brain --lib -- its_seats_are_the_declared_ones \
-            2>&1 | tee "$TMPDIR/fixture-test.log"
-          if ! grep -q "its_seats_are_the_declared_ones \.\.\. ok" "$TMPDIR/fixture-test.log"; then
-            echo "ERROR: the person's fixture's test did not run and pass" >&2
-            exit 1
-          fi
-          runHook postBuild
         '';
-      });
+      unsetVariable =
+        unit: unit // { env = removeAttrs unit.env [ "RONOCTUA_BRAIN_PERSON_MODULES_DIR" ]; };
+      unlistedFolder =
+        unit:
+        unit
+        // {
+          env = unit.env // {
+            RONOCTUA_BRAIN_PERSON_MODULES_DIR = "@PLANT@";
+          };
+        };
+      # THE FIXTURE'S OWN TEST, compiled into the daemon as a machine compiles
+      # it (the distro's own test units build without the person's folder),
+      # run alone out of the harness the person's chain built.
+      fixtureTest = person.rust.testsOf {
+        name = "check-brain-person-fixture-test";
+        crate = "ronoctua-brain-daemon";
+        exact = "compiled::my_sample::module::tests::its_seats_are_the_declared_ones";
+        expect = "test result: ok. 1 passed";
+      };
+      # A VARIABLE AS THE UNIT OF THE CRATE THAT READS IT IS HANDED IT (the
+      # first crate whose library declares it, in a build `r`).
+      handed =
+        r: var:
+        let
+          reader = lib.findFirst (
+            c: lib.elem var r.unitCrates.${c}.declared.env && r.release.libs ? ${c}
+          ) null (lib.attrNames r.unitCrates);
+        in
+        if reader == null then
+          null
+        else
+          builtins.unsafeDiscardStringContext (r.release.libs.${reader}.unit.env.${var} or "");
       etcOf =
         modules: on:
         builtins.attrNames
@@ -42094,7 +44738,7 @@ let
               }
             ];
           }).config.environment.etc;
-      env = d: d.drvAttrs;
+      daemonEnv = r: r.release.libs.ronoctua-brain-daemon.unit.env;
       facts = pkgs.writeText "brain-person-facts.json" (
         builtins.toJSON {
           distro = brainModules.ids;
@@ -42107,32 +44751,79 @@ let
           gateOpens = etcOf [ loader.personNixosModules.my-sample ] true == [ "ronoctua/my-sample" ];
           gateCloses = etcOf [ loader.personNixosModules.my-sample ] false == [ ];
           glyph = builtins.hasAttr "my-sample-seat" loader.glyphs;
-          # THE CHAIN, link by link: each variable the workspace reads moved
-          # to the person's derivation, and the components with it.
+          # THE CHAIN, link by link: the variable the daemon's unit reads moved
+          # to the person's derivation; every table a crate that draws or
+          # speaks compiles did NOT — the person's marks, glyphs, keys and
+          # notifications are the catalogue's and the texts', read at run time.
           chain =
             lib.genAttrs
               [
-                "RONOCTUA_BRAIN_MODULES_DIR"
-                "RONOCTUA_I18N_DIR"
+                "RONOCTUA_BRAIN_REGISTRY_DIR"
+              ]
+              (
+                v:
+                let
+                  mine = handed person.rust v;
+                in
+                mine != null && mine != handed rust v
+              );
+          stays =
+            lib.genAttrs
+              [
                 "RONOCTUA_TOKENS_RS"
                 "RONOCTUA_NOTIFICATIONS_RS"
               ]
               (
                 v:
-                builtins.unsafeDiscardStringContext (env person.rust.workspace).${v}
-                != builtins.unsafeDiscardStringContext (env rust.workspace).${v}
+                let
+                  mine = handed person.rust v;
+                in
+                mine != null && mine == handed rust v
               );
-          personDir = builtins.unsafeDiscardStringContext (
-            (env person.rust.workspace).RONOCTUA_BRAIN_PERSON_MODULES_DIR or ""
+          # THE DATA THE FOOTER READS AT RUN TIME moved, and the footer's own
+          # program did not: the distro's, byte for byte.
+          data = lib.genAttrs [ "RONOCTUA_BRAIN_CATALOGUE" "RONOCTUA_TEXTS" ] (
+            v:
+            builtins.unsafeDiscardStringContext person.rust.keyed.${v}
+            != builtins.unsafeDiscardStringContext rust.keyed.${v}
           );
-          distroHasNoPersonDir = !((env rust.workspace) ? RONOCTUA_BRAIN_PERSON_MODULES_DIR);
+          # AND THE GLYPH BROWSER'S INDEX, which names the fixture's glyph by
+          # its token on the machine (`nix/iconset.nix`), and never the
+          # distro's — the two directories themselves, read where this runs.
+          iconsets = {
+            machine = person.rust.atRunTime.RONOCTUA_ICONSET;
+            distro = rust.atRunTime.RONOCTUA_ICONSET;
+            fixtureGlyph = loader.glyphs.my-sample-seat or null;
+          };
+          sameFooter =
+            drvOf person.rust.loop.bins.ronoctua-shell == drvOf rust.loop.bins.ronoctua-shell
+            && drvOf person.rust.release.bins.ronoctua-shell == drvOf rust.release.bins.ronoctua-shell;
+          personDir = builtins.unsafeDiscardStringContext (
+            (daemonEnv person.rust).RONOCTUA_BRAIN_PERSON_MODULES_DIR or ""
+          );
+          # AND THE LINK THAT DOES NOT MOVE: the library's part — the distro's
+          # manifests, which the footer's crate compiles — is one derivation
+          # with or without the person's module.
+          libraryStays =
+            handed person.rust "RONOCTUA_BRAIN_MODULES_DIR" == handed rust "RONOCTUA_BRAIN_MODULES_DIR"
+            &&
+              builtins.unsafeDiscardStringContext person.rust.release.libs.ronoctua-brain.unit.env.RONOCTUA_BRAIN_MODULES_DIR
+              == builtins.unsafeDiscardStringContext rust.release.libs.ronoctua-brain.unit.env.RONOCTUA_BRAIN_MODULES_DIR
+            && drvOf person.brainManifestsRs == drvOf brainManifestsRs;
+          distroHasNoPersonDir = !((daemonEnv rust) ? RONOCTUA_BRAIN_PERSON_MODULES_DIR);
+          # AND NO CRATE'S KEYS: a module's texts are its own fragment, merged
+          # into the texts read at run time; no crate's `key` module holds a
+          # module's key, so a person's module moves none of them.
+          keysStay =
+            drvOf person.texts.keys == drvOf texts.keys
+            && handed person.rust "RONOCTUA_KEYS_DIR" == handed rust "RONOCTUA_KEYS_DIR";
           components = lib.mapAttrs (
             n: p:
             builtins.unsafeDiscardStringContext p
             != builtins.unsafeDiscardStringContext rust.bufferComponents.${n}
           ) person.rust.bufferComponents;
           # THE TEXTS: the fixture's fragment handed to the one text generator.
-          texts = lib.hasInfix "my-sample=" person.i18nRs.drvAttrs.buildPhase;
+          texts = lib.hasInfix "my-sample=" person.texts.drvAttrs.buildPhase;
           # THE MACHINE'S MODULES: the distro's, and an approved half only.
           machineModules = {
             none = builtins.length (person.machineModules [ ]);
@@ -42147,7 +44838,9 @@ let
           fineProblems = readable.brainModules.personProblemsOf.my-fine;
           fineOnlyRefused = fineOnly.refused;
           noneIsTheDistros =
-            none.brainModules.personModulesDir == null && drvOf none.rust.workspace == drvOf rust.workspace;
+            none.brainModules.personModulesDir == null
+            && drvOf none.rust.release.bins.ronoctua-brain == drvOf rust.release.bins.ronoctua-brain
+            && drvOf none.rust.release.bins.ronoctua-shell == drvOf rust.release.bins.ronoctua-shell;
           # A BROKEN MANIFEST IS A SENTENCE, never an error nothing catches:
           # each of these stopped the whole evaluation before it was one.
           odd =
@@ -42188,117 +44881,279 @@ let
                 function.events.ping.notification.show = x: x;
                 path.uses = [ ./checks.nix ];
               };
+          # A PERSON'S TEXTS LACKING A KEY ITS MANIFEST NEEDS: left out at
+          # evaluation, by the key's name — the generators would stop the build
+          # on every machine of theirs. Its fragment holds its name and line
+          # only (`fragmentKeys`), and each manifest needs one key more.
+          unsaid =
+            lib.mapAttrs
+              (
+                _: m:
+                brainModules.problemsOf {
+                  id = "my-odd";
+                  origin = "person";
+                  files = [
+                    "manifest.nix"
+                    "module.rs"
+                  ];
+                  i18nFiles = map (l: "${l}.ftl") languages;
+                  fragmentKeys = [
+                    "brain-task-my-odd"
+                    "brain-task-my-odd-does"
+                  ];
+                  manifest = {
+                    what = "A person's module whose texts lack a key.";
+                    needs = {
+                      root = false;
+                      network = false;
+                      boundaries = [ ];
+                    };
+                    schedule = null;
+                    uses = [ ];
+                    namedBy = { };
+                  }
+                  // m;
+                }
+              )
+              {
+                none = { };
+                action.actions.ping = { };
+                notification.events.ping.notification.show = "brief";
+              };
         }
       );
     in
-    mkCheck "brain-person-modules-load" [ pkgs.python3 ] ''
-      python3 - <<'END'
-      import json, pathlib, subprocess, sys
-      exec(open("${pyPrelude}").read())
+    mkCheck "brain-person-modules-load"
+      (
+        [
+          pkgs.python3
+          pkgs.coreutils
+          pkgs.gnugrep
+          pkgs.gnused
+        ]
+        ++ daemonLib.nativeBuildInputs
+        ++ daemonLib.buildInputs
+      )
+      ''
+        # THE TWO PLANTS, each stopping the build script with its sentence.
+        cp -r --no-preserve=mode ${registry.personModulesDir} person-plus
+        mkdir person-plus/my-stray
+        if (${plant unsetVariable}) > plant.log 2>&1; then
+          echo "ERROR: build.rs built the brain with the person's module listed and the variable unset" >&2
+          exit 1
+        fi
+        grep -qF "the table lists the person's modules (my-sample)" plant.log || {
+          tail -40 plant.log >&2
+          echo "ERROR: build.rs refused the variable unset, but not with its sentence" >&2
+          exit 1
+        }
+        if (${plant unlistedFolder}) > plant.log 2>&1; then
+          echo "ERROR: build.rs built the brain with a person's folder the table does not list" >&2
+          exit 1
+        fi
+        grep -qF "that Nix did not list: my-stray" plant.log || {
+          tail -40 plant.log >&2
+          echo "ERROR: build.rs refused an unlisted folder, but not with its sentence" >&2
+          exit 1
+        }
+        # The fixture's own test, run (`rust.testsOf` fails unless it passed, once).
+        test -e ${fixtureTest}
 
-      # PARSED: the loader's and the chain's answers arrive as JSON written by
-      # Nix; what the brain compiled is what its own binary says it made.
-      # FILE-WIDE: the answers and the sample's generated manifest are read
-      # whole — module-level data, with no function to narrow to.
-      wrong = []
-      facts = json.load(open("${facts}"))
-      distro = facts["distro"]
-      floor(len(distro), 10, "distro modules the loader read")
-      if facts["personIds"] != ["my-sample"]:
-          wrong.append(f"the person's folder loaded {facts['personIds']}, not the fixture")
-      if facts["distroIds"] != distro:
-          wrong.append("a person's folder changed which of the distro's modules load")
-      if facts["origin"] != "person":
-          wrong.append(f"the fixture's origin is {facts['origin']!r}")
-      if any(o != "distro" for i, o in facts["origins"].items() if i != "my-sample"):
-          wrong.append(f"a distro module is not the distro's: {facts['origins']}")
-      if facts["halves"] != ["my-sample"] or not facts["distroHalves"]:
-          wrong.append(f"the person's NixOS half is offered as {facts['halves']}, or it joined the distro's")
-      if not facts["gateOpens"]:
-          wrong.append("the person's NixOS half did not apply with the brain on")
-      if not facts["gateCloses"]:
-          wrong.append("the person's NixOS half applied with the brain off")
-      if not facts["glyph"]:
-          wrong.append("the fixture's glyph token is not in the loader's table")
-      for var, moved in facts["chain"].items():
-          if not moved:
-              wrong.append(f"the machine's workspace reads the distro's {var}: the person's folder never reached it")
-      for name, moved in facts["components"].items():
-          if not moved:
-              wrong.append(f"{name} is the distro's component, compiled against a WIT without the person's glyph")
-      floor(len(facts["components"]), 6, "components of the machine's workspace")
-      if not facts["personDir"].startswith("/nix/store/") or facts["personDir"] != "${registry.personModulesDir}":
-          wrong.append(f"the machine's workspace loads the person's modules from {facts['personDir']!r}")
-      if not facts["texts"]:
-          wrong.append("the machine's texts were generated without the person's fragment")
-      if not facts["distroHasNoPersonDir"]:
-          wrong.append("the distro's own workspace names a person's folder")
-      mm = facts["machineModules"]
-      floor(mm["none"], 20, "NixOS modules of the distro a machine imports")
-      if mm["approved"] != mm["none"] + 1 or mm["unknown"] != mm["none"]:
-          wrong.append(f"the machine's modules are not the distro's plus the approved half: {mm}")
+        python3 - <<'END'
+        import json, os, pathlib, subprocess, sys
+        exec(open("${pyPrelude}").read())
 
-      # ONE BAD FOLDER IS LEFT OUT AND SAID; THE GOOD ONE LOADS.
-      if facts["readableIds"] != ["my-fine"]:
-          wrong.append(f"beside refused folders the loader loaded {facts['readableIds']}, not `my-fine`")
-      refused = facts["readableRefused"]
-      expected = {
-          "my-fine-too": "overlaps `my-fine`",
-          "my-2fa": "is `my-` and an English kebab word",
-          "stray": "is `my-` and an English kebab word",
-          "my-unreadable": "left out unread",
-      }
-      if sorted(refused) != sorted(expected):
-          wrong.append(f"the folders left out are {sorted(refused)}, not {sorted(expected)}")
-      for folder, why in expected.items():
-          if not any(why in s for s in refused.get(folder, [])):
-              wrong.append(f"`{folder}` was not left out with `{why}`: {refused.get(folder)}")
-      if facts["copied"] != ["my-fine"]:
-          wrong.append(f"the build's copy holds {facts['copied']}: a refused folder in it stops build.rs")
-      if facts["fineProblems"]:
-          wrong.append(f"`my-fine`, read alone, has problems: {facts['fineProblems']}")
-      only = facts["fineOnlyRefused"]
-      if sorted(only) != ["my-2fa", "my-fine-too", "my-unreadable", "stray"] or not all(
-          all("left out unread" in s for s in v) for v in only.values()
-      ):
-          wrong.append(f"`only` did not leave every other folder out unread: {only}")
-      if not facts["noneIsTheDistros"]:
-          wrong.append("with no folder loading, the machine does not build the distro's own workspace")
-      for what, why in (
-          ("glyph", "names a glyph `glyphs` does not declare"),
-          ("tags", "notification.tags is a list of tags"),
-          ("function", "holds no function and no path"),
-          ("path", "holds no function and no path"),
-      ):
-          if not any(why in s for s in facts["odd"][what]):
-              wrong.append(f"a person's manifest with a bad {what} was not refused with `{why}`: {facts['odd'][what]}")
+        # PARSED: the loader's and the chain's answers arrive as JSON written by
+        # Nix; what the brain compiled is what its own binary says it made, and
+        # what the footer read is what its own program says (`check-catalogue`,
+        # the keymap's dump).
+        # FILE-WIDE: the answers and the sample's generated manifest are read
+        # whole — module-level data, with no function to narrow to.
+        wrong = []
+        facts = json.load(open("${facts}"))
+        distro = facts["distro"]
+        floor(len(distro), 10, "distro modules the loader read")
+        if facts["personIds"] != ["my-sample"]:
+            wrong.append(f"the person's folder loaded {facts['personIds']}, not the fixture")
+        if facts["distroIds"] != distro:
+            wrong.append("a person's folder changed which of the distro's modules load")
+        if facts["origin"] != "person":
+            wrong.append(f"the fixture's origin is {facts['origin']!r}")
+        if any(o != "distro" for i, o in facts["origins"].items() if i != "my-sample"):
+            wrong.append(f"a distro module is not the distro's: {facts['origins']}")
+        if facts["halves"] != ["my-sample"] or not facts["distroHalves"]:
+            wrong.append(f"the person's NixOS half is offered as {facts['halves']}, or it joined the distro's")
+        if not facts["gateOpens"]:
+            wrong.append("the person's NixOS half did not apply with the brain on")
+        if not facts["gateCloses"]:
+            wrong.append("the person's NixOS half applied with the brain off")
+        if not facts["glyph"]:
+            wrong.append("the fixture's glyph token is not in the loader's table")
+        for var, moved in facts["chain"].items():
+            if not moved:
+                wrong.append(f"the machine's workspace reads the distro's {var}: the person's folder never reached it")
+        if not facts["keysStay"]:
+            wrong.append("a person's module moved a crate's text keys: its keys are its own fragment's, read at run time")
+        for var, kept in facts["stays"].items():
+            if not kept:
+                wrong.append(f"the machine's workspace compiles another {var}: the person's module is data, and moved a table every crate that draws compiles")
+        for var, moved in facts["data"].items():
+            if not moved:
+                wrong.append(f"the machine's {var} is the distro's: the person's module never reached what the footer reads")
+        if not facts["sameFooter"]:
+            wrong.append("the machine's footer program is not the distro's: a person's module compiled it again")
+        # THE GLYPH BROWSER: the machine's index names the fixture's glyph by
+        # the fixture's token, the distro's never names one by it.
+        iconsets = facts["iconsets"]
+        def token_of(where):
+            rows = json.load(open(pathlib.Path(iconsets[where]) / "glyphs.json", encoding="utf-8"))
+            return {r.get("name"): r.get("token") for r in rows}
+        machine_index, distro_index = token_of("machine"), token_of("distro")
+        if machine_index.get(iconsets["fixtureGlyph"]) != "my-sample-seat":
+            wrong.append(f"the machine's glyph browser names {iconsets['fixtureGlyph']!r}"
+                         f" `{machine_index.get(iconsets['fixtureGlyph'])}`, not the fixture's `my-sample-seat`")
+        if "my-sample-seat" in distro_index.values():
+            wrong.append("the distro's glyph browser names a glyph by the fixture's token")
+        moved = sorted(n for n in machine_index if machine_index[n] != distro_index.get(n))
+        if moved != [iconsets["fixtureGlyph"]]:
+            wrong.append(f"the person's module renamed {moved} in the glyph browser, not its own glyph alone")
+        # THE COMPONENTS STAY THE DISTRO'S: the WIT is written from the
+        # chrome's icon names alone (`nix/token-names.nix`), so a person's
+        # glyph reaches the host's table and never a buffer — and a module of
+        # theirs compiles no component again.
+        for name, moved in facts["components"].items():
+            if moved:
+                wrong.append(f"{name} was compiled again for the person's modules: the WIT carries no module glyph, so no buffer may move")
+        floor(len(facts["components"]), 6, "components of the machine's workspace")
+        if not facts["personDir"].startswith("/nix/store/") or facts["personDir"] != "${registry.personModulesDir}":
+            wrong.append(f"the machine's workspace loads the person's modules from {facts['personDir']!r}")
+        if not facts["texts"]:
+            wrong.append("the machine's texts were generated without the person's fragment")
+        if not facts["distroHasNoPersonDir"]:
+            wrong.append("the distro's own workspace names a person's folder")
+        if not facts["libraryStays"]:
+            wrong.append("the person's module moved the library's part (RONOCTUA_BRAIN_MODULES_DIR): "
+                         "the footer's crate would be rebuilt for it")
+        library_ids = pathlib.Path("${person.brainManifestsRs}/ids.txt").read_text().splitlines()
+        if any(not l.endswith(" distro") for l in library_ids) or any(l.startswith("my-") for l in library_ids):
+            wrong.append(f"the library's table lists a module that is not the distro's: {library_ids}")
+        mm = facts["machineModules"]
+        floor(mm["none"], 20, "NixOS modules of the distro a machine imports")
+        if mm["approved"] != mm["none"] + 1 or mm["unknown"] != mm["none"]:
+            wrong.append(f"the machine's modules are not the distro's plus the approved half: {mm}")
 
-      # THE TABLE: whose each module is, the person's from the person's folder.
-      ids = pathlib.Path("${registry}/ids.txt").read_text().splitlines()
-      if "my-sample my_sample person" not in ids:
-          wrong.append(f"ids.txt does not list the fixture as the person's: {ids}")
-      if sorted(l.split()[0] for l in ids if l.endswith(" distro")) != sorted(distro):
-          wrong.append("ids.txt does not list every distro module as the distro's")
-      manifest = uncommented(pathlib.Path("${registry}/my-sample/manifest.rs").read_text())
-      if "crate::module::MarkId::declared(" not in manifest or '"my-sample-seat"' not in manifest:
-          wrong.append("the fixture's mark with instances is not declared with them")
+        # ONE BAD FOLDER IS LEFT OUT AND SAID; THE GOOD ONE LOADS.
+        if facts["readableIds"] != ["my-fine"]:
+            wrong.append(f"beside refused folders the loader loaded {facts['readableIds']}, not `my-fine`")
+        refused = facts["readableRefused"]
+        expected = {
+            "my-fine-too": "overlaps `my-fine`",
+            "my-2fa": "is `my-` and an English kebab word",
+            "stray": "is `my-` and an English kebab word",
+            "my-unreadable": "left out unread",
+        }
+        if sorted(refused) != sorted(expected):
+            wrong.append(f"the folders left out are {sorted(refused)}, not {sorted(expected)}")
+        for folder, why in expected.items():
+            if not any(why in s for s in refused.get(folder, [])):
+                wrong.append(f"`{folder}` was not left out with `{why}`: {refused.get(folder)}")
+        if facts["copied"] != ["my-fine"]:
+            wrong.append(f"the build's copy holds {facts['copied']}: a refused folder in it stops build.rs")
+        if facts["fineProblems"]:
+            wrong.append(f"`my-fine`, read alone, has problems: {facts['fineProblems']}")
+        only = facts["fineOnlyRefused"]
+        if sorted(only) != ["my-2fa", "my-fine-too", "my-unreadable", "stray"] or not all(
+            all("left out unread" in s for s in v) for v in only.values()
+        ):
+            wrong.append(f"`only` did not leave every other folder out unread: {only}")
+        if not facts["noneIsTheDistros"]:
+            wrong.append("with no folder loading, the machine does not build the distro's own workspace")
+        for what, why in (
+            ("glyph", "names a glyph `glyphs` does not declare"),
+            ("tags", "notification.tags is a list of tags"),
+            ("function", "holds no function and no path"),
+            ("path", "holds no function and no path"),
+        ):
+            if not any(why in s for s in facts["odd"][what]):
+                wrong.append(f"a person's manifest with a bad {what} was not refused with `{why}`: {facts['odd'][what]}")
+        if facts["unsaid"]["none"]:
+            wrong.append(f"a person's folder whose texts hold every key it needs was refused: {facts['unsaid']['none']}")
+        for what, key in (("action", "cmd-my-odd-ping"), ("notification", "notif-my-odd-ping-summary")):
+            if not any(f"has no `{key}`" in s for s in facts["unsaid"][what]):
+                wrong.append(f"a person's texts lacking the {what}'s `{key}` were not refused by its name: {facts['unsaid'][what]}")
 
-      # THE BRAIN, built with them: every module it MADE, by its own binary.
-      made = subprocess.run(["${brain}/bin/ronoctua-brain", "modules"],
-                            capture_output=True, text=True, check=True).stdout.split()
-      if sorted(made) != sorted(distro + ["my-sample"]):
-          wrong.append(f"the brain made {sorted(made)}; the distro's and the person's are {sorted(distro + ['my-sample'])}")
+        # THE TABLE: whose each module is, the person's from the person's folder.
+        ids = pathlib.Path("${registry}/ids.txt").read_text().splitlines()
+        if "my-sample my_sample person" not in ids:
+            wrong.append(f"ids.txt does not list the fixture as the person's: {ids}")
+        if sorted(l.split()[0] for l in ids if l.endswith(" distro")) != sorted(distro):
+            wrong.append("ids.txt does not list every distro module as the distro's")
+        manifest = uncommented(pathlib.Path("${registry}/my-sample/manifest.rs").read_text())
+        if "crate::module::MarkId::declared(" not in manifest or '"my-sample-seat"' not in manifest:
+            wrong.append("the fixture's mark with instances is not declared with them")
 
-      if wrong:
-          print("ERROR: the person's brain modules do not load as a machine loads them.", file=sys.stderr)
-          for w in wrong:
-              print("       " + w, file=sys.stderr)
-          raise SystemExit(1)
-      print(f"OK: the brain made {len(made)} modules, the person's `my-sample` among the distro's {len(distro)};"
-            f" the machine's chain moved {len(facts['chain'])} tables and {len(facts['components'])} components;"
-            f" {len(refused)} bad folders left out and said, build.rs refused its 2 plants, the fixture's test passed")
-      END
-    '';
+        # THE BRAIN, built with them: every module it MADE, by its own binary.
+        made = subprocess.run(["${brain}/bin/ronoctua-brain", "modules"],
+                              capture_output=True, text=True, check=True).stdout.split()
+        if sorted(made) != sorted(distro + ["my-sample"]):
+            wrong.append(f"the brain made {sorted(made)}; the distro's and the person's are {sorted(distro + ['my-sample'])}")
+
+        # AND WHAT IT DECLARES IS THE PERSON'S CATALOGUE, module by module.
+        catalogue = json.load(open("${person.rust.keyed.RONOCTUA_BRAIN_CATALOGUE}"))
+        declared = json.loads(subprocess.run(["${brain}/bin/ronoctua-brain", "modules", "--catalogue"],
+                                             capture_output=True, text=True, check=True).stdout)
+        held = {m["id"]: m for m in catalogue["modules"]}
+        if [d["id"] for d in declared] != [m["id"] for m in catalogue["modules"]]:
+            wrong.append("the person's catalogue and the daemon that compiled the person's module hold other modules")
+        for d in declared:
+            m = held.get(d["id"], {})
+            seen = {k: m.get(k) for k in ("name-key", "does-key", "marks", "notices", "actions", "whys")}
+            seen["events"] = [{"name": e["name"], "tag": e["tag"]} for e in m.get("events", [])]
+            if seen != {k: d[k] for k in seen}:
+                wrong.append(f"`{d['id']}` is not in the person's catalogue as the daemon compiled it")
+        mine = held.get("my-sample", {})
+        if mine.get("origin") != "person":
+            wrong.append(f"the person's catalogue says `my-sample` is {mine.get('origin')!r}")
+        if not any(g["token"] == "my-sample-seat" for g in catalogue["glyphs"]):
+            wrong.append("the person's catalogue measures no glyph for the fixture's mark")
+        notified = [e["notification"] for e in mine.get("events", []) if e["notification"]]
+        if len(notified) != 1 or notified[0]["apply"]["glyph"] is None:
+            wrong.append(f"the fixture's notification is not in the catalogue with its own glyph: {notified}")
+
+        # THE DISTRO'S FOOTER, handed the person's catalogue and texts: it
+        # passes its start's question and registers the person's action.
+        footer = dict(os.environ, RONOCTUA_THEMES="${rust.keyed.RONOCTUA_THEMES}",
+                      RONOCTUA_TEXTS="${person.rust.keyed.RONOCTUA_TEXTS}",
+                      RONOCTUA_BRAIN_CATALOGUE="${person.rust.keyed.RONOCTUA_BRAIN_CATALOGUE}",
+                      HOME=os.path.abspath("home"), XDG_RUNTIME_DIR=os.path.abspath("run"))
+        os.makedirs("home", exist_ok=True)
+        os.makedirs("run", mode=0o700, exist_ok=True)
+        verdict = subprocess.run(["${rust.loop.bins.ronoctua-shell}/bin/ronoctua-shell", "check-catalogue"],
+                                 env=footer, capture_output=True, text=True)
+        if verdict.returncode != 0 or f"{len(distro) + 1} modules" not in verdict.stdout:
+            wrong.append(f"the distro's footer did not read the person's catalogue: {verdict.stdout} {verdict.stderr}")
+        keymap = subprocess.run(["${rust.loop.bins.ronoctua-shell}/bin/ronoctua-shell", "check-keymap", "--dump"],
+                                env=footer, capture_output=True, text=True)
+        # A COMMAND OF THE REGISTRY the leader runs (`command` lines), and the
+        # catalogue's action in the dump (`brain-action` lines).
+        dumped = keymap.stdout.splitlines()
+        acted = ("command\tmy-sample-free\tcmd-my-sample-free",
+                 "brain-action\tmy-sample\tfree\tmy-sample-free\tcmd-my-sample-free\trow=false\tasks=-")
+        if keymap.returncode != 0 or any(line not in dumped for line in acted):
+            wrong.append(f"the distro's footer did not register the person's action: {keymap.stderr[-400:]}")
+
+        if wrong:
+            print("ERROR: the person's brain modules do not load as a machine loads them.", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            raise SystemExit(1)
+        print(f"OK: the brain made {len(made)} modules, the person's `my-sample` among the distro's {len(distro)};"
+              f" the machine's chain moved the daemon's registry and {len(facts['data'])} data, kept {len(facts['stays'])}"
+              f" compiled tables, {len(facts['components'])} components, the library's part and the footer's program;"
+              f" the distro's footer read the person's catalogue and registered its action;"
+              f" {len(refused)} bad folders left out and said, build.rs refused its 2 plants, the fixture's test passed")
+        END
+      '';
 
   # A PERSON'S MODULE IS `my-…`, AND ONLY A PERSON'S IS (belongings.md WP8b).
   #
@@ -42495,24 +45350,26 @@ let
       if f["fixtureAsPerson"] != ["my-sample"]:
           wrong.append(f"the loader did not load the person's fixture as the person's: {f['fixtureAsPerson']}")
 
-      # NO BASE KEY IN THE PERSON'S NAMESPACE, openers and the brain's task
-      # names included: a person's key would otherwise be refused as a base
+      # NO CRATE'S KEY IN THE PERSON'S NAMESPACE, openers and the brain's task
+      # names included: a person's key would otherwise be refused as a crate's
       # key, at their update.
       base = 0
       for language in "${lib.concatStringsSep " " languages}".split():
-          text = pathlib.Path("${../assets/i18n}", language + ".ftl").read_text()
+          text = "".join(pathlib.Path(d, language + ".ftl").read_text()
+                         for d in json.load(open("${fragmentDirs}")).values())
           for key in re.findall(r"^([a-z][a-z0-9-]*)\s*=", text, re.M):
               base += 1
               rest = re.sub(r"^(cmd|notif|echo|about|ask)-", "", key)
               rest = re.sub(r"^brain-task-", "", rest)
               if personal(rest):
-                  wrong.append(f"the base key `{key}` ({language}) is in the person's namespace")
-      floor(base, 2000, "base text keys read")
+                  wrong.append(f"the crate's key `{key}` ({language}) is in the person's namespace")
+      floor(base, 2000, "crates' text keys read")
 
       # THE GENERATOR, handed a record whose origin is neither.
       work = pathlib.Path(tempfile.mkdtemp())
-      r = subprocess.run([sys.executable, "${../nix/scripts/gen-brain-modules.py}", "--modules", "${records}",
-                          "--parser", "${../nix/scripts/gen-i18n.py}", "--language", "${builtins.head languages}",
+      r = subprocess.run([sys.executable, "${../nix/scripts/gen-brain-modules.py}", "--part", "daemon",
+                          "--modules", "${records}",
+                          "--language", "${builtins.head languages}",
                           "--out", str(work / "out")], capture_output=True, text=True)
       if r.returncode == 0 or "its origin is 'elsewhere'" not in r.stderr:
           wrong.append(f"the generator took a record that is neither the distro's nor the person's: {r.stderr!r}")
@@ -42631,7 +45488,7 @@ let
       # never more instances than one digit draws.
       seen = 0
       for m in f["declared"]:
-          made = uncommented(pathlib.Path("${brainModulesRs}", m["id"], "manifest.rs").read_text())
+          made = uncommented(pathlib.Path("${brainManifestsRs}", m["id"], "manifest.rs").read_text())
           for k, d in m["marks"].items():
               seen += 1
               if not 0 <= d["instances"] <= 9:
@@ -42655,8 +45512,10 @@ let
       mine["marks"]["seat"]["instances"] = 10
       work = pathlib.Path(tempfile.mkdtemp())
       (work / "records.json").write_text(json.dumps([mine]))
-      r = subprocess.run([sys.executable, "${../nix/scripts/gen-brain-modules.py}", "--modules", str(work / "records.json"),
-                          "--parser", "${../nix/scripts/gen-i18n.py}", "--language", "${builtins.head languages}",
+      # THE DAEMON'S PART, which writes a person's manifest.
+      r = subprocess.run([sys.executable, "${../nix/scripts/gen-brain-modules.py}", "--part", "daemon",
+                          "--modules", str(work / "records.json"),
+                          "--language", "${builtins.head languages}",
                           "--out", str(work / "out")], capture_output=True, text=True)
       if r.returncode == 0 or "from 1 to 9" not in r.stderr:
           wrong.append(f"the generator wrote a mark with 10 instances: {r.stderr!r}")
@@ -42987,6 +45846,7 @@ let
       python3 - <<'END'
       import json, pathlib, re, sys
       exec(open("${pyPrelude}").read())
+      exec(open("${shellPrelude}").read())
 
       # PARSED: the evaluated system arrives as JSON — the vault's units, its
       # tmpfiles lines, the merged polkit rules.
@@ -42999,7 +45859,7 @@ let
       lib = uncommented(pathlib.Path("${../crates/ronoctua-private/src}/lib.rs").read_text())
       side = uncommented(without_tests(pathlib.Path("${../crates/ronoctua-private/src}/root.rs").read_text()))
       helper = uncommented(pathlib.Path("${../crates/ronoctua-security/src/bin/root.rs}").read_text())
-      shell = code_of(without_tests(pathlib.Path("${../crates/ronoctua-shell/src}/vault.rs").read_text()))
+      shell = code_of(without_tests(shell_file("vault.rs").read_text()))
       wrong = []
 
       def const(name):
@@ -43582,8 +46442,14 @@ let
   # variable — the default account is the person's, in `llm-default.env`.
   one-llm-boundary =
     let
+      # By the package's name without its version: the CLI is the release
+      # unit now (`rust.llm`, `ronoctua-llm-0.1.0`), and was an extracted copy
+      # named `ronoctua-llm` before.
       onPath =
-        config: builtins.any (p: (p.name or "") == "ronoctua-llm") config.environment.systemPackages;
+        config:
+        builtins.any (
+          p: (builtins.parseDrvName (p.name or "")).name == "ronoctua-llm"
+        ) config.environment.systemPackages;
       facts = pkgs.writeText "llm-facts.json" (
         builtins.toJSON {
           full = onPath self.nixosConfigurations.noctua.config;
@@ -44521,6 +47387,7 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
     crates = pathlib.Path("${../crates}")
     wrong = []
 
@@ -44547,7 +47414,7 @@ let
         "ronoctua-cachix/src/netrc.rs",
         "ronoctua-cachix/src/bin/cli.rs",
         "ronoctua-security/src/bin/root.rs",
-        "ronoctua-shell/src/binary_cache.rs",
+        shell_file("binary_cache.rs"),
         "ronoctua-installer/src/executor.rs",
     ]
     # What prints or logs: the macros, and the push's own `say`, which is
@@ -45166,6 +48033,14 @@ let
           inherit (noctua) pkgs;
           inherit names;
         };
+      # WHAT THE DISTRO SHIPS, by the names a machine's closure has for it:
+      # every program whose role is `ship` (`nix/rust/units.nix`, one release
+      # unit each) and the shell's bundle — what `rust.shipped` is.
+      shipped =
+        map (b: b.name) (
+          lib.attrValues (lib.filterAttrs (_: b: b.passthru.role == "ship") rust.release.bins)
+        )
+        ++ [ rust.shell.name ];
       names = [
         uade
         unrar
@@ -45174,12 +48049,11 @@ let
         "platform-tools-37.0.0"
         "androidsdk"
         "android-studio-stable-2025.1.4.8"
-        "ronoctua-0.1.0"
-        "ronoctua-shell"
         "glibc-2.40-66"
         "emacs-30.2"
         "scroll-unwrapped-1.12.21"
-      ];
+      ]
+      ++ shipped;
       # WHAT THE WORKSPACE BAKES IN: every derivation the string context of
       # a `generated` value names.
       baked = lib.unique (
@@ -45192,7 +48066,7 @@ let
       );
       facts = pkgs.writeText "release-unfree-facts.json" (
         builtins.toJSON {
-          inherit uade unrar;
+          inherit uade unrar shipped;
           answer = ask names;
           baked = builtins.length baked;
           bakedUnfree = ask baked;
@@ -45216,6 +48090,7 @@ let
       if set(unfree) != want:
           wrong.append(f"the release calls unfree {sorted(unfree)}, not {sorted(want)}")
       floor(facts["baked"], 20, "derivations the workspace bakes in")
+      floor(len(facts["shipped"]), 25, "shipped programs asked about")
       if facts["bakedUnfree"]:
           wrong.append(f"the workspace bakes in {facts['bakedUnfree']}: unfree, so the workspace never reaches "
                        "the public cache and every machine compiles it — read it at run time (`atRunTime`)")
@@ -45413,8 +48288,8 @@ let
       '';
   # ── anchor: L17 ──
   # THE INSTALLER STICK WRITES ONLY A STICK — both halves of the rule, run as
-  # their own tests over the loop's dependency layer (the `rust-tests`
-  # derivation narrowed to them, `subtitles-stack-in-libass`'s shape): the
+  # their own tests out of the harness the test units built (`rust.testsOf`,
+  # `subtitles-stack-in-libass`'s shape): the
   # SCREEN's judgement of a fixture rack (`drives::judge` — the system's disk,
   # a soldered one, a mounted stick, a stick the system runs from, FireWire, a
   # read-only card, a nameless stick, an empty reader and a soldered eMMC on
@@ -45422,20 +48297,18 @@ let
   # UNIT's of the kernel's reading (`device::judge` — internal, mounted, the
   # boot disk, swap, held, read-only, a partition, another size, another
   # serial; and `device::probe` of a planted `mmcblk0`: an eMMC refused, an
-  # SD card written). Three tests by their shared name; a filter that matched
-  # fewer is a green build that judged nothing.
-  stick-writes-only-removable = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-stick-writes-only-removable";
-    checkPhase = ''
-      runHook preCheck
-      cargoWithProfile test --locked -p ronoctua-stick --lib -- writes_only_removable 2>&1 | tee ran.txt
-      grep -q 'test result: ok. 3 passed' ran.txt || {
-        echo "ERROR: the three judgements of a stick did not all run" >&2
-        exit 1
-      }
-      runHook postCheck
-    '';
-  });
+  # SD card written). The three tests that share the name, each by its full
+  # path; a run that passed fewer is a green build that judged nothing.
+  stick-writes-only-removable = rust.testsOf {
+    name = "ronoctua-stick-writes-only-removable";
+    crate = "ronoctua-stick";
+    exact = [
+      "drives::tests::writes_only_removable_targets_from_a_rack"
+      "device::tests::writes_only_removable_devices_as_root_reads_them"
+      "device::tests::writes_only_removable_cards_never_an_emmc"
+    ];
+    expect = "test result: ok. 3 passed";
+  };
 
   # A BLANK STICK IS ON THE SIDEBAR, and the installer is offered on it.
   #
@@ -45448,25 +48321,20 @@ let
   # object path in an id) and presses `W` on the blank one; the sidebar
   # menu's test holds that `W` is offered on a removable drive's heading and
   # nowhere else. Each by its full path, `--exact`.
-  blank-sticks-have-a-heading = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-blank-sticks-have-a-heading";
-    checkPhase = ''
-      runHook preCheck
-      cargoWithProfile test --locked -p ronoctua-shell --bin ronoctua-shell -- \
-        files::tests::blank_sticks_have_a_heading_where_the_installer_is_offered --exact 2>&1 | tee ran.txt
-      grep -q 'test result: ok. 1 passed' ran.txt || {
-        echo "ERROR: the sidebar's blank-stick test did not run exactly once" >&2
-        exit 1
-      }
-      cargoWithProfile test --locked -p ronoctua-files --lib -- \
-        sidebar_menu::tests::the_installer_is_offered_on_a_sticks_heading_only --exact 2>&1 | tee menu.txt
-      grep -q 'test result: ok. 1 passed' menu.txt || {
-        echo "ERROR: the sidebar menu's test did not run exactly once" >&2
-        exit 1
-      }
-      runHook postCheck
-    '';
-  });
+  blank-sticks-have-a-heading = testsRanTogether "ronoctua-blank-sticks-have-a-heading" [
+    (rust.testsOf {
+      name = "ronoctua-blank-sticks-have-a-heading-sidebar";
+      crate = "ronoctua-shell-files";
+      exact = "files::tests::blank_sticks_have_a_heading_where_the_installer_is_offered";
+      expect = "test result: ok. 1 passed";
+    })
+    (rust.testsOf {
+      name = "ronoctua-blank-sticks-have-a-heading-menu";
+      crate = "ronoctua-files";
+      exact = "sidebar_menu::tests::the_installer_is_offered_on_a_sticks_heading_only";
+      expect = "test result: ok. 1 passed";
+    })
+  ];
 
   # THE STICK'S ROOT UNIT IS REACHED THROUGH THE SUDO DOOR, AND ONLY THERE —
   # and what it may touch is the kernel's to refuse, not only the binary's.
@@ -45517,6 +48385,7 @@ let
       python3 - <<'END'
       import json, pathlib, re, sys
       exec(open("${pyPrelude}").read())
+      exec(open("${shellPrelude}").read())
 
       # PARSED: the evaluated system arrives as JSON — the unit's settings,
       # the merged polkit rules, the tmpfiles rules.
@@ -45528,7 +48397,6 @@ let
       crate = uncommented(pathlib.Path("${../crates/ronoctua-stick/src}/lib.rs").read_text())
       helper = uncommented(pathlib.Path("${../crates/ronoctua-security/src/bin/root.rs}").read_text())
       module = hashless(pathlib.Path("${../nix/modules/stick.nix}").read_text())
-      shell_dir = pathlib.Path("${../crates/ronoctua-shell/src}")
       wrong = []
 
       def const(text, name, where):
@@ -45564,12 +48432,12 @@ let
           wrong.append(f"a polkit rule names {unit!r}: a second door")
 
       # THE SHELL REACHES IT THROUGH THE DOOR, and never by itself.
-      stick = code_of(without_tests((shell_dir / "stick.rs").read_text()))
+      stick = code_of(without_tests(shell_file("stick.rs").read_text()))
       door = must(body_of(stick, "arm"), "stick.rs `Feed::arm`")
       if "RootVerb::StickWrite" not in door or not re.search(r"\bgesture\.run\(", door):
           wrong.append("stick.rs `Feed::arm` does not go through the sudo bar (`gesture.run(RootVerb::StickWrite…)`)")
       swept = 0
-      for f in sorted(shell_dir.glob("*.rs")):
+      for f in sorted(shell_files("*.rs")):
           swept += 1
           text = uncommented(without_tests(f.read_text()))
           if re.search(r"\bWRITE_UNIT\b|ronoctua-stick-write\.service", text):
@@ -45700,22 +48568,15 @@ let
   # by hand is never removed; a profile package goes once its declared copy is
   # applied and stays while its declaration was skipped; no other file of the
   # person's moves; and with Android down nothing goes in or out. ONE named
-  # test of the crate, run over the loop's dependency layer with the
+  # test of the crate, run out of the harness the test units built with the
   # features the workspace builds it with — and a run that did not execute
   # exactly that test, and pass, is refused.
-  reconcile-touches-only-the-ledger = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-reconcile-touches-only-the-ledger";
-    checkPhase = ''
-      runHook preCheck
-      cargoWithProfile test --locked -p ronoctua-software --features net,draw --lib -- \
-        reconcile::tests::reconcile_touches_only_the_ledger --exact 2>&1 | tee ran.txt
-      grep -q 'test result: ok. 1 passed' ran.txt || {
-        echo "ERROR: the reconciler's ledger test did not run exactly once and pass" >&2
-        exit 1
-      }
-      runHook postCheck
-    '';
-  });
+  reconcile-touches-only-the-ledger = rust.testsOf {
+    name = "ronoctua-reconcile-touches-only-the-ledger";
+    crate = "ronoctua-software";
+    exact = "reconcile::tests::reconcile_touches_only_the_ledger";
+    expect = "test result: ok. 1 passed";
+  };
 
   # DECLARE INSTALLS NOW AND RECORDS, on a booted machine with the real Nix,
   # systemd and polkit (`tests/declare-vm.nix`): the order as the queue hands
@@ -45748,6 +48609,13 @@ let
   # Each prints its frame (`--list`) — the frame its PNG is drawn from — and
   # the checks read it run by run.
   softwareDoors = ''
+    # The palettes and the texts (`rust.keyed`): the shell below is the
+    # unwrapped one, and the colours and the words are data it reads at run time.
+    export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+    export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+    # And the brain's catalogue (`rust.keyed`): the modules' marks and the
+    # keymap's actions are data it reads at run time, refused (78) without it.
+    export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
     export VK_DRIVER_FILES=${xvfb.icd}
     export VK_ICD_FILENAMES=${xvfb.icd}
     export LIBGL_ALWAYS_SOFTWARE=1
@@ -45760,14 +48628,14 @@ let
     window() {
       name=$1 language=$2; shift 2
       room
-      ${rust.workspace}/bin/ronoctua-shell photograph --door software --room "$PWD/room" \
+      ${rust.bins.ronoctua-shell}/bin/ronoctua-shell photograph --door software --room "$PWD/room" \
         --language "$language" --columns 110 --lines 34 --list "$@" > "$PWD/$name.txt"
     }
     # The footer: the same, walked from `LEADER i`.
     footer() {
       name=$1 language=$2; shift 2
       room
-      ${rust.workspace}/bin/ronoctua-shell photograph --door footer --room "$PWD/room" \
+      ${rust.bins.ronoctua-shell}/bin/ronoctua-shell photograph --door footer --room "$PWD/room" \
         --software noctua --language "$language" --list --leader --key i "$@" > "$PWD/$name.txt"
     }
     down6="--key <down> --key <down> --key <down> --key <down> --key <down> --key <down>"
@@ -45842,7 +48710,7 @@ let
     REST = ["Google Chrome", "Emacs", "mpv Media Player", "Ghostty"]
     wrong = []
     for language in ("en-GB", "pt-BR"):
-        keys = keys_of(pathlib.Path("${self}/assets/i18n/" + language + ".ftl").read_text())
+        keys = keys_of(pathlib.Path("${texts}/" + language + ".ftl").read_text())
         floor(len(keys), 1000, f"keys of {language}")
         for door in ("window", "footer"):
             name = f"{door}-{language}"
@@ -45905,7 +48773,7 @@ let
     # its keys; the floors refuse a frame or a language that came back short.
     wrong = []
     for language in ("en-GB", "pt-BR"):
-        keys = keys_of(pathlib.Path("${self}/assets/i18n/" + language + ".ftl").read_text())
+        keys = keys_of(pathlib.Path("${texts}/" + language + ".ftl").read_text())
         floor(len(keys), 1000, f"keys of {language}")
         said = [
             keys["software-declared-sure-forget"].replace("{ $app }", "ripgrep"),
@@ -45958,22 +48826,17 @@ let
   # new installer being tried), and one that does not answer goes on with
   # the ISO's own distro and SAYS so — a development build never follows,
   # and a hop never hops again. The decision is a pure function; this runs
-  # its test by name over the `rust-tests` derivation (`--exact`), so a
+  # its test by name out of the harness the test units built (`--exact`), so a
   # renamed test is a red check and never a filter that matched nothing.
-  installer-follows-release = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-installer-follows-release";
-    checkPhase = ''
-      runHook preCheck
-      cargoWithProfile test --locked -p ronoctua-installer --lib -- --exact \
-        release::tests::installer_follows_release \
-        release::tests::the_hop_starts_the_release_installer_with_what_this_one_was_given 2>&1 | tee ran.txt
-      grep -q 'test result: ok. 2 passed' ran.txt || {
-        echo "ERROR: the release follower's tests did not run exactly once, green" >&2
-        exit 1
-      }
-      runHook postCheck
-    '';
-  });
+  installer-follows-release = rust.testsOf {
+    name = "ronoctua-installer-follows-release";
+    crate = "ronoctua-installer";
+    exact = [
+      "release::tests::installer_follows_release"
+      "release::tests::the_hop_starts_the_release_installer_with_what_this_one_was_given"
+    ];
+    expect = "test result: ok. 2 passed";
+  };
 
   # THE INSTALLER REQUIRES THE NETWORK.
   #
@@ -45997,6 +48860,10 @@ let
         pkgs.coreutils
       ]
       ''
+        # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
+        # one, and the colours and the words are data it reads at run time.
+        export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+        export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
         export RONOCTUA_INST_DISK=/dev/nvme0n1
         export RONOCTUA_INST_HOSTNAME=noctua-teste
         export RONOCTUA_INST_PASSWORD=test-password
@@ -46009,7 +48876,7 @@ let
         export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/system_bus_socket
 
         status=0
-        ${rust.workspace}/bin/ronoctua-install --execute < /dev/null > said.txt 2>&1 || status=$?
+        ${rust.bins.ronoctua-install}/bin/ronoctua-install --execute < /dev/null > said.txt 2>&1 || status=$?
         cat said.txt
         [ "$status" = 3 ] || {
           echo "ERROR: with no network, --execute exited $status and not 3 (the gate's)" >&2
@@ -46024,7 +48891,7 @@ let
           exit 1
         fi
         # THE REHEARSAL asks nothing of the network, and runs.
-        ${rust.workspace}/bin/ronoctua-install < /dev/null > dry.txt
+        ${rust.bins.ronoctua-install}/bin/ronoctua-install < /dev/null > dry.txt
         grep -q -- '--execute' dry.txt || {
           echo "ERROR: the dry run did not run without the network" >&2
           exit 1
@@ -46112,8 +48979,8 @@ let
   # (`ronoctua_belongings::scope`), so it can never promise a file the sync
   # leaves out, nor leave out one it sends.
   #
-  # THE BEHAVIOUR, over the `rust-tests` derivation narrowed to these tests
-  # (`--exact`): a home with a file of every origin (a rule, a target, the
+  # THE BEHAVIOUR, out of the harness the test units built, narrowed to these
+  # tests (`rust.testsOf`, `--exact`): a home with a file of every origin (a rule, a target, the
   # person's addition, one followed from another machine, the plain part)
   # and of every reason a file is never kept, walked by the sync's walk and
   # the plain part's and listed by a door's inventory — every walked path
@@ -46125,31 +48992,27 @@ let
   # by itself only on the machine that runs the newest distro, never one the
   # person left; a copy of an access file found by its sum, never by bytes
   # kept; and the scope's and the inventory's own tests.
-  belongingsListing = rust.tests.overrideAttrs (old: {
-    pname = "ronoctua-belongings-listing";
-    checkPhase = ''
-      runHook preCheck
-      mkdir -p $out
-      cargoWithProfile test --locked -p ronoctua-belongings --lib -- --exact \
-        engine::tests::listing::belongings_list_is_the_walk \
-        engine::tests::listing::a_sync_leaves_the_listing_in_step \
-        scope::tests::every_kind_of_root_is_walked_once \
-        scope::tests::a_path_comes_from_the_most_specific_thing_that_names_it \
-        scope::tests::a_request_is_laid_over_what_the_index_dropped \
-        scope::tests::the_walk_meets_every_path_once_and_follows_no_link \
-        inventory::tests::a_state_is_what_a_stat_says_against_the_base \
-        inventory::tests::what_is_not_kept_says_why \
-        inventory::tests::a_run_stamps_only_what_it_can_vouch_for \
-        inventory::tests::a_file_deleted_here_is_said_to_leave_the_repository \
-        inventory::tests::an_access_file_is_found_by_its_sum \
-        inventory::tests::a_repair_writes_itself_only_on_the_newest_machine 2>&1 | tee $out/ran.txt
-      grep -q 'test result: ok. 12 passed' $out/ran.txt || {
-        echo "ERROR: the listing's tests did not run exactly once, green" >&2
-        exit 1
-      }
-      runHook postCheck
-    '';
-  });
+  belongingsListing = testsRanTogether "ronoctua-belongings-listing" [
+    (rust.testsOf {
+      name = "ronoctua-belongings-listing-run";
+      crate = "ronoctua-belongings";
+      exact = [
+        "engine::tests::listing::belongings_list_is_the_walk"
+        "engine::tests::listing::a_sync_leaves_the_listing_in_step"
+        "scope::tests::every_kind_of_root_is_walked_once"
+        "scope::tests::a_path_comes_from_the_most_specific_thing_that_names_it"
+        "scope::tests::a_request_is_laid_over_what_the_index_dropped"
+        "scope::tests::the_walk_meets_every_path_once_and_follows_no_link"
+        "inventory::tests::a_state_is_what_a_stat_says_against_the_base"
+        "inventory::tests::what_is_not_kept_says_why"
+        "inventory::tests::a_run_stamps_only_what_it_can_vouch_for"
+        "inventory::tests::a_file_deleted_here_is_said_to_leave_the_repository"
+        "inventory::tests::an_access_file_is_found_by_its_sum"
+        "inventory::tests::a_repair_writes_itself_only_on_the_newest_machine"
+      ];
+      expect = "test result: ok. 12 passed";
+    })
+  ];
 
   # AND NOTHING ELSE READS THE TABLES: the trees, the files, the targets, the
   # plain roots and what is never kept are named only in `kept.rs` (the
@@ -46411,6 +49274,7 @@ let
         python3 - <<'END'
         import pathlib, re, sys
         exec(open("${pyPrelude}").read())
+        exec(open("${shellPrelude}").read())
 
         wrong = []
         # PARSED: the queue's half — `carry` builds the command, and nothing
@@ -46427,7 +49291,7 @@ let
             wrong.append("the queue no longer writes the job on the sealer's standard input")
         # PARSED: the door's half — every passphrase is written by the
         # queue's `secrets::keep`, and the door writes no file itself.
-        door = code_of(without_tests(pathlib.Path("${../crates/ronoctua-shell/src/seal.rs}").read_text()))
+        door = code_of(without_tests(shell_file("seal.rs").read_text()))
         floor(len(door), 6000, "characters of the shell's seal.rs")
         written = must(scope(door, r"impl\s+Written\b"), "the shell's `Written`")
         if "ronoctua_transfers::secrets::keep(" not in written:
@@ -46480,8 +49344,10 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellManifestPrelude}").read())
 
-    # FILE-WIDE: three binaries read whole, and two manifests' dependency line.
+    # FILE-WIDE: three binaries read whole, and the queue's and every shell
+    # crate's manifest's dependency line.
     NEEDLE = re.compile(
         rb"(?:/age-0\.[0-9.]+|/age-core-0\.[0-9.]+|/ml-kem-0\.[0-9.]+)/src/[a-z0-9_/]+\.rs"
         rb"|ronoctua-pq/src/(?:crypt|xwing|vectors)\.rs"
@@ -46492,20 +49358,31 @@ let
     wrong = []
     for name, path in (
         ("the queue's daemon", "${rust.transfers}/bin/ronoctua-transfers"),
-        ("the footer", "${rust.workspace}/bin/ronoctua-shell"),
+        ("the footer", "${rust.bins.ronoctua-shell}/bin/ronoctua-shell"),
     ):
         linked = sorted(set(NEEDLE.findall(pathlib.Path(path).read_bytes())))
         if linked:
             wrong.append(f"{name} carries {len(linked)} of age's sources, e.g. {linked[0].decode()}")
-    for crate in ("ronoctua-transfers", "ronoctua-shell"):
-        manifest = hashless((pathlib.Path("${../crates}") / crate / "Cargo.toml").read_text())
+    # THE QUEUE NAMES THE WIRE ONCE; and the footer is every shell crate — a
+    # module that took the dependency to a crate of its own (the report, the
+    # work) is still the footer's — so each that names it names it once,
+    # without features, and at least one does (the job's wire is the shell's).
+    manifests = [("ronoctua-transfers", pathlib.Path("${../crates/ronoctua-transfers}") / "Cargo.toml")]
+    manifests += [(m.parent.name, m) for m in shell_manifests()]
+    naming = 0
+    for crate, path in manifests:
+        manifest = hashless(path.read_text())
         lines = [l for l in manifest.splitlines() if re.match(r"\s*ronoctua-pq\s*=", l)]
-        if len(lines) != 1:
+        naming += crate != "ronoctua-transfers" and bool(lines)
+        if crate == "ronoctua-transfers" and len(lines) != 1:
             wrong.append(f"{crate} names ronoctua-pq {len(lines)} times, not once")
-        elif "default-features = false" not in lines[0]:
+        elif len(lines) > 1:
+            wrong.append(f"{crate} names ronoctua-pq {len(lines)} times, not once")
+        elif lines and "default-features = false" not in lines[0]:
             wrong.append(f"{crate} depends on ronoctua-pq with its features: {lines[0].strip()!r}")
         if re.search(r"^\s*age\s*=", manifest, re.M):
             wrong.append(f"{crate} depends on age itself")
+    floor(naming, 1, "shell crates that name ronoctua-pq")
     if wrong:
         print("ERROR: age reached the queue or the footer.", file=sys.stderr)
         for w in wrong:
@@ -46631,7 +49508,7 @@ let
       if not isinstance(syncthing.get("pins-curves"), bool):
           wrong.append("the build did not say whether Syncthing pins its curves")
       # AND THE FOOTER READS THAT FILE: its path is in the binary.
-      shell = pathlib.Path("${rust.workspace}/bin/ronoctua-shell").read_bytes()
+      shell = pathlib.Path("${rust.bins.ronoctua-shell}/bin/ronoctua-shell").read_bytes()
       if b"${facts}" not in shell:
           wrong.append("the footer does not carry the path of the facts the build wrote")
       for w in wrong:
@@ -46649,8 +49526,10 @@ let
   # …`): its tokens, its keys, its font. The screen of a virtual machine is
   # not a terminal's — `incus console --type=vga` opens remote-viewer and
   # waits — so it is started by itself, and never inside one. Both doors (the
-  # footer's region and the window) launch exactly what ONE function says
-  # (`incus::launched`, over the CLI's line the feed asks the crate for), and
+  # footer's region and the window) carry the view's errands out with ONE
+  # function (`incus_open::carry_out`), which launches exactly what ONE
+  # function says (`incus::launched`, over the CLI's line the feed asks the
+  # crate for), and
   # the view's unit tests prove what it says for each (`a_console_and_a_shell
   # _open_in_our_terminal_and_the_screen_by_itself`, and the window's own, which
   # reads what its door would have started). This holds the shape that makes
@@ -46659,15 +49538,15 @@ let
     python3 - <<'END'
     import pathlib, re, sys
     exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
 
     # PARSED: one function's arms and two doors' arms, each found by its
     # name with `body_of` and cut by braces; the needles are the words a
     # launch is made of, so `uncommented` (comments off, strings kept) and
     # `without_tests` (a test builds lines on purpose).
-    shell = pathlib.Path("${../crates/ronoctua-shell/src}")
-    read = lambda name: uncommented(without_tests((shell / name).read_text()))
+    read = lambda name: uncommented(without_tests(shell_source(name)))
     view, feed, window = read("incus.rs"), read("incus_feed.rs"), read("incus_window.rs")
-    surface = read("surface.rs")
+    handler, region = read("incus_open.rs"), read("incus_region.rs")
     wrong = []
 
     # 1) WHAT EACH USE IS STARTED BY: the console and the shell in the
@@ -46697,33 +49576,43 @@ let
     if "crate::incus::launched(" not in opening or "what.launch()" not in opening:
         wrong.append("`Feed::opening` no longer goes through `incus::launched`")
     LINES = re.compile(r"\b(console_command|shell_command|console_arguments|shell_arguments)\(")
-    for f in sorted(shell.glob("*.rs")):
-        text = read(f.name)
+    for f in sorted(shell_files("*.rs")):
+        # The file itself, and not its name again: a name (`lib.rs`) may be
+        # the root of more than one shell crate.
+        text = uncommented(without_tests(f.read_text()))
         for m in LINES.finditer(text):
             if not (f.name == "incus_feed.rs" and m.start() > text.find("fn opening") and whose(text, m.start()) == "opening"):
                 wrong.append(f"{f.name} builds a console's line in `{whose(text, m.start())}`, outside `Feed::opening`")
 
-    # 4) BOTH DOORS START WHAT `opening` ANSWERED, and nothing else.
-    def arm(body, what):
-        m = re.search(r"Errand::Open\(what, name\)\s*=>\s*\{", body)
-        if not m:
-            return None
-        return scope(body[m.start():], r"Errand::Open\(what, name\)\s*=>")
-    doors = (
-        ("the window", must(body_of(window, "apply"), "the window's `apply`"),
-         r"ui\.launch\(&program, &words, None\)"),
-        ("the footer", must(body_of(surface, "incus_errand"), "the footer's `incus_errand`"),
-         r"self\.open_foreign\(&program, &words, None\)"),
-    )
-    for door, body, starts in doors:
-        piece = arm(body, door)
-        if piece is None:
-            wrong.append(f"{door} has no `Errand::Open` arm")
-            continue
-        if ".opening(what, &name, &me)" not in piece or not re.search(starts, piece):
-            wrong.append(f"{door} does not start exactly what `Feed::opening` answered")
+    # 4) BOTH DOORS START WHAT `opening` ANSWERED, and nothing else — through
+    #    the one handler both reach: the window's `apply` hands it the errand
+    #    whole, the region reaches it through the view open in it
+    #    (`Open::press`, `Open::answered`), and neither door's file starts a
+    #    console of its own.
+    carry = must(body_of(handler, "carry_out"), "`incus_open::carry_out`")
+    m = re.search(r"Errand::Open\(what, name\)\s*=>\s*\{", carry)
+    piece = scope(carry[m.start():], r"Errand::Open\(what, name\)\s*=>") if m else None
+    if piece is None:
+        wrong.append("`carry_out` has no `Errand::Open` arm")
+    else:
+        if ".opening(what, &name, &me)" not in piece or not re.search(
+            r"way\.launch\(crate::door::Launching::Program \{\s*program,\s*args: words,", piece
+        ):
+            wrong.append("`carry_out` does not start exactly what `Feed::opening` answered")
         if "current_exe()" not in piece:
-            wrong.append(f"{door} does not hand `opening` this binary, whose `terminal` it is")
+            wrong.append("`carry_out` does not hand `opening` this binary, whose `terminal` it is")
+        if not re.search(r"way\.step_aside\(\);\s*way\.launch\(", piece):
+            wrong.append("`carry_out` starts a console without the door stepping aside first")
+    if not re.search(r"\bcarry_out\(errand,", must(body_of(window, "apply"), "the window's `apply`")):
+        wrong.append("the window's `apply` does not hand its errand to `carry_out`")
+    for name, text in (("press", handler), ("answered", handler)):
+        if not re.search(r"\bcarry_out\(errand, self,", must(body_of(text, name), "`Open::" + name + "`")):
+            wrong.append(f"`Open::{name}`, the region's way in, does not hand its errand to `carry_out`")
+    if not re.search(r"self\.open\.(?:press|answered)\(", region):
+        wrong.append("the region reaches the view's errands some other way than the view open in it")
+    for door, text in (("incus_window.rs", window), ("incus_region.rs", region)):
+        if re.search(r"\.opening\(|open_foreign\(|Launching::Program", text):
+            wrong.append(f"{door} starts a program itself, beside `carry_out`")
 
     floor(len(arms), 7, "uses of an instance read")
     for w in wrong:
@@ -47110,6 +49999,7 @@ let
     compositor-contract = compositorContract;
     modeline-vm = modelineVm;
     leader-vm = leaderVm;
+    hidden-region-vm = hiddenRegionVm;
     apps-vm = appsVm;
     software-vm = softwareVm;
     inherit keymap-no-collision i18n-complete i18n-missing-key-fails;
@@ -48123,6 +51013,95 @@ let
       one-stick-boundary
       ;
     stick-vm = stickVm;
+    # THE THEMES AS DATA (2026-10-12): the palettes read at run time, the
+    # names at evaluation, the scripts cited by file. `tests/theme-data.nix`.
+    inherit
+      (import ./theme-data.nix {
+        inherit
+          pkgs
+          lib
+          self
+          system
+          mkCheck
+          pyPrelude
+          rust
+          buffers
+          themes
+          defaultTheme
+          themed
+          tokensRs
+          wit
+          tokenNames
+          brainModules
+          glyphdb
+          unicodedb
+          lucidedb
+          marksdb
+          primaryFont
+          atlasData
+          notificationsRs
+          texts
+          brainModulesRs
+          bluetoothProfilesRs
+          audioNamesRs
+          broadcastRs
+          syncthingOptionsRs
+          torOptionsRs
+          atuinOptionsRs
+          keyboardsRs
+          syntaxTable
+          mimeDb
+          compositorDeeds
+          extension
+          iconSuperpack
+          cursors
+          ;
+      })
+      themes-are-data
+      palettes-are-read-at-run-time
+      names-are-extracted-at-evaluation
+      generators-cite-their-scripts
+      ;
+    # THE TEXTS AS DATA (2026-10-12): the sentences read at run time, the key
+    # names at evaluation. `tests/text-data.nix`.
+    inherit
+      (import ./text-data.nix {
+        inherit
+          pkgs
+          lib
+          mkCheck
+          pyPrelude
+          rust
+          buffers
+          texts
+          languages
+          brainModules
+          ;
+      })
+      texts-are-data
+      every-key-exists-at-run-time
+      ;
+    # THE TEXTS IN FRAGMENTS (2026-10-12): one per crate, each compiled against
+    # its own keys. `tests/text-fragments.nix`.
+    inherit
+      (import ./text-fragments.nix {
+        inherit
+          pkgs
+          lib
+          self
+          system
+          mkCheck
+          pyPrelude
+          rust
+          texts
+          languages
+          ;
+        granularityModel = granularity.model;
+      })
+      keys-agree
+      a-new-key-rebuilds-its-crate
+      texts-tool-says-what-is-missing
+      ;
     # ── anchor: L18 ──
     inherit
       reconcile-touches-only-the-ledger
@@ -48152,6 +51131,310 @@ let
     inherit incus-console-is-the-terminal;
     # ── anchor: L24 ──
     inherit agents-reach-the-footer;
+
+    # THE BRAIN IN TWO CRATES (the 2026-10-12 wave): the library the footer
+    # links, and the daemon that compiles every module's code.
+    inherit
+      (import ./brain-split.nix {
+        inherit
+          pkgs
+          lib
+          self
+          rust
+          mkCheck
+          pyPrelude
+          languages
+          brainModules
+          brainManifestsRs
+          withPersonModules
+          ;
+      })
+      brain-library-links-no-module
+      brain-daemon-is-a-leaf
+      brain-shared-half-is-the-distros
+      ;
+    # THE BUILD IS UNITS (the 2026-10-12 wave, closing it): no crate of ours is
+    # compiled by cargo over the workspace. `tests/build-units-only.nix`.
+    inherit
+      (import ./build-units-only.nix {
+        inherit
+          pkgs
+          lib
+          self
+          system
+          rust
+          mkCheck
+          pyPrelude
+          ;
+      })
+      our-crates-are-built-unit-by-unit
+      ;
+    # THE RELEASE PROFILE, CHOSEN BY MEASUREMENT: `tests/build-profile.nix`.
+    inherit
+      (import ./build-profile.nix {
+        inherit
+          pkgs
+          lib
+          self
+          mkCheck
+          ;
+      })
+      profile-bench-passes-its-tests
+      release-profile-is-the-measured-one
+      ;
+    # HOW MANY COMPILATIONS FIT, AND THE UNITS A MACHINE KEEPS: `tests/build-sizing.nix`.
+    inherit
+      (import ./build-sizing.nix {
+        inherit
+          pkgs
+          lib
+          self
+          system
+          rust
+          mkCheck
+          pyPrelude
+          gateApp
+          ;
+      })
+      build-sizing-fits-the-machine
+      batteries-build-the-heavy-alone
+      kept-units-are-the-ones-the-store-holds
+      rust-peaks-names-what-is-past-the-slot
+      machine-builds-by-the-distros-plan
+      sized-build-builds-what-nix-would
+      batteries-reach-every-unit
+      ;
+
+    # THE KEYMAP IN CONTRIBUTIONS (the 2026-10-12 wave): every crate's keys,
+    # assembled by the binary. `tests/keymap-contributions.nix`.
+    inherit
+      (import ./keymap-contributions.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          ;
+      })
+      every-contribution-is-assembled
+      ;
+
+    # THE SHELL'S FOUNDATION IN CRATES (the 2026-10-12 wave): the machine's
+    # guards in every crate's tests, and a foundation that names no feature.
+    # `tests/shell-foundation.nix`.
+    inherit
+      (import ./shell-foundation.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          shellManifestPrelude
+          ;
+      })
+      shell-tests-keep-the-machine-guards
+      the-shell-foundation-names-no-feature
+      ;
+
+    # THE FOOTER'S REGIONS (the 2026-10-12 wave): a slot host that names no
+    # feature and does every thing a region asks. `tests/footer-regions.nix`.
+    inherit
+      (import ./footer-regions.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          ;
+      })
+      the-slot-host-names-no-feature
+      ;
+    # THE SOFTWARE CENTRE AND THE SEARCH, EACH A CRATE AND A REGION (the
+    # 2026-10-12 wave): one handler for both doors, and features that stand on
+    # what they show. `tests/software-and-search.nix`.
+    inherit
+      (import ./software-and-search.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          shellManifestPrelude
+          ;
+      })
+      software-errands-are-carried-out-once
+      software-and-search-stand-on-what-they-show
+      ;
+
+    # THE BELONGINGS, THE SECURITY CENTRE AND THE UPDATE IN CRATES OF THEIR
+    # OWN (the 2026-10-12 wave): each stands where the design put it.
+    # `tests/trust-regions.nix`.
+    inherit
+      (import ./trust-regions.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellManifestPrelude
+          ;
+      })
+      the-trust-crates-stand-where-the-design-says
+      ;
+
+    # THE FILE MANAGER IN A CRATE OF ITS OWN (the 2026-10-12 wave, lane R5h):
+    # one handler of its steps for both doors, a crate on the foundation and
+    # the git line alone, and a footer that names none of it.
+    # `tests/files-region.nix`.
+    inherit
+      (import ./files-region.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          shellManifestPrelude
+          ;
+      })
+      the-file-manager-carries-out-once
+      the-file-manager-stands-on-the-foundation
+      the-footer-names-no-file-manager
+      ;
+
+    # THE FOOTER'S VIEWS AS REGIONS OF THEIR OWN CRATES (the 2026-10-12
+    # wave): they order the footer's threads, and stand on the foundation.
+    # `tests/system-regions.nix`.
+    inherit
+      (import ./system-regions.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          shellManifestPrelude
+          ;
+      })
+      regions-order-the-footers-threads
+      a-view-stands-on-the-foundation
+      ;
+
+    # WHAT THE FOOTER LENDS ITS REGIONS AND TELLS THEM (the 2026-10-12 wave):
+    # every line a region asks for by type is one the footer lends or raises,
+    # and every type a region hears is one the footer tells by name.
+    # `tests/footer-lent-lines.nix`.
+    inherit
+      (import ./footer-lent-lines.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          ;
+      })
+      regions-ask-what-the-footer-lends
+      regions-hear-what-the-footer-tells
+      ;
+
+    # THE VIEWS THE FOOTER HOSTS (the 2026-10-12 wave): a view that became a
+    # region of the slot host left the footer. `tests/hosted-regions.nix`.
+    inherit
+      (import ./hosted-regions.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          ;
+      })
+      a-hosted-region-leaves-the-footer
+      ;
+
+    # THE SHELL'S FEATURES IN CRATES (the 2026-10-12 wave): a hosted feature
+    # stands on the foundation. `tests/shell-features.nix`.
+    inherit
+      (import ./shell-features.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          shellManifestPrelude
+          ;
+      })
+      a-feature-stands-on-the-foundation
+      ;
+
+    # THE TOOLS AS REGIONS OF THEIR OWN CRATES (the 2026-10-12 wave): tools on
+    # the foundation alone, no half of a region left in the footer, and one
+    # keeper of the clipboard's history. `tests/tool-regions.nix`.
+    inherit
+      (import ./tool-regions.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          shellManifestPrelude
+          ;
+      })
+      the-tools-stand-on-the-foundation
+      a-region-leaves-nothing-behind
+      the-clipboard-history-has-one-keeper
+      ;
+
+    # THE PLAYER'S SEAM (the 2026-10-12 wave): the pages written above the
+    # player stand on it alone, and every one is installed. `tests/player-seam.nix`.
+    inherit
+      (import ./player-seam.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          shellManifestPrelude
+          ;
+      })
+      the-player-pages-are-installed
+      ;
+
+    # THE FOOTER IN A CRATE OF ITS OWN (the 2026-10-12 wave, lane R6): it
+    # names no feature, and every window a crate says is one the binary runs.
+    # `tests/footer-crate.nix`.
+    inherit
+      (import ./footer-crate.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          shellManifestPrelude
+          ;
+      })
+      footer-names-no-feature
+      every-door-is-dispatched
+      ;
+
+    # THE BRAIN'S MODULES AS DATA (the 2026-10-12 wave, lane B2): the catalogue
+    # the footer reads at run time is what the daemon compiled, the footer's
+    # binary reads it — and refuses it — at run time, and the glyph browser
+    # names the modules' glyphs by their tokens. `tests/brain-catalogue.nix`.
+    inherit
+      (import ./brain-catalogue.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          rust
+          brainModules
+          brainCatalogue
+          glyphdb
+          xvfb
+          ;
+        inherit (self.packages.${system}) iconset;
+      })
+      brain-catalogue-is-what-the-daemon-compiled
+      the-shell-reads-the-brain-catalogue
+      the-glyph-browser-names-the-modules-glyphs
+      ;
 
     # THE BUFFERS' FORMATTING, WHICH NOTHING CHECKED.
     #

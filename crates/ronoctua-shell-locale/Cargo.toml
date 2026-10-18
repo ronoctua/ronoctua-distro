@@ -1,0 +1,57 @@
+[package]
+name = "ronoctua-shell-locale"
+description = "The language and region view (`LEADER s l`) and the regions whose streets are installed (`LEADER s g`): their rows, their two doors each — the footer's region and a window — and the one errand handler each carries out."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE LANGUAGE AND REGION IN A CRATE OF THEIR OWN (the 2026-10-12 wave): the
+# two views, their windows, their regions of the footer, their cameras and
+# their keys, on the kit, the door and the inspection panels (the globe the
+# regions' catalogue is read from).
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-inspect = { path = "../ronoctua-shell-inspect" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-store = { path = "../ronoctua-store" }
+# The glance's places, their zones and their currencies.
+ronoctua-world = { path = "../ronoctua-world" }
+# The currency codes the rates are asked in.
+ronoctua-calc = { path = "../ronoctua-calc" }
+# THE MACHINE'S OWN CLOCK — `systemd-timedated`.
+ronoctua-clock = { path = "../ronoctua-clock" }
+# The brain's clock watch, which the date-and-time page switches.
+ronoctua-brain = { path = "../ronoctua-brain" }
+# The regions' packs and the queue that installs one.
+ronoctua-atlas-packs = { path = "../ronoctua-atlas-packs" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+ronoctua-shell-inspect = { path = "../ronoctua-shell-inspect", features = [ "test-support" ] }
+# The places' file, read back as the store wrote it.
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]
+run-env = ["RONOCTUA_ZONEINFO"]

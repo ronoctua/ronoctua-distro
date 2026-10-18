@@ -1,0 +1,83 @@
+[package]
+name = "ronoctua-shell-kit"
+description = "The shell's vocabulary: chrome, fields, paint, theme, seats, the line, the keymap installed, the sockets it writes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE BOTTOM OF THE SHELL (the 2026-10-12 wave). What every door, the footer
+# and every feature draw and say with — and nothing that names one of them:
+# no shell crate is below this one, so an edit of a view never recompiles it,
+# and an edit here recompiles every shell crate, in parallel. A helper two
+# features use comes down to here (or to the door); it is never reached up for.
+[dependencies]
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-compositor = { path = "../ronoctua-compositor" }
+# The one crate that knows which compositor it is (inv. 3): the connection
+# the shell opens (`daemon::open_the_compositor`) and the deeds a chord speaks
+# (`actions`).
+ronoctua-scroll = { path = "../ronoctua-scroll" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-notify = { path = "../ronoctua-notify" }
+ronoctua-apps = { path = "../ronoctua-apps" }
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-syntax = { path = "../ronoctua-syntax" }
+ronoctua-store = { path = "../ronoctua-store" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+# Why the NetworkManager refused (`network_refusal`), which the network and
+# the Bluetooth views both say.
+ronoctua-network = { path = "../ronoctua-network" }
+ronoctua-display = { path = "../ronoctua-display" }
+ronoctua-pointers = { path = "../ronoctua-pointers" }
+ronoctua-keyboards = { path = "../ronoctua-keyboards" }
+ronoctua-keys = { path = "../ronoctua-keys" }
+# The brain's records turned into the WIT's (`mind_wire`).
+ronoctua-brain = { path = "../ronoctua-brain" }
+ronoctua-files = { path = "../ronoctua-files" }
+# What a row of facts offers (`fields::Doable`, the info panel's amend).
+ronoctua-inspect = { path = "../ronoctua-inspect" }
+# The SCHEMA of a file's tags (`sizes::clock_of`, a field's name): without the
+# engine, which is lofty's and the tag program's (`the-footer-never-links-lofty`).
+ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
+# The person's keys as a `Secret` (`security_words`), without the requests:
+# those are the views' (`net`), never the vocabulary's.
+ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
+# The security centre's words, without the sudo door (`authority` is the
+# shell binary's alone: `sudo-door-is-one`).
+ronoctua-security = { path = "../ronoctua-security" }
+
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
+# The person's uid, for the signal a running terminal reloads its font on.
+rustix.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+# WHAT THIS CRATE KEEPS FOR TESTS, kept for EVERY crate's tests — for
+# `[dev-dependencies]` only. `cfg(test)` is true only in this crate's own
+# test build, and the guards that keep a test off the machine (the clipboard
+# a copy reaches, the compositor a test would open) must hold in the
+# footer's and every feature's tests too; so do the stubs those tests read
+# the keymap through (`bindings::with_stub`). `shell-tests-keep-the-machine-guards`
+# refuses it in a `[dependencies]` table.
+test-support = [ ]
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_CHOOM", "RONOCTUA_DCONF", "RONOCTUA_KEYS_DIR", "RONOCTUA_SYSTEMCTL", "RONOCTUA_SYSTEMD_RUN", "RONOCTUA_TRUE", "RONOCTUA_WL_COPY", "RONOCTUA_WL_COPY_PATH", "RONOCTUA_XDG_OPEN"]
+run-env = ["RONOCTUA_THEMES", "RONOCTUA_ZONEINFO"]

@@ -21,7 +21,7 @@
 //! # Nothing here starts a thread
 //!
 //! Every function is synchronous. The shell runs them on the long-lived named
-//! thread `ronoctua_shell::apps::painter` already has, and caches the answer
+//! thread `ronoctua_shell_door::launch::painter` already has, and caches the answer
 //! under a [`crate::Stamp`] so a file is decoded once and not once a frame.
 
 use std::ffi::OsStr;

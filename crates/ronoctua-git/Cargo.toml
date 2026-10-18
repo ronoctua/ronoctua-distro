@@ -42,3 +42,9 @@ ronoctua-consent = { path = "../ronoctua-consent", features = ["test-support"] }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_GIT", "RONOCTUA_GIT_ASKPASS", "RONOCTUA_GIT_PQ_TLS", "RONOCTUA_SSH"]
+run-env = ["RONOCTUA_GIT", "RONOCTUA_GIT_ASKPASS", "RONOCTUA_GIT_PQ_TLS", "RONOCTUA_SCRIPT", "RONOCTUA_SETSID", "RONOCTUA_SSH", "RONOCTUA_SSH_KEYGEN"]
+bins = { "ronoctua-git-askpass" = "apart" }

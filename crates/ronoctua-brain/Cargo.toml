@@ -1,115 +1,69 @@
 [package]
 name = "ronoctua-brain"
-description = "The brain: what the machine does on its own, when it may do it, and what happened."
+description = "The brain as the system speaks to it: its wire, its mind, and the distro's modules as data."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# ONE BORDER, ONE CRATE — the shape `ronoctua-transfers`, `ronoctua-memory` and
-# `ronoctua-network` already have. What this one owns is WHEN: which task is
-# due, whether the machine can afford it right now, and what happened last
-# time. It does not draw, does not translate, does not speak Wayland, and it
-# runs no privileged command itself.
-[dependencies]
-# The two XDG roots, in the one crate that owns them (zero dependencies).
-ronoctua-xdg = { path = "../ronoctua-xdg" }
-# THE PULSE, and the only crate allowed to read `/proc`. The brain refuses to
-# start anything while the machine is busy, and it learns that the machine is
-# busy by ASKING — a scheduler that opened `/proc/pressure/cpu` for itself
-# would be the second border that crate exists to prevent.
-ronoctua-memory = { path = "../ronoctua-memory" }
-# The types `ronoctua-memory` speaks: `Pressure`, `Reading`, `Gauge`. Naming
-# them is not a dependency on the display list — nothing here builds one.
-ronoctua-protocol = { path = "../ronoctua-protocol" }
-# `when::Zone` — THE TZif READER, and the only reason this line exists.
+# WHAT CROSSES THE BRAIN'S SOCKET, and nothing that runs. The footer, its
+# windows and the brain's buffer link THIS to ask and to draw; the daemon
+# (`ronoctua-brain-daemon`, whose binary is still `ronoctua-brain`) decides
+# when anything runs and compiles every module's code, the person's included.
+# So a line in a module, or a module the person writes, never recompiles the
+# footer — see `src/lib.rs`.
 #
-# A schedule that says "in the afternoon" is a schedule in the person's own
-# time, and turning an instant into a local hour needs the machine's zone.
-# There are three ways to get one and two of them are worse: `localtime_r`
-# needs `unsafe`, which this crate forbids, and a second TZif reader would be
-# the same hundred lines in a second place — the one already here is checked
-# against `coreutils date` on the machine's real zone. Nothing else of this
-# crate is used, and `moment::Offset` is the seam, so a test drives a zone that
-# jumps without a fixture.
+# Every line below is either the wire's or the SHARED HALF of a module another
+# crate names (`modules/<id>/shared.rs`, compiled here beside its manifest).
+[dependencies]
+# The two XDG roots, in the one crate that owns them (zero dependencies): the
+# socket's path and the preferences' folders.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# `when::Zone` — THE TZif READER, and the only reason this line exists: a
+# moment in the person's own day (`moment::Offset`) needs the machine's zone,
+# and a second reader would be the same hundred lines in a second place.
 ronoctua-files = { path = "../ronoctua-files" }
-# THE MACHINE'S OWN CLOCK, in the one crate that talks to `timedated`. The
-# clock's watch (a module) reads three properties and, when nothing is keeping
-# the clock, turns the network time client on. A second reader of `timedatectl`
-# would be a second answer about one clock.
-ronoctua-clock = { path = "../ronoctua-clock" }
-# THE JOURNAL, through the one crate that follows it. The watch thread runs
-# ONE `journalctl --follow` for every module that asked for a match, by the
-# store path the unit hands in (`RONOCTUA_JOURNALCTL`) — never a second
-# reader of the journal here.
-ronoctua-journal = { path = "../ronoctua-journal" }
-# A CHIME, through the one crate that knows PipeWire's programs: `pw-play` by
-# the store path the unit's environment names, never compiled in — so this
-# line adds no PipeWire to the binary's closure.
-ronoctua-audio = { path = "../ronoctua-audio" }
-# A PERSON'S FILE — what a module lets them choose, under its config
-# directory — is written through the one crate that writes one: read with
-# `parsed` before it is written whole, so a file that does not parse is
-# refused and never replaced by a default.
+# A PERSON'S FILE, written through the one crate that writes one: the brain's
+# preferences, and the lines the LLM accounts' shared half keeps.
 ronoctua-store = { path = "../ronoctua-store" }
-# THE VIDEO CATALOGUE'S LAST SCAN, read-only (`read::Catalog`), for the module
-# that schedules its scanner: what the danger mark and the page say.
-ronoctua-video-metrics = { path = "../ronoctua-video-metrics", features = [ "db" ] }
-# WHETHER THERE IS A WAY OUT, and WHETHER THE POWER SAVER IS ON — from the
-# crates that speak NetworkManager and power-profiles-daemon, for a module
-# that needs the network and waits while the person saves energy.
-ronoctua-network = { path = "../ronoctua-network" }
-ronoctua-power = { path = "../ronoctua-power" }
-# THE SECURITY CENTRE'S FILES AND WORDS, for the module that watches it:
-# the status and settings the root helper writes, the window's end and the
-# firewall's log prefix. WITHOUT `authority`: the brain never links the sudo
-# door (`sudo-door-is-one`).
-ronoctua-security = { path = "../ronoctua-security" }
-# WHERE crun KEEPS ITS FOLDERS, for the `containers` module: the one crate
-# that knows podman says it (`runtime_dir`), and nothing here runs podman.
-ronoctua-containers = { path = "../ronoctua-containers" }
-# THE BELONGINGS' FILES, as their own crate reads them (`prefs`: serde and
-# the XDG roots, never `age`): the reminder module reads what the person chose
-# and how the last sync ended.
-ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
-# THE SUPER INDEX'S STATUS AND SETTINGS (the module that keeps the index): its
-# shapes and two small files, WITHOUT its engine — the brain never links
-# tantivy; the unit it starts is the one writer.
-ronoctua-index = { path = "../ronoctua-index", default-features = false }
-# THE LLM ACCOUNTS' module reads their list, their limits and what to watch
-# through the one crate that reads the agents' state — WITHOUT `fetch`: the
-# module only reads what was kept, so the brain links no TLS client, no
-# consent pass and no credentials reader (the usage unit is the one that asks).
-ronoctua-llm = { path = "../ronoctua-llm", default-features = false }
-# THE MACHINE'S RECORD (`state.json`), as the crate that writes it reads it,
-# for the module that says a boot trial failed. Pure: serde, the person
-# crate's schemas and `geteuid`; nothing of it runs as part of the brain.
+# THE SHARED HALVES (`modules/<id>/shared.rs`), each through the one crate that
+# is the border it reads — what a module's readers ask of the same machine its
+# daemon half watches. The modules are not named here (a module is its folder,
+# and only its `namedBy` may name it); what the halves read today:
+#
+# - the battery, as `ronoctua-memory` reads `/sys`;
+# - the machine's record and its boot trial (`ronoctua-machine`, pure: serde,
+#   the person crate's schemas and `geteuid`), and the declared programs the
+#   verification held (`ronoctua-person`, its schemas alone);
+# - how the last pull of the belongings ended (`ronoctua-belongings`'s
+#   `prefs`: serde and the XDG roots, never `age`);
+# - the LLM accounts, their limits and the usage endpoint's last answer, as
+#   `ronoctua-llm` keeps them — WITHOUT `fetch`: no TLS client, no consent
+#   pass, no credentials reader.
+ronoctua-memory = { path = "../ronoctua-memory" }
 ronoctua-machine = { path = "../ronoctua-machine" }
-# THE PERSON'S DECLARED DATA, as its crate reads it — the schemas alone
-# (`default-features = false`: no root applier, no lock): the update's view
-# says which declared programs the verification held (`local/held.json`).
 ronoctua-person = { path = "../ronoctua-person", default-features = false }
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
+ronoctua-llm = { path = "../ronoctua-llm", default-features = false }
 anyhow.workspace = true
 tracing.workspace = true
-# The wire, and the two files. One JSON object per line on the socket, for the
-# reason `ronoctua-transfers` writes down: a whitespace grammar loses half of a
-# value that contains a space without saying so.
+# The wire. One JSON object per line on the socket, for the reason
+# `ronoctua-transfers` writes down: a whitespace grammar loses half of a value
+# that contains a space without saying so.
 serde = { workspace = true }
 serde_json.workspace = true
 
-# THE DAEMON, as its own binary.
-#
-# A `[[bin]]` so `nix/rust.nix` can extract JUST this: a derivation references
-# what its BYTES cite, and shipping the whole workspace to decide when to run
-# an update would put the renderer, wgpu and the wasm runtime inside a unit
-# that has no screen.
-[[bin]]
-name = "ronoctua-brain"
-path = "src/bin/daemon.rs"
-
-[dependencies.tracing-subscriber]
-workspace = true
-
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_BRAIN_MODULES_DIR", "RONOCTUA_MACHINE_DIR", "RONOCTUA_SYSTEMCTL"]
+run-env = ["RONOCTUA_BRAIN_CATALOGUE", "RONOCTUA_SYSTEMCTL"]
+beside = ["ronoctua-brain"]
+# What this crate compiles of each module's folder: the manifest (which its
+# build script finds a folder by) and the shared half. Never a module's code,
+# its texts or its prose: an edit of those is the daemon's alone, and here it
+# would rebuild the footer.
+data = ["modules/*/manifest.nix", "modules/*/shared.rs"]

@@ -256,7 +256,7 @@ Chrome 151 real, offline, e o `kiosk-vm` repete o que importa. Isto a VM não mo
 ### 0.00000395. Os checks oferecidos do redimensionador, das colunas e do quiosque · pequeno
 
 - `native-hosts-take-chromes-origin` — ESCRITO e registrado, nunca construído: ele precisa dos
-  binários `rust.transfers` e `rust.browser`, e a leva não construía o workspace no Nix. Falta
+  binários `rust.transfers` e `rust.browser`, e a leva não construía os programas no Nix. Falta
   rodá-lo, quebrá-lo de propósito e ver a mensagem.
 
 - acabou quando: ele foi quebrado de propósito, a mensagem exata foi vista e o arquivo restaurado
@@ -267,13 +267,13 @@ A cadeia de fallback existe, 37 escritas desenham e a régua da célula conhece 
 asiática (ver `docs/ARCHITECTURE.md`, "Duas cadeias de fallback"). Três coisas ficam de fora, e
 nenhuma é um defeito escondido: são limites medidos.
 
-- **A tinta do CJK é mais estreita que a célula reservada.** Medido: o ideograma anda 1,667
-  célula das 2 que a régua dá, e o hangul 1,533. Nada se sobrepõe — sobra vão, e uma linha de
-  japonês fica com entreletra folgada. Fechar exige reescalar as cinco faces `NotoSansMonoCJK`
-  para `upem 833` mexendo em `head` E no `FontMatrix` do `CFF2`, porque com `CFF2` os contornos
-  têm escala própria. **Como saber que acabou:** o `ronoctua-test-faces` imprimir 2,000 para o
-  ideograma, e uma foto de um parágrafo em japonês ao lado do mesmo em latim mostrar a mesma
-  cor de página.
+- **A tinta do CJK é mais estreita que a célula reservada.** Medido: o ideograma anda 1,667 célula
+  das 2 que a régua dá, e o hangul 1,533. Nada se sobrepõe — sobra vão, e uma linha de japonês fica
+  com entreletra folgada. Fechar exige reescalar as cinco faces `NotoSansMonoCJK` para `upem 833`
+  mexendo em `head` E no `FontMatrix` do `CFF2`, porque com `CFF2` os contornos têm escala própria.
+  **Como saber que acabou:** o `nix run .#rust.bins.ronoctua-test-faces` imprimir 2,000 para o
+  ideograma, e uma foto de um parágrafo em japonês ao lado do mesmo em latim mostrar a mesma cor de
+  página.
 
 - **Não dá para DIGITAR japonês, só exibir.** Não há `zwp_text_input_v3` nem
   `zwp_input_method_v2` em lugar nenhum da árvore, então não há pré-edição nem string de commit;
@@ -731,8 +731,8 @@ vídeo que não baixa, não como erro do gerador.
 
 ### 3. Desempenho medido só em host não-NixOS · pequeno
 
-`nix run .#bench` mede num compositor **aninhado** dentro de outro, com o contorno de driver de
-`nix/graphics-host.nix`. O caminho gráfico da distro instalada é mais curto.
+`nix run .#bench` mede num compositor headless, sem janela, na GPU do host, com o contorno de driver
+de `nix/graphics-host.nix`. O caminho gráfico da distro instalada é mais curto.
 
 - acabou quando: o mesmo comando roda num NixOS instalado e os números entram no `ARCHITECTURE.md`
 
@@ -966,7 +966,8 @@ senha nova). O que eles não alcançam:
   janela (`fast_access_rows::draw`), mas só o `.#shot` a mostra. Falta uma cena.
 - **Vídeo apagado do catálogo sai do índice** (`Videos::gone_since`, testado contra um catálogo de
   mentira); falta ver com o catálogo de verdade e a unidade rodando: um vídeo em `ronoctua-index
-  query` depois de uma varredura, e fora dela depois de apagado no player.
+  query` (numa máquina, `nix run .#rust.index -- query …`: o programa não está no PATH) depois de
+  uma varredura, e fora dela depois de apagado no player.
 - **Web, YouTube, dicionário e tradução não foram fotografados com resposta**: o fotógrafo não pede
   host; o grid do YouTube foi fotografado sobre uma resposta de mentira (`--videos`).
 - **Instalar um programa pela fila** faz as perguntas da central (licença não livre, download acima
@@ -1022,7 +1023,7 @@ lista acima.
   `pq-age-interop` e `pq-identity-never-prints` (o texto avaliado de cada um) rodaram, limpos e
   sabotados, contra os binários do `cargo`, com o `age` 1.3.1 do nixpkgs e com o pinado do
   `pq-age-interop` (`.#checks.x86_64-linux.pq-age-interop.pinnedGoAge`, este sim construído no
-  Nix); nenhum dos três foi construído, porque pedem o workspace de `release`.
+  Nix); nenhum dos três foi construído, porque pedem os programas de `release`.
 - acabou quando: os três checks passam no `.#most`, e o `pq-age-interop` passa com o recipiente do
   crate `age` no lugar do nosso
 
@@ -1033,7 +1034,7 @@ lista acima.
 ### O flake da máquina e as declarações — o que a pista não provou · pequeno cada
 
 - **O `host-nix-golden-evaluates` não foi construído inteiro na pista**: a metade do build roda o
-  `ronoctua-install` do workspace do Nix, e compilar o workspace não cabe numa pista. As duas metades
+  `ronoctua-install` de release do Nix, e construí-lo não cabia numa pista. As duas metades
   foram provadas à parte (o ensaio do binário do `cargo` dá exatamente a fixture; o `toplevel` da
   referência instancia). Acabou quando: o `.#most` o constrói.
 - **O AppImage declarado nunca foi construído com um AppImage de verdade**: a fixture tem pin falso
@@ -1421,8 +1422,9 @@ Cachix nem uma instalação.
     só, que os dois crates leiam).
 - **A notificação de um "remover de vez" que a atualização segurou diz "removido"**: o fim do
   trabalho não sabe que a mudança esperou (o `Outcome` não diz, e um `Ended` novo pede uma etiqueta
-  de notificação no `surface.rs` e no `assets/notifications.nix`). A lista diz a verdade — o programa
-  continua nela com "sai na próxima atualização deste computador" (`Refusal::LeavesAtNextApply`).
+  de notificação no rodapé (`ronoctua-shell-footer`) e no `assets/notifications.nix`). A lista diz a
+  verdade — o programa continua nela com "sai na próxima atualização deste computador"
+  (`Refusal::LeavesAtNextApply`).
   - pronto quando: o fim do trabalho leva que a mudança espera, e a notificação diz isso.
 - **Os programas da distro de fora do Nix (Flatpak, AppImage, web, Android do registro) não passaram
   pela vista**: as tabelas do L04 estão vazias; o `Declarations::distro_of` acha um Flatpak e um app
@@ -1466,16 +1468,18 @@ Cachix nem uma instalação.
   é o `installer-vm`.
 - **Seguir um release que voltou** (`.#release --rollback-to`) é decisão do dono: o instalador só segue
   um release mais novo que o pendrive, e uma volta pediria ser reconhecida como volta.
-- **O salto para o instalador do release** (`nix run <release>#install`) compila no ISO o workspace do
-  release para rodar o instalador novo: a distro não tem cache binário (decisão do dono, 2026-10-11).
-  Ninguém saltou de verdade ainda — não existe release publicado.
+- **O salto para o instalador do release** (`nix run <release>#install`) compila no ISO as unidades
+  do release para rodar o instalador novo (a semente leva os programas, nunca as unidades): a distro
+  não tem cache binário (decisão do dono, 2026-10-11). Ninguém saltou de verdade ainda — não existe
+  release publicado.
 - **O portão de rede numa máquina real**: o tempo de espera do link (30 s) e da medição (5 s) foram
   escolhidos, não medidos, e a frase da pergunta nomeia os servidores que o `nix config show
   substituters` responde no ISO.
-- **Os três checks antigos do instalador** (`installer-dryrun`, `installer-writes-belongings-into-the-home`,
-  `host-nix-golden-evaluates`) e o novo `installer-requires-network` rodam o `rust.workspace` do Nix,
-  que uma pista não constrói: foram provados com o binário do `cargo`, com sabotagem síncrona no
-  novo. Acabou quando: o `.#most` os constrói.
+- **Os três checks antigos do instalador** (`installer-dryrun`,
+  `installer-writes-belongings-into-the-home`, `host-nix-golden-evaluates`) e o novo
+  `installer-requires-network` rodam os programas de release do Nix (`rust.bins.<programa>`), que
+  uma pista não constrói: foram provados com o binário do `cargo`, com sabotagem síncrona no novo.
+  Acabou quando: o `.#most` os constrói.
 - **As telas novas foram vistas como texto (`--show`) e como imagem** (o QR lido de volta pelo
   `zbarimg`). O ponteiro foi provado pelo estado da TUI (os testes clicam onde `places` diz que cada
   coisa está desenhada); ninguém clicou num terminal de verdade por SSH.
@@ -1486,12 +1490,13 @@ Cachix nem uma instalação.
 ### Pertences: a lista do que vai para o repositório — o que o pacote deixou · pequeno cada
 
 - **O `belongings-list-is-the-walk` foi avaliado, não construído.** A metade de Rust é o
-  `rust-tests` estreitado a doze testes (`belongingsListing`), que recompila o workspace no Nix sob
-  a trava pesada; a mesma linha de `cargo test --exact` rodou na pista ("12 passed") e cada teste foi
-  sabotado. A metade que lê fonte rodou fora do Nix, com o prelúdio extraído do `checks.nix`, e
-  pegou as sabotagens (um leitor de `TREES` no `walk.rs`, um `NEVER` importado na shell, o `PLAIN`
-  reexportado de novo no `plain.rs`, a lista caminhando sozinha, e os apelidos dentro de chaves:
-  `kept::{self as k}`, `kept::{*}`, `kept::{Place, x::{TREES}}`, `crate::{kept as k}`).
+  `rust.testsOf` de doze testes (`belongingsListing`), sobre o harness que as unidades constroem,
+  sob a trava pesada; a mesma linha de `cargo test --exact` rodou na pista ("12 passed") e cada
+  teste foi sabotado. A metade que lê fonte rodou fora do Nix, com o prelúdio extraído do
+  `checks.nix`, e pegou as sabotagens (um leitor de `TREES` no `walk.rs`, um `NEVER` importado na
+  shell, o `PLAIN` reexportado de novo no `plain.rs`, a lista caminhando sozinha, e os apelidos
+  dentro de chaves: `kept::{self as k}`, `kept::{*}`, `kept::{Place, x::{TREES}}`, `crate::{kept as
+  k}`).
 - **A vigia das pastas da lista tem teto** (64 pastas e 64 árvores, cada árvore com o teto da vigia,
   `TREE_MOST`): uma casa acrescentada inteira com mais pastas do que isso tem a parte de baixo ouvida
   só na próxima contagem que outra coisa dispare.
@@ -1533,7 +1538,7 @@ Cachix nem uma instalação.
   `seal-secrets-are-files`, `transfers-never-link-age` e `every-channel-says-its-quantum-status`
   rodaram (o texto de cada um no `tests/checks.nix`, com os caminhos do store trocados pelos
   binários do `cargo` de perfil `loop`), limpos e sabotados uma vez cada; nenhum foi construído,
-  porque pedem o workspace de `release`. As cópias dos fatos dos dois perfis que o
+  porque pedem os programas de `release`. As cópias dos fatos dos dois perfis que o
   `every-channel-says-its-quantum-status` lê (a unidade do rodapé de `noctua` e de `minimal`) foram
   avaliadas e construídas à parte.
   - acabou quando: os quatro passam no `.#most`.
@@ -1602,3 +1607,230 @@ fase). O que a foto achou e não foi consertado nela:
 - **No rodapé, a barra lateral do gerenciador não mostra o cabeçalho de pendrive**: ela lê o udisks
   da máquina, e só a câmera da janela planta drives (`--blank`, `--luks`). O mesmo vale para os
   registros da máquina na vista da atualização do rodapé, que pedem `machine-state/` plantado.
+
+
+## A leva de 2026-10-12
+
+A granularidade do build e o shell em crates (o porquê no `docs/ARCHITECTURE.md`, seção 10). O que
+cada passo deixou por fazer, por assunto.
+
+### O build em unidades — o que ficou · pequeno cada
+
+- **A fase 1 das camadas ainda existe** (`nix/rust/layers.nix`, `nix/scripts/rust-layer.py`,
+  `rust-index.py`, `test_rust_index.py`, `rust.layers`/`layersWith`, o `depsFrom = "layers"` e o
+  caminho da camada do executor). Só o `.#profile-bench` a usa, para medir cada variante sobre a
+  camada dela. Portá-lo para as unidades de terceiros (o frio = a soma das unidades, os codegen
+  units conferidos no `rustc.json` de cada uma) e então apagar tudo — numa leva em que a
+  reconstrução de toda unidade já vá acontecer, porque o executor é entrada de todas. A regra de
+  fronteira de caminho da fase 1 (`under`, `paths_in`) é a antiga e sai junto (latente: nenhum
+  pacote `links` do plano imprime um caminho colado numa flag).
+  - acabou quando: nenhuma derivation nomeia uma camada, e o `.#profile-bench` mede sobre as
+    unidades.
+- **Os outros apps que constroem um sistema não são dimensionados**: `.#apply-here`, `.#vm`,
+  `.#iso`, `.#install`, `.#shot` e `.#release` rodam `nix build` com o `max-jobs` do `nix.conf`.
+  Depois de uma edição, compilam sem conta.
+  - acabou quando: cada um constrói pelo `ronoctua-sized-build` (o `.#apply-here`, como o apply,
+    pelas `ronoctua.machine.phases`).
+- **O ISO não leva as unidades**: a semente tem só os programas, e as libs têm `allowSubstitutes =
+  false`. A primeira atualização depois de instalar que muda o código de um crate compila tudo o que
+  está abaixo dos programas que mudaram — se mudou o shell, toda lib abaixo dele. Levar o
+  `rust.release.keep` (~1,95 GiB) na semente custaria isso no ISO: decisão do dono.
+- **`metrics` não diz os núcleos**: o `peak-kib` de uma unidade pesada depende do `$NIX_BUILD_CORES`
+  com que foi construída, e o `.#rust-peaks` só diz, sem julgar, uma pesada acima do `shellMiB`.
+  Gravar `cores` ao lado (`rust-unit.py`) reconstrói toda unidade uma vez.
+- **`shellMiB`/`besideMiB` são do shell de um crate só** (o harness e o programa de release a 1, 3 e
+  6 núcleos, 2026-10-15). As pesadas de agora são o programa de release do shell (3,9 GiB a doze
+  núcleos), a biblioteca de loop do rodapé (1,8 GiB a doze) e a de release dele (2,2 GiB a um);
+  medi-las a 1, 3 e 6 núcleos daria a elas mais núcleos, e a de loop do rodapé a um núcleo pode sair
+  da lista. A lib de release do jogador mede 1770 MiB, perto da fatia (1792).
+  - acabou quando: os números do `nix/build-sizing.nix` são das pesadas de agora, e o `.#rust-peaks`
+    passa.
+- **O teto do cgroup do root só é provado nas funções** (`sizing_cgroup_ceiling` sobre pastas
+  plantadas).
+  - acabou quando: um teste de VM roda o apply como root numa unidade com `MemoryMax` e o diário diz
+    o orçamento daquele teto.
+- **Testes de tempo de parede ao lado de uma compilação**: a bateria roda as execuções de teste
+  depois de toda compilação (fase 1d), mas o `.#quick` e um `nix build` à mão ainda as põem ao lado
+  de um `rustc` (o teste de 20 ms do `ronoctua-broadcast` falhou assim uma vez).
+  - acabou quando: o teste mede tempo de CPU, ou toda porta de entrada roda as execuções depois.
+- **Uma pausa durante a pesagem vira "correndo"** (`ronoctua-transfers`, de antes da leva): o
+  `run_it` (`local.rs`) grava `Stage::Running` depois de pesar sem olhar o interruptor, e a pausa
+  que o `flip` do `serve.rs` gravou enquanto a cópia pesava some — a cópia fica parada e a linha diz
+  que ela corre. Sob carga o `pausing_holds_and_cancelling_takes_the_piece_back` falha assim
+  ("expected Paused and saw Some(Running)"; uma vez no F5, numa rodada de testes ao lado de
+  compilações).
+  - acabou quando: o fim da pesagem grava `Paused` com o interruptor em pausa, e um teste segura a
+    pesagem até a pausa chegar.
+- **O `.#rebuild-cost -- <arquivo>` não simula um dado**: só reescreve fonte de crate, então num
+  `.ftl` diz 0 entradas e numa semente recusa, onde a edição de verdade move 67 e 65 execuções de
+  teste (F5). Sem argumento ele compara com o `HEAD`.
+  - acabou quando: um `.ftl` e uma semente passam pelo `texts.override { fileEdits }` e pelo
+    `themed.override { seedEdits }`, como nos checks de granularidade.
+- **Pipelining por `.rmeta` nos terceiros**: com o mesmo número de threads que o cargo, os terceiros
+  sozinhos custam 1,48–1,72× a camada (o caminho crítico cranelift-codegen → wasmtime espera cada
+  rlib inteiro). O frio inteiro já é 1,01–1,03×; só vale se cortar 20% de algo que se sente.
+- **O `DEP_*` de um pacote `links` cujo build script roda mais de uma vez no mesmo grafo**, dizendo
+  coisas diferentes, não é atribuído (o relatório do cargo não diz qual execução é qual). Nenhum
+  build script nosso depende de um assim; a unidade que dependesse recusaria dizendo por quê.
+- **O rustfmt das unidades não alcança o `module.rs` dos módulos do brain**: eles entram por
+  `#[path]` em código gerado, e nenhum `fmt.<crate>` os nomeia — só o `nix fmt`.
+  - acabou quando: o `fmt` do daemon passa cada `module.rs` como raiz.
+- **`graphics-rpath-only-where-graphics-are` constrói todo programa de release** (está no `most`); o
+  RUNPATH já está num atributo da derivation (`passthru.graphics`), e o check pode virar avaliação.
+- **O `ronoctua-design` lê `../ronoctua-protocol/wit`** pela feature `guest` (os buffers): um
+  caminho que sai do crate. O host não compila a feature e nenhuma unidade o vê; o `nix/buffers.nix`
+  remonta a árvore para isso.
+- **A ponte Tor não liga o programa do transporte**: o anel `bridge-transport` escreve
+  `ClientTransportPlugin <palavra>` sem `exec <caminho>` (as variáveis `RONOCTUA_TOR_OBFS4` e
+  `_SNOWFLAKE` não eram lidas e saíram). Ligar é feature: o `lyrebird` e o `snowflake` continuam
+  instalados pelo `nix/modules/tor.nix`.
+- **O estúdio ganhou a libwayland no RUNPATH** (a cópia do crane a tirava, e a captura de tela dele
+  não achava a biblioteca numa máquina instalada). Nenhum teste de VM fotografa a captura do
+  estúdio.
+- **O palco do `.#shot` tem no PATH só os programas do bundle**, o cérebro, a fila e o player: a
+  cena do ranking (`ronoctua-video-metrics add`, `ronoctua-index query`) precisa pôr
+  `rust.videoMetrics` e `rust.index` no palco ao nascer.
+- **`declare-installs-now-and-records` é um teste de VM com nome de check** (sem `-vm`): quem filtra
+  as VMs pelo nome sobe uma sem querer.
+  - acabou quando: o nome termina em `-vm`.
+
+### O perfil de release e o tamanho do programa · horas de medida, e uma decisão do dono
+
+- **A decisão do perfil (a variante E) foi medida com o shell num crate só e a dois núcleos.** O
+  `.#profile-bench` agora constrói cada variante dimensionada (N4), e o override de dezesseis
+  unidades de código nomeia o `ronoctua-shell`, que é hoje um binário fino de ~800 linhas: medir de
+  novo, e decidir se o override nomeia os crates grandes que nasceram (o rodapé, o kit, a busca, o
+  jogador) ou sai.
+  - acabou quando: uma medida nova do `.#profile-bench` está no `docs/ARCHITECTURE.md` e o `chosen`
+    é o que ela escolheu.
+- **O programa do shell cresceu**: 133,8 MB em release na linha de base, 147,5 MB com a variante E e
+  163,7 MB com o shell em ~50 crates (genéricos monomorfizados em cada crate que os usa; o LTO fino
+  não junta). A regra do perfil não julga tamanho: se ele deve julgar (um teto no fecho do sistema),
+  é decisão do dono, e a medida roda de novo com ela.
+- **A resolução do `.#bench`**: o shaping de produção sai com 0,1 ms e a instanciação com 0,001 ms;
+  nesses números a regra de 3% só vale até um dígito impresso. Imprimir mais casas nos quatro
+  programas de bench deixaria a regra morder ali também.
+
+### O protocolo da região: as formas duplas · médio cada, com a matriz para provar
+
+As nove famílias do R5 estenderam o mesmo protocolo em paralelo, e a integração deixou duas formas
+de algumas ideias, cada uma documentada onde mora (`ronoctua-shell-door/src/region.rs`). Juntar um
+par muda o desenho das regiões que usam a forma que sai:
+
+- o que o ponteiro acende: `Region::hover_span`, `Region::lit`, `Region::band` (a faixa posta em
+  pixels) e `Told::lights` — juntar o `band` ao `lit` pede a `Area` no `lit`;
+- o estado que sobrevive à região: o `Kept` que o rodapé empresta por tipo (as linhas da máquina) e
+  o `Resident` de uma funcionalidade; e o empréstimo dos campos do rodapé (`Lent`) ao lado do
+  `Kept`;
+- o ponteiro sobre os controles da região: `pointer`/`rests_on`, `grab`/`drag` e `wheel`, ao lado de
+  `hovered`/`dragged`/`pressed`/`released`/`left`/`wheeled` com o `Under` e a mão;
+- os ganchos do quadro: `before_frame`/`after_paint`/`after_frame` e
+  `before_measuring`/`laid_out`/`painted`/`after_the_frame`/`framed`;
+- o cursor de texto (`Told::caret` e `Region::caret`) e as figuras (`held_picture`, `picture`,
+  `pictures` e `cover_picture`);
+- a página: `Doorway::follow` (a superfície primeiro) e `Paging::Follow` (só o cursor, só com a
+  região na tela); `Region::take_anchor` e `Paging::Top`; `Region::language_changed` e
+  `Region::speak`;
+- a altura depois de uma notícia: as regiões que dizem `rows_changed` respondem
+  `says_when_its_rows_change`, e para as outras o hospedeiro mede de novo depois do quadro; e
+  `Doorway::resized` ao lado de `rows_changed`.
+- acabou quando: cada ideia tem uma forma só, e a matriz da linha de base sai igual.
+
+### O shell em crates — o que ficou · pequeno cada
+
+- **`run-command-handles-every-key` e a lista à mão `WITH_ACTION`** (`keymap.rs`) podem sair quando
+  o `every_command_has_an_owner` perguntar ao `Region::command` e ao `closed` de cada dona se ela
+  toma cada comando seu.
+- **O `CONCRETE` do rodapé está vazio** (toda vista de funcionalidade é região): ele e os passos dos
+  checks que o liam (`a-region-leaves-nothing-behind`, `the-slot-host-names-no-feature`) podem sair.
+- **`notif-dismiss` é do `notifications::KEYS` e o rodapé o responde** (a faixa): o teste do binário
+  o lista como exceção escrita (`THE_FOOTERS`). Passá-lo ao `leader::BASE` muda o dono no
+  `check-keymap --dump`: decisão.
+- **Uma palavra da linha de comando que a porta LÊ e não é UTF-8 para o programa** (`files
+  <caminho>`, `git-browser <pasta>`, `software-file`, `buffer`, `play`, os programas do
+  terminal/monitor/resgate). As tabelas de portas guardaram o comportamento (só o que a porta lê
+  vira texto, e o que não é texto para com uma frase); a janela do histórico do git, aberta por
+  `Launching::Program` (`args: Vec<String>`), perde os bytes de uma pasta que não é texto. Ler como
+  `OsString`/`PathBuf` até o fim, ou recusar com frase, é mudança de comportamento: decisão do dono.
+- **O conjunto da base está escrito em quatro checks** (`the-shell-foundation-names-no-feature`,
+  `a-view-stands-on-the-foundation`, `the-file-manager-stands-on-the-foundation`,
+  `footer-names-no-feature`), iguais hoje; um lugar só (no `shellManifestPrelude`) evitaria que um
+  divirja.
+- **A frase de download do catálogo de vídeos ensina a fila sem o rótulo do líder**
+  (`video-metrics-downloading` diria `t` onde as outras portas dizem `SUPER t`): o
+  `video_metrics_window.rs`, a câmera dele e a região usam `bindings::keys`, e as outras portas
+  `bindings::taught`. Defeito de antes da leva, guardado igual.
+- **A chave do Atuin (`Errand::ShowKey`) roda `atuin key` no laço**, nas duas portas; o conserto é
+  mandar a ordem à thread do Atuin.
+- **A recusa do udisks com o gerenciador fechado** (trancar um pendrive ocupado e fechar antes da
+  resposta) não diz "ocupado", nem na base; a região que fica ainda tem a vista, e a frase custaria
+  uma linha no `reported_closed`. Muda o que a base fazia: decisão do dono.
+- **Abrir por cima é uma regra genérica** (`Footer::region_free_for`): um comando que a região
+  MOSTRADA pede e que abre uma região ranqueada acima dela abre sem a pergunta de região livre. Hoje
+  só o `git-history` do gerenciador a usa; se o dono a quiser só para quem a pede, é um
+  `Closed::Over`.
+- **Comportamento novo que o dono pode querer de outro jeito**: os comandos de tecla do clipboard
+  rodados pelo nome com a vista fechada (`clipboard-remove`…) abrem a vista e agem nela.
+- **A câmera do rodapé não alcança o menu da janela** (pergunta ao `SCROLLSOCK` de verdade, não ao
+  compositor substituto), e a região de ícones dela mostra "Lendo as tabelas de ícones…": ela não
+  espera a thread que lê o `RONOCTUA_ICONSET`, como a câmera da janela espera.
+
+### Os valores como dado e o brain — o que ficou · pequeno cada
+
+- **As metades compartilhadas dos módulos fazem E/S na biblioteca do brain**
+  (`system-update/shared.rs` lê a bateria e os registros da máquina; `agent-accounts/shared.rs` lê
+  as contas e escreve as linhas da pessoa): o rodapé chama essas funções direto, e por isso a
+  biblioteca depende de `ronoctua-memory`, `-machine`, `-person`, `-belongings` e `-llm`. Trocar a
+  leitura direta por dado do fio muda o comportamento (a janela vazia com o brain parado): decisão
+  do dono.
+- **A biblioteca do brain compila o manifesto de TODO módulo da distro**, embora o rodapé precise só
+  dos que um `namedBy` lê (`clock_sync`, `system_update`, `video_metrics`, `agent_accounts`): uma
+  marca nova num módulo da distro recompila o rodapé. E as tabelas de um módulo (`tables.nix`) vão
+  para a biblioteca pelo manifesto, as do disco (`cache.rs`) e dos lembretes (`words.rs`) inclusive,
+  que só o `module.rs` lê.
+- **A gramática dos lembretes** (`reminders-grammar-*`) é valor de texto compilado na biblioteca do
+  brain, e a tabela dela lê o `gen-i18n.py`: editar o gerador dos textos recompila 44 bibliotecas de
+  release. Levá-la ao catálogo, ou dar à tabela um leitor próprio, fecha a última rota do
+  `texts-are-data`.
+- **Um glifo de módulo da pessoa que a fonte não tem** para o build é recusado pelo `measure` do
+  catálogo, no build da máquina inteira; recusar na avaliação pediria o `glyphnames.json` na
+  avaliação (import-from-derivation) — a alternativa é medir por módulo e deixar de fora o que
+  falha.
+- **O `mimeDb` lê o `icons.json` inteiro do glyphdb**, e o `syntax.rs` o lê: um ícone do chrome
+  editado recompila os seis buffers. Um `mimeDb` que lesse só os tokens que usa cortaria isso.
+- **Um glifo desenhado por vários tokens mostra um só** no navegador de ícones (o último em ordem de
+  nome, a regra do glyphdb).
+- **240 chaves de texto sem quem as diga no código** (`hint-volume`, `group-geography`,
+  `sidebar-fact-*`, `cmd-file-save`, `atlas-*`…): foram atribuídas por regra de nome. Tirá-las muda
+  o conjunto de mensagens.
+
+### Checks oferecidos na leva · pequeno cada
+
+Cada um com o que pega; nenhum foi escrito:
+
+- `bench-reads-the-renderers-field` — o campo que o `nix/bench-frames.nix` procura é o que o
+  `ronoctua_render::gpu` registra (`milestone =`); ~1 s, só leitura de fonte.
+- `keymap-dump-is-total` — o `check-keymap --dump` tem uma linha por binding de cada conjunto e todo
+  comando do registro; ~10 s.
+- `profile-variants-stay-off-the-evaluation-path` — nenhum `.nix` fora do app e do `nix/rust.nix`
+  nomeia `profileVariants`/`profileBench` (o import-from-derivation delas); ~1 s.
+- `wrappers-set-what-is-keyed` — cada nome de `rust.keyed` vai com `--set`, nunca `--set-default`,
+  em todo embrulho; ~1 s, avaliação.
+- `every-binary-carries-its-data` — a lista dos programas que falam ou pintam sai do grafo (quem
+  liga o `ronoctua-i18n`, o `ronoctua-tokens`), e cada um é embrulhado; ~1 s.
+- `the-keymap-is-installed-at-start` — o binário instala o keymap antes de qualquer porta (sem isso
+  toda tecla ensinada sairia vazia, calada); ~1 s.
+- `the-foundation-stands-on-no-daemon` — a lista dos crates de fronteira de que o kit e a porta
+  podem depender, cada um com o porquê; segundos.
+- `every-key-is-said` — toda chave de texto é dita (constante, literal, id ou prefixo) — mostraria
+  as 240 órfãs; ~5 s.
+- o vigia do `.#dev` vivo depois de cada ramo — o bloco de recarga construído, o `ronoctua-reload`
+  de verdade e `cargo` e rodapé de mentira: um valor editado, uma chave somada e um `.rs`, e o vigia
+  de pé depois dos três; ~25 s.
+- `brain-daemon-halves-reexport` — cada módulo da biblioteca com metade no daemon é reexportado no
+  módulo homônimo do daemon (um item que faltasse faria um `module.rs` da pessoa parar de compilar
+  longe da causa); ~1 s.
+- `chrome-icons-match-the-text` estendido aos glifos medidos do catálogo do brain; o custo do de
+  hoje.
+- `our-crates-are-built-unit-by-unit` reconhecendo a vendorização do nosso lock pelo conteúdo do
+  `Cargo.lock`, e não pelo caminho (um `importCargoLock` do nixpkgs passaria); o mesmo custo.

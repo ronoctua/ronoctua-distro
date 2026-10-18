@@ -29,6 +29,16 @@ pub mod key {
     pub const PILOT_SAMPLE_SAYS_FULL: &str = "pilot-sample-says-full";
     /// The why `when-empty`.
     pub const PILOT_SAMPLE_WHY_WHEN_EMPTY: &str = "pilot-sample-why-when-empty";
+
+    /// Every key of the module's own texts, in order.
+    pub static ALL: [&str; 6] = [
+        BRAIN_TASK_PILOT_SAMPLE,
+        BRAIN_TASK_PILOT_SAMPLE_DOES,
+        CMD_PILOT_SAMPLE_FORGET,
+        PILOT_SAMPLE_MARK_FULL,
+        PILOT_SAMPLE_SAYS_FULL,
+        PILOT_SAMPLE_WHY_WHEN_EMPTY,
+    ];
 }
 
 /// The marks it may put on the modeline.

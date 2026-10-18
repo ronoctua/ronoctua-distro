@@ -66,6 +66,6 @@
   # one truth behind the brain and two doors onto it. It names the module by
   # its compiled id and flips it with `Ask::Set { Knob::Enabled }`.
   namedBy = {
-    "crates/ronoctua-shell/src/locale.rs" = [ "clock-sync" ];
+    "crates/ronoctua-shell-locale/src/locale.rs" = [ "clock-sync" ];
   };
 }

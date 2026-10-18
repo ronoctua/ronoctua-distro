@@ -68,7 +68,7 @@ pub fn ftl(path: &str) -> Result<HashMap<String, String>> {
 
 /// Hands the buffer the phrases it declared, in one language.
 ///
-/// The same thing `crates/ronoctua-shell/src/buffer.rs` does at load, and for
+/// The same thing `crates/ronoctua-shell-buffers/src/buffer.rs` does at load, and for
 /// the same reason: a buffer that holds interface text has to be given it
 /// before the first frame, or the test photographs the fallback.
 ///

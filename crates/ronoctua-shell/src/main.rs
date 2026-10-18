@@ -1,22 +1,18 @@
-//! `ronoctua-shell` — the two-line footer.
+//! `ronoctua-shell` — the binary: the one program every door of the shell is.
 //!
-//! # The system's only chrome (sections 3 and 4.1)
+//! # What it is
 //!
-//! **ONE** `wlr-layer-shell` surface, anchored at the bottom, taking the whole
-//! width, with an exclusive zone of two lines of text. There is no separate
-//! bar, dock, bar clock, taskbar or floating popup — and there is not going
-//! to be (invariant 14).
+//! The composition, and nothing else: the one crate that names every
+//! feature. It installs what every door of the process reads — the theme,
+//! the date's shape, the size of the text, the keymap every crate's keys are
+//! assembled into (`keymap::CONTRIBUTIONS`), the player's pages — and runs
+//! the door the first word names: its own subcommands, then every crate's
+//! windows by their tables ([`DOORS`]), and, with no word, the footer, handed
+//! the regions it hosts by their ids ([`COMPOSITION`]). Each window, each
+//! view, the footer itself, is a crate of its own; a line of one recompiles
+//! that crate and this one.
 //!
-//! ```text
-//! ┌──────────────────────────────────────────┐
-//! │              content (buffers)           │
-//! ├──────────────────────────────────────────┤
-//! │ modeline                  [tray] [notif] │
-//! │ minibuffer                               │
-//! └──────────────────────────────────────────┘
-//! ```
-//!
-//! # What this binary does NOT do
+//! # What it does NOT do
 //!
 //! - **It does not tile windows.** What does that is the compositor
 //!   (invariant 4). One `xdg_toplevel` per native buffer, and the compositor
@@ -24,329 +20,99 @@
 //! - **It does not talk to the compositor through anything other than IPC or
 //!   layer-shell** (invariant 3). There is no fork and no patch of it, and no
 //!   crate of ours but `ronoctua-scroll` knows which compositor it is.
-//! - **It does not draw a fullscreen surface reimplementing layout.** That
-//!   would throw the compositor away and is forbidden (section 7.5).
-//!
-//! # This milestone's state
-//!
-//! Milestone 4: the surface comes up in the right font and the modeline reflects the focused
-//! buffer, fed by the compositor's event stream. The leader and which-key arrive in 5;
-//! notifications and tray in 6.
 
-// `deny`, not `forbid`: `surface.rs` needs ONE unsafe block to pass
-// Wayland's pointers to wgpu, and `forbid` accepts no exception even with the
-// contract written out. `deny` requires an explicit, visible `#[allow]`.
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 use anyhow::{Context as _, Result};
-use ronoctua_render::layout::{Segment, Shrink, Side};
+use ronoctua_shell_door::{column, launch, right_column};
+use ronoctua_shell_kit::doors::{Door, Words};
+use ronoctua_shell_kit::{actions, bindings, fold, ipc, language, theme, toolkits, when};
 use ronoctua_tokens as tokens;
 
-mod actions;
-// THE MODELINE THAT ADAPTS TO A PROGRAM — one adapter per program, the
-// Chrome kiosk's the first.
-mod adapt;
-mod apps;
-mod audio;
-mod audio_window;
-mod audio_words;
-mod band;
-// WHERE EVERY SCROLLBAR OF A FRAME WAS DRAWN: its column is the bar's, for
-// the pointer and for every band, whatever drew it.
-mod bars;
-mod bluetooth;
-mod bluetooth_window;
-mod bluetooth_words;
-// THE BRAIN'S LINE, under the minibuffer, and the thread that feeds it.
-mod brain;
-mod buffer;
-mod carry;
-mod chrome;
-mod clipboard;
-mod clipboard_view;
-mod column;
-mod daemon;
-mod disks;
-mod display;
-mod display_window;
-mod display_words;
-mod events;
-// EVERY WINDOW'S PLUMBING, ONCE: the seats, the scale, the GPU, the watches,
-// the header, the list, the pointer and the finger. A window is what it
-// draws and what its keys do; the rest is here, and a window that wants it
-// otherwise says so by overriding one method.
-mod door;
-mod files;
-mod files_window;
-mod fold;
-mod foreign;
-mod geo;
-mod geo_window;
-mod globe;
-mod hidden;
-mod hidpi;
-mod history;
-mod history_window;
-mod keyboard;
-mod keys_link;
-// THE CHROME KIOSK (`LEADER m b`): the pairs and the modeline's adapter, and
-// the view its `…`, `LEADER w B` and the `,` group open.
-mod kiosk;
-mod kiosk_view;
-mod language;
-mod leader;
-mod line;
-// THE LINE THAT OUTLIVES THE FOOTER — raised by systemd when it fails.
-mod lifeline;
-mod locale;
-mod locale_window;
-mod manual;
-mod manual_window;
-// The pure half of the brain bridge — the daemon's records turned into the
-// WIT's. Split out so `ronoctua-render-png` can link it without linking the
-// footer's line, which is what made the brain photographable at all.
-mod camera;
-mod camera_settings;
-mod camera_settings_window;
-mod camera_window;
-mod capture;
-mod gestures;
-mod mind_wire;
-mod minibuffer;
-mod motion;
-mod network;
-mod network_window;
-mod network_words;
-mod notifications;
-mod notifications_window;
-mod osk;
-mod paint;
-mod pasting;
+mod key;
+mod keymap;
 mod photograph;
-mod player;
-mod player_ambience;
-mod player_directory;
-mod player_find;
-mod player_globe;
-mod player_home;
-mod player_internet;
-mod player_kinds;
-mod player_lane;
-mod player_layout;
-mod player_machines;
-mod player_mark;
-mod player_media;
-mod player_metadata;
-mod player_page;
-mod player_picture;
-mod player_question;
-mod player_queue;
-mod player_rows;
-mod player_stage;
-mod player_subtitles;
-mod player_suggest;
-mod player_timeline;
-mod player_tracks;
-mod player_transport;
-mod player_window;
-mod pointers;
-mod pointers_window;
-mod power;
-mod power_window;
-mod power_words;
-mod resizer;
-mod right_column;
-mod seats;
-// A NAME TOO LONG FOR ITS COLUMN, walking sideways a cell at a time.
-mod slide;
-mod software;
-mod software_feed;
-mod software_pictures;
-mod software_window;
-mod software_words;
-mod sound;
-mod stage;
-mod surface;
-mod syncthing;
-mod syncthing_window;
-mod terminal;
-// WHICH THEME THIS PROCESS DRAWS IN, and how the doors hear about a change.
-mod theme;
-mod theme_chooser;
-// THE FILE MANAGER'S THUMBNAILS: the workers that make them and what has been
-// made. A pool and not the preview's single thread, because a grid wants every
-// answer and the panel wants only the newest.
-mod selection;
-mod thumbs;
-mod toolkits;
-mod trails;
-mod transfers;
-mod window_menu;
-mod workspaces;
-mod world;
-// `LEADER s u`: the animated mark on the modeline, the door that starts a
-// run, and the view that watches it happen — in the footer and in a window.
-// It knows no step: the sequence is its brain module's declaration.
-mod cursor_shape;
-mod text_select;
-mod update_window;
-mod virtual_keys;
-mod virtual_pointer;
+// THE REGIONS THE FOOTER HOSTS (`region::Slots`): one line per region.
+mod regions;
+// THE CENTRE'S VAULT FLOW as another door holds it — the file manager's
+// window, for `m` and `l` on its vault's row (`vault::Flow`).
+mod vault_flow;
 
-// A SIZE AS A PERSON READS IT — one arithmetic for the footer and for the
-// photograph of the brain's page, which links this file by `#[path]`.
-mod sizes;
+/// THE PLAYER'S PAGES WRITTEN ABOVE IT, in the order its view asks them —
+/// the ranking's look before the catalogue's, as the view asked them before
+/// the seam (`player_seam`). The binary is the one place that names both.
+const PLAYER_PAGES: &[&dyn ronoctua_shell_player::player_seam::Page] = &[
+    &ronoctua_shell_video_metrics::player_ranking::PAGE,
+    &ronoctua_shell_catalogue::player_catalog::PAGE,
+];
 
-// THE FILE MANAGER'S WINDOW IN A PNG, the player's camera's neighbour.
-mod files_photograph;
-// THE PREVIEW AND THE FACTS OF ONE FILE — the file manager's two panels, as a
-// part of their own that any door showing a file can hold.
-mod inspection;
-mod inspection_sheet;
+/// WHAT THE FOOTER HOSTS, AND WHAT ITS CAMERA PLANTS: the regions the binary
+/// registers (`regions.rs`) with the residents beside them, and the
+/// features' own fixtures the footer's camera plants by their words — the
+/// LLM accounts' marks over the room's files, the software centre's reading
+/// of the room. The footer names none of them.
+static COMPOSITION: ronoctua_shell_footer::Composition = ronoctua_shell_footer::Composition {
+    regions: regions::REGIONS,
+    residents: regions::RESIDENTS,
+    plantings: ronoctua_shell_footer::footer_photograph::Plantings {
+        accounts_marks: ronoctua_shell_agents::agents::with_accounts_marks,
+        software: ronoctua_shell_software::software_window::camera::planted_in_the_footer,
+    },
+};
 
-mod text_area;
+/// EVERY CRATE'S WINDOWS, by the word that names each on the command line
+/// (`ronoctua-shell <door> …`): one table per crate, sorted, each written
+/// beside the windows it opens (`kit::doors::Door`). A door that needs what
+/// two crates make — the file manager's window and the vault flow of the
+/// security centre, a buffer and the queue's words, the column's two tenants
+/// — is a subcommand of this binary's own (`main`).
+const DOORS: &[&[Door]] = &[
+    ronoctua_shell_agents::DOORS,
+    ronoctua_shell_audio::DOORS,
+    ronoctua_shell_belongings::DOORS,
+    ronoctua_shell_bluetooth::DOORS,
+    ronoctua_shell_calc::DOORS,
+    ronoctua_shell_camera::DOORS,
+    ronoctua_shell_catalogue::DOORS,
+    ronoctua_shell_clipboard::DOORS,
+    ronoctua_shell_containers::DOORS,
+    ronoctua_shell_display::DOORS,
+    ronoctua_shell_fast_access::DOORS,
+    ronoctua_shell_footer::DOORS,
+    ronoctua_shell_git::DOORS,
+    ronoctua_shell_history::DOORS,
+    ronoctua_shell_icons::DOORS,
+    ronoctua_shell_incus::DOORS,
+    ronoctua_shell_lifeline::DOORS,
+    ronoctua_shell_locale::DOORS,
+    ronoctua_shell_manual::DOORS,
+    ronoctua_shell_network::DOORS,
+    ronoctua_shell_notifications::DOORS,
+    ronoctua_shell_overlays::DOORS,
+    ronoctua_shell_player::DOORS,
+    ronoctua_shell_pointers::DOORS,
+    ronoctua_shell_power::DOORS,
+    ronoctua_shell_security::DOORS,
+    ronoctua_shell_software::DOORS,
+    ronoctua_shell_stick::DOORS,
+    ronoctua_shell_syncthing::DOORS,
+    ronoctua_shell_terminal::DOORS,
+    ronoctua_shell_update::DOORS,
+    ronoctua_shell_video_metrics::DOORS,
+];
 
-// THE KEYS PACKAGE (2026-09-30): the maximum alert bar, the classes of a
-// message's life, and the footer's own settings in both doors.
-mod alert;
-mod echo;
-mod footer_settings;
-mod footer_settings_window;
-
-// THE ONE FILE PICKER every door asks for a file, a folder or a name to
-// save under (`crate::file_picker`).
-mod file_picker;
-
-// Everything the info panel can change — the tags through their own
-// program, the details and the place through `ronoctua_inspect::amend`.
-mod inspection_edit;
-
-// THE GIT LINE under the file manager's path, and the history `C-h` opens —
-// the view, its window, and its camera.
-mod git_browser;
-mod git_browser_window;
-mod git_line;
-mod git_photograph;
-
-// The file manager's archives and encrypted disks: what the view asks the
-// door, what comes back, and the sheet `compress` opens.
-mod files_archive;
-
-mod icons;
-mod icons_page;
-mod icons_photograph;
-mod icons_window;
-
-// THE CALCULATOR (`LEADER =`): one view, its keypad and its converter, its
-// window — and the table of the windows that open floating, which its
-// window's place is read from too.
-mod calc;
-mod calc_convert;
-mod calc_keypad;
-mod calc_window;
-mod floating;
-
-mod player_website;
-
-mod player_catalog;
-mod player_posters;
-mod player_sources;
-
-mod video_metrics;
-mod video_metrics_feed;
-mod video_metrics_photograph;
-mod video_metrics_window;
-mod video_metrics_words;
-
-// THE SECURITY CENTRE (`LEADER s e`): the view, its window, and its words.
-mod security;
-mod security_window;
-mod security_words;
-
-mod containers;
-mod containers_feed;
-mod containers_photograph;
-mod containers_window;
-mod containers_words;
-
-mod belongings;
-mod belongings_photograph;
-mod belongings_window;
-mod belongings_words;
-
-mod consent_rows;
-mod fast_access;
-mod fast_access_detail;
-mod fast_access_online;
-mod fast_access_photograph;
-mod fast_access_rows;
-mod fast_access_search;
-mod fast_access_videos;
-mod fast_access_window;
-
-// THE RANKING of the video catalogue, a page of the player (`LEADER p k`).
-mod player_ranking;
-
-mod clipboard_window;
-mod clipboard_wire;
-mod footer_photograph;
-mod scene_photograph;
-mod watchdog;
-
-// THE CAMERA OF FOUR SYSTEM WINDOWS over planted machines: the network,
-// Bluetooth, the language and region, the camera's settings.
-mod system_photograph;
-
-mod player_translator;
-// THE 2026-10-05 WAVE'S MODULES, each package after its anchor.
-// ── anchor: L12 ──
-// THE /private VAULT, as the doors see it: the security centre's section,
-// the sidebar's row, the work for its root unit.
-mod vault;
-// ── anchor: L15 ──
-// `LEADER / c`: the distro's own repository, cloned into a folder.
-mod dev_clone;
-// THE 2026-10-11 WAVE: the person's binary cache, a page of the update's
-// view in both doors, and root's netrc through the footer's sudo door.
-mod binary_cache;
-// ── anchor: L17 ──
-// THE INSTALLER STICK: the view both doors draw, and its window (with the
-// window's camera).
-mod stick;
-mod stick_window;
-// ── anchor: L22 ──
-// THE SUDO BAR (2026-10-11): where every root gesture of every screen is
-// asked — the footer's strip above the modeline, and the gestures the views'
-// doors make through it.
-mod sudo_bar;
-// Encrypt anything: what the file manager and the security centre ask, and
-// the `Work::Seal` they hand the queue.
-mod seal;
-// ── anchor: L23 ──
-// INCUS (`LEADER s x`): the view, its words, its threads, its window and its
-// camera.
-mod incus;
-mod incus_feed;
-mod incus_photograph;
-mod incus_window;
-mod incus_words;
-// ── anchor: L24 ──
-// THE LLM ACCOUNTS (`LEADER m a`): the view both doors draw, its window, its
-// words and its camera.
-mod agents;
-mod agents_photograph;
-mod agents_window;
-mod agents_words;
-
-/// The layer-shell surface's namespace.
-///
-/// It is what the layer surface calls itself on the wire. Nothing in the
-/// compositor's configuration matches on it today — the previous one had a
-/// `layer-rule` keyed by this string, and this one has no equivalent that we
-/// use — so it is an identity rather than a join, and it is the name a
-/// `WAYLAND_DEBUG` trace shows when one is looking for our surface.
-pub const NAMESPACE: &str = "ronoctua-footer";
+/// EVERY KEY THIS BINARY MAY SAY: every crate's it links that speaks
+/// (`key::sets`, each owning its own) and every DISTRO brain module's, whose
+/// words the footer says through the module's manifest
+/// (`ronoctua_brain::compiled::key_sets`). What the start guard,
+/// `check-texts` and the census ask of the texts (`ronoctua_i18n::Keys::of`).
+/// A person's module is not here: this binary is the same with or without
+/// one.
+fn every_key(into: &mut Vec<ronoctua_i18n::Set>) {
+    key::sets(into);
+    ronoctua_brain::compiled::key_sets(into);
+}
 
 fn main() -> Result<()> {
     // BEFORE the subscriber: building `tracing` already costs time, and it counts
@@ -362,24 +128,115 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    // THE THEME, before any door: every process of this binary — the footer,
-    // the windows, a buffer's host — draws through the same three sources,
-    // read once here. The short-lived subcommands pay one file read.
-    theme::resolve_at_start();
-    // AND THE DATE'S SHAPE, by the same means and at the same moment: it is
-    // a process-wide value the way the theme is, so that a date resolves
-    // through it wherever one is written. See `locale::prefs::current`.
-    locale::prefs::adopt();
+    // THE DATE'S SHAPE, before any door: it is a process-wide value the way
+    // the theme (below) is, so that a date resolves through it wherever one
+    // is written. See `when::prefs::current`.
+    when::prefs::adopt();
     // AND THE SIZE OF THE TEXT, on the same footing and for the same reason.
     // It is not the theme's business — a palette and a size are two choices —
-    // but they are read at the same moment because they are both properties
-    // of the process rather than of any one door.
+    // but they are both read at start because they are both properties of
+    // the process rather than of any one door.
     toolkits::resolve_at_start();
+    // AND THE KEYMAP, which every door teaches its keys from: installed now
+    // and built on the first question, in the process that asks
+    // (`bindings::taught`). The binary is the one place that names every
+    // crate's keys (`keymap::CONTRIBUTIONS`).
+    bindings::install(keymap::build);
+    // AND THE PLAYER'S PAGES WRITTEN ABOVE IT — the ranking of the video
+    // catalogue, channels by theme — which every player's view of this
+    // process holds (`player_seam::install`): the binary is the one place
+    // that names them.
+    ronoctua_shell_player::player_seam::install(PLAYER_PAGES);
 
-    match std::env::args().nth(1).as_deref() {
+    let subcommand = std::env::args().nth(1);
+    // AND THE THEME, before any door: every process of this binary — the
+    // footer, the windows, a buffer's host — draws through the same three
+    // sources, read once here. Every other short-lived subcommand pays one
+    // file read.
+    //
+    // NOT FOR THE FOUR RELAYS, which draw nothing: they write a line to a
+    // socket and exit. The compositor starts them on a keypress by this
+    // binary's own path (`export-binds`), unwrapped and with ITS environment,
+    // and the theme is read off the palettes (`RONOCTUA_THEMES`): a session
+    // without them, or with an older build's, would panic on every chord.
+    if !matches!(
+        subcommand.as_deref(),
+        Some("leader" | "command" | "buffer-keymap" | "buffer-command")
+    ) {
+        theme::resolve_at_start();
+    }
+
+    // THE TEXTS, before anything speaks. The sentences are data read at run
+    // time (`RONOCTUA_TEXTS`, which the wrapper sets) and this binary was
+    // compiled with the key names only, so whether every key is in them is
+    // asked HERE, once, of the language this process is about to speak: a
+    // missing directory or another build's texts is one English line and exit
+    // 78 (`ronoctua_i18n::refuse`), never a screen of `[key]` or a panic in the
+    // middle of a door. The four relays say no word — they write a line to the
+    // footer's socket and exit, and `leader` is on a keypress's path — and
+    // `check-texts` says what is wrong by itself. EVERY KEY is every crate's
+    // this binary links that speaks and every distro module's (`every_key`).
+    //
+    // AND THE BRAIN'S CATALOGUE, at the same moment and for the same reason
+    // in marks: what the footer draws of the brain's modules — their glyphs,
+    // the actions the keymap registers, their notifications — is data read at
+    // run time too (`RONOCTUA_BRAIN_CATALOGUE`), and a missing file, another
+    // build's (its keys not in these texts) or notifications the book cannot
+    // read are one English line and exit 78 (`catalogue::refuse`), never a
+    // keymap short of every module's action. `check-catalogue` says what is
+    // wrong by itself; and the lifeline, which comes up because the footer
+    // died, draws no module's mark and registers no keymap, so it is not
+    // refused for data it never reads.
+    if !matches!(
+        subcommand.as_deref(),
+        Some(
+            "leader"
+                | "command"
+                | "buffer-keymap"
+                | "buffer-command"
+                | "check-texts"
+                | "check-catalogue"
+        )
+    ) {
+        match ronoctua_i18n::Texts::checked(
+            &language::resolve().0,
+            &ronoctua_i18n::Keys::of(every_key),
+        ) {
+            Err(missing) => ronoctua_i18n::refuse(&missing),
+            // THE LIFELINE'S DOORS, by its own table: never named here, so
+            // its word stays its crate's (`every-door-is-dispatched`).
+            Ok(_)
+                if ronoctua_shell_lifeline::DOORS
+                    .iter()
+                    .any(|door| subcommand.as_deref() == Some(door.name)) => {}
+            Ok(texts) => {
+                // ITS KEYS ASKED OF THE TEXTS ABOUT TO BE SPOKEN — and only
+                // the file read for a language that is none (a refusal the
+                // texts' own guard owns, never one of the catalogue's).
+                let read = match texts.as_ref() {
+                    Some(texts) => ronoctua_brain::catalogue::checked(|key| texts.has(key)),
+                    None => ronoctua_brain::catalogue::load(),
+                };
+                if let Err(missing) = read {
+                    ronoctua_brain::catalogue::refuse(&missing);
+                }
+                if let Err(why) = ronoctua_notify::brain::checked() {
+                    eprintln!("{}: {why}", program_name());
+                    std::process::exit(i32::from(ronoctua_brain::catalogue::EXIT_MISSING));
+                }
+            }
+        }
+    }
+
+    // THE WORDS AFTER THE SUBCOMMAND, none of them read yet: each door makes
+    // text of the ones it takes and no others (`Words`), as each arm read its
+    // own before the doors had tables — a word that is not UTF-8 stops only a
+    // door that reads it, never `opener`, which reads them as the system's.
+    let words = Words::of_this_process();
+    match subcommand.as_deref() {
         // It tells an ALREADY-RUNNING footer. It is the compositor that sees the
-        // leader's key — see the top of `leader.rs`.
-        Some("leader") => return leader::send_it("leader").context("tell the leader"),
+        // leader's key — see the top of the footer's `leader.rs`.
+        Some("leader") => return ipc::send_it("leader").context("tell the leader"),
         // RUNNING A COMMAND BY NAME, from outside the process.
         //
         // It is what section 13 asks for — every feature addressable by name
@@ -401,7 +258,7 @@ fn main() -> Result<()> {
             } else {
                 format!("command {id} {}", rest.join(" "))
             };
-            let sent = leader::send_it(&line);
+            let sent = ipc::send_it(&line);
             // A KEY THE FOOTER ASKED THE COMPOSITOR FOR, and no footer to take
             // it: the keys go back to the windows (`fold::nobody_took`).
             if sent.is_err() {
@@ -423,7 +280,7 @@ fn main() -> Result<()> {
                 .context("usage: ronoctua-shell buffer-keymap <pid>")?
                 .parse::<u32>()
                 .context("the pid has to be a number")?;
-            for (keys, id) in leader::buffer_keymap(pid).context("read the buffer's keymap")? {
+            for (keys, id) in ipc::buffer_keymap(pid).context("read the buffer's keymap")? {
                 println!("{keys} {id}");
             }
             return Ok(());
@@ -438,7 +295,7 @@ fn main() -> Result<()> {
             let id = args
                 .next()
                 .context("usage: ronoctua-shell buffer-command <pid> <id>")?;
-            return leader::buffer_command(pid, &id)
+            return ipc::buffer_command(pid, &id)
                 .with_context(|| format!("send `{id}` to buffer {pid}"));
         }
         // It opens a native buffer in a window of its OWN. What decides where it
@@ -452,9 +309,12 @@ fn main() -> Result<()> {
             // asks to write with `Effect::Save`, which is what lets an editor
             // exist without giving a buffer a filesystem (invariant 11).
             let file = std::env::args().nth(3);
-            return buffer::host_it(
+            // AND THE QUEUE IN WORDS, which are the work's: the host of
+            // buffers stands on the door alone (`buffer::QueueWords`).
+            return ronoctua_shell_buffers::buffer::host_it(
                 std::path::Path::new(&path),
                 file.as_deref().map(std::path::Path::new),
+                ronoctua_shell_work::jobs::queue_of,
             )
             .context("host the buffer");
         }
@@ -519,224 +379,20 @@ fn main() -> Result<()> {
         // compositor's config, and a string written at both ends drifts. The
         // two configs (`nix/modules/scroll.nix` and `nix/dev.nix`) take this in.
         Some("export-window-rules") => {
-            print!("{}", terminal::window_rules());
+            print!("{}", ronoctua_shell_terminal::terminal::window_rules());
             return Ok(());
-        }
-        // A terminal in a window of its own. With no argument it starts `$SHELL`;
-        // with one, it runs what is asked — and it is what the VM test uses so as not
-        // to depend on some shell's prompt.
-        // `ronoctua-shell files [path]` — the manager in a window of its
-        // own. The SAME `files::View` the footer draws from: what differs is
-        // only the window and the events of it, which is what makes "one
-        // implementation, two doors" true rather than claimed.
-        // `ronoctua-shell notifications` — the manager in a window of its own.
-        // The SAME `notifications::View` the footer draws from: what differs is
-        // the window and its events, which is what makes "one implementation,
-        // two doors" true rather than claimed.
-        // THE SCREEN CAPTURE: a frozen picture of the screen with the focus,
-        // and a region, a window or all of it chosen on top — see `capture`.
-        // The footer starts it and reads back where the file went.
-        Some("capture") => {
-            return capture::host_it().context("the screen capture");
-        }
-        // THE SCREEN RESIZER'S KEEPER (`LEADER / r`): it measures the screen
-        // with the focus, raises the two curtains and ends both when either
-        // ends — see `resizer`. The footer starts it and reads how it ended.
-        Some("resizer") => {
-            return resizer::keep_it().context("the screen resizer");
-        }
-        // ONE CURTAIN OF THE RESIZER, `right` or `bottom` — raised by the
-        // keeper and by nothing else: it reads its parent's command line.
-        Some("resizer-curtain") => {
-            let edge = std::env::args()
-                .nth(2)
-                .as_deref()
-                .and_then(resizer::Edge::of_word)
-                .with_context(|| {
-                    format!(
-                        "usage: ronoctua-shell {} {}",
-                        resizer::CURTAIN_WORD,
-                        resizer::Edge::ALL.map(resizer::Edge::word).join("|")
-                    )
-                })?;
-            return resizer::curtain_it(edge).context("a curtain of the screen resizer");
-        }
-        Some("notifications") => {
-            return notifications_window::host_it().context("host the manager");
-        }
-        // `ronoctua-shell power` — the power view in a window of its own. The
-        // SAME `power::View` the footer draws from.
-        // THE RADIO'S SECOND DOOR, one device to a line and a fact to a
-        // row — the footer's capped region is a glance, not a reading.
-        Some("bluetooth") => {
-            return bluetooth_window::host_it().context("host the bluetooth view");
-        }
-        // THE SCREENS' SECOND DOOR, one monitor to a sheet of eighteen rows —
-        // the footer's capped region is a glance, not a reading.
-        Some("display") => {
-            return display_window::host_it().context("host the screens view");
-        }
-        Some("power") => {
-            return power_window::host_it().context("host the power view");
-        }
-        Some("history") => {
-            return history_window::host_it();
-        }
-        // THE MANUALS in a window: `ronoctua-shell manual` opens on their
-        // list, as `LEADER h` does, and `manual <word>` on one of them — the
-        // word the footer's `C-w` hands. A word that names no manual is
-        // refused, never taken for the shortcuts'.
-        Some("manual") => {
-            let which = match std::env::args().nth(2) {
-                None => None,
-                Some(word) => match manual::Which::of_word(&word) {
-                    Some(which) => Some(which),
-                    None => anyhow::bail!(
-                        "no manual is called `{word}`; the words are {}",
-                        manual::Which::ALL.map(manual::Which::word).join(", ")
-                    ),
-                },
-            };
-            return manual_window::host_it(which).context("host the manuals");
-        }
-        Some("syncthing") => {
-            return syncthing_window::host_it().context("host the syncthing view");
-        }
-        // `ronoctua-shell software [level | search <words> | web <address>]`
-        // — the person's own programs in a window of their own, the SAME
-        // `software::View` the footer draws from: on the first page, on the
-        // level named, on what a search for the words finds, or on a new web
-        // app's editor for the address.
-        Some("software") => {
-            let said: Vec<String> = std::env::args().skip(2).collect();
-            let opening = if said.is_empty() {
-                software::Opening::Home
-            } else {
-                software_window::opening_of(&said.join(" ")).with_context(|| {
-                    format!(
-                        "usage: ronoctua-shell software [{} | {} <words> | {} <address>]",
-                        software_window::LEVEL_WORDS.join(" | "),
-                        software_window::SEARCH_WORD,
-                        software_window::WEB_WORD
-                    )
-                })?
-            };
-            return software_window::host_it(opening).context("host the software view");
-        }
-        // WHAT THE `br.ronoctua.software.desktop` ENTRY RUNS for a double
-        // click on an `.AppImage`, an `.apk` or a `.flatpakref`: the window,
-        // with the question to install that file up.
-        Some("software-file") => {
-            let path = std::env::args()
-                .nth(2)
-                .context("usage: ronoctua-shell software-file <path>")?;
-            return software_window::host_it(software_window::file_opening(std::path::Path::new(
-                &path,
-            )))
-            .context("host the software view");
-        }
-        Some("audio") => {
-            return audio_window::host_it().context("host the sound view");
-        }
-        // MICE, TOUCHPADS AND EVERY CURSOR, in a window of their own.
-        Some("camera") => {
-            return camera_window::host_it().context("the camera app");
-        }
-        Some("camera-settings") => {
-            return camera_settings_window::host_it().context("the camera settings window");
         }
         // A NATIVE DOOR IN A PNG, with no compositor and no VM — the
         // player's window and its column at every size, walked by keys and
         // clicks from a state fixture (`photograph.rs`). What `nix run .#png
         // -- --door …` runs.
-        Some("photograph") => {
-            let words: Vec<String> = std::env::args().skip(2).collect();
-            return photograph::run(&words);
-        }
-        // THE PLAYER, in a window and in the column on the right: one host,
-        // two kinds of surface (`player_window::Door`).
-        // `player only`, `player maximized` and `player pip` open it with the
-        // picture alone: in the window, on the whole screen, or small in the
-        // corner.
-        //
-        // `player maximized --screen <connector>` is one of the windows "show
-        // on every screen" opens: whole-screen on THAT output, showing what is
-        // routed there (`player_stage::everywhere`).
-        Some("player") => {
-            let words: Vec<String> = std::env::args().skip(2).collect();
-            let stage = match words.first().map(String::as_str) {
-                Some("only") => player_window::Stage::Only,
-                Some("maximized") => player_window::Stage::Maximized,
-                Some("pip") => player_window::Stage::Small,
-                // A LISTING OF THE CATALOGUE on the whole screen, on the one
-                // the door that asked handed over (`player_catalog`).
-                Some("listing") => player_window::Stage::Listing,
-                _ => player_window::Stage::Off,
-            };
-            let screen = match words.get(1..) {
-                Some([flag, connector]) if flag == player_stage::SCREEN => Some(connector.clone()),
-                Some([]) | None => None,
-                Some(other) => anyhow::bail!(
-                    "`player {}` takes `{} <connector>` and nothing else, not `{}`",
-                    words.first().map_or("", String::as_str),
-                    player_stage::SCREEN,
-                    other.join(" ")
-                ),
-            };
-            anyhow::ensure!(
-                screen.is_none() || stage == player_window::Stage::Maximized,
-                "a screen of its own is for `player maximized` alone"
-            );
-            return player_window::host_window(stage, screen).context("the player's window");
-        }
-        // WHAT THE `.desktop` ENTRY RUNS: play these, and show the column —
-        // a file opened from anywhere is a file somebody wants to see play.
-        // RIGHT AFTER WHAT PLAYS, and the queue kept (the owner's rule): the
-        // player puts them there and plays the first. A folder goes whole —
-        // the player makes it a playlist named after it — and a subtitle
-        // file goes over the film it is named after.
-        Some("play") => {
-            let items: Vec<String> = std::env::args().skip(2).collect();
-            ronoctua_player::client::ensure().context("the player did not start")?;
-            let what = items
-                .iter()
-                .map(|i| {
-                    let path = std::path::Path::new(i);
-                    ronoctua_player::wire::Thing::Location(
-                        if i.contains("://") || path.is_absolute() {
-                            i.clone()
-                        } else {
-                            std::env::current_dir()
-                                .map(|d| d.join(path).to_string_lossy().into_owned())
-                                .unwrap_or_else(|_| i.clone())
-                        },
-                    )
-                })
-                .collect();
-            ronoctua_player::client::tell(&ronoctua_player::wire::Ask::Put {
-                what,
-                after: None,
-                into: None,
-                play: true,
-                replace: false,
-                once: false,
-            })?;
-            // A COLUMN ALREADY UP, on any workspace, is left where it is.
-            if right_column::holder(right_column::Tenant::Player).is_none() {
-                let me = std::env::current_exe().context("where this program is")?;
-                std::process::Command::new(me)
-                    .arg("column")
-                    .stdin(std::process::Stdio::null())
-                    .spawn()
-                    .context("raising the column")?;
-            }
-            return Ok(());
-        }
+        Some("photograph") => return photograph::run(&words.all()),
         // `ronoctua-shell column [<tenant>] [--on <workspace>] [--size <size>]`
-        // — a right column (`crate::column`), on the workspace named or the
-        // one in front, at the size named or its tenant's own.
+        // — a right column (`column`), on the workspace named or the one in
+        // front, at the size named or its tenant's own: its two tenants are
+        // two crates, and the binary is where both are named.
         Some("column") => {
-            let said: Vec<String> = std::env::args().skip(2).collect();
+            let said = words.all();
             let opening = column::Opening::parse(&said[..]).with_context(|| {
                 format!(
                     "usage: ronoctua-shell column [{}] [--on <workspace>] [--size {}]",
@@ -748,198 +404,171 @@ fn main() -> Result<()> {
             })?;
             return match opening.tenant {
                 right_column::Tenant::FastAccess => {
-                    fast_access_window::host_column(&opening, None).context("the search's column")
+                    ronoctua_shell_fast_access::fast_access_window::host_column(&opening, None)
+                        .context("the search's column")
                 }
 
                 right_column::Tenant::Player => {
-                    player_window::host_column(&opening).context("the player's column")
+                    ronoctua_shell_player::player_window::host_column(&opening)
+                        .context("the player's column")
                 }
             };
         }
-        Some("pointers") => {
-            return pointers_window::host_it().context("host the pointers view");
+        // `ronoctua-shell files [path]` — the manager in a window of its own,
+        // the SAME `files::View` the footer draws from, handed the vault's
+        // flow of the security centre, which the files crate cannot name
+        // (`vault_flow`).
+        Some("files") => {
+            let where_ = words.first().map(std::path::PathBuf::from);
+            return ronoctua_shell_files::files_window::host_it(
+                where_.as_deref(),
+                vault_flow::flow(),
+            )
+            .context("host the manager");
         }
-        Some("locale") => {
-            return locale_window::host_it().context("host the language and region view");
-        }
-        Some("geo") => {
-            return geo_window::host_it().context("host the regions' view");
-        }
-        // `ronoctua-shell network` — the network in a window of its own. The
-        // SAME `network::View` the footer draws from, and it asks what the
-        // footer asks — a password masked, a tunnel's path, a Tor value — on
-        // its own header's line (`Ui::ask`), where the footer asks on its
-        // minibuffer; both answers reach `network::View::answered`.
-        Some("network") => {
-            return network_window::host_it().context("host the network view");
-        }
-        // `ronoctua-shell network-facts` — what the view would draw, as lines
-        // a test can read.
-        //
-        // IT EXISTS FOR THE VM, and it is honest about that: a virtual machine
-        // has no screen worth photographing and no radio at all, so what it
-        // can prove about this view is the READINGS — the daemon's answer, the
-        // aeroplane, whether the two tunnels are there, how many sockets are
-        // listening. Each line is `key=value`, which is what a test asserts on
-        // and what a person reads when the screen says something surprising.
-        Some("network-facts") => {
-            let net = ronoctua_network::Manager::fresh()
-                .map(|m| m.look())
-                .unwrap_or_default();
-            println!("daemon={}", net.daemon);
-            println!("way={}", net.way.id());
-            println!("networking={}", net.networking);
-            println!("airplane={}", net.airplane());
-            println!("radio={}", net.radio);
-            println!("links={}", net.links.len());
-            for l in &net.links {
-                println!(
-                    "link={} medium={:?} state={:?} address={}",
-                    l.interface,
-                    l.medium,
-                    l.state,
-                    l.address.as_deref().unwrap_or("none")
-                );
+        // EVERY KEY THIS BINARY WAS COMPILED WITH, IN EVERY LANGUAGE OF THE
+        // TEXTS IT IS POINTED AT (`RONOCTUA_TEXTS`) — the start guard's
+        // question, asked of all of them and said in full. It brings nothing
+        // up; `every-key-exists-at-run-time` runs it against the build's own
+        // texts and against broken copies.
+        Some("check-texts") => {
+            let mut refused = false;
+            let keys = ronoctua_i18n::Keys::of(every_key);
+            for language in ronoctua_i18n::LANGUAGES {
+                match ronoctua_i18n::Texts::checked(language, &keys) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        eprintln!("{language} is a declared language and its texts do not load");
+                        refused = true;
+                    }
+                    // NO DIRECTORY AT ALL is one sentence, not one per language.
+                    Err(ronoctua_i18n::Missing::Unset) => {
+                        eprintln!("{}", ronoctua_i18n::Missing::Unset);
+                        refused = true;
+                        break;
+                    }
+                    Err(missing) => {
+                        eprintln!("{missing}");
+                        refused = true;
+                    }
+                }
             }
-            println!("saved={}", net.saved.len());
-            for a in &net.active {
-                println!("active={} kind={} tunnel={}", a.id, a.kind, a.tunnel());
-            }
-            let tunnels = ronoctua_tunnel::look(&ronoctua_tunnel::Places::default());
-            match tunnels.tailscale.as_ref() {
-                Some(t) => println!("tailscale={} running={}", t.state, t.running),
-                None => println!("tailscale=absent running=false"),
-            }
-            match tunnels.tor.as_ref() {
-                Some(t) => println!(
-                    "tor=present established={} bootstrap={}",
-                    t.established, t.bootstrap
-                ),
-                None => println!("tor=absent established=false bootstrap=0"),
-            }
-            let places = ronoctua_memory::Places::default();
-            let sockets = ronoctua_memory::net::sockets(&places);
-            println!(
-                "listening={}",
-                sockets.iter().filter(|s| s.listening).count()
-            );
-            for s in sockets.iter().filter(|s| s.listening) {
-                println!(
-                    "port={} {} owner={}",
-                    s.protocol.label(),
-                    s.named(),
-                    s.owner.as_ref().map_or("unknown", |o| o.program.as_str())
-                );
+            if refused {
+                std::process::exit(i32::from(ronoctua_i18n::EXIT_MISSING));
             }
             println!(
-                "neighbours={}",
-                ronoctua_memory::net::neighbours(&places).len()
-            );
-            println!(
-                "vendors={}",
-                ronoctua_lan::oui::table()
-                    .map(|t| ronoctua_lan::oui::Vendors::read(&t).len())
-                    .unwrap_or(0)
+                "texts OK: {} keys of {} crates and {} brain modules, each in {} languages ({}), at {}",
+                keys.len(),
+                ronoctua_i18n::Keys::of(key::sets).crates().count(),
+                ronoctua_brain::compiled::IDS.len(),
+                ronoctua_i18n::LANGUAGES.len(),
+                ronoctua_i18n::LANGUAGES.join(", "),
+                std::env::var(ronoctua_i18n::ENV).unwrap_or_default()
             );
             return Ok(());
         }
-        Some("files") => {
-            let where_ = std::env::args().nth(2).map(std::path::PathBuf::from);
-            return files_window::host_it(where_.as_deref()).context("host the manager");
-        }
-        // `ronoctua-shell update` — the update, live, in a window of its own.
-        //
-        // It is the door the modeline's mark opens, and it takes no argument
-        // BECAUSE it may name no step: what it draws is the declared table the
-        // brain already carries and the two journals the units write. It opens
-        // with nothing running too — a run that has finished is exactly when
-        // somebody wants to read what it did.
-        Some("update") => {
-            return update_window::host_it().context("host the update");
-        }
-        Some("terminal") => {
-            let args: Vec<String> = std::env::args().skip(2).collect();
-            let (program, rest) = args
-                .split_first()
-                .map_or((None, &[][..]), |(p, r)| (Some(p.as_str()), r));
-            return terminal::host_it(program, rest).context("host the terminal");
-        }
-        // THE SAME TERMINAL, under the monitor's `app_id`. It is a subcommand and
-        // not a flag on the one above because what changes is the window's
-        // IDENTITY, which is what the compositor's rule reads to float it — see
-        // `terminal::APP_ID_MONITOR`. The program is required: a monitor with no
-        // monitor to run is a floating window with a shell in it.
-        Some("monitor") => {
-            let args: Vec<String> = std::env::args().skip(2).collect();
-            let (program, rest) = args
-                .split_first()
-                .context("usage: ronoctua-shell monitor <program> [args]")?;
-            return terminal::host_monitor(program, rest).context("host the monitor");
-        }
-        // THE LINE THAT OUTLIVES THE FOOTER.
-        //
-        // Raised by `OnFailure=` when `ronoctua-footer.service` fails, and by
-        // the nested loop's starter when the child exits badly. It is a
-        // subcommand of this binary for the reason the ten window doors are:
-        // everything it needs — the renderer, the chrome, the tokens, both
-        // languages — is already here, and a crate of its own would be a second
-        // closure carrying the same wgpu for a process that lives seconds.
-        //
-        // It does NOT go through the control socket. That socket belongs to the
-        // footer, and this exists precisely when the footer does not answer —
-        // which is also why all four emergency binds are dead in that moment.
-        Some("lifeline") => {
-            let unit = std::env::args()
-                .nth(2)
-                .context("usage: ronoctua-shell lifeline <unit>")?;
-            return lifeline::host_it(&unit).context("raise the lifeline");
-        }
-        // THE RESCUE CONSOLE, and a third identity for the same terminal.
-        //
-        // `Ctrl+Alt+Del` reaches this, and so does the VT unit — the difference
-        // is that over there nobody goes through the shell at all. That is the
-        // whole point of the console being a terminal application: this
-        // subcommand is a convenience for the door that has a compositor, not
-        // the way in.
-        Some("rescue") => {
-            let args: Vec<String> = std::env::args().skip(2).collect();
-            let (program, rest) = args
-                .split_first()
-                .context("usage: ronoctua-shell rescue <program> [args]")?;
-            return terminal::host_rescue(program, rest).context("host the rescue console");
+        // WHAT THE FOOTER DRAWS OF THE BRAIN'S MODULES, AS IT IS POINTED AT
+        // (`RONOCTUA_BRAIN_CATALOGUE`) — the start guard's question, asked
+        // of every language and said in full: the file read, every key its
+        // modules need in each language's texts, and its notifications as
+        // the book reads them. It brings nothing up; the catalogue's checks
+        // run it against the build's own file and against broken copies.
+        Some("check-catalogue") => {
+            let catalogue = match ronoctua_brain::catalogue::load() {
+                Ok(c) => c,
+                Err(missing) => ronoctua_brain::catalogue::refuse(&missing),
+            };
+            let mut refused = false;
+            let keys = ronoctua_i18n::Keys::of(every_key);
+            for language in ronoctua_i18n::LANGUAGES {
+                match ronoctua_i18n::Texts::checked(language, &keys) {
+                    Ok(Some(texts)) => {
+                        let lacking = catalogue.lacking(|k| texts.has(k));
+                        if !lacking.is_empty() {
+                            eprintln!(
+                                "{language}: {}",
+                                ronoctua_brain::catalogue::Missing::Keys {
+                                    file: std::env::var_os(ronoctua_brain::catalogue::ENV)
+                                        .unwrap_or_default()
+                                        .into(),
+                                    keys: lacking,
+                                }
+                            );
+                            refused = true;
+                        }
+                    }
+                    Ok(None) => {
+                        eprintln!("{language} is a declared language and its texts do not load");
+                        refused = true;
+                    }
+                    Err(missing) => {
+                        eprintln!("{missing}");
+                        refused = true;
+                    }
+                }
+            }
+            let notified = match ronoctua_notify::brain::checked() {
+                Ok(entries) => entries.len(),
+                Err(why) => {
+                    eprintln!("{why}");
+                    refused = true;
+                    0
+                }
+            };
+            if refused {
+                std::process::exit(i32::from(ronoctua_brain::catalogue::EXIT_MISSING));
+            }
+            println!(
+                "catalogue OK: {} modules, {} marks, {} actions, {} events ({} notifications), \
+                 {} glyphs, every key in {} languages, at {}",
+                catalogue.modules.len(),
+                catalogue
+                    .modules
+                    .iter()
+                    .map(|m| m.marks.len())
+                    .sum::<usize>(),
+                catalogue.actions().count(),
+                catalogue.events().count(),
+                notified,
+                catalogue.glyphs.len(),
+                ronoctua_i18n::LANGUAGES.len(),
+                std::env::var(ronoctua_brain::catalogue::ENV).unwrap_or_default()
+            );
+            return Ok(());
         }
         // It checks the keymap without bringing anything up. It exists so whoever edits their own
         // keymap gets the same verdict `nix flake check` gives.
         Some("check-keymap") => {
             // THE THREE SETS, each built through `Tree::build_it`: a collision
             // in any of them — the folded ones included — fails here, named
-            // with the set it is in (`leader::Trees::build`).
-            let (trees, registry) = leader::default_of().context("keymap")?;
+            // with the set it is in (`bindings::Trees::build`).
+            let (trees, registry) = keymap::build().context("keymap")?;
             // REACHABILITY, and not only collisions. A command with no key at all does not
             // collide with anything — and that is how it goes unnoticed. It is
             // asked of the FULL tree, which holds every sequence the other two
             // fold away.
-            let reachable = leader::reachable(&trees.full);
+            let reachable = keymap::reachable(&trees.full);
             // The compositor's 141 MIRRORED actions are reachable by NAME
             // and by name only — giving them keys would spend the whole keymap on
             // what is almost never used. It is recognisable by its prefix.
             //
-            // AND THE THREE NAMED IN `leader::BY_NAME_ONLY`, which carries
-            // the reason for each. It is that constant and not a literal here
-            // because the TEST beside it reads the same list, and two literals
-            // would be two answers the day one of them moved.
+            // AND THE ONES EVERY CRATE NAMES AS REACHED BY NAME ONLY
+            // (`keymap::by_name_only`), each with its reason beside it. It is
+            // that list and not a literal here because the TEST beside it
+            // reads the same list, and two literals would be two answers the
+            // day one of them moved.
             //
             // AND EVERY BRAIN MODULE'S ACTION (`leader::a_module_action`),
             // generated from the modules' folders, for the reason written
             // there.
-            let by_name_only = leader::BY_NAME_ONLY;
+            let by_name_only = keymap::by_name_only();
             let orphans: Vec<&str> = registry
                 .all_ones()
                 .map(|c| c.id)
                 .filter(|id| {
                     !id.starts_with("wm-")
                         && !by_name_only.contains(id)
-                        && !leader::a_module_action(id)
+                        && !ronoctua_shell_footer::leader::a_module_action(id)
                         && !reachable.contains(id)
                 })
                 .collect();
@@ -948,6 +577,17 @@ fn main() -> Result<()> {
                 "commands with no key at all (no sequence, no chord, no emergency): {}",
                 orphans.join(", ")
             );
+            // `--dump`: THE WHOLE KEYMAP AS TEXT, after the verdict — every
+            // sequence of the three sets, the chords, every command the
+            // registry holds and every brain action. Sorted wherever the
+            // order is only the order of registration, so two builds that
+            // assemble the same keymap differently print the same lines: it
+            // is what proves a refactor of the keymap moved no key.
+            if std::env::args().skip(2).any(|a| a == "--dump") {
+                for line in keymap_dump(&trees, &registry) {
+                    println!("{line}");
+                }
+            }
             println!(
                 "keymap OK: {} bindings ({} in the footer's set, {} in the window's), \
                  {} chords, {} commands, all reachable",
@@ -960,191 +600,34 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
-        // `ronoctua-shell footer-settings` — the footer's own settings in a
-        // window (`LEADER s r w`). The SAME `footer_settings::View` the
-        // footer's region draws, and every change is a command the footer
-        // runs.
-        Some("footer-settings") => {
-            return footer_settings_window::host_it().context("host the footer's settings");
-        }
-
-        // `ronoctua-shell git-browser [<folder>]` — the history of the
-        // repository the folder is in (`C-h` in the file manager's window).
-        // The SAME `git_browser::View` the footer's region draws.
-        Some("git-browser") => {
-            let dir = std::env::args()
-                .nth(2)
-                .map_or_else(std::env::current_dir, |d| Ok(std::path::PathBuf::from(d)))
-                .context("no folder to read the history of")?;
-            return git_browser_window::host_it(&dir).context("host the git browser");
-        }
-
-        // `ronoctua-shell icons [nerd-fonts|lucide|unicode]` — the icons app
-        // in a window (`LEADER m i w`), on the screen named: the SAME
-        // `icons::View` the footer's region draws.
-        Some("icons") => {
-            let screen = std::env::args()
-                .nth(2)
-                .map(|w| {
-                    icons::screen_named(&w).with_context(|| {
-                        format!(
-                            "`{w}` is not a screen; the screens are nerd-fonts, lucide and unicode"
-                        )
-                    })
-                })
-                .transpose()?
-                .unwrap_or(ronoctua_iconset::Collection::NerdFonts);
-            return icons_window::host_it(screen).context("host the icons app");
-        }
-
-        // `ronoctua-shell calc` — the calculator in a window (`LEADER = w`),
-        // the SAME `calc::View` the footer's region draws.
-        Some("calc") => {
-            return calc_window::host_it().context("host the calculator");
-        }
-
-        // `ronoctua-shell unlock-check` — the adult catalogue's lock asked as
-        // a door asks it (`player_catalog::unlock`): this session's user, the
-        // `ronoctua-unlock` service, the password read from STANDARD INPUT
-        // (never an argument: an argv is every process's to read) into the
-        // `Secret` that wipes it. It prints `open` or the refusal's name, and
-        // fails unless open — what `player-vm` proves the declared service
-        // with, and what a person runs to see why the lock answers as it does.
-        Some("unlock-check") => {
-            let mut line = String::new();
-            std::io::stdin()
-                .read_line(&mut line)
-                .context("read the password from standard input")?;
-            let kept = line.trim_end_matches(['\n', '\r']).len();
-            line.truncate(kept);
-            let secret = ronoctua_consent::keys::Secret::new(line);
-            let answer = player_catalog::unlock(&secret);
-            drop(secret);
-            match answer {
-                Ok(()) => {
-                    println!("open");
-                    return Ok(());
-                }
-                Err(refusal) => {
-                    println!("{}", refusal.id());
-                    std::process::exit(1);
-                }
-            }
-        }
-
-        // `ronoctua-shell video-metrics [page]` — the video catalogue in a window
-        // (`LEADER v w`). The SAME `video_metrics::View` the footer's region draws.
-        Some("video-metrics") => {
-            let said: Vec<String> = std::env::args().skip(2).collect();
-            let word = said.join(" ");
-            let page = video_metrics_window::opening_of(&word).with_context(|| {
-                format!(
-                    "usage: ronoctua-shell video-metrics [{}]",
-                    video_metrics_window::OPENINGS.join(" | ")
-                )
-            })?;
-            return video_metrics_window::host_it(page).context("host the video catalogue");
-        }
-
-        // `ronoctua-shell security [section]` — the security centre in a window
-        // (`LEADER s e w`): the SAME `security::View` the footer's region draws.
-        Some("security") => {
-            let words: Vec<String> = std::env::args().skip(2).collect();
-            let (section, check) = security_window::words_of(&words)?;
-            return security_window::host_it(section, check).context("host the security centre");
-        }
-
-        // `ronoctua-shell containers` — the person's containers in a window
-        // (`LEADER s o w`). The SAME `containers::View` the footer's region
-        // draws, over its own threads.
-        Some("containers") => {
-            return containers_window::host_it().context("host the containers");
-        }
-
-        // `ronoctua-shell belongings` — the belongings in a window
-        // (`LEADER s v w`). The SAME `belongings::View` the footer's region
-        // draws.
-        Some("belongings") => {
-            return belongings_window::host_it().context("host the belongings");
-        }
-
-        // THE 2026-10-05 WAVE'S WINDOWS AND SUBCOMMANDS, each package after
-        // its anchor (`ronoctua-shell incus`, `stick`, `agents`…).
-        // ── anchor: L12 ──
-        // ── anchor: L15 ──
-        // ── anchor: L17 ──
-        // `ronoctua-shell stick [--drive <id>]` — the installer stick in a
-        // window (`LEADER s z w`), opened on a drive by the file manager's
-        // `W`. The SAME `stick::View` the footer's region draws.
-        Some("stick") => {
-            let words: Vec<String> = std::env::args().skip(2).collect();
-            let drive = match words.as_slice() {
-                [] => None,
-                [flag, id] if flag == "--drive" => Some(id.clone()),
-                _ => anyhow::bail!("usage: ronoctua-shell stick [--drive <id>]"),
-            };
-            return stick_window::host_it(drive).context("host the installer stick");
-        }
-        // ── anchor: L18 ──
-        // ── anchor: L22 ──
-        // ── anchor: L23 ──
-        // `ronoctua-shell incus [images|new]` — Incus in a window (`LEADER s x
-        // w`): the SAME `incus::View` the footer's region draws, over its own
-        // threads, opened on the instances, the images or a new instance's
-        // draft.
-        Some("incus") => {
-            let words: Vec<String> = std::env::args().skip(2).collect();
-            let opening = incus_window::Opening::of_words(&words)?;
-            return incus_window::host_it(opening).context("host Incus");
-        }
-        // ── anchor: L24 ──
-        // `ronoctua-shell agents [n]` — the LLM accounts in a window (`LEADER m
-        // a w`), on the account at place `n` when one is given. The SAME
-        // `agents::View` the footer's region draws.
-        Some("agents") => {
-            let place = std::env::args()
-                .nth(2)
-                .and_then(|n| n.parse::<usize>().ok());
-            return agents_window::host_it(place).context("host the LLM accounts");
-        }
-
         // `ronoctua-shell opener <file>…` — what opening each file reaches,
         // one line per file: the entry's id, `editor`, or `nothing <type>`.
-        // The answer both file doors act on (`files::opener_of`), over the
+        // The answer both file doors act on (`launch::opener_of`), over the
         // catalogue and the `mimeapps.list` defaults of this environment —
         // what `models-open-in-orca` asks, with no window.
         Some("opener") => {
             let paths: Vec<std::path::PathBuf> =
                 std::env::args_os().skip(2).map(Into::into).collect();
             anyhow::ensure!(!paths.is_empty(), "usage: ronoctua-shell opener <file>...");
-            let catalogue: apps::Catalogue = std::sync::Arc::new(ronoctua_apps::scan("en_GB"));
+            let catalogue: launch::Catalogue = std::sync::Arc::new(ronoctua_apps::scan("en_GB"));
             for path in &paths {
-                let said = match files::opener_of(&catalogue, path) {
-                    files::Opener::App(entry) => entry.id,
-                    files::Opener::Editor => "editor".to_owned(),
-                    files::Opener::Nothing(of_type) => format!("nothing {of_type}"),
+                let said = match launch::opener_of(&catalogue, path) {
+                    launch::Opener::App(entry) => entry.id,
+                    launch::Opener::Editor => "editor".to_owned(),
+                    launch::Opener::Nothing(of_type) => format!("nothing {of_type}"),
                 };
                 println!("{}\t{said}", path.display());
             }
             return Ok(());
         }
 
-        // `ronoctua-shell fast-access [--float|--column] [query]` — the search
-        // in a window (`LEADER d w`), floating over the whole room
-        // (`LEADER SPC`), or in the column (`LEADER d c`). The SAME
-        // `fast_access::View` the footer's region draws (`LEADER d d`).
-        Some("fast-access") => {
-            let words: Vec<String> = std::env::args().skip(2).collect();
-            return fast_access_window::invoked(&words).context("host the search");
+        // EVERY CRATE'S WINDOWS, by their tables ([`DOORS`]).
+        Some(name) => {
+            if let Some(door) = ronoctua_shell_kit::doors::door_named(DOORS, name) {
+                return (door.run)(&words);
+            }
         }
-
-        // THE CLIPBOARD'S HISTORY in a window: the footer's, followed over
-        // the control socket (`clipboard_window`).
-        Some("clipboard") => {
-            return clipboard_window::host_it().context("host the clipboard's window");
-        }
-
-        _ => {}
+        None => {}
     }
 
     tracing::info!(
@@ -1156,7 +639,101 @@ fn main() -> Result<()> {
         "bringing the footer up"
     );
 
-    surface::run().context("the footer's surface failed")
+    ronoctua_shell_footer::surface::run(&COMPOSITION).context("the footer's surface failed")
+}
+
+/// The lines of `check-keymap --dump`, one fact a line, tab-separated:
+///
+/// - `<set> <sequence> group <label>` and `<set> <sequence> command <id>
+///   <label> <argument|->`, for every node of the footer's, the window's and
+///   the full set, walked through [`ronoctua_keymap::Tree::resolve`] in the
+///   tree's own key order;
+/// - `chord <shows> <command> <label>`, for every chord which-key lists;
+/// - `command <id> <label>`, for every command the registry holds, by id;
+/// - `by-name-only <id>`, the commands reached by name alone;
+/// - `brain-action <module> <id> <command> <label> row=<bool> asks=<key|->`,
+///   every brain module's action, by command.
+fn keymap_dump(trees: &bindings::Trees, registry: &ronoctua_cmd::Registry) -> Vec<String> {
+    fn walk(
+        tree: &ronoctua_keymap::Tree,
+        set: &str,
+        seq: &mut Vec<ronoctua_keymap::Key>,
+        out: &mut Vec<String>,
+    ) {
+        let ronoctua_keymap::Resolution::Prefix(entries) = tree.resolve(seq) else {
+            return;
+        };
+        for entry in entries {
+            seq.push(entry.sym);
+            let at = ronoctua_keymap::notation(seq);
+            match tree.resolve(seq) {
+                ronoctua_keymap::Resolution::Command(id, argument) => out.push(format!(
+                    "{set}\t{at}\tcommand\t{id}\t{}\t{}",
+                    entry.label,
+                    argument.unwrap_or("-")
+                )),
+                _ => {
+                    out.push(format!("{set}\t{at}\tgroup\t{}", entry.label));
+                    walk(tree, set, seq, out);
+                }
+            }
+            seq.pop();
+        }
+    }
+    let mut out = Vec::new();
+    for (set, name) in [
+        (bindings::Set::Footer, "footer"),
+        (bindings::Set::Window, "window"),
+        (bindings::Set::Full, "full"),
+    ] {
+        walk(trees.of(set), name, &mut Vec::new(), &mut out);
+    }
+    for chord in actions::chords() {
+        out.push(format!(
+            "chord\t{}\t{}\t{}",
+            chord.shows,
+            chord.command,
+            chord.label()
+        ));
+    }
+    let mut commands: Vec<String> = registry
+        .all_ones()
+        .map(|c| format!("command\t{}\t{}", c.id, c.label))
+        .collect();
+    commands.sort();
+    out.extend(commands);
+    let mut by_name: Vec<String> = keymap::by_name_only()
+        .iter()
+        .map(|id| format!("by-name-only\t{id}"))
+        .collect();
+    by_name.sort();
+    out.extend(by_name);
+    let mut actions: Vec<String> = ronoctua_brain::catalogue::catalogue()
+        .actions()
+        .map(|(module, a)| {
+            format!(
+                "brain-action\t{}\t{}\t{}\t{}\trow={}\tasks={}",
+                module.id,
+                a.id,
+                a.command,
+                a.label,
+                a.row,
+                a.asks.as_deref().unwrap_or("-")
+            )
+        })
+        .collect();
+    actions.sort();
+    out.extend(actions);
+    out
+}
+
+/// This program's name, as a refusal at its start says it first.
+fn program_name() -> String {
+    std::env::args_os()
+        .next()
+        .map(std::path::PathBuf::from)
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default()
 }
 
 /// The bind's `repeat` property, when it needs to be stated.
@@ -1206,1120 +783,171 @@ fn region_of(key: &str) -> &'static str {
     if button { " --whole-window" } else { "" }
 }
 
-/// How the leader appears on screen.
-///
-/// # Why it comes from the ENVIRONMENT
-///
-/// It used to be a fixed `"SPC"`, and that was wrong in both modes: in the nested loop the
-/// key is `Ctrl+Alt+Space` (the `Mod` belongs to the host's compositor) and in
-/// production it is `Super` ON ITS OWN, tapped. The screen said `SPC` in both — a
-/// label that corresponds to no key does not help, it gets in the way.
-///
-/// Whoever defines the bind defines the label: `nix/dev.nix` in the nested loop,
-/// `nix/modules/scroll.nix` in production. A single truth.
-///
-/// Without the variable, it falls back to `SPC` — Doom's notation, which is where the
-/// concept comes from, and which serves whoever runs the binary by hand.
-#[must_use]
-pub fn leader() -> String {
-    std::env::var("RONOCTUA_LEADER").unwrap_or_else(|_| "SPC".to_owned())
-}
+#[cfg(test)]
+mod tests {
+    //! THE FOUNDATION'S GUARDS, IN THIS BINARY'S TESTS. `cfg(test)` is true in
+    //! a crate's own test build only: what the kit keeps for tests — a test
+    //! that reaches the machine fails, a copy stays in the tests — reaches
+    //! these through its `test-support`, named in `[dev-dependencies]`, or
+    //! it does not, and a test of the footer acts on the person's session.
 
-/// How the CHORD's key appears on screen.
-///
-/// # Why it is another variable
-///
-/// In production it is the same key as the sequence's — tapping Super opens the list,
-/// holding Super is the modifier — and it is that coincidence `keyd` buys.
-/// In the nested loop it is **not**: the sequence is `Ctrl+Alt+Space` and the chord is `Alt`
-/// alone. Deriving one from the other would make the screen say one holds `CTRL ALT SPC`,
-/// and holding Space along with it is exactly what fires the sequence — the
-/// opposite of what the chord needs.
-///
-/// Without the variable, it falls back to the leader's label: outside the two known modes,
-/// repeating what one knows is better than inventing a second key.
-#[must_use]
-pub fn leader_chord() -> String {
-    std::env::var("RONOCTUA_LEADER_CHORD").unwrap_or_else(|_| leader())
-}
+    /// FAILS IF: a test of this binary that reaches the machine acts on it
+    /// instead of failing — the kit's guard compiled out of these tests.
+    #[test]
+    #[should_panic(expected = "a test reached the machine")]
+    fn a_test_of_the_binary_that_reaches_the_machine_fails() {
+        ronoctua_shell_kit::daemon::about_to_act("the binary's own guard test");
+    }
 
-/// The right-hand side's optional marks, as text — each `None` at rest.
-///
-/// A struct and not four parameters, because there were four and clippy is
-/// right that a call with eight positional arguments is a call somebody
-/// will get in the wrong order. Every field is what the segment DRAWS,
-/// already resolved by whoever knows the daemon: this function only places.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Marks<'a> {
-    /// The transfer queue's `glyph NN%`, while something is moving.
-    pub transfer: Option<&'a str>,
-    /// The update's animated mark, while a rebuild runs.
-    pub update: Option<&'a str>,
-    /// The battery's glyph (and number), while there is one to show.
-    pub battery: Option<&'a str>,
-    /// The profile's glyph, off the machine's top profile.
-    pub profile: Option<&'a str>,
-    /// One mark per CONNECTED bluetooth device, four at most — already
-    /// resolved by `bluetooth::modeline`, which is where the owner's rule
-    /// about the percentage and the danger colour lives.
-    pub devices: &'a [crate::bluetooth::Shown],
-    /// The machine is SILENT — the default sink is muted.
-    ///
-    /// It asks the default and not "any sink": a muted HDMI output nobody is
-    /// using is not the machine being silent. At any other volume there is no
-    /// mark at all, because a modeline at rest says nothing.
-    pub silent: bool,
-    /// Something is RECORDING — some program holds a capture stream open.
-    ///
-    /// A privacy mark before it is an audio one, and derived from PipeWire's
-    /// graph rather than guessed: the node exists exactly while the stream
-    /// does.
-    pub listening: bool,
-    /// A CAMERA IS OPEN — any program, found in `/proc`. A privacy mark, the
-    /// microphone's twin.
-    pub camera: bool,
-    /// The studio is recording or streaming.
-    pub recording: bool,
-    /// Hand gestures are on: the camera reads hands (`LEADER m g`).
-    pub gestures: bool,
-    /// The screen is cut by the resizer (`LEADER / r`): what everything is
-    /// laid out in is not the whole monitor.
-    pub resizer: bool,
-    /// The player has something loaded: the play/pause glyph of its pair,
-    /// which says what a click does — pause or play (`player_mark::mark`). Absent with
-    /// nothing loaded — a modeline at rest says nothing.
-    pub player: Option<char>,
-    /// The numbered workspaces that hold something — empty when fewer than
-    /// two do (`workspaces::shown`, where the owner's rule lives).
-    pub workspaces: &'a [crate::workspaces::Shown],
-    /// How many windows the drawer holds — zero draws nothing.
-    pub drawer: usize,
-    /// The selection, when something is selected: how many windows, when
-    /// that can be counted (`crate::selection`).
-    pub selection: Option<Option<usize>>,
-    /// The compositor's trails.
-    pub trails: ronoctua_compositor::Trails,
-    /// The compositor's key mode, by its name, while one is on.
-    pub compositor_mode: Option<&'a str>,
-    /// SYNCTHING, and it is the only mark whose very existence is a choice.
-    ///
-    /// `None` draws nothing, which is what an ordinary day looks like: the
-    /// default is to say something only when nothing is travelling. `Some(true)`
-    /// is "it is syncing" and `Some(false)` is "it is not" — two glyphs, and
-    /// only ever one of them, because the person chose which question they
-    /// wanted answered. See `ronoctua_syncthing::prefs::Mark`.
-    pub syncthing: Option<bool>,
-    /// The clipboard's sync, when there is anything to say about it.
-    ///
-    /// The same three-word ring, and the same silence: a machine that never
-    /// told ClipCascade where a server is draws nothing at all. See
-    /// `ronoctua_clipcascade::prefs::Mark`.
-    pub clip: Option<bool>,
-    /// The shell history's sync, likewise — `ronoctua_atuin::prefs::Mark`.
-    pub history: Option<bool>,
-    /// A link that leads NOWHERE — the portal, the router with no uplink.
-    /// Not "there is no internet": nothing connected is not a fault.
-    pub adrift: bool,
-    /// Networking off, by somebody's own decision.
-    pub airplane: bool,
-    /// A tunnel is up.
-    pub tunnel: bool,
-    /// This machine is on its tailnet.
-    pub tailscale: bool,
-    /// Tor has a circuit.
-    pub tor: bool,
-    /// What the brain's modules marked, each as it published it — already
-    /// drawn by `brain::marks`, and empty at rest (invariant 14).
-    pub brain: &'a [brain::Drawn],
-    // ── end of brain-ui ──
-    /// The passwordless window's end, drawn as it is — the unlocked glyph and
-    /// the hour — while one is open (`security::modeline_until`).
-    pub security_until: Option<&'a str>,
-}
+    /// FAILS IF: a copy made in this binary's tests is handed to `wl-copy`,
+    /// over the clipboard of whoever runs the suite, instead of to the tests'
+    /// own record.
+    #[test]
+    fn a_copy_in_the_binarys_tests_stays_in_the_tests() {
+        ronoctua_shell_kit::clipboard_copy::COPIED.with(|c| c.borrow_mut().clear());
+        ronoctua_shell_kit::clipboard_copy::copy_to_clipboard("kept in the tests")
+            .expect("a test's copy is recorded");
+        let copied = ronoctua_shell_kit::clipboard_copy::COPIED.with(|c| c.borrow().clone());
+        assert_eq!(copied, vec![(None, b"kept in the tests".to_vec())]);
+    }
 
-/// The modeline's segments, with section 4.2's priority order.
-///
-/// `name`, `mode`, `state` and `unread` are PARAMETERS and not reads of global
-/// state on purpose: that way the layout stays a pure function of (width,
-/// segments) and every combination can be tested without a compositor.
-///
-/// `unread` is what decides whether the BELL is there at all, and it is
-/// deliberately not the queue's length: a notification a filter suppressed is
-/// not shown and is not counted either — a badge that counts what the person
-/// asked never to see is a badge that cannot be brought to zero.
-///
-/// # What left here, and why
-///
-/// **The mode indicator (`NORMAL`).** It came from Doom's evil-mode, and
-/// this system has no modal editing: there is no state to indicate. While the
-/// leader is active, what there is to show is the SEQUENCE — and its place is
-/// the minibuffer, not a second place on screen.
-///
-/// **The absence label (`fundamental`).** With no focused window there is no mode,
-/// and writing an invented mode name is worse than writing nothing: it
-/// takes up a column and asserts something false. The segment only exists when there is a buffer.
-#[must_use]
-pub fn segments(
-    name: &str,
-    mode: &str,
-    state: &str,
-    unread: usize,
-    marks: &Marks<'_>,
-) -> Vec<Segment> {
-    let Marks {
-        transfer,
-        update,
-        battery,
-        profile,
-        devices,
-        ..
-    } = *marks;
-    let mut out = Vec::new();
-    // 2. THE BELL, and only while something is UNREAD.
-    //
-    // It used to be a glyph and a count, on every screen, forever — a `0`
-    // beside a bell answering a question nobody had asked. The owner asked for
-    // the opposite: nothing at rest, and the dotted bell alone when something
-    // is waiting to be read. The NUMBER went with the rest of it: how many is
-    // the manager's question, and the pointer answers it on the minibuffer
-    // without opening anything (`Footer::segment_hint`).
-    //
-    // `removable`, now that it can be absent — but at priority 2, so on a line
-    // too narrow for everything it is the LAST of the right-hand marks to go.
-    // A copy at 62% is on the panel and in the log; a notification nobody was
-    // told about is nowhere.
-    if unread > 0 {
-        out.push(Segment {
-            id: "notif",
-            text: tokens::icon::NOTIFICATION_PENDING.to_string(),
-            priority: 2,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
+    /// FAILS IF: two crates' tables claim one word — the dispatch takes the
+    /// first table listed, and the other window could never be opened — or
+    /// a word no table has opens a door instead of falling to the footer.
+    #[test]
+    fn every_door_is_one_word_and_the_dispatch_finds_it() {
+        let mut seen = std::collections::BTreeMap::new();
+        for (at, table) in crate::DOORS.iter().enumerate() {
+            for door in *table {
+                if let Some(first) = seen.insert(door.name, at) {
+                    panic!("`{}` is the word of tables {first} and {at}", door.name);
+                }
+                let found = ronoctua_shell_kit::doors::door_named(crate::DOORS, door.name)
+                    .unwrap_or_else(|| panic!("`{}` is not found by its word", door.name));
+                assert_eq!(found.name, door.name);
+            }
+        }
+        assert!(seen.len() >= 30, "{} doors in the tables", seen.len());
+        assert!(ronoctua_shell_kit::doors::door_named(crate::DOORS, "nowhere").is_none());
+        assert!(ronoctua_shell_kit::doors::door_named(&[], "stick").is_none());
     }
-    // 3. THE TRANSFERS, next to the bell — and it goes away when there is
-    // nothing to say.
-    //
-    // # Why the bell outranks it
-    //
-    // They answer different questions, and on a screen too narrow for both the
-    // bell wins (2 against 3). That is the right way round: a copy at 62% is on
-    // the panel and in the log, and a notification nobody was told about is
-    // nowhere. With nothing happening this one is not there at all — it would
-    // be a column spent on `0%`, on every screen, forever.
-    if let Some(t) = transfer {
-        out.push(Segment {
-            id: "transfer",
-            text: t.to_owned(),
-            priority: 3,
-            // The icon and two digits. Below that there is no segment worth
-            // having: `6…` is not a percentage.
-            min_cols: 5,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // 5. THE UPDATE, and it is a mark rather than a measurement.
-    //
-    // One cell, one glyph, and it ANIMATES — see `update_window::FRAMES`. It
-    // appears while the machine is bringing its own software forward and goes
-    // away the moment it is not, which is why it is `removable` like the
-    // transfer and unlike the bell.
-    //
-    // # Why it gives way BEFORE the transfer and not after
-    //
-    // Because a rebuild is announced everywhere else too: it has the brain's
-    // own line under the minibuffer, its own screen, its own window and its
-    // own journal. A copy at 62% has this segment and a panel. On a line too
-    // narrow for both, the one with fewer other ways of being seen stays.
-    //
-    // And it never outranks the BELL, which is the only indicator that
-    // something is pending and the one thing on this line that must be the
-    // last to go.
-    if let Some(u) = update {
-        out.push(Segment {
-            id: "update",
-            text: u.to_owned(),
-            priority: 5,
-            // One glyph. There is nothing narrower that still says anything,
-            // and there is nothing wider worth saying here: a percentage of a
-            // rebuild is a number nobody can compute honestly.
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // 8. THE BATTERY, and 9. THE PROFILE — both absent at rest by the owner's
-    // rule: no glyph at 99% and above, none at the machine's top profile.
-    // Below the bell, the transfer and the update in priority: the battery
-    // has the catalogue's alarms as a second voice and the profile has the
-    // view; the bell has nothing else.
-    //
-    // `Cut` AND `min_cols` NEVER APPLY TO IT, and this used to say they did
-    // ("`Cut` drops the ` NN%` before the glyph"). `layout::resolve` REMOVES a
-    // removable segment whole while the line overflows and only shrinks what
-    // is left, so a `removable: true` segment is drawn at its natural width or
-    // not at all. The two fields are the shape every segment has, and on this
-    // one they are inert — which is worth knowing, because it means a narrow
-    // line loses the battery ENTIRELY at priority 8, danger colour and all,
-    // before it loses the bell, the transfer or the update. That order is the
-    // one this file argues for, and it is the order that happens.
-    if let Some(b) = battery {
-        out.push(Segment {
-            id: "battery",
-            text: b.to_owned(),
-            priority: 8,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // SILENCE, AND THE MICROPHONE. Two marks and no ladder: a volume is
-    // drawn nowhere at rest, because a machine that is simply playing at some
-    // volume has nothing to report. What IS worth a cell is the machine
-    // having gone quiet — a key that seems not to work is usually this — and
-    // something holding the microphone open, which is a privacy fact and the
-    // only way to see it without opening the view.
-    //
-    // They sit at priority 2 with the network's two faults, which is the rung
-    // for "a thing is not as you would assume".
-    if marks.silent {
-        out.push(Segment {
-            id: "muted",
-            text: tokens::icon::VOLUME_MUTE.to_string(),
-            priority: 2,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // THE CLIPBOARD'S SYNC AND THE SHELL HISTORY'S, at the same rung and for
-    // the same reason as Syncthing: "a thing is not as you would assume".
-    // Which of the two glyphs each is was decided where the preference is
-    // read; here they are only placed.
-    if let Some(syncing) = marks.clip {
-        out.push(Segment {
-            id: "clip",
-            text: if syncing {
-                tokens::icon::CLIP_ON.to_string()
-            } else {
-                tokens::icon::CLIP_OFF.to_string()
-            },
-            priority: 2,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    if let Some(syncing) = marks.history {
-        out.push(Segment {
-            id: "history",
-            text: if syncing {
-                tokens::icon::SHELL_HISTORY_ON.to_string()
-            } else {
-                tokens::icon::SHELL_HISTORY_OFF.to_string()
-            },
-            priority: 2,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // SYNCTHING, at the same rung and for the same reason: "a thing is not as
-    // you would assume". Which of the two glyphs it is was decided where the
-    // preference is read; here it is only placed.
-    if let Some(syncing) = marks.syncthing {
-        out.push(Segment {
-            id: "syncthing",
-            text: if syncing {
-                tokens::icon::SYNCTHING.to_string()
-            } else {
-                tokens::icon::SYNCTHING_OFF.to_string()
-            },
-            priority: 2,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    if marks.listening {
-        out.push(Segment {
-            id: "microphone",
-            text: tokens::icon::MICROPHONE.to_string(),
-            priority: 2,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // THE PLAYER, the FARTHEST of the right-hand marks from the edge — only
-    // the workspace numbers sit to its left (the owner's order). The rung is
-    // what places a mark on this side, lowest against the border, so it is
-    // also the first of them to go on a line too narrow for everything: the
-    // sound itself says it is there.
-    //
-    // A PAIR IN ONE SEGMENT — play/pause, a cell of air, next
-    // (`player_mark`) — so the layout keeps both or drops both.
-    if let Some(glyph) = marks.player {
-        out.push(Segment {
-            id: "player",
-            text: crate::player_mark::text(glyph),
-            priority: 16,
-            // BOTH GLYPHS AND THE AIR, or nothing: it is never cut, so its
-            // floor is its whole width.
-            min_cols: crate::player_mark::CELLS,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // THE WORKSPACES THAT HOLD SOMETHING, one number each: one segment per
-    // number because a segment has one colour, and the current one is drawn
-    // brighter.
-    //
-    // THE FIRST OF THE RIGHT-HAND MARKS, reading left to right, and to the
-    // left of the player (the owner's order): the highest rung on this side,
-    // since the rung is what places a mark here. Counted from the EDGE, so a
-    // click that changes the buffer — and with it the name's length — leaves
-    // them where the hand is; on the left, after the name, they slid four
-    // columns away from it (measured in the photo battery).
-    //
-    // PUSHED FROM THE LAST TO THE FIRST: one rung for all of them, and a tie
-    // keeps the order of declaration from the edge inwards, so the highest
-    // number is the one against the player and they read `1 3 4`. They are
-    // the first to go on a narrow screen — each is also `LEADER 1`…`9`.
-    // THE DRAWER, while it holds something: the windows put away have no
-    // focus and no number, and this is where the pointer finds them. The
-    // numbers' rung, pushed before them so it sits between the numbers and
-    // the player — it is about windows too.
-    if marks.drawer > 0 {
-        out.push(Segment {
-            id: "drawer",
-            text: tokens::icon::DRAWER.to_string(),
-            priority: 17,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // PUSHED FROM THE EDGE INWARDS, all on the numbers' rung, so they read
-    // left to right: the workspace numbers, the trails, the selection, the
-    // drawer — then the player. Each is about windows, as the numbers are.
-    //
-    // THE SELECTION, while something is selected, in the green of the
-    // selected outline, with how many when this footer can count them.
-    if let Some(count) = marks.selection {
-        out.push(Segment {
-            id: "selection",
-            text: match count {
-                Some(n) => format!("{} {n}", tokens::icon::WINDOWS_SELECTED),
-                None => tokens::icon::WINDOWS_SELECTED.to_string(),
-            },
-            priority: 17,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // THE TRAILS, while one exists: the glyph with how many windows the one
-    // in use holds, then — from two trails on, as the workspaces from two —
-    // one number per trail, the one in use drawn brighter. Pushed from the
-    // last, so they read `1 2 3` against the glyph.
-    if marks.trails.count > 1 {
-        for n in (1..=marks.trails.count).rev() {
-            let Some(id) = crate::trails::id_of(n) else {
-                continue;
-            };
-            out.push(Segment {
-                id,
-                text: n.to_string(),
-                priority: 17,
-                min_cols: 1,
-                side: Side::Right,
-                shrink: Shrink::Cut,
-                removable: true,
-            });
+
+    /// FAILS IF: a key a crate of this binary was compiled with, or a distro
+    /// brain module's, is not in the texts the tests read — in any declared
+    /// language — or a crate's or a module's keys are collected twice, or a
+    /// crate that speaks under the binary is not reached by its `key::sets`,
+    /// or a module's keys are not asked at all (each crate owns its keys now,
+    /// and a module's are its manifest's: only the binary knows them all, so
+    /// the census is here).
+    #[test]
+    fn every_key_of_every_crate_is_in_every_language() {
+        let keys = ronoctua_i18n::Keys::of(crate::every_key);
+        let crates: Vec<&str> = keys.crates().collect();
+        let mut once = crates.clone();
+        once.sort_unstable();
+        once.dedup();
+        assert_eq!(
+            once.len(),
+            crates.len(),
+            "a crate's keys were collected twice: {crates:?}"
+        );
+        for reached in [
+            "ronoctua-i18n",
+            "ronoctua-shell-kit",
+            "ronoctua-shell-door",
+            "ronoctua-shell-footer",
+            "ronoctua-shell-stick",
+        ] {
+            assert!(
+                crates.contains(&reached),
+                "`{reached}` is not among {crates:?}"
+            );
+        }
+        for module in ronoctua_brain::compiled::MANIFESTS {
+            assert!(
+                crates.contains(&module.id),
+                "the brain module `{}` is not among {crates:?}",
+                module.id
+            );
+            assert!(
+                keys.iter().any(|k| k == module.name_key),
+                "`{}`, the name of the brain module `{}`, is not asked",
+                module.name_key,
+                module.id
+            );
+        }
+        assert!(keys.len() > 5000, "only {} keys", keys.len());
+        for language in ronoctua_i18n::LANGUAGES {
+            if let Err(missing) = ronoctua_i18n::Texts::checked(language, &keys) {
+                panic!("{missing}");
+            }
         }
     }
-    if marks.trails.count > 0 {
-        out.push(Segment {
-            id: "trail",
-            text: format!("{} {}", tokens::icon::TRAIL, marks.trails.marked),
-            priority: 17,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    for shown in marks.workspaces.iter().rev() {
-        let Some(id) = crate::workspaces::id_of(shown.number) else {
-            continue;
-        };
-        out.push(Segment {
-            id,
-            text: shown.number.to_string(),
-            priority: 17,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // THE CAMERA, between the player and the devices — the owner's order: the
-    // two marks that say the camera is LOOKING (this and the gestures', in
-    // their own faded pink) sit together, after the workspace numbers and
-    // the player and before the Bluetooth marks. The rung places a mark on
-    // this side, so it is the rung that moved: from the microphone's 2 to
-    // just above the devices' 10–13.
-    if marks.camera {
-        out.push(Segment {
-            id: "camera",
-            text: tokens::icon::CAMERA_IN_USE.to_string(),
-            priority: 14,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // HAND GESTURES, beside the camera and to its left: the camera is open
-    // FOR THIS, and the mark is also the way to turn it off.
-    if marks.gestures {
-        out.push(Segment {
-            id: "gestures",
-            text: tokens::icon::GESTURES.to_string(),
-            priority: 15,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // THE RESIZER, at the top rung and beside the gestures, whose colour it
-    // wears: the screen is not what it looks like, and the lines the tool
-    // itself makes narrow are where that has to stay said. FIRST of its rung,
-    // because a line drops the LAST mark of a rung first: at twenty columns
-    // the key mode's long name goes and this glyph stays.
-    if marks.resizer {
-        out.push(Segment {
-            id: "resizer",
-            text: tokens::icon::RESIZER.to_string(),
-            priority: 1,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // A KEY MODE, at the top rung: while it is on every key means something
-    // else, and a person who does not know that is a person whose keys have
-    // stopped working.
-    if let Some(name) = marks.compositor_mode {
-        let text = format!("{} {name}", tokens::icon::KEYBOARD);
-        out.push(Segment {
-            id: "compositor-mode",
-            min_cols: ronoctua_protocol::cells(&text),
-            text,
-            priority: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // AND RECORDING, one rung above: a recording that nobody remembers is
-    // running fills a disk and films a room.
-    if marks.recording {
-        out.push(Segment {
-            id: "recording",
-            text: tokens::icon::RECORDING.to_string(),
-            priority: 1,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // THE WAY OUT, before everything else on this side: whether anything
-    // reaches the world is the first question a modeline answers, and the
-    // two faults are the only ones drawn — a machine that is simply not
-    // connected shows nothing, because nothing is wrong with it.
-    //
-    // The aeroplane and the fault cannot both be true (`Snapshot::adrift`
-    // asks for networking to be ON), so the two never crowd each other.
-    if marks.airplane {
-        out.push(Segment {
-            id: "airplane",
-            text: tokens::icon::AIRPLANE.to_string(),
-            priority: 2,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    if marks.adrift {
-        out.push(Segment {
-            id: "net-off",
-            text: tokens::icon::NO_INTERNET.to_string(),
-            priority: 2,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    if marks.tunnel {
-        out.push(Segment {
-            id: "vpn",
-            text: tokens::icon::VPN.to_string(),
-            priority: 5,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // AND THE OTHER TWO TUNNELS, beside the first and at its priority: they
-    // answer the same question — is this machine going out through something
-    // else — and they can all three be true at once, which is why each has a
-    // mark of its own rather than one shared glyph.
-    //
-    // RUNNING, and not installed: a tailnet nobody has logged into and a Tor
-    // that is not started draw nothing at all. Nothing at rest.
-    if marks.tailscale {
-        out.push(Segment {
-            id: "tailscale",
-            text: tokens::icon::TAILSCALE.to_string(),
-            priority: 5,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    if marks.tor {
-        out.push(Segment {
-            id: "tor",
-            text: tokens::icon::TOR.to_string(),
-            priority: 5,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // THE DEVICES, after the battery and the profile: they are about things
-    // on the desk, and the machine's own state comes first.
-    //
-    // THE MARKS DO MOVE, and this used to say they did not ("each one keeps
-    // its place in the pool"). The id is `POOL[i]` where `i` is the index in
-    // `Scene::connected()`, which sorts ALARMED FIRST and then by kind — so
-    // headphones connecting at 12% take `bt-1` and push every other mark
-    // along, and a disconnect pulls them back.
-    //
-    // That is the RIGHT order — the one about to die is the one to see — and
-    // the id is a pool slot rather than the device's path for the reason
-    // written over `POOL`: `Segment::id` is `&'static str`. What was wrong
-    // was the sentence, not the arithmetic.
-    for (i, shown) in devices.iter().enumerate() {
-        let Some(id) = crate::bluetooth::POOL.get(i) else {
-            break;
-        };
-        out.push(Segment {
-            id,
-            text: shown.text.clone(),
-            priority: 10 + u8::try_from(i).unwrap_or(0),
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    if let Some(p) = profile {
-        out.push(Segment {
-            id: "profile",
-            text: p.to_owned(),
-            priority: 9,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
 
-    // WHAT THE BRAIN'S MODULES MARKED, `brain:<module>/<mark>` — the disk
-    // nearly full, a reminder ringing, a service that keeps failing. Beside the
-    // profile and at its rung: each is a fact about the machine that stays
-    // until it stops being true, and none of them is louder than the battery.
-    // Drawn only while a module publishes one: at rest there is nothing here.
-    // A mark's instances in the order they read, `1 2 3` from the left
-    // (`brain::from_the_edge`).
-    for mark in brain::from_the_edge(marks.brain) {
-        out.push(Segment {
-            id: mark.id,
-            text: mark.text.clone(),
-            priority: 9,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
+    /// FAILS IF: the two crates that read the brain's catalogue — the brain's
+    /// library its modules, the notification book its notifications — read
+    /// it under two names or in two formats: the start guard would pass one
+    /// and the book refuse the other (or read another file). Both are linked
+    /// here, and only here are they asked together.
+    #[test]
+    fn the_brains_catalogue_is_one_file_in_one_format() {
+        assert_eq!(
+            ronoctua_brain::catalogue::ENV,
+            ronoctua_notify::brain::VARIABLE
+        );
+        assert_eq!(
+            ronoctua_brain::catalogue::VERSION,
+            ronoctua_notify::brain::VERSION
+        );
+        // AND THE BOOK HOLDS EVERY NOTIFICATION THE CATALOGUE DECLARES, by
+        // the event's tag: what the footer's events are recognised by.
+        let book = ronoctua_notify::Book::distro();
+        let declared: Vec<&str> = ronoctua_brain::catalogue::catalogue()
+            .events()
+            .filter(|(_, e)| e.notification.is_some())
+            .map(|(_, e)| e.tag.as_str())
+            .collect();
+        assert!(!declared.is_empty(), "no module declares a notification");
+        for tag in declared {
+            assert!(book.entry(tag).is_some(), "the book does not know `{tag}`");
+        }
     }
-
-    // THE PASSWORDLESS WINDOW'S END, beside the brain's shield: the HOUR it
-    // ends, never a countdown. Absent at rest (invariant 14).
-    if let Some(text) = marks.security_until {
-        out.push(Segment {
-            id: "security-until",
-            text: text.to_owned(),
-            priority: 8,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-
-    // The name only exists if there is a buffer. `removable: false` still holds
-    // for when it does exist: then it elides in the middle, but does not disappear.
-    if !name.is_empty() {
-        out.push(Segment {
-            id: "buffer",
-            text: name.to_owned(),
-            priority: 4,
-            min_cols: 8,
-            side: Side::Left,
-            shrink: Shrink::InTheMiddle,
-            removable: false,
-        });
-    }
-    // The mode only exists if there is a buffer with a mode. See the header.
-    if !mode.is_empty() {
-        out.push(Segment {
-            id: "mode",
-            text: mode.to_owned(),
-            priority: 6,
-            min_cols: 4,
-            side: Side::Left,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    // 7. THE STATE — what the buffer is DOING, next to what kind of buffer it is.
-    //
-    // It only exists for a buffer of ours. A foreign window has no state we can
-    // know: the compositor gives a title, an app id and a pid, and none of the
-    // three says what `vim` is in the middle of. Writing `normal` for it would
-    // be the same false assertion the `fundamental` label used to make.
-    //
-    // It dies BEFORE the mode (7 against 6) and both die before the buffer's
-    // name. On a screen too narrow for all three, what survives is which buffer
-    // this is — a person who cannot see the state can press `Esc` and know; a
-    // person who cannot see the name has nothing to press.
-    if !state.is_empty() {
-        out.push(Segment {
-            id: "state",
-            text: state.to_owned(),
-            priority: 7,
-            min_cols: 4,
-            side: Side::Left,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-    out
-}
-
-/// What the minibuffer shows at rest.
-///
-/// At rest it stays empty: the line exists, but does not invent content. It
-/// only gains text when there is a prompt, a message or completion (section 4.1).
-#[must_use]
-pub fn minibuffer_at_rest() -> String {
-    String::new()
 }
 
 #[cfg(test)]
-mod tests {
+mod player_pages {
+    //! THE WHOLE PLAYER, ITS PAGES PLUGGED IN — what no crate of it can ask
+    //! alone: the player's view reaches channels by theme and the ranking
+    //! only through the pages written above it (`player_seam`), and the
+    //! binary is the one place that names the view and both pages
+    //! (`PLAYER_PAGES`).
 
-    /// FAILS IF: a workspace number moves when the focused buffer changes —
-    /// clicking one changes the buffer, and a number that slides with the
-    /// name's length leaves the hand that clicked it over something else.
-    #[test]
-    fn the_workspace_numbers_do_not_move_with_the_buffer() {
-        let shown = [
-            crate::workspaces::Shown {
-                number: 1,
-                current: true,
-            },
-            crate::workspaces::Shown {
-                number: 3,
-                current: false,
-            },
-        ];
-        let marks = Marks {
-            workspaces: &shown,
-            ..Marks::default()
-        };
-        let at = |name: &str| {
-            layout::resolve(80, &segments(name, "power", "", 0, &marks))
-                .into_iter()
-                .filter(|c| crate::workspaces::number_of(c.id).is_some())
-                .map(|c| c.column)
-                .collect::<Vec<_>>()
-        };
-        let short = at("*Power*");
-        assert_eq!(short.len(), 2, "both numbers are drawn");
-        assert_eq!(short, at("*a much longer buffer name*"));
-        // AND THEY READ IN ORDER, to the left of the player's mark.
-        let with_player = Marks {
-            workspaces: &shown,
-            player: Some(tokens::icon::PLAYER),
-            ..Marks::default()
-        };
-        let placed = layout::resolve(80, &segments("*Power*", "power", "", 0, &with_player));
-        let column = |id: &str| {
-            placed
-                .iter()
-                .find(|c| c.id == id)
-                .map(|c| c.column)
-                .unwrap_or_else(|| panic!("`{id}` was not placed"))
-        };
-        assert!(column("ws-1") < column("ws-3"), "the numbers read `1 3`");
-        assert!(
-            column("ws-3") < column("player"),
-            "the numbers are left of the player"
-        );
-    }
-    use super::*;
-    use ronoctua_render::layout;
+    use ronoctua_shell_catalogue::player_catalog::CatalogueView as _;
+    use ronoctua_shell_video_metrics::player_ranking::{RankingView as _, fixture::video};
 
+    /// FAILS IF: a page of the player exists that no row opens — a page
+    /// reachable only by a command is one the pointer never reaches
+    /// (invariant 19) — a row that opens a page is labelled by another key
+    /// than the one the page is titled by, or the pages the binary installs
+    /// are not the ones that make every page reachable.
     #[test]
-    fn the_segments_fit_on_a_narrow_screen() {
-        // 40 columns is a cramped terminal; nothing may spill. The buffer's
-        // name now comes from the compositor, so it can be ABSURD — a browser
-        // title easily goes past 200 characters.
-        let name = "a".repeat(300);
-        // AND THE LINE IS AS FULL AS IT EVER GETS: the queue, an update, the
-        // battery with its number, a profile off the top, and four devices —
-        // one of them with a percentage of its own. Anything that fits here
-        // fits.
-        let devices: Vec<crate::bluetooth::Shown> = crate::bluetooth::POOL
-            .iter()
-            .enumerate()
-            .map(|(i, at)| crate::bluetooth::Shown {
-                at: (*at).to_owned(),
-                text: if i == 0 {
-                    format!(
-                        "{} 12%",
-                        crate::bluetooth::glyph(ronoctua_bluetooth::Kind::Keyboard)
-                    )
-                } else {
-                    crate::bluetooth::glyph(ronoctua_bluetooth::Kind::Headphones).to_string()
-                },
-                alarmed: i == 0,
-            })
-            .collect();
-        // AND TWO MARKS OF THE BRAIN'S MODULES, one with a count: a disk
-        // nearly full and a service that keeps failing are on the fullest
-        // line as well.
-        let brain_marks: Vec<crate::brain::Drawn> = [("full", 0_u32), ("errors", 12)]
-            .into_iter()
-            .map(|(name, count)| crate::brain::Drawn {
-                id: if count > 0 {
-                    "brain:fixture/errors"
-                } else {
-                    "brain:fixture/full"
-                },
-                module: "fixture".to_owned(),
-                text: if count > 0 {
-                    format!("{} {count}", tokens::icon::BRAIN)
-                } else {
-                    tokens::icon::BRAIN.to_string()
-                },
-                tone: ronoctua_brain::module::Tone::Danger,
-                hint: format!("fixture-mark-{name}"),
-                count,
-                act: None,
-                opens: None,
-                instance: 0,
-                label: None,
-            })
-            .collect();
-        for columns in [20_u16, 40, 80, 200] {
-            for c in layout::resolve(
-                columns,
-                &segments(
-                    &name,
-                    "ghostty",
-                    "search",
-                    99,
-                    &Marks {
-                        // THE TOKENS AND NOT THE CODEPOINTS. Invariant 9
-                        // names `codepoint` explicitly, and a test written in
-                        // literals stays green on the old drawing the day a
-                        // glyph moves in `icons.nix` — which is exactly what
-                        // this test is for.
-                        transfer: Some(&format!("{} 62%", tokens::icon::TRANSFER)),
-                        update: Some(
-                            &crate::update_window::frame_of(u64::from(columns)).to_string(),
-                        ),
-                        battery: Some(&format!("{} 12%", tokens::icon::BATTERY_DANGER)),
-                        profile: Some(&tokens::icon::PROFILE_POWER_SAVER.to_string()),
-                        devices: &devices,
-                        // AND THE TWO SOUND MARKS, both at once: a machine can
-                        // be muted while something records, and the narrowest
-                        // line has to survive the pair.
-                        silent: true,
-                        listening: true,
-                        camera: true,
-                        recording: true,
-                        gestures: true,
-                        // AND THE SCREEN CUT, which is when lines get narrow.
-                        resizer: true,
-                        // AND A KEY MODE, the longest of their names: the
-                        // fullest line has to survive it beside the rest.
-                        compositor_mode: Some("alternar largura"),
-                        player: Some(tokens::icon::PLAYER),
-                        // AND SYNCTHING'S, which the fullest line has to
-                        // carry too: it is a mark somebody chose to have, so
-                        // the worst case is a line that has it AND everything
-                        // else.
-                        syncthing: Some(false),
-                        // THE TWO SYNC MARKS, on the fullest line this test
-                        // measures: they sit at the same rung as Syncthing's
-                        // and have to fit beside it.
-                        clip: Some(false),
-                        history: Some(false),
-                        // AND THE WAY OUT'S TWO THAT CAN SHOW AT ONCE: the
-                        // aeroplane and the fault are exclusive by rule, so
-                        // the fullest line carries the fault and a tunnel.
-                        adrift: true,
-                        airplane: false,
-                        // AND ALL THREE TUNNELS AT ONCE, which is a real
-                        // machine: a VPN inside a tailnet with Tor on top is
-                        // three marks, and the narrowest line has to survive
-                        // them.
-                        tunnel: true,
-                        tailscale: true,
-                        tor: true,
-                        workspaces: &[],
-                        // AND THE DRAWER HOLDING SOMETHING, a selection and
-                        // three trails: more marks the fullest line carries.
-                        drawer: 3,
-                        selection: Some(Some(2)),
-                        trails: ronoctua_compositor::Trails {
-                            count: 3,
-                            active: Some(0),
-                            marked: 4,
-                        },
-                        brain: &brain_marks,
-                        // AND THE PASSWORDLESS WINDOW'S END, the glyph and
-                        // an hour: a mark the fullest line has to carry too.
-                        security_until: Some(&format!(
-                            "{} 23:45",
-                            tokens::icon::SECURITY_SUDO_OPEN
-                        )),
-                    },
-                ),
-            ) {
-                assert!(
-                    c.column + layout::width(&c.text) <= columns,
-                    "'{}' leaks at {columns} columns",
-                    c.id
-                );
-            }
-        }
-    }
-
-    /// FAILS IF: the resizer's mark leaves the line the resizer itself made
-    /// narrow — twenty columns, every mark on, and the screen is still said
-    /// to be cut.
-    #[test]
-    fn the_resizer_mark_survives_the_narrowest_line() {
-        let devices: Vec<crate::bluetooth::Shown> = crate::bluetooth::POOL
-            .iter()
-            .map(|at| crate::bluetooth::Shown {
-                at: (*at).to_owned(),
-                text: crate::bluetooth::glyph(ronoctua_bluetooth::Kind::Headphones).to_string(),
-                alarmed: false,
-            })
-            .collect();
-        let placed = layout::resolve(
-            20,
-            &segments(
-                "main.rs",
-                "ghostty",
-                "search",
-                9,
-                &Marks {
-                    transfer: Some(&format!("{} 62%", tokens::icon::TRANSFER)),
-                    battery: Some(&format!("{} 12%", tokens::icon::BATTERY_DANGER)),
-                    profile: Some(&tokens::icon::PROFILE_POWER_SAVER.to_string()),
-                    devices: &devices,
-                    silent: true,
-                    listening: true,
-                    camera: true,
-                    recording: true,
-                    gestures: true,
-                    resizer: true,
-                    compositor_mode: Some("alternar largura"),
-                    player: Some(tokens::icon::PLAYER),
-                    syncthing: Some(false),
-                    clip: Some(false),
-                    history: Some(false),
-                    adrift: true,
-                    tunnel: true,
-                    tailscale: true,
-                    tor: true,
-                    drawer: 3,
-                    selection: Some(Some(2)),
-                    ..Marks::default()
-                },
-            ),
-        );
-        let ids: Vec<&str> = placed.iter().map(|c| c.id).collect();
-        assert!(ids.contains(&"resizer"), "the cut went unsaid: {ids:?}");
-        let mark = placed.iter().find(|c| c.id == "resizer").unwrap();
-        assert!(mark.text.starts_with(tokens::icon::RESIZER));
-    }
-
-    #[test]
-    fn the_bell_survives_a_deskful_of_devices() {
-        // THE POOL IS REMOVABLE AND THE BELL IS NOT ABOUT TO BE: four device
-        // marks must not push the one thing on this line that says something
-        // was missed. `priority` is what decides it, and this is the test
-        // that reads the decision rather than the number.
-        let devices: Vec<crate::bluetooth::Shown> = crate::bluetooth::POOL
-            .iter()
-            .map(|at| crate::bluetooth::Shown {
-                at: (*at).to_owned(),
-                text: format!(
-                    "{} 12%",
-                    crate::bluetooth::glyph(ronoctua_bluetooth::Kind::Headphones)
-                ),
-                alarmed: true,
-            })
-            .collect();
-        for columns in [20_u16, 30, 40, 80] {
-            let placed = layout::resolve(
-                columns,
-                &segments(
-                    "buffer",
-                    "ghostty",
-                    "normal",
-                    3,
-                    &Marks {
-                        devices: &devices,
-                        ..Marks::default()
-                    },
-                ),
-            );
-            let ids: Vec<&str> = placed.iter().map(|c| c.id).collect();
-            assert!(
-                ids.contains(&"notif"),
-                "at {columns} columns the devices pushed the bell off: {ids:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_minibuffer_at_rest_is_empty() {
-        // The line always exists (the footer has TWO lines, section 4.1), but
-        // does not invent content.
-        assert!(minibuffer_at_rest().is_empty());
-    }
-
-    #[test]
-    fn the_bell_is_only_there_while_something_is_unread() {
-        // NOTHING AT REST. A bell with a `0` beside it was a mark on every
-        // screen answering a question nobody had asked; the owner asked for
-        // silence, and for the dotted bell alone when something is waiting.
-        let quiet = segments("", "", "", 0, &Marks::default());
-        assert!(
-            !quiet.iter().any(|s| s.id == "notif"),
-            "a bell with nothing unread"
-        );
-        let with = segments("", "", "", 3, &Marks::default());
-        let notif = with.iter().find(|x| x.id == "notif").unwrap();
-        // ONE GLYPH AND NO NUMBER: how many is the manager's question, and the
-        // pointer answers it on the minibuffer without opening anything.
-        assert_eq!(
-            layout::width(&notif.text),
-            1,
-            "{:?} is not one glyph",
-            notif.text
-        );
-        assert_eq!(
-            notif.text.chars().next().unwrap(),
-            tokens::icon::NOTIFICATION_PENDING
-        );
-    }
-
-    #[test]
-    fn the_update_mark_is_a_column_only_while_something_runs() {
-        // IT COSTS NOTHING AT REST: it appears because something is happening,
-        // and at rest it would be a column spent on a still glyph on every
-        // screen in the session, forever.
-        let quiet = segments("a.rs", "rust", "", 0, &Marks::default());
-        assert!(!quiet.iter().any(|s| s.id == "update"));
-        // ONE UNREAD, so that the bell is on the line and the second half of
-        // this test has something to outlive the mark.
-        let busy = segments(
-            "a.rs",
-            "rust",
-            "",
-            1,
-            &Marks {
-                update: Some(&crate::update_window::frame_of(0).to_string()),
-                ..Marks::default()
-            },
-        );
-        let mark = busy
-            .iter()
-            .find(|s| s.id == "update")
-            .expect("the mark has to be there");
-        // One glyph, and it is one of the twelve — never the countdown's pie,
-        // which answers the opposite question.
-        assert_eq!(layout::width(&mark.text), 1);
-        assert!(
-            crate::update_window::FRAMES.contains(&mark.text.chars().next().unwrap()),
-            "the mark did not come from the clock's lap"
-        );
-        // AND THE BELL OUTLIVES IT on every width worth drawing. A screen too
-        // narrow for both keeps the one that says something is waiting to be
-        // read — the mark has the brain's own line, a screen and a window; the
-        // bell has nothing else.
-        for columns in [20_u16, 30, 40, 80] {
-            let placed = layout::resolve(columns, &busy);
-            let has = |id: &str| placed.iter().any(|p| p.id == id);
-            assert!(has("notif"), "the bell went away at {columns} columns");
-            if has("update") {
-                assert!(has("notif"), "the mark survived the bell");
-            }
-        }
-    }
-
-    #[test]
-    fn the_icons_come_from_a_token() {
-        // Invariant 9: no icon codepoint outside the tokens. If
-        // someone writes a literal here, this test does not catch it — but the
-        // generator has already guaranteed that the token exists in the font.
-        let s = segments("arq.rs", "rust", "", 1, &Marks::default());
-        let notif = s.iter().find(|x| x.id == "notif").unwrap();
-        assert!(notif.text.starts_with(tokens::icon::NOTIFICATION_PENDING));
+    fn every_page_of_the_player_is_reached_by_a_row() {
+        // A CATALOGUE OF ITS OWN: a listing is reached from a row of channels
+        // by theme (`player_catalog`).
+        let catalogue =
+            std::env::temp_dir().join(format!("ronoctua-pages-catalog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&catalogue);
+        ronoctua_shell_catalogue::player_catalog::write_fixture(&catalogue).expect("a catalogue");
+        ronoctua_shell_player::player_seam::with_pages(crate::PLAYER_PAGES, || {
+            ronoctua_shell_player::player::every_page_is_reached_by_a_row(&|v| {
+                v.catalogue_at(catalogue.clone());
+                v.catalog_mut().source = Some("archive".into());
+                // AND A RANKING HANDED ITS VIDEOS: a video's own page is
+                // reached from the `⋯` of its row (`player_ranking`).
+                v.ranking_mut().given(vec![video(1)], 1);
+                v.ranking_mut().chosen = Some(video(1).id);
+            });
+        });
+        let _ = std::fs::remove_dir_all(&catalogue);
     }
 }

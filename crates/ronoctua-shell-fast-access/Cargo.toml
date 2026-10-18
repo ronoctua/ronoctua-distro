@@ -1,0 +1,93 @@
+[package]
+name = "ronoctua-shell-fast-access"
+description = "The search over everything (LEADER d): the view, its sources, the detail, its window, its column and its footer region."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# FAST-ACCESS, ONE FEATURE IN ONE CRATE (the 2026-10-12 wave): the view, the
+# in-process sources and the feed that asks the rest, the detail, the window,
+# the column, the footer's region and their cameras, beside its keys. It
+# stands on the foundation and on the two features whose pages it shows —
+# the calculator's answer, an icon's page — so a line of it recompiles it and
+# the binary, and no other feature.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-report = { path = "../ronoctua-shell-report" }
+ronoctua-shell-work = { path = "../ronoctua-shell-work" }
+ronoctua-shell-inspect = { path = "../ronoctua-shell-inspect" }
+# How a sum's answer is said (`calc::answer_text`), and an icon's page.
+ronoctua-shell-calc = { path = "../ronoctua-shell-calc" }
+ronoctua-shell-icons = { path = "../ronoctua-shell-icons" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-apps = { path = "../ronoctua-apps" }
+ronoctua-store = { path = "../ronoctua-store" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+# THE BORDER WITH WHAT IS INSIDE A FILE, for the detail's preview.
+ronoctua-inspect = { path = "../ronoctua-inspect" }
+# The SCHEMA of a file's tags: the detail edits them through the tag
+# program, never the engine (`the-footer-never-links-lofty`).
+ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
+# A sum, a conversion, a currency — `/$` asks the bank's rates on its pass.
+ronoctua-calc = { path = "../ronoctua-calc" }
+# THE ICONS' three tables, read at RUN time from `RONOCTUA_ICONSET`.
+ronoctua-iconset = { path = "../ronoctua-iconset" }
+# THE SUPER INDEX, READ: the reader and nothing else — `engine` without
+# `write`, so the crawlers and the unit stay the unit's, and a door opens the
+# index read-only while a view shows it; `man` for a manual page's first
+# lines in the detail.
+ronoctua-index = { path = "../ronoctua-index", default-features = false, features = [ "engine", "man" ] }
+# `/w`: Wikipedia, DuckDuckGo, the person's SearXNG or Brave key, asked on a
+# thread of the door's with the person's pass for the host.
+ronoctua-websearch = { path = "../ronoctua-websearch" }
+# The dictionary, synonyms and translations (`/d`, `/s`, `/t`), asked by the
+# door on its own threads with the person's pass for the host: hence `net`.
+ronoctua-words = { path = "../ronoctua-words", default-features = false, features = [ "net" ] }
+# YouTube's search (`/y`, `ronoctua_ytdlp::search`).
+ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
+# The video catalogue read only (`Catalog::open_ro`) and a video's picture;
+# `net` for the thumbnail asked of its host on a pass.
+ronoctua-video-metrics = { path = "../ronoctua-video-metrics", features = [ "net" ] }
+# A program's details and its install, as the software centre's engine says
+# them; `net` is the search, `draw` the icon decoder.
+ronoctua-software = { path = "../ronoctua-software", features = [ "net", "draw" ] }
+# Which addresses a kiosk may take.
+ronoctua-browser = { path = "../ronoctua-browser" }
+# THE STOP OF A REQUEST IN FLIGHT (`web::Abort`), and nothing else: the last
+# key's requests are stopped on the next one. `tls` because `web::Abort`
+# lives under it; the requests are made by the crates that own their hosts.
+ronoctua-http = { path = "../ronoctua-http", default-features = false, features = [ "tls" ] }
+
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's, the kit's and the panels' guards hold in these tests too
+# (`test-support`).
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+ronoctua-shell-inspect = { path = "../ronoctua-shell-inspect", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]
+run-env = ["RONOCTUA_ZONEINFO"]

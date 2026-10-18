@@ -56,42 +56,55 @@
 # one is out (a hash with an expiry date, the defect above). It costs a
 # machine that never ran a battery one download of 134 MiB.
 #
-# # And the dependency layers, the CURRENT ones only
+# # No dependency layers any more
 #
-# The two `buildDepsOnly` layers (`rust.cargoArtifacts`, `rust.loopArtifacts`)
-# are what every edit of the workspace builds on: the 483 third-party crates,
-# compiled, per profile. Nothing installed references them — they are build
-# inputs — so a collection takes them, and the next build pays both again.
-# The store now collects itself — the update's weekly collection, and Nix's
-# own floor when the disk runs short (`nix/modules/store.nix`) — so without a
-# root that would be most weeks.
+# The two `buildDepsOnly` layers crane's whole-workspace builds stood on were
+# rooted here, one root per layer (`layer-<name>-<hash>…`), because nothing
+# installed references them and every edit built on them. They are gone with
+# those builds (2026-10-12): the Rust build is one derivation per unit, the
+# third-party crates included, and what a collection must not take is now the
+# units below. A `layer-…` root an older checkout left is released like the
+# rest, `releaseDays` after it was last refreshed.
 #
-# So each gets a root of its own, pointing at the layer THIS evaluation would
-# build — named after that layer, for the reason above. A layer is rooted only
-# if it is already in the store: rooting is never a reason to compile 483
-# crates. The layer of an OLD lockfile (or an old toolchain) keeps its root
-# until no checkout has asked for it in `releaseDays`, and then dies at the
-# next collection like anything else unreferenced.
+# # And the compiled units, the CURRENT ones of THIS checkout
 #
-# `unsafeDiscardStringContext`, as in `nix/gate.nix`: the path is TEXT here.
-# With its context the script would depend on both layers, and running it
-# would build them.
+# With the Rust build in one derivation per unit (`nix/rust/units.nix`), a
+# library unit — ours or a third-party crate's — is one nothing installed
+# references, taken by the next collection, paid again by the next build.
+# The sets (`units`: `rust.release.keep`, the release graph's units, and
+# `rust.loop.keep`, the loop's third-party ones, which the test graph
+# shares) are rooted by `ronoctua-keep-units`
+# (`nix/keep-units.nix`) — only the members the store holds, so rooting
+# compiles nothing.
+#
+# PER CHECKOUT, and replaced, never accumulated. A layer moved with the
+# lockfile, so a root per hash was a root per lockfile; a set of units moves
+# with nearly every edit, and a root per hash would hold every version for
+# `releaseDays` — gigabytes an afternoon. So a set is named after the
+# checkout that ran this (its top directory, hashed): each checkout holds the
+# units of its own current tree, the last run replaces what the one before
+# held, and a checkout nobody ran in `releaseDays` (a lane dropped, a branch
+# forgotten) is released like the rest.
 {
   lib,
   linkFarm,
   fetchurl,
   writeShellApplication,
+  writeText,
   nix,
   coreutils,
   findutils,
+  git,
   inputs,
   # Every fixed-output download a derivation of this flake declares.
   downloads ? [ ],
-  # The dependency layers to hold while they are the current ones, by name.
-  layers ? { },
+  # The sets of compiled units to hold while they are the current ones, by
+  # name (each with its members' `paths`), and what roots them.
+  units ? { },
+  keepUnits ? null,
   # How long a root no checkout refreshed is kept (`assets/cache.nix`'s
-  # `oldCompilerDays`, passed by `flake.nix`: a layer IS an old compiler's
-  # build once nothing builds on it).
+  # `oldCompilerDays`, passed by `flake.nix`: a set of units IS an old
+  # compiler's build once nothing builds on it).
   releaseDays,
 }:
 
@@ -106,13 +119,21 @@ let
       path = d;
     }) (downloads ++ lib.attrValues (import ./test-vectors.nix { inherit fetchurl; }))
   );
+  # Each set's members, as text: naming them builds nothing.
+  unitFiles = lib.mapAttrs (
+    name: set: writeText "ronoctua-kept-${name}-unit-paths" (lib.concatLines set.paths)
+  ) units;
 in
+assert lib.assertMsg (
+  units == { } || keepUnits != null
+) "nix/kept-sources.nix: units to keep, and nothing to keep them with";
 writeShellApplication {
   name = "ronoctua-keep-sources";
   runtimeInputs = [
     nix
     coreutils
     findutils
+    git
   ];
   text = ''
     roots="''${XDG_STATE_HOME:-$HOME/.local/state}/ronoctua/gcroots"
@@ -134,22 +155,24 @@ writeShellApplication {
     if ! hold "$roots/sources-$(basename ${kept})" ${kept}; then
       echo "warning: could not root the flake's sources; a garbage collection may take them" >&2
     fi
-    ${lib.concatStrings (
-      lib.mapAttrsToList (name: layer: ''
-        layer=${builtins.unsafeDiscardStringContext layer.outPath}
-        # `--check-validity` and not `-e`: a path half-deleted by a running
-        # collection still exists and is no longer valid.
-        if nix-store --check-validity "$layer" 2> /dev/null; then
-          if ! hold "$roots/layer-${name}-$(basename "$layer")" "$layer"; then
-            echo "warning: could not root the ${name} dependency layer" >&2
+    ${lib.optionalString (units != { }) ''
+      # THE UNITS OF THIS CHECKOUT'S TREE, by the checkout's own name.
+      checkout=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+      key=$(printf '%s' "$checkout" | sha256sum | cut -c1-12)
+      ${lib.concatStrings (
+        lib.mapAttrsToList (name: file: ''
+          if ! ${keepUnits}/bin/ronoctua-keep-units --roots "$roots" --set "units-${name}-$key" \
+               --release-days ${toString releaseDays} ${file} >&2; then
+            echo "warning: could not root the ${name} units; a garbage collection may take them" >&2
           fi
-        fi
-      '') layers
-    )}
+        '') unitFiles
+      )}
+    ''}
     # RELEASE WHAT NO CHECKOUT HAS ASKED FOR IN ${toString releaseDays} DAYS — the
     # names of before this rule (`sources`, `layer-<name>`) included. Only
     # links, only here, and only these names: the directory holds nothing
-    # else of ours, and whatever else is in it is not this script's.
+    # else of ours but the unit sets, which `ronoctua-keep-units` releases
+    # itself, and whatever else is in it is not this script's.
     while IFS= read -r -d "" stale; do
       rm -f -- "$stale"
       echo "released $(basename -- "$stale"): no checkout asked for it in ${toString releaseDays} days" >&2

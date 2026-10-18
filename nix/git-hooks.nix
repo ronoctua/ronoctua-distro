@@ -50,6 +50,16 @@ let
         exit 1
       fi
 
+      # THE BUILD PLAN, which every Rust unit is made from: a commit whose
+      # manifests moved without `nix/rust/plan.json` following them would
+      # leave the next checkout unable to build a single unit.
+      echo "pre-commit: the build plan…"
+      if ! nix build .#checks."$(nix eval --raw --impure \
+            --expr 'builtins.currentSystem')".rust-plan-is-current --no-link 2>&1 | tail -20; then
+        echo "ERROR: nix/rust/plan.json is not the plan of this tree. Run: nix run .#rust-plan" >&2
+        exit 1
+      fi
+
       echo "pre-commit: ok"
     '';
   };

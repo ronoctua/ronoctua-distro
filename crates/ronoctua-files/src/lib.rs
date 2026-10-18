@@ -34,6 +34,7 @@ use std::path::Path;
 
 pub mod act;
 pub mod archive;
+pub mod key;
 pub mod listing;
 pub mod menu;
 pub mod mime;

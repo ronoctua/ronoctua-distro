@@ -40,10 +40,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use ronoctua_i18n::{LANGUAGES, Texts, key};
+use ronoctua_i18n::{LANGUAGES, Texts};
 use serde_json::{Map, Value};
 
 pub mod copy;
+pub mod key;
 pub mod lucide;
 
 /// The variable that names the directory of the three tables.

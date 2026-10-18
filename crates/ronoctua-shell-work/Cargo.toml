@@ -1,0 +1,62 @@
+[package]
+name = "ronoctua-shell-work"
+description = "The work a door hands the queue, in words: the seal, the /private vault, a job, the software centre's words."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# WHAT THE DOORS HAND THE QUEUE, AND SAY ABOUT IT (the 2026-10-12 wave): the
+# seal's questions and its `Work::Seal`, the vault's request for its root unit,
+# a job of the queue in words, the software centre's words. The file manager,
+# the security centre, the software centre, the queue's view and fast-access
+# say a job the same way because they say it here; and none of the inspection
+# panels, the player or the belongings stands on it, so a line of the seal
+# recompiles only the five that do.
+[dependencies]
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-report = { path = "../ronoctua-shell-report" }
+ronoctua-shell-keep = { path = "../ronoctua-shell-keep" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+# The modeline's segments the programs' two marks are (`programs_words`).
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+ronoctua-archive = { path = "../ronoctua-archive" }
+ronoctua-disks = { path = "../ronoctua-disks" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+# The seal's wire, WITHOUT `age`: the queue's `ronoctua-seal` child seals
+# (`transfers-never-link-age`).
+ronoctua-pq = { path = "../ronoctua-pq", default-features = false }
+# Whose keys a seal is for (`prefs`), with no `age` of the belongings either.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }
+# A passphrase held as a `Secret`, without the requests.
+ronoctua-lookup = { path = "../ronoctua-lookup", default-features = false }
+ronoctua-private = { path = "../ronoctua-private" }
+# The verbs of a root gesture, without the sudo door (`sudo-door-is-one`).
+ronoctua-security = { path = "../ronoctua-security" }
+# The software centre's shapes (`software_words`), without the network and
+# the icon decoder — those are the centre's own (`net`, `draw`).
+ronoctua-software = { path = "../ronoctua-software" }
+
+smithay-client-toolkit.workspace = true
+rustix = { workspace = true, features = [ "event", "process" ] }
+serde.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+# The seal's tests hold its post-quantum exchange to git's.
+ronoctua-git = { path = "../ronoctua-git" }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

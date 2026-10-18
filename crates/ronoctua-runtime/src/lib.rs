@@ -1671,7 +1671,7 @@ fn effects_from(v: &wasmtime::component::Val) -> Vec<ronoctua_protocol::Effect> 
                 // IT WAS MISSING, AND THE EDITOR'S SAVE WAS THE PRICE.
                 //
                 // `buffers/editor` emits `effect::save` and
-                // `crates/ronoctua-shell/src/buffer.rs` handles it — but nothing
+                // `crates/ronoctua-shell-buffers/src/buffer.rs` handles it — but nothing
                 // ever built it: the case fell into `otherwise` below, came out
                 // as a `warn` in a log nobody reads, and `SPC m s` looked like a
                 // key that does nothing. Which is exactly what this arm's

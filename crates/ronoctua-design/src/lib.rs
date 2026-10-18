@@ -357,7 +357,7 @@ pub enum Role {
     ///
     /// The host paints it as the neutral [`Role::Hover`] while only one
     /// cursor is on the window: colour is spent only where it tells two hands
-    /// apart, the rule the shell's own windows keep (`crate::seats`).
+    /// apart, the rule the shell's own windows keep (`ronoctua_shell_kit::seats`).
     HoverOf(u16),
     /// SOMETHING IS BEING FOLLOWED — a brain module that listens, and the
     /// rows and marks it tones `watching`. The gestures' glyph colour, the one

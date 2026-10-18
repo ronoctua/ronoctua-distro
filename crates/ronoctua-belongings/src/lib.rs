@@ -64,6 +64,7 @@ pub mod crypt;
 pub mod engine;
 #[cfg(feature = "prefs")]
 pub mod kept;
+pub mod key;
 #[cfg(feature = "crypt")]
 pub mod merge;
 #[cfg(feature = "prefs")]

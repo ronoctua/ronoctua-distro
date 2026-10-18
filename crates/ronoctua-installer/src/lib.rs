@@ -23,6 +23,7 @@ pub mod access;
 pub mod executor;
 pub mod gate;
 pub mod job;
+pub mod key;
 pub mod model;
 pub mod plan;
 pub mod reach;

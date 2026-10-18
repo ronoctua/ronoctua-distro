@@ -12,6 +12,9 @@
   iconSuperpack,
   # Where cargo writes (nix/cargo-dirs.nix).
   cargoDirs,
+  # `ronoctua-keys`, the checkout's text key files for cargo and its texts
+  # (`nix/keys-checkout.nix`).
+  keysCheckout,
 }:
 
 let
@@ -41,7 +44,7 @@ pkgs.mkShell {
 
   # What the workspace LINKS, as in `nix/rust.nix`'s `buildInputs`: SQLite for
   # the catalogues and libpam for `ronoctua-pam`. As build inputs, so pkg-config
-  # finds their `.pc` files the way crane's build does.
+  # finds their `.pc` files the way the units do.
   buildInputs = toolchain.links;
 
   # The renderer links wgpu; the loader has to find the libs at run
@@ -53,7 +56,7 @@ pkgs.mkShell {
   # expensive to diagnose. Fixed here, in one place.
   RONOCTUA_WIT_VERSION = "0.2.0";
 
-  # EVERYTHING THE BUILD BAKES, AS A TABLE — the same one crane gets.
+  # EVERYTHING THE BUILD BAKES, AS A TABLE — the one the units take theirs from.
   #
   # `option_env!` is resolved at COMPILE time, so a binary `cargo` built inside
   # the devshell has exactly what this attrset holds and nothing else. Written
@@ -103,6 +106,41 @@ pkgs.mkShell {
     # copies kept in step by hand.
     ${cargoDirs.exports}
 
+    # THE TEXT KEYS AND THE TEXTS, for this checkout's `cargo` and the
+    # programs it builds (`nix/keys-checkout.nix`).
+    #
+    # The table above hands `RONOCTUA_KEYS_DIR` the evaluation's directory of
+    # every crate's file — a store path that changes whenever any key does,
+    # and with it every crate that speaks would recompile. Here the checkout
+    # gets a directory of its own, outside the tree, kept in step with its
+    # fragments by rewriting only the files that changed: a key added
+    # recompiles the crate that says it. And `RONOCTUA_TEXTS` the texts of
+    # the same fragments, beside it: the evaluation's are the tree's as it was
+    # on entry, and a program built with a key added since would be refused
+    # at its start by them (exit 78). `ronoctua-keys` (on the PATH) makes both
+    # again — after a key is added or removed, or a sentence edited — and the
+    # two variables keep naming them, so nothing needs the shell entered
+    # again. When it cannot (a refused fragment, said above), the
+    # evaluation's stay.
+    #
+    # THE CHECKOUT IS GIT'S TOP LEVEL, wherever the shell was entered: a
+    # subdirectory with the evaluation's directory would compile against
+    # another value of the variable, and cargo would recompile every crate
+    # that speaks each time the two alternate.
+    export PATH="${keysCheckout}/bin:$PATH"
+    keys_tree=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    if [ -f "$keys_tree/Cargo.toml" ] && [ -d "$keys_tree/crates" ]; then
+      if ronoctua-keys --tree "$keys_tree" > /dev/null; then
+        RONOCTUA_KEYS_DIR=$(ronoctua-keys --tree "$keys_tree" --dir)
+        RONOCTUA_TEXTS=$(ronoctua-keys --tree "$keys_tree" --texts-dir)
+        export RONOCTUA_KEYS_DIR RONOCTUA_TEXTS
+      else
+        echo "  the texts and text keys of this checkout were not made: cargo compiles against the"
+        echo "  evaluation's keys, and its programs read the evaluation's texts"
+        echo
+      fi
+    fi
+
     # Installed on entering the devshell, and not by an installer step: a hook
     # lives in `.git/hooks`, which git never clones. Whoever clones this
     # repository gets the hook the first time they run `nix develop`, and not
@@ -136,7 +174,7 @@ pkgs.mkShell {
         crates/ronoctua-protocol/wit/deps/tokens/tokens.wit
     fi
 
-    echo "  nix run .#quick    ten chosen ones (~1 min) — a subset, not a category"
+    echo "  nix run .#quick    the chosen ones (~1 min) — a subset, not a category"
     echo "  nix run .#most     the ones that do not build an installation — before committing"
     echo "  nix run .#gate     everything, by the machine's RAM — only it closes invariant 7"
     echo "  nix run .#dev      nested compositor + footer (leader = Ctrl+Alt+Space)"

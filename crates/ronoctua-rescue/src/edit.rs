@@ -21,6 +21,7 @@
 
 use std::path::Path;
 
+use crate::key;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -31,7 +32,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
-use ronoctua_i18n::{Texts, key};
+use ronoctua_i18n::Texts;
 use ronoctua_tokens::color;
 
 /// Where the edited text waits for the unit that has the privilege.

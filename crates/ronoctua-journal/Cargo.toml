@@ -21,3 +21,7 @@ ronoctua-xdg = { path = "../ronoctua-xdg" }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+run-env = ["RONOCTUA_JOURNALCTL"]

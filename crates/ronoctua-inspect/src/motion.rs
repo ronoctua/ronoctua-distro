@@ -8,7 +8,7 @@
 //! when the cursor moves on — and this crate's own promise is that it spawns
 //! no threads, because the shell owns concurrency.
 //!
-//! So what is here is the probe. The player is `ronoctua_shell::motion`.
+//! So what is here is the probe. The player is `ronoctua_shell_inspect::motion`.
 //!
 //! # Two sources, one shape
 //!

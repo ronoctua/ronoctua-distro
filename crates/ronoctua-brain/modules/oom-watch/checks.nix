@@ -85,7 +85,7 @@ in
         # footer's tag is its constant, the event's values are `args_of`'s,
         # and the names the footer matches by are `ronoctua_notify::oom`'s — strings kept.
         tags = json.load(open("${facts}"))["tags"]
-        surface = uncommented(pathlib.Path("${../../../ronoctua-shell/src/surface.rs}").read_text())
+        surface = uncommented(pathlib.Path("${../../../ronoctua-shell-door/src/tags.rs}").read_text())
         oom = uncommented(pathlib.Path("${../../../ronoctua-notify/src/oom.rs}").read_text())
         module = uncommented(pathlib.Path("${./module.rs}").read_text())
         wrong = []

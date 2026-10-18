@@ -43,6 +43,47 @@ writeShellApplication {
 
     ${graphicsHost.prelude}
 
+    # AND THE GBM BACKENDS, as `nix/dev.nix` sets them and for its reason: the
+    # nested compositor allocates through GBM, whose loader reads neither
+    # `LIBGL_DRIVERS_PATH` nor anything but `/run/opengl-driver/lib/gbm`
+    # unless told — and that folder exists on NixOS alone. Without it, on any
+    # other host, the compositor never came up and no frame was measured.
+    # Derived from what the prelude decided; empty on NixOS and NVIDIA.
+    if [ -n "''${LIBGL_DRIVERS_PATH:-}" ]; then
+      export GBM_BACKENDS_PATH="''${LIBGL_DRIVERS_PATH%/dri}/gbm"
+    fi
+
+    # HEADLESS: NO WINDOW IN THE PERSON'S SESSION.
+    #
+    # Run on the host's Wayland, the nested compositor was a window there, and
+    # three things about it belonged to the host. Its SIZE: the host tiles it,
+    # so the `output * mode` below was ignored and the footer was measured at
+    # whatever tile the host handed out (on a fractional host, blown up on the
+    # screen as well). Its FRAMES: that backend draws when the host calls back,
+    # and a host owes no callback to a window it does not show. Its FOCUS: a
+    # new window takes it, and what the person typed landed in the measured
+    # session. Part of every number was the host's layout, and every round
+    # flashed on the person's screen.
+    #
+    # The headless backend draws on the GPU through a render node, honours the
+    # mode to the pixel and opens nothing. `WLR_RENDERER=gles2` because, asked
+    # for nothing, wlroots falls back to pixman on a backend with no DRM device
+    # of its own when no GPU renderer comes up: the CPU, which section 9.3
+    # forbids measuring under any name. Named, it fails instead. The host's
+    # `WAYLAND_DISPLAY` and `DISPLAY` are taken from the compositor, so no
+    # backend can reach the host's session even if this choice were ignored.
+    export WLR_BACKENDS=headless
+    export WLR_HEADLESS_OUTPUTS=1
+    export WLR_RENDERER=gles2
+
+    # A SECOND INSTANCE, as `nix/dev.nix` names its own (`ronoctua_xdg::INSTANCE`):
+    # every root becomes `ronoctua-bench` and every socket `ronoctua-bench-…`.
+    # Unnamed, the measured footer read the installed session's preferences —
+    # the numbers moved with the person's theme and text size — and talked to
+    # its queue and brain. The `leader` and `command` calls below inherit it,
+    # which is how they find this footer's control socket.
+    export RONOCTUA_INSTANCE=bench
+
     # `writeShellApplication` turns on `errexit` and `pipefail`. A `grep` that
     # has not yet found what it is looking for returns 1, and inside `var=$(...)` that
     # TAKES THE SCRIPT DOWN — silently, before the error message that exists
@@ -51,6 +92,25 @@ writeShellApplication {
     trap 'rm -rf "$dir"' EXIT
     compositor_log="$dir/compositor.log"
     display_file="$dir/display"
+
+    # THE ROOTS ARE THE ROUND'S. The instance above names them, and these put
+    # them in this folder: every round measures the footer as it first starts
+    # (no theme, text size or consent of the person's, nothing left by the
+    # round before), and nothing is written into the home. The cache stays the
+    # person's, so the fonts are as warm as in their session.
+    export XDG_CONFIG_HOME="$dir/roots/config"
+    export XDG_STATE_HOME="$dir/roots/state"
+    export XDG_DATA_HOME="$dir/roots/data"
+    mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME"
+
+    # AND EVERY PROCESS OF THE ROUND CARRIES THE ROUND'S NAME. A client starts
+    # the daemon it finds missing beside itself (`ronoctua_brain::client`, and
+    # the queue's and the studio's alike), and that daemon outlives the footer
+    # on purpose: killing the footer left a brain, a queue and a studio running
+    # for good, the brain acting on the machine. They are found by this mark at
+    # the end, never by name (AGENTS.md: `pkill 'ronoctua-'` is the installed
+    # session too).
+    export RONOCTUA_BENCH_ROUND="$dir"
 
     # THE IPC SOCKET IS NAMED BEFORE THE COMPOSITOR STARTS, which is what
     # `SCROLLSOCK` is for: set to a path that does not exist yet, it is the path
@@ -85,13 +145,38 @@ writeShellApplication {
     CONF
 
     echo "== nested compositor =="
-    scroll -c "$dir/config" > "$compositor_log" 2>&1 &
+    env -u WAYLAND_DISPLAY -u DISPLAY scroll -c "$dir/config" > "$compositor_log" 2>&1 &
     compositor_proc=$!
     footer_proc=""
     cleanup() {
       [ -n "$footer_proc" ] && kill "$footer_proc" 2>/dev/null || true
       kill "$compositor_proc" 2>/dev/null || true
       wait "$compositor_proc" 2>/dev/null || true
+      # Everything else that carries the round's mark: the daemons above. The
+      # scan skips itself and this script, which carry it too.
+      python3 - "$dir" "$$" <<'PY'
+    import os, signal, sys
+    mark = ("RONOCTUA_BENCH_ROUND=" + sys.argv[1]).encode()
+    skip = {os.getpid(), int(sys.argv[2])}
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        if int(pid) in skip:
+            continue
+        try:
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                env = f.read().split(b"\0")
+        except OSError:
+            continue
+        if mark in env:
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except OSError:
+                pass
+    PY
+      # Their sockets stay on the disk, as a server killed by a signal leaves
+      # its socket; the instance is the bench's alone.
+      if [ -n "''${XDG_RUNTIME_DIR:-}" ]; then
+        rm -f "$XDG_RUNTIME_DIR"/ronoctua-bench-*.sock
+      fi
     }
     trap 'cleanup; rm -rf "$dir"' EXIT
 
@@ -115,7 +200,7 @@ writeShellApplication {
 
     start_footer() {
       # NO_COLOR: `tracing` interleaves ANSI escapes BETWEEN the fields, and
-      # `marco=...` stops matching any grep.
+      # `milestone=...` stops matching any grep.
       env WAYLAND_DISPLAY="$display" NO_COLOR=1 \
           RUST_LOG="ronoctua_shell=info,ronoctua_render=info" \
           ${ronoctua-shell}/bin/ronoctua-shell > "$1" 2>&1 &
@@ -170,7 +255,9 @@ writeShellApplication {
 
     # QUOTES around the value: `tracing` adds them on a `Debug` field. It is
     # already in AGENTS.md, and it has already cost one measurement round.
-    PATTERN = re.compile(r'marco="([a-z-]+)" ms=([0-9.]+)')
+    # The field is the renderer's `milestone` (`ronoctua_render::gpu`): it
+    # was `marco` once, and the rename left this pattern matching nothing.
+    PATTERN = re.compile(r'milestone="([a-z-]+)" ms=([0-9.]+)')
     TARGETS = {"first-frame": 200.0, "which-key": 16.7}
 
     d = {}

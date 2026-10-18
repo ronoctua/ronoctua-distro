@@ -18,6 +18,11 @@
 let
   machine = import ../machine.nix;
   cfg = config.ronoctua.machine;
+  # HOW MANY BUILDS FIT, and the plan of the heavy units (`nix/build-sizing.nix`):
+  # the same arithmetic the batteries build by.
+  sizing = pkgs.callPackage ../build-sizing.nix { };
+  # What roots a build's units: over the machine's own Nix, whose store it is.
+  keepUnits = pkgs.callPackage ../keep-units.nix { nix = config.nix.package; };
   tool = "${cfg.package}/bin/ronoctua-machine";
   # THE UPDATE'S OWN LOCK, which the root half of the update holds for its
   # whole run (`gen-updates.py`): an apply started beside it — by the software
@@ -171,12 +176,77 @@ in
         # Nix is the one that filled this store.
         RONOCTUA_NIX = "${config.nix.package}/bin/nix";
         RONOCTUA_BOOTCTL = "${config.systemd.package}/bin/bootctl";
+        # HOW MANY BUILDS FIT HERE, and what roots a build's units.
+        RONOCTUA_BUILD_SIZING = "${sizing.program}/bin/ronoctua-build-sizing";
+        RONOCTUA_KEEP_UNITS = "${keepUnits}/bin/ronoctua-keep-units";
       };
-      defaultText = "the machine directory, its attribute, the state and run folders, the menu's limit, the template, nix and bootctl";
+      defaultText = "the machine directory, its attribute, the state and run folders, the menu's limit, the template, nix, bootctl, the build sizing and what keeps a build's units";
       description = ''
         What `ronoctua-machine` is told, by every unit that runs it and by
         its wrapper: one table, so the rescue's rebuild, the update and the
         boot's bless cannot disagree about which flake or which `nix`.
+      '';
+    };
+
+    # HOW THE SYSTEM IS BUILT (`ronoctua-machine apply`, `crate::build`): the
+    # heavy units first and alone, and the compiled units kept after a build
+    # that worked. The flake sets the two inputs next to the import of this
+    # module, from the same `rust` the system is built from.
+    heavyUnits = lib.mkOption {
+      type = lib.types.attrsOf lib.types.package;
+      default = { };
+      internal = true;
+      description = ''
+        The release units whose own compiler peaks past the slot every other
+        compilation is sized by (`rust.heavyUnits` of the release graph): an
+        apply builds each one alone, after what it is built from.
+      '';
+    };
+
+    keptUnits = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      internal = true;
+      description = ''
+        The compiled units of the version this system is built from
+        (`rust.release.keep`, as store paths): after a build that worked,
+        `ronoctua-machine apply` roots the ones the store holds, under the
+        machine's record, and releases the last build's — so the next update
+        compiles only what changed, and a weekly collection does not take the
+        rest. Never part of the system's closure.
+      '';
+    };
+
+    phases = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      internal = true;
+      default =
+        let
+          plan = sizing.heavyPlan cfg.heavyUnits;
+          drv = d: builtins.unsafeDiscardStringContext d.drvPath;
+        in
+        {
+          # `ronoctua_machine::build::PHASES_FORMAT`.
+          format = 1;
+          first = map drv plan.first;
+          heavy = map (step: {
+            inherit (step) name;
+            drv = drv step.unit;
+            between = map drv step.between;
+          }) plan.steps;
+          system = drv config.system.build.toplevel;
+          kept = cfg.keptUnits;
+        };
+      defaultText = "the heavy units' plan, the system's derivation and the units to keep";
+      description = ''
+        What `ronoctua-machine apply` evaluates, once, before it builds: the
+        derivations of each phase (`nix eval --json`, which writes them) and
+        the units to keep. Of each phase it builds only what Nix's own plan
+        for the system lists (a dry run): a unit whose consumer the store
+        already holds, the seed's or the person's cache's, is in a phase and
+        never built. Read by the apply and nothing else; no part of the
+        system refers to it.
       '';
     };
 
@@ -186,9 +256,10 @@ in
       default = "/var/lib/ronoctua-machine";
       description = ''
         The machine's record (`state.json`: the last good generation, the
-        boot trial, a hold, the last apply), the lock snapshots and the old
-        layout a migration set aside. Persisted; the generations' trim reads
-        the record to keep the last good system and the one on trial.
+        boot trial, a hold, the last apply), the lock snapshots, the old
+        layout a migration set aside and the roots of the units the last build
+        was compiled from (`kept-units/`). Persisted; the generations' trim
+        reads the record to keep the last good system and the one on trial.
       '';
     };
 

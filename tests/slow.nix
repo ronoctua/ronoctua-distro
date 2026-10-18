@@ -166,9 +166,9 @@
   # measured 4.2 GB at the peak and 36 s to build it).
   #
   # The update's never-asks check (its brain module's, now) changed
-  # underneath: its runner names the software CLI, which is copied out of
-  # the same `workspace` derivation as `rust.shell`. That is a compilation the battery already pays for, not a
-  # second one, so criterion 4 does not reach it either.
+  # underneath: its runner names the software CLI, a release program of its
+  # own (`rust.software`, nix/rust/outputs.nix) that the battery builds anyway,
+  # not a second compilation, so criterion 4 does not reach it either.
   #
   # `software-vm` boots ONE machine from a handful of modules — not the
   # `toplevel` of any of the four systems — and partitions nothing, reboots
@@ -192,4 +192,12 @@
   # ── anchor: L17 ──
   # ── anchor: L19 ──
   # ── anchor: L20 ──
+
+  # THE THIRD-PARTY UNITS BESIDE CARGO (criterion 4): the spike's crates and
+  # everything below them — about 120 libraries of the release graph, wasmtime
+  # and cranelift among them — compiled AGAIN by cargo, to set each unit's
+  # command and each build script's result beside cargo's. The units
+  # themselves are the battery's own; cargo's second compilation is what is
+  # here. MEASURED with the units already built: 2 min 10 s.
+  "third-party-units-are-cargo-s"
 ]

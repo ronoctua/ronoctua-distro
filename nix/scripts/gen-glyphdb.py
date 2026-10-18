@@ -389,16 +389,26 @@ def main() -> int:
     ap.add_argument("--font-unpatched", type=pathlib.Path, required=True)
     ap.add_argument("--glyphnames", type=pathlib.Path, required=True)
     ap.add_argument("--tokens", type=pathlib.Path, required=True, help="icons.json")
-    ap.add_argument("--tray", type=pathlib.Path, required=True, help="tray.json")
+    # THE ICON TABLE ALONE, of the tokens handed in: what `nix/glyphgen.nix`'s
+    # `measure` asks for the brain modules' glyphs. Measured by the SAME code as
+    # every chrome token (`build_icon_table`), so a module's mark answers the
+    # same band beside the text; the glyph index, the lexicon and the coverage
+    # guards are the glyph browser's, and are not asked.
+    ap.add_argument(
+        "--icons-only",
+        action="store_true",
+        help="write icons.json of --tokens alone (no glyph index, no coverage)",
+    )
+    ap.add_argument("--tray", type=pathlib.Path, help="tray.json (not with --icons-only)")
     ap.add_argument("--typography", type=pathlib.Path, required=True, help="typography.json")
-    ap.add_argument("--lexicon", type=pathlib.Path, required=True)
+    ap.add_argument("--lexicon", type=pathlib.Path, help="the pt-BR lexicon (not with --icons-only)")
     # THE FLOOR COMES FROM OUTSIDE so the negative fixture can exercise the guard without
     # editing the real lexicon — see `nix/glyphgen.nix`.
     ap.add_argument("--min-coverage", type=float, default=90.0)
     # The languages, from `assets/i18n/languages.nix`. The tags are built for
     # every one of them; the lexicon is keyed on the subtag.
-    ap.add_argument("--languages", required=True, nargs="+")
-    ap.add_argument("--overlay", type=pathlib.Path, required=True)
+    ap.add_argument("--languages", nargs="+", help="the declared languages (not with --icons-only)")
+    ap.add_argument("--overlay", type=pathlib.Path, help="the curated overlay (not with --icons-only)")
     # THE MARKS THIS REPOSITORY DRAWS, and the face holding them. A token
     # naming `ours-<mark>` resolves here — see `nix/marksgen.nix`.
     ap.add_argument("--marks", type=pathlib.Path, required=True, help="marks.json")
@@ -406,6 +416,13 @@ def main() -> int:
     ap.add_argument("--nf-version", required=True)
     ap.add_argument("--out", type=pathlib.Path, required=True)
     args = ap.parse_args()
+    # WHAT THE GLYPH INDEX NEEDS, demanded unless only the icon table is asked.
+    if not args.icons_only:
+        absent = [f"--{n}" for n in ("tray", "lexicon", "languages", "overlay") if getattr(args, n) is None]
+        if absent:
+            die(f"{', '.join(absent)} {'is' if len(absent) == 1 else 'are'} required to build the glyph index")
+    elif args.tray is not None:
+        die("--tray names app ids of the chrome's own tokens, and --icons-only measures other tokens")
 
     font = TTFont(args.font, lazy=True)
     cmap = set(font.getBestCmap())
@@ -417,9 +434,26 @@ def main() -> int:
     check_versions(font, names_meta, args.nf_version)
 
     tokens = json.loads(args.tokens.read_text())
-    tray = json.loads(args.tray.read_text())
     typography = json.loads(args.typography.read_text())
     sizes = typography["size"]
+    marks = json.loads(args.marks.read_text())
+    marks_font = TTFont(args.marks_font, lazy=True)
+    if args.icons_only:
+        icons = build_icon_table(
+            tokens,
+            raw_names,
+            font,
+            {},
+            float(sizes["base"]),
+            float(sizes["icon"]),
+            float(typography["chromeTolerance"]),
+            marks,
+            marks_font,
+        )
+        args.out.mkdir(parents=True, exist_ok=True)
+        (args.out / "icons.json").write_text(json.dumps(icons, indent=2, ensure_ascii=False))
+        return 0
+    tray = json.loads(args.tray.read_text())
     lexicon = tomllib.loads(args.lexicon.read_text())
     overlay = tomllib.loads(args.overlay.read_text())
 
@@ -431,8 +465,6 @@ def main() -> int:
             "       Use the name without the `nf-` prefix (e.g. `fa-folder`, not `nf-fa-folder`)."
         )
 
-    marks = json.loads(args.marks.read_text())
-    marks_font = TTFont(args.marks_font, lazy=True)
     icons = build_icon_table(
         tokens,
         raw_names,

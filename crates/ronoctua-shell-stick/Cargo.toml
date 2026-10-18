@@ -1,0 +1,51 @@
+[package]
+name = "ronoctua-shell-stick"
+description = "The installer on a USB stick (LEADER s z): the view, its window, its region in the footer, its camera and its keys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# ONE FEATURE, ONE CRATE (the 2026-10-12 wave): the view, its window, the
+# region the footer hosts and the camera stand on the kit and the door alone,
+# so a line of the stick recompiles this crate and the binary that links it —
+# never the footer, never another view.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+# The drives, through the disk border's own signal.
+ronoctua-disks = { path = "../ronoctua-disks" }
+# THE INSTALLER STICK: the releases (its `net`: GitHub on the person's pass),
+# which drives may be written, the staging the root writer reads.
+ronoctua-stick = { path = "../ronoctua-stick", features = [ "net" ] }
+# The verbs of a root gesture and their refusals, without the sudo door
+# (`sudo-door-is-one`): the gesture goes through the footer's bar.
+ronoctua-security = { path = "../ronoctua-security" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

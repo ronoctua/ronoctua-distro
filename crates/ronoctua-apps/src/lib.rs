@@ -7,7 +7,7 @@
 //! milliseconds. It is the same reason as `ronoctua-clipboard` (queue and policy,
 //! without whatever watches the selection) and as `ronoctua-term` (the VT machine, without the PTY).
 //!
-//! And because `surface.rs` already has more than four thousand lines.
+//! And because the footer's `surface.rs` already had more than four thousand lines.
 //!
 //! # What it does NOT do
 //!

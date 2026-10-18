@@ -53,6 +53,8 @@ impl Scratch {
         let nix = self.path("bin/nix").display().to_string();
         let bootctl = self.path("bin/bootctl").display().to_string();
         let template = self.path("template").display().to_string();
+        let sizing = self.path("bin/sizing").display().to_string();
+        let keep = self.path("bin/keep-units").display().to_string();
         System::from_env(&Env::of(&[
             (system::SYSROOT, &root),
             (system::MACHINE_ATTR, "noctua"),
@@ -61,6 +63,8 @@ impl Scratch {
             (system::MENU_LIMIT, "5"),
             (system::TEMPLATE, &template),
             (system::SYSTEM_LOCK, SYSTEM_LOCK),
+            (system::BUILD_SIZING, &sizing),
+            (system::KEEP_UNITS, &keep),
         ]))
     }
 }
@@ -78,6 +82,11 @@ const LOCK_A: &str = r#"{"nodes":{"root":{"inputs":{"ronoctua":"ronoctua"}},"ron
 "#;
 const LOCK_B: &str = r#"{"nodes":{"root":{"inputs":{"ronoctua":"ronoctua"}},"ronoctua":{"locked":{"rev":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}},"root":"root","version":7}
 "#;
+
+/// What the fake sizing says: three Rust units at once, a heavy one with
+/// five cores, the rest two at a time with two cores each.
+const SIZING: &str =
+    "total_kb=1\nceiling_kb=\nslots=4\nrust_jobs=3\nrust_cores=1\njobs=2\ncores=2\nheavy_cores=5\n";
 
 /// A machine on its own root: system A booted and running from generation
 /// 1, the machine directory locked at A's revision.
@@ -123,10 +132,17 @@ case "$1" in
       [ "$a" = "--dry-run" ] && dry=1
       prev="$a"; last="$a"
     done
+    if [ "$dry" = 1 ]; then
+      if [ -e "$root/dry-fails" ]; then echo "error: cannot open the store" >&2; exit 1; fi
+      if [ -e "$root/dry-says" ]; then cat "$root/dry-says" >&2; fi
+      exit 0
+    fi
     echo "$last" >> "$root/built"
     if [ -e "$root/build-fails" ]; then echo "error: builder failed" >&2; exit 1; fi
-    if [ "$dry" = 1 ]; then cat "$root/dry-says" >&2; exit 0; fi
     ln -sfn "$(cat "$root/build-result")" "$out" ;;
+  eval)
+    if [ -e "$root/phases.json" ]; then cat "$root/phases.json"; exit 0; fi
+    echo "error: attribute 'phases' missing" >&2; exit 1 ;;
   flake)
     last=""; for a in "$@"; do last="$a"; done
     d="${{last#path:}}"
@@ -183,6 +199,20 @@ case "$1" in
   *) exit 2 ;;
 esac
 "#
+            ),
+        );
+        // THE SIZING, as `sizing-says` says it; and WHAT KEEPS A BUILD'S
+        // UNITS, which writes down what it was handed. (What a build would
+        // build is the dry run's, `dry-says`.)
+        std::fs::write(s.path("sizing-says"), SIZING).unwrap();
+        script(
+            &s.path("bin/sizing"),
+            &format!("#!/bin/sh\necho sizing >> '{root}/calls'\ncat '{root}/sizing-says'\n"),
+        );
+        script(
+            &s.path("bin/keep-units"),
+            &format!(
+                "#!/bin/sh\necho \"keep-units $*\" >> '{root}/calls'\nfor a in \"$@\"; do last=\"$a\"; done\ncp \"$last\" '{root}/kept'\n"
             ),
         );
         std::fs::create_dir_all(s.path("nix/store")).unwrap();
@@ -1118,4 +1148,277 @@ fn a_rollback_by_hand_disarms_the_trial() {
     assert_eq!(w.profile().as_deref(), Some(a.as_str()));
     std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();
     assert_eq!(w.m.apply(false).unwrap_err().why, Why::DidNotBoot);
+}
+
+/// The phases a distro would describe: one unit below the shell, the shell,
+/// a second heavy unit the system does not reach (with a unit between), the
+/// system, and two units to keep.
+const PHASES: &str = r#"{"format":1,
+"first":["/nix/store/aaaa-rust-lib-x-0.1.0.drv"],
+"heavy":[{"name":"shell-release","drv":"/nix/store/ssss-ronoctua-shell-0.1.0.drv","between":[]},
+         {"name":"not-here","drv":"/nix/store/oooo-other-0.1.0.drv","between":["/nix/store/xxxx-rust-lib-y-0.1.0.drv"]}],
+"system":"/nix/store/tttt-nixos-system-noctua.drv",
+"kept":["/nix/store/pppp-rust-lib-x-0.1.0","/nix/store/qqqq-ronoctua-shell-0.1.0"]}"#;
+
+/// What Nix would build for a system whose shell changed, in its own words:
+/// the unit below the shell, the shell and the system — not the second heavy
+/// unit, which the system does not reach.
+const PLANNED: &str = "these 3 derivations will be built:\n  /nix/store/aaaa-rust-lib-x-0.1.0.drv\n  /nix/store/ssss-ronoctua-shell-0.1.0.drv\n  /nix/store/tttt-nixos-system-noctua.drv\nthese 2 paths will be fetched (1.00 MiB download, 2.00 MiB unpacked):\n  /nix/store/gggg-glibc\n  /nix/store/ffff-ffmpeg\n";
+
+/// The `nix build` lines of the log that build, in order (not the dry run).
+fn builds(w: &World) -> Vec<String> {
+    w.read("calls")
+        .lines()
+        .filter(|l| l.starts_with("nix build") && !l.contains("--dry-run"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// FAILS IF: an apply does not build in the distro's phases — what the
+/// heavy units are built from as Rust units, each heavy unit the system
+/// reaches alone with its own cores, the system as everything else — or
+/// builds a heavy unit the system does not reach, or does not hand the units
+/// to keep to what keeps them once the build worked.
+#[test]
+fn an_apply_builds_in_phases_and_keeps_its_units() {
+    let w = World::new("phases");
+    std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
+    std::fs::write(w.s.path("dry-says"), PLANNED).unwrap();
+    let b = w.toplevel("b", "quiet panic=10");
+    w.builds(&b);
+    assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
+    let calls = w.read("calls");
+    let order: Vec<&str> = calls
+        .lines()
+        .map(|l| {
+            (
+                l,
+                l.split_whitespace().take(2).collect::<Vec<_>>().join(" "),
+            )
+        })
+        .map(|(l, head)| match head.as_str() {
+            "sizing" => "sizing",
+            "nix eval" => "eval",
+            "nix build" if l.contains("--dry-run") => "dry-run",
+            "nix build" => "build",
+            "keep-units --roots" => "keep",
+            "nix-env --profile" => "profile",
+            _ => "other",
+        })
+        .filter(|w| *w != "other")
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "sizing", "eval", "dry-run", "build", "build", "build", "keep", "profile"
+        ],
+        "{calls}"
+    );
+    let built = builds(&w);
+    assert!(
+        built[0].contains("--max-jobs 3 --cores 1")
+            && built[0].ends_with("/nix/store/aaaa-rust-lib-x-0.1.0.drv^*"),
+        "what the heavy units are built from, as Rust units: {}",
+        built[0]
+    );
+    assert!(
+        built[1].contains("--max-jobs 1 --cores 5")
+            && built[1].ends_with("/nix/store/ssss-ronoctua-shell-0.1.0.drv^*"),
+        "the shell alone, with the heavy cores: {}",
+        built[1]
+    );
+    assert!(
+        built[2].contains("--max-jobs 2 --cores 2")
+            && built[2].ends_with("/nix/store/tttt-nixos-system-noctua.drv^*"),
+        "the system, sized as everything else: {}",
+        built[2]
+    );
+    assert!(
+        !calls.contains("oooo-other") && !calls.contains("xxxx-rust-lib-y"),
+        "a heavy unit the system does not reach is not built: {calls}"
+    );
+    let dry = calls.lines().find(|l| l.contains("--dry-run")).unwrap();
+    assert!(
+        dry.ends_with(" --dry-run /nix/store/tttt-nixos-system-noctua.drv^*"),
+        "Nix is asked what the system's own build builds: {dry}"
+    );
+    let eval = calls.lines().find(|l| l.starts_with("nix eval")).unwrap();
+    assert!(
+        eval.contains("--no-update-lock-file")
+            && eval.ends_with("#nixosConfigurations.noctua.config.ronoctua.machine.phases"),
+        "{eval}"
+    );
+    let keep = calls.lines().find(|l| l.starts_with("keep-units")).unwrap();
+    let roots = w.m.places.state.join(crate::build::KEPT_DIR);
+    assert!(
+        keep.contains(&format!("--roots {} --set release", roots.display())),
+        "{keep}"
+    );
+    assert_eq!(
+        w.read("kept"),
+        "/nix/store/pppp-rust-lib-x-0.1.0\n/nix/store/qqqq-ronoctua-shell-0.1.0\n"
+    );
+    assert!(
+        !w.m.places.run.join("units").exists() && !w.m.places.run.join("kept-units.txt").exists(),
+        "what held the units while building does not outlive the apply"
+    );
+}
+
+/// FAILS IF: a build that fails hands anything to what keeps the units (the
+/// last build's stay), or leaves the out-links that held its units.
+#[test]
+fn a_failed_build_keeps_the_last_units() {
+    let w = World::new("phases-fail");
+    std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
+    std::fs::write(w.s.path("dry-says"), PLANNED).unwrap();
+    std::fs::write(w.s.path("build-fails"), "").unwrap();
+    assert_eq!(w.m.apply(false).unwrap_err().why, Why::BuildFailed);
+    assert!(
+        !w.read("calls").contains("keep-units"),
+        "{}",
+        w.read("calls")
+    );
+    assert_eq!(
+        builds(&w).len(),
+        1,
+        "the first phase failed, and nothing after it ran"
+    );
+    assert_eq!(w.lock(), LOCK_A);
+    assert!(!w.m.places.run.join("units").exists());
+}
+
+/// FAILS IF: a phase is built that Nix would not build for the system —
+/// the units below the shell, or the shell, on a machine whose store holds
+/// the shell's bundle (freshly installed from the ISO's seed, or fed by the
+/// person's binary cache, where no unit ever is), though every one of them
+/// is in the system's `.drv` closure — or a unit Nix would build below the
+/// shell is left to the system's build instead of its own phase.
+#[test]
+fn an_apply_builds_only_what_nix_would_build() {
+    // The shell's bundle in the store, the system changed: Nix builds the
+    // system and nothing below it.
+    let w = World::new("phases-fresh");
+    std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
+    std::fs::write(
+        w.s.path("dry-says"),
+        "this derivation will be built:\n  /nix/store/tttt-nixos-system-noctua.drv\n",
+    )
+    .unwrap();
+    let b = w.toplevel("b", "quiet");
+    w.builds(&b);
+    assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
+    let built = builds(&w);
+    assert_eq!(
+        built.len(),
+        1,
+        "no unit and no shell, only the system: {built:?}"
+    );
+    assert!(
+        built[0].contains("--max-jobs 2 --cores 2")
+            && built[0].ends_with("/nix/store/tttt-nixos-system-noctua.drv^*"),
+        "{}",
+        built[0]
+    );
+    assert!(
+        w.read("calls").contains("keep-units"),
+        "what the store holds is still kept"
+    );
+
+    // The shell held, a unit below it needed by another program: that unit
+    // as a Rust unit, the shell not at all.
+    let w = World::new("phases-unit");
+    std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
+    std::fs::write(
+        w.s.path("dry-says"),
+        "these 2 derivations will be built:\n  /nix/store/aaaa-rust-lib-x-0.1.0.drv\n  /nix/store/tttt-nixos-system-noctua.drv\n",
+    )
+    .unwrap();
+    let b = w.toplevel("b", "quiet");
+    w.builds(&b);
+    w.m.apply(false).unwrap();
+    let built = builds(&w);
+    assert_eq!(built.len(), 2, "{built:?}");
+    assert!(
+        built[0].contains("--max-jobs 3 --cores 1")
+            && built[0].ends_with("/nix/store/aaaa-rust-lib-x-0.1.0.drv^*"),
+        "{}",
+        built[0]
+    );
+    assert!(
+        !built.iter().any(|b| b.contains("ssss-ronoctua-shell")),
+        "the shell the store holds is not linked again: {built:?}"
+    );
+}
+
+/// FAILS IF: a distro that describes no phases (older than them) is not
+/// built in one step — sized, as a flake, moving no input — or a dry run
+/// that does not say what the system's build builds (no answer, or words
+/// this does not read) skips a phase.
+#[test]
+fn a_build_without_phases_or_a_plan_is_still_whole_and_sized() {
+    let w = World::new("no-phases");
+    let b = w.toplevel("b", "quiet");
+    w.builds(&b);
+    w.m.apply(false).unwrap();
+    let built = builds(&w);
+    assert_eq!(built.len(), 1, "{built:?}");
+    assert!(
+        built[0].contains("--no-update-lock-file")
+            && built[0].contains("--max-jobs 2 --cores 2")
+            && built[0].ends_with("#nixosConfigurations.noctua.config.system.build.toplevel"),
+        "{}",
+        built[0]
+    );
+    assert!(
+        !w.read("calls").contains("keep-units"),
+        "no phases, no units to keep"
+    );
+
+    for (what, knob, says) in [
+        ("no-plan", "dry-fails", ""),
+        (
+            "unread-plan",
+            "dry-says",
+            "these 4 derivations will be built:\n  /nix/store/tttt-nixos-system-noctua.drv\n",
+        ),
+    ] {
+        let w = World::new(what);
+        std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
+        std::fs::write(w.s.path(knob), says).unwrap();
+        let b = w.toplevel("b", "quiet");
+        w.builds(&b);
+        w.m.apply(false).unwrap();
+        let built = builds(&w);
+        assert_eq!(built.len(), 5, "every phase, {what}: {built:?}");
+        assert!(
+            built[2].contains("--max-jobs 3 --cores 1")
+                && built[2].ends_with("xxxx-rust-lib-y-0.1.0.drv^*"),
+            "{what}"
+        );
+        assert!(
+            built[3].contains("--max-jobs 1 --cores 5")
+                && built[3].ends_with("oooo-other-0.1.0.drv^*"),
+            "{what}"
+        );
+    }
+}
+
+/// FAILS IF: a sizing that does not answer with counts is guessed at instead
+/// of refused — before anything is built, with the lock put back.
+#[test]
+fn a_sizing_that_says_no_count_is_a_refusal() {
+    for says in [
+        "",
+        "rust_jobs=3\n",
+        "rust_jobs=0\nrust_cores=1\njobs=1\ncores=1\nheavy_cores=1\n",
+    ] {
+        let w = World::new("sizing");
+        std::fs::write(w.s.path("sizing-says"), says).unwrap();
+        std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();
+        std::fs::create_dir_all(&w.m.places.state).unwrap();
+        std::fs::write(w.m.places.state.join(crate::APPLIED_LOCK), LOCK_A).unwrap();
+        assert_eq!(w.m.apply(false).unwrap_err().why, Why::Failed, "{says:?}");
+        assert!(builds(&w).is_empty(), "{says:?}");
+        assert_eq!(w.lock(), LOCK_A, "{says:?}");
+    }
 }

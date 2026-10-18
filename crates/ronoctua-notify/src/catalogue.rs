@@ -19,6 +19,13 @@
 //! entry says how to RECOGNISE a notification and what to make of it, and the
 //! same machinery then serves a notification we raise ourselves and one that
 //! arrives from outside. Two paths, one table.
+//!
+//! # And the brain's modules', read at run time
+//!
+//! A brain module's event that declared a notification is an entry too — but
+//! it arrives as DATA, out of the brain's catalogue ([`crate::brain`]), and
+//! [`Book::distro`] merges it in. The generated table is the distro's own, and
+//! compiled; a module's — the person's above all — never recompiles it.
 
 use crate::Notification;
 use crate::action::{Action, Arg, Doing, Label, Program};
@@ -26,7 +33,10 @@ use crate::presentation::{Life, Presentation, Show, Verdict};
 use crate::rule::{Field, Rule, Term, Test};
 
 /// One of the distro's notifications.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `serde`'s own shape is what the brain's catalogue carries a module's entry
+/// in ([`crate::brain`]): every field, the variants by their Rust names.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
     /// Stable, kebab, English (invariant 18). The text keys derive from it.
     pub id: String,
@@ -118,11 +128,22 @@ pub struct Book {
 }
 
 impl Book {
-    /// The distro's, with nothing of the person's yet.
+    /// The distro's, with nothing of the person's yet: the generated table
+    /// and the brain modules' entries ([`crate::brain::entries`]), in one
+    /// order by id — the order the table had when both were compiled into
+    /// it, and the order an arrival is recognised in.
+    ///
+    /// # Panics
+    ///
+    /// As [`crate::brain::entries`]: when the brain's catalogue cannot be
+    /// had, which the footer's start has already refused.
     #[must_use]
     pub fn distro() -> Self {
+        let mut entries = generated_entries();
+        entries.extend(crate::brain::entries().iter().cloned());
+        entries.sort_by(|a, b| a.id.cmp(&b.id));
         Self {
-            entries: generated_entries(),
+            entries,
             rules: generated_rules(),
             mine: Vec::new(),
             shared: std::collections::BTreeSet::new(),

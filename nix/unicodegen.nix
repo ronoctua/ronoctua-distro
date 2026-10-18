@@ -73,12 +73,17 @@ let
 
       buildPhase =
         let
-          # A shell FUNCTION, and the scripts' DIRECTORY rather than the file: the
-          # generator imports `lexicon.py`, the module the two generators
-          # share. Both things for the same reason as `glyphgen.nix`.
+          # A shell FUNCTION, for the reason `glyphgen.nix` gives.
           cmd = ''
+            # THE SCRIPT AND ITS ONE SIBLING, copied by FILE: the generator
+            # imports `lexicon.py`, so the two sit side by side here — and not
+            # the whole `nix/scripts`, whose every other generator would then be
+            # a reason to build this table again (`generators-cite-their-scripts`).
+            mkdir -p generator
+            cp ${./scripts/gen-unicodedb.py} generator/gen-unicodedb.py
+            cp ${./scripts/lexicon.py} generator/lexicon.py
             gen() {
-              python3 ${./scripts}/gen-unicodedb.py \
+              python3 generator/gen-unicodedb.py \
                 --ucd ${ucd} \
                 --font ${fonts.corrected}/TTF/NoctuaIosevka-Regular.ttf \
                 --lexicon ${lexiconFile} \

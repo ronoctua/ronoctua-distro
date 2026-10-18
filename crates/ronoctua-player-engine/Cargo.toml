@@ -88,3 +88,8 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_CACHE_RS", "RONOCTUA_LIBMPV_DIR"]
+run-env = ["RONOCTUA_ATLAS", "RONOCTUA_FFMPEG"]

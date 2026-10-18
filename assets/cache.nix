@@ -80,7 +80,7 @@
   # a decision about a machine and `at night` is a decision about a life.
   #
   # A machine that is asleep at four does not lose its turn — see the overdue
-  # rule in `crates/ronoctua-brain/src/schedule.rs`.
+  # rule in `crates/ronoctua-brain-daemon/src/schedule.rs`.
   partOfDay = "night";
 
   # WHEN THE FILE MANAGER REMAKES A THUMBNAIL IT ALREADY HAS, in days.

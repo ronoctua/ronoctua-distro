@@ -33,3 +33,7 @@ path = "src/bin/network-console.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_ASK_PASSWORD", "RONOCTUA_NMCLI", "RONOCTUA_SYSTEMD_CREDS"]

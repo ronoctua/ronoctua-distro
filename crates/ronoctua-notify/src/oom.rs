@@ -19,7 +19,7 @@
 //! rule, and no bridge from root into the session.
 //!
 //! The cgroup path that arrives is exactly what
-//! `ronoctua_shell::foreign::scope_from_cgroup` already parses, so the
+//! `ronoctua_shell_kit::foreign::scope_from_cgroup` already parses, so the
 //! application's identity comes out of code that already exists and is already
 //! tested.
 //!

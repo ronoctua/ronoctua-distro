@@ -1,0 +1,59 @@
+[package]
+name = "ronoctua-shell-belongings"
+description = "The belongings (LEADER s v): the view, its window, its region in the footer, its camera and its keys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE BELONGINGS, ONE CRATE (the 2026-10-12 wave): the view both doors draw,
+# the window, the footer's region and the one errand handler both carry out,
+# the camera and the keymap's contribution. It stands on the kit, the door
+# and the keep alone, so a line of it recompiles it and the crates above —
+# the binary, the update and the software centre — and nothing else.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-keep = { path = "../ronoctua-shell-keep" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-store = { path = "../ronoctua-store" }
+ronoctua-syntax = { path = "../ronoctua-syntax" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+ronoctua-transfers = { path = "../ronoctua-transfers" }
+# THE BELONGINGS' SHAPES only — the settings, what is kept, the plan and its
+# decisions, the orders, and saying yes to what a sync brought (`offers`):
+# `age` is the CLI's, behind `crypt`, which the queue runs as a child.
+ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs", "offers" ] }
+# SSH signing's yes runs git's configuration (`offers::accept`).
+ronoctua-git = { path = "../ronoctua-git" }
+# The verbs of a root gesture (the keys' yes, the pin) — without the sudo
+# door, which the sudo bar alone calls.
+ronoctua-security = { path = "../ronoctua-security" }
+# THE KEY ROOT PINNED (`local/signer.json`), read with the person crate's one
+# reader, the data alone.
+ronoctua-person = { path = "../ronoctua-person", default-features = false }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR", "RONOCTUA_MACHINE_DIR"]

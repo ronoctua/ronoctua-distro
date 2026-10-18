@@ -42,7 +42,7 @@
 //! way out (`crate::gate`), and the three questions about the repository come
 //! after it — each checked against the network before the next one appears.
 
-use ronoctua_i18n::key;
+use crate::key;
 
 /// The questions. **Seventeen, and the test counts them.**
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

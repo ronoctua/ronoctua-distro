@@ -1,0 +1,26 @@
+[package]
+name = "ronoctua-shell-display-words"
+description = "The screens as the shell says them: a refusal of their reader in a sentence and the brightness keys' step — in the footer and the screens' view."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE SCREENS, AS THEIR VIEW AND THE FOOTER SAY THEM (the 2026-10-12 wave):
+# the footer keeps the screens' reader for the session — the brightness keys
+# order it with no view open — and names no feature, so the sentence of a
+# refusal and the step stand under both, on no other shell crate.
+[dependencies]
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+# The screens: what they can do, how bright they are, how big the text is.
+ronoctua-display = { path = "../ronoctua-display" }
+
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

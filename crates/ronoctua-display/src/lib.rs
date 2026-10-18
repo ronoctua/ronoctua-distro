@@ -462,14 +462,52 @@ enum Beat {
     Done,
 }
 
-/// The way to send orders to the thread.
+/// A LINE TO THE THREAD: what sends an order, and nothing else.
+///
+/// The [`Handle`]'s own sender, and a clone of it for a view that is not the
+/// door holding the handle — the footer's screens view, which orders the
+/// reader the footer started at login (the brightness keys order it too), and
+/// a second reader of its own would be a second truth about one set of
+/// screens. It cannot wait for the thread: only the handle can
+/// ([`Handle::finish`]).
+///
+/// # The one thing a line costs
+///
+/// The thread's loop ends when its queue is empty AND every sender is gone —
+/// the handle's and every line's. So a door waiting on `finish` lets every
+/// line it handed out go FIRST, or it waits for a thread that was never told
+/// to stop, and gives up after a beat's patience.
+#[derive(Debug, Clone)]
+pub struct Orders(mpsc::Sender<Order>);
+
+impl Orders {
+    /// A line with no reader behind it: what it sends comes out of the
+    /// receiver — what a test of a view that orders the screens hands the
+    /// view, so the test reads the orders and never this machine's screens.
+    #[must_use]
+    pub fn detached() -> (Self, mpsc::Receiver<Order>) {
+        let (sender, inbox) = mpsc::channel();
+        (Self(sender), inbox)
+    }
+
+    /// Sends one. A thread that has gone away is a warning, not a panic: the
+    /// desktop keeps running without the screens being adjustable.
+    pub fn send(&self, order: Order) {
+        if let Err(e) = self.0.send(order) {
+            tracing::warn!(error = %e, "there is no display thread to take the order");
+        }
+    }
+}
+
+/// The way to send orders to the thread, and to wait for it.
 ///
 /// NOT `Clone`, since it grew the thread: two of these would be two callers
 /// each believing they could wait for the thread to finish, and only one of
-/// them could. Nothing clones it — a door holds one.
+/// them could. Nothing clones it — a door holds one; a view that only orders
+/// is handed a line ([`Handle::orders`]).
 #[derive(Debug)]
 pub struct Handle {
-    orders: mpsc::Sender<Order>,
+    orders: Orders,
     /// The thread's last act, so a caller can wait for what it has just sent.
     ///
     /// See [`Handle::finish`]. Without it a door that quits leaves the thread
@@ -488,9 +526,15 @@ impl Handle {
     /// Sends one. A thread that has gone away is a warning, not a panic:
     /// the desktop keeps running without the screens being adjustable.
     pub fn send(&self, order: Order) {
-        if let Err(e) = self.orders.send(order) {
-            tracing::warn!(error = %e, "there is no display thread to take the order");
-        }
+        self.orders.send(order);
+    }
+
+    /// The handle's line to the thread — what an order is sent through, and
+    /// what a view that only orders is handed a clone of (see [`Orders`] for
+    /// what a clone costs `finish`).
+    #[must_use]
+    pub const fn orders(&self) -> &Orders {
+        &self.orders
     }
 
     /// Waits for everything this door has sent, and lets the thread go.
@@ -625,7 +669,7 @@ where
         })
         .context("could not start the display thread")?;
     Ok(Handle {
-        orders,
+        orders: Orders(orders),
         over: waited,
     })
 }
@@ -1731,6 +1775,7 @@ mod tests {
         // on the FIRST and would come back in a third of the time.
         let (beats, over) = mpsc::channel();
         let (orders, _inbox) = mpsc::channel::<Order>();
+        let orders = Orders(orders);
         let step = std::time::Duration::from_millis(120);
         std::thread::spawn(move || {
             for _ in 0..2 {
@@ -1749,6 +1794,35 @@ mod tests {
             "`finish` came back after the first beat instead of waiting for the \
              queue to drain: {waited:?}",
         );
+    }
+
+    /// FAILS IF: an order sent through a line handed out does not reach the
+    /// handle's thread, or a line still held lets `finish` pass for a drained
+    /// thread — the queue ends only when every sender is gone, which is why
+    /// a door lets its lines go before it waits.
+    #[test]
+    fn a_line_orders_the_handles_thread_and_holds_it_open() {
+        let (orders, inbox) = mpsc::channel::<Order>();
+        let (_beats, over) = mpsc::channel();
+        let handle = Handle {
+            orders: Orders(orders),
+            over,
+        };
+        let line = handle.orders().clone();
+        line.send(Order::Look { deep: false });
+        handle.send(Order::Undo);
+        assert_eq!(inbox.try_recv().ok(), Some(Order::Look { deep: false }));
+        assert_eq!(inbox.try_recv().ok(), Some(Order::Undo));
+        drop(handle);
+        assert!(
+            matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "the queue closed while a line still held it"
+        );
+        drop(line);
+        assert!(matches!(
+            inbox.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
     }
 
     /// FAILS IF: a render depth chosen in one door is dropped by the merge —

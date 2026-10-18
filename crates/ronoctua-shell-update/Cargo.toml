@@ -1,0 +1,56 @@
+[package]
+name = "ronoctua-shell-update"
+description = "The update (LEADER s u) and the person's binary cache: the view, its window, its region in the footer, its camera and its keys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE UPDATE, ONE CRATE (the 2026-10-12 wave): the mark's frames, the door
+# that starts a run, the view both doors draw — the steps, their verdicts,
+# both journals — the window, the footer's region and the one errand handler
+# both carry out, the person's binary cache (a page of the view), the camera
+# and the keymap's contribution. It stands on the kit, the door and the
+# belongings, whose conflicts a line counts.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+ronoctua-shell-belongings = { path = "../ronoctua-shell-belongings" }
+# The mark the footer draws while a run is under way, and the door it opens.
+ronoctua-shell-update-words = { path = "../ronoctua-shell-update-words" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-design = { path = "../ronoctua-design" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+ronoctua-brain = { path = "../ronoctua-brain" }
+ronoctua-security = { path = "../ronoctua-security" }
+ronoctua-person = { path = "../ronoctua-person", default-features = false }
+# THE PERSON'S BINARY CACHE: their copy of the choice, the token (sealed,
+# `0600`), the record of the last push and what root's netrc should be —
+# through the one crate that knows Cachix.
+ronoctua-cachix = { path = "../ronoctua-cachix" }
+
+smithay-client-toolkit.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_JOURNALCTL", "RONOCTUA_KEYS_DIR"]

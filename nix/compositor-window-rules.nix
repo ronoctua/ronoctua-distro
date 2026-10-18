@@ -6,7 +6,7 @@
 # and the calculator — one rule each. The shell does not place windows
 # (invariant 4) — it sets the window's `app_id` and the compositor decides. The
 # two ends of that agreement are one string, and the table of them is
-# `crates/ronoctua-shell/src/floating.rs` (`FLOATING`), which the calculator's
+# `crates/ronoctua-shell-door/src/floating.rs` (`FLOATING`), which the calculator's
 # own toggle reads too.
 #
 # # Why generated, and not written in the two configs

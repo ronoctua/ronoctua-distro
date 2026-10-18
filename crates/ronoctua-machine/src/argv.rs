@@ -35,19 +35,113 @@ pub fn flake(dir: &Path) -> String {
     format!("path:{}", dir.display())
 }
 
-/// `nix build` of the machine's system into `out_link`, never moving an
-/// input: a lock that would have to change is a failed build, not a new
+/// How many derivations a build runs at once and how many cores each is
+/// given — `--max-jobs` and `--cores`, as the machine's sizing says
+/// (`crate::build::Sizing`). Never Nix's own `auto` and `0`: that is every
+/// core, times every core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sized {
+    /// Derivations at once.
+    pub jobs: u32,
+    /// Cores each one is given (its `NIX_BUILD_CORES`).
+    pub cores: u32,
+}
+
+impl Sized {
+    fn words(self) -> [String; 4] {
+        [
+            "--max-jobs".to_owned(),
+            self.jobs.to_string(),
+            "--cores".to_owned(),
+            self.cores.to_string(),
+        ]
+    }
+}
+
+/// `nix build` of the machine's system into `out_link`, sized, never moving
+/// an input: a lock that would have to change is a failed build, not a new
 /// distro revision nobody asked for.
 #[must_use]
-pub fn build(dir: &Path, attr: &str, out_link: &Path) -> Vec<String> {
-    vec![
+pub fn build(dir: &Path, attr: &str, out_link: &Path, sized: Sized) -> Vec<String> {
+    let mut words = vec![
         "build".to_owned(),
         "--extra-experimental-features".to_owned(),
         FEATURES.to_owned(),
         "--no-update-lock-file".to_owned(),
+    ];
+    words.extend(sized.words());
+    words.extend([
         "--out-link".to_owned(),
         out_link.display().to_string(),
         format!("{}#{}", flake(dir), toplevel_of(attr)),
+    ]);
+    words
+}
+
+/// The attribute path of what a machine flake says about how its system is
+/// built (`ronoctua.machine.phases`, `nix/modules/machine.nix`).
+#[must_use]
+pub fn phases_of(attr: &str) -> String {
+    format!("nixosConfigurations.{attr}.config.ronoctua.machine.phases")
+}
+
+/// `nix eval` of the build's phases, as JSON — the one evaluation of an
+/// apply: it writes every `.drv` the builds after it name, and moves no
+/// input.
+#[must_use]
+pub fn phases(dir: &Path, attr: &str) -> Vec<String> {
+    vec![
+        "eval".to_owned(),
+        "--extra-experimental-features".to_owned(),
+        FEATURES.to_owned(),
+        "--no-update-lock-file".to_owned(),
+        "--json".to_owned(),
+        format!("{}#{}", flake(dir), phases_of(attr)),
+    ]
+}
+
+/// `nix build` of derivations already evaluated (`<drv>^*`, every output),
+/// sized, into `out_link` (and `out_link-1`, … for more than one) — which
+/// holds them while it exists.
+#[must_use]
+pub fn build_drvs(drvs: &[String], sized: Sized, out_link: &Path) -> Vec<String> {
+    let mut words = vec![
+        "build".to_owned(),
+        "--extra-experimental-features".to_owned(),
+        FEATURES.to_owned(),
+    ];
+    words.extend(sized.words());
+    words.extend(["--out-link".to_owned(), out_link.display().to_string()]);
+    words.extend(drvs.iter().map(|d| format!("{d}^*")));
+    words
+}
+
+/// `nix build --dry-run` of derivations already evaluated (`<drv>^*`):
+/// Nix's own plan for building them, on its standard error
+/// ([`crate::dry::to_build`]) — what is missing and must be built, never
+/// what the store already holds or anything only below it.
+#[must_use]
+pub fn dry_run_drvs(drvs: &[String]) -> Vec<String> {
+    let mut words = vec![
+        "build".to_owned(),
+        "--extra-experimental-features".to_owned(),
+        FEATURES.to_owned(),
+        "--dry-run".to_owned(),
+    ];
+    words.extend(drvs.iter().map(|d| format!("{d}^*")));
+    words
+}
+
+/// `ronoctua-keep-units` rooting, under `roots`, the set `set` of the paths
+/// listed in `paths` that the store holds.
+#[must_use]
+pub fn keep_units(roots: &Path, set: &str, paths: &Path) -> Vec<String> {
+    vec![
+        "--roots".to_owned(),
+        roots.display().to_string(),
+        "--set".to_owned(),
+        set.to_owned(),
+        paths.display().to_string(),
     ]
 }
 
@@ -154,12 +248,15 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    const SIZED: Sized = Sized { jobs: 3, cores: 2 };
+
     #[test]
     fn the_build_never_moves_an_input_and_reads_the_folder_as_it_is() {
         let words = build(
             Path::new("/etc/nixos"),
             "noctua",
             Path::new("/run/ronoctua-update/next"),
+            SIZED,
         );
         assert!(words.contains(&"--no-update-lock-file".to_owned()));
         assert_eq!(
@@ -168,6 +265,8 @@ mod tests {
         );
         let at = words.iter().position(|w| w == "--out-link").unwrap();
         assert_eq!(words[at + 1], "/run/ronoctua-update/next");
+        let jobs = words.iter().position(|w| w == "--max-jobs").unwrap();
+        assert_eq!(words[jobs + 1..jobs + 4], ["3", "--cores", "2"]);
         let dry = dry_run(Path::new("/run/x"), "noctua");
         assert!(
             dry.contains(&"--dry-run".to_owned())
@@ -195,6 +294,50 @@ mod tests {
         for bad in ["", "Noctua", "9x", "a.b", "a\"b", "a b", &"x".repeat(33)] {
             assert!(!is_attr(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_phases_are_evaluated_once_and_built_by_their_derivations() {
+        let eval = phases(Path::new("/etc/nixos"), "noctua");
+        assert_eq!(eval[0], "eval");
+        assert!(eval.contains(&"--no-update-lock-file".to_owned()));
+        assert!(eval.contains(&"--json".to_owned()));
+        assert_eq!(
+            eval.last().unwrap(),
+            "path:/etc/nixos#nixosConfigurations.noctua.config.ronoctua.machine.phases"
+        );
+        let built = build_drvs(
+            &["/nix/store/a.drv".to_owned(), "/nix/store/b.drv".to_owned()],
+            Sized { jobs: 1, cores: 7 },
+            Path::new("/run/u/heavy-0"),
+        );
+        assert_eq!(
+            built[3..],
+            [
+                "--max-jobs",
+                "1",
+                "--cores",
+                "7",
+                "--out-link",
+                "/run/u/heavy-0",
+                "/nix/store/a.drv^*",
+                "/nix/store/b.drv^*"
+            ]
+        );
+        assert_eq!(
+            dry_run_drvs(&["/nix/store/s.drv".to_owned()]),
+            [
+                "build",
+                "--extra-experimental-features",
+                FEATURES,
+                "--dry-run",
+                "/nix/store/s.drv^*"
+            ]
+        );
+        assert_eq!(
+            keep_units(Path::new("/var/k"), "release", Path::new("/run/u/kept")),
+            ["--roots", "/var/k", "--set", "release", "/run/u/kept"]
+        );
     }
 
     #[test]

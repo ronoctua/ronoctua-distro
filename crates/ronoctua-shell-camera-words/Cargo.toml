@@ -1,0 +1,27 @@
+[package]
+name = "ronoctua-shell-camera-words"
+description = "The camera's daemon as the shell says it: the sentence for each refusal of the studio, in the camera's doors and the footer's hands."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE STUDIO'S REFUSALS IN WORDS (the 2026-10-12 wave): the camera's doors
+# and the footer's hand gestures say the same sentence for one refusal, so it
+# stands under both — and on no other shell crate: the camera view's words
+# leaf (`<view crate>-words`, as the sound's, the power's, the history's and
+# Syncthing's are). A leaf of its own, and not
+# a module of the door, because the studio is a daemon whose library changes
+# with it: under the door, a line of the studio's engine would recompile every
+# shell crate; here, it recompiles this, the camera and the binary.
+[dependencies]
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-studio = { path = "../ronoctua-studio" }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

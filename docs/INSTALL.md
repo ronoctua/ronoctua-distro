@@ -145,9 +145,13 @@ aplicar à mão uma linha nova do `host.nix`:
 sudo systemctl start ronoctua-rescue-rebuild.service
 ```
 
-É o mesmo rebuild do resgate (`ronoctua-machine apply`): constrói antes, troca depois e arma o ensaio
-de boot — um sistema novo que não sobe volta sozinho ao último bom. Com a atualização rodando, ele
-recusa por estar ocupado. O atributo do flake tem o nome da pessoa (`noctua`), e não o da máquina.
+É o mesmo rebuild do resgate (`ronoctua-machine apply`): constrói antes — dimensionado à memória
+livre e nas fases que a distro descreve, só o que o Nix diz que falta —, troca depois e arma o
+ensaio de boot; um sistema novo que não sobe volta sozinho ao último bom. Depois de um build que deu
+certo, a máquina guarda as unidades compiladas da versão em uso
+(`/var/lib/ronoctua-machine/kept-units`, ~2 GiB), para a atualização seguinte recompilar só o que
+mudou. Com a atualização rodando, ele recusa por estar ocupado. O atributo do flake tem o nome da
+pessoa (`noctua`), e não o da máquina.
 
 A pasta não aceita outra versão do nixpkgs nem de outro input além da que a distro testou: um
 `follows` ou um `--override-input` faz a avaliação parar dizendo qual input mudou.
@@ -177,8 +181,10 @@ nix run github:ronoctua/ronoctua-distro/release#fetch-iso
 ```
 
 Uma máquina instalada também grava o pendrive sozinha (`LEADER s z`), da mesma versão. O ISO escrito
-no pendrive com `dd` é o mesmo nos dois casos. O ISO leva sempre a semente — o que só a distro
-compila —, e a instalação baixa o resto do `cache.nixos.org`.
+no pendrive com `dd` é o mesmo nos dois casos. O ISO leva sempre a semente — os programas que só a
+distro compila, nunca as unidades de que eles são feitos —, e a instalação baixa o resto do
+`cache.nixos.org`. A primeira atualização que muda o código de um crate compila na máquina o que
+fica abaixo dos programas que mudaram.
 
 ### O seu cache binário
 

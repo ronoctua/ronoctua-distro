@@ -1,0 +1,57 @@
+[package]
+name = "ronoctua-shell-catalogue"
+description = "Channels by theme (LEADER p n): the local catalogue as a page of the player — its listing, its sources, its posters and the adult lock."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A PAGE OF THE PLAYER WRITTEN ABOVE IT (the 2026-10-12 wave, the player's
+# seam): channels by theme, its listing and its sources plug into the
+# player's view as a `player_seam::Page` the binary installs, so a line of the
+# catalogue recompiles this crate and the binary — never the player's
+# transport, its stage or its window.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-player = { path = "../ronoctua-shell-player" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+ronoctua-protocol = { path = "../ronoctua-protocol" }
+ronoctua-files = { path = "../ronoctua-files" }
+ronoctua-consent = { path = "../ronoctua-consent" }
+ronoctua-player = { path = "../ronoctua-player" }
+# THE LOCAL CATALOGUE, which a door READS itself: `catalog` brings SQLite over
+# the system's libsqlite3, without TLS.
+ronoctua-broadcast = { path = "../ronoctua-broadcast", default-features = false, features = [ "catalog" ] }
+# The adult catalogue's lock: the person's system password, checked through
+# the one crate that speaks PAM, on a thread of the door's.
+ronoctua-pam = { path = "../ronoctua-pam" }
+
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
+tracing.workspace = true
+# The adult lock's door, by name (`unlock-check`), and its words.
+anyhow.workspace = true
+
+[dev-dependencies]
+# The foundation's guards and the player's fixtures hold in these tests too
+# (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-player = { path = "../ronoctua-shell-player", features = [ "test-support" ] }
+
+[features]
+# WHAT THIS CRATE KEEPS FOR TESTS — for `[dev-dependencies]` only: the
+# catalogue a test of the whole player is handed (`player_catalog::fixture`).
+# It brings the player's along.
+test-support = [ "ronoctua-shell-player/test-support" ]
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

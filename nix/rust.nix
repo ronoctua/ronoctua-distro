@@ -1,12 +1,15 @@
 # Building the Rust workspace inside Nix — section 7.12.
 #
-# "`crane` to build the crates inside Nix."
-#
-# crane separates compiling the DEPENDENCIES from compiling our own code. That
-# matters here more than usual: there are 204 pinned packages, and wgpu +
-# cosmic-text alone take minutes. Without the separation, editing one of our
-# lines would recompile everything — and principle no. 1 of section 15 is
-# "feedback loop before any feature".
+# CARGO PLANS, NIX BUILDS (`nix/rust/`, nix-design §1): cargo computes the
+# build plan once (`nix/rust/plan.json`, `nix run .#rust-plan`), and every
+# compilation unit of it — each library, build script, program, test
+# harness, test run, clippy and rustfmt of ours, and each third-party crate —
+# is a derivation of its own, in three flavours (`release`, `loop`, `test`).
+# An edited line rebuilds the units built from it and nothing else; that is
+# the granularity `tests/build-granularity.nix` holds. crane is only what
+# vendors the sources and builds the planner and the two third-party layers
+# the profile bench measures on (`nix/rust/layers.nix`): it compiles no crate
+# of ours.
 {
   lib,
   stdenv,
@@ -14,7 +17,6 @@
   crane,
   rustToolchain,
   pkg-config,
-  symlinkJoin,
   makeBinaryWrapper,
   wayland,
   libxkbcommon,
@@ -23,6 +25,9 @@
   fonts,
   noto-fonts-color-emoji,
   tokensRs,
+  # THE PALETTES (`nix/themes.nix`): `palettes.bin`, read at RUN time by every
+  # binary that paints, through `RONOCTUA_THEMES` — never a compilation input.
+  themed,
   # The notification catalogue and filters (section 4.2), generated from
   # `assets/notifications.nix` in the same shape as the tokens.
   notificationsRs,
@@ -34,13 +39,6 @@
   atuin,
   keyboardsRs,
   keyd,
-  # THE TWO PLUGGABLE TRANSPORTS. They are store paths and not names because
-  # the view writes them into a torrc as a `ClientTransportPlugin exec` line,
-  # and Tor runs that line with a minimal environment — a bare name there fails
-  # at EXEC, and the symptom is a bootstrap that stalls at 5% with nothing
-  # saying why.
-  lyrebird,
-  snowflake,
   # The cache policy, generated from `assets/cache.nix`.
   cacheRs,
   # The camera's effects, generated from `assets/camera-effects.nix`.
@@ -51,7 +49,11 @@
   handModels,
   syntaxRs,
   mimeDb,
-  i18nRs,
+  # THE TEXTS (`nix/i18n.nix`): the merged `<lang>.ftl`, read at RUN time by
+  # every binary that speaks (`RONOCTUA_TEXTS`) — and each crate's `key`
+  # module, written at evaluation from the names of its own fragment alone
+  # (`texts.keys`, `texts.keysOf`), which is all a compilation reads of them.
+  texts,
   compositorDeeds,
   coreutils,
   util-linux,
@@ -104,8 +106,15 @@
   primaryFontFile,
 
   # The brain's modules as Rust, generated from their folders — see
-  # `nix/brain-modules-rs.nix`.
+  # `nix/brain-modules-rs.nix`: the daemon's part (the registry, the person's
+  # manifests) and the library's (the distro's manifests).
   brainModulesRs,
+  brainManifestsRs,
+  # AND WHAT THE FOOTER DRAWS OF THEM (`nix/brain-catalogue.nix`): the
+  # modules' marks and glyphs, actions, events and notifications — read at RUN
+  # time by every binary that draws them (`RONOCTUA_BRAIN_CATALOGUE`), never a
+  # compilation input.
+  brainCatalogue,
 
   # The offline English dictionary (`nix/wordsgen.nix`), for the tests only:
   # see `RONOCTUA_WORDS` in the tests' environment below.
@@ -119,6 +128,11 @@
   belongingsRs,
 
   src,
+
+  # AN EDIT, SIMULATED, for the granularity checks and `nix run
+  # .#rebuild-cost` (`rust.override { crateSourceOverrides = …; }`): see
+  # `nix/rust/units.nix`. Empty in every build of the flake.
+  crateSourceOverrides ? { },
 }:
 
 let
@@ -165,97 +179,35 @@ let
   # range is free in all three before writing. See `nix/marksgen.nix`.
   marksFont = marksFontFile;
 
-  # FILTERED source. Without this, any change under docs/ or nix/ would
-  # invalidate the entire compilation cache.
-  rustFont = lib.fileset.toSource {
-    root = src;
-    fileset = lib.fileset.unions [
-      (src + "/Cargo.toml")
-      (src + "/Cargo.lock")
-      (lib.fileset.fileFilter (f: f.hasExt "rs") (src + "/crates"))
-      (lib.fileset.fileFilter (f: f.name == "Cargo.toml") (src + "/crates"))
-      # `buffers/` IS NOT HERE, and it used to be — with the comment "they are
-      # workspace members". They are not: the root `Cargo.toml` `exclude`s them
-      # and lists every member by hand, so `cargo` never looks inside. What the
-      # line did was put five directories of sources into the compilation's
-      # `src`, and one edited comment in any of them recompiled the workspace,
-      # clippy and the tests. `nix/buffers.nix` builds them, from their own
-      # filtered source.
-      # The `.wit` is invariant 11's boundary; without it `wit-bindgen` does not
-      # generate and the buffer does not compile.
-      (lib.fileset.fileFilter (f: f.hasExt "wit") (src + "/crates"))
-      # The rectangle painter's `.wgsl`, embedded by `include_str!`.
-      # The filter only let `.rs` through, and the error that gives —
-      # "couldn't read quad.wgsl" — shows up in the NIX BUILD and not in the
-      # local `cargo build`, which sees the whole tree.
-      (lib.fileset.fileFilter (f: f.hasExt "wgsl") (src + "/crates"))
-      # The segmenter's reference — MediaPipe's own output on a synthetic
-      # input — which its test embeds. By NAME, not every `.txt`: the same
-      # trap as the `.wgsl`, and it too only showed in the Nix build.
-      (src + "/crates/ronoctua-segment/src/reference.txt")
-      # And the hand models', the TFLite runtime's output, for the same test.
-      (src + "/crates/ronoctua-segment/src/reference-hands.txt")
-      # The software centre's fixtures, every one PUBLIC data (Flathub's and
-      # F-Droid's answers, a signed `entry.jar`, a cut of the Nix index, a
-      # tiny squashfs): its tests read them with `include_bytes!` and
-      # `std::fs::read`, and like the `.wgsl` above they would only fail HERE.
-      (src + "/crates/ronoctua-software/tests/fixtures")
-      # The person's data fixtures (`ronoctua-person`): the golden files and
-      # the person's brain-module id table, which its tests `include_str!` —
-      # the `.wgsl` trap again, which only this build would show.
-      (src + "/crates/ronoctua-person/fixtures")
-      # The web apps' id table (`ronoctua-software/fixtures`), which the
-      # crate's test `include_str!`s and `web-app-ids-agree` reads from Nix:
-      # one file, both sides — and the `.wgsl` trap a third time.
-      (src + "/crates/ronoctua-software/fixtures")
-    ];
-  };
-
-  # WHAT THE DEPENDENCY LAYER NEEDS — and nothing else.
+  # WHAT A UNIT'S SOURCES ARE is not a filter of the whole tree any more: each
+  # target's fileset (`nix/rust/units.nix`) is its crate's `Cargo.toml`,
+  # `build.rs`, its sources and what its `data` names — the `.wgsl`, the
+  # `.wit`, a test's fixtures —, so a file of one crate is no input of another
+  # and `buffers/` (a workspace of its own each, `nix/buffers.nix`) is no
+  # input of any.
   #
-  # # The measurement that split this in two
-  #
-  # `buildDepsOnly` compiles the 483 third-party crates against dummy sources:
-  # crane replaces every one of OUR crates with a stub, INCLUDING their
-  # `build.rs`. So none of the generated inputs below is read there — and yet
-  # they were all in its `env`, because it was handed the whole of `commonArgs`.
-  #
-  # Nix addresses a derivation by its INPUTS. With `RONOCTUA_BUFFER_MEMORY` in
-  # that env, editing a buffer changed the layer's hash and paid 4m46 of
-  # compilation for a value nothing in it reads — and the six `.wasm` were
-  # direct dependencies of it, so the layer waited for six builds it never
-  # consumed. The same for a `.ftl`, a token or a font.
-  #
-  # The split is the fix, and `deps-layer-is-lean` is what keeps it: it reads
-  # the generated `.drv` and refuses a `RONOCTUA_*` in there.
   # THE PLAYER'S ENGINE: libmpv, over the SAME ffmpeg-full the rest of the
   # system decodes with — libopenmpt, gme, modplug, bluray, dvdnav, dav1d and
   # libass are what make it open what DeaDBeeF and VLC open. The stock mpv is
   # built against the smaller ffmpeg.
   mpvFull = pkgs.mpv-unwrapped.override { ffmpeg = pkgs.ffmpeg-full; };
 
+  # THE FEATURES EVERY BUILD TURNS ON, from the one place that says them:
+  # `[workspace.metadata.ronoctua] build-features` in the root `Cargo.toml`
+  # (the why is written there). The plan reads it, and through the plan the
+  # layers (whose requests carry the features it unified) and every unit.
+  buildFeatures =
+    (fromTOML (builtins.readFile (src + "/Cargo.toml"))).workspace.metadata.ronoctua.build-features;
+
+  # WHAT EVERY COMPILATION IS GIVEN, ours and the third-party crates' alike
+  # (the units, `unitArgs`; a third-party build script, `depBase`; and the
+  # profile bench's layers, `layerArgs`): the C libraries the dependencies link
+  # and how the TLS stack's C is built — and nothing of `generated`, which a
+  # unit takes only as its crate declares. A `RONOCTUA_*` here would be in
+  # every derivation of the build, and a value nothing in most of them reads
+  # would rebuild them all when it moved (`deps-layer-is-lean`,
+  # `units-see-only-what-they-read`).
   buildBase = {
-    src = rustFont;
-    strictDeps = true;
-
-    # THE SOFTWARE CLI'S TWO FEATURES, on EVERY cargo command of this file.
-    #
-    # `ronoctua-software`'s `[[bin]]` requires `net` and `draw`, and a
-    # workspace build compiles a target only when some member ENABLES its
-    # required features — so without this `${workspace}/bin/ronoctua-software`
-    # simply is not there, and nothing says so until `software` below looks
-    # for it. Here and not only on `workspace`: the dependency layers then
-    # build `image` with the ICO decoder the workspace links (one layer, not a
-    # second compilation of it in the workspace), and the tests and clippy
-    # reach the code the CLI ships instead of skipping the half of the crate
-    # that is behind the two features. `--locked` is crane's own default,
-    # restated because this line replaces it.
-    #
-    # AND THE VIDEO-METRICS SCANNER'S `net`, for the same reason: its binary
-    # requires it (`[[bin]] required-features`), and without it the tests and
-    # clippy stop at the catalogue and never reach the scanner.
-    cargoExtraArgs = "--locked --features ronoctua-software/net,ronoctua-software/draw,ronoctua-video-metrics/net";
-
     nativeBuildInputs = [ pkg-config ];
     # These DO belong here: the dependencies themselves link against them —
     # `wayland-sys` and `khronos-egl` do not build without the libraries.
@@ -343,11 +295,20 @@ let
     # declaration. `crates/ronoctua-syntax`'s `build.rs` copies it into
     # `OUT_DIR` and refuses to generate anything itself (invariant 5).
     RONOCTUA_SYNTAX_RS = "${syntaxRs}/syntax.rs";
-    # The directory, not a file: the crate embeds the generated `keys.rs` AND the
-    # `.ftl` files it came from.
-    RONOCTUA_I18N_DIR = "${i18nRs}";
-    # The MIME table, for `ronoctua-files`'s `build.rs`. A directory for the
-    # same reason as the one above, and read at COMPILE time only: the
+    # THE TEXT KEYS' NAMES, and nothing of their values: the directory each
+    # speaking crate's `src/key.rs` includes its `<crate>.rs` from, written at
+    # evaluation by `nix/text-keys.nix` out of the names of its own fragment.
+    # Here, every crate's file (the devshell's and the nested loop's `cargo`
+    # builds the whole workspace); a UNIT is handed a directory holding its
+    # own crate's file alone (`perCrateEnv` below), so a key added to one
+    # crate rebuilds that crate and what links it. The sentences are
+    # `RONOCTUA_TEXTS`, read at run time (`keyed`, below), so a value edit
+    # leaves every one of these as it was.
+    RONOCTUA_KEYS_DIR = "${texts.keys}";
+    # `ronoctua_i18n::LANGUAGES`, from `assets/i18n/languages.nix`.
+    RONOCTUA_LANGUAGES_RS = "${texts.languagesRs}";
+    # The MIME table, for `ronoctua-files`'s `build.rs`, which copies its
+    # `mimedb.rs` out of this directory — read at COMPILE time only: the
     # `shared-mime-info` package is a build input of the derivation that made
     # this file, and nothing of it survives into the closure — which is what
     # `files-closure-has-no-mime-db` measures rather than assumes.
@@ -423,14 +384,13 @@ let
     # moved. `tor-socks-is-declared-once` compares them both ways now.
     RONOCTUA_TOR_SOCKS = "${torFacts.socks.address}:${toString torFacts.socks.port}";
     RONOCTUA_TOR_FRAGMENT = torFacts.fragmentDirectory;
-    # `lyrebird` is obfs4's current name upstream, and it speaks `meek_lite`
-    # and `scramblesuit` from the same binary — which is why one path covers
-    # three transports in the fragment the view writes.
-    RONOCTUA_TOR_OBFS4 = "${lyrebird}/bin/lyrebird";
-    # `client` and NOT `proxy`: the proxy is what you run to CARRY other
-    # people's traffic, and pointing a client at it stalls the bootstrap
-    # with no error either side.
-    RONOCTUA_TOR_SNOWFLAKE = "${snowflake}/bin/client";
+    # THE TWO BRIDGES' PROGRAMS ARE NOT HERE. `RONOCTUA_TOR_OBFS4` (lyrebird)
+    # and `RONOCTUA_TOR_SNOWFLAKE` were, and no crate read either: the view's
+    # `ClientTransportPlugin` ring writes the transport's word and no `exec`
+    # path. A value nothing reads is a reason for a unit to rebuild when it
+    # moves, so they left when every crate began declaring what it reads
+    # (`[package.metadata.ronoctua]`); `nix/modules/tor.nix` still installs
+    # both programs.
     # The URL opener, for Syncthing's interface (`LEADER s s a`).
     # A store path, and not the name: inside a systemd unit PATH is
     # minimal and the failure would show up far from the cause.
@@ -631,12 +591,19 @@ let
     # `nix/modules/icons.nix` and by `nix/dev.nix`. It can be: unlike `setsid`
     # or the wasm buffers, this is data the shell can do without.
 
-    # THE BRAIN'S MODULES: one `<id>/manifest.rs` per folder under
-    # `crates/ronoctua-brain/modules/`, the registry `all.rs`, and `ids.txt` —
-    # which the crate's `build.rs` compares with the folders it sees, refusing
-    # a stale environment rather than compiling a module list that is not the
-    # tree's. A directory, for `RONOCTUA_I18N_DIR`'s reason.
-    RONOCTUA_BRAIN_MODULES_DIR = "${brainModulesRs}";
+    # THE BRAIN'S MODULES, one part per crate (`nix/brain-modules-rs.nix`).
+    #
+    # The LIBRARY's (`ronoctua-brain`, which the footer links): one
+    # `<id>/manifest.rs` per folder under `crates/ronoctua-brain/modules/`,
+    # `distro.rs`, `ids.txt` and `shared.txt` — the distro's alone, so it is
+    # the same derivation on a machine with a person's module. The DAEMON's
+    # (`ronoctua-brain-daemon`): the person's manifests, the registry
+    # `all.rs` over every module, and `ids.txt` — which its `build.rs`
+    # compares with the folders it sees, refusing a stale environment rather
+    # than compiling a module list that is not the tree's. Directories: each
+    # crate includes several files out of its own.
+    RONOCTUA_BRAIN_MODULES_DIR = "${brainManifestsRs}";
+    RONOCTUA_BRAIN_REGISTRY_DIR = "${brainModulesRs}";
 
     # THE CALCULATOR'S UNITS, generated from `assets/units.nix`. In `generated`
     # and not at run time: it is CODE — the table the engine matches words and
@@ -707,9 +674,10 @@ let
     RONOCTUA_PAMU2FCFG = "${pkgs.pam_u2f}/bin/pamu2fcfg";
     # ── anchor: L11 ──
     # THE PERSON'S BRAIN MODULES (`my-…`), when this build has any: the
-    # folder their `module.rs` is read from, which the brain crate's
-    # `build.rs` compares with the table's `person` lines. It rides on the
-    # table (`brainModulesRs.personModulesDir`), so the two are one copy.
+    # folder their `module.rs` is read from, which the daemon's `build.rs`
+    # compares with the table's `person` lines — the daemon's alone; the
+    # library never reads it. It rides on the daemon's table
+    # (`brainModulesRs.personModulesDir`), so the two are one copy.
     # ABSENT, not empty, for a build with none — the distro's: the name is
     # `null` then, and Nix leaves the attribute out.
     ${
@@ -740,12 +708,9 @@ let
     # post-quantum section reads (`ronoctua_security::quantum::built`) and
     # whether Syncthing's source narrows TLS's curves (`nix/pq-facts.nix`). A
     # few hundred bytes of JSON naming no store path; it changes when nixpkgs
-    # moves, as the workspace does anyway.
+    # moves, as every unit does anyway.
     RONOCTUA_PQ_FACTS = "${import ./pq-facts.nix { inherit pkgs; }}";
   };
-
-  # What compiles OUR code needs both halves.
-  commonArgs = buildBase // generated;
 
   # THE FIVE COMPONENTS — and they are not in `generated` on purpose.
   #
@@ -753,8 +718,9 @@ let
   #
   # `option_env!` with a store path is a REFERENCE, and it is charged for where
   # the compilation happens: with the six here, editing one COMMENT in any
-  # buffer changed the hash of the whole workspace. Measured, on the four
-  # derivations a person waits for:
+  # buffer changed the hash of the whole workspace (one crane derivation then;
+  # today every unit that reads one, and every one above). Measured then, on
+  # the four derivations a person waited for:
   #
   #   ronoctua-0.1.0 (the workspace)   rebuilt      2m15 – 5m46
   #   ronoctua-tests                   rebuilt      the workspace again, in test mode
@@ -770,8 +736,9 @@ let
   #
   # Because it must not. Whoever installs this has to get the components
   # WITHOUT compiling them — that is the whole point of the ISO's seed. So the
-  # reference moves one derivation UP: `shell` below is what carries it, and
-  # what the system, the VMs and the nested loop all run. `iso-carries-the-seed`
+  # reference moves one derivation UP: the shell's bundle (`shell`, from
+  # `nix/rust/outputs.nix`) is what carries it, and what the system, the VMs
+  # and the nested loop all run. `iso-carries-the-seed`
   # and `profile-minimal-closes` name them, and would say so if they left.
   bufferComponents = {
     RONOCTUA_BUFFER_MEMORY = "${bufferMemory}/lib/ronoctua_buffer_memory.wasm";
@@ -785,6 +752,76 @@ let
     RONOCTUA_BUFFER_EXAMPLE = "${bufferExample}/lib/ronoctua_buffer_example.wasm";
   };
 
+  # THE DATA A BINARY IS KEYED TO, and not only pointed at.
+  #
+  # The palettes are read at run time (`ronoctua_tokens::palettes`), and they
+  # are written for ONE set of colour roles: the file carries a hash of the
+  # role names, and a binary compiled with other roles refuses it — loudly,
+  # naming the variable, because a palette read through the wrong index is
+  # every colour on screen wrong with nothing failing.
+  #
+  # SO THE WRAPPERS `--set` THESE, and do not `--set-default` them like the
+  # rest of `atRunTime`. A login session exports `RONOCTUA_THEMES` too
+  # (`nix/modules/scroll.nix`), and it keeps the value it logged in with: after
+  # a switch that added a colour role, the compositor's binds and a terminal
+  # would start the NEW binary with the OLD palettes — and the refusal would
+  # take the leader down until the next login. The wrapped binary always
+  # reads the palettes of its own build. Nothing is lost: what one would swap
+  # by hand is the palettes of the same roles, and a `cargo` binary (the
+  # devshell, `.#dev`, `cargo test`) has no wrapper and reads the variable.
+  #
+  # THE TEXTS, for the same reason in words: a binary is compiled with the
+  # key NAMES (`texts.keys`) and reads the sentences at run time, and texts
+  # that lack a key it was compiled with are another build's — refused at its
+  # start, one line naming `RONOCTUA_TEXTS` and exit 78
+  # (`ronoctua_i18n::Texts::checked`). A session that kept an older directory
+  # would take the leader down after a switch that added a key, exactly as an
+  # older palette would.
+  #
+  # AND THE BRAIN'S CATALOGUE, for the same reason in marks: the footer draws
+  # a module's mark from the glyph it measured, registers the actions it
+  # lists and raises the notifications it declares — the modules this build's
+  # daemon compiled. A session's older file would draw yesterday's modules
+  # over today's brain; one the program cannot read, or whose keys its texts
+  # lack, is refused at its start (`ronoctua_brain::catalogue::checked`).
+  keyed = {
+    RONOCTUA_THEMES = "${themed}";
+    RONOCTUA_TEXTS = "${texts}";
+    RONOCTUA_BRAIN_CATALOGUE = "${brainCatalogue}/${brainCatalogue.file}";
+  };
+  # `--set` for what is keyed, `--set-default` for everything else.
+  wrapFlags =
+    vars:
+    lib.concatStringsSep " " (
+      lib.mapAttrsToList (
+        name: path: "${if keyed ? ${name} then "--set" else "--set-default"} ${name} ${path}"
+      ) vars
+    );
+  # THE OTHER BINARIES THAT PAINT, beside the footer in the same bundle, and
+  # what each is keyed to: the PNG camera, the rescue console and the
+  # installer (a terminal, in the palette's colours) paint AND speak; the
+  # player's daemon (the subtitle lanes' colours) paints and says no word —
+  # it links no text, and its closure needs none. They get the keyed data
+  # only — the rescue console and the installer run with no coverage faces
+  # and no atlas on purpose (`RONOCTUA_COVERAGE_FONTS`). Wherever one is
+  # installed — under its own wrapper or as a copy in the shell's bundle —
+  # it is wrapped with these (`nix/rust/outputs.nix`); `wrapPainters` is the
+  # same over a `bin/` that holds them all (`nix/rust/profiles.nix`).
+  #
+  # NONE OF THEM DRAWS A BRAIN MODULE'S MARK: the catalogue is the footer's
+  # (`atRunTime`), and a painter that never reads it does not carry it.
+  painters = {
+    ronoctua-render-png = { inherit (keyed) RONOCTUA_THEMES RONOCTUA_TEXTS; };
+    ronoctua-rescue = { inherit (keyed) RONOCTUA_THEMES RONOCTUA_TEXTS; };
+    ronoctua-install = { inherit (keyed) RONOCTUA_THEMES RONOCTUA_TEXTS; };
+    ronoctua-player = { inherit (keyed) RONOCTUA_THEMES; };
+  };
+  wrapPainters = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (
+      bin: vars: "wrapProgram $out/bin/${bin} --inherit-argv0 ${wrapFlags vars}"
+    ) painters
+  );
+
   # EVERYTHING THE WRAPPER SETS, and not only the components.
   #
   # The eight above are `.wasm`; this adds what is read at run time for the same
@@ -794,8 +831,11 @@ let
   # a component pointed at the wrong kind of thing, and a font directory in
   # there would have had to weaken it.
   atRunTime = bufferComponents // {
+    # WHAT A BINARY IS KEYED TO (`keyed`, above): here too, for the devshell
+    # and the nested loop, whose `cargo` binaries have no wrapper.
+    inherit (keyed) RONOCTUA_THEMES RONOCTUA_TEXTS RONOCTUA_BRAIN_CATALOGUE;
     # THE SEGMENTATION MODEL, at run time for `RONOCTUA_ATLAS`'s reason: a
-    # model update must not rebuild the workspace, and absence is a refusal
+    # model update must not rebuild a unit, and absence is a refusal
     # drawn on the background effects, not an error.
     RONOCTUA_SEGMENT_MODEL = "${segmentModel}";
     # THE HAND MODELS, for the same reason: the gestures refuse without them.
@@ -816,12 +856,12 @@ let
     # `nix/atlas.nix`.
     #
     # AT RUN TIME AND NOT IN `generated`, and the reason is measured: a store
-    # path in `generated` is a compilation INPUT, so re-baking the table — a
-    # newer Natural Earth tag, a fresher GeoNames dump, `cities1000` instead of
-    # `cities500` — would rebuild the whole workspace at the 2m15–5m46 this
-    # file records for the buffers, and make both dependency layers wait on it.
-    # `deps-layer-is-lean` refuses a `RONOCTUA_*` in those layers for exactly
-    # this reason, and `atlas-is-at-run-time` turns the rule on this variable.
+    # path in `generated` is a compilation INPUT of every unit that reads it,
+    # so re-baking the table — a newer Natural Earth tag, a fresher GeoNames
+    # dump, `cities1000` instead of `cities500` — would rebuild those units and
+    # every one above them, for a value no compilation reads.
+    # `units-see-only-what-they-read` holds what each unit is handed, and
+    # `atlas-is-at-run-time` turns the rule on this variable.
     #
     # AND ABSENCE IS NOT AN ERROR, which is `RONOCTUA_COVERAGE_FONTS`' rule:
     # the installer and the rescue console have no atlas, and there the info
@@ -834,7 +874,9 @@ let
     RONOCTUA_XKB_LIST = "${pkgs.xkeyboard_config}/share/X11/xkb/rules/evdev.lst";
 
     # THE ICON TABLES, at run time for `RONOCTUA_ATLAS`'s reason: ~9 MB that a
-    # font release or a lexicon edit re-bakes, and no compilation reads.
+    # font release, a lexicon edit or a brain module's glyph re-bakes (the
+    # glyph index names a module's token, a person's included:
+    # `nix/iconset.nix`), and no compilation reads.
     # Absence is a refusal the icons app draws (`icons-why-no-variable`), not an
     # error. `iconset-is-at-run-time` holds it here.
     RONOCTUA_ICONSET = "${iconset}";
@@ -853,57 +895,432 @@ let
 
   };
 
-  # The dependencies, compiled once.
+  # CARGO PLANS, NIX BUILDS (`nix/rust/`, nix-design §1): the plan cargo made
+  # once (`plan.json`, regenerated by `nix run .#rust-plan`) and one
+  # derivation per compilation unit in three flavours — the third-party ones
+  # included (phase 2 of §1.4). The two layers cargo builds from the plan's
+  # third-party half (phase 1, `nix/rust/layers.nix`) are read by no unit:
+  # `nix run .#profile-bench` measures a profile's variants on them, and
+  # `rust.unitsWith { depsFrom = "layers"; }` builds the units on them for a
+  # comparison.
+  plannerArgs = {
+    inherit
+      lib
+      pkgs
+      craneLib
+      src
+      buildFeatures
+      ;
+    inherit (pkgs) python3;
+  };
+  planner = import ./rust/planner.nix plannerArgs;
+  planFile = ./rust/plan.json;
+  plan = builtins.fromJSON (builtins.readFile planFile);
+  layerArgs = {
+    inherit
+      lib
+      pkgs
+      craneLib
+      plan
+      ;
+    inherit (pkgs) python3;
+    inherit (planner) vendor;
+    cargoLock = fromTOML (builtins.readFile (src + "/Cargo.lock"));
+    rootManifest = fromTOML (builtins.readFile (src + "/Cargo.toml"));
+    inherit (buildBase) nativeBuildInputs buildInputs;
+    env = {
+      inherit (buildBase) AWS_LC_SYS_CMAKE_BUILDER AWS_LC_SYS_USE_SYSTEM;
+    };
+  };
+  layers = import ./rust/layers.nix layerArgs;
+  unitArgs = {
+    inherit
+      lib
+      stdenv
+      pkgs
+      rustToolchain
+      src
+      plan
+      layers
+      generated
+      testEnv
+      ;
+    inherit (pkgs) python3;
+    inherit (planner) inputsHash vendor;
+    inherit crateSourceOverrides;
+    # A VALUE THAT IS EACH CRATE'S OWN: the keys' directory holding that
+    # crate's file and nothing else, so a unit's derivation moves with its
+    # own keys alone (`generated` has the directory of them all).
+    perCrateEnv = {
+      RONOCTUA_KEYS_DIR = crate: "${texts.keysOf crate}";
+    };
+    # Present in `generated` only on a machine with the person's brain
+    # modules; the brain declares it either way.
+    optionalNames = [ "RONOCTUA_BRAIN_PERSON_MODULES_DIR" ];
+    # Names only: what `run-env-absent` may declare (the tests never get the
+    # values).
+    atRunTimeNames = lib.attrNames atRunTime;
+    inherit (buildBase) nativeBuildInputs buildInputs;
+    testLibraryPath = [ (lib.makeLibraryPath [ wayland ]) ];
+    # Phase 2 of nix-design §1.4 (third-party crates unit by unit): each
+    # registry package's source — crane's per-crate download, the very
+    # derivation the vendoring links — and what a unit running a third-party
+    # build script is given, the layers' own.
+    depSources = lib.listToAttrs (
+      map (p: lib.nameValuePair "${p.name}@${p.version}" (craneLib.downloadCargoPackage p)) (
+        lib.filter (p: p ? source && p ? checksum) layerArgs.cargoLock.package
+      )
+    );
+    depBase = {
+      inherit (buildBase) nativeBuildInputs buildInputs;
+      inherit (layerArgs) env;
+    };
+    # WHAT A CRATE LOADS WITH `dlopen`, and so what a program whose closure
+    # holds it needs in its RUNPATH (no `DT_NEEDED` puts it there): the GPU
+    # layer the Vulkan loader (`ash::Entry::load_from` in `wgpu-hal` itself,
+    # and `ash`), EGL (`khronos-egl`) and, on Wayland, libwayland-egl
+    # (`wayland-sys`'s `egl`); `wayland-sys` (with its `dlopen` feature, which
+    # the workspace turns on) libwayland; `xkbcommon-dl` libxkbcommon. libxkbcommon itself is LINKED by the
+    # `xkbcommon` crate, and the linker writes that one. A program with none
+    # of these crates in its closure — the queue, the brain, the rescue
+    # console, the installer — carries none of the graphics stack.
+    dlopened = lib.mapAttrs (_: map (p: lib.makeLibraryPath [ p ])) {
+      wgpu-hal = [
+        vulkan-loader
+        libGL
+        wayland
+      ];
+      ash = [ vulkan-loader ];
+      khronos-egl = [ libGL ];
+      wayland-sys = [ wayland ];
+      xkbcommon-dl = [ libxkbcommon ];
+    };
+  };
+  unitBuilder = import ./rust/units.nix unitArgs;
+  releaseUnits = unitBuilder.units "release";
+  loopUnits = unitBuilder.units "loop";
+  # A SET OF UNITS TO KEEP: one link farm (what `nix build` of it builds and
+  # `nix path-info -S` measures), and its members' paths as text — what is
+  # rooted is the ones the store holds, so naming them builds nothing.
   #
-  # `buildBase` and NOT `commonArgs`: see the comment on the split. Editing our
-  # code never invalidated this — crane's dummy is built from the parsed
-  # manifests and carries no source hash — but editing a buffer, a `.ftl` or a
-  # token did, through the environment. Now nothing does but the lockfile.
-  #
-  # No explicit `dummySrc`: crane already resolves it correctly, and pinning one
-  # here would be fixing what is not broken.
-  cargoArtifacts = craneLib.buildDepsOnly (buildBase // { pname = "ronoctua-deps"; });
-
-  # THE SAME DEPENDENCIES, AT THE LOOP'S PROFILE.
-  #
-  # A profile is part of what an artifact IS: objects built with `lto = "thin"`
-  # and one codegen unit are not the ones a build without LTO links, so the two
-  # profiles cannot share a layer. This is the price of `[profile.loop]` and it
-  # is paid ONCE per lockfile, not per edit — see the root `Cargo.toml`.
-  #
-  # It takes `buildBase` for the reason the layer above does: `deps-layer-is-lean`
-  # refuses a `RONOCTUA_*` in either of them, and a value nothing reads must not
-  # be a reason to compile 483 crates again.
-  loopArtifacts = craneLib.buildDepsOnly (
-    buildBase
+  # EVERY OUTPUT OF EACH UNIT, `metrics` beside `out` (a few bytes: its
+  # compiler's peak and time). The batteries ask for every output of every
+  # unit (`<drv>^*`, `nix/gate.nix`), and a derivation with one output gone
+  # is built again whole: with only `out` rooted, a collection took the
+  # `metrics` and the next `.#most` compiled every kept unit again — and
+  # `.#rebuild-cost` and `.#rust-peaks` lost what they read.
+  keptUnits =
+    flavour: units:
+    let
+      outputsOf = d: [
+        d.out
+        d.metrics
+      ];
+      every = lib.concatMap outputsOf units;
+    in
+    pkgs.linkFarm "ronoctua-kept-${flavour}-units" (
+      map (o: {
+        name = baseNameOf (builtins.unsafeDiscardStringContext o.outPath);
+        path = o;
+      }) every
+    )
     // {
-      pname = "ronoctua-deps-loop";
-      CARGO_PROFILE = loopProfile;
-    }
-  );
+      paths = map (o: builtins.unsafeDiscardStringContext o.outPath) every;
+      inherit flavour;
+    };
 
-  # The name cargo knows the fast profile by. One string, because it is written
-  # in four places — the two layers, the two builds — and a typo in one of them
-  # is a silent second full compilation.
-  loopProfile = "loop";
+  # THE PROGRAMS IN THEIR PLACES (`nix/rust/outputs.nix`): every release
+  # program by name, the named ones the modules run, the shell bundle, the
+  # benchmarks and what the ISO carries.
+  outputs = import ./rust/outputs.nix {
+    inherit lib pkgs makeBinaryWrapper;
+    release = releaseUnits;
+    loop = loopUnits;
+    crates = unitBuilder.crates;
+    inherit
+      atRunTime
+      wrapFlags
+      painters
+      ;
+  };
+
+  # WHAT THE TESTS ARE GIVEN beyond `generated`: the programs and the data they
+  # run against for real, each one closing the trap of a test that returns
+  # early without its variable and passes having proved nothing. A test unit
+  # takes only what its crate declares (`test-env` when compiled, `run-env`
+  # when run). Nothing ships them.
+  testEnv = {
+    RONOCTUA_FFMPEG = "${pkgs.ffmpeg-full}/bin/ffmpeg";
+    RONOCTUA_FFPROBE = "${pkgs.ffmpeg-full}/bin/ffprobe";
+    RONOCTUA_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
+    RONOCTUA_PDFTOPPM = "${pkgs.poppler-utils}/bin/pdftoppm";
+    RONOCTUA_PDFINFO = "${pkgs.poppler-utils}/bin/pdfinfo";
+    # AND THE THREE OLE READERS, for the same reason the five above are here:
+    # a test that reaches one of them without the variable set answers
+    # `Refusal::Missing` and proves nothing, which is the trap AGENTS.md
+    # records as "every ffmpeg test was EMPTY".
+    RONOCTUA_XLS2CSV = "${pkgs.catdoc}/bin/xls2csv";
+    # AND THE WORLD, for the same reason again: `globe::world()` returns
+    # `None` without it, the test that asks London where it is returns early,
+    # and it proves nothing while passing. The variable is the one the
+    # WRAPPER sets at run time; this is the same path, for the tests.
+    RONOCTUA_ATLAS = "${atlasData}/world.atlas";
+    # AND THE MODEL, so `the_mask_is_mediapipes_own` compares against
+    # MediaPipe instead of returning early and proving nothing.
+    RONOCTUA_SEGMENT_MODEL = "${segmentModel}";
+    # And the hands', so `the_outputs_are_tflites_own` compares.
+    RONOCTUA_HAND_MODELS = "${handModels}";
+    # AND THE NIX THE MACHINE RUNS, so `the_pinned_nix_prints_roots_this_reads`
+    # asks the real `nix-store` how it prints a root — against a store of its
+    # own in the build directory — instead of returning early: the cache
+    # sweep's guard is only as good as its reading of that listing.
+    RONOCTUA_NIX_STORE = "${pkgs.nix}/bin/nix-store";
+
+    # THE OFFLINE ENGLISH DICTIONARY (`nix/wordsgen.nix`), so
+    # `the_real_dictionary_answers_in_a_few_reads` reads the converted
+    # WordNet instead of returning early and proving nothing. Not in
+    # `atRunTime`: the installed session gets it from `nix/modules/words.nix`,
+    # on the profile that carries it.
+    RONOCTUA_WORDS = "${wordsData}";
+    # AND THE ICON TABLES, so `ronoctua-iconset`'s tests search the real
+    # tables — `house` at U+E0F5, the twenty-three double-width arrows —
+    # instead of refusing for want of the variable.
+    RONOCTUA_ICONSET = "${iconset}";
+    # AND THE ZONE FILES, so the calculator's `now in Tokyo` is asked of
+    # tzdata and not skipped.
+    RONOCTUA_ZONEINFO = "${tzdata}/share/zoneinfo";
+    # AND THE PALETTES, which every test that resolves a colour reads at
+    # run time (`ronoctua_tokens::palettes`): the role tables and the
+    # pictures compare against the real bytes, and without the variable the
+    # first colour asked for panics, naming it. A RUN input: a test unit
+    # gets it only when it runs (`run-env` of `ronoctua-tokens`, so every
+    # crate above it), apart from the compilation, so a seed's edit compiles
+    # no test harness (`colour-seeds-rebuild-no-rust`).
+    RONOCTUA_THEMES = "${themed}";
+    # AND THE TEXTS, on the same footing: every test that says a word reads
+    # the merged files at run time (`ronoctua_i18n`), and without them the
+    # first sentence asked for panics, naming `RONOCTUA_TEXTS`. A test unit
+    # gets it when it runs (`run-env` of `ronoctua-i18n`, so every crate
+    # above it).
+    RONOCTUA_TEXTS = "${texts}";
+    # AND THE BRAIN'S CATALOGUE, on the same footing: the tests that draw a
+    # module's mark, list the leader's actions or make the notification book
+    # read it at run time, and without it the first one panics, naming
+    # `RONOCTUA_BRAIN_CATALOGUE` (`run-env` of `ronoctua-brain` and
+    # `ronoctua-notify`, so every crate above them).
+    RONOCTUA_BRAIN_CATALOGUE = keyed.RONOCTUA_BRAIN_CATALOGUE;
+
+    # AND A KERNEL FOR THE FIREWALL'S SNAPSHOTS. `nft -c` talks to the
+    # kernel, which a build may not; in a user and network namespace of its
+    # own it may, and nothing outside can be touched. Without this the test
+    # that puts every snapshot through `nft` returns early and proves
+    # nothing — the trap above, again.
+    RONOCTUA_UNSHARE = "${util-linux}/bin/unshare";
+
+    # sys-boundaries: the programs the boundary crates' tests run for real
+    # (`ronoctua-git` on fixture repositories, `ronoctua-archive` with the
+    # passwords on stdin). Also baked through `generated`; set here at run
+    # time too, as the five above are, so the tests read what they would
+    # read in a unit.
+    RONOCTUA_GIT = "${pkgs.git}/bin/git";
+    RONOCTUA_SSH = "${pkgs.openssh}/bin/ssh";
+    RONOCTUA_SETSID = "${util-linux}/bin/setsid";
+    # `script`, a terminal for `a_hostile_repository_runs_nothing`: git
+    # starts a pager only on one, and the test shows the pager door open.
+    RONOCTUA_SCRIPT = "${util-linux}/bin/script";
+    inherit (import ./archive-tools.nix { inherit pkgs; })
+      RONOCTUA_7ZZ
+      RONOCTUA_UNRAR
+      RONOCTUA_BSDTAR
+      ;
+
+    # ── anchor: L01 ──
+    # ── anchor: L02 ──
+    # The post-quantum-only TLS of git, read at run time as a unit would.
+    RONOCTUA_GIT_PQ_TLS = "${import ./pq-tls.nix { inherit pkgs; }}";
+    # ── anchor: L06 ──
+    # ── anchor: L07 ──
+    # ── anchor: L08 ──
+    # ── anchor: L09 ──
+    # ── anchor: L10 ──
+    # ── anchor: L12 ──
+    # ── anchor: L13 ──
+    # ── anchor: L14 ──
+    # ── anchor: L17 ──
+    # ── anchor: L22 ──
+  };
 in
 rec {
-  inherit cargoArtifacts craneLib;
-  # The loop's layer is exported for the same reason the other one is: a check
-  # reads its attributes, at evaluation time and without a build.
-  inherit loopArtifacts;
-  # Exposed so the devshell can offer the SAME environment as crane — see the
-  # comment over there.
+  # crane, for what it still does: vendoring, the planner, the profile
+  # bench's layers, and the check that sets the third-party units beside
+  # cargo (`third-party-units-are-cargo-s`).
+  inherit craneLib;
+  # THE PLAN AND ITS UNITS (`nix/rust/`): `planner.plan` is the derivation
+  # whose `plan.json` `nix run .#rust-plan` copies into the tree; `layers` the
+  # two third-party layers of phase 1 (no unit reads them); `release`, `loop`
+  # and `test` the units of each flavour (`deps`, `libs`, `bins`, `testBins`,
+  # `testRuns`, `clippy`, `fmt`).
   inherit
-    regularFont
-    emojiFont
-    lucideFont
-    marksFont
+    planner
+    layers
+    testEnv
+    buildFeatures
     ;
+  # AND WHAT IS KEPT OF EACH (`keep`): the compiled units of the version in
+  # use, which nothing installed references — a program is linked from them
+  # and cites none — so a collection takes them, and the next build pays them
+  # all again. Rooted while current: on a machine by `ronoctua-machine apply`
+  # after a build that worked, on a checkout by `nix/kept-sources.nix`, each
+  # only the ones its store holds (`nix/keep-units.nix`). The release set is
+  # every third-party unit, library, build script and `ship` program of the
+  # release graph (the shell's own program among them: the bundle COPIES it,
+  # so the system does not hold it); the loop's is its third-party units,
+  # which the test graph shares — what the loop's layer used to be.
+  release = releaseUnits // {
+    keep = keptUnits "release" (
+      lib.attrValues releaseUnits.deps
+      ++ lib.attrValues releaseUnits.libs
+      ++ lib.attrValues releaseUnits.scripts
+      ++ lib.filter (b: b.passthru.role == "ship") (lib.attrValues releaseUnits.bins)
+    );
+  };
+  loop = loopUnits // {
+    keep = keptUnits "loop" (lib.attrValues loopUnits.deps);
+  };
+  test = unitBuilder.units "test";
+  # THE UNITS NO DIVISION DESCRIBES: their own compiler was MEASURED past the
+  # slot every other compilation is sized by (`peakMiB` in
+  # `nix/build-sizing.nix`; `metrics/peak-kib`, and `nix run .#rust-peaks`
+  # says when this list is wrong). Since the footer is a crate of its own and
+  # the binary only composes (lane R6, 2026-10-18, built alone at twelve
+  # cores): the shell's release program, the thin-LTO link of every crate
+  # (3910 MiB), and the footer's loop library (1827 MiB). And the footer's
+  # release library, which R6 measured at 1542 MiB and which grew past the
+  # slot when the texts and the brain's catalogue moved (lanes T1 and B2):
+  # 2279 MiB at one core, in three builds of the final tree (F5,
+  # 2026-10-18). The footer's test harness (1117) and clippy (840), and the
+  # thin binary's loop program (1330), harness (1186) and clippy (533),
+  # measured under the slot, and are sized like every other unit — the
+  # player's release library too, at 1770 MiB the nearest to it.
+  # The batteries, a machine's apply and `.#sized-build` build each heavy one
+  # alone, with the cores the memory leaves beside it, after what it is built
+  # from.
+  heavyUnits = releaseHeavyOf release // {
+    footer-loop = loop.libs.ronoctua-shell-footer;
+  };
+  # The heavy units of a RELEASE graph, named once: this tree's (above) and
+  # a release profile variant's, whose units are other derivations of the
+  # same programs (`nix/profile-bench.nix` builds each variant sized by
+  # them).
+  releaseHeavyOf = units: {
+    shell-release = units.bins.ronoctua-shell;
+    footer-release = units.libs.ronoctua-shell-footer;
+  };
+  # One test of a crate, out of the harness `test.testBins` built — see
+  # `nix/rust/units.nix`.
+  testsOf = unitBuilder.testsOf test;
+  # What a third-party unit that runs a build script is given (the layers'
+  # own): for the check that sets those units beside cargo.
+  inherit (unitArgs) depBase;
+  # What each crate declares, as the unit builder read it (for checks).
+  unitCrates = unitBuilder.crates;
+  # The same builder with some of its arguments replaced — for the checks
+  # that prove what it refuses.
+  unitsWith = args: import ./rust/units.nix (unitArgs // args);
+  # And the layers with theirs (a plan edited at evaluation): what a check
+  # asks to see which edits move a layer.
+  layersWith = args: import ./rust/layers.nix (layerArgs // args);
+  # THE RELEASE PROFILE'S VARIANTS, for `nix run .#profile-bench` and nothing
+  # else (`nix/rust/profiles.nix`: the plan of each is read from a build).
+  profileVariants = import ./rust/profiles.nix {
+    inherit lib pkgs;
+    plannerWith = args: import ./rust/planner.nix (plannerArgs // args);
+    inherit layersWith unitsWith;
+    inherit (layerArgs) rootManifest;
+    shellWrapFlags = wrapFlags atRunTime;
+    inherit wrapPainters;
+    graphicsLibraryPath = lib.makeLibraryPath [
+      vulkan-loader
+      wayland
+      libxkbcommon
+      libGL
+    ];
+  };
+  # THE THREE AGGREGATES: every crate's test run, clippy and rustfmt, each
+  # its own unit (`test.testRuns`, `test.clippy`, `test.fmt`) gathered in one
+  # link farm — what the checks `rust-tests`, `rust-clippy` and `rust-fmt`
+  # are, and what the pre-commit hook builds (`rust-clippy`). Building one
+  # builds the units it gathers and nothing else: a line of one crate reruns
+  # that crate's units and those above it, never the workspace.
+  tests = pkgs.linkFarm "rust-tests" (
+    lib.mapAttrsToList (name: path: { inherit name path; }) test.testRuns
+  );
+  clippy = pkgs.linkFarm "rust-clippy" (
+    lib.mapAttrsToList (name: path: { inherit name path; }) test.clippy
+  );
+  fmt = pkgs.linkFarm "rust-fmt" (lib.mapAttrsToList (name: path: { inherit name path; }) test.fmt);
+  # EVERY DERIVATION OF THE BUILD AS DATA (`nix/rust/units.nix`, `index`):
+  # what `legacyPackages.<system>.rustUnits` is, for `nix run .#rebuild-cost`
+  # and the granularity checks.
+  unitIndex = unitBuilder.index {
+    inherit release loop test;
+    layers = {
+      inherit (layers) release loop;
+    };
+    aggregates = {
+      rust-tests = {
+        drv = tests;
+        members = lib.attrValues test.testRuns;
+      };
+      rust-clippy = {
+        drv = clippy;
+        members = lib.attrValues test.clippy;
+      };
+      rust-fmt = {
+        drv = fmt;
+        members = lib.attrValues test.fmt;
+      };
+    };
+  };
+  # ONE BYTE APPENDED TO EACH FILE, as `crateSourceOverrides`: the edit
+  # `nix run .#rebuild-cost -- <file>…` simulates. A path is the
+  # repository's, under a crate's directory; any other is refused, naming
+  # it (a file outside every crate is no unit's source).
+  oneByteEdits =
+    files:
+    let
+      dirs = lib.mapAttrsToList (crate: p: {
+        inherit crate;
+        inherit (p) dir;
+      }) plan.packages;
+      crateOf =
+        file:
+        lib.findFirst (
+          d: lib.hasPrefix "${d.dir}/" file
+        ) (throw "${file} is in no crate's directory: no unit compiles it") dirs;
+      one =
+        file:
+        let
+          d = crateOf file;
+          rel = lib.removePrefix "${d.dir}/" file;
+          path = src + "/${file}";
+        in
+        {
+          ${d.crate}.${rel} =
+            if builtins.pathExists path then
+              builtins.toFile (baseNameOf file) (builtins.readFile path + "\n")
+            else
+              throw "${file} does not exist";
+        };
+    in
+    lib.foldl' lib.recursiveUpdate { } (map one files);
   # THE ONE TRUTH about where the components are. The wrapper below reads it;
   # so do the devshell and the nested loop, which run a binary `cargo` built and
   # that therefore has no wrapper. Three readers, one table.
   inherit bufferComponents atRunTime;
+  # And which of them a binary is keyed to (`--set`, never `--set-default`):
+  # an app that runs an unwrapped binary sets these the same way.
+  inherit keyed;
   # AND THE WHOLE TABLE OF WHAT THE BUILD BAKES, for the same readers and one
   # sharper reason.
   #
@@ -923,684 +1340,66 @@ rec {
   # picked up over there.
   inherit generated;
 
-  # The built workspace.
-  workspace = craneLib.buildPackage (
-    commonArgs
-    // {
-      inherit cargoArtifacts;
-      pname = "ronoctua";
-      doCheck = false; # the tests have a derivation of their own, so they fail separately
-
-      # The binary has to find the graphics libraries at runtime. Without this,
-      # `wgpu` does not find the Vulkan loader and falls back to software silently.
-      postFixup = ''
-        for b in $out/bin/*; do
-          patchelf --add-rpath "${
-            lib.makeLibraryPath [
-              vulkan-loader
-              wayland
-              libxkbcommon
-              libGL
-            ]
-          }" "$b" || true
-        done
-      '';
-      nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ stdenv.cc.bintools ];
-    }
-  );
-
-  # THE SAME WORKSPACE, BUILT FOR THE LOOP.
+  # THE PROGRAMS IN THEIR PLACES (`nix/rust/outputs.nix`), all out of the
+  # units:
   #
-  # `nix run .#dev` is the most-run command in the project and it is where one
-  # LOOKS at the interface — never where one measures it. `[profile.loop]` in
-  # the root `Cargo.toml` carries the measurement and the reasoning; what it
-  # buys here is that the nested loop stops paying `lto` and one codegen unit
-  # for a binary nobody installs.
+  #   bins.<bin>   every release program but `apart`, as built: what a check
+  #                runs by name
+  #   shell        THE SHELL AS THE SYSTEM RUNS IT: the footer and what its
+  #                code finds beside it, under the wrapper that carries the
+  #                components — what the module's `ExecStart`, the VM tests
+  #                and the compositor's binds point at
+  #   loopShell    the same over the loop's programs, which `nix run .#dev`
+  #                runs
+  #   installer, rescue, brain, …   the 29 programs a module, an app or the
+  #                ISO runs, each its own unit (a painter under the palettes'
+  #                wrapper): a derivation references what its bytes cite, and
+  #                a unit's bytes are one program's — the "extract the binary"
+  #                rule, now by construction rather than by `cp`
+  #   benches      the four benchmarks, for `.#bench`
+  #   shipped      what the ISO carries: the shell and every `ship` program
+  #   roles        each program's role, by name
   #
-  # A derivation of its own and not a replacement: everything that does not ask
-  # for this one keeps `workspace`, so forgetting falls on the side of the
-  # binary being right.
-  loopWorkspace = workspace.overrideAttrs (old: {
-    pname = "ronoctua-loop";
-    cargoArtifacts = loopArtifacts;
-    CARGO_PROFILE = loopProfile;
-  });
-
-  # And its wrapper, which is what `nix/dev.nix` actually runs — the components
-  # travel on the wrapper for the reason `shell` gives just below.
-  loopShell = symlinkJoin {
-    name = "ronoctua-shell-loop";
-    paths = [ loopWorkspace ];
-    nativeBuildInputs = [ makeBinaryWrapper ];
-    postBuild = ''
-      wrapProgram $out/bin/ronoctua-shell --inherit-argv0 ${
-        lib.concatStringsSep " " (
-          lib.mapAttrsToList (name: path: "--set-default ${name} ${path}") atRunTime
-        )
-      }
-    '';
-  };
-
-  # THE SHELL AS THE SYSTEM RUNS IT — the workspace plus the components.
-  #
-  # This is what the module's `ExecStart`, `nix run .#dev` and every VM test
-  # point at; `workspace` is what the driven tests and the benchmarks call by
-  # binary name, and it no longer knows a buffer exists.
-  #
-  # # Why a wrapper and not a variable in each launcher
-  #
-  # Because there are NINE launchers — the user unit, the compositor's binds, the nested
-  # loop, six VM tests — and a variable one of them forgets is not a failure: it
-  # is a key that stops opening a window, with a line in a journal nobody is
-  # reading. Here there is one place, and no launcher has to know anything.
-  #
-  # `symlinkJoin` and not a package of its own: the contract binary, the benchmarks
-  # and the driven tests are all in `bin/` and the tests call them through THIS
-  # path. `makeBinaryWrapper` and not `makeWrapper`: the second one puts a bash
-  # in the closure of what the ISO carries.
-  #
-  # `--inherit-argv0` is not decoration: `nix run .#diagnostics` finds the
-  # footer with `pgrep -f "bin/ronoctua-shell$"`, and without it every process
-  # would show up as `.ronoctua-shell-wrapped` — the diagnostic would go blind
-  # exactly when it is the thing being run.
-  #
-  # `--set-default` and not `--set`: the point of taking the paths out of the
-  # compilation is being able to swap a component without recompiling anything,
-  # and `--set` would have the wrapper win over whoever exported one by hand.
-  shell = symlinkJoin {
-    name = "ronoctua-shell";
-    paths = [ workspace ];
-    nativeBuildInputs = [ makeBinaryWrapper ];
-    postBuild = ''
-      wrapProgram $out/bin/ronoctua-shell --inherit-argv0 ${
-        lib.concatStringsSep " " (
-          lib.mapAttrsToList (name: path: "--set-default ${name} ${path}") atRunTime
-        )
-      }
-    '';
-  };
-
-  # ONLY `ronoctua-install`, and it is the ISO that wants it.
-  #
-  # # What the whole workspace was costing the ISO
-  #
-  # `nix/installer/iso.nix` used to install `workspace`, which is ONE derivation
-  # holding EVERY binary — and a derivation references whatever its bytes
-  # mention. `ronoctua-shell` mentions `libghostty-vt`, which drags Zig, clang
-  # and LLVM (1,7 GiB measured), and through the `option_env!` paths set above it
-  # mentions the icon superpack (0,61 GiB) and the fonts. A console installer has
-  # no desktop and no compiler; none of that could ever run there.
-  #
-  # # Why copying one file is enough
-  #
-  # Nix scans the OUTPUT for store paths. What the copied bytes do not name stops
-  # being a reference — so the extraction is the whole mechanism, not a hint to
-  # the garbage collector.
-  #
-  # What it does still name is what it uses: `base.lst`, glibc's `SUPPORTED` and
-  # `zone1970.tab`, which are the three lists the questions are built from.
-  installer = pkgs.runCommand "ronoctua-installer" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-install $out/bin/
-    chmod +w $out/bin/ronoctua-install
-
-    # `workspace` adds the graphics rpath to EVERY binary it produces, and
-    # the installer draws no graphics. Left in place it would reference the
-    # Vulkan loader and mesa for a program that runs on a TTY.
-    patchelf --shrink-rpath $out/bin/ronoctua-install
-  '';
-
-  # THE RESCUE CONSOLE, extracted for the same reason and to answer one question.
-  #
-  # It is not what the system installs — `ronoctua.shell` already carries
-  # `bin/ronoctua-rescue`, since there is one workspace. What this derivation is
-  # for is MEASURING: a derivation references what its own bytes cite, so the
-  # closure of this one is the closure of the rescue console alone.
-  #
-  # The question it answers is `rescue-has-no-toolchain`. The console exists for
-  # when the machine is broken, and the day someone reaches for `ronoctua-term`
-  # in it — for terminal panes, say — the answer is `libghostty-vt`, and with it
-  # Zig, clang and LLVM. That would not fail anything; it would just quietly make
-  # the rescue console the heaviest thing in the system.
-  rescue = pkgs.runCommand "ronoctua-rescue" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-rescue $out/bin/
-    chmod +w $out/bin/ronoctua-rescue
-    # Same as above: the graphics rpath belongs to the footer, and this program
-    # draws on a terminal.
-    patchelf --shrink-rpath $out/bin/ronoctua-rescue
-  '';
-
-  # THE PRIVILEGED HELPER, EXTRACTED — and for the sharpest version of the
-  # reason the rescue console gives.
-  #
-  # This one runs as ROOT. Handing it the whole workspace would put wgpu, the
-  # wasm runtime, the renderer and its three embedded fonts inside a unit that
-  # runs as root — a hundred megabytes to perform four syscalls. `nix
-  # why-depends` on the unit is what would say so, and nobody runs that on a
-  # Tuesday.
-  #
-  # A `[[bin]]` of `ronoctua-files` and nothing else: it links `rustix`,
-  # `anyhow` and this crate's own parsers.
-  # THE VM'S FORMATTER, extracted for the reason the others are: it is three
-  # D-Bus calls, and the workspace it comes out of carries wgpu, the wasm
-  # runtime, the renderer and three embedded fonts. `disks-vm` is its only
-  # caller, and a VM that had to carry all of that to write a filesystem onto a
-  # 64 MiB virtual disk would spend more time booting than testing.
-  formatDisk = pkgs.runCommand "ronoctua-format-disk" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-format-disk $out/bin/
-    chmod +w $out/bin/ronoctua-format-disk
-    patchelf --shrink-rpath $out/bin/ronoctua-format-disk
-  '';
-
-  filesRoot = pkgs.runCommand "ronoctua-files-root" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-files-root $out/bin/
-    chmod +w $out/bin/ronoctua-files-root
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-files-root
-  '';
-
-  # THE QUEUE'S DAEMON, extracted for the reason the three above give, and for
-  # one more that is its own.
-  #
-  # This one is a UNIT that outlives the session — it is what keeps a copy of
-  # forty gibibytes alive across a footer restart. A unit whose closure carried
-  # wgpu, the wasm runtime, the renderer and three embedded fonts would be a
-  # hundred megabytes resident to copy files, and it would keep every one of
-  # those store paths alive for as long as the machine is on.
-  #
-  # A `[[bin]]` of `ronoctua-transfers`: it links `ronoctua-files`, `serde` and
-  # this crate's own queue.
-  #
-  # It is NOT how the shell finds it — that one looks next door, because the two
-  # come out of the same build and a variable holding this path would be the
-  # workspace referencing itself. See `ronoctua_transfers::client::beside_me`.
-  transfers = pkgs.runCommand "ronoctua-transfers" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-transfers $out/bin/
-    chmod +w $out/bin/ronoctua-transfers
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-transfers
-  '';
-
-  # THE KIOSK'S BRIDGE, extracted for the queue's reason and one of its own:
-  # Chrome starts it for every kiosk, as the person, beside their browser — a
-  # process whose job is to relay JSON between a pipe and a socket must not
-  # carry the renderer, wgpu and the wasm runtime into that. Its `[[bin]]`
-  # links `serde`, `rustix` and `ronoctua-xdg`, nothing else. The native-
-  # messaging manifest (`nix/modules/browser-extension.nix`) names THIS path.
-  browser = pkgs.runCommand "ronoctua-browser" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-browser $out/bin/
-    chmod +w $out/bin/ronoctua-browser
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-browser
-  '';
-
-  # THE SOFTWARE CLI, extracted for the queue's reason and a sharper one.
-  #
-  # It is what the queue runs for every install, update and removal, and what
-  # the update sequence runs — as ROOT, for the Android image. A package
-  # manager's closure must be its tools and never the desktop: the renderer,
-  # wgpu and the wasm runtime would ride along into a root unit for a program
-  # that draws nothing. `nix/modules/software.nix` wraps THIS with the tools of
-  # the machine it lands on.
-  #
-  # ITS `[[bin]]` NEEDS TWO FEATURES (`net` and `draw`), which `buildBase`
-  # turns on for the whole workspace. The day that line goes, the refusal below
-  # says why instead of `cp` saying "cannot stat".
-  software = pkgs.runCommand "ronoctua-software-cli" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    if [ ! -x ${workspace}/bin/ronoctua-software ]; then
-      echo "the workspace built no ronoctua-software: its [[bin]] requires the" >&2
-      echo "features net and draw, and no member of the build enabled them" >&2
-      exit 1
-    fi
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-software $out/bin/
-    chmod +w $out/bin/ronoctua-software
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-software
-  '';
-
-  # THE STUDIO'S DAEMON, extracted the same way: it owns the camera, the
-  # encoders and the virtual camera, and draws nothing — a unit carrying the
-  # renderer and the wasm runtime would keep both alive for a process whose
-  # screen is somebody else's.
-  studio = pkgs.runCommand "ronoctua-studio" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-studio $out/bin/
-    chmod +w $out/bin/ronoctua-studio
-    patchelf --shrink-rpath $out/bin/ronoctua-studio
-  '';
-
-  # THE PLAYER, extracted for the studio's reason: its closure is libmpv and
-  # ffmpeg-full, and never the renderer or the wasm runtime.
-  player = pkgs.runCommand "ronoctua-player" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-player $out/bin/
-    chmod +w $out/bin/ronoctua-player
-    patchelf --shrink-rpath $out/bin/ronoctua-player
-  '';
-
-  # THE KEYS DAEMON, extracted the same way: Independent mode runs it as root
-  # in keyd's place, and a root unit whose closure carried the renderer and
-  # the wasm runtime would keep all of it alive for a program that moves key
-  # codes from one device to another.
-  keys = pkgs.runCommand "ronoctua-keys" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-keys $out/bin/
-    chmod +w $out/bin/ronoctua-keys
-    patchelf --shrink-rpath $out/bin/ronoctua-keys
-  '';
-
-  # THE BRAIN'S DAEMON, extracted the same way and for the same reason.
-  #
-  # It decides WHEN something runs; it draws nothing, opens no window and loads
-  # no component. Shipping `workspace` to a unit with no screen would put the
-  # renderer, wgpu and the wasm runtime in its closure — a derivation references
-  # what its BYTES cite, and `brain-unit-is-narrow` is what measures that this
-  # stayed true.
-  brain = pkgs.runCommand "ronoctua-brain" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-brain $out/bin/
-    chmod +w $out/bin/ronoctua-brain
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-brain
-  '';
-
-  # THE CACHE SWEEP, extracted for the brain's own reason and one of its own.
-  #
-  # It walks a directory and calls `unlink`. What it is allowed to link is part
-  # of its argument: no D-Bus, no renderer, no reader of `/proc` — whether the
-  # machine is busy is decided before this is ever started. Shipping `workspace`
-  # to it would put the whole shell in the closure of a unit that deletes files.
-  # AND THE ONE THAT EMPTIES THE TRASH, for the sweep's reason and one sharper:
-  # what it deletes is the only copy.
-  emptyTrash = pkgs.runCommand "ronoctua-empty-trash" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-empty-trash $out/bin/
-    chmod +w $out/bin/ronoctua-empty-trash
-    patchelf --shrink-rpath $out/bin/ronoctua-empty-trash
-  '';
-
-  cacheSweep = pkgs.runCommand "ronoctua-cache-sweep" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-cache-sweep $out/bin/
-    chmod +w $out/bin/ronoctua-cache-sweep
-    patchelf --shrink-rpath $out/bin/ronoctua-cache-sweep
-  '';
-
-  # AND THE DISK'S RELIEF, extracted for the sweep's reason: it deletes cargo
-  # builds and asks the daemon to collect the store, and a program whose job is
-  # `unlink` must not carry the shell in its closure.
-  diskRelief = pkgs.runCommand "ronoctua-disk-relief" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-disk-relief $out/bin/
-    chmod +w $out/bin/ronoctua-disk-relief
-    patchelf --shrink-rpath $out/bin/ronoctua-disk-relief
-  '';
-
-  # THE SUPER INDEX'S UNIT, extracted for the brain's reason: it is a unit
-  # that lives for days in the background, and its closure should be the
-  # indexer (tantivy, the preview's text readers, SQLite for the video
-  # catalogue) and never the desktop — no renderer, no wasm runtime, no
-  # graphics libraries, which `--shrink-rpath` takes back out of the rpath the
-  # workspace's `postFixup` gave every binary.
-  index = pkgs.runCommand "ronoctua-index" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-index $out/bin/
-    chmod +w $out/bin/ronoctua-index
-    patchelf --shrink-rpath $out/bin/ronoctua-index
-  '';
-
-  # THE VIDEO CATALOGUE'S SCANNER, extracted for the brain's reason: it is a
-  # unit that asks YouTube every few hours, and its closure is SQLite, the HTTP
-  # client and the feed reader — never the desktop the workspace would bring.
-  # yt-dlp is not in it: the unit hands it in by store path, inside the
-  # `mkIf` that decides whether the package exists (`nix/modules/video-metrics.nix`).
-  videoMetrics =
-    pkgs.runCommand "ronoctua-video-metrics" { nativeBuildInputs = [ pkgs.patchelf ]; }
-      ''
-        mkdir -p $out/bin
-        cp ${workspace}/bin/ronoctua-video-metrics $out/bin/
-        chmod +w $out/bin/ronoctua-video-metrics
-        patchelf --shrink-rpath $out/bin/ronoctua-video-metrics
-      '';
-
-  # THE SECURITY CENTRE'S ROOT HELPER, extracted for the file manager's
-  # reason and a sharper one: it runs as ROOT, from sudo and from four units
-  # (the table at boot, the shields, the window's expiry and the sleep hook),
-  # and the whole workspace would put the renderer, wgpu and the wasm runtime
-  # there. Its `[[bin]]` links `ronoctua-security`, serde, zbus and rustix,
-  # and cites `visudo`, `nft`, `systemctl` and `systemd-run`.
-  #
-  # NOT in `atRunTime`, and that is load-bearing: the devshell reads that
-  # table, and a path extracted from the workspace there would make entering
-  # the shell build the workspace. The session gets it from
-  # `nix/modules/security.nix` (`RONOCTUA_SECURITY_ROOT`).
-  securityRoot =
-    pkgs.runCommand "ronoctua-security-root" { nativeBuildInputs = [ pkgs.patchelf ]; }
-      ''
-        mkdir -p $out/bin
-        cp ${workspace}/bin/ronoctua-security-root $out/bin/
-        chmod +w $out/bin/ronoctua-security-root
-        # The graphics rpath belongs to the footer; this program opens no window.
-        patchelf --shrink-rpath $out/bin/ronoctua-security-root
-      '';
-
-  # THE QUEUE'S CHILD FOR `Work::Scan`: one file sent to VirusTotal, its
-  # analysis waited for. A `[[bin]]` of `ronoctua-lookup` (TLS, multipart in
-  # `ronoctua-http::web`), extracted so the queue's daemon starts it by store
-  # path (`RONOCTUA_SCAN`, set beside the security module's import) and never
-  # carries TLS itself — nor the desktop.
-  scan = pkgs.runCommand "ronoctua-scan" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-scan $out/bin/
-    chmod +w $out/bin/ronoctua-scan
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-scan
-  '';
-
-  # THE BELONGINGS' CLI, extracted for the software CLI's reason: the queue
-  # runs it for every sync, and it links `age` — which must stay out of the
-  # queue and the footer. Its `[[bin]]` requires `crypt`, a DEFAULT feature
-  # of `ronoctua-belongings` the three consumers take off by name; the day
-  # the default goes, the refusal below says why instead of `cp`.
-  belongings = pkgs.runCommand "ronoctua-belongings" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    if [ ! -x ${workspace}/bin/ronoctua-belongings ]; then
-      echo "the workspace built no ronoctua-belongings: its [[bin]] requires the" >&2
-      echo "feature crypt, and no member of the build enabled it" >&2
-      exit 1
-    fi
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-belongings $out/bin/
-    chmod +w $out/bin/ronoctua-belongings
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-belongings
-  '';
-
-  # THE 2026-10-05 WAVE'S EXTRACTED BINARIES (`seal`, `machine`, the person's
-  # applier, the private vault's and the stick's root helpers, the Incus
-  # job, the LLM CLI): one region per package, after its anchor.
-  # ── anchor: L01 ──
-  # THE SEALER, extracted for the belongings' reason: the queue runs it for
-  # every `Work::Seal`, and it links `age` and the X-Wing pieces, which stay
-  # out of the queue's daemon (it links `ronoctua-pq` without features) and
-  # out of the footer. Its `[[bin]]` requires `cli`, a DEFAULT feature of
-  # `ronoctua-pq`; the day the default goes, the refusal below says why
-  # instead of `cp`.
-  seal = pkgs.runCommand "ronoctua-seal" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    if [ ! -x ${workspace}/bin/ronoctua-seal ]; then
-      echo "the workspace built no ronoctua-seal: its [[bin]] requires the" >&2
-      echo "feature cli, and no member of the build enabled it" >&2
-      exit 1
-    fi
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-seal $out/bin/
-    chmod +w $out/bin/ronoctua-seal
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-seal
-  '';
-
-  # ── anchor: L05 ──
-  # THE MACHINE'S LIFE, extracted for the person's applier's reason, and as
-  # sharp: `ronoctua-machine` runs as root on every update, every rescue
-  # rebuild and every boot (`ronoctua-boot-bless.service`). It links
-  # `serde`, `rustix` and the person crate's schemas and lock, nothing of the
-  # desktop. Its programs (`nix`, `bootctl`) come from the units' environment
-  # (`ronoctua.machine.environment`), never baked here: a store path in the
-  # compilation would be a reference of the whole workspace.
-  machine = pkgs.runCommand "ronoctua-machine" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    if [ ! -x ${workspace}/bin/ronoctua-machine ]; then
-      echo "the workspace built no ronoctua-machine: its [[bin]] is in" >&2
-      echo "crates/ronoctua-machine, and the build did not reach it" >&2
-      exit 1
-    fi
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-machine $out/bin/
-    chmod +w $out/bin/ronoctua-machine
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-machine
-  '';
-  # ── anchor: L06 ──
-  # THE PERSON'S ROOT HALF, extracted for the reason the files' helper gives,
-  # and the sharpest version of it: `ronoctua-person apply` runs as root on
-  # every declaration, `approve` behind the sudo door, `verify` in the
-  # update. A `[[bin]]` of `ronoctua-person` (feature `apply`, a DEFAULT one,
-  # so the workspace build makes it): it links `serde`, `rustix` and the
-  # crate's own schemas. The refusal says why when the binary is not there,
-  # instead of `cp`.
-  person = pkgs.runCommand "ronoctua-person" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    if [ ! -x ${workspace}/bin/ronoctua-person ]; then
-      echo "the workspace built no ronoctua-person: its [[bin]] requires the" >&2
-      echo "feature apply, and no member of the build enabled it" >&2
-      exit 1
-    fi
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-person $out/bin/
-    chmod +w $out/bin/ronoctua-person
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-person
-  '';
-  # ── anchor: L12 ──
-  # THE /private VAULT'S ROOT SIDE, extracted for the security helper's
-  # reason: three units run it as root (a request, the sleep hook, the boot's
-  # status), and the whole workspace would put the renderer, wgpu and the wasm
-  # runtime there. Its `[[bin]]` links `ronoctua-private`, serde and rustix,
-  # and cites no store path: the programs it runs (`cryptsetup`, `losetup`,
-  # `systemd-cryptenroll`…) reach it by its units' environment
-  # (`nix/modules/private.nix`).
-  privateRoot = pkgs.runCommand "ronoctua-private-root" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-private-root $out/bin/
-    chmod +w $out/bin/ronoctua-private-root
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-private-root
-  '';
-  # ── anchor: L13 ──
-  # THE QUEUE'S CHILD FOR `Work::Incus`, extracted for the belongings CLI's
-  # reason: the queue's source names only the job's wire (`ronoctua-incus`
-  # without features), and the daemon's client — the socket, the WebSocket,
-  # the consent file — is this binary's work. (The workspace build unifies
-  # features, so the queue is compiled against the whole crate; it calls
-  # none of the client.) The unit gets its path as `RONOCTUA_INCUS_JOB` from
-  # `nix/modules/incus.nix`, where Incus is on. Its `[[bin]]` requires
-  # `cli`, a DEFAULT feature; the queue takes the defaults off by name, and
-  # the refusal below says so if nobody turns them on.
-  incusJob = pkgs.runCommand "ronoctua-incus-job" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    if [ ! -x ${workspace}/bin/ronoctua-incus-job ]; then
-      echo "the workspace built no ronoctua-incus-job: its [[bin]] requires the" >&2
-      echo "feature cli, and no member of the build enabled it" >&2
-      exit 1
-    fi
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-incus-job $out/bin/
-    chmod +w $out/bin/ronoctua-incus-job
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-incus-job
-  '';
-  # ── anchor: L14 ──
-  # THE LLM CLI (`ronoctua-llm`), extracted for the belongings' reason and one
-  # of its own: Claude Code runs its `statusline` after every answer, from
-  # `/run/current-system/sw/bin` (a `settings.json` outlives a generation), and
-  # the usage unit runs its `refresh`. Its closure is TLS, serde and bash —
-  # never the desktop the workspace's rpath would bring.
-  llm = pkgs.runCommand "ronoctua-llm" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-llm $out/bin/
-    chmod +w $out/bin/ronoctua-llm
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-llm
-  '';
-  # THE PUSH TO THE PERSON'S BINARY CACHE (`ronoctua-cachix`), extracted for
-  # the belongings' reason: the update runs it after every switch, and its
-  # closure is serde and the consent's file — never the desktop. It cites no
-  # store path: `cachix` and the machine's `nix` reach it by the wrapper
-  # `nix/modules/binary-cache.nix` puts around it.
-  cachix = pkgs.runCommand "ronoctua-cachix" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-cachix $out/bin/
-    chmod +w $out/bin/ronoctua-cachix
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-cachix
-  '';
-  # ── anchor: L17 ──
-  # THE INSTALLER STICK'S ROOT WRITER, extracted for the security helper's
-  # reason and a sharper one: it writes a whole drive as root, and its unit
-  # must carry this crate and nothing of the desktop (`stick-root-is-narrow`).
-  stickWrite = pkgs.runCommand "ronoctua-stick-write" { nativeBuildInputs = [ pkgs.patchelf ]; } ''
-    mkdir -p $out/bin
-    cp ${workspace}/bin/ronoctua-stick-write $out/bin/
-    chmod +w $out/bin/ronoctua-stick-write
-    # The graphics rpath belongs to the footer; this program opens no window.
-    patchelf --shrink-rpath $out/bin/ronoctua-stick-write
-  '';
-
-  # Tests. A separate derivation so it can say WHAT broke.
-  #
-  # AND THE FIVE PROGRAMS, which is a defect being closed and not a nicety.
-  #
-  # `tools::Tool::path` reads its variable at RUN TIME, and nothing set those
-  # variables for `cargo test` — not the dev shell, not this derivation. So
-  # every test that opens ffmpeg began with `let Ok(x) = ffmpeg() else { return }`
-  # and took that branch, always. Measured: `a_rotated_video_is_the_size_we_asked_for`
-  # finishes in 0,00 s without them and 0,75 s with them — it had never once
-  # built the three videos it claims to compare, in any environment.
-  #
-  # They go HERE and not in `commonArgs`: the workspace build must not reference
-  # ffmpeg, which is the "extract the binary" rule this file already keeps for
-  # the installer and the rescue console. A test derivation may; nothing ships
-  # it.
-  tests = craneLib.cargoTest (
-    commonArgs
-    // {
-      # THE LOOP'S PROFILE, and the tests are the reason it is worth having
-      # twice. What is proved here is BEHAVIOUR; `lto` and one codegen unit
-      # change how fast the answer arrives, never what it is. The owner runs
-      # this many times a day and installs the system rarely.
-      cargoArtifacts = loopArtifacts;
-      CARGO_PROFILE = loopProfile;
-      # NOTHING IS KEPT BUT THE VERDICT. crane's default for a derivation that
-      # is not `buildPackage` is to tar and zstd the whole `target/` into
-      # `$out` — gigabytes per edit, a link to the loop's layer beside it, and
-      # nothing that ever reads either: a check needs the build to SUCCEED, not
-      # its objects. `$out` still exists (crane's install is `mkdir -p $out`),
-      # and `leaf-builds-keep-no-artifacts` refuses a new leaf that forgets.
-      doInstallCargoArtifacts = false;
-      pname = "ronoctua-tests";
-      RONOCTUA_FFMPEG = "${pkgs.ffmpeg-full}/bin/ffmpeg";
-      RONOCTUA_FFPROBE = "${pkgs.ffmpeg-full}/bin/ffprobe";
-      RONOCTUA_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
-      RONOCTUA_PDFTOPPM = "${pkgs.poppler-utils}/bin/pdftoppm";
-      RONOCTUA_PDFINFO = "${pkgs.poppler-utils}/bin/pdfinfo";
-      # AND THE THREE OLE READERS, for the same reason the five above are here:
-      # a test that reaches one of them without the variable set answers
-      # `Refusal::Missing` and proves nothing, which is the trap AGENTS.md
-      # records as "every ffmpeg test was EMPTY".
-      RONOCTUA_XLS2CSV = "${pkgs.catdoc}/bin/xls2csv";
-      # AND THE WORLD, for the same reason again: `globe::world()` returns
-      # `None` without it, the test that asks London where it is returns early,
-      # and it proves nothing while passing. The variable is the one the
-      # WRAPPER sets at run time; this is the same path, for the tests.
-      RONOCTUA_ATLAS = "${atlasData}/world.atlas";
-      # AND THE MODEL, so `the_mask_is_mediapipes_own` compares against
-      # MediaPipe instead of returning early and proving nothing.
-      RONOCTUA_SEGMENT_MODEL = "${segmentModel}";
-      # And the hands', so `the_outputs_are_tflites_own` compares.
-      RONOCTUA_HAND_MODELS = "${handModels}";
-      # AND THE NIX THE MACHINE RUNS, so `the_pinned_nix_prints_roots_this_reads`
-      # asks the real `nix-store` how it prints a root — against a store of its
-      # own in the build directory — instead of returning early: the cache
-      # sweep's guard is only as good as its reading of that listing.
-      RONOCTUA_NIX_STORE = "${pkgs.nix}/bin/nix-store";
-      # AND LIBWAYLAND, for every window's test. `Ui::for_tests` opens a real
-      # `Connection` over a socket pair nobody serves, and `wayland-client`
-      # loads the library with `dlopen`: the workspace's binaries find it
-      # through the rpath `postFixup` adds, and a test binary gets no such
-      # step. Without it, every such test panics with `NoWaylandLib` here and
-      # passes in the dev shell, which has the library on its path.
-      LD_LIBRARY_PATH = lib.makeLibraryPath [ wayland ];
-
-      # THE OFFLINE ENGLISH DICTIONARY (`nix/wordsgen.nix`), so
-      # `the_real_dictionary_answers_in_a_few_reads` reads the converted
-      # WordNet instead of returning early and proving nothing. Not in
-      # `atRunTime`: the installed session gets it from `nix/modules/words.nix`,
-      # on the profile that carries it.
-      RONOCTUA_WORDS = "${wordsData}";
-      # AND THE ICON TABLES, so `ronoctua-iconset`'s tests search the real
-      # tables — `house` at U+E0F5, the twenty-three double-width arrows —
-      # instead of refusing for want of the variable.
-      RONOCTUA_ICONSET = "${iconset}";
-      # AND THE ZONE FILES, so the calculator's `now in Tokyo` is asked of
-      # tzdata and not skipped.
-      RONOCTUA_ZONEINFO = "${tzdata}/share/zoneinfo";
-
-      # AND A KERNEL FOR THE FIREWALL'S SNAPSHOTS. `nft -c` talks to the
-      # kernel, which a build may not; in a user and network namespace of its
-      # own it may, and nothing outside can be touched. Without this the test
-      # that puts every snapshot through `nft` returns early and proves
-      # nothing — the trap above, again.
-      RONOCTUA_UNSHARE = "${util-linux}/bin/unshare";
-
-      # sys-boundaries: the programs the boundary crates' tests run for real
-      # (`ronoctua-git` on fixture repositories, `ronoctua-archive` with the
-      # passwords on stdin). Also baked through `generated`; set here at run
-      # time too, as the five above are, so the tests read what they would
-      # read in a unit.
-      RONOCTUA_GIT = "${pkgs.git}/bin/git";
-      RONOCTUA_SSH = "${pkgs.openssh}/bin/ssh";
-      RONOCTUA_SETSID = "${util-linux}/bin/setsid";
-      # `script`, a terminal for `a_hostile_repository_runs_nothing`: git
-      # starts a pager only on one, and the test shows the pager door open.
-      RONOCTUA_SCRIPT = "${util-linux}/bin/script";
-      inherit (import ./archive-tools.nix { inherit pkgs; })
-        RONOCTUA_7ZZ
-        RONOCTUA_UNRAR
-        RONOCTUA_BSDTAR
-        ;
-
-      # ── anchor: L01 ──
-      # ── anchor: L02 ──
-      # The post-quantum-only TLS of git, read at run time as a unit would.
-      RONOCTUA_GIT_PQ_TLS = "${import ./pq-tls.nix { inherit pkgs; }}";
-      # ── anchor: L06 ──
-      # ── anchor: L07 ──
-      # ── anchor: L08 ──
-      # ── anchor: L09 ──
-      # ── anchor: L10 ──
-      # ── anchor: L12 ──
-      # ── anchor: L13 ──
-      # ── anchor: L14 ──
-      # ── anchor: L17 ──
-      # ── anchor: L22 ──
-    }
-  );
-
-  # Clippy with `-D warnings`: a warning becomes an error.
-  clippy = craneLib.cargoClippy (
-    commonArgs
-    // {
-      # The loop's profile too: clippy reads code and never links a program,
-      # so the profile only decides which artifacts it may reuse — and sharing
-      # the tests' layer is what keeps it from being a third compilation.
-      cargoArtifacts = loopArtifacts;
-      CARGO_PROFILE = loopProfile;
-      # The tests' reason: the answer is the output, the objects are not. This
-      # is also the one the pre-commit hook builds on every commit.
-      doInstallCargoArtifacts = false;
-      pname = "ronoctua-clippy";
-      cargoClippyExtraArgs = "--all-targets -- --deny warnings";
-    }
-  );
-
-  # Formatting.
-  fmt = craneLib.cargoFmt {
-    inherit (commonArgs) src;
-    pname = "ronoctua-fmt";
-    # Formatting compiles nothing, so there is nothing to keep — and crane would
-    # still archive the empty `target/` it creates.
-    doInstallCargoArtifacts = false;
-  };
+  # `securityRoot` is NOT in `atRunTime`, and that stays load-bearing: the
+  # devshell reads that table, and a program's path there would make entering
+  # the shell build it. The session gets it from `nix/modules/security.nix`
+  # (`RONOCTUA_SECURITY_ROOT`).
+  inherit (outputs)
+    bins
+    shell
+    loopShell
+    benches
+    shipped
+    roles
+    painters
+    installer
+    rescue
+    player
+    formatDisk
+    filesRoot
+    transfers
+    browser
+    software
+    studio
+    keys
+    brain
+    emptyTrash
+    cacheSweep
+    diskRelief
+    index
+    videoMetrics
+    securityRoot
+    scan
+    belongings
+    seal
+    machine
+    person
+    privateRoot
+    incusJob
+    llm
+    cachix
+    stickWrite
+    networkConsole
+    networkAgent
+    ;
 }

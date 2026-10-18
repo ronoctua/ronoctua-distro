@@ -63,3 +63,9 @@ tracing.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_CHAIN_RS", "RONOCTUA_FONT_EMOJI", "RONOCTUA_FONT_LUCIDE", "RONOCTUA_FONT_MARKS", "RONOCTUA_FONT_REGULAR"]
+run-env-absent = ["RONOCTUA_COVERAGE_FONTS"]
+bins = { "ronoctua-bench-layout" = "bench", "ronoctua-bench-shaping" = "bench", "ronoctua-test-faces" = "driver", "ronoctua-test-large-surface" = "driver" }

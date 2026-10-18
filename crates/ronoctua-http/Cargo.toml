@@ -81,3 +81,7 @@ aws-lc-rs = { workspace = true }
 
 [lints]
 workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_CACHE_RS"]
