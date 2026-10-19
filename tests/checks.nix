@@ -26595,6 +26595,20 @@ let
                     part = part.split("=")[0].split(":")[0].split(".")[0].strip("*")
                     if part:
                         s.add(part)
+        # A DEFAULT WITH PARENTHESES (`fails=()`) ends the parameter list for
+        # the `def` pattern above, which stops at the first closing one: every
+        # parameter after it was reported as an orphan (`tests/build-sizing.nix`),
+        # which was this check being wrong rather than the code. The list is
+        # read to the parenthesis that balances the opening one.
+        for m in re.finditer(r"\bdef\s+[A-Za-z_][A-Za-z0-9_]*\s*\(", t):
+            depth, j = 1, m.end()
+            while j < len(t) and depth:
+                depth += {"(": 1, ")": -1}.get(t[j], 0)
+                j += 1
+            for part in re.split(r"[,\s()\[\]]+", t[m.end() : j - 1]):
+                part = part.split("=")[0].split(":")[0].strip("*")
+                if part:
+                    s.add(part)
         return s
 
     # The fence delimiter, built rather than written: a literal pair of quotes
@@ -27785,9 +27799,9 @@ let
   # (`cannot download ... from any mirror`) that points at Google instead of at
   # the missing call — which is exactly how an afternoon was lost once already.
   #
-  # It also has to come FIRST. Fetching after the heavy three would still work,
-  # and would still make everyone pay the compile before finding out the network
-  # is the problem.
+  # It also has to come FIRST. Fetching after the Rust build (phase 1) would
+  # still work, and would still make everyone pay the compile before finding
+  # out the network is the problem.
   gate-fetches-what-no-cache-has = mkCheck "gate-fetches-what-no-cache-has" [ pkgs.gnugrep ] ''
     script=${gateApp}/bin/ronoctua-gate
     tool=${prefetchApp}/bin/ronoctua-prefetch
@@ -27800,14 +27814,16 @@ let
       exit 1
     fi
 
-    called_at=$(grep -nF "$tool" "$script" | head -1 | cut -d: -f1)
-    heavy_at=$(grep -n '^heavy=(' "$script" | head -1 | cut -d: -f1)
+    # `|| true`: under pipefail a grep that finds nothing would end the check
+    # here, silently, instead of at the sentence below.
+    called_at=$(grep -nF "$tool" "$script" | head -1 | cut -d: -f1 || true)
+    heavy_at=$(grep -n 'echo "== 1\. the Rust build' "$script" | head -1 | cut -d: -f1 || true)
     if [ -z "$heavy_at" ]; then
-      echo "ERROR: could not find the block with the three heavy ones in the gate." >&2
+      echo "ERROR: could not find the gate's Rust build (phase 1) in the gate." >&2
       exit 1
     fi
     if [ "$called_at" -ge "$heavy_at" ]; then
-      echo "ERROR: the prefetch comes AFTER the three heavy ones (line $called_at, against $heavy_at)." >&2
+      echo "ERROR: the prefetch comes AFTER the Rust build (line $called_at, against $heavy_at)." >&2
       echo "      That way the compiler runs whole before finding out that the" >&2
       echo "      problem is the network." >&2
       exit 1
@@ -32505,9 +32521,14 @@ let
     if "set_permissions" in keep:
         wrong.append("`secrets::keep_in` chmods after the creation: the password is readable between the two calls")
     local = uncommented(without_tests((transfers / "local.rs").read_text()))
+    # `run` hands the job to `run_marked` (the tests' seam), which removes the
+    # secrets once the job has ended, however it ended.
     run = must(body_of(local, "run"), "local::run")
-    if "forget_in" not in run or ".secrets()" not in run:
-        wrong.append("`local::run` no longer removes the job's secrets when it ends")
+    marked = must(body_of(local, "run_marked"), "local::run_marked")
+    if "run_marked(" not in run:
+        wrong.append("`local::run` no longer goes through `run_marked`, where the job's secrets are removed")
+    if "forget_in" not in marked or ".secrets()" not in marked:
+        wrong.append("`local::run_marked` no longer removes the job's secrets when it ends")
     job = uncommented(without_tests((transfers / "job.rs").read_text()))
     for m in re.finditer(r"\b(secret|from_secret)\s*:\s*([^,\n]+)", job):
         if m.group(2).strip() != "Option<PathBuf>":

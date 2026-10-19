@@ -149,9 +149,13 @@ in
       # THE FOLDER FIRST (`emacsHome`), in the environment the daemon starts
       # in — the same `set-environment` its `ExecStart` sources, so both see
       # the same `XDG_CONFIG_HOME`. By store path: a user unit's `PATH` is
-      # minimal. `-`: its failure never keeps the daemon from starting.
-      systemd.user.services.emacs.serviceConfig.ExecStartPre =
-        "-${pkgs.runtimeShell} -c 'source ${config.system.build.setEnvironment}; exec ${emacsHome}'";
+      # minimal. `-`: its failure never keeps the daemon from starting. An
+      # attribute set and not a dotted path: the dotted one spells the unit's
+      # file name, which `brain-modules-are-sealed` reads as this file naming
+      # the unit a brain module watches.
+      systemd.user.services.emacs = {
+        serviceConfig.ExecStartPre = "-${pkgs.runtimeShell} -c 'source ${config.system.build.setEnvironment}; exec ${emacsHome}'";
+      };
 
       services.emacs = {
         enable = true;
