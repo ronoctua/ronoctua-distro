@@ -39,6 +39,11 @@ let
       doubled = {
         paths = [ "home/.shellrc.local" ];
       };
+      # A PATH CARRIED OUT OF NOTHING SKIPPED.
+      strange = {
+        paths = [ "home/.strange" ];
+        carry = [ "plain/file" ];
+      };
       keys = {
         paths = [ "config/belongings-keys/deploy" ];
       };
@@ -126,7 +131,9 @@ let
               || { echo "ERROR: it failed, but did not refuse a path two targets own" >&2; exit 1; }
             grep -q "targets.keys: .config/belongings-keys/deploy. overlaps .config/belongings-keys., which is never kept" $out/out_text.txt \
               || { echo "ERROR: it failed, but did not refuse the deploy key as a target" >&2; exit 1; }
-            echo "OK: an unknown field, a climbing path, a hard pattern, a bad reason, a bad target, unordered chunks, overlapping plain roots and overlapping targets take the build down"
+            grep -q "targets.strange: .plain/file. carries what nothing it skips holds" $out/out_text.txt \
+              || { echo "ERROR: it failed, but did not refuse a carry out of nothing skipped" >&2; exit 1; }
+            echo "OK: an unknown field, a climbing path, a hard pattern, a bad reason, a bad target, unordered chunks, overlapping plain roots, overlapping targets and a carry out of nothing take the build down"
             runHook postBuild
           ''
         else

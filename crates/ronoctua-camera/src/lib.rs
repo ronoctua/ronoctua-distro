@@ -590,6 +590,11 @@ pub fn read(node: &Path) -> Option<Camera> {
 }
 
 /// Every camera, in node order.
+///
+/// IT OPENS EVERY NODE, and opening a UVC camera powers it up — its light
+/// blinks. So it runs only for something a person asked for: a view of the
+/// cameras while it is open ([`watch`]), a camera the studio opens or a
+/// gesture about one — never because a program started.
 pub fn scan() -> Vec<Camera> {
     let Ok(dir) = fs::read_dir(SYS) else {
         return Vec::new();

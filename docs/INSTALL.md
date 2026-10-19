@@ -18,8 +18,12 @@ que guarda o repositório.
    flake, e sem eles o flake não avalia numa máquina que não tenha os 4,1 GB no disco.
 2. **Os pertences, sincronizados** (`LEADER s v`). O repositório privado deles é de onde a máquina
    nova restaura a sua configuração e, por padrão, também `~/.ssh` (menos a chave de acesso ao próprio
-   repositório), a configuração do git, `~/.gnupg`, `~/.shellrc.local` e o `local.el` do Doom. O que
-   você marcou como "não guardar" não vai: guarde por fora.
+   repositório), a configuração do git, `~/.gnupg`, `~/.shellrc.local` e a sua configuração do Emacs
+   em `~/.config/emacs` (sem os pacotes e caches, que se baixam de novo). Se o seu Emacs lê outro
+   lugar (`~/.emacs.d`, `~/.emacs`, ou um `$XDG_CONFIG_HOME` fora de `~/.config`), ele não viaja:
+   mova a configuração para `~/.config/emacs` (e desfaça o `$XDG_CONFIG_HOME` que o desvia) — a
+   página dos pertences diz qual lugar o Emacs lê. O que você marcou como "não guardar" não vai:
+   guarde por fora.
 3. **`host.nix` e `facter.json`**, se já existirem. São desta máquina e também ficam fora do git. O
    instalador gera os dois sozinho; o backup só importa se você já os tinha ajustado à mão.
 
@@ -95,7 +99,7 @@ instala nela em vez de baixar 29 GiB para chegar nele.
 
 ```
 ronoctua.browser.enable = true;    # o Chrome
-ronoctua.editor.emacs   = true;    # o Emacs e o Doom
+ronoctua.editor.emacs   = true;    # o Emacs, com o daemon (a configuração é a sua)
 ronoctua.media.enable   = true;    # VLC, mpv, gstreamer (o ffmpeg vem sempre)
 ronoctua.dev.toolchains = true;    # rust, go, python, node, gcc
 ronoctua.dev.android    = true;    # Android Studio, SDK, Flutter

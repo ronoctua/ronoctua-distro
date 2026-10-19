@@ -137,6 +137,7 @@ fn baked(name: &str) -> (std::path::PathBuf, Pack) {
         "portugal",
         "Portugal",
         "portugal-260914-free.shp.zip",
+        &mut || true,
     )
     .expect("the download bakes");
     let path = dir.join(crate::FILE);
@@ -215,9 +216,39 @@ fn a_dbf_that_does_not_match_the_shp_is_refused() {
         ("gis_osm_roads_free_1.dbf", dbf(&["One", "Two"])),
     ]);
     assert_eq!(
-        bake::pack(&zip, "x", "X", "x.zip"),
+        bake::pack(&zip, "x", "X", "x.zip", &mut || true),
         Err(crate::Trouble::Mismatched)
     );
+}
+
+/// FAILS IF: the baking runs on past a no, at any of its boundaries, or asks
+/// too seldom for a pause to hold it — before each layer is inflated, before
+/// each record of a walk and before the pack is written. A NO AT EVERY ASK IN
+/// TURN, and each one ends the baking there.
+#[test]
+fn the_baking_stops_at_every_boundary_it_is_told_to() {
+    let zip = download();
+    let mut asked = 0;
+    bake::pack(&zip, "portugal", "Portugal", "p.zip", &mut || {
+        asked += 1;
+        true
+    })
+    .expect("the download bakes");
+    // FOUR LAYERS, FOUR RECORDS (three ways and a place), ONE WRITE.
+    assert_eq!(asked, 4 + 4 + 1, "the baking's boundaries");
+    for no_at in 1..=asked {
+        let mut n = 0;
+        let given = bake::pack(&zip, "portugal", "Portugal", "p.zip", &mut || {
+            n += 1;
+            n < no_at
+        });
+        assert_eq!(
+            given,
+            Err(crate::Trouble::GivenUp),
+            "a no at ask {no_at} of {asked}"
+        );
+        assert_eq!(n, no_at, "the baking asked again after a no at ask {no_at}");
+    }
 }
 
 /// FAILS IF: something that is not a region download is baked anyway.
@@ -225,7 +256,7 @@ fn a_dbf_that_does_not_match_the_shp_is_refused() {
 fn a_zip_without_the_roads_layer_is_not_a_region() {
     let zip = zip_of(&[("readme.txt", b"nothing here".to_vec())]);
     assert_eq!(
-        bake::pack(&zip, "x", "X", "x.zip"),
+        bake::pack(&zip, "x", "X", "x.zip", &mut || true),
         Err(crate::Trouble::NotARegionPack)
     );
 }

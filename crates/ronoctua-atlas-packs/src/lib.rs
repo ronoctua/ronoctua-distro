@@ -116,6 +116,9 @@ pub enum Trouble {
     /// The filesystem said no. Carries what it said, as a string, because the
     /// caller writes it into a transfer's own trouble and never matches on it.
     Disk(String),
+    /// The caller said stop, between two bites of the baking
+    /// ([`bake::pack`]'s `go_on`).
+    GivenUp,
 }
 
 impl From<ronoctua_zip::Trouble> for Trouble {

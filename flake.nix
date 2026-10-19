@@ -247,12 +247,13 @@
         }
       }/bin/ronoctua-keep-sources";
 
-      # HOW MANY COMPILATIONS FIT AT ONCE, and the plan of the heavy units:
-      # one arithmetic for the batteries, `.#sized-build`, `.#quick` and a
-      # machine's own apply. See nix/build-sizing.nix.
+      # HOW MANY COMPILATIONS FIT AT ONCE, and the plan of the units, each by
+      # its measured class: one arithmetic for the batteries, `.#sized-build`,
+      # `.#quick` and a machine's own apply. See nix/build-sizing.nix.
       buildSizing = pkgs.callPackage ./nix/build-sizing.nix { };
-      # `nix build`, sized: the heavy units it reaches one at a time.
-      sizedBuild = buildSizing.sizedBuild rust.heavyUnits;
+      # `nix build`, sized: every unit it reaches its own build, by its
+      # class, the heavy ones alone, the test runs after every compilation.
+      sizedBuild = buildSizing.sizedBuild (buildSizing.unitPlan { units = rust.unitIndex; });
 
       # The glance's places (`LEADER g`, `leader::GLANCE_KEYS`). One declaration,
       # and the build refuses a zone `zone1970.tab` does not know — see
@@ -991,7 +992,7 @@
       # (`nix/profile-bench.nix`). Named only by the app at run time.
       profileBench = import ./nix/profile-bench.nix {
         inherit lib pkgs system;
-        inherit (rust) profileVariants releaseHeavyOf;
+        inherit (rust) profileVariants;
         inherit scroll graphicsHost;
         themes = rust.keyed.RONOCTUA_THEMES;
         component = "${buffers.brain}/lib/ronoctua_buffer_brain.wasm";
@@ -1079,18 +1080,10 @@
         inherit system keepSources;
         prefetch = "${prefetchApp}/bin/ronoctua-prefetch";
         sizing = buildSizing;
-        inherit heavy;
         units = rust.unitIndex;
         targets = builtins.attrNames self.checks.${system};
         alone = slowNames;
       };
-
-      # THE UNITS NO DIVISION DESCRIBES, which both batteries build one at a
-      # time, each after what it is built from (`nix/gate.nix`): their own
-      # compiler was measured past the slot every other compilation is sized
-      # by (`rust.heavyUnits`, `nix/build-sizing.nix`). The bundles are not
-      # among them any more: they copy programs the units already built.
-      heavy = rust.heavyUnits;
 
       # THE MIDDLE BATTERY, derived and not hand-written.
       #
@@ -1108,7 +1101,6 @@
         name = "ronoctua-most";
         what = "targets";
         sizing = buildSizing;
-        inherit heavy;
         units = rust.unitIndex;
         targets = lib.subtractLists slowNames (builtins.attrNames self.checks.${system});
         left = slowNames;
@@ -1288,9 +1280,9 @@
         {
           ronoctua.machine = {
             tool = rust.machine;
-            # HOW ITS SYSTEM IS BUILT: the release graph's heavy units alone,
-            # and the release units kept after a build that worked.
-            heavyUnits = lib.filterAttrs (_: u: u.passthru.flavour == "release") rust.heavyUnits;
+            # HOW ITS SYSTEM IS BUILT: the release graph's units, each by its
+            # class, and the release units kept after a build that worked.
+            units = lib.filterAttrs (_: e: e.flavour == "release") rust.unitIndex;
             keptUnits = rust.release.keep.paths;
           };
         }
@@ -1943,7 +1935,7 @@
         # `earlyoom`: it kills `rustc` with SIGTERM and no diagnostic, and
         # `--max-jobs` does not save it. This one measures first, caps the
         # product of jobs and cores, evaluates before it builds and never while,
-        # builds the heavy derivations one at a time, runs the VM tests in a
+        # builds each Rust unit by its class (the heavy ones alone), runs the VM tests in a
         # phase of their own, packed by the memory they declare, and — if
         # something dies anyway — says who killed it.
         gate = {
@@ -2020,8 +2012,8 @@
           # Written here it would be the only copy, and nothing could check it.
           # Coming from a file that `quick-names-exist` also reads, a renamed
           # check is reported instead of dropping out of the loop in silence.
-          # SIZED (`nix/build-sizing.nix`): the shell's test harness and its
-          # clippy, which `rust-tests` and `rust-clippy` reach, one at a time.
+          # SIZED (`nix/build-sizing.nix`): every unit `rust-tests` and
+          # `rust-clippy` reach its own build, by its class.
           ${sizedBuild}/bin/ronoctua-sized-build --no-link --keep-going -L \
             ${
               lib.concatMapStringsSep " \\\n            " (n: ".#checks.${system}.${n}") (
@@ -2810,53 +2802,82 @@
         };
 
         # `nix build`, SIZED TO THE MACHINE (`nix/build-sizing.nix`): what
-        # it is given evaluated once, the heavy units it reaches built alone
-        # after what each is built from, everything else as many at once as
-        # the memory holds. The command for a build of the unit graph by hand.
+        # it is given evaluated once, every unit it reaches that Nix would
+        # build its own build, as many at once as their classes' slots fit
+        # the memory, the heavy ones alone; then what it was given. The
+        # command for a build of the unit graph by hand.
         sized-build = {
           type = "app";
           program = "${sizedBuild}/bin/ronoctua-sized-build";
           meta = {
-            description = "builds what it is given sized to the machine: the heavy units alone, the rest as many as fit";
+            description = "builds what it is given sized to the machine: each unit by its class, as many as fit, the heavy ones alone";
             platforms = [ system ];
           };
         };
 
-        # WHICH UNITS PEAK PAST THE SLOT: every unit's `metrics/peak-kib` read
-        # from the store, the heaviest listed, and a unit past the slot that
-        # `rust.heavyUnits` does not name is an error — the list the
-        # batteries and a machine's apply size by has fallen behind the
-        # build. See `nix/scripts/rust-peaks.py`.
+        # EACH UNIT AGAINST ITS CLASS: every unit's `metrics/peak-kib` read
+        # from the store, the heaviest listed, and a unit past the slot of its
+        # class (`nix/rust/unit-classes.json`) is an error — the class the
+        # batteries and a machine's apply start it by has fallen behind the
+        # build. `--write` writes the classes as measured into the checkout
+        # it runs in. See `nix/scripts/rust-peaks.py`.
         rust-peaks = {
           type = "app";
           program =
             let
-              plain = builtins.unsafeDiscardStringContext;
-              index = rust.unitIndex;
-              idOf = lib.listToAttrs (lib.mapAttrsToList (id: u: lib.nameValuePair u.drv id) index);
+              n = buildSizing.numbers;
+              raw = lib.importJSON buildSizing.classesFile;
+              # The class each planned unit is built by, and how it was
+              # found (`classesOf`): the one resolution, the plans'.
+              found = buildSizing.classesOf {
+                units = lib.attrNames (
+                  lib.filterAttrs (_: u: lib.elem u.kind buildSizing.plannedKinds) rust.unitIndex
+                );
+                classes = raw.units;
+              };
               facts = pkgs.writeText "ronoctua-rust-peaks.json" (
                 builtins.toJSON {
-                  units = lib.mapAttrs (_: u: { inherit (u) kind flavour metrics; }) index;
-                  heavy = lib.mapAttrs (
-                    name: u: idOf.${plain u.drvPath} or (throw "rust.heavyUnits.${name} is no unit of rust.unitIndex")
-                  ) rust.heavyUnits;
-                  peakKiB = buildSizing.numbers.peakMiB * 1024;
-                  shellKiB = buildSizing.numbers.shellMiB * 1024;
-                  besideKiB = buildSizing.numbers.besideMiB * 1024;
+                  units = lib.mapAttrs (_: u: { inherit (u) kind flavour metrics; }) rust.unitIndex;
+                  # READ RAW, never through the sizing's check of it: this is
+                  # what writes it again when it is stale.
+                  classes = raw;
+                  resolved = lib.mapAttrs (_: f: f.class) found;
+                  how = lib.mapAttrs (_: f: f.how) found;
+                  order = map (c: c.name) n.classes;
+                  slots = lib.listToAttrs (map (c: lib.nameValuePair c.name c.slotMiB) n.classes);
+                  inherit (n) headroomPercent unclassed;
+                  kinds = buildSizing.plannedKinds;
+                  shellKiB = n.shellMiB * 1024;
+                  besideKiB = n.besideMiB * 1024;
                 }
               );
             in
             lib.getExe (
               pkgs.writeShellApplication {
                 name = "ronoctua-rust-peaks";
-                runtimeInputs = [ pkgs.python3 ];
+                runtimeInputs = [
+                  pkgs.python3
+                  pkgs.git
+                ];
                 text = ''
-                  exec python3 ${./nix/scripts/rust-peaks.py} ${facts} "$@"
+                  args=()
+                  for a in "$@"; do
+                    if [ "$a" = --write ]; then
+                      root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+                        echo "ronoctua-rust-peaks: --write writes into the checkout it runs in, and this is none" >&2
+                        exit 2
+                      }
+                      args+=(--write "$root/nix/rust/unit-classes.json")
+                    else
+                      args+=("$a")
+                    fi
+                  done
+                  exec python3 ${./nix/scripts/rust-peaks.py} "''${args[@]}" ${facts}
                 '';
               }
             );
           meta = {
-            description = "lists the units that peaked heaviest and refuses one past the slot that is not named heavy";
+            description = "holds each unit to its measured class, and with --write writes the classes as measured";
             platforms = [ system ];
           };
         };

@@ -3,8 +3,9 @@
 //! # What is here
 //!
 //! Which rows exist, what a key does on each, and what the door must do about
-//! it. Nothing here opens a camera or a socket: the cameras come from
-//! `ronoctua-camera` (the one V4L2 boundary) and the rest from
+//! it. The cameras come from `ronoctua-camera` (the one V4L2 boundary), read
+//! by the door's own watch while the view is open ([`CameraWatch`]) — and
+//! never before, because reading a camera opens it — and the rest from
 //! `ronoctua-studio` (the daemon's socket and its two files). It is the shape
 //! `pointers.rs` has, down to the rings.
 //!
@@ -308,8 +309,11 @@ pub enum Errand {
 /// Everything a row reads.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
-    /// Every camera, as the watch last read them.
+    /// Every camera, as the door's watch last read them ([`CameraWatch`]).
     pub cameras: Vec<Camera>,
+    /// The door's watch has not answered yet: the cameras are being read,
+    /// and the section says so rather than "no camera".
+    pub reading: bool,
     /// `camera.json`.
     pub camera_prefs: ronoctua_camera::prefs::Preferences,
     /// `studio.json`.
@@ -322,12 +326,14 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// Reads the two files; the cameras and the state come from the
-    /// threads. The backdrop is chosen in the file picker, where every
-    /// picture of every folder is — never a ring of one folder's.
+    /// threads — `None` while the cameras are still being read. The backdrop
+    /// is chosen in the file picker, where every picture of every folder
+    /// is — never a ring of one folder's.
     #[must_use]
-    pub fn read(cameras: Vec<Camera>, state: Option<State>) -> Self {
+    pub fn read(cameras: Option<Vec<Camera>>, state: Option<State>) -> Self {
         Self {
-            cameras,
+            reading: cameras.is_none(),
+            cameras: cameras.unwrap_or_default(),
             camera_prefs: ronoctua_camera::prefs::store().read(),
             prefs: prefs::store().read(),
             state,
@@ -337,6 +343,158 @@ impl Snapshot {
 
     fn camera(&self, identity: &str) -> Option<&Camera> {
         self.cameras.iter().find(|c| c.identity.0 == identity)
+    }
+}
+
+/// THE CAMERAS A DOOR OF THESE SETTINGS SHOWS, read by the door itself for as
+/// long as the view is open — and never before it opens: reading a camera
+/// opens its node, and a UVC camera's light blinks when it is opened
+/// (`ronoctua_camera::watch`). The window raises one when it opens and the
+/// footer's region when it is shown; dropping it, as the view goes, ends the
+/// watch. What a reading brings wakes the door's loop, whose `woken` takes it
+/// ([`CameraWatch::arrived`]).
+pub struct CameraWatch {
+    newest: std::sync::Arc<std::sync::Mutex<Option<Vec<Camera>>>>,
+    /// The watch's thread — `None` for a planted one ([`CameraWatch::planted`]).
+    _watch: Option<ronoctua_camera::watch::Handle>,
+}
+
+impl CameraWatch {
+    /// Starts reading the cameras: once now, and again on every plug.
+    #[must_use]
+    pub fn raise(wake: crate::wake::Wake) -> Self {
+        let newest = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let into = std::sync::Arc::clone(&newest);
+        let watch = ronoctua_camera::watch::watch(move |cameras| {
+            if let Ok(mut n) = into.lock() {
+                *n = Some(cameras);
+            }
+            wake.call();
+        });
+        Self {
+            newest,
+            _watch: Some(watch),
+        }
+    }
+
+    /// A watch that READ NOTHING of the machine: `first` stands for its first
+    /// reading (`None`: one that never answers) — a photograph's planted
+    /// machine, a test's. No thread is raised and no node is opened.
+    #[must_use]
+    pub fn planted(first: Option<Vec<Camera>>) -> Self {
+        Self {
+            newest: std::sync::Arc::new(std::sync::Mutex::new(first)),
+            _watch: None,
+        }
+    }
+
+    /// The newest reading, when one arrived since the last call.
+    #[must_use]
+    pub fn arrived(&self) -> Option<Vec<Camera>> {
+        self.newest.lock().ok()?.take()
+    }
+}
+
+/// THE CAMERA A PHOTOGRAPH PLANTS — never this machine's: one colour webcam
+/// with two modes and the fourteen controls a UVC driver commonly declares
+/// (two of them decided by another, drawn and refusing). Its names are the
+/// driver's words, data as a device reports them. With it, the Cameras
+/// section is longer than a footer's page, as a real one is.
+#[must_use]
+pub fn planted_camera() -> Camera {
+    use ronoctua_camera::{Control, Format, Identity, Interval, Size};
+    let format = |fourcc: &str, compressed: bool, width: u32, height: u32| Format {
+        fourcc: fourcc.into(),
+        description: String::new(),
+        compressed,
+        sizes: vec![Size {
+            width,
+            height,
+            intervals: vec![Interval { num: 1, den: 30 }],
+        }],
+    };
+    let control =
+        |id: u32, name: &str, kind: ControlKind, (min, max, value): (i32, i32, i32)| Control {
+            id,
+            name: name.into(),
+            key: name.to_lowercase().replace([' ', ','], "-"),
+            kind,
+            min,
+            max,
+            step: 1,
+            default: value,
+            value,
+            inactive: false,
+            read_only: false,
+            menu: Vec::new(),
+        };
+    let menu = |c: Control, items: &[(i32, &str)]| Control {
+        menu: items.iter().map(|(v, n)| (*v, (*n).to_owned())).collect(),
+        ..c
+    };
+    let decided = |c: Control| Control {
+        inactive: true,
+        ..c
+    };
+    Camera {
+        identity: Identity::of("Webcam", "usb-0000:00:14.0-1", "1-1:1.0"),
+        node: "/dev/video0".into(),
+        card: "Webcam".into(),
+        driver: "uvcvideo".into(),
+        bus: "usb-0000:00:14.0-1".into(),
+        kind: Kind::Colour,
+        formats: vec![
+            format("MJPG", true, 1280, 720),
+            format("YUYV", false, 640, 480),
+        ],
+        controls: vec![
+            control(1, "Brightness", ControlKind::Integer, (-64, 64, 0)),
+            control(2, "Contrast", ControlKind::Integer, (0, 95, 32)),
+            control(3, "Saturation", ControlKind::Integer, (0, 100, 64)),
+            control(4, "Hue", ControlKind::Integer, (-2000, 2000, 0)),
+            control(
+                5,
+                "White Balance Automatic",
+                ControlKind::Boolean,
+                (0, 1, 1),
+            ),
+            control(6, "Gamma", ControlKind::Integer, (100, 300, 100)),
+            control(7, "Gain", ControlKind::Integer, (1, 8, 1)),
+            menu(
+                control(8, "Power Line Frequency", ControlKind::Menu, (0, 2, 1)),
+                &[(0, "Disabled"), (1, "50 Hz"), (2, "60 Hz")],
+            ),
+            decided(control(
+                9,
+                "White Balance Temperature",
+                ControlKind::Integer,
+                (2800, 6500, 4600),
+            )),
+            control(10, "Sharpness", ControlKind::Integer, (0, 7, 2)),
+            control(
+                11,
+                "Backlight Compensation",
+                ControlKind::Integer,
+                (0, 2, 1),
+            ),
+            menu(
+                control(12, "Auto Exposure", ControlKind::Menu, (1, 3, 3)),
+                &[(1, "Manual Mode"), (3, "Aperture Priority Mode")],
+            ),
+            decided(control(
+                13,
+                "Exposure Time, Absolute",
+                ControlKind::Integer,
+                (1, 5000, 156),
+            )),
+            control(
+                14,
+                "Exposure, Dynamic Framerate",
+                ControlKind::Boolean,
+                (0, 1, 0),
+            ),
+        ],
+        streamable: true,
     }
 }
 
@@ -601,11 +759,44 @@ impl View {
             return;
         }
         self.clamp(&rows);
+        // A CURSOR NOBODY MOVED IS WHERE THE VIEW OPENS: on the first row
+        // that does something on THESE rows, whatever came above it since.
+        // The cameras are read after the view opens; a cursor put on the
+        // first row that turned while they were being read ("Effect") was
+        // left there when they came, a camera's controls below the page, and
+        // `RET` turned an effect nobody saw.
         if !self.moved
-            && rows.get(self.cursor).is_some_and(|r| !r.target.turns())
             && let Some(i) = rows.iter().position(|r| !r.heading && r.target.turns())
         {
             self.cursor = i;
+        }
+    }
+
+    /// THE ROWS READ AGAIN, in either door: `then` is what they were drawn
+    /// from and `now` what they read from here on. The cursor stays on its
+    /// row by identity, and one nobody moved goes where the view opens on the
+    /// new rows ([`View::settle_in`]). When that put it on another line, the
+    /// page follows it — if the line it was on was in sight
+    /// (`Doorway::follow_if_seen`): what arrives never moves a page somebody
+    /// wheeled away, and never leaves the cursor below one nobody touched.
+    pub fn reread(
+        &mut self,
+        then: &Snapshot,
+        now: &Snapshot,
+        way: &mut dyn crate::region::Doorway,
+    ) {
+        let (columns, texts) = (way.columns(), way.words());
+        let was = self.cursor;
+        let spot = self
+            .rows(then, columns, &texts)
+            .get(was)
+            .map(|r| r.spot.clone());
+        if let Some(spot) = spot {
+            self.follow(&spot, now, columns, &texts);
+        }
+        self.settle_in(now, columns, &texts);
+        if self.cursor != was {
+            way.follow_if_seen(was);
         }
     }
 
@@ -1418,6 +1609,12 @@ fn cameras(b: &mut Builder<'_>, snap: &Snapshot) {
     use crate::key;
     b.heading(key::CAMERA_HEADING_CAMERAS);
     b.note(key::CAMERA_ABOUT_CAMERAS);
+    // BEING READ is not "none": the door's watch was raised as the view
+    // opened, and a camera takes a moment to answer.
+    if snap.reading {
+        b.note(key::CAMERA_READING);
+        return;
+    }
     let shown: Vec<&Camera> = snap
         .cameras
         .iter()
@@ -1883,6 +2080,30 @@ mod tests {
             }),
             ..Snapshot::default()
         }
+    }
+
+    /// FAILS IF: the cameras still being read are drawn as "no camera" —
+    /// the door raises its watch as the view opens, and for the moment a
+    /// camera takes to answer the section said none was connected — or a
+    /// reading that found none stops saying so.
+    #[test]
+    fn cameras_being_read_are_not_cameras_missing() {
+        let tx = texts();
+        let says = |snap: &Snapshot, key: &str| {
+            View::fresh()
+                .rows(snap, 100, &tx)
+                .iter()
+                .any(|r| r.fields.iter().any(|f| f.text == tx.t(key)))
+        };
+        let reading = Snapshot::read(None, None);
+        assert!(reading.reading);
+        assert!(says(&reading, crate::key::CAMERA_READING));
+        assert!(!says(&reading, crate::key::STUDIO_TROUBLE_NO_CAMERA));
+        let none = Snapshot::read(Some(Vec::new()), None);
+        assert!(!none.reading);
+        assert!(says(&none, crate::key::STUDIO_TROUBLE_NO_CAMERA));
+        assert!(!says(&none, crate::key::CAMERA_READING));
+        assert!(!says(&snap(), crate::key::CAMERA_READING));
     }
 
     #[test]

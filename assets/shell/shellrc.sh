@@ -108,10 +108,6 @@ path_append "$CARGO_HOME/bin"
 path_append "$GOPATH/bin"
 path_append "$BUN_INSTALL/bin"
 
-# Doom Emacs: exposes the `doom` CLI. The framework lives in ~/.config/emacs
-# (Doom's own XDG location) and the binary in its `bin`.
-path_append "$XDG_CONFIG_HOME/emacs/bin"
-
 export PATH
 
 
@@ -226,9 +222,10 @@ alias glg='git log --stat'
 # -----------------------------------------------------------------------------
 # Aliases: Emacs in daemon mode
 # -----------------------------------------------------------------------------
-# WHY A DAEMON: one Emacs process loads the whole configuration ONCE and every
-# `e` after that opens in it. Without the daemon each file pays Doom's full
-# startup, which is seconds — enough that one stops using it as `$EDITOR`.
+# WHY A DAEMON: one Emacs process loads the person's configuration ONCE and
+# every `e` after that opens in it. Without the daemon each file pays the whole
+# startup, which with a configuration of any size is seconds — enough that one
+# stops using it as `$EDITOR`.
 #
 #   e   in the terminal itself (`-t`), the everyday one
 #   et  a graphical frame (`-c`), for when a window is wanted

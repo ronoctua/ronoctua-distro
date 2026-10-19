@@ -213,6 +213,10 @@ avaliação; estas coisas não:
   tamanhos e taxas aparecem na vista ao lado da frase `camera-about-cannot-stream`; quem não a abre
   é a entrada V4L2 do ffmpeg, que só fala plano único. Acaba com a mesma ponte do item de cima (o
   libcamera, ou um `v4l2-relayd` declarado). Médio.
+- **A luz da câmera ao entrar na sessão instalada não foi medida.** O rodapé e o estúdio não abrem
+  mais nenhum nó ao subir (`camera-vm`), mas o monitor V4L2 do WirePlumber da sessão pode abrir cada
+  câmera para perguntar o que ela é. Acaba com o `inotifywait -m -e open /dev/video*` num login da
+  `.#vm -- --cameras` e, se ele abrir, com a decisão do dono sobre o monitor. Pequeno.
 - **O recuo para `wlr-screencopy` nunca rodou contra um compositor de verdade.** Ele existe
   (`ronoctua-studio`, `screen.rs`) e a conversão de pixels é testada, mas o pinado anuncia o
   `ext-image-copy-capture-v1`, então só outro compositor o exercita. Pequeno.
@@ -1053,6 +1057,47 @@ lista acima.
 
 <!-- anchor: L04 -->
 
+### Emacs: o que a página só diz · pequeno cada
+
+O alvo `emacs` leva só `~/.config/emacs`, e o que o Emacs de uma máquina lê fora dali é dito numa
+frase da página dos pertences, nunca resolvido por ela:
+
+- **Um `~/.emacs.d` (ou `~/.emacs`) que esconde `~/.config/emacs`.** Numa máquina de antes da pasta
+  XDG da unidade, ou com uma configuração antiga, o Emacs lê o outro lugar; a página diz qual, e que
+  mover a configuração para `~/.config/emacs` a faz viajar. Um `~/.emacs.d` só com o que o Emacs fez
+  é dito à parte. Nada é movido nem apagado.
+- **Um `~/.emacs.el` sozinho deixa de ser lido** quando uma sincronização traz `~/.config/emacs` para
+  aquela casa: o Emacs passa a ler a configuração que chegou, e a página não diz nada (o Emacs lê o
+  lugar que viaja). A unidade nunca cria a pasta XDG numa casa com `~/.emacs.el`.
+- **Um framework clonado em `~/.config/emacs` viaja como configuração.** Nenhum checkout é
+  reconhecido: o Doom ou o Spacemacs de uma máquina chegam à pasta das outras, e uma configuração
+  própria e um framework no mesmo lugar em duas máquinas se misturam (com pergunta onde o mesmo
+  arquivo difere).
+- **Apagar ou mover `~/.config/emacs` numa máquina apaga nas outras** (cada uma guarda a cópia em
+  `replaced/`), como qualquer pasta guardada.
+- **`emacsclient -a ''` sobe um daemon sem a unidade.** Com a unidade parada, o `e` do shell sobe o
+  Emacs direto, sem a pasta XDG antes; numa casa sem nada, ele cria o `~/.emacs.d`.
+- **Uma adição feita à mão em `~/.config/emacs` antes do alvo** (a sobreposição que a primeira
+  revisão achou) é o que era na a88e849: uma raiz própria no índice. O que isso faz, medido nos
+  testes `an_old_addition_at_the_emacs_folder_is_a_root_and_deletes_nothing` e
+  `an_old_addition_at_a_target_is_a_root_and_takes_no_file_out`: os arquivos dela viajam marcados
+  como acrescentados, e as outras máquinas a seguem (a página delas a lista como acrescentada em
+  outra máquina, ao lado do alvo, para o mesmo lugar); "deixar de guardar" na linha dela põe
+  `~/.config/emacs` no que foi tirado, e isso é o "não nesta máquina" do alvo inteiro (ele tem um
+  caminho só) — a máquina para de guardar a
+  configuração do Emacs, as cópias do repositório ficam para as outras, e "guardar aqui de novo" no
+  alvo a traz de volta; e os pacotes que uma máquina sem o alvo mandou por ela (`elpa/` e o resto do
+  que o alvo pula) ficam no repositório para sempre — nenhuma máquina nova os guarda, e tirar a
+  adição não os tira, por causa da guarda —, até um "em nenhuma máquina" do alvo, que tira o alvo
+  inteiro. E com uma máquina na a88e849 no mesmo repositório (nenhuma versão foi publicada, então só
+  entre builds de desenvolvimento): se ELA tira uma adição que cobre um alvo enquanto outra máquina
+  não sincronizava, essa outra apaga a própria cópia dos arquivos do alvo que tinha de antes da
+  adição (posta de lado em `replaced/`); a guarda só vale para quem tira.
+- acabou quando: o dono decidir se algum desses casos ganha mais que a frase (uma pasta raiz que
+  some inteira esperar pela pessoa, por exemplo), se o `e` passa pela unidade, e se uma adição no
+  caminho de um alvo passa a ser o alvo — com uma migração que não quebre o "guardar de novo" nem uma
+  máquina na versão anterior.
+
 ### O Emacs tem dois lançadores que ninguém pediu · pequeno
 
 `services.emacs.enable` põe o pacote no `systemPackages`, e com ele `emacs.desktop` e
@@ -1636,31 +1681,39 @@ cada passo deixou por fazer, por assunto.
   está abaixo dos programas que mudaram — se mudou o shell, toda lib abaixo dele. Levar o
   `rust.release.keep` (~1,95 GiB) na semente custaria isso no ISO: decisão do dono.
 - **`metrics` não diz os núcleos**: o `peak-kib` de uma unidade pesada depende do `$NIX_BUILD_CORES`
-  com que foi construída, e o `.#rust-peaks` só diz, sem julgar, uma pesada acima do `shellMiB`.
-  Gravar `cores` ao lado (`rust-unit.py`) reconstrói toda unidade uma vez.
+  com que foi construída — a biblioteca de release do rodapé, 2 279 MiB a um núcleo e 1 534 sozinha
+  a doze —, e por isso uma pesada nunca é rebaixada pelo `--write` do `.#rust-peaks`. Gravar `cores`
+  ao lado (`rust-unit.py`) reconstrói toda unidade uma vez, e deixaria classificar a pesada pela
+  medida certa.
+- **As duas pesadas fecham o release sozinhas** (65 s a biblioteca do rodapé, de um fio só, e 96 s o
+  link do shell, S1): uma terceira classe de ~2,75 GiB poria a biblioteca ao lado de outras unidades
+  (−~60 s num release), ao preço de medi-la a um núcleo e de menos médias de uma vez.
 - **`shellMiB`/`besideMiB` são do shell de um crate só** (o harness e o programa de release a 1, 3 e
-  6 núcleos, 2026-10-15). As pesadas de agora são o programa de release do shell (3,9 GiB a doze
-  núcleos), a biblioteca de loop do rodapé (1,8 GiB a doze) e a de release dele (2,2 GiB a um);
-  medi-las a 1, 3 e 6 núcleos daria a elas mais núcleos, e a de loop do rodapé a um núcleo pode sair
-  da lista. A lib de release do jogador mede 1770 MiB, perto da fatia (1792).
+  6 núcleos, 2026-10-15). As pesadas de agora (`nix/rust/unit-classes.json`) são o programa de
+  release do shell (3,8 GiB a oito núcleos) e a biblioteca de release do rodapé (2,3 GiB a um);
+  medi-las a 1, 3 e 6 núcleos daria a elas mais núcleos.
   - acabou quando: os números do `nix/build-sizing.nix` são das pesadas de agora, e o `.#rust-peaks`
     passa.
 - **O teto do cgroup do root só é provado nas funções** (`sizing_cgroup_ceiling` sobre pastas
   plantadas).
   - acabou quando: um teste de VM roda o apply como root numa unidade com `MemoryMax` e o diário diz
     o orçamento daquele teto.
-- **Testes de tempo de parede ao lado de uma compilação**: a bateria roda as execuções de teste
-  depois de toda compilação (fase 1d), mas o `.#quick` e um `nix build` à mão ainda as põem ao lado
-  de um `rustc` (o teste de 20 ms do `ronoctua-broadcast` falhou assim uma vez).
-  - acabou quando: o teste mede tempo de CPU, ou toda porta de entrada roda as execuções depois.
-- **Uma pausa durante a pesagem vira "correndo"** (`ronoctua-transfers`, de antes da leva): o
-  `run_it` (`local.rs`) grava `Stage::Running` depois de pesar sem olhar o interruptor, e a pausa
-  que o `flip` do `serve.rs` gravou enquanto a cópia pesava some — a cópia fica parada e a linha diz
-  que ela corre. Sob carga o `pausing_holds_and_cancelling_takes_the_piece_back` falha assim
-  ("expected Paused and saw Some(Running)"; uma vez no F5, numa rodada de testes ao lado de
-  compilações).
-  - acabou quando: o fim da pesagem grava `Paused` com o interruptor em pausa, e um teste segura a
-    pesagem até a pausa chegar.
+- **Testes de tempo de parede ao lado de uma compilação**: as baterias, o `.#sized-build` e por
+  ele o `.#quick` rodam as execuções de teste depois de toda compilação (as últimas linhas do plano),
+  mas um `nix build` à mão ainda as põe ao lado de um `rustc` (o teste de 20 ms do
+  `ronoctua-broadcast` falhou assim uma vez).
+  - acabou quando: o teste mede tempo de CPU.
+- **O `peak-kib` é do maior processo, não da unidade**: o `rust-unit.py` grava o `ru_maxrss` do
+  maior filho, e uma unidade que liga roda o `rustc` e o linker juntos. O harness de teste do
+  `ronoctua-shell-kit` mede 667 MiB de `peak-kib`; refeito sozinho a um núcleo, com o RSS de todo
+  processo do build somado a cada 0,1 s (2026-10-19), chegou a 790 MiB no pior instante (`rustc`
+  412 + `rust-lld` 340 + python 22 + o resto 16): 123 MiB (18 %) a mais que a classe vê, além da
+  folga de um décimo e 22 MiB além da fatia leve de 768. A soma conta duas vezes as páginas que os
+  processos dividem, então o pico de verdade fica entre os dois. Medir a árvore de processos
+  (somar o RSS dos filhos vivos, ou o `memory.peak` de um cgroup por build) muda o executor, que é
+  entrada de toda unidade: reconstrói todas uma vez, um build frio inteiro, e depois o `--write`
+  reclassifica.
+  - acabou quando: o `metrics` diz o pico da árvore, e o `.#rust-peaks` classifica por ele.
 - **O `.#rebuild-cost -- <arquivo>` não simula um dado**: só reescreve fonte de crate, então num
   `.ftl` diz 0 entradas e numa semente recusa, onde a edição de verdade move 67 e 65 execuções de
   teste (F5). Sem argumento ele compara com o `HEAD`.

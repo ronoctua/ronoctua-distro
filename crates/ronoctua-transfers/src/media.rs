@@ -265,7 +265,9 @@ fn carry(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, asked: &Asked<'_>
         .spawn()
         .with_context(|| format!("could not run {}", program.display()))?;
     let pid = child.id();
-    shared.touch(id, |j| j.stage = Stage::Running);
+    // UNDER WAY — or held, if a pause landed before yt-dlp started: the
+    // switch decides, and the loop below stops the group at once.
+    shared.under_way(id, |_| {});
 
     // TWO READER THREADS AND A CHANNEL, because reading a line BLOCKS and the
     // switch has to stay answerable. The alternative was a non-blocking read
@@ -289,15 +291,15 @@ fn carry(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, asked: &Asked<'_>
                 sweep_parts(into, &before);
                 bail!("given up");
             }
+            // THE ROW IS NOT WRITTEN HERE: the pause and the resume wrote it
+            // with the switch (`crate::engine`'s header says why).
             Flow::Pause if !held => {
                 signal(pid, rustix::process::Signal::STOP);
                 held = true;
-                progress.stage(Stage::Paused);
             }
             Flow::Run if held => {
                 signal(pid, rustix::process::Signal::CONT);
                 held = false;
-                progress.stage(Stage::Running);
             }
             Flow::Pause | Flow::Run => {}
         }

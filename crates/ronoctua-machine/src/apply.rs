@@ -15,12 +15,12 @@
 //! update leaves the folder as the machine runs, and the next apply builds
 //! what runs, not what failed.
 //!
-//! # Sized, in phases, and its units kept
+//! # Sized, unit by unit, and its units kept
 //!
-//! The build is [`build::system`]: sized to the machine
-//! (`ronoctua-build-sizing`), in the phases the distro describes, and after
-//! it worked the compiled units it was built from are rooted for the next
-//! one ([`build::keep`]).
+//! The build is [`build::system`]: the units the distro's plan describes
+//! first, each by its class (`ronoctua-build-units`), then the system, sized
+//! to the machine (`ronoctua-build-sizing`); after it worked the compiled
+//! units it was built from are rooted for the next one ([`build::keep`]).
 //!
 //! # A trial is judged before anything is built
 //!
@@ -137,6 +137,7 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
     let nix_env = needed(s.nix_env().as_ref(), system::NIX)?;
     let bootctl = needed(s.bootctl.as_ref(), system::BOOTCTL)?;
     needed(s.sizing.as_ref(), system::BUILD_SIZING)?;
+    needed(s.build_units.as_ref(), system::BUILD_UNITS)?;
     needed(s.keep_units.as_ref(), system::KEEP_UNITS)?;
     let limit = s.menu_limit()?;
     let mut state = disk::read_state(p)?;
@@ -175,8 +176,9 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
         }
     }
 
-    // THE BUILD, which changes nothing but the store: sized, in the
-    // distro's phases ([`build`]). Any way it fails puts the lock back.
+    // THE BUILD, which changes nothing but the store: the distro's units by
+    // their class, then the system, sized ([`build`]). Any way it fails puts
+    // the lock back.
     std::fs::create_dir_all(&p.run).map_err(|e| disk::failed(&p.run, &e))?;
     let out = p.run.join("next");
     disk::remove(&out).map_err(|e| disk::failed(&out, &e))?;

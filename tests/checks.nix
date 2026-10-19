@@ -42156,6 +42156,7 @@ let
       PY = "${pkgs.python3}/bin/python3"
       MACHINE = "${rust.machine}/bin/ronoctua-machine"
       SIZING = "${vm.config.ronoctua.machine.environment.RONOCTUA_BUILD_SIZING}"
+      UNITS = "${vm.config.ronoctua.machine.environment.RONOCTUA_BUILD_UNITS}"
       LOCK_A = '{"nodes":{"root":{"inputs":{"ronoctua":"r"}},"r":{"locked":{"rev":"' + "a" * 40 + '"}}},"root":"root","version":7}\n'
       LOCK_B = LOCK_A.replace("a" * 40, "b" * 40)
       FACTS = json.load(open("${facts}"))
@@ -42282,9 +42283,10 @@ let
               "RONOCTUA_MACHINE_SYSTEM_LOCK": INSIDE,
               "RONOCTUA_NIX": str(root / "bin/nix"),
               "RONOCTUA_BOOTCTL": str(root / "bin/bootctl"),
-              # The machine's own sizing; what keeps the units writes down
-              # that it was asked.
+              # The machine's own sizing and units program; what keeps the
+              # units writes down that it was asked.
               "RONOCTUA_BUILD_SIZING": SIZING,
+              "RONOCTUA_BUILD_UNITS": UNITS,
               "RONOCTUA_KEEP_UNITS": str(root / "bin/keep-units"),
           }
           return subprocess.run([MACHINE, "apply"], env=env, capture_output=True, text=True)
@@ -44190,9 +44192,10 @@ let
     '';
   # THE PREDEFINED TARGETS AND THE IDENTITY KEPT FOR THE SESSION (the
   # belongings-targets-unlock package): `~/.ssh`, git's configuration,
-  # GnuPG, the shell's and Doom's local files kept encrypted on every
-  # machine; "not here" and "nowhere"; what they offer after a sync that
-  # brought them; the identity kept in the kernel's keyring for the session.
+  # GnuPG, the shell's own file and the Emacs configuration kept encrypted
+  # on every machine; "not here" and "nowhere"; what they offer after a sync
+  # that brought them; the identity kept in the kernel's keyring for the
+  # session.
   #
   # ONE RUN OF THE TESTS THAT PROVE THEM — real git, a `file://` bare remote,
   # two machines — out of the harnesses the test units built, narrowed to
@@ -51197,9 +51200,13 @@ let
           ;
       })
       build-sizing-fits-the-machine
-      batteries-build-the-heavy-alone
+      sized-units-keep-to-the-budget
+      sized-units-keep-time-in-any-locale
+      batteries-build-each-unit-by-its-class
       kept-units-are-the-ones-the-store-holds
       rust-peaks-names-what-is-past-the-slot
+      unit-classes-fit-the-measures
+      unit-classes-name-units-of-the-index
       machine-builds-by-the-distros-plan
       sized-build-builds-what-nix-would
       batteries-reach-every-unit

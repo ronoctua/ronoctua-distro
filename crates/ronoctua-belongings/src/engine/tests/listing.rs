@@ -168,10 +168,7 @@ fn belongings_list_is_the_walk() {
     }
     // EVERY REASON A FILE IS NEVER KEPT, and not here, and nowhere.
     assert_eq!(row("config/column-player.pid").here, Here::Never("draft"));
-    assert_eq!(
-        row("home/.ssh/agent.sock").here,
-        Here::Never(kept::SKIPPED_REASON)
-    );
+    assert_eq!(row("home/.ssh/agent.sock").here, Here::Never("socket"));
     assert_eq!(
         row("home/.ssh/belongings").here,
         Here::Never(crate::sift::ACCESS),

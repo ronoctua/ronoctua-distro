@@ -71,6 +71,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::key;
 use ronoctua_belongings::Why;
+use ronoctua_belongings::emacs;
 use ronoctua_belongings::inventory::{Here, Item, Origin, Part};
 use ronoctua_belongings::kept::{self, Pattern};
 use ronoctua_belongings::order::Op;
@@ -905,6 +906,9 @@ pub struct Counted {
     there: BTreeMap<&'static str, bool>,
     /// The folders a door hears what the listing is made of in.
     pub heard: Heard,
+    /// Which place this machine's Emacs reads, when it is not the one the
+    /// belongings carry (`ronoctua_belongings::emacs`): said, never acted on.
+    pub emacs: Option<emacs::Reads>,
     /// The files' rows, formatted once per language: a large addition is
     /// thousands of rows, and the page is drawn on every key.
     formatted: Mutex<Option<(String, Arc<Vec<Formatted>>)>>,
@@ -938,6 +942,7 @@ impl Counted {
             by_origin,
             there,
             heard: Heard::of(scope, places),
+            emacs: emacs::reads(places),
             formatted: Mutex::new(None),
         }
     }
@@ -993,40 +998,67 @@ impl Counted {
 /// `max_user_watches`.
 const HEARD_MOST: usize = 64;
 
+/// One tree a door hears: a root of the walk that is a folder here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeardTree {
+    /// Where it is.
+    pub at: PathBuf,
+    /// Its logical path.
+    pub logical: String,
+    /// Whether the table declares it — a tree, a target's folder, a plain
+    /// root: it holds watches of its own (`TREE_MOST`), and a person's
+    /// large addition never takes them. The person's additions share one
+    /// budget, after these.
+    pub declared: bool,
+}
+
 /// The folders a door hears what the listing is made of in, while it shows
 /// it: every root of the walk that is a folder here, as a TREE (a file
-/// changed in `~/.ssh` or deep in an addition), and the folder of every root
-/// that is a file (`~/.gitconfig`, `~/.shellrc.local`) — or the nearest one
-/// that is there, so that its making is heard, and the count after it hears
-/// the folder itself.
+/// changed in `~/.ssh` or deep in an addition) — but what its target skips,
+/// which the walk does not enter either — and the folder of every root that
+/// is a file (`~/.gitconfig`, `~/.shellrc.local`), or the nearest one that
+/// is there, so that its making is heard, and the count after it hears the
+/// folder itself.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Heard {
     dirs: Vec<PathBuf>,
-    trees: Vec<PathBuf>,
+    trees: Vec<HeardTree>,
 }
 
 impl Heard {
     /// The folders of what `scope` walks under `places` — a `stat` per root,
-    /// in the count's thread.
+    /// in the count's thread. The table's trees first: past [`HEARD_MOST`],
+    /// it is the person's additions that go unheard.
     #[must_use]
     pub fn of(scope: &Scope, places: &Places) -> Self {
         let mut dirs = BTreeSet::new();
-        let mut trees = BTreeSet::new();
+        let mut trees = Vec::new();
+        let declared = |root: &str| {
+            scope::rules().any(|(p, _)| p.path == root)
+                || scope::plain_roots().iter().any(|r| r.path == root)
+                || kept::target_of(root).is_some()
+        };
         for root in scope.roots() {
             let Some(at) = places.resolve(&root) else {
                 continue;
             };
             if std::fs::symlink_metadata(&at).is_ok_and(|m| m.is_dir()) {
-                trees.insert(at);
+                trees.push(HeardTree {
+                    at,
+                    declared: declared(&root),
+                    logical: root,
+                });
             } else if let Some(dir) = at.ancestors().skip(1).find(|a| a.is_dir()) {
                 dirs.insert(dir.to_path_buf());
             }
         }
         // A FOLDER INSIDE A TREE is heard by the tree.
-        dirs.retain(|d| !trees.iter().any(|t| d.starts_with(t)));
+        dirs.retain(|d| !trees.iter().any(|t| d.starts_with(&t.at)));
+        trees.sort_by(|a, b| b.declared.cmp(&a.declared).then_with(|| a.at.cmp(&b.at)));
+        trees.truncate(HEARD_MOST);
         Self {
             dirs: dirs.into_iter().take(HEARD_MOST).collect(),
-            trees: trees.into_iter().take(HEARD_MOST).collect(),
+            trees,
         }
     }
 
@@ -1038,14 +1070,42 @@ impl Heard {
     where
         F: Fn() -> bool + Send + 'static,
     {
-        use ronoctua_files::notice::{Notice, Pace};
+        use ronoctua_files::notice::{Notice, Pace, TREE_MOST, Tree};
         if self.dirs.is_empty() && self.trees.is_empty() {
             return None;
         }
-        Notice::on_dirs(&self.dirs, &self.trees, Pace::Coalesced, ring)
+        let trees = self
+            .trees
+            .iter()
+            .map(|t| Tree {
+                root: t.at.clone(),
+                most: t.declared.then_some(TREE_MOST),
+                unheard: Some(unheard(t)),
+            })
+            .collect();
+        Notice::on_trees(&self.dirs, trees, Pace::Coalesced, ring)
             .map_err(|e| tracing::warn!(error = %e, "what the belongings keep is not heard"))
             .ok()
     }
+}
+
+/// What a door does not hear under the tree `t`: what its target skips (a
+/// package folder, what Emacs keeps of its sessions — the walk enters
+/// neither, and a write there changes no row).
+fn unheard(t: &HeardTree) -> ronoctua_files::notice::Unheard {
+    let (at, root) = (t.at.clone(), t.logical.clone());
+    Arc::new(move |path: &Path| {
+        let Some(rel) = path.strip_prefix(&at).ok().and_then(Path::to_str) else {
+            return false;
+        };
+        let logical = if rel.is_empty() {
+            root.clone()
+        } else {
+            format!("{root}/{rel}")
+        };
+        kept::target_of(&logical)
+            .is_some_and(|target| matches!(target.inside(&logical), kept::Inside::Skipped(_)))
+    })
 }
 
 /// What a door hears the listing's files by: one notice over the folders of
@@ -3681,6 +3741,12 @@ fn listing_section(b: &mut Builder<'_>, r: &Readings) {
             }
             e.push(act(key::BELONGINGS_TARGET_ACT_NOWHERE, Target::Nowhere(id)));
         }
+        // WHERE EMACS READS HERE, when it is not the place this target
+        // carries — said while the target travels from this machine, and
+        // never acted on.
+        if id == emacs::TARGET && !dropped && !all_out {
+            e.extend(emacs_said(count.emacs.clone(), places, t));
+        }
         files(&mut e, &Origin::Target(id));
     }
 
@@ -3844,12 +3910,23 @@ struct Formatted {
 impl Formatted {
     fn of(item: &Item, places: Option<&Places>, t: &ronoctua_i18n::Texts) -> Self {
         let root = group_root(item);
+        // A FOLDER ends in `/`, like every folder of the page: one the walk
+        // did not enter (a package folder, one that cannot be listed).
         let label = item
             .path
             .strip_prefix(root)
             .map(|rest| rest.trim_start_matches('/'))
             .filter(|rest| !rest.is_empty())
-            .map_or_else(|| shown_path(&item.path, places, false), str::to_owned);
+            .map_or_else(
+                || shown_path(&item.path, places, item.folder),
+                |rest| {
+                    if item.folder {
+                        format!("{rest}/")
+                    } else {
+                        rest.to_owned()
+                    }
+                },
+            );
         let value = match item.here {
             Here::Kept => t.t_with(
                 key::BELONGINGS_ITEM,
@@ -3925,6 +4002,65 @@ fn group_root(item: &Item) -> &str {
 /// The paths of the target `id`.
 fn target_paths(id: &str) -> &'static [&'static str] {
     kept::target_by_id(id).map_or(&[], |t| t.paths)
+}
+
+/// The sentence of where this machine's Emacs reads ([`emacs::Reads`]), in
+/// the warning's colour: which place, that the belongings carry
+/// `~/.config/emacs`, and that moving the configuration there carries it —
+/// or that a `~/.emacs.d` with nothing of the person's in it, or a `~/.emacs`
+/// that is no file, makes Emacs read `~/.emacs.d` in its place, or that
+/// `$XDG_CONFIG_HOME` puts Emacs's folder elsewhere, so the carried one is
+/// never read. What to do is the person's.
+fn emacs_said(
+    reads: Option<emacs::Reads>,
+    places: Option<&Places>,
+    t: &ronoctua_i18n::Texts,
+) -> Option<Entry> {
+    let carried = shown_path(emacs::XDG, places, true);
+    let text = match reads? {
+        emacs::Reads::Elsewhere(place) => t.t_with(
+            key::BELONGINGS_EMACS_READS,
+            &[
+                ("place", &shown_path(place, places, place == emacs::EMACS_D)),
+                ("carried", &carried),
+            ],
+        ),
+        emacs::Reads::Hidden => t.t_with(
+            key::BELONGINGS_EMACS_HIDDEN,
+            &[
+                ("place", &shown_path(emacs::EMACS_D, places, true)),
+                ("carried", &carried),
+            ],
+        ),
+        emacs::Reads::NoFile => t.t_with(
+            key::BELONGINGS_EMACS_NO_FILE,
+            &[
+                ("place", &shown_path(emacs::EMACS, places, true)),
+                ("folder", &shown_path(emacs::EMACS_D, places, true)),
+                ("carried", &carried),
+            ],
+        ),
+        emacs::Reads::Xdg(at) => t.t_with(
+            key::BELONGINGS_EMACS_XDG,
+            &[("place", &shown_folder(&at, places)), ("carried", &carried)],
+        ),
+    };
+    Some(Entry::Note(text, tokens::color::STATE_WARNING))
+}
+
+/// A folder that is not a logical path (Emacs's own, where
+/// `$XDG_CONFIG_HOME` puts it) as the page writes paths: `~/…` under the
+/// home, else whole, ending in `/`.
+fn shown_folder(at: &Path, places: Option<&Places>) -> String {
+    let mut text = match places.map(|p| at.strip_prefix(&p.home)) {
+        Some(Ok(rest)) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(Ok(rest)) => format!("~/{}", rest.display()),
+        _ => at.display().to_string(),
+    };
+    if !text.ends_with('/') {
+        text.push('/');
+    }
+    text
 }
 
 /// Asks `request` of the next sync (`requests.json`, `0600`): one answer per
@@ -6051,6 +6187,177 @@ mod tests {
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 
+    /// FAILS IF: the Emacs configuration's page does not say, in both
+    /// languages, which place Emacs reads here when it is not the one the
+    /// belongings carry — the `~/.emacs.d` that holds nothing of the
+    /// person's, a `~/.emacs` that is a folder —, says it when Emacs reads
+    /// the carried place (a `~/.emacs.d` linked to it) or when the target
+    /// does not travel from this machine, does not draw a package folder as
+    /// one folder row with its reason, or draws an addition made under the
+    /// target's folder as anything but the person's addition, as before the
+    /// target.
+    #[test]
+    fn the_emacs_configuration_says_what_emacs_reads() {
+        let places = scratch("emacs-rows");
+        ready(&places);
+        store_of(&places)
+            .write(&Belongings {
+                extra: vec!["home/.config/emacs/lisp".into()],
+                ..store_of(&places).read()
+            })
+            .expect("prefs");
+        put(&places, "home/.config/emacs/init.el", b"(setq a 1)");
+        put(&places, "home/.config/emacs/lisp/keys.el", b";;");
+        put(&places, "home/.config/emacs/elpa/magit-4.1/magit.el", b";;");
+        put(&places, "home/.emacs.d/init.el", b"(setq b 2)");
+        status(&places, synced(vec![], None));
+        let squeezed = |x: &str| {
+            x.split_whitespace()
+                .filter(|w| *w != "|")
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let page = |language: &str| {
+            let t = texts(language);
+            let r = counted(&places, 1_700_000_500);
+            let rows = View::fresh(&r, &zone(), 100, &t).rows(&r, &zone(), 100, &t);
+            (t, rows)
+        };
+        let reads = |t: &ronoctua_i18n::Texts, place: &str| {
+            squeezed(&t.t_with(
+                key::BELONGINGS_EMACS_READS,
+                &[("place", place), ("carried", "~/.config/emacs/")],
+            ))
+        };
+        let hidden = |t: &ronoctua_i18n::Texts| {
+            squeezed(&t.t_with(
+                key::BELONGINGS_EMACS_HIDDEN,
+                &[("place", "~/.emacs.d/"), ("carried", "~/.config/emacs/")],
+            ))
+        };
+        for language in ["en-GB", "pt-BR"] {
+            let (t, rows) = page(language);
+            let text = drawn(&rows);
+            // A NOTE WRAPS over rows, which `drawn` joins with ` | `.
+            assert!(
+                squeezed(&text).contains(&reads(&t, "~/.emacs.d/")),
+                "{language}: {text}"
+            );
+            let packages = t.t_with(
+                key::BELONGINGS_NEVER_BECAUSE,
+                &[("reason", &t.t("belongings-reason-packages"))],
+            );
+            assert!(text.contains("elpa/"), "{language}: no folder: {text}");
+            assert!(text.contains(&packages), "{language}: {text}");
+            assert!(!text.contains("magit.el"), "{language}: walked: {text}");
+            row_of(&rows, &Target::Kept("home/.config/emacs/lisp".into()));
+            assert!(!text.contains('['), "{language}: a raw key: {text}");
+        }
+        // A `~/.emacs` beats `~/.emacs.d`'s own `init.el`.
+        put(&places, "home/.emacs", b"(custom-set-variables)");
+        let (t, rows) = page("en-GB");
+        assert!(squeezed(&drawn(&rows)).contains(&reads(&t, "~/.emacs")));
+        std::fs::remove_file(places.resolve("home/.emacs").unwrap()).unwrap();
+        // `~/.emacs` A FOLDER: no init file, but Emacs reads `~/.emacs.d`.
+        std::fs::create_dir_all(places.resolve("home/.emacs").unwrap()).unwrap();
+        for language in ["en-GB", "pt-BR"] {
+            let (t, rows) = page(language);
+            let said = squeezed(&t.t_with(
+                key::BELONGINGS_EMACS_NO_FILE,
+                &[
+                    ("place", "~/.emacs/"),
+                    ("folder", "~/.emacs.d/"),
+                    ("carried", "~/.config/emacs/"),
+                ],
+            ));
+            assert!(squeezed(&drawn(&rows)).contains(&said), "{language}");
+        }
+        std::fs::remove_dir_all(places.resolve("home/.emacs").unwrap()).unwrap();
+        // ONLY WHAT EMACS MADE in `~/.emacs.d`: it hides the carried place.
+        std::fs::remove_dir_all(places.resolve("home/.emacs.d").unwrap()).unwrap();
+        put(&places, "home/.emacs.d/eln-cache/30.2-72dc/x.eln", b"elf");
+        put(&places, "home/.emacs.d/auto-save-list/.saves-1-x~", b";;");
+        for language in ["en-GB", "pt-BR"] {
+            let (t, rows) = page(language);
+            let text = squeezed(&drawn(&rows));
+            assert!(text.contains(&hidden(&t)), "{language}: {text}");
+        }
+        // NOT ON THIS MACHINE: the belongings carry nothing of it from here,
+        // and nothing is said.
+        store_of(&places)
+            .write(&Belongings {
+                excluded: vec!["home/.config/emacs".into()],
+                ..store_of(&places).read()
+            })
+            .expect("prefs");
+        let (t, rows) = page("en-GB");
+        assert!(!squeezed(&drawn(&rows)).contains(&hidden(&t)));
+        store_of(&places)
+            .write(&Belongings {
+                excluded: vec![],
+                ..store_of(&places).read()
+            })
+            .expect("prefs");
+        // A LINK TO THE CARRIED PLACE is that place: nothing to say.
+        std::fs::remove_dir_all(places.resolve("home/.emacs.d").unwrap()).unwrap();
+        std::os::unix::fs::symlink(".config/emacs", places.resolve("home/.emacs.d").unwrap())
+            .unwrap();
+        let (t, rows) = page("en-GB");
+        let text = squeezed(&drawn(&rows));
+        assert!(!text.contains(&hidden(&t)), "{text}");
+        assert!(!text.contains(&reads(&t, "~/.emacs.d/")), "{text}");
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a variant of where Emacs reads draws no sentence, a raw key
+    /// or a sentence without its places, in either language — the folder
+    /// `$XDG_CONFIG_HOME` puts Emacs's in, under the home or not, included.
+    #[test]
+    fn every_emacs_sentence_is_drawn_with_its_places() {
+        let places = Places::under(Path::new("/r"));
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            for (reads, places_said) in [
+                (
+                    emacs::Reads::Elsewhere(emacs::EMACS_D),
+                    vec!["~/.emacs.d/", "~/.config/emacs/"],
+                ),
+                (
+                    emacs::Reads::Elsewhere("home/.emacs.el"),
+                    vec!["~/.emacs.el", "~/.config/emacs/"],
+                ),
+                (
+                    emacs::Reads::Hidden,
+                    vec!["~/.emacs.d/", "~/.config/emacs/"],
+                ),
+                (
+                    emacs::Reads::NoFile,
+                    vec!["~/.emacs/", "~/.emacs.d/", "~/.config/emacs/"],
+                ),
+                (
+                    emacs::Reads::Xdg(PathBuf::from("/r/home/xdg/emacs")),
+                    vec!["~/xdg/emacs/", "~/.config/emacs/"],
+                ),
+                (
+                    emacs::Reads::Xdg(PathBuf::from("/emacs")),
+                    vec!["/emacs/", "~/.config/emacs/"],
+                ),
+            ] {
+                let Some(Entry::Note(text, _)) = emacs_said(Some(reads.clone()), Some(&places), &t)
+                else {
+                    panic!("{language}: {reads:?} said nothing");
+                };
+                assert!(
+                    !text.contains('[') && !text.contains("belongings-"),
+                    "{language}: {reads:?}: a raw key: {text}"
+                );
+                for place in places_said {
+                    assert!(text.contains(place), "{language}: {reads:?}: {text}");
+                }
+            }
+        }
+    }
+
     /// FAILS IF: "not on this machine" does not take a target's paths out
     /// here, or does not come back; "not on any machine" acts without a
     /// question, draws "yes" first, or — answered yes — asks nothing of the
@@ -6812,20 +7119,83 @@ mod tests {
         let r = Readings::read(Some(places.clone()), 1_700_000_500);
         let heard = Heard::of(r.scope(), &places);
         let ssh = places.resolve("home/.ssh").unwrap();
-        assert!(heard.trees.contains(&ssh), "{heard:?}");
-        assert!(heard.trees.contains(&places.config), "{heard:?}");
+        let tree = |at: &Path| heard.trees.iter().find(|t| t.at == at);
+        assert!(tree(&ssh).is_some_and(|t| t.declared), "{heard:?}");
+        assert!(
+            tree(&places.config).is_some_and(|t| t.declared),
+            "{heard:?}"
+        );
         assert!(heard.dirs.contains(&places.home), "{heard:?}");
-        // `~/.config/doom/local.el` is not there: `~/.config` is heard.
+        // `~/.config/emacs` is not there: `~/.config` is heard.
         let dot_config = places.resolve("home/.config").unwrap();
         assert!(heard.dirs.contains(&dot_config), "{heard:?}");
         assert!(
             !heard
                 .dirs
                 .iter()
-                .any(|d| heard.trees.iter().any(|t| d.starts_with(t))),
+                .any(|d| heard.trees.iter().any(|t| d.starts_with(&t.at))),
             "a folder inside a tree is heard twice: {heard:?}"
         );
         assert!(heard.dirs.len() <= HEARD_MOST && heard.trees.len() <= HEARD_MOST);
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a folder the Emacs configuration skips (its packages) is
+    /// heard — a write there would cost a count, and a large one every
+    /// watch — while the person's files beside it, and a folder on the way
+    /// to a carried lockfile, are not; or a person's addition comes before
+    /// the table's trees, which hold watches of their own.
+    #[test]
+    fn what_a_target_skips_is_not_heard_and_the_tables_trees_come_first() {
+        let places = scratch("heard-skips");
+        ready(&places);
+        store_of(&places)
+            .write(&Belongings {
+                extra: vec!["home/notes".into()],
+                ..store_of(&places).read()
+            })
+            .expect("prefs");
+        put(&places, "home/notes/a.md", b"# a");
+        put(&places, "home/.config/emacs/init.el", b";;");
+        put(&places, "home/.config/emacs/elpa/magit/magit.el", b";;");
+        put(
+            &places,
+            "home/.config/emacs/straight/versions/default.el",
+            b"()",
+        );
+        put(&places, "home/.config/emacs/straight/repos/x/x.el", b";;");
+        let r = Readings::read(Some(places.clone()), 1_700_000_500);
+        let heard = Heard::of(r.scope(), &places);
+        let at = |logical: &str| places.resolve(logical).unwrap();
+        let tree = |logical: &str| {
+            heard
+                .trees
+                .iter()
+                .find(|t| t.at == at(logical))
+                .unwrap_or_else(|| panic!("{logical} is no tree: {heard:?}"))
+        };
+        let emacs = tree("home/.config/emacs");
+        assert!(emacs.declared, "{emacs:?}");
+        let quiet = unheard(emacs);
+        for (logical, is_unheard) in [
+            ("home/.config/emacs", false),
+            ("home/.config/emacs/init.el", false),
+            ("home/.config/emacs/elpa", true),
+            ("home/.config/emacs/elpa/magit", true),
+            ("home/.config/emacs/straight", false),
+            ("home/.config/emacs/straight/versions", false),
+            ("home/.config/emacs/straight/repos", true),
+            ("home/.config/emacs/history", true),
+        ] {
+            assert_eq!(quiet(&at(logical)), is_unheard, "{logical}");
+        }
+        let notes = tree("home/notes");
+        assert!(!notes.declared);
+        let first_person = heard.trees.iter().position(|t| !t.declared).unwrap();
+        assert!(
+            heard.trees[first_person..].iter().all(|t| !t.declared),
+            "a person's tree before the table's: {heard:?}"
+        );
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 

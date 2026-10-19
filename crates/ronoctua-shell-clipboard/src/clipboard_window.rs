@@ -180,6 +180,32 @@ pub(crate) struct ClipboardWindow {
 }
 
 impl ClipboardWindow {
+    /// The list's hover bands, one per pointer, laid ONLY on a row a click
+    /// takes (`Clip::takes`, which the footer's region asks too) — never on
+    /// the heading, a fact or the air between, where the click takes
+    /// nothing. Its own function, and not two lines of [`Content::paint`],
+    /// so a test can hold it: a frame's canvas needs a GPU.
+    fn hover(
+        &self,
+        ui: &Ui,
+        lit: &[(ronoctua_tokens::Color, Option<usize>)],
+    ) -> Vec<ronoctua_render::quad::Quad> {
+        let takes = self.clip.takes(ui.columns, &ui.texts);
+        crate::chrome::hover_bands(
+            lit.iter().map(|&(colour, row)| {
+                (
+                    colour,
+                    row.filter(|n| takes.get(*n).copied().unwrap_or(false)),
+                )
+            }),
+            ui.offset,
+            ui.room_for_rows(),
+            takes.len(),
+            ui.first_of_list(),
+            ui.room.band_width(),
+        )
+    }
+
     /// What the footer's thread said.
     fn heard(&mut self, ui: &mut Ui, h: Heard) {
         match h {
@@ -270,8 +296,15 @@ impl Content for ClipboardWindow {
 
     /// The rows, and the shown entry's picture or its code in the box the
     /// view left for it — the footer's drawing, by the same functions.
+    ///
+    /// THE POINTER LIGHTS WHAT THE CLICK TAKES: the list is drawn without
+    /// its hover, and the hover is [`ClipboardWindow::hover`]'s.
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
+        let lit = canvas.lit;
+        canvas.lit = &[];
         crate::door::list::paint(self, ui, canvas);
+        canvas.lit = lit;
+        canvas.under.extend(self.hover(ui, lit));
         if !self.clip.heard() {
             return;
         }
@@ -404,6 +437,60 @@ mod tests {
             ui.message.as_deref(),
             Some(ui.texts.t(crate::key::CLIPBOARD_NO_ROOM).as_str())
         );
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — the `History` heading, the air between the sections, a
+    /// fact — or leaves unlit one the click takes. THE LIGHT IS THE CLICK:
+    /// every row is clicked twice, on a window of its own, and is lit
+    /// exactly where something happened. The footer's region has its own
+    /// (`clipboard_region`'s `the_pointer_lights_what_the_click_takes`).
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let entries = ["one", "two", "three"].map(ronoctua_clipboard::Entry::of_text);
+        let sized = |(w, mut ui): (ClipboardWindow, Ui)| {
+            (ui.columns, ui.lines) = (100, 40);
+            (w, ui)
+        };
+        let (w, ui) = sized(a_window(&entries));
+        let rows = w.rows(&ui).len();
+        assert!(
+            ui.room_for_rows() >= rows,
+            "the whole list is not on the page"
+        );
+        let lit: Vec<bool> = (0..rows)
+            .map(|n| {
+                !w.hover(&ui, &[(ronoctua_tokens::color::TEXT_HERE_ACTS, Some(n))])
+                    .is_empty()
+            })
+            .collect();
+        assert!(!lit[0], "the `History` heading lights");
+        assert!(
+            lit.iter().any(|l| *l) && lit.iter().any(|l| !*l),
+            "no row lit, or every row lit: {lit:?}"
+        );
+        let seen = |w: &ClipboardWindow, ui: &Ui| {
+            (
+                w.rows(ui),
+                ui.orders().to_vec(),
+                ui.launches().len(),
+                ui.asking.is_some(),
+                ui.message.clone(),
+            )
+        };
+        for (n, lit) in lit.iter().enumerate() {
+            let (mut w, mut ui) = sized(a_window(&entries));
+            let before = seen(&w, &ui);
+            w.clicked(&mut ui, n);
+            w.clicked(&mut ui, n);
+            let something = seen(&w, &ui) != before;
+            assert_eq!(
+                *lit,
+                something,
+                "row {n} is lit {lit} and a click on it did {}",
+                if something { "something" } else { "nothing" }
+            );
+        }
     }
 
     /// FAILS IF: the window draws a list before the footer sent one, or

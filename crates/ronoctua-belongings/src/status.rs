@@ -34,8 +34,9 @@ pub enum Outcome {
         kept: u32,
         /// How many bytes they weigh.
         kept_bytes: u64,
-        /// The paths the person added that are past the "large" line, with
-        /// their weight — said on the page, never refused.
+        /// The paths the person added, and the targets' paths, that are
+        /// past the "large" line, with their weight — said on the page,
+        /// never refused.
         #[serde(default)]
         large: Vec<(String, u64)>,
         /// Paths that could not be read here, left as they were.

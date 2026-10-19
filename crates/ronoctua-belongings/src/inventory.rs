@@ -164,6 +164,10 @@ pub struct Item {
     pub size_bytes: u64,
     /// Against the last sync.
     pub state: State,
+    /// Whether it is a FOLDER — one the walk did not enter: a folder that
+    /// cannot be listed, or one a target skips. Drawn ending in `/`, like
+    /// every folder of the page.
+    pub folder: bool,
 }
 
 /// The listing of what goes to the repository from this machine, by path —
@@ -203,6 +207,7 @@ impl Present {
     fn met(&mut self, logical: &str, met: Met<'_>) {
         match met {
             Met::Hidden => self.hidden.push(logical.to_owned()),
+            Met::Skipped(_) => {}
             Met::Entry(meta) => {
                 if meta.is_file() || meta.file_type().is_symlink() {
                     self.sealed.insert(logical.to_owned());
@@ -254,6 +259,7 @@ fn deleted(scope: &Scope, here: &Present) -> Vec<Item> {
             } else {
                 State::Deleted
             },
+            folder: false,
         });
     }
     for (path, known) in &base.plain.files {
@@ -275,14 +281,16 @@ fn deleted(scope: &Scope, here: &Present) -> Vec<Item> {
             } else {
                 State::Deleted
             },
+            folder: false,
         });
     }
     out
 }
 
-/// The row of one path the walk met; `None` for what is not a file of the
-/// listing (a socket, a pipe, a link in the plain part) or that nothing
-/// names any more.
+/// The row of one path the walk met — a file, a link, or a folder a target
+/// skips; `None` for what is not a file of the listing (a socket, a pipe,
+/// any other folder, a link in the plain part) or that nothing names any
+/// more.
 fn item_of(
     scope: &Scope,
     access: &Access,
@@ -311,6 +319,20 @@ fn item_of(
                 here: Here::Kept,
                 size_bytes: 0,
                 state: State::Unreadable,
+                folder: true,
+            });
+        }
+        // A FOLDER A TARGET SKIPS (`Scope::meet` goes no further into it):
+        // one row, never kept, and why — never one per file in it.
+        Met::Skipped(why) => {
+            return Some(Item {
+                path: logical.to_owned(),
+                part: Part::Sealed,
+                origin: scope.origin_of(logical)?,
+                here: Here::Never(why),
+                size_bytes: 0,
+                state: State::Synced,
+                folder: true,
             });
         }
         Met::Entry(meta) => meta,
@@ -359,6 +381,7 @@ fn item_of(
             here,
             size_bytes: meta.len(),
             state,
+            folder: false,
         });
     }
     let origin = scope.origin_of(logical)?;
@@ -380,7 +403,7 @@ fn item_of(
     } else {
         match kept::by_default(logical) {
             Verdict::Never(n) if n.hard => Here::Never(n.reason),
-            Verdict::Skipped(_) => Here::Never(kept::SKIPPED_REASON),
+            Verdict::Skipped(_, why) => Here::Never(why),
             _ if kept::excluded_here(logical, scope.prefs()) => Here::NotHere,
             Verdict::Never(n) => Here::Never(n.reason),
             _ => return None,
@@ -432,6 +455,7 @@ fn item_of(
         here,
         size_bytes,
         state,
+        folder: false,
     })
 }
 
@@ -773,7 +797,7 @@ mod tests {
         assert_eq!(config.origin, Origin::Target("ssh"));
         assert_eq!(
             of(&items, "home/.ssh/agent.sock").here,
-            Here::Never(kept::SKIPPED_REASON)
+            Here::Never("socket")
         );
         assert_eq!(
             of(&items, "config/column-player.pid").here,
@@ -783,6 +807,84 @@ mod tests {
         assert_eq!((big.part, big.here), (Part::Plain, Here::Never(TOO_LARGE)));
         let options = of(&items, "state/person/options.json");
         assert_eq!((options.here, options.state), (Here::Kept, State::New));
+        let _ = std::fs::remove_dir_all(p.home.parent().unwrap());
+    }
+
+    /// FAILS IF: the person's Emacs configuration is not listed as going
+    /// sealed with its target, a package folder Emacs made is walked (one
+    /// row per file in it) instead of said once — as a folder, with its own
+    /// reason — a compiled file beside the configuration is listed as going,
+    /// or what is carried out of a skipped folder is not listed as going.
+    #[test]
+    fn a_folder_a_target_skips_is_one_row() {
+        let p = scratch("skipped-folder");
+        write(&p, "home/.config/emacs/init.el", b"(setq x 1)\n");
+        write(&p, "home/.config/emacs/lisp/mine.el", b"(provide 'mine)\n");
+        write(&p, "home/.config/emacs/lisp/mine.elc", b"compiled");
+        for file in ["magit.el", "magit-pkg.el", "magit.elc"] {
+            write(
+                &p,
+                &format!("home/.config/emacs/elpa/magit-4.1/{file}"),
+                b";;",
+            );
+        }
+        write(&p, "home/.config/emacs/eln-cache/30.2-1a/magit.eln", b"elf");
+        write(
+            &p,
+            "home/.config/emacs/transient/values.el",
+            b"((magit-log))",
+        );
+        write(&p, "home/.config/emacs/transient/history.el", b"()");
+        write(&p, "home/.config/emacs/straight/versions/default.el", b"()");
+        write(&p, "home/.config/emacs/straight/repos/x/x.el", b";;");
+        let scope = Scope::of(&Belongings::default(), None, &Requests::default());
+        let items = inventory(&scope, &p);
+        for kept in [
+            "home/.config/emacs/init.el",
+            "home/.config/emacs/lisp/mine.el",
+            "home/.config/emacs/transient/values.el",
+            "home/.config/emacs/straight/versions/default.el",
+        ] {
+            let item = of(&items, kept);
+            assert_eq!(
+                (item.part, item.here, item.state, &item.origin, item.folder),
+                (
+                    Part::Sealed,
+                    Here::Kept,
+                    State::New,
+                    &Origin::Target("emacs"),
+                    false
+                ),
+                "{kept}"
+            );
+        }
+        for (never, why, folder) in [
+            ("home/.config/emacs/elpa", "packages", true),
+            ("home/.config/emacs/eln-cache", "compiled", true),
+            ("home/.config/emacs/straight/repos", "packages", true),
+            ("home/.config/emacs/lisp/mine.elc", "compiled", false),
+            (
+                "home/.config/emacs/transient/history.el",
+                "editor-state",
+                false,
+            ),
+        ] {
+            let item = of(&items, never);
+            assert_eq!(
+                (item.here, item.folder),
+                (Here::Never(why), folder),
+                "{never}"
+            );
+            assert_eq!(item.origin, Origin::Target("emacs"), "{never}");
+        }
+        let inside: Vec<&str> = items
+            .iter()
+            .map(|i| i.path.as_str())
+            .filter(|path| {
+                path.contains("/elpa/") || path.contains("/eln-cache/") || path.contains("/repos/")
+            })
+            .collect();
+        assert!(inside.is_empty(), "a skipped folder was walked: {inside:?}");
         let _ = std::fs::remove_dir_all(p.home.parent().unwrap());
     }
 

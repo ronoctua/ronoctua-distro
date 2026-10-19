@@ -147,7 +147,7 @@ fn carry(
         Err(e) => return Ending::Failed(format!("could not run {program}: {e}")),
     };
     let pid = child.id();
-    shared.touch(id, |j| j.stage = Stage::Running);
+    shared.under_way(id, |_| {});
 
     // THE READERS ON THREADS, so the switch stays answerable while a line is
     // awaited — the software engine's shape.

@@ -35,6 +35,8 @@
 //! so a polygon must be filled EVEN-ODD or the Caspian becomes land — and that
 //! rule already has one home, in `ronoctua-atlas`.
 
+use std::ops::ControlFlow;
+
 use crate::Trouble;
 
 /// The two shapes this reader knows.
@@ -58,11 +60,19 @@ pub enum Shape {
 /// shapes of the same data in memory at once. `shapes` below is this function
 /// collected, for a test that wants to look at four records.
 ///
+/// `take` answers whether the walk goes on: a [`ControlFlow::Break`] ends it
+/// at once, which is how the baking gives up between two records instead of
+/// parsing the rest of a country for nobody.
+///
 /// # Errors
 ///
 /// [`Trouble::Malformed`] when the file code is not 9994, a record header
-/// reaches past the end, or a record claims more points than the bytes hold.
-pub fn each(bytes: &[u8], mut take: impl FnMut(usize, Shape)) -> Result<usize, Trouble> {
+/// reaches past the end, or a record claims more points than the bytes hold;
+/// [`Trouble::GivenUp`] when `take` broke the walk.
+pub fn each(
+    bytes: &[u8],
+    mut take: impl FnMut(usize, Shape) -> ControlFlow<()>,
+) -> Result<usize, Trouble> {
     if bytes.len() < 100 || be_u32(bytes, 0) != 9994 {
         return Err(Trouble::Malformed);
     }
@@ -77,7 +87,9 @@ pub fn each(bytes: &[u8], mut take: impl FnMut(usize, Shape)) -> Result<usize, T
         if to > bytes.len() {
             return Err(Trouble::Malformed);
         }
-        take(n, one(&bytes[from..to])?);
+        if take(n, one(&bytes[from..to])?).is_break() {
+            return Err(Trouble::GivenUp);
+        }
         n += 1;
         at = to;
     }
@@ -91,7 +103,10 @@ pub fn each(bytes: &[u8], mut take: impl FnMut(usize, Shape)) -> Result<usize, T
 /// What [`each`] answers.
 pub fn shapes(bytes: &[u8]) -> Result<Vec<Shape>, Trouble> {
     let mut out = Vec::new();
-    each(bytes, |_, s| out.push(s))?;
+    each(bytes, |_, s| {
+        out.push(s);
+        ControlFlow::Continue(())
+    })?;
     Ok(out)
 }
 

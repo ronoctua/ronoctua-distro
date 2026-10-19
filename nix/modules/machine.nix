@@ -18,8 +18,9 @@
 let
   machine = import ../machine.nix;
   cfg = config.ronoctua.machine;
-  # HOW MANY BUILDS FIT, and the plan of the heavy units (`nix/build-sizing.nix`):
-  # the same arithmetic the batteries build by.
+  # HOW MANY BUILDS FIT, and the plan of the units, each by its measured
+  # class (`nix/build-sizing.nix`): the same arithmetic the batteries build
+  # by.
   sizing = pkgs.callPackage ../build-sizing.nix { };
   # What roots a build's units: over the machine's own Nix, whose store it is.
   keepUnits = pkgs.callPackage ../keep-units.nix { nix = config.nix.package; };
@@ -176,11 +177,13 @@ in
         # Nix is the one that filled this store.
         RONOCTUA_NIX = "${config.nix.package}/bin/nix";
         RONOCTUA_BOOTCTL = "${config.systemd.package}/bin/bootctl";
-        # HOW MANY BUILDS FIT HERE, and what roots a build's units.
+        # HOW MANY BUILDS FIT HERE, what builds the units, each by its
+        # class, and what roots a build's units.
         RONOCTUA_BUILD_SIZING = "${sizing.program}/bin/ronoctua-build-sizing";
+        RONOCTUA_BUILD_UNITS = "${sizing.unitsProgram}/bin/ronoctua-build-units";
         RONOCTUA_KEEP_UNITS = "${keepUnits}/bin/ronoctua-keep-units";
       };
-      defaultText = "the machine directory, its attribute, the state and run folders, the menu's limit, the template, nix, bootctl, the build sizing and what keeps a build's units";
+      defaultText = "the machine directory, its attribute, the state and run folders, the menu's limit, the template, nix, bootctl, the build sizing, what builds the units and what keeps them";
       description = ''
         What `ronoctua-machine` is told, by every unit that runs it and by
         its wrapper: one table, so the rescue's rebuild, the update and the
@@ -188,18 +191,19 @@ in
       '';
     };
 
-    # HOW THE SYSTEM IS BUILT (`ronoctua-machine apply`, `crate::build`): the
-    # heavy units first and alone, and the compiled units kept after a build
-    # that worked. The flake sets the two inputs next to the import of this
-    # module, from the same `rust` the system is built from.
-    heavyUnits = lib.mkOption {
-      type = lib.types.attrsOf lib.types.package;
+    # HOW THE SYSTEM IS BUILT (`ronoctua-machine apply`, `crate::build`): its
+    # units first, each by its class, and the compiled units kept after a
+    # build that worked. The flake sets the two inputs next to the import of
+    # this module, from the same `rust` the system is built from.
+    units = lib.mkOption {
+      type = lib.types.attrs;
       default = { };
       internal = true;
       description = ''
-        The release units whose own compiler peaks past the slot every other
-        compilation is sized by (`rust.heavyUnits` of the release graph): an
-        apply builds each one alone, after what it is built from.
+        The release units the system is built from, as data
+        (`rust.unitIndex` of the release graph: `kind`, `drv` and `deps` by
+        id): their plan (`unitPlan`, each with its class as measured) is
+        what an apply builds, unit by unit, before the system.
       '';
     };
 
@@ -221,32 +225,29 @@ in
       type = lib.types.attrs;
       readOnly = true;
       internal = true;
-      default =
-        let
-          plan = sizing.heavyPlan cfg.heavyUnits;
-          drv = d: builtins.unsafeDiscardStringContext d.drvPath;
-        in
-        {
-          # `ronoctua_machine::build::PHASES_FORMAT`.
-          format = 1;
-          first = map drv plan.first;
-          heavy = map (step: {
-            inherit (step) name;
-            drv = drv step.unit;
-            between = map drv step.between;
-          }) plan.steps;
-          system = drv config.system.build.toplevel;
-          kept = cfg.keptUnits;
-        };
-      defaultText = "the heavy units' plan, the system's derivation and the units to keep";
+      default = {
+        # `ronoctua_machine::build::PHASES_FORMAT`.
+        format = 3;
+        # One line a unit: its id, its class, how the class was found, its
+        # COST — the slot in MiB, or `alone` with a heavy unit's numbers —,
+        # its `.drv` and the lines it is built from: what
+        # `ronoctua-build-units` reads. The cost is in the line because the
+        # program that reads it is the RUNNING system's, and this plan the
+        # new distro's: a class table in the program would be the old one.
+        units = (sizing.unitPlan { inherit (cfg) units; }).lines;
+        system = builtins.unsafeDiscardStringContext config.system.build.toplevel.drvPath;
+        kept = cfg.keptUnits;
+      };
+      defaultText = "the plan of the units, the system's derivation and the units to keep";
       description = ''
         What `ronoctua-machine apply` evaluates, once, before it builds: the
-        derivations of each phase (`nix eval --json`, which writes them) and
-        the units to keep. Of each phase it builds only what Nix's own plan
-        for the system lists (a dry run): a unit whose consumer the store
-        already holds, the seed's or the person's cache's, is in a phase and
-        never built. Read by the apply and nothing else; no part of the
-        system refers to it.
+        plan of the units, each with its class, its cost and the `.drv` the
+        evaluation writes (`nix eval --json`), the system's and the units to
+        keep. Of the plan it builds only what Nix's own plan for the system
+        lists (a dry run): a unit whose consumer the store already holds,
+        the seed's or the person's cache's, is in the plan and never built.
+        Read by the apply and nothing else; no part of the system refers to
+        it.
       '';
     };
 

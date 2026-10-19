@@ -230,12 +230,12 @@ in
     # THE UPDATE MOVES WHAT THE MACHINE CAN MOVE.
     #
     # The update's `steps.nix` declares the steps; which of them apply is decided by
-    # the module that knows the support is there — the shape
-    # `nix/modules/emacs.nix` has for `doom-sync`. A step for a source this
-    # machine does not have would only ever be skipped, and a skipped line on
-    # every run teaches people to stop reading the list. `android-images` is
-    # not here: it rewrites the system image as root, and it ships off
-    # everywhere until a machine's own configuration turns it on.
+    # the module that knows the support is there — the shape `nix/modules/cli.nix`
+    # has for `tldr-cache`. A step for a source this machine does not have
+    # would only ever be skipped, and a skipped line on every run teaches
+    # people to stop reading the list. `android-images` is not here: it
+    # rewrites the system image as root, and it ships off everywhere until a
+    # machine's own configuration turns it on.
     #
     # `mkDefault`, so a machine that wants otherwise says so in one line.
     ronoctua.update.steps = {

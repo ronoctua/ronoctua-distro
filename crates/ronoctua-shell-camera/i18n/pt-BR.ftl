@@ -130,6 +130,7 @@ studio-sound-microphone = Microfone
 studio-sound-desktop = O som da máquina
 camera-heading-cameras = Câmeras
 camera-about-cameras = Toda câmera que esta máquina vê, com os modos e os controles que o driver dela declara. O que muda aqui fica guardado para aquela câmera e volta a cada vez que ela é conectada.
+camera-reading = Lendo as câmeras…
 camera-default = A câmera que o app abre
 camera-default-first = a primeira câmera colorida
 camera-infrared = infravermelho

@@ -531,12 +531,7 @@ impl Virtual {
     /// Opens our loopback node, if the module is loaded.
     pub fn start(prefs: &Preferences) -> Result<Self, crate::wire::Trouble> {
         use crate::wire::Trouble;
-        let node = ronoctua_camera::scan()
-            .into_iter()
-            .find(|c| c.kind == ronoctua_camera::Kind::Virtual)
-            .map(|c| c.node)
-            .or_else(find_loopback)
-            .ok_or(Trouble::NoVirtual)?;
+        let node = find_loopback().ok_or(Trouble::NoVirtual)?;
         let ffmpeg =
             std::env::var(ronoctua_camera::capture::FFMPEG).map_err(|_| Trouble::NoFfmpeg)?;
         let (w, h) = prefs.size();
@@ -568,8 +563,13 @@ impl Virtual {
     }
 }
 
-/// A loopback node that is not listed as a capture device yet — with
-/// `exclusive_caps=1` our node advertises OUTPUT until a writer opens it.
+/// Our loopback node, by its label in sysfs — which is also the one way to
+/// find it while it is not a capture device yet: with `exclusive_caps=1` it
+/// advertises OUTPUT until a writer opens it.
+///
+/// NEVER BY READING THE CAMERAS (`ronoctua_camera::scan`), which opens every
+/// node: the virtual camera turned on — at the studio's start, when the
+/// person asked for that — blinked the light of every real camera.
 fn find_loopback() -> Option<PathBuf> {
     let dir = std::fs::read_dir(ronoctua_camera::SYS).ok()?;
     for e in dir.flatten() {

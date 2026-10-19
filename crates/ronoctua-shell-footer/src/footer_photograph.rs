@@ -113,10 +113,12 @@ Steps — walked in the order they appear:
   --sudo-lit <control>  the bar's control under a pointer: answer,
                         use-password or cancel
 
-Three views read the scene a variable names, in their window camera's shape,
+Four views read the scene a variable names, in their window camera's shape,
 never this machine's: RONOCTUA_PHOTOGRAPH_INCUS_SCENE (`--door incus
---scene`), RONOCTUA_PHOTOGRAPH_SECURITY_SCENE (`--door security --state`) and
-RONOCTUA_PHOTOGRAPH_STICK_SCENE (`--door stick --scene`).";
+--scene`), RONOCTUA_PHOTOGRAPH_SECURITY_SCENE (`--door security --state`),
+RONOCTUA_PHOTOGRAPH_STICK_SCENE (`--door stick --scene`) and
+RONOCTUA_PHOTOGRAPH_CAMERA_SCENE (`--door camera-settings --scene`: the
+cameras its reading finds).";
 
 /// The PID the window in focus is said to have: the kernel's default
 /// `pid_max`, which no process can have — so nothing under `/proc` answers

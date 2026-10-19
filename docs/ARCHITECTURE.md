@@ -32,6 +32,7 @@ um compromisso: nada aqui precisa se parecer com nenhum outro programa.
 | Fontes | assets de um Release, quatro inputs fixados por hash | dentro do repositório |
 | Janelas | uma `Door<C>` genérica com padrões sobrescrevíveis | uma macro por janela; um trait de janela com toda a encanação |
 | Build Rust | o cargo planeja (`plan.json`), o Nix constrói uma derivation por unidade, os terceiros inclusive | o workspace inteiro numa derivation do crane; crate2nix/`buildRustCrate`; cache entre máquinas |
+| Memória do build | cada unidade começa pela fatia da sua classe medida (`nix/rust/unit-classes.json`), um `nix build` por unidade | uma fatia só, o pico do pior compilador; ondas de uma classe cada |
 | Shell | um crate por funcionalidade, o rodapé num crate, um binário fino que compõe | um crate só, de quase 200 mil linhas |
 | Valores | frases, paletas e o catálogo do brain lidos em tempo de execução; só os NOMES compilam | tabelas compiladas em todo crate que fala ou pinta |
 
@@ -504,7 +505,7 @@ dela existir. Ao terminar, cada bateria **diz o que não verificou, com os nomes
 um segura o que os nós declaram (`virtualisation.memorySize`, de 1 a 4 GiB por teste) enquanto o
 roteiro roda, e quatro lado a lado são de 8 a 16 GiB numa máquina de 14. Uma rodada passava quando
 os pequenos coincidiam e outra morria no meio das VMs. Por isso as VMs viraram uma fase própria, em
-quatro passos: o build Rust (as unidades pesadas sozinhas, depois do que elas precisam); **o que as
+quatro passos: o build Rust (cada unidade pela fatia da sua classe, as pesadas sozinhas); **o que as
 VMs bootam** (o `driver` de cada teste, que é o sistema dele), dimensionado como compilação; **as
 VMs**, empacotadas pela memória declarada mais 256 MiB de QEMU por nó e 128 MiB de driver por teste,
 e pelos núcleos que declaram; e o resto. Cada VM roda como `nix build <o .drv dela>` com tudo já no
@@ -522,9 +523,9 @@ todo compilador fosse igual. A unidade pesada se paga uma vez, e cada núcleo a 
 mediu ao lado dela: com o shell num crate só, o harness de teste dele mediu 4350 MiB a um núcleo e o
 programa de release 228 MiB por núcleo a mais, e o `nix/build-sizing.nix` usa 4864 e 320 MiB, com
 margem (`shellMiB`, `besideMiB`). Antes das unidades eram workspaces do crane — o shell sob
-`release`, uma unidade de código só com LTO fino, mediu 5120 MiB sozinho. Hoje as pesadas são as que
-o `rust.heavyUnits` nomeia pela medida (o programa de release do shell e as bibliotecas de release e
-de loop do rodapé), e o `.#rust-peaks` falha quando uma unidade acima da fatia não está na lista.
+`release`, uma unidade de código só com LTO fino, mediu 5120 MiB sozinho. Hoje pesada é a classe
+medida de uma unidade (`nix/rust/unit-classes.json`: o programa de release do shell e a biblioteca de
+release do rodapé), e o `.#rust-peaks` falha quando uma unidade passou da fatia da classe dela.
 
 **E avaliar também não é de graça.** Um teste de VM é um sistema NixOS, e avaliá-lo segura ~260 MiB
 até o avaliador sair. O `nix build` da bateria avaliava as 31 VMs num processo só — 8,2 GiB de RSS,
@@ -4602,8 +4603,8 @@ mão e a tela, nos dois sentidos. Medir isso exige a distro instalada, que é o 
 
 `buffers/editor` existia por uma razão só, e ela estava escrita na primeira linha dele: *"isto existe
 para que `LEADER f f` pare de prometer algo que não acontece"*. A mesma docstring dizia *"não é o
-Emacs e não tenta ser"* — e o editor deste sistema É o Doom Emacs, com módulo próprio, daemon e
-`doom sync`. Ninguém pediu um segundo.
+Emacs e não tenta ser"* — e o editor deste sistema É o Emacs, com módulo próprio e daemon. Ninguém
+pediu um segundo.
 
 Com `f f` abrindo o gerenciador, a razão acabou. Saíram: o componente wasm, `RONOCTUA_BUFFER_EDITOR`,
 o comando `file-open` e o seu bind, o seletor de arquivo do localizador, e as chaves de texto de
@@ -4626,6 +4627,34 @@ estar ausente"* — que é exatamente a forma de um interruptor que não interro
 do superpacote de ícones, com a mesma saída: quem põe a variável é o `nix/modules/emacs.nix`, dentro
 do próprio `mkIf`, e o `nix/dev.nix` para o laço aninhado. Quem perguntou foi o
 `profile-minimal-closes`, no gate — e a resposta veio do `nix why-depends`, não de leitura de código.
+
+#### O Emacs é o puro, e a configuração é da pessoa
+
+Decisão do dono (2026-10-19): a distro não instala o Doom e não escreve configuração nenhuma do
+Emacs. O `nix/modules/emacs.nix` traz o pacote (`emacs30`), o daemon (`services.emacs`, unidade de
+usuário: o `e`, o `$EDITOR` e o gerenciador de arquivos abrem com `emacsclient` num processo que já
+carregou tudo), o `RONOCTUA_EMACSCLIENT` e o interruptor — e só. Nenhum `init.el` ou `default.el`,
+nenhum arquivo em `~/.config/emacs` ou `~/.emacs.d`, nada em `/etc` que o Emacs leia; no máximo a
+pasta VAZIA `~/.config/emacs`, que a unidade do daemon cria antes do Emacs numa casa sem nenhum dos
+lugares dele, para que a primeira configuração da pessoa nasça no lugar que os pertences levam (o
+porquê, medido, na seção dos alvos dos pertences). O `site-start.el` que vem no pacote é o do
+nixpkgs (os caminhos dos perfis Nix e da compilação nativa, o `PATH` remoto do `tramp`): é como o
+pacote acha o que está instalado, e não escolhe nada pela pessoa.
+
+Uma configuração da distro ou briga com a da pessoa ou é sobrescrita por ela. E o Doom era a única
+coisa do sistema que buscava código fora do flake (clonar o framework, `doom sync`), com um passo
+próprio na atualização. Saíram com ele os arquivos (`assets/doom/`), o `local.el` semeado na
+ativação, o `ronoctua-doom-sync`, as ferramentas que o `doom doctor` pedia e o passo `doom-sync`. O
+editor também não traz ferramenta nenhuma: o que uma configuração quer ao lado (o `pandoc`, um
+corretor, um servidor de linguagem) a pessoa declara como qualquer programa. A configuração dela
+viaja nos pertences, no alvo `emacs` (na seção dos alvos pré-definidos), e é dali que uma máquina
+nova a recebe.
+
+Tirar um passo da atualização não passa por livro-razão: o id vive na tabela (`steps.nix`), no
+`updates.conf` gerado e nos interruptores que a pessoa virou no `brain.json`. O id que sobrar no
+`brain.json` não casa com passo nenhum e não faz nada; uma linha `ronoctua.update.steps.doom-sync`
+no `host.nix` de uma máquina passa a recusar a avaliação, como todo id que não existe — de propósito:
+um erro de digitação que não ligasse nada seria pior. Nenhuma versão foi publicada com o passo.
 
 #### Uma pergunta vaga e duas respostas em chave crua
 
@@ -4843,6 +4872,44 @@ errada", que é o mesmo problema com um número menor.
 **Pausar não é parar.** O interruptor tem três estados e dois deles encerram a operação se
 `allowed` for escrito com um `if` só — o teste `pausing_holds_and_resuming_finishes` é o que separa
 os dois, e ele solta a pausa de OUTRA thread, que é o arranjo que a fila tem de verdade.
+
+#### Quem escreve "segurado" é o razão, e o interruptor decide
+
+Uma linha que diz `Paused` sobre um interruptor que manda andar — ou `Running` sobre um que segura —
+mente sobre a única coisa em que a pessoa pode agir, e eram dois escritores que a diziam: o socket
+punha o interruptor em pausa e escrevia `Paused`, e a thread da cópia, ao fim da pesagem, escrevia
+`Running` sem olhar. A pausa que chegava durante a pesagem sumia: a cópia ficava parada e a linha
+dizia que ela corria. Era isso, e não a máquina carregada, o `expected Paused and saw Some(Running)`
+do `pausing_holds_and_cancelling_takes_the_piece_back`.
+
+Agora as duas escritas que dizem "andando ou segurado" moram no razão (`ledger.rs`) e leem o
+interruptor sob o MESMO lock. `Shared::pause` e `Shared::resume` põem o interruptor e a linha juntos
+(e só para um motor que segura); o motor, na passagem de uma etapa a outra — a pesagem para os
+bytes, o pedido ao aria2 para o download, o filho iniciado —, diz só que está `under_way`, e o
+interruptor decide a palavra. Quem escrever por último, a linha diz o que o interruptor diz. Retomar
+devolve a etapa em que o trabalho estava: `Weighing` até o motor ter passado adiante, porque uma
+cópia solta no meio da pesagem ainda pesa.
+
+Os motores que seguram um filho (aria2, yt-dlp) não escrevem mais a etapa depois de agir no
+interruptor: escreviam o que ele dizia uma volta antes. Uma retomada que chegasse enquanto o aria2
+era pedido a pausar tinha o seu `Running` coberto por `Paused`, e a linha dizia segurada sobre um
+interruptor que mandava andar até a volta seguinte do laço (300 ms) despausar o aria2 e escrever
+`Running` — uma mentira de uma volta, e não uma que ficasse, mas sobre a tecla que a pessoa acabara
+de apertar. O torrent lê o interruptor sob o lock, e o `paused` da sessão só vale quando a pausa não
+é nossa (a fila da própria sessão), porque as linhas dela foram lidas antes de o interruptor ser
+obedecido. As ruas (`atlas.rs`) seguram entre as duas metades, o download e o assar, e o assar
+segura também: o `bake::pack` pergunta ao `go_on` antes de inflar cada camada, entre um registro e o
+seguinte e antes de escrever, e o `go_on` é o interruptor — espera enquanto a fila segura e diz não
+quando ela desiste. Era uma chamada só, e uma pausa durante ela desenhava uma linha segurada sobre
+um assar que corria até o `Done`. O pedaço mais longo que sobrou é inflar uma camada (uma chamada do
+`ronoctua_zip`): segundos nas maiores regiões. Uma desistência no meio não escreve pacote nenhum, e
+o download sai do disco em todo fim, não só no bom.
+
+Os testes disso não esperam tempo nenhum: `local::run_marked` conta ao teste onde a thread chegou
+(`Mark::Weighed`, `Mark::Bitten`) e espera enquanto ele age, o `bake` das ruas faz o mesmo a cada
+pergunta do assar, e `Shared::until` espera no sino do razão. A janela que se perdia tem
+microssegundos, e um teste que espera um tempo chutado por ela passa numa máquina rápida e falha
+numa carregada.
 
 #### O cursor do painel é um ID, nunca uma linha
 
@@ -7804,6 +7871,13 @@ do ClipCascade e as ações à direita. É o **quinto** modo da mesma superfíci
 do `M-x`, do manual e do histórico de notificações: nenhuma janela nova, nenhum popup
 (invariante 14).
 
+**O ponteiro parado acende só a linha que o clique pega** (`Clip::takes`): uma entrada, uma linha da
+sincronização — nunca o título `History`, um fato ou o ar entre as seções, onde o clique não faz
+nada. Uma resposta só para as duas portas e para o clique: a região dizia "o histórico chegou" em
+toda linha (`Row::takes`), e a janela acendia qualquer linha sob o ponteiro. E no rodapé a marca é
+só a faixa, como na janela (`Lights::Nothing`): o acento é o cursor desta vista, e o campo aceso nele
+sob o ponteiro parecia um segundo cursor — no título também.
+
 #### O protocolo é `zwlr_data_control`, e não `wl_data_device`
 
 A primeira versão usou o `wl_data_device` do SCTK. Ela **compilou, não deu erro, e nunca viu uma
@@ -8174,6 +8248,34 @@ a INTERFACE USB, porque cor e IR de uma mesma webcam têm `card` e `bus` iguais.
 dispositivo enumera (pelo menos 24 quadros por segundo se algum modo chega lá, a maior área até
 1080p, comprimido antes de cru no mesmo tamanho), e o
 `camera-vm` prova tudo contra uma "webcam" que é um loopback alimentado por `testsrc`.
+
+**Nenhuma câmera abre antes de um gesto.** Ler a lista (`ronoctua_camera::scan`) ABRE cada
+`/dev/videoN` para o `QUERYCAP`, os formatos e os controles, e abrir um nó UVC liga a câmera: a luz
+pisca. O rodapé e o estúdio liam a lista ao subir, então a luz piscava duas vezes a cada `.#dev`, sem
+ninguém ter pedido câmera — o dono trata isso como defeito de privacidade. Agora a lista só é lida por
+quem a mostra ou a usa: os ajustes, nas duas portas, levantam o vigia (`camera_settings::CameraWatch`)
+quando a vista aparece e o largam quando ela sai; o estúdio o mantém só enquanto uma câmera está em uso
+(uma fonte de câmera aberta, ou o app mostrando a prévia), e um gesto sobre câmera sem nenhuma em uso
+(a próxima câmera, o espelho) lê uma vez, fora da trava, e não guarda nada; a câmera virtual acha o nó
+dela pelo rótulo no sysfs, sem ler as câmeras. Ler do sysfs em vez de abrir não serve à lista: a
+identidade é o `card` e o `bus` do `QUERYCAP` (o `name` do sysfs nem sempre é o `card`, e o `bus` é
+de cada driver), e o tipo sai dos formatos — trocar a fonte trocaria as chaves do `camera.json`. E o
+vigia não fica pela sessão, como fica a linha do Atuin depois do primeiro pedido: cada mudança de
+permissão de um nó (o `ATTRIB` que o logind causa) e cada conexão leriam todas as câmeras de novo, de
+novo sem ninguém pedir. Por isso o vigia termina com o `Handle` (um cano cujo fechamento acorda a
+thread), e uma leitura que estava no meio quando ele caiu não é contada a ninguém. Enquanto a primeira
+leitura não chega, a seção diz que está lendo (`camera-reading`), nunca "nenhuma câmera"; quando
+ela chega, um cursor que ninguém moveu vai para onde a vista abre sobre as câmeras (a câmera que o
+app abre), e a página o segue (`View::reread`, nas duas portas) — ficar onde estava, no "Efeito",
+punha o cursor abaixo da página, atrás dos controles da câmera. Um gesto sobre câmera sem nenhuma em
+uso é respondido ANTES da leitura: quem pergunta espera no laço dele e desiste em dois segundos
+dizendo que o estúdio não roda, e esses pedidos não recusam nada (`Ask::reads_the_cameras`). E a
+leitura curta do próprio shell (a região, a janela, um controle escrito) não é alguém usando a
+câmera: o vigia do `/proc` deixa de fora, para o evento e para a marca, o processo com o nome do
+executável do shell — pelo nome dele, nunca pela linhagem, porque o que o shell lança continua sendo
+alguém (`events::holders_of`). O `camera-vm` vigia `IN_OPEN` nos dois nós enquanto o estúdio e um
+rodapé sobem e não vê nada até os ajustes abrirem. Fica de fora o que não é nosso: o `v4l_id` do udev
+abre o nó quando ele é conectado.
 
 ## 7. Memória, disco, boot e instalação
 
@@ -11479,8 +11581,8 @@ Quatro defeitos impediriam a feature de funcionar, e todos eram do lançador:
    `flatpak run` das exportações não abriam, e todo passo `binary` da atualização era pulado. As
    unidades `ronoctua-footer`, `ronoctua-update`, `ronoctua-update-rehearsal` e
    `ronoctua-transfers` têm `enableDefaultPath = false` e herdam o `PATH` da sessão, que o NixOS
-   gera de `environment.profiles`. Consequência aceita pelo dono: passos `binary` ligados, como o
-   `doom-sync`, passam a rodar de verdade.
+   gera de `environment.profiles`. Consequência aceita pelo dono: passos `binary` ligados (os
+   gerenciadores de linguagem) passam a rodar de verdade.
 
 O nome na modeline de um web app vem do `Name` do `.desktop` que declara aquele `StartupWMClass`
 (sem isso apareceria `com__-Default`).
@@ -15043,8 +15145,8 @@ do `PATH` não quebra nada. Também não é entrada:
 - o equipamento de uma função da distro, que entra e sai com ela: os formatos atrás do `extract`
   (`archives.nix`), o `sops` e o `age` dos segredos, os transportes do Tor, o `podman-compose` dos
   containers, o `virt-viewer` do console VGA do Incus;
-- o que só existe para um programa da pessoa: os plugins do zsh andam com o zsh, as ferramentas do
-  Doom com o Emacs (`extraPackages`), o GStreamer fica com o grupo de mídia.
+- o que só existe para um programa da pessoa: os plugins do zsh andam com o zsh (`extraPackages`), o
+  GStreamer fica com o grupo de mídia.
 
 Nenhum check cobra hoje a regra para uma ferramenta de terminal nova (o `distro-apps-are-registered`
 vê lançadores, não `bin/`): ela vale pela revisão. Os toolchains são uma entrada por linguagem (e
@@ -15067,7 +15169,7 @@ tenha frase, que nenhuma frase sobre e que cada motivo seja dado por algum progr
 
 **Dois programas são interruptores, e a recusa os desliga.** O Chrome e o Emacs não são só pacotes:
 o quiosque, o host de native messaging, a extensão e o diretório de estado leem
-`ronoctua.browser.enable`; o daemon, os arquivos do Doom e o passo `doom-sync` da atualização leem
+`ronoctua.browser.enable`; o daemon e o caminho do `emacsclient` do gerenciador de arquivos leem
 `ronoctua.editor.emacs`. Tirar só o pacote deixaria tudo isso apontando para nada. Então a
 declaração do interruptor leva um `apply` que o desliga quando o id está em
 `ronoctua.distroApps.honoured`, e todo leitor segue. É `apply`, e não uma definição com prioridade,
@@ -15111,7 +15213,7 @@ CARREGA o programa (o `when`, como o `reports::DistroApp` o congelou) e `decline
 pessoa o recusou aqui: com os dois, a central distingue o programa que o perfil não tem do que a
 pessoa só recusou, e sabe que desfazer a recusa do segundo o traz de volta. Instalado é o primeiro
 sem o segundo honrado. "Ainda presente" é medido na lista de que o `system.path` é feito, e só pelo
-pacote principal da entrada: os companheiros são divididos (o `ripgrep` é do Emacs e da base), e
+pacote principal da entrada: um companheiro pode ser também de outra entrada ou da base, e
 achar um deles não é achar o programa. A recusa é lida por um leitor só: o
 `ronoctua.person.declinedHere` do módulo da pessoa, quando existe; até lá, uma cópia do mesmo filtro
 (uma linha de forma desconhecida fica de fora, nunca para a avaliação).
@@ -16152,11 +16254,12 @@ chave nenhuma, e uma máquina nova começava sem o `~/.ssh`, sem o GnuPG e sem a
 registradas. O dono reverteu isso (2026-10-05): uma tabela de ALVOS (`targets` em
 `assets/belongings.nix`) diz o que vai selado para toda máquina por padrão — `ssh` (`~/.ssh`), `git`
 (`~/.gitconfig`, `~/.config/git`, `~/.config/Yubico/u2f_keys`), `gnupg` (`~/.gnupg`), `shell`
-(`~/.shellrc.local`) e `doom` (`~/.config/doom/local.el`). A chave de implantação dos pertences
-continua fora sob qualquer nome: o `crate::sift` a reconhece por dispositivo, inode e conteúdo, então
-"o `~/.ssh` menos a chave de deploy" vale até para um link duro dela. Como agora uma senha fraca abre
-as chaves de SSH, o chaveiro do GnuPG e as chaves de segurança da pessoa, a força dela pesa mais: a
-frase `belongings-targets-note` diz isso, e a vista dos pertences a desenha junto da senha.
+(`~/.shellrc.local`) e `emacs` (`~/.config/emacs`). A chave de implantação dos pertences continua
+fora sob qualquer nome: o `crate::sift` a reconhece por
+dispositivo, inode e conteúdo, então "o `~/.ssh` menos a chave de deploy" vale até para um link duro
+dela. Como agora uma senha fraca abre as chaves de SSH, o chaveiro do GnuPG e as chaves de segurança
+da pessoa, a força dela pesa mais: a frase `belongings-targets-note` diz isso, e a vista dos pertences
+a desenha junto da senha.
 
 **Um caminho, um veredito.** Um alvo é o seu próprio veredito (`Verdict::Target`), depois do `never`
 por caminho e da parte em claro e antes das árvores; o gerador recusa um alvo sobre outro alvo, sobre
@@ -16165,7 +16268,121 @@ e o `belongings-targets-avoid-home-manager` recusa um alvo sobre um arquivo que 
 esse é um link para o store que o sistema refaz, e voltaria pendurado. Abaixo de um alvo, só o `skip`
 dele tira nomes (`Verdict::Skipped`: sockets, travas, a semente do agente), e nunca os padrões do
 `never` das árvores (`.*` levaria o `.#lk` do GnuPG e mais nada). O que um alvo pula não viaja nem
-quando a pessoa acrescentou a casa inteira: é o momento desta máquina.
+quando a pessoa acrescentou a casa inteira: é o momento desta máquina. Cada padrão do `skip` tem o
+motivo dele (`skip = { "<padrão>" = "<motivo>"; }`), e a linha diz a frase certa — um socket, uma
+conexão SSH compartilhada, a semente do agente, uma trava, pacotes, compilado —, nunca uma frase de
+todos. Um padrão casa um nome em qualquer profundidade; escrito `/nome`, só o primeiro nome abaixo
+do caminho do alvo (a raiz dele). O `carry` traz de volta caminhos abaixo de uma pasta pulada
+(`straight/versions/*.el`): a caminhada entra nela só pelo caminho dele (`Inside::Passage`), e o
+resto da pasta é pulado como antes. Uma pasta pulada não é percorrida (`Scope::meet`): nada abaixo
+dela é guardado, quem quer que peça, e aparece como UMA linha, com o motivo e a barra de pasta.
+
+**A configuração do Emacs viaja; o que o Emacs faz dela, não (2026-10-19).** O alvo `emacs` leva
+UM lugar, `~/.config/emacs` (o `$XDG_CONFIG_HOME/emacs`). Pula, em qualquer profundidade, o que os
+gerenciadores de pacote baixam (`elpa`, `straight`, `elpaca`, `quelpa`, `el-get`, `.local`, as
+gramáticas do tree-sitter), o compilado (`eln-cache`, `*.elc`, `*.eln`, `*.so`), os caches, a pasta
+própria de um repositório git e os backups, salvamentos automáticos e travas de um editor — uma
+pasta de pacotes não viaja onde quer que a configuração a ponha. Pula só na RAIZ o que o Emacs
+guarda das sessões desta máquina e escreve ali (`var` do `no-littering`, `transient`, `url`,
+`tramp`, `auto-save-list`, `backups`, `server`, `history`, `recentf`, `places`, o desktop salvo, a
+sessão do LSP, o banco que um pacote refaz): um snippet da pessoa chamado `url`, mais fundo, viaja.
+As escolhas salvas do `transient` (`values.el`, `levels.el`) e os lockfiles do `straight`
+(`straight/versions/*.el`) são da pessoa, e o `carry` as tira das pastas puladas. Um arquivo que os
+dois lados mudaram é escolha (`choose`): elisp juntado por trecho pode virar uma configuração que
+não carrega. O alvo não é privado.
+
+**Um lugar só, porque levar quatro apagava dados.** A primeira versão do alvo levava os quatro
+lugares em que o Emacs 30 procura a configuração (`~/.config/emacs`, `~/.emacs.d`, `~/.emacs`,
+`~/.emacs.el`) e as pastas da pessoa do Doom e do Spacemacs, com rivais (dois lugares que o Emacs
+não lê juntos: o sync retinha um) e o checkout de um framework posto de lado. Duas revisões
+adversariais acharam perda de dados em cenários reais de duas máquinas com git de verdade: o
+checkout posto de lado fazia a base de uma máquina nomear arquivos de outra que ela nunca teve, e
+tirar o checkout os apagava na outra máquina e no repositório; uma mudança de lugar viajava pela
+metade; o "não nesta máquina" não soltava uma retenção; uma pasta ligada contava como rival; e a
+saída do repositório do que a tabela pula apagava arquivos em máquinas cuja tabela era outra. O dono
+decidiu simplificar (2026-10-19): um lugar, nenhuma retenção, nenhum checkout reconhecido, nenhuma
+saída do repositório pelo que a tabela pula — o motor de sincronização não ganhou caminho de
+apagar nenhum em relação ao de antes, e perdeu um (a guarda de "O arquivo de um alvo não sai com uma
+adição por cima dele", abaixo). A base de uma máquina só nomeia o que o disco dela teve, então o que
+viaja dela é sempre um gesto da pessoa sobre um arquivo que estava ali (e o que é apagado ou trocado
+em outra máquina fica de lado, em `replaced/`, como sempre). O preço: um framework clonado
+em `~/.config/emacs` viaja como qualquer configuração, e duas máquinas que guardam coisas diferentes
+nesse lugar o compartilham — como dois `~/.ssh/config`.
+
+**Onde o Emacs lê, a página diz; nada age por isso.** O `startup.el` do Emacs 30 (medido numa casa
+descartável, com o Emacs do store): a pasta XDG dele é `$XDG_CONFIG_HOME/emacs` — o valor como
+está, mais `/emacs` (vazio, é `/emacs`; relativo, é relativo a onde o Emacs começa, a home para a
+unidade do daemon) — e `~/.config/emacs` só sem a variável. A pasta de início é `~/.emacs.d` quando
+ela ou o `~/.emacs` existe (`file-exists-p`, que segue link: um link pendurado não existe), senão a
+pasta XDG quando existe, senão `~/.emacs.d`; da casa, o arquivo de início é o `~/.emacs` que o
+`load` acha (`~/.emacs.elc`, senão `~/.emacs.el`, senão `~/.emacs`, e só arquivo: o `load` passa
+por cima de uma pasta), senão o `init` de `~/.emacs.d` (`init.elc` antes de `init.el`, e o
+`early-init` igual); da pasta XDG, só o `init` dela, e o `~/.emacs.el` nem é lido. Então `~/.emacs`
+ou `~/.emacs.d` escondem a pasta XDG — o `~/.emacs` até como pasta, que não é arquivo de início —,
+o `~/.emacs.el` não a esconde quando ela existe, um `~/.emacs.d` que é link para `~/.config/emacs` é
+o mesmo lugar, e um `~/.emacs.d` só com um `init.elc` guarda a configuração da pessoa, compilada. O
+alvo leva o `~/.config/emacs` da home, diga o `$XDG_CONFIG_HOME` o que disser. Quando o Emacs desta
+máquina lê outro lugar, a página dos pertences diz numa frase, nas duas portas, qual lugar ele lê,
+que os pertences levam `~/.config/emacs` e que mover a configuração para lá a faz viajar
+(`ronoctua_belongings::emacs`, contado na thread da contagem); um `~/.emacs.d` que não guarda nada
+da pessoa (só o que o alvo pularia — o que o Emacs criou antes de a pasta XDG existir) é dito como
+lido no lugar de `~/.config/emacs`, e um `~/.emacs` que não é arquivo, como o que faz o Emacs ler o
+`~/.emacs.d` no lugar dele. Um `$XDG_CONFIG_HOME` que põe a pasta do Emacs fora de `~/.config/emacs`
+é dito à parte: o Emacs procura ali e na home, nunca no lugar que viaja, e mover a configuração para
+lá não mudaria isso — então a frase não manda mover. A variável é a do processo do rodapé (unidade
+de usuário, como o daemon), e só vale para a home dele. Nada é retido, movido ou apagado por isso, e
+o sync não pergunta nada a ele. Os outros lugares não viajam: quem quer um deles nos pertences o
+acrescenta à mão, e ele é uma adição como outra qualquer — que vai para TODA máquina, onde um
+`~/.emacs.d` que chega esconde o `~/.config/emacs` dela (a página de lá então o diz).
+
+**A pasta XDG nasce antes do Emacs.** O Customize, o `package-install` e um comando habilitado
+escrevem no arquivo de início, então uma casa sem nada faria um `~/.emacs`; e o primeiro início do
+daemon cria um `~/.emacs.d` sem nada da pessoa (medido numa casa nua: a pasta e o `eln-cache/` do
+compilador nativo, onde o `site-start.el` do nixpkgs chega compilado em segundos; o socket do
+servidor fica no `$XDG_RUNTIME_DIR`), que sozinho esconde a pasta XDG de todo início depois dele —
+fora do lugar que viaja. A unidade do daemon cria, antes do
+Emacs, a pasta VAZIA XDG do próprio Emacs (`0700`, calculada como o `startup.el` a calcula) numa casa
+sem `~/.emacs.el`, `~/.emacs.elc`, `~/.emacs`, `~/.emacs.d` nem ela, e sem link em nenhum desses
+nomes, pendurado inclusive (`-e || -L`: um link ali é gesto da pessoa, e `mkdir -p` sobre um
+pendurado falha). Uma pasta, nunca um arquivo; e nunca numa casa com um deles — um `~/.emacs.el`
+sozinho deixaria de ser lido. O Emacs então lê ali, escreve o `init.el` ali e põe pacotes e caches
+ali, tudo dentro do lugar que o alvo leva. O passo nunca para o daemon: o que falhar nele é dito no
+stderr (o journal do daemon) e ele sai com 0, e a unidade o roda com `-`; com `Restart=always`, um
+passo que falhasse deixaria o daemon tentando subir para sempre.
+
+**Uma adição feita à mão no lugar do alvo continua sendo adição.** Quem acrescentou
+`~/.config/emacs` à mão antes do alvo existir tem uma adição no caminho dele, e ela é o que era na
+a88e849: uma raiz própria no índice, cujos arquivos viajam como acrescentados pela pessoa — o que uma
+máquina naquela versão, no mesmo repositório, segue. Uma versão anterior desta mudança a absorvia no
+alvo (nem raiz, nem adição); a terceira revisão mostrou que isso quebrava o "voltar a guardar" de
+TODO alvo (o `Belongings::keep` grava justamente uma adição no caminho do alvo ou abaixo dele, e ela
+não guardava nada) e, com uma máquina na a88e849 no mesmo repositório, fazia a máquina nova apagar
+do próprio disco os arquivos do Emacs: ela os marcava como do alvo, e a saída deles com a raiz,
+tirada na outra, parecia uma exclusão. Voltou ao que era. O que o alvo pula continua pulado sob
+qualquer adição, como sempre; o resto da sobreposição está no `docs/PENDING.md`.
+
+**O arquivo de um alvo não sai com uma adição por cima dele.** Tirar uma adição que cobre um alvo —
+a casa inteira, ou uma feita no caminho dele — tira do repositório os arquivos da adição, nunca os
+do alvo (`merge::plan`): as outras máquinas guardam o alvo, e só o "em nenhuma máquina" o tira de
+lá. Sem essa guarda, que a a88e849 não tem, uma máquina que não sincronizou enquanto a adição durou —
+a base dela diz que o arquivo é do alvo, não acrescentado — lia a saída como exclusão e apagava a
+própria cópia (o `~/.ssh/config`, no teste com git de verdade
+`a_root_taken_out_over_a_target_deletes_nothing_elsewhere`; na a88e849 o mesmo roteiro apaga). A
+guarda vale para a máquina que tira: uma na a88e849 que tira a adição ainda faz isso com as outras.
+
+**A linha do "grande" vale para os alvos.** O aviso de que algo passa de `largeMB` cobria só o que a
+pessoa acrescentou; agora cobre cada caminho de alvo também (`large_of`): uma configuração do Emacs
+que leva uma pasta de dados diz o peso dela. Um caminho que é adição e alvo ao mesmo tempo é dito
+uma vez.
+
+**O alvo `doom` saiu, e o arquivo dele fica onde está.** O `doom` levava `~/.config/doom/local.el`;
+nenhum alvo nomeia esse caminho agora, então a cópia que um repositório tenha dele fica lá, a do
+disco fica no disco, nenhuma máquina nova a puxa e nenhuma o apaga (o merge não dá passo nenhum a um
+caminho que a tabela não guarda e que ninguém acrescentou). Quem o quer de volta o acrescenta à mão:
+a cópia do repositório e a do disco se encontram como numa primeira sincronização (iguais, nada; as
+duas diferentes, uma pergunta). Um `doom` no `dropped` do índice não casa com alvo nenhum e não
+derruba nada, e um pedido sobre ele é recusado (`Request::is_known`). Nenhuma versão foi publicada
+com o alvo, então nenhuma casa instalada precisa de nada.
 
 **Privado é o dono, e é medido igual nos três pontos.** Um alvo `private` (`ssh`, `gnupg`) viaja com
 os bits do dono e só (`kept::kept_mode`): o `0644` de uma `.pub` vira `0600`, e uma chave `0400` fica
@@ -17711,10 +17928,15 @@ A contagem roda numa thread por porta, uma de cada vez: uma leitura que chega no
 uma depois (`Counting`); quem dispara é a vigia dos arquivos dos pertences e a das pastas do que a
 lista contém (`Heard`: cada raiz da caminhada que é pasta, como árvore; a pasta de cada raiz que é
 arquivo, ou a mais próxima que existe, para ouvir quando ela nasce), levantada de novo quando uma
-contagem acha outras pastas e com teto (64 de cada, cada árvore com o teto da vigia) — nunca uma tecla
-que só move o cursor. A contagem também traz o que desenhar pede: as linhas dos arquivos formatadas
-uma vez por contagem e idioma, o índice por origem e quais caminhos são pastas aqui; o desenho roda a
-cada quadro e a cada tecla e não faz `stat` nem formata um arquivo de novo.
+contagem acha outras pastas e com teto (64 de cada) — nunca uma tecla que só move o cursor. A vigia
+não ouve o que a caminhada não percorre: uma pasta que o alvo pula não é vigiada, e um evento sobre
+um nome pulado não conta (`Notice::on_trees`, com o `unheard` de cada árvore). E cada árvore que a
+tabela declara (as árvores, os alvos, as raízes em claro) tem o próprio teto (`TREE_MOST`) e vem
+primeiro: a adição grande de uma pessoa divide um teto com as outras adições e nunca tira a vigia do
+`~/.config/ronoctua`, do `~/.ssh` ou do `~/.gnupg`. O `Notice::on_dirs`, das outras portas, continua
+como era: um teto só, dividido em ordem. A contagem também traz o que desenhar pede: as linhas dos
+arquivos formatadas uma vez por contagem e idioma, o índice por origem e quais caminhos são pastas
+aqui; o desenho roda a cada quadro e a cada tecla e não faz `stat` nem formata um arquivo de novo.
 
 **O que aparece sozinho pergunta com o "não" primeiro.** O que um restore ofereceu (assinar commits
 com a chave SSH, a chave de segurança no lugar da senha) e um arquivo que uma leitura leniente
@@ -18214,6 +18436,15 @@ compilados e o `withPersonModules` trocava o workspace. Segundos de relógio:
 | um matiz de semente (o acento do `cyber`) | 66, nenhuma compila; 112 s; 28 s | 22,2 | 1,1 | 32,9 | 0,2 | 56,4 |
 | um módulo da pessoa (`my-sample`) | 81, 11 compilam; 258 s; 80 s | 66,7 | 23,3 | 88,2 | 6,5 | 184,7 |
 | uma linha do `ronoctua-xdg` | 690; 5 043 s; 247 s | 492,4 | 376,3 | 597,1 | 65,5 | 1 531,3 |
+| a mesma, a fatia única (S1, a árvore de 2026-10-19 antes da leva) | 690 | 603,3 | 375,6 | 634,1 | 89,0 | 1 702,0 |
+| a mesma, a fatia única de novo (S1, a rodada de consertos) | 690 | 565,6 | 378,1 | 638,9 | 65,8 | 1 648,4 |
+| a mesma, cada unidade pela sua classe (S1, antes dos consertos) | 690 | 426,7 | 308,0 | 505,2 | 62,7 | 1 302,6 |
+| a mesma, cada unidade pela sua classe (a rodada de consertos; as execuções de teste ainda ao lado das compilações) | 690 | 422,5 | 304,1 | 479,9 | 51,0 | 1 257,4 |
+| a mesma, cada unidade pela sua classe, as execuções depois de toda compilação (a árvore final) | 690 | 417,7 | 302,6 | 515,8 | 49,8 | **1 285,8** |
+| uma linha do pendrive, a fatia única (S1, a árvore de antes da leva) | 15 | 133,8 | 20,3 | 19,8 | 2,7 | 176,6 |
+| a mesma, cada unidade pela sua classe (S1, antes dos consertos) | 15 | 111,6 | 20,8 | 21,0 | 3,6 | 157,0 |
+| a mesma, a fatia única (a árvore final) | 15 | 108,5 | 20,2 | 19,7 | 2,6 | 150,9 |
+| a mesma, cada unidade pela sua classe (a árvore final) | 15 | 109,3 | 20,5 | 20,3 | 2,9 | **152,9** |
 | antes (crane), qualquer uma delas | o workspace inteiro em cada derivation | 700 | 272 | ~500 | 65 | 1 537 |
 
 Avaliar o flake editado custa mais ~11 s (~20 s quando o hub muda), uma vez por `nix build`. A
@@ -18222,13 +18453,39 @@ do shell domina). O `-- <arquivo>` dele, que simula um byte a mais, só reescrev
 `.ftl` diz 0 e numa semente recusa, e a edição de um dado se prevê comparando a árvore
 (`docs/PENDING.md`).
 
-O hub custa o mesmo de antes, e o porquê é a memória, não o grafo. O caminho crítico do xdg é de
-248 s em release, 182 s em loop e 245 s nos testes; o trabalho, de 1 398, 1 057 e 2 280 s de
-unidade, e quatro fatias de um núcleo (a fatia é o pico do pior `rustc`, 1 792 MiB, num orçamento de
-~8,4 GiB) o dividem em 492, 376 e 597 s. O release caiu 30 %; o loop e os testes subiram, onde o
-cargo, dentro de uma derivation, punha todos os núcleos dela no mesmo grafo e sobrepunha os
-`.rmeta`. Numa folha, numa vista, num programa ou num dado, onde o trabalho é pouco e o que resta é
-o link do shell, a granularidade é o ganho inteiro.
+O hub custava o mesmo de antes, e o porquê era a memória, não o grafo. O caminho crítico do xdg é
+de 248 s em release, 182 s em loop e 245 s nos testes; o trabalho, de 1 398, 1 057 e 2 280 s de
+unidade, e quatro fatias de um núcleo (a fatia era o pico do pior `rustc`, 1 792 MiB, num orçamento
+de ~8,4 GiB) o dividiam em 492, 376 e 597 s. Com cada unidade pela fatia da sua classe (S1, "Cada
+unidade pela sua classe", abaixo) cabem até dez de uma vez. Cada esquema foi medido duas vezes, a
+partir de um store quente, e a diferença entre duas rodadas do MESMO esquema é o tamanho do ruído: a
+fatia única deu 1 702 s numa e 1 648 s na outra, cada unidade pela sua classe 1 303 e 1 257 s — 54 e
+45 s, ~3,5 %. A rodada de 1 257 s ainda punha as execuções de teste ao lado das compilações: a
+regra das últimas linhas valia nas baterias e não no `.#sized-build`, por onde a edição é medida.
+Com ela lá também (a árvore final), as 106 execuções esperam a última compilação, que acaba aos
+~451 s, e rodam juntas nos últimos 63 s: os testes levam 515,8 s em vez de 479,9 (+36 s), e o total
+é 1 285,8 s (outra rodada com a regra: 1 291,5). Entre os esquemas, de 1 648 a 1 286 s (−22 %:
+release −26 %, loop −20 %, testes −19 %, clippy −24 %), sete vezes o ruído. (O F5 mediu a fatia
+única, 1 531 s, sobre a árvore de antes desta leva.) A memória de todo o build (a anônima do cgroup
+do `nix-daemon` e dos clientes, amostrada a cada meio segundo) chegou a 3,8 GiB (3 910 MiB), a do
+link do shell sozinho, e a menor memória disponível foi 7 126 MiB (a fatia única, na rodada de
+consertos: 3,8 GiB e 7 236 MiB); o pico medido das unidades que rodaram juntas no pior instante (o
+`metrics/peak-kib` delas, na rodada final) foi de 6,2 GiB no release, 5,5 no loop e 5,4 nos testes,
+num orçamento de ~8,4 GiB, e nada foi morto. O ganho é menor que o da simulação (1 085 s) porque dez
+compiladores em seis núcleos físicos ficam mais lentos cada um (o trabalho das unidades do release
+subiu de 1 398 para 1 709 s) e cada unidade paga ~0,5 s do próprio `nix build`; e o release ainda
+termina com as duas pesadas sozinhas (65 e 96 s).
+
+A edição do pendrive não ficou mais lenta: 152,9 s por classe, 150,9 s pela fatia única sobre a
+mesma árvore (outra rodada da fatia única deu 149,2: os 2 s são o ruído e o `nix build` próprio de
+cada uma das doze unidades). A primeira medida (177 → 157 s) era contra a árvore de antes da leva,
+cujo link do shell teve sete núcleos com menos memória livre. Com o plano ainda lido no shell, a
+mesma árvore deu 158,1 contra 149,2 s: o agendador lia as 2 320 linhas testando cada número de linha
+de cada dependência com uma expressão do bash, 1,5 s por conjunto antes de construir qualquer coisa.
+Não era o dry run das unidades: este custava 0,1 s num conjunto do pendrive e 0,3–0,5 s num do hub,
+e as referências do store que o substituem custam 0,16–0,18 e 0,24–0,33 s. O plano agora é lido
+pelo `awk` (`sizing_scan_plan`, 0,08 s). Numa folha, numa vista, num programa ou num dado, onde o
+trabalho é pouco e o que resta é o link do shell, a granularidade é o ganho inteiro.
 
 Os fechos (NAR, MB), do `c61c5c0` e da árvore final, os dois construídos no mesmo store:
 
@@ -19108,11 +19365,12 @@ pergunta a ela: o gate e o most (carregam as funções), o `.#quick` e o `.#size
 `ronoctua-machine apply` (roda o programa e lê os números — a conta fica em Nix e shell; o Rust só
 passa as palavras, inv. 5).
 
-As fatias são gastas de três jeitos: as unidades Rust, quantas couberem, um núcleo cada (uma unidade
-é um `rustc`, quase sempre de um fio; o grafo é feito de muitas pequenas, e o teto de quatro jobs
-das baterias não vale para elas); as unidades pesadas, uma por vez, com os núcleos que o orçamento
-deixa ao lado do próprio compilador; e todo o resto (sistemas, testes de VM, bibliotecas C de
-outros) até quatro de cada vez com as fatias divididas entre eles.
+O orçamento é gasto de três jeitos: as unidades Rust, cada uma pela fatia da sua classe e com um
+núcleo (uma unidade é um `rustc`, quase sempre de um fio; o grafo é feito de muitas pequenas, e o
+teto de quatro jobs das baterias não vale para elas — "Cada unidade pela sua classe", abaixo); as
+unidades pesadas, uma por vez, com os núcleos que o orçamento deixa ao lado do próprio compilador; e
+todo o resto (sistemas, testes de VM, bibliotecas C de outros) até quatro de cada vez, com as fatias
+do pico geral (`peakMiB`, 1 792 MiB) divididas entre eles.
 
 #### Onde o build roda decide o teto
 
@@ -19122,34 +19380,160 @@ próprios filhos: o `ronoctua-machine apply`, dentro da unidade da atualização
 dela, e o teto é o menor `memory.high`/`memory.max` dele para cima (`sizing_cgroup_ceiling`). Medido
 pelo do daemon, o orçamento seria o de um processo onde nada roda.
 
-#### As unidades pesadas, sozinhas, depois do que as constrói
+#### Cada unidade pela sua classe (S1)
 
-`rust.heavyUnits` nomeia as unidades cujo compilador foi MEDIDO acima da fatia (`metrics/peak-kib`).
-Com o shell num crate só eram quatro: o programa de release, o de loop, o harness de teste e o
-clippy dele. Com o rodapé no crate dele e o binário fino (R6) são três: o programa de release do
-shell (o link thin LTO de tudo, 3,9 GiB a doze núcleos), a biblioteca de loop do rodapé (1,8 GiB) e
-a de release dele, que o R6 mediu abaixo da fatia (1542 MiB) e que passou dela quando os textos e o
-catálogo do brain mudaram (T1, B2): 2279 MiB a um núcleo, em três builds (F5). O harness, o clippy e
-o programa de loop do binário fino mediram abaixo da fatia; a lib de release do jogador, a mais
-perto dela, 1770 MiB. A ordem e o que
-cada uma precisa antes são lidos na avaliação do `passthru.unitDeps` (`heavyPlan`): uma pesada
-abaixo de outra vem antes, e o que uma pesada é construída antes nunca a inclui. Nomear não basta: o
-`--max-jobs 1` de uma pesada vale para tudo o que ela puxa, e o programa do shell puxa centenas de
-unidades; por isso o que ela é construída antes vai primeiro, como unidades Rust, e só então ela. O
-`.#rust-peaks` lê o `peak-kib` de toda unidade construída e falha quando uma unidade acima da fatia
-não está na lista — a lista não envelhece calada.
+Uma fatia só para todo compilador — o pico do pior, 1 792 MiB — guardava o orçamento e o
+desperdiçava: das 2 310 unidades medidas (`metrics/peak-kib`, 2026-10-19), 2 116 picam até 512 MiB e
+só 21 passam de 1 GiB, e numa máquina de doze processadores com ~8 GiB de orçamento a edição de um
+hub construía quatro compiladores pequenos por vez (F5: 1 531 s, o mesmo do workspace do crane).
+Então toda unidade tem uma CLASSE, medida: leve (fatia de 768 MiB), média (2 048 MiB) e pesada, a
+que nenhuma fatia descreve — o programa de release do shell (o link thin LTO do rodapé inteiro) e a
+biblioteca de release do rodapé —, construída sozinha. As fatias saíram de uma simulação sobre as
+unidades, os tempos e o grafo da edição do xdg do F5 (640, 768 ou 1 024 por 1 792 ou 2 048): uma
+fatia leve menor põe unidades demais na média, uma maior deixa caber menos de uma vez.
 
-Os bundles do rodapé (`rust.shell`, `rust.loopShell`) saíram da lista: são cópias de programas que
-as unidades já construíram, e com eles lá a bateria ligava os oito vizinhos um de cada vez.
+A classe de cada unidade está num lugar só, `nix/rust/unit-classes.json`, dado commitado como o
+`plan.json`: escrito por `nix run .#rust-peaks -- --write` a partir do `metrics/peak-kib` das
+unidades que o store mediu, conferido pelo check `unit-classes-fit-the-measures` contra a medida de
+toda unidade, e lido pelo `nix/build-sizing.nix` (`unitPlan`), que recusa na avaliação um arquivo
+escrito para outras fatias ou outra folga. É dado e não leitura do store porque a classe é preciso
+na avaliação (o plano da máquina e das baterias é avaliado antes de qualquer build), e uma unidade
+editada é uma derivation nova, sem medida; o id do índice (`release/libs/ronoctua-xdg`) não muda
+com a edição, e a medida é do id. Uma unidade vai para a primeira classe cuja fatia cabe o pico dela
+e mais um décimo (`headroomPercent`): crescendo um pouco, continua dentro da fatia, e só a medida a
+muda de classe. O check julga pela MESMA regra: uma unidade cujo pico e mais um décimo passa da fatia
+da classe por que é construída é recusada — o `.#rust-peaks` sai com erro e o check falha,
+nomeando-a —, nunca construída ao lado de outras por uma fatia que não a cabe. Julgada só pelo pico
+(sem a folga), uma unidade a 700 MiB passava na fatia leve que o `--write` já não lhe daria, e o
+`peak-kib` é do maior processo, não da árvore (o `docs/PENDING.md` diz quanto falta). Uma que o
+arquivo não nomeia (um crate novo) é média até ser medida, e todo build diz quantas, com o comando
+que as mede. Uma pesada continua pesada: ela é medida sozinha, com os
+núcleos da pesada, e o pico a um núcleo pode ser maior — a biblioteca de release do rodapé picou
+2 279 MiB a um núcleo ao lado de outras (F5) e 1 534 MiB sozinha a doze (S1). Rebaixada pelo pico de
+doze núcleos, ela seria construída a um, passaria da fatia e voltaria; o `--write` a mantém pesada e
+o relatório diz que ela poderia sair, o que é uma medida dela a um núcleo e uma edição à mão. A
+lista de pesadas escrita à mão (`rust.heavyUnits`) saiu: pesada é uma classe como as outras, e a
+lista envelhecia calada (o F5 achou a biblioteca do rodapé fora dela).
+
+Um arquivo escrito para outras fatias, outra folga ou outro formato não é lido pela avaliação, e o
+`--write` sobre ele não guarda classe que não mediu neste store: ela é de números que não existem
+mais. A unidade sai do arquivo (e é construída como média até ser medida), menos a pesada, que fica
+pesada — sozinha, ela nunca passa de fatia —, e o `--write` diz quantas saíram.
+
+**Um lock novo renomeia metade das dependências.** O id de uma unidade de terceiro termina num
+digest do que ela é construída com (`key` do `rust-plan.py`: as features, o perfil, o tipo, os tipos
+de crate e a edição do alvo, e os ids das dependências): subir o `proc-macro2` renomeou 498 das
+1 232 unidades de terceiros (487 leves), que viravam médias todas, sem nada dizer. Agora a unidade
+que o arquivo não nomeia e cujo id difere de um nomeado só por esse digest — o mesmo crate na mesma
+versão, com o mesmo alvo, modo e nível de otimização: o mesmo fonte — LEVA a classe daquela (a mais
+pesada, se houver várias; `classesOf`, a única resolução, a dos planos e a do `.#rust-peaks`). O que
+mudou está dentro do digest, e nada aqui diz o quê: depois de um lock novo são as dependências, mas
+as features ou o perfil podem ter mudado também. A folga cobre um pico um pouco acima do medido, e o
+check medido julga a unidade pela medida DELA depois de construída: o `unit-classes-fit-the-measures`
+entrega ao `.#rust-peaks` o `metrics` de cada unidade do índice, a renomeada inclusive, e ele compara
+o pico dela com a classe levada (`fits(m["peak-kib"], class_of(uid), facts)` no `rust-peaks.py`),
+recusando-a se não coube. Uma versão nova do próprio crate não leva nada. O check
+`unit-classes-name-units-of-the-index` (só
+avaliação, ~1 s) falha quando o arquivo nomeia um id que o índice não tem mais, e o
+`nix run .#rust-peaks -- --write` resolve sem build: tira os ids velhos e escreve a classe que cada
+renomeada levou. Todo build (o `.#sized-build`, as baterias, o apply) diz quantas unidades planeja
+por uma classe levada e quantas por nenhuma.
+
+**O que não é unidade vem antes.** O `nix build` de uma unidade (`--max-jobs 1`, um núcleo, na
+fatia dela) construía também o que ela precisava e não era unidade: o `libghostty-vt`, cujo
+`zig build` não tinha `-j` e usava todo processador — sozinho, a um núcleo, os processos do zig
+somaram 2 365 MiB (2,31 GiB) —, numa fatia leve de 768 MiB, ao lado de nove outras. Por isso o
+`sized_units` constrói isso primeiro, dimensionado como o que não é unidade e com `--keep-going`
+quando quem chamou segue (sem ele o Nix para todo o resto na primeira falha, e uma unidade que só
+precisava do que não falhou ficava de fora; cobra o caso com o `nix` de verdade do
+`sized-units-keep-to-the-budget`). Se algo dele falha, as unidades que precisam dele (as referências
+do próprio store, `nix-store --query --referrers-closure`) não são construídas, dizem por quê, e ele
+fica escrito como não construído, para as fases seguintes não o construírem de novo. O que é isso sai
+do dry run de quem chamou — o do `.#sized-build`, o da bateria, o do sistema no apply —, que já o
+lista ao lado das unidades: das derivations dele que não são linha do plano, as que ficam abaixo de
+uma unidade a construir, achadas nas referências do store nível a nível e só entre o que vai ser
+construído (`sizing_below`, uma pergunta ao banco do store que não constrói nada nem pergunta a
+substituidor). Um segundo dry run, o das unidades, perguntava ao Nix — e a cada substituidor, por
+unidade — o que o primeiro já tinha respondido. Só quando nenhum dry run respondeu (o apply com o
+plano do sistema ilegível entrega toda unidade e diz `--units-only`) o das unidades é perguntado. E o
+`zig build` agora recebe `-j"$NIX_BUILD_CORES"`: a um núcleo, os processos do zig somados picaram
+1 488 MiB (contra 2 365 sem o `-j`), dentro da fatia geral de 1 792 MiB, e o build levou 99 s em vez
+de 53.
+
+**O plano leva os próprios números.** O apply de uma máquina constrói o plano da distro NOVA (o
+flake da máquina já moveu o input) com o programa do sistema EM USO (`ronoctua-build-units`). Com uma
+tabela de classes no programa, uma classe nova seria recusada (`large is no class`, o build falharia,
+o lock voltaria, e a máquina nunca mais atualizaria, nem o resgate) e uma fatia redimensionada seria
+cobrada pelo tamanho velho, calada. Então cada linha diz tudo o que a conta precisa —
+`<id> <classe> <como> <custo> <.drv> <linhas>…`, o custo a fatia em MiB ou
+`alone:<MiB a um núcleo>+<MiB por núcleo a mais>` —, o nome da classe só é dito, e nenhum dos dois
+programas guarda tabela de classe. O `<como>` também só é dito: qualquer nome passa, e só os três
+de hoje são contados — uma palavra que uma distro nova acrescentasse seria recusada, e todo update
+daquela máquina voltaria o lock. Uma linha em outras palavras é recusada, com a frase.
+
+**Uma unidade que falha é construída uma vez.** As execuções de teste eram um agendador próprio,
+depois das compilações, e não sabiam o que o primeiro não construiu: cada execução era o seu
+`nix build`, então uma dependência de hub que falhava era construída de novo por cada uma das ~40
+execuções dela, uma depois da outra (10–15 min), e depois de uma falha da máquina (um compilador
+morto por memória) a cadeia abaixo de uma execução era compilada na fatia leve dela. Agora um
+agendador só cuida das compilações e das execuções (estas por último, só quando toda compilação
+terminou — por tempo, não por memória: uma execução tem a fatia dela como qualquer unidade); o que é
+construído de uma unidade que falhou não é construído, numa linha que diz por quê; o que não foi
+construído fica escrito, e as fases seguintes deixam de fora, pelo nome, o que precisa dele.
+
+**Um sinal para os builds antes da limpeza.** Um TERM só no agendador deixava os builds dele
+rodando, órfãos, e a trap de `EXIT` removia a pasta dos out-links debaixo deles. As três portas (as
+baterias, o `.#sized-build`, o `ronoctua-build-units`) armam TERM, HUP e INT: matam os builds que
+começaram, esperam por eles e só então saem (143, 129, 130). E tudo o que elas perguntam — a
+avaliação do `.#sized-build` (`path-info`) e a da fase 0, os dry runs, as perguntas ao store, o
+`nix flake check` do gate — roda em segundo plano e é esperado (`& wait $!`): uma trap espera um
+comando em primeiro plano terminar, e um TERM durante a avaliação de todos os testes de VM esperava
+minutos (cobram o `sized-build-builds-what-nix-would`, num dry run, e o
+`batteries-build-each-unit-by-its-class`, numa avaliação). A pasta da trap não pode ter o nome de um
+`local` do agendador: a trap lê a variável no escopo de onde o `exit` foi chamado.
+
+**Linhas, nunca barra.** Vários `nix build` num terminal desenhavam cada um a sua barra na mesma
+linha e colavam o `->`/`<-` do agendador ao texto dela. O erro padrão de cada build passa por um
+cano, onde o Nix escreve linhas (com `-L`, cada linha do log depois do nome da derivation), e sem
+`-L` ele é `--quiet` também: uma unidade só fala da própria falha.
+
+**Nenhum locale move o relógio.** O bash escreve `$EPOCHREALTIME` com a marca decimal do locale (a
+vírgula, no pt_BR do dono e do ISO), e tirar só o ponto deixava `0.-3 s` e depois
+`value too great for base` (um campo com zero à esquerda lido em octal), saída 1 com os builds ainda
+rodando. Só os dígitos entram na conta, e todo número que um plano ou uma resposta dá é lido como
+dígitos, sem zero à esquerda (cobra `sized-units-keep-time-in-any-locale`).
+
+O Nix não pesa derivation: o `--max-jobs` conta derivations, e um `nix build` do grafo poria uma
+unidade média onde cabe uma leve. Ondas de uma classe cada, uma depois da outra, foram simuladas
+sobre a edição do xdg e perderam para a fatia única (o release em 586–680 s, contra 500): cada onda
+espera a unidade mais lenta dela, e as classes se alternam subindo o grafo. Por isso o `sized_units`
+(`nix/build-sizing.nix`) agenda ele mesmo: cada unidade é o seu `nix build` (`--max-jobs 1`, um
+núcleo), começado quando tudo de que ela é construída terminou e quando a fatia dela, mais o
+próprio `nix` (`clientMiB`, 48 MiB; medido em 43), cabe no que sobra do orçamento ao lado do que
+roda — nunca mais de uma vez que processadores. Entre as prontas vai primeiro a de cadeia mais
+longa acima dela (o caminho crítico em unidades, que dispensa tempo medido; na simulação deu o
+mesmo que o caminho crítico em segundos). Uma pesada começa quando nada mais pode — nada rodando e
+nenhuma outra pronta — e nada começa ao lado dela: esvaziar o resto para ela assim que fica pronta
+custou 50–90 s na simulação, porque uma pesada de release é de um fio só e esperar por ela deixa
+onze núcleos parados.
+
+A soma das fatias do que roda junto nunca passa do orçamento, e toda unidade pica abaixo da fatia
+dela (o check acima): é esse o limite da memória do build, provado no `sized-units-keep-to-the-budget`
+(quarenta unidades plantadas e o que rodou junto a cada instante) e medido no build de verdade ("As
+edições medidas", acima).
 
 #### A fase 1 da bateria é o build Rust inteiro
 
-1a tudo abaixo das pesadas (`first`), 1b as pesadas, 1c toda outra unidade do índice
-(`rust.unitIndex`), 1d as execuções de teste e os agregados. As execuções vão depois de toda
-compilação, dimensionadas como o resto (elas usam `$NIX_BUILD_CORES` como fios de teste): um teste
-que mede tempo de parede não mede um compilador ao lado (o PENDING do N1 sobre o teste de 20 ms do
-broadcast). Uma unidade que não compila em 1c é anotada e a bateria segue: os checks que precisam
-dela falham com o nome dela, os outros rodam.
+Um dry run de toda unidade do índice (`rust.unitIndex`), uma vez; 1a as compilações e as execuções
+de teste, cada unidade que ele lista, num `sized_units` só sobre um plano só — as execuções nas
+últimas linhas (`lateFrom`), começadas só quando toda compilação terminou, como no `.#sized-build`
+(e por ele no `.#quick`); 1b os agregados, como o
+que não é unidade. As execuções vão depois de toda compilação (elas usam `$NIX_BUILD_CORES` como
+fios de teste, e ganham um): um teste que mede tempo de parede não mede um compilador ao lado (o
+PENDING do N1 sobre o teste de 20 ms do broadcast). Uma unidade que não compila é construída uma vez
+e a bateria segue: o que é construído dela não começa, numa linha que diz por quê, e toda fase
+seguinte deixa de fora, pelo nome, o agregado, o sistema de um teste de VM e o check que precisam
+dela (`sizing_needing`); os outros rodam.
 
 #### A máquina guarda as unidades da versão em uso
 
@@ -19184,14 +19568,18 @@ indiretas pelo próprio Nix da máquina. Não é configuração fora do flake (i
 máquina É muda; é a coleta de lixo deixando de levar o que o build dela fez, como as raízes que o
 apply já deixava durante o build — a decisão 4 do dono, e nenhuma emenda de invariante.
 
-#### O apply constrói em fases que a distro descreve
+#### O apply constrói o plano que a distro descreve
 
-`ronoctua.machine.phases` é o que o apply avalia, uma vez (`nix eval --json`, que escreve todo
-`.drv`): `first`, as pesadas com o `between` de cada, o `.drv` do sistema e as unidades a guardar.
-Os builds depois disso nomeiam `.drv` e não avaliam nada.
+`ronoctua.machine.phases` (formato 3) é o que o apply avalia, uma vez (`nix eval --json`, que
+escreve todo `.drv`): o plano das unidades de release, uma linha cada (o id, a classe, como ela foi
+achada, o custo, o `.drv` e as linhas de que ela é construída), o `.drv` do sistema e as unidades a
+guardar. O apply
+entrega o plano ao `ronoctua-build-units` (o mesmo `sized_units`, como programa: a conta fica em Nix
+e shell, inv. 5) com o que dele o Nix vai construir, e depois constrói o sistema como o que não é
+unidade. Os builds nomeiam `.drv` e não avaliam nada.
 
-De cada fase só se constrói o que o PLANO DO PRÓPRIO NIX para o sistema lista: um dry run do `.drv`
-do sistema (`nix build --dry-run`, os caminhos sob "will be built:", `dry::to_build`). Nunca o fecho
+Do plano só se constrói o que o PLANO DO PRÓPRIO NIX para o sistema lista: um dry run do `.drv` do
+sistema (`nix build --dry-run`, os caminhos sob "will be built:", `dry::to_build`). Nunca o fecho
 dos `.drv` (`nix-store --query --requisites`): toda unidade está nele, e um store que já tem o
 consumidor de uma unidade não precisa dela. A semente do ISO leva os programas (o shell na cópia do
 bundle) e nenhuma unidade — elas têm `allowSubstitutes = false` e ficam fora de todo fecho —, e o
@@ -19201,13 +19589,18 @@ toda atualização numa máquina servida pelo cache compilariam as ~680 unidades
 religariam o shell (3,8–5 GiB, 4–11 min) para um sistema cujo Rust não mudou — onde o `nix build` de
 uma vez de antes não compilava nada. Lido do dry run, o apply constrói o mesmo que o `--rehearse`
 mede. Um dry run que não responde, ou responde em palavras que o programa não lê (uma contagem que
-não é a dos caminhos listados, um caminho sob nenhum título conhecido), constrói todas as fases, e
-diz: uma fase construída à toa custa tempo, uma pesada deixada para o build do sistema seria ligada
-ao lado de tudo. O `.#sized-build` lê o mesmo plano (`sizing_will_build`, as mesmas regras), e ali
-um plano que não lê é recusa, sem build. Uma distro que não descreve fases (mais velha que elas, ou
-num formato que este programa não lê — `PHASES_FORMAT`) é construída de uma vez, dimensionada como o
-resto, sem guardar unidades, e o diário diz. Um dimensionamento que não responde com contagens é
-recusa, antes de qualquer build e com o lock posto de volta, nunca um padrão plausível.
+não é a dos caminhos listados, um caminho sob nenhum título conhecido), entrega toda unidade do
+plano, e diz: uma unidade construída à toa custa tempo, uma pesada deixada para o build do sistema
+seria ligada ao lado de tudo. O `.#sized-build` lê o mesmo plano (`sizing_will_build`, as mesmas
+regras), e ali um plano que não lê é recusa, sem build. Uma distro que não descreve fases, ou que as
+descreve noutro formato (`PHASES_FORMAT`, mais velho ou mais NOVO que o programa), é construída de
+uma vez, dimensionada como o resto, sem guardar unidades, e o diário diz os dois números: recusar
+ali prenderia a máquina neste programa para sempre, porque é uma distro mais nova que traz o
+programa mais novo. Do formato que o programa lê, ele lê só o `.drv` de cada linha e os números
+depois dele (o resto é do `ronoctua-build-units`); uma linha sem eles é recusa com a linha e o
+porquê, o lock de volta: a distro está errada, e a próxima conserta. Um dimensionamento que não
+responde com contagens é recusa, antes de qualquer build e com o lock posto de volta, nunca um
+padrão plausível.
 
 #### No checkout, por checkout
 
@@ -20811,8 +21204,10 @@ do `main.rs` — o rodapé não nomeia nenhum desses módulos (cobra
 `a-hosted-region-leaves-the-footer`).
 
 Por que estes quatro juntos: não por afinidade de domínio, mas porque são as vistas cujo estado é do
-rodapé — a lista da fila, o estado do estúdio e as câmeras, a fila de notificações e o livro de
-filtros, o relógio — e que por isso exigiram que o hospedeiro aprendesse a EMPRESTAR o que guarda.
+rodapé — a lista da fila, o estado do estúdio, a fila de notificações e o livro de filtros, o
+relógio — e que por isso exigiram que o hospedeiro aprendesse a EMPRESTAR o que guarda. (As câmeras
+eram do rodapé e deixaram de ser: ler uma abre o nó e pisca a luz, então a configuração as lê ela
+mesma enquanto aparece — "Nenhuma câmera abre antes de um gesto", na seção da câmera.)
 Cada linha de uma delas agora recompila o crate dela e o binário, e nada do rodapé.
 
 ##### O que o rodapé guarda é emprestado; o que muda é contado
@@ -20824,23 +21219,24 @@ defeito que esse arquivo já pagou uma vez. Então o que o rodapé guarda e uma 
 por chamada, por tipo (`region::Lent`): `Seen::lent` nas perguntas (`rows`, `hint`, `cursor_in`…),
 `Doorway::lent()` nos gestos (`key`, `command`, `clicked`…) e `RegionEasel::lent` na pintura. A
 lista do que o rodapé empresta é UMA macro (`held_by_the_footer!`, em `surface/mod.rs`): os jobs da
-fila, o estado do estúdio, as câmeras, a fila de notificações, o livro de filtros e o fuso. Ela
+fila, o estado do estúdio, a fila de notificações, o livro de filtros e o fuso. Ela
 empresta campo a campo — e não por um método de `&self`, que pegaria o rodapé inteiro — para que o
 `with_region` possa emprestar esses campos enquanto empresta a região do `self.regions` (o
 compilador aceita empréstimos disjuntos de campos dentro de uma função, não através de um método).
 
 O que MUDA continua contado (`Region::heard`), como o R4 desenhou: a lista nova da fila, o estado
-novo do estúdio, as câmeras plugadas. A região que mudou pede o quadro (`Doorway::repaint`), e o
+novo do estúdio. A região que mudou pede o quadro (`Doorway::repaint`), e o
 hospedeiro mede a altura de novo depois do quadro que uma notícia pediu (a regra de toda região que
 não diz quando as linhas mudam, `Region::says_when_its_rows_change` falso), como as vistas com campo
-faziam (`apply_geometry` no `ledger_arrived`, `region_resized` no `camera_reread`): uma câmera
-plugada que acrescenta linhas mudava a altura, e um `owes_paint` sozinho não muda.
+faziam (`apply_geometry` no `ledger_arrived`, `region_resized` no `camera_reread`): uma notícia
+que acrescenta linhas muda a altura, e um `owes_paint` sozinho não muda.
 
 O que é aberto ou recebe um comando fechado também é emprestado: o `open_region` e o caminho fechado
 do `hosted_command` emprestam a mesma lista, e é por isso que o painel da fila abre com a lista que
 o rodapé já tem ("um painel que abre vazio parece dizer que nada está rodando no instante em que
-alguém abriu para ver"), a configuração da câmera abre sobre as câmeras e o estúdio que o rodapé
-ouviu, e as teclas do app da câmera funcionam de qualquer lugar com a vista fechada —
+alguém abriu para ver"), a configuração da câmera abre sobre o estúdio que o rodapé ouviu (as
+câmeras ela lê depois de aparecer), e as teclas do app da câmera funcionam de qualquer lugar com a
+vista fechada —
 `camera-param-more` precisa saber o efeito atual, e é o estado do estúdio emprestado que diz.
 
 ##### A mesa de notificações é do rodapé; o gerenciador pede

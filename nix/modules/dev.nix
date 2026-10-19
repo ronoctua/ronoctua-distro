@@ -103,8 +103,8 @@ in
     # working on OTHER code from the installed system.
     #
     # EACH ENTRY'S `package` IS THE ONE THAT SAYS THE PROGRAM IS THERE (the
-    # registry's `still-present` looks for it): `gcc` and not `gnumake`, which
-    # the editor's Doom carries too.
+    # registry's `still-present` looks for it): `gcc` and not `gnumake`, a
+    # companion another entry could carry too.
     ronoctua.apps = {
       # ---- rust ----
       #

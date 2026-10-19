@@ -133,13 +133,12 @@ let
       # built on third-party units instead (phase 2 of nix-design §1.4, the
       # same commands, `third-party-units-are-cargo-s`); measuring a variant
       # that way is the day phase 1 goes.
-      units =
-        (unitsWith {
-          inherit plan layers;
-          inherit (planner) inputsHash;
-          depsFrom = "layers";
-        }).units
-          "release";
+      builder = unitsWith {
+        inherit plan layers;
+        inherit (planner) inputsHash;
+        depsFrom = "layers";
+      };
+      units = builder.units "release";
       programs = lib.attrValues units.bins;
       everyUnit = lib.attrValues units.libs ++ lib.attrValues units.scripts ++ programs;
       isUnit = d: (d.passthru.kind or null) != null;
@@ -154,6 +153,17 @@ let
       inherit (v) lto codegenUnits;
       packages = v.packages or { };
       inherit units;
+      # ITS UNITS AS DATA, shaped and named as `rust.unitIndex` (the same
+      # ids, so the same measured classes): what its own sized build plans
+      # (`nix/profile-bench.nix`). Its layer is an entry, never planned: it
+      # is built first, alone.
+      index = builder.index {
+        release = units;
+        loop = { };
+        test = { };
+        layers = { inherit (layers) release; };
+        aggregates = { };
+      };
       plan = planDrv;
       layer = layers.release;
       bundle =

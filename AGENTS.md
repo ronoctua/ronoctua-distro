@@ -192,7 +192,7 @@ nix build .#themes           gera os temas e o report.md (~20 s)
 nix fmt                      formata a árvore (Nix e Rust); nix fmt -- --check só confere
 nix run .#rust-plan          regenera nix/rust/plan.json (o plano do cargo) depois de um Cargo.toml
 nix run .#rebuild-cost       o que a árvore (ou -- <arquivo>) reconstrói, e quanto, sem construir
-nix run .#sized-build -- …   nix build dimensionado à máquina; nix run .#rust-peaks, as mais pesadas
+nix run .#sized-build -- …   nix build dimensionado à máquina; .#rust-peaks (-- --write) e as classes
 nix run .#texts -- missing <idioma>   o que falta traduzir, por fragmento (-- where <chave>)
 ```
 
@@ -457,7 +457,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | `timedate1` | `ronoctua-clock` |
 | Syncthing | `ronoctua-syncthing` (cobra `one-syncthing-boundary`) |
 | Tailscale e Tor | `ronoctua-tunnel` |
-| câmera (V4L2) | `ronoctua-camera` — só a `Capture` abre uma (cobra `the-camera-has-one-door`) |
+| câmera (V4L2) | `ronoctua-camera` — só a `Capture` abre uma para quadros (cobra `the-camera-has-one-door`); ler a lista abre cada nó e pisca a luz, então só depois de um gesto da pessoa, nunca na partida (cobra `camera-vm`) |
 | o disco, para o gerenciador de arquivos | `ronoctua-files` |
 | decodificar imagem, vídeo, documento e 3D | `ronoctua-inspect` |
 | HTTP (redirecionamento e gzip só em `web`) | `ronoctua-http` (cobra `one-http-writer`) |
@@ -750,6 +750,12 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
   commitado (`nix run .#rust-plan` depois de mexer num `Cargo.toml`; um plano velho é recusado), e
   cada unidade — lib, programa, teste, clippy, rustfmt, terceiro — é uma derivation
   (`rust.{release,loop,test}`; cobra `our-crates-are-built-unit-by-unit`).
+- **A classe de uma unidade é medida** (leve, média ou pesada, do `metrics/peak-kib`) e mora só em
+  `nix/rust/unit-classes.json`: `nix run .#rust-peaks -- --write` a regrava depois de um build (e
+  depois de um lock novo, sem build), e uma unidade cujo pico e a folga passam da fatia da sua
+  classe é recusada (cobram `unit-classes-fit-the-measures` e
+  `unit-classes-name-units-of-the-index`). O plano leva a fatia em MiB em cada linha: quem o lê é o
+  programa do sistema em uso.
 - **Cada programa é a sua unidade** (`rust.bins.<bin>`, `rust.brain`…), com o papel que o crate
   declara, e só `ship` chega a uma máquina (cobra `every-bin-has-a-role`); um módulo nomeia o
   programa que roda, nunca `${rust.shell}/bin/<outro>`. O perfil de release é o medido (cobra
@@ -850,10 +856,16 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
 - `cannot download … from any mirror` não é arquivo removido: o `fetchurl` repete sem retomar. Os
   arquivos grandes são baixados pelo `nix/prefetch.nix`, que o gate roda antes de compilar.
 - `rustc` morto por `signal: 15` sem diagnóstico é o `earlyoom` do host: o que estoura é jobs ×
-  cores, e a conta é uma só (`nix/build-sizing.nix`, o `.#sized-build`, as pesadas sozinhas). Teste
+  cores, e a conta é uma só (`nix/build-sizing.nix`). O Nix não pesa derivation: cada unidade é um
+  `nix build` próprio, começado pela fatia da classe dela (`sized_units`). Teste
   de VM segura a memória que declara (`virtualisation.memorySize`) enquanto roda, e as baterias o
   rodam numa fase própria, somando o declarado; e avaliam antes, construindo pelos `.drv`
   (`nix/gate.nix`), porque cada teste de VM avaliado segura ~260 MiB.
+- No bash, `$EPOCHREALTIME` sai com a marca decimal do locale (vírgula no pt_BR): só os dígitos
+  entram numa conta (cobra `sized-units-keep-time-in-any-locale`). E uma trap de `EXIT` lê as
+  variáveis no escopo de onde o `exit` foi chamado: um `local` de mesmo nome numa função a esconde.
+  Uma trap de sinal espera o comando em primeiro plano terminar (um `$(…)` também): o que o sinal
+  tem de parar roda com `& wait $!`.
 - `teste && comando` como última instrução do corpo de um laço derruba o script inteiro sob
   `errexit` + `pipefail` (que o `writeShellApplication` liga); um `ls` sem correspondência faz o
   mesmo. Use um `if` sem `else`. O check de um laço que varre diretório tem de plantar arquivos,

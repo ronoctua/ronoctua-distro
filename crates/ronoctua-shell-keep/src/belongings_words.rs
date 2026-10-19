@@ -280,9 +280,15 @@ mod tests {
             for why in ronoctua_store::repair::Why::ALL {
                 has(&format!("belongings-repair-why-{}", why.id()));
             }
-            // AND THE LISTING'S: what a target skips, a plain file past the
-            // line, every state, every target by its id.
-            has(&reason_key(ronoctua_belongings::kept::SKIPPED_REASON));
+            // AND THE LISTING'S: what a target skips (each by its own
+            // reason, among the table's above — and asked of every target
+            // here, so none falls through), a plain file past the line,
+            // every state, every target by its id.
+            for target in ronoctua_belongings::scope::targets() {
+                for skip in target.skip {
+                    has(&reason_key(skip.reason));
+                }
+            }
             for reason in ronoctua_belongings::inventory::REASONS {
                 has(&reason_key(reason));
             }

@@ -407,8 +407,8 @@ in
     #
     # AND WITH THE SESSION'S `PATH`, not a unit's. NixOS gives every unit five
     # packages on `PATH` unless told otherwise, and the person's half exists
-    # precisely to find what the PERSON has: every `binary` step (`doom-sync`,
-    # the language managers) was skipped from here, always, because `command
+    # precisely to find what the PERSON has: every `binary` step (the
+    # language managers) was skipped from here, always, because `command
     # -v` asked those five. Off and with no `path`, the unit writes no
     # `Environment=PATH` (`nixos/lib/systemd-lib.nix`) and inherits the user
     # manager's, built from `environment.profiles`. The consequence is

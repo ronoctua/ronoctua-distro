@@ -140,8 +140,7 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
         return;
     };
     let staging = Path::new(ronoctua_stick::STAGING);
-    shared.touch(id, |j| {
-        j.stage = Stage::Running;
+    shared.under_way(id, |j| {
         j.now.clone_from(&release.label);
     });
     let outcome = {
@@ -216,8 +215,7 @@ fn carry(
     write: Option<&Target>,
     staging: &Path,
 ) -> Result<()> {
-    shared.touch(id, |j| {
-        j.stage = Stage::Running;
+    shared.under_way(id, |j| {
         j.now.clone_from(&release.label);
     });
     if let Some(target) = write

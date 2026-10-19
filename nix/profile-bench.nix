@@ -38,12 +38,14 @@
 # # Sized as every machine builds
 #
 # A variant's units are other derivations than the tree's, so `.#sized-build`
-# (whose heavy units are the tree's) does not know them: each variant has its
-# own (`sized`, the same `nix/build-sizing.nix` over the variant's heavy units,
-# `rust.releaseHeavyOf`). Its layer is built first and alone, one cargo with as
+# (whose plan is the tree's units) does not know them: each variant has its
+# own (`sized`, the same `nix/build-sizing.nix` over the plan of the
+# variant's units, each with the class the tree's unit of the same id was
+# measured into). Its layer is built first and alone, one cargo with as
 # many compilations inside it as fit; then its units, the bench and the bundle
 # through that program — the shell's thin-LTO link alone, with the cores the
-# memory leaves it, everything else as many Rust units as fit. The edit costs
+# memory leaves it, every other unit as many at once as their classes' slots
+# fit. The edit costs
 # and the cold build the decision reads are the units' own measured seconds,
 # and a heavy unit's depend on its cores: measured at the general numbers they
 # would be another machine's.
@@ -51,10 +53,8 @@
   lib,
   pkgs,
   system,
-  # `nix/rust.nix`'s `profileVariants`, and the heavy units of a release
-  # graph (`releaseHeavyOf`).
+  # `nix/rust.nix`'s `profileVariants`.
   profileVariants,
-  releaseHeavyOf,
   # What `nix/bench.nix` and `nix/bench-frames.nix` take besides the programs.
   scroll,
   graphicsHost,
@@ -92,7 +92,7 @@ let
     v
     // {
       runner = runnerOf letter v;
-      sized = sizing.sizedBuild (releaseHeavyOf v.units);
+      sized = sizing.sizedBuild (sizing.unitPlan { units = v.index; });
     }
   ) profileVariants.variants;
 

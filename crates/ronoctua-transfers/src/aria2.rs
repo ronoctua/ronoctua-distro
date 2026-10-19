@@ -273,7 +273,9 @@ pub(crate) fn carry(
         .as_str()
         .context("aria2 did not give back a gid")?
         .to_owned();
-    shared.touch(id, |j| j.stage = Stage::Running);
+    // UNDER WAY — or held, if a pause landed while aria2 was being asked: the
+    // switch decides, and the loop below holds the download at once.
+    shared.under_way(id, |_| {});
 
     let mut progress = Progress::new(shared, id);
     let mut held = false;
@@ -292,15 +294,15 @@ pub(crate) fn carry(
                 progress.flush();
                 bail!("given up");
             }
+            // THE ROW IS NOT WRITTEN HERE: the pause and the resume wrote it
+            // with the switch (`crate::engine`'s header says why).
             Flow::Pause if !held => {
                 call("aria2.pause", vec![Value::String(gid.clone())])?;
                 held = true;
-                progress.stage(Stage::Paused);
             }
             Flow::Run if held => {
                 call("aria2.unpause", vec![Value::String(gid.clone())])?;
                 held = false;
-                progress.stage(Stage::Running);
             }
             Flow::Pause | Flow::Run => {}
         }

@@ -51,6 +51,9 @@ pub const BOOTCTL: &str = "RONOCTUA_BOOTCTL";
 /// How many compilations fit at once on this machine
 /// (`ronoctua-build-sizing`, `nix/build-sizing.nix`).
 pub const BUILD_SIZING: &str = "RONOCTUA_BUILD_SIZING";
+/// What builds a system's units, each by its class (`ronoctua-build-units`,
+/// `nix/build-sizing.nix`).
+pub const BUILD_UNITS: &str = "RONOCTUA_BUILD_UNITS";
 /// What roots the compiled units of a build (`ronoctua-keep-units`,
 /// `nix/keep-units.nix`).
 pub const KEEP_UNITS: &str = "RONOCTUA_KEEP_UNITS";
@@ -87,6 +90,7 @@ impl Env {
                 NIX,
                 BOOTCTL,
                 BUILD_SIZING,
+                BUILD_UNITS,
                 KEEP_UNITS,
             ]
             .into_iter()
@@ -150,6 +154,8 @@ pub struct System {
     pub bless_wait: Option<String>,
     /// The build sizing.
     pub sizing: Option<PathBuf>,
+    /// What builds the units.
+    pub build_units: Option<PathBuf>,
     /// What roots a build's units.
     pub keep_units: Option<PathBuf>,
 }
@@ -172,6 +178,7 @@ impl System {
                 .map(str::to_owned),
             bless_wait: env.get(BLESS_WAIT).map(str::to_owned),
             sizing: env.path(BUILD_SIZING),
+            build_units: env.path(BUILD_UNITS),
             keep_units: env.path(KEEP_UNITS),
         }
     }

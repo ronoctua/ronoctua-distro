@@ -3,7 +3,8 @@
 //!
 //! What these prove: `~/.ssh` and `~/.gnupg` travel encrypted and come back
 //! private — files with their owner's bits alone, folders `0700` even where
-//! something made them wider first — and what a target skips never travels;
+//! something made them wider first — and what a target skips never travels
+//! (the person's Emacs configuration goes, its packages and caches do not);
 //! a target dropped on every machine leaves the repository from the machine
 //! that dropped it, is forgotten (and kept on disk) by the others, and comes
 //! back when kept everywhere again; "not here" leaves the repository's
@@ -132,6 +133,77 @@ fn belongings_targets_come_back_private() {
             panic!("{}", m.name);
         };
         assert_eq!((pushed, pulled), (0, 0), "{} moved a mode", m.name);
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: the person's Emacs configuration does not reach another
+/// machine as it was written — its saved choices and lockfiles carried out
+/// of the folders that hold them, a snippet named like Emacs's state deeper
+/// down included — or anything Emacs and its package managers made from it
+/// does: the packages, what was compiled, the caches and the state of this
+/// machine, a checkout's `.git`, an editor's drafts.
+#[test]
+fn belongings_emacs_travels_without_its_packages() {
+    let root = scratch("targets-emacs");
+    let remote = bare(&root.join("remote.git"));
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    let b = Machine::new(&root, "machine-beta", &remote);
+    let carried = [
+        (
+            "home/.config/emacs/init.el",
+            "(load-theme 'modus-vivendi t)\n",
+        ),
+        (
+            "home/.config/emacs/early-init.el",
+            "(setq package-enable-at-startup nil)\n",
+        ),
+        ("home/.config/emacs/lisp/my-keys.el", "(provide 'my-keys)\n"),
+        ("home/.config/emacs/custom.el", "(custom-set-variables)\n"),
+        ("home/.config/emacs/snippets/org-mode/url", "# name: url\n"),
+        ("home/.config/emacs/transient/values.el", "((magit-log))\n"),
+        (
+            "home/.config/emacs/straight/versions/default.el",
+            "((\"x\" . \"1\"))\n",
+        ),
+    ];
+    for (logical, text) in carried {
+        a.write(logical, text);
+    }
+    let skipped = [
+        "home/.config/emacs/elpa/magit-4.1/magit.el",
+        "home/.config/emacs/elpa/magit-4.1/magit.elc",
+        "home/.config/emacs/eln-cache/30.2-1a2b/magit-3c4d.eln",
+        "home/.config/emacs/straight/repos/vertico/vertico.el",
+        "home/.config/emacs/.local/straight/build-30.2/x/x.el",
+        "home/.config/emacs/lisp/my-keys.elc",
+        "home/.config/emacs/auto-save-list/.saves-42-alpha~",
+        "home/.config/emacs/transient/history.el",
+        "home/.config/emacs/var/elfeed/db/index",
+        "home/.config/emacs/history",
+        "home/.config/emacs/url/cookies",
+        "home/.config/emacs/server/server",
+        "home/.config/emacs/.git/index",
+        "home/.config/emacs/#init.el#",
+        "home/.config/emacs/init.el~",
+        "home/.config/emacs/tree-sitter/libtree-sitter-rust.so",
+    ];
+    for logical in skipped {
+        a.write(logical, "this machine's");
+    }
+    a.sync();
+    let outcome = b.sync();
+    let Outcome::Synced { pulled, .. } = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(pulled, 7, "the seven files of the configuration");
+    for (logical, text) in carried {
+        assert_eq!(b.read(logical).as_deref(), Some(text), "{logical}");
+    }
+    let last = Last::read(&a.places.last()).unwrap();
+    for logical in skipped {
+        assert!(b.read(logical).is_none(), "{logical} travelled");
+        assert!(!last.entries.contains_key(logical), "{logical} is kept");
     }
     let _ = std::fs::remove_dir_all(root);
 }
@@ -617,5 +689,108 @@ fn forgetting_takes_this_instance_or_every_one() {
         assert!(!kept(&vault, name) && !marked(name), "{name} was left");
     }
     assert!(vault.take("someone-else:cccc").is_some());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: a target's path past the "large" line is not said — only the
+/// person's additions were, and an Emacs configuration carrying a gigabyte
+/// said nothing —, an addition of the person's past it stops being said (one
+/// under a target's path included, as before the target), or a path that is
+/// both an addition and a target's is said twice.
+#[test]
+fn a_target_past_the_large_line_is_said() {
+    let big = kept::LARGE_BYTES + 1;
+    let entries: BTreeMap<String, Known> = [
+        ("home/.config/emacs/data/big.el", big),
+        ("home/.config/emacs/init.el", 10),
+        ("home/.ssh/config", 3),
+        ("home/videos/a.mkv", big),
+        ("home/notes/a.md", 5),
+    ]
+    .into_iter()
+    .map(|(p, size_bytes)| {
+        (
+            p.to_owned(),
+            Known {
+                size_bytes,
+                ..Known::default()
+            },
+        )
+    })
+    .collect();
+    let prefs = Belongings {
+        extra: vec![
+            "home/.config/emacs".to_owned(),
+            "home/.config/emacs/data".to_owned(),
+            "home/notes".to_owned(),
+            "home/videos".to_owned(),
+        ],
+        ..Belongings::default()
+    };
+    assert_eq!(
+        large_of(&prefs, &entries),
+        [
+            ("home/.config/emacs".to_owned(), big + 10),
+            ("home/.config/emacs/data".to_owned(), big),
+            ("home/videos".to_owned(), big),
+        ]
+    );
+}
+
+/// FAILS IF: a machine that takes out an addition over a target (the whole
+/// home, added by hand) takes the target's files out of the repository, so
+/// that a machine which did not sync while the addition lasted — its base
+/// still says the file is the target's, not an addition — deletes its own
+/// copy (`~/.ssh/config`): the deletion a88e849 makes, and the guard in
+/// `merge::plan` closes. The addition's own files still leave, and are
+/// forgotten (kept on disk) elsewhere.
+#[test]
+fn a_root_taken_out_over_a_target_deletes_nothing_elsewhere() {
+    let root = scratch("targets-root-over");
+    let remote = bare(&root.join("remote.git"));
+    let mut a = Machine::new(&root, "machine-alpha", &remote);
+    let b = Machine::new(&root, "machine-beta", &remote);
+    let counts = |m: &Machine| match m.sync() {
+        Outcome::Synced {
+            pulled,
+            pushed,
+            deleted_here,
+            deleted_there,
+            ..
+        } => (pulled, pushed, deleted_here, deleted_there),
+        other => panic!("{}: {other:?}", m.name),
+    };
+    let ssh = "home/.ssh/config";
+    let notes = "home/notes/a.md";
+    assert!(a.prefs.keep("home/notes"));
+    a.write(notes, "a\n");
+    a.write(ssh, "Host x\n");
+    assert_eq!(counts(&a), (0, 2, 0, 0));
+    assert_eq!(counts(&b), (2, 0, 0, 0));
+    // A ADDS THE WHOLE HOME in place of its notes, and every file of it
+    // travels as an addition now — B, asleep, does not hear of it: its base
+    // still says the SSH file is the target's.
+    a.prefs.extra = vec!["home".to_owned()];
+    assert_eq!(counts(&a), (0, 0, 0, 0));
+    let last = Last::read(&a.places.last()).unwrap();
+    assert!(last.roots.contains("home"), "{:?}", last.roots);
+    assert!(last.entries.get(ssh).is_some_and(|k| k.added));
+    let asleep = Last::read(&b.places.last()).unwrap();
+    assert!(asleep.entries.get(ssh).is_some_and(|k| !k.added));
+    // A TAKES THE HOME OUT: the notes leave the repository, the SSH file
+    // stays for the machines that keep the target.
+    a.prefs.stop_keeping("home");
+    assert_eq!(counts(&a), (0, 0, 0, 1), "the target's file left");
+    // B WAKES: nothing deleted, nothing set aside.
+    assert_eq!(counts(&b), (0, 0, 0, 0));
+    assert_eq!(b.read(ssh).as_deref(), Some("Host x\n"));
+    assert_eq!(b.read(notes).as_deref(), Some("a\n"), "forgotten, kept");
+    assert!(
+        std::fs::read_dir(b.places.replaced()).map_or(true, |mut d| d.next().is_none()),
+        "something was set aside on B"
+    );
+    let c = Machine::new(&root, "machine-gamma", &remote);
+    assert_eq!(counts(&c), (1, 0, 0, 0));
+    assert_eq!(c.read(ssh).as_deref(), Some("Host x\n"));
     let _ = std::fs::remove_dir_all(root);
 }

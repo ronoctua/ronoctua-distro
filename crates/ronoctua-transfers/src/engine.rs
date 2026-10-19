@@ -7,8 +7,21 @@
 //! `completedLength`, yt-dlp prints the byte count so far, and libtorrent
 //! reports `total_done`. Adding those up would count the same bytes over and
 //! over, so this one SETS rather than adds, and throttles the same way.
+//!
+//! # Why none of them writes `Paused` or `Running` while it works
+//!
+//! Because the row already says it: the socket's pause and resume write the
+//! switch and the row together ([`Shared::pause`]), and the hand-off to the
+//! work says only that the job is [`Shared::under_way`] — the switch decides
+//! the word. An engine that wrote the stage again after acting on the switch
+//! wrote what the switch said a round trip AGO: a resume that landed while
+//! aria2 was being asked to pause had its `Running` written over with
+//! `Paused`, and the row said held over a switch at run until the loop's next
+//! look unpaused aria2 and wrote `Running` — a lie of one poll (`POLL`),
+//! not a lasting one, but about the key the person had just pressed. And the
+//! stage is never guessed from the counters: a download that moves no byte
+//! for a minute is not paused.
 
-use crate::job::Stage;
 use crate::ledger::Shared;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -85,15 +98,5 @@ impl<'a> Progress<'a> {
         });
         self.said = Instant::now();
         self.fresh = false;
-    }
-
-    /// Says the job is held, or running again.
-    ///
-    /// The stage is written by whoever changed it and not guessed from the
-    /// counters: a download that moves no byte for a minute is not paused, and
-    /// a screen that decided otherwise would be lying about something the
-    /// person can act on.
-    pub(crate) fn stage(&mut self, stage: Stage) {
-        self.shared.touch(self.id, |j| j.stage = stage);
     }
 }

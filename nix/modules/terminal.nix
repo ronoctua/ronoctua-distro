@@ -24,7 +24,7 @@ let
   # decoration included, was a no-op until the file moved into the home: the
   # D5 review measured it with `+show-config` under both variables. So the
   # file is placed by home-manager, which already manages this user's
-  # dotfiles (`nix/modules/home.nix`, `emacs.nix`), at the one path Ghostty
+  # dotfiles (`nix/modules/home.nix`), at the one path Ghostty
   # reads — declared in the flake, not written by hand (invariant 6).
 
   # ONE WINDOW, ONE PROCESS, WHICHEVER DOOR OPENS IT. The config below says

@@ -29,8 +29,8 @@
 # For most entries the registry is the whole story: the package leaves
 # `systemPackages`. Chrome and Emacs are not packages but features — the
 # kiosk, the native-messaging host, the extension and the browser's state
-# directory hang off `ronoctua.browser.enable`; the daemon, the Doom files
-# and the update's `doom-sync` off `ronoctua.editor.emacs`. Taking only the
+# directory hang off `ronoctua.browser.enable`; the daemon and the file
+# manager's way to `emacsclient` off `ronoctua.editor.emacs`. Taking only the
 # package away would leave all of that pointing at nothing. So their modules
 # declare the switch with an `apply` that turns it off when the person
 # declined the program (`honoured`), and every reader of the switch follows.
@@ -504,8 +504,8 @@ let
     .${sourceOf id e};
 
   # The ONE package that says the program is there, for `still-present`: an
-  # entry's companions are shared with others (`ripgrep` is the editor's and
-  # the base's), and finding one of them is not finding the program.
+  # entry's companions may be shared with others (or with the base), and
+  # finding one of them is not finding the program.
   mainOf =
     id: e:
     let

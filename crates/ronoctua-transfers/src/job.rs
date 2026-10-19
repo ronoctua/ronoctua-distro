@@ -115,8 +115,8 @@ impl Engine {
     /// Whether it honours PAUSE. Cancel is honoured by every engine.
     ///
     /// Data and not a second code path, which is what this module's header
-    /// promises: the socket asks it before flipping a row to held, and a screen
-    /// asks it before offering the key.
+    /// promises: the ledger asks it before holding a row (`Shared::pause`),
+    /// and a screen asks it before offering the key.
     ///
     /// The software engine does not pause, and it cannot be made to honestly.
     /// What it runs is `nix`, `flatpak` and `waydroid` in the middle of a

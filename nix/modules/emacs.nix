@@ -1,24 +1,29 @@
-# Emacs as a daemon, and Doom's config as versioned files.
+# Emacs, plain, as a daemon — and no configuration of the distro's.
 #
-# WHERE THE LINE IS, AND WHY IT IS THERE
-# --------------------------------------
-# Invariant 6 says: if it is not in the flake, it does not exist. Doom does not
-# fit that cleanly, and pretending otherwise would be the dishonest option. So
-# the boundary is drawn where it actually falls:
+# WHAT THE DISTRO DOES, AND WHAT IT LEAVES ALONE
+# ----------------------------------------------
+# The package (`emacs30`, as nixpkgs builds it), the daemon (`services.emacs`,
+# a user unit, so `emacsclient` opens in a process that has already loaded
+# everything), the variable the file manager reaches `emacsclient` by, and the
+# switch. Nothing else: no `init.el`, no `default.el`, no file under
+# `~/.config/emacs` or `~/.emacs.d`, nothing in `/etc` that Emacs reads — at
+# most the EMPTY folder `$XDG_CONFIG_HOME/emacs` (`emacsHome`, below). The owner's
+# decision (2026-10-19): the configuration is the PERSON's, and it travels
+# with their belongings (the target `emacs`, `assets/belongings.nix`). A
+# configuration the distro wrote would either be overwritten by theirs or
+# overwrite it on every rebuild.
 #
-#   DECLARATIVE — `init.el`, `packages.el`, `config.el` live in `assets/doom/`
-#   and home-manager writes them to `~/.config/doom`. They are versioned, they
-#   diff, and a rebuild puts them back exactly as the repository has them.
+# The package carries nixpkgs' own `site-start.el` — the load paths of the Nix
+# profiles and of native compilation, `tramp`'s remote `PATH` — which is how the
+# package finds what is installed, and sets no preference of anybody's.
 #
-#   IMPERATIVE — what Doom DOES with them: cloning the framework, resolving
-#   packages, byte-compiling. That is a network fetch into `~/.config/emacs`, and
-#   there is no honest way to call it declarative. `ronoctua-doom-sync` runs it,
-#   is idempotent, and is the only command on this system that reaches outside
-#   the flake.
+# NO TOOLS RIDE WITH IT. What a configuration wants beside the editor (a
+# document converter, a spell checker, a language server) is the person's to
+# declare, like any other program: the editor's entry is Emacs alone.
 #
-# WHY A DAEMON AT ALL: one process loads the whole configuration ONCE. Without
-# it, every `$EDITOR` invocation pays Doom's full startup — seconds — which is
-# enough that one silently stops using it and the config rots.
+# WHY A DAEMON AT ALL: one process loads the person's configuration ONCE.
+# Without it, every `$EDITOR` invocation pays the whole startup — seconds, with
+# a configuration of any size — which is enough that one stops using it.
 {
   config,
   lib,
@@ -30,99 +35,90 @@ let
   cfg = config.ronoctua;
   emacsPkg = pkgs.emacs30;
 
-  # The `doom doctor` list, plus what the `:lang` modules in `init.el` need.
-  # Missing one of these does not fail loudly: the module just quietly does less,
-  # and the symptom is a feature that "never worked".
-  doomDeps = with pkgs; [
-    git
-    ripgrep
-    fd
-    coreutils
-    gnutar
-    gzip
-    cmake # vterm and tree-sitter grammars
-    gnumake
-    libtool
-    sqlite # forge, org-roam
-    editorconfig-core-c
-    pandoc # :lang markdown export
-    shellcheck # :checkers syntax for sh
-    shfmt # :editor format
-    nixfmt # :lang nix
-    nil
-    graphviz # org export of diagrams
-    (aspellWithDicts (d: [
-      d.en
-      d.pt_BR # :checkers spell, both languages — section 2
-    ]))
-  ];
-
-  # Same reason as in home.nix: a heredoc terminator must be in column 0, and
-  # `nix fmt` reindents activation scripts.
-  doomLocalTemplate = pkgs.writeText "doom-local.el" ''
-    ;;; local.el — this machine's own. NEVER versioned (invariant 13).
-    ;;
-    ;; Loaded LAST by config.el, so anything here wins.
-    ;; (setq user-full-name "..."
-    ;;       user-mail-address "...")
-  '';
-
-  doomSync = pkgs.writeShellApplication {
-    name = "ronoctua-doom-sync";
-    runtimeInputs = [ emacsPkg ] ++ doomDeps;
-    text = ''
-      # IDEMPOTENT BY DESIGN: clone if absent, sync always.
-      #
-      # It has to be safe to run on every login and by hand at any moment,
-      # because the alternative is a machine where nobody is sure whether the
-      # config on disk is the config that is loaded.
-      framework="''${XDG_CONFIG_HOME:-$HOME/.config}/emacs"
-
-      if [ ! -d "$framework/.git" ]; then
-        echo "ronoctua: cloning Doom into $framework"
-        git clone --depth 1 https://github.com/doomemacs/doomemacs "$framework"
-        "$framework/bin/doom" install --no-config --no-env --no-fonts --force
+  # WHERE A FIRST CONFIGURATION IS BORN — before the daemon starts, an EMPTY
+  # `$XDG_CONFIG_HOME/emacs` in a home that has none of the places Emacs
+  # reads (`~/.emacs.el`, `~/.emacs.elc`, `~/.emacs`, `~/.emacs.d`, that
+  # folder). Emacs 30 picks its init folder in `startup.el`: `~/.emacs.d`
+  # when it or `~/.emacs` exists, else the XDG one when it exists, else
+  # `~/.emacs.d` — which the daemon's first start then makes, with nothing of
+  # the person's in it (measured in a bare home: the folder and the native
+  # compiler's `eln-cache/`, where nixpkgs' `site-start.el` lands compiled
+  # within seconds; the server's socket is under `$XDG_RUNTIME_DIR`) — and
+  # Customize, `package-install` and an enabled command write `~/.emacs`.
+  # Neither is the one place the belongings carry (target `emacs`:
+  # `~/.config/emacs`), and that `~/.emacs.d` alone hides the XDG folder from
+  # every start after it. With the folder there
+  # first, Emacs reads `~/.config/emacs/init.el`, writes into it, and puts its
+  # packages and caches under it — all inside the carried place, the packages
+  # skipped. Measured with Emacs 30.2 in throwaway homes
+  # (`docs/ARCHITECTURE.md`).
+  #
+  # A folder and never a file; and never in a home that has any of them — a
+  # `~/.emacs.el` alone is read only while no XDG folder exists, so making
+  # one there would switch the person's configuration off. Emacs's own test
+  # is `file-exists-p`, which follows a link, and a DANGLING link is not
+  # there for it; but a link at one of these names is the person's doing,
+  # and `mkdir -p` over a dangling one fails: so a name counts when it is
+  # there or is a link (`-e || -L`), and the home is left alone.
+  #
+  # IT NEVER STOPS THE DAEMON. The step is a convenience: whatever fails in
+  # it (a dangling link raced in, a read-only home, a full disk) is said on
+  # stderr — the daemon's journal — and the step still exits 0; and the unit
+  # runs it with `-`, so not even a shell that cannot start keeps the daemon
+  # from starting (`Restart=always` would otherwise retry it for ever).
+  #
+  # The folder is Emacs's own XDG folder, as `startup.el` makes it: the
+  # variable's value joined by `/emacs` — set but empty, that is `/emacs`,
+  # which cannot be made (and Emacs then uses `~/.emacs.d`) —, a leading `~`
+  # the home, a relative value under the unit's working directory (the home,
+  # as Emacs sees it there), and `~/.config/emacs` without the variable.
+  emacsHome = pkgs.writeShellScript "ronoctua-emacs-home" ''
+    if [ "''${XDG_CONFIG_HOME+set}" = set ]; then
+      xdg="$XDG_CONFIG_HOME/emacs"
+    else
+      xdg="$HOME/.config/emacs"
+    fi
+    case "$xdg" in
+      "~"/*) xdg="$HOME/''${xdg#"~/"}" ;;
+    esac
+    for place in "$HOME/.emacs.el" "$HOME/.emacs.elc" "$HOME/.emacs" "$HOME/.emacs.d" "$xdg"; do
+      if [ -e "$place" ] || [ -L "$place" ]; then
+        exit 0
       fi
-
-      # `--force`: the config is REPLACED by the repository on every rebuild, so
-      # there is never anything local to preserve here. Prompting would only
-      # block a login.
-      echo "ronoctua: doom sync"
-      "$framework/bin/doom" sync --force
-      echo "ronoctua: done. Restart the daemon with: systemctl --user restart emacs"
-    '';
-  };
+    done
+    if ! ${pkgs.coreutils}/bin/mkdir -p -m 0700 "$xdg"; then
+      echo "ronoctua-emacs-home: could not make $xdg; Emacs starts without it" >&2
+    fi
+    exit 0
+  '';
 in
 {
   # The registry this module writes the editor's entry into (see
   # `browser.nix` for why it is imported here too).
   imports = [ ./distro-apps.nix ];
 
-  options.ronoctua.editor.emacs =
-    lib.mkEnableOption "Emacs 30 and Doom's dependencies (~0.6 GiB)"
-    // {
-      default = true;
-      # A DECLINE TURNS THE EDITOR OFF, daemon, Doom files and update step
-      # included — the package alone would leave a daemon unit starting a
-      # program that is not on the machine's `PATH` and the rest waiting for
-      # it. An `apply`, as Chrome's switch has (`browser.nix` says why).
-      apply = carried: carried && !(lib.elem "emacs" config.ronoctua.distroApps.honoured);
-    };
+  options.ronoctua.editor.emacs = lib.mkEnableOption "Emacs 30 and its daemon (~0.5 GiB)" // {
+    default = true;
+    # A DECLINE TURNS THE EDITOR OFF, daemon included — the package alone
+    # would leave a daemon unit starting a program that is not on the
+    # machine's `PATH`. An `apply`, as Chrome's switch has (`browser.nix`
+    # says why).
+    apply = carried: carried && !(lib.elem "emacs" config.ronoctua.distroApps.honoured);
+  };
 
   config = lib.mkMerge [
     {
-      # EMACS IS A PROGRAM OF THE REGISTRY (`nix/modules/distro-apps.nix`),
-      # with Doom's tools and its sync riding along. Its four launcher entries
-      # are the package's own: `services.emacs.enable` alone puts the package
-      # in `systemPackages` in nixpkgs 26.05 (`install = false` below does not
-      # keep it out), and `emacs.desktop` and `emacsclient.desktop` with it.
+      # EMACS IS A PROGRAM OF THE REGISTRY (`nix/modules/distro-apps.nix`).
+      # Its four launcher entries are the package's own: `services.emacs.enable`
+      # alone puts the package in `systemPackages` in nixpkgs 26.05
+      # (`install = false` below does not keep it out), and `emacs.desktop` and
+      # `emacsclient.desktop` with it.
       #
       # OUTSIDE the `mkIf` below, because the switch reads the registry (its
       # `apply`, above): an entry inside it would make the registry's names
       # depend on the switch (see `distro-apps.nix`).
       ronoctua.apps.emacs = {
         package = emacsPkg;
-        extraPackages = [ doomSync ] ++ doomDeps;
         group = "editor";
         desktopIds = [
           "emacs.desktop"
@@ -133,27 +129,8 @@ in
       };
     }
 
-    # EVERYTHING ELSE hangs off the switch, `home-manager` files included: a
-    # machine with no Emacs has no use for a Doom configuration in the home
-    # directory, and the activation script would create `local.el` for a
-    # framework that is not installed.
+    # EVERYTHING ELSE hangs off the switch.
     (lib.mkIf cfg.editor.emacs {
-      # AND THE UPDATE BRINGS DOOM WITH IT.
-      #
-      # The update's `steps.nix` declares the step and ships it OFF, which it has to:
-      # it names a bare binary, and a bare binary must not ship on (invariant 6).
-      # The module that knows the binary exists is this one, so this is where it
-      # is switched on — the same shape `ronoctua.update.steps` has for every
-      # other per-machine answer, written into `/etc/ronoctua/updates.conf`.
-      #
-      # WHY IT HAS TO HAPPEN AT ALL: the three files below are rewritten from the
-      # repository on every rebuild, and until `doom sync` runs the framework is
-      # still resolving the previous ones. The owner asked for the two to move
-      # together.
-      #
-      # `mkDefault`, so somebody who does not want it says so in one line.
-      ronoctua.update.steps.doom-sync = lib.mkDefault true;
-
       # WHERE THE FILE MANAGER SENDS TEXT — and it is set HERE, inside this
       # `mkIf`, rather than baked into the binary.
       #
@@ -169,6 +146,13 @@ in
       systemd.user.services.ronoctua-footer.environment.RONOCTUA_EMACSCLIENT =
         "${emacsPkg}/bin/emacsclient";
 
+      # THE FOLDER FIRST (`emacsHome`), in the environment the daemon starts
+      # in — the same `set-environment` its `ExecStart` sources, so both see
+      # the same `XDG_CONFIG_HOME`. By store path: a user unit's `PATH` is
+      # minimal. `-`: its failure never keeps the daemon from starting.
+      systemd.user.services.emacs.serviceConfig.ExecStartPre =
+        "-${pkgs.runtimeShell} -c 'source ${config.system.build.setEnvironment}; exec ${emacsHome}'";
+
       services.emacs = {
         enable = true;
         package = emacsPkg;
@@ -183,34 +167,6 @@ in
         install = false;
         defaultEditor = false; # `$EDITOR` is set by assets/shell/shellrc.sh
         startWithGraphical = false; # a terminal Emacs must work without a session
-      };
-
-      home-manager.users.${cfg.user} = {
-        xdg.configFile = {
-          "doom/init.el".source = ../../assets/doom/init.el;
-          "doom/packages.el".source = ../../assets/doom/packages.el;
-          "doom/config.el".source = ../../assets/doom/config.el;
-        };
-      };
-
-      # `~/.config/doom/local.el` — identity and anything else personal, created
-      # once and never overwritten. Same arrangement as `~/.shellrc.local`, and the
-      # same reason: invariant 13 keeps a name and an e-mail out of the repository.
-      system.activationScripts.doomLocal = {
-        deps = [
-          "users"
-          "configHome"
-        ];
-        text = ''
-          target=/home/${cfg.user}/.config/doom/local.el
-          if [ ! -d /home/${cfg.user}/.config/doom ]; then
-            install -d -m 0755 -o ${cfg.user} -g users /home/${cfg.user}/.config/doom
-          fi
-          if [ ! -e "$target" ]; then
-            cp ${doomLocalTemplate} "$target"
-            chown ${cfg.user}:users "$target"
-          fi
-        '';
       };
     })
   ];

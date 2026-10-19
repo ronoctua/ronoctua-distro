@@ -122,6 +122,53 @@ pub enum Pace {
 /// session's watches. Past it the rest are not heard, and the log says so.
 pub const TREE_MOST: usize = 512;
 
+/// What decides whether a path under a [`Tree`] is heard: `true` for one
+/// that is not — a directory it names is not watched, nor anything under
+/// it, and an event about a path it names is not reported.
+pub type Unheard = std::sync::Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
+/// A tree [`Notice::on_trees`] hears: a directory and every directory under
+/// it, the ones made later included — but what `unheard` names.
+#[derive(Clone)]
+pub struct Tree {
+    /// The directory.
+    pub root: PathBuf,
+    /// The most directories held under it, its OWN: past it the rest of
+    /// this tree is not heard, and no other tree pays for it. `None`: one
+    /// of the trees that share [`TREE_MOST`] between them — what
+    /// [`Notice::on_dirs`] makes of every tree it is given.
+    pub most: Option<usize>,
+    /// What under it is not heard; `None`: everything is.
+    pub unheard: Option<Unheard>,
+}
+
+impl Tree {
+    /// A tree as [`Notice::on_dirs`] hears it: whole, sharing [`TREE_MOST`].
+    #[must_use]
+    pub const fn shared(root: PathBuf) -> Self {
+        Self {
+            root,
+            most: None,
+            unheard: None,
+        }
+    }
+
+    /// Whether `path` under it is not heard.
+    fn unheard(&self, path: &Path) -> bool {
+        self.unheard.as_ref().is_some_and(|f| f(path))
+    }
+}
+
+impl std::fmt::Debug for Tree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tree")
+            .field("root", &self.root)
+            .field("most", &self.most)
+            .field("unheard", &self.unheard.is_some())
+            .finish()
+    }
+}
+
 /// The read buffer, in bytes.
 ///
 /// An `inotify_event` is sixteen bytes plus the name, so this holds upwards of a
@@ -262,7 +309,33 @@ impl Notice {
     where
         F: Fn() -> bool + Send + 'static,
     {
-        Self::raise(dirs.to_vec(), trees.to_vec(), None, pace, on_stir)
+        Self::raise(
+            dirs.to_vec(),
+            trees.iter().cloned().map(Tree::shared).collect(),
+            None,
+            pace,
+            on_stir,
+        )
+    }
+
+    /// [`Notice::on_dirs`], with each tree saying what of it is not heard
+    /// and how many directories it may hold of its own ([`Tree`]): a tree
+    /// in a home whose folder of packages is thousands of directories hears
+    /// the person's files beside them and not the packages, and the other
+    /// trees keep their watches whatever that one holds. In the order given:
+    /// a tree that shares [`TREE_MOST`] with others is grown after those
+    /// before it.
+    ///
+    /// An event in a directory that is also one of `dirs` is always heard.
+    ///
+    /// # Errors
+    ///
+    /// As [`Notice::watching`].
+    pub fn on_trees<F>(dirs: &[PathBuf], trees: Vec<Tree>, pace: Pace, on_stir: F) -> Result<Self>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        Self::raise(dirs.to_vec(), trees, None, pace, on_stir)
     }
 
     /// The one constructor behind the doors: the fixed directories (the
@@ -270,7 +343,7 @@ impl Notice {
     /// that narrows what counts, and the thread.
     fn raise<F>(
         fixed: Vec<PathBuf>,
-        trees: Vec<PathBuf>,
+        trees: Vec<Tree>,
         only: Option<OsString>,
         pace: Pace,
         on_stir: F,
@@ -305,6 +378,7 @@ impl Notice {
                     told,
                     listing: None,
                     fixed,
+                    fixed_wds: Vec::new(),
                     trees,
                     grown: Vec::new(),
                     only,
@@ -431,12 +505,16 @@ struct Watcher {
     /// the one the file lives in, or [`Notice::on_dirs`]'s. Fixed for the
     /// life of the watch.
     fixed: Vec<PathBuf>,
-    /// The trees [`Notice::on_dirs`] was given: each root and every directory
-    /// under it.
-    trees: Vec<PathBuf>,
-    /// Every directory held under a tree, by its watch — so a directory made
-    /// inside one is known to be a tree's, and is held in its turn.
-    grown: Vec<(i32, PathBuf)>,
+    /// The watches the fixed directories hold: an event in one is heard
+    /// whatever a tree says of it.
+    fixed_wds: Vec<i32>,
+    /// The trees [`Notice::on_dirs`] or [`Notice::on_trees`] was given:
+    /// each root and every directory under it.
+    trees: Vec<Tree>,
+    /// Every directory held under a tree, by its watch, and the tree's
+    /// place in `trees` — so a directory made inside one is known to be
+    /// that tree's, and is held in its turn.
+    grown: Vec<(i32, PathBuf, usize)>,
     /// The one file name that counts, when the watch is on a file. `None`
     /// means every event in a held directory is ours.
     only: Option<OsString>,
@@ -627,15 +705,19 @@ impl Watcher {
             let _ = inotify::remove_watch(&self.fd, wd);
         }
         self.grown.clear();
+        self.fixed_wds.clear();
         self.listing_wd = match self.listing.clone() {
             Some(dir) => self.hold(&dir),
             None => None,
         };
         for dir in self.fixed.clone() {
-            let _ = self.hold(&dir);
+            if let Some(wd) = self.hold(&dir) {
+                self.fixed_wds.push(wd);
+            }
         }
-        for root in self.trees.clone() {
-            self.grow(&root);
+        for tree in 0..self.trees.len() {
+            let root = self.trees[tree].root.clone();
+            self.grow(tree, &root);
         }
     }
 
@@ -667,23 +749,47 @@ impl Watcher {
         }
     }
 
-    /// Holds `root` and every directory under it — a tree's, or a directory
-    /// just made inside one. Symbolic links are not followed: a link out of
-    /// the tree is not the tree.
-    fn grow(&mut self, root: &Path) {
+    /// Whether the tree at `tree` holds all it may: its own `most`, or —
+    /// one that shares — [`TREE_MOST`] among every tree that shares.
+    fn full(&self, tree: usize) -> (bool, usize) {
+        match self.trees[tree].most {
+            Some(most) => (
+                self.grown.iter().filter(|(_, _, t)| *t == tree).count() >= most,
+                most,
+            ),
+            None => (
+                self.grown
+                    .iter()
+                    .filter(|(_, _, t)| self.trees[*t].most.is_none())
+                    .count()
+                    >= TREE_MOST,
+                TREE_MOST,
+            ),
+        }
+    }
+
+    /// Holds `root` and every directory under it — a tree's (`tree`, its
+    /// place in `trees`), or a directory just made inside one — but what
+    /// the tree does not hear. Symbolic links are not followed: a link out
+    /// of the tree is not the tree.
+    fn grow(&mut self, tree: usize, root: &Path) {
         let mut todo = vec![root.to_path_buf()];
         while let Some(dir) = todo.pop() {
-            if self.grown.iter().any(|(_, d)| d == &dir) {
+            if self.grown.iter().any(|(_, d, _)| d == &dir) {
                 continue;
             }
-            if self.grown.len() >= TREE_MOST {
-                tracing::warn!(directory = %dir.display(), most = TREE_MOST, "a tree too large to hear whole; this part of it is not watched");
+            if self.trees[tree].unheard(&dir) {
+                continue;
+            }
+            let (full, most) = self.full(tree);
+            if full {
+                tracing::warn!(directory = %dir.display(), most, "a tree too large to hear whole; this part of it is not watched");
                 return;
             }
             let Some(wd) = self.hold(&dir) else {
                 continue;
             };
-            self.grown.push((wd, dir.clone()));
+            self.grown.push((wd, dir.clone(), tree));
             let Ok(each) = std::fs::read_dir(&dir) else {
                 continue;
             };
@@ -703,7 +809,7 @@ impl Watcher {
         // — before the door is told, so whatever lands in them after this is
         // heard, and whatever landed before is on disk for the reading the
         // report asks for.
-        let mut born: Vec<PathBuf> = Vec::new();
+        let mut born: Vec<(usize, PathBuf)> = Vec::new();
         {
             let mut reader = inotify::Reader::new(&self.fd, buffer);
             loop {
@@ -738,12 +844,29 @@ impl Watcher {
                 if !self.held.contains(&wd) {
                     continue;
                 }
+                let grown = self.grown.iter().find(|(w, _, _)| *w == wd);
+                let named = grown
+                    .zip(event.file_name())
+                    .map(|((_, parent, tree), name)| {
+                        (
+                            *tree,
+                            parent.join(std::ffi::OsStr::from_bytes(name.to_bytes())),
+                        )
+                    });
+                // WHAT A TREE DOES NOT HEAR is no event of its — but in a
+                // directory that is also a fixed one, it is that one's.
+                if let Some((tree, path)) = &named
+                    && self.trees[*tree].unheard(path)
+                    && !self.fixed_wds.contains(&wd)
+                    && self.listing_wd != Some(wd)
+                {
+                    continue;
+                }
                 if flags.contains(inotify::ReadFlags::ISDIR)
                     && flags.intersects(inotify::ReadFlags::CREATE | inotify::ReadFlags::MOVED_TO)
-                    && let Some((_, parent)) = self.grown.iter().find(|(w, _)| *w == wd)
-                    && let Some(name) = event.file_name()
+                    && let Some(born_here) = named
                 {
-                    born.push(parent.join(std::ffi::OsStr::from_bytes(name.to_bytes())));
+                    born.push(born_here);
                 }
                 // A WATCH ON ONE FILE hears the whole directory and keeps the
                 // one name; the rest is the sidebar file, a scratch file, and
@@ -757,14 +880,15 @@ impl Watcher {
             }
         }
         self.held.retain(|wd| !gone.contains(wd));
-        self.grown.retain(|(wd, _)| !gone.contains(wd));
+        self.grown.retain(|(wd, _, _)| !gone.contains(wd));
+        self.fixed_wds.retain(|wd| !gone.contains(wd));
         // THE LISTING'S WATCH OVER — its folder deleted, or the vault it is
         // in locked and unmounted: asked for again at the next stir.
         if self.listing_wd.is_some_and(|wd| gone.contains(&wd)) {
             self.listing_wd = None;
         }
-        for dir in born {
-            self.grow(&dir);
+        for (tree, dir) in born {
+            self.grow(tree, &dir);
         }
         ours
     }
@@ -1350,5 +1474,99 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&refs);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// A tree's notice whose reports are counted, and the counter.
+    fn counted_trees(trees: Vec<Tree>) -> (Notice, Arc<AtomicUsize>) {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let mine = Arc::clone(&seen);
+        let notice = Notice::on_trees(&[], trees, Pace::AtOnce, move || {
+            mine.fetch_add(1, Ordering::SeqCst);
+            true
+        })
+        .unwrap();
+        (notice, seen)
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: one tree — a person's addition of thousands of
+    // directories — taking every watch, so a tree that holds its own goes
+    // unheard; and a write in a folder a tree skips costing the door a
+    // re-read nobody needs.
+    fn a_tree_of_its_own_hears_beside_a_full_one_and_not_what_it_skips() {
+        let big = scratch("trees-big");
+        let small = scratch("trees-small");
+        for n in 0..TREE_MOST + 8 {
+            std::fs::create_dir(big.join(format!("d{n}"))).unwrap();
+        }
+        std::fs::create_dir_all(small.join("inner")).unwrap();
+        std::fs::create_dir_all(small.join("packages/a/b")).unwrap();
+        let skip: Unheard = Arc::new(|p: &Path| {
+            p.components()
+                .any(|c| c.as_os_str() == "packages" || c.as_os_str() == "history")
+        });
+        let (_notice, seen) = counted_trees(vec![
+            Tree::shared(big.clone()),
+            Tree {
+                root: small.clone(),
+                most: Some(8),
+                unheard: Some(skip),
+            },
+        ]);
+        // THE TREE OF ITS OWN KEEPS ITS WATCHES, the shared one full.
+        assert!(
+            armed(&seen, &small.join("inner")),
+            "a tree of its own went unheard because a shared one was full"
+        );
+        assert!(armed(&seen, &big), "the shared tree's root was not heard");
+        // WHAT THE TREE SKIPS is not watched, and a file it names beside
+        // the person's is not reported.
+        settled(&seen);
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(small.join("packages/a/b/x.el"), b";;").unwrap();
+        std::fs::write(small.join("history"), b"()").unwrap();
+        assert_eq!(
+            past(&seen, was, Duration::from_millis(400)),
+            was,
+            "what the tree skips was heard"
+        );
+        let _ = std::fs::remove_dir_all(&big);
+        let _ = std::fs::remove_dir_all(&small);
+    }
+
+    #[test]
+    // WHAT `on_dirs` WAS, it stays — the git line's, the agents', the
+    // stick's: its trees share one budget, in the order given, and hear
+    // everything in them.
+    fn trees_on_dirs_share_one_budget_as_before() {
+        let first = scratch("shared-first");
+        let second = scratch("shared-second");
+        for n in 0..TREE_MOST {
+            std::fs::create_dir(first.join(format!("d{n}"))).unwrap();
+        }
+        std::fs::create_dir(second.join("late")).unwrap();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let mine = Arc::clone(&seen);
+        let _notice = Notice::on_dirs(
+            &[],
+            &[first.clone(), second.clone()],
+            Pace::AtOnce,
+            move || {
+                mine.fetch_add(1, Ordering::SeqCst);
+                true
+            },
+        )
+        .unwrap();
+        assert!(armed(&seen, &first), "the first tree was not heard");
+        settled(&seen);
+        let was = seen.load(Ordering::SeqCst);
+        std::fs::write(second.join("late/x"), b"x").unwrap();
+        assert_eq!(
+            past(&seen, was, Duration::from_millis(400)),
+            was,
+            "the second tree was heard past the shared budget: `on_dirs` changed"
+        );
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
     }
 }

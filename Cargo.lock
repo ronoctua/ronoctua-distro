@@ -5082,7 +5082,6 @@ dependencies = [
  "ronoctua-bluetooth",
  "ronoctua-brain",
  "ronoctua-browser",
- "ronoctua-camera",
  "ronoctua-clipboard",
  "ronoctua-clipcascade",
  "ronoctua-cmd",

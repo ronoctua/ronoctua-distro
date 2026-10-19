@@ -424,7 +424,7 @@ class Builds(unittest.TestCase):
 
     def test_the_sizing_is_read_and_never_guessed(self):
         with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as root:
-            said = "slots=5\nrust_jobs=5\njobs=4\ncores=1\nheavy_cores=9\n"
+            said = "slots=5\njobs=4\ncores=1\nheavy_cores=9\nclass_light_jobs=9\n"
             self.assertEqual(pb.sizing_of(self.sizing(root, said)), {"slots": 5, "jobs": 4, "cores": 1})
         for says, status in [("jobs=4\ncores=1\n", 0), ("slots=0\njobs=4\ncores=1\n", 0),
                              ("slots=many\njobs=4\ncores=1\n", 0), ("slots=5\njobs=4\ncores=1\n", 1)]:

@@ -241,6 +241,35 @@ impl std::fmt::Debug for Engine<'_> {
     }
 }
 
+/// What the page says is past the "large" line (`kept::LARGE_BYTES`) among
+/// `entries` — what a sync keeps: every folder or file the person added,
+/// and every path of a target (an Emacs configuration that carries a folder
+/// of data, a GnuPG keyring grown huge), each with its weight, and a path
+/// that is both (an addition made at a target's path) once. Pure.
+fn large_of(prefs: &Belongings, entries: &BTreeMap<String, Known>) -> Vec<(String, u64)> {
+    let weight = |root: &str| {
+        entries
+            .iter()
+            .filter(|(p, _)| crate::places::covers(root, p))
+            .map(|(_, k)| k.size_bytes)
+            .sum::<u64>()
+    };
+    let mut said = BTreeSet::new();
+    prefs
+        .extra
+        .iter()
+        .map(String::as_str)
+        .chain(
+            crate::scope::targets()
+                .iter()
+                .flat_map(|t| t.paths.iter().copied()),
+        )
+        .filter(|root| said.insert(*root))
+        .map(|root| (root.to_owned(), weight(root)))
+        .filter(|(_, bytes)| *bytes > kept::LARGE_BYTES)
+        .collect()
+}
+
 /// Seconds since the epoch, now.
 #[must_use]
 pub fn now_s() -> i64 {
@@ -1259,22 +1288,7 @@ impl<'a> Engine<'a> {
             }
         }
         let kept_bytes = entries.values().map(|k| k.size_bytes).sum();
-        let large = self
-            .prefs
-            .extra
-            .iter()
-            .map(|e| {
-                (
-                    e.clone(),
-                    entries
-                        .iter()
-                        .filter(|(p, _)| crate::places::covers(e, p))
-                        .map(|(_, k)| k.size_bytes)
-                        .sum::<u64>(),
-                )
-            })
-            .filter(|(_, bytes)| *bytes > kept::LARGE_BYTES)
-            .collect();
+        let large = large_of(self.prefs, &entries);
         let mut last = Last {
             repository: self.prefs.repository.clone(),
             commit,

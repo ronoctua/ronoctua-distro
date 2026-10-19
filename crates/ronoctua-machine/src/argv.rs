@@ -132,6 +132,39 @@ pub fn dry_run_drvs(drvs: &[String]) -> Vec<String> {
     words
 }
 
+/// `ronoctua-build-units` building, of the plan in `plan`, the units `will`
+/// lists (one `.drv` a line), each its own `nix build` by `nix` — taking the
+/// features every call here takes —, their outputs held under `held`.
+/// `will` is a dry run's whole answer (the units, and what is no unit, of
+/// which the program builds first what the units are built from), or, with
+/// `units_only`, units and nothing else: no dry run answered, and the
+/// program asks Nix what they are built from.
+#[must_use]
+pub fn build_units(
+    nix: &Path,
+    plan: &Path,
+    will: &Path,
+    held: &Path,
+    units_only: bool,
+) -> Vec<String> {
+    let mut words = vec![
+        "--nix".to_owned(),
+        nix.display().to_string(),
+        plan.display().to_string(),
+        will.display().to_string(),
+        held.display().to_string(),
+    ];
+    if units_only {
+        words.push("--units-only".to_owned());
+    }
+    words.extend([
+        "--".to_owned(),
+        "--extra-experimental-features".to_owned(),
+        FEATURES.to_owned(),
+    ]);
+    words
+}
+
 /// `ronoctua-keep-units` rooting, under `roots`, the set `set` of the paths
 /// listed in `paths` that the store holds.
 #[must_use]
@@ -309,7 +342,7 @@ mod tests {
         let built = build_drvs(
             &["/nix/store/a.drv".to_owned(), "/nix/store/b.drv".to_owned()],
             Sized { jobs: 1, cores: 7 },
-            Path::new("/run/u/heavy-0"),
+            Path::new("/run/u/next"),
         );
         assert_eq!(
             built[3..],
@@ -319,7 +352,7 @@ mod tests {
                 "--cores",
                 "7",
                 "--out-link",
-                "/run/u/heavy-0",
+                "/run/u/next",
                 "/nix/store/a.drv^*",
                 "/nix/store/b.drv^*"
             ]
@@ -334,6 +367,29 @@ mod tests {
                 "/nix/store/s.drv^*"
             ]
         );
+        for units_only in [false, true] {
+            let mut want = vec![
+                "--nix",
+                "/nix/store/n/bin/nix",
+                "/run/u/plan",
+                "/run/u/will",
+                "/run/u/built",
+            ];
+            if units_only {
+                want.push("--units-only");
+            }
+            want.extend(["--", "--extra-experimental-features", FEATURES]);
+            assert_eq!(
+                build_units(
+                    Path::new("/nix/store/n/bin/nix"),
+                    Path::new("/run/u/plan"),
+                    Path::new("/run/u/will"),
+                    Path::new("/run/u/built"),
+                    units_only
+                ),
+                want
+            );
+        }
         assert_eq!(
             keep_units(Path::new("/var/k"), "release", Path::new("/run/u/kept")),
             ["--roots", "/var/k", "--set", "release", "/run/u/kept"]

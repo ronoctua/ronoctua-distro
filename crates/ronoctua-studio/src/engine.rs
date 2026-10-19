@@ -52,7 +52,18 @@ pub struct Engine {
     book: Book,
     stamps: (Option<SystemTime>, Option<SystemTime>),
     book_dirty: Option<Instant>,
+    /// Every camera, as the watch last read them — and NONE while no camera
+    /// is in use: reading one opens it, and its light blinks
+    /// ([`Engine::follow_cameras`]).
     cameras: Vec<ronoctua_camera::Camera>,
+    /// The watch that reads them, raised only while a camera is in use.
+    camera_watch: Option<ronoctua_camera::watch::Handle>,
+    /// Which raising of the watch is the current one: a reading of a watch
+    /// already let go is dropped ([`Engine::cameras_read`]).
+    camera_epoch: u64,
+    /// The watch raised has answered: `cameras` is its reading, and not
+    /// the nothing it starts from.
+    cameras_heard: bool,
     sources: HashMap<String, (Source, Live)>,
     scene: String,
     fading: Option<(Arc<Frame>, Instant, u32)>,
@@ -144,6 +155,9 @@ impl Engine {
             book,
             book_dirty: None,
             cameras: Vec::new(),
+            camera_watch: None,
+            camera_epoch: 0,
+            cameras_heard: false,
             sources: HashMap::new(),
             scene,
             fading: None,
@@ -533,10 +547,92 @@ impl Engine {
         Ok(())
     }
 
-    /// Replaces the camera list.
-    pub fn cameras_changed(&mut self, cameras: Vec<ronoctua_camera::Camera>) {
-        self.cameras = cameras;
-        self.dirty = true;
+    /// Whether the cameras are to be read now: while one is OPEN for a
+    /// source — its light is on — or the camera app shows the program (a
+    /// viewer: a person opened the camera). Nothing else asks for them: a
+    /// door watching the state, the screen recorded alone, the virtual
+    /// camera sending a scene with no camera, or a studio that only started.
+    fn cameras_wanted(&self) -> bool {
+        cameras_wanted(
+            self.viewers.len(),
+            self.sources.values().map(|(source, _)| source),
+        )
+    }
+
+    /// Whether the cameras held are the raised watch's reading — raised, and
+    /// answered. Before its first answer the list is empty, not read.
+    #[must_use]
+    pub fn knows_the_cameras(&self) -> bool {
+        self.camera_watch.is_some() && self.cameras_heard
+    }
+
+    /// RAISES THE CAMERA WATCH while a camera is wanted, and lets go of it —
+    /// and of the list — when none is: read after every change of the
+    /// sources, by the loop.
+    ///
+    /// Kept for the studio's whole life, the watch read every camera again at
+    /// every plug and every change of a node's permissions — a camera's light
+    /// blinking with nobody having asked for one.
+    fn follow_cameras(&mut self, shared: &Shared) {
+        match (self.cameras_wanted(), self.camera_watch.is_some()) {
+            (true, false) => {
+                self.camera_epoch += 1;
+                self.cameras_heard = false;
+                let epoch = self.camera_epoch;
+                let shared = Arc::clone(shared);
+                self.camera_watch = Some(ronoctua_camera::watch::watch(move |cameras| {
+                    let (lock, bell) = &*shared;
+                    if let Ok(mut e) = lock.lock() {
+                        e.cameras_read(epoch, cameras);
+                    }
+                    bell.notify_all();
+                }));
+            }
+            (false, true) => {
+                self.camera_watch = None;
+                self.cameras_heard = false;
+                self.cameras.clear();
+                self.dirty = true;
+            }
+            _ => {}
+        }
+    }
+
+    /// A reading of the watch raised as `epoch`, taken while that watch is
+    /// still the one raised: one that finished after its watch was let go
+    /// is about cameras nobody asks for any more.
+    fn cameras_read(&mut self, epoch: u64, cameras: Vec<ronoctua_camera::Camera>) {
+        if self.camera_watch.is_some() && epoch == self.camera_epoch {
+            self.cameras = cameras;
+            self.cameras_heard = true;
+            self.dirty = true;
+            self.broadcast();
+        }
+    }
+
+    /// [`Engine::ask`], for a gesture about a camera ([`Ask::reads_the_cameras`])
+    /// made while no watch's reading is held: the cameras it was given, read
+    /// once for it, are the list it reads — and are let go after it, unless
+    /// the watch answered meanwhile, so the state never keeps a camera nobody
+    /// looks at.
+    pub fn ask_having_read(
+        &mut self,
+        ask: Ask,
+        read: Option<Vec<ronoctua_camera::Camera>>,
+        shared: &Shared,
+    ) -> Say {
+        let once = match read {
+            Some(cameras) if !self.knows_the_cameras() => {
+                self.cameras = cameras;
+                true
+            }
+            _ => false,
+        };
+        let say = self.ask(ask, shared);
+        if once && !self.knows_the_cameras() {
+            self.cameras.clear();
+        }
+        say
     }
 
     fn save_book_soon(&mut self) {
@@ -1023,6 +1119,13 @@ impl Engine {
     }
 }
 
+/// Whether the cameras are to be read, given how many viewers the program
+/// has and the sources open: a viewer is the camera app, and a camera source
+/// is a light on ([`Engine::follow_cameras`]).
+fn cameras_wanted<'a>(viewers: usize, mut open: impl Iterator<Item = &'a Source>) -> bool {
+    viewers > 0 || open.any(|s| matches!(s, Source::Camera { .. }))
+}
+
 /// The ring of a family: `None` (no effect), then every declared id, then
 /// `None` again.
 /// Whether `name` may be put in the effect's place (`background` false) or
@@ -1057,6 +1160,7 @@ pub fn run(shared: &Shared) {
             let Ok(mut e) = lock.lock() else { return };
             if !e.wanted() {
                 e.sources.clear();
+                e.follow_cameras(shared);
                 if e.dirty {
                     e.broadcast();
                 }
@@ -1064,6 +1168,7 @@ pub fn run(shared: &Shared) {
                 continue;
             }
             e.sync_sources();
+            e.follow_cameras(shared);
             if !e.composing() {
                 // The hands alone: their thread reads the source, and there
                 // is no program to draw.
@@ -1266,6 +1371,16 @@ pub fn run(shared: &Shared) {
 /// Serves one connection: one ask, and for a watcher or a viewer, the
 /// connection is kept.
 pub fn serve_one(stream: UnixStream, shared: &Shared) {
+    serve_one_reading(stream, shared, ronoctua_camera::scan);
+}
+
+/// [`serve_one`], with `read` the reading of the cameras a gesture at rest
+/// takes — a test's, which opens nothing.
+fn serve_one_reading(
+    stream: UnixStream,
+    shared: &Shared,
+    read: impl FnOnce() -> Vec<ronoctua_camera::Camera>,
+) {
     let Ok(read_half) = stream.try_clone() else {
         return;
     };
@@ -1275,6 +1390,35 @@ pub fn serve_one(stream: UnixStream, shared: &Shared) {
         _ => return,
     };
     let (lock, bell) = &**shared;
+    // A GESTURE ABOUT A CAMERA with none in use reads them ONCE, for it —
+    // off the lock: a reading opens every node and takes its time, and the
+    // loop must not wait on it. With a camera in use, the watch holds them
+    // (once it answered: until then this reads them too).
+    //
+    // AND IT IS ANSWERED BEFORE THE READING. The door that asked waits for
+    // the answer on its own loop, and gives up after two seconds saying the
+    // studio is not running — while a reading of every node can take
+    // longer, the footer frozen meanwhile. These asks refuse nothing
+    // (`Ask::reads_the_cameras`), so `done` is the answer the reading would
+    // have given; what the gesture changes reaches every door as the state.
+    if ask.reads_the_cameras() && lock.lock().is_ok_and(|e| !e.knows_the_cameras()) {
+        let mut out = stream;
+        let _ = wire::write_line(&mut out, &Say::Done);
+        drop(out);
+        let cameras = read();
+        let Ok(mut e) = lock.lock() else { return };
+        let said = e.ask_having_read(ask, Some(cameras), shared);
+        if said != Say::Done {
+            tracing::error!(
+                ?said,
+                "a gesture about a camera, answered done before its reading, said otherwise once read"
+            );
+        }
+        e.broadcast();
+        drop(e);
+        bell.notify_all();
+        return;
+    }
     let Ok(mut e) = lock.lock() else { return };
     match ask {
         Ask::Watch => e.add_watcher(stream),
@@ -1324,6 +1468,173 @@ mod tests {
             Say::Refused(Trouble::Rehearsal)
         );
         assert!(e.virtual_cam.is_none());
+    }
+
+    /// A camera as a driver would report it, with nothing opened.
+    fn planted(card: &str, interface: &str) -> ronoctua_camera::Camera {
+        ronoctua_camera::Camera {
+            identity: ronoctua_camera::Identity::of(card, "usb-1", interface),
+            node: format!("/dev/video-{interface}").into(),
+            card: card.into(),
+            driver: "uvcvideo".into(),
+            bus: "usb-1".into(),
+            kind: ronoctua_camera::Kind::Colour,
+            formats: Vec::new(),
+            controls: Vec::new(),
+            streamable: true,
+        }
+    }
+
+    /// FAILS IF: anything but a camera in use or the camera app asks for the
+    /// cameras to be read — a screen recorded alone, a door watching the
+    /// state or a studio that only started would blink the light.
+    #[test]
+    fn only_a_camera_in_use_or_the_camera_app_reads_the_cameras() {
+        let camera = Source::Camera { identity: None };
+        let screen = Source::Screen { output: None };
+        assert!(!cameras_wanted(0, std::iter::empty()));
+        assert!(!cameras_wanted(0, [&screen].into_iter()));
+        assert!(cameras_wanted(0, [&screen, &camera].into_iter()));
+        assert!(cameras_wanted(1, [&screen].into_iter()), "the camera app");
+        // A STUDIO THAT ONLY STARTED, followed by its loop: no watch, no
+        // camera in its state.
+        let shared: Shared = Arc::new((Mutex::new(Engine::default()), Condvar::new()));
+        let mut e = Engine::default();
+        e.follow_cameras(&shared);
+        assert!(e.camera_watch.is_none(), "an idle studio raised the watch");
+        assert!(e.state().cameras.is_empty());
+    }
+
+    /// FAILS IF: a gesture about a camera made with none in use does not
+    /// act on the cameras read for it, or the state keeps them after it —
+    /// a list nobody looks at, gone stale at the next unplug.
+    #[test]
+    fn a_camera_gesture_at_rest_reads_once_and_keeps_nothing() {
+        let shared: Shared = Arc::new((Mutex::new(Engine::default()), Condvar::new()));
+        let mut e = Engine {
+            book: crate::scene::Book::default(),
+            scene: crate::scene::CAMERA.into(),
+            ..Engine::default()
+        };
+        let (first, second) = (planted("Front", "1.0"), planted("Back", "2.0"));
+        let turned_to = second.identity.0.clone();
+        let read = vec![first, second];
+        assert!(Ask::CameraTurn { by: 1 }.reads_the_cameras());
+        assert!(!Ask::Look.reads_the_cameras());
+        assert_eq!(
+            e.ask_having_read(Ask::CameraTurn { by: 1 }, Some(read), &shared),
+            Say::Done
+        );
+        let layer = e.book.camera_layer(crate::scene::CAMERA).expect("a layer");
+        assert_eq!(
+            e.book
+                .scene(crate::scene::CAMERA)
+                .expect("the scene")
+                .layers[layer]
+                .source,
+            Source::Camera {
+                identity: Some(turned_to)
+            },
+            "the turn did not walk the cameras read for it"
+        );
+        assert!(e.cameras.is_empty(), "the cameras read once were kept");
+        assert!(e.camera_watch.is_none());
+    }
+
+    /// FAILS IF: a gesture about a camera made with none in use is answered
+    /// only once the cameras are read — the door that asked waits on its
+    /// loop, the footer frozen, and past two seconds says the studio is not
+    /// running though the gesture happened — or it is not carried out on the
+    /// reading when that comes.
+    #[test]
+    fn a_camera_gesture_at_rest_is_answered_before_its_reading() {
+        use std::io::BufReader;
+        use std::sync::mpsc;
+        let shared: Shared = Arc::new((
+            Mutex::new(Engine {
+                book: crate::scene::Book::default(),
+                scene: crate::scene::CAMERA.into(),
+                ..Engine::default()
+            }),
+            Condvar::new(),
+        ));
+        let (first, second) = (planted("Front", "1.0"), planted("Back", "2.0"));
+        let turned_to = second.identity.0.clone();
+        let (studio_end, asker) = UnixStream::pair().expect("a socket pair");
+        asker
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("a timeout");
+        wire::write_line(&mut &asker, &Ask::CameraTurn { by: 1 }).expect("the ask");
+        // THE READING HELD until the answer is in: a camera slow to answer.
+        let (release, held) = mpsc::channel::<()>();
+        let serving = Arc::clone(&shared);
+        let served = std::thread::spawn(move || {
+            serve_one_reading(studio_end, &serving, move || {
+                let _ = held.recv_timeout(Duration::from_secs(10));
+                vec![first, second]
+            });
+        });
+        let said: Option<Say> =
+            wire::read_line(&mut BufReader::new(&asker)).expect("an answer within the timeout");
+        assert_eq!(said, Some(Say::Done));
+        assert!(
+            !served.is_finished(),
+            "the reading was over before the answer: this proves nothing"
+        );
+        let _ = release.send(());
+        served.join().expect("the serving thread");
+        let (lock, _) = &*shared;
+        let e = lock.lock().expect("the engine");
+        let layer = e.book.camera_layer(crate::scene::CAMERA).expect("a layer");
+        assert_eq!(
+            e.book
+                .scene(crate::scene::CAMERA)
+                .expect("the scene")
+                .layers[layer]
+                .source,
+            Source::Camera {
+                identity: Some(turned_to)
+            },
+            "the turn was not carried out on the reading that came after"
+        );
+        assert!(e.cameras.is_empty(), "the cameras read once were kept");
+    }
+
+    /// FAILS IF: an ask that reads the cameras can say anything but `done` —
+    /// the studio answers it before the reading (`serve_one`), and a refusal
+    /// would never reach the door that asked.
+    #[test]
+    fn the_asks_that_read_the_cameras_refuse_nothing() {
+        let shared: Shared = Arc::new((Mutex::new(Engine::default()), Condvar::new()));
+        let asks = || {
+            [
+                Ask::CameraTurn { by: 1 },
+                Ask::CameraTurn { by: -1 },
+                Ask::Camera {
+                    identity: "nobody|usb-9|9.0".into(),
+                },
+                // Turned with no camera known and none named: nothing is
+                // written (`camera.json` is the person's).
+                Ask::Mirror,
+            ]
+        };
+        for scene in [crate::scene::CAMERA, "screen"] {
+            for read in [None, Some(Vec::new())] {
+                for ask in asks() {
+                    assert!(ask.reads_the_cameras(), "{ask:?}");
+                    let mut e = Engine {
+                        book: crate::scene::Book::default(),
+                        scene: scene.into(),
+                        ..Engine::default()
+                    };
+                    assert_eq!(
+                        e.ask_having_read(ask.clone(), read.clone(), &shared),
+                        Say::Done,
+                        "{ask:?} in `{scene}`"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

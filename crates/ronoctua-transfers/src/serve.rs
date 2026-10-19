@@ -17,7 +17,6 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use ronoctua_files::watch::Flow;
 
 use crate::job::{Engine, Stage};
 use crate::ledger::Shared;
@@ -146,12 +145,14 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
             }
             write_line(out, &Say::Took { id })
         }
+        // THE SWITCH AND THE ROW TOGETHER, under the ledger's lock — and only
+        // for an engine that honours a pause (`Shared::pause`).
         Ask::Pause { id } => {
-            flip(shared, *id, Flow::Pause, Stage::Paused);
+            shared.pause(*id);
             Ok(())
         }
         Ask::Resume { id } => {
-            flip(shared, *id, Flow::Run, Stage::Running);
+            shared.resume(*id);
             Ok(())
         }
         // NO STAGE HERE, on purpose. What ends a job is the thread finding out
@@ -159,9 +160,7 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
         // it had written. Writing `Cancelled` from this side would show the row
         // as over while the file was still being taken back.
         Ask::Cancel { id } => {
-            if let Some(switch) = shared.switch(*id) {
-                switch.set(Flow::Stop);
-            }
+            shared.cancel(*id);
             Ok(())
         }
         Ask::Forget { id } => {
@@ -174,29 +173,6 @@ fn answer(shared: &Arc<Shared>, ask: &Ask, out: &mut impl Write) -> Result<()> {
             Ok(())
         }
     }
-}
-
-/// Sets the switch and the row together.
-///
-/// Only for an engine that honours a pause: flipping the row of one that does
-/// not would draw a HELD job that is still working, which is a lie about the
-/// one thing the person can act on. The ask is dropped instead, the way an ask
-/// for a job that ended is.
-fn flip(shared: &Arc<Shared>, id: u64, flow: Flow, stage: Stage) {
-    if !shared.engine_of(id).is_some_and(Engine::pauses) {
-        return;
-    }
-    let Some(switch) = shared.switch(id) else {
-        return;
-    };
-    switch.set(flow);
-    // Only what is still afoot: pausing something that ended a minute ago would
-    // put a held row on screen that nothing is holding.
-    shared.touch(id, |j| {
-        if j.afoot() {
-            j.stage = stage;
-        }
-    });
 }
 
 /// The whole list now, and again on every change, until the client goes.
@@ -218,6 +194,7 @@ mod tests {
     use super::*;
     use crate::job::Work;
     use crate::wire::Paths;
+    use ronoctua_files::watch::Flow;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
@@ -260,8 +237,9 @@ mod tests {
     /// THIRTY SECONDS, and the number is about the MACHINE and not the code:
     /// these tests run inside `nix build`, beside a VM and a dozen `rustc`s,
     /// and a daemon thread that gets no processor for ten seconds is not a
-    /// daemon that ignored the ask. It failed exactly that way once, saying
-    /// `expected Paused and saw Some(Running)`.
+    /// daemon that ignored the ask. (The `expected Paused and saw
+    /// Some(Running)` this once said was the code after all: the hand-off
+    /// that undid a pause landed during the weighing — `Shared::under_way`.)
     fn until(socket: &Path, id: u64, stage: Stage) -> crate::job::Job {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
@@ -321,6 +299,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// What the socket says of job `id` now.
+    fn stage_now(socket: &Path, id: u64) -> Stage {
+        jobs_now(socket)
+            .into_iter()
+            .find(|j| j.id == id)
+            .expect("the job is on the list")
+            .stage
+    }
+
+    /// How many bytes of the copy have landed.
+    fn landed(piece: &Path) -> u64 {
+        std::fs::metadata(piece).map_or(0, |m| m.len())
+    }
+
     #[test]
     fn pausing_holds_and_cancelling_takes_the_piece_back() {
         // The whole promise of the panel, end to end and over the real socket:
@@ -328,44 +320,82 @@ mod tests {
         // NOTHING in the destination. Half a file left behind turns "I pasted
         // 40 GiB into the wrong folder" into the same problem with a smaller
         // number.
+        //
+        // NO CLOCK DECIDES IT. The copy is the queue's own (`local::run`, as
+        // `Ask::Add` starts it), with its BITES told to the test
+        // (`local::Mark::Bitten`): it waits after each one until the test lets
+        // it ask the switch again, so every ask lands mid-file, with a piece
+        // behind it. Left to race the asks, a copy of three bites finished
+        // first on a fast disk — and a pause that landed while it was weighed
+        // was undone, `expected Paused and saw Some(Running)`.
         let root = scratch("hold");
-        let (_shared, socket) = a_daemon(&root);
-
-        // Big enough that the copy is still going when the asks arrive: three
-        // bites, and the queue reports between each.
+        let (shared, socket) = a_daemon(&root);
         let size = ronoctua_files::watch::CHUNK * 3;
         std::fs::write(root.join("large.bin"), vec![7u8; size]).unwrap();
         std::fs::create_dir(root.join("into")).unwrap();
-
-        let Say::Took { id } = crate::client::ask_at(
-            &socket,
-            &Ask::Add {
-                work: Work::Paste {
-                    paths: vec![root.join("large.bin")],
-                    into: root.join("into"),
-                    moves: false,
-                },
-            },
-        )
-        .unwrap() else {
-            panic!("the queue did not take the job");
+        let piece = root.join("into").join("large.bin");
+        let work = Work::Paste {
+            paths: vec![root.join("large.bin")],
+            into: root.join("into"),
+            moves: false,
+        };
+        let (id, switch) = shared.take(work.engine(), work.clone());
+        let (bitten, a_bite) = std::sync::mpsc::channel::<()>();
+        let (go, let_go) = std::sync::mpsc::channel::<()>();
+        let worker = {
+            let shared = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                local::run_marked(&shared, id, &switch, work, &mut |mark| {
+                    if mark == local::Mark::Bitten {
+                        let _ = bitten.send(());
+                        let _ = let_go.recv();
+                    }
+                });
+            })
         };
 
+        // ONE BITE BEHIND IT — a piece — and the copy waiting on the test.
+        a_bite.recv().expect("the first bite");
+        let first = landed(&piece);
+        assert!(first > 0 && first < size as u64, "not a piece: {first}");
         crate::client::tell_at(&socket, &Ask::Pause { id }).unwrap();
-        let held = until(&socket, id, Stage::Paused);
-        // A pause that is really a stop would show `Cancelled` here, and a
-        // pause that did nothing would have raced past `Paused` to `Done`.
-        assert!(held.stage == Stage::Paused, "{held:?}");
+        shared.until(id, |j| j.stage == Stage::Paused);
+        go.send(()).unwrap();
+        // HELD: it asks the switch before the next bite, and the switch says
+        // hold. A pause that is really a stop would show `Cancelled`, and one
+        // that did nothing would have moved on to the next bite.
+        assert_eq!(stage_now(&socket, id), Stage::Paused);
+        assert_eq!(landed(&piece), first, "a held copy moved");
 
+        // LET GO: the next bite comes, and the row says it runs.
+        crate::client::tell_at(&socket, &Ask::Resume { id }).unwrap();
+        a_bite.recv().expect("the second bite");
+        assert_eq!(stage_now(&socket, id), Stage::Running);
+        let second = landed(&piece);
+        assert!(
+            second > first && second < size as u64,
+            "{first} then {second}"
+        );
+
+        // HELD AGAIN, and GIVEN UP with a piece of two bites behind it.
+        crate::client::tell_at(&socket, &Ask::Pause { id }).unwrap();
+        shared.until(id, |j| j.stage == Stage::Paused);
+        go.send(()).unwrap();
         crate::client::tell_at(&socket, &Ask::Cancel { id }).unwrap();
-        until(&socket, id, Stage::Cancelled);
+        shared.until(id, |j| j.stage == Stage::Cancelled);
+        assert_eq!(stage_now(&socket, id), Stage::Cancelled);
+        worker.join().expect("the copy's thread");
 
         assert_eq!(
             std::fs::read_dir(root.join("into")).unwrap().count(),
             0,
             "a piece was left at the destination after the cancellation"
         );
-        assert!(root.join("large.bin").exists(), "the original was touched");
+        assert_eq!(
+            std::fs::metadata(root.join("large.bin")).unwrap().len(),
+            size as u64,
+            "the original was touched"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -1188,34 +1188,10 @@ rec {
     keep = keptUnits "loop" (lib.attrValues loopUnits.deps);
   };
   test = unitBuilder.units "test";
-  # THE UNITS NO DIVISION DESCRIBES: their own compiler was MEASURED past the
-  # slot every other compilation is sized by (`peakMiB` in
-  # `nix/build-sizing.nix`; `metrics/peak-kib`, and `nix run .#rust-peaks`
-  # says when this list is wrong). Since the footer is a crate of its own and
-  # the binary only composes (lane R6, 2026-10-18, built alone at twelve
-  # cores): the shell's release program, the thin-LTO link of every crate
-  # (3910 MiB), and the footer's loop library (1827 MiB). And the footer's
-  # release library, which R6 measured at 1542 MiB and which grew past the
-  # slot when the texts and the brain's catalogue moved (lanes T1 and B2):
-  # 2279 MiB at one core, in three builds of the final tree (F5,
-  # 2026-10-18). The footer's test harness (1117) and clippy (840), and the
-  # thin binary's loop program (1330), harness (1186) and clippy (533),
-  # measured under the slot, and are sized like every other unit — the
-  # player's release library too, at 1770 MiB the nearest to it.
-  # The batteries, a machine's apply and `.#sized-build` build each heavy one
-  # alone, with the cores the memory leaves beside it, after what it is built
-  # from.
-  heavyUnits = releaseHeavyOf release // {
-    footer-loop = loop.libs.ronoctua-shell-footer;
-  };
-  # The heavy units of a RELEASE graph, named once: this tree's (above) and
-  # a release profile variant's, whose units are other derivations of the
-  # same programs (`nix/profile-bench.nix` builds each variant sized by
-  # them).
-  releaseHeavyOf = units: {
-    shell-release = units.bins.ronoctua-shell;
-    footer-release = units.libs.ronoctua-shell-footer;
-  };
+  # WHICH UNITS ARE HEAVY — built alone, with the cores the memory leaves
+  # beside them — is no list here: it is a unit's measured class, like light
+  # and medium (`nix/rust/unit-classes.json`, read by `nix/build-sizing.nix`;
+  # `nix run .#rust-peaks -- --write` writes it from `metrics/peak-kib`).
   # One test of a crate, out of the harness `test.testBins` built — see
   # `nix/rust/units.nix`.
   testsOf = unitBuilder.testsOf test;

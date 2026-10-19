@@ -5,10 +5,12 @@
 //! `camera_settings.rs`, and both doors ask the same view the same questions.
 //! The plumbing every window shares is `crate::door`.
 //!
-//! Two threads feed it: the camera watch (`ronoctua_camera::watch`, inotify on
-//! `/dev`) and the studio's state (`ronoctua_studio::client::watch`). Every
-//! order is carried out here and the file it wrote is reread — the footer's
-//! door does the same, and the two never keep a copy between orders.
+//! Two threads feed it: the camera watch (`camera_settings::CameraWatch`,
+//! inotify on `/dev`, raised as the window opens and gone with it — no camera
+//! is opened before somebody opens the settings) and the studio's state
+//! (`ronoctua_studio::client::watch`). Every order is carried out here and
+//! the file it wrote is reread — the footer's door does the same, and the two
+//! never keep a copy between orders.
 //!
 //! # And what is typed is typed HERE
 //!
@@ -36,22 +38,10 @@ pub const APP_ID: &str = "br.ronoctua.camera-settings";
 /// `xdg_shell`.
 pub fn host_it() -> Result<()> {
     crate::door::run(|w| {
-        // THE CAMERAS, by event (inotify on `/dev`), and THE STUDIO's state.
-        let (camera_sender, camera_events) = channel::channel::<Vec<ronoctua_camera::Camera>>();
-        let cameras = ronoctua_camera::watch::watch(move |c| {
-            let _ = camera_sender.send(c);
-        });
-        w.handle
-            .insert_source(
-                camera_events,
-                |event, (), door: &mut Door<CameraSettingsWindow>| {
-                    if let channel::Event::Msg(c) = event {
-                        door.content.cameras = c;
-                        door.content.reread(&mut door.ui);
-                    }
-                },
-            )
-            .map_err(|e| anyhow::anyhow!("could not hang the camera channel: {e}"))?;
+        // THE CAMERAS, by event (inotify on `/dev`), read from now on — the
+        // window opening is the person asking — through the door's wake
+        // (`woken`); and THE STUDIO's state.
+        let cameras = crate::camera_settings::CameraWatch::raise(w.wake());
         let (studio_sender, studio_events) =
             channel::channel::<Option<ronoctua_studio::wire::State>>();
         let studio = ronoctua_studio::client::watch(move |s| {
@@ -74,38 +64,97 @@ pub fn host_it() -> Result<()> {
         view.watch_with(w.wake());
         Ok(CameraSettingsWindow {
             view,
-            snapshot: crate::camera_settings::Snapshot::default(),
-            cameras: Vec::new(),
+            snapshot: crate::camera_settings::Snapshot {
+                reading: true,
+                ..crate::camera_settings::Snapshot::default()
+            },
+            cameras: None,
             studio: None,
-            _cameras: Some(cameras),
+            watch: Some(cameras),
             _studio: studio,
         })
     })
 }
 
-/// The window: the view, and what it reads.
+/// The scenes of this window's camera, in the words `--scene` takes.
+const SCENES: [&str; 3] = ["virtual", "reading", "arrived"];
+
+/// The variable a photograph of the FOOTER names its camera scene with — one
+/// of [`SCENES`], read only by a footer that is a photograph's
+/// (`Doorway::photographing`): the cameras that scene's reading finds are
+/// the region's.
+pub const SCENE_VARIABLE: &str = "RONOCTUA_PHOTOGRAPH_CAMERA_SCENE";
+
+/// The first reading of the cameras in scene `scene` — `None` for one that
+/// never answers (`reading`).
+fn cameras_of(scene: &str) -> Option<Vec<ronoctua_camera::Camera>> {
+    match scene {
+        "reading" => None,
+        "arrived" => Some(vec![crate::camera_settings::planted_camera()]),
+        _ => Some(Vec::new()),
+    }
+}
+
+/// A photograph's footer's camera watch: planted with the cameras of the
+/// scene [`SCENE_VARIABLE`] names — a machine with none when it names none,
+/// the picture the baseline holds. A scene that is none of [`SCENES`] is
+/// said in the log, and its reading never comes: the section says it is
+/// reading, never "no camera", which would pass for one.
+#[must_use]
+pub fn planted_watch() -> crate::camera_settings::CameraWatch {
+    let scene = std::env::var(SCENE_VARIABLE).unwrap_or_default();
+    if !scene.is_empty() && !SCENES.contains(&scene.as_str()) {
+        tracing::error!(%scene, scenes = %SCENES.join(", "), "the footer camera's camera scene is none of the scenes");
+        return crate::camera_settings::CameraWatch::planted(None);
+    }
+    crate::camera_settings::CameraWatch::planted(cameras_of(&scene))
+}
+
 /// The window over a PLANTED studio, for the photograph
 /// (its camera, `camera`): `virtual` is the virtual camera on, sending the
-/// camera alone, through an effect of its own.
+/// camera alone, through an effect of its own, on a machine with no camera;
+/// `reading` is the same while the cameras are still being read — the
+/// moment after the view opens, which a photograph, reading none, never
+/// reaches by itself; `arrived` is the window opened with the studio
+/// answering first and a webcam's reading coming after it
+/// (`camera_settings::planted_camera`), taken at the door's first turn by
+/// the handler a wake reaches.
 ///
 /// # Errors
 ///
 /// A scene this door does not know.
 pub fn photographed(scene: &str) -> anyhow::Result<(impl Content, Option<crate::line::Line>)> {
     anyhow::ensure!(
-        scene == "virtual",
-        "`{scene}` is not a scene of the camera's settings; the scene is virtual"
+        SCENES.contains(&scene),
+        "`{scene}` is not a scene of the camera's settings; the scenes are {}",
+        SCENES.join(", ")
     );
+    let arrived = scene == "arrived";
     let studio = ronoctua_studio::wire::State {
         scenes: vec!["camera".into(), "screen".into()],
         scene: "camera".into(),
-        virtual_node: Some("/dev/video9".into()),
+        virtual_node: (!arrived).then(|| "/dev/video9".into()),
         ..ronoctua_studio::wire::State::default()
     };
-    let prefs = ronoctua_studio::prefs::Preferences {
-        virtual_sends: ronoctua_studio::prefs::Sends::Camera,
-        virtual_effect: ronoctua_studio::prefs::VirtualEffect::Own("background-blur".into()),
-        ..ronoctua_studio::prefs::Preferences::default()
+    let prefs = if arrived {
+        ronoctua_studio::prefs::Preferences::default()
+    } else {
+        ronoctua_studio::prefs::Preferences {
+            virtual_sends: ronoctua_studio::prefs::Sends::Camera,
+            virtual_effect: ronoctua_studio::prefs::VirtualEffect::Own("background-blur".into()),
+            ..ronoctua_studio::prefs::Preferences::default()
+        }
+    };
+    // THE READING TO COME, for `arrived`; the others are drawn as they are.
+    let (cameras, watch) = if arrived {
+        (
+            None,
+            Some(crate::camera_settings::CameraWatch::planted(cameras_of(
+                scene,
+            ))),
+        )
+    } else {
+        (cameras_of(scene), None)
     };
     Ok((
         CameraSettingsWindow {
@@ -113,11 +162,12 @@ pub fn photographed(scene: &str) -> anyhow::Result<(impl Content, Option<crate::
             snapshot: crate::camera_settings::Snapshot {
                 state: Some(studio.clone()),
                 prefs,
+                reading: cameras.is_none(),
                 ..crate::camera_settings::Snapshot::default()
             },
-            cameras: Vec::new(),
+            cameras,
             studio: Some(studio),
-            _cameras: None,
+            watch,
             _studio: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         },
         None,
@@ -128,42 +178,54 @@ pub fn photographed(scene: &str) -> anyhow::Result<(impl Content, Option<crate::
 /// over a planted machine, walked and drawn (`crate::photo::planted`) — the
 /// camera of the camera's settings, beside the door it photographs.
 pub fn camera(rest: &[String]) -> ! {
-    crate::photo::planted::taken(rest, "camera-settings", "virtual", |asked| {
+    crate::photo::planted::taken(rest, "camera-settings", &SCENES.join(", "), |asked| {
         let (content, line) = photographed(&asked.scene)?;
         crate::photo::planted::shoot(asked, content, line)
     })
 }
 
+/// The window: the view, and what it reads.
 struct CameraSettingsWindow {
     view: crate::camera_settings::View,
     /// What the rows read, rebuilt whenever a thread brings news.
     snapshot: crate::camera_settings::Snapshot,
-    /// The cameras, as the watch last read them.
-    cameras: Vec<ronoctua_camera::Camera>,
+    /// The cameras, as the watch last read them — `None` until its first
+    /// reading.
+    cameras: Option<Vec<ronoctua_camera::Camera>>,
     /// The studio's state, when it answers.
     studio: Option<ronoctua_studio::wire::State>,
-    /// The camera watch, which stops when this is dropped — `None` only in a
-    /// test, which watches nothing of the machine.
-    _cameras: Option<ronoctua_camera::watch::Handle>,
+    /// The camera watch, which stops when this is dropped — `None` in a
+    /// photograph and a test, which watch nothing of the machine.
+    watch: Option<crate::camera_settings::CameraWatch>,
     /// The studio watch's switch, kept for as long as the window lives.
     _studio: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl CameraSettingsWindow {
-    /// Rebuilds what the rows read, keeping the cursor on its row by identity.
+    /// Rebuilds what the rows read — the cursor kept on its row by
+    /// identity, or put where the view opens when nobody moved it, and the
+    /// list after it (`View::reread`, the footer's region's too).
     fn reread(&mut self, ui: &mut Ui) {
-        let spot = self
-            .view_rows(ui)
-            .get(self.view.cursor())
-            .map(|r| r.spot.clone());
-        self.snapshot =
-            crate::camera_settings::Snapshot::read(self.cameras.clone(), self.studio.clone());
-        if let Some(spot) = spot {
-            self.view
-                .follow(&spot, &self.snapshot, ui.columns, &ui.texts);
-        }
-        self.view.settle_in(&self.snapshot, ui.columns, &ui.texts);
+        let now = crate::camera_settings::Snapshot::read(self.cameras.clone(), self.studio.clone());
+        self.view.reread(&self.snapshot, &now, ui);
+        self.snapshot = now;
         ui.ask_paint();
+    }
+
+    /// The cameras the watch read, when a reading came: the rows read again
+    /// over them. `true` when one did.
+    fn take_the_reading(&mut self, ui: &mut Ui) -> bool {
+        let Some(cameras) = self
+            .watch
+            .as_ref()
+            .and_then(crate::camera_settings::CameraWatch::arrived)
+        else {
+            return false;
+        };
+        self.cameras = Some(cameras);
+        let _ = self.view.look();
+        self.reread(ui);
+        true
     }
 
     /// Carries out what the view asked for — through the one handler the
@@ -196,11 +258,21 @@ impl CameraSettingsWindow {
 }
 
 impl Content for CameraSettingsWindow {
-    /// A thread of the window's woke the loop — the file picker's folder
-    /// moved, or its devices were read: its rows again, when they changed.
+    /// A thread of the window's woke the loop — the camera watch read the
+    /// cameras, or the file picker's folder moved or its devices were read:
+    /// its rows again, when they changed.
     fn woken(&mut self, ui: &mut Ui) {
-        if self.view.look() {
+        if !self.take_the_reading(ui) && self.view.look() {
             ui.ask_paint();
+        }
+    }
+
+    /// A PHOTOGRAPH HAS NO LOOP TO WAKE — its door is detached — so the
+    /// reading planted for it is taken at its turn, by the handler a wake
+    /// reaches on the screen. A window on the screen takes it in `woken`.
+    fn each_turn(&mut self, ui: &mut Ui) {
+        if crate::region::Doorway::photographing(ui) {
+            let _ = self.take_the_reading(ui);
         }
     }
     type Hand = ();
@@ -293,9 +365,9 @@ mod tests {
                 state: Some(studio.clone()),
                 ..Snapshot::default()
             },
-            cameras: Vec::new(),
+            cameras: Some(Vec::new()),
             studio: Some(studio),
-            _cameras: None,
+            watch: None,
             _studio: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -409,9 +481,90 @@ mod tests {
         );
     }
 
-    /// FAILS IF: the camera's planted virtual camera stops building.
+    /// FAILS IF: the camera's planted virtual camera stops building, or the
+    /// planted reading stops being photographed as one.
     #[test]
     fn the_planted_virtual_camera_builds() {
         assert!(photographed("virtual").is_ok());
+        assert!(photographed("reading").is_ok());
+        assert!(photographed("arrived").is_ok());
+        assert!(photographed("no-such-scene").is_err());
+    }
+
+    /// The target of the row the cursor is on, and its line.
+    fn at_the_cursor(w: &CameraSettingsWindow, ui: &Ui) -> (Target, usize) {
+        let at = w.view.cursor();
+        (w.view_rows(ui)[at].target.clone(), at)
+    }
+
+    /// FAILS IF: the window opened, the studio answering before the cameras
+    /// are read, leaves a cursor nobody moved on the first row that turned
+    /// then — "Effect", which the webcam's fourteen controls push below the
+    /// list's first page — instead of where the view opens once they are
+    /// read, the camera the app opens, on the first page. The footer's
+    /// region runs the same race (`camera_region`'s test).
+    #[test]
+    fn the_cameras_arriving_after_the_studio_put_the_cursor_where_the_view_opens() {
+        use crate::camera_settings::{CameraWatch, planted_camera};
+        let mut ui = Ui::for_tests(texts());
+        // AS `host_it` OPENS IT: nothing read yet.
+        let mut w = CameraSettingsWindow {
+            view: View::fresh(),
+            snapshot: Snapshot {
+                reading: true,
+                ..Snapshot::default()
+            },
+            cameras: None,
+            studio: None,
+            watch: None,
+            _studio: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        // THE STUDIO FIRST, through the channel's handler.
+        w.studio = a_window().studio;
+        w.reread(&mut ui);
+        assert_eq!(
+            at_the_cursor(&w, &ui).0,
+            Target::Effect,
+            "the race is not set up"
+        );
+        // THEN THE READING, through the wake's.
+        w.watch = Some(CameraWatch::planted(Some(vec![planted_camera()])));
+        w.woken(&mut ui);
+        let (on, at) = at_the_cursor(&w, &ui);
+        assert_eq!(on, Target::DefaultCamera, "the cursor stayed on {on:?}");
+        let room = ui.room_for_rows();
+        let effect = w
+            .view_rows(&ui)
+            .iter()
+            .position(|r| r.target == Target::Effect)
+            .expect("the effect's row");
+        assert!(
+            effect >= room,
+            "the webcam no longer pushes \"Effect\" off the list"
+        );
+        assert!(
+            at >= ui.offset && at < ui.offset + room,
+            "the cursor is on line {at}, off the list at {} of {room}",
+            ui.offset
+        );
+    }
+
+    /// FAILS IF: the photographed `arrived` stops taking its planted reading
+    /// at the door's turn — a photograph has no loop to wake — so the picture
+    /// of where the cursor lands once the cameras are read is a picture of
+    /// them being read.
+    #[test]
+    fn a_photograph_takes_its_planted_reading_at_its_turn() {
+        let mut ui = Ui::for_tests(texts());
+        let mut w = a_window();
+        w.cameras = None;
+        w.snapshot.reading = true;
+        w.watch = Some(crate::camera_settings::CameraWatch::planted(Some(vec![
+            crate::camera_settings::planted_camera(),
+        ])));
+        w.each_turn(&mut ui);
+        assert!(!w.snapshot.reading, "the planted reading was not taken");
+        assert_eq!(w.snapshot.cameras.len(), 1);
+        assert_eq!(at_the_cursor(&w, &ui).0, Target::DefaultCamera);
     }
 }

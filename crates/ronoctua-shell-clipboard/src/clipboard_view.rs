@@ -986,10 +986,26 @@ impl View {
         texts: &ronoctua_i18n::Texts,
         n: usize,
     ) -> bool {
-        !matches!(
-            self.targets(facts, columns, texts).get(n),
-            None | Some(Target::Nothing)
-        )
+        self.acting(facts, columns, texts)
+            .get(n)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Which rows answer a key, in the order they are drawn — one layout
+    /// for the whole list, where [`View::acts_at`] lays it out once per row
+    /// asked.
+    #[must_use]
+    pub fn acting(
+        &self,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<bool> {
+        self.targets(facts, columns, texts)
+            .iter()
+            .map(|t| !matches!(t, Target::Nothing))
+            .collect()
     }
 
     /// Every row's target, in the order they are drawn.

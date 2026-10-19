@@ -139,7 +139,10 @@ fn session(shared: &Arc<Shared>, dir: PathBuf, orders: &std::sync::mpsc::Receive
             };
             match added {
                 Ok(hash) => {
-                    shared.touch(id, |j| j.stage = Stage::Running);
+                    // UNDER WAY — or held, if a pause landed before the
+                    // session took it: the switch decides, and the poll below
+                    // holds it in the session.
+                    shared.under_way(id, |_| {});
                     watching.push(Watched {
                         id,
                         hash,
@@ -172,6 +175,7 @@ fn keep(
     rows: &[ronoctua_torrent::Torrent],
     w: &mut Watched,
 ) -> bool {
+    let was_held = w.held;
     match w.switch.flow() {
         Flow::Stop => {
             // The data goes with it, which is the promise a cancelled copy
@@ -198,19 +202,20 @@ fn keep(
         return true;
     };
 
-    let stage = match row.state {
-        ronoctua_torrent::State::Errored => Stage::Failed,
-        _ if row.paused => Stage::Paused,
-        // Metadata and checking are both "we do not know the total yet", which
-        // is exactly what `weighing` means for a copy.
-        ronoctua_torrent::State::Metadata | ronoctua_torrent::State::Checking => Stage::Weighing,
-        ronoctua_torrent::State::Downloading => Stage::Running,
-        ronoctua_torrent::State::Finished | ronoctua_torrent::State::Seeding => Stage::Done,
-    };
+    // THE HOLD IS OURS when we held it, or let it go, this poll or before:
+    // the rows were read BEFORE the switch was acted on (`stage_of`).
+    let ours = was_held || w.held;
     let trouble = (!row.trouble.is_empty()).then(|| row.trouble.clone());
     let (done, total, name) = (row.done, row.total, row.name.clone());
-    let settled = stage == Stage::Done;
+    let switch = Arc::clone(&w.switch);
+    let mut settled = false;
     shared.touch(w.id, |j| {
+        // THE SWITCH IS READ UNDER THE LEDGER'S LOCK, the one a pause and a
+        // resume write the row under (`Shared::pause`): a pause that landed
+        // since the switch was read above is a held row now, not one poll
+        // from now.
+        let stage = stage_of(row.state, switch.flow() == Flow::Pause, row.paused, ours);
+        settled = stage == Stage::Done;
         j.stage = stage;
         j.done = done;
         j.total = total;
@@ -224,6 +229,29 @@ fn keep(
         tracing::info!(id = w.id, hash = %w.hash, "the torrent is complete; still seeding");
     }
     true
+}
+
+/// What a torrent's row says: where the session is, and whether it is held.
+///
+/// HELD BY THE SWITCH — the person's, read under the ledger's lock — or by
+/// the session's own queue. The session's `paused` was read a poll ago, so it
+/// is its own word only while the hold is not `ours`: a torrent it queued by
+/// itself is held, and one we have just let go is not.
+const fn stage_of(
+    state: ronoctua_torrent::State,
+    switch_holds: bool,
+    session_paused: bool,
+    ours: bool,
+) -> Stage {
+    match state {
+        ronoctua_torrent::State::Errored => Stage::Failed,
+        _ if switch_holds || (session_paused && !ours) => Stage::Paused,
+        // Metadata and checking are both "we do not know the total yet", which
+        // is exactly what `weighing` means for a copy.
+        ronoctua_torrent::State::Metadata | ronoctua_torrent::State::Checking => Stage::Weighing,
+        ronoctua_torrent::State::Downloading => Stage::Running,
+        ronoctua_torrent::State::Finished | ronoctua_torrent::State::Seeding => Stage::Done,
+    }
 }
 
 /// Hands one torrent to the session and returns.
@@ -283,5 +311,25 @@ mod tests {
         assert!(takes("/home/someone/debian.torrent"));
         assert!(!takes("https://example/file.iso"));
         assert!(!takes("https://exemplo/video"));
+    }
+
+    /// FAILS IF: a poll writes a torrent the switch holds as running — the
+    /// session's flag, read before the hold was handed to it, overwriting the
+    /// pause — a torrent just let go stays held by that stale flag, one the
+    /// session queued by itself reads as running, or a failure is hidden by a
+    /// hold.
+    #[test]
+    fn the_switch_decides_a_torrents_hold_and_the_session_only_its_own() {
+        use ronoctua_torrent::State::{Downloading, Errored, Metadata, Seeding};
+        // HELD NOW, the session not told yet.
+        assert_eq!(stage_of(Downloading, true, false, true), Stage::Paused);
+        assert_eq!(stage_of(Metadata, true, false, false), Stage::Paused);
+        // LET GO NOW, the session's flag a poll old.
+        assert_eq!(stage_of(Downloading, false, true, true), Stage::Running);
+        assert_eq!(stage_of(Metadata, false, true, true), Stage::Weighing);
+        // QUEUED BY THE SESSION ITSELF.
+        assert_eq!(stage_of(Downloading, false, true, false), Stage::Paused);
+        assert_eq!(stage_of(Seeding, false, false, false), Stage::Done);
+        assert_eq!(stage_of(Errored, true, true, true), Stage::Failed);
     }
 }

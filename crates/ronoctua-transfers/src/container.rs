@@ -206,7 +206,7 @@ fn carry(
         Err(e) => return Ending::Failed(format!("could not run podman: {e}")),
     };
     let pid = child.id();
-    shared.touch(id, |j| j.stage = Stage::Running);
+    shared.under_way(id, |_| {});
 
     // A READER AND A CHANNEL, because reading a line blocks and the switch
     // has to stay answerable.

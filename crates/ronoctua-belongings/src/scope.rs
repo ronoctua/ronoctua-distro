@@ -24,7 +24,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::kept::{self, Never, Place, PlainRoot, Target};
+use crate::kept::{self, Inside, Never, Place, PlainRoot, Target};
 use crate::places::{Places, covers, is_logical};
 use crate::prefs::Belongings;
 use crate::requests::{Request, Requests};
@@ -82,6 +82,9 @@ pub enum Met<'a> {
     Hidden,
     /// Anything else, as `lstat` read it: a file, a link, a socket, a pipe.
     Entry(&'a std::fs::Metadata),
+    /// A folder a target skips (a package folder, what Emacs keeps of its
+    /// sessions), and why: nothing below it is walked, nor kept.
+    Skipped(&'static str),
 }
 
 /// How deep a walk goes: a loop of bind mounts must end somewhere.
@@ -249,7 +252,8 @@ impl Scope {
 
     /// Meets every path under [`Scope::roots`] on this machine, in order:
     /// a folder is walked (links are never followed), a folder that cannot
-    /// be listed is [`Met::Hidden`], everything else is handed over as
+    /// be listed is [`Met::Hidden`], a folder a target skips is
+    /// [`Met::Skipped`] and not walked, everything else is handed over as
     /// `lstat` read it. A path inside another root is that root's
     /// (`home/.config/ronoctua` is `config`), and is met there once.
     pub fn meet(&self, places: &Places, f: &mut dyn FnMut(&str, &Path, Met<'_>)) {
@@ -327,6 +331,15 @@ fn visit(
     };
     if !meta.is_dir() {
         f(logical, at, Met::Entry(&meta));
+        return;
+    }
+    // A FOLDER ITS TARGET SKIPS is met as itself and never walked: nothing
+    // under it is kept, whoever asks (`kept::kept_here`), and an Emacs's
+    // `elpa` or a `straight` is thousands of files the sync would `lstat` and
+    // the listing draw, one row each. A folder on the way to a path the
+    // target carries (`straight/versions`) is walked.
+    if let Some(Inside::Skipped(why)) = kept::target_of(logical).map(|t| t.inside(logical)) {
+        f(logical, at, Met::Skipped(why));
         return;
     }
     if depth >= DEEPEST {

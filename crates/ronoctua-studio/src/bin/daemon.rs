@@ -6,6 +6,11 @@
 //! not socket-activated because adopting the listening descriptor systemd
 //! passes needs `from_raw_fd`, which is `unsafe`, for a saving of one idle
 //! process.
+//!
+//! STARTING IT OPENS NO CAMERA. Reading the cameras opens every node, and a
+//! UVC camera's light blinks when it is opened: the engine reads them only
+//! while a camera is in use (`Engine::follow_cameras`), and the virtual
+//! camera finds its node by its label (`outputs::Virtual::start`).
 
 use std::{
     os::unix::net::UnixListener,
@@ -35,17 +40,6 @@ fn main() -> Result<()> {
         .with_context(|| format!("could not listen at {}", path.display()))?;
 
     let shared: engine::Shared = Arc::new((Mutex::new(engine::Engine::new()), Condvar::new()));
-
-    // Cameras coming and going, by event.
-    let watched = shared.clone();
-    let _cameras = ronoctua_camera::watch::watch(move |cameras| {
-        let (lock, bell) = &*watched;
-        if let Ok(mut e) = lock.lock() {
-            e.cameras_changed(cameras);
-            e.broadcast();
-        }
-        bell.notify_all();
-    });
 
     // The virtual camera, when the person asked for it at every start.
     {

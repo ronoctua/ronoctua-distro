@@ -75,9 +75,9 @@ ronoctua-pointers = { path = "../ronoctua-pointers" }
 # rest and the bare volume keys act through it with no view open, so the
 # footer holds its threads for the whole session.
 ronoctua-audio = { path = "../ronoctua-audio" }
-# THE CAMERA: the cameras plugged in, and the studio's state and wire — the
-# modeline's marks and the hand gestures.
-ronoctua-camera = { path = "../ronoctua-camera" }
+# THE STUDIO'S state and wire — the modeline's marks and the hand gestures.
+# Never `ronoctua-camera`: the footer reads no camera (reading one opens it,
+# and its light blinks); the camera's settings read them while shown.
 ronoctua-studio = { path = "../ronoctua-studio" }
 # What a pose of the hands means (`gestures.rs`).
 ronoctua-gestures = { path = "../ronoctua-gestures" }

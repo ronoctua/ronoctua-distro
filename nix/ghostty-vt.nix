@@ -90,6 +90,12 @@ stdenv.mkDerivation {
   nativeBuildInputs = [ zig ];
   dontConfigure = true;
 
+  # `-j"$NIX_BUILD_CORES"`, AND NOT ZIG'S DEFAULT: `zig build` runs a step
+  # per processor whatever Nix gave it, so at one core it peaked at 2365 MiB
+  # (its processes' `VmRSS` summed, 2026-10-19) — past the slot
+  # `nix/build-sizing.nix` plans a derivation that is no unit at
+  # (`peakMiB`, 1792); with the cores it was given, 1488 MiB, in 99 s
+  # against 53.
   buildPhase = ''
     runHook preBuild
     # The cache is read-only in the store, and Zig writes to it. Copying is the
@@ -111,7 +117,7 @@ stdenv.mkDerivation {
     # `x86_64-unknown-linux-gnu`, and Zig reads the middle field as the OS —
     # answering `unknown OS: 'unknown'`, which sounds like a broken toolchain and
     # is only a spelling difference.
-    zig build \
+    zig build -j"$NIX_BUILD_CORES" \
       -Doptimize=ReleaseFast \
       -Dtarget=${
         {

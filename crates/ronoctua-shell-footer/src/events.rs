@@ -135,6 +135,55 @@ pub struct CameraHolder {
     pub ours: bool,
 }
 
+/// WHO HOLDS A CAMERA, from what the walk of `/proc` `found`: each holder
+/// told ours or theirs by its lineage — and THE SHELL'S OWN READING left
+/// out, for the event and the mark alike, because it is nobody using a
+/// camera.
+///
+/// Reading the cameras opens every node for a moment: the camera's settings
+/// read them while shown, in the footer's region and in their window, and a
+/// control is written the same way. A walk that caught one of those moments
+/// said "camera in use: ronoctua-shell" and lit the mark, two seconds later
+/// "free". No process of the shell's films: what streams a camera is the
+/// studio's `ffmpeg` (`the-camera-has-one-door`), which has its own name. So
+/// a holder NAMED as the shell's executable (`shell`, [`process_name`]) is
+/// left out — by its own name, never its lineage: what the shell starts (a
+/// browser, a terminal's `ffmpeg`) runs under it with a name of its own, and
+/// is still somebody. With no name for the shell, nobody is left out.
+#[must_use]
+pub fn holders_of(
+    found: Vec<ronoctua_memory::camera::Holder>,
+    shell: Option<&str>,
+) -> Vec<CameraHolder> {
+    let mut holders: Vec<CameraHolder> = found
+        .into_iter()
+        .filter(|h| shell.is_none_or(|s| h.name != s))
+        .map(|h| CameraHolder {
+            ours: h.under(OUR_CAMERA_HOLDERS),
+            name: h.name,
+        })
+        .collect();
+    holders.sort();
+    holders.dedup();
+    holders
+}
+
+/// The name `/proc` gives a process of the executable at `exe`: its file
+/// name cut to the kernel's fifteen bytes (`TASK_COMM_LEN`) — a wrapped
+/// program's `.ronoctua-shell-wrapped` runs as `.ronoctua-shell`. The
+/// shell's doors are started from this same file (`current_exe`), so they
+/// bear the footer's name.
+#[must_use]
+pub fn process_name(exe: &std::path::Path) -> Option<String> {
+    const COMM: usize = 15;
+    let name = exe.file_name()?.to_str()?;
+    let mut end = name.len().min(COMM);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(name[..end].to_owned()).filter(|n| !n.is_empty())
+}
+
 /// One thing the machine did, worth a line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
@@ -970,6 +1019,66 @@ mod tests {
             name: name.to_owned(),
             ours,
         }
+    }
+
+    /// A process the walk of `/proc` found holding `/dev/video0`.
+    fn found(pid: u32, name: &str, parents: &[&str]) -> ronoctua_memory::camera::Holder {
+        ronoctua_memory::camera::Holder {
+            pid,
+            name: name.to_owned(),
+            node: "/dev/video0".to_owned(),
+            parents: parents.iter().map(|p| (*p).to_owned()).collect(),
+        }
+    }
+
+    /// FAILS IF: the shell's own short reading of the cameras — the footer's
+    /// region or the settings' window, a process named as the shell —
+    /// counts as somebody using a camera ("camera in use: ronoctua-shell",
+    /// and the mark), or leaving it out hides a real holder: what the shell
+    /// started (a browser, a terminal's `ffmpeg`) runs under it and is still
+    /// somebody, and the studio's `ffmpeg` is still ours and still a camera
+    /// open. With no name for the shell, nobody is left out.
+    #[test]
+    fn the_shells_own_reading_is_nobody_using_a_camera() {
+        let shell = process_name(std::path::Path::new(
+            "/nix/store/x-ronoctua-shell/bin/.ronoctua-shell-wrapped",
+        ));
+        assert_eq!(shell.as_deref(), Some(".ronoctua-shell"));
+        assert_eq!(
+            process_name(std::path::Path::new("/run/bin/ronoctua-shell")).as_deref(),
+            Some("ronoctua-shell")
+        );
+        let walk = || {
+            vec![
+                // THE FOOTER reading, and a settings window it started.
+                found(10, ".ronoctua-shell", &["systemd"]),
+                found(11, ".ronoctua-shell", &[".ronoctua-shell", "systemd"]),
+                // WHAT IT STARTED, and the studio's own.
+                found(12, "chromium", &[".ronoctua-shell"]),
+                found(13, "ffmpeg", &["zsh", ".ronoctua-shell"]),
+                found(14, "ffmpeg", &["ronoctua-studio"]),
+            ]
+        };
+        assert_eq!(
+            holders_of(walk(), shell.as_deref()),
+            vec![
+                holder("chromium", false),
+                holder("ffmpeg", false),
+                holder("ffmpeg", true),
+            ]
+        );
+        assert!(
+            holders_of(walk(), None)
+                .iter()
+                .any(|h| h.name == ".ronoctua-shell" && !h.ours),
+            "with no name for the shell, a holder was left out"
+        );
+        // AND NO EVENT for the reading alone, nor a mark.
+        let mut w = Watch::default();
+        assert!(w.camera(&[]).is_empty());
+        let reading = holders_of(vec![found(10, ".ronoctua-shell", &[])], shell.as_deref());
+        assert!(reading.is_empty());
+        assert!(w.camera(&reading).is_empty(), "the reading was news");
     }
 
     /// FAILS IF: a camera found open when the footer starts is announced, a

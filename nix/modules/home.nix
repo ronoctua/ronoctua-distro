@@ -224,8 +224,8 @@ in
   # eat exactly the token the person put there.
   # `~/.config` IS THE PERSON'S, and this is the one place that makes it.
   #
-  # Activation runs as root. Two seed scripts (`atuinConfig`, `doomLocal`)
-  # each did a `mkdir -p` under `~/.config`, which on a fresh home made
+  # Activation runs as root. A seed script (`atuinConfig`, and one more that
+  # is gone) did a `mkdir -p` under `~/.config`, which on a fresh home made
   # `~/.config` itself root's — and home-manager, which runs as the person,
   # then could not link a single file there. That was the
   # `[FAILED] Home Manager environment for noctua` of the first `nix run .#vm`.
@@ -239,7 +239,7 @@ in
       fi
       # AND A HOME THAT WENT THROUGH THE DEFECT IS REPAIRED: the folder
       # itself, never recursively — what is inside may be anybody's.
-      for d in ${home}/.config ${home}/.config/doom ${home}/.config/atuin; do
+      for d in ${home}/.config ${home}/.config/atuin; do
         if [ -d "$d" ] && [ "$(stat -c %u "$d")" = 0 ]; then
           chown ${cfg.user}:users "$d"
         fi

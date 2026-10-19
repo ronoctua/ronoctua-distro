@@ -183,6 +183,25 @@ pub enum Ask {
     Hands,
 }
 
+impl Ask {
+    /// Whether this ask is carried out against the list of cameras — a
+    /// person's gesture about a camera, which may read them when none is in
+    /// use (`engine::serve_one`). No other ask reads one: reading a camera
+    /// opens it, and its light blinks.
+    ///
+    /// EACH OF THEM REFUSES NOTHING — a camera that is not there is not
+    /// turned to, and that is all — so the studio answers `done` BEFORE such
+    /// a reading, which can outlast the two seconds an asker waits. An ask
+    /// added here that may refuse would be answered wrong.
+    #[must_use]
+    pub const fn reads_the_cameras(&self) -> bool {
+        matches!(
+            self,
+            Self::Camera { .. } | Self::CameraTurn { .. } | Self::Mirror
+        )
+    }
+}
+
 /// Why something does not work, for a sentence on screen. Each has a text key
 /// `studio-trouble-<kebab>` in both languages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,9 +288,12 @@ pub struct Rolling {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct State {
-    /// Every camera.
+    /// Every camera — while one is in use or the camera app shows the
+    /// program, and none otherwise: reading a camera opens it, and its light
+    /// blinks (`Engine::follow_cameras`).
     pub cameras: Vec<CameraSeen>,
-    /// The camera the camera layer shows now.
+    /// The camera the camera layer shows now — when it names one, or the
+    /// cameras are read.
     pub camera: Option<String>,
     /// Shown as a mirror.
     pub mirror: bool,

@@ -120,6 +120,9 @@ pub fn walk(scope: &Scope, places: &Places) -> Found {
                 found.unreadable.insert(logical.to_owned());
             }
         }
+        // A FOLDER A TARGET SKIPS keeps nothing: the scope says so of every
+        // path under it.
+        Met::Skipped(_) => {}
         Met::Entry(_) => {
             if !scope.kept_here(logical) {
                 return;

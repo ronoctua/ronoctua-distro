@@ -74,7 +74,10 @@ in
     # machine, `ronoctua.browser.enable = true` downloads 0,42 GiB, against the
     # 23,2 GiB of installing the full profile to get at it.
     browser.enable = lib.mkDefault full;
-    # Emacs 30 and the Doom dependencies, ~0,6 GiB.
+    # Emacs 30 and its daemon, ~0,5 GiB: measured on 2026-10-19 as what the
+    # package's closure adds to either profile, counted as the figures above
+    # are (a ceiling). It is Emacs alone now — the Doom framework's tools that
+    # rode along until then were another 0,23 GiB, most of it pandoc.
     editor.emacs = lib.mkDefault full;
     # VLC, mpv, imagemagick, ghostscript and the gstreamer plugins.
     #

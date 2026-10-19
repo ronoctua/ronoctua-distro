@@ -218,7 +218,7 @@ fn carry(
         Err(e) => return Ending::Failed(format!("could not run {program}: {e}")),
     };
     let pid = child.id();
-    shared.touch(id, |j| j.stage = Stage::Running);
+    shared.under_way(id, |_| {});
     let (lines, arriving) = mpsc::channel::<Line>();
     reader(child.stdout.take(), lines.clone(), true);
     reader(child.stderr.take(), lines, false);

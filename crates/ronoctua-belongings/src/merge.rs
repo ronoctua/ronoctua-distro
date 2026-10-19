@@ -286,7 +286,16 @@ pub fn plan(base: Option<&Last>, local: &Found, remote: &Index, prefs: &Belongin
         }
         let added_now = under_a_root(&after, path);
         if !kept::kept_here(path, prefs, added_now) {
-            if r.is_some() && under_a_root(&removed, path) {
+            // A TARGET'S FILE never leaves with an addition over it (one
+            // above the target, the whole home, or one made by hand at its
+            // path): the target is kept on the other machines whatever this
+            // one took out ("not on this machine" leaves the repository's
+            // copies to them), and a target leaves the repository only by
+            // "not on any machine" (`dropped_rule`, above). Without it, a
+            // machine that did not sync while the addition lasted — its base
+            // says the file is the target's, not added — would read the
+            // file's leaving as a deletion and delete its own copy.
+            if r.is_some() && under_a_root(&removed, path) && kept::target_of(path).is_none() {
                 // TAKEN OUT HERE, an addition this machine followed: it
                 // leaves the repository, for every machine.
                 out.entries.push(entry(path, Step::Unkeep));
@@ -590,6 +599,316 @@ mod tests {
 
     fn notes_root() -> BTreeSet<String> {
         ["home/notes".to_owned()].into_iter().collect()
+    }
+
+    /// FAILS IF: a path a predefined target of an older build kept — the
+    /// `doom` target's `local.el`, replaced by `emacs` on 2026-10-19: in the
+    /// repository, in this machine's base, its id maybe in `dropped` — is
+    /// deleted from the repository, deleted or changed here, pulled to a new
+    /// machine, or forgotten as if a person had stopped keeping it. No table
+    /// names it any more, so nothing moves it on either side; and a request
+    /// about the old id is refused instead of waiting for ever.
+    #[test]
+    fn a_path_no_target_names_any_more_stays_put() {
+        let old = "home/.config/doom/local.el";
+        assert!(kept::target_of(old).is_none() && kept::target_by_id("doom").is_none());
+        let prefs = Belongings::default();
+        let remote = Index {
+            entries: vec![blob(old, "d")],
+            dropped: [("doom".to_owned(), Dropped::default())]
+                .into_iter()
+                .collect(),
+            ..Index::fresh()
+        };
+        let base = Last {
+            repository: "r".to_owned(),
+            entries: [(old.to_owned(), known("d"))].into_iter().collect(),
+            ..Last::default()
+        };
+        // THE MACHINE THAT PUSHED IT, whose walk no longer meets it.
+        assert_eq!(
+            step_of(&plan(Some(&base), &Found::default(), &remote, &prefs), old),
+            None
+        );
+        // EVEN MET, AND CHANGED HERE (a person who adds it back by hand takes
+        // the other path: an addition).
+        let mut local = Found::default();
+        local.files.insert(old.to_owned(), side("e"));
+        assert_eq!(
+            step_of(&plan(Some(&base), &local, &remote, &prefs), old),
+            None
+        );
+        // A NEW MACHINE: nothing pulled — the restore asks the same rule.
+        assert_eq!(
+            step_of(&plan(None, &Found::default(), &remote, &prefs), old),
+            None
+        );
+        assert!(!kept::kept_here(old, &prefs, false));
+        assert!(
+            !crate::requests::Request::DropEverywhere {
+                target: "doom".to_owned()
+            }
+            .is_known()
+        );
+    }
+
+    /// FAILS IF: an addition made by hand at a target's path before the
+    /// target existed (`home/.config/emacs`, before 2026-10-19) stops being
+    /// what it was — a root of its own, whose files travel as the person's
+    /// addition — or adds what the target skips; or the target's files leave
+    /// the repository when it is taken out here ("not on this machine" on the
+    /// target takes the addition with it, `Belongings::stop_keeping`), or
+    /// another machine, or a new one, moves the package it once sent.
+    #[test]
+    fn an_old_addition_at_a_target_is_a_root_and_takes_no_file_out() {
+        let added = "home/.config/emacs";
+        let init = "home/.config/emacs/init.el";
+        let package = "home/.config/emacs/elpa/magit-4.1/magit.el";
+        let remote = Index {
+            entries: vec![
+                Blob {
+                    added: true,
+                    ..blob(init, "i")
+                },
+                Blob {
+                    added: true,
+                    ..blob(package, "p")
+                },
+            ],
+            roots: [added.to_owned()].into_iter().collect(),
+            ..Index::fresh()
+        };
+        let base = Last {
+            repository: "r".to_owned(),
+            entries: [init, package]
+                .into_iter()
+                .map(|p| {
+                    (
+                        p.to_owned(),
+                        Known {
+                            added: true,
+                            ..known(if p == init { "i" } else { "p" })
+                        },
+                    )
+                })
+                .collect(),
+            roots: [added.to_owned()].into_iter().collect(),
+            ..Last::default()
+        };
+        let mut local = Found::default();
+        local.files.insert(init.to_owned(), side("i"));
+        // THE MACHINE THAT MADE IT: a root, as before the target; the
+        // configuration syncs, and the package stays where it is.
+        let prefs = Belongings {
+            extra: vec![added.to_owned()],
+            ..Belongings::default()
+        };
+        let planned = plan(Some(&base), &local, &remote, &prefs);
+        assert_eq!(step_of(&planned, init), Some(Step::Same));
+        assert_eq!(step_of(&planned, package), None, "the package moved");
+        assert_eq!(
+            roots_after(Some(&base), &remote, &prefs),
+            [added.to_owned()].into_iter().collect()
+        );
+        // ANOTHER MACHINE TOOK THE ROOT OUT, its files with it (one on
+        // a88e849, which has no guard): this one, which added it itself,
+        // adds it again — as before the target.
+        let gone = Index {
+            entries: Vec::new(),
+            ..Index::fresh()
+        };
+        let planned = plan(Some(&base), &local, &gone, &prefs);
+        assert_eq!(step_of(&planned, init), Some(Step::Push));
+        assert_eq!(step_of(&planned, package), Some(Step::Forget));
+        // "NOT ON THIS MACHINE" on the target: the addition goes with it,
+        // and no file leaves the repository — the others keep the target.
+        let mut prefs = Belongings {
+            extra: vec![added.to_owned(), format!("{added}/lisp")],
+            ..Belongings::default()
+        };
+        for path in kept::target_by_id("emacs").unwrap().paths {
+            prefs.stop_keeping(path);
+        }
+        assert_eq!(prefs.extra, [format!("{added}/lisp")]);
+        let planned = plan(Some(&base), &local, &remote, &prefs);
+        assert_eq!(step_of(&planned, init), None, "the others' copy left");
+        assert_eq!(step_of(&planned, package), None, "the package moved");
+        assert_eq!(
+            roots_after(Some(&base), &remote, &prefs),
+            [format!("{added}/lisp")].into_iter().collect()
+        );
+        // ANOTHER MACHINE, which follows the root: in step, the package
+        // never pulled — and a new one takes the configuration alone.
+        let planned = plan(Some(&base), &local, &remote, &Belongings::default());
+        assert_eq!(step_of(&planned, init), Some(Step::Same));
+        assert_eq!(step_of(&planned, package), None);
+        let planned = plan(None, &Found::default(), &remote, &Belongings::default());
+        assert_eq!(step_of(&planned, init), Some(Step::Pull));
+        assert_eq!(step_of(&planned, package), None, "a package was pulled");
+    }
+
+    /// FAILS IF: a file the target skips — in the repository, in a base, on
+    /// a disk, added or not, under no root, a root above the target (the
+    /// whole home) or a root at its path (an addition from before it), the
+    /// root in the repository, in this machine's base (followed), both or
+    /// neither, and this machine adding, keeping or taking out the target
+    /// or the root — is pushed, pulled, deleted on either side, taken out
+    /// of the repository or made a question. What the table skips is never
+    /// a reason to touch a file another machine has (the second review's
+    /// M4), and a root taken out takes no file of a target with it; the
+    /// most a sync does is forget a base's copy of what a person once added
+    /// (the file stays where it is).
+    #[test]
+    fn what_a_target_skips_is_never_moved_nor_deleted() {
+        let target = "home/.config/emacs";
+        let skipped = "home/.config/emacs/eln-cache/30.2/x.eln";
+        assert!(kept::target_of(skipped).is_some_and(|t| t.skips(skipped)));
+        let mut seen = BTreeSet::new();
+        for root in [None, Some("home"), Some(target)] {
+            for (in_repo, in_base, on_disk, added, rooted, followed) in (0..64).map(|n| {
+                (
+                    n & 1 != 0,
+                    n & 2 != 0,
+                    n & 4 != 0,
+                    n & 8 != 0,
+                    n & 16 != 0,
+                    n & 32 != 0,
+                )
+            }) {
+                if root.is_none() && (rooted || followed) {
+                    continue;
+                }
+                let roots = |on: bool| -> BTreeSet<String> {
+                    root.filter(|_| on).map(str::to_owned).into_iter().collect()
+                };
+                let remote = Index {
+                    entries: in_repo
+                        .then(|| Blob {
+                            added,
+                            ..blob(skipped, "r")
+                        })
+                        .into_iter()
+                        .collect(),
+                    roots: roots(rooted),
+                    ..Index::fresh()
+                };
+                let base = Last {
+                    repository: "r".to_owned(),
+                    entries: in_base
+                        .then(|| {
+                            (
+                                skipped.to_owned(),
+                                Known {
+                                    added,
+                                    ..known("b")
+                                },
+                            )
+                        })
+                        .into_iter()
+                        .collect(),
+                    roots: roots(followed),
+                    ..Last::default()
+                };
+                let mut local = Found::default();
+                if on_disk {
+                    local.files.insert(skipped.to_owned(), side("l"));
+                }
+                let mut choices = vec![
+                    Belongings::default(),
+                    Belongings {
+                        extra: vec![target.to_owned()],
+                        ..Belongings::default()
+                    },
+                    Belongings {
+                        excluded: vec![target.to_owned()],
+                        ..Belongings::default()
+                    },
+                ];
+                if let Some(root) = root {
+                    choices.push(Belongings {
+                        extra: vec![root.to_owned()],
+                        ..Belongings::default()
+                    });
+                    choices.push(Belongings {
+                        excluded: vec![root.to_owned()],
+                        ..Belongings::default()
+                    });
+                }
+                for prefs in &choices {
+                    for base in [None, Some(&base)] {
+                        let planned = plan(base, &local, &remote, prefs);
+                        let step = step_of(&planned, skipped);
+                        let forgets = base.is_some() && in_base && added && !in_repo;
+                        assert_eq!(
+                            step,
+                            forgets.then_some(Step::Forget),
+                            "root {root:?} in repo {rooted} followed {followed} | file: repo \
+                             {in_repo} base {in_base} disk {on_disk} added {added} | {prefs:?}"
+                        );
+                        assert!(planned.conflicts.is_empty());
+                        // WHAT THE LOOP REACHED: a root taken out now, with the
+                        // file in the repository — the case a missing guard
+                        // turns into `Unkeep`.
+                        let after = roots_after(base, &remote, prefs);
+                        if in_repo && remote.roots.difference(&after).next().is_some() {
+                            seen.insert(root);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            seen,
+            [Some("home"), Some(target)].into_iter().collect(),
+            "a root taken out with the file in the repository was never planned"
+        );
+    }
+
+    /// FAILS IF: a machine that takes out an addition ABOVE a target (the
+    /// whole home, added on another machine) while the target is "not on
+    /// this machine" here takes the target's files out of the repository —
+    /// the others keep the target — or stops taking the addition's own
+    /// files out.
+    #[test]
+    fn a_root_taken_out_above_a_target_leaves_the_targets_files() {
+        let init = "home/.config/emacs/init.el";
+        let notes = "home/notes/a.md";
+        let added = |path: &str, sha: &str| Blob {
+            added: true,
+            ..blob(path, sha)
+        };
+        let remote = Index {
+            entries: vec![added(init, "i"), added(notes, "n")],
+            roots: ["home".to_owned()].into_iter().collect(),
+            ..Index::fresh()
+        };
+        let base = Last {
+            repository: "r".to_owned(),
+            entries: [init, notes]
+                .into_iter()
+                .map(|p| {
+                    (
+                        p.to_owned(),
+                        Known {
+                            added: true,
+                            ..known(if p == init { "i" } else { "n" })
+                        },
+                    )
+                })
+                .collect(),
+            roots: ["home".to_owned()].into_iter().collect(),
+            ..Last::default()
+        };
+        let prefs = Belongings {
+            excluded: vec!["home".to_owned(), "home/.config/emacs".to_owned()],
+            ..Belongings::default()
+        };
+        let mut local = Found::default();
+        local.files.insert(init.to_owned(), side("i"));
+        local.files.insert(notes.to_owned(), side("n"));
+        let planned = plan(Some(&base), &local, &remote, &prefs);
+        assert_eq!(step_of(&planned, init), None, "the target's file left");
+        assert_eq!(step_of(&planned, notes), Some(Step::Unkeep));
     }
 
     /// FAILS IF: a file created in an added folder on another machine is not

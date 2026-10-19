@@ -54,6 +54,7 @@ impl Scratch {
         let bootctl = self.path("bin/bootctl").display().to_string();
         let template = self.path("template").display().to_string();
         let sizing = self.path("bin/sizing").display().to_string();
+        let units = self.path("bin/build-units").display().to_string();
         let keep = self.path("bin/keep-units").display().to_string();
         System::from_env(&Env::of(&[
             (system::SYSROOT, &root),
@@ -64,6 +65,7 @@ impl Scratch {
             (system::TEMPLATE, &template),
             (system::SYSTEM_LOCK, SYSTEM_LOCK),
             (system::BUILD_SIZING, &sizing),
+            (system::BUILD_UNITS, &units),
             (system::KEEP_UNITS, &keep),
         ]))
     }
@@ -83,10 +85,10 @@ const LOCK_A: &str = r#"{"nodes":{"root":{"inputs":{"ronoctua":"ronoctua"}},"ron
 const LOCK_B: &str = r#"{"nodes":{"root":{"inputs":{"ronoctua":"ronoctua"}},"ronoctua":{"locked":{"rev":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}},"root":"root","version":7}
 "#;
 
-/// What the fake sizing says: three Rust units at once, a heavy one with
-/// five cores, the rest two at a time with two cores each.
+/// What the fake sizing says: what is no unit two at a time with two cores
+/// each (and, for the units' own program, more it does not read here).
 const SIZING: &str =
-    "total_kb=1\nceiling_kb=\nslots=4\nrust_jobs=3\nrust_cores=1\njobs=2\ncores=2\nheavy_cores=5\n";
+    "total_kb=1\nceiling_kb=\nslots=4\njobs=2\ncores=2\nheavy_cores=5\nclass_light_jobs=3\n";
 
 /// A machine on its own root: system A booted and running from generation
 /// 1, the machine directory locked at A's revision.
@@ -201,13 +203,21 @@ esac
 "#
             ),
         );
-        // THE SIZING, as `sizing-says` says it; and WHAT KEEPS A BUILD'S
-        // UNITS, which writes down what it was handed. (What a build would
-        // build is the dry run's, `dry-says`.)
+        // THE SIZING, as `sizing-says` says it; WHAT BUILDS THE UNITS, which
+        // keeps the plan and the units it was handed (`--nix NIX PLAN WILL
+        // HELD -- …`) and fails when `units-fail` exists; and WHAT KEEPS A
+        // BUILD'S UNITS, which writes down what it was handed. (What a build
+        // would build is the dry run's, `dry-says`.)
         std::fs::write(s.path("sizing-says"), SIZING).unwrap();
         script(
             &s.path("bin/sizing"),
             &format!("#!/bin/sh\necho sizing >> '{root}/calls'\ncat '{root}/sizing-says'\n"),
+        );
+        script(
+            &s.path("bin/build-units"),
+            &format!(
+                "#!/bin/sh\necho \"build-units $*\" >> '{root}/calls'\ncp \"$3\" '{root}/units-plan'\ncp \"$4\" '{root}/units-will'\n[ ! -e '{root}/units-fail' ]\n"
+            ),
         );
         script(
             &s.path("bin/keep-units"),
@@ -1150,15 +1160,22 @@ fn a_rollback_by_hand_disarms_the_trial() {
     assert_eq!(w.m.apply(false).unwrap_err().why, Why::DidNotBoot);
 }
 
-/// The phases a distro would describe: one unit below the shell, the shell,
-/// a second heavy unit the system does not reach (with a unit between), the
-/// system, and two units to keep.
-const PHASES: &str = r#"{"format":1,
-"first":["/nix/store/aaaa-rust-lib-x-0.1.0.drv"],
-"heavy":[{"name":"shell-release","drv":"/nix/store/ssss-ronoctua-shell-0.1.0.drv","between":[]},
-         {"name":"not-here","drv":"/nix/store/oooo-other-0.1.0.drv","between":["/nix/store/xxxx-rust-lib-y-0.1.0.drv"]}],
+/// The phases a distro would describe: the plan of four units — one below
+/// the shell, the shell (alone), and a second unit built alone that the
+/// system does not reach, with a unit below it —, the system, and two units
+/// to keep. Its classes are a newer distro's, none this program or its
+/// distro's units program ever knew, nor are their slots.
+const PHASES: &str = r#"{"format":3,
+"units":["release/libs/x feather named 300 /nix/store/aaaa-rust-lib-x-0.1.0.drv",
+         "release/bins/ronoctua-shell giant named alone:6000+400 /nix/store/ssss-ronoctua-shell-0.1.0.drv 0",
+         "release/libs/y feather carried 300 /nix/store/xxxx-rust-lib-y-0.1.0.drv",
+         "release/bins/other giant default alone:6000+400 /nix/store/oooo-other-0.1.0.drv 2"],
 "system":"/nix/store/tttt-nixos-system-noctua.drv",
 "kept":["/nix/store/pppp-rust-lib-x-0.1.0","/nix/store/qqqq-ronoctua-shell-0.1.0"]}"#;
+
+/// The plan's lines, as the units' program must be handed them: word for
+/// word, its classes and costs as the distro wrote them.
+const PLAN: &str = "release/libs/x feather named 300 /nix/store/aaaa-rust-lib-x-0.1.0.drv\nrelease/bins/ronoctua-shell giant named alone:6000+400 /nix/store/ssss-ronoctua-shell-0.1.0.drv 0\nrelease/libs/y feather carried 300 /nix/store/xxxx-rust-lib-y-0.1.0.drv\nrelease/bins/other giant default alone:6000+400 /nix/store/oooo-other-0.1.0.drv 2\n";
 
 /// What Nix would build for a system whose shell changed, in its own words:
 /// the unit below the shell, the shell and the system — not the second heavy
@@ -1174,13 +1191,22 @@ fn builds(w: &World) -> Vec<String> {
         .collect()
 }
 
-/// FAILS IF: an apply does not build in the distro's phases — what the
-/// heavy units are built from as Rust units, each heavy unit the system
-/// reaches alone with its own cores, the system as everything else — or
-/// builds a heavy unit the system does not reach, or does not hand the units
-/// to keep to what keeps them once the build worked.
+/// The lines the units' program was handed, or none when it never ran.
+fn handed(w: &World) -> Option<(String, String)> {
+    w.read("calls")
+        .contains("build-units ")
+        .then(|| (w.read("units-plan"), w.read("units-will")))
+}
+
+/// FAILS IF: an apply does not build the distro's units first — handing the
+/// units' program the whole plan and what Nix would build for the system
+/// (its units, and what is no unit: the program builds first what the units
+/// are built from, and asks Nix nothing again), with the machine's own
+/// `nix` and features — and then the system, sized as what is no unit; or
+/// hands it a unit the system does not reach; or does not hand the units to
+/// keep to what keeps them once the build worked.
 #[test]
-fn an_apply_builds_in_phases_and_keeps_its_units() {
+fn an_apply_builds_its_units_then_the_system_and_keeps_them() {
     let w = World::new("phases");
     std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
     std::fs::write(w.s.path("dry-says"), PLANNED).unwrap();
@@ -1201,6 +1227,7 @@ fn an_apply_builds_in_phases_and_keeps_its_units() {
             "nix eval" => "eval",
             "nix build" if l.contains("--dry-run") => "dry-run",
             "nix build" => "build",
+            "build-units --nix" => "units",
             "keep-units --roots" => "keep",
             "nix-env --profile" => "profile",
             _ => "other",
@@ -1210,32 +1237,37 @@ fn an_apply_builds_in_phases_and_keeps_its_units() {
     assert_eq!(
         order,
         [
-            "sizing", "eval", "dry-run", "build", "build", "build", "keep", "profile"
+            "sizing", "eval", "dry-run", "units", "build", "keep", "profile"
         ],
         "{calls}"
     );
+    let (plan, will) = handed(&w).unwrap();
+    assert_eq!(plan, PLAN, "the units' program is handed the whole plan");
+    assert_eq!(
+        will,
+        "/nix/store/aaaa-rust-lib-x-0.1.0.drv\n/nix/store/ssss-ronoctua-shell-0.1.0.drv\n/nix/store/tttt-nixos-system-noctua.drv\n",
+        "what Nix would build for the system, whole, and not the unit it does not reach"
+    );
+    let units = calls
+        .lines()
+        .find(|l| l.starts_with("build-units"))
+        .unwrap();
+    assert!(
+        units.contains(&format!("--nix {} ", w.s.path("bin/nix").display()))
+            && units.ends_with(" -- --extra-experimental-features nix-command flakes"),
+        "the units are built by the machine's own nix: {units}"
+    );
+    assert!(
+        !units.contains("--units-only"),
+        "Nix's plan answered: the program is not told to ask it again: {units}"
+    );
     let built = builds(&w);
+    assert_eq!(built.len(), 1, "{built:?}");
     assert!(
-        built[0].contains("--max-jobs 3 --cores 1")
-            && built[0].ends_with("/nix/store/aaaa-rust-lib-x-0.1.0.drv^*"),
-        "what the heavy units are built from, as Rust units: {}",
+        built[0].contains("--max-jobs 2 --cores 2")
+            && built[0].ends_with("/nix/store/tttt-nixos-system-noctua.drv^*"),
+        "the system, sized as what is no unit: {}",
         built[0]
-    );
-    assert!(
-        built[1].contains("--max-jobs 1 --cores 5")
-            && built[1].ends_with("/nix/store/ssss-ronoctua-shell-0.1.0.drv^*"),
-        "the shell alone, with the heavy cores: {}",
-        built[1]
-    );
-    assert!(
-        built[2].contains("--max-jobs 2 --cores 2")
-            && built[2].ends_with("/nix/store/tttt-nixos-system-noctua.drv^*"),
-        "the system, sized as everything else: {}",
-        built[2]
-    );
-    assert!(
-        !calls.contains("oooo-other") && !calls.contains("xxxx-rust-lib-y"),
-        "a heavy unit the system does not reach is not built: {calls}"
     );
     let dry = calls.lines().find(|l| l.contains("--dry-run")).unwrap();
     assert!(
@@ -1264,39 +1296,48 @@ fn an_apply_builds_in_phases_and_keeps_its_units() {
     );
 }
 
-/// FAILS IF: a build that fails hands anything to what keeps the units (the
-/// last build's stay), or leaves the out-links that held its units.
+/// FAILS IF: a build that fails — its units, or the system after them —
+/// hands anything to what keeps the units (the last build's stay), builds
+/// the system after its units failed, or leaves the out-links that held its
+/// units.
 #[test]
 fn a_failed_build_keeps_the_last_units() {
-    let w = World::new("phases-fail");
-    std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
-    std::fs::write(w.s.path("dry-says"), PLANNED).unwrap();
-    std::fs::write(w.s.path("build-fails"), "").unwrap();
-    assert_eq!(w.m.apply(false).unwrap_err().why, Why::BuildFailed);
-    assert!(
-        !w.read("calls").contains("keep-units"),
-        "{}",
-        w.read("calls")
-    );
-    assert_eq!(
-        builds(&w).len(),
-        1,
-        "the first phase failed, and nothing after it ran"
-    );
-    assert_eq!(w.lock(), LOCK_A);
-    assert!(!w.m.places.run.join("units").exists());
+    for knob in ["units-fail", "build-fails"] {
+        let w = World::new("phases-fail");
+        std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
+        std::fs::write(w.s.path("dry-says"), PLANNED).unwrap();
+        std::fs::write(w.s.path(knob), "").unwrap();
+        assert_eq!(
+            w.m.apply(false).unwrap_err().why,
+            Why::BuildFailed,
+            "{knob}"
+        );
+        assert!(
+            !w.read("calls").contains("keep-units"),
+            "{knob}: {}",
+            w.read("calls")
+        );
+        assert!(handed(&w).is_some(), "{knob}: the units came first");
+        assert_eq!(
+            builds(&w).len(),
+            usize::from(knob == "build-fails"),
+            "{knob}: the system is built only after its units were"
+        );
+        assert_eq!(w.lock(), LOCK_A, "{knob}");
+        assert!(!w.m.places.run.join("units").exists(), "{knob}");
+    }
 }
 
-/// FAILS IF: a phase is built that Nix would not build for the system —
+/// FAILS IF: a unit is built that Nix would not build for the system —
 /// the units below the shell, or the shell, on a machine whose store holds
 /// the shell's bundle (freshly installed from the ISO's seed, or fed by the
 /// person's binary cache, where no unit ever is), though every one of them
 /// is in the system's `.drv` closure — or a unit Nix would build below the
-/// shell is left to the system's build instead of its own phase.
+/// shell is left to the system's build instead of being handed over.
 #[test]
 fn an_apply_builds_only_what_nix_would_build() {
     // The shell's bundle in the store, the system changed: Nix builds the
-    // system and nothing below it.
+    // system and nothing below it, and the units' program never runs.
     let w = World::new("phases-fresh");
     std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
     std::fs::write(
@@ -1308,11 +1349,8 @@ fn an_apply_builds_only_what_nix_would_build() {
     w.builds(&b);
     assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
     let built = builds(&w);
-    assert_eq!(
-        built.len(),
-        1,
-        "no unit and no shell, only the system: {built:?}"
-    );
+    assert!(handed(&w).is_none(), "no unit and no shell: {built:?}");
+    assert_eq!(built.len(), 1, "only the system: {built:?}");
     assert!(
         built[0].contains("--max-jobs 2 --cores 2")
             && built[0].ends_with("/nix/store/tttt-nixos-system-noctua.drv^*"),
@@ -1325,7 +1363,7 @@ fn an_apply_builds_only_what_nix_would_build() {
     );
 
     // The shell held, a unit below it needed by another program: that unit
-    // as a Rust unit, the shell not at all.
+    // handed over, the shell not at all.
     let w = World::new("phases-unit");
     std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
     std::fs::write(
@@ -1336,24 +1374,21 @@ fn an_apply_builds_only_what_nix_would_build() {
     let b = w.toplevel("b", "quiet");
     w.builds(&b);
     w.m.apply(false).unwrap();
-    let built = builds(&w);
-    assert_eq!(built.len(), 2, "{built:?}");
-    assert!(
-        built[0].contains("--max-jobs 3 --cores 1")
-            && built[0].ends_with("/nix/store/aaaa-rust-lib-x-0.1.0.drv^*"),
-        "{}",
-        built[0]
+    assert_eq!(
+        handed(&w).unwrap().1,
+        "/nix/store/aaaa-rust-lib-x-0.1.0.drv\n/nix/store/tttt-nixos-system-noctua.drv\n",
+        "the shell the store holds is not linked again"
     );
-    assert!(
-        !built.iter().any(|b| b.contains("ssss-ronoctua-shell")),
-        "the shell the store holds is not linked again: {built:?}"
-    );
+    assert_eq!(builds(&w).len(), 1);
 }
 
 /// FAILS IF: a distro that describes no phases (older than them) is not
-/// built in one step — sized, as a flake, moving no input — or a dry run
-/// that does not say what the system's build builds (no answer, or words
-/// this does not read) skips a phase.
+/// built in one step — sized, as a flake, moving no input, handing nothing
+/// to the units' program — or a dry run that does not say what the
+/// system's build builds (no answer, or words this does not read) hands
+/// over less than every unit of the plan, or does not tell the program that
+/// they are units only (`--units-only`: it asks Nix what they are built
+/// from).
 #[test]
 fn a_build_without_phases_or_a_plan_is_still_whole_and_sized() {
     let w = World::new("no-phases");
@@ -1369,6 +1404,7 @@ fn a_build_without_phases_or_a_plan_is_still_whole_and_sized() {
         "{}",
         built[0]
     );
+    assert!(handed(&w).is_none(), "no phases, no units handed over");
     assert!(
         !w.read("calls").contains("keep-units"),
         "no phases, no units to keep"
@@ -1388,30 +1424,75 @@ fn a_build_without_phases_or_a_plan_is_still_whole_and_sized() {
         let b = w.toplevel("b", "quiet");
         w.builds(&b);
         w.m.apply(false).unwrap();
-        let built = builds(&w);
-        assert_eq!(built.len(), 5, "every phase, {what}: {built:?}");
-        assert!(
-            built[2].contains("--max-jobs 3 --cores 1")
-                && built[2].ends_with("xxxx-rust-lib-y-0.1.0.drv^*"),
-            "{what}"
+        assert_eq!(
+            handed(&w).unwrap().1,
+            "/nix/store/aaaa-rust-lib-x-0.1.0.drv\n/nix/store/ssss-ronoctua-shell-0.1.0.drv\n/nix/store/xxxx-rust-lib-y-0.1.0.drv\n/nix/store/oooo-other-0.1.0.drv\n",
+            "every unit, {what}"
         );
+        let call = w.read("calls");
+        let units = call.lines().find(|l| l.starts_with("build-units")).unwrap();
         assert!(
-            built[3].contains("--max-jobs 1 --cores 5")
-                && built[3].ends_with("oooo-other-0.1.0.drv^*"),
-            "{what}"
+            units.contains(" --units-only -- "),
+            "{what}: no plan, and the program is not told the units are all it has: {units}"
         );
+        assert_eq!(builds(&w).len(), 1, "{what}");
     }
+}
+
+/// FAILS IF: a distro whose phases are in another format than this program
+/// reads — older, or newer (how a newer program arrives) — is refused
+/// instead of built in one step, sized and said with both numbers; or one
+/// in this program's format with a line it cannot read is built at all,
+/// instead of refused with the line and why, the lock put back.
+#[test]
+fn another_format_is_built_whole_and_a_broken_one_refused() {
+    for format in [2, 4] {
+        let w = World::new("other-format");
+        std::fs::write(
+            w.s.path("phases.json"),
+            PHASES.replace(r#""format":3"#, &format!(r#""format":{format}"#)),
+        )
+        .unwrap();
+        std::fs::write(w.s.path("dry-says"), PLANNED).unwrap();
+        let b = w.toplevel("b", "quiet");
+        w.builds(&b);
+        let applied = w.m.apply(false).unwrap();
+        assert_eq!(applied.result, ApplyResult::Switched, "{format}");
+        let built = builds(&w);
+        assert_eq!(built.len(), 1, "{format}: {built:?}");
+        assert!(
+            built[0].contains("--max-jobs 2 --cores 2")
+                && built[0].ends_with("#nixosConfigurations.noctua.config.system.build.toplevel"),
+            "{format}: one step, sized: {}",
+            built[0]
+        );
+        assert!(handed(&w).is_none(), "{format}: no units handed over");
+    }
+
+    let w = World::new("broken-format");
+    std::fs::write(
+        w.s.path("phases.json"),
+        PHASES.replace(
+            "release/libs/y feather carried 300 /nix/store/xxxx-rust-lib-y-0.1.0.drv",
+            "release/libs/y /nix/store/xxxx-rust-lib-y-0.1.0.drv",
+        ),
+    )
+    .unwrap();
+    std::fs::write(w.s.path("dry-says"), PLANNED).unwrap();
+    std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();
+    std::fs::create_dir_all(&w.m.places.state).unwrap();
+    std::fs::write(w.m.places.state.join(crate::APPLIED_LOCK), LOCK_A).unwrap();
+    assert_eq!(w.m.apply(false).unwrap_err().why, Why::BuildFailed);
+    assert!(builds(&w).is_empty(), "nothing is built");
+    assert!(handed(&w).is_none(), "no unit is handed over");
+    assert_eq!(w.lock(), LOCK_A, "the lock is put back");
 }
 
 /// FAILS IF: a sizing that does not answer with counts is guessed at instead
 /// of refused — before anything is built, with the lock put back.
 #[test]
 fn a_sizing_that_says_no_count_is_a_refusal() {
-    for says in [
-        "",
-        "rust_jobs=3\n",
-        "rust_jobs=0\nrust_cores=1\njobs=1\ncores=1\nheavy_cores=1\n",
-    ] {
+    for says in ["", "jobs=3\n", "jobs=0\ncores=1\nheavy_cores=1\n"] {
         let w = World::new("sizing");
         std::fs::write(w.s.path("sizing-says"), says).unwrap();
         std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();

@@ -164,8 +164,9 @@ Ao terminar, ele **lista o que não verificou**, pelo nome. `test-tiers-are-tota
 não envelheça, e um check novo entra no `most` sozinho.
 
 O **`gate`** roda o `nix flake check` depois de **medir a memória livre**: ele limita quantas
-compilações correm juntas (`nix/build-sizing.nix`, a mesma conta do `ronoctua-machine apply`) e
-constrói as unidades pesadas (`rust.heavyUnits`) uma de cada vez, depois do que elas precisam. Sem
+compilações correm juntas (`nix/build-sizing.nix`, a mesma conta do `ronoctua-machine apply`):
+cada unidade Rust começa quando a fatia da classe dela (medida, `nix/rust/unit-classes.json`) cabe
+ao lado do que roda, e as pesadas vão uma de cada vez. Sem
 isso, numa máquina com `earlyoom`, o `rustc` morre com `signal: 15` **sem diagnóstico nenhum** —
 parece defeito de compilação e é falta de RAM. Se acontecer mesmo assim, ele diz quem foi morto e
 por quem — o `earlyoom`, o `systemd-oomd` ou o OOM killer do kernel. Numa máquina da distro ele
@@ -174,8 +175,11 @@ ter](#o-que-a-máquina-precisa-ter)).
 
 As duas baterias andam em fases: **0** avalia o `.drv` de cada alvo em lotes, antes de construir
 qualquer coisa (um teste de VM avaliado custa ~260 MiB, e todos juntos passam de 8 GiB); **1** o
-build Rust: o que as pesadas precisam, como unidades Rust (`--max-jobs <fatias> --cores 1`), cada
-pesada sozinha, toda outra unidade, e as execuções de teste por último; **2** o que as VMs bootam;
+build Rust: o que as unidades precisam e não é unidade, primeiro; cada unidade que o dry run lista
+é um `nix build` próprio, por classe (as linhas `->` e `<-` dizem quando cada uma começou e acabou,
+e quanto do orçamento ia junto), as execuções de teste depois de toda compilação, os agregados por
+último — uma unidade que falha é construída uma vez, e o que precisa dela fica de fora até o fim,
+pelo nome; **2** o que as VMs bootam;
 **3** as VMs, sozinhas, tantas ao mesmo tempo quanto cabe na **memória que declaram**
 (`virtualisation.memorySize`, somada por nó) — cada uma aparece com `->` ao começar e `<-` ao
 acabar; **4** o resto. O gate termina no `nix flake check`.
@@ -341,8 +345,11 @@ derivation por unidade — o porquê está no `docs/ARCHITECTURE.md`, seção 10
 nix run .#rust-plan      regenera nix/rust/plan.json (dependência, feature, perfil ou alvo mudou)
 nix run .#rebuild-cost   o que a árvore reconstrói contra o HEAD, e quanto, sem construir
 nix run .#sized-build -- <instalável>…
-                         nix build dimensionado: as pesadas sozinhas, o resto quantas couberem
-nix run .#rust-peaks     as unidades que mais pesaram; falha se uma passou da fatia e não é pesada
+                         nix build dimensionado: cada unidade pela sua classe, as pesadas sozinhas,
+                         as execuções de teste depois de toda compilação
+nix run .#rust-peaks     cada unidade contra a sua classe; falha se uma passou da fatia dela
+nix run .#rust-peaks -- --write
+                         regrava nix/rust/unit-classes.json com as classes que o store mediu
 nix run .#profile-bench  mede cada variante do perfil de release no .#bench (horas; sessão gráfica)
 ```
 
@@ -365,6 +372,12 @@ nix run .#profile-bench  mede cada variante do perfil de release no .#bench (hor
   sobre o harness que as unidades já construíram.
 - **Quanto cabe nesta máquina agora**: `ronoctua-build-sizing --explain` (está no fecho do
   `ronoctua-machine`).
+- **Uma unidade que mudou de tamanho** (o `.#rust-peaks` ou o check `unit-classes-fit-the-measures`
+  a nomeia): depois de um build dela, `nix run .#rust-peaks -- --write` regrava a classe de toda
+  unidade medida no store e mantém a das outras; commite o `nix/rust/unit-classes.json` com o resto.
+  Depois de um `Cargo.lock` novo o mesmo comando, sem build, tira os ids que o lock renomeou e dá a
+  cada renomeada a classe da que ela substituiu (o check `unit-classes-name-units-of-the-index`
+  cobra).
 - **As unidades guardadas**: num checkout,
   `~/.local/state/ronoctua/gcroots/units-<release|loop>-<hash do checkout>@<carimbo>/`; numa
   máquina, `/var/lib/ronoctua-machine/kept-units/release@<carimbo>/`. Nenhuma raiz é motivo para

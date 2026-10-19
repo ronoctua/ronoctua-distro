@@ -44,10 +44,15 @@
 
   # ── the 2026-10-05 wave: format 2 ─────────────────────────────────────
   #
-  # THE PREDEFINED ENCRYPTED TARGETS (`~/.ssh`, git, GnuPG, the shell's and
-  # Doom's local files), by id: `paths` (logical), `skip` (name patterns),
-  # `private` (restored 0700/0600), `merge` (per file name or `default`:
-  # `choose` or `union`) and `offers` (`ssh-signing`, `pam-u2f`).
+  # THE PREDEFINED ENCRYPTED TARGETS (`~/.ssh`, git, GnuPG, the shell's own
+  # file, the Emacs configuration), by id: `paths` (logical); `skip`, what is
+  # never kept below them, each with its reason — a name pattern matches a
+  # name at ANY depth, and one written `/name` only the first name below the
+  # target's path (its root); `carry`, paths below a path that are kept
+  # although a `skip` names a folder they are in, each name a pattern
+  # (`straight/versions/*.el`); `private` (restored 0700/0600); `merge` (per
+  # file name or `default`: `choose` or `union`); `offers` (`ssh-signing`,
+  # `pam-u2f`).
   # ── anchor: L10 ──
   # Kept ENCRYPTED like the rest of the sealed part, on every machine, by
   # default. Each can be taken out on one machine ("not here": its paths go
@@ -67,11 +72,11 @@
     # fact per line, so both sides' lines are kept.
     ssh = {
       paths = [ "home/.ssh" ];
-      skip = [
-        "*.sock"
-        "control-*"
-        "S.*"
-      ];
+      skip = {
+        "*.sock" = "socket";
+        "control-*" = "connection";
+        "S.*" = "socket";
+      };
       private = true;
       merge = {
         default = "choose";
@@ -101,12 +106,12 @@
     # person's; a keyring's parts mean nothing apart.
     gnupg = {
       paths = [ "home/.gnupg" ];
-      skip = [
-        "S.*"
-        "random_seed"
-        "*.lock"
-        ".#lk*"
-      ];
+      skip = {
+        "S.*" = "socket";
+        "random_seed" = "random-seed";
+        "*.lock" = "lock";
+        ".#lk*" = "lock";
+      };
       private = true;
       merge = {
         default = "choose";
@@ -117,9 +122,76 @@
     shell = {
       paths = [ "home/.shellrc.local" ];
     };
-    # Doom Emacs' local file: a name, an e-mail, what is personal.
-    doom = {
-      paths = [ "home/.config/doom/local.el" ];
+    # THE PERSON'S EMACS CONFIGURATION, in ONE place: `~/.config/emacs`
+    # (`$XDG_CONFIG_HOME/emacs`). The distro writes none
+    # (`nix/modules/emacs.nix`), so what is there is theirs; and on a machine
+    # with none of Emacs's places, the daemon's unit makes that folder, empty,
+    # before Emacs starts — so a first configuration is born where it is
+    # carried. Emacs's other places (`~/.emacs.d`, `~/.emacs`, `~/.emacs.el`)
+    # and a framework's user folder are not carried: a person who keeps one
+    # adds it by hand, and the page says which place Emacs reads here when it
+    # is not this one (`ronoctua_belongings::emacs`) — it never moves one.
+    #
+    # WHAT IT SKIPS is what Emacs and its package managers make from a
+    # configuration. At any depth: the packages (`elpa`, `straight`,
+    # `elpaca`, `quelpa`, `el-get`, `.local`, the tree-sitter grammars) and
+    # the compiled (`eln-cache`, `*.elc`, `*.eln`, a module's `*.so`), the
+    # caches, a git repository's own folder, and an editor's backups,
+    # autosaves and locks — a package folder never travels wherever a
+    # configuration puts it. At the root only (`/`), where Emacs writes them:
+    # what it keeps of this machine's sessions — `no-littering`'s `var`,
+    # `transient`, `url`, `tramp`, `auto-save-list`, `backups`, the server's
+    # key, the minibuffer's `history`, `recentf`, `places`, a saved desktop,
+    # an LSP session, a database a package keeps and rebuilds (`org-roam.db`,
+    # forge's) — so a snippet of the person's named `url` deeper down
+    # travels. `transient`'s saved choices and `straight`'s lockfiles are the
+    # person's, and are carried out of the folders that hold them.
+    #
+    # Elisp merged by hunk can make a configuration that no longer loads: a
+    # file both sides changed is a choice.
+    emacs = {
+      paths = [ "home/.config/emacs" ];
+      skip = {
+        "elpa" = "packages";
+        "straight" = "packages";
+        "elpaca" = "packages";
+        "quelpa" = "packages";
+        "el-get" = "packages";
+        ".local" = "packages";
+        "tree-sitter" = "packages";
+        "eln-cache" = "compiled";
+        "*.elc" = "compiled";
+        "*.eln" = "compiled";
+        "*.so" = "compiled";
+        ".cache" = "cache";
+        ".git" = "git-folder";
+        ".#*" = "editor-draft";
+        "#*#" = "editor-draft";
+        "*~" = "editor-draft";
+        "*.lock" = "lock";
+        "/var" = "editor-state";
+        "/transient" = "editor-state";
+        "/url" = "editor-state";
+        "/tramp" = "editor-state";
+        "/auto-save-list" = "editor-state";
+        "/backups" = "editor-state";
+        "/server" = "editor-state";
+        "/history" = "editor-state";
+        "/recentf" = "editor-state";
+        "/places" = "editor-state";
+        "/.emacs.desktop" = "editor-state";
+        "/.lsp-session-v1" = "editor-state";
+        "/*.db" = "editor-state";
+        "/*.sqlite" = "editor-state";
+      };
+      carry = [
+        "transient/values.el"
+        "transient/levels.el"
+        "straight/versions/*.el"
+      ];
+      merge = {
+        default = "choose";
+      };
     };
   };
 

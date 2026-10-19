@@ -20,7 +20,7 @@
 //! ground beside it — the failure would look like "this pack has no streets
 //! here", which is indistinguishable from a region genuinely without any.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::ControlFlow};
 
 use crate::{CELL_DEGREES, MAGIC, META, MOST_CELLS, MOST_PLACES, Trouble, VERSION, shapefile};
 
@@ -39,18 +39,36 @@ const ROADS: &str = "gis_osm_roads_free_1";
 /// See [`ROADS`].
 const PLACES: &str = "gis_osm_places_free_1";
 
-/// Bakes the download into a pack.
+/// Bakes the download into a pack, asking `go_on` between its bites.
 ///
 /// `id`, `label` and `dated` come from the catalogue and from what the
 /// download redirected to — the dated name IS the version, because the
 /// `-latest-` URL is a redirect and what it points at is a date.
 ///
+/// # Why it asks, and where
+///
+/// Because the baking is the transfer queue's to hold. A region's job pauses
+/// (`Engine::pauses`), and a pause the baking did not hear was a row saying
+/// HELD over a baking that ran to the end. So it asks `go_on` at every
+/// natural boundary — before each layer is inflated, between the records of
+/// a walk, and before the pack is written — and the queue's `go_on` is the
+/// job's switch: it blocks while the job is held and answers no once it is
+/// given up. The longest bite left is one layer's inflation, a single call
+/// (`ronoctua_zip::member_up_to`): seconds on the largest regions.
+///
 /// # Errors
 ///
 /// [`Trouble::NotARegionPack`] when the two layers are not in the zip,
 /// [`Trouble::Mismatched`] when a layer's `.shp` and `.dbf` disagree about how
-/// many records there are, and whatever the zip or the shapefile answers.
-pub fn pack(zip: &[u8], id: &str, label: &str, dated: &str) -> Result<Vec<u8>, Trouble> {
+/// many records there are, [`Trouble::GivenUp`] when `go_on` said no, and
+/// whatever the zip or the shapefile answers.
+pub fn pack(
+    zip: &[u8],
+    id: &str,
+    label: &str,
+    dated: &str,
+    go_on: &mut dyn FnMut() -> bool,
+) -> Result<Vec<u8>, Trouble> {
     let list = ronoctua_zip::members(zip)?;
     let find = |layer: &str, ext: &str| {
         list.iter()
@@ -64,25 +82,30 @@ pub fn pack(zip: &[u8], id: &str, label: &str, dated: &str) -> Result<Vec<u8>, T
     let mut segments: Vec<(u32, i32, i32, i32, i32)> = Vec::new();
     let mut ways = 0_u32;
     {
+        bite(go_on)?;
         let dbf = ronoctua_zip::member_up_to(zip, rd, LAYER_CEILING)?;
         let columns = shapefile::columns(&dbf, &["name"])?;
         let named = columns.into_iter().next().unwrap_or_default();
         drop(dbf);
+        bite(go_on)?;
         let shp = ronoctua_zip::member_up_to(zip, rs, LAYER_CEILING)?;
         let mut trouble = None;
         let count = shapefile::each(&shp, |i, shape| {
+            if !go_on() {
+                return ControlFlow::Break(());
+            }
             let Some(name) = named.get(i).filter(|n| !n.is_empty()) else {
-                return;
+                return ControlFlow::Continue(());
             };
             let shapefile::Shape::Line(points) = shape else {
-                return;
+                return ControlFlow::Continue(());
             };
             if points.len() < 2 {
-                return;
+                return ControlFlow::Continue(());
             }
             if names.len() >= u32::MAX as usize {
                 trouble = Some(Trouble::Malformed);
-                return;
+                return ControlFlow::Continue(());
             }
             let n = names.id(name);
             ways += 1;
@@ -95,6 +118,7 @@ pub fn pack(zip: &[u8], id: &str, label: &str, dated: &str) -> Result<Vec<u8>, T
                     micro(pair[1].1),
                 ));
             }
+            ControlFlow::Continue(())
         })?;
         if let Some(t) = trouble {
             return Err(t);
@@ -113,27 +137,34 @@ pub fn pack(zip: &[u8], id: &str, label: &str, dated: &str) -> Result<Vec<u8>, T
 
     let mut places: Vec<(i32, i32, u32)> = Vec::new();
     if let (Some(ps), Some(pd)) = (find(PLACES, "shp"), find(PLACES, "dbf")) {
+        bite(go_on)?;
         let dbf = ronoctua_zip::member_up_to(zip, pd, LAYER_CEILING)?;
         let named = shapefile::columns(&dbf, &["name"])?
             .into_iter()
             .next()
             .unwrap_or_default();
         drop(dbf);
+        bite(go_on)?;
         let shp = ronoctua_zip::member_up_to(zip, ps, LAYER_CEILING)?;
         let count = shapefile::each(&shp, |i, shape| {
+            if !go_on() {
+                return ControlFlow::Break(());
+            }
             let (Some(name), shapefile::Shape::Point(lat, lon)) = (named.get(i), shape) else {
-                return;
+                return ControlFlow::Continue(());
             };
             if name.is_empty() || places.len() >= MOST_PLACES {
-                return;
+                return ControlFlow::Continue(());
             }
             places.push((micro(lat), micro(lon), names.id(name)));
+            ControlFlow::Continue(())
         })?;
         if count != named.len() {
             return Err(Trouble::Mismatched);
         }
     }
 
+    bite(go_on)?;
     Ok(write(&Baked {
         id,
         label,
@@ -143,6 +174,16 @@ pub fn pack(zip: &[u8], id: &str, label: &str, dated: &str) -> Result<Vec<u8>, T
         places,
         names: names.taken(),
     }))
+}
+
+/// One of [`pack`]'s boundaries: `go_on` asked, and a no is
+/// [`Trouble::GivenUp`].
+fn bite(go_on: &mut dyn FnMut() -> bool) -> Result<(), Trouble> {
+    if go_on() {
+        Ok(())
+    } else {
+        Err(Trouble::GivenUp)
+    }
 }
 
 /// Degrees to micro-degrees, which is the pack's unit.

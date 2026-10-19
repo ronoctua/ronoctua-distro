@@ -52,8 +52,8 @@
 //! # What a region reads of the footer's
 //!
 //! What the footer holds and a region reads without owning it — the queue's
-//! jobs, the studio's state, the cameras, the notification desk's queue and
-//! book, the clock's zone — is LENT for each call, the questions and the
+//! jobs, the studio's state, the notification desk's queue and book, the
+//! clock's zone — is LENT for each call, the questions and the
 //! painting included (`region::Lent`, the list `held_by_the_footer!` writes
 //! once), and what changes is told (`Region::heard`). A region keeps no
 //! second copy of it. (What it keeps of the MACHINE is the other loan,
@@ -1399,8 +1399,8 @@ impl Footer {
             return;
         };
         self.hang_a_region_wake(id);
-        // IT OPENS ON WHAT THE FOOTER HOLDS, lent: the cameras, the studio's
-        // state, the queue's jobs, the clock's zone.
+        // IT OPENS ON WHAT THE FOOTER HOLDS, lent: the studio's state, the
+        // queue's jobs, the clock's zone.
         let way = self.region_way(id);
         let (region, owed) = {
             let mut way = way.lending(crate::region::Lent::of(held_by_the_footer!(self)));

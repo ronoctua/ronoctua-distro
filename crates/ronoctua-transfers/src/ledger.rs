@@ -20,6 +20,20 @@
 //! a running copy, which is precisely the kind of wrongness nobody double
 //! checks. The list is at most a few dozen short records; sending it whole is
 //! cheaper than being subtly wrong.
+//!
+//! # Why a held row is written HERE, and never by an engine
+//!
+//! Because a row that says `Paused` over a switch that says run — or
+//! `Running` over a switch that holds the work — is a lie about the one thing
+//! the person can act on, and it took two writers to tell it. The socket set
+//! the switch and wrote `Paused`; the copy's thread, done weighing, wrote
+//! `Running` without looking, and a pause that had landed during the weighing
+//! was undone: the copy held, its row saying it ran. So the two writes that
+//! say "moving or held" both live here and both read the switch UNDER THE ONE
+//! LOCK: [`Shared::pause`] and [`Shared::resume`] set it and write the row
+//! together, and an engine handing off to its work says only that it is
+//! [`Shared::under_way`] — the switch decides which word that is. Whichever
+//! writes last, the row says what the switch says.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex};
@@ -43,9 +57,21 @@ struct State {
     jobs: Vec<Job>,
     /// One per job that is still afoot. It leaves when the job ends: a switch
     /// nobody can press is a switch nobody should be able to find.
-    switches: HashMap<u64, Arc<Control>>,
+    switches: HashMap<u64, Switch>,
     next: u64,
     version: u64,
+}
+
+/// A job's switch, as the ledger keeps it.
+#[derive(Debug)]
+struct Switch {
+    /// What the job's thread reads between bites.
+    control: Arc<Control>,
+    /// Whether its engine has said it is [`Shared::under_way`] — what a
+    /// resume puts back: `Running` once it has, `Weighing` before. A copy let
+    /// go in the middle of its weighing is still weighing, and a row that said
+    /// it ran would sit at no bar for the rest of the walk.
+    under_way: bool,
 }
 
 /// The queue, shared by the daemon's threads.
@@ -94,10 +120,104 @@ impl Shared {
         state.next += 1;
         let id = state.next;
         state.jobs.push(Job::fresh_one(id, engine, work));
-        state.switches.insert(id, Arc::clone(&switch));
+        state.switches.insert(
+            id,
+            Switch {
+                control: Arc::clone(&switch),
+                under_way: false,
+            },
+        );
         prune(&mut state);
         self.rang(state);
         (id, switch)
+    }
+
+    /// Says a job is under way, with `change` made in the same breath: its
+    /// row reads `Running` — or `Paused`, when its switch holds it.
+    ///
+    /// What an engine calls where it hands off to its work: a copy done
+    /// weighing, a download aria2 took, a program started. A pause can land at
+    /// that very moment, and the switch is read under the lock the row is
+    /// written under (the module's header says why). A stop reads as under
+    /// way: the engine meets it at its next look at the switch and ends the
+    /// row cancelled. An ended job stays ended.
+    pub fn under_way(&self, id: u64, change: impl FnOnce(&mut Job)) {
+        let mut state = self.locked();
+        let State { jobs, switches, .. } = &mut *state;
+        let (Some(job), Some(switch)) =
+            (jobs.iter_mut().find(|j| j.id == id), switches.get_mut(&id))
+        else {
+            return;
+        };
+        if !job.afoot() {
+            return;
+        }
+        change(job);
+        switch.under_way = true;
+        job.stage = if switch.control.flow() == Flow::Pause {
+            Stage::Paused
+        } else {
+            Stage::Running
+        };
+        self.rang(state);
+    }
+
+    /// Holds a job: its switch, and its row, together.
+    ///
+    /// Only for an engine that honours a pause ([`Engine::pauses`]): holding
+    /// the row of one that does not would draw a HELD job that is still
+    /// working. The ask is dropped instead, the way an ask for a job that
+    /// ended is.
+    pub fn pause(&self, id: u64) {
+        self.steer(id, true);
+    }
+
+    /// Lets a held job go: its switch, and its row, together — back to the
+    /// stage it was in, `Weighing` until its engine said it was under way.
+    pub fn resume(&self, id: u64) {
+        self.steer(id, false);
+    }
+
+    /// Gives a job up: its switch to stop, under the lock [`Shared::pause`]
+    /// sets it under — so a pause that arrives with the cancel cannot turn
+    /// it back. No stage: what ends a job is its thread meeting the stop and
+    /// unwinding (`serve`'s ask says why).
+    pub fn cancel(&self, id: u64) {
+        let state = self.locked();
+        if let Some(switch) = state.switches.get(&id) {
+            switch.control.set(Flow::Stop);
+        }
+    }
+
+    /// [`Shared::pause`] and [`Shared::resume`]: the switch is set UNDER THE
+    /// LOCK the row is written under, so a pause and a resume from two doors
+    /// at once cannot leave the row saying one and the switch the other.
+    fn steer(&self, id: u64, held: bool) {
+        let mut state = self.locked();
+        let State { jobs, switches, .. } = &mut *state;
+        let (Some(job), Some(switch)) = (jobs.iter_mut().find(|j| j.id == id), switches.get(&id))
+        else {
+            return;
+        };
+        // Only what is still afoot: pausing something that ended a minute ago
+        // would put a held row on screen that nothing is holding. AND A STOP
+        // IS FINAL: a pause or a resume that came after it, before the engine
+        // met it, would turn the switch back from stop — a cancelled copy
+        // held, or carried on, instead of taken back.
+        if !job.afoot() || !job.engine.pauses() || switch.control.flow() == Flow::Stop {
+            return;
+        }
+        switch
+            .control
+            .set(if held { Flow::Pause } else { Flow::Run });
+        job.stage = if held {
+            Stage::Paused
+        } else if switch.under_way {
+            Stage::Running
+        } else {
+            Stage::Weighing
+        };
+        self.rang(state);
     }
 
     /// Changes one job and tells everybody.
@@ -130,18 +250,10 @@ impl Shared {
     /// The switch of a job still afoot.
     #[must_use]
     pub fn switch(&self, id: u64) -> Option<Arc<Control>> {
-        self.locked().switches.get(&id).map(Arc::clone)
-    }
-
-    /// Who is doing a job, for the asks that depend on it — a pause is only
-    /// flipped for an engine that honours one ([`Engine::pauses`]).
-    #[must_use]
-    pub fn engine_of(&self, id: u64) -> Option<Engine> {
         self.locked()
-            .jobs
-            .iter()
-            .find(|j| j.id == id)
-            .map(|j| j.engine)
+            .switches
+            .get(&id)
+            .map(|s| Arc::clone(&s.control))
     }
 
     /// The list as everybody should draw it, and the version it is.
@@ -206,7 +318,7 @@ impl Shared {
     pub fn stop_everything(&self) {
         let state = self.locked();
         for switch in state.switches.values() {
-            switch.set(Flow::Stop);
+            switch.control.set(Flow::Stop);
         }
     }
 
@@ -226,7 +338,7 @@ impl Shared {
         let deadline = std::time::Instant::now() + patience;
         let mut state = self.locked();
         for switch in state.switches.values() {
-            switch.set(Flow::Stop);
+            switch.control.set(Flow::Stop);
         }
         while !state.switches.is_empty() {
             let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
@@ -256,6 +368,33 @@ impl Shared {
         state.version += 1;
         drop(state);
         self.bell.notify_all();
+    }
+}
+
+#[cfg(test)]
+impl Shared {
+    /// Waits ON THE BELL until job `id` is as `holds` says, and gives it
+    /// back — a test's wait, which ends on the change it waits for and never
+    /// on a guessed time. The half minute only stops a broken run from
+    /// hanging the build; reaching it is the failure, said with what the row
+    /// was.
+    pub(crate) fn until(&self, id: u64, holds: impl Fn(&Job) -> bool) -> Job {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut state = self.locked();
+        loop {
+            let job = state.jobs.iter().find(|j| j.id == id).cloned();
+            if let Some(j) = job.as_ref().filter(|j| holds(j)) {
+                return j.clone();
+            }
+            let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                drop(state);
+                panic!("job {id} never got there: {job:?}");
+            };
+            state = self
+                .bell
+                .wait_timeout(state, left)
+                .map_or_else(|poisoned| poisoned.into_inner().0, |(state, _)| state);
+        }
     }
 }
 
@@ -356,6 +495,80 @@ mod tests {
         assert!(shared.switch(id).is_some(), "it was born with no switch");
         ended(&shared, id, Stage::Done);
         assert!(shared.switch(id).is_none(), "the switch stayed");
+    }
+
+    /// FAILS IF: an engine's hand-off to its work writes `Running` over a
+    /// pause that landed before it — the work held by its switch and its row
+    /// saying it runs — a resume says `Running` of a job its engine has not
+    /// handed off yet, an ended job is brought back by a late hand-off, an
+    /// engine that does not pause can be held, or a pause or a resume turns
+    /// a stop back.
+    #[test]
+    fn the_switch_decides_what_a_row_under_way_says() {
+        let shared = Shared::fresh_one();
+        let (id, switch) = shared.take(Engine::Local, some_work());
+        let stage = |shared: &Shared| shared.until(id, |_| true).stage;
+
+        shared.pause(id);
+        assert_eq!(
+            (stage(&shared), switch.flow()),
+            (Stage::Paused, Flow::Pause)
+        );
+        shared.resume(id);
+        assert_eq!(
+            (stage(&shared), switch.flow()),
+            (Stage::Weighing, Flow::Run),
+            "a job let go before its hand-off said it ran"
+        );
+
+        // THE PAUSE LANDS, AND THEN THE HAND-OFF.
+        shared.pause(id);
+        shared.under_way(id, |j| j.total = 9);
+        let held = shared.until(id, |_| true);
+        assert_eq!(
+            (held.stage, held.total),
+            (Stage::Paused, 9),
+            "the hand-off undid the pause"
+        );
+        shared.resume(id);
+        assert_eq!(stage(&shared), Stage::Running);
+        // AND WITH THE SWITCH AT RUN, the hand-off says it runs.
+        shared.under_way(id, |_| {});
+        assert_eq!(stage(&shared), Stage::Running);
+
+        // A STOP IS FINAL, until the engine meets it.
+        switch.set(Flow::Stop);
+        shared.pause(id);
+        assert_eq!(switch.flow(), Flow::Stop, "a pause turned a stop back");
+        shared.resume(id);
+        assert_eq!(switch.flow(), Flow::Stop, "a resume turned a stop back");
+        assert_eq!(stage(&shared), Stage::Running);
+
+        ended(&shared, id, Stage::Done);
+        shared.under_way(id, |j| j.total = 1);
+        assert_eq!(
+            stage(&shared),
+            Stage::Done,
+            "a late hand-off woke an ended job"
+        );
+        shared.resume(id);
+        assert_eq!(stage(&shared), Stage::Done);
+
+        let (software, its) = shared.take(
+            Engine::Software,
+            Work::Software {
+                order: Box::new(ronoctua_software::Order::AndroidErase),
+                label: String::new(),
+            },
+        );
+        shared.pause(software);
+        assert_eq!(
+            its.flow(),
+            Flow::Run,
+            "an engine that does not pause was held"
+        );
+        shared.under_way(software, |_| {});
+        assert_eq!(shared.until(software, |_| true).stage, Stage::Running);
     }
 
     #[test]

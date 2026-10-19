@@ -237,6 +237,13 @@ belongings-nowhere-question = Stop keeping { $target } on every machine? Its cop
 about-belongings-not-here = Stops keeping it on this machine: the repository's copy stays for the others
 about-belongings-nowhere = Stops keeping it on every machine — asks first
 about-belongings-everywhere = Keeps it on every machine again, from the next sync
+# Where this machine's Emacs reads its configuration, when it is not the
+# one place the belongings carry (`ronoctua_belongings::emacs`): said, never
+# acted on.
+belongings-emacs-reads = Emacs here reads { $place }, but your belongings carry { $carried }: move your configuration there and it travels.
+belongings-emacs-hidden = { $place } holds nothing of yours, only what Emacs makes, and while it is there Emacs reads it in place of { $carried }, which your belongings carry.
+belongings-emacs-no-file = { $place } is there but is no file Emacs loads, and while it is there Emacs reads { $folder } in place of { $carried }, which your belongings carry.
+belongings-emacs-xdg = With your $XDG_CONFIG_HOME, Emacs here looks for its configuration in { $place } and in your home, never in { $carried }, which your belongings carry.
 # A question on a page of its own, "no" first.
 belongings-answer-no = No
 belongings-answer-yes = Yes

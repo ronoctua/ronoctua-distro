@@ -249,7 +249,7 @@ fn carry(
         stop(&mut child, pid, grace);
         return Ending::Failed("could not hand the job to the incus job".to_owned());
     }
-    shared.touch(id, |j| j.stage = Stage::Running);
+    shared.under_way(id, |_| {});
 
     let (lines, arriving) = mpsc::channel::<(String, bool)>();
     for (from_stdout, stream) in [

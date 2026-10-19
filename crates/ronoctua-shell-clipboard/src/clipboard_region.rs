@@ -167,21 +167,41 @@ impl Clip {
         carry_out(errand, self, way);
     }
 
+    /// Which of [`Clip::rows`] a click takes: a row that answers a key, once
+    /// a history has arrived — never a heading, a fact or the air between
+    /// them, nor anything before the first history.
+    ///
+    /// AND SO WHAT A RESTING POINTER LIGHTS, in both doors: the region's
+    /// `Row::takes` and the window's hover read this, and [`Clip::clicked`]
+    /// reads it too — one answer for the light and for the click. The region
+    /// had said "the history arrived" for every row, and the window lit
+    /// whatever row the pointer was on: the heading and the blank rows lit
+    /// under a pointer whose click there took nothing.
+    #[must_use]
+    pub fn takes(&self, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<bool> {
+        let acting = self.view.acting(&self.facts(), columns, texts);
+        if self.heard {
+            acting
+        } else {
+            // THE SENTENCE that says why there is no history, over a list
+            // that is not one yet (`Clip::rows`).
+            vec![false; acting.len() + 1]
+        }
+    }
+
     /// THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19: a click on
     /// the row DRAWN as the cursor is `RET` (`View::here`, the row `RET`
     /// acts on — never the raw cursor, which a fresh view keeps on the
     /// heading: compared with that, a click on the heading acted on the row
     /// drawn below it, and one on the row drawn as the cursor only selected
-    /// it). A row that answers no key — a heading, a fact, the air between —
-    /// takes nothing, as a row past the list does, or a list not heard yet.
+    /// it). A row [`Clip::takes`] says no to — a heading, a fact, the air
+    /// between, a row past the list, a list not heard yet — takes nothing.
     pub fn clicked(&mut self, row: usize, way: &mut dyn Doorway) {
-        if !self.heard {
+        let taken = self.takes(way.columns(), way.texts());
+        if !taken.get(row).copied().unwrap_or(false) {
             return;
         }
         let facts = self.facts();
-        if !self.view.acts_at(&facts, way.columns(), way.texts(), row) {
-            return;
-        }
         let here = self.view.here(&facts, way.columns(), way.texts());
         if row == here {
             self.pressed(Press::Enter, way);
@@ -410,16 +430,29 @@ impl Region for ClipboardRegion {
 
     /// Its rows carry BOTH halves — the history on the left and the item's
     /// facts on the right, as fields at known columns — and the click is the
-    /// row, which the view turns into a target.
+    /// row, which the view turns into a target. A row takes a click, and so
+    /// lights under a resting pointer, only where the click does something
+    /// ([`Clip::takes`]).
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
+        let takes = self.clip.takes(seen.columns, seen.texts);
         self.clip
             .rows(seen.columns, seen.texts)
             .into_iter()
-            .map(|fields| Row {
+            .enumerate()
+            .map(|(n, fields)| Row {
                 fields,
-                takes: self.clip.heard,
+                takes: takes.get(n).copied().unwrap_or(false),
             })
             .collect()
+    }
+
+    /// THE BAND ALONE says where the pointer rests, as in the window, which
+    /// lights no field: the accent is this view's CURSOR (the entry drawn in
+    /// `text.here.*`, a sync row's label in `state.accent`), so a field lit in
+    /// it under the pointer read as a second cursor — and lit the `History`
+    /// heading, which a click does not take.
+    fn lights(&self) -> crate::region::Lights {
+        crate::region::Lights::Nothing
     }
 
     /// On the minibuffer's line, elided with an ellipsis, the rest reachable
@@ -750,6 +783,69 @@ mod tests {
             "a click on the server's row, drawn as the cursor, did not ask for it: {:?}",
             w.owed
         );
+    }
+
+    /// FAILS IF: a resting pointer lights a row a click takes nothing on —
+    /// the `History` heading, the air between the sections, a fact — or
+    /// leaves unlit one the click takes, in the footer's region
+    /// (`Row::takes`); or a row takes a click before a history arrived; or
+    /// the footer lights the field under the pointer in the accent, which is
+    /// this view's cursor — on the heading too.
+    /// THE LIGHT IS THE CLICK: every row is clicked twice, on a history of
+    /// its own, and lit exactly where something happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        assert_eq!(
+            ClipboardRegion::default().lights(),
+            crate::region::Lights::Nothing,
+            "a field lights under the pointer in the cursor's colour"
+        );
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = Default::default();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 20,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let fresh = ClipboardRegion::default();
+        assert!(
+            fresh.rows(&seen).iter().all(|r| !r.takes),
+            "a row took a click before a history arrived"
+        );
+
+        let entries = ["one", "two", "three"];
+        let mut w = way();
+        let mut r = ClipboardRegion::default();
+        told(&mut r, &entries, 5, &mut w);
+        let rows = r.rows(&seen);
+        assert!(!rows[0].takes, "the `History` heading takes a click");
+        assert!(
+            rows.iter().any(|row| row.takes) && rows.iter().any(|row| !row.takes),
+            "no row lit, or every row lit"
+        );
+        for (n, row) in rows.iter().enumerate() {
+            let mut w = way();
+            let mut r = ClipboardRegion::default();
+            told(&mut r, &entries, 5, &mut w);
+            w.owed.clear();
+            let before = drawn(&r, &w);
+            r.clicked(n, &mut w);
+            r.clicked(n, &mut w);
+            let something = drawn(&r, &w) != before
+                || w.owed
+                    .iter()
+                    .any(|e| !matches!(e, Effect::Repaint | Effect::RowsChanged));
+            assert_eq!(
+                row.takes,
+                something,
+                "row {n} is lit {} and a click on it did {}",
+                row.takes,
+                if something { "something" } else { "nothing" }
+            );
+        }
     }
 
     /// FAILS IF: a login typed in the footer leaves the password anywhere

@@ -53,20 +53,34 @@
 # # The order
 #
 #   0. the `.drv` of every target, evaluated in batches;
-#   1. the Rust build, unit by unit (`nix/rust/units.nix`):
-#      a. everything the heavy units are built from, as Rust units
-#         (`--max-jobs <slots> --cores 1`);
-#      b. the heavy units, one at a time, each with the cores the budget
-#         leaves beside its own compiler (`rust.heavyUnits`);
-#      c. every other unit, as Rust units again;
-#      d. the test runs and the aggregates, sized as everything else is —
-#         after every compilation, so a test that measures time does not
-#         measure a compiler beside it;
+#   1. the Rust build, unit by unit (`nix/rust/units.nix`), each unit its
+#      own build by its class (`sized_units`, `nix/build-sizing.nix`): as
+#      many at once as their slots fit, the heavy ones alone, of what Nix's
+#      dry run says it will build:
+#      a. every compilation and every test run, ONE scheduler over one plan
+#         — the test runs last, started only once every compilation has
+#         ended, so a test that measures time does not measure a compiler
+#         beside it (the reason is time, not memory: a run is planned at
+#         its own slot like any unit);
+#      b. the aggregates over them, sized as everything else is;
 #   2. what the VMs BOOT — each test's driver, which is its systems — sized as
 #      compilations, because that is what they are;
 #   3. the VMs, as many at once as their declared memory and their cores fit;
 #   4. everything else, sized as compilations;
 #   5. the gate only: `nix flake check`, over a store that has it all.
+#
+# # A unit that failed is built once
+#
+# The test runs were a scheduler of their own, after the compilations, and
+# knew nothing of what the first one had not built: each run was its own
+# `nix build`, so a hub dependency that failed was built again by each of
+# its forty runs, one after another, and after a failure that was the
+# machine's (a compiler killed for memory) the chain below a run was
+# compiled inside the run's light slot. One scheduler over both never
+# builds a failed unit again, nor anything built from it, and says which
+# and why; and every later phase leaves out, by name, what needs a unit
+# phase 1 did not build (`sizing_needing`, the store's own references),
+# which its own `nix build` would build again, sized for nothing.
 #
 # # Why `most` and `gate` are one function
 #
@@ -97,16 +111,16 @@
   alone ? [ ],
   # What is left out, so the battery can say what it did not verify.
   left ? [ ],
-  # THE SIZING (`nix/build-sizing.nix`): its shell functions and its plan of
-  # the heavy units.
+  # THE SIZING (`nix/build-sizing.nix`): its shell functions and the plan
+  # of the units (`unitPlan`, each unit with its measured class).
   sizing,
-  # The units whose own compiler no division describes, by name
-  # (`rust.heavyUnits`). They go one at a time, each after what it is built
-  # from (`sizing.heavyPlan`).
-  heavy ? { },
-  # EVERY UNIT OF THE RUST BUILD, as data (`rust.unitIndex`: `kind` and
-  # `drv` by id), or `null`: phase 1 builds them all, the test runs last.
+  # EVERY UNIT OF THE RUST BUILD, as data (`rust.unitIndex`: `kind`, `drv`
+  # and `deps` by id), or `null`: phase 1 builds them all, the test runs
+  # last.
   units ? null,
+  # The class of each unit, by id, or `null`: the measured ones
+  # (`nix/rust/unit-classes.json`). A check plants its own.
+  classes ? null,
   # The downloader that resumes, or `null`. See `nix/prefetch.nix`.
   prefetch ? null,
   # Roots the flake's downloads first, or `null`. See `nix/kept-sources.nix`.
@@ -117,28 +131,24 @@ let
   # NOTHING STARTS OVER A BUILD INSIDE THE TREE (`nix/tree-guard.nix`).
   treeGuard = callPackage ./tree-guard.nix { };
   quoted = lib.concatMapStringsSep " " (n: "\"${n}\"");
-  plain = builtins.unsafeDiscardStringContext;
-  # EVERY OUTPUT of a unit (`^*`): its `metrics` too, which `.#rust-peaks`
-  # and `.#rebuild-cost` read. A derivation with one output gone is built
-  # again whole, so the kept units are rooted with both (`keptUnits`,
-  # `nix/rust.nix`): rooted by `out` alone, a collection took their
-  # `metrics` and this phase compiled every kept unit again.
-  drvOf = d: "${plain d.drvPath}^*";
-  # THE HEAVY UNITS IN THE ORDER THEY ARE BUILT, and what they are built
-  # from — read off the units' own `passthru.unitDeps`, at evaluation.
-  plan = sizing.heavyPlan heavy;
-  heavyDrvs = quoted (map (s: drvOf s.unit) plan.steps);
-  heavyNames = quoted (map (s: s.name) plan.steps);
-  heavyBetween = quoted (map (s: lib.concatMapStringsSep " " drvOf s.between) plan.steps);
-  firstDrvs = quoted (map drvOf plan.first);
-  # EVERY OTHER UNIT, and the test runs (with the aggregates over them) apart.
-  heavyPaths = map (s: plain s.unit.drvPath) plan.steps;
-  entries = if units == null then [ ] else lib.attrValues units;
-  isRun = e: e.kind == "testRuns" || e.kind == "aggregate";
-  restDrvs = quoted (
-    map (e: "${e.drv}^*") (lib.filter (e: !isRun e && !(lib.elem e.drv heavyPaths)) entries)
+  # THE PLAN OF THE UNITS (`unitPlan`): every compilation and every test
+  # run, the runs last (`lateFrom`). Each unit is built with every output
+  # (`^*`): its `metrics` too, which `.#rust-peaks` and `.#rebuild-cost`
+  # read. A derivation with one output gone is built again whole, so the
+  # kept units are rooted with both (`keptUnits`, `nix/rust.nix`): rooted by
+  # `out` alone, a collection took their `metrics` and this phase compiled
+  # every kept unit again.
+  index = if units == null then { } else units;
+  unitPlan = sizing.unitPlan (
+    {
+      units = index;
+      late = [ "testRuns" ];
+    }
+    // lib.optionalAttrs (classes != null) { inherit classes; }
   );
-  runDrvs = quoted (map (e: "${e.drv}^*") (lib.filter isRun entries));
+  aggregateDrvs = quoted (
+    map (e: "${e.drv}^*") (lib.filter (e: e.kind == "aggregate") (lib.attrValues index))
+  );
 
   # WHAT PHASE 0 ASKS THE FLAKE, as functions of the names. The text goes
   # through the shell inside double quotes, so it has none of its own and no
@@ -198,7 +208,9 @@ let
           echo "not run: $failures target(s) failed above: ''${failed[*]}"
           exit 1
         fi
-        if ! nix flake check --keep-going -L --max-jobs "$jobs" --cores "$cores" "$@"; then
+        # In the background, waited for: a signal stops it at once.
+        nix flake check --keep-going -L --max-jobs "$jobs" --cores "$cores" "$@" &
+        if ! wait "$!"; then
           blame_memory
           exit 1
         fi
@@ -252,20 +264,12 @@ writeShellApplication {
       ${prefetch}
       echo ""
     ''}
-    # THE HEAVY ONES, and they go one at a time.
-    #
-    # Named by the flake rather than discovered (`rust.heavyUnits`), because
-    # "heavy" is not a property Nix exposes: it is the units whose own
-    # compiler was MEASURED past the slot (`metrics/peak-kib`; `.#rust-peaks`
-    # says when the list is wrong). The `loop` workspace was missing for
-    # months: three checks reach it through `.#dev`, and it compiled in the
-    # last phase, four at a time, beside whatever else was building.
-    heavy=(${heavyDrvs})
-    heavy_name=(${heavyNames})
-    heavy_between=(${heavyBetween})
-    first=(${firstDrvs})
-    units_rest=(${restDrvs})
-    runs=(${runDrvs})
+    # THE UNITS, each by its class — measured, not discovered
+    # (`nix/rust/unit-classes.json`; `.#rust-peaks` says when a unit has
+    # outgrown its own): the compilations, the test runs, the aggregates.
+    plan_units=${unitPlan.text}
+    runs_from=${toString unitPlan.lateFrom}
+    aggregates=(${aggregateDrvs})
 
     names=(${quoted targets})
     alone=(${quoted alone})
@@ -277,9 +281,17 @@ writeShellApplication {
     sizing_measure || exit 1
     sizing_say
     echo ""
-    # What every heavy build is also handed (`sized_heavy`): nothing here.
+    # A SIGNAL STOPS WHAT RUNS before `$work` goes (`sizing_on_signal`):
+    # every evaluation, dry run and build from here on runs in the
+    # background and is waited for, since a trap waits for a command in the
+    # foreground to end — a TERM during an evaluation of every VM test would
+    # wait minutes for it.
+    sizing_stop_on_signals
+    # What every unit's build is also handed (`sized_units`): nothing here;
+    # a unit that fails stops nothing that does not need it; and the test
+    # runs, the plan's last lines, start after every compilation.
     # shellcheck disable=SC2034
-    sized_flags=()
+    sized_flags=() sizing_keep_going=1 sizing_late_from=$runs_from
 
     started=$(date '+%Y-%m-%d %H:%M:%S')
     failures=0
@@ -328,6 +340,25 @@ writeShellApplication {
       fi
     }
 
+    # WHAT NEEDS A UNIT PHASE 1 DID NOT BUILD (`$work/units/not-built`), of
+    # the derivations given, one a line: never handed a build of a later
+    # phase, which would build that unit again. A store that does not say
+    # leaves out everything given, and is said.
+    # (In this shell, its answer to a file: a command substitution is a
+    # subshell, which a signal's trap does not reach.)
+    blocked=""
+    blocked_of() {
+      if [ ! -s "$work/units/not-built" ]; then return 0; fi
+      printf '%s\n' "$@" > "$work/candidates"
+      if ! sizing_needing "$work/units/not-built" "$work/candidates"; then
+        echo "the store did not say what needs the units phase 1 did not build: none of it is built" >&2
+        printf '%s\n' "$@"
+      fi
+    }
+    is_blocked() {
+      [ -n "$blocked" ] && grep -qxF -- "$1" <<< "$blocked"
+    }
+
     nix_list() {
       local s="[" x
       for x in "$@"; do s+=" \"$x\""; done
@@ -340,9 +371,9 @@ writeShellApplication {
     echo "== 0. what there is to build, evaluated before anything builds =="
     # The facts first, all in one evaluator: which targets are VM tests, and
     # what their nodes declare.
-    if ! nix eval --json ".#checks.${system}" \
-         --apply "cs: (${factsOf}) $(nix_list "''${names[@]}") cs" \
-         | jq -r '.[] | [.n, .mib, .cores, .nodes] | @tsv' > "$work/facts"; then
+    nix eval --json ".#checks.${system}" \
+      --apply "cs: (${factsOf}) $(nix_list "''${names[@]}") cs" > "$work/facts.json" &
+    if ! wait "$!" || ! jq -r '.[] | [.n, .mib, .cores, .nodes] | @tsv' < "$work/facts.json" > "$work/facts"; then
       blame_memory
       exit 1
     fi
@@ -391,9 +422,9 @@ writeShellApplication {
     for b in "''${batches[@]}"; do
       read -r -a batch <<< "$b"
       echo "-- ''${#batch[@]} target(s)"
-      if ! nix eval --json ".#checks.${system}" \
-           --apply "cs: (${drvsOf}) $(nix_list "''${batch[@]}") cs" \
-           | jq -r '.[] | [.n, .drv, .driver // "-", .out // "-"] | @tsv' >> "$work/drvs"; then
+      nix eval --json ".#checks.${system}" \
+        --apply "cs: (${drvsOf}) $(nix_list "''${batch[@]}") cs" > "$work/batch.json" &
+      if ! wait "$!" || ! jq -r '.[] | [.n, .drv, .driver // "-", .out // "-"] | @tsv' < "$work/batch.json" >> "$work/drvs"; then
         blame_memory
         exit 1
       fi
@@ -415,38 +446,55 @@ writeShellApplication {
     # the units again.
     # So each result is an out-link in `$work`, which the `EXIT` trap removes:
     # a root for exactly as long as the battery lasts.
-    echo "== 1. the Rust build: ''${#first[@]} units below the ''${#heavy[@]} heavy ones, the heavy ones alone, ''${#units_rest[@]} more units, ''${#runs[@]} test runs =="
-    if [ "''${#first[@]}" -gt 0 ]; then
-      echo "-- a. what the heavy units are built from"
-      if ! nix build --out-link "$work/first" --max-jobs "$rust_jobs" --cores "$rust_cores" "''${first[@]}"; then
-        blame_memory
-        exit 1
+    mapfile -t every_unit < <(awk '{print $5 "^*"}' "$plan_units")
+    echo "== 1. the Rust build: $runs_from compilations, $(( $(wc -l < "$plan_units") - runs_from )) test runs, ''${#aggregates[@]} aggregates =="
+    if [ "''${#every_unit[@]}" -gt 0 ]; then
+      # WHAT NIX WILL BUILD of them, asked once: a unit the store holds is
+      # never handed a build of its own. A dry run that does not say it in
+      # words this reads builds no unit: the phase fails, and says it.
+      nix build --dry-run "''${every_unit[@]}" > /dev/null 2> "$work/dry" &
+      if wait "$!" && sizing_will_build < "$work/dry" > "$work/will"; then
+        echo "-- a. the compilations, and then the test runs"
+        if ! sized_units "$plan_units" "$work/will" "$work/units"; then
+          blame_memory
+          fail "phase 1a (the units that failed or were not built are named above)"
+        fi
+      else
+        tail -n 5 "$work/dry"
+        echo "the dry run of the units did not say what it builds: no unit is built"
+        mkdir -p "$work/units"
+        awk '{print $5}' "$plan_units" > "$work/units/not-built"
+        fail "phase 1a (the dry run of the units)"
       fi
     fi
-    echo "-- b. the heavy units, one at a time"
-    for i in "''${!heavy[@]}"; do
-      read -r -a between <<< "''${heavy_between[i]}"
-      if ! sized_heavy "$work/heavy-$i" "''${heavy_name[i]}" "''${heavy[i]}" "''${between[@]}"; then
-        blame_memory
-        exit 1
-      fi
+    # WHAT THE LATER PHASES MAY NOT BUILD, asked once of the store.
+    later=("''${aggregates[@]%^*}")
+    for n in "''${names[@]}"; do
+      if [ "''${driver[$n]:-}" != "" ] && [ "''${driver[$n]}" != - ]; then later+=("''${driver[$n]}"); fi
+      if [ "''${mib[$n]}" -eq 0 ]; then later+=("''${drv[$n]}"); fi
     done
-    if [ "''${#units_rest[@]}" -gt 0 ]; then
-      echo "-- c. every other unit"
-      # `--keep-going` and no exit: a unit that does not compile fails the
-      # checks that need it, by name, and every other check still runs.
-      if ! nix build --out-link "$work/units" --keep-going \
-           --max-jobs "$rust_jobs" --cores "$rust_cores" "''${units_rest[@]}"; then
-        blame_memory
-        fail "phase 1c (the units that failed are named above)"
-      fi
+    if [ "''${#later[@]}" -gt 0 ]; then
+      blocked_of "''${later[@]}" > "$work/blocked"
+      blocked=$(< "$work/blocked")
     fi
-    if [ "''${#runs[@]}" -gt 0 ]; then
-      echo "-- d. the test runs"
-      if ! nix build --out-link "$work/runs" --keep-going \
-           --max-jobs "$jobs" --cores "$cores" "''${runs[@]}"; then
-        blame_memory
-        fail "phase 1d (the test runs that failed are named above)"
+    if [ "''${#aggregates[@]}" -gt 0 ]; then
+      echo "-- b. the aggregates"
+      ready_aggregates=()
+      for a in "''${aggregates[@]}"; do
+        if is_blocked "''${a%^*}"; then
+          echo "<- ''${a%^*}: not built: it needs a unit phase 1 did not build"
+          fail "''${a%^*}"
+        else
+          ready_aggregates+=("$a")
+        fi
+      done
+      if [ "''${#ready_aggregates[@]}" -gt 0 ]; then
+        nix build --out-link "$work/aggregates" --keep-going \
+          --max-jobs "$jobs" --cores "$cores" "''${ready_aggregates[@]}" &
+        if ! wait "$!"; then
+          blame_memory
+          fail "phase 1b (the aggregates that failed are named above)"
+        fi
       fi
     fi
     ${lib.optionalString (keepSources != null) ''
@@ -461,14 +509,23 @@ writeShellApplication {
     if [ "''${#vms[@]}" -gt 0 ]; then
       boots=()
       for n in "''${vms[@]}"; do
-        boots+=("''${driver[$n]}^*")
+        # What needs a unit phase 1 did not build is not booted: its test
+        # fails in phase 3, by name.
+        if is_blocked "''${driver[$n]}"; then
+          echo "<- $n: what it boots needs a unit phase 1 did not build: not built"
+        else
+          boots+=("''${driver[$n]}^*")
+        fi
       done
       # `--keep-going` and no exit: a system that does not build fails its
       # test in phase 3, by name, and every other test still runs. Held in
       # `$work` for phase 1's reason.
-      if ! nix build --out-link "$work/boot" --keep-going -L \
-           --max-jobs "$jobs" --cores "$cores" "''${boots[@]}"; then
-        blame_memory
+      if [ "''${#boots[@]}" -gt 0 ]; then
+        nix build --out-link "$work/boot" --keep-going -L \
+          --max-jobs "$jobs" --cores "$cores" "''${boots[@]}" &
+        if ! wait "$!"; then
+          blame_memory
+        fi
       fi
     fi
     echo ""
@@ -563,13 +620,21 @@ writeShellApplication {
     # ── 4 ──────────────────────────────────────────────────────────────────
     rest=()
     for n in "''${names[@]}"; do
-      if [ "''${mib[$n]}" -eq 0 ]; then rest+=("''${drv[$n]}^*"); fi
+      if [ "''${mib[$n]}" -eq 0 ]; then
+        if is_blocked "''${drv[$n]}"; then
+          echo "<- $n: not built: it needs a unit phase 1 did not build"
+          fail "$n"
+        else
+          rest+=("''${drv[$n]}^*")
+        fi
+      fi
     done
     echo "== 4. the other ''${#rest[@]} checks =="
     if [ "''${#rest[@]}" -gt 0 ]; then
       # HELD in `$work` too, for the same reason as phase 3's.
-      if ! nix build --out-link "$work/rest" --keep-going -L \
-           --max-jobs "$jobs" --cores "$cores" "''${rest[@]}" "$@"; then
+      nix build --out-link "$work/rest" --keep-going -L \
+        --max-jobs "$jobs" --cores "$cores" "''${rest[@]}" "$@" &
+      if ! wait "$!"; then
         blame_memory
         fail "phase 4 (the failed builds are named above)"
       fi

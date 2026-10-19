@@ -227,10 +227,48 @@ pub fn is_plain(path: &str) -> bool {
     matches!(by_default(path), Verdict::Plain(_))
 }
 // ── anchor: L10 ──
+/// A name a target never keeps below its paths, and why (the table's
+/// `skip`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Skip {
+    /// A name pattern (at most one `*`), matched against every name below
+    /// the target's path — or, written `/name`, against the first one only:
+    /// the target's root's (Emacs writes its state there, and a snippet of
+    /// the person's named `url` deeper down is theirs).
+    pub pattern: &'static str,
+    /// The reason's id (`belongings-reason-<id>`).
+    pub reason: &'static str,
+}
+
+impl Skip {
+    /// Whether it names `name`, met `depth` names below the target's path
+    /// (`0`: at its root). Pure.
+    #[must_use]
+    pub fn names(&self, name: &str, depth: usize) -> bool {
+        match self.pattern.strip_prefix('/') {
+            Some(rooted) => depth == 0 && name_matches(rooted, name),
+            None => name_matches(self.pattern, name),
+        }
+    }
+}
+
+/// What a target makes of a path below one of its paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Inside {
+    /// Kept.
+    Carried,
+    /// Never kept, nor anything below it, and why: a walk does not go in.
+    Skipped(&'static str),
+    /// Never kept itself — a `skip` names it, or a folder above it — but a
+    /// path the target carries lies below it (`transient/values.el` under
+    /// `transient`): a walk goes in, and keeps only what is carried.
+    Passage(&'static str),
+}
+
 /// A PREDEFINED ENCRYPTED TARGET (`assets/belongings.nix`'s `targets`): a few
 /// paths of the person's home — their SSH, git's configuration, GnuPG, the
-/// shell's and Doom's local files — kept SEALED on every machine by
-/// default. "Not on this machine" puts its paths into the person's
+/// shell's own file, their Emacs configuration — kept SEALED on every
+/// machine by default. "Not on this machine" puts its paths into the person's
 /// `excluded` (the repository's copies stay for the others); "not on any
 /// machine" is a request (`crate::requests`) the next sync turns into the
 /// index's `dropped`: the repository's copies are deleted, and every other
@@ -241,9 +279,14 @@ pub struct Target {
     pub id: &'static str,
     /// Its logical paths — folders walked whole, or files.
     pub paths: &'static [&'static str],
-    /// Name patterns below its paths that are never kept: a socket, a lock,
-    /// an agent's seed — this machine's moment, never the person's.
-    pub skip: &'static [&'static str],
+    /// What is never kept below its paths, each with its reason ([`Skip`]):
+    /// a socket, a lock, an agent's seed, a package or a cache Emacs made —
+    /// this machine's, never the person's.
+    pub skip: &'static [Skip],
+    /// The paths below one of its paths that are kept although a `skip`
+    /// names a folder they lie in — relative to that path, each name a
+    /// pattern (`straight/versions/*.el`).
+    pub carry: &'static [&'static str],
     /// Whether its files come back with their owner's bits alone and its
     /// folders `0700` ([`kept_mode`], [`PRIVATE_DIR_MODE`]).
     pub private: bool,
@@ -283,10 +326,6 @@ pub use table::TARGETS;
 /// — `0700` when the index remembers nothing of them.
 pub const PRIVATE_DIR_MODE: u32 = 0o700;
 
-/// The reason's id of what a target skips ([`Verdict::Skipped`],
-/// `belongings-reason-<id>`): this machine's moment.
-pub const SKIPPED_REASON: &str = "transient";
-
 impl Target {
     /// Whether one of its paths is `path`, or a folder above it. Pure.
     #[must_use]
@@ -294,18 +333,59 @@ impl Target {
         self.paths.iter().any(|p| covers(p, path))
     }
 
-    /// Whether a name of [`Target::skip`] matches a component of `path`
-    /// below the target's path that covers it. Pure.
+    /// What the target makes of `path` ([`Inside`]): a path it carries is
+    /// kept whatever folder it lies in; else the first name below the
+    /// target's path that a [`Target::skip`] names takes it out — and a
+    /// folder on the way to a carried path is a passage. Pure.
     #[must_use]
-    pub fn skips(&self, path: &str) -> bool {
+    pub fn inside(&self, path: &str) -> Inside {
         let Some(root) = self.paths.iter().find(|p| covers(p, path)) else {
-            return false;
+            return Inside::Carried;
         };
-        let below = path.get(root.len()..).unwrap_or_default();
-        below
+        let below: Vec<&str> = path
+            .get(root.len()..)
+            .unwrap_or_default()
             .split('/')
             .filter(|c| !c.is_empty())
-            .any(|c| self.skip.iter().any(|s| name_matches(s, c)))
+            .collect();
+        self.inside_below(&below)
+    }
+
+    /// [`Target::inside`] for the names `below` one of its paths, in order
+    /// (`["transient", "values.el"]`) — the same rule for a folder the
+    /// target does not carry, read as if it were its root (what Emacs reads
+    /// in `~/.emacs.d`: `crate::emacs`). Pure.
+    #[must_use]
+    pub fn inside_below(&self, below: &[&str]) -> Inside {
+        let carried = |carry: &&str, exact: bool| {
+            let parts: Vec<&str> = carry.split('/').collect();
+            let long = if exact {
+                parts.len() == below.len()
+            } else {
+                parts.len() > below.len()
+            };
+            long && parts.iter().zip(below).all(|(p, n)| name_matches(p, n))
+        };
+        if self.carry.iter().any(|c| carried(c, true)) {
+            return Inside::Carried;
+        }
+        let skipped = below.iter().enumerate().find_map(|(depth, name)| {
+            self.skip
+                .iter()
+                .find(|s| s.names(name, depth))
+                .map(|s| s.reason)
+        });
+        match skipped {
+            None => Inside::Carried,
+            Some(why) if self.carry.iter().any(|c| carried(c, false)) => Inside::Passage(why),
+            Some(why) => Inside::Skipped(why),
+        }
+    }
+
+    /// Whether it never keeps `path` itself ([`Target::inside`]). Pure.
+    #[must_use]
+    pub fn skips(&self, path: &str) -> bool {
+        !matches!(self.inside(path), Inside::Carried)
     }
 
     /// The rule its `merge` names for `path`: its file name's, else the
@@ -375,7 +455,19 @@ mod target_tests {
             ("home/.config/Yubico/u2f_keys", "git"),
             ("home/.gnupg/private-keys-v1.d/A1.key", "gnupg"),
             ("home/.shellrc.local", "shell"),
-            ("home/.config/doom/local.el", "doom"),
+            ("home/.config/emacs/init.el", "emacs"),
+            ("home/.config/emacs/early-init.el", "emacs"),
+            ("home/.config/emacs/lisp/my-keys.el", "emacs"),
+            // A STATE NAME is the root's: deeper down, a name of the
+            // person's (a snippet called `url`, a folder called `history`).
+            ("home/.config/emacs/snippets/org-mode/url", "emacs"),
+            ("home/.config/emacs/lisp/history/notes.el", "emacs"),
+            ("home/.config/emacs/lisp/var", "emacs"),
+            // CARRIED out of the folders that hold them: transient's saved
+            // choices and straight's lockfiles are the person's.
+            ("home/.config/emacs/transient/values.el", "emacs"),
+            ("home/.config/emacs/transient/levels.el", "emacs"),
+            ("home/.config/emacs/straight/versions/default.el", "emacs"),
         ] {
             assert!(
                 matches!(by_default(path), Verdict::Target(t) if t.id == id),
@@ -384,16 +476,69 @@ mod target_tests {
             );
             assert!(kept_here(path, &Belongings::default(), false), "{path}");
         }
-        for skipped in [
-            "home/.ssh/agent.sock",
-            "home/.ssh/control-git@github.com:22",
-            "home/.gnupg/S.gpg-agent",
-            "home/.gnupg/random_seed",
-            "home/.gnupg/public-keys.d/pubring.db.lock",
-            "home/.gnupg/.#lk0x0000.host.123",
+        for (skipped, why) in [
+            ("home/.ssh/agent.sock", "socket"),
+            ("home/.ssh/control-git@github.com:22", "connection"),
+            ("home/.gnupg/S.gpg-agent", "socket"),
+            ("home/.gnupg/random_seed", "random-seed"),
+            ("home/.gnupg/public-keys.d/pubring.db.lock", "lock"),
+            ("home/.gnupg/.#lk0x0000.host.123", "lock"),
+            // EMACS: its packages and what it compiled, at any depth — a
+            // framework's own folder (`.local/straight`) included —, its
+            // caches, a repository's own folder and an editor's drafts.
+            ("home/.config/emacs/elpa/magit-4.1/magit.el", "packages"),
+            ("home/.config/emacs/lisp/vendor/elpa/x.el", "packages"),
+            (
+                "home/.config/emacs/.local/straight/repos/magit/magit.el",
+                "packages",
+            ),
+            (
+                "home/.config/emacs/elpaca/repos/vertico/vertico.el",
+                "packages",
+            ),
+            (
+                "home/.config/emacs/tree-sitter/libtree-sitter-rust.so",
+                "packages",
+            ),
+            (
+                "home/.config/emacs/eln-cache/30.2-1a2b/magit-3c4d.eln",
+                "compiled",
+            ),
+            ("home/.config/emacs/lisp/my-keys.elc", "compiled"),
+            ("home/.config/emacs/.git/index", "git-folder"),
+            ("home/.config/emacs/#init.el#", "editor-draft"),
+            ("home/.config/emacs/init.el~", "editor-draft"),
+            ("home/.config/emacs/.#init.el", "editor-draft"),
+            // AND AT ITS ROOT, what Emacs keeps of this machine's sessions.
+            (
+                "home/.config/emacs/var/straight/build/magit/magit.elc",
+                "editor-state",
+            ),
+            ("home/.config/emacs/var/recentf-save.el", "editor-state"),
+            (
+                "home/.config/emacs/auto-save-list/.saves-42-laptop~",
+                "editor-state",
+            ),
+            ("home/.config/emacs/transient/history.el", "editor-state"),
+            ("home/.config/emacs/transient", "editor-state"),
+            ("home/.config/emacs/history", "editor-state"),
+            ("home/.config/emacs/recentf", "editor-state"),
+            ("home/.config/emacs/org-roam.db", "editor-state"),
+            ("home/.config/emacs/forge-database.sqlite", "editor-state"),
+            ("home/.config/emacs/server/server", "editor-state"),
+            // THE REST OF A FOLDER A CARRIED PATH LIES IN.
+            (
+                "home/.config/emacs/straight/repos/vertico/vertico.el",
+                "packages",
+            ),
+            (
+                "home/.config/emacs/straight/versions/default.el~",
+                "packages",
+            ),
+            ("home/.config/emacs/straight/build-cache.el", "packages"),
         ] {
             assert!(
-                matches!(by_default(skipped), Verdict::Skipped(_)),
+                matches!(by_default(skipped), Verdict::Skipped(_, r) if r == why),
                 "{skipped}: {:?}",
                 by_default(skipped)
             );
@@ -402,10 +547,41 @@ mod target_tests {
             prefs.extra.push("home".to_owned());
             assert!(!kept_here(skipped, &prefs, true), "{skipped}");
         }
+        // A FOLDER ON THE WAY TO A CARRIED PATH is walked into; one past it
+        // is not.
+        let emacs = target_by_id("emacs").unwrap();
+        assert_eq!(
+            emacs.inside("home/.config/emacs/straight"),
+            Inside::Passage("packages")
+        );
+        assert_eq!(
+            emacs.inside("home/.config/emacs/straight/versions"),
+            Inside::Passage("packages")
+        );
+        assert_eq!(
+            emacs.inside("home/.config/emacs/straight/repos"),
+            Inside::Skipped("packages")
+        );
+        assert_eq!(
+            emacs.inside("home/.config/emacs/elpa"),
+            Inside::Skipped("packages")
+        );
+        assert_eq!(emacs.inside("home/.config/emacs"), Inside::Carried);
+        // ONE PLACE: Emacs's other places, and the user folders of the
+        // frameworks, are no target's — a person adds one by hand.
         for near in [
             "home/.sshd/x",
             "home/.gitconfig.bak",
+            "home/.config/emacsen/init.el",
+            "home/.emacs.d/init.el",
+            "home/.emacs",
+            "home/.emacs.el",
             "home/.config/doom/config.el",
+            "home/.spacemacs",
+            // The target this one replaced (2026-10-19) is no target's any
+            // more: a repository's copy of it stays where it is
+            // (`merge::tests::a_path_no_target_names_any_more_stays_put`).
+            "home/.config/doom/local.el",
         ] {
             assert!(target_of(near).is_none(), "{near}");
         }
@@ -413,6 +589,63 @@ mod target_tests {
             by_default("config/belongings-keys/deploy"),
             Verdict::Never(_)
         ));
+    }
+
+    /// FAILS IF: "keep again" keeps nothing, for any target: "here again"
+    /// on a target whose folder lies under one taken out here (the whole
+    /// home), or "keep again" on a file of a target that is "not on this
+    /// machine". Both write an addition at or under the target's path
+    /// (`Belongings::keep`), and an addition there must keep what it names
+    /// — what the target skips aside — as it did before the target `emacs`.
+    #[test]
+    fn keep_again_keeps_under_every_target() {
+        for target in crate::scope::targets() {
+            for path in target.paths {
+                // A FILE BELOW the path (a folder's), and the path itself (a
+                // file's): the rule is the same string arithmetic for both.
+                for inside in [format!("{path}/x"), (*path).to_owned()] {
+                    // A: HERE AGAIN, a folder above taken out.
+                    for ancestor in ["home", "home/.config"] {
+                        if !covers(ancestor, path) || ancestor == *path {
+                            continue;
+                        }
+                        let mut prefs = Belongings {
+                            excluded: vec![ancestor.to_owned()],
+                            ..Belongings::default()
+                        };
+                        assert!(!kept_here(&inside, &prefs, false), "{inside}");
+                        assert!(prefs.keep(path), "{path}");
+                        assert!(
+                            kept_here(&inside, &prefs, false),
+                            "{}: here again under {ancestor} keeps nothing: {prefs:?}",
+                            target.id
+                        );
+                    }
+                    // B: KEEP AGAIN, a file of a target not on this machine.
+                    let mut prefs = Belongings::default();
+                    for p in target.paths {
+                        prefs.stop_keeping(p);
+                    }
+                    assert!(!kept_here(&inside, &prefs, false), "{inside}");
+                    assert!(prefs.keep(&inside), "{inside}");
+                    assert!(
+                        kept_here(&inside, &prefs, false),
+                        "{}: keep again keeps nothing: {prefs:?}",
+                        target.id
+                    );
+                }
+            }
+        }
+        // AN ADDITION BESIDE A TARGET, or above it, is the person's, as
+        // ever.
+        let mut prefs = Belongings::default();
+        prefs.extra.push("home/.emacs.d".to_owned());
+        assert!(added_here("home/.emacs.d/init.el", &prefs));
+        assert!(kept_here("home/.emacs.d/elpa/x/x.el", &prefs, false));
+        // AND WHAT A TARGET SKIPS stays skipped under any addition.
+        prefs.extra.push("home/.config/emacs".to_owned());
+        assert!(kept_here("home/.config/emacs/init.el", &prefs, false));
+        assert!(!kept_here("home/.config/emacs/elpa/x/x.el", &prefs, false));
     }
 
     /// FAILS IF: a key ring's file is merged instead of chosen, a known host
@@ -429,6 +662,12 @@ mod target_tests {
         );
         assert_eq!(merge_rule("home/.gitconfig"), MergeRule::Auto);
         assert_eq!(merge_rule("home/.gnupg/trustdb.gpg"), MergeRule::Choose);
+        // ELISP MERGED BY HUNK can make a configuration that does not load.
+        assert_eq!(merge_rule("home/.config/emacs/init.el"), MergeRule::Choose);
+        assert_eq!(
+            merge_rule("home/.config/emacs/lisp/keys.el"),
+            MergeRule::Choose
+        );
         assert_eq!(merge_rule("config/theme.json"), MergeRule::Auto);
     }
 
@@ -472,8 +711,8 @@ pub enum Verdict {
     /// machine that did not take it out.
     Target(&'static Target),
     /// Under a target, a name its `skip` lists (a socket, a lock, an
-    /// agent's seed): never kept, whoever asks.
-    Skipped(&'static Target),
+    /// agent's seed), with that name's reason: never kept, whoever asks.
+    Skipped(&'static Target, &'static str),
 }
 
 /// Whether a name matches a pattern with at most one `*`. Pure.
@@ -510,10 +749,9 @@ pub fn by_default(path: &str) -> Verdict {
     // A TARGET'S PATH IS THE TARGET'S, and only its own `skip` takes a name
     // out below it (the generator refuses a target over a tree or a file).
     if let Some(target) = target_of(path) {
-        return if target.skips(path) {
-            Verdict::Skipped(target)
-        } else {
-            Verdict::Target(target)
+        return match target.inside(path) {
+            Inside::Carried => Verdict::Target(target),
+            Inside::Skipped(why) | Inside::Passage(why) => Verdict::Skipped(target, why),
         };
     }
     for tree in TREES {

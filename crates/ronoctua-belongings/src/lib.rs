@@ -60,6 +60,10 @@
 
 #[cfg(feature = "crypt")]
 pub mod crypt;
+// Which place this machine's Emacs reads: what the page says when it is not
+// the one the target `emacs` carries.
+#[cfg(feature = "prefs")]
+pub mod emacs;
 #[cfg(feature = "crypt")]
 pub mod engine;
 #[cfg(feature = "prefs")]

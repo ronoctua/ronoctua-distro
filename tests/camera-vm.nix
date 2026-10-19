@@ -24,6 +24,14 @@
 # NO SOUND: the VM has no PipeWire session, and the recording is asked for with
 # the microphone and the desktop off. Sound is proved on the host (a stereo AAC
 # track, `ffprobe`); here a missing audio server must not stop the video.
+#
+# NO CAMERA OPENS BEFORE A PERSON ASKS FOR ONE. Opening a UVC node powers the
+# camera up and its light blinks — and the footer and the studio, starting,
+# each read every camera, so the light blinked twice at every start. The
+# kernel's own answer is the witness: `inotifywait` watches `IN_OPEN` on both
+# nodes while the studio and a footer start, and must see nothing until the
+# camera's settings are opened, and then see the node opened. It runs as soon
+# as the webcam is up, on this test's VM: no second boot, a footer more.
 {
   pkgs,
   lib,
@@ -179,6 +187,11 @@ pkgs.testers.runNixOSTest {
             f"XDG_RUNTIME_DIR=/run/user/0 python3 ${client} '{json.dumps(what)}'"
         ))
 
+    def opened():
+        # Every `IN_OPEN` of a camera node since the watch began, as
+        # `inotifywait` wrote them.
+        return machine.succeed("cat /tmp/opens").strip()
+
     def readers():
         # Who has the "webcam" open — the question the modeline's mark asks —
         # leaving out the `testsrc` that plays the camera itself.
@@ -202,7 +215,16 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds("test -e /dev/video10")
         machine.sleep(2)
 
-    with subtest("the studio sees it, and sees ours as not a camera"):
+    with subtest("nothing opens a camera before somebody asks for one"):
+        # THE WATCH FIRST, after the `testsrc` writer opened its node: from
+        # here on, every open of either node is somebody reading a camera.
+        machine.succeed(
+            "systemd-run --unit=opens ${pkgs.inotify-tools}/bin/inotifywait -m -e open "
+            "--format '%w' -o /tmp/opens /dev/video10 /dev/video42"
+        )
+        machine.wait_until_succeeds(
+            "journalctl -u opens --no-pager | grep -q 'Watches established'", timeout=30
+        )
         machine.succeed(
             "systemd-run --unit=studio --setenv=XDG_RUNTIME_DIR=/run/user/0 "
             "--setenv=HOME=/root --setenv=RUST_LOG=ronoctua_studio=debug "
@@ -210,14 +232,37 @@ pkgs.testers.runNixOSTest {
             "${studio}/bin/ronoctua-studio"
         )
         machine.wait_until_succeeds("ls /run/user/0 | grep -q studio", timeout=30)
+        start_xvfb()
+        start_compositor("compositor", "${scroll}")
+        sock = socket_of("compositor")
+        machine.succeed(
+            "systemd-run --unit=footer ${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
+            f"--setenv=HOME=/root --setenv=SCROLLSOCK={sock} "
+            "--setenv=RUST_LOG=ronoctua_shell=info "
+            "${ronoctua-shell}/bin/ronoctua-shell"
+        )
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep -q 'footer layout resolved'", timeout=60
+        )
+        # The footer watches the studio, and the studio is asked for its
+        # state: neither is asked for a camera.
+        state = studio({"ask": "look"})
+        assert state["cameras"] == [], f"an idle studio read the cameras: {state['cameras']}"
+        # Both read every camera within a second of starting, before.
+        machine.sleep(3)
+        assert opened() == "", f"a camera was opened with nobody asking: {opened()}"
+        # THE GESTURE: the camera's settings, which show the cameras.
+        machine.succeed(
+            "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
+            f"SCROLLSOCK={sock} ${ronoctua-shell}/bin/ronoctua-shell command camera-settings-open"
+        )
+        machine.wait_until_succeeds("grep -q /dev/video10 /tmp/opens", timeout=30)
+        machine.succeed("systemctl stop footer")
+
+    with subtest("at rest the studio holds nothing, and reads no camera"):
         state = studio({"ask": "look"})
         print(state)
-        cards = [c["card"] for c in state["cameras"]]
-        assert "Webcam" in cards, f"the webcam was not seen: {state['cameras']}"
-        assert state["camera"] is not None, "no default camera chosen"
-        assert state["camera"].startswith("Webcam|"), (
-            f"the default camera is not the webcam: {state['camera']}"
-        )
+        assert state["cameras"] == [], f"at rest, the studio keeps a camera list: {state}"
         # At rest nobody holds the camera: the light stays off.
         assert readers() == [], f"at rest, the camera is held: {readers()}"
 
@@ -247,6 +292,22 @@ pkgs.testers.runNixOSTest {
                 break
             machine.sleep(1)
         assert readers(), "recording, and nobody holds the camera"
+        # WITH A CAMERA IN USE the studio reads them: it sees the webcam, and
+        # sees ours as not a camera. The watch's first reading is its own
+        # thread's, a moment after the camera opened.
+        for _ in range(20):
+            if any(c["card"] == "Webcam" for c in studio({"ask": "look"})["cameras"]):
+                break
+            machine.sleep(1)
+        state = studio({"ask": "look"})
+        print(state)
+        cards = [c["card"] for c in state["cameras"]]
+        assert "Webcam" in cards, f"the webcam was not seen: {state['cameras']}"
+        assert "ronoctua" not in cards, f"our own output was listed as a camera: {cards}"
+        assert state["camera"] is not None, "no default camera chosen"
+        assert state["camera"].startswith("Webcam|"), (
+            f"the default camera is not the webcam: {state['camera']}"
+        )
         # A photo while recording: the same program, one frame of it.
         said = studio({"ask": "photo"})
         assert said["say"] == "done", said
@@ -309,9 +370,6 @@ pkgs.testers.runNixOSTest {
         studio({"ask": "virtual", "on": False})
 
     with subtest("the app shows the camera in a window of its own"):
-        start_xvfb()
-        start_compositor("compositor", "${scroll}")
-        sock = socket_of("compositor")
         machine.succeed(
             "systemd-run --unit=app ${xvfb.env} --setenv=WAYLAND_DISPLAY=wayland-1 "
             "--setenv=HOME=/root "

@@ -17,8 +17,10 @@ REFUSES, naming what it refused:
   - a `largeMB` that is not a positive whole number;
   - a target (`targets.<id>`) whose id is not a kebab id, with a field it
     does not know, no `paths`, a path that is not logical, a `skip` that is
-    not a name pattern, a `private` that is not a boolean, a `merge` that is
-    not `choose` or `union`, or an offer it does not know;
+    not a name pattern (or `/` and one) with a reason, a `carry` that is not
+    a relative path of name patterns or that nothing it skips holds, a
+    `private` that is not a boolean, a `merge` that is not `choose` or
+    `union`, or an offer it does not know;
   - a plain root (`plain.<path>`) that is not logical, with a field it does
     not know, an `at` that is not a plain relative path or a bad reason, two
     roots that overlap (by path or by `at`), or one that overlaps a path
@@ -45,7 +47,7 @@ TOP = {
 }
 NEVER = {"name", "path", "reason", "hard"}
 STORE = {"kept", "reason"}
-TARGET = {"paths", "skip", "private", "merge", "offers"}
+TARGET = {"paths", "skip", "carry", "private", "merge", "offers"}
 MERGES = {"choose", "union"}
 OFFERS = {"ssh-signing", "pam-u2f"}
 PLAIN = {"at", "reason"}
@@ -123,6 +125,42 @@ def target_refusals(targets, plain, nevers, trees, files):
                 refuse(f"targets.{t['id']}: the merge of `{name}` names no file (a name, or `default`)")
 
 
+def skip_name(pattern):
+    """A skip's name pattern, and whether it is written at the root (`/`)."""
+    return (pattern[1:], True) if pattern.startswith("/") else (pattern, False)
+
+
+def carry_refusals(where, carry, skip):
+    """A carried path is relative, each of its names a pattern — and some
+    folder on its way is one the target skips, or there is nothing to
+    carry it out of."""
+    ok = True
+    for path in carry:
+        parts = path.split("/") if isinstance(path, str) else []
+        if not parts or any(not pattern(f"{where}.carry", p) or p in (".", "..") for p in parts):
+            refuse(f"{where}: `{path}` is not a relative path of name patterns")
+            ok = False
+            continue
+        skipped = any(
+            name_matches(name, part)
+            for at, part in enumerate(parts[:-1])
+            for name, rooted in map(skip_name, skip)
+            if not rooted or at == 0
+        )
+        if not skipped:
+            refuse(f"{where}: `{path}` carries what nothing it skips holds")
+            ok = False
+    return ok
+
+
+def name_matches(pattern_, name):
+    """`crate::kept::name_matches`: a name against a pattern with one `*`."""
+    if "*" not in pattern_:
+        return pattern_ == name
+    before, after = pattern_.split("*", 1)
+    return len(name) >= len(before) + len(after) and name.startswith(before) and name.endswith(after)
+
+
 def targets_rust(targets):
     """The targets as Rust (`crate::kept::Target`, by its full path)."""
     lines = [
@@ -131,7 +169,11 @@ def targets_rust(targets):
     ]
     for t in targets:
         paths = ", ".join(rust_str(p) for p in t["paths"])
-        skip = ", ".join(rust_str(s) for s in t["skip"])
+        skip = ", ".join(
+            f"crate::kept::Skip {{ pattern: {rust_str(pat)}, reason: {rust_str(why)} }}"
+            for pat, why in sorted(t["skip"].items())
+        )
+        carry = ", ".join(rust_str(c) for c in t["carry"])
         merge = ", ".join(
             f"({rust_str(name)}, crate::kept::MergeRule::{MERGE_RULES[rule]})"
             for name, rule in sorted(t["merge"].items())
@@ -139,7 +181,7 @@ def targets_rust(targets):
         offers = ", ".join(f"crate::kept::Offering::{OFFERINGS[o]}" for o in t["offers"])
         lines.append(
             f"    crate::kept::Target {{ id: {rust_str(t['id'])}, paths: &[{paths}], "
-            f"skip: &[{skip}], private: {'true' if t['private'] else 'false'}, "
+            f"skip: &[{skip}], carry: &[{carry}], private: {'true' if t['private'] else 'false'}, "
             f"merge: &[{merge}], offers: &[{offers}] }},"
         )
     return lines + ["];", ""]
@@ -295,8 +337,22 @@ def main():
             refuse(f"{where}: `paths` is a list of one or more logical paths")
             continue
         ok = all(logical(f"{where}.paths", p) for p in paths)
-        skip = entry.get("skip", [])
-        ok = isinstance(skip, list) and all(pattern(f"{where}.skip", s) for s in skip) and ok
+        # WHAT IT SKIPS, each with its reason: a name pattern, or `/` and one
+        # (the root's first name only).
+        skip = entry.get("skip", {})
+        if not isinstance(skip, dict):
+            refuse(f"{where}: `skip` maps a name pattern (or `/` and one) to its reason")
+            ok, skip = False, {}
+        for pat, why in sorted(skip.items()):
+            name, _ = skip_name(pat)
+            ok = pattern(f"{where}.skip", name) and reason(f"{where}.skip.{pat}", why) and ok
+            if isinstance(why, str) and ID.match(why):
+                reasons.add(why)
+        carry = entry.get("carry", [])
+        if not isinstance(carry, list):
+            refuse(f"{where}: `carry` is a list of relative paths")
+            ok, carry = False, []
+        ok = carry_refusals(where, carry, list(skip)) and ok
         private = entry.get("private", False)
         if not isinstance(private, bool):
             refuse(f"{where}: `private` is a boolean")
@@ -310,8 +366,8 @@ def main():
             refuse(f"{where}: `offers` is a list of {', '.join(sorted(OFFERS))}")
             ok = False
         if ok:
-            targets.append({"id": tid, "paths": paths, "skip": skip, "private": private,
-                            "merge": merge, "offers": offers})
+            targets.append({"id": tid, "paths": paths, "skip": skip, "carry": carry,
+                            "private": private, "merge": merge, "offers": offers})
 
     plain = []
     for path, entry in sorted((table.get("plain") or {}).items()):

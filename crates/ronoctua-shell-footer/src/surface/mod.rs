@@ -106,8 +106,10 @@ mod desk;
 mod footer_settings;
 /// WHAT THE FOOTER HOLDS that a region of the slot host reads and does not
 /// own, LENT for one call by type (`region::Lent`): the transfer queue's
-/// jobs, the studio's state and the cameras plugged in, the notification
-/// desk's queue and the person's filter book, and the clock's zone. A list of
+/// jobs, the studio's state, the notification desk's queue and the person's
+/// filter book, and the clock's zone. (Never the cameras plugged in: reading
+/// one opens it and blinks its light, so the footer reads none, and the
+/// camera's settings read them while they are shown.) A list of
 /// the footer's fields, borrowed one by one — so a call can lend them while
 /// the slot host lends the region out (`Footer::with_region`) — and written
 /// once, here: a region keeps no second copy of any of them.
@@ -116,7 +118,6 @@ macro_rules! held_by_the_footer {
         vec![
             &$footer.jobs as &(dyn std::any::Any + 'static),
             &$footer.studio,
-            &$footer.camera_list,
             &$footer.notifications,
             &$footer.book,
             &$footer.zone,
@@ -971,11 +972,6 @@ struct Footer {
     /// a device plugged in with no view open a cursor of its own; and the one
     /// line the pointers' region asks through.
     pointer_thread: Option<std::rc::Rc<ronoctua_pointers::Handle>>,
-    /// Every camera, from the watch (inotify on `/dev`) — lent to the camera's
-    /// settings (`crate::region::Lent`) and told to them as it changes.
-    camera_list: Vec<ronoctua_camera::Camera>,
-    /// The watch itself, kept for the life of the footer.
-    _camera_watch: Option<ronoctua_camera::watch::Handle>,
     /// The studio's last state: the modeline's recording mark, the photo and
     /// recording notifications, and the settings' scenes.
     studio: Option<ronoctua_studio::wire::State>,
@@ -2834,8 +2830,6 @@ fn assemble(
         audio_orders: None,
         pointer_snapshot: None,
         pointer_thread: None,
-        camera_list: Vec::new(),
-        _camera_watch: None,
         studio: None,
         pointer_on: None,
         player: None,
@@ -4032,22 +4026,13 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("could not hang the pointers' channel: {e}"))?;
 
-    // THE CAMERAS, by event: the settings view reads them, and the watch is
-    // an inotify thread that sleeps until a camera is plugged or unplugged.
-    let (camera_sender, camera_events) = channel::channel::<Vec<ronoctua_camera::Camera>>();
-    state._camera_watch = Some(ronoctua_camera::watch::watch(move |c| {
-        let _ = camera_sender.send(c);
-    }));
-    handle
-        .insert_source(camera_events, |event, (), state: &mut Footer| {
-            if let channel::Event::Msg(c) = event {
-                // WHAT THE FOOTER HEARD, told to every region of the slot host
-                // first — the camera's settings, which read it.
-                state.hosted_heard::<Vec<ronoctua_camera::Camera>>(&c);
-                state.camera_list = c;
-            }
-        })
-        .map_err(|e| anyhow::anyhow!("could not hang the camera channel: {e}"))?;
+    // NO CAMERA IS READ HERE. Reading one opens its node, and a UVC camera's
+    // light blinks when it is opened: a footer that watched the cameras from
+    // its start blinked it at every start, with nobody having asked. The
+    // camera's settings read them while they are shown, the studio while a
+    // camera is in use, and who HOLDS one is read from `/proc` below, which
+    // opens nothing.
+    //
     // THE STUDIO'S STATE, for the recording mark and the photo and recording
     // notifications. `client::watch` starts the daemon when nobody answers —
     // the nested loop has no unit — and an idle studio costs nothing.
@@ -4101,23 +4086,23 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
     //
     // EACH ONE TOLD OURS OR THEIRS BY ITS LINEAGE: what holds the device
     // during the studio's preview or recording is the studio's own `ffmpeg`,
-    // named like anybody's (`events::OUR_CAMERA_HOLDERS`).
+    // named like anybody's (`events::OUR_CAMERA_HOLDERS`). AND THE SHELL'S
+    // OWN READING — the camera's settings, in this process or a window it
+    // started — is nobody using a camera (`events::holders_of`).
+    let shell = std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(crate::events::process_name);
     let (holders_sender, holders_events) = channel::channel::<Vec<crate::events::CameraHolder>>();
     let _ = std::thread::Builder::new()
         .name("camera-holders".into())
         .spawn(move || {
             let mut last: Option<Vec<crate::events::CameraHolder>> = None;
             loop {
-                let mut holders: Vec<crate::events::CameraHolder> =
-                    ronoctua_memory::camera::holders("/dev/video")
-                        .into_iter()
-                        .map(|h| crate::events::CameraHolder {
-                            ours: h.under(crate::events::OUR_CAMERA_HOLDERS),
-                            name: h.name,
-                        })
-                        .collect();
-                holders.sort();
-                holders.dedup();
+                let holders = crate::events::holders_of(
+                    ronoctua_memory::camera::holders("/dev/video"),
+                    shell.as_deref(),
+                );
                 if last.as_ref() != Some(&holders) {
                     if holders_sender.send(holders.clone()).is_err() {
                         return;
@@ -8092,7 +8077,7 @@ impl Footer {
     /// and its own docstring said it was not Emacs and did not try to be. Once
     /// that key opened the MANAGER (`LEADER . .` today, `f f` then), the reason
     /// was gone, and what was left was a second editor nobody asked for on a
-    /// system whose editor is Doom Emacs.
+    /// system whose editor is Emacs.
     ///
     /// `emacsclient` and not `emacs`, because `nix/modules/emacs.nix` runs a
     /// DAEMON: a second process would take seconds and would not see the

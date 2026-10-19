@@ -36,6 +36,9 @@ mod listing;
 // ONE SEALED FILE FOR THE INSTALLER, and the push token's sealed home (the
 // person's binary cache, 2026-10-11), on the helpers above.
 mod take;
+// THE PERSON'S EMACS CONFIGURATION: one place travels, and what Emacs
+// reads elsewhere moves nothing (2026-10-19), on the helpers above.
+mod emacs;
 
 /// A vault of a test's own: what a session keeps, in memory — never the
 /// kernel's keyring of whoever runs the tests.

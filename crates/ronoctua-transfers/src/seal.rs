@@ -332,7 +332,7 @@ fn carry(
             "could not hand the job to the sealing program: {e}"
         ));
     }
-    shared.touch(id, |j| j.stage = Stage::Running);
+    shared.under_way(id, |_| {});
     let (lines, arriving) = mpsc::channel::<Said>();
     reader(child.stdout.take(), lines.clone(), true);
     reader(child.stderr.take(), lines, false);

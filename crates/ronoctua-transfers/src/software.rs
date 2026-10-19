@@ -381,7 +381,7 @@ fn carry(
         }
     };
     let pid = child.id();
-    shared.touch(id, |j| j.stage = Stage::Running);
+    shared.under_way(id, |_| {});
 
     // THE ORDER ON STDIN, from a thread: a child that answers before it has
     // read everything must not deadlock against a full pipe. Dropping the pipe

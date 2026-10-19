@@ -77,9 +77,18 @@ belongings-op-forget = forgetting the session's key
 belongings-target-git = git's settings and your registered security keys
 belongings-target-gnupg = your GnuPG keyring
 belongings-target-shell = your shell's own file
-belongings-target-doom = Doom Emacs' local file
-# A name a target leaves out: a socket, a lock, an agent's seed.
-belongings-reason-transient = this machine's moment: a socket, a lock, a seed
+belongings-target-emacs = your Emacs configuration
+# What a target leaves out, each by its own reason. Short: the listing's
+# widest value moves its column.
+belongings-reason-socket = a socket of a program running now
+belongings-reason-connection = an SSH connection shared while it is open
+belongings-reason-random-seed = the agent's random seed: each machine has its own
+belongings-reason-lock = a lock held by a program running now
+belongings-reason-packages = packages, fetched again from your configuration
+belongings-reason-compiled = compiled again from what travels
+belongings-reason-editor-state = what Emacs keeps of this machine's sessions
+belongings-reason-editor-draft = an editor's backup, autosave or lock
+belongings-reason-git-folder = a git repository's own folder: a clone brings it
 belongings-state-synced = in step
 belongings-state-changed = changed
 belongings-state-new = new

@@ -55,7 +55,36 @@ const LOCALTIME: &str = "/etc/localtime";
 /// an error crossing back to a caller that has already moved on has nowhere to
 /// be shown.
 pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
-    run_it(shared, id, switch, &work);
+    run_marked(shared, id, switch, work, &mut |_| {});
+}
+
+/// Where a job's thread has got to, told to [`run_marked`]'s caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mark {
+    /// The weighing is over, and the row has not heard it yet.
+    Weighed,
+    /// A bite is behind it, and the next one has not asked the switch yet.
+    Bitten,
+}
+
+/// [`run`], telling `at` where the thread has got to — and waiting while
+/// `at` does.
+///
+/// # Why a seam, and not a sleep
+///
+/// For the tests that have to act at one exact point of a job: a pause that
+/// lands between the end of the weighing and the hand-off, a pause that lands
+/// mid-file. That window is microseconds wide, and a test that waits a
+/// guessed time for it passes on a fast machine and fails on a loaded one —
+/// the socket's test did both. [`run`] passes a mark nobody reads.
+pub(crate) fn run_marked(
+    shared: &Arc<Shared>,
+    id: u64,
+    switch: &Arc<Control>,
+    work: Work,
+    at: &mut dyn FnMut(Mark),
+) {
+    run_it(shared, id, switch, &work, at);
     // THE PASSWORD GOES WITH THE JOB, however it ended — and only from the
     // queue's own folder.
     if let Some(dir) = shared.secrets() {
@@ -65,9 +94,15 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
     }
 }
 
-/// [`run`], minus the removal of the job's secrets — so that removal cannot be
-/// skipped by any of the ways this returns.
-fn run_it(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: &Work) {
+/// [`run_marked`], minus the removal of the job's secrets — so that removal
+/// cannot be skipped by any of the ways this returns.
+fn run_it(
+    shared: &Arc<Shared>,
+    id: u64,
+    switch: &Arc<Control>,
+    work: &Work,
+    at: &mut dyn FnMut(Mark),
+) {
     // WEIGHING FIRST, and it is a stage. On a folder of a hundred thousand
     // files it is the longest part of a copy that has not started, and a row
     // sitting at zero with no explanation reads as stuck.
@@ -75,10 +110,12 @@ fn run_it(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: &Work) {
         Ok(t) => t,
         Err(e) => return end_it(shared, id, &e),
     };
-    shared.touch(id, |j| {
-        j.total = total;
-        j.stage = Stage::Running;
-    });
+    at(Mark::Weighed);
+    // THE SWITCH DECIDES what the row says now: a pause that landed while
+    // this was weighing is a held copy, and its row says so — written
+    // `Running` here, it was undone, and the copy sat held under a row that
+    // said it ran.
+    shared.under_way(id, |j| j.total = total);
 
     // AN ARCHIVE'S WORK IS THE ARCHIVE CRATE'S, with its own counter: the
     // program says where it is (a per cent, a member), and the job SETS that
@@ -98,7 +135,13 @@ fn run_it(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: &Work) {
 
     let mut beats = Beats::new(shared, id);
     let outcome = {
-        let mut sink = |b: watch::Beat<'_>| beats.take(b);
+        let mut sink = |b: watch::Beat<'_>| {
+            let bitten = matches!(b, watch::Beat::Did(_));
+            beats.take(b);
+            if bitten {
+                at(Mark::Bitten);
+            }
+        };
         carry_out(work, &mut Watch::new(switch, &mut sink))
     };
     // THE LAST ONE ALWAYS GOES OUT. A job that ends at 97% because its final
@@ -690,6 +733,65 @@ mod tests {
             std::fs::read_dir(&secrets).unwrap().count(),
             0,
             "a password was left behind in the queue's folder"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// FAILS IF: a pause that lands after the weighing and before the
+    /// hand-off is undone by it — the copy held by its switch, its row saying
+    /// it runs — the held copy moves a byte, or it does not finish once let
+    /// go. The thread is held AT the seam (`Mark::Weighed`) until the pause is
+    /// in, so the pause lands exactly where it was lost.
+    #[test]
+    fn a_pause_during_the_weighing_holds_the_copy_and_its_row_says_so() {
+        let root = place("weighed");
+        let shared = Arc::new(Shared::default());
+        let from = root.join("large.bin");
+        std::fs::write(&from, vec![7u8; 4096]).unwrap();
+        let into = root.join("into");
+        std::fs::create_dir_all(&into).unwrap();
+        let work = Work::Paste {
+            paths: vec![from],
+            into: into.clone(),
+            moves: false,
+        };
+        let (id, switch) = shared.take(Engine::Local, work.clone());
+        let (weighed, at_the_seam) = std::sync::mpsc::channel::<()>();
+        let (go, let_go) = std::sync::mpsc::channel::<()>();
+        let worker = {
+            let shared = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                run_marked(&shared, id, &switch, work, &mut |mark| {
+                    if mark == Mark::Weighed {
+                        let _ = weighed.send(());
+                        let _ = let_go.recv();
+                    }
+                });
+            })
+        };
+
+        at_the_seam.recv().expect("the weighing ended");
+        assert_eq!(job_of(&shared, id).stage, Stage::Weighing);
+        // THE PAUSE, by the hand the socket's ask goes through.
+        shared.pause(id);
+        go.send(()).unwrap();
+        let handed = shared.until(id, |j| j.total == 4096);
+        assert_eq!(
+            handed.stage,
+            Stage::Paused,
+            "the hand-off undid the pause: {handed:?}"
+        );
+        // AND IT IS HELD: the copy asks the switch before its first byte.
+        assert_eq!(job_of(&shared, id).stage, Stage::Paused);
+        assert!(!into.join("large.bin").exists(), "a held copy moved");
+
+        shared.resume(id);
+        let done = shared.until(id, |j| !j.afoot());
+        assert_eq!(done.stage, Stage::Done, "{done:?}");
+        worker.join().expect("the copy's thread");
+        assert_eq!(
+            std::fs::read(into.join("large.bin")).unwrap(),
+            vec![7u8; 4096]
         );
         let _ = std::fs::remove_dir_all(root);
     }
