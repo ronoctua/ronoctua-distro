@@ -27966,6 +27966,10 @@ let
         # work on an installed machine and do nothing in the loop, which is the
         # first place anybody looks.
         "RONOCTUA_ATLAS",
+        # AND ONE THE LOOP EMPTIES: the installed footer's children inherit the
+        # units it restarts before the session ends, and the nested footer
+        # quitting with them would restart the person's own daemons.
+        "RONOCTUA_SESSION_END_RESTARTS",
     ]
 
     # `hashless` keeps one line per line, so the line NUMBERS this check

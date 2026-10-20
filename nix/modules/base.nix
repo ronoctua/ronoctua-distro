@@ -242,6 +242,27 @@ in
         at runtime with `LEADER s t`; this is what a fresh machine shows.
       '';
     };
+
+    # WHAT ENDS BEFORE THE SESSION DOES. `session-quit` asks the compositor to
+    # leave, and a program that drew on it may die with it — the pure-GTK
+    # editor (`emacs.nix`) is ended by GDK, its own way out skipped. So the
+    # footer RESTARTS these user units, when they run, before it asks: each
+    # gets its SIGTERM while the compositor is still up, and the instance
+    # systemd starts in its place has drawn on nothing and outlives it. The
+    # module that owns a program names its unit here, inside its own switch;
+    # the footer reads the list from its environment and names nothing
+    # (`session_end.rs`). A power-off or a reboot needs none of this: a stop
+    # of the person's manager follows the units' order.
+    session.restartBeforeQuit = lib.mkOption {
+      type = lib.types.listOf (lib.types.strMatching "[A-Za-z0-9:_.@][A-Za-z0-9:_.@-]*\\.service");
+      default = [ ];
+      description = ''
+        User services restarted (`systemctl --user try-restart`) before the
+        session ends from the footer, so that they end while the compositor
+        is still up. The footer waits a few seconds for their old processes,
+        and ends the session anyway after that.
+      '';
+    };
   };
 
   config = {
@@ -359,6 +380,10 @@ in
     systemd.user.services.ronoctua-footer.environment.RONOCTUA_TIME_ZONE = lib.optionalString (
       cfg.time.zone != null
     ) cfg.time.zone;
+    # The units `session.restartBeforeQuit` lists, separated by spaces —
+    # empty is none, and the session ends at once.
+    systemd.user.services.ronoctua-footer.environment.RONOCTUA_SESSION_END_RESTARTS =
+      lib.concatStringsSep " " cfg.session.restartBeforeQuit;
 
     # -----------------------------------------------------------------
     # Nix — section 7.1: everything through flakes, nothing imperative.

@@ -362,6 +362,13 @@ struct Footer {
     /// makes the compositor close it right away. See `run`.
     screens: Vec<Screen>,
     quit: bool,
+    /// Where the footer is in ending the session: what has to end before
+    /// the compositor does is ending, or the compositor was asked
+    /// (`crate::session_end`).
+    ending: crate::session_end::Ending,
+    /// Where the thread that ends those units first says how they ended.
+    /// `None` outside the event loop (tests).
+    session_end_sender: Option<calloop::channel::Sender<crate::session_end::Ended>>,
     /// A paint is owed, and it happens once the queue is empty.
     ///
     /// # Why the pointer does not paint where it is handled
@@ -2730,6 +2737,8 @@ fn assemble(
         requested_height: footer_height,
         screens: Vec::new(),
         quit: false,
+        ending: crate::session_end::Ending::default(),
+        session_end_sender: None,
         owes_paint: false,
         windows: ronoctua_compositor::State::default(),
         seats: SeatState::new(globals, qh),
@@ -3347,6 +3356,19 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the launch channel: {e}"))?;
+
+    // WHAT ENDS BEFORE THE SESSION, ended off the loop: `systemctl` and the
+    // wait for the old processes are a thread's (`crate::session_end`), and
+    // its answer is what lets the compositor be asked to leave.
+    let (session_end_sender, session_ends) = channel::channel::<crate::session_end::Ended>();
+    state.session_end_sender = Some(session_end_sender);
+    handle
+        .insert_source(session_ends, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(ended) = event {
+                state.session_end_answered(&ended);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the session's end channel: {e}"))?;
 
     // WHAT WAS COPIED, read off the loop. The program that owns the selection
     // answers when it likes, and a hung one would hold the loop that draws.
@@ -8282,11 +8304,9 @@ impl Footer {
             // QUITTING IS THE COMPOSITOR'S, not just the footer's. Ending the
             // footer would leave the session standing with no modeline and no
             // leader — a system with no chrome at all and no way out of it.
-            "session-quit" => {
-                self.compositor_action(|wm| wm.leave());
-                self.put_a_preview_back();
-                self.quit = true;
-            }
+            // What has to end before the compositor ends first
+            // (`crate::session_end`).
+            "session-quit" => self.session_quit(),
             "onscreen-keyboard" => self.toggle_the_keyboard(),
             // WHAT WAS JUST INSTALLED, opened — the event's "open it", the
             // notification's, and by name: the footer keeps which entry the
@@ -8802,6 +8822,123 @@ impl Footer {
         if let Err(e) = asked {
             tracing::debug!(error = %e, "the compositor was not told to reread its config");
         }
+    }
+
+    /// `session-quit`: the user units the environment names end first, while
+    /// the compositor is still up, and then the compositor is asked to leave
+    /// (`crate::session_end` says why). Every way of quitting comes in here:
+    /// the leader, the compositor's chord, `LEADER :` and the minibuffer's
+    /// list are all the one command.
+    fn session_quit(&mut self) {
+        use crate::session_end::{Next, VARIABLE, units_of};
+        let value = std::env::var(VARIABLE).ok();
+        let units = units_of(value.as_deref()).unwrap_or_else(|word| {
+            // A VALUE SET BY HAND (the NixOS option refuses a bad one): said,
+            // and the session still ends, as the person asked.
+            tracing::error!(
+                variable = VARIABLE,
+                value = ?value,
+                word = %word,
+                "not the name of a service; nothing is restarted before the session ends"
+            );
+            Vec::new()
+        });
+        match self.ending.quit(&units) {
+            Next::Leave => self.leave_the_session(),
+            Next::EndFirst(units) => self.end_first(units),
+            Next::Nothing => {}
+        }
+    }
+
+    /// The units end on a thread, and the loop waits for its answer or the
+    /// deadline — whichever comes first — saying so on the minibuffer.
+    fn end_first(&mut self, units: Vec<String>) {
+        use crate::session_end::DEADLINE;
+        // NO LOOP TO HAND THE ANSWER BACK TO (a unit test's footer): the
+        // session ends at once, as it did before.
+        let (Some(sender), Some(handle)) = (self.session_end_sender.clone(), self.repeat.clone())
+        else {
+            self.session_end_over();
+            return;
+        };
+        tracing::info!(
+            ?units,
+            deadline_ms = DEADLINE.as_millis(),
+            "ending these before the session"
+        );
+        let spawned = std::thread::Builder::new()
+            .name("session-end".into())
+            .spawn(move || {
+                let ended = crate::session_end::end_first(&units, DEADLINE);
+                // The loop may have left already (a second quit, the
+                // deadline): nobody is listening, and that is fine.
+                let _ = sender.send(ended);
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "could not start the thread that ends the units; the session ends now");
+            self.session_end_over();
+            return;
+        }
+        // THE DEADLINE ON THE LOOP TOO: the thread keeps its own, but a
+        // `systemctl` that hangs on the bus (its own timeout is 25 s) would
+        // hold the thread past it.
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(DEADLINE),
+            |_, (), state: &mut Self| {
+                if state.ending == crate::session_end::Ending::Waiting {
+                    tracing::warn!(
+                        "the units did not end by the deadline; the session ends anyway"
+                    );
+                }
+                state.session_end_over();
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        if let Err(e) = armed {
+            tracing::warn!(error = %e, "the deadline was not armed; the thread's own ends the wait");
+        }
+        // WHAT IT WAITS FOR, for as long as it can wait: the command's
+        // caller paints it.
+        let m = self.texts.t(crate::key::ECHO_SESSION_ENDING);
+        self.echo_lasting(m, DEADLINE);
+    }
+
+    /// What the thread says of the units, logged — and the session ends,
+    /// whatever it says: the person asked to quit.
+    fn session_end_answered(&mut self, ended: &crate::session_end::Ended) {
+        use crate::session_end::Ended;
+        match ended {
+            Ended::Gone { took } => {
+                tracing::info!(
+                    took_ms = took.as_millis(),
+                    "what ends before the session has ended"
+                );
+            }
+            Ended::Overdue { left } => {
+                tracing::warn!(
+                    left,
+                    "processes still running at the deadline; the session ends anyway"
+                );
+            }
+            Ended::Failed(why) => {
+                tracing::warn!(why = %why, "the units could not be restarted; the session ends anyway");
+            }
+        }
+        self.session_end_over();
+    }
+
+    /// The wait is over: the compositor is asked, unless it was already.
+    fn session_end_over(&mut self) {
+        if self.ending.over() == crate::session_end::Next::Leave {
+            self.leave_the_session();
+        }
+    }
+
+    /// Asks the compositor to leave, and the footer with it.
+    fn leave_the_session(&mut self) {
+        self.compositor_action(|wm| wm.leave());
+        self.put_a_preview_back();
+        self.quit = true;
     }
 
     /// Asks the compositor for an action, opening a connection just for it.

@@ -109,6 +109,10 @@ pub mod footer_settings_window;
 // THE FOOTER IN A PNG (`photograph --door footer`).
 pub mod footer_photograph;
 
+// WHAT ENDS BEFORE THE SESSION DOES: the user units restarted, while the
+// compositor is still up, before `session-quit` asks it to leave.
+mod session_end;
+
 // THE SUDO BAR (2026-10-11): where every root gesture of every screen is
 // asked — the footer's strip above the modeline, and the gestures the views'
 // doors make through it.

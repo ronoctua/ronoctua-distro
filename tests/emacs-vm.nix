@@ -31,7 +31,12 @@
 #      the nested compositor's end leaves the daemon alone;
 #   7. a stop of the person's manager (a power-off, a reboot, the last
 #      logout) with a frame open and an edit unsaved stops the daemon first:
-#      `kill-emacs` runs, with its hook and its auto-save, every time.
+#      `kill-emacs` runs, with its hook and its auto-save, every time;
+#   8. the session ended from the footer (`session-quit`, the real footer
+#      and the command every way of quitting runs) with a frame open and an
+#      edit unsaved restarts the daemon before the compositor leaves:
+#      `kill-emacs` runs, and the daemon in its place outlives the
+#      compositor and opens a frame in the next session.
 #
 # WHAT IS MEASURED, AND HELD
 # --------------------------
@@ -59,6 +64,13 @@
 # (`scroll.service`, `nix/modules/scroll.nix`), because that name is what the
 # daemon's unit is ordered after — once per manager, which it stops each
 # time. The earlier sections give each compositor a name of its own.
+#
+# Section 8 runs the FOOTER under its own unit name too (`ronoctua-footer`),
+# because that is the unit the modules write its environment on: the units
+# it restarts before the session ends are what `base.nix` makes of what
+# `emacs.nix` declares, read here from the very unit. Its program and the
+# software renderer are this test's; the session's scroll module (its
+# compositor config, its targets) is not imported.
 #
 # The brain's watch on the daemon proves its half in its own folder (its
 # `vm.nix`, run by `tests/brain-modules-vm.nix`).
@@ -142,6 +154,18 @@ pkgs.testers.runNixOSTest {
       # whole question.
       users.users.${config.ronoctua.user}.linger = true;
 
+      # THE REAL FOOTER (section 8), on the unit the modules declare its
+      # environment on, started by hand once a compositor is up: no
+      # `wantedBy`, as the session's is wanted by a target this test has not.
+      systemd.user.services.ronoctua-footer = {
+        environment = {
+          VK_DRIVER_FILES = gpu.icd;
+          VK_ICD_FILENAMES = gpu.icd;
+          LIBGL_ALWAYS_SOFTWARE = "1";
+        };
+        serviceConfig.ExecStart = "${ronoctua.shell}/bin/ronoctua-shell";
+      };
+
       environment.systemPackages = [
         scroll
         pkgs.procps
@@ -169,6 +193,13 @@ pkgs.testers.runNixOSTest {
       user = "${machine.ronoctua.user}"
       # THE DAEMON'S UNIT, as the editor's module names it.
       daemon_unit = "${machine.systemd.user.services.emacs.name}"
+      # THE FOOTER'S, and what the modules told it to restart before the
+      # session ends.
+      footer_unit = "${machine.systemd.user.services.ronoctua-footer.name}"
+      end_restarts = "${
+        machine.systemd.user.services.ronoctua-footer.environment.RONOCTUA_SESSION_END_RESTARTS or ""
+      }"
+      shell = "${ronoctua.shell}/bin/ronoctua-shell"
       client = "${emacs}/bin/emacsclient"
       # THE NESTED LOOP'S CLIENT, and the variable the loop keeps the
       # session's display in.
@@ -617,5 +648,93 @@ pkgs.testers.runNixOSTest {
               f"the edit held in {sum(held)} of {STOPS} stops of the manager: the daemon "
               "lost its display before its SIGTERM's `kill-emacs` ran"
           )
+
+      with subtest("the session ended from the footer restarts the daemon first, and the edit holds"):
+          print(f"the footer restarts {end_restarts!r} before the session ends")
+          daemon()
+          session, sock = start_session(11, unit="scroll")
+          open_frame(sock, "quit")
+          name = "notes-quit.txt"
+          hook = f"/home/{user}/hook-quit"
+          # ONLY THE EXIT CAN WRITE THE AUTO-SAVE, as in section 7.
+          said = ask_emacs(
+              "(progn (setq auto-save-interval 0 auto-save-timeout nil) "
+              f"(add-hook 'kill-emacs-hook (lambda () (write-region \"ran\" nil \"{hook}\"))) "
+              f"(with-current-buffer \"{name}\" (insert \"EDIT-quit\") (buffer-modified-p)))"
+          )
+          assert said == "t", f"the edit did not take: {said}"
+          # THE REAL FOOTER, up on the compositor with its control socket.
+          manager(f"start {footer_unit}")
+          try:
+              machine.wait_until_succeeds(f"test -S {run_dir}/ronoctua-wayland-1.sock", timeout=120)
+              machine.wait_until_succeeds(
+                  f"journalctl --no-pager _UID={uid} | grep 'layer-shell surface created' > /dev/null",
+                  timeout=120,
+              )
+          except Exception:
+              print(machine.execute(f"journalctl --no-pager _UID={uid} | tail -80")[1])
+              raise
+          old = daemon()
+          cursor = journal_cursor()
+          # THE COMMAND EVERY WAY OF QUITTING RUNS — the leader's `s q q`, the
+          # compositor's chord, `LEADER :` — through the footer's socket.
+          machine.succeed(
+              f"runuser -u {user} -- env XDG_RUNTIME_DIR={run_dir} WAYLAND_DISPLAY=wayland-1 "
+              f"{shell} command session-quit"
+          )
+          machine.wait_until_fails(
+              f"systemctl --user --machine={user}@ is-active {session}", timeout=60
+          )
+          autosave = machine.execute(f"cat '/home/{user}/#{name}#'")[1].strip()
+          ran = machine.execute(f"test -e {hook}")[0] == 0
+          # A FRESH DAEMON, which never drew on the compositor that went:
+          # still up after it, and not brought back by a death (a restart
+          # asked for is no `NRestarts`).
+          machine.sleep(5)
+          after = daemon()
+          # The footer's log is `tracing`'s, which colours its field names.
+          journal = re.sub(r"\x1b\[[0-9;]*m", "", machine.succeed(
+              f"journalctl --no-pager -o cat --after-cursor={shlex.quote(cursor)} _UID={uid}"
+          ))
+          lost = [
+              line for line in journal.splitlines()
+              if "Lost connection to Wayland compositor" in line
+              or "Error reading events from display" in line
+              or "dispatching to Wayland display" in line
+          ]
+          took = re.search(r"what ends before the session has ended took_ms=([0-9]+)", journal)
+          said_by_footer = [
+              line for line in journal.splitlines()
+              if "before the session" in line or "the session ends anyway" in line
+          ]
+          print(
+              f"quit: auto-save {autosave!r}, kill-emacs-hook ran: {ran}, the display lost "
+              f"first: {lost}; daemon {old} -> {after}; the footer: {said_by_footer}"
+          )
+          assert autosave == "EDIT-quit", (
+              f"the edit is not in the auto-save ({autosave!r}): the daemon did not end through "
+              "`kill-emacs` before the compositor left"
+          )
+          assert ran, "`kill-emacs-hook` did not run"
+          assert not lost, f"the daemon lost its display before it ended: {lost}"
+          # WHAT THE MODULES TOLD THE FOOTER: the daemon's unit, and only it
+          # (asked after what it does, so a list gone wrong shows its cost).
+          assert end_restarts.split() == [daemon_unit], (
+              f"the footer restarts {end_restarts!r} before the session ends, not {daemon_unit}"
+          )
+          assert took, "the footer did not say the daemon ended before the session:\n" + journal
+          print(f"THE DAEMON ENDED {took.group(1)} ms AFTER THE RESTART WAS ASKED")
+          assert after[0] != old[0], f"the daemon was not restarted: {old} -> {after}"
+          assert after[1] == old[1], f"the daemon died and systemd brought it back: {old} -> {after}"
+          assert ask_emacs("(daemonp)") == "t"
+          assert not [f for f in frames() if f.startswith("pgtk ")], frames()
+          # AND THE NEXT SESSION GETS A FRAME of the daemon that outlived it —
+          # under a name of its own: the daemon's `After=` keeps the ended
+          # `scroll` loaded until the manager goes, and a transient unit is
+          # never made over a loaded one.
+          session, sock = start_session(12)
+          open_frame(sock, "after-quit")
+          assert daemon()[0] == after[0], "the daemon that opened the frame is not the one that outlived the quit"
+          end_session(session)
     '';
 }

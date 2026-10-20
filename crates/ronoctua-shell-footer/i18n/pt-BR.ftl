@@ -91,6 +91,10 @@ cmd-keyboard-restore = Restaurar o teclado
 echo-keyboard-restored = Teclado restaurado
 echo-keyboard-failed = Não consegui restaurar o teclado: { $reason }
 
+## O fim da sessão
+
+echo-session-ending = Deixando seus programas salvarem antes de a sessão acabar — encerre de novo para sair já
+
 ## Comandos do compositor — §13, "toda ação do SO tem um comando"
 
 # São os comandos do compositor, cada um alcançável pelo nome no localizador.

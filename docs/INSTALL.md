@@ -136,10 +136,13 @@ Três atalhos ficam fora dela de propósito, para o caso de a máquina parar de 
 
 A distro não escreve configuração nenhuma do Emacs: o que ele lê é seu, em `~/.config/emacs`, que
 viaja nos pertences. O daemon sobe com a máquina, e o `e`, o `$EDITOR` e o gerenciador de arquivos
-abrem nele. Ele é o Emacs nativo do Wayland (pgtk), e um compositor que acaba sozinho — uma queda
-dele, ou o `Encerrar sessão`, que fecha só o compositor — leva o daemon junto: os buffers e o que
-foi editado desde o último auto-save se perdem, e o daemon volta vazio no mesmo segundo. Desligar e
-reiniciar não perdem nada: o daemon para antes do compositor, e salva.
+abrem nele. Ele é o Emacs nativo do Wayland (pgtk), e um compositor que cai leva o daemon junto: os
+buffers e o que foi editado desde o último auto-save se perdem, e o daemon volta vazio no mesmo
+segundo. Encerrar a sessão, desligar e reiniciar não perdem o que foi editado: o daemon termina antes
+do compositor, grava o auto-save de cada buffer modificado (`#arquivo#`, que o `M-x recover-file`
+devolve) e roda o `kill-emacs-hook`; os buffers abertos fecham. No `Encerrar sessão`, o rodapé
+reinicia o daemon e espera por ele até cinco segundos, dizendo isso no minibuffer (encerrar de novo
+sai na hora), e o daemon novo fica para a próxima sessão.
 
 Na sua configuração, duas linhas diminuem o que uma queda leva:
 

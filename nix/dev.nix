@@ -1271,6 +1271,14 @@ let
       # the session the loop runs in, never the nested one (`loopEmacsclient`
       # says why).
       export RONOCTUA_EMACSCLIENT="${loopEmacsclient}"
+      # AND NOTHING ENDS BEFORE THE LOOP'S SESSION. The installed footer hands
+      # its children the units it restarts before `s q q` leaves
+      # (`RONOCTUA_SESSION_END_RESTARTS`, `nix/modules/base.nix`), so a loop
+      # started from a terminal of the session inherits them — and the
+      # nested footer quitting would restart the person's own daemons,
+      # whose frames are in the real session (`loopEmacsclient`) and which
+      # the nested compositor's end never takes. Empty: it leaves at once.
+      export RONOCTUA_SESSION_END_RESTARTS=""
       # AND THE SCREENSHOT'S EDITOR, third of the same family: the notification
       # a capture raises offers to edit it, and `swappy` is out of the
       # compilation so `ronoctua.media.enable = false` can really remove it.

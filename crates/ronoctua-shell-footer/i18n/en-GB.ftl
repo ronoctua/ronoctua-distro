@@ -91,6 +91,10 @@ cmd-keyboard-restore = Restore the keyboard
 echo-keyboard-restored = Keyboard restored
 echo-keyboard-failed = Could not restore the keyboard: { $reason }
 
+## The session's end
+
+echo-session-ending = Letting your programs save before the session ends — quit again to leave now
+
 ## Compositor commands — §13, "every OS action has a command"
 
 # These are the compositor's commands, each reachable by name in the command

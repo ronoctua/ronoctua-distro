@@ -4853,7 +4853,7 @@ o daemon que o `Restart=always` traz de volta no mesmo segundo volta vazio — o
 salvos. A sessão seguinte abre quadro de novo. O `emacs-vm` segura as três linhas da primeira
 coluna, e um GTK que aprendesse a soltar o display o faria falhar. Pelo desenho da sessão, o
 compositor acaba sozinho, sem o gerente do usuário acabar, no `s q q` (o shell de login do tty fica)
-e numa queda dele.
+e numa queda dele; o `s q q` reinicia o daemon antes (abaixo), e só a queda o leva.
 
 **Decisão do dono (2026-10-20): o pgtk fica.** O quadro nativo vale o preço, e o Lucid, que com o
 `DISPLAY` exportado agora abriria quadro pela sessão, desenharia pelo XWayland. A distro continua
@@ -4876,6 +4876,38 @@ reading events from display: Broken pipe`) antes do auto-save do fim. A ordem n�
 boot: o compositor não tem trabalho no `default.target` (quem o sobe é o shell de login), e uma
 ordem sem trabalho ao lado não espera nada — o daemon sobe sem sessão, e o cliente de terminal
 funciona, como o `emacs-vm` cobra antes de tudo.
+
+**O `s q q` reinicia o daemon antes de o compositor sair** (2026-10-20). O compositor que sai pelo
+IPC não é parada de unidade nenhuma, então a ordem acima não vale ali; quem a faz é o rodapé. Antes
+de pedir o `exit`, o `session-quit` — o comando de todo jeito de sair: a leader, o acorde do
+compositor, o `LEADER :` e a lista do minibuffer — dá `systemctl --user try-restart --no-block` nas
+unidades que a distro lista (`ronoctua.session.restartBeforeQuit`, no `base.nix`, que o módulo dono
+de cada programa preenche dentro do próprio interruptor; o rodapé lê de
+`RONOCTUA_SESSION_END_RESTARTS` e não nomeia programa nenhum, `session_end.rs`). O Emacs recebe o
+SIGTERM com o display de pé, roda o `kill-emacs`, e o daemon que o systemd sobe no lugar não tem
+quadro: sobrevive ao fim do compositor e está lá na sessão seguinte. Os buffers fecham, como num
+desligar; a edição fica no auto-save, e o hook roda. O `try-restart`, e não um `stop` seguido de
+`start`, porque o trabalho do systemd leva a volta junto: se o rodapé morrer no meio, o daemon volta
+mesmo assim. E o rodapé espera os processos VELHOS acabarem, não o reinício: um `try-restart` que
+bloqueia só volta com o daemon novo pronto, e pronto é a configuração da pessoa carregada — segundos
+que ninguém saindo deve esperar. Ele lê o `MainPID` de cada unidade, segura um pidfd em cada um
+antes de pedir o reinício e espera os pidfds (evento, não relógio), numa thread, por no máximo cinco
+segundos (`session_end::DEADLINE`), com o mesmo prazo armado no laço — um `systemctl` preso no
+barramento seguraria a thread além dele. O minibuffer diz que espera; um segundo `session-quit` sai
+na hora; um `systemctl` que falha, ou o prazo vencido, sai mesmo assim e fica no log: a pessoa pediu
+para sair. Medido no `emacs-vm` com o rodapé de verdade, um quadro aberto e um buffer modificado: o
+daemon velho tinha acabado 61 e 54 ms (duas rodadas) depois de o rodapé pedir os PIDs, e o prazo de
+cinco segundos é oitenta vezes isso. O `emacs-vm` cobra que o `#arquivo#` tem a edição, que o
+`kill-emacs-hook` rodou, que o display não caiu antes, que o daemon novo sobreviveu ao compositor
+sem morrer (`NRestarts` parado) e que abre quadro na sessão seguinte; sem a lista (tirada do
+`emacs.nix` para provar), o `#arquivo#` ficou vazio, o hook não rodou, e o daemon morreu com o
+compositor e voltou pelo `Restart=always` (`NRestarts` 0 → 1). O laço de desenvolvimento exporta a
+variável vazia (`nix/dev.nix`): um `.#dev` aberto num terminal da sessão herda a lista do rodapé
+instalado, e o rodapé aninhado saindo reiniciaria o daemon da pessoa (o
+`dev-exports-before-it-starts` cobra a linha). O console de resgate (`restart-compositor`,
+`restart-session`) também acaba o compositor e continua sem reiniciar o daemon antes: ele existe
+para um compositor travado, e prometer ali um `kill-emacs` limpo seria prometer o que ninguém mediu;
+a linha de vida não acaba sessão nenhuma.
 
 **O laço de desenvolvimento** (`nix/dev.nix`) dá ao rodapé dele o `emacsclient` do pgtk preso à
 sessão em que o `.#dev` foi aberto (`loopEmacsclient`). O do build X11, que ele usava, só lê o

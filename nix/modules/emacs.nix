@@ -43,8 +43,8 @@ let
   # from the session, it found no display and no terminal, and opened nothing.
   #
   # WHAT IT COSTS: GTK keeps a display it drew on, and leaves with it — a
-  # compositor that ends on its own (`s q q`, a crash) takes the daemon with
-  # it, through GDK's `_exit(1)`, and the unit's `Restart=always` brings it
+  # compositor that ends on its own (a crash) takes the daemon with it,
+  # through GDK's `_exit(1)`, and the unit's `Restart=always` brings it
   # back empty: every buffer is gone, process buffers too (shells,
   # compilations, TRAMP connections), and nobody was asked about the unsaved
   # ones. And `_exit` skips `kill-emacs` whole: the edits since the last
@@ -52,8 +52,10 @@ let
   # savehist, recentf, bookmarks and desktop-save-mode write at the end is not
   # written). The Lucid daemon outlived the same end. A STOP of the person's
   # manager is not that: the unit is ordered so the daemon stops first, on a
-  # SIGTERM that runs `kill-emacs` (below). `tests/emacs-vm.nix` proves the
-  # frame native and holds the measure (`docs/ARCHITECTURE.md`).
+  # SIGTERM that runs `kill-emacs` (below). Nor is `s q q`: the footer
+  # restarts the daemon before it asks the compositor to leave (below). The
+  # buffers still go, but through `kill-emacs`. `tests/emacs-vm.nix` proves
+  # the frame native and holds the measure (`docs/ARCHITECTURE.md`).
   emacsPkg = pkgs.emacs30-pgtk;
 
   # WHERE A FIRST CONFIGURATION IS BORN — before the daemon starts, an EMPTY
@@ -188,13 +190,25 @@ in
       # compositor has no job there (the login shell starts it), and an order
       # with no job beside it waits for nothing — the daemon still comes up
       # at `default.target` with no session. The compositor ENDING on its own
-      # (`s q q`, a crash) is not a stop of this unit, and still takes the
-      # daemon (`emacsPkg`, above). `tests/emacs-vm.nix` stops the manager
-      # with a frame open and an edit unsaved, again and again.
+      # is not a stop of this unit: a crash still takes the daemon
+      # (`emacsPkg`, above), and `s q q` restarts it first (below).
+      # `tests/emacs-vm.nix` stops the manager with a frame open and an edit
+      # unsaved, again and again.
       systemd.user.services.emacs = {
         after = [ "scroll.service" ];
         serviceConfig.ExecStartPre = "-${pkgs.runtimeShell} -c 'source ${config.system.build.setEnvironment}; exec ${emacsHome}'";
       };
+
+      # AND IT ENDS BEFORE THE SESSION DOES (`ronoctua.session.restartBeforeQuit`,
+      # `base.nix`): `s q q` restarts the daemon, if it runs, before the
+      # footer asks the compositor to leave — the SIGTERM's `kill-emacs` runs
+      # (the hook, the auto-save) with the display still there, and the
+      # daemon that takes its place has no frame, so the compositor's end
+      # leaves it alone and it is there at the next login. The unit by the
+      # name its option gives it: spelt out, the name is the one a brain
+      # module watches (`brain-modules-are-sealed`). `tests/emacs-vm.nix`
+      # quits through the real footer with a frame open and an edit unsaved.
+      ronoctua.session.restartBeforeQuit = [ config.systemd.user.services.emacs.name ];
 
       services.emacs = {
         enable = true;
