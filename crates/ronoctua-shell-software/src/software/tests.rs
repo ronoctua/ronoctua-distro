@@ -2703,6 +2703,7 @@ fn declared_machine() -> Snapshot {
             group: "base".into(),
             on_this_machine: true,
             declined_here: false,
+            appimage: None,
         },
         name: name.into(),
     };

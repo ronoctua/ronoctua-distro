@@ -95,8 +95,10 @@ pub const ROOT_U2F_KEYS: &str = "/var/lib/ronoctua-security/u2f_keys";
 pub const ALLOWED_SIGNERS: &str = "home/.config/git/allowed_signers";
 
 /// The person's list of VS Code extensions, logical — inside the `vscode`
-/// target, so it travels (`ronoctua_vscode::LIST_IN_HOME`, under the home).
-pub const EXTENSIONS_LIST: &str = "home/.config/Code/User/ronoctua-extensions.json";
+/// target, so it travels (`ronoctua_vscode::LIST_IN_HOME`, under the home):
+/// the crate's own literal, never a second spelling of VS Code's folder
+/// (`one-vscode-boundary`).
+pub const EXTENSIONS_LIST: &str = concat!("home/", ronoctua_vscode::list_in_home!());
 
 /// What the last install of the person's extensions did, under the
 /// belongings' own folder ([`ExtensionsDone`]).

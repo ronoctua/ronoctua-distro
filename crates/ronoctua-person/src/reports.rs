@@ -5,12 +5,16 @@
 //!   the declines did, which person brain modules were included or wait for
 //!   an approval, and what root made of the person's signature (the key it
 //!   trusts, the last refusal, what it kept back — `local/signer.json`).
-//! - `distro-apps.json`: the distro's registry on this machine.
+//! - `distro-apps.json`: the distro's registry on this machine — and, for
+//!   each AppImage of its table, which pin built it: the distro's, or the
+//!   one the person follows past it (`crate::distro_pins`).
 //! - `declared-android.json`: the Android apps to reconcile, as store apks.
 
 use serde::{Deserialize, Serialize};
 
-use crate::declared::{AndroidImage, Source};
+use crate::declared::{AndroidImage, GithubReleases, Source};
+use crate::distro_pins::Fault;
+use crate::local::HeldWhy;
 use crate::local::SignatureRefused;
 use crate::tree::KeptBack;
 use crate::{Document, Refusal, Why, check};
@@ -233,6 +237,80 @@ pub struct DistroApps {
     pub format: u32,
     /// The registry.
     pub apps: Vec<DistroApp>,
+    /// What the registry made of the person's followed pins. A report of a
+    /// build before them has none, which reads as not following.
+    #[serde(default)]
+    pub followed: FollowedReport,
+}
+
+/// What the registry made of the person's followed pins
+/// (`software/distro-pins.json`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct FollowedReport {
+    /// Whether the person's options say to follow — as root's copy said
+    /// when the system was built.
+    pub on: bool,
+    /// The followed pins the registry refused and dropped — the distro's pin
+    /// built in their place.
+    pub refused: Vec<FollowedRefused>,
+}
+
+/// A followed pin the registry refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct FollowedRefused {
+    /// The id it named, as written (`unknown` when it named none).
+    pub id: String,
+    /// The rule that refused it.
+    pub fault: Fault,
+    /// The registry's sentence, English, for the journal.
+    pub detail: String,
+}
+
+/// Whose pin built a distro AppImage here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PinFrom {
+    /// The distro's, as its gate tested it.
+    Distro,
+    /// A pin the person follows, newer than the distro's and built by the
+    /// update's verification: in the person's own profile.
+    Followed,
+}
+
+/// A distro AppImage on this machine: its key, what it follows, and which
+/// pin built it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DistroAppImage {
+    /// The key it is wrapped as (`ronoctua-appimage-<key>`), and its
+    /// download's store name begins with.
+    pub key: String,
+    /// The repository whose releases it follows, `None` for a pin moved by
+    /// hand alone.
+    pub follows: Option<GithubReleases>,
+    /// Whose pin built it — a followed one lives in the person's own
+    /// profile, never in the system's packages.
+    pub pin: PinFrom,
+    /// The version built.
+    pub version: String,
+    /// The distro's pin: its version.
+    pub distro_version: String,
+    /// The distro's pin: its address — what a followed pin is not needed
+    /// past.
+    pub distro_url: String,
+    /// The person's followed pin the registry took (the option on, the pin
+    /// valid), whether newer or not; `None` without one.
+    pub followed_version: Option<String>,
+    /// Why the update's verification held the followed pin back — the last
+    /// verified one, or the distro's, built in its place.
+    pub held: Option<HeldWhy>,
+    /// The followed pin is newer and no verification built it yet: it waits
+    /// for the update's, and the last verified one, or the distro's, is
+    /// built meanwhile. A report of a build before it has none.
+    #[serde(default)]
+    pub waiting: bool,
 }
 
 /// One program of the distro's registry.
@@ -260,6 +338,10 @@ pub struct DistroApp {
     pub on_this_machine: bool,
     /// Whether the person declined it here.
     pub declined_here: bool,
+    /// For an AppImage of the distro's table: its key and its pins. A report
+    /// of a build before them has none.
+    #[serde(default)]
+    pub appimage: Option<DistroAppImage>,
 }
 
 impl Document for DistroApps {
@@ -293,6 +375,30 @@ impl Document for DistroApps {
                     format!("{at}/name"),
                     name.as_str(),
                 ));
+            }
+            if let Some(image) = &a.appimage {
+                let wrong = if !check::slug(&image.key) {
+                    Some(("key", image.key.as_str()))
+                } else if !check::token(&image.version) {
+                    Some(("version", image.version.as_str()))
+                } else if !check::token(&image.distro_version) {
+                    Some(("distro-version", image.distro_version.as_str()))
+                } else if !check::https_url(&image.distro_url) {
+                    Some(("distro-url", image.distro_url.as_str()))
+                } else {
+                    image
+                        .followed_version
+                        .as_deref()
+                        .filter(|v| !check::token(v))
+                        .map(|v| ("followed-version", v))
+                };
+                if let Some((field, found)) = wrong {
+                    return Err(Refusal::new(
+                        Why::Invalid,
+                        format!("{at}/appimage/{field}"),
+                        found,
+                    ));
+                }
             }
         }
         Ok(())
@@ -394,6 +500,37 @@ mod tests {
     const LIBREOFFICE: &str = r#"{"id": "libreoffice", "source": "nix",
         "desktop-ids": ["startcenter.desktop"], "essential": null, "group": "office",
         "on-this-machine": true, "declined-here": true"#;
+
+    /// FAILS IF: a report of a build before the followed pins stops reading,
+    /// or an AppImage's pins are not read whole — whose pin built it, both
+    /// versions, the hold — or a key that is not a slug reaches a screen.
+    #[test]
+    fn an_appimage_says_whose_pin_built_it() {
+        let older: DistroApps =
+            crate::parse(registry(&format!("{LIBREOFFICE}}}")).as_bytes()).unwrap();
+        assert_eq!(older.followed, FollowedReport::default());
+        assert_eq!(older.apps[0].appimage, None);
+        let golden: DistroApps =
+            crate::parse(include_str!("../fixtures/good/distro-apps.json").as_bytes()).unwrap();
+        let cad = golden
+            .apps
+            .iter()
+            .find_map(|a| a.appimage.as_ref())
+            .expect("the golden report has an AppImage");
+        assert_eq!(cad.pin, PinFrom::Followed);
+        assert_eq!(
+            (cad.version.as_str(), cad.distro_version.as_str()),
+            ("0.9.0", "0.8.0")
+        );
+        assert!(golden.followed.on);
+        assert_eq!(golden.followed.refused[0].fault, Fault::Asset);
+        let mut bad = golden;
+        if let Some(a) = bad.apps.iter_mut().find_map(|a| a.appimage.as_mut()) {
+            a.key = "Bad Key".to_owned();
+        }
+        let refused = crate::parse::<DistroApps>(crate::to_json(&bad).as_bytes()).unwrap_err();
+        assert_eq!(refused.at, "/apps/2/appimage/key");
+    }
 
     /// FAILS IF: the registry's name is not read, a report of a build before
     /// the name stops reading (its programs would lose their page), or a

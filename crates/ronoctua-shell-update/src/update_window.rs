@@ -1006,6 +1006,9 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // THE PERSON'S BINARY CACHE, a page of this view (`crate::binary_cache`):
     // `c` turns the view to it and back.
     ("c", crate::binary_cache::OPEN),
+    // THE DISTRO'S APPS THAT FOLLOW THEIR RELEASES, another page
+    // (`crate::follow`): `f` turns the view to it and back.
+    ("f", crate::follow::OPEN),
 ];
 
 /// The keys the binary cache's page teaches, in both doors — every one a
@@ -1016,6 +1019,17 @@ pub const OF_THE_PAGE: &[(&str, &str)] = &[
     ("<up>", "binary-cache-up"),
     ("RET", "binary-cache-enter"),
     ("c", "binary-cache-steps"),
+];
+
+/// The keys the page of the apps that follow their releases teaches, in
+/// both doors — every one a click, pressed by its notation through
+/// [`press_of_key`]: the rows, the switch, and `f` back to the steps (the
+/// way back, `Esc`, too).
+pub const OF_THE_FOLLOW: &[(&str, &str)] = &[
+    ("<down>", "distro-follow-down"),
+    ("<up>", "distro-follow-up"),
+    ("RET", "distro-follow-enter"),
+    ("f", "distro-follow-steps"),
 ];
 
 /// The command that starts the whole sequence now — the module's own id, and
@@ -1085,6 +1099,12 @@ pub const COMMANDS: &[ronoctua_cmd::Command] = &[
         id: crate::binary_cache::NETRC,
         label: key::CMD_BINARY_CACHE_NETRC,
     },
+    // THE DISTRO'S APPS THAT FOLLOW THEIR RELEASES, the view's other page
+    // (`crate::follow`): its door (`LEADER s u f`).
+    ronoctua_cmd::Command {
+        id: crate::follow::OPEN,
+        label: key::CMD_DISTRO_FOLLOW_OPEN,
+    },
 ];
 
 /// `LEADER s u` — THE UPDATE, a group under SYSTEM, beside the memory panel
@@ -1098,6 +1118,8 @@ pub const BINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("s u n", START, None),
     // THE PERSON'S BINARY CACHE, straight to the view's page.
     ("s u c", crate::binary_cache::OPEN, None),
+    // THE DISTRO'S APPS THAT FOLLOW THEIR RELEASES, straight to theirs.
+    ("s u f", crate::follow::OPEN, None),
 ];
 
 /// What this crate adds to the leader's keymap ([`crate::bindings::Contribution`]):
@@ -1136,6 +1158,9 @@ pub enum Order {
     Watch,
     /// One of the binary cache's commands (`crate::binary_cache`), by its id.
     Cache(&'static str),
+    /// The page of the distro's apps that follow their releases
+    /// (`crate::follow`).
+    Follow,
 }
 
 /// Which of the update's commands an id is — the one question the footer asks
@@ -1151,6 +1176,7 @@ pub fn order_of(id: &str) -> Option<Order> {
         crate::binary_cache::KEY => Some(Order::Cache(crate::binary_cache::KEY)),
         crate::binary_cache::TOKEN => Some(Order::Cache(crate::binary_cache::TOKEN)),
         crate::binary_cache::NETRC => Some(Order::Cache(crate::binary_cache::NETRC)),
+        crate::follow::OPEN => Some(Order::Follow),
         _ => None,
     }
 }
@@ -1181,6 +1207,9 @@ pub enum Press {
     Escape,
     /// The person's binary cache: the page, or back to the steps.
     Cache,
+    /// The distro's apps that follow their releases: the page, or back to
+    /// the steps.
+    Follow,
 }
 
 /// A key, as the view's press — the one reader both doors call.
@@ -1219,6 +1248,7 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
         ABORT => Press::Abort,
         PROCEED => Press::Proceed,
         crate::binary_cache::OPEN => Press::Cache,
+        crate::follow::OPEN => Press::Follow,
         _ => return None,
     })
 }
@@ -1266,6 +1296,9 @@ pub enum Errand {
     /// What the binary cache's page asks of the door: a question on its
     /// line, a sentence, a change (`crate::binary_cache::apply`).
     Cache(crate::binary_cache::Errand),
+    /// What the page of the apps that follow their releases asks of the
+    /// door: a sentence, a turn of the switch (`crate::follow::apply`).
+    Follow(crate::follow::Errand),
     /// The view closes.
     Close,
 }
@@ -1282,11 +1315,12 @@ pub enum Target {
     /// The belongings, whose conflicts a line counts: one click opens them,
     /// as a key the line teaches does.
     Belongings,
-    /// A row of the binary cache's page, by its index: the first click puts
+    /// A row of the page the view is turned to (the binary cache's, or the
+    /// apps' that follow their releases), by its index: the first click puts
     /// the cursor there, the second does what `RET` does.
-    Cache(usize),
-    /// An answer of the page's grave question — `true` is yes.
-    CacheAnswer(bool),
+    Page(usize),
+    /// An answer of the binary cache page's grave question — `true` is yes.
+    PageAnswer(bool),
 }
 
 /// What a question of the view is about: what a run asked for BY HAND would
@@ -1353,6 +1387,22 @@ pub struct View {
     charge: Option<module::Charge>,
     /// The person's binary cache's page, while the view is turned to it.
     cache: Option<CachePage>,
+    /// The page of the distro's apps that follow their releases, while the
+    /// view is turned to it — never both pages at once.
+    follow: Option<FollowPage>,
+}
+
+/// The page of the apps that follow their releases as the view holds it:
+/// the page, what it read, and where it reads again (none for a test's or a
+/// photograph's page, which reads nothing of the machine).
+#[derive(Debug, Clone)]
+pub struct FollowPage {
+    /// The page's cursor.
+    pub page: crate::follow::Page,
+    /// What it draws.
+    pub readings: crate::follow::Readings,
+    /// Where it reads, and when each file last moved.
+    places: Option<(crate::follow::Places, Vec<Option<std::time::SystemTime>>)>,
 }
 
 /// The binary cache's page as the view holds it: the page, what it read,
@@ -1408,6 +1458,7 @@ impl View {
                 percent: None,
             }),
             cache: None,
+            follow: None,
         }
     }
 
@@ -1452,6 +1503,7 @@ impl View {
         if self.cache.is_some() {
             return;
         }
+        self.follow = None;
         let places = crate::binary_cache::Places::here();
         let readings = crate::binary_cache::Readings::read(&places);
         let stamp = places.stamp();
@@ -1467,6 +1519,7 @@ impl View {
     /// photograph's: nothing of the machine is read, and its dates are UTC.
     #[must_use]
     pub fn with_cache(mut self, readings: crate::binary_cache::Readings) -> Self {
+        self.follow = None;
         self.cache = Some(CachePage {
             page: crate::binary_cache::Page::default(),
             readings,
@@ -1492,15 +1545,147 @@ impl View {
             .is_some_and(|c| c.page.takes(n, &c.readings))
     }
 
-    /// The keys this view teaches now: the steps', or the binary cache's
-    /// page's — what both doors' hints draw.
+    /// The keys this view teaches now: the steps', or the page's it is
+    /// turned to — what both doors' hints draw.
     #[must_use]
     pub const fn taught(&self) -> &'static [(&'static str, &'static str)] {
         if self.cache.is_some() {
             OF_THE_PAGE
+        } else if self.follow.is_some() {
+            OF_THE_FOLLOW
         } else {
             OF_THE_VIEW
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // THE PAGE OF THE APPS THAT FOLLOW THEIR RELEASES (`crate::follow`)
+    // -----------------------------------------------------------------------
+
+    /// Turns the view to the page of the apps that follow their releases,
+    /// reading what this person and this machine say — or, when it is open,
+    /// back to the steps.
+    pub fn toggle_follow(&mut self) -> Errand {
+        if self.follow.take().is_none() {
+            self.open_follow();
+        }
+        Errand::Moved
+    }
+
+    /// Opens the page over what this person and this machine say (kept open
+    /// when it is).
+    pub fn open_follow(&mut self) {
+        if self.follow.is_some() {
+            return;
+        }
+        self.cache = None;
+        let places = crate::follow::Places::here();
+        let readings = crate::follow::Readings::read(&places);
+        let stamp = places.stamp();
+        self.follow = Some(FollowPage {
+            page: crate::follow::Page::default(),
+            readings,
+            places: Some((places, stamp)),
+        });
+    }
+
+    /// The same view on the page, over these readings — a test's, a
+    /// photograph's: nothing of the machine is read.
+    #[must_use]
+    pub fn with_follow(mut self, readings: crate::follow::Readings) -> Self {
+        self.cache = None;
+        self.follow = Some(FollowPage {
+            page: crate::follow::Page::default(),
+            readings,
+            places: None,
+        });
+        self
+    }
+
+    /// The page, while the view is turned to it.
+    #[must_use]
+    pub const fn follow_page(&self) -> Option<&FollowPage> {
+        self.follow.as_ref()
+    }
+
+    /// Where the page reads — `None` for a test's or a photograph's.
+    #[must_use]
+    pub fn follow_places(&self) -> Option<&crate::follow::Places> {
+        self.follow
+            .as_ref()
+            .and_then(|f| f.places.as_ref())
+            .map(|(p, _)| p)
+    }
+
+    /// Reads the page again, now — after a change this door made.
+    pub fn follow_reread(&mut self) {
+        if let Some(f) = self.follow.as_mut()
+            && let Some((places, stamp)) = f.places.as_mut()
+        {
+            f.readings = crate::follow::Readings::read(places);
+            *stamp = places.stamp();
+            f.page.settle(&f.readings);
+        }
+    }
+
+    /// What the page asks of the door, as the view's errand.
+    fn follow_errand(&mut self, e: crate::follow::Errand) -> Errand {
+        use crate::follow::Errand as Page;
+        match e {
+            Page::Nothing => Errand::Nothing,
+            Page::Moved => Errand::Moved,
+            Page::Close => {
+                self.follow = None;
+                Errand::Moved
+            }
+            other => Errand::Follow(other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // EITHER PAGE — what both doors draw and click by
+    // -----------------------------------------------------------------------
+
+    /// Whether the view is turned to a page.
+    #[must_use]
+    pub const fn page_open(&self) -> bool {
+        self.cache.is_some() || self.follow.is_some()
+    }
+
+    /// The row under the open page's cursor.
+    #[must_use]
+    pub fn page_cursor(&self) -> Option<usize> {
+        self.cache
+            .as_ref()
+            .map(|c| c.page.cursor())
+            .or_else(|| self.follow.as_ref().map(|f| f.page.cursor()))
+    }
+
+    /// Whether a click takes row `n` of the open page — the page's one
+    /// answer, which both doors light and click by.
+    #[must_use]
+    pub fn page_takes(&self, n: usize) -> bool {
+        self.cache_takes(n)
+            || self
+                .follow
+                .as_ref()
+                .is_some_and(|f| f.page.takes(n, &f.readings))
+    }
+
+    /// The open page's lines under the head, placed from `left` in `room`.
+    #[must_use]
+    pub fn page_lines(
+        &self,
+        left: u16,
+        room: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<crate::binary_cache::PageLine> {
+        if self.cache.is_some() {
+            return self.cache_lines(left, room, texts);
+        }
+        self.follow
+            .as_ref()
+            .map_or_else(Vec::new, |f| f.page.lines(&f.readings, left, room, texts))
     }
 
     /// Where the page reads — `None` for a test's or a photograph's.
@@ -1681,8 +1866,20 @@ impl View {
     /// then; `true` when something did.
     pub fn reread_if_moved(&mut self) -> bool {
         // THE BINARY CACHE'S PAGE reads its own files, the same way: only
-        // when one moved.
+        // when one moved — and so does the page of the apps that follow
+        // their releases.
         let mut moved = false;
+        if let Some(f) = self.follow.as_mut()
+            && let Some((places, stamp)) = f.places.as_mut()
+        {
+            let now = places.stamp();
+            if now != *stamp {
+                *stamp = now;
+                f.readings = crate::follow::Readings::read(places);
+                f.page.settle(&f.readings);
+                moved = true;
+            }
+        }
         if let Some(c) = self.cache.as_mut()
             && let Some((places, stamp)) = c.places.as_mut()
         {
@@ -1719,7 +1916,28 @@ impl View {
         // view is turned to it, and `c` turns it back; the other keys stay
         // the update's.
         if press == Press::Cache {
+            self.follow = None;
             return self.toggle_cache();
+        }
+        if press == Press::Follow {
+            return self.toggle_follow();
+        }
+        // THE PAGE OF THE APPS THAT FOLLOW THEIR RELEASES takes the arrows,
+        // `RET` and `Esc` while the view is turned to it, and `f` turns it
+        // back.
+        if let Some(f) = self.follow.as_mut() {
+            use crate::follow::Press as Page;
+            let page = match press {
+                Press::Up => Some(Page::Up),
+                Press::Down => Some(Page::Down),
+                Press::Enter => Some(Page::Enter),
+                Press::Escape => Some(Page::Escape),
+                _ => None,
+            };
+            if let Some(p) = page {
+                let e = f.page.press(p, &f.readings);
+                return self.follow_errand(e);
+            }
         }
         if let Some(c) = self.cache.as_mut() {
             use crate::binary_cache::Press as Page;
@@ -1777,6 +1995,7 @@ impl View {
             Press::Enter => Errand::Nothing,
             Press::Escape => Errand::Close,
             Press::Cache => self.toggle_cache(),
+            Press::Follow => self.toggle_follow(),
         }
     }
 
@@ -1798,7 +2017,17 @@ impl View {
                 .page
                 .top_lines(&c.readings, room, texts)
                 .into_iter()
-                .map(|h| line(h.text, h.color, h.answer.map(Target::CacheAnswer)))
+                .map(|h| line(h.text, h.color, h.answer.map(Target::PageAnswer)))
+                .collect();
+        }
+        // THE PAGE OF THE APPS THAT FOLLOW THEIR RELEASES: what the row
+        // under its cursor is.
+        if let Some(f) = &self.follow {
+            return f
+                .page
+                .top_lines(&f.readings, room, texts)
+                .into_iter()
+                .map(|h| line(h.text, h.color, None))
                 .collect();
         }
         let mut out = Vec::new();
@@ -1882,8 +2111,8 @@ impl View {
     #[must_use]
     pub fn region_len(&self, columns: u16, texts: &ronoctua_i18n::Texts) -> usize {
         let (left, room) = crate::chrome::extent(columns);
-        if self.cache.is_some() {
-            return self.top_lines(room, texts).len() + self.cache_lines(left, room, texts).len();
+        if self.page_open() {
+            return self.top_lines(room, texts).len() + self.page_lines(left, room, texts).len();
         }
         self.top_lines(room, texts).len() + self.steps.len() + 1 + self.scrollback.amount().max(1)
     }
@@ -1895,21 +2124,21 @@ impl View {
     pub fn region_cursor(&self, columns: u16, texts: &ronoctua_i18n::Texts) -> usize {
         let (_, room) = crate::chrome::extent(columns);
         let head = self.top_lines(room, texts);
-        if let Some(c) = &self.cache {
-            // THE PAGE'S CURSOR, under its heading — or the answer of its
-            // grave question the cursor is on.
-            if let Some(q) = c.page.confirm()
+        if let Some(cursor) = self.page_cursor() {
+            // THE PAGE'S CURSOR, under its heading — or the answer of the
+            // binary cache's grave question the cursor is on.
+            if let Some(q) = self.cache.as_ref().and_then(|c| c.page.confirm())
                 && let Some(n) = head
                     .iter()
-                    .position(|l| l.target == Some(Target::CacheAnswer(q.yes)))
+                    .position(|l| l.target == Some(Target::PageAnswer(q.yes)))
             {
                 return n;
             }
             let (left, room) = crate::chrome::extent(columns);
             let below = self
-                .cache_lines(left, room, texts)
+                .page_lines(left, room, texts)
                 .iter()
-                .position(|l| l.row == Some(c.page.cursor()))
+                .position(|l| l.row == Some(cursor))
                 .unwrap_or(0);
             return head.len() + below;
         }
@@ -1940,9 +2169,10 @@ impl View {
     ) -> Vec<RegionRow> {
         let (left, room) = crate::chrome::extent(columns);
         let head = self.top_lines(room, texts);
-        // THE BINARY CACHE'S PAGE: its head, then its heading and its rows.
-        if self.cache.is_some() {
-            let page = self.cache_lines(left, room, texts);
+        // THE PAGE THE VIEW IS TURNED TO: its head, then its heading and its
+        // rows.
+        if self.page_open() {
+            let page = self.page_lines(left, room, texts);
             let rows = head
                 .iter()
                 .map(|said| RegionRow {
@@ -1959,8 +2189,8 @@ impl View {
                 .chain(page.into_iter().map(|l| RegionRow {
                     fields: l.fields,
                     // A ROW TAKES THE CLICK ONLY WHERE THE PAGE SAYS SO —
-                    // never under the grave question (`View::cache_takes`).
-                    target: l.row.filter(|n| self.cache_takes(*n)).map(Target::Cache),
+                    // never under the grave question (`View::page_takes`).
+                    target: l.row.filter(|n| self.page_takes(*n)).map(Target::Page),
                 }));
             return rows.skip(skip).take(take).collect();
         }
@@ -2062,14 +2292,18 @@ impl View {
                 None => Errand::Nothing,
             },
             Target::Belongings => Errand::OpenBelongings,
-            Target::Cache(n) => match self.cache.as_mut() {
-                Some(c) => {
+            Target::Page(n) => match (self.cache.as_mut(), self.follow.as_mut()) {
+                (Some(c), _) => {
                     let e = c.page.clicked(n, &c.readings);
                     self.page_errand(e)
                 }
-                None => Errand::Nothing,
+                (None, Some(f)) => {
+                    let e = f.page.clicked(n, &f.readings);
+                    self.follow_errand(e)
+                }
+                (None, None) => Errand::Nothing,
             },
-            Target::CacheAnswer(yes) => match self.cache.as_mut() {
+            Target::PageAnswer(yes) => match self.cache.as_mut() {
                 Some(c) => {
                     let e = c.page.answer_clicked(yes);
                     self.page_errand(e)
@@ -2373,10 +2607,10 @@ pub struct UpdateWindow {
     page_offset: usize,
 }
 
-/// Where the binary cache page's rows are counted from among the rows the
-/// seats light: far past any step and any head line, so a row of the page
-/// and a step are never the same number.
-const CACHE_ROWS: usize = 1 << 20;
+/// Where a page's rows are counted from among the rows the seats light: far
+/// past any step and any head line, so a row of the page and a step are
+/// never the same number.
+const PAGE_ROWS: usize = 1 << 20;
 
 /// The window a photograph takes (`ronoctua-shell photograph --door update`).
 ///
@@ -2451,9 +2685,13 @@ usage: ronoctua-shell photograph --door update-scene --scene <file> [options] [s
                              \"last\": {\"at\": \"<stamp>\", \"cache\": \"someone\",
                                \"visibility\": \"private\", \"applied-at\": null,
                                \"outcome\": \"pushed\", \"paths\": 3, \"bytes\": 9}}}
+                           \"follow\": {\"copy\": \"on\" | \"off\" | \"unreadable\" | \"newer\",
+                             \"let\": true, \"registry\": {…distro-apps.json…},
+                             \"applied\": {…person-applied.json…}}}
                         `metered`: the brain holds the run a `u` asks for,
                         for a metered way out; `cache`: the view opens on the
-                        binary cache's page, over these readings
+                        binary cache's page, over these readings; `follow`:
+                        on the page of the apps that follow their releases
   --out <file>          where to write                 (default: update.png)
   --columns <n>         the window's width, in cells   (default: 90)
   --lines <n>           the height, in lines           (default: 30)
@@ -2479,6 +2717,47 @@ Steps — walked in the order they appear:
         metered: bool,
         keys: String,
         cache: Option<CacheScene>,
+        follow: Option<FollowScene>,
+    }
+
+    /// The page of the apps that follow their releases, as the scene says
+    /// it: the person's copy, their consent, and the registry's report as
+    /// the machine would have it.
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct FollowScene {
+        copy: Option<String>,
+        #[serde(rename = "let")]
+        let_in: bool,
+        registry: Option<ronoctua_person::reports::DistroApps>,
+        applied: Option<ronoctua_person::reports::PersonApplied>,
+    }
+
+    impl FollowScene {
+        fn readings(self) -> Result<crate::follow::Readings> {
+            use crate::follow::Choice;
+            let copy = match self.copy.as_deref() {
+                None | Some("off") => Choice::Off,
+                Some("on") => Choice::On,
+                Some("unreadable") => Choice::Unreadable,
+                Some("newer") => Choice::Newer,
+                Some(other) => bail!("`copy` is on, off, unreadable or newer, not `{other}`"),
+            };
+            let (machine, apps) = self
+                .registry
+                .as_ref()
+                .map_or((None, Vec::new()), crate::follow::of_registry);
+            Ok(crate::follow::Readings {
+                copy,
+                let_in: self.let_in,
+                machine,
+                apps,
+                taken: self
+                    .applied
+                    .as_ref()
+                    .map_or(crate::follow::Taken::Yes, crate::follow::Taken::of),
+            })
+        }
     }
 
     /// The binary cache's page, as the scene says it.
@@ -2674,9 +2953,13 @@ Steps — walked in the order they appear:
     /// The window the scene describes.
     fn window_of(mut scene: Scene) -> Result<UpdateWindow> {
         let cache = scene.cache.take().map(CacheScene::readings).transpose()?;
+        let follow = scene.follow.take().map(FollowScene::readings).transpose()?;
         let mut w = window_of_records(scene);
         if let Some(readings) = cache {
             w.open.view = w.open.view.clone().with_cache(readings);
+        }
+        if let Some(readings) = follow {
+            w.open.view = w.open.view.clone().with_follow(readings);
         }
         Ok(w)
     }
@@ -2971,7 +3254,7 @@ impl UpdateWindow {
     /// Which step row a pointer position lands on, if any.
     fn at(&self, ui: &Ui, x: f64, y: f64) -> Option<usize> {
         let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
-        if line_px <= 0.0 || x < 0.0 || y < 0.0 || self.open.view.cache_page().is_some() {
+        if line_px <= 0.0 || x < 0.0 || y < 0.0 || self.open.view.page_open() {
             return None;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -3004,8 +3287,8 @@ impl UpdateWindow {
         if let Some(row) = self.at(ui, x, y) {
             return Some(Target::Step(row));
         }
-        if let Some(row) = self.cache_row_at(ui, x, y) {
-            return Some(Target::Cache(row));
+        if let Some(row) = self.page_row_at(ui, x, y) {
+            return Some(Target::Page(row));
         }
         let n = self.head_at(ui, y)?;
         self.open
@@ -3021,7 +3304,7 @@ impl UpdateWindow {
     fn lit_row_of(&self, ui: &Ui, target: Target) -> Option<usize> {
         match target {
             Target::Step(n) => Some(n),
-            Target::Cache(n) => Some(CACHE_ROWS + n),
+            Target::Page(n) => Some(PAGE_ROWS + n),
             other => self
                 .open
                 .view
@@ -3032,10 +3315,13 @@ impl UpdateWindow {
         }
     }
 
-    /// Which row of the binary cache's page a pointer position lands on —
-    /// the lines the painting draws under the head, from the same function.
-    fn cache_row_at(&self, ui: &Ui, x: f64, y: f64) -> Option<usize> {
-        self.open.view.cache_page()?;
+    /// Which row of the page the view is turned to a pointer position lands
+    /// on — the lines the painting draws under the head, from the same
+    /// function.
+    fn page_row_at(&self, ui: &Ui, x: f64, y: f64) -> Option<usize> {
+        if !self.open.view.page_open() {
+            return None;
+        }
         let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
         if line_px <= 0.0 || x < 0.0 || y < 0.0 {
             return None;
@@ -3046,10 +3332,10 @@ impl UpdateWindow {
         let n = usize::from(line.checked_sub(first)?) + self.page_offset;
         self.open
             .view
-            .cache_lines(0, ui.columns, &ui.texts)
+            .page_lines(0, ui.columns, &ui.texts)
             .get(n)
             .and_then(|l| l.row)
-            .filter(|row| self.open.view.cache_takes(*row))
+            .filter(|row| self.open.view.page_takes(*row))
     }
 
     /// The first line of the page that keeps its cursor in `room` lines.
@@ -3246,28 +3532,28 @@ impl Content for UpdateWindow {
                 .push(span(head.text.clone(), margin, y, head.color));
         }
 
-        // THE BINARY CACHE'S PAGE, in place of the steps and the output: its
-        // heading and its rows under the head, the cursor a colour and the
-        // row under the pointer lit — from the lines the pointer reads too
-        // (`cache_row_at`).
-        if let Some(page) = self.open.view.cache_page() {
+        // THE PAGE THE VIEW IS TURNED TO, in place of the steps and the
+        // output: its heading and its rows under the head, the cursor a
+        // colour and the row under the pointer lit — from the lines the
+        // pointer reads too (`page_row_at`).
+        if let Some(cursor) = self.open.view.page_cursor() {
             let below = first + self.register;
-            let lines = self.open.view.cache_lines(0, columns, &texts);
+            let lines = self.open.view.page_lines(0, columns, &texts);
             // A WINDOW TOO SHORT FOR THE PAGE keeps its cursor in sight: the
             // page follows the cursor, which the arrows and the wheel walk.
             let room = usize::from(ui.lines.saturating_sub(below));
-            self.page_offset = Self::page_offset_for(&lines, page.page.cursor(), room);
+            self.page_offset = Self::page_offset_for(&lines, cursor, room);
             for (n, l) in lines.into_iter().skip(self.page_offset).enumerate() {
                 let y = below + u16::try_from(n).unwrap_or(u16::MAX);
                 if y >= ui.lines {
                     break;
                 }
                 if let Some(row) = l.row
-                    && self.open.view.cache_takes(row)
+                    && self.open.view.page_takes(row)
                     && let Some((color, _)) = canvas
                         .lit
                         .iter()
-                        .find(|(_, under)| *under == Some(CACHE_ROWS + row))
+                        .find(|(_, under)| *under == Some(PAGE_ROWS + row))
                 {
                     canvas.under.push(ronoctua_render::quad::Quad {
                         x: 0.0,
@@ -3525,9 +3811,9 @@ impl UpdateWindow {
             return;
         }
         if by != 0 {
-            // ON THE BINARY CACHE'S PAGE the wheel walks its rows, once a
-            // notch, as the arrows do — and the page follows its cursor.
-            if self.open.view.cache_page().is_some() {
+            // ON A PAGE the wheel walks its rows, once a notch, as the
+            // arrows do — and the page follows its cursor.
+            if self.open.view.page_open() {
                 let press = if by > 0 { Press::Down } else { Press::Up };
                 let errand = self.open.view.key(press);
                 self.apply(ui, errand);
@@ -3905,9 +4191,11 @@ mod tests {
                 .register(*c)
                 .expect("a command the registry refuses");
         }
-        // THE UPDATE'S THREE, and the binary cache's five (its page's door,
-        // its questions and root's netrc — whose password the sudo bar asks).
-        assert_eq!(COMMANDS.len(), 8);
+        // THE UPDATE'S THREE, the binary cache's five (its page's door, its
+        // questions and root's netrc — whose password the sudo bar asks),
+        // and the door of the page of the apps that follow their releases.
+        assert_eq!(COMMANDS.len(), 9);
+        assert_eq!(order_of(crate::follow::OPEN), Some(Order::Follow));
         for c in COMMANDS {
             assert!(order_of(c.id).is_some(), "`{}` is not dispatched", c.id);
         }
@@ -4821,7 +5109,7 @@ mod tests {
                 .filter(|line| {
                     matches!(
                         w.target_at(&ui, 40.0, (f64::from(*line) + 0.5) * line_px),
-                        Some(Target::Cache(_))
+                        Some(Target::Page(_))
                     )
                 })
                 .count();
@@ -4834,5 +5122,82 @@ mod tests {
                 assert!(taken >= 3, "{taken} rows of the page take a click");
             }
         }
+    }
+
+    /// The follow page over two AppImages, the person following, GitHub
+    /// let, the machine built following them.
+    fn on_the_follow_page() -> crate::follow::Readings {
+        crate::follow::Readings {
+            copy: crate::follow::Choice::On,
+            let_in: true,
+            machine: Some(true),
+            apps: ["CADCraft", "FigCraft"]
+                .into_iter()
+                .map(|name| crate::follow::App {
+                    name: name.to_owned(),
+                    here: true,
+                    pin: ronoctua_person::reports::PinFrom::Followed,
+                    version: "0.9.0".to_owned(),
+                    followed: Some("0.9.0".to_owned()),
+                    held: None,
+                    waiting: false,
+                    refused: None,
+                })
+                .collect(),
+            taken: crate::follow::Taken::Yes,
+        }
+    }
+
+    /// FAILS IF: `f` does not turn the view to the page of the apps that
+    /// follow their releases and back, the page does not teach its own keys,
+    /// its rows are not lit and clicked where they are drawn — in the
+    /// footer's list and in the window alike — or the second click on the
+    /// switch does not turn it.
+    #[test]
+    fn the_follow_page_is_turned_to_and_clicked_where_it_is_drawn() {
+        let texts = texts();
+        let mut view = a_view();
+        assert_eq!(view.key(Press::Follow), Errand::Moved);
+        assert!(view.follow_page().is_some() && view.page_open());
+        assert_eq!(view.taught(), OF_THE_FOLLOW);
+        assert_eq!(view.key(Press::Follow), Errand::Moved);
+        assert!(!view.page_open(), "`f` turns it back");
+        let mut view = a_view().with_follow(on_the_follow_page());
+        // THE FOOTER'S LIST: the head, the heading and a row a line, each
+        // row taking the click.
+        let rows = view.region_rows(0, 100, 100, &texts);
+        let taking: Vec<Target> = rows.iter().filter_map(|r| r.target).collect();
+        assert_eq!(
+            taking,
+            (0..5).map(Target::Page).collect::<Vec<_>>(),
+            "the switch, the hosts, the machine and two apps"
+        );
+        let words: String = rows
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        assert!(
+            words.contains("CADCraft") && words.contains("api.github.com"),
+            "{words}"
+        );
+        assert_eq!(
+            view.clicked(Target::Page(0)),
+            Errand::Follow(crate::follow::Errand::Turn(false))
+        );
+        // THE WINDOW: a row is taken where it is drawn.
+        let (mut w, mut ui) = a_window();
+        ui.lines = 40;
+        w.open.view = w.open.view.clone().with_follow(on_the_follow_page());
+        w.measure(&ui);
+        let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let taken: Vec<Target> = (0..ui.lines)
+            .filter_map(|line| w.target_at(&ui, 40.0, (f64::from(line) + 0.5) * line_px))
+            .collect();
+        assert_eq!(taken, (0..5).map(Target::Page).collect::<Vec<_>>());
+        typed(&mut w, &mut ui, "f");
+        assert!(
+            !w.open.view.page_open(),
+            "the page's own `f` goes back to the steps"
+        );
     }
 }

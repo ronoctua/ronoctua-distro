@@ -2578,6 +2578,11 @@ let
   # What divergence looks like: a machine installed by pressing Enter through
   # the questions and a machine built by `nix build .#noctua` type differently.
   # Nothing fails; the person just finds out the day they need an accent.
+  #
+  # AND `CAPS_TOGGLE`, what the system adds whatever the answer: the Compose
+  # question's help names the keys of the default and of this option
+  # (`COMPOSE_HELP_KEYS`), so the help says what the system does only while the
+  # two agree.
   installer-defaults-match-the-keyboard =
     mkCheck "installer-defaults-match-the-keyboard" [ pkgs.gnugrep ]
       ''
@@ -2594,6 +2599,7 @@ let
         }
         agree DEFAULT_LAYOUT "${keyboard.layout}"
         agree DEFAULT_COMPOSE "${keyboard.compose}"
+        agree CAPS_TOGGLE "${lib.concatStringsSep "," keyboard.always}"
 
         [ "$failed" = 0 ] || exit 1
         echo "OK: the installer and nix/keyboard-xkb.nix agree"
@@ -9976,6 +9982,14 @@ let
   # It is about VALUES and not keys: `cmd-notif-open` may say what a command
   # does, and a value may name a key by NOTATION (`RET`, `TAB`) — what it may
   # not do is spell out a leader sequence, which is what goes stale.
+  #
+  # AND THE INSTALLER'S KEYS, which it names in a console's words (`Enter`,
+  # `Esc`, `Ctrl+C`, `Space`, `↑↓`): none of them in a value of its fragment.
+  # The keys lines said them as text, and the same rot waited there — plus
+  # one of its own: a hint's click is read from the code's name, so a
+  # language spelling a key its own way would draw a hint no click reaches.
+  # The names are the code's (`KEY_*` beside `KEYS` in its `tui.rs`), handed
+  # to every sentence that names a key (`tui::with_keys`).
   keys-are-never-text = mkCheck "keys-are-never-text" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -10005,6 +10019,133 @@ let
                 wrong.append(f"{language}: `{key}` spells a leader key: {value[:60]}")
     floor(seen, 1000, "values read out of the catalogue")
 
+    # THE INSTALLER'S KEY NAMES.
+    # PARSED: the names its code hands to sentences — the `KEY_*` constants of
+    # its `tui.rs` (the keys lines) and `model.rs` (the Compose help) — and the
+    # arguments it hands them by; with the names of the other keys a translator
+    # could reach for, below.
+    # FILE-WIDE: every message AND TERM of the installer's fragment, in every
+    # language — attributes, variants and lines after a blank one included —,
+    # with a term's value read in where a message places it (`{ -x }`).
+    import unicodedata
+    coded, args = set(), set()
+    for path in ("${../crates/ronoctua-installer/src/tui.rs}", "${../crates/ronoctua-installer/src/model.rs}"):
+        code = uncommented(without_tests(open(path).read()))
+        coded |= set(re.findall(r'\bpub const KEY_\w+: &str = "([^"]+)";', code))
+        args |= set(re.findall(r'\barg: "(\w+)"', code))
+        args |= set(re.findall(r'\(\s*"(\w+)",\s*(?:key_of\(|KEY_)', code))
+    floor(len(coded), 8, "key names among the installer's `KEY_*` constants")
+    floor(len(args), 8, "arguments the installer hands its key names by")
+    # THE NAMES THAT ARE ALSO WORDS. "Enter the passphrase" is a verb and
+    # "Space left on the disk" a noun; "Enter starts it" and "Tab moves on" are
+    # keys. Such a word is a key: in a keys line (one with the hints'
+    # separator), in a sentence handed a key's name (it talks about keys), in
+    # the middle of a sentence (capitalised there, it is a name), and at the
+    # head of one unless the next word is a function word — the verb takes an
+    # object ("the", "your"), the noun a preposition ("left on", "to").
+    WORDS = {"Enter", "Space", "Return", "Tab", "Shift", "Escape", "Home", "End",
+             "Insert", "Delete", "Espaço"}
+    FUNCTION = {"the", "a", "an", "your", "this", "that", "these", "those", "it", "its",
+                "their", "my", "our", "some", "any", "each", "every", "all", "to", "on",
+                "in", "at", "for", "of", "from", "with", "into", "up", "down", "back",
+                "left", "o", "os", "as", "um", "uma", "seu", "sua", "de", "do", "da",
+                "no", "na", "em", "para", "e"}
+    others = {"Caps Lock", "Num Lock", "Scroll Lock", "AltGr", "Esc", "Backspace",
+              "PgUp", "PgDn", "Page Up", "Page Down", "Print Screen", "Ctrl", "Super"}
+    def token(name):
+        body = r"\s+".join(re.escape(w) for w in name.split(" "))
+        return re.compile(r"(?<![\w+])" + body + r"s?(?![\w+])")
+    always = [token(n) for n in sorted((coded | others) - WORDS)]
+    always += [
+        re.compile(r"\b(?:Ctrl|Control|Alt|Shift|Super|Meta)\s*[+-]\s*\S"),
+        re.compile(r"\^[A-Z]\b"),
+        re.compile(r"[←↑→↓]\s*[/,]?\s*[←↑→↓]"),
+        re.compile(r"(?i)\b(?:space\s*bar|barra\s+de\s+espaço|caps\s+lock)\b"),
+    ]
+    words = {w: token(w) for w in WORDS}
+    takes_keys = re.compile(r"\{\s*\$(?:" + "|".join(sorted(args)) + r")\s*\}")
+
+    def entries(text):
+        # Every message and term with its value: the first line's and every
+        # line indented under it, until the next entry or comment at the
+        # margin. A blank line does not end a value — Fluent lets one stand
+        # inside a multiline pattern.
+        out, current = {}, None
+        for line in text.splitlines():
+            m = re.match(r"(-?[A-Za-z][A-Za-z0-9_-]*)\s*=(.*)", line)
+            if m:
+                current = m.group(1)
+                out[current] = m.group(2)
+            elif not line.strip():
+                if current is not None:
+                    out[current] += "\n"
+            elif line[:1].isspace() and current is not None:
+                out[current] += "\n" + line
+            else:
+                current = None
+        return out
+
+    def scan(text):
+        # What a fragment's text says of a key in words: `(entry, words)`.
+        found = []
+        every = entries(unicodedata.normalize("NFKC", text))
+        terms = {k: v for k, v in every.items() if k.startswith("-")}
+        for key, value in every.items():
+            term = key.startswith("-")
+            if not term:
+                value = re.sub(r"\{\s*(-[A-Za-z][A-Za-z0-9_-]*)[^}]*\}", lambda m: terms.get(m.group(1), ""), value)
+            for pattern in always:
+                hit = pattern.search(value)
+                if hit:
+                    found.append((key, hit.group(0)))
+            about_keys = term or " · " in value or takes_keys.search(value)
+            for word, pattern in words.items():
+                for hit in pattern.finditer(value):
+                    before = value[:hit.start()].rstrip()
+                    after = re.match(r"\s*([^\s.,;:!?]*)", value[hit.end():]).group(1)
+                    head = before == "" or before[-1] in ".!?:;"
+                    if about_keys or not head or after.lower() not in FUNCTION:
+                        found.append((key, hit.group(0)))
+                        break
+        return len(every), sorted(set(found))
+
+    # THE READER, PROVED: each of these says a key in words, and must be
+    # refused; each after them says none, and must pass.
+    planted = {
+        "a term": "-enter-key = Enter\ninst-x = { -enter-key } continues\n",
+        "a default in words": "inst-x = The default is Caps Lock, which the two Shifts take over.\n",
+        "a key heading a sentence": "inst-x = Tab moves on.\n",
+        "a hint": "inst-x = Return continues · Esc goes back\n",
+        "a chord with a dash": "inst-x = Ctrl-C quits\n",
+        "a chord spaced": "inst-x = Ctrl + C quits\n",
+        "a caret chord": "inst-x = ^C quits\n",
+        "the space bar": "inst-x = a barra de espaço marca\n",
+        "after a blank line": "inst-x =\n    first line\n\n    Enter continues\n",
+        "an attribute": "inst-x = ok\n    .title = Enter continues\n",
+        "a variant": "inst-x = { $n ->\n    [one] Enter\n   *[other] Esc\n}\n",
+        "two arrows apart": "inst-x = ↑/↓ choose\n",
+        "full width": "inst-x = Ｅｎｔｅｒ continues\n",
+        "mid-sentence": "inst-x = Then press Space to mark it.\n",
+        "beside a key handed in": "inst-x = { $enter } or Space marks it\n",
+    }
+    for what, text in planted.items():
+        if not scan(text)[1]:
+            wrong.append(f"the reader let {what} through: {text!r}")
+    for text in ("inst-x = Enter the passphrase again.\n",
+                 "inst-x = Space left on the disk runs out.\n",
+                 "inst-x = Type it. Return to the list below.\n",
+                 "inst-x = enter continues, in lower case, is no name\n"):
+        if scan(text)[1]:
+            wrong.append(f"the reader refused words that name no key: {text!r} -> {scan(text)[1]}")
+
+    installer = 0
+    for language in "${lib.concatStringsSep " " languages}".split():
+        read, found = scan(pathlib.Path(f"${texts.fragments.ronoctua-installer}/{language}.ftl").read_text())
+        installer += read
+        for key, hit in found:
+            wrong.append(f"{language}: `{key}` writes the installer's key `{hit}` as text")
+    floor(installer, 200, "values read out of the installer's fragment")
+
     if wrong:
         print("ERROR: a key sequence written as text.", file=sys.stderr)
         print("", file=sys.stderr)
@@ -10014,10 +10155,11 @@ let
         print("       The keys are an ARGUMENT: a constant beside the binding, plus", file=sys.stderr)
         print("       `bindings::label()`, interpolated into a `{ $keys }`. A sequence", file=sys.stderr)
         print("       written here goes stale the day the key moves, and the word", file=sys.stderr)
-        print("       LEADER is not a key on anybody's keyboard.", file=sys.stderr)
+        print("       LEADER is not a key on anybody's keyboard. The installer's keys", file=sys.stderr)
+        print("       are its `KEY_*` constants, handed in by `tui::with_keys`.", file=sys.stderr)
         raise SystemExit(1)
 
-    print(f"OK: {seen} values, and none of them spells a key")
+    print(f"OK: {seen} values, and none of them spells a key; {installer} of the installer's, and none names a key in words ({len(coded)} named by its code)")
     END
   '';
 
@@ -21388,6 +21530,9 @@ let
     inherit scroll;
     vscodeTool = rust.vscode;
     belongingsTool = rust.belongings;
+    # The registry's `nixpkgs` as an installed machine locks it
+    # (`nix/modules/software.nix`), for rust-analyzer's own NixOS patch.
+    nixpkgsInput = inputs.nixpkgs;
     # The modules' argument, as `emacsVm` builds it.
     ronoctua = {
       inherit fonts fontconfigConf;
@@ -21397,6 +21542,141 @@ let
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
     };
   };
+
+  # VS CODE HAS ONE CRATE (`ronoctua-vscode`, AGENTS.md's table).
+  #
+  # It is the only code that names VS Code's folders (`~/.vscode`,
+  # `~/.config/Code`), the person's list and what this machine saw, the only
+  # one that runs `code` or hands it one of its own flags, and the only reader
+  # of `RONOCTUA_VSCODE` — `code()`, by its constant. The belongings keep the
+  # list under their logical `home/` with the crate's own literal
+  # (`list_in_home!`). `code`'s path comes from the environment and is never
+  # compiled in: the belongings link the crate, and VS Code would ride in every
+  # closure. The variable has a value only where it was declared to:
+  # `nix/modules/vscode.nix` (the footer, the queue, the person's command) and
+  # the nested loop (`nix/dev.nix`, the installed system's `code`) — in any
+  # spelling Nix or a shell has for giving one. And the paths the Nix side
+  # writes by hand are the crate's: the user path unit watches its manifest
+  # and its list, and the belongings' `vscode` target holds the list's folder
+  # and merges the list as the set it is.
+  one-vscode-boundary =
+    let
+      c = self.nixosConfigurations.vm.config;
+      target = (import ../assets/belongings.nix).targets.vscode;
+      facts = pkgs.writeText "vscode-boundary-facts.json" (
+        builtins.toJSON {
+          watched = c.systemd.user.paths.ronoctua-vscode-record.pathConfig.PathChanged;
+          targetPaths = target.paths;
+          merge = target.merge;
+        }
+      );
+    in
+    mkCheck "one-vscode-boundary" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      tree = pathlib.Path("${self}")
+      crates = tree / "crates"
+      home = crates / "ronoctua-vscode"
+      # FILE-WIDE: a boundary is broken by a NAME anywhere outside it, so the
+      # file is the question. `uncommented` and not `code_of`: every needle is
+      # a string literal (a folder, a file, the variable, a flag of `code`);
+      # `outside_tests` blanks each test module — a fixture is not a product's
+      # read — and keeps the product after one.
+      NAMES = ("RONOCTUA_VSCODE", ".vscode/", "\".vscode\"", ".config/Code", "Code/User",
+               "ronoctua-extensions.json", "vscode-seen.json", "ronoctua_vscode::VARIABLE")
+      # `code`'s OWN FLAGS, which no other program takes.
+      FLAGS = ("--install-extension", "--uninstall-extension", "--list-extensions",
+               "--show-versions", "--extensions-dir", "--update-extensions",
+               "--locate-extension", "--disable-extension", "--enable-proposed-api")
+      RUNS = re.compile(r'Command::new\(\s*"(?:[^"]*/)?code"')
+      JOINS = re.compile(r'\.join\(\s*"(?:\.config/)?Code(?:/User)?"\s*\)')
+      COMPILED_IN = re.compile(r'\b(?:option_env|env)!\(\s*"RONOCTUA_VSCODE"')
+      wrong, swept = [], 0
+      for f in workspace_sources(crates):
+          code = uncommented(outside_tests(f.read_text()))
+          rel = f.relative_to(crates)
+          if COMPILED_IN.search(code):
+              wrong.append(f"{rel} compiles `code`'s path in: VS Code is unfree, and it would "
+                           "ride in every closure that links this")
+          if home in f.parents:
+              continue
+          swept += 1
+          for name in NAMES + FLAGS:
+              if name in code:
+                  wrong.append(f"{rel} names `{name}` outside ronoctua-vscode")
+          if RUNS.search(code):
+              wrong.append(f"{rel} runs VS Code's `code` itself")
+          if JOINS.search(code):
+              wrong.append(f"{rel} joins VS Code's `Code` folder outside ronoctua-vscode")
+      floor(swept, 800, "sources outside ronoctua-vscode swept")
+
+      # PARSED: the crate is the reader — its constant is the variable, `code()`
+      # reads it by that constant, and the list's literal is the macro's.
+      lib = code_of(without_tests((home / "src" / "lib.rs").read_text()))
+      consts = uncommented(without_tests((home / "src" / "lib.rs").read_text()))
+      if not re.search(r'pub const VARIABLE: &str = "RONOCTUA_VSCODE";', consts):
+          wrong.append("ronoctua_vscode::VARIABLE is no longer RONOCTUA_VSCODE")
+      if "var_os(VARIABLE)" not in must(body_of(lib, "code"), "ronoctua_vscode::code").replace(" ", ""):
+          wrong.append("ronoctua_vscode::code() no longer reads `code` from RONOCTUA_VSCODE")
+      if "pub const LIST_IN_HOME: &str = list_in_home!();" not in consts:
+          wrong.append("LIST_IN_HOME is spelled apart from `list_in_home!`: two spellings of one file")
+      listed = re.search(r'macro_rules!\s*list_in_home\s*\{\s*\(\)\s*=>\s*\{\s*"([^"]+)"', consts)
+      manifest = re.search(r'pub const MANIFEST_IN_HOME: &str = "([^"]+)";', consts)
+      if not listed or not manifest:
+          print("ERROR: the crate's list or manifest path went away", file=sys.stderr)
+          raise SystemExit(1)
+      list_in_home, manifest_in_home = listed.group(1), manifest.group(1)
+
+      # PARSED: the Nix side's paths, as the system and the table evaluate them.
+      facts = json.load(open("${facts}"))
+      want = sorted([f"%h/{manifest_in_home}", f"%h/{list_in_home}"])
+      if sorted(facts["watched"]) != want:
+          wrong.append(f"the record's path unit watches {facts['watched']}, not the crate's {want}")
+      folder = "home/" + list_in_home.rsplit("/", 1)[0]
+      if facts["targetPaths"] != [folder]:
+          wrong.append(f"the `vscode` target holds {facts['targetPaths']}, not the list's folder {folder}")
+      name = list_in_home.rsplit("/", 1)[1]
+      if facts["merge"].get(name) != "set":
+          wrong.append(f"the `vscode` target does not merge `{name}` as a set: {facts['merge']}")
+
+      # FILE-WIDE: the variable is given a value only where it was declared to
+      # be, in every spelling — `X =`, `"X" =`, `inherit … X`, a wrapper's
+      # `--set`/`--set-default`, a shell's `export X=` — in every Nix, shell
+      # and Python file of the tree outside `crates/` and the tests (whose
+      # harnesses hand VS Code to a program by hand).
+      SETS = re.compile(r'"?\bRONOCTUA_VSCODE"?\s*=|--set(?:-default)?\s+RONOCTUA_VSCODE\b'
+                        r'|\binherit\b[^;]*\bRONOCTUA_VSCODE\b')
+      PLACES = {"nix/modules/vscode.nix": 3, "nix/dev.nix": 1}
+      found, files = {}, 0
+      for p in sorted(tree.rglob("*")):
+          rel = str(p.relative_to(tree))
+          if p.suffix not in (".nix", ".sh", ".py") or not p.is_file():
+              continue
+          if rel.startswith(("crates/", "tests/", "buffers/")):
+              continue
+          files += 1
+          hits = len(SETS.findall(hashless(p.read_text(errors="replace"))))
+          if hits and rel not in PLACES:
+              wrong.append(f"{rel} gives RONOCTUA_VSCODE a value; nix/modules/vscode.nix and "
+                           "nix/dev.nix are the places")
+          found[rel] = hits
+      floor(files, 150, "Nix, shell and Python files swept")
+      for rel, least in PLACES.items():
+          if found.get(rel, 0) < least:
+              wrong.append(f"{rel} gives RONOCTUA_VSCODE a value {found.get(rel, 0)} time(s), "
+                           f"wanted {least} (the footer, the queue and the person's command; the loop)")
+
+      for w in wrong:
+          print(f"ERROR: {w}", file=sys.stderr)
+      if wrong:
+          raise SystemExit(1)
+      print(f"OK: {swept} sources outside ronoctua-vscode name none of it; the variable has a "
+            f"value in nix/modules/vscode.nix and nix/dev.nix only ({files} files); the Nix side's "
+            "paths are the crate's")
+      END
+    '';
 
   # The root's wipe, proved between two boots (milestone 7).
   impermanenceVm = import ./impermanence-vm.nix { inherit pkgs lib; };
@@ -28358,7 +28638,9 @@ let
     import re as _re
 
     def product(text):
-        m = _re.search(r"#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\b", text)
+        # `#[cfg(test)]`, or `#[cfg(all(test, …))]` — a test module behind a
+        # feature too (never `any(test, …)`: that one builds outside tests).
+        m = _re.search(r"#\[cfg\((?:test|all\(\s*test\b[^\]]*)\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\b", text)
         return text if m is None else text[: m.start()]
 
     def is_test_file(path):
@@ -41726,11 +42008,13 @@ let
 
     # AND THE REGISTRY'S FILE SAYS SO, in the shape `ronoctua-person` reads
     # (`reports::DistroApps`, unknown fields refused).
-    keys = {"id", "name", "source", "desktop-ids", "essential", "group", "on-this-machine", "declined-here"}
+    # `appimage` says which pin built a distro AppImage, and `followed` what
+    # the registry made of the person's followed pins (2026-10-20).
+    keys = {"id", "name", "source", "desktop-ids", "essential", "group", "on-this-machine", "declined-here", "appimage"}
     for side, name in ((before, "before"), (after, "after")):
         registry = side["registry"]
-        if set(registry) != {"format", "apps"} or registry["format"] != 1:
-            wrong.append(f"{name}: distro-apps.json is not `format` 1 with `apps`")
+        if set(registry) != {"format", "apps", "followed"} or registry["format"] != 1:
+            wrong.append(f"{name}: distro-apps.json is not `format` 1 with `apps` and `followed`")
         for app in registry["apps"]:
             if set(app) != keys:
                 wrong.append(f"{name}: {app.get('id')} has the fields {sorted(app)}")
@@ -42106,6 +42390,211 @@ let
         END
       '';
 
+  # EVERY ROW THE INSTALLER COULD NOT MEAN IS REFUSED, EACH IN ITS OWN WORDS.
+  #
+  # `nix/offered.nix` refuses the build over a malformed `offered` in the
+  # ledger, and the tree's ledger is well formed: nothing ever reached a
+  # refusal, and a guard that never refused is not tested. Here each defect
+  # is planted in a ledger of its own — an empty list, no list, `ids` that is
+  # no list, an unknown id, an id that is no slug (text, a set, a list), the
+  # same id twice, `none`, a `checked` that is not a boolean, a field no row
+  # takes, a row that is not one, no name, a name that is not text, empty,
+  # spans lines (a line feed, U+0085, U+2028), holds a control character (a
+  # tab, DEL), is white space alone (U+00A0) or has white space at an edge (a
+  # space, U+00A0), and two rows of one name — and the refusals are asked of
+  # all of them in ONE evaluation (`problemsOf`). Each defect is refused by a
+  # sentence of its own kind and no other, naming the row; nothing aborts the
+  # evaluation; two ledgers the screen can draw — one naming a row by the
+  # `apps` table — are refused by none. And the GUARD: a malformed ledger
+  # handed to `nix/offered.nix` as the build hands one fails to evaluate, and
+  # a good one does not.
+  offeredRefusals =
+    let
+      inherit
+        (pkgs.callPackage ../nix/offered.nix {
+          ledgerFile = ../assets/distro-apps.nix;
+        })
+        problemsOf
+        ;
+      first = {
+        id = "alpha";
+        checked = true;
+        name = "Alpha";
+      };
+      second = {
+        id = "beta";
+        checked = false;
+        name = "Beta";
+      };
+      base = {
+        ids = [
+          "alpha"
+          "beta"
+          "gamma"
+        ];
+        apps.gamma.name = "Gamma Table";
+        offered = [
+          first
+          second
+        ];
+      };
+      # The base with its second row changed, or its rows replaced.
+      planted =
+        change:
+        base
+        // {
+          offered = [
+            first
+            (second // change)
+          ];
+        };
+      rows = offered: base // { inherit offered; };
+      char = hex: builtins.fromJSON ''"\u${hex}"'';
+      ledgers = {
+        good = base;
+        named-by-the-table = rows [
+          first
+          second
+          {
+            id = "gamma";
+            checked = true;
+          }
+        ];
+        empty = rows [ ];
+        not-a-list = rows "alpha";
+        ids-not-a-list = base // {
+          ids = null;
+        };
+        unknown-id = planted { id = "delta"; };
+        not-a-slug = planted { id = "be,ta"; };
+        id-a-set = planted { id = { }; };
+        id-a-list-and-no-name = rows [
+          first
+          {
+            id = [ "x" ];
+            checked = true;
+          }
+        ];
+        duplicate-id = planted { id = "alpha"; };
+        none = planted { id = "none"; };
+        checked-not-bool = planted { checked = "yes"; };
+        unknown-field = planted { icon = "beta.svg"; };
+        not-a-row = rows [
+          first
+          "beta"
+        ];
+        missing-name = rows [
+          first
+          (builtins.removeAttrs second [ "name" ])
+        ];
+        name-not-text = planted { name = 3; };
+        empty-name = planted { name = ""; };
+        name-spans-lines = planted { name = "Be\nta"; };
+        name-next-line = planted { name = "Beta" + char "0085"; };
+        name-line-separator = planted { name = "Be" + char "2028" + "ta"; };
+        name-holds-a-tab = planted { name = "Be\tta"; };
+        name-holds-a-delete = planted { name = "Be" + char "007f" + "ta"; };
+        name-white-alone = planted { name = char "00a0"; };
+        name-edge-space = planted { name = "Beta "; };
+        name-edge-nbsp = planted { name = "Beta" + char "00a0"; };
+        duplicate-name = planted { name = "Alpha"; };
+      };
+      # THE GUARD, as the build meets it: the ledger is a FILE `import`ed by
+      # `nix/offered.nix`, and a refused one has no derivation.
+      evaluates =
+        ledger:
+        (builtins.tryEval
+          (pkgs.callPackage ../nix/offered.nix {
+            ledgerFile = builtins.toFile "ledger.nix" ledger;
+          }).drvPath
+        ).success;
+    in
+    pkgs.writeText "offered-refusals.json" (
+      builtins.toJSON {
+        said = lib.mapAttrs (_: problemsOf) ledgers;
+        guard = {
+          # The same id twice: refused, and still a table that would render
+          # — so it is the guard, and nothing after it, that stops it.
+          bad = evaluates ''{ ids = [ "alpha" ]; offered = [ { id = "alpha"; checked = true; name = "Alpha"; } { id = "alpha"; checked = false; name = "Again"; } ]; }'';
+          good = evaluates ''{ ids = [ "alpha" ]; offered = [ { id = "alpha"; checked = true; name = "Alpha"; } ]; }'';
+        };
+      }
+    );
+  offered-refuses-each-malformed-row =
+    mkCheck "offered-refuses-each-malformed-row" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import json, sys
+
+        # PARSED: each planted ledger's refusals, as `nix/offered.nix` says
+        # them, and whether a ledger evaluates through it, JSON.
+        doc = json.load(open("${offeredRefusals}"))
+        said, guard = doc["said"], doc["guard"]
+        # Each defect, and the words only its kind of sentence says; a ledger
+        # with two defects is refused by two sentences.
+        own = {
+            "empty": ["has no row"],
+            "not-a-list": ["is a list of rows"],
+            "ids-not-a-list": ["`ids` is the list of the registry's ids, not null"],
+            "unknown-id": ["`delta` is not in the ledger's `ids`"],
+            "not-a-slug": ["is not a slug"],
+            "id-a-set": ["is not a slug"],
+            "id-a-list-and-no-name": ["is not a slug", "has no name"],
+            "duplicate-id": ["`alpha` is offered twice"],
+            "none": ["`none` is the answer that leaves nothing out"],
+            "checked-not-bool": ["`checked` is true or false"],
+            "unknown-field": ["has fields no row takes: icon"],
+            "not-a-row": ["is not an attribute set"],
+            "missing-name": ["has no name"],
+            "name-not-text": ["the name 3 is not text"],
+            "empty-name": ["the name is empty"],
+            "name-spans-lines": ["spans lines"],
+            "name-next-line": ["spans lines"],
+            "name-line-separator": ["spans lines"],
+            "name-holds-a-tab": ["holds a control character"],
+            "name-holds-a-delete": ["holds a control character"],
+            "name-white-alone": ["is white space alone"],
+            "name-edge-space": ["begins or ends with white space"],
+            "name-edge-nbsp": ["begins or ends with white space"],
+            "duplicate-name": ['two offered rows are called "Alpha"'],
+        }
+        kinds = {w for words in own.values() for w in words}
+        wrong = []
+        if sorted(said) != sorted(list(own) + ["good", "named-by-the-table"]):
+            wrong.append(f"the planted ledgers are {sorted(said)}")
+        for good in ("good", "named-by-the-table"):
+            if said.get(good) != []:
+                wrong.append(f"`{good}` is a ledger the screen draws, and it was refused: {said.get(good)}")
+        for case, words in own.items():
+            got = said.get(case, [])
+            if len(got) != len(words):
+                wrong.append(f"`{case}` was refused by {len(got)} sentences, not {len(words)}: {got}")
+                continue
+            for w in words:
+                if not any(w in g for g in got):
+                    wrong.append(f"`{case}` was refused without saying `{w}`: {got}")
+            for g in got:
+                if not g.startswith("assets/distro-apps.nix"):
+                    wrong.append(f"`{case}`'s sentence does not name the ledger: {g}")
+                others = [k for k in kinds if k not in words and k in g]
+                if others:
+                    wrong.append(f"`{case}` is refused in the words of another defect ({others}): {g}")
+        whole = ("empty", "not-a-list", "ids-not-a-list", "duplicate-id", "duplicate-name")
+        for case in own:
+            if case not in whole and said.get(case) and not all("offered row 1" in g for g in said[case]):
+                wrong.append(f"`{case}`'s sentence does not name the row: {said[case]}")
+        if guard != {"bad": False, "good": True}:
+            wrong.append(f"the build's guard: a malformed ledger evaluates {guard['bad']}, a good one {guard['good']}")
+
+        if wrong:
+            print("ERROR: nix/offered.nix does not refuse each malformed row in its own words:", file=sys.stderr)
+            for w in wrong:
+                print("  " + w, file=sys.stderr)
+            sys.exit(1)
+        print(f"OK: {len(own)} malformed ledgers, each refused by sentences of their own kind, two good ones by none, and the build refuses a bad ledger")
+        END
+      '';
+
   # EVERY LAUNCHER ENTRY HAS AN OWNER.
   #
   # The two profiles' `system.path`, BUILT: a launcher entry is what a
@@ -42347,6 +42836,34 @@ let
           }).name;
       }
     );
+  # THE BUILD'S ORDER OF VERSIONS, asked of Nix for pairs a release's tags
+  # could make: what `distro-pins.py`'s `compare_versions` must answer.
+  distroPinsVersionOrder = pkgs.writeText "distro-pins-version-order.json" (
+    builtins.toJSON (
+      map
+        (
+          pair:
+          let
+            two = lib.splitString " " pair;
+          in
+          two ++ [ (builtins.compareVersions (builtins.elemAt two 0) (builtins.elemAt two 1)) ]
+        )
+        [
+          "0.9.0 0.10.0"
+          "0.10.0 0.9.0"
+          "1.0 1.0"
+          "1.0 1.0.1"
+          "2.3a 2.3.1"
+          "1.0pre1 1.0"
+          "1.2-rc1 1.2"
+          "1.2rc1 1.2.0"
+          "2024.10.1 2024.9.30"
+          "1.21.1 1.21"
+          "a b"
+          "1.0-beta 1.0-alpha"
+        ]
+    )
+  );
   distro-pins-move-only-what-follows =
     mkCheck "distro-pins-move-only-what-follows" [ pkgs.python3 ]
       ''
@@ -42487,6 +43004,75 @@ let
         expect("a followed entry without its pin is said, to be moved by the tool",
                said(offline_wrong(no_demo), "`demo` has no pin") and said(offline_wrong(no_demo), "nix run .#distro-pins"))
 
+        # STALE, READ-ONLY (`--stale`, what `nix run .#release` says before
+        # it publishes): a pin OLDER than its latest release is named with
+        # both versions, one at it is not, one newer is said as newer;
+        # nothing is downloaded and the pins are not touched; an entry that
+        # follows nothing is not asked; a tag that moves and a question the
+        # network did not answer are said, and the other entries are asked
+        # all the same — while a defect of the tool is not said as silence.
+        import copy
+        class Silent(Fake):
+            def github_latest(self, repo):
+                if repo == "o/down":
+                    raise OSError("no route to host")
+                return super().github_latest(repo)
+        down = dict(follows, key="down", name="Down",
+                    follows={"github": {"repo": "o/down", "assetPattern": "Down-*.AppImage"}})
+        moving = dict(follows, key="moving", name="Moving",
+                      follows={"github": {"repo": "o/moving", "assetPattern": "Moving-*.AppImage"}})
+        newer = dict(follows, key="newer", name="Newer",
+                     follows={"github": {"repo": "o/newer", "assetPattern": "Demo-*-x86_64.AppImage"}})
+        stale_table = {"demo": follows, "fixed": still, "fdroid": droid, "down": down, "moving": moving,
+                       "newer": newer}
+        held = {"format": 1,
+                "appimage": {"demo": new["appimage"]["demo"], "fixed": written,
+                             "newer": dict(new["appimage"]["demo"], version="2.0.0")},
+                "android": {"fdroid": {"url": "https://f-droid.org/repo/org.fdroid.fdroid_1020000.apk",
+                                       "hash": "sha256-C=", "version": "1.20", "version-code": 1020000}}}
+        kept = copy.deepcopy(held)
+        ask = Silent({"o/demo": release("v1.3.0"), "o/newer": release("v1.10.0"),
+                      "o/moving": {"tag_name": "nightly", "assets": []}},
+                     fdroid={"org.fdroid.fdroid": info})
+        behind, ahead, unasked = pins.stale(stale_table, held, ask)
+        expect(f"the pins behind are {behind}",
+               behind == [("demo", "Demo", "1.2.3", "1.3.0"), ("fdroid", "fdroid", "1.20", "1.21.1")])
+        expect(f"a pin newer than its latest release is said as newer: {ahead}",
+               ahead == [("newer", "Newer", "2.0.0", "1.10.0")])
+        expect("asking which pins are behind downloaded something", ask.hashed == [])
+        expect("asking which pins are behind changed the pins", held == kept)
+        said_down = [u for u in unasked if u.startswith("down:")]
+        said_moving = [u for u in unasked if u.startswith("moving:")]
+        expect(f"the network's silence is said: {unasked}", len(said_down) == 1 and "could not be asked" in said_down[0])
+        expect(f"a tag that moves is said: {unasked}", len(said_moving) == 1 and "moves" in said_moving[0])
+        expect(f"an entry that follows nothing was asked about: {unasked}", not any(u.startswith("fixed") for u in unasked))
+        lines = pins.stale_lines(behind, ahead, unasked)
+        expect(f"each pin behind is named with both versions: {lines}",
+               "  Demo (demo): 1.2.3 pinned, 1.3.0 released" in lines
+               and "2 of the distro's pins are behind their latest release:" in lines)
+        expect(f"the way to move them is said: {lines}", any("nix run .#distro-pins" in l for l in lines))
+        expect(f"a newer pin is said as newer: {lines}",
+               "1 of the distro's pins is newer than its latest release:" in lines
+               and "  Newer (newer): 2.0.0 pinned, 1.10.0 the latest" in lines)
+        expect(f"what was not asked is said: {lines}", sum(l.startswith("not asked: ") for l in lines) == 2)
+        current_pins = {"format": 1, "appimage": {"demo": moved["appimage"]["demo"]}, "android": {}}
+        at_latest = pins.stale({"demo": follows}, current_pins, Fake({"o/demo": release("v1.3.0")}))
+        expect(f"a pin at its latest release is neither behind nor newer: {at_latest}", at_latest == ([], [], []))
+        expect("all at their latest is said", pins.stale_lines([], [], []) == ["every pin that follows a release is at its latest"])
+        class Broken(Fake):
+            def github_latest(self, repo):
+                raise KeyError("a defect of the tool")
+        try:
+            pins.stale({"demo": follows}, current_pins, Broken())
+            expect("a defect of the tool was said as the network's silence", False)
+        except KeyError:
+            pass
+        # THE BUILD'S ORDER OF VERSIONS (`builtins.compareVersions`), which a
+        # followed pin is judged by: the same answer for every pair.
+        for a, b, want in json.load(open("${distroPinsVersionOrder}")):
+            got = pins.compare_versions(a, b)
+            expect(f"`{a}` against `{b}` is {got}, and Nix says {want}", got == want)
+
         # AND THE TREE'S OWN TABLE AND PINS.
         table = json.load(open("${distroPinsTable}"))
         current = open("${../assets/distro-pins.json}").read()
@@ -42498,8 +43084,78 @@ let
             for w in wrong:
                 print("  " + w, file=sys.stderr)
             sys.exit(1)
-        print("OK: pins follow what follows, keep what does not, and the tree's file is the tool's")
+        print("OK: pins follow what follows, keep what does not, the stale ones are said without a download, and the tree's file is the tool's")
         END
+      '';
+  # THE STALE PINS, ASKED WHERE NO NETWORK ANSWERS — this sandbox —, the way
+  # `nix run .#release` asks them (`distro-pins.py --stale` on a checkout of
+  # the tree's table and pins): the tool ends well (the release reads a
+  # failure as "not compared"), says every app it follows as not asked, says
+  # none behind, downloads nothing and leaves `assets/distro-pins.json` as it
+  # was. `nix` is a stand-in that answers the one question the tool asks it
+  # with the tree's table, evaluated here; anything else it is asked fails.
+  distro-pins-stale-is-read-only =
+    let
+      nix = pkgs.writeShellScript "stand-in-nix" ''
+        echo "nix $*" >>"$CALLS"
+        if [ "$*" = "eval --json --file $ROOT/assets/distro-apps.nix apps" ]; then
+          cat ${distroPinsTable}
+          exit 0
+        fi
+        echo "stand-in nix: not a question the stale pins ask: $*" >&2
+        exit 1
+      '';
+    in
+    mkCheck "distro-pins-stale-is-read-only"
+      [
+        pkgs.python3
+        pkgs.coreutils
+      ]
+      ''
+        export CALLS=$PWD/calls ROOT=$PWD/checkout HOME=$PWD/home
+        mkdir -p bin "$ROOT/assets" "$HOME"
+        ln -s ${nix} bin/nix
+        export PATH=$PWD/bin:$PATH
+        : >"$ROOT/flake.nix"
+        cp ${../assets/distro-apps.nix} "$ROOT/assets/distro-apps.nix"
+        cp ${../assets/distro-pins.json} "$ROOT/assets/distro-pins.json"
+        chmod -R u+w "$ROOT"
+        before=$(sha256sum <"$ROOT/assets/distro-pins.json")
+        asked="nix eval --json --file $ROOT/assets/distro-apps.nix apps"
+        status=0
+        python3 ${../nix/scripts/distro-pins.py} --stale --root "$ROOT" >said 2>&1 || status=$?
+        cat said
+        failed=0
+        [ "$status" = 0 ] || { echo "ERROR: --stale with no network ended with $status" >&2; failed=1; }
+        [ "$(sha256sum <"$ROOT/assets/distro-pins.json")" = "$before" ] ||
+          { echo "ERROR: --stale changed assets/distro-pins.json" >&2; failed=1; }
+        [ "$(ls -A "$ROOT/assets" | sort | tr '\n' ' ')" = "distro-apps.nix distro-pins.json " ] ||
+          { echo "ERROR: --stale left a file beside the pins: $(ls -A "$ROOT/assets")" >&2; failed=1; }
+        [ "$(cat "$CALLS")" = "$asked" ] ||
+          { echo "ERROR: --stale asked nix more than the table:" >&2; cat "$CALLS" >&2; failed=1; }
+        python3 - <<'END' || failed=1
+        import importlib.util, json, sys
+        # PARSED: the table as JSON, and what the tool printed, line by line.
+        spec = importlib.util.spec_from_file_location("pins", "${../nix/scripts/distro-pins.py}")
+        pins = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pins)
+        table = json.load(open("${distroPinsTable}"))
+        followed = sorted(i for i, e in table.items() if pins.follows_a_source(e))
+        if not followed:
+            sys.exit("ERROR: the table follows nothing; this check stopped reaching the network's questions")
+        lines = open("said").read().splitlines()
+        unasked = sorted(l.split(":", 2)[1].strip() for l in lines if l.startswith("not asked: "))
+        wrong = []
+        if unasked != followed:
+            wrong.append(f"not asked {unasked}, and the table follows {followed}")
+        if any("behind" in l or "newer than" in l for l in lines):
+            wrong.append("a pin was said behind or newer with no network to ask")
+        for w in wrong:
+            print("ERROR: " + w, file=sys.stderr)
+        sys.exit(1 if wrong else 0)
+        END
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: with no network, --stale ends well, says each followed app not asked, and leaves the pins as they were"
       '';
   # THE TABLE'S SOURCES, BUILT AND REFUSED.
   #
@@ -43117,6 +43773,469 @@ let
           "by name and refused; four AppImage entries (one out of the opener's name order) and a web app built as the launcher reads them")
     END
   '';
+
+  # THE DISTRO'S APPIMAGES THE PERSON FOLLOWS PAST ITS PINS (the owner's
+  # decision, 2026-10-20), AS THE SYSTEMS SEE THEM: the judge of a followed
+  # pin (`nix/distro-pins.nix`) over the table of cases the Rust judge is
+  # held to, and the reference system with a planted table of AppImages that
+  # follow a repository, and the person's options, followed pins, verified
+  # record and held entries planted where root's applier and verify leave
+  # them (`extendModules`). Evaluated, never built.
+  distroFollowFacts =
+    let
+      shared = import ../nix/distro-pins.nix;
+      cases = builtins.fromJSON (
+        builtins.readFile ../crates/ronoctua-person/fixtures/distro-pin-cases.json
+      );
+      base = self.nixosConfigurations.noctua;
+      user = base.config.ronoctua.user;
+      sri = "sha256-${lib.concatStrings (lib.replicate 43 "A")}=";
+      stamp = "2026-10-20T12:00:00Z";
+      urlOf =
+        id: key: v:
+        "https://github.com/storytold/${id}/releases/download/v${v}/${key}-${v}-linux-x86_64.AppImage";
+      # Each planted AppImage: its key, the distro's version and the
+      # version the person follows.
+      planted = {
+        planted-newer = {
+          key = "pnewer";
+          distro = "1.0";
+          followed = "2.0";
+        };
+        planted-older = {
+          key = "polder";
+          distro = "1.0";
+          followed = "0.9";
+        };
+        planted-equal = {
+          key = "pequal";
+          distro = "1.0";
+          followed = "1.0";
+        };
+        planted-distro-newer = {
+          key = "pdnewer";
+          distro = "3.0";
+          followed = "2.0";
+        };
+        planted-held = {
+          key = "pheld";
+          distro = "1.0";
+          followed = "2.0";
+        };
+        planted-stale-hold = {
+          key = "pstale";
+          distro = "1.0";
+          followed = "2.0";
+        };
+        planted-unverified = {
+          key = "punver";
+          distro = "1.0";
+          followed = "2.0";
+        };
+        planted-last = {
+          key = "plast";
+          distro = "1.0";
+          followed = "2.1";
+        };
+        planted-dup = {
+          key = "pdup";
+          distro = "1.0";
+          followed = "2.0";
+        };
+        planted-url = {
+          key = "purl";
+          distro = "1.0";
+          followed = "2.0";
+        };
+        planted-asset = {
+          key = "passet";
+          distro = "1.0";
+          followed = "2.0";
+        };
+        planted-version = {
+          key = "pversion";
+          distro = "1.0";
+          followed = "2.0";
+        };
+        planted-hash = {
+          key = "phash";
+          distro = "1.0";
+          followed = "2.0";
+        };
+        planted-typed = {
+          key = "ptyped";
+          distro = "1.0";
+          followed = "2.0";
+        };
+      };
+      table =
+        lib.mapAttrs (id: p: {
+          source = "appimage";
+          inherit (p) key;
+          name = "Planted ${p.key}";
+          # OUT OF THE OPENER'S NAME ORDER, as the Crafting Apps are: the
+          # person's build must carry the key too.
+          fallback = false;
+          follows.github = {
+            repo = "storytold/${id}";
+            assetPattern = "${p.key}-*-linux-x86_64.AppImage";
+          };
+        }) planted
+        // {
+          by-hand = {
+            source = "appimage";
+            key = "byhand";
+            name = "By Hand";
+            follows = null;
+          };
+        };
+      pins = {
+        format = 1;
+        appimage =
+          lib.mapAttrs (id: p: {
+            url = urlOf id p.key p.distro;
+            hash = sri;
+            version = p.distro;
+            pinned-at = stamp;
+          }) planted
+          // {
+            by-hand = {
+              url = "https://example.org/byhand-1.0.AppImage";
+              hash = sri;
+              version = "1.0";
+              pinned-at = stamp;
+            };
+          };
+        android = { };
+      };
+      good = id: v: {
+        inherit id;
+        url = urlOf id planted.${id}.key v;
+        hash = sri;
+        version = v;
+        pinned-at = stamp;
+      };
+      # ONE PIN PER RULE THE JUDGE ASKS, and the good ones; `last` is the
+      # version `planted-last` follows now.
+      followedDoc = last: {
+        format = 1;
+        pins =
+          map (id: good id planted.${id}.followed) [
+            "planted-newer"
+            "planted-older"
+            "planted-equal"
+            "planted-distro-newer"
+            "planted-held"
+            "planted-stale-hold"
+            "planted-unverified"
+            "planted-dup"
+          ]
+          ++ [
+            (good "planted-last" last)
+            (good "planted-dup" "2.1")
+            (
+              (good "planted-url" "2.0")
+              // {
+                url = "https://github.com/someone/planted-url/releases/download/v2.0/purl-2.0-linux-x86_64.AppImage";
+              }
+            )
+            (
+              (good "planted-asset" "2.0")
+              // {
+                url = "https://github.com/storytold/planted-asset/releases/download/v2.0/passet-2.0-linux-aarch64.AppImage";
+              }
+            )
+            ((good "planted-version" "2.0") // { version = "2.1"; })
+            ((good "planted-hash" "2.0") // { hash = "md5-x"; })
+            ((good "planted-typed" "2.0") // { version = 2; })
+            ((good "planted-newer" "2.0") // { id = "nobody"; })
+            ((good "planted-newer" "2.0") // { id = "by-hand"; })
+            7
+          ];
+      };
+      optionsOf =
+        on:
+        builtins.toFile "options.json" (
+          builtins.toJSON (
+            {
+              format = 1;
+              ssh-signing = null;
+            }
+            // lib.optionalAttrs on { distro-apps-follow-releases = true; }
+          )
+        );
+      heldOf =
+        held:
+        builtins.toFile "held.json" (
+          builtins.toJSON {
+            format = 1;
+            held = lib.mapAttrsToList (id: fingerprint: {
+              id = "distro-appimage:${id}";
+              inherit fingerprint;
+              reason = "build-failed";
+              since = stamp;
+            }) held;
+          }
+        );
+      verifiedOf =
+        verified:
+        builtins.toFile "verified.json" (
+          builtins.toJSON {
+            format = 1;
+            verified = lib.mapAttrsToList (
+              id: v:
+              {
+                id = "distro-appimage:${id}";
+                inherit (v) fingerprint;
+                since = stamp;
+              }
+              // removeAttrs (good id v.version) [
+                "id"
+                "pinned-at"
+              ]
+            ) verified;
+          }
+        );
+      plant =
+        {
+          on,
+          last,
+          held ? { },
+          verified ? { },
+        }:
+        base.extendModules {
+          modules = [
+            {
+              ronoctua.distroApps.table = table;
+              ronoctua.distroApps.pins = pins;
+              ronoctua.person.options = lib.mkForce (optionsOf on);
+              ronoctua.person.distroPins = lib.mkForce (
+                builtins.toFile "distro-pins.json" (builtins.toJSON (followedDoc last))
+              );
+              ronoctua.person.held = lib.mkForce (heldOf held);
+              ronoctua.person.verified = lib.mkForce (verifiedOf verified);
+            }
+          ];
+        };
+      seen =
+        sys:
+        let
+          c = sys.config;
+          report = builtins.fromJSON c.environment.etc."ronoctua/distro-apps.json".text;
+          mine = id: table ? ${id};
+          names = map (p: p.name or "");
+          ours = builtins.filter (lib.hasPrefix "ronoctua-appimage-p");
+        in
+        {
+          problems = c.ronoctua.distroApps.problems;
+          inherit (report) followed;
+          apps = builtins.listToAttrs (
+            map (a: lib.nameValuePair a.id a.appimage) (builtins.filter (a: mine a.id) report.apps)
+          );
+          system = ours (names c.environment.systemPackages);
+          profile = ours (names c.home-manager.users.${user}.home.packages);
+          # WHAT THE PERSON'S LAUNCHER ENTRY RUNS, and whether it keeps the
+          # opener's key: the entry derivation's own inputs.
+          entries = lib.mapAttrsToList (_: b: {
+            inherit (b.package) name;
+            program = b.entry.PROGRAM;
+            fallback = b.entry.FALLBACK;
+          }) c.ronoctua.distroApps.personBuilds;
+          fingerprints = lib.filterAttrs (
+            n: _: lib.hasPrefix "${shared.entry}:" n
+          ) c.ronoctua.person.fingerprints;
+          tried = builtins.filter (lib.hasPrefix "${shared.entry}:") (
+            builtins.attrNames c.ronoctua.person.entries
+          );
+          warnings = builtins.filter (lib.hasInfix "distro pins") c.warnings;
+        };
+      # THE FINGERPRINTS NIX GIVES, read off machines that hand them to the
+      # verification: `planted-last` at 2.0, and every candidate as `on` has it.
+      first = seen (plant {
+        on = true;
+        last = "2.0";
+      });
+      on = seen (plant {
+        on = true;
+        last = "2.1";
+      });
+      fp = machine: id: machine.fingerprints."${shared.entry}:${id}";
+      records = {
+        planted-newer = {
+          fingerprint = fp on "planted-newer";
+          version = "2.0";
+        };
+        planted-stale-hold = {
+          fingerprint = fp on "planted-stale-hold";
+          version = "2.0";
+        };
+        planted-dup = {
+          fingerprint = fp on "planted-dup";
+          version = "2.0";
+        };
+        # VERIFIED AT ANOTHER FINGERPRINT than the candidate's: not let in.
+        planted-unverified = {
+          fingerprint = "a-fingerprint-of-another-build";
+          version = "2.0";
+        };
+        # THE LAST VERIFIED PIN, 2.0, while 2.1 is held.
+        planted-last = {
+          fingerprint = fp first "planted-last";
+          version = "2.0";
+        };
+      };
+      holds = {
+        planted-held = fp on "planted-held";
+        planted-stale-hold = "a-fingerprint-of-another-pin";
+        planted-last = fp on "planted-last";
+      };
+    in
+    pkgs.writeText "distro-follow-facts.json" (
+      builtins.toJSON {
+        judged = map (c: {
+          inherit (c) case fault;
+          said = shared.judge cases.table c.pin;
+        }) cases.cases;
+        inherit on user;
+        verified = seen (plant {
+          on = true;
+          last = "2.1";
+          held = holds;
+          verified = records;
+        });
+        off = seen (plant {
+          on = false;
+          last = "2.1";
+          held = holds;
+          verified = records;
+        });
+        planted = lib.mapAttrs (_: p: { inherit (p) key distro followed; }) planted;
+      }
+    );
+
+  # A FOLLOWED PIN IS THE PERSON'S PROGRAM, BUILT ONLY WHILE THEY FOLLOW,
+  # ONLY WHEN IT IS NEWER THAN THE DISTRO'S, AND ONLY ONCE ROOT'S VERIFY
+  # BUILT IT; ONE THE JUDGE REFUSES IS SAID, AND NEVER STOPS THE MACHINE.
+  #
+  # The judge and the Rust one agree on one table of cases, rule for rule.
+  # On, with no record: no followed pin is built — every newer one waits for
+  # the verification, which is handed each (`personEntries`,
+  # `personFingerprints`, `distro-appimage:<id>`). Verified: the newer pin is
+  # built for the PERSON (their Home Manager profile, the launcher running it
+  # from `/etc/profiles/per-user`, `X-Ronoctua-Fallback=false` kept) and the
+  # distro's of that id is not in `systemPackages` — never both; a record at
+  # another fingerprint lets nothing in; a held candidate falls back to the
+  # last verified pin, never to the older distro one; an older, an equal one
+  # and one the distro's own newer pin passed are not built. Every malformed
+  # pin is refused by its rule, by name, in `distro-apps.json`, and the
+  # registry's `problems` stay empty. Off: nothing followed is built, said
+  # or verified, whatever the files hold.
+  distro-apps-follow-when-on-and-newer =
+    mkCheck "distro-apps-follow-when-on-and-newer" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import json, sys
+        exec(open("${pyPrelude}").read())
+
+        # PARSED: the planted machines arrive as their evaluated configuration,
+        # the judge as what it answered of each case of the shared table.
+        facts = json.load(open("${distroFollowFacts}"))
+        wrong = []
+
+        judged = facts["judged"]
+        floor(len(judged), 20, "cases of the shared table")
+        for c in judged:
+            if c["said"] != c["fault"]:
+                wrong.append(f"the judge says {c['said']!r} of {c['case']!r}, and the table {c['fault']!r}")
+        for rule in ("id", "url", "asset", "version", "hash"):
+            if not any(c["fault"] == rule for c in judged):
+                wrong.append(f"no case of the table is refused by the rule {rule}")
+
+        planted = facts["planted"]
+        user = facts["user"]
+        candidates = {"planted-newer", "planted-held", "planted-stale-hold", "planted-unverified",
+                      "planted-last", "planted-dup"}
+        refused = {
+            "planted-url": "url", "planted-asset": "asset", "planted-version": "version",
+            "planted-hash": "hash", "planted-typed": "version", "nobody": "id", "by-hand": "id",
+            "unknown": "id", "planted-dup": "duplicate",
+        }
+
+        def package(id, version):
+            return f"ronoctua-appimage-{planted[id]['key']}-{version}"
+
+        # `built`: the version built FOR THE PERSON, by id; every other is the
+        # distro's, in the system.
+        def look(name, got, follows, built, held=()):
+            if got["problems"]:
+                wrong.append(f"{name}: the registry refuses {got['problems']}")
+            if got["followed"]["on"] != follows:
+                wrong.append(f"{name}: the report says on = {got['followed']['on']}")
+            for id, p in planted.items():
+                app = got["apps"].get(id)
+                if app is None:
+                    wrong.append(f"{name}: {id} is not in the registry's report")
+                    continue
+                want = "followed" if id in built else "distro"
+                version = built.get(id, p["distro"])
+                if app["pin"] != want or app["version"] != version:
+                    wrong.append(f"{name}: {id} is built from the {app['pin']} pin at {app['version']}, not the {want} pin at {version}")
+                mine, system = package(id, version), package(id, p["distro"])
+                if id in built:
+                    if mine not in got["profile"]:
+                        wrong.append(f"{name}: {id}'s followed build {mine} is not in the person's profile: {sorted(got['profile'])}")
+                    if any(n.startswith(f"ronoctua-appimage-{p['key']}-") for n in got["system"]):
+                        wrong.append(f"{name}: {id} is in systemPackages beside the person's build: {sorted(got['system'])}")
+                else:
+                    if system not in got["system"]:
+                        wrong.append(f"{name}: {id}'s distro build {system} is not in systemPackages")
+                    if any(n.startswith(f"ronoctua-appimage-{p['key']}-") for n in got["profile"]):
+                        wrong.append(f"{name}: {id} is in the person's profile with no verified pin")
+                if app["distro-version"] != p["distro"]:
+                    wrong.append(f"{name}: {id} says the distro's is {app['distro-version']}")
+                taken = follows and refused.get(id) not in ("url", "asset", "version", "hash")
+                if (app["followed-version"] is not None) != taken:
+                    wrong.append(f"{name}: {id} says the followed version {app['followed-version']!r}")
+                tried = follows and id in candidates
+                entry = f"distro-appimage:{id}"
+                if (entry in got["fingerprints"]) != tried or (entry in got["tried"]) != tried:
+                    wrong.append(f"{name}: {id} is {'not ' if tried else ""}handed to the verification")
+                if (app["held"] is not None) != (id in held):
+                    wrong.append(f"{name}: {id} says held {app['held']!r}")
+                waits = tried and id not in built and id not in held
+                if app["waiting"] != waits:
+                    wrong.append(f"{name}: {id} says waiting {app['waiting']}, not {waits}")
+            for e in got["entries"]:
+                if e["program"] != f"/etc/profiles/per-user/{user}/bin/" + e["name"].rsplit("-", 1)[0]:
+                    wrong.append(f"{name}: the person's {e['name']} runs {e['program']}, not their own profile's")
+                if e["fallback"] != "false":
+                    wrong.append(f"{name}: the person's {e['name']} lost `X-Ronoctua-Fallback=false`")
+            if len(got["entries"]) != len(built):
+                wrong.append(f"{name}: {len(got['entries'])} followed builds for the person, not {len(built)}")
+            said = {r["id"]: r["fault"] for r in got["followed"]["refused"]}
+            if said != (refused if follows else {}):
+                wrong.append(f"{name}: the refused pins are {said}, not {refused if follows else {}}")
+            for r in got["followed"]["refused"]:
+                if not r["detail"]:
+                    wrong.append(f"{name}: {r['id']} is refused without a sentence")
+            if got["warnings"]:
+                wrong.append(f"{name}: warned {got['warnings']}")
+
+        look("on, nothing verified", facts["on"], True, {})
+        look("on, verified", facts["verified"], True,
+             {"planted-newer": "2.0", "planted-stale-hold": "2.0", "planted-dup": "2.0", "planted-last": "2.0"},
+             held={"planted-held", "planted-last"})
+        look("off", facts["off"], False, {})
+
+        if wrong:
+            print("ERROR: the distro's AppImages do not follow their releases as the person chose.", file=sys.stderr)
+            print("", file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            sys.exit(1)
+        print(f"OK: {len(judged)} cases judged as the Rust judge does; unverified pins wait, a verified newer one is built in the person's profile and not in systemPackages, a held one falls back to the last verified, {len(refused)} malformed ones refused by their rule; off, nothing followed")
+        END
+      '';
   # ── anchor: L05 ──
   # THE MACHINE'S LIFE (the machine-lifecycle package): the apply that puts
   # the lock back, the one rule that lets the person apply without moving
@@ -43744,7 +44863,11 @@ let
       declared-unknown-field:declared:shape
       declared-unknown-source:declared:shape
       declined-duplicate:declined:duplicate
+      distro-pins-duplicate:distro-pins:duplicate
+      distro-pins-not-a-release:distro-pins:invalid
+      distro-pins-not-the-tags-version:distro-pins:invalid
       held-unknown-reason:held:shape
+      verified-not-a-followed-id:verified:invalid
       not-json:declared:not-json
       signer-not-a-key:signer:invalid
     "
@@ -43773,7 +44896,7 @@ let
       name=$(printf '%s' "$row" | cut -d: -f1)
       [ -f "$fixtures/bad/$name.json" ] || { echo "ERROR: the table names $name, which is not a fixture" >&2; exit 1; }
     done
-    [ "$bad" -ge 12 ] || { echo "ERROR: only $bad bad fixtures; this stopped reaching them" >&2; exit 1; }
+    [ "$bad" -ge 16 ] || { echo "ERROR: only $bad bad fixtures; this stopped reaching them" >&2; exit 1; }
 
     sed 's/"format": 1,/"format": 2,/' "$fixtures/good/declared.json" > newer.json
     cmp -s newer.json "$fixtures/good/declared.json" && { echo "ERROR: the format was not raised" >&2; exit 1; }
@@ -43800,6 +44923,57 @@ let
     bash ${./person-apply-refuses-links.sh} ${rust.person}/bin/ronoctua-person \
       ${rust.bins.ronoctua-test-pq}/bin/ronoctua-test-pq
   '';
+
+  # THE SEEDED DECLINE CHAIN, END TO END, WITH THE REAL PROGRAMS: the
+  # installer's own plan (its dry run's steps and choice, replayed with its
+  # places moved here) — the choice signed into the person's repository
+  # (`plain --decline`), the key pinned, root's apply held to it and the
+  # installer's reading of it (restated: only `--execute` runs it) — the
+  # restore's mirror; the updates' person half, its steps as the update
+  # declares them (read here, so a changed argument is followed), with root's
+  # applier started by the stage as its unit is: the first update keeping
+  # the choice, a decline another machine signed arriving with no identity
+  # kept, one signed here arriving; and an empty repository's declines,
+  # staged unsigned, signed by `init` and kept by the pinned apply. Offline:
+  # the repositories are bare ones here, reached over the belongings' own SSH
+  # path through a stand-in `ssh`, while the person's global git
+  # configuration rewrites their address to decoys nothing may touch. The
+  # script runs only inside a Nix build — the kernel keyring it opens and
+  # forgets in is the build's own — and refuses anywhere else. It does not
+  # install a disk: that is `installer-vm`'s (`docs/PENDING.md`).
+  person-decline-chain =
+    let
+      # THE UPDATE'S PERSON HALF THAT GATHERS, as its steps declare it — their
+      # order, programs, arguments, preconditions and the refusals each reads
+      # as news — chosen by what they are, never by name: a step's id lives
+      # in `steps.nix` alone (the update module's own check of its one list).
+      declared = (import ../crates/ronoctua-brain/modules/system-update/steps.nix).steps;
+      personHalf = pkgs.writeText "person-half.json" (
+        builtins.toJSON (
+          map (s: {
+            inherit (s)
+              id
+              program
+              run
+              enable
+              ;
+            declines = s.declines or [ ];
+            needs = s.needs or [ ];
+          }) (lib.filter (s: s.does == "gather" && !s.root) declared)
+        )
+      );
+    in
+    mkCheck "person-decline-chain" [ pkgs.python3 pkgs.git ] ''
+      # The installer's texts and palettes (`rust.keyed`): its binary here is
+      # the unwrapped one, as `installer-dryrun` runs it.
+      export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+      export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+      python3 ${./person-decline-chain.py} ${personHalf} \
+        ${rust.belongings}/bin/ronoctua-belongings \
+        ${rust.person}/bin/ronoctua-person \
+        ${rust.software}/bin/ronoctua-software \
+        ${rust.bins.ronoctua-install}/bin/ronoctua-install
+    '';
 
   # THE APPLIER'S ONE POLKIT RULE, AND HOW WIDE IT IS.
   #
@@ -49020,6 +50194,9 @@ let
           "auth status")
             [ "''${FAKE_GH_AUTH:-0}" = 0 ] || exit 1
             ;;
+          "auth token")
+            echo "stand-in-token"
+            ;;
           "release view")
             [ -f "$GH_STATE/$3" ] || exit 1
             read -r kind _ <"$GH_STATE/$3"
@@ -49080,6 +50257,15 @@ let
         echo "gate" >>"$CALLS"
         exit "''${FAKE_GATE_EXIT:-0}"
       '';
+      # The distro's pins against their releases: one behind, or no answer.
+      # It says whether the token reached it, never the token.
+      pins = pkgs.writeShellScript "stand-in-stale-pins" ''
+        echo "pins $* ''${GH_TOKEN:+with-the-token}" >>"$CALLS"
+        echo "1 of the distro's pins is behind its latest release:"
+        echo "  Demo (demo): 1.0 pinned, 1.1 released"
+        sleep "''${FAKE_PINS_SLEEP:-0}"
+        exit "''${FAKE_PINS_EXIT:-0}"
+      '';
     };
 
   # A RELEASE IS `main`, CLEAN, EQUAL TO `origin/main`, AND ONLY EVER MOVES
@@ -49104,7 +50290,10 @@ let
   # `--sign`: the
   # signed tag stays in the checkout until `release` has moved (a push of the
   # branch that is refused leaves it there, and says so), then reaches the
-  # origin before the release is published against it.
+  # origin before the release is published against it. And the distro's pins
+  # that fell behind their releases are said (the program that asks is
+  # handed the checkout) before the gate, in the dry run too, and an answer
+  # that did not come is said and stops nothing.
   release-refuses-dirty-tree =
     let
       release = releaseApps.releaseWith {
@@ -49112,7 +50301,9 @@ let
           gh
           nix
           gate
+          pins
           ;
+        pinsLimitS = 2;
       };
     in
     mkCheck "release-refuses-dirty-tree"
@@ -49238,10 +50429,36 @@ let
           failed=1
         fi
         grep -q "dry run: nothing was built" "$said" || { echo "ERROR: the dry run did not say so" >&2; failed=1; }
-        if grep -v -e '^gh auth status' -e '^gh release view' "$CALLS"; then
+        if grep -v -e '^gh auth status' -e '^gh auth token' -e '^gh release view' -e '^pins ' "$CALLS"; then
           echo "ERROR: the dry run did more than ask" >&2
           failed=1
         fi
+        # THE PINS BEHIND, said with both versions, of this checkout; and an
+        # answer that did not come stops nothing.
+        grep -qx "pins $(git rev-parse --show-toplevel) with-the-token" "$CALLS" ||
+          { echo "ERROR: the pins were not compared, not of this checkout, or without gh's token" >&2; cat "$CALLS" >&2; failed=1; }
+        if grep -q stand-in-token "$said" "$CALLS"; then
+          echo "ERROR: the token was printed" >&2
+          failed=1
+        fi
+        grep -qx "    Demo (demo): 1.0 pinned, 1.1 released" "$said" && grep -qx "  this release goes on with the pins it has" "$said" ||
+          { echo "ERROR: the dry run did not say the pins behind, and that it goes on" >&2; cat "$said" >&2; failed=1; }
+        if ! FAKE_PINS_EXIT=1 "$release" --dry-run >"$said" 2>&1; then
+          echo "ERROR: pins that could not be compared stopped the release" >&2
+          cat "$said" >&2
+          failed=1
+        fi
+        grep -q "they could not be compared" "$said" || { echo "ERROR: the pins not compared were not said" >&2; failed=1; }
+        # A NETWORK THAT DOES NOT ANSWER holds nothing: the comparison has
+        # its limit (two seconds here), and the release goes on.
+        started=$SECONDS
+        if ! FAKE_PINS_SLEEP=30 "$release" --dry-run >"$said" 2>&1; then
+          echo "ERROR: pins that did not answer stopped the release" >&2
+          cat "$said" >&2
+          failed=1
+        fi
+        [ $((SECONDS - started)) -lt 20 ] || { echo "ERROR: pins that did not answer held the release" >&2; failed=1; }
+        grep -q "no answer within 2 s" "$said" || { echo "ERROR: the pins that did not answer were not said" >&2; cat "$said" >&2; failed=1; }
 
         # THE RELEASE, whole.
         rev=$(git rev-parse HEAD)
@@ -49266,6 +50483,10 @@ let
           { echo "ERROR: the release was not published after release moved" >&2; failed=1; }
         grep -q -e '--draft=false --latest' "$CALLS" || { echo "ERROR: not published as the latest" >&2; failed=1; }
         grep -qx gate "$CALLS" || { echo "ERROR: released without the gate" >&2; failed=1; }
+        pins_at=$(grep -n '^pins ' "$CALLS" | head -1 | cut -d: -f1)
+        gate_at=$(grep -nx gate "$CALLS" | head -1 | cut -d: -f1)
+        [ -n "$pins_at" ] && [ -n "$gate_at" ] && [ "$pins_at" -lt "$gate_at" ] ||
+          { echo "ERROR: the pins behind were not said before the gate" >&2; cat "$CALLS" >&2; failed=1; }
 
         # A RUN ONTO A DRAFT THAT IS THERE: the assets go to it again, and no
         # other draft is made. `mid` is released by nobody.
@@ -49296,8 +50517,8 @@ let
         [ "$(at_release)" = "$rev" ] || { echo "ERROR: the rollback did not move release back" >&2; failed=1; }
         grep -qx "gh release edit $first --repo ronoctua/ronoctua-distro --latest" "$CALLS" ||
           { echo "ERROR: the release rolled back to is not the latest again" >&2; cat "$CALLS" >&2; failed=1; }
-        if grep -q -e '^nix' -e '^gh release \(create\|upload\)' -e '--draft=false' "$CALLS"; then
-          echo "ERROR: a rollback built or published something:" >&2
+        if grep -q -e '^nix' -e '^gh release \(create\|upload\)' -e '--draft=false' -e '^pins ' "$CALLS"; then
+          echo "ERROR: a rollback built, published or asked about pins:" >&2
           cat "$CALLS" >&2
           failed=1
         fi
@@ -49354,7 +50575,7 @@ let
           { echo "ERROR: the signed release was not published against its tag" >&2; cat "$CALLS" >&2; failed=1; }
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: seventeen refusals before anything was built or pushed; a release drafts, moves release forward, publishes, commits nothing and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
+        echo "OK: seventeen refusals before anything was built or pushed; the pins behind said before the gate, and stopping nothing; a release drafts, moves release forward, publishes, commits nothing and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
       '';
 
   # THE ISO COMES BACK WHOLE FROM ITS PARTS, AND FROM NOTHING ELSE.
@@ -51749,6 +52970,7 @@ let
     x11-vm = x11Vm;
     emacs-vm = emacsVm;
     vscode-vm = vscodeVm;
+    inherit one-vscode-boundary;
     keyboard-vm = keyboardVm;
     rescue-vm = rescueVm;
     tpm-vm = tpmVm;
@@ -52456,9 +53678,12 @@ let
       essential-apps-say-why
       distro-app-ids-are-stable
       offered-programs-are-the-registrys
+      offered-refuses-each-malformed-row
       distro-apps-are-registered
       distro-pins-move-only-what-follows
+      distro-pins-stale-is-read-only
       distro-app-sources-are-checked
+      distro-apps-follow-when-on-and-newer
       ;
     # ── anchor: L05 ──
     inherit
@@ -52473,6 +53698,7 @@ let
     inherit
       person-schema-golden
       person-apply-refuses-links
+      person-decline-chain
       person-apply-rule-is-narrow
       one-person-boundary
       ;

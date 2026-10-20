@@ -418,7 +418,9 @@ fn quoted(text: &OsStr) -> String {
 /// in `repo` (`-C`), with [`HARDENING`], no prompt (`GIT_TERMINAL_PROMPT=0`),
 /// no optional lock (`GIT_OPTIONAL_LOCKS=0`), literal pathspecs, no lazy
 /// fetch, only [`PROTOCOLS`], [`UNSET`] removed, stdin closed — and the
-/// credentials' environment. Add the subcommand with [`subcommand`].
+/// credentials' environment, with neither the global nor the system
+/// configuration when there are credentials (no rewrite of the address the
+/// consent named). Add the subcommand with [`subcommand`].
 ///
 /// # Errors
 ///
@@ -450,6 +452,20 @@ pub fn base(
         .env("GIT_PROXY_COMMAND", "")
         .env("SSH_ASKPASS_REQUIRE", "never")
         .stdin(Stdio::null());
+    // A REMOTE REACHED WITH OUR ACCESS (the belongings' deploy key or token)
+    // reads no configuration but the repository's own. The consent was given
+    // for the host of the address the caller named, and the person's global
+    // or the system's `url.<base>.insteadOf` / `pushInsteadOf` would take the
+    // access — and what is pushed — to a host nobody let, after the pass was
+    // checked. Nothing else of those files is needed here: the SSH command,
+    // the credentials and a commit's identities are all said by this call. A
+    // call with no access of ours (the git view, on the person's own
+    // projects) keeps the person's configuration, rewrites included.
+    if credentials.is_some() {
+        command
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+    }
     // ALWAYS SET: the environment beats the repository's `core.sshCommand`.
     let ssh = tools
         .ssh
@@ -2377,6 +2393,98 @@ mod tests {
 
     fn opened(tools: &Tools, dir: &Path) -> Repo {
         Repo::discover(dir).unwrap().with_tools(tools.clone())
+    }
+
+    /// FAILS IF: a remote reached with our access follows a rewrite of the
+    /// address from the person's global configuration or the system's
+    /// (`url.<base>.insteadOf`, `pushInsteadOf`) — the consent named the
+    /// address's host, and git would take the access and what is pushed
+    /// elsewhere — or a call with no access of ours stops following them
+    /// (the git view reaches the person's projects their way). git itself
+    /// says where it would go (`remote get-url`, which expands both).
+    #[test]
+    fn our_access_follows_no_rewrite_of_the_address() {
+        let tools = real();
+        let dir = place("insteadof");
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        fixture(&tools, &work, &["init", "-q", "-b", "main"]);
+        let address = "git@example.org:me/belongings.git";
+        fixture(&tools, &work, &["remote", "add", "origin", address]);
+        // THE PERSON'S GLOBAL FILE, read through the home, and THE SYSTEM'S,
+        // through the variable git reads it from — each sending the host
+        // somewhere else.
+        let rewrite = |to: &str| {
+            format!(
+                "[url \"{to}\"]\n\tinsteadOf = git@example.org:\n\tpushInsteadOf = git@example.org:\n"
+            )
+        };
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".gitconfig"), rewrite("file:///elsewhere/")).unwrap();
+        let system = dir.join("system-gitconfig");
+        std::fs::write(&system, rewrite("file:///system/")).unwrap();
+        let bare_home = dir.join("bare-home");
+        std::fs::create_dir_all(&bare_home).unwrap();
+        let ours = Credentials::Ssh {
+            key: dir.join("deploy"),
+            known_hosts: dir.join("known_hosts"),
+            pq_only: true,
+        };
+        // Where git would go for `origin` (`--push`: to push), with the
+        // person's home `home` and the system's file `system`.
+        let get_url =
+            |credentials: Option<&Credentials>, push: bool, home: &Path, system: &Path| {
+                let mut command = base(&tools, &work, credentials).unwrap();
+                if credentials.is_none() {
+                    // What this test process inherited is not the person's.
+                    command
+                        .env_remove("GIT_CONFIG_GLOBAL")
+                        .env_remove("GIT_CONFIG_NOSYSTEM");
+                }
+                command
+                    .env("HOME", home)
+                    .env_remove("XDG_CONFIG_HOME")
+                    .env("GIT_CONFIG_SYSTEM", system);
+                subcommand(&mut command, "remote").arg("get-url");
+                if push {
+                    command.arg("--push");
+                }
+                let out = command.arg("origin").output().unwrap();
+                assert!(
+                    out.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                String::from_utf8_lossy(&out.stdout).trim().to_owned()
+            };
+        let none = Path::new("/dev/null");
+        for push in [false, true] {
+            // WITH OUR ACCESS: the address, whatever either file says.
+            assert_eq!(
+                get_url(Some(&ours), push, &home, none),
+                address,
+                "global, push {push}"
+            );
+            assert_eq!(
+                get_url(Some(&ours), push, &bare_home, &system),
+                address,
+                "system, push {push}"
+            );
+            // WITHOUT: the person's own rewrites hold — and so the files
+            // above do say something.
+            assert_eq!(
+                get_url(None, push, &home, none),
+                "file:///elsewhere/me/belongings.git",
+                "global, push {push}"
+            );
+            assert_eq!(
+                get_url(None, push, &bare_home, &system),
+                "file:///system/me/belongings.git",
+                "system, push {push}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

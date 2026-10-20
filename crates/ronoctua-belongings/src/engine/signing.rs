@@ -64,7 +64,24 @@ const SIGNATURE_MOST_BYTES: u64 = ronoctua_person::tree::caps::SIGNATURE_MOST_BY
 /// one and its fingerprint its own, else nothing is trusted.
 #[must_use]
 pub fn pinned_key() -> Option<PublicKey> {
-    pinned_key_in(Path::new(env!("RONOCTUA_MACHINE_DIR")))
+    pinned_key_in(&machine_dir(std::env::var_os(MACHINE_DIR)))
+}
+
+/// The variable that names the machine directory at run time — the one
+/// `ronoctua-person` and `ronoctua-machine` read too. On a machine it is
+/// unset in the person's session, or names the directory the build baked;
+/// a test points it at a machine of its own, so the person's programs there
+/// trust that machine's pin.
+pub const MACHINE_DIR: &str = "RONOCTUA_MACHINE_DIR";
+
+/// The machine directory: what `given` names ([`MACHINE_DIR`], read at run
+/// time), else the one the build baked. An empty value is none. Pure.
+#[must_use]
+pub fn machine_dir(given: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    given.filter(|v| !v.is_empty()).map_or_else(
+        || std::path::PathBuf::from(env!("RONOCTUA_MACHINE_DIR")),
+        std::path::PathBuf::from,
+    )
 }
 
 /// [`pinned_key`] of the machine directory `machine`.
@@ -543,5 +560,21 @@ mod tests {
                 "person/software/declared.json",
             ]
         );
+    }
+
+    /// FAILS IF: the machine directory the person's pin is read from is not
+    /// the one named at run time when one is (a test's machine, the way
+    /// `ronoctua-person` and `ronoctua-machine` read it), or not the baked
+    /// one when none is — an empty value included.
+    #[test]
+    fn the_pin_is_read_where_the_machine_is_named() {
+        let baked = std::path::PathBuf::from(env!("RONOCTUA_MACHINE_DIR"));
+        assert_eq!(machine_dir(None), baked);
+        assert_eq!(machine_dir(Some(std::ffi::OsString::new())), baked);
+        assert_eq!(
+            machine_dir(Some("/var/test/machine".into())),
+            std::path::PathBuf::from("/var/test/machine")
+        );
+        assert_eq!(MACHINE_DIR, "RONOCTUA_MACHINE_DIR");
     }
 }

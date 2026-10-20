@@ -4,7 +4,8 @@
 use crate::choice::Choice;
 use crate::declared::Declared;
 use crate::declined::Declined;
-use crate::local::{Approved, Held, Signer};
+use crate::distro_pins::DistroPins;
+use crate::local::{Approved, Held, Signer, Verified};
 use crate::options::Options;
 use crate::reports::{DeclaredAndroid, DistroApps, PersonApplied};
 use crate::state::MachineState;
@@ -43,6 +44,11 @@ fn every_good_fixture_reads_and_writes_back_byte_for_byte() {
     round_trips::<Options>("options", include_str!("../fixtures/good/options.json"));
     round_trips::<Signer>("signer", include_str!("../fixtures/good/signer.json"));
     round_trips::<Choice>("choice", include_str!("../fixtures/good/choice.json"));
+    round_trips::<DistroPins>(
+        "distro-pins",
+        include_str!("../fixtures/good/distro-pins.json"),
+    );
+    round_trips::<Verified>("verified", include_str!("../fixtures/good/verified.json"));
 }
 
 fn refused<T: Document + std::fmt::Debug>(name: &str, text: &str, why: Why) {
@@ -117,6 +123,26 @@ fn every_bad_fixture_is_refused_for_its_reason() {
         "not a key",
         include_str!("../fixtures/bad/signer-not-a-key.json"),
         Why::Invalid,
+    );
+    refused::<DistroPins>(
+        "not the tag's version",
+        include_str!("../fixtures/bad/distro-pins-not-the-tags-version.json"),
+        Why::Invalid,
+    );
+    refused::<DistroPins>(
+        "not a release",
+        include_str!("../fixtures/bad/distro-pins-not-a-release.json"),
+        Why::Invalid,
+    );
+    refused::<Verified>(
+        "not a followed id",
+        include_str!("../fixtures/bad/verified-not-a-followed-id.json"),
+        Why::Invalid,
+    );
+    refused::<DistroPins>(
+        "a pin twice",
+        include_str!("../fixtures/bad/distro-pins-duplicate.json"),
+        Why::Duplicate,
     );
 }
 

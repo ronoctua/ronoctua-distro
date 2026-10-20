@@ -1271,6 +1271,22 @@ let
       # the session the loop runs in, never the nested one (`loopEmacsclient`
       # says why).
       export RONOCTUA_EMACSCLIENT="${loopEmacsclient}"
+      # AND VS CODE, for the belongings door: the extensions' offer and its
+      # row are drawn only where `code` is (`offers::vscode_here`), and the
+      # queue's child installs with it. An installed machine sets it only
+      # where VS Code is (`nix/modules/vscode.nix`); the loop has no NixOS to
+      # ask, so it takes THE INSTALLED SYSTEM'S `code` — the registry puts it
+      # in `systemPackages` — and nothing else: a `code` of another kind on
+      # the PATH (a non-NixOS host's own, another version) is not the program
+      # whose Marketplace hosts the consent was written for. A value
+      # inherited from the installed footer (a terminal it opened) is
+      # replaced or removed, never trusted. `one-vscode-boundary` holds the
+      # two places.
+      if [ -x /run/current-system/sw/bin/code ]; then
+        export RONOCTUA_VSCODE=/run/current-system/sw/bin/code
+      else
+        unset RONOCTUA_VSCODE
+      fi
       # AND NOTHING ENDS BEFORE THE LOOP'S SESSION. The installed footer hands
       # its children the units it restarts before `s q q` leaves
       # (`RONOCTUA_SESSION_END_RESTARTS`, `nix/modules/base.nix`), so a loop

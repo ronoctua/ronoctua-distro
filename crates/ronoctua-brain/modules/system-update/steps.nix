@@ -234,8 +234,15 @@ in
 
     # G2. THE PINS, MOVED FORWARD: an AppImage that follows its releases, an
     # Android app that follows F-Droid — each to the version and the digest
-    # it has now, written into the declaration. Without a declaration there
-    # is nothing to move.
+    # it has now, written into the declaration. And, while the person's
+    # options say to follow them (the owner's decision, 2026-10-20), the
+    # distro's AppImages that follow a repository (the Crafting Apps), past
+    # the pins the distro tested, into their `software/distro-pins.json`;
+    # with the option off, that file goes. No argument names a program: the
+    # table says what follows, the program reads it from the system's
+    # report. Without the person's folder there is nothing to move.
+    # `github-not-let` is news: GitHub is not in their consent, and the
+    # distro's AppImages keep the pins they had.
     {
       id = "person-pins";
       does = "gather";
@@ -246,8 +253,9 @@ in
         "pins"
         "refresh"
       ];
+      declines = [ "github-not-let" ];
       needs = [
-        { file = "$XDG_STATE_HOME/ronoctua/person/software/declared.json"; }
+        { directory = "$XDG_STATE_HOME/ronoctua/person"; }
         { network = true; }
       ];
       on-failure = "carry-on";
@@ -258,9 +266,11 @@ in
     # the person's plain part as it is now, and root takes from a staging
     # only what the person signed (`ronoctua-person apply`, against the key
     # the machine pinned). With the identity the session keeps, the moved
-    # pins arrive signed; without it the step declines (`no-passphrase`) and
-    # root keeps its copy of the declaration until the person's next sync —
-    # nothing here ever asks. No network.
+    # pins arrive signed; without it the step declines (`no-passphrase`):
+    # what the person's other machines signed, which G1 brought with its
+    # signature, still arrives, and only what changed HERE unsigned (the
+    # moved pins, a change made here) waits — root keeps its copy of that
+    # file until this machine signs it. Nothing here ever asks. No network.
     {
       id = "person-sign";
       does = "gather";
@@ -277,10 +287,16 @@ in
       enable = true;
     }
 
-    # G3. THE DECLARATIONS, STAGED FOR ROOT: the person's copy put where root's
-    # narrow applier (`ronoctua-person-apply.service`) takes it, validated and
-    # swapped into the machine directory whole — data, never Nix code. A
-    # rehearsal only checks that it would be taken (`--check`).
+    # G3. THE DECLARATIONS, HANDED TO ROOT: the person's copy put where root's
+    # narrow applier (`ronoctua-person-apply.service`) takes it, the unit
+    # started as the software centre starts it, and its verdict read — so the
+    # root half verifies and builds what the person's signature covers now
+    # (what G1 brought signed, and what G2b signed here), and not the copy
+    # the machine had. Validated and swapped into the machine directory
+    # whole — data, never Nix code. `busy` is news: another of root's
+    # programs (the software centre's rebuild) held the machine, and this
+    # run builds what it had. A rehearsal only checks that it would be taken
+    # (`--check`).
     {
       id = "person-stage";
       does = "gather";
@@ -296,6 +312,7 @@ in
         "stage"
         "--check"
       ];
+      declines = [ "busy" ];
       needs = [ { directory = "$XDG_STATE_HOME/ronoctua/person"; } ];
       on-failure = "carry-on";
       enable = true;

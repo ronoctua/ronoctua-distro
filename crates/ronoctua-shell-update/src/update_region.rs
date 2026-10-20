@@ -329,6 +329,7 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
             )),
         },
         Errand::Cache(e) => cache_errand(e, open, way),
+        Errand::Follow(e) => follow_errand(e, open, way),
         Errand::Close => way.close(),
     }
     way.repaint();
@@ -376,6 +377,34 @@ fn cache_errand(e: binary_cache::Errand, open: &mut Open, way: &mut dyn Doorway)
                     edit.word()
                 ));
             }
+        },
+        Page::Nothing | Page::Moved | Page::Close => {}
+    }
+}
+
+/// What the page of the apps that follow their releases asked of the door:
+/// a sentence, or a turn of the switch — the person's copy of their options
+/// and, turning it on, their consent for GitHub — said on the door's line.
+fn follow_errand(e: crate::follow::Errand, open: &mut Open, way: &mut dyn Doorway) {
+    use crate::follow::Errand as Page;
+    match e {
+        Page::Say(k) => {
+            let said = way.texts().t(k);
+            way.say(said, crate::echo::Echo::Long);
+        }
+        Page::Turn(on) => match &mut open.reach {
+            Reach::Machine => {
+                let Some(places) = open.view.follow_places().cloned() else {
+                    return;
+                };
+                let said = crate::follow::apply(on, &places, way.texts());
+                open.view.follow_reread();
+                way.say(said, crate::echo::Echo::Long);
+            }
+            Reach::Kept(asked) => asked.push(format!(
+                "would have turned following the distro's releases {}",
+                if on { "on" } else { "off" }
+            )),
         },
         Page::Nothing | Page::Moved | Page::Close => {}
     }
@@ -533,6 +562,10 @@ impl Region for UpdateRegion {
                 self.open.view.open_cache();
                 self.shown_on_the_step(way);
             }
+            Order::Follow => {
+                self.open.view.open_follow();
+                self.shown_on_the_step(way);
+            }
             // ROOT'S NETRC, by its name: a root gesture, asked in the sudo
             // bar above the footer.
             Order::Cache(binary_cache::NETRC) => {
@@ -647,7 +680,7 @@ fn closed(command: &str, _: Option<&str>, way: &mut dyn Doorway) -> Closed {
             Closed::Taken
         }
         Some(Order::Start | Order::Cache(binary_cache::NETRC)) => Closed::Behind,
-        Some(Order::Open | Order::Cache(_)) => Closed::Opens,
+        Some(Order::Open | Order::Cache(_) | Order::Follow) => Closed::Opens,
     }
 }
 
@@ -883,7 +916,7 @@ mod tests {
                             .region_rows(*n, 1, 100, &t)
                             .first()
                             .and_then(|x| x.target)
-                            == Some(crate::update_window::Target::Cache(remove))
+                            == Some(crate::update_window::Target::Page(remove))
                     })
                     .expect("the removal is drawn")
             };

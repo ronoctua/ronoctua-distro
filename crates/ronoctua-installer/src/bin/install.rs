@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file>]
-//! ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out>
+//! ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out|compose>
 //! ```
 //!
 //! # Two modes, and why there are two
@@ -37,10 +37,10 @@
 //! # `--show`
 //!
 //! Prints one of the screens that check the network or the repository (or the list of
-//! programs a `full` installation leaves out), drawn as the TUI draws it, from a fixture and
-//! with no network: what a person (or a reviewer) looks at without a disk to install on. To a
-//! terminal, at its size and in its colours, so a narrow console is looked at as it is; to a
-//! file, its text at 100 × 34 cells.
+//! programs a `full` installation leaves out, or the Compose question), drawn as the TUI
+//! draws it, from a fixture and with no network: what a person (or a reviewer) looks at
+//! without a disk to install on. To a terminal, at its size and in its colours, so a narrow
+//! console is looked at as it is; to a file, its text at 100 × 34 cells.
 //!
 //! # The programs left out
 //!
@@ -83,7 +83,7 @@ use ronoctua_installer::tui;
 /// The usage, in English (invariant 18: a command line's help).
 const USAGE: &str =
     "usage: ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file|->]
-       ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out>";
+       ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out|compose>";
 
 /// The size `--show` draws at when it does not print to a terminal: the
 /// review's plan fits it, and the tests read it.

@@ -120,6 +120,17 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    (`/var/lib/ronoctua-binary-cache/netrc`, `0600`), escrito só pelo gesto dela pela porta do sudo
    (`binary-cache-netrc`) e pelo instalador, e removido quando o token ou o cache privado saem; o
    netrc e o token nunca entram no flake, no store nem em `/etc`.
+   Emenda aprovada pelo dono (2026-10-20): **os apps da distro podem seguir as próprias releases, no
+   perfil da pessoa**. Só com a opção dela ligada (`distro-apps-follow-releases` no `options.json`,
+   desligada por padrão; ligar é o gesto que permite `api.github.com` e `github.com`), o
+   `person-pins` leva cada AppImage da tabela com `follows.github` à release mais nova, em
+   `person/software/distro-pins.json`: dado da pessoa, só assinado, como o `options.json`, nunca de
+   repositório fora da tabela, e nenhum argumento da sequência nomeia o que instalar. Os bytes são o
+   download da própria pessoa, então a versão seguida vai para o perfil DELA (Home Manager), nunca
+   para o `systemPackages` — o L03 vale —, e só depois que o `person-verify` do root a construiu
+   (`local/verified.json`); até lá fica a última verificada, ou a da distro no sistema. O que o juiz
+   recusa (`nix/distro-pins.nix`, a tabela de casos do Rust) é dito, nunca uma parada (cobra
+   `distro-apps-follow-when-on-and-newer`).
    Exceção no mesmo molde (2026-10-20, aprovada no plano da leva): **as extensões do VS Code e o
    Quicklisp da pessoa**. Só pelo gesto dela — a oferta dos pertences ou `ronoctua-vscode install`,
    com o `Pass` de cada host que `hosts_of` nomeia; `quicklisp-install`, digitado — o que a distro
@@ -499,9 +510,9 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | o Incus (a API REST pelo socket e o CLI) | `ronoctua-incus` (cobra `one-incus-boundary`) |
 | o estado do Claude Code e do Codex, e o endpoint de uso da Anthropic | `ronoctua-llm` (cobra `one-llm-boundary`) |
 | `bootctl`, as variáveis EFI e o diretório da máquina | `ronoctua-machine` (cobra `one-bootctl-driver`) |
-| os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/held.json`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
+| os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/held.json`, `local/verified.json`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
 | o Cachix: o cache binário da pessoa, o token de envio, o netrc do root e o envio depois da atualização | `ronoctua-cachix` (cobra `binary-cache-token-never-prints`) |
-| o VS Code: o manifesto das extensões instaladas, a lista da pessoa que viaja nos pertences e o `code --install-extension` | `ronoctua-vscode` |
+| o VS Code: o manifesto das extensões instaladas, a lista da pessoa que viaja nos pertences e o `code --install-extension` | `ronoctua-vscode` (cobra `one-vscode-boundary`) |
 
 <!-- anchor: L01 -->
 
@@ -543,7 +554,7 @@ boot, nunca pelo relógio; a aparagem guarda o último bom e o ensaio (cobra
 
 <!-- anchor: L06 -->
 
-Quem escreve o `person/` da máquina e o `local/` dela (`held.json`, `approved.json`, `signer.json`)
+Quem escreve o `person/` da máquina e o `local/` dela (`held.json`, `verified.json`, `approved.json`, `signer.json`)
 é o binário `ronoctua-person`, como root, e só ele (`apply`, `verify`, `approve`, `pin`); ler é de
 todos (cobra `one-person-boundary`). Todo arquivo da pessoa se lê com `ronoctua_person::parse`
 (formato mais novo é recusado antes dos campos) e se escreve com `ronoctua_person::to_json`; o que

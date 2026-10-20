@@ -195,22 +195,12 @@ in
     };
   };
 
-  config = {
-    # `nixpkgs#…` IS THE SYSTEM'S OWN nixpkgs, LOCKED.
-    #
-    # `nixosSystem` already points the registry at the system's source, but by
-    # PATH alone — an entry with no `narHash` is not a locked one, so every
-    # `nix profile add nixpkgs#x` re-hashes the source tree and nothing about it
-    # can be cached. Given the flake input itself, the entry carries its `rev`
-    # and `narHash`: what a person installs for themselves (invariant 6's dated
-    # exception) comes from EXACTLY the revision the system was built from, and
-    # the search index (`nix/software-index.nix`) was built from that same one.
-    # It moves when the system's `flake update` moves it, and never on its own.
-    #
-    # HERE, and not in `base.nix`, because this module is who needs it: the
-    # VM tests that import the base alone have no flake inputs to give it.
-    nix.registry.nixpkgs.flake = inputs.nixpkgs;
+  # `nixpkgs#…` IS THE SYSTEM'S OWN nixpkgs, LOCKED, and the global registry
+  # comes from the store: `nix-registries.nix`, beside this module, which is
+  # who needs them (a VM test imports it alone).
+  imports = [ ./nix-registries.nix ];
 
+  config = {
     # THE STABLE PATH: `/run/current-system/sw/bin/ronoctua-software`, which
     # is what a web app's `.desktop` line names — a store path there would
     # open a deleted program after the next garbage collection.

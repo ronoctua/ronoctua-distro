@@ -7,12 +7,14 @@
 //!   software/declared.json               the programs declared for this person
 //!   software/declined.json               the distro's programs this person declined
 //!   software/icons/<sha256>.png          content-addressed icons the entries name
+//!   software/distro-pins.json            the distro's AppImages followed past its pins
 //!   machines/<hostname>.json             each machine's record (its `state.json`)
 //!   options.json                         opt-ins (signing commits by SSH, their binary cache)
 //!
 //! <machine dir>/person/              the root copy the root applier swaps in (data, never Nix)
 //! <machine dir>/local/held.json      entries the update held back (root only, never synced)
 //! <machine dir>/local/approved.json  person brain modules approved through the sudo door
+//! <machine dir>/local/verified.json  the followed distro AppImages root's verify built
 //! <machine dir>/local/signer.json    the person's signing key root trusts, and the last verdict on it
 //! $XDG_STATE_HOME/ronoctua/person-signed/  the manifest the person signed of the mirror, and its signature
 //! /etc/ronoctua/person-applied.json  what Nix applied and skipped, and why
@@ -55,6 +57,7 @@ pub mod approve;
 pub mod choice;
 pub mod declared;
 pub mod declined;
+pub mod distro_pins;
 pub mod local;
 pub mod merge;
 pub mod options;
@@ -83,6 +86,9 @@ pub mod names {
     pub const DECLINED: &str = "software/declined.json";
     /// The folder of content-addressed icons (`<sha256>.png`).
     pub const ICONS: &str = "software/icons";
+    /// Under the person's mirror and under the machine's `person/`: the
+    /// distro's AppImages followed past its pins ([`crate::distro_pins`]).
+    pub const DISTRO_PINS: &str = "software/distro-pins.json";
     /// The folder of the machines' records (`<hostname>.json`).
     pub const MACHINES: &str = "machines";
     /// The opt-ins.
@@ -95,6 +101,9 @@ pub mod names {
     pub const HELD: &str = "local/held.json";
     /// Under the machine directory, root only.
     pub const APPROVED: &str = "local/approved.json";
+    /// Under the machine directory, root only: the followed distro AppImages
+    /// root's verify built ([`crate::local::Verified`]).
+    pub const VERIFIED: &str = "local/verified.json";
     /// Under `/etc/ronoctua/`, written by Nix.
     pub const PERSON_APPLIED: &str = "person-applied.json";
     /// Under `/etc/ronoctua/`, written by Nix.

@@ -121,7 +121,7 @@ system-update-verdict-pending = still to come
 system-update-step-person-fetch = bring in what you declared elsewhere
 system-update-step-person-fetch-does = ronoctua-belongings plain pull: the plain part of your belongings — the programs you declared and declined on your other machines, their records — fetched and merged into this machine's copy, with no passphrase and the encrypted part untouched — and only what your key signed: anything else is held, and the view says why. A file changed here and elsewhere is left as this machine has it, and the view says so. Without a repository, or a network, the step is skipped and says so.
 system-update-step-person-pins = move the pins forward
-system-update-step-person-pins-does = ronoctua-software pins refresh: every declared program that follows its releases — an AppImage, an Android app from F-Droid — pinned to the version and the digest it has now. Without a declaration there is nothing to move.
+system-update-step-person-pins-does = ronoctua-software pins refresh: every declared program that follows its releases — an AppImage, an Android app from F-Droid — pinned to the version and the digest it has now. With your option to follow them on, and on a machine that trusts your signing key, the distro's apps that follow their releases (the Crafting Apps) too, past the pins the distro tested — asking GitHub, which you allowed, and downloading only a release this machine would take; with it off, those pins go and the distro's come back.
 system-update-step-person-sign = sign what you declared
 system-update-step-person-sign-does = ronoctua-belongings sign: your declarations as they are now — what came from your other machines, the pins just moved — signed on this machine with your key, with no network and no question, so the machine takes them. Without your identity open (no passphrase typed this session), the step declines and the machine keeps the declarations it had until your next sync.
 system-update-step-person-stage = hand your declarations to the machine
@@ -129,7 +129,7 @@ system-update-step-person-stage-does = ronoctua-software person stage: your decl
 system-update-step-machine-migrate = give the machine its own flake
 system-update-step-machine-migrate-does = ronoctua-machine migrate: a machine that still carries a copy of the distro gets its own flake, with the distro as an input — built beside the old folder and swapped in only when it builds; a failure leaves the machine exactly as it was. Every other machine skips it. If it fails, the sequence stops here.
 system-update-step-person-verify = try what you declared
-system-update-step-person-verify-does = ronoctua-person verify: every program you declared, built on its own against the distro just fetched, so one that no longer builds is held back with its reason instead of taking the whole rebuild down. Its rehearsal tries, and writes nothing.
+system-update-step-person-verify-does = ronoctua-person verify: every program you declared, built on its own against the distro just fetched, so one that no longer builds is held back with its reason instead of taking the whole rebuild down — and every newer release of the distro's apps you follow, which is used only once it has built here, and tried again at every update until it does. Its rehearsal tries, and writes nothing.
 system-update-step-person-reconcile = bring in what is declared
 system-update-step-person-reconcile-does = ronoctua-software reconcile: what the system cannot do for you — the Android apps your declarations list, installed from the machine's copy — and the copy you installed by hand of a program now declared, taken out so the two do not shadow each other. It touches only what it put there itself.
 system-update-step-person-record = record what this machine did
@@ -149,9 +149,11 @@ system-update-kind-reconcile-declared = brings in what is declared
 system-update-kind-publish = publishes what this machine did
 
 system-update-declined-empty = This machine has not synced its belongings yet: there is no key to sign with, and the update goes on.
-system-update-declined-no-passphrase = Your identity is not open in this session: nothing was signed, and the machine keeps the declarations it had until your next sync signs them.
+system-update-declined-no-passphrase = Your identity is not open in this session: nothing was signed here. What your other machines signed still reaches this one; a change made here waits until your next sync signs it.
+system-update-declined-busy = Another of the machine's own programs was applying a change, and held its copy of your declarations: this update builds the ones it had, and yours reach it with its next apply.
 system-update-declined-did-not-boot = This is the system that did not start when it was tried: there is nothing new to apply until the distro moves on, and the rest of the update goes on.
 system-update-declined-nothing-to-migrate = This machine already has its own flake: there was nothing to migrate, and the update goes on.
+system-update-declined-github-not-let = GitHub is not allowed in your consent: the distro's apps that follow their releases were not looked at, and keep the versions they had; none of your own pins moved either. Turning the option to follow them on again allows it.
 system-update-verdict-declined = nothing new
 
 # WHAT THE MACHINE'S RECORDS SAY, above the steps, in both doors — only what

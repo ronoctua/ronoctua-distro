@@ -11,7 +11,8 @@
       "essential": null,
       "group": "media",
       "on-this-machine": true,
-      "declined-here": true
+      "declined-here": true,
+      "appimage": null
     },
     {
       "id": "chrome",
@@ -23,7 +24,44 @@
       "essential": "the-browser",
       "group": "base",
       "on-this-machine": true,
-      "declined-here": false
+      "declined-here": false,
+      "appimage": null
+    },
+    {
+      "id": "cadcraft",
+      "name": "CADCraft",
+      "source": "appimage",
+      "desktop-ids": [
+        "ronoctua-appimage-cadcraft.desktop"
+      ],
+      "essential": null,
+      "group": "crafts",
+      "on-this-machine": true,
+      "declined-here": false,
+      "appimage": {
+        "key": "cadcraft",
+        "follows": {
+          "repo": "storytold/cadcraft",
+          "asset-pattern": "cadcraft-*-linux-x86_64.AppImage"
+        },
+        "pin": "followed",
+        "version": "0.9.0",
+        "distro-version": "0.8.0",
+        "distro-url": "https://github.com/storytold/cadcraft/releases/download/v0.8.0/cadcraft-0.8.0-linux-x86_64.AppImage",
+        "followed-version": "0.9.0",
+        "held": null,
+        "waiting": false
+      }
     }
-  ]
+  ],
+  "followed": {
+    "on": true,
+    "refused": [
+      {
+        "id": "photocraft",
+        "fault": "asset",
+        "detail": "the followed pin of photocraft names an asset its table's pattern does not match"
+      }
+    ]
+  }
 }

@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "verified": [
+    {
+      "id": "distro-appimage:cadcraft",
+      "fingerprint": "3f1c2b7a9d0e4c58b6a1f2e3d4c5b6a79a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d",
+      "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+      "hash": "sha256-JPd+NyvwcjP3JnJFi8aRNdVLyfa7Y3ntc3hwp8EVK9I=",
+      "version": "0.9.0",
+      "since": "2026-10-20T12:30:00Z"
+    }
+  ]
+}

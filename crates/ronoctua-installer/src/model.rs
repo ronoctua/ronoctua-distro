@@ -592,6 +592,16 @@ fn data_file(var: &str, baked: Option<&str>, fallback: &str) -> Option<String> {
         .and_then(|p| std::fs::read_to_string(p).ok())
 }
 
+/// The five XML entities a `base.lst` description can carry, as the
+/// characters they stand for; anything else is left as it is.
+fn unescaped(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
 /// Reads one section of `base.lst`.
 ///
 /// The file is sections opened by `! layout`, `! variant`, `! option`, each line
@@ -627,11 +637,13 @@ fn section(header: &str, keep: &dyn Fn(&str, &str) -> bool) -> Vec<Choice> {
         if name.is_empty() {
             continue;
         }
-        let description = rest.trim();
-        if keep(name, description) {
+        // `base.lst` is generated from XML, and a few descriptions keep its
+        // entities (`The "&lt; &gt;" key`): a person reads the characters.
+        let description = unescaped(rest.trim());
+        if keep(name, &description) {
             out.push(Choice {
                 name: name.to_owned(),
-                description: description.to_owned(),
+                description,
             });
         }
     }
@@ -770,6 +782,62 @@ pub const DEFAULT_TIMEZONE: &str = "Europe/London";
 /// by pressing Enter and one built by `nix build` would otherwise type
 /// differently.
 pub const DEFAULT_COMPOSE: &str = "compose:caps";
+
+/// What the system adds to the Compose answer, whatever it is: the two
+/// Shifts together toggle Caps Lock, which is where Caps Lock went when the
+/// Compose key took its key. The same value as `nix/keyboard-xkb.nix`'s
+/// `always`, and `installer-defaults-match-the-keyboard` says so.
+pub const CAPS_TOGGLE: &str = "shift:both_capslock";
+
+// THE KEYS THE COMPOSE QUESTION'S HELP NAMES, by the xkb option that puts
+// them to work — the code's, never a sentence's (`keys-are-never-text`): the
+// help said "Caps Lock" and "the two Shifts" in both languages, and the
+// default had already moved once (it was AltGr). A default with no name here
+// does not compile ([`key_of`]).
+
+/// Caps Lock, by name — and the lock the toggle turns on and off.
+pub const KEY_CAPS_LOCK: &str = "Caps Lock";
+/// AltGr, by name.
+pub const KEY_ALTGR: &str = "AltGr";
+/// The two Shifts pressed together, by name.
+pub const KEY_BOTH_SHIFTS: &str = "Shift+Shift";
+
+/// Each xkb option the help may name, and the key it puts to work.
+pub const OPTION_KEYS: [(&str, &str); 3] = [
+    ("compose:caps", KEY_CAPS_LOCK),
+    ("compose:ralt", KEY_ALTGR),
+    ("shift:both_capslock", KEY_BOTH_SHIFTS),
+];
+
+/// The key an xkb option of [`OPTION_KEYS`] puts to work. Evaluated while
+/// compiling: an option with no name stops the build.
+const fn key_of(option: &str) -> &'static str {
+    let mut i = 0;
+    while i < OPTION_KEYS.len() {
+        let (named, key) = OPTION_KEYS[i];
+        if named.len() == option.len() {
+            let (a, b) = (named.as_bytes(), option.as_bytes());
+            let mut j = 0;
+            while j < a.len() && a[j] == b[j] {
+                j += 1;
+            }
+            if j == a.len() {
+                return key;
+            }
+        }
+        i += 1;
+    }
+    panic!("an xkb option the Compose help names has no key in OPTION_KEYS")
+}
+
+/// What the Compose question's help is handed: the default Compose key, the
+/// chord that toggles the lock, and the lock — by the options the system
+/// sets, never by words.
+pub const COMPOSE_HELP_KEYS: [(&str, &str); 3] = [
+    ("compose", key_of(DEFAULT_COMPOSE)),
+    ("toggle", key_of(CAPS_TOGGLE)),
+    ("capslock", KEY_CAPS_LOCK),
+];
 
 /// The keyboard layout when nobody chooses another.
 pub const DEFAULT_LAYOUT: &str = "gb";
@@ -1238,6 +1306,17 @@ mod tests {
     const LANGUAGES: &[&str] = &ronoctua_i18n::LANGUAGES;
     /// Enough to tell an accepted layout from a refused one.
     const LAYOUTS: &[&str] = &["br", "us", "gb"];
+
+    /// FAILS IF: a `base.lst` description reaches the screen with its XML
+    /// entities (`The "&lt; &gt;" key`) instead of the characters, or an
+    /// ampersand is decoded twice.
+    #[test]
+    fn a_base_lst_description_is_read_as_characters() {
+        assert_eq!(unescaped("The \"&lt; &gt;\" key"), "The \"< >\" key");
+        assert_eq!(unescaped("A &amp;lt; B"), "A &lt; B");
+        assert_eq!(unescaped("&quot;x&quot; &apos;y&apos;"), "\"x\" 'y'");
+        assert_eq!(unescaped("plain"), "plain");
+    }
 
     #[test]
     fn there_are_exactly_eighteen_questions() {

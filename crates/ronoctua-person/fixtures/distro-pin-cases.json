@@ -1,0 +1,401 @@
+{
+  "table": {
+    "cadcraft": {
+      "source": "appimage",
+      "key": "cadcraft",
+      "name": "CADCraft",
+      "follows": {
+        "github": {
+          "repo": "storytold/cadcraft",
+          "assetPattern": "cadcraft-*-linux-x86_64.AppImage"
+        }
+      }
+    },
+    "by-hand": {
+      "source": "appimage",
+      "key": "byhand",
+      "name": "By Hand",
+      "follows": null
+    },
+    "a-flatpak": {
+      "source": "flatpak",
+      "appId": "org.example.Flat"
+    }
+  },
+  "cases": [
+    {
+      "case": "the newest release, as GitHub names it",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": null
+    },
+    {
+      "case": "a tag without a v",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/0.9.1/cadcraft-0.9.1-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.1",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": null
+    },
+    {
+      "case": "a tag with a plus and an underscore",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v1.0.0+build_7/cadcraft-1.0.0+build_7-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "1.0.0+build_7",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": null
+    },
+    {
+      "case": "a hash that uses the whole alphabet",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-abcdefghijklmnopqrstuvwxyzABCDEFGHIJK+/0123=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": null
+    },
+    {
+      "case": "a tag that starts with v and no digit is its own version",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/vintage-2/cadcraft-vintage-2-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "vintage-2",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": null
+    },
+    {
+      "case": "an id the table does not have",
+      "pin": {
+        "id": "photocraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "id"
+    },
+    {
+      "case": "an id that follows nothing",
+      "pin": {
+        "id": "by-hand",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "id"
+    },
+    {
+      "case": "an id of a Flatpak",
+      "pin": {
+        "id": "a-flatpak",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "id"
+    },
+    {
+      "case": "an id that is not a slug",
+      "pin": {
+        "id": "CADCraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "id"
+    },
+    {
+      "case": "another repository",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/someone/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "plain http",
+      "pin": {
+        "id": "cadcraft",
+        "url": "http://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "another host",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://objects.githubusercontent.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "a query after the asset",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage?x=1",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "a fragment after the asset",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage#x",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "a dot-dot inside the tag",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0..9/cadcraft-0..9-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0..9",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "a dot-dot segment",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/../cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "a backslash in the asset",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage\\x",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "white space in the tag",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9 .0/cadcraft-0.9 .0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9 .0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "a percent-encoded name",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0%2Blinux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "a path one segment deeper",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/x/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "the latest-release shortcut, which moves",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/latest/download/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "url"
+    },
+    {
+      "case": "the aarch64 image",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-aarch64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "asset"
+    },
+    {
+      "case": "the zsync beside the image",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage.zsync",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "asset"
+    },
+    {
+      "case": "another app's image",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/photocraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "asset"
+    },
+    {
+      "case": "a version that is not the tag's",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.1",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "version"
+    },
+    {
+      "case": "the tag with its v kept",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "v0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "version"
+    },
+    {
+      "case": "a tag with no digit, which moves",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/nightly/cadcraft-nightly-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "nightly",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "version"
+    },
+    {
+      "case": "a version too long for a store name",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cadcraft-1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "version"
+    },
+    {
+      "case": "an empty version",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "version"
+    },
+    {
+      "case": "a SHA-512",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "hash"
+    },
+    {
+      "case": "GitHub's digest as it comes",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "hash"
+    },
+    {
+      "case": "a hash one character short",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "hash"
+    },
+    {
+      "case": "a hash without its padding",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "hash"
+    },
+    {
+      "case": "a character base64 does not have",
+      "pin": {
+        "id": "cadcraft",
+        "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+        "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-=",
+        "version": "0.9.0",
+        "pinned-at": "2026-10-20T12:00:00Z"
+      },
+      "fault": "hash"
+    }
+  ]
+}

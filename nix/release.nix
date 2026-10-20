@@ -69,6 +69,20 @@ let
       "nix/release.nix: the update's lock is no longer ${lock} (nix/modules/machine.nix, applyCommand)";
     lock;
 
+  # THE DISTRO'S PINS THAT FELL BEHIND, said before a release publishes
+  # (`distro-pins.py --stale`): read-only questions to GitHub (and F-Droid)
+  # about what each pin follows — nothing is downloaded or written, and no
+  # pin moves: a pin is what the gate tested, and moving one is the owner's
+  # commit (`nix run .#distro-pins`). Its one argument is the checkout.
+  stalePins = writeShellApplication {
+    name = "ronoctua-stale-pins";
+    runtimeInputs = [ nix ];
+    text = ''
+      export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
+      exec ${python3}/bin/python3 ${./scripts/distro-pins.py} --stale --root "$1"
+    '';
+  };
+
   # THE RELEASE, as a function of the programs it drives: the check
   # (`release-refuses-dirty-tree`) builds it with programs that only write
   # down that they were called, and the refusals it proves are this same
@@ -78,6 +92,10 @@ let
       gh,
       nix,
       gate,
+      pins,
+      # How long the pins may take to be compared, all of them: a network
+      # that does not answer must not hold the release.
+      pinsLimitS ? 120,
     }:
     writeShellApplication {
       name = "ronoctua-release";
@@ -93,6 +111,7 @@ let
         gh=${gh}
         nix=${nix}
         gate=${gate}
+        pins=${pins}
 
         usage() {
           cat <<'EOF'
@@ -102,6 +121,8 @@ let
         equal to `origin/main`: runs the gate, builds the two reference systems and
         the ISO (which carries its seed), moves `release` forward (only forward), and
         publishes the ISO as a GitHub release with SHA256SUMS. It never makes a commit.
+        First it says which of the distro's pins are behind their latest release
+        (`nix run .#distro-pins` moves them); it never moves one, and goes on.
 
           --dry-run          check everything that costs nothing, say what would happen,
                              build and publish nothing
@@ -295,6 +316,36 @@ let
         if [ "$sign" = 1 ]; then
           echo "  tag      signed, carrying the checksums"
         fi
+
+        # THE PINS THAT FELL BEHIND, said before anything costs time: the
+        # owner may stop here, move them (`nix run .#distro-pins`, a commit
+        # and a push) and release again. Never a refusal and never a move —
+        # a pin is what the gate tests —, and a question the network did not
+        # answer is said and the release goes on.
+        #
+        # THE LOGGED-IN `gh`'s TOKEN goes in the environment of that one call —
+        # never an argument, never printed —: GitHub answers sixty questions
+        # an hour without one, and a release is asked again and again.
+        echo
+        echo "the distro's pins, against their latest releases:"
+        token=$("$gh" auth token 2>/dev/null || true)
+        limit=${toString pinsLimitS}
+        status=0
+        if [ -n "$token" ]; then
+          said=$(GH_TOKEN="$token" timeout "$limit" "$pins" "$top" 2>&1) || status=$?
+        else
+          said=$(timeout "$limit" "$pins" "$top" 2>&1) || status=$?
+        fi
+        unset token
+        while IFS= read -r line; do
+          echo "  $line"
+        done <<<"$said"
+        case "$status" in
+          0) ;;
+          124) echo "  (no answer within $limit s: they were not compared)" ;;
+          *) echo "  (they could not be compared: see above)" ;;
+        esac
+        echo "  this release goes on with the pins it has"
         if [ "$dry" = 1 ]; then
           echo
           echo "dry run: nothing was built, pushed or published"
@@ -398,12 +449,13 @@ let
     };
 in
 rec {
-  inherit releaseWith;
+  inherit releaseWith stalePins;
 
   release = releaseWith {
     gh = lib.getExe gh;
     nix = lib.getExe' nix "nix";
     inherit gate;
+    pins = lib.getExe stalePins;
   };
 
   # ANYBODY'S, not only the owner's: no account, nothing to install but Nix.

@@ -9354,7 +9354,11 @@ instalação: diz para que a máquina serve, e nada no hardware diz isso.
   inicial de cada linha (o LibreOffice vem desmarcado: o ONLYOFFICE abre os mesmos documentos). O
   `nix/offered.nix` a escreve como tabela do instalador (`RONOCTUA_OFFERED_RS`) e recusa a linha
   que a tela não saberia desenhar ou que nenhuma recusa saberia nomear: id fora do `ids`, repetido
-  ou `none`, nome vazio, de duas linhas ou igual a outro. O build do instalador lê um arquivo, não
+  ou `none`, nome que o registro não aceita (`nix/names.nix`, a regra do `isName`), de duas linhas
+  (U+0085 e U+2028 inclusive), com espaço numa ponta (U+00A0 inclusive) ou igual a outro — cada
+  defeito numa frase só dele, que o `offered-refuses-each-malformed-row` pede de um livro-razão
+  plantado por defeito, numa avaliação só, e a guarda do build recusa um livro-razão ruim (uma
+  guarda que nunca recusou não foi testada). O build do instalador lê um arquivo, não
   avalia a máquina; o que a lista promete do registro — cada id é um programa que a `full` carrega
   e a `minimal` não, que se pode recusar e que sai quando recusado — o
   `offered-programs-are-the-registrys` pergunta às máquinas avaliadas. Por isso a tela só existe na
@@ -9368,7 +9372,9 @@ instalação: diz para que a máquina serve, e nada no hardware diz isso.
   texto com a palavra de resposta, o deixado de fora todo apagado.
 - **A resposta é o estado.** Ela é a lista dos ids desmarcados separados por vírgula, ou `none` —
   nunca vazia, para cruzar o arquivo de salto do release como qualquer outra. `Enter` ou espaço numa
-  linha de programa a marca ou desmarca; `Enter` na primeira linha segue. `Esc`, o salto e a
+  linha de programa a marca ou desmarca; `Enter` na primeira linha segue. A linha de teclas ensina o
+  espaço onde a linha que o nomeia cabe com uma célula de folga, medida na língua (a 100 colunas nas
+  duas; a 60, nenhuma), e senão fica com o `Enter`, que também marca. `Esc`, o salto e a
   retomada carregam as marcas de graça. Sem terminal, `RONOCTUA_INST_LEFT_OUT` recusa um id que a
   lista não oferece (`Invalid::NotOffered`, nomeando-o): um erro de digitação ali instalaria o que a
   pessoa quis deixar de fora.
@@ -11901,6 +11907,17 @@ e só neles. Quebrado, inseguro e indisponível são recusados ANTES de o Nix ro
 `remove` e `upgrade` procuram o elemento no manifesto antes, porque um nome que não casa só avisa
 e sai 0.
 
+**O registro global vem do store.** O Nix resolve uma referência indireta (`nixpkgs#…`, o `<nixpkgs>`
+do `NIX_PATH=nixpkgs=flake:nixpkgs`) lendo todos os registros antes, o global inclusive — baixado de
+`channels.nixos.org` e guardado no `~/.cache/nix` da pessoa por uma hora —, mesmo quando o da máquina
+responde. Medido: com uma cópia no cache, fresca ou vencida, ele segue ("using cached version"); sem
+cópia e sem rede, o comando falha. Era o primeiro `nixpkgs#…` de uma pessoa offline, e o remendo do
+rust-analyzer (a seção do VS Code). Por isso `nix.settings.flake-registry` aponta para um commit fixo do
+repositório do registro, por hash (`nix/flake-registry.nix`, preso pelo `nix/kept-sources.nix`), em
+`nix/modules/nix-registries.nix`, junto com o `nixpkgs` travado: nenhum comando `nix` de uma máquina
+busca o registro na rede. O que ele diz anda quando alguém move o `rev`; uma referência que pede um
+canal pelo nome (`nixpkgs/nixos-unstable#…`) continua indo a `channels.nixos.org`, porque é o que pede.
+
 **O índice de busca é assado na build** (`nix/software-index.nix`): a receita do próprio nixpkgs
 (`packages-info`) sobre o input, com `tryEval` por registro e `lib.meta.availableOn` (o `available`
 do meta mentia sobre o Chrome, que é unfree e não indisponível). Portão M1 medido antes de escrever
@@ -13176,6 +13193,19 @@ por isso ele é construído à parte do workspace, só com `rustc` sobre as font
 (`nix/git-askpass.nix`, que não tem dependência nenhuma): procurá-lo ao lado do `current_exe()` só
 acharia no `bin/` do workspace, nunca ao lado de um daemon extraído. O teste
 `git_hands_the_token_through_the_helper` faz o caminho inteiro contra um servidor que pede senha.
+
+**Com o acesso nosso, nenhuma configuração global nem do sistema.** Uma chamada que alcança um
+remoto com a chave de implantação ou o token dos pertences (`Credentials`) roda com
+`GIT_CONFIG_GLOBAL=/dev/null` e `GIT_CONFIG_NOSYSTEM=1`. O consentimento é do host do endereço que
+o motor nomeou, conferido antes da chamada; um `url.<base>.insteadOf` (ou `pushInsteadOf`) no
+`~/.gitconfig` da pessoa ou no do sistema reescrevia o endereço DEPOIS, e o git levava a chave e o
+que empurra a um host que ninguém deixou. Nada mais desses arquivos faz falta ali: o comando do SSH,
+as credenciais e as identidades de um commit são ditos pela própria chamada. A config do clone (que
+o motor escreve, e que o `a_host_not_let_is_never_asked` usa para chegar a uma pasta) continua
+valendo; e uma chamada sem acesso nosso (a vista do git, nos projetos da pessoa) continua lendo a
+config dela, reescritas inclusive. O teste `our_access_follows_no_rewrite_of_the_address` pergunta
+ao próprio git aonde ele iria (`remote get-url`, com e sem `--push`), e o `person-decline-chain`
+roda a cadeia inteira com uma reescrita hostil para pastas-isca que nada pode tocar.
 
 Checks: `one-git-driver`, `git-calls-are-hardened`; a prova de comportamento é o teste
 `a_hostile_repository_runs_nothing`, com o git real: um repositório cuja config nomeia um comando em
@@ -15733,7 +15763,8 @@ mão e o que a ferramenta escreve moram em arquivos separados, como `flake.nix` 
 `nix run .#distro-pins` move só o que segue uma fonte (a release mais nova de um repositório do
 GitHub, a versão que o F-Droid sugere), mantém o pin escrito à mão do que não segue nada, recusa uma
 release com tag sem número (`continuous` serve bytes novos sob o mesmo nome — o defeito que o
-`downloads-are-pinned` recusa) e nunca faz commit: o pin é o que o gate testou, e só o dono o move.
+`downloads-are-pinned` recusa) e nunca faz commit: o pin é o que o gate testou, e só o dono o move
+(a pessoa pode seguir os AppImages além dele, no perfil dela — veja os Crafting Apps, abaixo).
 O Flatpak da distro vai para a instalação `--user` pela lista do nix-flatpak, a mesma do
 `declaredFlatpaks` (sair dela é o que desinstala). O AppImage é embrulhado no build
 (`appimageTools.wrapType2`) como `ronoctua-appimage-<chave>`, o nome que o AppImage declarado da
@@ -15822,8 +15853,9 @@ puro, do projeto ArtCraft) não estão no nixpkgs, e cada release traz um AppIma
 com o lançador escrito a partir da imagem; os 13 têm um `.desktop` só na raiz, e todos foram
 construídos. O `assetPattern` (`<app>-*-linux-x86_64.AppImage`) casa uma imagem só — o `.zsync` e a
 aarch64 ficam de fora —, e o `nix run .#distro-pins` move o pin para a release mais nova. As releases
-são quase diárias (as treze de agora saíram entre 17 e 18/10); mover os pins é do dono, que roda a
-ferramenta, lê o diff e faz o commit: o pin é o que o gate testou. Ficaram de fora o ArtCraft em si
+são quase diárias (as treze de agora saíram entre 17 e 18/10); mover os pins da distro é do dono, que
+roda a ferramenta, lê o diff e faz o commit: o pin é o que o gate testou. A pessoa que quiser as
+releases antes disso liga a opção de segui-las (abaixo). Ficaram de fora o ArtCraft em si
 (o motor de IA: as releases só têm macOS e Windows), o Craft Launcher (baixa e atualiza os apps
 sozinho, fora do flake — invariante 6) e o AniCraft (sem release). Padrão de MIME não há: os apps são
 0.x — e eles declaram fotos, filmes, som e documentos, e o `opener`, que sem padrão vai pela ordem
@@ -15849,10 +15881,15 @@ dois o leem; numa imagem que não o lê, a variável não custa nada).
 
 **O que os apps fazem e a distro não segura.** O "tornar padrão" do WordCraft roda `xdg-mime` com o
 id dele (`ai.storyteller.wordcraft.desktop`), que não existe aqui — o lançador é
-`ronoctua-appimage-wordcraft.desktop` —: o padrão que ele grava no `~/.config/mimeapps.list` da
-pessoa é morto, e todo leitor o pula. E o "Verificar atualizações" do PdfCraft, à mão, pergunta ao
-GitHub pela release mais nova e anuncia uma versão que a distro não entrega até o dono mover o pin.
-Os dois estão no `docs/PENDING.md`.
+`ronoctua-appimage-wordcraft.desktop` —: ele reescreve a linha do tipo no `~/.config/mimeapps.list`
+da pessoa com um nome morto, que todo leitor pula, e desfaz o padrão que ela tenha escrito ali. O
+lançador fica com o nome da distro (o id do app mudaria o que o registro e a central usam), e o
+`docs/INSTALL.md` diz à pessoa que o padrão se escolhe pela distro — o "abrir com", e uma linha no
+`mimeapps.list` com o nome do lançador daqui, que o gerenciador de arquivos não lê para um tipo
+`text/*` (esse vai sempre ao editor) — e que não use o botão (2026-10-20). E o
+"Verificar atualizações" do PdfCraft, à mão, pergunta ao GitHub pela release mais nova e anuncia uma
+versão que a distro só entrega quando o dono move o pin — ou na próxima atualização de quem segue as
+releases (abaixo).
 
 **Os arquivos fixados têm um nome só** (`nix/distro-downloads.nix`): o `nix run .#distro-pins` baixa
 cada release nova para tirar o hash com o mesmo nome que o `fetchurl` do build dá, então o download
@@ -15860,6 +15897,95 @@ da ferramenta é a fonte do build, e nada é baixado duas vezes (o `distro-pins-
 cobra os dois nomes). Os arquivos ficam presos pela raiz das fontes guardadas (`nix/kept-sources.nix`,
 ~0,95 GB): uma release que o upstream apaga não volta. E o `downloads-are-pinned` lê o
 `assets/distro-pins.json` também.
+
+**Os Crafting Apps podem seguir as próprias releases (decisão do dono, 2026-10-20).** O pin da distro
+continua o que o gate testou, e só o dono o move; o que mudou é que a pessoa pode deixar a atualização
+de rotina levar, NAS MÁQUINAS DELA, cada AppImage da tabela que segue um repositório
+(`follows.github` — hoje os Crafting Apps) até a release mais nova. A escolha é dela, desligada por
+padrão, e viaja assinada com as opções (`distro-apps-follow-releases` no `options.json`, escrito só
+enquanto ligado: uma máquina cuja distro é mais velha, cujo leitor recusa campo desconhecido, recusa
+o arquivo de opções até a distro dela andar — a página diz isso). Liga-se na vista da atualização, nas
+duas portas (`f`, `LEADER s u f`, `ronoctua-shell-update/src/follow.rs`): ligar é o gesto que permite
+`api.github.com` e `github.com` no `consent.json`; a página diz os dois hosts, o que esta máquina
+construiu e, por app, a versão, de quem é o pin e — na própria linha, para as duas portas dizerem ao
+lado do cursor — por que uma mais nova não está em uso (espera a verificação, foi retida e por quê,
+foi recusada e por qual regra). Os pins seguidos são DADO da pessoa
+(`person/software/distro-pins.json`, `ronoctua_person::distro_pins`): espelho dela, parte em claro
+assinada, preparação e cópia root como qualquer documento — e só assinado, como o `options.json`.
+Por isso a página lê o `person-applied.json`: numa máquina que não confia em nenhuma chave dela, ou
+que ainda não recebeu a assinatura, a linha da máquina diz que a escolha não vale ali, e o
+`pins refresh` nem pergunta nada ao GitHub numa máquina sem chave fixada. Um documento de pins que
+não lê (mais novo, quebrado) nunca segura as declarações: a preparação o leva como está, e o root o
+mantém de fora com o motivo (`kept-back`), ficando com a cópia que tinha. Ninguém além do update os
+escreve, então dois espelhos se juntam sem pergunta: o pin mais recente de cada id ganha, e uma
+remoção (a distro alcançou) vence um pin que andou (`merge_distro_pins`).
+
+**A versão seguida é programa da pessoa.** Os bytes de um pin seguido são o download da própria
+pessoa: qualquer processo dela pode pôr no store um arquivo com o nome e o hash que quiser, e um
+caminho fixo é só nome e hash — o build o acharia e nunca baixaria. Então o build de um pin seguido
+vai para o perfil DELA (o `home.packages` do Home Manager, pelo `ronoctua.person`, como os AppImages
+que ela declara), com o lançador rodando `/etc/profiles/per-user/<pessoa>/bin/…` e a
+`X-Ronoctua-Fallback=false` da tabela, e o pin da distro do mesmo id sai do `systemPackages`: nunca os
+dois, um programa e um lançador de cada nome. O L03 vale: nada da pessoa entra no sistema.
+
+Quem segue é o `ronoctua-software pins refresh` (o passo `person-pins`, que já buscava os pins da
+pessoa), lendo a tabela do relatório do sistema (`distro-apps.json`, que diz de cada AppImage a chave,
+o repositório, o pin da distro e o seguido) — nenhuma avaliação do Nix em tempo de execução, e nada
+fora dos repositórios da tabela. É o mesmo GitHub dos AppImages da pessoa (`github::latest_with`: a
+release mais nova, senão a mais nova das recentes com o asset do padrão; rascunho e pré-release nunca;
+resposta guardada seis horas e reperguntada com `ETag`, para a atualização não gastar as 60 perguntas
+por hora que o GitHub responde sem conta). A release é julgada pela regra — endereço, asset, versão,
+com um hash de mentira — ANTES do download, e só a que pode passar é baixada (`nix store
+prefetch-file` com o `digest` do GitHub como `--expected-hash`), sob O MESMO nome de store que o
+builder da distro usa (`<chave>-<versão>.AppImage`, `nix/distro-downloads.nix`). Tag sem dígito nunca
+vira pin. Sem os dois hosts permitidos nada é perguntado: se nenhum pin da pessoa andou, o passo
+termina `refused github-not-let`, que a sequência lê como notícia (`declines`); se os dela andaram, o
+passo diz o que andou e uma linha diz que os da distro não foram olhados. Com a opção desligada o
+arquivo sai, e a máquina deixa de construir os seguidos assim que o root recebe as opções assinadas
+que dizem isso. O passo só pede a pasta do espelho: quem não declarou nada também pode seguir.
+
+**Uma regra, duas vezes.** Um pin seguido é julgado contra a linha da tabela do id em Rust
+(`distro_pins::fault`) e em Nix (`nix/distro-pins.nix`, `judge`), presos a uma tabela de casos
+(`crates/ronoctua-person/fixtures/distro-pin-cases.json`) em que cada caso diz a REGRA que o recusa:
+o id é uma AppImage da tabela que segue um repositório; o endereço é exatamente
+`https://github.com/<esse repo>/releases/download/<tag>/<asset>`, tag e asset um segmento de
+`[A-Za-z0-9._+-]` cada (nada de `/`, `?`, `#`, `\`, `%` ou espaço) e nenhum `..`; o asset casa o
+`assetPattern` (só `*`); a versão é a tag sem um `v` inicial antes de dígito (o `version_of_tag` da
+ferramenta da distro, para comparar igual com igual), tem dígito e cabe num nome de store; o hash é
+SRI `sha256-` de 44 caracteres. O documento em si pergunta, na aplicação do root, só o que não
+precisa da tabela — o root aplica contra a distro que roda, e a atualização move a distro DEPOIS —, e
+as perguntas da tabela são do registro, no build: um pin recusado não é motivo para a máquina parar de
+avaliar. Ele sai, com a regra e uma frase, em `followed.refused` do `distro-apps.json`, fora do
+`problems`, que derruba a avaliação (o `problems` continua das linhas da distro).
+
+**Só o que o verify do root construiu entra — uma lista de permitidos.** O `system-rebuild` é `stop`,
+e não é o único build da máquina: a aplicação da central de programas e o rebuild do resgate
+(`ronoctua-machine apply`) não rodam verify nenhum. Por isso cada candidato — o pin seguido mais novo
+que o da distro, nesta máquina — entra no `personEntries`/`personFingerprints` como
+`distro-appimage:<id>`, o verify do root o constrói sozinho antes do rebuild, exatamente como o perfil
+da pessoa o levaria, e só o que CONSTRUIU é anotado em `local/verified.json` (do root, escrito só pelo
+`ronoctua-person verify`), com a impressão digital (id, chave, pin e o nixpkgs) e o pin. O registro usa
+um pin seguido só enquanto essa lista o nomeia na impressão digital de agora; o que não avalia, não
+baixa, mudou no upstream ou não constrói fica em `local/held.json` com o motivo e é tentado de novo
+em toda atualização. Até lá a máquina constrói o ÚLTIMO pin verificado, enquanto ele for mais novo
+que o da distro — nunca um passo atrás numa versão 0.x —, ou o da distro. Um nixpkgs novo muda a
+impressão digital: o último verificado só volta quando o verify o constrói de novo (o que ele faz
+quando é o candidato, o caso de todo dia). O `pins refresh` busca de novo um retido por download
+mudado ou sumido. O custo é baixar e abrir cada release seguida nova a cada atualização.
+
+**O root aplica a preparação dentro da mesma atualização.** O `person-stage` inicia o aplicador do
+root (o `person-decline-chain` cobra), então os pins chegam à máquina antes do `person-verify` da
+mesma atualização, e o verify constrói o que acabou de chegar. Se a metade root não roda (piso de
+bateria, falta de espaço), a lista de permitidos garante que nenhum build — o da central de programas
+ou o do resgate — constrói um pin que o verify não construiu.
+
+O `distro-apps-follow-when-on-and-newer` planta a tabela, as opções, os pins, a lista de permitidos e
+as retenções em máquinas avaliadas: sem lista, nenhum pin seguido é construído e cada candidato
+espera e é entregue ao verify; com ela, o mais novo verificado vai para o perfil da pessoa (o
+lançador no perfil dela, a chave do abridor mantida) e sai do `systemPackages`; uma anotação em outra
+impressão digital não deixa nada entrar; um candidato retido cai no último verificado, não no da
+distro; mais velho, igual ou ultrapassado pela distro não; cada forma ruim é recusada pela sua regra;
+desligado, nada.
 
 
 <!-- anchor: L05 -->
@@ -16537,7 +16663,11 @@ forjado é um arquivo que nada consulta.
 senha abriu do `key.age`: a senha prova que ela é da pessoa. Numa execução sem ninguém (`sync-plain`,
 `plain pull`), é a chave que root fixou nesta máquina (`<pasta da máquina>/local/signer.json`, lida
 pelo mesmo leitor que root usa: chave que não lê, ou impressão digital que não é a dela, é nenhuma
-chave). Sem nenhuma das duas, toda mudança do repositório num arquivo assinado fica retida
+chave). A pasta é a que `RONOCTUA_MACHINE_DIR` nomeia na hora, como o `ronoctua-person` e o
+`ronoctua-machine` a leem, e senão a que o build assou: na máquina a sessão não nomeia outra, e um
+teste aponta a máquina dele — sem isso, nenhum teste via uma atualização sem identidade receber o
+que outra máquina assinou. Apontá-la é coisa do processo da própria pessoa: muda só no que o espelho
+DELA confia, nunca no que root aceita, que lê o próprio pino. Sem nenhuma das duas, toda mudança do repositório num arquivo assinado fica retida
 (`no-key`). Uma mudança do repositório num arquivo coberto só entra quando a assinatura vale sob essa
 chave, o manifesto nomeia o arquivo com o hash que ele tem, e o contador não é menor que o maior que
 esta máquina já viu daquela chave (`Seen`; uma chave nova, de um repositório refeito, conta do zero).
@@ -17160,13 +17290,46 @@ programa (127); com o pacote puro a extensão não consegue executá-lo ("Failed
 --version") e nenhum servidor sobe; no ambiente FHS (`pkgs.vscode.fhs`, bubblewrap) ele roda. O
 ambiente é CONTIDO — do VS Code e dos filhos dele —, onde o `programs.nix-ld` poria um carregador
 naquele caminho para todo programa da máquina. O rust-analyzer em especial tem um caminho próprio
-para o NixOS: ao ver `ID=nixos` no `/etc/os-release` (que o ambiente também mostra), copia o servidor
-para o armazenamento dele e o remenda com `nix-build` contra o `<nixpkgs>`; o teste desliga isso
-(`rust-analyzer.server.path` apontando o servidor que vem no pacote) para medir o programa, e não o
-remendo (`docs/PENDING.md`). O ambiente faz o próprio `/etc` com uma lista de
+para o NixOS, que o ambiente evita (o parágrafo seguinte); o teste do ambiente aponta o
+`rust-analyzer.server.path` para o servidor que vem no pacote, para medir o programa e não o
+caminho. O ambiente faz o próprio `/etc` com uma lista de
 entradas do host, e o `/etc/vscode` não está nela: lá dentro o VS Code não acharia a política. Por
 isso o pacote é o `.fhs` de um `pkgs.vscode` cujo `customizeFHSEnv` acrescenta `--ro-bind-try
 /etc/vscode /etc/vscode` (o derivation do VS Code em si não muda; muda só o ambiente).
+
+**O rust-analyzer: o ambiente diz `ID=linux`, e o servidor do pacote roda sem nada.** A extensão
+(0.3.3081, o VSIX de 2026-10-12) lê o `ID` do `/etc/os-release`; vendo `nixos`, não roda o servidor
+que traz: copia-o para o armazenamento dela (`~/.config/Code/User/globalStorage/rust-lang.rust-analyzer/`)
+e, sob a notificação "Patching rust-analyzer for NixOS", roda `nix-build -E -` sobre
+`import <nixpkgs> {}` para trocar o carregador do programa pelo da glibc do nixpkgs. Dentro do ambiente
+FHS esse remendo é à toa — o carregador que ele troca está lá —, então o ambiente mostra o
+`os-release` da máquina com uma linha trocada, `ID=linux` (o valor que o os-release(5) dá a um sistema
+sem nome), escrito a cada partida em `$XDG_RUNTIME_DIR` a partir do da máquina (`nix/vscode.nix`). O
+`vscode-vm` prova: o servidor do pacote sobe na hora, sem rede e sem ajuste nenhum, e o resto do arquivo
+é o da máquina. O VS Code lê o `ID` só para saber se está no Alpine e para a telemetria, que está
+desligada. O terminal integrado roda no ambiente, e quem nele ler o `ID` lê `linux` — o preço; nada
+que a distro rode ali o lê.
+
+O remendo, medido num ambiente que diz `nixos` (o de antes; o teste guarda os dois), com o Nix de uma
+máquina instalada — o `NIX_PATH=nixpkgs=flake:nixpkgs` que o `nixosSystem` põe (canal nenhum é
+baixado), os registros de `nix/modules/nix-registries.nix` e o toolchain guardado, cujo stdenv é o
+mesmo que o `import <nixpkgs> {}` faz (`nix/toolchain.nix`): constrói e roda, uns 20 s na primeira
+partida de cada versão da extensão, e deixa uma cópia no store presa pelo link no armazenamento dela.
+Sem rede, só funcionava com o registro global de flakes no cache da pessoa: frio, o Nix o pedia a
+`channels.nixos.org` antes de ler qualquer entrada e a falha era fatal — "Cannot start rust-analyzer
+server: bootstrap error", a cópia apagada e outra tentativa a cada partida. Com o registro global no
+store (a seção do Nix da central de programas, "O registro global vem do store"), constrói sem rede e
+com o cache frio (medido); com rede, alcança só o cache binário (medido). Sem `NIX_PATH`, falha com
+`file 'nixpkgs' was not found in the Nix search path`.
+
+A alternativa, para quem quer o servidor da toolchain: `"rust-analyzer.server.path": "rust-analyzer"`
+no `settings.json`. A extensão usa então o `rust-analyzer` do `PATH`, o da toolchain da distro
+(`ronoctua.apps.rust`, nos dois perfis), sem cópia nem remendo (medido). O ajuste é
+`machine-overridable` e de perfil: vai no `settings.json` do perfil padrão e no de cada perfil que tem
+o seu. Ganha-se o servidor do mesmo Rust que compila o projeto; perde-se o que a extensão traz, do
+lançamento semanal dela, que pode ter o que o da toolchain estável ainda não tem — e é contra ele que
+a extensão é testada. Quem recusou o `rust` (`declined.json`) não tem esse programa, e a extensão diz
+isso ("Failed to execute rust-analyzer --version").
 
 **A telemetria sai por política, e a política é da máquina.** Uma linha no `settings.json` seria um
 arquivo da pessoa — que a distro nunca escreve, e que os pertences trazem de volta como ELA o
@@ -17181,9 +17344,51 @@ começado como a sessão o começa, e com um `settings.json` que pede `all`, o l
 `trace`) diz `PolicyConfiguration#changed [ [ 'telemetry.telemetryLevel', 'off' ] ]`; com o arquivo
 tirado do lugar, a mesma partida não diz nada disso; a tela de configurações mostra o ajuste como
 gerenciado ("Managed by organization"). A janela é do compositor (`xdg_shell`, `app_id` `code`, o
-mesmo nome do `code.desktop`), nunca pelo XWayland. A política não cala tudo: medido na mesma VM,
-sem rede, o VS Code ainda pergunta ao Marketplace, ao subir, pela versão mais nova do Copilot Chat
-que ele traz — é busca de atualização de extensão, não telemetria (`docs/PENDING.md`).
+mesmo nome do `code.desktop`), nunca pelo XWayland. A política não cala tudo — o parágrafo seguinte.
+
+**O que ele pergunta ao fabricante ao subir, medido até o fim.** Com a telemetria desligada, um perfil
+novo e nenhuma extensão da pessoa, o `vscode-vm` manda todo nome para a própria máquina (um servidor de
+nomes que responde 127.0.0.1 a tudo) e responde a conversa inteira: o substituto do Marketplace anota
+cada saudação TLS, atende o preflight CORS das janelas, oferece um Copilot Chat mais novo que o
+embutido e redireciona o dicionário como o Google redireciona. O VS Code alcança só isto:
+
+- a CDN dele, `main.vscode-cdn.net`: a lista de controle das extensões (`/extensions/marketplace.json`,
+  as maliciosas e as obsoletas), a dos participantes de chat (`/extensions/chat.json`, o
+  `chatParticipantRegistry` do `product.json`) e o alerta de emergência (`/core/stable.json`, de hora
+  em hora);
+- o Marketplace e os hosts de pacotes dele: a versão mais nova do Copilot Chat que ele traz embutido
+  (`marketplace.visualstudio.com/_apis/public/gallery/vscode/github/copilot-chat/latest`), e, havendo
+  uma, o manifesto dela (`github.gallerycdn.vsassets.io`) e o pacote (`github.gallery.vsassets.io`),
+  que ele instala sozinho em `~/.vscode/extensions`. É a busca de atualização de extensões de sempre
+  (`checkForUpdates`, na partida e de 12 em 12 horas): o `product.json` põe o Copilot Chat em
+  `builtInExtensionsEnabledWithAutoUpdates`, a busca leva junto toda extensão que a pessoa instalou,
+  e o `extensions.autoUpdate` instala o que ela acha; com a primeira pergunta falhando, o reserva é
+  `www.vscode-unpkg.net`;
+- o Google, pelo Electron: `redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic` e o espelho para
+  onde ele manda — o dicionário do corretor ortográfico do Chromium para a língua da interface,
+  baixado mesmo com o corretor desligado nas janelas do VS Code.
+
+Nada de telemetria: com ela desligada, o Marketplace recebe só a versão (`X-Market-Client-Id`,
+`User-Agent`); o id da máquina só iria com ela em `all` (lido no código pinado).
+
+**Nenhuma política cala o Marketplace sem quebrá-lo.** As políticas que a 1.119 declara
+(`resources/app/policies/policy.json`) foram lidas contra o código: a busca depende do
+`extensions.autoCheckUpdates` e de a conexão não ser tarifada (`network.meteredConnection`), e nenhum
+dos dois é política. `AllowedExtensions` recusando o `github.copilot-chat` desligaria o Copilot da
+pessoa; `ExtensionGalleryServiceUrl` trocaria o Marketplace; tirar o Copilot Chat do
+`builtInExtensionsEnabledWithAutoUpdates` (mudando o pacote) calaria a pergunta só para quem não tem
+extensão nenhuma e prenderia o Copilot Chat na versão do pacote — a tela das extensões deixaria de
+oferecer a atualização dele. Por isso a distro não declara mais nada: o VS Code é um programa de
+terceiro que fala com o fabricante, como o Chrome, e quem cala é a pessoa, no `settings.json`, com
+dois ajustes (medidos): `"extensions.autoCheckUpdates": false` tira a busca da partida (as extensões
+dela deixam de se atualizar sozinhas; a busca à mão continua), mas abrir um arquivo para o qual o
+`product.json` recomenda uma extensão (um `.py`: `ms-python/python/latest` e a `extensionquery`) ainda
+pergunta; `"extensions.ignoreRecommendations": true` cala essa (e as recomendações todas). O
+`chat.disableAIFeatures` existe na 1.119 (esconde o chat e as entradas de IA e desliga a extensão
+embutida do Copilot Chat), mas não cala a pergunta nem a atualização dele (medido). A CDN e o
+dicionário não têm ajuste; um `--host-resolver-rules` no embrulho do `code` bloquearia o dicionário,
+e não foi adotado: a regra vale para toda a rede do Electron e o argumento passa pela CLI do VS Code,
+nada disso medido, por um download sem identidade (`docs/PENDING.md`).
 
 **A configuração viaja, as extensões não.** O alvo `vscode` dos pertences leva
 `~/.config/Code/User` — configurações, atalhos, snippets, tarefas, servidores MCP, prompts, os
@@ -17206,7 +17411,10 @@ a CLI do VS Code, o `ronoctua-vscode`. O `record` lê o manifesto do VS Code
 (`~/.vscode/extensions/extensions.json`, o do perfil padrão — a lista segue só esse perfil),
 defensivamente, e só as extensões do Marketplace (`metadata.source` `gallery`, ou, sem fonte, um
 uuid do Marketplace, como o próprio VS Code lê): uma instalada de um arquivo `.vsix` não tem id que
-outra máquina possa instalar. Escreve a lista da pessoa dentro do alvo
+outra máquina possa instalar. Nem um embutido que o Marketplace atualizou — o VS Code escreve a cópia
+nova no mesmo manifesto, de fonte `gallery`, com `isBuiltin` (medido; o código põe também `isSystem`
+em outro caminho, e o filtro olha os dois): é do programa, toda máquina o tem e ninguém o desinstala. O Copilot Chat se atualiza assim
+(medido no `vscode-vm`, contra um substituto que oferece um mais novo), e entrava na lista. Escreve a lista da pessoa dentro do alvo
 (`~/.config/Code/User/ronoctua-extensions.json`, `{"format": 1, "extensions": [...],
 "pre-release": [...]}`, ordenada, em minúsculas como o VS Code compara, inteira e atômica), com a
 regra simétrica, decisão do dono depois da revisão: lista' = (lista − (vistas − instaladas)) ∪
@@ -17262,7 +17470,9 @@ instalação) que TROUXE a lista, com ids que faltam aqui, oferece reinstalá-lo
 assinatura: outro arquivo do alvo não oferece nada, e o "não" não precisa ser lembrado (a oferta
 volta quando a lista muda em outra máquina). O motor oferece pelo que os arquivos dizem, porque a
 restauração do instalador não sabe se a máquina nova terá o VS Code; a porta, que sabe
-(`RONOCTUA_VSCODE`, posto no rodapé e na fila só onde ele está instalado), desenha a oferta só onde o
+(`RONOCTUA_VSCODE`, posto no rodapé e na fila só onde ele está instalado — e, no `.#dev`, o `code`
+do sistema instalado, `/run/current-system/sw/bin/code`, se houver: nunca outro `code` do `PATH`, de
+outra versão e com outros hosts, nem o valor herdado do rodapé instalado), desenha a oferta só onde o
 "sim" pode funcionar, contando o que falta AGORA e nomeando cada host que o "sim" libera, um por
 linha, antes do "não" e do "sim". E a página guarda, nas duas portas, uma seção das extensões: a
 qualquer momento em que a lista diz que falta alguma e o VS Code está aqui (não só logo depois de uma
@@ -18109,6 +18319,22 @@ descobrir uma hora depois que faltava o login é o tipo de erro que um comando d
 `--dry-run` para aí e diz o que faria. Como o gate demora, a árvore é conferida de novo depois
 dele, e os sistemas são construídos do commit (`git+file://…?rev=`), não da pasta.
 
+**Os pins que ficaram para trás são ditos, nunca movidos.** Depois das recusas e antes do gate — no
+`--dry-run` também —, o `.#release` pergunta a release mais nova do que cada pin de
+`assets/distro-pins.json` segue (`distro-pins.py --stale`: a lógica do `nix run .#distro-pins`, só com
+perguntas de leitura, sem download) e diz cada pin MAIS VELHO que ela, com o nome do app e as duas
+versões, e como movê-los; um pin mais novo que a release mais nova (uma release retirada) é dito como
+tal. A ordem é a do `builtins.compareVersions`, a do build. Nunca recusa e nunca move: o pin é o que o
+gate testou, e movê-lo é um commit do dono (`nix run .#distro-pins`, o diff, o commit, o push e o
+`.#release` de novo). O GitHub responde 60 perguntas por hora sem token, e um release é ensaiado de
+novo e de novo: o token do `gh` logado vai no ambiente daquela chamada só (nunca num argumento, nunca
+impresso), e a comparação inteira tem um limite de tempo (`timeout`). Uma pergunta que a rede não
+respondeu é dita, e a versão segue; um defeito da ferramenta não passa por silêncio da rede (só os
+erros de rede e de JSON viram "não perguntado"). O `distro-pins-move-only-what-follows` (a lógica e a
+ordem das versões, contra o próprio Nix), o `distro-pins-stale-is-read-only` (a ferramenta sem rede,
+no sandbox: termina bem, diz cada app como não perguntado e não toca no arquivo) e o
+`release-refuses-dirty-tree` (a ordem, o token, o limite, e que nada para) provam isso sem rede.
+
 **A ordem é a da segurança de quem segue.** (1) O gate. (2) Os dois sistemas de referência e o ISO,
 que leva a semente. (3) O Release do GitHub como rascunho, com todos os assets: o pendrive
 (`ronoctua-stick`) e o `.#fetch-iso` leem só versão publicada, então um upload pela metade fica
@@ -18609,6 +18835,21 @@ publica por último. Cada lei é uma recusa com frase no `gen-updates.py`, e o
 ordem que a próxima edição troca sem ninguém ver. O `system-update-gathers-first-and-publishes-last`
 roda as duas metades geradas inteiras num mundo de dublês que anotam o que lhes pediram.
 
+**Entregar ao root é preparar E aplicar.** O `person-stage` (`ronoctua-software person stage`)
+prepara e inicia a unidade do aplicador (a mesma partida da central de programas, pela regra polkit
+de um verbo, L06), e só dá certo quando o veredito responde ao `nonce` dele. Só preparada, a metade
+root verificava e construía a cópia que a máquina já tinha, e o que a pessoa declarou nas outras
+máquinas esperava um gesto na central; os dublês não viam isso, porque cada um diz que fez o que lhe
+pediram. Quem viu foi a corrida dos programas de verdade, da escolha do instalador à primeira
+atualização (`person-decline-chain`, que lê os passos do `steps.nix`). O passo não assina (o
+`person-sign` veio antes). Uma recusa termina em `refused <palavra>` na saída, a última linha que o
+executor lê: `busy` — outro programa de root com o lock, o rebuild da central — é notícia
+declarada (`declines`), com a frase dela na vista: a mudança fica no espelho e esta atualização
+constrói o que a máquina tinha. A razão do aplicador (`TreeWhy`: `not-signed`, `rolled-back`…) é
+falha e o relatório guarda a palavra (`failed-<palavra>`); a vista só tem frase para as palavras
+da máquina (`refusal_key`), e a página dos pertences diz as recusas de assinatura
+(`docs/PENDING.md`).
+
 **O rebuild é um filho da metade root, e não mais a unidade do resgate.** O lock de root dos dados
 da pessoa (`ronoctua-person hold`, L06) só passa por herança da entrada padrão: o `verify` e o
 `ronoctua-machine apply` (L05) rodam como filhos da metade que o segura, e assim o que foi tentado é o
@@ -18827,9 +19068,20 @@ e apagava, e a CLI da segunda não lia nada — uma senha certa recusada como "s
 
 **A TUI responde ao ponteiro** (invariante 19): um terminal por SSH manda eventos de mouse. A linha de
 uma lista é escolhida no primeiro clique e tomada no segundo (numa tela recém-aberta, a do cursor
-também: `State::aimed`), a roda anda na lista, cada tecla da linha de teclas é um clique (`Enter`,
-`Esc`, `Ctrl+C` — lidas pela primeira palavra de cada dica, que é o nome da tecla e não se traduz), e o
-que está sob o ponteiro acende. O que a pintura desenha e o que o ponteiro acerta é uma resposta só
+também: `State::aimed`), a roda anda na lista, cada tecla da linha de teclas é um clique (`Space`,
+`Enter`, `Esc`, `Ctrl+C`), e o que está sob o ponteiro acende. O nome e o código de cada tecla são do
+código e não do `.ftl` (`tui::KEYS`): o `State::key` e o `gives_up` respondem àqueles códigos e a
+nenhum outro, as frases recebem o nome como argumento (`{ $enter }`, pelo `tui::with_keys`), e o
+clique de uma dica sai da mesma tabela, pela palavra dela que é o nome de uma tecla. Escrito no
+`.ftl`, um nome envelhecia no dia em que a tecla mudasse, e uma língua que o escrevesse do seu jeito
+desenharia uma dica que clique nenhum alcança; uma tecla que muda sem o nome reprova um teste. A
+ajuda da tecla Compose também: o padrão e o atalho que liga o Caps Lock são nomeados pela opção do
+xkb que o sistema põe (`model::COMPOSE_HELP_KEYS`, presa ao `nix/keyboard-xkb.nix` pelo
+`installer-defaults-match-the-keyboard`). O `keys-are-never-text` lê o fragmento do instalador, termos
+inclusive, e recusa um nome de tecla escrito; um nome que também é palavra ("Enter", "Space") é
+tecla numa linha de teclas, numa frase que recebe o nome de uma tecla e no meio de uma frase, e no
+começo dela só quando a palavra seguinte não é uma palavra de função ("Enter the passphrase" é
+verbo). O que a pintura desenha e o que o ponteiro acerta é uma resposta só
 (`tui::places`), e a lista guarda onde rolou (`State::scroll`): rolar a partir da escolha a cada quadro
 mexia a lista entre os dois cliques, e o segundo caía em outra linha. As linhas que quebram (a ajuda, a
 recusa, o texto da chave) são contadas pelo mesmo quebrador que as desenha (`Paragraph::line_count`),
@@ -18837,7 +19089,8 @@ nunca por caracteres ÷ largura; o estado do acesso tem linhas próprias, que o 
 para fora.
 
 **A TUI se fotografa sem disco.** `ronoctua-install --show <tela>` desenha, de uma fixture e sem rede,
-as telas que conferem a rede e o repositório e a lista de programas (`left-out`) — num terminal, no
+as telas que conferem a rede e o repositório, a lista de programas (`left-out`) e a pergunta da tecla
+Compose (`compose`) — num terminal, no
 tamanho e nas cores dele (SGR de 24 bits, `tui::painted`); num arquivo, só o texto em 100 × 34. O QR da
 chave foi lido de volta por um leitor de QR a partir das cores que a TUI pinta (os testes conferem
 módulo a módulo que o desenho é o código). O QR é desenhado em meios-blocos

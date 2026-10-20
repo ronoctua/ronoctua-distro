@@ -61,9 +61,19 @@ pub mod install;
 /// one is refused ([`Why::Newer`]), never rewritten by an older machine.
 pub const FORMAT: u64 = 1;
 
+/// [`LIST_IN_HOME`] as a literal, for a crate that keeps the list under a
+/// prefix of its own — the belongings' logical `home/` — with `concat!`:
+/// VS Code's folder is spelled here and nowhere else (`one-vscode-boundary`).
+#[macro_export]
+macro_rules! list_in_home {
+    () => {
+        ".config/Code/User/ronoctua-extensions.json"
+    };
+}
+
 /// The person's list, relative to the home: inside `~/.config/Code/User`,
 /// so it travels with the belongings' target `vscode`.
-pub const LIST_IN_HOME: &str = ".config/Code/User/ronoctua-extensions.json";
+pub const LIST_IN_HOME: &str = list_in_home!();
 
 /// VS Code's folder of installed extensions, relative to the home — what
 /// `code` is told to install into (`--extensions-dir`), so the manifest read
@@ -311,7 +321,11 @@ pub fn recorded(list: &Extensions, seen: &Extensions, installed: &Extensions) ->
 /// names no extension's id, or that did not come from the Marketplace
 /// (`metadata.source` other than `gallery`; VS Code itself takes an entry
 /// with no source and a Marketplace uuid for one), is left out: it is VS
-/// Code's file, and one odd entry is no reason to read none.
+/// Code's file, and one odd entry is no reason to read none. So is a
+/// built-in the Marketplace updated (`metadata.isBuiltin` — measured on
+/// Copilot Chat, which updates itself so — or `isSystem`, which the pinned
+/// build writes on another path): it is the program's, every machine has
+/// it, and none could uninstall it.
 ///
 /// # Errors
 ///
@@ -346,7 +360,12 @@ pub fn installed(home: &Path) -> Result<Option<Extensions>, Refusal> {
             Some(s) => s == "gallery",
             None => has_uuid,
         };
-        if !from_the_gallery {
+        let flag = |name: &str| {
+            e.pointer(&format!("/metadata/{name}"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        };
+        if !from_the_gallery || flag("isBuiltin") || flag("isSystem") {
             continue;
         }
         if e.pointer("/metadata/preRelease")
@@ -878,6 +897,36 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".new"))
             .collect();
         assert!(drafts.is_empty(), "a draft was left: {drafts:?}");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// FAILS IF: a built-in VS Code updated from the Marketplace — written
+    /// to the manifest with `isBuiltin` (Copilot Chat, measured in
+    /// `tests/vscode-vm.nix`), or `isSystem` on the pinned build's other path
+    /// — enters the person's list: another machine would be offered an
+    /// extension it already has, and the uninstall of a built-in does not
+    /// exist.
+    #[test]
+    fn an_updated_built_in_is_not_the_persons() {
+        let home = scratch("built-in");
+        let seen = seen_in(&home);
+        let mut updated = entry(&home, "GitHub.copilot-chat", "gallery", false);
+        updated["metadata"]["isBuiltin"] = serde_json::json!(true);
+        updated["metadata"]["isSystem"] = serde_json::json!(true);
+        let mut system_only = entry(&home, "vscode.some-system", "gallery", false);
+        system_only["metadata"]["isSystem"] = serde_json::json!(true);
+        let mut not_builtin = entry(&home, "ms-python.python", "gallery", false);
+        not_builtin["metadata"]["isBuiltin"] = serde_json::json!(false);
+        let entries = vec![updated, system_only, not_builtin];
+        let at = home.join(MANIFEST_IN_HOME);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(&at, serde_json::to_vec(&entries).unwrap()).unwrap();
+        assert_eq!(
+            installed(&home).unwrap().unwrap().ids,
+            set(&["ms-python.python"])
+        );
+        assert_eq!(record(&home, &seen), Ok(Recorded::Written(1)));
+        assert_eq!(read_list(&home).unwrap().ids, set(&["ms-python.python"]));
         let _ = std::fs::remove_dir_all(home);
     }
 

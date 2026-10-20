@@ -121,7 +121,7 @@ system-update-verdict-pending = ainda vem
 system-update-step-person-fetch = trazer o que você declarou em outro lugar
 system-update-step-person-fetch-does = ronoctua-belongings plain pull: a parte em claro dos seus pertences — os programas que você declarou e recusou nas outras máquinas, os registros delas — buscada e mesclada à cópia desta máquina, sem senha e sem tocar na parte cifrada — e só o que a sua chave assinou: o resto fica retido, e a vista diz por quê. Um arquivo mudado aqui e em outra máquina fica como esta máquina o tem, e a vista diz isso. Sem repositório, ou sem rede, o passo é pulado e diz isso.
 system-update-step-person-pins = adiantar as fixações
-system-update-step-person-pins-does = ronoctua-software pins refresh: cada programa declarado que segue as próprias versões — um AppImage, um app Android do F-Droid — fixado na versão e no resumo que ele tem agora. Sem declaração, não há o que adiantar.
+system-update-step-person-pins-does = ronoctua-software pins refresh: cada programa declarado que segue as próprias versões — um AppImage, um app Android do F-Droid — fixado na versão e no resumo que ele tem agora. Com a sua opção de segui-los ligada, e numa máquina que confia na sua chave de assinatura, também os apps da distro que seguem as próprias versões (os Crafting Apps), além das fixações que a distro testou — perguntando ao GitHub, que você permitiu, e baixando só uma versão que esta máquina aceitaria; com ela desligada, essas fixações saem e voltam as da distro.
 system-update-step-person-sign = assinar o que você declarou
 system-update-step-person-sign-does = ronoctua-belongings sign: as suas declarações como estão agora — o que veio das outras máquinas, as fixações recém-adiantadas — assinadas nesta máquina com a sua chave, sem rede e sem pergunta, para que a máquina as aceite. Sem a sua identidade aberta (nenhuma senha digitada nesta sessão), o passo recusa e a máquina fica com as declarações que tinha até a próxima sincronização.
 system-update-step-person-stage = entregar as suas declarações à máquina
@@ -129,7 +129,7 @@ system-update-step-person-stage-does = ronoctua-software person stage: as suas d
 system-update-step-machine-migrate = dar à máquina o próprio flake
 system-update-step-machine-migrate-does = ronoctua-machine migrate: uma máquina que ainda carrega uma cópia da distro ganha o próprio flake, com a distro como input — montado ao lado da pasta velha e trocado só se montar; uma falha deixa a máquina exatamente como estava. Toda outra máquina pula este passo. Se falhar, a sequência para aqui.
 system-update-step-person-verify = experimentar o que você declarou
-system-update-step-person-verify-does = ronoctua-person verify: cada programa que você declarou, montado sozinho contra a distro recém-buscada, para que um que não monta mais seja retido com o motivo em vez de derrubar a reconstrução inteira. O ensaio dele experimenta e não escreve nada.
+system-update-step-person-verify-does = ronoctua-person verify: cada programa que você declarou, montado sozinho contra a distro recém-buscada, para que um que não monta mais seja retido com o motivo em vez de derrubar a reconstrução inteira — e cada versão mais nova dos apps da distro que você segue, que só é usada depois de montar aqui, e é tentada de novo em toda atualização até montar. O ensaio dele experimenta e não escreve nada.
 system-update-step-person-reconcile = trazer o que está declarado
 system-update-step-person-reconcile-does = ronoctua-software reconcile: o que o sistema não faz por você — os apps Android que as suas declarações listam, instalados da cópia da máquina — e a cópia que você instalou à mão de um programa agora declarado, retirada para que as duas não se sobreponham. Mexe só no que ele mesmo pôs.
 system-update-step-person-record = registrar o que esta máquina fez
@@ -149,9 +149,11 @@ system-update-kind-reconcile-declared = traz o que está declarado
 system-update-kind-publish = publica o que esta máquina fez
 
 system-update-declined-empty = Esta máquina ainda não sincronizou os pertences: não há chave para assinar, e a atualização segue.
-system-update-declined-no-passphrase = A sua identidade não está aberta nesta sessão: nada foi assinado, e a máquina fica com as declarações que tinha até a próxima sincronização assiná-las.
+system-update-declined-no-passphrase = A sua identidade não está aberta nesta sessão: nada foi assinado aqui. O que as suas outras máquinas assinaram chega a esta assim mesmo; uma mudança feita aqui espera a próxima sincronização assiná-la.
+system-update-declined-busy = Outro programa da própria máquina aplicava uma mudança e segurava a cópia das suas declarações: esta atualização constrói as que ela tinha, e as suas chegam na próxima aplicação.
 system-update-declined-did-not-boot = Este é o sistema que não subiu quando foi experimentado: não há nada novo a aplicar até a distro andar, e o resto da atualização segue.
 system-update-declined-nothing-to-migrate = Esta máquina já tem o próprio flake: não havia o que migrar, e a atualização segue.
+system-update-declined-github-not-let = O GitHub não está permitido no seu consentimento: os apps da distro que seguem as próprias versões não foram olhados, e ficam nas versões que tinham; nenhuma fixação sua andou também. Ligar de novo a opção de segui-los permite.
 system-update-verdict-declined = nada novo
 
 # O QUE OS REGISTROS DA MÁQUINA DIZEM, acima dos passos, nas duas portas — só

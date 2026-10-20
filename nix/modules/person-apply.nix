@@ -21,10 +21,12 @@
 # -------------
 # The person, through ONE polkit rule: verb `start`, this unit, the one user,
 # `YES` — there is no polkit agent in the session, so anything that would
-# ask would simply fail (the update's rule is the precedent). The update's
-# root half and the installer run the program directly. What buys the width
-# back is that the unit takes no argument: it reads one folder the person
-# owns, and writes one folder of root's.
+# ask would simply fail (the update's rule is the precedent). The software
+# centre starts it after a declaration, and the update's person half after it
+# stages (`person-stage`), before the root half verifies and builds; the
+# installer runs the program directly. What buys the width back is that the
+# unit takes no argument: it reads one folder the person owns, and writes one
+# folder of root's.
 #
 # AND THE APPROVAL, WHICH IS NOT AUTOMATIC
 # ----------------------------------------

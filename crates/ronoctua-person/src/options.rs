@@ -3,7 +3,8 @@
 //! ```json
 //! {"format": 1, "ssh-signing": null,
 //!  "binary-cache": {"name": "someone", "public-key": "someone.cachix.org-1:…=",
-//!                   "visibility": "public"}}
+//!                   "visibility": "public"},
+//!  "distro-apps-follow-releases": true}
 //! ```
 //!
 //! The belongings' targets offer them after a restore ("no" first); the Nix
@@ -28,6 +29,18 @@
 //! table of cases (`fixtures/binary-cache-cases.json`): a value one of them
 //! takes and the other refuses would be a cache the screen accepts and the
 //! machine ignores, or the reverse.
+//!
+//! # The distro's apps may follow their releases
+//!
+//! `distro-apps-follow-releases` (owner's decision, 2026-10-20): OFF unless
+//! the person turned it on, on the update's page. On, the routine update
+//! follows each distro AppImage whose table entry follows a GitHub
+//! repository (the Crafting Apps) past the pin the distro tested, into the
+//! person's own `software/distro-pins.json` ([`crate::distro_pins`]); off,
+//! that file goes at the next update and the machine builds the distro's
+//! pins at once. Written only while ON: an older machine, whose reader
+//! refuses a field it does not know, meets it only once the person turns it
+//! on.
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +58,17 @@ pub struct Options {
     /// written before it existed, which reads as none.
     #[serde(default)]
     pub binary_cache: Option<BinaryCache>,
+    /// Whether the distro's AppImages that follow their releases follow them
+    /// with the routine update, past the distro's pins. Absent — off — in a
+    /// file written before it existed, and never written while off.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub distro_apps_follow_releases: bool,
+}
+
+/// Whether a switch is off — what is never written.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_off(on: &bool) -> bool {
+    !*on
 }
 
 impl Default for Options {
@@ -53,6 +77,7 @@ impl Default for Options {
             format: crate::FORMAT,
             ssh_signing: None,
             binary_cache: None,
+            distro_apps_follow_releases: false,
         }
     }
 }
@@ -205,6 +230,30 @@ impl Document for Options {
 mod tests {
     use super::*;
 
+    /// FAILS IF: the switch is written while off — an older machine would
+    /// refuse a file it reads today — is not written while on, or does not
+    /// read back.
+    #[test]
+    fn following_is_written_only_while_on() {
+        let off = crate::to_json(&Options::default());
+        assert!(!off.contains("distro-apps-follow-releases"), "{off}");
+        let on = Options {
+            distro_apps_follow_releases: true,
+            ..Options::default()
+        };
+        let text = crate::to_json(&on);
+        assert!(
+            text.contains("\"distro-apps-follow-releases\": true"),
+            "{text}"
+        );
+        assert_eq!(crate::parse::<Options>(text.as_bytes()).unwrap(), on);
+        let refused = crate::parse::<Options>(
+            br#"{"format": 1, "ssh-signing": null, "distro-apps-follow-releases": "yes"}"#,
+        )
+        .unwrap_err();
+        assert_eq!(refused.why, Why::Shape);
+    }
+
     /// One case of the table both validators are held to.
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -249,6 +298,10 @@ mod tests {
     fn an_older_file_reads_as_no_cache_and_the_address_is_the_names() {
         let old: Options = crate::parse(br#"{"format": 1, "ssh-signing": null}"#).unwrap();
         assert_eq!(old.binary_cache, None);
+        assert!(
+            !old.distro_apps_follow_releases,
+            "an older file follows nothing"
+        );
         let cache = BinaryCache {
             name: "someone".to_owned(),
             public_key: format!("someone.cachix.org-1:{}=", "Q".repeat(43)),

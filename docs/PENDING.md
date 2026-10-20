@@ -268,25 +268,29 @@ Chrome 151 real, offline, e o `kiosk-vm` repete o que importa. Isto a VM não mo
 - acabou quando: cada item foi visto no hardware do dono e virou frase no `ARCHITECTURE.md`, ou
   conserto
 
-### 0.0000037. O VS Code — o que ficou com o dono · pequeno cada
+### 0.0000037. O VS Code — o que só uma sessão de verdade mede · pequeno cada
 
-O VS Code (`docs/ARCHITECTURE.md`, "VS Code: a build da Microsoft…") foi medido no `vscode-vm`,
-offline. Ficam duas decisões:
+O VS Code (`docs/ARCHITECTURE.md`, "VS Code: a build da Microsoft…") foi medido no `vscode-vm`, contra
+substitutos. Fica o que só uma sessão de verdade, com a rede de verdade, diz:
 
-- **A rede que ele abre sozinho.** Ao subir, mesmo com a telemetria desligada pela política, ele
-  pergunta ao Marketplace pela versão mais nova do Copilot Chat que traz (no log da VM: `Error while
-  getting the latest version for the extension GitHub.copilot-chat`). Falta decidir se a distro
-  declara mais alguma política (e qual) ou se isso é da pessoa.
-- **O laço `.#dev`** não exporta `RONOCTUA_VSCODE`: a oferta e a linha das extensões não aparecem no
-  rodapé aninhado.
-- **O remendo do rust-analyzer.** Ao ver `ID=nixos`, a extensão remenda o próprio servidor com
-  `nix-build` contra o `<nixpkgs>`, dentro do ambiente FHS também (o teste desliga isso para medir o
-  programa). Não foi medido numa sessão de verdade se esse caminho funciona numa máquina da distro
-  (o `NIX_PATH` dela, a construção com o store e sem rede), ou se a pessoa precisa apontar o
-  `rust-analyzer.server.path` para o servidor que vem no pacote, que no ambiente FHS roda (a distro
-  não escreve o `settings.json` dela).
+- **Um `SIGTRAP` quando a unidade dele é parada.** Na VM, `systemctl --user stop` da unidade que o
+  roda termina o VS Code num `trap int3`, com um core de ~3,6 GB por partida — o bastante para encher
+  o disco da VM, e o `systemd-coredump` chegou a 3 GiB de memória; o teste não guarda core nenhum
+  (`Storage=none`). Medir numa sessão Wayland: o fim da sessão (`s q q`) com o VS Code aberto deixa
+  um core? Se deixa, cada saída guarda gigabytes.
+- **O dicionário do corretor (`redirector.gvt1.com`).** O Electron o baixa para a língua da interface
+  a cada perfil novo, com o corretor desligado nas janelas. Um `--host-resolver-rules` no embrulho do
+  `code` o bloquearia; não foi adotado nem medido (a regra vale para toda a rede do Electron, e o
+  argumento tem de passar pela CLI do VS Code). Decidir se a distro o bloqueia.
+- **O Copilot Chat embutido, depois de uma troca do VS Code.** A cópia que o Marketplace atualizou
+  fica em `~/.vscode/extensions` (fora da lista da pessoa); quando a distro move o VS Code e o
+  embutido do pacote passa a ser mais novo, a 1.119 diz "Removing stale auto-update builtin
+  extensions". Ver numa máquina que isso acontece sem nada da pessoa.
+- **O terminal integrado vê `ID=linux`** (o ambiente FHS se diz assim para o rust-analyzer não se
+  remendar). Nada da distro lê o `ID` ali; ver se algo que a pessoa usa no terminal do VS Code lê.
 
-- acabou quando: cada item virou decisão escrita no `ARCHITECTURE.md`, ou conserto
+- acabou quando: cada item foi visto numa sessão de verdade e virou frase no `ARCHITECTURE.md`, ou
+  conserto
 
 ### 0.0000039. As colunas: o que ficou para depois · pequeno
 
@@ -811,13 +815,16 @@ ferramentas de build no `extraDependencies`; custa ~1 h por tentativa e um fecho
 
 ### A lista de programas do instalador — o que a pista não provou · pequeno cada
 
-- **A recusa semeada nunca correu de ponta a ponta.** O ensaio prova os comandos (`installer-dryrun`:
-  `--decline` no passo da cópia, o `declined.json` com o hostname, `zsh` recusado, `none` sem nada), e
-  cada ponta tem os seus testes (a ordem e os três arquivos no instalador, o `plain --decline` no
-  `ronoctua-belongings`), mas nenhuma execução juntou envio, `apply` com chave fixada, `nixos-install`
-  sem o programa e restauração. O `installer-vm` instala a `minimal`, offline, e a `full` tem ~37 GiB.
-  Acabou quando: uma instalação de verdade (ou a VM, com um perfil de teste que carregue um programa
-  oferecido) deixa um de fora e a máquina nasce sem ele, com a recusa no repositório e no espelho.
+- **A recusa semeada nunca chegou a um disco.** O `person-decline-chain` roda os programas de
+  verdade da escolha às atualizações seguintes: os passos do PLANO do instalador (o ensaio dele, com
+  os lugares mudados: o `plain --decline`, a chave fixada, o `apply`, a restauração), os passos da
+  pessoa na atualização, outra máquina assinando uma recusa, e o repositório vazio com `init`. Não
+  roda o `nixos-install`: que a máquina nasça SEM o programa deixado de fora só uma instalação
+  mostra. E duas coisas ali são reescritas, não do instalador: a leitura `left-out-applied` (só o
+  `--execute` a roda; a regra é a do `executor::not_as_chosen`) e o caminho do repositório vazio (o
+  ensaio não sonda o repositório, e nunca o alcança). O `installer-vm` instala a `minimal`, offline,
+  e a `full` tem ~37 GiB. Acabou quando: uma instalação de verdade (ou a VM, com um perfil de teste
+  que carregue um programa oferecido) deixa um de fora e a máquina nasce sem ele.
 
 ### Os painéis fora do gerenciador — o que a B1 deixou para depois · pequeno cada
 
@@ -874,6 +881,13 @@ A B1 tirou a prévia e os fatos do `files::View` sem mudar nada na tela (`inspec
 - acabou quando: um pendrive espetado aparece no seletor aberto, e cada quadro acima tem foto
 
 ### 0.00000042. O navegador do git e os arquivos compactados: o que falta provar · pequeno cada
+
+- **O clone de desenvolvimento segue a reescrita global da pessoa** (`Repo::clone_with`, o `/ c`): o
+  passe é conferido para o host do endereço e o clone roda sem acesso nosso, com a config da pessoa,
+  então um `url.<base>.insteadOf` no `~/.gitconfig` dela leva o clone a outro host. Os pertences não
+  seguem mais (chamada com acesso nosso: sem config global nem do sistema); aqui a reescrita para o
+  MESMO host (https→ssh do GitHub) é uso comum, então a regra seria recusar quando o host efetivo
+  (`git ls-remote --get-url`) não é o do passe. Decisão do dono.
 
 - **O lançamento pelo `C-h` da janela do gerenciador**: ele lança `ronoctua-shell git-browser
   <raiz>` por `systemd-run --user --scope`, que só existe com o gerenciador de usuário. Fora da VM
@@ -1147,24 +1161,18 @@ frase da página dos pertences, nunca resolvido por ela:
   caminho de um alvo passa a ser o alvo — com uma migração que não quebre o "guardar de novo" nem uma
   máquina na versão anterior.
 
-### Os Crafting Apps fazem o que a distro não segura · pequeno
+### Seguir as releases dos Crafting Apps nunca rodou de ponta a ponta · médio
 
-O que um Crafting App DECLARA abrir não abre mais nada sozinho (`fallback = false`; o
-`files-open-by-choice` cobra), mas dois deles fazem por conta própria o que a distro não acompanha:
+A opção (`distro-apps-follow-releases`) foi provada por partes: o `pins refresh` sobre respostas
+gravadas do GitHub e sem Nix, o juiz nos dois lados pela tabela de casos, o registro, a lista de
+permitidos e o perfil da pessoa em máquinas avaliadas (`distro-apps-follow-when-on-and-newer`), o
+verify do root com um `nix` de mentira. Nenhuma execução juntou o GitHub de verdade, o
+`prefetch-file` com o nome do builder, a assinatura, a aplicação do root dentro da própria atualização, o verify construindo um Craft seguido e o rebuild que o põe
+no perfil da pessoa.
 
-- **O "tornar padrão" do WordCraft grava um padrão morto.** Ele roda `xdg-mime` com o id que o app
-  espera, `ai.storyteller.wordcraft.desktop`, e o lançador daqui é
-  `ronoctua-appimage-wordcraft.desktop`: o `~/.config/mimeapps.list` da pessoa ganha linhas que todo
-  leitor pula, e o botão parece não fazer nada.
-  - acabou quando: o dono decidir entre dar ao lançador o id que o app espera (muda o id que o
-    registro e a central usam) e dizer em algum lugar que a pessoa leia que o padrão se escolhe pela
-    distro (o "abrir com" e o `mimeapps.list`)
-- **O "Verificar atualizações" do PdfCraft anuncia o que a distro não entrega.** À mão, ele pergunta
-  ao GitHub pela release mais nova e diz que há versão nova; ela só chega quando o dono move o pin
-  (`nix run .#distro-pins`) e a máquina se atualiza. O pedido é do app, fora do consentimento da
-  distro, como toda a rede dele.
-  - acabou quando: o dono decidir se os pins dos Crafting Apps andam sozinhos com a atualização da
-    máquina, ou onde a pessoa lê que a versão é a que a distro testou
+- acabou quando: um teste de VM (ou uma atualização numa máquina de teste) segue uma release real,
+  o verify a anota e o perfil da pessoa roda a versão seguida; e outra, com o pin seguido estragado,
+  retém, fica com a última verificada e diz por quê
 
 ### O apk do F-Droid é fixado pelo que chegou, não pelo índice assinado · pequeno
 
@@ -1533,6 +1541,12 @@ Cachix nem uma instalação.
   da atualização que quebra em várias linhas (todas as linhas acendem, `update_window::one_control`)
   é provado por teste e pela foto da janela, não por uma foto do rodapé.
   - pronto quando: a câmera do rodapé aceitar `--hover`/`--click`.
+- **A razão do aplicador não tem frase na vista**: o `person-stage` termina uma recusa em `refused
+  <palavra>` e o relatório guarda `failed-<palavra>` (`not-signed`, `rolled-back`, `too-large`…), mas
+  a vista só tem frase para as palavras da máquina (`update_window::refusal_key`); só o `busy` é
+  notícia declarada, com frase. As recusas de assinatura a página dos pertences já diz (o
+  `signer.json`); as outras só o diário.
+  - pronto quando: a vista disser a frase de cada razão do aplicador que um `person-stage` pode dar.
 
 <!-- anchor: L20 -->
 

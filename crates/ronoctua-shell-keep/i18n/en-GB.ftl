@@ -63,6 +63,7 @@ belongings-root-refused-bad-signature = Not signed by the key this machine trust
 belongings-root-refused-rolled-back = An older version than this machine already took, and this machine kept the data it had.
 belongings-kept-back-not-as-signed = kept as this machine has it: not what you signed
 belongings-kept-back-no-key-pinned = kept as this machine has it: no key is pinned here
+belongings-kept-back-document = kept as this machine has it: this machine cannot read your copy
 belongings-op-sync-plain = the plain part's sync
 belongings-op-restore = the restore
 belongings-op-probe = checking the access

@@ -125,4 +125,4 @@ workspace = true
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
 env = ["RONOCTUA_BELONGINGS_RS", "RONOCTUA_KEYS_DIR", "RONOCTUA_MACHINE_DIR", "RONOCTUA_SSH_KEYGEN"]
-run-env = ["RONOCTUA_SSH_KEYGEN"]
+run-env = ["RONOCTUA_MACHINE_DIR", "RONOCTUA_SSH_KEYGEN"]

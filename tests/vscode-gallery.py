@@ -16,12 +16,41 @@ for every one of them. It answers what the pinned 1.119 asks for an install
 - GET  main.vscode-cdn.net /extensions/marketplace.json — an empty control
        list.
 
+And what the editor's window asks at start-up (the start-up measure), the
+whole conversation and not its first line:
+
+- every answer carries the CORS headers, and OPTIONS answers the preflight
+  the window's `fetch` sends first (without them the window stops at the
+  preflight, and a measure sees only the first question);
+- whatever VSIX the folder holds is offered — the test puts a Copilot Chat
+  NEWER than the one the pinned build carries beside rust-analyzer, so the
+  window's update of its built-in goes all the way to the download;
+- GET  main.vscode-cdn.net /core/stable.json — no emergency alert, and
+       /extensions/chat.json — an empty list of chat participants;
+- GET  redirector.gvt1.com /edgedl/… — a redirect to one of its mirrors, as
+       the real one answers, and the mirror answers with bytes.
+
+And Nix's two hosts, for the measure of rust-analyzer's own NixOS patch on a
+machine that is online (the test sends their names here only then):
+
+- GET  channels.nixos.org /flake-registry.json — the global flake registry,
+       in the real one's shape (`nixpkgs` → GitHub, which the machine's own
+       registry comes before);
+- GET  cache.nixos.org /nix-cache-info — a binary cache, which has none of
+       the outputs asked for (404).
+
 Everything else is 404. Every request is written, a JSON line, to the log
 the test reads: which hosts VS Code reached, against the hosts the person
 let. No signature is offered: VS Code takes an unsigned gallery extension
-("NotSigned") of a public publisher.
+("NotSigned") of a public publisher only where `extensions.verifySignature`
+is off (the test's settings say where).
 
-usage: vscode-gallery.py <vsix folder> <cert> <key> <log>
+And every name a client ASKED for in its TLS greeting (SNI), a JSON line to
+a second log, before the handshake is decided: the start-up measure sends
+every name to this machine, so a host whose name the certificate does not
+carry is still written down — the handshake fails, the attempt does not.
+
+usage: vscode-gallery.py <vsix folder> <cert> <key> <log> <sni log>
 """
 
 import http.server
@@ -33,7 +62,9 @@ import uuid
 import zipfile
 from xml.etree import ElementTree
 
-VSIX_DIR, CERT, KEY, LOG = sys.argv[1:5]
+VSIX_DIR, CERT, KEY, LOG, SNI_LOG = sys.argv[1:6]
+# THE MIRROR redirector.gvt1.com sends a download to, shaped as its own.
+MIRROR = "r1---sn-ronoctua.gvt1.com"
 VSIX = "Microsoft.VisualStudio.Services.VSIXPackage"
 MANIFEST = "Microsoft.VisualStudio.Code.Manifest"
 
@@ -53,6 +84,12 @@ def read_vsix(path):
         "path": path,
     }
 
+
+# THE GLOBAL FLAKE REGISTRY, shaped as the one at channels.nixos.org.
+GLOBAL_REGISTRY = {"version": 2, "flakes": [{
+    "from": {"type": "indirect", "id": "nixpkgs"},
+    "to": {"type": "github", "owner": "NixOS", "repo": "nixpkgs", "ref": "nixpkgs-unstable"},
+}]}
 
 EXTENSIONS = {}
 for entry in sorted(os.listdir(VSIX_DIR)):
@@ -117,12 +154,32 @@ class Gallery(http.server.BaseHTTPRequestHandler):
             out.write(json.dumps({"method": self.command, "host": host,
                                   "path": self.path, "code": code}) + "\n")
 
-    def send(self, code, body, kind="application/json"):
+    def end_headers(self):
+        """Every answer may be read by the window that asked (CORS)."""
+        origin = self.headers.get("Origin")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+            self.send_header("Vary", "Origin")
+        super().end_headers()
+
+    def send(self, code, body, kind="application/json", extra=()):
         self.send_response(code)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
+        for name, value in extra:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        """The preflight of the window's `fetch`: anything it asks to send."""
+        asked = self.headers.get("Access-Control-Request-Headers") or "*"
+        self.send(204, b"", "text/plain", (
+            ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+            ("Access-Control-Allow-Headers", asked),
+            ("Access-Control-Max-Age", "600"),
+        ))
 
     def host(self):
         return (self.headers.get("Host") or "").split(":")[0].lower()
@@ -147,6 +204,20 @@ class Gallery(http.server.BaseHTTPRequestHandler):
             return self.send(404, b"")
         if host == "main.vscode-cdn.net" and path == "/extensions/marketplace.json":
             return self.send(200, b"{}")
+        if host == "main.vscode-cdn.net" and path == "/core/stable.json":
+            return self.send(200, b'{"alerts": []}')
+        if host == "main.vscode-cdn.net" and path == "/extensions/chat.json":
+            return self.send(200, b"{}")
+        if host == "redirector.gvt1.com" and path.startswith("/edgedl/"):
+            where = f"https://{MIRROR}{path}?cms_redirect=yes"
+            return self.send(302, b"", "text/plain", (("Location", where),))
+        if host == MIRROR and path.startswith("/edgedl/"):
+            return self.send(200, b"not a dictionary", "application/octet-stream")
+        if host == "channels.nixos.org" and path == "/flake-registry.json":
+            return self.send(200, json.dumps(GLOBAL_REGISTRY).encode())
+        if host == "cache.nixos.org" and path == "/nix-cache-info":
+            return self.send(200, b"StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n",
+                             "text/x-nix-cache-info")
         return self.send(404, b"")
 
     def do_POST(self):
@@ -175,6 +246,15 @@ class Gallery(http.server.BaseHTTPRequestHandler):
 server = http.server.ThreadingHTTPServer(("0.0.0.0", 443), Gallery)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(CERT, KEY)
+
+
+def asked(_socket, name, _context):
+    """Write down the name a client asked for; the handshake goes on."""
+    with open(SNI_LOG, "a") as out:
+        out.write(json.dumps({"sni": (name or "").lower()}) + "\n")
+
+
+context.sni_callback = asked
 server.socket = context.wrap_socket(server.socket, server_side=True)
 print(f"serving {sorted(EXTENSIONS)}", flush=True)
 server.serve_forever()

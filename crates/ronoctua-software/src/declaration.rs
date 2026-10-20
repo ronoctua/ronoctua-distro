@@ -1474,6 +1474,7 @@ mod tests {
                     group: "graphics".into(),
                     on_this_machine: true,
                     declined_here: false,
+                    appimage: None,
                 },
                 name: "GIMP".into(),
             }],
@@ -1531,6 +1532,7 @@ mod tests {
                     group: "base".into(),
                     on_this_machine: true,
                     declined_here: false,
+                    appimage: None,
                 },
                 name: id.into(),
             });
@@ -1653,6 +1655,7 @@ mod tests {
             group: "graphics".into(),
             on_this_machine: true,
             declined_here: true,
+            appimage: None,
         };
         // GIMP's entry is here, and wins over the registry's name;
         // LibreOffice was declined before it was ever installed: no entry,
@@ -1664,6 +1667,7 @@ mod tests {
                 app("libreoffice", Some("LibreOffice"), "startcenter.desktop"),
                 app("htop", None, "htop.desktop"),
             ],
+            followed: ronoctua_person::reports::FollowedReport::default(),
         };
         std::fs::write(
             roots.system.reports.join(names::DISTRO_APPS),

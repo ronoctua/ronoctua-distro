@@ -102,14 +102,20 @@ A sequência agora tem três tempos, e o gerador recusa qualquer outra ordem
 
 1. **A pessoa reúne, ANTES da metade root** (`gather`): puxa a parte em claro dos pertences
    (`ronoctua-belongings plain pull`, sem senha; um conflito fica como esta máquina o tem e nunca
-   bloqueia; o que a chave da pessoa não assinou fica retido), adianta as fixações (`pins refresh`),
+   bloqueia; o que a chave da pessoa não assinou fica retido), adianta as fixações (`pins refresh`;
+   com a opção da pessoa ligada, também os AppImages da distro que seguem as próprias releases, além
+   dos pins da distro — `docs/ARCHITECTURE.md`, os Crafting Apps),
    assina o resultado com a chave da pessoa (`ronoctua-belongings sign`, só com a identidade que a
-   sessão guarda; sem ela, recusa com `no-passphrase` e root fica com a cópia que tinha, porque só
-   aceita o que a chave fixada assinou) e entrega as declarações ao aplicador estreito de root
-   (`person stage`). Antes, porque o rebuild tem de construir o que a pessoa declarou em TODAS
-   as máquinas, e não o da semana passada; como a pessoa, porque o acesso ao repositório, o
-   consentimento e a pasta de preparo são dela — root não tem nenhum dos três. Nenhum outro passo da
-   pessoa vem antes da metade root.
+   sessão guarda; sem ela, recusa com `no-passphrase`: o que as outras máquinas assinaram e o
+   `plain pull` trouxe com a assinatura chega a root assim mesmo, e só o que mudou AQUI sem
+   assinatura espera, porque root só aceita o que a chave fixada assinou) e entrega as declarações
+   ao aplicador estreito de root (`person stage`: prepara, inicia a unidade do aplicador como a
+   central de programas a inicia e lê o veredito; só preparada, a metade root construiria a cópia
+   que a máquina já tinha; `busy`, outro programa de root segurando a máquina, é notícia). Antes,
+   porque o rebuild tem de construir o que a pessoa declarou em TODAS as máquinas, e não o da
+   semana passada; como a pessoa, porque o acesso ao repositório, o consentimento e a pasta de
+   preparo são dela — root não tem nenhum dos três. Nenhum outro passo da pessoa vem antes da
+   metade root.
 2. **A metade root** migra (`migrate`, antes de mover os inputs: o lock do layout velho não é o do
    flake da máquina; e `stop`, porque tudo depois fala o layout novo), move SÓ o input da distro
    (`nix flake update ronoctua`: os outros inputs são os da distro, copiados do lock dela, e mover a

@@ -8,6 +8,7 @@
 //!   person/software/declared.json    →      software/declared.json   rewritten canonical
 //!   person/software/declined.json    →      software/declined.json   rewritten canonical
 //!   person/software/icons/<h>.png    →      software/icons/<h>.png   only the ones an entry names
+//!   person/software/distro-pins.json →      software/distro-pins.json rewritten canonical
 //!   person/options.json              →      options.json             rewritten canonical
 //!   person/machines/…                       —  (the machines' records: Nix reads none)
 //!   brain-modules/<my-id>/…          →      brain/<my-id>/…          byte for byte
@@ -59,9 +60,10 @@
 //!
 //! A machine with NO key pinned takes the declarations as the person staged
 //! them — a person without a repository has nothing to sign with — but never
-//! their options nor a brain module ([`TreeWhy::NoKeyPinned`]): what changes
-//! root's own configuration, and the code the brain compiles, need the
-//! person's signature, always.
+//! their options, the distro's apps they follow past its pins, nor a brain
+//! module ([`TreeWhy::NoKeyPinned`]): what changes root's own configuration,
+//! what moves a program past what the distro tested, and the code the brain
+//! compiles, need the person's signature, always.
 //!
 //! # Which staging this is
 //!
@@ -86,6 +88,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::declared::{Declared, Entry};
 use crate::declined::Declined;
+use crate::distro_pins::DistroPins;
 use crate::options::Options;
 use crate::{Document, Refusal, Stamp, check, names};
 
@@ -113,6 +116,9 @@ pub mod caps {
     pub const DECLINED_MOST_BYTES: u64 = 256 << 10;
     /// `options.json`.
     pub const OPTIONS_MOST_BYTES: u64 = 16 << 10;
+    /// `software/distro-pins.json`: one pin of a few hundred bytes for each
+    /// AppImage of the distro's table that follows its releases.
+    pub const DISTRO_PINS_MOST_BYTES: u64 = 64 << 10;
     /// One icon. The machine's flake is copied whole into the store at every
     /// evaluation (`path:`), so its icons stay small.
     pub const ICON_MOST_BYTES: u64 = 256 << 10;
@@ -294,10 +300,15 @@ impl TreeWhy {
     }
 
     /// Whether it keeps one file back (the machine keeps its own copy) while
-    /// the rest of the staging arrives.
+    /// the rest of the staging arrives — a document's own refusal included:
+    /// the followed distro pins that do not read here never refuse the
+    /// whole tree ([`assemble`]).
     #[must_use]
     pub const fn keeps_back(self) -> bool {
-        matches!(self, Self::NotAsSigned | Self::NoKeyPinned)
+        matches!(
+            self,
+            Self::NotAsSigned | Self::NoKeyPinned | Self::Document(_)
+        )
     }
 }
 
@@ -458,6 +469,12 @@ pub fn staged_place(rel: &str, kind: Kind) -> Result<Place, Refused> {
             Kind::File,
             Place::Read {
                 most_bytes: caps::DECLINED_MOST_BYTES,
+            },
+        ),
+        [PERSON, "software", "distro-pins.json"] => folder(
+            Kind::File,
+            Place::Read {
+                most_bytes: caps::DISTRO_PINS_MOST_BYTES,
             },
         ),
         [PERSON, "options.json"] => folder(
@@ -753,9 +770,24 @@ pub fn assemble(staged: &Staged) -> Result<Assembled, Refused> {
     let declared_at = format!("{PERSON}/{}", names::DECLARED);
     let declined_at = format!("{PERSON}/{}", names::DECLINED);
     let options_at = format!("{PERSON}/{}", names::OPTIONS);
+    let distro_pins_at = format!("{PERSON}/{}", names::DISTRO_PINS);
     let declared: Option<Declared> = document(staged, &declared_at)?;
     let declined: Option<Declined> = document(staged, &declined_at)?;
     let options: Option<Options> = document(staged, &options_at)?;
+    // THE FOLLOWED DISTRO PINS NEVER REFUSE THE TREE: they move a distro
+    // program past its pins, which a machine can do without, and the
+    // declarations must still arrive. One that does not read here (a newer
+    // machine's, a broken one) is kept back with its reason, and the machine
+    // keeps its copy ([`hold_to_signature`]).
+    let mut kept_back = Vec::new();
+    let distro_pins: Option<DistroPins> =
+        document(staged, &distro_pins_at).unwrap_or_else(|refused| {
+            kept_back.push(KeptBack {
+                at: distro_pins_at.clone(),
+                why: refused.why,
+            });
+            None
+        });
     if let Some(d) = &declared {
         tree.put(names::DECLARED, crate::to_json(d).into_bytes());
     }
@@ -764,6 +796,9 @@ pub fn assemble(staged: &Staged) -> Result<Assembled, Refused> {
     }
     if let Some(o) = &options {
         tree.put(names::OPTIONS, crate::to_json(o).into_bytes());
+    }
+    if let Some(p) = &distro_pins {
+        tree.put(names::DISTRO_PINS, crate::to_json(p).into_bytes());
     }
 
     // THE ICONS THE ENTRIES NAME, and no other: an icon of a forgotten entry
@@ -879,7 +914,7 @@ pub fn assemble(staged: &Staged) -> Result<Assembled, Refused> {
         tree,
         ignored,
         left_out,
-        kept_back: Vec::new(),
+        kept_back,
     })
 }
 
@@ -924,11 +959,29 @@ pub enum Trust<'a> {
 
 /// The documents of the person's data, by their path under the staged root
 /// and under the machine's `person/`.
-fn documents() -> [(String, &'static str); 3] {
+fn documents() -> [(String, &'static str); 4] {
     [
         (format!("{PERSON}/{}", names::DECLARED), names::DECLARED),
         (format!("{PERSON}/{}", names::DECLINED), names::DECLINED),
         (format!("{PERSON}/{}", names::OPTIONS), names::OPTIONS),
+        (
+            format!("{PERSON}/{}", names::DISTRO_PINS),
+            names::DISTRO_PINS,
+        ),
+    ]
+}
+
+/// The documents a machine with no key pinned never takes from a staging —
+/// what changes root's configuration, and what moves a distro program past
+/// the pins the distro tested — by their path under the staged root and
+/// under the machine's `person/`.
+fn signed_only() -> [(String, &'static str); 2] {
+    [
+        (format!("{PERSON}/{}", names::OPTIONS), names::OPTIONS),
+        (
+            format!("{PERSON}/{}", names::DISTRO_PINS),
+            names::DISTRO_PINS,
+        ),
     ]
 }
 
@@ -962,8 +1015,8 @@ fn keep_current_icons(tree: &mut Tree, current: &Tree) {
 /// `declared.json` when an icon it names is not as signed, and then the
 /// machine's icons with it. A brain module with one file root reads that is
 /// not as signed, or that the manifest names and the staging lacks, is left
-/// out. UNPINNED: the declarations are taken; the options and every brain
-/// module are not ([`TreeWhy::NoKeyPinned`]).
+/// out. UNPINNED: the declarations are taken; the options, the followed
+/// distro pins and every brain module are not ([`TreeWhy::NoKeyPinned`]).
 ///
 /// `sha256` is the hash a manifest names files by (hexadecimal): the binary
 /// hands `ronoctua_pq::sign::sha256_hex`, a test its own — this crate stays
@@ -977,15 +1030,24 @@ pub fn hold_to_signature(
 ) {
     let modules_at = format!("{BRAIN_MODULES}/");
     let mut out: BTreeMap<String, Refused> = BTreeMap::new();
+    // WHAT `assemble` KEPT BACK for its own reason keeps the machine's copy,
+    // and is said once.
+    let already: Vec<String> = assembled.kept_back.iter().map(|k| k.at.clone()).collect();
+    for (rel, machine) in documents() {
+        if already.contains(&rel) {
+            keep_current(&mut assembled.tree, current, machine);
+        }
+    }
     match trust {
         Trust::Unpinned => {
-            let options = format!("{PERSON}/{}", names::OPTIONS);
-            if staged.files.contains_key(&options) {
-                keep_current(&mut assembled.tree, current, names::OPTIONS);
-                assembled.kept_back.push(KeptBack {
-                    at: options,
-                    why: TreeWhy::NoKeyPinned,
-                });
+            for (rel, machine) in signed_only() {
+                if staged.files.contains_key(&rel) && !already.contains(&rel) {
+                    keep_current(&mut assembled.tree, current, machine);
+                    assembled.kept_back.push(KeptBack {
+                        at: rel,
+                        why: TreeWhy::NoKeyPinned,
+                    });
+                }
             }
             for dir in assembled.tree.dirs.iter() {
                 if let Some(id) = dir
@@ -1025,7 +1087,7 @@ pub fn hold_to_signature(
                 .all(|f| as_signed(f));
             for (rel, machine) in documents() {
                 let holds = as_signed(&rel) && (machine != names::DECLARED || icons_hold);
-                if holds {
+                if holds || already.contains(&rel) {
                     continue;
                 }
                 keep_current(&mut assembled.tree, current, machine);
@@ -1275,6 +1337,10 @@ mod tests {
             "person/options.json".to_owned(),
             include_bytes!("../fixtures/good/options.json").to_vec(),
         );
+        s.files.insert(
+            "person/software/distro-pins.json".to_owned(),
+            include_bytes!("../fixtures/good/distro-pins.json").to_vec(),
+        );
         s.files
             .insert(format!("person/software/icons/{ICON}.png"), PNG.to_vec());
         s
@@ -1308,6 +1374,12 @@ mod tests {
             staged_place("person/software/declared.json", File),
             Ok(Place::Read {
                 most_bytes: caps::DECLARED_MOST_BYTES
+            })
+        );
+        assert_eq!(
+            staged_place("person/software/distro-pins.json", File),
+            Ok(Place::Read {
+                most_bytes: caps::DISTRO_PINS_MOST_BYTES
             })
         );
         assert_eq!(
@@ -1404,6 +1476,10 @@ mod tests {
         assert_eq!(
             a.tree.files["software/declared.json"],
             include_bytes!("../fixtures/good/declared.json")
+        );
+        assert_eq!(
+            a.tree.files["software/distro-pins.json"],
+            include_bytes!("../fixtures/good/distro-pins.json")
         );
         assert!(
             a.tree
@@ -1621,6 +1697,7 @@ mod tests {
         let mut t = Tree::default();
         t.put(names::DECLARED, b"the machine's declared".to_vec());
         t.put(names::OPTIONS, b"the machine's options".to_vec());
+        t.put(names::DISTRO_PINS, b"the machine's followed pins".to_vec());
         t.put(
             &format!("{}/{}.png", names::ICONS, "c".repeat(64)),
             b"old icon".to_vec(),
@@ -1636,6 +1713,7 @@ mod tests {
     fn the_signature_covers_the_persons_data_but_the_machines_records() {
         for yes in [
             "person/options.json",
+            "person/software/distro-pins.json",
             "person/software/declared.json",
             "person/software/icons/x.png",
             "brain-modules/my-tea/module.rs",
@@ -1709,6 +1787,27 @@ mod tests {
             "the declarations as signed did not arrive"
         );
         assert!(a.tree.files.contains_key("brain/my-tea/module.rs"));
+
+        // THE FOLLOWED PINS CHANGED after the signature: a release nobody
+        // signed for never reaches the build, and the machine keeps its own.
+        let mut moved = signed_staging.clone();
+        moved.files.insert(
+            "person/software/distro-pins.json".to_owned(),
+            br#"{"format": 1, "pins": []}"#.to_vec(),
+        );
+        let mut a = assemble(&moved).unwrap();
+        hold_to_signature(&mut a, &moved, &current, Trust::Signed(&files), &content);
+        assert_eq!(
+            a.tree.files[names::DISTRO_PINS],
+            b"the machine's followed pins"
+        );
+        assert_eq!(
+            a.kept_back,
+            [KeptBack {
+                at: "person/software/distro-pins.json".to_owned(),
+                why: TreeWhy::NotAsSigned
+            }]
+        );
 
         // A DOCUMENT SIGNED AND NOT STAGED: the machine keeps its copy (here,
         // none of `declined.json`).
@@ -1823,8 +1922,57 @@ mod tests {
         }
     }
 
-    /// FAILS IF: a machine with no key pinned takes the person's options or a
-    /// brain module, or stops taking their declarations.
+    /// FAILS IF: followed distro pins that do not read here (a newer
+    /// machine's, a broken file) refuse the whole tree — the declarations
+    /// must still arrive — or are taken, or are not kept back with their
+    /// reason while the machine keeps its own copy.
+    #[test]
+    fn followed_pins_that_do_not_read_are_kept_back_and_the_rest_arrives() {
+        let mut staged = good_with_a_module();
+        staged.files.insert(
+            "person/software/distro-pins.json".to_owned(),
+            br#"{"format": 2, "pins": []}"#.to_vec(),
+        );
+        let files = manifest_of(&staged);
+        let mut a = assemble(&staged).expect("the declarations still arrive");
+        assert_eq!(
+            a.kept_back,
+            [KeptBack {
+                at: "person/software/distro-pins.json".to_owned(),
+                why: TreeWhy::Document(crate::Why::Newer)
+            }]
+        );
+        assert!(a.kept_back[0].why.keeps_back());
+        hold_to_signature(
+            &mut a,
+            &staged,
+            &machine_had(),
+            Trust::Signed(&files),
+            &content,
+        );
+        assert_eq!(
+            a.tree.files[names::DISTRO_PINS],
+            b"the machine's followed pins",
+            "the machine keeps its copy"
+        );
+        assert_eq!(a.kept_back.len(), 1, "said once: {:?}", a.kept_back);
+        assert_eq!(
+            a.tree.files[names::DECLARED],
+            include_bytes!("../fixtures/good/declared.json")
+        );
+        let mut a = assemble(&staged).unwrap();
+        hold_to_signature(&mut a, &staged, &machine_had(), Trust::Unpinned, &content);
+        assert_eq!(
+            a.kept_back.len(),
+            2,
+            "the options, and the pins once: {:?}",
+            a.kept_back
+        );
+    }
+
+    /// FAILS IF: a machine with no key pinned takes the person's options,
+    /// the distro pins they follow or a brain module, or stops taking their
+    /// declarations.
     #[test]
     fn with_no_key_pinned_only_the_declarations_arrive() {
         let staged = good_with_a_module();
@@ -1837,11 +1985,21 @@ mod tests {
         );
         assert_eq!(a.tree.files[names::OPTIONS], b"the machine's options");
         assert_eq!(
+            a.tree.files[names::DISTRO_PINS],
+            b"the machine's followed pins"
+        );
+        assert_eq!(
             a.kept_back,
-            [KeptBack {
-                at: "person/options.json".to_owned(),
-                why: TreeWhy::NoKeyPinned
-            }]
+            [
+                KeptBack {
+                    at: "person/options.json".to_owned(),
+                    why: TreeWhy::NoKeyPinned
+                },
+                KeptBack {
+                    at: "person/software/distro-pins.json".to_owned(),
+                    why: TreeWhy::NoKeyPinned
+                }
+            ]
         );
         assert_eq!(a.left_out.len(), 1);
         assert_eq!(a.left_out[0].why, TreeWhy::NoKeyPinned);
@@ -1853,6 +2011,10 @@ mod tests {
         assert!(
             !a.tree.files.contains_key(names::OPTIONS),
             "options from nowhere"
+        );
+        assert!(
+            !a.tree.files.contains_key(names::DISTRO_PINS),
+            "followed pins from nowhere"
         );
         assert!(!a.tree.dirs.contains(BRAIN));
     }

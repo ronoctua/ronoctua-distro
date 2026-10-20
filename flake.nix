@@ -238,6 +238,9 @@
               # is current: `kiosk-vm` (in `.#most`) and the `full` profile's
               # browser build from it, and no cache has an unfree source.
               unfreePkgs.google-chrome.src
+              # THE GLOBAL FLAKE REGISTRY every machine reads from the store
+              # (`nix/flake-registry.nix`).
+              (import ./nix/flake-registry.nix { inherit (pkgs) fetchurl; })
             ]
             # THE DISTRO'S APPIMAGES AND APKS at their pins (the Crafting
             # Apps, ~0,95 GB): a release upstream deletes is gone for good,
@@ -2686,8 +2689,10 @@
         # Android apps of `assets/distro-apps.nix` that follow a source (a
         # GitHub repository, F-Droid) get the newest release's address and
         # hash in `assets/distro-pins.json`. The owner runs it, reads the
-        # diff and commits by hand — a pin is what the gate tested, so it
-        # never moves on a machine by itself. `--check` writes nothing.
+        # diff and commits by hand — a pin is what the gate tested. A person
+        # may follow the AppImages further on THEIR machines (the owner's
+        # decision, 2026-10-20): their own signed pins, newer ones only
+        # (`ronoctua_person::distro_pins`). `--check` writes nothing.
         distro-pins =
           mkScriptApp "ronoctua-distro-pins" "moves the pins of the distro's own AppImages and Android apps"
             ''

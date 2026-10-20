@@ -149,6 +149,28 @@ Três atalhos ficam fora dela de propósito, para o caso de a máquina parar de 
 `Ctrl+Alt+L` abre a lista quando o `Super` falha, `Ctrl+Shift+L` reinicia o `keyd` e
 `Ctrl+Alt+Esc` abre o monitor de processos numa janela flutuante.
 
+### Os Crafting Apps
+
+Nenhum Crafting App abre um tipo de arquivo sozinho: eles ficam no "abrir com" do gerenciador de
+arquivos, onde você escolhe um deles para um arquivo. Para um tipo abrir sempre num deles, o padrão é
+uma linha sua no `~/.config/mimeapps.list`, com o nome do lançador da distro,
+`ronoctua-appimage-<app>.desktop`:
+
+```
+[Default Applications]
+application/vnd.oasis.opendocument.text=ronoctua-appimage-wordcraft.desktop
+```
+
+Um tipo `text/*` (Markdown, RTF, HTML, texto puro) é exceção no gerenciador de arquivos: ele vai
+sempre para o editor, antes de qualquer `mimeapps.list` ser lido, e ali um Crafting App só abre o
+arquivo pelo "abrir com", um de cada vez. A linha do `mimeapps.list` para um tipo `text/*` vale para
+os outros programas que abrem arquivos (o `xdg-open`).
+
+Não use o botão "tornar padrão" do próprio app. O do WordCraft (o único observado; os outros não
+foram conferidos) reescreve a linha do tipo no `mimeapps.list` com o nome que o app espera,
+`ai.storyteller.wordcraft.desktop`, que a distro não usa: ele desfaz a linha que você escreveu, e o
+que fica no lugar nenhum programa lê.
+
 ### O Emacs
 
 A distro não escreve configuração nenhuma do Emacs: o que ele lê é seu, em `~/.config/emacs`, que
@@ -181,6 +203,32 @@ reinstalar as que faltam, com o "não" primeiro, dizendo de quais hosts do Marke
 "sim" libera esses hosts e as baixa, uma de cada vez, na fila de transferências. Enquanto faltar
 alguma, a página mantém uma linha que as instala (para tentar de novo depois de uma falha), e
 `ronoctua-vscode install`, num terminal, faz o mesmo quando os hosts já foram liberados.
+
+**O rust-analyzer** funciona sem ajuste: o VS Code da distro roda num ambiente que não se diz NixOS
+para as extensões, e a extensão usa o servidor que traz, mesmo sem rede. Se você prefere o servidor da
+toolchain da distro (o do mesmo Rust que compila), ponha no `settings.json` do perfil padrão e no de
+cada perfil seu:
+
+```json
+"rust-analyzer.server.path": "rust-analyzer"
+```
+
+e deixa de ter o servidor do lançamento da extensão, que pode trazer recursos mais novos.
+
+**A rede que ele abre sozinho.** O VS Code é um programa de terceiro que fala com o fabricante, como o
+Chrome: mesmo com a telemetria desligada, ao subir ele pede à CDN dele as listas de controle e o alerta
+de emergência, baixa do Google o dicionário do corretor e pergunta ao Marketplace se há versão nova
+das extensões — a do Copilot Chat embutido inclusive, que ele baixa e instala sozinho. Para calar o
+Marketplace, dois ajustes no seu `settings.json`:
+
+```json
+"extensions.autoCheckUpdates": false,
+"extensions.ignoreRecommendations": true
+```
+
+O primeiro tira a busca da partida (as extensões deixam de se atualizar sozinhas; a busca à mão
+continua); o segundo, a pergunta que abrir um arquivo faz (um `.py` pergunta pela extensão de Python).
+O `"chat.disableAIFeatures": true` esconde o chat e a IA, mas não cala nada disso.
 
 <!-- anchor: L03 -->
 
@@ -299,12 +347,12 @@ conferências rodam antes do primeiro passo. Os programas que a `full` deixa de 
 `RONOCTUA_INST_LEFT_OUT`: os ids separados por vírgula (`blender,libreoffice`) ou `none`; sem ela,
 fica de fora o que a tela traz desmarcado, e o ensaio imprime, depois do plano, a escolha que seria
 assinada (os desmarcados e os marcados), sob o caminho em que é escrita. Para ver as telas novas sem instalar nada: `ronoctua-install --show access` (ou
-`network`, `token`, `passphrase`, `passphrase-new`, `hop`, `review`, `left-out`) — num terminal, no
+`network`, `token`, `passphrase`, `passphrase-new`, `hop`, `review`, `left-out`, `compose`) — num terminal, no
 tamanho e nas cores dele.
 
 A instalação responde ao mouse num terminal que o mande (por SSH, por exemplo): um clique escolhe a
-linha de uma lista, um segundo a confirma, e as teclas da última linha (`Enter`, `Esc`, `Ctrl+C`) são
-clicáveis.
+linha de uma lista, um segundo a confirma, e as teclas da última linha (`Enter`, `Esc`, `Ctrl+C` e,
+na lista de programas, `Space`) são clicáveis.
 
 
 ## Se algo der errado

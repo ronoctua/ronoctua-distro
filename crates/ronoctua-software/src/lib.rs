@@ -51,6 +51,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub mod declaration;
+pub mod follow;
 pub mod found;
 pub mod journal;
 pub mod lock;

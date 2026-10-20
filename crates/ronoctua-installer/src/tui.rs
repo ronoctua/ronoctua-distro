@@ -31,8 +31,9 @@
 //! **19:** everything answers the pointer too — a terminal over SSH sends
 //! mouse events. A list's row is selected by a click and taken by a second
 //! one, the wheel moves the list, every key in the keys line is a click
-//! (`Enter`, `Esc`, `Ctrl+C`), and what the pointer rests on is lit. What the
-//! drawing paints and what the pointer hits are ONE answer ([`places`]).
+//! (`Space`, `Enter`, `Esc`, `Ctrl+C`, named by the code: [`KEYS`]), and
+//! what the pointer rests on is lit. What the drawing paints and what the
+//! pointer hits are ONE answer ([`places`]).
 //!
 //! **What a click opens is born under the pointer** (AGENTS, "Perguntas"): a
 //! screen that a click brought takes no click of its own until one SELECTED
@@ -1120,12 +1121,12 @@ impl State {
                     return Next::Stay;
                 };
                 match k {
-                    KeyCode::Esc => self.go_back(),
+                    ESC => self.go_back(),
                     // WHILE A CHECK RUNS, only Esc counts: an Enter would ask
                     // twice, and typing would change what is being checked.
                     _ if self.waiting.is_some() => {}
-                    KeyCode::Up if self.is_list() => self.choice = self.choice.saturating_sub(1),
-                    KeyCode::Down if self.is_list() => {
+                    UP if self.is_list() => self.choice = self.choice.saturating_sub(1),
+                    DOWN if self.is_list() => {
                         let last = self.options().len().saturating_sub(1);
                         self.choice = (self.choice + 1).min(last);
                     }
@@ -1140,15 +1141,13 @@ impl State {
                     // A PROGRAM'S ROW IS MARKED OR UNMARKED, by Enter as by
                     // the space bar: the answer itself changes, and the
                     // screen stays. Enter on "continue" takes the answer.
-                    KeyCode::Enter | KeyCode::Char(' ')
-                        if self.offered_at(self.choice).is_some() =>
-                    {
+                    ENTER | SPACE if self.offered_at(self.choice).is_some() => {
                         if let Some(o) = self.offered_at(self.choice) {
                             self.answers.left_out = model::toggle(&self.answers.left_out, o.id);
                             self.error = None;
                         }
                     }
-                    KeyCode::Enter => {
+                    ENTER => {
                         let v = if self.is_list() {
                             self.choice_value()
                         } else {
@@ -1161,22 +1160,22 @@ impl State {
                 Next::Stay
             }
             Screen::Hopping(hop) => match k {
-                KeyCode::Enter => Next::Hop(hop),
-                KeyCode::Esc => {
+                ENTER => Next::Hop(hop),
+                ESC => {
                     self.go_back();
                     Next::Stay
                 }
                 _ => Next::Stay,
             },
             Screen::Reviewing => match k {
-                KeyCode::Esc => {
+                ESC => {
                     self.go_back();
                     Next::Stay
                 }
                 // THE PLAN SCROLLS — what is typed here is the disk's path,
                 // and no arrow is part of one.
-                KeyCode::Up => self.scroll_review(-1),
-                KeyCode::Down => self.scroll_review(1),
+                UP => self.scroll_review(-1),
+                DOWN => self.scroll_review(1),
                 KeyCode::PageUp => self.scroll_review(-self.review_step()),
                 KeyCode::PageDown => self.scroll_review(self.review_step()),
                 KeyCode::Backspace => {
@@ -1189,7 +1188,7 @@ impl State {
                     self.error = None;
                     Next::Stay
                 }
-                KeyCode::Enter => {
+                ENTER => {
                     // Typing the disk's path, and not "yes". Copying the
                     // path forces one to READ the path, which is the one thing
                     // on this screen nobody can get wrong.
@@ -1221,11 +1220,11 @@ impl State {
                 self.hover = hit;
                 Next::Stay
             }
-            Pointer::WheelUp if self.is_list() => self.key(KeyCode::Up),
-            Pointer::WheelDown if self.is_list() => self.key(KeyCode::Down),
+            Pointer::WheelUp if self.is_list() => self.key(UP),
+            Pointer::WheelDown if self.is_list() => self.key(DOWN),
             // THE REVIEW'S PLAN, a line a notch.
-            Pointer::WheelUp if self.screen == Screen::Reviewing => self.key(KeyCode::Up),
-            Pointer::WheelDown if self.screen == Screen::Reviewing => self.key(KeyCode::Down),
+            Pointer::WheelUp if self.screen == Screen::Reviewing => self.key(UP),
+            Pointer::WheelDown if self.screen == Screen::Reviewing => self.key(DOWN),
             Pointer::WheelUp | Pointer::WheelDown => Next::Stay,
             Pointer::Click => {
                 self.hover = hit;
@@ -1236,7 +1235,7 @@ impl State {
                     // on the row it selected does what `Enter` does.
                     Some(Hit::Row(i)) if self.waiting.is_none() && self.is_list() => {
                         if i == self.choice && self.aimed == Some(i) {
-                            self.key(KeyCode::Enter)
+                            self.key(ENTER)
                         } else {
                             self.choice = i;
                             self.aimed = Some(i);
@@ -1333,6 +1332,8 @@ fn help_of(e: &State, q: Question, texts: &Texts) -> String {
         // consent to reach them.
         Question::Wifi if e.hosts.is_empty() => texts.t(key::INST_NETWORK_HELP_UNNAMED),
         Question::Wifi => texts.t_with(q.help(), &[("hosts", &e.hosts)]),
+        // THE KEYS THE DEFAULT PUTS TO WORK, by the options the system sets.
+        Question::ComposeKey => texts.t_with(q.help(), &model::COMPOSE_HELP_KEYS),
         Question::BelongingsAccess if e.by_token() => texts.t(key::INST_BELONGINGS_TOKEN_HELP),
         Question::BelongingsPassphrase if e.answers.belongings_empty == Some(true) => {
             texts.t(key::INST_BELONGINGS_PASSPHRASE_NEW_HELP)
@@ -1368,17 +1369,35 @@ fn said_of(e: &State, texts: &Texts) -> (String, bool) {
     (help, false)
 }
 
-/// The keys line of the screen.
-fn keys_of(e: &State, texts: &Texts) -> String {
+/// The keys line of the screen, for a line `width` cells wide.
+fn keys_of(e: &State, texts: &Texts, width: u16) -> String {
+    let line = |k| with_keys(texts, k, &[]);
     match e.screen {
         Screen::Asking(_) if e.question_of() == Some(Question::LeftOut) && e.is_list() => {
-            texts.t(key::INST_KEYS_CHECK)
+            // THE SPACE BAR IS TAUGHT WHERE IT FITS ([`spaced_fits`]). The
+            // line that names it is the longer one, and a keys line is never
+            // cut; narrower, the line names Enter alone, which marks a
+            // program's row too.
+            let spaced = line(key::INST_KEYS_CHECK_SPACE);
+            if spaced_fits(&spaced, width) {
+                spaced
+            } else {
+                line(key::INST_KEYS_CHECK)
+            }
         }
-        Screen::Asking(_) if e.is_list() => texts.t(key::INST_KEYS_CHOOSE),
-        Screen::Asking(_) | Screen::Hopping(_) => texts.t(key::INST_KEYS_EDIT),
-        Screen::Reviewing => texts.t(key::INST_KEYS_REVIEW),
-        _ => texts.t(key::INST_KEYS_QUIT),
+        Screen::Asking(_) if e.is_list() => line(key::INST_KEYS_CHOOSE),
+        Screen::Asking(_) | Screen::Hopping(_) => line(key::INST_KEYS_EDIT),
+        Screen::Reviewing => line(key::INST_KEYS_REVIEW),
+        _ => line(key::INST_KEYS_QUIT),
     }
+}
+
+/// Whether the checklist's longer keys line, the one teaching the space
+/// bar, is drawn on a line `width` cells wide: when it fits with a cell to
+/// spare, so its last word never touches the edge. Measured as the language
+/// writes it, never a column count.
+fn spaced_fits(spaced: &str, width: u16) -> bool {
+    cells(spaced) < width
 }
 
 /// What separates two hints of a keys line, as both `.ftl` files write it —
@@ -1386,16 +1405,136 @@ fn keys_of(e: &State, texts: &Texts) -> String {
 /// (`Hint::at`).
 pub const HINT_SEPARATOR: &str = " · ";
 
-/// What a hint does, from its first word — the key's name, which is the
-/// code's and never translated (`Enter`, `Esc`, `Ctrl+C`).
+// THE KEYS A LINE TEACHES, beside what they press — names and codes both
+// the code's, never a sentence's (AGENTS, "Tecla nunca é texto no .ftl";
+// `keys-are-never-text`). Written in a `.ftl`, a name goes stale the day its
+// key moves, and a language may spell it so the pointer no longer reads it.
+// Each key is ONE code here: `State::key` and `gives_up` answer these and no
+// other, the sentences take the names as arguments (`{ $enter }`), and a
+// hint's click is read from the same table (`KEYS`) — a hint is grabbed
+// where it is drawn, and a key that moves without its name fails a test
+// (`a_taught_keys_name_spells_its_code`).
+
+/// The arrow that moves a list's cursor up.
+pub const UP: KeyCode = KeyCode::Up;
+/// The arrow that moves a list's cursor down.
+pub const DOWN: KeyCode = KeyCode::Down;
+/// The space bar, which marks a program's row of the checklist.
+pub const SPACE: KeyCode = KeyCode::Char(' ');
+/// The key that continues — and marks a program's row.
+pub const ENTER: KeyCode = KeyCode::Enter;
+/// The key that goes back.
+pub const ESC: KeyCode = KeyCode::Esc;
+/// The letter that gives up while Control is held ([`gives_up`]).
+pub const QUIT: KeyCode = KeyCode::Char('c');
+
+/// The two arrows, by name.
+pub const KEY_ARROWS: &str = "↑↓";
+/// The space bar, by name.
+pub const KEY_SPACE: &str = "Space";
+/// The key that continues, by name.
+pub const KEY_ENTER: &str = "Enter";
+/// The key that goes back, by name.
+pub const KEY_ESC: &str = "Esc";
+/// The chord that gives up, by name.
+pub const KEY_QUIT: &str = "Ctrl+C";
+
+/// A key a sentence names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Taught {
+    /// The argument the sentences name it by (`{ $enter }`).
+    pub arg: &'static str,
+    /// Its name, as the line draws it.
+    pub name: &'static str,
+    /// The keys the terminal reports for it.
+    pub codes: &'static [KeyCode],
+    /// Whether it is pressed with Control held (the chord that gives up).
+    pub control: bool,
+    /// Whether a click on its hint presses it — not the arrows, which the
+    /// list and the wheel answer, and whose hint is drawn inert.
+    pub clicks: bool,
+}
+
+impl Taught {
+    /// What a click on its hint does: its key, by the keyboard's path, or
+    /// giving up for the chord.
+    #[must_use]
+    pub const fn act(&self) -> Option<Act> {
+        if !self.clicks {
+            None
+        } else if self.control {
+            Some(Act::Quit)
+        } else {
+            Some(Act::Key(self.codes[0]))
+        }
+    }
+}
+
+/// Every key a sentence names.
+pub const KEYS: [Taught; 5] = [
+    Taught {
+        arg: "arrows",
+        name: KEY_ARROWS,
+        codes: &[UP, DOWN],
+        control: false,
+        clicks: false,
+    },
+    Taught {
+        arg: "space",
+        name: KEY_SPACE,
+        codes: &[SPACE],
+        control: false,
+        clicks: true,
+    },
+    Taught {
+        arg: "enter",
+        name: KEY_ENTER,
+        codes: &[ENTER],
+        control: false,
+        clicks: true,
+    },
+    Taught {
+        arg: "esc",
+        name: KEY_ESC,
+        codes: &[ESC],
+        control: false,
+        clicks: true,
+    },
+    Taught {
+        arg: "quit",
+        name: KEY_QUIT,
+        codes: &[QUIT],
+        control: true,
+        clicks: true,
+    },
+];
+
+/// Whether a key pressed gives up: [`QUIT`] with Control held, the chord
+/// [`KEY_QUIT`] names. The event loop asks this, and only this.
+#[must_use]
+pub fn gives_up(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    modifiers.contains(KeyModifiers::CONTROL) && code == QUIT
+}
+
+/// A sentence that names keys: every key's name handed in as its
+/// argument ([`KEYS`]), with `more` beside them.
+#[must_use]
+pub fn with_keys(texts: &Texts, key: &str, more: &[(&str, &str)]) -> String {
+    let args: Vec<(&str, &str)> = KEYS
+        .iter()
+        .map(|k| (k.arg, k.name))
+        .chain(more.iter().copied())
+        .collect();
+    texts.t_with(key, &args)
+}
+
+/// What a hint does: the key named by the first of its words that is a
+/// key's name ([`KEYS`]), wherever the language put it.
 #[must_use]
 pub fn act_of(hint: &str) -> Option<Act> {
-    match hint.split_whitespace().next()? {
-        "Enter" => Some(Act::Key(KeyCode::Enter)),
-        "Esc" => Some(Act::Key(KeyCode::Esc)),
-        "Ctrl+C" => Some(Act::Quit),
-        _ => None,
-    }
+    hint.split_whitespace()
+        .find_map(|word| KEYS.iter().find(|k| k.name == word))
+        .and_then(Taught::act)
 }
 
 /// The width of `text`, in cells, as ratatui draws it.
@@ -1632,7 +1771,7 @@ pub fn places(area: Rect, e: &State, texts: &Texts) -> Places {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(help_rows), Constraint::Length(1)])
         .split(areas[2]);
-    let key_line = keys_of(e, texts);
+    let key_line = keys_of(e, texts, footer[1].width);
     Places {
         head: areas[0],
         body: areas[1],
@@ -1836,7 +1975,7 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
         }
         Screen::Hopping(hop) => {
             f.render_widget(
-                Paragraph::new(texts.t_with(hop.key(), &[("rev", hop.short())]))
+                Paragraph::new(with_keys(texts, hop.key(), &[("rev", hop.short())]))
                     .style(base)
                     .wrap(Wrap { trim: true }),
                 area,
@@ -2277,7 +2416,7 @@ pub fn collect(
                 if kind != KeyEventKind::Press {
                     continue;
                 }
-                if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+                if gives_up(code, modifiers) {
                     return Ok(Collected::GaveUp);
                 }
                 e.key(code)
@@ -2326,7 +2465,7 @@ pub enum Shown {
 }
 
 /// One of the screens that check the network or the repository (or the list
-/// of programs), drawn from a fixture as the TUI draws it, `width × height`
+/// of programs, or the Compose question), drawn from a fixture as the TUI draws it, `width × height`
 /// cells — `ronoctua-install --show <screen>`; `None` for a name that is not
 /// one.
 #[must_use]
@@ -2422,6 +2561,9 @@ pub fn show(
             e.stay = Some(Stay::Unreachable);
             e.screen = Screen::Reviewing;
         }
+        // THE COMPOSE QUESTION, whose help names the keys the default puts
+        // to work.
+        "compose" => at(&mut e, Question::ComposeKey),
         // THE LIST OF PROGRAMS, with one more unmarked than the default (the
         // first marked one) and the cursor on the row below it, so a dim
         // row and the cursor's are both on screen.
@@ -2807,7 +2949,10 @@ mod tests {
         for language in ronoctua_i18n::LANGUAGES {
             let t = Texts::fresh(language).unwrap();
             let (kept, out) = (t.t(key::INST_LEFT_OUT_KEPT), t.t(key::INST_LEFT_OUT_OUT));
-            let keys = t.t(key::INST_KEYS_CHECK);
+            // THE KEYS LINE THE WIDTH TAKES: the one teaching the space bar
+            // where it fits, whole either way.
+            let spaced = with_keys(&t, key::INST_KEYS_CHECK_SPACE, &[]);
+            let plain = with_keys(&t, key::INST_KEYS_CHECK, &[]);
             let help = t.t(key::INST_LEFT_OUT_HELP);
             let end = help
                 .split_whitespace()
@@ -2817,6 +2962,11 @@ mod tests {
                 .to_owned();
             for width in 60..=100 {
                 let shown = rendered(&e, &t, width, 34);
+                let keys = if spaced_fits(&spaced, width) {
+                    &spaced
+                } else {
+                    &plain
+                };
                 for o in OFFERED {
                     let word = if is_left_out(&e.answers.left_out, o.id) {
                         &out
@@ -2840,7 +2990,7 @@ mod tests {
                     "{language}, {width}"
                 );
                 assert!(
-                    shown.lines().any(|l| l.trim_end() == keys),
+                    shown.lines().any(|l| l.trim_end() == keys.as_str()),
                     "{language}, {width}: the keys line is cut:\n{shown}"
                 );
                 assert!(
@@ -3089,45 +3239,55 @@ mod tests {
     }
 
     /// FAILS IF: a double click on `Enter` in the keys line goes past the
-    /// list of programs: `Enter` stands in the same columns on the screen
-    /// before it, and the second click must only light it.
+    /// list of programs: the second click lands on the list's own keys
+    /// line, on whatever hint stands in those columns (`Enter`, or the
+    /// space bar where the line teaches it), and must only light it.
     #[test]
     fn a_double_click_on_enter_does_not_skip_the_list() {
-        let t = texts();
-        let area = Rect::new(0, 0, 100, 34);
-        let mut e = with_disks();
-        walk_to(&mut e, Question::Profile);
-        let at = places(area, &e, &t);
-        e.drawn(&at);
-        // THE PERSON TOUCHED THE SCREEN first: `full`, by its row.
-        let rows = at.list.unwrap();
-        e.pointer(Pointer::Click, 2, rows.area.y, &at);
-        let enter = |at: &Places| {
-            at.hints
-                .iter()
-                .find(|h| h.act == Some(Act::Key(KeyCode::Enter)))
-                .map(|h| h.x)
-                .expect("no Enter in the keys line")
-        };
-        let x = enter(&at);
-        e.pointer(Pointer::Click, x, at.keys.y, &at);
-        assert_eq!(e.question_of(), Some(Question::LeftOut));
-        let at = places(area, &e, &t);
-        e.drawn(&at);
-        assert_eq!(
-            enter(&at),
-            x,
-            "the two screens' Enter moved apart; the test asks nothing"
-        );
-        e.pointer(Pointer::Click, x, at.keys.y, &at);
-        assert_eq!(
-            e.question_of(),
-            Some(Question::LeftOut),
-            "the second click went past the list"
-        );
-        // A THIRD, deliberate, takes the list as it is.
-        e.pointer(Pointer::Click, x, at.keys.y, &at);
-        assert_eq!(e.question_of(), Some(Question::Keyboard));
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = Texts::fresh(language).unwrap();
+            for width in [60, 100] {
+                let area = Rect::new(0, 0, width, 34);
+                let mut e = with_disks();
+                walk_to(&mut e, Question::Profile);
+                let at = places(area, &e, &t);
+                e.drawn(&at);
+                // THE PERSON TOUCHED THE SCREEN first: `full`, by its row.
+                let rows = at.list.unwrap();
+                e.pointer(Pointer::Click, 2, rows.area.y, &at);
+                let enter = |at: &Places| {
+                    at.hints
+                        .iter()
+                        .find(|h| h.act == Some(Act::Key(KeyCode::Enter)))
+                        .map(|h| h.x)
+                        .expect("no Enter in the keys line")
+                };
+                let x = enter(&at);
+                e.pointer(Pointer::Click, x, at.keys.y, &at);
+                assert_eq!(e.question_of(), Some(Question::LeftOut));
+                let at = places(area, &e, &t);
+                e.drawn(&at);
+                assert!(
+                    matches!(at.hit(x, at.keys.y), Some(Hit::Key(_))),
+                    "{language}, {width}: no hint where the Enter before stood; the test asks nothing"
+                );
+                let marks = e.answers.left_out.clone();
+                e.pointer(Pointer::Click, x, at.keys.y, &at);
+                assert_eq!(
+                    (e.question_of(), &e.answers.left_out),
+                    (Some(Question::LeftOut), &marks),
+                    "{language}, {width}: the second click went past the list, or marked it"
+                );
+                // A THIRD, deliberate, on the list's own `Enter`, takes the
+                // list as it is.
+                e.pointer(Pointer::Click, enter(&at), at.keys.y, &at);
+                assert_eq!(
+                    e.question_of(),
+                    Some(Question::Keyboard),
+                    "{language}, {width}"
+                );
+            }
+        }
     }
 
     /// FAILS IF: the click that opened a screen — the second of a double
@@ -3710,33 +3870,223 @@ mod tests {
     }
 
     /// FAILS IF: a language's keys line stops naming its keys the way the
-    /// pointer reads them — the clicks would fall on nothing.
+    /// pointer reads them — the clicks would fall on nothing —, a hint
+    /// names two keys or none, its click is not its key's, or a line names
+    /// a key other than the ones its screen answers.
     #[test]
     fn every_keys_line_names_its_keys() {
+        let named = |line: &str| -> Vec<&str> {
+            KEYS.iter()
+                .filter(|k| line.split_whitespace().any(|w| w == k.name))
+                .map(|k| k.name)
+                .collect()
+        };
         for language in ronoctua_i18n::LANGUAGES {
             let t = Texts::fresh(language).unwrap();
-            for k in [
-                key::INST_KEYS_EDIT,
-                key::INST_KEYS_CHOOSE,
-                key::INST_KEYS_CHECK,
-                key::INST_KEYS_REVIEW,
-                key::INST_KEYS_QUIT,
+            for (k, keys) in [
+                (key::INST_KEYS_EDIT, vec![KEY_ENTER, KEY_ESC, KEY_QUIT]),
+                (key::INST_KEYS_CHOOSE, vec![KEY_ARROWS, KEY_ENTER, KEY_ESC]),
+                (key::INST_KEYS_CHECK, vec![KEY_ARROWS, KEY_ENTER, KEY_ESC]),
+                (
+                    key::INST_KEYS_CHECK_SPACE,
+                    vec![KEY_ARROWS, KEY_SPACE, KEY_ENTER, KEY_ESC],
+                ),
+                (key::INST_KEYS_REVIEW, vec![KEY_ENTER, KEY_ESC, KEY_QUIT]),
+                (key::INST_KEYS_QUIT, vec![KEY_QUIT]),
             ] {
-                let hints = hints_of(&t.t(k), 0);
-                let acts: Vec<Option<Act>> = hints.iter().map(|h| h.act).collect();
+                let line = with_keys(&t, k, &[]);
+                assert_eq!(named(&line), keys, "{language}: `{k}` says {line}");
+                let hints = hints_of(&line, 0);
                 assert!(
-                    acts.iter().any(Option::is_some),
+                    hints.iter().any(|h| h.act.is_some()),
                     "{language}: `{k}` has no key a click can press: {hints:?}"
                 );
                 for h in &hints {
-                    let first = h.text.split_whitespace().next().unwrap_or_default();
-                    assert!(
-                        h.act.is_some() || first == "↑↓",
-                        "{language}: `{k}` names a key the pointer does not know: {first}"
+                    let own = named(&h.text);
+                    assert_eq!(
+                        own.len(),
+                        1,
+                        "{language}: `{k}` has a hint naming {own:?}: {}",
+                        h.text
                     );
+                    let act = KEYS.iter().find(|k| k.name == own[0]).unwrap().act();
+                    assert_eq!(h.act, act, "{language}: `{}` clicks another key", h.text);
                 }
             }
+            // AND THE HOP'S SENTENCE names the key that starts the newer one.
+            let hop = with_keys(&t, key::INST_RELEASE_NEWER, &[("rev", "4f1c2a9")]);
+            assert_eq!(named(&hop), vec![KEY_ENTER], "{language}: {hop}");
         }
+    }
+
+    /// FAILS IF: the checklist's keys line does not teach the space bar
+    /// where it fits with a cell to spare — from 61 columns in pt-BR and 67
+    /// in en-GB, at 100 in both —, teaches it where it would touch the edge,
+    /// or a click on the space bar's hint does not mark the cursor's row as
+    /// the key does. The widths are written out: the rule is checked against
+    /// the screen, never against itself.
+    #[test]
+    fn the_space_bar_is_taught_where_it_fits() {
+        use crate::model::{OFFERED, is_left_out};
+        for (language, plain_at, spaced_at) in [("pt-BR", 60, 61), ("en-GB", 66, 67)] {
+            let t = Texts::fresh(language).unwrap();
+            let spaced = with_keys(&t, key::INST_KEYS_CHECK_SPACE, &[]);
+            let plain = with_keys(&t, key::INST_KEYS_CHECK, &[]);
+            let mut e = with_disks();
+            walk_to(&mut e, Question::LeftOut);
+            e.key(DOWN);
+            for (width, want) in [
+                (60, &plain),
+                (plain_at, &plain),
+                (spaced_at, &spaced),
+                (100, &spaced),
+            ] {
+                let at = places(Rect::new(0, 0, width, 34), &e, &t);
+                assert_eq!(&at.key_line, want, "{language}, {width}");
+            }
+            // THE CLICK on `Space` marks the cursor's row (a key was pressed
+            // on this screen: the click is not the second of a double one).
+            let at = places(Rect::new(0, 0, 100, 34), &e, &t);
+            let space = at
+                .hints
+                .iter()
+                .find(|h| h.act == Some(Act::Key(SPACE)))
+                .expect("no Space in the keys line");
+            let row = OFFERED[0].id;
+            let before = is_left_out(&e.answers.left_out, row);
+            e.pointer(Pointer::Click, space.x, at.keys.y, &at);
+            assert_ne!(
+                is_left_out(&e.answers.left_out, row),
+                before,
+                "{language}: the click on Space did not mark the row"
+            );
+            assert_eq!(e.question_of(), Some(Question::LeftOut));
+        }
+        assert_eq!(
+            ronoctua_i18n::LANGUAGES.len(),
+            2,
+            "a language whose widths this test does not write out"
+        );
+    }
+
+    /// FAILS IF: the Compose question's help names a key in words, or not
+    /// the keys the system's options put to work, in either language.
+    #[test]
+    fn the_compose_help_names_the_keys_the_options_set() {
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = Texts::fresh(language).unwrap();
+            let mut e = with_disks();
+            walk_to(&mut e, Question::ComposeKey);
+            let help = help_of(&e, Question::ComposeKey, &t);
+            for (_, key) in model::COMPOSE_HELP_KEYS {
+                assert!(
+                    help.contains(key),
+                    "{language}: the help does not name {key}: {help}"
+                );
+            }
+            assert!(
+                !help.contains('{') && !help.contains('$'),
+                "{language}: an argument was not handed in: {help}"
+            );
+        }
+    }
+
+    /// FAILS IF: a taught key's code moves and its name stays, or the other
+    /// way round: the line would teach a key the screen does not answer.
+    #[test]
+    fn a_taught_keys_name_spells_its_code() {
+        for k in KEYS {
+            let spelled: String = k
+                .codes
+                .iter()
+                .map(|c| match (k.control, c) {
+                    (true, KeyCode::Char(l)) => format!("Ctrl+{}", l.to_ascii_uppercase()),
+                    (true, other) => format!("Ctrl+{other}"),
+                    (false, KeyCode::Up) => "↑".to_owned(),
+                    (false, KeyCode::Down) => "↓".to_owned(),
+                    (false, other) => other.to_string(),
+                })
+                .collect();
+            assert_eq!(
+                spelled, k.name,
+                "`{}` is named {} and pressed as {:?}",
+                k.arg, k.name, k.codes
+            );
+        }
+    }
+
+    /// FAILS IF: a key a line teaches does not do what the line says, by the
+    /// code the line's table names — the arrows move the cursor, Enter
+    /// continues (and starts the newer installer, and runs the review),
+    /// Space marks a program, Esc goes back, Ctrl+C gives up. A binding that
+    /// moves away from the taught key leaves the key doing nothing here.
+    #[test]
+    fn every_taught_key_does_what_its_line_says() {
+        use crate::model::{OFFERED, is_left_out};
+        let taught = |arg: &str| *KEYS.iter().find(|k| k.arg == arg).unwrap();
+        let &[up, down] = taught("arrows").codes else {
+            panic!("the arrows are two keys")
+        };
+        let [space, enter, esc, quit] =
+            ["space", "enter", "esc", "quit"].map(|a| taught(a).codes[0]);
+        let mut e = with_disks();
+        walk_to(&mut e, Question::Disk);
+        let disk = e.screen.clone();
+        e.key(down);
+        assert_eq!(e.choice, 1, "the down arrow did not move the cursor");
+        e.key(up);
+        assert_eq!(e.choice, 0, "the up arrow did not move the cursor");
+        e.key(enter);
+        assert_ne!(e.screen, disk, "Enter did not continue");
+        e.key(esc);
+        assert_eq!(e.screen, disk, "Esc did not go back");
+        // SPACE marks a program's row.
+        walk_to(&mut e, Question::LeftOut);
+        e.key(down);
+        let before = is_left_out(&e.answers.left_out, OFFERED[0].id);
+        e.key(space);
+        assert_ne!(
+            is_left_out(&e.answers.left_out, OFFERED[0].id),
+            before,
+            "Space did not mark the row"
+        );
+        // THE HOP: Enter starts the newer installer, Esc goes back.
+        let hop = Hop {
+            release: Release {
+                revision: Revision {
+                    rev: "4f1c2a9b7e3d5f60a1b2c3d4e5f60718293a4b5c".into(),
+                    last_modified_s: 0,
+                },
+                url: String::new(),
+                path: String::new(),
+            },
+        };
+        e.screen = Screen::Hopping(hop.clone());
+        assert_eq!(e.key(enter), Next::Hop(hop), "Enter did not hop");
+        e.key(esc);
+        assert!(
+            matches!(e.screen, Screen::Asking(_)),
+            "Esc did not go back from the hop"
+        );
+        // THE REVIEW: Enter runs the confirmed disk, Esc goes back.
+        let mut e = with_disks();
+        e.answers.disk = "/dev/nvme0n1".into();
+        e.screen = Screen::Reviewing;
+        e.key(esc);
+        assert!(
+            matches!(e.screen, Screen::Asking(_)),
+            "Esc did not go back from the review"
+        );
+        e.screen = Screen::Reviewing;
+        type_in(&mut e, "/dev/nvme0n1");
+        assert_eq!(e.key(enter), Next::Run, "Enter did not run the review");
+        // THE CHORD gives up with Control held, and only with it.
+        assert!(gives_up(quit, KeyModifiers::CONTROL));
+        assert!(
+            !gives_up(quit, KeyModifiers::NONE),
+            "the letter alone gave up"
+        );
+        assert!(!gives_up(enter, KeyModifiers::CONTROL));
     }
 
     #[test]
@@ -3895,6 +4245,7 @@ mod tests {
                 key::INST_NETWORK_HELP_UNNAMED,
                 key::INST_STEP_SKIPPED,
                 key::INST_KEYS_CHECK,
+                key::INST_KEYS_CHECK_SPACE,
                 key::INST_LEFT_OUT_CONTINUE,
                 key::INST_LEFT_OUT_KEPT,
                 key::INST_LEFT_OUT_OUT,

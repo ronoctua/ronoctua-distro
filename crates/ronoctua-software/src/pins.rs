@@ -242,8 +242,36 @@ pub mod appimage {
         pinned_at: Stamp,
         report: &mut dyn Report,
     ) -> Result<Pin, Failure> {
+        pin_as(
+            ctx,
+            key,
+            &version_of(&asset.tag),
+            asset,
+            here,
+            pinned_at,
+            report,
+        )
+    }
+
+    /// [`pin`], under the `version` the builder names the download by — a
+    /// distro AppImage's is the tag without its `v`
+    /// (`ronoctua_person::distro_pins::version_of_tag`), the name the
+    /// distro's builder fetches it under (`nix/distro-downloads.nix`).
+    ///
+    /// # Errors
+    ///
+    /// As [`pin`].
+    pub fn pin_as(
+        ctx: &Context,
+        key: &str,
+        version: &str,
+        asset: &Asset,
+        here: Option<(&std::path::Path, &str)>,
+        pinned_at: Stamp,
+        report: &mut dyn Report,
+    ) -> Result<Pin, Failure> {
         let nix = tool(ctx.tools.nix.as_ref())?;
-        let version = version_of(&asset.tag);
+        let version = version.to_owned();
         let name = store_name(key, &version);
         let digest = asset.sha256().and_then(|h| sri_of_hex(&h));
         let hash = match here {

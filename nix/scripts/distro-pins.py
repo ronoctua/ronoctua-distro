@@ -4,6 +4,11 @@
     nix run .#distro-pins            write assets/distro-pins.json
     nix run .#distro-pins -- --check say what would move; exit 1 if anything would,
                                      or if the file is out of shape (asked first, offline)
+    nix run .#distro-pins -- --stale say which pins are behind their latest release,
+                                     asking only read-only questions: nothing is
+                                     downloaded or written, and a question the
+                                     network does not answer is said, never a failure
+                                     (what `nix run .#release` says before it publishes)
 
 Run from the root of a checkout. What moves:
 
@@ -25,6 +30,7 @@ pure function a check runs offline (`distro-pins-move-only-what-follows`).
 import argparse
 import datetime
 import fnmatch
+import http.client
 import json
 import os
 import pathlib
@@ -82,6 +88,42 @@ def pick_asset(id_, assets, pattern):
     return hits[0]["name"], url
 
 
+def latest_appimage(id_, follows, ask):
+    """The latest release of the repository an AppImage follows: the address
+    of its one asset matching the pattern, and its version. A tag with no
+    digit is refused: it moves."""
+    release = ask.github_latest(follows["repo"])
+    tag = release.get("tag_name", "")
+    # A TAG WITH NO NUMBER MOVES (`continuous`, `nightly`, `stable`): its
+    # address serves new bytes under the same name, and the hash pinned
+    # today fails the day the store copy is collected — the defect
+    # `downloads-are-pinned` refuses for every download.
+    if not any(c.isdigit() for c in tag):
+        raise Refusal(
+            f"{id_}: the latest release of {follows['repo']} is tagged `{tag}`, a tag "
+            f"that moves; follow a repository whose releases carry their version"
+        )
+    _, url = pick_asset(id_, release.get("assets", []), follows["assetPattern"])
+    return url, version_of_tag(tag)
+
+
+def latest_apk(id_, package, ask):
+    """The version F-Droid suggests of a package: its apk's address, its
+    name and its code."""
+    info = ask.fdroid(package)
+    code = info.get("suggestedVersionCode")
+    if not isinstance(code, int) or code <= 0:
+        raise Refusal(f"{id_}: F-Droid suggests no version of {package}")
+    names = [
+        p.get("versionName")
+        for p in info.get("packages", [])
+        if p.get("versionCode") == code
+    ]
+    if not names or not names[0]:
+        raise Refusal(f"{id_}: F-Droid lists no name for version {code} of {package}")
+    return f"https://f-droid.org/repo/{package}_{code}.apk", names[0], code
+
+
 def plan(table, pins, ask):
     """The next pins, and a note for every entry. Pure: every question that
     needs the network is `ask`'s (`github_latest`, `fdroid`, `hash`, `now`).
@@ -112,19 +154,7 @@ def plan(table, pins, ask):
                 new["appimage"][id_] = old
                 notes.append(f"{id_}: kept (follows nothing)")
                 continue
-            release = ask.github_latest(follows["repo"])
-            tag = release.get("tag_name", "")
-            # A TAG WITH NO NUMBER MOVES (`continuous`, `nightly`, `stable`):
-            # its address serves new bytes under the same name, and the hash
-            # pinned today fails the day the store copy is collected — the
-            # defect `downloads-are-pinned` refuses for every download.
-            if not any(c.isdigit() for c in tag):
-                raise Refusal(
-                    f"{id_}: the latest release of {follows['repo']} is tagged `{tag}`, a tag "
-                    f"that moves; follow a repository whose releases carry their version"
-                )
-            _, url = pick_asset(id_, release.get("assets", []), follows["assetPattern"])
-            version = version_of_tag(tag)
+            url, version = latest_appimage(id_, follows, ask)
             if old is not None and old.get("url") == url:
                 new["appimage"][id_] = old
                 notes.append(f"{id_}: unchanged ({old.get('version')})")
@@ -150,19 +180,7 @@ def plan(table, pins, ask):
                 new["android"][id_] = old
                 notes.append(f"{id_}: kept (a direct address)")
                 continue
-            package = entry["package"]
-            info = ask.fdroid(package)
-            code = info.get("suggestedVersionCode")
-            if not isinstance(code, int) or code <= 0:
-                raise Refusal(f"{id_}: F-Droid suggests no version of {package}")
-            names = [
-                p.get("versionName")
-                for p in info.get("packages", [])
-                if p.get("versionCode") == code
-            ]
-            if not names or not names[0]:
-                raise Refusal(f"{id_}: F-Droid lists no name for version {code} of {package}")
-            url = f"https://f-droid.org/repo/{package}_{code}.apk"
+            url, name, code = latest_apk(id_, entry["package"], ask)
             if old is not None and old.get("url") == url and old.get("version-code") == code:
                 new["android"][id_] = old
                 notes.append(f"{id_}: unchanged ({old.get('version')})")
@@ -170,19 +188,141 @@ def plan(table, pins, ask):
             new["android"][id_] = {
                 "url": url,
                 "hash": ask.hash(url, file_name_of(entry, code)),
-                "version": names[0],
+                "version": name,
                 "version-code": code,
             }
             notes.append(
-                f"{id_}: pinned {names[0]}"
+                f"{id_}: pinned {name}"
                 if old is None
-                else f"{id_}: {old.get('version')} -> {names[0]}"
+                else f"{id_}: {old.get('version')} -> {name}"
             )
 
     for kind, old in (("appimage", old_appimage), ("android", old_android)):
         for id_ in sorted(set(old) - set(new[kind])):
             notes.append(f"{id_}: dropped (the table has no {kind} by that id)")
     return new, notes
+
+
+def version_components(version):
+    """A version cut as Nix's `builtins.compareVersions` cuts it: runs of
+    digits and runs of other characters, `.` and `-` only separating."""
+    out, i = [], 0
+    while i < len(version):
+        if version[i] in ".-":
+            i += 1
+            continue
+        j = i
+        digits = version[i].isdigit()
+        while j < len(version) and version[j] not in ".-" and version[j].isdigit() == digits:
+            j += 1
+        out.append(version[i:j])
+        i = j
+    return out
+
+
+def compare_versions(a, b):
+    """-1, 0 or 1, as Nix's `builtins.compareVersions` answers — the rule the
+    build follows: numbers by value, `pre` before anything, a missing part
+    before a number, and a word before a number (`2.3a` < `2.3.1`)."""
+
+    def less(c1, c2):
+        n1 = int(c1) if c1.isdigit() else None
+        n2 = int(c2) if c2.isdigit() else None
+        if n1 is not None and n2 is not None:
+            return n1 < n2
+        if c1 == "" and n2 is not None:
+            return True
+        if c1 == "pre" and c2 != "pre":
+            return True
+        if c2 == "pre":
+            return False
+        if n2 is not None:
+            return True
+        if n1 is not None:
+            return False
+        return c1 < c2
+
+    x, y = version_components(a), version_components(b)
+    for k in range(max(len(x), len(y))):
+        c1 = x[k] if k < len(x) else ""
+        c2 = y[k] if k < len(y) else ""
+        if less(c1, c2):
+            return -1
+        if less(c2, c1):
+            return 1
+    return 0
+
+
+# WHAT THE NETWORK MAY ANSWER WITH, and only that: no route, a refusal, a
+# timeout (`OSError`, `urllib`'s errors among them), a cut answer, or one
+# that is not JSON (`ValueError`). Anything else is a defect of this tool,
+# and goes up as one — never said as silence.
+NETWORK_ERRORS = (OSError, ValueError, http.client.HTTPException)
+
+
+def stale(table, pins, ask):
+    """Which pins are OLDER than the latest release of what their entry
+    follows, and which are newer than it.
+
+    READ-ONLY: only `github_latest` and `fdroid` are asked — never `hash`, so
+    nothing is downloaded —, nothing is written, and a pin is never moved.
+    Answers `(behind, ahead, unasked)`: `behind` and `ahead` lists of `(id,
+    name, pinned, latest)` — by `compare_versions`, the build's rule, and an
+    apk by its version code —, `unasked` a sentence for each entry whose
+    latest release could not be told (the network, a tag that moves, a
+    pattern that is not one asset). What `nix run .#release` says before it
+    publishes; moving a pin is the owner's (`nix run .#distro-pins` and a
+    commit)."""
+    behind, ahead, unasked = [], [], []
+    pins = pins if isinstance(pins, dict) else {}
+    for id_ in sorted(table):
+        entry = table[id_]
+        if not follows_a_source(entry):
+            continue
+        kind = entry.get("source")
+        old = (pins.get(kind) or {}).get(id_) or {}
+        try:
+            if kind == "appimage":
+                _, latest = latest_appimage(id_, entry["follows"]["github"], ask)
+                order = compare_versions(old["version"], latest) if old.get("version") else -1
+            else:
+                _, latest, code = latest_apk(id_, entry["package"], ask)
+                pinned_code = old.get("version-code")
+                order = -1 if not isinstance(pinned_code, int) else (pinned_code > code) - (pinned_code < code)
+        except Refusal as why:
+            unasked.append(str(why))
+            continue
+        except NETWORK_ERRORS as why:
+            unasked.append(f"{id_}: its latest release could not be asked ({why})")
+            continue
+        row = (id_, entry.get("name") or id_, old.get("version") or "nothing", latest)
+        if order < 0:
+            behind.append(row)
+        elif order > 0:
+            ahead.append(row)
+    return behind, ahead, unasked
+
+
+def stale_lines(behind, ahead, unasked):
+    """What `--stale` prints: each pin behind, by name and both versions, how
+    to move them, each pin newer than its latest release, and each entry
+    that could not be asked."""
+    def counted(rows, what):
+        one = len(rows) == 1
+        return f"{len(rows)} of the distro's pins {'is' if one else 'are'} {what} {'its' if one else 'their'} latest release:"
+
+    lines = []
+    if behind:
+        lines.append(counted(behind, "behind"))
+        lines += [f"  {name} ({id_}): {pinned} pinned, {latest} released" for id_, name, pinned, latest in behind]
+        lines.append(f"to move them: nix run .#distro-pins, review git diff {PINS}, and commit")
+    if ahead:
+        lines.append(counted(ahead, "newer than"))
+        lines += [f"  {name} ({id_}): {pinned} pinned, {latest} the latest" for id_, name, pinned, latest in ahead]
+    if not behind and not ahead and not unasked:
+        lines.append("every pin that follows a release is at its latest")
+    lines += [f"not asked: {why}" for why in unasked]
+    return lines
 
 
 def text_of(pins):
@@ -244,6 +384,9 @@ def offline_problems(table, text):
 class Ask:
     """The network, for real."""
 
+    def __init__(self, timeout_s=60):
+        self.timeout_s = timeout_s
+
     def _get(self, url):
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         # A TOKEN FROM THE ENVIRONMENT, never from the command line: GitHub
@@ -251,7 +394,7 @@ class Ask:
         token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
         if token and url.startswith("https://api.github.com/"):
             request.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(request, timeout=60) as answer:
+        with urllib.request.urlopen(request, timeout=self.timeout_s) as answer:
             return json.load(answer)
 
     def github_latest(self, repo):
@@ -278,7 +421,13 @@ def main(argv):
         prog="distro-pins",
         description="Moves the pins of the distro's own AppImages and Android apps.",
     )
-    parser.add_argument("--check", action="store_true", help="say what would move; write nothing")
+    which = parser.add_mutually_exclusive_group()
+    which.add_argument("--check", action="store_true", help="say what would move; write nothing")
+    which.add_argument(
+        "--stale",
+        action="store_true",
+        help="say which pins are behind their latest release; download, write and move nothing",
+    )
     parser.add_argument("--root", default=".", help="the checkout (default: here)")
     args = parser.parse_args(argv)
 
@@ -286,16 +435,31 @@ def main(argv):
     if not (root / "flake.nix").is_file() or not (root / TABLE).is_file():
         print(f"distro-pins: {root.resolve()} is not a checkout of the distro (no {TABLE})", file=sys.stderr)
         return 2
-    table = json.loads(
-        subprocess.run(
-            ["nix", "eval", "--json", "--file", str(root / TABLE), "apps"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-    )
+    try:
+        table = json.loads(
+            subprocess.run(
+                ["nix", "eval", "--json", "--file", str(root / TABLE), "apps"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+    except subprocess.CalledProcessError as why:
+        print(f"distro-pins: {TABLE} did not evaluate: {why.stderr.strip()}", file=sys.stderr)
+        return 1
     pins_path = root / PINS
     before = pins_path.read_text()
+    if args.stale:
+        # READ-ONLY, and never a failure for what the network does not
+        # answer: the release asks it before it publishes, and goes on.
+        try:
+            pinned = json.loads(before)
+        except ValueError as why:
+            print(f"distro-pins: {PINS} is not JSON: {why}", file=sys.stderr)
+            return 1
+        for line in stale_lines(*stale(table, pinned, Ask(timeout_s=20))):
+            print(line)
+        return 0
     if args.check:
         # FIRST WHAT NEEDS NO NETWORK: a file a hand edited out of shape, or
         # an entry without its pin, is said before anything is asked.

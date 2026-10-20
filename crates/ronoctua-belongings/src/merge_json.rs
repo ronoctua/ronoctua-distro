@@ -29,6 +29,11 @@
 //! (`/apps/<id>`). A file that does not read as that document (a newer
 //! format, a broken one) is joined by the general rules.
 //!
+//! `software/distro-pins.json` — the distro's AppImages the person follows
+//! past its pins, written by the update alone — never clashes: the later
+//! pin of an id wins, and a removal (the distro caught up) beats a pin that
+//! moved (`ronoctua_person::merge::merge_distro_pins`).
+//!
 //! # VS Code's list of extensions
 //!
 //! `home/.config/Code/User/ronoctua-extensions.json` is a SET of ids
@@ -43,6 +48,7 @@
 
 use ronoctua_person::declared::Declared;
 use ronoctua_person::declined::Declined;
+use ronoctua_person::distro_pins::DistroPins;
 use ronoctua_store::json::{Node, pointer_of};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -104,6 +110,8 @@ pub enum List {
     Declared,
     /// `software/declined.json`.
     Declined,
+    /// `software/distro-pins.json`.
+    DistroPins,
     /// VS Code's list of the person's extensions, a set
     /// (`ronoctua_vscode::merge`) — the `vscode` target's.
     Extensions,
@@ -113,7 +121,7 @@ pub enum List {
 /// Pure.
 #[must_use]
 pub fn list_of(logical: &str) -> Option<List> {
-    use ronoctua_person::names::{DECLARED, DECLINED, MIRROR};
+    use ronoctua_person::names::{DECLARED, DECLINED, DISTRO_PINS, MIRROR};
     if logical == crate::offers::EXTENSIONS_LIST {
         return Some(List::Extensions);
     }
@@ -121,6 +129,7 @@ pub fn list_of(logical: &str) -> Option<List> {
     match rest.strip_prefix('/')? {
         r if r == DECLARED => Some(List::Declared),
         r if r == DECLINED => Some(List::Declined),
+        r if r == DISTRO_PINS => Some(List::DistroPins),
         _ => None,
     }
 }
@@ -152,6 +161,7 @@ pub fn merge(
         let joined = match list {
             List::Declared => person::<Declared>(base, ours, theirs, pick),
             List::Declined => person::<Declined>(base, ours, theirs, pick),
+            List::DistroPins => person::<DistroPins>(base, ours, theirs, pick),
             // A SET, joined as one: what either side added or took out,
             // never a clash.
             List::Extensions => ronoctua_vscode::merge(base, ours, theirs).map(|bytes| Joined {
@@ -420,6 +430,22 @@ impl PersonList for Declined {
     }
 }
 
+impl PersonList for DistroPins {
+    type Item = ronoctua_person::distro_pins::FollowedPin;
+
+    fn merged(
+        base: &Self,
+        ours: &Self,
+        theirs: &Self,
+    ) -> (Self, Vec<ronoctua_person::merge::Clash<Self::Item>>) {
+        ronoctua_person::merge::merge_distro_pins(base, ours, theirs)
+    }
+
+    fn put(&mut self, id: &str, item: Option<Self::Item>) {
+        put_by(&mut self.pins, id, item, |p| p.id.as_str());
+    }
+}
+
 /// Sets the element `id` of `items` to `item`, removes it (`None`), or
 /// appends it.
 fn put_by<T>(items: &mut Vec<T>, id: &str, item: Option<T>, id_of: impl Fn(&T) -> &str) {
@@ -552,6 +578,32 @@ mod tests {
             Some(List::Declined)
         );
         assert_eq!(list_of("state/person/options.json"), None);
+        assert_eq!(
+            list_of("state/person/software/distro-pins.json"),
+            Some(List::DistroPins)
+        );
+        // THE FOLLOWED DISTRO PINS: two machines that followed one release
+        // to two versions are asked nothing, and the later pin wins.
+        let pin = |version: &str, at: &str| {
+            format!(
+                r#"{{"id": "cadcraft", "url": "https://github.com/storytold/cadcraft/releases/download/v{version}/cadcraft-{version}-linux-x86_64.AppImage", "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=", "version": "{version}", "pinned-at": "{at}"}}"#
+            )
+        };
+        let pins = |p: &str| format!(r#"{{"format": 1, "pins": [{p}]}}"#).into_bytes();
+        let joined = merge(
+            "state/person/software/distro-pins.json",
+            &pins(&pin("0.8.1", "2026-10-01T10:00:00Z")),
+            &pins(&pin("0.9.0", "2026-10-03T10:00:00Z")),
+            &pins(&pin("0.9.1", "2026-10-04T10:00:00Z")),
+            &none,
+        )
+        .unwrap();
+        assert!(joined.clashes.is_empty(), "{:?}", joined.clashes);
+        assert!(
+            text(&joined).contains("\"version\": \"0.9.1\""),
+            "{}",
+            text(&joined)
+        );
         let base = declared(&[
             entry("one", "1.0", "2026-10-01T10:00:00Z"),
             entry("two", "1.0", "2026-10-01T10:00:00Z"),

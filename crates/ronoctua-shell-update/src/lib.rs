@@ -8,7 +8,9 @@
 //! ([`update_window::KEYS`]). A crate of its own, so a line of the update
 //! recompiles the update and the binary, and nothing else. The mark the
 //! footer draws while a run is under way, and the door a click on it opens,
-//! are the leaf under both (`ronoctua-shell-update-words`).
+//! are the leaf under both (`ronoctua-shell-update-words`). And the page of
+//! the distro's apps that follow their releases ([`follow`]): the person's
+//! option to let the routine update move them past the distro's pins.
 
 #![deny(unsafe_code)]
 
@@ -21,6 +23,7 @@ use ronoctua_shell_kit::{bindings, chrome, echo, fields, line, security_words, w
 use ronoctua_shell_update_words::update_mark;
 
 pub mod binary_cache;
+pub mod follow;
 pub mod key;
 pub mod update_region;
 pub mod update_window;

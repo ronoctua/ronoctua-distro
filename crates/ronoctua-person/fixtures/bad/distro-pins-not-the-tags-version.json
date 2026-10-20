@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "pins": [
+    {
+      "id": "cadcraft",
+      "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+      "hash": "sha256-JPd+NyvwcjP3JnJFi8aRNdVLyfa7Y3ntc3hwp8EVK9I=",
+      "version": "0.9.1",
+      "pinned-at": "2026-10-20T12:00:00Z"
+    }
+  ]
+}

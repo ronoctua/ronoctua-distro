@@ -24,6 +24,14 @@
 //!
 //! Our order first; what only theirs has is appended in their order.
 //!
+//! # The followed distro pins never clash
+//!
+//! `distro-pins.json` is written by the update alone, never by a hand: every
+//! field of a followed pin is the pin, so two machines that followed one
+//! differently differ "only in their pin" — the LATER `pinned-at` wins, and
+//! a removal (the distro caught up) beats a pin that moved
+//! ([`merge_distro_pins`]). Nobody is asked about a release.
+//!
 //! # The declines meet machine by machine
 //!
 //! `declined.json` keeps the order and the ids, and each decline meets as a
@@ -35,6 +43,7 @@
 use crate::Stamp;
 use crate::declared::{Declared, Entry};
 use crate::declined::{Declined, Declining};
+use crate::distro_pins::{DistroPins, FollowedPin};
 
 /// An element of a list merged by id.
 pub trait Keyed: Clone + PartialEq {
@@ -195,6 +204,39 @@ pub fn merge_declared(
     )
 }
 
+impl Keyed for FollowedPin {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn edited_at(&self) -> &Stamp {
+        &self.pinned_at
+    }
+
+    /// Every field is the pin: two of one id differ only in it.
+    fn minor_change(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+/// `distro-pins.json` three ways: by id, the later pin of two, a removal
+/// over a moved pin — never a clash.
+#[must_use]
+pub fn merge_distro_pins(
+    base: &DistroPins,
+    ours: &DistroPins,
+    theirs: &DistroPins,
+) -> (DistroPins, Vec<Clash<FollowedPin>>) {
+    let m = merge_by_id(&base.pins, &ours.pins, &theirs.pins);
+    (
+        DistroPins {
+            format: crate::FORMAT,
+            pins: m.items,
+        },
+        m.clashes,
+    )
+}
+
 /// `declined.json` three ways, each decline by its machines
 /// ([`Declining::merged`]): it never clashes, and the list of clashes is
 /// always empty — it is the shape every list of the person's merges into.
@@ -235,6 +277,48 @@ pub fn merge_declined(
 mod tests {
     use super::*;
     use crate::declared::{AppImageApp, NixApp, Pin};
+
+    fn followed(id: &str, version: &str, at_s: i64) -> FollowedPin {
+        FollowedPin {
+            id: id.to_owned(),
+            url: crate::distro_pins::url_of(
+                &format!("storytold/{id}"),
+                &format!("v{version}"),
+                &format!("{id}-{version}-linux-x86_64.AppImage"),
+            ),
+            hash: format!("sha256-{}=", "A".repeat(43)),
+            version: version.to_owned(),
+            pinned_at: at(at_s),
+        }
+    }
+
+    /// FAILS IF: two machines that followed a release differently are
+    /// asked anything, the earlier pin wins, or a pin one machine dropped
+    /// (its distro caught up) comes back because the other moved it.
+    #[test]
+    fn followed_pins_meet_by_the_later_pin_and_never_clash() {
+        let doc = |pins: Vec<FollowedPin>| DistroPins {
+            format: crate::FORMAT,
+            pins,
+        };
+        let base = doc(vec![
+            followed("cadcraft", "0.9.0", 0),
+            followed("figcraft", "0.7.1", 0),
+        ]);
+        let ours = doc(vec![
+            followed("cadcraft", "0.9.1", 10),
+            followed("figcraft", "0.7.2", 30),
+        ]);
+        let theirs = doc(vec![followed("cadcraft", "0.9.2", 20)]);
+        let (merged, clashes) = merge_distro_pins(&base, &ours, &theirs);
+        assert!(clashes.is_empty(), "{clashes:?}");
+        assert_eq!(merged.pins, [followed("cadcraft", "0.9.2", 20)]);
+        // THE SAME RELEASE, pinned on two machines at two moments: one pin.
+        let ours = doc(vec![followed("cadcraft", "0.9.2", 25)]);
+        let (merged, clashes) = merge_distro_pins(&base, &ours, &theirs);
+        assert!(clashes.is_empty());
+        assert_eq!(merged.pins, [followed("cadcraft", "0.9.2", 25)]);
+    }
 
     fn at(s: i64) -> Stamp {
         Stamp::from_unix_s(1_791_201_600 + s)

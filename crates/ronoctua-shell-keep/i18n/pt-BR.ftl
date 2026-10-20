@@ -63,6 +63,7 @@ belongings-root-refused-bad-signature = Não foi assinado pela chave em que esta
 belongings-root-refused-rolled-back = Uma versão mais antiga que a que esta máquina já aceitou, e ela ficou com os dados que tinha.
 belongings-kept-back-not-as-signed = mantido como esta máquina o tem: não é o que você assinou
 belongings-kept-back-no-key-pinned = mantido como esta máquina o tem: não há chave fixada aqui
+belongings-kept-back-document = mantido como esta máquina o tem: esta máquina não consegue ler a sua cópia
 belongings-op-sync-plain = a sincronização da parte em claro
 belongings-op-restore = a restauração
 belongings-op-probe = a verificação do acesso

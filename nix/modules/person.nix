@@ -165,6 +165,22 @@ let
     else
       [ ];
   heldBy = lib.listToAttrs (map (h: lib.nameValuePair h.id h) heldList);
+  # THE FOLLOWED DISTRO APPIMAGES ROOT'S VERIFY BUILT, by id, in a format
+  # this distro reads — nothing else is let in.
+  verifiedDoc = read cfg.verified;
+  verifiedBy =
+    if
+      verifiedDoc != null
+      && (verifiedDoc.format or null) == format
+      && builtins.isList (verifiedDoc.verified or null)
+    then
+      lib.listToAttrs (
+        map (v: lib.nameValuePair v.id v) (
+          builtins.filter (v: builtins.isAttrs v && builtins.isString (v.id or null)) verifiedDoc.verified
+        )
+      )
+    else
+      { };
   # Held by the fingerprint it has NOW: an edit, a new pin or a new nixpkgs
   # gives it another try. JSON alone answers it — nothing of the package.
   isHeld = e: heldBy ? ${e.id} && heldBy.${e.id}.fingerprint == fingerprintOf e;
@@ -486,6 +502,53 @@ in
       '';
     };
 
+    distroPins = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        The person's `software/distro-pins.json` (the root copy, validated by
+        the root applier): the distro's AppImages they follow past its pins.
+        The registry builds one only while their options say to follow, and
+        only when it is newer than the distro's (`nix/modules/distro-apps.nix`).
+        `null` for none.
+      '';
+    };
+
+    verified = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        `local/verified.json` of the machine directory: the followed distro
+        AppImages the update's verification built, each at its fingerprint
+        and with its pin — the allow-list the registry builds one by.
+      '';
+    };
+
+    verifiedBy = lib.mkOption {
+      type = lib.types.raw;
+      readOnly = true;
+      internal = true;
+      default = verifiedBy;
+      defaultText = "the entries `local/verified.json` names, by id";
+      description = ''
+        `local/verified.json` as read here, by id: what the registry asks of a
+        followed distro AppImage before it builds it.
+      '';
+    };
+
+    heldBy = lib.mkOption {
+      type = lib.types.raw;
+      readOnly = true;
+      internal = true;
+      default = heldBy;
+      defaultText = "the entries `local/held.json` holds, by id";
+      description = ''
+        `local/held.json` as read here, by id (`{ id; fingerprint; reason; … }`):
+        what the registry asks of a followed distro AppImage
+        (`distro-appimage:<id>`), the one reader of the file.
+      '';
+    };
+
     # ── anchor: L03 ──
     held = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
@@ -548,18 +611,24 @@ in
       type = lib.types.lazyAttrsOf lib.types.unspecified;
       readOnly = true;
       internal = true;
-      default = lib.listToAttrs (
-        map (
-          e:
-          lib.nameValuePair e.id (
-            builders.${e.source}.raw {
-              entry = e;
-              inherit (cfg) icons;
-            }
-          )
-        ) verifiable
-      );
-      defaultText = "one derivation per entry of this machine";
+      # AND THE DISTRO'S APPIMAGES THE PERSON FOLLOWS past its pins, each one
+      # the registry would build (`distro-appimage:<id>`,
+      # `nix/modules/distro-apps.nix`): a release the gate never built is
+      # tried like a declaration before the rebuild meets it.
+      default =
+        lib.listToAttrs (
+          map (
+            e:
+            lib.nameValuePair e.id (
+              builders.${e.source}.raw {
+                entry = e;
+                inherit (cfg) icons;
+              }
+            )
+          ) verifiable
+        )
+        // (config.ronoctua.distroApps.followedEntries or { });
+      defaultText = "one derivation per entry of this machine, and per followed distro AppImage";
       description = ''
         Every entry this machine would build, by id, with NO protection. The
         machine flake's `personEntries` reads each one from the machine as
@@ -573,8 +642,10 @@ in
       type = lib.types.attrsOf lib.types.str;
       readOnly = true;
       internal = true;
-      default = lib.listToAttrs (map (e: lib.nameValuePair e.id (fingerprintOf e)) verifiable);
-      defaultText = "one fingerprint per entry of this machine";
+      default =
+        lib.listToAttrs (map (e: lib.nameValuePair e.id (fingerprintOf e)) verifiable)
+        // (config.ronoctua.distroApps.followedFingerprints or { });
+      defaultText = "one fingerprint per entry of this machine, and per followed distro AppImage";
       description = ''
         The machine flake's `personFingerprints`: what `local/held.json`
         names an entry by.
@@ -638,7 +709,11 @@ in
 
     # THE PERSON'S PROFILE, through Home Manager — never `systemPackages`.
     home-manager.users.${user} = {
-      home.packages = lib.concatMap (r: r.packages) applied;
+      # AND THE DISTRO'S APPIMAGES THE PERSON FOLLOWS past its pins, at the
+      # pin root's verify built: their programs, from their own download
+      # (`nix/modules/distro-apps.nix`, `personPackages`).
+      home.packages =
+        lib.concatMap (r: r.packages) applied ++ (config.ronoctua.distroApps.personPackages or [ ]);
       xdg.desktopEntries = builtins.foldl' (all: r: all // r.desktopEntries) { } applied;
     }
     # nix-flatpak's option exists only where Flatpak is on

@@ -1,13 +1,16 @@
 //! `verify`: every declared entry tried in a `nix` of its own, and what
-//! failed written to `local/held.json` — the decisions are
-//! [`ronoctua_person::verify`]'s; this runs the commands.
+//! failed written to `local/held.json` — and every followed distro AppImage
+//! that built, to `local/verified.json`, the allow-list the registry builds
+//! one by. The decisions are [`ronoctua_person::verify`]'s; this runs the
+//! commands.
 
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use ronoctua_person::declared::Declared;
-use ronoctua_person::local::{Held, HeldWhy};
+use ronoctua_person::distro_pins::DistroPins;
+use ronoctua_person::local::{Held, HeldWhy, Verified, VerifiedEntry};
 use ronoctua_person::verify::{self as decide, Fetch, Tried};
 use ronoctua_person::{Stamp, names};
 use rustix::fs::{AtFlags, Mode, OFlags};
@@ -153,6 +156,15 @@ pub fn verify(machine: &str, nix: &Nix, rehearse: bool, now: &Stamp) -> Result<R
             Declared::default()
         }),
     };
+    // THE DISTRO'S APPIMAGES THE PERSON FOLLOWS, each tried as an entry of
+    // its own (`distro-appimage:<id>`), its pin from the same copy.
+    let followed: DistroPins = match current.files.get(names::DISTRO_PINS) {
+        None => DistroPins::default(),
+        Some(bytes) => ronoctua_person::parse(bytes).unwrap_or_else(|r| {
+            eprintln!("<4>the machine's distro-pins.json was refused ({r}); no pin is fetched");
+            DistroPins::default()
+        }),
+    };
     let before: Held = match read_local(&machine_fd, names::HELD)? {
         None => Held::default(),
         Some(bytes) => ronoctua_person::parse(&bytes).unwrap_or_else(|r| {
@@ -161,11 +173,23 @@ pub fn verify(machine: &str, nix: &Nix, rehearse: bool, now: &Stamp) -> Result<R
         }),
     };
 
+    let verified_before: Verified = match read_local(&machine_fd, names::VERIFIED)? {
+        None => Verified::default(),
+        Some(bytes) => ronoctua_person::parse(&bytes).unwrap_or_else(|r| {
+            eprintln!("<4>verified.json was refused ({r}); no followed release is verified yet");
+            Verified::default()
+        }),
+    };
+
     let mut tried = Vec::new();
     let mut failed = Vec::new();
     let mut evaluated = Vec::new();
+    let mut built: Vec<VerifiedEntry> = Vec::new();
     for (id, fingerprint) in &fingerprints {
-        let pin = declared.entry(id).and_then(decide::pin_of);
+        let pin = declared
+            .entry(id)
+            .and_then(decide::pin_of)
+            .or_else(|| followed.download_of(id));
         let said = match decide::reason(try_entry(nix, &flake, id, pin, rehearse)) {
             Some(why) => {
                 failed.push((id.clone(), fingerprint.clone(), why));
@@ -175,7 +199,23 @@ pub fn verify(machine: &str, nix: &Nix, rehearse: bool, now: &Stamp) -> Result<R
                 evaluated.push(id.clone());
                 Said::Untried
             }
-            None => Said::Ok,
+            None => {
+                // A FOLLOWED DISTRO APPIMAGE THAT BUILT is let in, at the
+                // fingerprint it built at, with the pin it built.
+                if let Some(p) =
+                    ronoctua_person::distro_pins::of_entry(id).and_then(|t| followed.pin(t))
+                {
+                    built.push(VerifiedEntry {
+                        id: id.clone(),
+                        fingerprint: fingerprint.clone(),
+                        url: p.url.clone(),
+                        hash: p.hash.clone(),
+                        version: p.version.clone(),
+                        since: now.clone(),
+                    });
+                }
+                Said::Ok
+            }
         };
         tried.push((id.clone(), said));
     }
@@ -196,6 +236,14 @@ pub fn verify(machine: &str, nix: &Nix, rehearse: bool, now: &Stamp) -> Result<R
             names::HELD,
             ronoctua_person::to_json(&held).as_bytes(),
         )?;
+        let verified = decide::verified_after(&verified_before, &built);
+        if verified != verified_before || read_local(&machine_fd, names::VERIFIED)?.is_none() {
+            write_local(
+                &machine_fd,
+                names::VERIFIED,
+                ronoctua_person::to_json(&verified).as_bytes(),
+            )?;
+        }
     }
     Ok(Round { tried, held })
 }
@@ -246,6 +294,8 @@ mod tests {
             "appimage:gone",
             "appimage:changed",
             "appimage:same",
+            "distro-appimage:followed",
+            "distro-appimage:good",
         ]);
         let baseline = if baseline_ok {
             format!("echo '{fingerprints}'")
@@ -265,6 +315,7 @@ case "$*" in
   *prefetch-file*gone*) exit 1 ;;
   *prefetch-file*changed*) echo '{{"hash":"sha256-mOpuTyFvL7S2n/+bOkSELDhobKaF8/VdxIxdP7EQe+Q=","storePath":"/nix/store/y"}}' ;;
   *prefetch-file*same*) echo '{{"hash":"{pin}","storePath":"/nix/store/z"}}' ;;
+  *prefetch-file*followed*) exit 1 ;;
   *) exit 2 ;;
 esac
 "#,
@@ -293,6 +344,16 @@ esac
         Stamp::parse("2026-10-05T12:00:00Z").unwrap()
     }
 
+    /// The machine's copy of the distro pins the person follows: one, whose
+    /// release the fake `nix` cannot fetch.
+    const FOLLOWED: &str = r#"{"format": 1, "pins": [{"id": "followed",
+        "url": "https://github.com/storytold/followed/releases/download/v2.0/followed-2.0-linux-x86_64.AppImage",
+        "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=", "version": "2.0",
+        "pinned-at": "2026-10-05T12:00:00Z"}, {"id": "good",
+        "url": "https://github.com/storytold/good/releases/download/v3.0/good-3.0-linux-x86_64.AppImage",
+        "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=", "version": "3.0",
+        "pinned-at": "2026-10-05T12:00:00Z"}]}"#;
+
     /// FAILS IF: a good entry is held, a broken one is not, or the four
     /// reasons are confused — eval, build, a download that is gone and one
     /// that changed upstream.
@@ -302,6 +363,10 @@ esac
         s.file(
             "machine/person/software/declared.json",
             declared_with_pins().as_bytes(),
+        );
+        s.file(
+            "machine/person/software/distro-pins.json",
+            FOLLOWED.as_bytes(),
         );
         let nix = fake_nix(&s, true);
         let machine = s.0.join("machine");
@@ -316,11 +381,34 @@ esac
             Said::Held(HeldWhy::UpstreamChanged)
         );
         assert_eq!(by_id["appimage:same"], Said::Held(HeldWhy::BuildFailed));
+        // A FOLLOWED DISTRO APPIMAGE that does not build is held like a
+        // declared entry, its pin the machine's copy's — the registry then
+        // builds the distro's pin in its place.
+        assert_eq!(
+            by_id["distro-appimage:followed"],
+            Said::Held(HeldWhy::FetchFailed)
+        );
+        // AND ONE THAT BUILT is let in — the allow-list the registry builds a
+        // followed pin by — at its fingerprint, with its pin; the held one is
+        // not.
+        assert_eq!(by_id["distro-appimage:good"], Said::Ok);
+        let verified: Verified =
+            ronoctua_person::parse(&std::fs::read(machine.join("local/verified.json")).unwrap())
+                .unwrap();
+        let ids: Vec<&str> = verified.verified.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids, ["distro-appimage:good"]);
+        assert_eq!(
+            (
+                verified.verified[0].fingerprint.as_str(),
+                verified.verified[0].version.as_str()
+            ),
+            ("fp-20", "3.0")
+        );
         let written: Held =
             ronoctua_person::parse(&std::fs::read(machine.join("local/held.json")).unwrap())
                 .unwrap();
         assert_eq!(written, round.held);
-        assert_eq!(written.held.len(), 5);
+        assert_eq!(written.held.len(), 6);
         assert!(!written.held.iter().any(|h| h.id == "nix:good"));
         let gone = written
             .held
@@ -333,7 +421,12 @@ esac
         let log = std::fs::read_to_string(s.0.join("nix.log")).unwrap();
         assert_eq!(
             log.lines().filter(|l| l.starts_with("eval --raw")).count(),
-            6
+            8
+        );
+        assert!(
+            log.lines()
+                .any(|l| l.contains("prefetch-file") && l.contains("followed-2.0-linux")),
+            "the followed pin's own address was asked: {log}"
         );
         assert!(
             log.lines()

@@ -65,9 +65,17 @@ commands:
                             declared one replaces, once it is applied.
   pins refresh              look for newer downloads of the declared AppImages
                             and Android apps, and write them into the
-                            person's declaration (nothing is staged).
+                            person's declaration (nothing is staged); with
+                            distro-apps-follow-releases on in their options,
+                            the distro's AppImages that follow a repository
+                            too, into software/distro-pins.json — and with it
+                            off, that file goes. Nothing is followed on a
+                            machine that trusts no signing key of theirs.
+                            Ends `refused github-not-let` when GitHub was not
+                            let and none of their own pins moved.
   person stage [--check]    lay the person's declaration where root's applier
-                            reads it; --check only reads it, as root would.
+                            reads it, and start the applier; --check only
+                            reads it, as root would.
   help                      this text.
 
 Every command but `upgrade android-system` refuses to run as root.
@@ -922,20 +930,47 @@ pub fn main() -> ExitCode {
 }
 
 /// `pins refresh`: newer pins into the declaration, and nothing staged —
-/// the update's `person-stage` comes after it.
+/// the update's `person-stage` comes after it. And the distro's AppImages
+/// the person follows past its pins (`crate::follow`): followed while their
+/// options say so, forgotten when they say not, left alone when the options
+/// do not read here. A host following asks that is not let ends the run
+/// `refused github-not-let` — news, which the update's step says — unless
+/// the person's own pins moved: the run then says what moved, and a line
+/// says the distro's were not looked at.
 fn pins_refresh(ctx: &Context, report: &mut dyn Report) -> ExitCode {
     let host = crate::declaration::host_of(&crate::declaration::this_host());
+    let mut not_let = false;
+    let mut own_moved = 0;
     let done = host.and_then(|host| {
         // THE DOWNLOADS RUN WITH NO LANE HELD, and only the write takes it.
         let newer = crate::pins::newer(ctx, &crate::github::Net, &host, report)?;
+        let following = crate::follow::following(&ctx.roots);
+        let looked = if following == Some(true) {
+            crate::follow::look(ctx, &crate::github::Net, report)
+        } else {
+            crate::follow::Looked::default()
+        };
+        not_let = looked.not_let;
+        if looked.no_signer {
+            println!(
+                "this machine trusts no signing key of yours: the distro's apps that follow their releases were not looked at"
+            );
+        }
         let moved = if ctx.rehearse {
-            newer.len() as u64
+            (newer.len() + looked.changes.len()) as u64
         } else {
             let _held = crate::lock::take_declaration(&crate::lock::directory(&ctx.roots), || {
                 report.step(Phase::Waiting, 0, 0, crate::lock::DECLARATION);
             })
             .map_err(|e| Failure::trouble(format!("could not take the declaration's lane: {e}")))?;
-            crate::pins::take(&ctx.roots, &newer)?
+            let mut moved = crate::pins::take(&ctx.roots, &newer)?;
+            own_moved = moved;
+            match following {
+                Some(true) => moved += crate::follow::apply(&ctx.roots, &looked.changes)?,
+                Some(false) => moved += u64::from(crate::follow::forget(&ctx.roots)?),
+                None => {}
+            }
+            moved
         };
         Ok(Outcome {
             amount: Some(moved),
@@ -943,30 +978,93 @@ fn pins_refresh(ctx: &Context, report: &mut dyn Report) -> ExitCode {
             ..Outcome::default()
         })
     });
-    answer(report, done)
+    let went_through = done.is_ok();
+    let code = answer(report, done);
+    if went_through && not_let {
+        // THE PERSON'S OWN PINS THAT MOVED are what the run did: said, and
+        // the GitHub refusal a line beside them rather than the verdict.
+        if own_moved > 0 {
+            println!(
+                "GitHub is not allowed in your consent: the distro's apps that follow their releases were not looked at"
+            );
+            return code;
+        }
+        println!("refused {}", crate::follow::NOT_LET);
+        return ExitCode::FAILURE;
+    }
+    code
 }
 
 /// `person stage [--check]`: the declaration laid where root's applier reads
-/// it — the nonce on standard output — or, with `--check`, only read.
+/// it AND applied by it — the applier's unit started, as the software
+/// centre starts it — or, with `--check`, only read. Laid and never
+/// applied, the update's root half would verify and build what the machine
+/// had.
 fn person_stage(ctx: &Context, check: bool) -> ExitCode {
-    let said = if check || ctx.rehearse {
-        crate::stage::check(&ctx.roots)
-            .map(|(declared, declined)| format!("reads: {declared} declared, {declined} declined"))
+    let said = person_stage_said(ctx, check);
+    if let Some(line) = &said.out {
+        println!("{line}");
+    }
+    if let Some(line) = &said.err {
+        let _ = writeln!(std::io::stderr(), "ronoctua-software: {line}");
+    }
+    if said.ok {
+        ExitCode::SUCCESS
     } else {
-        crate::lock::take_declaration(&crate::lock::directory(&ctx.roots), || {})
-            .map_err(|e| Failure::trouble(format!("could not take the declaration's lane: {e}")))
-            .and_then(|_held| crate::stage::stage(&ctx.roots, &ctx.roots.system.staged()))
-            .map(|nonce| format!("staged {nonce}"))
+        ExitCode::FAILURE
+    }
+}
+
+/// What `person stage` says: its last line on standard output, its line on
+/// standard error, and whether it did what it was asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Said {
+    out: Option<String>,
+    err: Option<String>,
+    ok: bool,
+}
+
+/// [`person_stage`]'s answer. The applier's own answer is the last line:
+/// `applied` or `unchanged`; a refusal ends `refused <word>`, which the
+/// update's runner reads — `busy` when another of root's programs holds the
+/// machine (the software centre's rebuild: the mirror keeps the
+/// declaration, this update builds without it, and the step declares the
+/// word, with its sentence), else the applier's reason (`TreeWhy`). Any
+/// other failure says only why, on standard error.
+fn person_stage_said(ctx: &Context, check: bool) -> Said {
+    use crate::stage::Applied;
+    use ronoctua_person::tree::TreeWhy;
+    let refused = |word: Option<TreeWhy>, why: String| Said {
+        out: word.map(|w| format!("refused {}", w.id())),
+        err: Some(why),
+        ok: false,
     };
-    match said {
-        Ok(line) => {
-            println!("{line}");
-            ExitCode::SUCCESS
-        }
-        Err(f) => {
-            let _ = writeln!(std::io::stderr(), "ronoctua-software: {f}");
-            ExitCode::FAILURE
-        }
+    let said = |line: String| Said {
+        out: Some(line),
+        err: None,
+        ok: true,
+    };
+    if check || ctx.rehearse {
+        return match crate::stage::check(&ctx.roots) {
+            Ok((declared, declined)) => {
+                said(format!("reads: {declared} declared, {declined} declined"))
+            }
+            Err(f) => refused(None, f.to_string()),
+        };
+    }
+    let handed = crate::lock::take_declaration(&crate::lock::directory(&ctx.roots), || {})
+        .map_err(|e| Failure::trouble(format!("could not take the declaration's lane: {e}")))
+        .and_then(|_held| crate::stage::hand_over(ctx, &mut Vec::new()));
+    match handed {
+        Ok(Applied::Applied) => said("applied".to_owned()),
+        Ok(Applied::Unchanged) => said("unchanged".to_owned()),
+        Ok(Applied::Busy) => refused(
+            Some(TreeWhy::Busy),
+            "root's applier is busy: another of root's programs holds the machine, and this \
+             run builds the declarations it had"
+                .to_owned(),
+        ),
+        Err(f) => refused(crate::stage::refused_why(&f), f.to_string()),
     }
 }
 
@@ -1313,6 +1411,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// FAILS IF: `person stage` does not end with the applier's own answer —
+    /// `applied`, or `refused <word>` the update's runner reads: `busy`
+    /// (another of root's programs holds the machine) as a failure of this
+    /// run, and the applier's reason for a staging it refused — or calls
+    /// anything done that was not.
+    #[test]
+    fn the_stage_says_what_the_applier_answered() {
+        let verdict = |nonce: &str, outcome: &str, why: &str| {
+            let refused = if why.is_empty() {
+                "null".to_owned()
+            } else {
+                format!(
+                    "{{\"why\":\"{why}\",\"at\":\"person/software/declined.json\",\"detail\":\"x\"}}"
+                )
+            };
+            format!(
+                "{{\"format\":1,\"at\":\"2099-01-01T00:00:00Z\",\"nonce\":{nonce},\"outcome\":\"{outcome}\",\"refused\":{refused},\"ignored\":[],\"left-out\":[]}}"
+            )
+        };
+        for (tag, written, line, ok) in [
+            (
+                "applied",
+                verdict("\"$(cat STAGED/nonce)\"", "applied", ""),
+                Some("applied"),
+                true,
+            ),
+            // BUSY is said before the staging is read: no nonce.
+            (
+                "busy",
+                verdict("null", "refused", "busy"),
+                Some("refused busy"),
+                false,
+            ),
+            (
+                "refused",
+                verdict("\"$(cat STAGED/nonce)\"", "refused", "not-signed"),
+                Some("refused not-signed"),
+                false,
+            ),
+        ] {
+            let root = scratch(&format!("stage-{tag}"));
+            let roots = Roots::under(&root);
+            let bin = root.join("bin");
+            // SYSTEMCTL, as the applier's unit answers: its verdict, written
+            // beside the staging.
+            let written = written.replace("STAGED", &roots.system.staged().display().to_string());
+            crate::write_executable(
+                &bin.join("systemctl"),
+                &format!(
+                    "#!/bin/sh\nprintf '%s' \"{}\" > {}\n",
+                    written.replace('"', "\\\""),
+                    roots.system.verdict().display()
+                ),
+            );
+            let ctx = Context {
+                roots,
+                ..context(
+                    &root,
+                    Tools {
+                        systemctl: Some(bin.join("systemctl")),
+                        ..Tools::default()
+                    },
+                )
+            };
+            let said = person_stage_said(&ctx, false);
+            assert_eq!(said.out.as_deref(), line, "{tag}: {said:?}");
+            assert_eq!(said.ok, ok, "{tag}: {said:?}");
+            assert_eq!(said.err.is_some(), !ok, "{tag}: {said:?}");
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 
     fn context(root: &std::path::Path, tools: Tools) -> Context {

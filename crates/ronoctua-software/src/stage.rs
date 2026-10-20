@@ -21,10 +21,12 @@
 //!    `busy` means the update is building — an answer, not a failure: the
 //!    mirror keeps the change, and the machine takes it at the apply after
 //!    that update's, which staged the mirror before it took the machine.
-//!    [`rebuild`] then starts `ronoctua-update-apply.service` when the
-//!    change needs the system rebuilt (a program removed, a decline): exit 75
-//!    of its `flock` is the update holding the machine, and the change waits
-//!    for the same next apply.
+//!    The update's `person-stage` hands the mirror over the same way
+//!    ([`hand_over`], `person stage`), without signing: its `person-sign`
+//!    came first. [`rebuild`] then starts `ronoctua-update-apply.service`
+//!    when the change needs the system rebuilt (a program removed, a
+//!    decline): exit 75 of its `flock` is the update holding the machine,
+//!    and the change waits for the same next apply.
 //! 3. **Publish** ([`publish`]). `ronoctua-belongings plain push`, which
 //!    carries the declaration to the person's repository. Not having one, or
 //!    the network being down, is not a failure of the declaration: the next
@@ -179,6 +181,12 @@ pub fn check(roots: &Roots) -> Result<(usize, usize), Failure> {
         refusal: Some(Refusal::DeclarationUnreadable),
         trouble: format!("{}: {}", names::DECLINED, why.id()),
     })?;
+    // THE DISTRO PINS THEY FOLLOW never hold the declarations back: one that
+    // does not read here is staged as it is, and root keeps it back with its
+    // reason while everything else arrives.
+    if let Err(e) = crate::follow::read(roots) {
+        tracing::warn!(error = %e, "the followed distro pins do not read; root keeps them back");
+    }
     Ok((declared.apps.len(), declined.apps.len()))
 }
 
@@ -207,7 +215,12 @@ pub fn stage(roots: &Roots, staged: &Path) -> Result<String, Failure> {
     empty(staged).map_err(wrote)?;
     let mirror = crate::declaration::mirror(roots);
     let person = staged.join(tree::PERSON);
-    for rel in [names::DECLARED, names::DECLINED, names::OPTIONS] {
+    for rel in [
+        names::DECLARED,
+        names::DECLINED,
+        names::OPTIONS,
+        names::DISTRO_PINS,
+    ] {
         match std::fs::read(mirror.join(rel)) {
             Ok(bytes) => write_private(&person.join(rel), &bytes).map_err(wrote)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -328,13 +341,46 @@ pub fn read_verdict(
     })
 }
 
-/// Stage the mirror and have root apply it.
+/// The applier's reason, when `failure` is its refusal of a staging
+/// ([`read_verdict`] writes it first: `<why> at <where>: <detail>`) — the
+/// word the update's step ends with (`refused <why>`). `None` for any other
+/// failure. Pure.
+#[must_use]
+pub fn refused_why(failure: &Failure) -> Option<TreeWhy> {
+    if failure.refusal != Some(Refusal::DeclarationRefused) {
+        return None;
+    }
+    let (word, _) = failure.trouble.split_once(" at ")?;
+    TreeWhy::try_from(word.to_owned()).ok()
+}
+
+/// Sign the mirror here, stage it and have root apply it — the software
+/// centre's gesture.
 ///
 /// # Errors
 ///
 /// What staging refused, [`Refusal::SourceAbsent`] without `systemctl`, and
 /// the applier's refusal.
 pub fn apply(ctx: &Context, report: &mut dyn Report) -> Result<Applied, Failure> {
+    applied(ctx, report, true)
+}
+
+/// Stage the mirror AS IT IS SIGNED NOW and have root apply it — the update's
+/// `person-stage`, whose own step signed it just before (`person-sign`, which
+/// declines and is said when the session keeps no identity). Without the
+/// apply, the update's root half verifies and builds the declarations the
+/// machine had, and what the person declared on their other machines waits
+/// for a gesture in the software centre.
+///
+/// # Errors
+///
+/// As [`apply`].
+pub fn hand_over(ctx: &Context, report: &mut dyn Report) -> Result<Applied, Failure> {
+    applied(ctx, report, false)
+}
+
+/// [`apply`], signing first or not.
+fn applied(ctx: &Context, report: &mut dyn Report, signing: bool) -> Result<Applied, Failure> {
     let systemctl = tool(ctx.tools.systemctl.as_ref())?;
     report.step(Phase::Applying, 0, 0, "");
     if ctx.rehearse {
@@ -348,7 +394,9 @@ pub fn apply(ctx: &Context, report: &mut dyn Report) -> Result<Applied, Failure>
     }
     let staged = ctx.roots.system.staged();
     let unit = ronoctua_person::root::APPLY_UNIT;
-    sign(ctx);
+    if signing {
+        sign(ctx);
+    }
     // WHY THE LAST START RAN NO APPLIER, when it did not (a start limit, a
     // unit that does not load): no verdict answers such a start, and the one
     // in the file is an earlier run's.
@@ -615,6 +663,10 @@ mod tests {
             !staged.join("person").join(names::DECLINED).exists(),
             "nothing declined"
         );
+        assert!(
+            !staged.join("person").join(names::DISTRO_PINS).exists(),
+            "nothing followed"
+        );
         assert_eq!(
             std::fs::read(
                 staged
@@ -662,6 +714,36 @@ mod tests {
             roots.state.join(ronoctua_xdg::name()).join(names::SIGNED),
             "the stager looks for the signature where the belongings keep it"
         );
+        // THE DISTRO PINS THEY FOLLOW travel as they are — one that does not
+        // read too: root keeps it back, and the declarations still arrive.
+        // Written here and not read from `ronoctua-person`'s fixtures: a unit
+        // of this crate is built from this crate's sources alone.
+        let followed: &[u8] = br#"{
+  "format": 1,
+  "pins": [
+    {
+      "id": "cadcraft",
+      "url": "https://github.com/storytold/cadcraft/releases/download/v0.9.0/cadcraft-0.9.0-linux-x86_64.AppImage",
+      "hash": "sha256-JPd+NyvwcjP3JnJFi8aRNdVLyfa7Y3ntc3hwp8EVK9I=",
+      "version": "0.9.0",
+      "pinned-at": "2026-10-20T12:00:00Z"
+    }
+  ]
+}
+"#;
+        std::fs::write(crate::follow::path(&roots), followed).unwrap();
+        stage(&roots, &staged).unwrap();
+        assert_eq!(
+            std::fs::read(staged.join("person").join(names::DISTRO_PINS)).unwrap(),
+            followed
+        );
+        std::fs::write(crate::follow::path(&roots), b"{\"format\": 9}").unwrap();
+        stage(&roots, &staged).expect("followed pins that do not read hold nothing back");
+        assert_eq!(
+            std::fs::read(staged.join("person").join(names::DISTRO_PINS)).unwrap(),
+            b"{\"format\": 9}"
+        );
+        std::fs::remove_file(crate::follow::path(&roots)).unwrap();
         // A SECOND STAGING has another nonce.
         assert_ne!(stage(&roots, &staged).unwrap(), nonce);
         // A MIRROR THAT DOES NOT READ is never staged.
@@ -835,6 +917,64 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// FAILS IF: the update's hand-over signs (its own step signed just
+    /// before), or the software centre's gesture does not — or either stages
+    /// without starting the applier.
+    #[test]
+    fn the_update_hands_over_what_its_own_step_signed() {
+        let root = scratch("hand-over");
+        let roots = Roots::under(&root);
+        crate::declaration::change_declared(&roots, |d: &mut Declared| {
+            crate::declaration::upsert(d, web("mail", None));
+            Ok(())
+        })
+        .unwrap();
+        let bin = root.join("bin");
+        let log = root.join("calls.log");
+        crate::write_executable(
+            &bin.join("systemctl"),
+            &format!(
+                "#!/bin/sh\n\
+                 echo \"systemctl $*\" >> {log}\n\
+                 n=$(cat {staged}/nonce)\n\
+                 printf '{{\"format\":1,\"at\":\"2026-10-05T12:00:00Z\",\"nonce\":\"%s\",\"outcome\":\"unchanged\",\"refused\":null,\"ignored\":[],\"left-out\":[]}}' \"$n\" > {verdict}\n",
+                log = log.display(),
+                staged = roots.system.staged().display(),
+                verdict = roots.system.verdict().display()
+            ),
+        );
+        crate::write_executable(
+            &bin.join("belongings"),
+            &format!(
+                "#!/bin/sh\necho \"belongings $*\" >> {log}\necho '{{\"signed\":\"unchanged\"}}'\n",
+                log = log.display()
+            ),
+        );
+        let ctx = Context {
+            tools: Tools {
+                systemctl: Some(bin.join("systemctl")),
+                belongings: Some(bin.join("belongings")),
+                ..Tools::default()
+            },
+            roots,
+            prefs: crate::prefs::Preferences::default(),
+            rehearse: false,
+        };
+        let start = format!(
+            "systemctl start --no-ask-password {}",
+            ronoctua_person::root::APPLY_UNIT
+        );
+        assert_eq!(hand_over(&ctx, &mut Vec::new()), Ok(Applied::Unchanged));
+        assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), start);
+        std::fs::remove_file(&log).unwrap();
+        assert_eq!(apply(&ctx, &mut Vec::new()), Ok(Applied::Unchanged));
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap().trim(),
+            format!("belongings sign --json\n{start}")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// FAILS IF: a start that ran no applier (the unit's start limit, a
     /// unit that does not load) is answered by the busy an earlier update
     /// left in root's file — the order would say it was done — or its
@@ -881,6 +1021,28 @@ exit 1
             refused.trouble
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: the applier's reason is lost on the way to the update's
+    /// step — or a failure that is not the applier's is given one.
+    #[test]
+    fn the_appliers_reason_is_its_word() {
+        let since = Stamp::parse("2026-10-05T12:00:00Z").unwrap();
+        for why in [TreeWhy::NotSigned, TreeWhy::RolledBack, TreeWhy::TooLarge] {
+            let failure = read_verdict(
+                &verdict_of(Some("aaaaaaaaaaaa"), TreeOutcome::Refused, Some(why)),
+                "aaaaaaaaaaaa",
+                &since,
+            )
+            .unwrap()
+            .unwrap_err();
+            assert_eq!(refused_why(&failure), Some(why), "{}", failure.trouble);
+        }
+        assert_eq!(refused_why(&Failure::trouble("not-signed at x: y")), None);
+        assert_eq!(
+            refused_why(&Failure::refused(Refusal::DeclarationRefused)),
+            None
+        );
     }
 
     #[test]

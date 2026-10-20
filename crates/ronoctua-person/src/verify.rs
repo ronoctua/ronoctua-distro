@@ -25,6 +25,23 @@
 //! it, and the consumer skips it while the fingerprint stays the same. The
 //! update goes on: a held entry is said, never fatal.
 //!
+//! # And the distro's AppImages the person follows
+//!
+//! A followed pin (`crate::distro_pins`) is a release the distro's gate never
+//! built, and the rebuild that would meet it first stops the update. So the
+//! machine flake hands each one the registry would build — the option on,
+//! newer than the distro's — to this same round, as `distro-appimage:<id>`
+//! ([`crate::distro_pins::ENTRY`]), with its pin from the machine's copy of
+//! `distro-pins.json`: one that does not build is held like a declared
+//! entry, and the registry builds the distro's pin in its place.
+//!
+//! AND FOR THESE, BUILT IS WHAT LETS THEM IN: one that built is recorded in
+//! `local/verified.json` at its fingerprint ([`verified_after`]), and the
+//! registry builds a followed pin only while that record names it — so a
+//! build of the machine that ran no verify (the software centre's apply, the
+//! rescue's rebuild) never meets an untried release: it builds the last
+//! verified one, or the distro's.
+//!
 //! # The contract with the machine flake
 //!
 //! `personEntries` and `personFingerprints` have the same names — every
@@ -35,7 +52,7 @@
 use std::collections::BTreeMap;
 
 use crate::declared::{Entry, Source};
-use crate::local::{Held, HeldEntry, HeldWhy};
+use crate::local::{Held, HeldEntry, HeldWhy, Verified, VerifiedEntry};
 use crate::{Stamp, check};
 
 /// The machine flake's output of the declared entries' builds.
@@ -67,7 +84,8 @@ fn flake_flags() -> [String; 3] {
 pub fn plain_id(id: &str) -> bool {
     id.len() <= 256
         && id.split_once(':').is_some_and(|(source, rest)| {
-            Source::ALL.iter().any(|s| s.word() == source) && !rest.is_empty()
+            (Source::ALL.iter().any(|s| s.word() == source) || source == crate::distro_pins::ENTRY)
+                && !rest.is_empty()
         })
         && id
             .chars()
@@ -261,6 +279,34 @@ pub fn held_after(before: &Held, failed: &[(String, String, HeldWhy)], now: &Sta
     }
 }
 
+/// The verified record after a round: every followed distro AppImage that
+/// BUILT now (`built`, each stamped now), its `since` kept when it built at
+/// the same fingerprint before — and every other entry of `before` as it
+/// was: a followed AppImage held or not tried keeps the last pin that built.
+#[must_use]
+pub fn verified_after(before: &Verified, built: &[VerifiedEntry]) -> Verified {
+    let mut verified: Vec<VerifiedEntry> = before
+        .verified
+        .iter()
+        .filter(|v| !built.iter().any(|b| b.id == v.id))
+        .cloned()
+        .collect();
+    for b in built {
+        let since = before
+            .verified
+            .iter()
+            .find(|v| v.id == b.id && v.fingerprint == b.fingerprint)
+            .map_or_else(|| b.since.clone(), |v| v.since.clone());
+        verified.push(VerifiedEntry { since, ..b.clone() });
+    }
+    verified.sort_by(|a, b| a.id.cmp(&b.id));
+    verified.dedup_by(|a, b| a.id == b.id);
+    Verified {
+        format: crate::FORMAT,
+        verified,
+    }
+}
+
 /// What a REHEARSAL can say of the entries whose evaluation passed: it
 /// builds nothing, so it cannot say they build. An entry `before` held at the
 /// fingerprint it still has, for a reason only a build finds (`build-failed`,
@@ -343,6 +389,7 @@ mod tests {
             "nix:python3Packages.requests",
             "android:org.fdroid.fdroid",
             "nix:foo'",
+            "distro-appimage:cadcraft",
         ] {
             assert!(plain_id(good), "{good}");
         }
@@ -350,6 +397,7 @@ mod tests {
             "ripgrep",
             "nix:",
             "snap:x",
+            "distro-appimage:",
             "nix:a\".drvPath",
             "nix:a b",
             "nix:a\\b",
@@ -436,6 +484,66 @@ mod tests {
         let now = Stamp::parse("2026-10-05T12:00:00Z").unwrap();
         let after = held_after(&before, &carried, &now);
         assert_eq!(after.held[0].since, old, "carried with its since");
+    }
+
+    /// FAILS IF: a followed AppImage that built is not recorded at the
+    /// fingerprint it built at, one held or not tried loses the last pin
+    /// that built, or `since` moves while the fingerprint stays.
+    #[test]
+    fn what_built_is_recorded_and_the_last_verified_pin_stays() {
+        let old = Stamp::parse("2026-10-01T00:00:00Z").unwrap();
+        let now = Stamp::parse("2026-10-20T12:00:00Z").unwrap();
+        let entry = |id: &str, fp: &str, version: &str, since: &Stamp| VerifiedEntry {
+            id: crate::distro_pins::entry_id(id),
+            fingerprint: fp.to_owned(),
+            url: format!(
+                "https://github.com/storytold/{id}/releases/download/v{version}/{id}-{version}-linux-x86_64.AppImage"
+            ),
+            hash: format!("sha256-{}=", "A".repeat(43)),
+            version: version.to_owned(),
+            since: since.clone(),
+        };
+        let before = Verified {
+            format: crate::FORMAT,
+            verified: vec![
+                entry("cadcraft", "f1", "0.9.0", &old),
+                entry("figcraft", "f2", "0.7.2", &old),
+                entry("pdfcraft", "f3", "0.6.2", &old),
+            ],
+        };
+        let after = verified_after(
+            &before,
+            &[
+                entry("cadcraft", "f1", "0.9.0", &now),
+                entry("figcraft", "f9", "0.7.3", &now),
+                entry("photocraft", "f4", "0.12.1", &now),
+            ],
+        );
+        assert!(after.validate().is_ok(), "{after:?}");
+        let by = |id: &str| {
+            after
+                .verified
+                .iter()
+                .find(|v| v.id == crate::distro_pins::entry_id(id))
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(
+            by("cadcraft").since,
+            old,
+            "the same fingerprint keeps its since"
+        );
+        assert_eq!(
+            (by("figcraft").version.as_str(), &by("figcraft").since),
+            ("0.7.3", &now)
+        );
+        assert_eq!(
+            by("pdfcraft").version,
+            "0.6.2",
+            "a held one keeps the last that built"
+        );
+        assert_eq!(by("photocraft").fingerprint, "f4");
+        assert_eq!(after.verified.len(), 4);
     }
 
     #[test]

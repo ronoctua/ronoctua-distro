@@ -8,8 +8,9 @@
 #
 #   flake.nix  flake.lock  host.nix  facter.json  [secrets.yaml]
 #   person/    software/declared.json  software/declined.json
-#              software/icons/<sha256>.png  brain/<my-id>/…
-#   local/     held.json  approved.json        (root only, never synced)
+#              software/distro-pins.json  software/icons/<sha256>.png
+#              brain/<my-id>/…
+#   local/     held.json  verified.json  approved.json   (root only, never synced)
 #
 # The machine's code is the distro at the revision its lock names, so an update
 # that moves the `ronoctua` input brings new code — the copy of the distro the
@@ -50,7 +51,13 @@ let
     brain = "person/brain";
     # The person's opt-ins (`ronoctua_person::names::OPTIONS`).
     options = "person/options.json";
+    # The distro's AppImages the person follows past its pins
+    # (`ronoctua_person::names::DISTRO_PINS`).
+    distroPins = "person/software/distro-pins.json";
     held = "local/held.json";
+    # The followed distro AppImages root's verify built
+    # (`ronoctua_person::names::VERIFIED`).
+    verified = "local/verified.json";
     approved = "local/approved.json";
     # The person's signing key root trusts, and what the last apply made of
     # the signature (`ronoctua_person::names::SIGNER`).
@@ -277,8 +284,10 @@ in
                     data = present parts.declared;
                     declined = present parts.declined;
                     held = present parts.held;
+                    verified = present parts.verified;
                     icons = present parts.icons;
                     options = present parts.options;
+                    distroPins = present parts.distroPins;
                     signer = present parts.signer;
                     brainModules = brain.included;
                     awaitingApproval = brain.awaiting;

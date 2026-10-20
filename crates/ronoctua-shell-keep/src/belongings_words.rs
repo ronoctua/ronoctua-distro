@@ -162,6 +162,9 @@ pub const fn kept_back_key(why: TreeWhy) -> Option<&'static str> {
     Some(match why {
         TreeWhy::NotAsSigned => key::BELONGINGS_KEPT_BACK_NOT_AS_SIGNED,
         TreeWhy::NoKeyPinned => key::BELONGINGS_KEPT_BACK_NO_KEY_PINNED,
+        // A document of the person's that this machine cannot read (a newer
+        // format, a broken one): root keeps its own copy and takes the rest.
+        TreeWhy::Document(_) => key::BELONGINGS_KEPT_BACK_DOCUMENT,
         _ => return None,
     })
 }
@@ -270,7 +273,7 @@ mod tests {
                 assert_eq!(root_refused_key(why).is_some(), why.refuses_the_signature());
                 assert_eq!(kept_back_key(why).is_some(), why.keeps_back());
             }
-            assert_eq!((refusing, keeping), (3, 2));
+            assert_eq!((refusing, keeping), (3, 7));
             for reason in ronoctua_belongings::kept::REASONS {
                 has(&reason_key(reason));
             }
