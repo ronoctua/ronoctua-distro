@@ -339,14 +339,15 @@ impl crate::region::Region for LocaleRegion {
     }
 
     /// THE LANGUAGE AND REGION ROWS, as `fields`. A heading is not a row to
-    /// click on, and neither is a note: both answer `heading`, so both are
-    /// skipped here for the reason the cursor skips them.
+    /// click on, and neither is a note: the view's one answer
+    /// ([`crate::locale::Row::takes`]) skips both here for the reason the
+    /// cursor skips them.
     fn rows(&self, seen: &Seen<'_>) -> Vec<crate::region::Row> {
         self.view
             .rows(seen.columns, seen.zone, seen.texts)
             .into_iter()
             .map(|r| crate::region::Row {
-                takes: !r.heading,
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -678,5 +679,74 @@ mod tests {
         assert_eq!(r.command("locale-zone", None, &mut w), Taken::Yes);
         assert_eq!(r.asking, Some(Asking::Zone));
         assert_eq!(r.command("geo-open", None, &mut w), Taken::No);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a note —
+    /// or leaves unlit one it takes. THE LIGHT IS THE CLICK: every row
+    /// clicked, on a view of its own, and lit exactly where something was
+    /// seen to happen.
+    ///
+    /// CLICKED ONCE, AND NEVER ON THE CURSOR'S ROW — as
+    /// `region::held_to_the_click` clicks too: a second click would be the `RET`, and
+    /// a `RET` here writes this machine's language, dates and places and
+    /// turns its clock-keeping (`carry_out`), which no test may do. One click
+    /// is enough for the light: from any other row it selects, and the cursor
+    /// moving is seen; on the cursor's row it is already the `RET`, and that
+    /// row is lit by being the cursor's (`Held::here`).
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 80,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        // THE ROWS' TONES AND PLACES, and not their words: a row of this view
+        // says the time to the minute, and a minute turning between the two
+        // readings is no click's doing. A click that selects moves a tone.
+        let tinted = |r: &LocaleRegion, w: &crate::region::Recorder| {
+            let (rows, cursor, deeds) = crate::region::seen(r, &w.owed, &seen);
+            let tones: Vec<Vec<(u16, ronoctua_tokens::Color)>> = rows
+                .iter()
+                .map(|f| f.iter().map(|x| (x.at, x.color)).collect())
+                .collect();
+            (tones, cursor, deeds)
+        };
+        let first = region();
+        let cursor = first.cursor_in(&seen);
+        let held: Vec<crate::region::Held> = first
+            .rows(&seen)
+            .iter()
+            .enumerate()
+            .map(|(row, drawn)| {
+                let here = cursor == Some(row);
+                let (mut r, mut w) = (region(), way());
+                let before = tinted(&r, &w);
+                if !here {
+                    r.clicked(row, &mut w);
+                }
+                crate::region::Held {
+                    row,
+                    lit: drawn.takes,
+                    did: tinted(&r, &w) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        assert!(
+            held.iter().all(|h| !h.here || h.lit),
+            "the cursor stands on a row a click does not take: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

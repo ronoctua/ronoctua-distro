@@ -200,6 +200,16 @@ impl Content for AudioWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, and only that row lights
+    /// under the pointer — the view's one answer ([`crate::audio::Row::takes`]),
+    /// which the footer's region gives too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::audio::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -219,5 +229,44 @@ impl Content for AudioWindow {
         if again {
             self.pressed(ui, crate::audio::Press::Enter);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A window over [`crate::audio::a_machine`] — no PipeWire behind it and
+    /// no `audio.json` watched, on the settings a fresh view keeps — and
+    /// never this machine's.
+    fn a_window() -> (AudioWindow, Ui) {
+        let ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
+        let snapshot = crate::audio::a_machine();
+        let mut view = crate::audio::View::fresh(ronoctua_audio::prefs::Preferences::default());
+        view.settle_in(Some(&snapshot), ui.columns, &ui.texts);
+        let w = AudioWindow {
+            view,
+            snapshot: Some(snapshot),
+            audio: None,
+            meter: crate::audio_region::Meter::default(),
+            _watch: None,
+        };
+        (w, ui)
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections, a sentence about a
+    /// whole section — or leaves unlit one it takes. THE LIGHT IS THE CLICK:
+    /// every row clicked once, on a window of its own, and lit exactly where
+    /// something happened. The footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let held = crate::door::held_to_the_click(a_window, crate::door::seen);
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

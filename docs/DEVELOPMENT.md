@@ -363,7 +363,9 @@ nix run .#profile-bench  mede cada variante do perfil de release no .#bench (hor
   --no-link` (o programa de release; `rust.<nome>` é o que o módulo roda, com o embrulho de quem
   pinta; `rust.loop.bins.<programa>` o de loop; `rust.shell`/`rust.loopShell` o bundle do rodapé), e
   `rust.test.testRuns.<crate>`, `rust.test.clippy.<crate>`, `rust.release.deps."<chave>"` (um
-  terceiro). `metrics/seconds` e `metrics/peak-kib` dizem quanto custou; o comando de um terceiro
+  terceiro). O `metrics` diz quanto custou: `seconds`, `peak-kib` (o pico do build inteiro, da memória
+  que o orçamento paga: anônima, shmem, swap e tabelas de página) e `cores` (os núcleos com que foi
+  construída); o comando de um terceiro
   está no `nix-support/rustc.json` dele. Os agregados são `rust.tests`, `rust.clippy` e `rust.fmt`
   (os checks `rust-tests`, `rust-clippy`, `rust-fmt`).
 - **Um programa que saiu do PATH** (os `driver` de teste, as ferramentas de check) roda pelo flake:
@@ -373,8 +375,11 @@ nix run .#profile-bench  mede cada variante do perfil de release no .#bench (hor
 - **Quanto cabe nesta máquina agora**: `ronoctua-build-sizing --explain` (está no fecho do
   `ronoctua-machine`).
 - **Uma unidade que mudou de tamanho** (o `.#rust-peaks` ou o check `unit-classes-fit-the-measures`
-  a nomeia): depois de um build dela, `nix run .#rust-peaks -- --write` regrava a classe de toda
-  unidade medida no store e mantém a das outras; commite o `nix/rust/unit-classes.json` com o resto.
+  a nomeia): depois de um build dela pelo `.#sized-build` (a um núcleo; a medida de um `nix build`
+  cru tem os núcleos do `nix.conf` e não classifica: a unidade fica na classe que tinha até o build
+  dimensionado seguinte dela, e o check a diz), `nix run .#rust-peaks -- --write` regrava a classe de
+  toda unidade medida no store e mantém a das outras; commite o `nix/rust/unit-classes.json` com o
+  resto.
   Depois de um `Cargo.lock` novo o mesmo comando, sem build, tira os ids que o lock renomeou e dá a
   cada renomeada a classe da que ela substituiu (o check `unit-classes-name-units-of-the-index`
   cobra).

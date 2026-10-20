@@ -109,6 +109,18 @@ pub struct Row {
     pub disabled: bool,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on, a fact and a
+    /// line of a note included: `RET` there copies what it says — and so
+    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
+    /// and click (the region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]).
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// What the view wants done, after a key or a click.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Errand {
@@ -243,7 +255,7 @@ impl View {
     /// Answers whether the cursor was ALREADY on that row: that is the second
     /// click, which the door turns into `RET` (invariant 19).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
-        if rows.get(n).is_some_and(|r| !r.heading) {
+        if rows.get(n).is_some_and(Row::takes) {
             let again = n == self.cursor;
             // MOVING DISARMS, by the mouse as by the arrows: the question was
             // about the row that was left, and the pointer is not a second
@@ -1179,10 +1191,56 @@ fn keys_reached() -> Vec<&'static str> {
         .collect()
 }
 
+/// A LAPTOP — a battery at 42% on its own power, the three profiles
+/// offered, thresholds one may write, and logind able to do all but
+/// hibernate — built without the daemons: what the view's tests and both
+/// doors' read, and never this machine's.
+#[cfg(test)]
+pub(crate) fn laptop() -> Snapshot {
+    let mut battery =
+        ronoctua_power::Battery::from_props("/b", &ronoctua_power::upower::Props::new());
+    battery.present = true;
+    battery.percentage = 42.0;
+    battery.state = ronoctua_power::State::Discharging;
+    battery.energy_full_wh = 50.0;
+    battery.energy_full_design_wh = 60.0;
+    battery.native_path = "BAT0".into();
+    let sleep = ronoctua_power::Sleep {
+        can_suspend: Can::Yes,
+        can_hibernate: Can::NotAvailable,
+        can_reboot: Can::Yes,
+        can_power_off: Can::Yes,
+        handle_lid: "suspend".into(),
+        ..Default::default()
+    };
+    Snapshot {
+        display: Some(battery.clone()),
+        batteries: vec![battery],
+        profiles: Some(ronoctua_power::Profiles {
+            active: Profile::Balanced,
+            offered: Profile::ALL.to_vec(),
+            degraded: None,
+            inhibited: None,
+            holds: Vec::new(),
+            battery_aware: Some(true),
+            version: "0.30".into(),
+        }),
+        sleep,
+        thresholds: Some(ronoctua_power::sysfs::Thresholds {
+            supply: "BAT0".into(),
+            start: Some(40),
+            end: 80,
+            writable: true,
+            behaviour: None,
+            types: None,
+        }),
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_power::{Battery, Profiles, Sleep, State};
     use ronoctua_render::layout;
 
     fn texts() -> ronoctua_i18n::Texts {
@@ -1255,47 +1313,6 @@ mod tests {
         assert!(at_eighty.len() > 5, "only {} acting rows", at_eighty.len());
         for columns in [40_u16, 60, 100, 160, 240] {
             assert_eq!(want(columns), at_eighty, "the rows differ at {columns}");
-        }
-    }
-
-    fn laptop() -> Snapshot {
-        let mut battery = Battery::from_props("/b", &ronoctua_power::upower::Props::new());
-        battery.present = true;
-        battery.percentage = 42.0;
-        battery.state = State::Discharging;
-        battery.energy_full_wh = 50.0;
-        battery.energy_full_design_wh = 60.0;
-        battery.native_path = "BAT0".into();
-        let sleep = Sleep {
-            can_suspend: Can::Yes,
-            can_hibernate: Can::NotAvailable,
-            can_reboot: Can::Yes,
-            can_power_off: Can::Yes,
-            handle_lid: "suspend".into(),
-            ..Default::default()
-        };
-        Snapshot {
-            display: Some(battery.clone()),
-            batteries: vec![battery],
-            profiles: Some(Profiles {
-                active: Profile::Balanced,
-                offered: Profile::ALL.to_vec(),
-                degraded: None,
-                inhibited: None,
-                holds: Vec::new(),
-                battery_aware: Some(true),
-                version: "0.30".into(),
-            }),
-            sleep,
-            thresholds: Some(ronoctua_power::sysfs::Thresholds {
-                supply: "BAT0".into(),
-                start: Some(40),
-                end: 80,
-                writable: true,
-                behaviour: None,
-                types: None,
-            }),
-            ..Default::default()
         }
     }
 

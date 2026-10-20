@@ -222,6 +222,16 @@ impl Content for HistoryWindow {
             .collect()
     }
 
+    /// A click takes a row a key acts on, and only that row lights under the
+    /// pointer — the view's one answer (`View::takes`), which the footer's
+    /// region gives too: never a heading, a fact or the air between.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        let facts = crate::history::Facts {
+            shot: &self.snapshot,
+        };
+        self.view.takes(&facts, ui.columns, &ui.texts)
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -430,5 +440,21 @@ mod tests {
             },
         );
         assert!(ui.message.clone().unwrap_or_default().contains("no route"));
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections, a sentence — or
+    /// leaves unlit one it takes. THE LIGHT IS THE CLICK: every row clicked
+    /// once, on a window of its own, and lit exactly where something
+    /// happened. The footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let held = crate::door::held_to_the_click(|| a_window(true), crate::door::seen);
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

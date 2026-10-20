@@ -194,7 +194,7 @@ impl crate::region::Region for DisplayRegion {
             .rows(&self.snapshot, seen.columns, Instant::now(), seen.texts)
             .into_iter()
             .map(|r| crate::region::Row {
-                takes: !r.heading,
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -397,6 +397,18 @@ mod tests {
         }
     }
 
+    /// The region over two planted screens (`photo::scene`), opened as the
+    /// footer opens it — with no reader behind it, so an order is said to
+    /// have no thread to go to — and never this machine's.
+    fn over_two_screens() -> (DisplayRegion, Recorder) {
+        let mut r = opened(None);
+        r.snapshot = crate::photo::scene("two").expect("the scene of two screens");
+        let mut w = way();
+        r.command("display-open", None, &mut w);
+        w.owed.clear();
+        (r, w)
+    }
+
     /// FAILS IF: an order reaches no reader without a word, or a sentence of
     /// the view's table is not said, or a close is not asked of the door.
     #[test]
@@ -526,5 +538,33 @@ mod tests {
             "the sheet came back unfollowed"
         );
         assert!(r.view.asking().is_none());
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a
+    /// sentence — or leaves unlit one it takes. THE LIGHT IS THE CLICK: every
+    /// row clicked once, on a view of its own over the same screens, and
+    /// lit exactly where something happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 80,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let held = crate::region::held_to_the_click(over_two_screens, &seen, |r, w: &Recorder| {
+            crate::region::seen(r, &w.owed, &seen)
+        });
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

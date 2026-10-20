@@ -414,7 +414,7 @@ impl Region for BelongingsRegion {
             .iter()
             .map(|r| Row {
                 fields: r.fields.clone(),
-                takes: !r.heading(),
+                takes: r.takes(),
             })
             .collect()
     }
@@ -683,7 +683,7 @@ mod tests {
         let views = r.open.rows(80, &texts);
         assert_eq!(rows.len(), views.len());
         for (n, (row, view)) in rows.iter().zip(&views).enumerate() {
-            assert_eq!(row.takes, !view.heading(), "row {n}");
+            assert_eq!(row.takes, view.takes(), "row {n}");
             assert_eq!(r.about(n, &seen), View::about(&views, n, &texts));
         }
         let before = r.generation;
@@ -714,5 +714,38 @@ mod tests {
             Closed::Opens
         );
         assert_eq!(closed("stick-open", None, &mut way()), Closed::NotMine);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, a sentence, the rest of a wrapped
+    /// label — or leaves unlit one it takes. THE LIGHT IS THE CLICK: every
+    /// row clicked once, on a view of its own over files laid again for it
+    /// (a click writes them: a setting, a host let), and lit exactly where
+    /// something happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let laid = places("pointer");
+        let texts = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &texts,
+            columns: 80,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let held = crate::region::held_to_the_click(
+            || (region(&places("pointer")), way()),
+            &seen,
+            |r, w: &crate::region::Recorder| crate::region::seen(r, &w.owed, &seen),
+        );
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
+        let _ = std::fs::remove_dir_all(laid.home.parent().unwrap());
     }
 }

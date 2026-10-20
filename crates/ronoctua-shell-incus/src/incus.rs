@@ -829,6 +829,18 @@ pub struct Line {
     pub zones: Vec<Zone>,
 }
 
+impl Line {
+    /// Whether a click takes something on it — some stretch of it acts —
+    /// and so whether a resting pointer may light it: ONE ANSWER for both
+    /// doors (the region's `Row::takes`, the window's `Content::takes`).
+    /// Which stretch lights, and which a click takes, is
+    /// [`View::hover_spans`]'s and [`View::clicked`]'s, by the cell.
+    #[must_use]
+    pub fn takes(&self) -> bool {
+        self.zones.iter().any(|z| z.target.acts())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Questions, the draft and errands.
 // ---------------------------------------------------------------------------
@@ -2952,14 +2964,7 @@ impl View {
             _ => {
                 // A ROW OF THE DETAIL: a row drawn over several lines (the
                 // consent's) is one row, its first line.
-                let mut row = zone.row;
-                while row > 0
-                    && lines.iter().flat_map(|l| l.zones.iter()).any(|z| {
-                        z.pane == Pane::Detail && z.row == row - 1 && z.target == zone.target
-                    })
-                {
-                    row -= 1;
-                }
+                let (row, _) = Self::control_rows(lines, &zone);
                 let again = self.focus == Pane::Detail && self.at == row;
                 self.focus = Pane::Detail;
                 self.put_at(row);
@@ -2979,6 +2984,92 @@ impl View {
             .iter()
             .find(|z| crate::chrome::in_cell(cell, z.from, z.to.saturating_sub(z.from)))?;
         z.target.acts().then_some((z.from, z.to))
+    }
+
+    /// Every stretch a pointer on drawn line `line`, at cell `cell`, lights,
+    /// as `(line, from, to)`: the zone under it ([`View::hover_span`]) — and,
+    /// for a row of the detail drawn over several lines (the consent's), the
+    /// same row's zone on EACH of its lines. ONE CONTROL LIGHTS WHOLE, as a
+    /// click on any of its lines takes it ([`View::clicked`]): a line of it
+    /// lighting alone said the others were something else.
+    #[must_use]
+    pub fn hover_spans(lines: &[Line], line: usize, cell: u16) -> Vec<(usize, u16, u16)> {
+        let Some(z) = lines.get(line).and_then(|l| {
+            l.zones
+                .iter()
+                .find(|z| crate::chrome::in_cell(cell, z.from, z.to.saturating_sub(z.from)))
+        }) else {
+            return Vec::new();
+        };
+        if !z.target.acts() {
+            return Vec::new();
+        }
+        let (first, last) = Self::control_rows(lines, z);
+        if first == last {
+            return vec![(line, z.from, z.to)];
+        }
+        let mut out = Vec::new();
+        for (n, l) in lines.iter().enumerate() {
+            for o in &l.zones {
+                if o.pane == Pane::Detail && o.target == z.target && (first..=last).contains(&o.row)
+                {
+                    out.push((n, o.from, o.to));
+                }
+            }
+        }
+        out
+    }
+
+    /// The drawn line where the control drawn line `line` is a line of
+    /// begins — the first line of a row of the detail drawn over several (the
+    /// consent's), which light together and take one click — and `line`
+    /// itself for every other: a line of one stretch alone can be a line of
+    /// such a row (`Region::control_of`, the footer's region).
+    #[must_use]
+    pub fn control_of(lines: &[Line], line: usize) -> usize {
+        let Some([z]) = lines.get(line).map(|l| l.zones.as_slice()) else {
+            return line;
+        };
+        let (first, _) = Self::control_rows(lines, z);
+        if first == z.row {
+            return line;
+        }
+        lines
+            .iter()
+            .position(|l| {
+                l.zones
+                    .iter()
+                    .any(|o| o.pane == Pane::Detail && o.target == z.target && o.row == first)
+            })
+            .unwrap_or(line)
+    }
+
+    /// The first and the last row of the detail that zone `z` is one control
+    /// with, among `lines`: the consent's row, drawn over several lines, is
+    /// one control — its lines share the target and follow one another, a
+    /// click on any of them takes the first ([`View::clicked`]) and a pointer
+    /// on any lights them all ([`View::hover_spans`]). Every other zone is a
+    /// control of its own row — two facts side by side that copy the same
+    /// value are two rows. ONE ANSWER for the click and the light.
+    fn control_rows(lines: &[Line], z: &Zone) -> (usize, usize) {
+        if z.pane != Pane::Detail || !matches!(z.target, Target::Consent(_)) {
+            return (z.row, z.row);
+        }
+        let drawn = |row: usize| {
+            lines
+                .iter()
+                .flat_map(|l| l.zones.iter())
+                .any(|o| o.pane == Pane::Detail && o.row == row && o.target == z.target)
+        };
+        let mut first = z.row;
+        while first > 0 && drawn(first - 1) {
+            first -= 1;
+        }
+        let mut last = z.row;
+        while last < usize::MAX && drawn(last + 1) {
+            last += 1;
+        }
+        (first, last)
     }
 
     fn pick(&mut self, key: String) {
@@ -4213,6 +4304,40 @@ pub(crate) mod tests {
                 created_at: "2026-10-04T06:00:00Z".to_owned(),
             }],
         }
+    }
+
+    /// The cells line `line` is probed at, counted as its fields are: its
+    /// first, where each field begins, and each stretch's first and last
+    /// cell and the cell on either side of it — wherever a light and a click
+    /// could part.
+    pub(crate) fn probes(line: &Line) -> Vec<u16> {
+        let mut cells = vec![0];
+        cells.extend(line.fields.iter().map(|f| f.at));
+        for z in &line.zones {
+            cells.extend([
+                z.from.saturating_sub(1),
+                z.from,
+                z.to.saturating_sub(1),
+                z.to,
+            ]);
+        }
+        cells.sort_unstable();
+        cells.dedup();
+        cells
+    }
+
+    /// Whether cell `cell` of `line` is the cursor's own place on a strip —
+    /// the kind shown, the tab shown — which lights, and where a click has
+    /// nothing left to do.
+    pub(crate) fn own_place(view: &View, line: &Line, cell: u16) -> bool {
+        line.zones
+            .iter()
+            .filter(|z| crate::chrome::in_cell(cell, z.from, z.to.saturating_sub(z.from)))
+            .any(|z| match &z.target {
+                Target::Kind(k) => *k == view.kind(),
+                Target::Tab(t) => *t == view.tab_shown(),
+                _ => false,
+            })
     }
 
     /// The readings a photograph's scene gives, as the view's tests read them.

@@ -22,7 +22,7 @@
 
 use std::sync::mpsc;
 
-use crate::calc::{Errand, Fetched, Press, Target, View};
+use crate::calc::{Errand, Fetched, Line, Press, Target, View};
 use crate::region::{Closed, Doorway, Entry, Lights, Lit, Region, Row, Seen, Taken};
 
 /// The region's id, as the footer ranks it.
@@ -454,6 +454,37 @@ impl Region for CalcRegion {
         Lights::Kin
     }
 
+    /// A SENTENCE WRAPPED OVER SEVERAL LINES THAT TAKE ONE PRESS — the
+    /// consent's row, a failed fetch's — is one control: its lines light
+    /// together, and a click on any takes it (`Line::control_of`, the lines
+    /// the window lights together too).
+    fn control_of(&self, row: usize, seen: &Seen<'_>) -> usize {
+        Line::control_of(&self.calc.view.footer_lines(seen.columns, seen.texts), row)
+    }
+
+    /// The lines laid out once, each with its control (`Told::control`):
+    /// asked row by row, [`Self::control_of`] lays them out again for each.
+    fn told(&self, seen: &Seen<'_>, skip: usize, take: usize) -> Vec<crate::region::Told> {
+        let lines = self.calc.view.footer_lines(seen.columns, seen.texts);
+        let controls: Vec<usize> = (0..lines.len())
+            .map(|n| Line::control_of(&lines, n))
+            .collect();
+        lines
+            .into_iter()
+            .zip(controls)
+            .map(|(l, control)| crate::region::Told {
+                row: Row {
+                    takes: l.targets.iter().any(Option::is_some) || !l.bands.is_empty(),
+                    fields: l.fields,
+                },
+                control: Some(control),
+                ..crate::region::Told::default()
+            })
+            .skip(skip)
+            .take(take)
+            .collect()
+    }
+
     fn pasted(&mut self, text: &str, way: &mut dyn Doorway) {
         let left = self.calc.pasted(text, way);
         Self::left(left, way);
@@ -631,6 +662,75 @@ mod tests {
         assert_eq!(r.lit(n, None, &seen), Lit::Nothing);
         assert_eq!(r.lit(lines.len(), Some(cell), &seen), Lit::Nothing);
         assert_eq!(r.lights(), Lights::Kin);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the lines of the row that asks for the rates' host — the
+    /// host, then what for — or of a failed fetch's sentence are not ONE
+    /// control in the footer: a line of it its own control lights alone,
+    /// while a press on any of them takes the same thing (`Line::target_at`,
+    /// the footer clicking the control, `Region::control_of`); a line of
+    /// another control is taken for one of theirs; or the light the footer
+    /// asks at the control is not the band a press on the line takes.
+    #[test]
+    fn a_sentence_that_takes_one_press_lights_whole() {
+        let dir = a_room("whole");
+        let store = ronoctua_store::Store::at(Some(dir.clone()), crate::calc::FILE);
+        let view = View::fresh(Vec::new(), ronoctua_files::when::Zone::utc(), None);
+        // A PHOTOGRAPH'S CALCULATOR: no consent read or written, no fetch.
+        let mut r = CalcRegion {
+            calc: Calc::over(view, store, true),
+            _watch: None,
+        };
+        let mut w = way();
+        let keys = [
+            "1", "0", "SPC", "U", "S", "D", "SPC", "i", "n", "SPC", "E", "U", "R",
+        ];
+        typed(&mut r, &keys, &mut w);
+        assert_eq!(r.calc.view.money(), &crate::calc::Money::Asking);
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 40,
+            lines: 30,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let whole = |r: &CalcRegion, what: &str| {
+            let lines = r.calc.view.footer_lines(seen.columns, seen.texts);
+            let one: Vec<usize> = (0..lines.len())
+                .filter(|&n| lines[n].bands.iter().any(|b| b.2 == Target::Allow))
+                .collect();
+            assert!(one.len() >= 2, "{what}: the press on {one:?}");
+            for (n, line) in lines.iter().enumerate() {
+                let control = r.control_of(n, &seen);
+                if one.contains(&n) {
+                    assert_eq!(control, one[0], "{what}: line {n}");
+                    let (from, to, _) = line.bands[0];
+                    assert_eq!(
+                        r.lit(control, Some(from), &seen),
+                        Lit::Cells(from, to),
+                        "{what}: line {n}"
+                    );
+                } else {
+                    assert_eq!(control, n, "{what}: line {n} is a control of its own");
+                }
+            }
+        };
+        whole(&r, "the host asked");
+        // A FETCH THAT FAILED is pressed again, on every line of its sentence.
+        r.calc.view.fetched(
+            crate::calc::Fetched::Failed(ronoctua_calc::rates::Why::Garbled),
+            &t,
+        );
+        assert!(
+            matches!(r.calc.view.money(), crate::calc::Money::Failed(_)),
+            "{:?}",
+            r.calc.view.money()
+        );
+        whole(&r, "the fetch failed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

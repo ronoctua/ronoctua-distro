@@ -576,6 +576,18 @@ pub struct Line {
     pub zones: Vec<Zone>,
 }
 
+impl Line {
+    /// Whether a click takes something on it — some stretch of it is a
+    /// target — and so whether a resting pointer may light it: ONE ANSWER
+    /// for both doors (the region's `Row::takes`, the window's
+    /// `Content::takes`). Which stretch lights, and which a click takes, is
+    /// [`View::hover_span`]'s and [`View::clicked`]'s, by the cell.
+    #[must_use]
+    pub fn takes(&self) -> bool {
+        self.zones.iter().any(|z| z.target != Target::Nothing)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Questions and errands.
 // ---------------------------------------------------------------------------
@@ -3228,7 +3240,7 @@ fn keys_reached() -> Vec<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::places::layout_of;
     use ronoctua_containers::{ComposeLabels, Mount};
@@ -3266,7 +3278,8 @@ mod tests {
         }
     }
 
-    fn readings() -> Readings {
+    /// Three containers (two of a compose project) and an image, listed.
+    pub(crate) fn readings() -> Readings {
         let containers = vec![
             container("aaaa1111", "web", State::Running, Some("site")),
             container("bbbb2222", "db", State::Exited, Some("site")),
@@ -3292,6 +3305,40 @@ mod tests {
             listing: Some(Ok(listing)),
             ..Readings::default()
         }
+    }
+
+    /// The cells line `line` is probed at, counted as its fields are: its
+    /// first, where each field begins, and each stretch's first and last
+    /// cell and the cell on either side of it — wherever a light and a click
+    /// could part.
+    pub(crate) fn probes(line: &Line) -> Vec<u16> {
+        let mut cells = vec![0];
+        cells.extend(line.fields.iter().map(|f| f.at));
+        for z in &line.zones {
+            cells.extend([
+                z.from.saturating_sub(1),
+                z.from,
+                z.to.saturating_sub(1),
+                z.to,
+            ]);
+        }
+        cells.sort_unstable();
+        cells.dedup();
+        cells
+    }
+
+    /// Whether cell `cell` of `line` is the cursor's own place on a strip —
+    /// the kind shown, the tab shown — which lights, and where a click has
+    /// nothing left to do.
+    pub(crate) fn own_place(view: &View, line: &Line, cell: u16) -> bool {
+        line.zones
+            .iter()
+            .filter(|z| crate::chrome::in_cell(cell, z.from, z.to.saturating_sub(z.from)))
+            .any(|z| match &z.target {
+                Target::Kind(k) => *k == view.kind(),
+                Target::Tab(t) => *t == view.tab_shown(),
+                _ => false,
+            })
     }
 
     fn details() -> Details {

@@ -678,6 +678,111 @@ fn bars_of(laid: [(&crate::fields::Section, Area); 2]) -> Vec<FileBar> {
     out
 }
 
+/// WHAT A PRESS ON A FIELD OF A FILE'S PANELS TAKES. The ONE answer: the
+/// press acts by it (`file_pressed`) and the band lights by it (`draw_file`),
+/// so a field lights under a resting pointer exactly when a click there does
+/// something (invariant 19).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FieldPress {
+    /// The change a fact offers, asked as `RET` on its row asks (`amend_of`).
+    Amend(crate::fields::Doable),
+    /// A bit of the mode flipped, after a question (`no` first).
+    Mode(Flip),
+    /// One of the panel's own controls, through its keys' code
+    /// (`inspection::Panel::click`).
+    Panel(crate::fields::Hit),
+}
+
+/// Which bit of a mode a press flips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Flip {
+    /// Reading, writing or running, for one of the three.
+    Bit(ronoctua_files::mode::Who, ronoctua_files::mode::What),
+    /// Setuid, setgid or sticky.
+    Special(ronoctua_files::mode::Special),
+}
+
+impl Flip {
+    /// `mode` with this bit flipped.
+    const fn of(self, mode: u32) -> u32 {
+        match self {
+            Self::Bit(who, what) => ronoctua_files::mode::toggled(mode, who, what),
+            Self::Special(special) => ronoctua_files::mode::toggled_special(mode, special),
+        }
+    }
+}
+
+/// What a press on a field carrying `hit` takes — `None`: nothing, and the
+/// field does not light.
+fn field_press(hit: &crate::fields::Hit) -> Option<FieldPress> {
+    use crate::fields::{Doable as D, Hit as H};
+    match hit {
+        // THE PERMISSIONS' LABEL OFFERS NOTHING HERE (`amend_of`): its letters
+        // are what a press flips.
+        H::Amend(_, D::Nothing | D::Mode) => None,
+        H::Amend(_, does) => Some(FieldPress::Amend(*does)),
+        // THE OWNER AND THE GROUP ARE THEIR ROW'S PRESS: the file manager's
+        // door, shown on the file, where both are changed.
+        H::Owner(_) | H::Group(_) => Some(FieldPress::Amend(D::Ownership)),
+        // A DIRECTORY'S SIZE IS THE WALK `RET` on its row asks for.
+        H::Measure(_) => Some(FieldPress::Amend(D::Measure)),
+        H::Bit(_, who, what) => Some(FieldPress::Mode(Flip::Bit(*who, *what))),
+        // A SPECIAL BIT IS ONE OF THE LETTERS, asked the same question — the
+        // file manager's own press on it.
+        H::Special(_, special) => Some(FieldPress::Mode(Flip::Special(*special))),
+        H::Play | H::Sound | H::Theatre(_) | H::GlobeDot | H::Track(_) => {
+            Some(FieldPress::Panel(hit.clone()))
+        }
+        // THE GLOBE'S PICTURE answers a click nothing (`Panel::click`): a
+        // press there starts the file manager's drag, and this door turns no
+        // globe — it holds bars only (`fast_access_rows::held`). THE ADDRESS
+        // UNDER IT opens the map through the file manager's menu, which this
+        // door has not.
+        _ => None,
+    }
+}
+
+/// THE STRETCH, in pixels (`x`, width), that a press at `column` of surface
+/// line `line` takes the same field on: the cells around it the press's own
+/// walk gives that field (`fields::lit_field` — its text and the cell of air
+/// after it, less what a field after it claims), short of a bar's strip on
+/// either side, a bar being what a press takes first (`target_at`). What the
+/// field's band lights and where a press takes it: one answer. `None` when
+/// the walk gives the column no field.
+fn field_stretch(
+    fields: &[crate::fields::Field],
+    column: u16,
+    line: u16,
+    bars: &[FileBar],
+) -> Option<(f32, f32)> {
+    let k = crate::fields::lit_field(fields, column)?;
+    let same = |c: u16| crate::fields::lit_field(fields, c) == Some(k);
+    let (mut first, mut last) = (column, column);
+    while first > 0 && same(first - 1) {
+        first -= 1;
+    }
+    while last < u16::MAX && same(last + 1) {
+        last += 1;
+    }
+    let (mut from, mut to) = (Area::x_of(first), Area::x_of(last.saturating_add(1)));
+    // THE BARS ACROSS THE LINE'S MIDDLE, where a resting pointer is read: one
+    // left of the pointer's cell ends the stretch there, one right of it ends
+    // it there.
+    let middle = Area::y_of(line) + Area::line() / 2.0;
+    let centre = Area::x_of(column) + Area::cell() / 2.0;
+    for (x, y, w, h) in bars.iter().map(|b| b.strip) {
+        if y > middle || middle >= y + h {
+            continue;
+        }
+        if x + w <= centre {
+            from = from.max(x + w);
+        } else if x > centre {
+            to = to.min(x);
+        }
+    }
+    (to > from).then_some((from, to - from))
+}
+
 /// The bars of the file under the detail in `area`.
 fn file_bars(
     p: &FilePanel,
@@ -899,19 +1004,24 @@ fn draw_file(
             _ => None,
         })
         .collect();
+    let bars = bars_of([(&preview, pre), (&facts, info)]);
     for (section, top) in [(&preview, pre.top), (&facts, info.top)] {
         for (i, row) in section.content.iter().enumerate() {
             let at = top + u16::try_from(i).unwrap_or(u16::MAX);
             let line_in_detail = at - area.top;
+            // THE FIELD A PRESS HERE WOULD TAKE LIGHTS, and only one that
+            // takes something (`field_press`) — over the stretch the press
+            // takes it on (`field_stretch`).
             for (colour, l, col) in &lit_cells {
                 if *l == line_in_detail
-                    && let Some(f) = row.fields.iter().find(|f| f.covers(*col))
-                    && !matches!(f.hit, crate::fields::Hit::Nothing)
+                    && let Some(k) = crate::fields::lit_field(&row.fields, *col)
+                    && field_press(&row.fields[k].hit).is_some()
+                    && let Some((x, width)) = field_stretch(&row.fields, *col, at, &bars)
                 {
                     out.under.push(ronoctua_render::quad::Quad {
-                        x: Area::x_of(f.at),
+                        x,
                         y: Area::y_of(at),
-                        width: f32::from(ronoctua_render::layout::width(&f.text)) * Area::cell(),
+                        width,
                         height: Area::line(),
                         color: *colour,
                     });
@@ -942,7 +1052,7 @@ fn draw_file(
         height: rect.3,
         color,
     };
-    for bar in bars_of([(&preview, pre), (&facts, info)]) {
+    for bar in bars {
         if bar.axis != crate::fields::Axis::Time {
             out.tracks.push(crate::bars::Track::of(bar.strip));
             if let Some(m) = bar.mark {
@@ -1712,9 +1822,9 @@ pub fn pressed(
     Vec::new()
 }
 
-/// A press on a cell of a file's panels: a fact's change, a permission's
-/// bit, the film's transport — through the panel's own code where it has
-/// one.
+/// A press on a cell of a file's panels: what `field_press` says it takes —
+/// a fact's change, a permission's bit, the film's transport — through the
+/// panel's own code where it has one.
 fn file_pressed(
     view: &mut View,
     area: Area,
@@ -1727,30 +1837,26 @@ fn file_pressed(
     };
     let (preview, facts, pre, info) = file_sections(p, area, true, texts);
     let at = area.top + line;
+    // THE FIELD UNDER THE PRESS, by the walk its band lights by
+    // (`field_stretch`), and what a press on it takes (`field_press`).
     let found = [(&preview, pre.top), (&facts, info.top)]
         .into_iter()
         .find_map(|(s, top)| {
-            let i = usize::from(at.checked_sub(top)?);
-            s.content
-                .get(i)?
-                .fields
-                .iter()
-                .rev()
-                .find(|f| f.covers(column))
-                .map(|f| f.hit.clone())
+            let fields = &s.content.get(usize::from(at.checked_sub(top)?))?.fields;
+            crate::fields::lit_field(fields, column).map(|k| fields[k].hit.clone())
         });
-    let Some(hit) = found else {
+    let Some(press) = found.as_ref().and_then(field_press) else {
         return Vec::new();
     };
     let path = p.path.clone();
-    match hit {
-        crate::fields::Hit::Amend(_, does) => amend_of(view, does, &path, texts),
-        crate::fields::Hit::Bit(_, who, what) => {
+    match press {
+        FieldPress::Amend(does) => amend_of(view, does, &path, texts),
+        FieldPress::Mode(flip) => {
             let Ok(meta) = std::fs::symlink_metadata(&path) else {
                 return Vec::new();
             };
             let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions());
-            let wanted = ronoctua_files::mode::toggled(mode, who, what);
+            let wanted = flip.of(mode);
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -1772,10 +1878,9 @@ fn file_pressed(
             });
             Vec::new()
         }
-        crate::fields::Hit::Owner(_) => vec![Errand::Amend(Amend::Owner(path))],
-        other => {
+        FieldPress::Panel(hit) => {
             if let Some(p) = view.detail.panel.as_mut() {
-                let _ = p.panel.click(&other);
+                let _ = p.panel.click(&hit);
             }
             Vec::new()
         }
@@ -1993,6 +2098,195 @@ mod tests {
                 .info_offset,
             facts,
             "the wheel over the preview scrolled the facts"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a field of a file's detail lights under a resting pointer
+    /// where a press does nothing — the permissions' label — or a press does
+    /// something where nothing lit: the group, a directory's size, a special
+    /// bit, the cell of air after a field; in either door, which both draw
+    /// and press through these (`the-pointer-lights-what-the-click-takes`,
+    /// invariant 19).
+    #[test]
+    fn a_files_field_lights_exactly_where_a_press_takes_something() {
+        use crate::fast_access::{Filled, Focus, Ground, Section, SectionId, Settings};
+        use crate::fast_access_rows::Target as On;
+        use crate::fields::{Doable as D, Hit as H};
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-fast-access-lit-{}", std::process::id()));
+        let folder = dir.join("kept");
+        std::fs::create_dir_all(&folder).expect("a folder");
+        let inside = folder.join("a.txt");
+        std::fs::write(&inside, "a\n").expect("a file");
+        // AN OLD DATE ON BOTH, so no frame says another time while the test
+        // walks; AND A STICKY BIT, so the permissions carry a special letter.
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&inside)
+            .and_then(|f| f.set_modified(old))
+            .expect("the file's date");
+        std::fs::set_permissions(
+            &folder,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o1755),
+        )
+        .expect("the folder's mode");
+        std::fs::File::open(&folder)
+            .and_then(|f| f.set_modified(old))
+            .expect("the folder's date");
+        let texts = std::rc::Rc::new(ronoctua_i18n::Texts::fresh("en-GB").expect("the language"));
+        let zone = ronoctua_files::when::Zone::utc();
+        let whole = Area {
+            left: 1,
+            top: 2,
+            columns: 150,
+            lines: 44,
+            right_px: Area::x_of(151),
+            bottom_px: Area::y_of(46),
+        };
+        let frame = |view: &View, lit: &[(tokens::Color, On)]| {
+            let mut d = Drawing::default();
+            crate::fast_access_rows::draw(view, whole, true, lit, &texts, &mut d);
+            d
+        };
+        let said = |d: &Drawing| format!("{:?} {:?}", d.spans, d.under);
+        // THE FOLDER'S DETAIL, ITS PANEL'S QUESTION ANSWERED — as a door's
+        // threads — and the keys on the detail, as a press there leaves them.
+        let fresh = || {
+            let mut view = View::new(Settings::default(), &texts);
+            view.set_text("kept");
+            view.with_sections(vec![Section {
+                id: SectionId::Files,
+                filled: Filled::Hits(vec![Hit {
+                    id: format!("file:{}", folder.display()),
+                    title: "kept".to_owned(),
+                    note: None,
+                    what: What::File {
+                        path: folder.clone(),
+                        folder: true,
+                        content: false,
+                        mime: Some("inode/directory".to_owned()),
+                        size_bytes: None,
+                        mtime_s: None,
+                    },
+                }]),
+            }]);
+            view.settle_detail(&texts, &zone);
+            let _ = frame(&view, &[]);
+            let ask = view.detail.panel.as_mut().and_then(|p| {
+                p.panel
+                    .wants_look(u32::from(tokens::space::FILES_PANELPIXELS))
+            });
+            if let Some(ask) = ask {
+                let looked = crate::inspection::look(ask);
+                if let Some(p) = view.detail.panel.as_mut() {
+                    let _ = p
+                        .panel
+                        .heard(crate::inspection::Heard::Looked(Box::new(looked)));
+                }
+            }
+            view.focus = Focus::Detail;
+            let _ = frame(&view, &[]);
+            view
+        };
+        let g = Ground {
+            catalogue: std::sync::Arc::default(),
+            commands: Vec::new(),
+            zone: zone.clone(),
+            zoneinfo: None,
+            queue_keys: String::new(),
+        };
+        let mut view = fresh();
+        let mut before = said(&frame(&view, &[]));
+        let d = Lay::of(&view, whole, &texts).detail.expect("a detail");
+        // WHAT A CELL OF THE DETAIL IS ON, by the walk a press makes.
+        let on_at = |view: &View, line: u16, column: u16| -> Option<H> {
+            let p = view.detail.panel.as_ref()?;
+            let (preview, facts, pre, info) = file_sections(p, d, true, &texts);
+            [(&preview, pre.top), (&facts, info.top)]
+                .into_iter()
+                .find_map(|(s, top)| {
+                    let fields = &s.content.get(usize::from(line.checked_sub(top)?))?.fields;
+                    crate::fields::lit_field(fields, column).map(|k| fields[k].hit.clone())
+                })
+        };
+        let (mut acted_on, mut dark_on): (Vec<H>, Vec<H>) = (Vec::new(), Vec::new());
+        for line in d.top..d.top + d.lines {
+            for column in d.left.saturating_sub(crate::chrome::FIELDS_LEAD)..=d.left + d.columns {
+                let x = Area::x_of(column) + Area::cell() / 2.0;
+                let y = Area::y_of(line) + Area::line() / 2.0;
+                let lay = Lay::of(&view, whole, &texts);
+                let Some(On::Detail(t @ Target::Cell(..))) = lay.target_at(&view, x, y, &texts)
+                else {
+                    continue;
+                };
+                // LIT: a band under the resting pointer, in its hand's colour —
+                // cut at every track, as the doors cut it.
+                let mut drawn = frame(&view, &[(tokens::color::SURFACE_HOVER, On::Detail(t))]);
+                let mut bars = crate::bars::Drawn::default();
+                for track in &drawn.tracks {
+                    bars.record(*track);
+                }
+                bars.clip(&mut drawn.under);
+                let lit = drawn.under.iter().any(|q| {
+                    q.color == tokens::color::SURFACE_HOVER
+                        && x >= q.x
+                        && x < q.x + q.width
+                        && y >= q.y
+                        && y < q.y + q.height
+                });
+                // TAKEN: the press asked something, or changed what is drawn.
+                let on = on_at(&view, line, column);
+                let errands = crate::fast_access_rows::pressed(
+                    &mut view,
+                    On::Detail(t),
+                    whole,
+                    (x, y),
+                    &g,
+                    &texts,
+                );
+                let acted = !errands.is_empty()
+                    || view.detail.confirm.is_some()
+                    || view.detail.asking.is_some()
+                    || said(&frame(&view, &[])) != before;
+                assert_eq!(
+                    lit, acted,
+                    "column {column}, line {line}, on {on:?}: lit {lit}, a press took {acted}"
+                );
+                if let Some(h) = on {
+                    if acted {
+                        acted_on.push(h);
+                    } else {
+                        dark_on.push(h);
+                    }
+                }
+                if acted {
+                    view = fresh();
+                    before = said(&frame(&view, &[]));
+                }
+            }
+        }
+        // AND THE ROW'S CONTROLS WERE UNDER THE POINTER, each taken — and the
+        // label that offers nothing was too, dark.
+        type Is = fn(&H) -> bool;
+        let taken: [(&str, Is); 6] = [
+            ("the name", |h| matches!(h, H::Amend(_, D::Rename))),
+            ("the owner", |h| matches!(h, H::Owner(_))),
+            ("the group", |h| matches!(h, H::Group(_))),
+            ("a permission's letter", |h| matches!(h, H::Bit(..))),
+            ("the sticky letter", |h| matches!(h, H::Special(..))),
+            ("the folder's size", |h| matches!(h, H::Measure(_))),
+        ];
+        for (what, is) in taken {
+            assert!(
+                acted_on.iter().any(is),
+                "no press on {what} took it: {acted_on:?}"
+            );
+        }
+        assert!(
+            dark_on.iter().any(|h| matches!(h, H::Amend(_, D::Mode))),
+            "the permissions' label was never under the pointer: {dark_on:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

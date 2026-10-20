@@ -230,7 +230,7 @@ impl Region for Settings {
             .rows(&self.snap, seen.columns, seen.texts)
             .into_iter()
             .map(|r| Row {
-                takes: !r.heading,
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -391,6 +391,17 @@ mod tests {
             scene: "camera".into(),
             ..State::default()
         })
+    }
+
+    /// The settings as a photograph's footer opens and shows them: no camera
+    /// read, the studio answering, and nothing of the machine reached.
+    fn shown_settings(t: &std::rc::Rc<ronoctua_i18n::Texts>) -> (Settings, Recorder) {
+        let mut w = way(t);
+        let mut s = Settings::opened(&mut w);
+        s.shown(&mut w);
+        s.heard(&a_studio(), &mut w);
+        w.owed.clear();
+        (s, w)
     }
 
     /// FAILS IF: a question of the camera stops being asked on the door's
@@ -581,5 +592,35 @@ mod tests {
         assert_eq!(now, Target::Background, "a cursor somebody moved was moved");
         assert_ne!(at, was);
         assert!(w.owed.contains(&Effect::FollowIfSeen(was)), "{:?}", w.owed);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a
+    /// sentence — or leaves unlit one it takes. THE LIGHT IS THE CLICK: every
+    /// row clicked once, on settings of their own, and lit exactly where
+    /// something happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 120,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: Lent::none(),
+        };
+        let held = crate::region::held_to_the_click(
+            || shown_settings(&t),
+            &seen,
+            |r, w: &Recorder| crate::region::seen(r, &w.owed, &seen),
+        );
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

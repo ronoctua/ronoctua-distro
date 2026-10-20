@@ -23,8 +23,6 @@
 //! it down the control socket. A typed question — an image to pull, a folder
 //! to build — is asked on this window's own line (`Ui::ask`).
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
@@ -99,8 +97,6 @@ type Bar = (Pane, Rect, Option<Rect>, ronoctua_design::Scroll);
 /// What one pointer keeps of its own over this window.
 #[derive(Debug, Default)]
 pub struct Pointed {
-    /// Which pointer this is, given on its first frame — `0` is "not yet".
-    number: u32,
     /// The cell along the line under it: three columns share a line, and
     /// the line alone cannot say which is under the pointer.
     cell: Option<u16>,
@@ -116,9 +112,6 @@ pub struct ContainersWindow {
     open: Open,
     /// The cell the last press was on — what `clicked` reads.
     click_cell: Option<u16>,
-    /// Every pointer's line and cell, by its number — for the hover bands.
-    pointers: BTreeMap<u32, (Option<usize>, Option<u16>)>,
-    hands: u32,
     /// The drawn line the keyboard's cursor is on, stacked — counted where
     /// the width is known ([`ContainersWindow::settled`]) and handed to the
     /// door by [`Content::cursor`], which follows it after a key or a click
@@ -135,8 +128,6 @@ impl ContainersWindow {
         Self {
             open: Open::new(Some(feed), zone, queue_keys),
             click_cell: None,
-            pointers: BTreeMap::new(),
-            hands: 0,
             cursor_at: None,
         }
     }
@@ -269,6 +260,12 @@ impl ContainersWindow {
     }
 
     /// The cell a pixel is in, counted as the fields are.
+    ///
+    /// THE MARGIN IS CELL 0, as the footer counts it (`Footer::cell_at`):
+    /// outside every stretch, so nothing lights there and a click there takes
+    /// nothing. Read as no cell, it lit nothing while its click took the
+    /// line's first stretch (`View::clicked` with no cell) — the first kind,
+    /// the first tab.
     fn cell_at(ui: &Ui, x: f64) -> Option<u16> {
         let cell = f64::from(tokens::metrics::cell_width(tokens::text::size()));
         if cell <= 0.0 || x < 0.0 {
@@ -276,7 +273,21 @@ impl ContainersWindow {
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let which = (x / cell) as u16;
-        which.checked_sub(ui.margin)
+        Some(which.saturating_sub(ui.margin))
+    }
+
+    /// The stretch of drawn line `row` a pointer at `x` lights — the zone a
+    /// press there takes (`View::hover_span`, which `View::clicked` reads
+    /// the same zones as), at the cell [`ContainersWindow::cell_at`] counts
+    /// for the press too: one answer for the band and the click.
+    fn lit_at(
+        lines: &[crate::containers::Line],
+        ui: &Ui,
+        row: usize,
+        x: Option<f32>,
+    ) -> Option<(u16, u16)> {
+        let cell = Self::cell_at(ui, f64::from(x?))?;
+        View::hover_span(lines, row, cell)
     }
 
     /// Each scrolling column's bar, placed — one function for the paint and
@@ -446,6 +457,16 @@ impl Content for ContainersWindow {
         self.lines(ui).into_iter().map(|l| l.fields).collect()
     }
 
+    /// A click reaches `clicked` on a line where some stretch takes one — the
+    /// view's one answer (`containers::Line::takes`), which the footer's
+    /// region gives too; which stretch, the press's cell says.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.lines(ui)
+            .iter()
+            .map(crate::containers::Line::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         // THE PANES SCROLL INSIDE THEMSELVES; stacked, the door follows the
         // cursor's line — after a key or a click, so a wheel or a dragged bar
@@ -468,10 +489,6 @@ impl Content for ContainersWindow {
     }
 
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<Pointed>, events: &[PointerEvent]) {
-        if hand.extra.number == 0 {
-            self.hands = self.hands.wrapping_add(1).max(1);
-            hand.extra.number = self.hands;
-        }
         let before = hand.extra.cell;
         for e in events {
             match e.kind {
@@ -489,8 +506,6 @@ impl Content for ContainersWindow {
         if !self.panes_pointer(ui, hand, events) {
             crate::door::list::pointer(self, ui, hand, events);
         }
-        self.pointers
-            .insert(hand.extra.number, (hand.row_under_pointer, hand.extra.cell));
         // A NEW CELL CAN BE A NEW COLUMN: the band follows the column.
         if before != hand.extra.cell {
             ui.ask_paint();
@@ -520,11 +535,10 @@ impl Content for ContainersWindow {
             // (`Ui::settle_offset`); it never brings it back to the cursor.
             ui.settle_offset(rows.len());
         }
-        // THE LINES WITHOUT THEIR HOVER, which is drawn below by zone.
-        let lit = canvas.lit;
-        canvas.lit = &[];
-        crate::door::list::body(ui, canvas, &rows);
-        canvas.lit = lit;
+        // THE LINES WITHOUT THEIR HOVER, which is drawn below by zone: no row
+        // is lit whole.
+        let (lit, lit_x) = (canvas.lit, canvas.lit_x);
+        crate::door::list::body(ui, canvas, &rows, &[], None);
         let first = ui.first_of_list();
         let f = ui.frame(first);
         let cell = f.cell();
@@ -557,32 +571,30 @@ impl Content for ContainersWindow {
             }
         }
         // EVERY CURSOR'S HOVER, in its own colour, over the stretch of the
-        // line the pointer is in: a column, a kind on the strip, a tab.
+        // line ITS pointer is in: a column, a kind on the strip, a tab — read
+        // from where that pointer is across the surface (`Canvas::lit_x`, in
+        // `Canvas::lit`'s order). Each colour once: a colour that walked every
+        // pointer on its row painted another pointer's stretch too.
         let line_px = f.line();
         let room = ui.room_for_rows();
-        for &(color, row) in lit {
+        for (&(color, row), &x) in lit.iter().zip(lit_x) {
             let Some(row) = row else {
                 continue;
             };
             if row < ui.offset || row >= ui.offset + room {
                 continue;
             }
-            for (r, c) in self.pointers.values() {
-                if *r != Some(row) {
-                    continue;
-                }
-                let Some((from, to)) = c.and_then(|c| View::hover_span(&lines, row, c)) else {
-                    continue;
-                };
-                let y = f.y_of(first + u16::try_from(row - ui.offset).unwrap_or(0));
-                canvas.under.push(ronoctua_render::quad::Quad {
-                    x: f32::from(ui.margin + from) * cell,
-                    y,
-                    width: f32::from(to.saturating_sub(from)) * cell,
-                    height: line_px,
-                    color,
-                });
-            }
+            let Some((from, to)) = Self::lit_at(&lines, ui, row, x) else {
+                continue;
+            };
+            let y = f.y_of(first + u16::try_from(row - ui.offset).unwrap_or(0));
+            canvas.under.push(ronoctua_render::quad::Quad {
+                x: f32::from(ui.margin + from) * cell,
+                y,
+                width: f32::from(to.saturating_sub(from)) * cell,
+                height: line_px,
+                color,
+            });
         }
     }
 
@@ -689,5 +701,81 @@ mod tests {
         let (mut w, mut ui) = a_window();
         w.apply(&mut ui, Errand::Run(crate::containers::FIREWALL));
         assert_eq!(ui.orders(), ["command security-firewall".to_owned()]);
+    }
+
+    /// A window over three containers listed, `columns` wide — stacked
+    /// below `panesFrom`, the panes from it — with no feed, every date in
+    /// UTC, and the first one's detail open over the list when `opened`.
+    fn a_listed_window(columns: u16, opened: bool) -> (ContainersWindow, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut ui = Ui::for_tests(texts);
+        ui.columns = columns;
+        let mut w = ContainersWindow {
+            open: Open::new(None, ronoctua_files::when::Zone::utc(), String::new()),
+            click_cell: None,
+            cursor_at: None,
+        };
+        w.open.readings.listing = crate::containers::tests::readings().listing;
+        w.settled(&mut ui);
+        if opened {
+            w.pressed(&mut ui, crate::containers::Press::Enter);
+        }
+        (w, ui)
+    }
+
+    /// FAILS IF: a resting pointer lights, at any pixel of a line of the
+    /// window — the strip of kinds, a row of the list, a column of the
+    /// panes, the detail's title, a tab, a fact, a heading, a note, the
+    /// margin before them — a stretch where a press takes nothing, or leaves
+    /// unlit one where a press takes something: above all the margin, which
+    /// lit nothing while a press there took the line's first stretch. THE
+    /// LIGHT IS THE CLICK, PIXEL BY PIXEL, through the window's own count of
+    /// the cell (`ContainersWindow::cell_at`) and the gate the door's list
+    /// hands a press through (`Content::takes`): every probe pressed once,
+    /// on a window of its own. The cursor's own place — the kind shown, the
+    /// tab shown, the line the cursor is on — lights all the same. The
+    /// footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        use crate::containers::tests::{own_place, probes};
+        let cell_px = tokens::metrics::cell_width(tokens::text::size());
+        for (columns, opened) in [(80, false), (80, true), (140, false)] {
+            let (first, ui) = a_listed_window(columns, opened);
+            let lines = first.lines(&ui);
+            let cursor = first.cursor();
+            let (mut lit_once, mut dark_once) = (false, false);
+            let mut wrong = Vec::new();
+            for (n, line) in lines.iter().enumerate() {
+                // THE MARGIN'S PIXEL, then every probe of the line's cells.
+                let pixels =
+                    std::iter::once(0).chain(probes(line).into_iter().map(|c| c + ui.margin));
+                for pixel in pixels {
+                    let x = (f32::from(pixel) + 0.5) * cell_px;
+                    let lit = ContainersWindow::lit_at(&lines, &ui, n, Some(x)).is_some();
+                    lit_once |= lit;
+                    dark_once |= !lit;
+                    let (mut w, mut its) = a_listed_window(columns, opened);
+                    let before = crate::door::seen(&w, &its);
+                    w.click_cell = ContainersWindow::cell_at(&its, f64::from(x));
+                    if w.takes(&its).get(n).copied().unwrap_or(false) {
+                        w.clicked(&mut its, n);
+                    }
+                    let did = crate::door::seen(&w, &its) != before;
+                    let cell = ContainersWindow::cell_at(&ui, f64::from(x)).unwrap_or(0);
+                    let own = cursor == Some(n) || own_place(&first.open.view, line, cell);
+                    if lit != did && !(lit && own) {
+                        wrong.push(format!(
+                            "{columns} columns, opened {opened}, line {n}, pixel cell {pixel}: \
+                             lit {lit}, did {did}"
+                        ));
+                    }
+                }
+            }
+            assert!(
+                lit_once && dark_once,
+                "{columns}, {opened}: all lit, or none"
+            );
+            assert!(wrong.is_empty(), "{wrong:#?}");
+        }
     }
 }

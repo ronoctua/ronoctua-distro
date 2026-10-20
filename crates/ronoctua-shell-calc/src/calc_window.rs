@@ -108,9 +108,10 @@ struct Laid {
     units: Option<(ListBox, Option<crate::chrome::Rect>)>,
 }
 
-/// What the pointer lights: the card under it, and the line — with the
-/// cells of it the band covers, which are what a press there takes.
-type Lit = (Option<Button>, Option<(usize, (u16, u16))>);
+/// What the pointer lights: the card under it, and the lines — each with the
+/// cells of it the band covers, which are what a press there takes: the line
+/// under it, and every other line of its control (`Line::continues`).
+type Lit = (Option<Button>, Vec<(usize, (u16, u16))>);
 
 /// A list's box on the surface.
 #[derive(Debug, Clone, Copy, Default)]
@@ -682,14 +683,41 @@ impl CalcWindow {
     }
 
     /// What the pointer lights: a card, or the band of a line — the cells a
-    /// press there takes.
+    /// press there takes — on every line of its control.
     fn hovered(&self, ui: &Ui) -> Option<Lit> {
         let (x, y) = self.pointer_at?;
         let card = self.card_lit(ui);
-        let line = self
+        let lines: Vec<(usize, (u16, u16))> = self
             .line_at(ui, x, y)
-            .and_then(|(i, cell)| self.laid.lines[i].2.band_at(cell).map(|b| (i, b)));
-        Some((card, line))
+            .and_then(|(i, cell)| self.laid.lines[i].2.band_at(cell).map(|b| (i, b)))
+            .map(|(i, band)| self.one_control(i).into_iter().map(|k| (k, band)).collect())
+            .unwrap_or_default();
+        Some((card, lines))
+    }
+
+    /// The laid lines that are one control with laid line `i`: those that
+    /// follow one another on the surface and go on the same control
+    /// ([`Line::continues`], the rule the footer's region lights and clicks
+    /// by — `Line::control_of`) — every line of the consent's row, of a
+    /// failed fetch's sentence. A press on any of them takes the same thing,
+    /// and a line of it lighting alone said the others were something else.
+    fn one_control(&self, i: usize) -> Vec<usize> {
+        let laid = &self.laid.lines;
+        let goes_on = |k: usize| {
+            k > 0
+                && k < laid.len()
+                && laid[k - 1].0 + 1 == laid[k].0
+                && laid[k].2.continues(&laid[k - 1].2)
+        };
+        let mut first = i;
+        while goes_on(first) {
+            first -= 1;
+        }
+        let mut last = i;
+        while goes_on(last + 1) {
+            last += 1;
+        }
+        (first..=last).collect()
     }
 }
 
@@ -773,9 +801,7 @@ impl Content for CalcWindow {
         let (cell, line) = (f.cell(), f.line());
         #[allow(clippy::cast_precision_loss)]
         let (w, h) = (ui.width as f32, ui.height as f32);
-        let hovered = self.hovered(ui);
-        let lit_card = hovered.and_then(|(c, _)| c);
-        let lit_line = hovered.and_then(|(_, l)| l);
+        let (lit_card, lit_lines) = self.hovered(ui).unwrap_or_default();
 
         // THE KEYPAD: a ground per card — the one a press is tested against
         // (`Card::rect`) — and its legend in the middle of it, both ways,
@@ -815,7 +841,7 @@ impl Content for CalcWindow {
             // there takes (`Line::band_at`) — a row of a list whole, a field
             // of a line of fields alone — and never a colour of the text: the
             // accent on a mode or a category is where the keyboard is.
-            if let Some((_, (from, to))) = lit_line.filter(|(i, _)| *i == k) {
+            if let Some(&(_, (from, to))) = lit_lines.iter().find(|(i, _)| *i == k) {
                 let a = f.x_of(x0 + from);
                 let b = f.x_of(x0 + to).min(*stop).min(w);
                 canvas.under.push(ronoctua_render::quad::Quad {
@@ -881,5 +907,51 @@ impl Content for CalcWindow {
         ui.hinted.swap_hand(&mut hand.hint_drag);
         self.pointer_here(ui, hand, events);
         ui.hinted.swap_hand(&mut hand.hint_drag);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FAILS IF: a pointer on any line of the row that asks for the rates'
+    /// host — the host, then what for — lights anything but every line of
+    /// it: a press on any of them takes the same thing (`Line::target_at`),
+    /// and a line that lit alone said the others were something else. The
+    /// footer's region has its own.
+    #[test]
+    fn the_lines_of_one_press_light_together() {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-calc-window-whole-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a room");
+        let store = ronoctua_store::Store::at(Some(dir.clone()), crate::calc::FILE);
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut ui = Ui::for_tests(texts);
+        // A PHOTOGRAPH'S WINDOW: no consent read or written, no fetch.
+        let mut w = CalcWindow::over(store, Reach::Kept);
+        for k in [
+            "1", "0", "SPC", "U", "S", "D", "SPC", "i", "n", "SPC", "E", "U", "R",
+        ] {
+            let key = ronoctua_keymap::Key::parse(k).expect("a key");
+            w.pressed(&mut ui, crate::calc::press_of_key(key).expect(k));
+        }
+        w.laid = w.lay_out(&ui);
+        let asks: Vec<usize> = (0..w.laid.lines.len())
+            .filter(|&k| w.laid.lines[k].2.bands.iter().any(|b| b.2 == Target::Allow))
+            .collect();
+        assert!(asks.len() >= 2, "the host asked on {asks:?}");
+        let f = ui.frame(0);
+        for &k in &asks {
+            let (y, x0) = (w.laid.lines[k].0, w.laid.lines[k].1);
+            w.pointer_at = Some((
+                f64::from(f.x_of(x0 + 1) + f.cell() / 2.0),
+                f64::from(f.y_of(y) + f.line() / 2.0),
+            ));
+            let (_, lit) = w.hovered(&ui).expect("a pointer");
+            let lit: Vec<usize> = lit.into_iter().map(|(n, _)| n).collect();
+            assert_eq!(lit, asks, "the pointer on laid line {k}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

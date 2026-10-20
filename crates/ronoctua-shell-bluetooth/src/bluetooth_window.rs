@@ -291,6 +291,50 @@ impl BluetoothWindow {
         self.view.rows(&self.scene, ui.columns, &ui.texts)
     }
 
+    /// Every pointer's hover band — each row, cursor's colour and `x` across
+    /// the surface — laid ONLY where a click there takes something
+    /// (`View::takes_at`, the click's own answer): over a device's page side
+    /// by side, the half under the pointer and never both; elsewhere the
+    /// whole row. Its own function, so a test holds it: a frame's canvas
+    /// needs a GPU.
+    fn hover(&self, ui: &Ui, pointers: &[Pointing]) -> Vec<ronoctua_render::quad::Quad> {
+        let rows = self.view_rows(ui).len();
+        let cell_px = ui.frame(0).cell();
+        let mut out = Vec::new();
+        for &((colour, row), x) in pointers {
+            let (Some(row), Some(x)) = (row, x) else {
+                continue;
+            };
+            let cell = cell_at(ui, f64::from(x));
+            if !self
+                .view
+                .takes_at(row, cell, &self.scene, ui.columns, &ui.texts)
+            {
+                continue;
+            }
+            let all = [true];
+            for mut band in crate::door::list::hover_bands(
+                &[(colour, Some(row))],
+                &all.repeat(rows),
+                None,
+                ui.offset,
+                ui.room_for_rows(),
+                rows,
+                ui.first_of_list(),
+                ui.room.band_width(),
+            ) {
+                if let Some((from, to)) = self.view.half_at(cell, ui.columns) {
+                    let left = f32::from(ui.margin + from) * cell_px;
+                    let right = (f32::from(ui.margin + to) * cell_px).min(band.width);
+                    band.x = if from == 0 { 0.0 } else { left };
+                    band.width = (right - band.x).max(0.0);
+                }
+                out.push(band);
+            }
+        }
+        out
+    }
+
     /// What the row under the pointer has to add: its whole sentence, which
     /// the footer puts on its own message line from the same field.
     fn about_the_pointer(&self, ui: &Ui) -> Option<String> {
@@ -298,6 +342,10 @@ impl BluetoothWindow {
         self.view_rows(ui).into_iter().nth(row)?.description
     }
 }
+
+/// One pointer as a frame paints it: its cursor's colour and the row it is
+/// on, and where across the surface it is (`Canvas::lit`, `Canvas::lit_x`).
+type Pointing = ((tokens::Color, Option<usize>), Option<f32>);
 
 /// Which cell of the line a pointer at `x` is over.
 ///
@@ -367,6 +415,13 @@ impl Content for BluetoothWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row where one of its halves does — the view's one
+    /// answer (`View::takes`), which the footer's region gives too; the
+    /// half the band lights is [`BluetoothWindow::hover`]'s.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view.takes(&self.scene, ui.columns, &ui.texts)
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -376,11 +431,22 @@ impl Content for BluetoothWindow {
     ///
     /// THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer's door
     /// draws for these rows.
+    ///
+    /// THE POINTER LIGHTS WHAT THE CLICK TAKES: the list is drawn without
+    /// its hover, and the hover is [`BluetoothWindow::hover`]'s — the half
+    /// of a device's page the pointer is over, as the footer lights it.
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
         let about = self.about_the_pointer(ui);
         crate::door::list::header_about(ui, canvas, None, about, |ui| self.view.hint(&ui.texts));
         let rows = self.rows(ui);
-        crate::door::list::body(ui, canvas, &rows);
+        crate::door::list::body(ui, canvas, &rows, &[], None);
+        let pointers: Vec<_> = canvas
+            .lit
+            .iter()
+            .copied()
+            .zip(canvas.lit_x.iter().copied().chain(std::iter::repeat(None)))
+            .collect();
+        canvas.under.extend(self.hover(ui, &pointers));
     }
 
     /// The standard list, and two things more: WHERE ALONG THE LINE a press
@@ -405,6 +471,15 @@ impl Content for BluetoothWindow {
     /// this view says why, and the two doors have to agree.
     fn clicked(&mut self, ui: &mut Ui, row: usize) {
         let cell = self.clicked_cell;
+        // A CLICK WHERE IT TAKES NOTHING DOES NOTHING — a heading, the blank
+        // beside the other half's row: `RET` was pressed on the cursor's row
+        // (`View::takes_at`, the answer the light is drawn by).
+        if !self
+            .view
+            .takes_at(row, cell, &self.scene, ui.columns, &ui.texts)
+        {
+            return;
+        }
         // THE PANE FIRST, THEN THE ROWS: they describe whichever half has
         // the keyboard, so reading them before aiming would put the cursor
         // on a row that is about to stop existing.
@@ -668,5 +743,85 @@ mod tests {
     #[test]
     fn the_planted_phone_builds() {
         assert!(photographed("phone").is_ok());
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a heading, a sentence — or leaves unlit one it takes, on
+    /// the list. THE LIGHT IS THE CLICK: every row clicked once, on a
+    /// window of its own, and lit exactly where something happened. The
+    /// footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let held = crate::door::held_to_the_click(a_window, crate::door::seen);
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
+    }
+
+    /// FAILS IF: on a device's page side by side the window's pointer
+    /// lights a half a click there does not take, or leaves unlit one it
+    /// takes, or lights across both halves — the footer's region holds the
+    /// same (`a_devices_page_lights_the_half_a_click_takes`).
+    #[test]
+    fn the_windows_device_page_lights_the_half_a_click_takes() {
+        let page = || {
+            let (mut w, mut ui) = a_window();
+            if let Some(d) = w.scene.devices.first_mut() {
+                d.wake = Some(false);
+            }
+            w.view = crate::bluetooth::View::fresh_at("/d/1");
+            w.view.look_at_the_device(&w.scene);
+            ui.columns = 120;
+            // THE ROOM A FRAME LEAVES THE LIST — what a band is cut to.
+            #[allow(clippy::cast_precision_loss)]
+            let (width, height) = (ui.width as f32, ui.height as f32);
+            ui.room = crate::chrome::Room::of(crate::chrome::list_scroll(0, 0, 0), width, height);
+            (w, ui)
+        };
+        let (first, ui) = page();
+        let rows = first.rows(&ui).len();
+        assert!(rows >= 3, "{rows} rows");
+        let split = crate::bluetooth::split_at(ui.columns);
+        let cell_px = ui.frame(0).cell();
+        let (mut left, mut right, mut dark) = (false, false, false);
+        for n in 0..rows {
+            for cell in [2, split + 2] {
+                #[allow(clippy::cast_precision_loss)]
+                let x = f32::from(ui.margin + cell) * cell_px + 1.0;
+                let bands = first.hover(&ui, &[((tokens::color::SURFACE_HOVER, Some(n)), Some(x))]);
+                for b in &bands {
+                    assert!(
+                        b.x <= x && x < b.x + b.width,
+                        "row {n}: the band is not under the pointer"
+                    );
+                    let split_px = f32::from(ui.margin + split) * cell_px;
+                    assert!(
+                        b.x + b.width <= split_px + 0.5 || b.x >= split_px - 0.5,
+                        "row {n}: the band crosses the halves"
+                    );
+                }
+                let lit = !bands.is_empty();
+                let (mut w, mut ui) = page();
+                let before = crate::door::seen(&w, &ui);
+                w.clicked_cell = Some(cell);
+                w.clicked(&mut ui, n);
+                let did = crate::door::seen(&w, &ui) != before;
+                // THE ROW THE CURSOR STANDS ON, in the half the keyboard is
+                // in, is the click's whatever its `RET` does
+                // (`region::Held::here`).
+                let here = n == first.view.cursor() && cell < split;
+                assert!(
+                    lit == did || (lit && here),
+                    "row {n} at cell {cell} is lit {lit} and a click did {did}"
+                );
+                left |= lit && cell < split;
+                right |= lit && cell >= split;
+                dark |= !lit;
+            }
+        }
+        assert!(left && right && dark, "the halves were not both reached");
     }
 }

@@ -24,6 +24,36 @@ let
   cfg = config.ronoctua.studio;
 in
 {
+  # THE SESSION'S CAMERAS IN PIPEWIRE, and why they are off.
+  #
+  # WirePlumber's `main` profile requires `hardware.video-capture`, which
+  # wants its V4L2 and libcamera monitors: when the person's PipeWire starts —
+  # at login, on the session's first audio client — WirePlumber opens every
+  # `/dev/videoN` to ask what it is, and again whenever a camera is plugged.
+  # On a UVC webcam that open is the light blinking with nobody asking, the
+  # defect the footer and the studio stopped committing (`camera-vm` measures
+  # both). Nothing the distro runs reads a camera through PipeWire: the
+  # studio, the browser and the virtual camera's readers open the V4L2 node
+  # themselves. What turning it on gives is the cameras as PipeWire nodes —
+  # the camera portal, and a program that reads a camera only through it (a
+  # Flatpak without device access, OBS's PipeWire source).
+  #
+  # HERE AND NOT IN `base.nix`, beside `services.pipewire`: it is a camera's
+  # system side, like the loopback below, and it is outside the studio's
+  # switch because the light is the person's with or without the studio.
+  options.ronoctua.camera.pipewireCameras = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    description = ''
+      Let WirePlumber publish every camera as a PipeWire node (its V4L2 and libcamera monitors).
+      On, the person's WirePlumber opens every camera when the session starts and whenever one is
+      plugged in — on a webcam, the light comes on with nobody asking. What it gives: the cameras
+      through PipeWire, which the camera portal and programs that only read a camera through it
+      (a Flatpak without device access, OBS's PipeWire source) need. Off, those see no camera;
+      every program that opens /dev/video* itself (the studio, the browser) is unchanged.
+    '';
+  };
+
   options.ronoctua.studio = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -59,40 +89,54 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    boot.extraModulePackages = lib.mkIf cfg.virtualCamera [ config.boot.kernelPackages.v4l2loopback ];
-    boot.kernelModules = lib.mkIf cfg.virtualCamera [ "v4l2loopback" ];
-    boot.extraModprobeConfig = lib.mkIf cfg.virtualCamera ''
-      options v4l2loopback video_nr=${toString cfg.virtualNode} card_label="ronoctua" exclusive_caps=1
-    '';
+  # `hardware.video-capture` is the virtual feature that wants both monitors,
+  # and nothing requires it but the profile: disabling it is the switch the
+  # pinned WirePlumber (0.5) documents, and it takes the libcamera monitor
+  # with the V4L2 one.
+  config = lib.mkMerge [
+    {
+      services.pipewire.wireplumber.extraConfig."90-ronoctua-cameras" =
+        lib.mkIf (!config.ronoctua.camera.pipewireCameras)
+          {
+            "wireplumber.profiles".main."hardware.video-capture" = "disabled";
+          };
+    }
 
-    systemd.user.services.ronoctua-studio = {
-      description = "ronoctua — the camera studio";
-      partOf = [ "graphical-session.target" ];
-      after = [ "graphical-session.target" ];
-      wantedBy = [ "graphical-session.target" ];
-      environment = {
-        # THE PATH AND NOT THE NAME — a unit's `PATH` is minimal. The same
-        # ffmpeg `nix/modules/media.nix` installs on every profile.
-        RONOCTUA_FFMPEG = "${pkgs.ffmpeg-full}/bin/ffmpeg";
-        # The segmentation model; absent, the three background effects are
-        # drawn refusing and everything else works.
-        RONOCTUA_SEGMENT_MODEL = "${ronoctua.segmentModel}";
-        # The hand models; absent, gestures are refused with a sentence.
-        RONOCTUA_HAND_MODELS = "${ronoctua.handModels}";
+    (lib.mkIf cfg.enable {
+      boot.extraModulePackages = lib.mkIf cfg.virtualCamera [ config.boot.kernelPackages.v4l2loopback ];
+      boot.kernelModules = lib.mkIf cfg.virtualCamera [ "v4l2loopback" ];
+      boot.extraModprobeConfig = lib.mkIf cfg.virtualCamera ''
+        options v4l2loopback video_nr=${toString cfg.virtualNode} card_label="ronoctua" exclusive_caps=1
+      '';
+
+      systemd.user.services.ronoctua-studio = {
+        description = "ronoctua — the camera studio";
+        partOf = [ "graphical-session.target" ];
+        after = [ "graphical-session.target" ];
+        wantedBy = [ "graphical-session.target" ];
+        environment = {
+          # THE PATH AND NOT THE NAME — a unit's `PATH` is minimal. The same
+          # ffmpeg `nix/modules/media.nix` installs on every profile.
+          RONOCTUA_FFMPEG = "${pkgs.ffmpeg-full}/bin/ffmpeg";
+          # The segmentation model; absent, the three background effects are
+          # drawn refusing and everything else works.
+          RONOCTUA_SEGMENT_MODEL = "${ronoctua.segmentModel}";
+          # The hand models; absent, gestures are refused with a sentence.
+          RONOCTUA_HAND_MODELS = "${ronoctua.handModels}";
+        };
+        serviceConfig = {
+          ExecStart = "${ronoctua.studio}/bin/ronoctua-studio";
+          Restart = "on-failure";
+          RestartSec = 1;
+          # `session.slice`, beside the footer: a recording holds a camera and
+          # an encoder, and oomd choosing it among the applications would end a
+          # recording at random.
+          Slice = "session.slice";
+          # Long enough for ffmpeg to finish a file on logout: a Matroska that
+          # was killed keeps its frames, and one that finished keeps its index.
+          TimeoutStopSec = 20;
+        };
       };
-      serviceConfig = {
-        ExecStart = "${ronoctua.studio}/bin/ronoctua-studio";
-        Restart = "on-failure";
-        RestartSec = 1;
-        # `session.slice`, beside the footer: a recording holds a camera and
-        # an encoder, and oomd choosing it among the applications would end a
-        # recording at random.
-        Slice = "session.slice";
-        # Long enough for ffmpeg to finish a file on logout: a Matroska that
-        # was killed keeps its frames, and one that finished keeps its index.
-        TimeoutStopSec = 20;
-      };
-    };
-  };
+    })
+  ];
 }

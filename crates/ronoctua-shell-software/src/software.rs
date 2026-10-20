@@ -1266,6 +1266,19 @@ pub struct Row {
     pub picture: Option<Portrait>,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on, or a later
+    /// line of a catalogue's consent row, which is the row's press as its
+    /// first line is ([`View::clicked`] lands it there) — and so whether a
+    /// resting pointer lights it: ONE ANSWER for both doors' light and click
+    /// (the region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]).
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading || matches!(self.target, Target::Let(_))
+    }
+}
+
 /// An order for the queue, with the name its row shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Queued {
@@ -1650,10 +1663,41 @@ impl View {
         crate::chrome::hint_of_marked(&here, |_| None, texts)
     }
 
+    /// The row a click on row `n` of `rows` lands on — `n` itself, a row the
+    /// cursor stands on, or the first line of the consent row a later line
+    /// belongs to — and `None` where the click takes nothing ([`Row::takes`]):
+    /// a heading, a sentence.
+    fn landing(n: usize, rows: &[Row]) -> Option<usize> {
+        let row = rows.get(n).filter(|x| x.takes())?;
+        // A LATER LINE OF THE CONSENT ROW is the row: its first line is
+        // where the cursor stands.
+        let n = match row.target {
+            Target::Let(source) if row.heading => rows[..n]
+                .iter()
+                .rposition(|p| !p.heading && p.target == Target::Let(source))?,
+            _ => n,
+        };
+        Some(n)
+    }
+
+    /// The row whose control row `n` is: itself, or the first line of the
+    /// consent row a later line belongs to — the lines of one control light
+    /// together, and a click on any takes the same thing
+    /// (`Region::control_of`).
+    #[must_use]
+    pub fn control_of(n: usize, rows: &[Row]) -> usize {
+        Self::landing(n, rows).unwrap_or(n)
+    }
+
     /// Put the cursor where a click landed. Answers whether it was ALREADY
-    /// there — the second click, which the door turns into `RET`.
+    /// there — the second click, which the door turns into `RET`. A click
+    /// on any line of a consent row is a click on its first
+    /// ([`View::control_of`]).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
-        let Some(row) = rows.get(n).filter(|x| !x.heading) else {
+        let Some(n) = Self::landing(n, rows) else {
+            return false;
+        };
+        let Some(row) = rows.get(n) else {
             return false;
         };
         // A ROW OF THE PICKER is chosen there: its cursor, and the second
@@ -6371,6 +6415,9 @@ impl Builder<'_> {
             self.push(Row {
                 fields: vec![Self::piece(self.left, text, colour)],
                 focused: focused && n == 0,
+                // THE CURSOR SKIPS A LATER LINE, and a click takes it all
+                // the same: it lands on the first (`Row::takes`,
+                // `View::clicked`).
                 heading: n > 0,
                 target: Target::Let(source),
                 spot: if n == 0 { spot.clone() } else { Spot::Nothing },

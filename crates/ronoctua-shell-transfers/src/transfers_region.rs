@@ -317,6 +317,86 @@ mod tests {
         }
     }
 
+    /// A panel opened over `jobs` — the footer lends them — and driven by
+    /// `keys`, with the doorway it was opened through, its asks cleared.
+    fn a_panel(
+        t: &std::rc::Rc<ronoctua_i18n::Texts>,
+        jobs: Vec<Job>,
+        keys: &[&str],
+    ) -> (Panel, Recorder) {
+        let mut lending = way(t).lending(Lent::of(vec![&jobs]));
+        let mut panel = Panel {
+            view: View::fresh_one(),
+            shown: false,
+        };
+        let _ = panel.command("transfers-open", None, &mut lending);
+        for notation in keys {
+            let key = ronoctua_keymap::Key::parse(notation).expect("a key");
+            let _ = panel.key(key, &mut lending);
+        }
+        let mut w = lending.way;
+        w.owed.clear();
+        (panel, w)
+    }
+
+    /// FAILS IF: a resting pointer lights a line of the panel a click takes
+    /// nothing on — the job the give-up question is about, its sentence, a
+    /// fact of a job's page, the empty queue's line — or leaves unlit one it
+    /// takes: a job of the list, an answer. THE LIGHT IS THE CLICK: every
+    /// line clicked once, on a panel of its own, and lit exactly where
+    /// something happened — on the list, under the give-up question, on a
+    /// job's page and on the empty queue.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        fn two() -> Vec<Job> {
+            vec![a_job(1, Stage::Running), a_job(2, Stage::Done)]
+        }
+        let t = std::rc::Rc::new(texts());
+        let zone = ronoctua_files::when::Zone::utc();
+        let at = seen(&t, &zone);
+        let held = |jobs: fn() -> Vec<Job>, keys: &[&str]| {
+            crate::region::held_to_the_click(
+                || a_panel(&t, jobs(), keys),
+                &at,
+                |r: &Panel, w: &Recorder| crate::region::seen(r, &w.owed, &at),
+            )
+        };
+        // THE LIST: every line a job, and each takes the click.
+        let list = held(two, &[]);
+        assert!(
+            list.len() == 2 && list.iter().all(|h| h.lit),
+            "the list: {list:?}"
+        );
+        // THE QUESTION, about the running job: its two answers take it, the
+        // job it is about and its sentence do not.
+        let question = held(two, &["C-c"]);
+        assert!(
+            question.iter().any(|h| h.lit) && question.iter().any(|h| !h.lit),
+            "the question: {question:?}"
+        );
+        // A JOB'S PAGE is facts, and takes nothing.
+        let page = held(two, &["RET"]);
+        assert!(
+            page.len() > 1 && page.iter().all(|h| !h.lit),
+            "a job's page: {page:?}"
+        );
+        // THE EMPTY QUEUE is a line of words.
+        let empty = held(Vec::new, &[]);
+        assert!(
+            empty.len() == 1 && !empty[0].lit,
+            "the empty queue: {empty:?}"
+        );
+        for (what, held) in [
+            ("the list", list),
+            ("the question", question),
+            ("a job's page", page),
+            ("the empty queue", empty),
+        ] {
+            let unheld = crate::region::unheld(&held);
+            assert!(unheld.is_empty(), "{what}: {unheld:?}");
+        }
+    }
+
     /// FAILS IF: the panel opens without the list the footer already holds
     /// — it would read "nothing is running" at the instant somebody looked.
     #[test]

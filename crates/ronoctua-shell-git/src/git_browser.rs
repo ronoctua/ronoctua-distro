@@ -919,6 +919,17 @@ impl Drawn {
         Some(l.and_then(|l| l.target).unwrap_or(Target::In(pane.col)))
     }
 
+    /// Whether a click takes something somewhere along line `line` — a row,
+    /// a kind, or a column the keyboard is not in — the row's answer the
+    /// footer gives it (`Region`'s `Row::takes`); WHERE along it is
+    /// [`hover_band`]'s, the click's own.
+    #[must_use]
+    pub fn takes_line(&self, line: usize) -> bool {
+        self.panes
+            .iter()
+            .any(|p| !p.focused || p.lines().nth(line).is_some_and(|l| l.target.is_some()))
+    }
+
     /// The pane of a column, when it is on screen.
     #[must_use]
     pub fn pane(&self, col: Col) -> Option<&Pane> {
@@ -1107,8 +1118,16 @@ pub fn bands(drawn: &Drawn, px: &Px) -> Vec<ronoctua_render::quad::Quad> {
     out
 }
 
-/// A hover's band: the row a point is on, in its column's band — or none
-/// where a click does nothing (a kind is lit as its piece, not as a band).
+/// A hover's band: what a click at the point takes — the row it is on, in
+/// its column's band; a kind, as its piece; a line of a column the keyboard
+/// is not in, which a click there gives the keyboard — or none where a click
+/// does nothing: the column the keyboard is in, past its rows, and a bar's
+/// cell, which the bar takes.
+///
+/// THE LIGHT IS THE CLICK ([`View::clicked`] reads the same
+/// [`Drawn::target_at`]). A kind took the click and lit nothing — the door
+/// lights no field here, its accent being the cursor — and so did a click
+/// that moved the keyboard to another column.
 #[must_use]
 pub fn hover_band(
     drawn: &Drawn,
@@ -1118,13 +1137,22 @@ pub fn hover_band(
     color: tokens::Color,
 ) -> Option<ronoctua_render::quad::Quad> {
     let pane = drawn.pane_at(cell)?;
-    if !matches!(
-        drawn.target_at(line, cell),
-        Some(Target::Item(_) | Target::File(_))
-    ) {
-        return None;
-    }
-    let (x, wide) = px.band(drawn, pane);
+    let (x, wide) = match drawn.target_at(line, cell)? {
+        Target::Item(_) | Target::File(_) => px.band(drawn, pane),
+        // A KIND LIGHTS AS ITS PIECE: the name a click there picks, by the
+        // walk the click makes (`fields::lit_field`).
+        Target::Kind(_) => {
+            let l = pane.lines().nth(line)?;
+            let f = &l.fields[crate::fields::lit_field(&l.fields, cell.saturating_sub(pane.from))?];
+            let from = pane.from.saturating_add(f.at);
+            let cells = ronoctua_render::layout::width(&f.text);
+            (px.x(from), f32::from(cells) * px.cell)
+        }
+        Target::In(_) if !pane.focused && !(pane.barred() && cell + 1 >= pane.to) => {
+            px.band(drawn, pane)
+        }
+        Target::In(_) => return None,
+    };
     Some(ronoctua_render::quad::Quad {
         x,
         y: px.y(line),
@@ -4241,5 +4269,56 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: the band both doors paint under a resting pointer
+    /// (`hover_band`) lights what a click at the same point does not take,
+    /// or leaves unlit what it takes — an item, a file, a kind (as its
+    /// piece: it took the click and lit nothing), a line of a column the
+    /// keyboard is not in (a click there gives it the keyboard) — or lights
+    /// anything in the column the keyboard is in past its rows, or a bar's
+    /// cell, which the bar takes. THE LIGHT IS THE CLICK: every point clicked
+    /// once, on a view of its own.
+    #[test]
+    fn the_band_is_what_the_click_takes() {
+        let (columns, room) = (180, 30);
+        let px = Px {
+            lead: 1,
+            top: 0.0,
+            bottom: 600.0,
+            edge: 1810.0,
+            cell: 10.0,
+            line: 20.0,
+        };
+        let v = with_history();
+        let drawn = v.drawn(columns, room);
+        let (mut lit_any, mut dark_any, mut a_kind) = (false, false, false);
+        for line in 0..drawn.room {
+            for cell in (0..columns).step_by(2) {
+                let lit =
+                    hover_band(&drawn, &px, line, cell, tokens::color::SURFACE_HOVER).is_some();
+                if drawn
+                    .pane_at(cell)
+                    .is_some_and(|p| p.barred() && cell + 1 >= p.to)
+                {
+                    assert!(!lit, "line {line}: a bar's cell lights");
+                    continue;
+                }
+                let mut fresh = with_history();
+                let _ = fresh.drawn(columns, room);
+                let did = fresh.clicked(line, cell) != Errand::Nothing;
+                assert_eq!(
+                    lit, did,
+                    "line {line} cell {cell}: lit {lit}, a click did {did}"
+                );
+                lit_any |= lit;
+                dark_any |= !lit;
+                a_kind |= lit && matches!(drawn.target_at(line, cell), Some(Target::Kind(_)));
+            }
+        }
+        assert!(
+            lit_any && dark_any && a_kind,
+            "the sweep reached too little"
+        );
     }
 }

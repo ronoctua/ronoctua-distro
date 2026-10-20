@@ -329,9 +329,11 @@ impl Region for Manager {
     }
 
     /// Its own `fields` and not the key/text pair: it lays out two columns of
-    /// its own — the file manager's listing's shape. Every drawn row is a
-    /// target, headings included: which of them is an item, and of which
-    /// column, is the view's plan (`View::place_of`), which the click asks.
+    /// its own — the file manager's listing's shape. A drawn row takes a
+    /// click where the view says one does along it (`View::takes`, the
+    /// window's answer too) — never a title, the blank between the columns,
+    /// an empty column's sentence or a fact — and the band then lights only
+    /// where the click at the pointer's cell takes ([`Self::lit`]).
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
         let Some((lists, book)) = lists_of(&seen.lent) else {
             return Vec::new();
@@ -340,14 +342,35 @@ impl Region for Manager {
         // ceiling, which is the most it can be given — never the height it
         // was last drawn at (`notifications::View::open_room`).
         self.view.set_room(usize::from(seen.lines));
-        self.view
-            .rows(&lists, book, seen.columns, seen.texts)
-            .into_iter()
-            .map(|r| Row {
+        let rows = self.view.rows(&lists, book, seen.columns, seen.texts);
+        let takes = self
+            .view
+            .takes(&lists, book, seen.columns, rows.len(), seen.texts);
+        rows.into_iter()
+            .zip(takes)
+            .map(|(r, takes)| Row {
                 fields: r.fields,
-                takes: true,
+                takes,
             })
             .collect()
+    }
+
+    /// WHERE A CLICK AT THE CELL TAKES SOMETHING — the column the cell is in
+    /// side by side, an action of an open record — the band lights, within
+    /// the half [`Self::hover_span`] gives; nothing where the click there
+    /// takes nothing (`View::takes_at`, which the click's own answer is).
+    fn lit(&self, row: usize, cell: Option<u16>, seen: &Seen<'_>) -> crate::region::Lit {
+        let Some((lists, book)) = lists_of(&seen.lent) else {
+            return crate::region::Lit::Nothing;
+        };
+        if self
+            .view
+            .takes_at(row, cell, &lists, book, seen.columns, seen.texts)
+        {
+            crate::region::Lit::Row
+        } else {
+            crate::region::Lit::Nothing
+        }
     }
 
     /// THE SAME TABLE the window draws on ITS first line, counter included —
@@ -502,7 +525,8 @@ impl Region for Manager {
             let Some((lists, book)) = lists_of(&lent) else {
                 return;
             };
-            self.view.clicked(row, cell, &lists, book, way.columns())
+            self.view
+                .clicked(row, cell, &lists, book, way.columns(), way.texts())
         };
         self.carry(errand, way);
     }
@@ -933,5 +957,203 @@ mod tests {
         w.owed.clear();
         m.heard(&Settle { follow: false }, &mut w);
         assert_eq!(w.owed, vec![Effect::Repaint]);
+    }
+
+    /// A queue of three records, from three apps, none filtered out.
+    fn three_records() -> Queue {
+        let book = Book::distro();
+        let mut q = Queue::fresh_one();
+        for (id, app) in [(1, "mail"), (2, "chat"), (3, "build")] {
+            let mut n = ronoctua_notify::Notification::fresh_one(
+                id,
+                app.into(),
+                None,
+                format!("{app} said something"),
+                "body".into(),
+                ronoctua_notify::Urgency::Normal,
+            );
+            // TWO ACTIONS, each a line of the open record a click selects and
+            // a second click runs.
+            n.actions = vec![
+                ronoctua_notify::Action {
+                    id: "reply".into(),
+                    label: ronoctua_notify::Label::Key("k".into()),
+                    doing: ronoctua_notify::Doing::Invoke,
+                },
+                ronoctua_notify::Action {
+                    id: "see".into(),
+                    label: ronoctua_notify::Label::Key("k".into()),
+                    doing: ronoctua_notify::Doing::Command("bluetooth-open".into()),
+                },
+            ];
+            let p = book.decide(&n);
+            q.enqueue(n, p, std::time::Instant::now());
+        }
+        q
+    }
+
+    /// The manager, open on `pane`, the keys of `steps` pressed on it — a
+    /// level reached as the keyboard reaches it — and nothing of the way
+    /// there left on the doorway.
+    fn reached<'a>(
+        t: &std::rc::Rc<ronoctua_i18n::Texts>,
+        columns: u16,
+        lent: (&'a Queue, &'a Book),
+        pane: Pane,
+        steps: &[&str],
+    ) -> (Manager, crate::region::Lending<'a>) {
+        let mut m = Manager {
+            view: View::fresh()
+                .in_zone(ronoctua_files::when::Zone::utc())
+                .reopened(pane),
+            shown: true,
+        };
+        let mut w = Recorder::new(
+            std::rc::Rc::clone(t),
+            columns,
+            true,
+            crate::sudo::Gate::window(),
+            crate::wake::Wake::new(|| {}),
+        )
+        .lending(Lent::of(vec![lent.0, lent.1]));
+        for step in steps {
+            let _ = m.key(ronoctua_keymap::Key::parse(step).expect("a key"), &mut w);
+        }
+        w.way.owed.clear();
+        (m, w)
+    }
+
+    /// FAILS IF: on the list, stacked or side by side, a resting pointer
+    /// lights a row — or a column of it — a click there takes nothing on: a
+    /// column's title, the blank between them, an empty column's sentence;
+    /// or leaves unlit an item a click takes. THE LIGHT IS THE CLICK: every
+    /// row, in each half, clicked once on a manager of its own and lit
+    /// exactly where something happened. The region said every row took a
+    /// click, titles included.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let queue = three_records();
+        let book = Book::distro();
+        let zone = ronoctua_files::when::Zone::utc();
+        for columns in [60, 160] {
+            let seen = Seen {
+                texts: &t,
+                columns,
+                lines: 30,
+                zone: &zone,
+                photographing: true,
+                lent: Lent::of(vec![&queue, &book]),
+            };
+            let split = crate::notifications::split_at(columns);
+            let (first, _) = reached(&t, columns, (&queue, &book), Pane::Happened, &[]);
+            let rows = first.rows(&seen);
+            let here = first.cursor_in(&seen);
+            let (mut lit_any, mut dark_any) = (false, false);
+            for (n, row) in rows.iter().enumerate() {
+                for cell in [2, split + 2] {
+                    let lit =
+                        row.takes && first.lit(n, Some(cell), &seen) != crate::region::Lit::Nothing;
+                    let (mut m, mut w) = reached(&t, columns, (&queue, &book), Pane::Happened, &[]);
+                    let before = crate::region::seen(&m, &w.owed, &seen);
+                    m.clicked_at(n, Some(cell), &mut w);
+                    let did = crate::region::seen(&m, &w.owed, &seen) != before;
+                    assert!(
+                        lit == did || (lit && here == Some(n)),
+                        "{columns} columns: row {n} at cell {cell} is lit {lit} and a click did {did}"
+                    );
+                    lit_any |= lit;
+                    dark_any |= !lit;
+                }
+            }
+            assert!(
+                lit_any && dark_any,
+                "{columns} columns: no row lit, or every row lit"
+            );
+        }
+    }
+
+    /// FAILS IF: on the sheet of a kind, or the draft of a filter, a
+    /// resting pointer lights what a click takes nothing on — the sheet's
+    /// name — or a knob or a line a click does not select. The two had no
+    /// pointer at all: every row lit, and a click on any did nothing.
+    #[test]
+    fn the_sheet_and_the_draft_light_what_the_click_takes() {
+        let t = texts();
+        let queue = three_records();
+        let book = Book::distro();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 30,
+            zone: &zone,
+            photographing: true,
+            lent: Lent::of(vec![&queue, &book]),
+        };
+        for (steps, level) in [(&["RET"][..], "the sheet"), (&["n"][..], "the draft")] {
+            let held = crate::region::held_to_the_click(
+                || reached(&t, 100, (&queue, &book), Pane::Catalogue, steps),
+                &seen,
+                |r, w: &crate::region::Lending<'_>| crate::region::seen(r, &w.owed, &seen),
+            );
+            assert!(
+                held.iter().filter(|h| h.lit).count() >= 2,
+                "{level}: fewer than two rows lit: {held:?}"
+            );
+            let unheld = crate::region::unheld(&held);
+            assert!(unheld.is_empty(), "{level}: {unheld:?}");
+        }
+    }
+
+    /// FAILS IF: on an open record, side by side or stacked, the pointer
+    /// lights a line a click there takes nothing on — a line of the message
+    /// in its own half, a fact while the keyboard is in the facts — or
+    /// leaves unlit an action, or the half the keyboard is not in (a click
+    /// gives it the keyboard).
+    #[test]
+    fn an_open_record_lights_what_the_click_takes() {
+        let t = texts();
+        let queue = three_records();
+        let book = Book::distro();
+        let zone = ronoctua_files::when::Zone::utc();
+        for columns in [60, 200] {
+            let seen = Seen {
+                texts: &t,
+                columns,
+                lines: 30,
+                zone: &zone,
+                photographing: true,
+                lent: Lent::of(vec![&queue, &book]),
+            };
+            let split = crate::notifications::split_at(columns);
+            let open = || reached(&t, columns, (&queue, &book), Pane::Happened, &["RET"]);
+            let (first, _) = open();
+            assert!(first.view.is_open(), "{columns} columns: no record opened");
+            let rows = first.rows(&seen);
+            for (n, row) in rows.iter().enumerate() {
+                for cell in [2, split + 2] {
+                    let lit =
+                        row.takes && first.lit(n, Some(cell), &seen) != crate::region::Lit::Nothing;
+                    // AND WHICH HALF HAS THE KEYBOARD: a click there gives it
+                    // — which the lit divider says side by side, and the
+                    // arrows' next turn stacked.
+                    let (mut m, mut w) = open();
+                    let before = (
+                        crate::region::seen(&m, &w.owed, &seen),
+                        m.view.facts_have_the_keyboard(),
+                    );
+                    m.clicked_at(n, Some(cell), &mut w);
+                    let did = (
+                        crate::region::seen(&m, &w.owed, &seen),
+                        m.view.facts_have_the_keyboard(),
+                    ) != before;
+                    assert_eq!(
+                        lit, did,
+                        "{columns} columns: row {n} at cell {cell} is lit {lit} and a click did {did}"
+                    );
+                }
+            }
+        }
     }
 }

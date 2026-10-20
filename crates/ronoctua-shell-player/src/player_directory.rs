@@ -2073,4 +2073,65 @@ pub(crate) mod tests {
             );
         }
     }
+
+    /// FAILS IF: a title lights more than its control under a resting
+    /// pointer — the whole line lit, while a click beside the control did
+    /// nothing — or its control does not light, or a title with no control
+    /// lights at all (`player_rows::lighting`, the one answer both doors
+    /// paint by; `player_rows::takes`, the footer's row). THE LIGHT IS THE
+    /// CLICK: every column of the countries' title clicked on a view of its
+    /// own, lit exactly where the click acts.
+    #[test]
+    fn a_title_lights_its_control_alone() {
+        use crate::player_rows::{Lighting, lighting, takes};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("a language");
+        let s = with_radio(3);
+        let fresh = || {
+            let mut v = View::blank(None);
+            v.prefs.let_directory(Directory::Radio);
+            v.key(Press::Go(PageId::Radio), Some(&s), 80, &t);
+            v.found.given(countries_desk());
+            v.settle_in(Some(&s), 80, &t);
+            v
+        };
+        let rows = fresh().rows(Some(&s), 80, &t);
+        let title = rows
+            .iter()
+            .position(|r| {
+                r.cells
+                    .iter()
+                    .any(|c| c.about == Some("player-countries-order"))
+            })
+            .expect("the countries' title");
+        let Lighting::Cell(cells) = lighting(&rows, title) else {
+            panic!("the title lights whole");
+        };
+        let control = rows[title].cells[0].clone();
+        assert_eq!(
+            cells,
+            vec![(control.from, control.width)],
+            "the title lights more than its control"
+        );
+        assert!(takes(&rows, title), "the title's control takes no click");
+        for column in 0..80 {
+            let lit = cells
+                .iter()
+                .any(|&(from, width)| crate::chrome::in_cell(column, from, width));
+            let mut v = fresh();
+            let did = v.clicked_at(title, column, &rows);
+            assert_eq!(
+                lit, did,
+                "column {column} is lit {lit} and the click acts {did}"
+            );
+        }
+        // AND A TITLE WITH NO CONTROL lights nothing and takes no click.
+        let bare = rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.heading && r.cells.is_empty() && !r.fields.is_empty())
+            .map(|(n, _)| n)
+            .expect("a title with no control");
+        assert_eq!(lighting(&rows, bare), Lighting::Cell(Vec::new()));
+        assert!(!takes(&rows, bare), "a bare title takes a click");
+    }
 }

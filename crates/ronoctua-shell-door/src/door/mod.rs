@@ -511,6 +511,25 @@ impl Ui {
         &self.launches
     }
 
+    /// What a person or the machine SEES of this window's state, but its
+    /// rows: line 0's sentence and question, and what the window sent out of
+    /// itself — the footer's orders, the programs to start, the clipboard
+    /// asked for, its closing. For a test that holds a window's light to its
+    /// click ([`held_to_the_click`]).
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn deeds(&self) -> Deeds {
+        Deeds {
+            message: self.message.clone(),
+            asking: self.asking.clone(),
+            orders: self.orders.clone(),
+            launches: self.launches.clone(),
+            pasting: self.paste_owed.is_some(),
+            quit: self.quit,
+            handing_over: self.handing_over,
+        }
+    }
+
     /// A `Ui` with no compositor behind it — what a test hands a window.
     #[cfg(any(test, feature = "test-support"))]
     #[must_use]
@@ -1277,6 +1296,87 @@ impl<C: Content> Wiring<'_, C> {
     }
 }
 
+/// What a test sees a window did ([`Ui::deeds`]).
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Deeds {
+    /// Line 0's sentence.
+    pub message: Option<String>,
+    /// The question on line 0.
+    pub asking: Option<crate::line::Line>,
+    /// The orders waiting for the footer.
+    pub orders: Vec<String>,
+    /// The programs waiting to be started.
+    pub launches: Vec<Launching>,
+    /// Whether the clipboard is wanted.
+    pub pasting: bool,
+    /// Whether the window is to close.
+    pub quit: bool,
+    /// Whether it closes for another door.
+    pub handing_over: bool,
+}
+
+/// Every row of a window `fresh` opens, held to its click
+/// ([`crate::region::Held`]): lit by [`Content::takes`], and clicked once
+/// through [`Content::clicked`] on a window of its own each time — but the
+/// row the cursor is on, where the click is the `RET` — and `witness` is
+/// what a click is seen by ([`seen`] by default: the rows, the cursor and
+/// [`Ui::deeds`]). The footer's half is [`crate::region::held_to_the_click`],
+/// which says why once, and [`crate::region::unheld`] says what disagrees.
+#[cfg(any(test, feature = "test-support"))]
+pub fn held_to_the_click<C: Content, W: PartialEq>(
+    fresh: impl Fn() -> (C, Ui),
+    witness: impl Fn(&C, &Ui) -> W,
+) -> Vec<crate::region::Held> {
+    held_to_the_control(fresh, witness, |_, _, row| row)
+}
+
+/// [`held_to_the_click`], for a window whose rows can be lines of ONE
+/// control — a sentence wrapped over several, which a click on any takes
+/// whole: `control_of` names the row each row's click lands on, and every
+/// line of the cursor's control is left unclicked, as the cursor's row is.
+#[cfg(any(test, feature = "test-support"))]
+pub fn held_to_the_control<C: Content, W: PartialEq>(
+    fresh: impl Fn() -> (C, Ui),
+    witness: impl Fn(&C, &Ui) -> W,
+    control_of: impl Fn(&C, &Ui, usize) -> usize,
+) -> Vec<crate::region::Held> {
+    let (first, ui) = fresh();
+    let rows = first.rows(&ui).len();
+    let lit = first.takes(&ui);
+    let cursor = first.cursor().map(|c| control_of(&first, &ui, c));
+    (0..rows)
+        .map(|row| {
+            let lit = lit.get(row).copied().unwrap_or(false);
+            let here = cursor == Some(control_of(&first, &ui, row));
+            if here {
+                return crate::region::Held {
+                    row,
+                    lit,
+                    did: false,
+                    here,
+                };
+            }
+            let (mut c, mut ui) = fresh();
+            let before = witness(&c, &ui);
+            c.clicked(&mut ui, row);
+            crate::region::Held {
+                row,
+                lit,
+                did: witness(&c, &ui) != before,
+                here,
+            }
+        })
+        .collect()
+}
+
+/// What [`held_to_the_click`] sees of a window by default: its rows as drawn,
+/// its cursor, and [`Ui::deeds`].
+#[cfg(any(test, feature = "test-support"))]
+pub fn seen<C: Content>(c: &C, ui: &Ui) -> (Vec<Vec<crate::fields::Field>>, Option<usize>, Deeds) {
+    (c.rows(ui), c.cursor(), ui.deeds())
+}
+
 /// A WINDOW: what it draws, and what its keys and rows do.
 ///
 /// Three methods are the window's to write — its name, its `app_id` and what
@@ -1428,6 +1528,36 @@ pub trait Content: Sized + 'static {
     /// Where the keyboard's cursor is in [`Content::rows`], when there is one:
     /// the list follows it after every key and every click.
     fn cursor(&self) -> Option<usize> {
+        None
+    }
+
+    /// WHICH OF [`Content::rows`] A CLICK TAKES, row by row — and so the
+    /// only rows a resting pointer lights ([`list::body`]) and the only ones
+    /// whose click reaches [`Content::clicked`] ([`list::pointer`]): ONE
+    /// ANSWER for the light and the click, as the footer's region gives it
+    /// in [`crate::region::Row::takes`]. A heading, the air between two
+    /// sections, a fact the cursor does not stand on take nothing, and
+    /// nothing lights on them.
+    ///
+    /// NONE BY DEFAULT: a window that draws no list of the door's takes no
+    /// click on one. A window that does says it for every row, from what
+    /// each row is (`the-pointer-lights-row-by-row`) — never one answer for
+    /// the whole list, which is how a heading came to light under a pointer
+    /// whose click there did nothing.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        let _ = ui;
+        Vec::new()
+    }
+
+    /// WHICH CONTROL EACH OF [`Content::rows`] IS, as the row whose control
+    /// it is: itself, or the first line of one control drawn over several
+    /// rows — a consent's note wrapped under its row. The pointer over any
+    /// line of a control lights every line of it ([`list::body_of`]), as the
+    /// footer's region lights it (`region::Region::control_of`); a line of
+    /// it lighting alone said the others were something else. `None`, the
+    /// default, is a row per control.
+    fn controls(&self, ui: &Ui) -> Option<Vec<usize>> {
+        let _ = ui;
         None
     }
 

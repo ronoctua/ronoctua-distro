@@ -118,6 +118,25 @@ impl Content for StickWindow {
             .collect()
     }
 
+    /// A click takes a row the cursor stands on — a fact too — and every
+    /// line of the consent row, and only those light under the pointer: the
+    /// view's one answer (`View::takes`), which the footer's region gives
+    /// too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        crate::stick::View::takes(&self.open.rows(ui.columns, &ui.texts))
+    }
+
+    /// The consent row's note is the row: its lines light together, as in
+    /// the footer (`View::control_of`, the answer the click lands by).
+    fn controls(&self, ui: &Ui) -> Option<Vec<usize>> {
+        let rows = self.open.rows(ui.columns, &ui.texts);
+        Some(
+            (0..rows.len())
+                .map(|n| View::control_of(n, &rows))
+                .collect(),
+        )
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.open.view.cursor())
     }
@@ -540,4 +559,81 @@ fn shoot(asked: &Asked) -> Result<()> {
         println!("the message line says: {m}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A window over the readings a fresh machine has — the hosts not let,
+    /// no drive yet — and no thread behind it.
+    fn a_window() -> (StickWindow, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        (
+            StickWindow::over(Readings::default(), None),
+            Ui::for_tests(texts),
+        )
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, a sentence — or leaves unlit one it takes: a
+    /// fact the cursor stands on, a line of the consent row's note. THE
+    /// LIGHT IS THE CLICK: every row clicked once, on a window of its own,
+    /// and lit exactly where something happened. The footer's region has
+    /// its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        // THE CONSENT ROW'S NOTE IS THE ROW: a click on one of its lines lands
+        // on the cursor's own row, and is its `RET` — which lets the hosts.
+        let held = crate::door::held_to_the_control(a_window, crate::door::seen, |w, ui, row| {
+            View::control_of(row, &w.open.rows(ui.columns, &ui.texts))
+        });
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
+    }
+
+    /// FAILS IF: the window lights one line of a consent row alone where
+    /// the footer lights the whole row: every line of a control lights with
+    /// the one under the pointer (`Content::controls`, the `View::control_of`
+    /// the click lands by), and nothing else does.
+    #[test]
+    fn a_line_of_the_consent_lights_the_whole_row() {
+        let (w, ui) = a_window();
+        let rows = w.open.rows(ui.columns, &ui.texts);
+        let takes = w.takes(&ui);
+        let controls = w.controls(&ui).expect("the window says its controls");
+        assert_eq!(controls.len(), rows.len(), "a control for each row");
+        let later = (0..rows.len())
+            .find(|&n| controls[n] != n)
+            .expect("no later line of a consent row: the fixture lost what it holds");
+        let whole: Vec<usize> = (0..rows.len())
+            .filter(|&k| controls[k] == controls[later] && takes[k])
+            .collect();
+        assert!(whole.len() > 1, "the consent row is one line: {whole:?}");
+        let line_px = tokens::metrics::line_height(tokens::text::size());
+        let bands = crate::door::list::hover_bands(
+            &[(tokens::color::SURFACE_HOVER, Some(later))],
+            &takes,
+            Some(&controls),
+            0,
+            rows.len(),
+            rows.len(),
+            0,
+            100.0,
+        );
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let mut lit: Vec<usize> = bands
+            .iter()
+            .map(|q| (q.y / line_px).round() as usize)
+            .collect();
+        lit.sort_unstable();
+        assert_eq!(
+            lit, whole,
+            "the pointer on line {later} lit another set of rows"
+        );
+    }
 }

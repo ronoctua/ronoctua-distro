@@ -788,9 +788,11 @@ impl View {
         crate::chrome::hint_of(&table, texts)
     }
 
-    /// Puts the cursor where a click landed; `true` when it was already
-    /// there — the second click, which is `RET` (invariant 19).
-    pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+    /// The row a click on row `n` of `rows` lands on — `n` itself, a row the
+    /// cursor stands on (a fact included: it is read there), or the consent
+    /// row a line of its note belongs to — and `None` where the click takes
+    /// nothing: a heading, a sentence.
+    fn landing(n: usize, rows: &[Row]) -> Option<usize> {
         // A LINE OF THE CONSENT ROW'S NOTE is the row: its first line is
         // where the cursor stands.
         let n = match rows.get(n) {
@@ -800,12 +802,41 @@ impl View {
                 .unwrap_or(n),
             _ => n,
         };
-        if rows.get(n).is_some_and(|r| !r.heading) {
-            let again = self.cursor == n;
-            self.cursor = n;
-            return again;
-        }
-        false
+        rows.get(n).is_some_and(|r| !r.heading).then_some(n)
+    }
+
+    /// Which of `rows` a click takes ([`View::clicked`]) — and so what a
+    /// resting pointer lights, in both doors: a row the cursor stands on,
+    /// the facts among them, and every line of the consent row; never a
+    /// heading or a sentence.
+    ///
+    /// ONE ANSWER FOR THE LIGHT AND THE CLICK. The region lit only the rows
+    /// whose `RET` acts, while the click selected a fact too: the pointer
+    /// on a fact lit nothing, and its click moved the cursor there.
+    #[must_use]
+    pub fn takes(rows: &[Row]) -> Vec<bool> {
+        (0..rows.len())
+            .map(|n| Self::landing(n, rows).is_some())
+            .collect()
+    }
+
+    /// The row whose control row `n` is: itself, or the consent row a line
+    /// of its note belongs to — the lines of one control light together,
+    /// and a click on any takes the same thing (`Region::control_of`).
+    #[must_use]
+    pub fn control_of(n: usize, rows: &[Row]) -> usize {
+        Self::landing(n, rows).unwrap_or(n)
+    }
+
+    /// Puts the cursor where a click landed; `true` when it was already
+    /// there — the second click, which is `RET` (invariant 19).
+    pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        let Some(n) = Self::landing(n, rows) else {
+            return false;
+        };
+        let again = self.cursor == n;
+        self.cursor = n;
+        again
     }
 
     /// What the pointer resting on row `n` says.

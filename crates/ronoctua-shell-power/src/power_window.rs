@@ -195,6 +195,17 @@ impl Content for Power {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, a fact and a line of a note
+    /// included, and only that row lights under the pointer — the view's one
+    /// answer ([`crate::power::Row::takes`]), which the footer's region gives
+    /// too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::power::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -241,6 +252,14 @@ mod tests {
         (me, Ui::for_tests(texts))
     }
 
+    /// The same window over [`crate::power::laptop`]: a reading planted, and
+    /// never this machine's.
+    fn a_laptops_window() -> (Power, Ui) {
+        let (mut w, ui) = a_window();
+        w.snapshot = Some(crate::power::laptop());
+        (w, ui)
+    }
+
     /// A LOCK IS ASKED OF THE FOOTER WITH THE STATE WANTED, off the loop, and
     /// nothing tells the person to go anywhere.
     #[test]
@@ -259,5 +278,22 @@ mod tests {
             assert_eq!(ui.orders(), [order.to_owned()]);
             assert!(ui.message.is_none(), "{:?}", ui.message);
         }
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections — or leaves unlit one
+    /// it takes: a fact and a line of a note are rows the cursor stands on.
+    /// THE LIGHT IS THE CLICK: every row clicked once, on a window of its
+    /// own, and lit exactly where something happened. The footer's region
+    /// has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let held = crate::door::held_to_the_click(a_laptops_window, crate::door::seen);
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

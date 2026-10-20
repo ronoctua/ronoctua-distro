@@ -175,6 +175,17 @@ pub struct Row {
     pub target: Target,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on — and so
+    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
+    /// and click (the region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]). A title and a sentence take nothing.
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// The width the tests build rows at.
 ///
 /// # Why production no longer has one
@@ -289,6 +300,37 @@ impl View {
         me
     }
 
+    /// A view over `root` and a PLANTED catalogue of two regions — one that
+    /// installs, one Geofabrik publishes whole — and never the baked world,
+    /// which a test build may not carry: a door's test that needs rows a
+    /// click takes has them whether the world is there or not. `root` is a
+    /// scratch directory, never the person's own (`geo::tests`' rule).
+    #[cfg(test)]
+    pub(crate) fn planted(root: std::path::PathBuf, columns: u16) -> Self {
+        let region = |id: &str, label: &str, url: &str| Region {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            url: url.to_owned(),
+        };
+        let mut me = Self {
+            cursor: 0,
+            installed: ronoctua_atlas_packs::installed(&root),
+            catalogue: vec![
+                region("planted-whole", "Planted whole", ""),
+                region(
+                    "planted-part",
+                    "Planted part",
+                    "https://download.invalid/planted-part-latest-free.shp.zip",
+                ),
+            ],
+            filter: String::new(),
+            asking: None,
+            root,
+        };
+        me.settle(columns);
+        me
+    }
+
     /// Reads the directory again — a download finished, or one was removed.
     pub fn reread(&mut self, columns: u16) {
         self.installed = ronoctua_atlas_packs::installed(&self.root);
@@ -306,7 +348,7 @@ impl View {
     /// Answers whether the cursor was ALREADY on that row: that is the second
     /// click, which the door turns into `RET` (invariant 19).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
-        if rows.get(n).is_some_and(|r| !r.heading) {
+        if rows.get(n).is_some_and(Row::takes) {
             let again = self.cursor == n;
             self.cursor = n;
             return again;

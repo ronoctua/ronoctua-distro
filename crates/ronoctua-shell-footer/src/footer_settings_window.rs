@@ -214,6 +214,18 @@ impl Content for FooterSettingsWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes the first line of a setting, and only that row lights
+    /// under the pointer — the view's one answer
+    /// ([`crate::footer_settings::Row::takes`]), which the footer's door
+    /// gives too: never a title, the air before it, the rest of a wrapped
+    /// label or a note.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::footer_settings::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -233,5 +245,45 @@ impl Content for FooterSettingsWindow {
         } else {
             ui.ask_paint();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air before it, the rest of a wrapped label,
+    /// a note — or leaves unlit one it takes. THE LIGHT IS THE CLICK: every
+    /// row clicked once, on a window of its own over a file of its own,
+    /// and lit exactly where something happened. The footer's door lights
+    /// by the same answer (`footer_settings::Row::takes`).
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let root = std::env::temp_dir().join(format!(
+            "ronoctua-footer-settings-window-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let windows = std::cell::Cell::new(0_u32);
+        let fresh = || {
+            // A FILE OF ITS OWN FOR EVERY WINDOW: a second click on a setting
+            // writes it, and the next window opens over the default.
+            let n = windows.get();
+            windows.set(n + 1);
+            let dir = root.join(n.to_string());
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            let store = ronoctua_store::Store::<Prefs>::at(Some(dir), crate::adapt::FILE);
+            let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+            (FooterSettingsWindow::over(store), Ui::for_tests(texts))
+        };
+        let held = crate::door::held_to_the_click(fresh, crate::door::seen);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

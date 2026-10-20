@@ -798,6 +798,21 @@ pub struct Picker {
     pub query: String,
     /// Which of the surviving choices is focused.
     pub cursor: usize,
+    /// Whether the PERSON put the cursor where it is — an arrow, or a click
+    /// that selected the row — and not the question, which is born with it
+    /// on its first row (or the query, which puts it back there).
+    ///
+    /// # Why a click asks it
+    ///
+    /// Because a question comes up under the pointer that asked for it, and
+    /// the next press of a double click lands on whichever of its rows is
+    /// there — the row the cursor was born on as well. A click on the
+    /// cursor's row is that row's `Enter` only where the person aimed the
+    /// cursor; on the row the question chose, the first click selects it, as
+    /// on every other row, and the second answers (invariant 19). Without it
+    /// a double click on the owner of a file, drawn on the line the owner's
+    /// question puts its first person on, gave the file to `root`.
+    pub aimed: bool,
     /// Whether the TYPED text is the answer, rather than a choice.
     ///
     /// True for a rename, which is the one question whose answer is not on any
@@ -974,6 +989,11 @@ pub struct View {
     sort: Sort,
     /// The action menu, when it is open, and which of its rows is focused.
     menu: Option<usize>,
+    /// Whether the PERSON put the menu's cursor where it is (an arrow, or a
+    /// click that selected the row) — and not the menu, which opens with it
+    /// on its first row. What `Picker::aimed` is to a question, and for its
+    /// reason: a click on the cursor's row runs it only where it was aimed.
+    menu_aimed: bool,
     /// THE GIT LINE'S LAST READING (`crate::git_line`), kept whatever the
     /// folder: it is drawn only while the folder is inside its repository.
     git: Option<crate::report::Line>,
@@ -1242,6 +1262,11 @@ pub struct View {
     /// trip ([`View::vault_moved`]).
     rack: ronoctua_disks::Rack,
     vault: Option<ronoctua_private::Status>,
+    /// HOW MANY TIMES A COLUMN WAS LAID OUT ([`View::sections_of`]), what the
+    /// tests hold the pointer's light to — one a frame. Counted always: one
+    /// addition per layout, where a `cfg(test)` field would leave every other
+    /// crate's tests without it (`shell-tests-keep-the-machine-guards`).
+    layouts: std::cell::Cell<usize>,
 }
 
 impl View {
@@ -1282,6 +1307,7 @@ impl View {
             // somebody ends up using without knowing half is gone.
             sort: Sort::default(),
             menu: None,
+            menu_aimed: false,
             git: None,
             arming: None,
             picking: None,
@@ -1324,6 +1350,7 @@ impl View {
             withheld: None,
             rack: ronoctua_disks::Rack::default(),
             vault: None,
+            layouts: std::cell::Cell::new(0),
         };
         view.reread();
         // PAST THE WAY OUT, the same landing `enter` makes: opening the
@@ -2637,9 +2664,20 @@ impl View {
     ///
     /// A preview showing TEXT keeps it: there the rows are lines, and the band
     /// answers the question it was written for.
+    ///
+    /// # And so does a PLAYLIST
+    ///
+    /// It is a list in every other sense — it has a cursor (`focused_here`),
+    /// its arrows walk it, and a click on an entry plays that entry
+    /// (`Hit::Track`) — and it was left out of this one, so the pointer over
+    /// an entry lit nothing while a click there played it. Which of its rows
+    /// light is [`View::band_row`]'s answer, through [`View::takes_at`]: the
+    /// entries take a click, the line that says the list was cut does not.
     #[must_use]
     pub fn band_belongs(&self, pane: Pane) -> bool {
-        !matches!(pane, Pane::Preview) || self.showing_text().is_some()
+        !matches!(pane, Pane::Preview)
+            || self.showing_text().is_some()
+            || self.showing_list().is_some()
     }
 
     /// The same question asked of a CELL, which is what the band itself uses.
@@ -5522,6 +5560,7 @@ impl View {
         if let Some(picker) = self.picking.as_mut() {
             picker.query.push_str(&typed);
             picker.cursor = 0;
+            picker.aimed = false;
             return Step::Changed;
         }
         self.filter.push_str(&typed);
@@ -5766,23 +5805,29 @@ impl View {
                 self.picking = None;
                 Step::Changed
             }
+            // THE QUERY PUTS THE CURSOR BACK ON THE FIRST ROW, and that row is
+            // the question's choice again, not the person's (`Picker::aimed`).
             Gesture::Insert(c) => {
                 picker.query.push(c);
                 picker.cursor = 0;
+                picker.aimed = false;
                 Step::Changed
             }
             Gesture::Delete => {
                 crate::line::pop_cluster(&mut picker.query);
                 picker.cursor = 0;
+                picker.aimed = false;
                 Step::Changed
             }
             Gesture::Down => {
                 let last = picker.shown().len().saturating_sub(1);
                 picker.cursor = (picker.cursor + 1).min(last);
+                picker.aimed = true;
                 Step::Changed
             }
             Gesture::Up => {
                 picker.cursor = picker.cursor.saturating_sub(1);
+                picker.aimed = true;
                 Step::Changed
             }
             Gesture::Confirm => self.answered(),
@@ -5952,6 +5997,7 @@ impl View {
             choices,
             query,
             cursor: 0,
+            aimed: false,
             typed,
         });
         Step::Changed
@@ -6108,11 +6154,13 @@ impl View {
             }
             Sym::Down => {
                 self.menu = Some((chosen + 1).min(offered.len().saturating_sub(1)));
+                self.menu_aimed = true;
                 self.arming = None;
                 return Step::Changed;
             }
             Sym::Up => {
                 self.menu = Some(chosen.saturating_sub(1));
+                self.menu_aimed = true;
                 self.arming = None;
                 return Step::Changed;
             }
@@ -6150,10 +6198,12 @@ impl View {
             }
             Sym::Down => {
                 self.menu = Some((chosen + 1).min(offered.len().saturating_sub(1)));
+                self.menu_aimed = true;
                 return Step::Changed;
             }
             Sym::Up => {
                 self.menu = Some(chosen.saturating_sub(1));
+                self.menu_aimed = true;
                 return Step::Changed;
             }
             Sym::Enter => {
@@ -6282,9 +6332,24 @@ impl View {
                 self.side_cursor = *n;
                 self.eject_focused()
             }
+            // AN ANSWER IS TWO CLICKS, as a row of every list is (invariant
+            // 19): the first selects it, and only a click on the row the
+            // person put the cursor on is the `Enter`.
+            //
+            // It answered on the first, and a question opened by a click comes
+            // up under the pointer that opened it: a double click on a
+            // permission letter asked "change the permissions …?" and its
+            // second press fell on `yes`. Now that press selects the row under
+            // it and nothing else — the row the question was born on too,
+            // which the question chose and not the person (`Picker::aimed`).
             Hit::Choice(n) => {
-                if let Some(p) = self.picking.as_mut() {
+                let Some(p) = self.picking.as_mut() else {
+                    return Step::Nothing;
+                };
+                if p.cursor != *n || !p.aimed {
                     p.cursor = *n;
+                    p.aimed = true;
+                    return Step::Changed;
                 }
                 // THROUGH THE SAME `Enter` as the keyboard, for the reason the
                 // locator already gives: an answer reached by the mouse and an
@@ -6304,20 +6369,44 @@ impl View {
                 self.reread();
                 Step::Changed
             }
+            // A ROW OF A MENU IS TWO CLICKS TOO, for the answer's reason: the
+            // sidebar opens a device's menu on its first click, so the menu
+            // comes up under the pointer, and a double click on the device
+            // ran whichever action its second press fell on. The first click
+            // selects the row, as `↓` and `↑` move to it (and lets go of an
+            // armed row, as they do); a click on the row the person put the
+            // cursor on is `Enter` (`View::menu_aimed`).
             Hit::SideMenu(id) => {
                 let offered = self
                     .focused_side()
                     .map(|r| ronoctua_files::sidebar_menu::for_row(&r));
-                offered
-                    .and_then(|o| o.iter().find(|a| a.id == *id).copied())
-                    .map_or(Step::Nothing, |a| self.run_side(a))
+                let Some((at, a)) = offered.and_then(|o| {
+                    o.iter()
+                        .enumerate()
+                        .find(|(_, a)| a.id == *id)
+                        .map(|(at, a)| (at, *a))
+                }) else {
+                    return Step::Nothing;
+                };
+                if self.menu != Some(at) || !self.menu_aimed {
+                    self.menu = Some(at);
+                    self.menu_aimed = true;
+                    return Step::Changed;
+                }
+                self.run_side(a)
             }
             Hit::Menu(id) => {
                 let offered = self.offered_now();
-                offered
-                    .iter()
-                    .find(|a| a.id == *id)
-                    .map_or(Step::Nothing, |a| self.run(a))
+                let Some((at, a)) = offered.iter().enumerate().find(|(_, a)| a.id == *id) else {
+                    return Step::Nothing;
+                };
+                if self.menu != Some(at) || !self.menu_aimed {
+                    self.menu = Some(at);
+                    self.menu_aimed = true;
+                    self.arming = None;
+                    return Step::Changed;
+                }
+                self.run(a)
             }
             // FIRST CLICK SELECTS, SECOND OPENS.
             //
@@ -6343,7 +6432,12 @@ impl View {
                 self.cursor = *n;
                 Step::Changed
             }
-            // THE AIR PUTS THE MARKS DOWN, through `C-A`'s own code.
+            // THE AIR PUTS THE MARKS DOWN, through `C-A`'s own code — and with
+            // none up it does nothing and says so, which is what `View::takes`
+            // answers there. It answered `Changed` for a click that changed
+            // nothing, and a step that says a redraw is due is a step that
+            // says something happened.
+            Hit::Air if self.marks.is_empty() => Step::Nothing,
             Hit::Air => self.unmark_all(),
             Hit::Mark(n) => {
                 self.cursor = *n;
@@ -6412,6 +6506,78 @@ impl View {
                     None => Step::Nothing,
                 }
             }
+        }
+    }
+
+    /// WHETHER A CLICK ON `target` DOES SOMETHING — [`View::click`]'s own
+    /// table, read and not run.
+    ///
+    /// # Why it exists
+    ///
+    /// Because what the pointer LIGHTS has to be what the click TAKES
+    /// (invariant 19), and the light was decided by a second rule — "the line
+    /// has a field on it" — that knew nothing about what the field did. So
+    /// the menu's title, a fact that is only read, the folder one is already
+    /// in and the sentence of an empty folder all lit up, and a press on any
+    /// of them did nothing. This walks the arms `click` walks, in the same
+    /// state, and answers the one question the light asks.
+    ///
+    /// No modifiers: a pointer at rest has no button down, and `Ctrl` and
+    /// `Shift` only ever widen a click on a row that already takes one.
+    ///
+    /// EVERY ARM IS NAMED, and none falls to a wildcard: a variant added to
+    /// [`Hit`] stops this compiling exactly where it stops `click` compiling,
+    /// so the two cannot come apart by an arm one of them forgot.
+    #[must_use]
+    pub fn takes(&self, target: &Target) -> bool {
+        match &target.hit {
+            Hit::Nothing => false,
+            // THE AIR PUTS THE MARKS DOWN, so it takes only while there are
+            // some — see the arm in `click`.
+            Hit::Air => !self.marks.is_empty(),
+            // A CRUMB THAT LEADS NOWHERE is the folder one is in, which
+            // carries `Nothing` already; this is the same answer `click` gives
+            // a crumb past the path's end.
+            Hit::Crumb(n) => self.crumb_target(*n).is_some(),
+            // A ROW OF A MENU takes while the menu still offers it.
+            Hit::Menu(id) => self.offered_now().iter().any(|a| a.id == *id),
+            Hit::SideMenu(id) => self.focused_side().is_some_and(|r| {
+                ronoctua_files::sidebar_menu::for_row(&r)
+                    .iter()
+                    .any(|a| a.id == *id)
+            }),
+            Hit::Choice(_) => self.picking.is_some(),
+            Hit::Amend(_, does) => *does != crate::fields::Doable::Nothing,
+            Hit::GlobeMap => menu::by_id("open-map").is_some(),
+            // A SIZE IS MEASURED for an entry that is not the way out — the
+            // same refusal `measure_focused` gives `..`.
+            Hit::Measure(n) => self
+                .shown
+                .get(*n)
+                .and_then(|i| self.entries.get(*i))
+                .is_some_and(|e| !e.is_parent()),
+            // AND EVERY OTHER ARM ACTS, on what is on screen. The globe's
+            // picture among them takes the PRESS, which both doors turn into a
+            // drag before any click is decided — a control, and one no band
+            // ever lights, because it is a picture (`View::band_row`).
+            Hit::Globe
+            | Hit::GlobeDot
+            | Hit::Git
+            | Hit::Play
+            | Hit::Sound
+            | Hit::Theatre(_)
+            | Hit::Track(_)
+            | Hit::Layout
+            | Hit::Sizing
+            | Hit::Sidebar(_)
+            | Hit::Eject(_)
+            | Hit::Sort(_)
+            | Hit::Name(_)
+            | Hit::Mark(_)
+            | Hit::Owner(_)
+            | Hit::Group(_)
+            | Hit::Bit(..)
+            | Hit::Special(..) => true,
         }
     }
 
@@ -6727,6 +6893,7 @@ impl View {
         texts: &ronoctua_i18n::Texts,
         only: Option<Pane>,
     ) -> Vec<Section> {
+        self.layouts.set(self.layouts.get().wrapping_add(1));
         let panes = self.panes(width);
         let mut out = Vec::with_capacity(4);
         let side = self.side.shown();
@@ -7148,6 +7315,21 @@ impl View {
         // residue (see `transport_band`); this is the same decision for the
         // pointer, so what is drawn there is what answers there.
         let (sec, inside) = at_line(&sections, which, line)?;
+        self.hit_in(sec, inside, chrome.len(), cell)
+    }
+
+    /// How many times a column has been laid out since the view opened
+    /// ([`View::sections_of`]) — what the light is measured in: one a frame.
+    #[must_use]
+    pub fn layouts_made(&self) -> usize {
+        self.layouts.get()
+    }
+
+    /// [`View::hit`] at a point already resolved to its section `sec` and
+    /// that section's own line `inside`, under `chrome` lines of the
+    /// listing's chrome — the layout made ONCE by whoever asks
+    /// ([`View::lit_at`] reads every answer of the light off one).
+    fn hit_in(&self, sec: &Section, inside: usize, chrome: usize, cell: u16) -> Option<Target> {
         // SIDE BY SIDE, THE CELL ANSWERS WHEREVER THE POINTER IS INSIDE IT.
         //
         // A thumbnail is almost all empty cells — a picture the door draws over
@@ -7197,7 +7379,7 @@ impl View {
         //     live there and answer for themselves.
         if matches!(sec.pane, Pane::Listing)
             && self.plain()
-            && inside >= chrome.len()
+            && inside >= chrome
             && sec.row_at(inside, cell).is_none()
         {
             return Some(Target {
@@ -7208,7 +7390,7 @@ impl View {
             });
         }
         let f = sec.content.get(inside)?.field_at(cell);
-        let row = row_of_line(sec, inside, chrome.len()).unwrap_or(usize::MAX);
+        let row = row_of_line(sec, inside, chrome).unwrap_or(usize::MAX);
         // A LISTING ROW IS PRESSED WHEREVER IT IS PRESSED.
         //
         // The size, the date, the owner's name, the gap between two columns
@@ -7223,7 +7405,7 @@ impl View {
         // them already answers for itself.
         if matches!(sec.pane, Pane::Listing)
             && self.plain()
-            && inside >= chrome.len()
+            && inside >= chrome
             && row != usize::MAX
             && f.is_none_or(|f| f.hit == Hit::Nothing)
         {
@@ -7252,6 +7434,35 @@ impl View {
                 row,
                 hit: side.hit.clone(),
                 explain: side.explain.clone(),
+            });
+        }
+        // AND A ROW OF A MENU OR OF A PICKER IS PRESSED ACROSS ITS WIDTH, for
+        // the sidebar's reason one column along: the band lights the row, and
+        // the air after a short label (`copy`) answered nothing, so the band
+        // promised a click the row did not take. The row's own field says
+        // which action or answer it is. The menu's title, the sidebar menu's
+        // facts, the picker's question and query and the whole detail sheet
+        // carry no such field, and stay read.
+        //
+        // A ROW THIS WIDE IS UNDER THE POINTER THAT OPENED IT: a question or
+        // a menu comes up where the press that asked for it was, so the next
+        // press of a double click lands on one of its rows. That press only
+        // moves the cursor — `View::click` answers, and runs, on the second
+        // click of a row, never the first.
+        if !self.plain()
+            && matches!(sec.pane, Pane::Listing)
+            && f.is_none_or(|f| f.hit == Hit::Nothing)
+            && let Some(act) = sec.content.get(inside).and_then(|r| {
+                r.fields
+                    .iter()
+                    .find(|f| matches!(f.hit, Hit::Menu(_) | Hit::SideMenu(_) | Hit::Choice(_)))
+            })
+        {
+            return Some(Target {
+                pane: sec.pane,
+                row,
+                hit: act.hit.clone(),
+                explain: act.explain.clone(),
             });
         }
         // AND A FACT THAT CHANGES THE FILE IS PRESSED ACROSS ITS ROW: the air
@@ -7324,12 +7535,14 @@ impl View {
         at_line(&sections, which, line).map(|(sec, _)| sec.pane)
     }
 
-    /// Which ROW of which pane a point is on, with no field needed.
+    /// Which ROW of which pane a point is on, with no field needed — and only
+    /// where a press there takes something ([`View::takes_at`]).
     ///
     /// [`View::hit`] is this plus the field under the cell; see [`at_point`] for
     /// why the two depths exist and which one a band wants. `None` means the
     /// point is on no list at all — past the end of a short listing, on a blank
-    /// line of the sidebar, or outside every column.
+    /// line of the sidebar, or outside every column — or on a part of one that
+    /// a click does nothing to. [`View::lit_at`]'s `band`, which says why.
     #[must_use]
     pub fn band_row(
         &self,
@@ -7338,13 +7551,65 @@ impl View {
         line: usize,
         cell: u16,
     ) -> Option<(Pane, usize)> {
+        self.lit_at(width, room, line, cell).band
+    }
+
+    /// EVERY ANSWER THE POINTER'S LIGHT ASKS OF A POINT, from ONE layout of
+    /// the column under it (`crate::sections::LitAt`): what a press there
+    /// takes, the band, the accent's line and a grid cell's name.
+    ///
+    /// # Why one layout
+    ///
+    /// Each of the four laid the column out on its own — the band twice, for
+    /// it asked what the press takes inside it — and a frame asks all of them
+    /// of the same point: five layouts a frame for a hand resting on the
+    /// listing, beside the paint's own. Both doors ask this once a frame and
+    /// read their light off it; the four questions below are this, read for
+    /// one answer.
+    ///
+    /// # The air takes and lights nothing
+    ///
+    /// The one place the light and the click part, and on purpose. With marks
+    /// up, a click on the listing's air puts them down (`Hit::Air`, `C-A`'s own
+    /// code) — and a band there would be a band on no row. A hover band says
+    /// which LINE OF A LIST the pointer is on, and the air is what is left of
+    /// the listing where there is none: past the last entry, past the last
+    /// cell of a shelf, and the sentence of an empty folder, which is drawn on
+    /// a line no entry has. Pressing the blank of a listing to let go of a
+    /// selection is the gesture every listing has, and none of them lights
+    /// the blank.
+    #[must_use]
+    pub fn lit_at(
+        &self,
+        width: u16,
+        room: usize,
+        line: usize,
+        cell: u16,
+    ) -> crate::sections::LitAt {
         let chrome = self.chrome_rows(width, &self.texts);
         let panes = self.panes(width);
         let in_strip = panes.strip > 0 && line >= room;
         let which = panes.section_at(cell, width, in_strip);
         let sections = self.sections_of(&chrome, room, width, &self.texts, Some(which));
-        let (sec, inside) = at_line(&sections, which, line)?;
-        // AND NO BAND AT ALL OVER A GRID.
+        let Some((sec, inside)) = at_line(&sections, which, line) else {
+            return crate::sections::LitAt::default();
+        };
+        // ONLY WHERE A PRESS TAKES SOMETHING (invariant 19).
+        //
+        // A line with a field on it was enough, and a field is not a target:
+        // the menu's title, a fact that is only read, a line of a text, the
+        // folder one is already in, the sentence of an empty folder and the
+        // air beside a crumb all lit, and a click on any of them did nothing.
+        // `View::takes` is the click's own table read at the same point, so
+        // the band, the field's accent and the click are one answer.
+        let Some(taken) = self
+            .hit_in(sec, inside, chrome.len(), cell)
+            .filter(|t| t.hit != Hit::Air && self.takes(t))
+        else {
+            return crate::sections::LitAt::default();
+        };
+        let here = (sec.pane, sec.top + inside);
+        // THE BAND, and NONE AT ALL OVER A GRID.
         //
         // The rule is older than this mode and `band_belongs` already states
         // it: a band says which LINE OF A LIST the pointer is on, and a
@@ -7352,29 +7617,91 @@ impl View {
         // photographs, so there is no line for it to be about — the owner
         // photographed what drawing one anyway looks like: *"a linha do hover
         // do mouse aparece e está enorme. Porém não deveria aparecer nenhuma
-        // linha"*.
+        // linha"*. What still says where the pointer is, is the FIELD it
+        // lights — the name under the cell — and that is the same answer a
+        // picture in the preview panel gets.
         //
-        // What still says where the pointer is, is the FIELD it lights — the
-        // name under the cell — and that is the same answer a picture in the
-        // preview panel gets.
-        if sec.grid.is_some() {
-            return None;
-        }
         // A LINE WITH NOTHING ON IT IS NOT A ROW. Past the last entry the
         // listing pads with empty rows and the sidebar with its gaps; lighting
         // those would promise a click on nothing.
-        if sec.content.get(inside).is_none_or(|r| r.fields.is_empty()) {
-            return None;
-        }
+        //
         // AND NEVER OVER A PICTURE. The band says which ROW OF A LIST the
         // pointer is on, and the globe is not a list — the same sentence
         // `band_belongs` already makes about a photograph in the preview. Its
         // lines carry a field so the pointer can NAME them; that is a different
         // question from whether to stripe them.
-        if matches!(sec.pane, Pane::Info) && inside < sec.above {
-            return None;
+        let band = (sec.grid.is_none()
+            && sec
+                .content
+                .get(inside)
+                .is_some_and(|r| !r.fields.is_empty())
+            && !(matches!(sec.pane, Pane::Info) && inside < sec.above))
+            .then_some(here);
+        // THE ACCENT'S LINE, wider than the band's: a grid, a picture and the
+        // globe each take a click — a film's controls, a picture's expand
+        // button, the path over a grid — and the field under the pointer is
+        // what says so there.
+        let accent = (sec.pane == taken.pane).then_some(here);
+        // IN A GRID, the cell's name: the grid the point was just resolved
+        // against — the layout above wrote `drawn_grid`.
+        let grid = (taken.pane == Pane::Listing
+            && taken.row != usize::MAX
+            && self.plain()
+            && self.grid_now().is_some())
+        .then(|| taken.hit.clone());
+        crate::sections::LitAt {
+            taken: Some(taken),
+            band,
+            line: accent,
+            grid,
         }
-        Some((sec.pane, sec.top + inside))
+    }
+
+    /// WHETHER THE POINTER MAY LIGHT A POINT — whether a press there takes
+    /// anything. The ONE predicate both doors' light reads: the band
+    /// ([`View::band_row`]), the field's accent and, in a grid, the cell's
+    /// name ([`View::grid_lit_at`]). See [`View::lit_at`] for the air, which
+    /// a click takes and nothing lights.
+    #[must_use]
+    pub fn takes_at(&self, width: u16, room: usize, line: usize, cell: u16) -> bool {
+        self.lit_at(width, room, line, cell).taken.is_some()
+    }
+
+    /// The section and its own line a press at a point takes — where the
+    /// pointer's ACCENT may light, which is wider than where a BAND may.
+    ///
+    /// [`View::band_row`] refuses a grid, a picture and the globe, and each of
+    /// them still takes a click: a film's controls, a picture's expand button,
+    /// the path over a grid. The field under the pointer is what says so there,
+    /// and it is lit on this line. `None` where [`View::takes_at`] says no.
+    #[must_use]
+    pub fn taken_line(
+        &self,
+        width: u16,
+        room: usize,
+        line: usize,
+        cell: u16,
+    ) -> Option<(Pane, usize)> {
+        self.lit_at(width, room, line, cell).line
+    }
+
+    /// IN A GRID, the `Hit` the cell under a point lights with
+    /// (`fields::lit_with`) — the target its click takes — and `None` off the
+    /// grid's cells, or where the click takes nothing.
+    ///
+    /// # Why a grid needs its own answer
+    ///
+    /// Because a grid has no band — the owner's *"não deveria aparecer nenhuma
+    /// linha"*, `band_row` — and most of a cell carries no field: the picture
+    /// is painted over cells the view left empty. Lit by the field under the
+    /// pointer, a cell lit only while the hand happened to be on its name, and
+    /// a click on its picture took the cell (`View::hit`'s grid arm) with
+    /// nothing on screen saying which. What says which is the cell's NAME, so
+    /// that is what lights, wherever in the cell the pointer rests — both of
+    /// its runs, and never the glyph that fills the picture's room.
+    #[must_use]
+    pub fn grid_lit_at(&self, width: u16, room: usize, line: usize, cell: u16) -> Option<Hit> {
+        self.lit_at(width, room, line, cell).grid
     }
 
     /// THE LISTING'S SECTION as it stands right now.
@@ -9378,6 +9705,7 @@ impl View {
                 .collect(),
             query: String::new(),
             cursor: 0,
+            aimed: false,
             typed: false,
         });
         Step::Changed
@@ -9493,6 +9821,7 @@ impl View {
     fn open_menu(&mut self) -> Step {
         self.modal_starts();
         self.menu = Some(0);
+        self.menu_aimed = false;
         Step::Changed
     }
 
@@ -18569,6 +18898,135 @@ mod tests {
         );
     }
 
+    /// FAILS IF: the pointer over a cell's picture lights nothing while a
+    /// click there takes that cell, or lights another cell's name, or the path
+    /// above the grid answers as one of its cells. What the window paints of
+    /// it is `files_window`'s
+    /// `a_grid_cell_under_the_pointer_lights_its_name_and_nothing_else`.
+    #[test]
+    fn a_grid_cell_lights_its_name_wherever_its_click_takes_it() {
+        let (v, b) = a_grid_of("grid-lit", 20);
+        let sec = the_shelves(&v, TALL, 120, &b);
+        let (from, to) = sec.cells_of(2).expect("the third entry is drawn");
+        let line = sec.line_of(2).expect("the third entry is on screen");
+        // THE PICTURE'S TOP LINE, which carries no field unless the entry is
+        // marked — the part of a cell a field-led light never reached.
+        assert!(
+            sec.content[line - sec.top]
+                .fields
+                .iter()
+                .all(|f| f.at < from || f.at >= to),
+            "this line has a field inside the cell, so it proves nothing"
+        );
+        for cell in [from, (from + to) / 2] {
+            assert_eq!(
+                v.hit(120, TALL, line, cell, &b).map(|t| t.hit),
+                Some(Hit::Name(2)),
+                "a click on the picture at cell {cell} does not take the third entry"
+            );
+            assert!(
+                v.takes_at(120, TALL, line, cell),
+                "cell {cell} took and lit nothing"
+            );
+            assert_eq!(
+                v.grid_lit_at(120, TALL, line, cell),
+                Some(Hit::Name(2)),
+                "the picture at cell {cell} lights something other than its own name"
+            );
+        }
+        // WHAT LIGHTS WITH IT IS THAT CELL'S NAME: something of the entry's
+        // own is drawn to light (`fields::lit_with`).
+        assert!(
+            sec.content
+                .iter()
+                .flat_map(|r| r.fields.iter())
+                .any(|f| lit_with(f, &Hit::Name(2))),
+            "nothing of the third entry lights with it"
+        );
+        // AND OFF THE GRID'S CELLS IT ANSWERS NOTHING: the path above them is
+        // lit by its own field, as in a list.
+        assert_eq!(
+            v.grid_lit_at(120, TALL, 0, 1),
+            None,
+            "the path answered as a cell"
+        );
+    }
+
+    /// FAILS IF: an entry of a playlist in the preview takes a click — it
+    /// plays that entry — and lights no band, on its name or past it.
+    #[test]
+    fn a_playlist_entry_lights_where_its_click_plays_it() {
+        let dir = scratch("playlist-lit");
+        std::fs::write(dir.join("a.m3u"), b"one.mp3\n").unwrap();
+        let mut v = view_at(&dir);
+        v.panel.preview_on = true;
+        v.reread();
+        v.measured_preview(256.0, 144.0);
+        v.cursor = v
+            .shown
+            .iter()
+            .position(|&n| v.entries[n].name == "a.m3u")
+            .expect("the playlist is in the listing");
+        v.panel.asked = Some("prev:lit".to_owned());
+        v.looked(Looked {
+            key: "prev:lit".to_owned(),
+            path: dir.join("a.m3u"),
+            rgba: None,
+            moving: None,
+            list: Some(a_list(&["one.mp3", "two.mp3", "three.mp3"], &dir)),
+            text: None,
+            why: None,
+            facts: Vec::new(),
+            mime: "audio/x-mpegurl",
+            turns: false,
+            outlined: 0,
+            at: None,
+            amendable: crate::inspection_edit::Amendable::default(),
+        });
+        let b = bundle();
+        let (width, room) = (200u16, 12usize);
+        assert!(
+            v.band_belongs(Pane::Preview),
+            "a list in the preview refused its band"
+        );
+        let sec = v
+            .sections(&v.chrome_rows(width, &b), room, width, &b)
+            .into_iter()
+            .find(|s| s.pane == Pane::Preview)
+            .expect("a preview section");
+        // THE ENTRY'S BACKING FIELD, which runs across its whole row.
+        let (inside, back) = sec
+            .content
+            .iter()
+            .enumerate()
+            .find_map(|(k, r)| {
+                r.fields
+                    .iter()
+                    .find(|f| f.hit == Hit::Track(1))
+                    .map(|f| (k, f.clone()))
+            })
+            .expect("the second entry is drawn");
+        let line = sec.top + inside;
+        let end = back.at + width_of(&back.text).saturating_sub(2);
+        for cell in [back.at + 1, end] {
+            assert_eq!(
+                v.hit(width, room, line, cell, &b).map(|t| t.hit),
+                Some(Hit::Track(1)),
+                "cell {cell} of the entry is not the entry"
+            );
+            assert!(
+                v.takes_at(width, room, line, cell),
+                "a click plays the entry at cell {cell} and the light says it takes nothing"
+            );
+            assert_eq!(
+                v.band_row(width, room, line, cell),
+                Some((Pane::Preview, line)),
+                "the entry at cell {cell} lights no band"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_size_ring_answers_on_a_short_door_too() {
         // THE DEFECT THIS CATCHES, reported: *"ao apertar Ctrl+Shift+g os
@@ -19492,6 +19950,233 @@ mod tests {
         assert_eq!(v.band_row(120, ROOM, 8, first), None);
     }
 
+    /// FAILS IF: the pointer lights a cell whose click does nothing, or a cell
+    /// whose click does something stays dark where a band may be drawn — at
+    /// every cell of the path, the header, the entries, the air under them and
+    /// the facts beside them, of a folder and of an empty one (invariant 19).
+    ///
+    /// THE CLICK IS RUN, AND NOT READ. Every target the sweep meets is pressed
+    /// once, on a view planted the same way, and `Step::Nothing` is the one
+    /// answer that means nothing happened. Comparing `takes_at` with `takes`
+    /// would be asking the table whether it agrees with itself.
+    #[test]
+    fn the_pointer_lights_exactly_what_the_click_takes() {
+        let dir = scratch("lit-is-taken");
+        std::fs::write(dir.join("a.txt"), b"letters").unwrap();
+        std::fs::write(dir.join("b.txt"), b"more letters").unwrap();
+        std::fs::create_dir(dir.join("empty")).unwrap();
+        let b = bundle();
+        // WIDE ENOUGH FOR BOTH PANELS BESIDE THE LISTING, and taller than the
+        // listing, so its air is on screen.
+        let (width, room) = (200u16, 16usize);
+        let planted = |at: &Path| {
+            let mut v = view_at(at);
+            v.reread();
+            with_panels(&mut v);
+            // THE ROW THAT NAMES THE COLUMNS, drawn: its headings sort.
+            let _ = v.key(of_view("C-D"));
+            v
+        };
+        let mut met: Vec<&str> = Vec::new();
+        for at in [dir.clone(), dir.join("empty")] {
+            let v = planted(at.as_path());
+            // THE STRIP'S LINES TOO, should the panels go down there.
+            let lines = room + usize::from(v.panes(width).strip);
+            // WHAT EACH TARGET'S CLICK DID, pressed once per target: a click
+            // changes the view it lands on, so each lands on a fresh one.
+            let mut pressed: Vec<(Pane, usize, Hit, bool)> = Vec::new();
+            for line in 0..lines {
+                for cell in 0..width {
+                    let target = v.hit(width, room, line, cell, &b);
+                    let takes = v.takes_at(width, room, line, cell);
+                    let band = v.band_row(width, room, line, cell);
+                    assert!(
+                        band.is_none() || takes,
+                        "{at:?}, line {line}, cell {cell}: a band over a cell a click \
+                         does nothing to ({target:?})"
+                    );
+                    let Some(t) = target else {
+                        assert!(!takes, "line {line}, cell {cell} takes with no target");
+                        continue;
+                    };
+                    met.push(match (t.pane, &t.hit) {
+                        (Pane::Listing, Hit::Crumb(_)) => "a crumb",
+                        (Pane::Listing, Hit::Nothing) if line == 0 => "the folder one is in",
+                        (Pane::Listing, Hit::Sort(_)) => "a heading",
+                        (Pane::Listing, Hit::Name(_)) => "an entry",
+                        (Pane::Listing, Hit::Air) => "the air",
+                        (Pane::Info, Hit::Amend(..)) => "a fact that changes the file",
+                        (Pane::Info, Hit::Nothing) => "a fact that is only read",
+                        _ => "",
+                    });
+                    let known = pressed
+                        .iter()
+                        .find(|(p, r, h, _)| *p == t.pane && *r == t.row && *h == t.hit)
+                        .map(|(_, _, _, done)| *done);
+                    let done = known.unwrap_or_else(|| {
+                        let mut fresh = planted(at.as_path());
+                        let again = fresh.hit(width, room, line, cell, &b);
+                        assert_eq!(
+                            again.as_ref().map(|a| (a.pane, a.row, a.hit.clone())),
+                            Some((t.pane, t.row, t.hit.clone())),
+                            "the copy resolved line {line}, cell {cell} to something else"
+                        );
+                        // THE ROW THE CURSOR IS ON IS NOT CLICKED: there the
+                        // first click IS the `RET`, and it is the click's all
+                        // the same — from any other row the first click
+                        // selects it (`region::held_to_the_click`'s rule).
+                        let here = t.pane == Pane::Listing
+                            && matches!(t.hit, Hit::Name(n) if n == fresh.cursor());
+                        // A CRUMB IS ASKED WHERE IT LEADS, and not pressed:
+                        // pressed, it enters a folder of this machine — the
+                        // scratch's own parents — and reads it.
+                        let done = here
+                            || match &t.hit {
+                                Hit::Crumb(n) => fresh.crumb_target(*n).is_some(),
+                                hit => {
+                                    fresh.click(t.row, hit, ronoctua_keymap::Mods::default())
+                                        != Step::Nothing
+                                }
+                            };
+                        pressed.push((t.pane, t.row, t.hit.clone(), done));
+                        done
+                    });
+                    assert_eq!(
+                        takes,
+                        done,
+                        "{at:?}, line {line}, cell {cell}: the light says {takes} and the \
+                         click {} ({t:?})",
+                        if done { "did something" } else { "did nothing" }
+                    );
+                    // AND WHERE A BAND MAY BE DRAWN, EVERY CELL THAT TAKES HAS
+                    // ONE. The preview of a file nobody looked at is not a list,
+                    // and its expand button lights by its accent alone.
+                    if takes && v.band_belongs(t.pane) {
+                        assert!(
+                            band.is_some(),
+                            "line {line}, cell {cell} takes a click and lights no band ({t:?})"
+                        );
+                    }
+                }
+            }
+        }
+        // THE SWEEP MET EVERY KIND OF CELL IT IS ABOUT, or it proved nothing.
+        for kind in [
+            "a crumb",
+            "the folder one is in",
+            "a heading",
+            "an entry",
+            "the air",
+            "a fact that changes the file",
+            "a fact that is only read",
+        ] {
+            assert!(met.contains(&kind), "the sweep never met {kind}");
+        }
+
+        // THE SENTENCE OF AN EMPTY FOLDER IS READ, and lights nowhere.
+        let empty = planted(dir.join("empty").as_path());
+        let said = b.t(crate::key::FILES_NOTHING_HERE);
+        let listing = empty
+            .sections(&empty.chrome_rows(width, &b), room, width, &b)
+            .into_iter()
+            .find(|s| s.pane == Pane::Listing)
+            .expect("the listing is a section");
+        let (line, note) = listing
+            .content
+            .iter()
+            .enumerate()
+            .find_map(|(n, r)| r.fields.iter().find(|f| f.text == said).map(|f| (n, f.at)))
+            .expect("the empty folder says it is empty");
+        for cell in [note, note + 1, note + 4] {
+            assert!(
+                !empty.takes_at(width, room, listing.top + line, cell),
+                "the empty folder's sentence lit at cell {cell}"
+            );
+        }
+
+        // AND THE ONE PLACE THE TWO PART, ON PURPOSE: with marks up, the air
+        // takes a click — it puts them down — and lights nothing, because a
+        // band there would be a band on no row (`View::lit_at`).
+        let mut v = planted(dir.as_path());
+        v.key(of_view("C-a"));
+        let cell = v.panes(width).listing_from() + 1;
+        let air = room - 1;
+        assert_eq!(
+            v.hit(width, room, air, cell, &b).map(|t| t.hit),
+            Some(Hit::Air),
+            "the fixture's last line is not the listing's air"
+        );
+        assert!(!v.takes_at(width, room, air, cell), "the air lit");
+        assert_eq!(
+            v.band_row(width, room, air, cell),
+            None,
+            "the air grew a band"
+        );
+        assert_ne!(
+            v.click(usize::MAX, &Hit::Air, ronoctua_keymap::Mods::default()),
+            Step::Nothing,
+            "the air did not put the marks down"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: over an open menu a cell lights that a click does nothing to,
+    /// or the air past a row's label stops answering — and lighting — as that
+    /// row, or the menu's title lights at all.
+    #[test]
+    fn a_menu_row_lights_and_takes_across_its_width_and_its_title_neither() {
+        let dir = scratch("lit-menu");
+        std::fs::write(dir.join("a.txt"), b"letters").unwrap();
+        let mut v = view_at(&dir);
+        v.reread();
+        v.key(of_view("C-m"));
+        assert!(!v.plain(), "the menu did not open");
+        let b = bundle();
+        let (width, room) = (120u16, 16usize);
+        // THE TITLE, read on its first cell: it says who the menu is about.
+        assert_eq!(
+            v.hit(width, room, 0, 1, &b).map(|t| t.hit),
+            Some(Hit::Nothing),
+            "the menu's first line is not its title"
+        );
+        let mut rows = 0;
+        for line in 0..room {
+            for cell in 0..width {
+                assert_eq!(
+                    v.band_row(width, room, line, cell).is_some(),
+                    v.takes_at(width, room, line, cell),
+                    "menu line {line}, cell {cell}: the band and the click disagree ({:?})",
+                    v.hit(width, room, line, cell, &b)
+                );
+            }
+            // A ROW ANSWERS AT ITS FAR END AS IT DOES ON ITS LABEL, which
+            // begins at cell seven.
+            let Some(label) = v
+                .hit(width, room, line, 8, &b)
+                .filter(|t| matches!(t.hit, Hit::Menu(_)))
+            else {
+                continue;
+            };
+            rows += 1;
+            let far = width - 2;
+            assert_eq!(
+                v.hit(width, room, line, far, &b).map(|t| t.hit),
+                Some(label.hit.clone()),
+                "the air past the label of menu line {line} is not that row"
+            );
+            assert!(
+                v.takes_at(width, room, line, far),
+                "menu line {line} takes a click at cell {far} and lights nothing"
+            );
+        }
+        assert!(rows > 3, "only {rows} rows of the menu were met");
+        assert!(
+            !(0..width).any(|cell| v.takes_at(width, room, 0, cell)),
+            "the menu's title lit"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn clicking_a_menu_row_runs_it() {
         // NOTHING REACHABLE ONLY BY THE KEYBOARD. The menu draws the key beside
@@ -19526,13 +20211,432 @@ mod tests {
             .hit(120, ROOM, line, cell, &b)
             .expect("the row has a field");
         assert_eq!(target.hit, want, "the point resolved to another row");
+        // THE FIRST CLICK SELECTS THE ROW, and the second is its `Enter`
+        // (invariant 19): the menu's cursor was born on another row.
+        assert_eq!(
+            v.click(target.row, &target.hit, ronoctua_keymap::Mods::default()),
+            Step::Changed,
+            "the first click on `copy the path` did something else than select it"
+        );
+        assert!(
+            v.modal_all(120, &b)
+                .iter()
+                .find(|r| r.focused)
+                .is_some_and(|r| r.fields.iter().any(|f| f.hit == want)),
+            "the first click did not put the menu's cursor on the row"
+        );
         assert!(
             matches!(
                 v.click(target.row, &target.hit, ronoctua_keymap::Mods::default()),
                 Step::Do(Doing::Copy(_))
             ),
-            "clicking `copy the path` did not copy it"
+            "the second click on `copy the path` did not copy it"
         );
+    }
+
+    /// Every point of a region `width` by `room` — the strip's lines too —
+    /// where [`View::hit`] resolves a target `wanted` accepts.
+    fn points_of(
+        v: &View,
+        (width, room): (u16, usize),
+        b: &ronoctua_i18n::Texts,
+        wanted: impl Fn(&Hit) -> bool,
+    ) -> Vec<(usize, u16)> {
+        let lines = room + usize::from(v.panes(width).strip);
+        (0..lines)
+            .flat_map(|line| (0..width).map(move |cell| (line, cell)))
+            .filter(|&(line, cell)| {
+                v.hit(width, room, line, cell, b)
+                    .is_some_and(|t| wanted(&t.hit))
+            })
+            .collect()
+    }
+
+    /// A click AT A POINT, as both doors make one: [`View::hit`] there, and
+    /// [`View::click`] on what it resolved. `None` where it resolves nothing.
+    fn click_at(
+        v: &mut View,
+        (width, room): (u16, usize),
+        (line, cell): (usize, u16),
+        b: &ronoctua_i18n::Texts,
+    ) -> Option<Step> {
+        let t = v.hit(width, room, line, cell, b)?;
+        Some(v.click(t.row, &t.hit, ronoctua_keymap::Mods::default()))
+    }
+
+    /// Three people, so the owner's question has rows past its first.
+    fn three_people() -> Roster {
+        Roster::parse(
+            "root:x:0:0::/root:/bin/sh\nnoctua:x:1000:100::/home/noctua:/bin/sh\nnobody:x:65534:65534::/:/bin/sh\n",
+            "root:x:0:\nusers:x:100:\n",
+        )
+    }
+
+    /// A folder with one file, both panels on and the cursor on the file, so
+    /// its facts are on screen beside the listing.
+    fn facts_of_one_file(dir: &Path) -> View {
+        let mut v = plainly(View::at(
+            dir,
+            three_people(),
+            Zone::utc(),
+            None,
+            std::sync::Arc::new(Vec::new()),
+            std::rc::Rc::new(bundle()),
+            no_sidebar(),
+        ));
+        v.reread();
+        with_panels(&mut v);
+        v.cursor = v
+            .shown
+            .iter()
+            .position(|&n| v.entries[n].name == "one.txt")
+            .expect("the file is in the listing");
+        v
+    }
+
+    /// Whether a target is the fact a test is about.
+    type IsTheFact = fn(&Hit) -> bool;
+
+    /// The three facts whose click asks a question, by what they are.
+    const ASKING_FACTS: [(&str, IsTheFact); 3] = [
+        ("a permission letter", |h| {
+            matches!(h, Hit::Bit(..) | Hit::Special(..))
+        }),
+        ("the owner", |h| matches!(h, Hit::Owner(_))),
+        ("the group", |h| matches!(h, Hit::Group(_))),
+    ];
+
+    /// FAILS IF: a double click on a permission letter, on the owner or on
+    /// the group of the facts applies anything (invariant 19).
+    ///
+    /// The first press asks, and the question comes up under the pointer that
+    /// pressed — across the region's whole width, its rows taking a press
+    /// past their label. So the second press falls on the question, and it
+    /// may only move the question's cursor, or be the `Enter` of the row the
+    /// question was born on — which, for a change of mode, is `no`. It
+    /// answered on the first click, and a double click on a letter applied
+    /// the `chmod` with nobody choosing `yes`. Swept over every cell of each
+    /// fact and over four sizes of region, because which answer lies under
+    /// which fact is a matter of where the facts happen to be drawn.
+    #[test]
+    fn a_double_click_on_a_fact_answers_nothing() {
+        let dir = scratch("double-fact");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let b = bundle();
+        let mut met = [0usize; ASKING_FACTS.len()];
+        for size in [(200u16, ROOM), (200, 16), (WIDE, TALL), (160, 12)] {
+            for (k, (what, wanted)) in ASKING_FACTS.iter().enumerate() {
+                let points = points_of(&facts_of_one_file(&dir), size, &b, wanted);
+                for point in points {
+                    let mut v = facts_of_one_file(&dir);
+                    let first = click_at(&mut v, size, point, &b);
+                    assert!(
+                        v.picking.is_some(),
+                        "{what} at {point:?} of {size:?} asked nothing: {first:?}"
+                    );
+                    let second = click_at(&mut v, size, point, &b);
+                    assert!(
+                        !matches!(second, Some(Step::Do(_))),
+                        "a double click on {what} at {point:?} of {size:?} applied {second:?}"
+                    );
+                    met[k] += 1;
+                }
+            }
+        }
+        for (k, (what, _)) in ASKING_FACTS.iter().enumerate() {
+            assert!(met[k] > 0, "the sweep never met {what}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: two clicks on an answer — the first selecting it, the second
+    /// on the row it selected — do not answer it, or the first one already
+    /// does, the row the question was born on included (invariant 19); or a
+    /// row the person put the cursor on by the keys is not answered by one
+    /// click, its `Enter`.
+    #[test]
+    fn two_clicks_on_an_answer_answer_it_and_one_selects_it() {
+        let dir = scratch("two-on-an-answer");
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        let b = bundle();
+        let size = (200u16, ROOM);
+        let groups = Roster::default().mine().len();
+        let asked = |wanted: IsTheFact, what: &str| {
+            let mut v = facts_of_one_file(&dir);
+            let at = points_of(&v, size, &b, wanted)
+                .first()
+                .copied()
+                .unwrap_or_else(|| panic!("{what} is not on screen"));
+            let _ = click_at(&mut v, size, at, &b);
+            assert!(v.picking.is_some(), "{what} asked nothing");
+            v
+        };
+        for (what, wanted) in ASKING_FACTS {
+            // EVERY ANSWER, the one the cursor was born on as well — a
+            // session in one group has one answer to that question.
+            let answers = if what == "the group" {
+                groups.min(2)
+            } else {
+                2
+            };
+            for choice in 0..answers {
+                let mut v = asked(wanted, what);
+                let at = points_of(&v, size, &b, |h| *h == Hit::Choice(choice))
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| panic!("the answer {choice} to {what} is not drawn"));
+                assert_eq!(
+                    click_at(&mut v, size, at, &b),
+                    Some(Step::Changed),
+                    "the first click on answer {choice} to {what} did more than select it"
+                );
+                assert_eq!(
+                    v.picking.as_ref().map(|p| p.cursor),
+                    Some(choice),
+                    "the first click on answer {choice} to {what} did not select it"
+                );
+                let answered = click_at(&mut v, size, at, &b);
+                let expected = match (what, choice) {
+                    // `no` CHANGES NOTHING, and takes the question down.
+                    ("a permission letter", 0) => answered == Some(Step::Changed),
+                    ("a permission letter", _) => {
+                        matches!(answered, Some(Step::Do(Doing::Mode(..))))
+                    }
+                    ("the owner", 0) => matches!(answered, Some(Step::Do(Doing::Owner(_, 0)))),
+                    ("the owner", _) => {
+                        matches!(answered, Some(Step::Do(Doing::Owner(_, 1000))))
+                    }
+                    _ => matches!(answered, Some(Step::Do(Doing::Group(..)))),
+                };
+                assert!(
+                    expected,
+                    "the second click on answer {choice} to {what} gave {answered:?}"
+                );
+                assert!(v.picking.is_none(), "the answered question stayed up");
+            }
+        }
+        // AND WHERE THE KEYS PUT THE CURSOR, one click is its `Enter`: the
+        // person aimed it, and a click on that row is what `RET` does.
+        let (what, wanted) = ASKING_FACTS[0];
+        let mut v = asked(wanted, what);
+        v.key(Key {
+            mods: ronoctua_keymap::Mods::default(),
+            sym: Sym::Down,
+        });
+        let yes = points_of(&v, size, &b, |h| *h == Hit::Choice(1))[0];
+        assert!(
+            matches!(
+                click_at(&mut v, size, yes, &b),
+                Some(Step::Do(Doing::Mode(..)))
+            ),
+            "one click on the `yes` the arrow chose did not answer it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WHAT THE POINTER COSTS A FRAME, over a folder of ten thousand
+    /// entries: what each door asks of the point under it every frame, timed
+    /// and counted in layouts of a column (`View::sections_of`), beside the
+    /// paint's own layout of every column. A measurement that proves
+    /// nothing, so it is ignored; `-- --ignored --nocapture
+    /// the_pointers_cost_a_frame` prints it.
+    #[test]
+    #[ignore = "a measurement, printed with --nocapture"]
+    fn the_pointers_cost_a_frame() {
+        let dir = scratch("pointer-cost");
+        for n in 0..10_000 {
+            std::fs::write(dir.join(format!("f{n:05}.txt")), b"x").unwrap();
+        }
+        let mut v = view_at(&dir);
+        v.reread();
+        with_panels(&mut v);
+        let (width, room) = (200u16, ROOM);
+        // A POINT ON AN ENTRY, in the listing: the case every motion over it
+        // pays.
+        let line = v.chrome_lines() + 3;
+        let cell = v.panes(width).listing_from() + 4;
+        assert!(
+            v.takes_at(width, room, line, cell),
+            "the point is not on an entry"
+        );
+        let frames: u32 = 200;
+        let time = |what: &str, ask: &dyn Fn()| {
+            v.layouts.set(0);
+            let t = std::time::Instant::now();
+            for _ in 0..frames {
+                ask();
+            }
+            let per = t.elapsed() / frames;
+            println!(
+                "{what}: {per:?} a frame, {} layouts",
+                v.layouts_made() / frames as usize
+            );
+        };
+        time("the paint's layout of every column", &|| {
+            let _ = v.sections(&v.chrome_rows(width, &v.texts), room, width, &v.texts);
+        });
+        time(
+            "the footer's four questions, asked one by one as it did",
+            &|| {
+                let _ = v.band_row(width, room, line, cell);
+                let _ = v.grid_lit_at(width, room, line, cell);
+                let _ = v.takes_at(width, room, line, cell);
+                let _ = v.takes_at(width, room, line, cell);
+            },
+        );
+        time(
+            "the window's three questions, asked one by one as it did",
+            &|| {
+                let _ = v.taken_line(width, room, line, cell);
+                let _ = v.grid_lit_at(width, room, line, cell);
+                let _ = v.band_row(width, room, line, cell);
+            },
+        );
+        time("what both doors ask now, once a frame", &|| {
+            let _ = v.lit_at(width, room, line, cell);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: what the pointer's light asks of a point each frame
+    /// (`View::lit_at`) lays the column out more than once, or takes another
+    /// target than the click's own resolution there (`View::hit`, read by
+    /// `View::takes`) — anywhere over a folder, its panels, an open menu and
+    /// the entries side by side.
+    #[test]
+    fn the_pointers_light_is_one_layout_a_frame() {
+        let dir = scratch("lit-once");
+        for n in 0..12 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let b = bundle();
+        let (width, room) = (200u16, ROOM);
+        let mut met = 0;
+        for shape in ["listing", "menu", "grid"] {
+            let mut v = view_at(&dir);
+            v.reread();
+            with_panels(&mut v);
+            match shape {
+                "menu" => {
+                    v.key(of_view("C-m"));
+                    assert!(v.menu_open(), "the menu did not open");
+                }
+                "grid" => {
+                    v.key(of_view("C-g"));
+                    assert!(v.grid_shown(), "the entries did not turn over");
+                }
+                _ => {}
+            }
+            let lines = room + usize::from(v.panes(width).strip);
+            for line in 0..lines {
+                for cell in 0..width {
+                    v.layouts.set(0);
+                    let lit = v.lit_at(width, room, line, cell);
+                    assert_eq!(
+                        v.layouts_made(),
+                        1,
+                        "{shape}, line {line}, cell {cell}: the light laid the column out {} times",
+                        v.layouts_made()
+                    );
+                    let taken = v
+                        .hit(width, room, line, cell, &b)
+                        .filter(|t| t.hit != Hit::Air && v.takes(t));
+                    assert_eq!(
+                        lit.taken, taken,
+                        "{shape}, line {line}, cell {cell}: the light takes another target"
+                    );
+                    met += usize::from(lit.taken.is_some());
+                }
+            }
+        }
+        assert!(
+            met > 100,
+            "only {met} points took anything: the sweep proved nothing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a double click on a device that is not mounted runs an
+    /// action of the menu its first click opened, or two clicks on that
+    /// menu's `mount` — the first selecting it — do not mount it.
+    ///
+    /// The sidebar opens on the first click (the owner's rule), and a device
+    /// that is not mounted opens its menu: the menu comes up under the
+    /// pointer, and its rows take a press across their width. With places
+    /// above the devices, the device's row walks down past every row of the
+    /// menu, its first action — where the cursor is born — among them.
+    #[test]
+    fn a_double_click_on_a_device_runs_nothing_of_its_menu() {
+        use ronoctua_files::sidebar::Item;
+        let dir = scratch("double-device");
+        let b = bundle();
+        let size = (120u16, ROOM);
+        let planted = |places: usize| {
+            let mut v = view_with_devices(&dir);
+            for n in 0..places {
+                v.side.add(Item {
+                    id: format!("place:/lugar{n}"),
+                    target: ronoctua_files::sidebar::Target::Place(PathBuf::from(format!(
+                        "/lugar{n}"
+                    ))),
+                    label: Some(format!("lugar{n}")),
+                });
+            }
+            v.reread();
+            v
+        };
+        let mut fell_on_a_row = Vec::new();
+        let mut born = None;
+        for places in 0..8 {
+            let device = |h: &Hit| matches!(h, Hit::Sidebar(_));
+            for point in points_of(&planted(places), size, &b, device) {
+                let mut v = planted(places);
+                let _ = click_at(&mut v, size, point, &b);
+                if !v.menu_open() {
+                    // A PLACE, OR THE MOUNTED DEVICE: walked into, no menu.
+                    continue;
+                }
+                // THE ROW THE MENU'S CURSOR IS BORN ON.
+                born = born.or_else(|| {
+                    v.modal_all(size.0, &b)
+                        .into_iter()
+                        .find(|r| r.focused)
+                        .and_then(|r| r.fields.first().map(|f| f.hit.clone()))
+                });
+                let under = v.hit(size.0, size.1, point.0, point.1, &b);
+                if let Some(t) = under.as_ref().filter(|t| matches!(t.hit, Hit::SideMenu(_))) {
+                    fell_on_a_row.push(t.hit.clone());
+                }
+                let second = click_at(&mut v, size, point, &b);
+                assert!(
+                    !matches!(second, Some(Step::Do(_))),
+                    "a double click on the device at {point:?} under {places} places ran \
+                     {second:?} ({under:?})"
+                );
+            }
+        }
+        let born = born.expect("no device opened its menu");
+        assert!(
+            fell_on_a_row.contains(&born),
+            "no second press fell on {born:?}, the row the menu's cursor is born on, so \
+             this proved nothing: {fell_on_a_row:?}"
+        );
+        // AND `mount` IS TWO CLICKS, the first selecting it although the
+        // cursor was born there.
+        let mut v = planted(0);
+        let device = points_of(&v, size, &b, |h| *h == Hit::Sidebar(1))[0];
+        let _ = click_at(&mut v, size, device, &b);
+        let mount = points_of(&v, size, &b, |h| *h == Hit::SideMenu("mount"))[0];
+        assert_eq!(
+            click_at(&mut v, size, mount, &b),
+            Some(Step::Changed),
+            "the first click on `mount` did more than select it"
+        );
+        match click_at(&mut v, size, mount, &b) {
+            Some(Step::Do(Doing::Mount(ref id))) => assert_eq!(id, "/block/sda2"),
+            other => panic!("two clicks on `mount` gave {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

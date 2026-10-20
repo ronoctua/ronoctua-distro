@@ -106,7 +106,7 @@ impl Region for AgentsRegion {
             .rows(seen.columns, seen.texts)
             .into_iter()
             .map(|r| Row {
-                takes: !r.heading(),
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -319,11 +319,41 @@ mod tests {
         assert_eq!(rows.len(), view.len());
         assert!(rows.len() >= 3, "{} rows", rows.len());
         for (drawn, row) in rows.iter().zip(&view) {
-            assert_eq!(drawn.takes, !row.heading());
+            assert_eq!(drawn.takes, row.takes());
         }
         let mut w = way();
         let esc = ronoctua_keymap::Key::parse("ESC").expect("a key");
         assert_eq!(r.key(esc, &mut w), Taken::Yes);
         assert!(w.owed.contains(&Effect::Close), "{:?}", w.owed);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, a sentence, the rest of a wrapped
+    /// label — or leaves unlit one it takes. THE LIGHT IS THE CLICK: every
+    /// row clicked once, on a view of its own, and lit exactly where
+    /// something happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let held = crate::region::held_to_the_click(
+            || (region(), way()),
+            &seen,
+            |r, w: &Recorder| crate::region::seen(r, &w.owed, &seen),
+        );
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

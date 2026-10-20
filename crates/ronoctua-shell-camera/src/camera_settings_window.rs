@@ -327,6 +327,17 @@ impl Content for CameraSettingsWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, and only that row lights
+    /// under the pointer — the view's one answer
+    /// ([`crate::camera_settings::Row::takes`]), which the footer's region
+    /// gives too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::camera_settings::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -566,5 +577,24 @@ mod tests {
         assert!(!w.snapshot.reading, "the planted reading was not taken");
         assert_eq!(w.snapshot.cameras.len(), 1);
         assert_eq!(at_the_cursor(&w, &ui).0, Target::DefaultCamera);
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections, a sentence — or
+    /// leaves unlit one it takes. THE LIGHT IS THE CLICK: every row clicked
+    /// once, on a window of its own, and lit exactly where something
+    /// happened. The footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let held = crate::door::held_to_the_click(
+            || (a_window(), Ui::for_tests(texts())),
+            crate::door::seen,
+        );
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

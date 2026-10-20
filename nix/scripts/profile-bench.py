@@ -598,6 +598,30 @@ def read(path):
         return f.read()
 
 
+# The format of a unit's `metrics` this reads (`METRICS_FORMAT` of
+# `nix/scripts/rust-unit.py`): what the whole build held that the budget pays
+# for, and the cores it was built with. A peak depends on its cores, so the
+# report says them; a measurement of another format is of another quantity
+# (1, the largest process's RSS; 2, the PSS of the build's processes, file
+# pages split with the builds beside it) and is refused.
+METRICS_FORMAT = 3
+
+
+def unit_peak(path):
+    """(peak KiB, cores) of a unit's `metrics` output; refused, naming it,
+    when it is of another format than `METRICS_FORMAT` (one with no
+    `format` file is 1, what the driver wrote before it said one)."""
+    named = os.path.join(path, "format")
+    said = read(named).strip() if os.path.exists(named) else "1"
+    if said != str(METRICS_FORMAT):
+        raise SystemExit(
+            f"profile-bench: {path} is a measurement of format {said}, not {METRICS_FORMAT}: its peak is of "
+            "another quantity, and this does not report it as one; build the variant again with the driver "
+            "of this tree (nix/scripts/rust-unit.py)"
+        )
+    return int(read(os.path.join(path, "peak-kib"))), int(read(os.path.join(path, "cores")))
+
+
 def read_json(path):
     with open(path) as f:
         return json.load(f)
@@ -771,7 +795,8 @@ def report(out, letters, decision_crate=DECISION_CRATE):
             )
         cost = read_json(built["cost"])
         seconds = {u["name"]: float(read(os.path.join(u["metrics"], "seconds"))) for u in cost["units"]}
-        peaks = {u["name"]: int(read(os.path.join(u["metrics"], "peak-kib"))) for u in cost["units"]}
+        peaks = {u["name"]: unit_peak(u["metrics"]) for u in cost["units"]}
+        heaviest = max(peaks, key=lambda n: peaks[n][0])
         layer_log = os.path.join(cost["layer"], "cargo", "release.log")
         layer_seconds = cargo_elapsed(read(layer_log))
         if layer_seconds is None:
@@ -790,7 +815,12 @@ def report(out, letters, decision_crate=DECISION_CRATE):
             # As the build wrote it (a run before the sized builds wrote the
             # two numbers it was given).
             "sizing": built.get("sizing") or {k: built[k] for k in ("max-jobs", "cores") if k in built},
-            "peak-kib": max(peaks.values()),
+            # The heaviest unit's peak and the cores it was built with: a
+            # heavy unit is built with the cores the budget leaves, so two
+            # variants' peaks are compared only at the same cores.
+            "peak-kib": peaks[heaviest][0],
+            "peak-cores": peaks[heaviest][1],
+            "peak-unit": heaviest,
             "sizes": program_sizes(built["bundle"]),
             "heaviest": sorted(seconds, key=seconds.get, reverse=True)[:5],
             "seconds": {n: seconds[n] for n in sorted(seconds, key=seconds.get, reverse=True)[:10]},
@@ -915,13 +945,24 @@ def markdown(result, letters):
     lines.append("| layer (s) | " + " | ".join(f"{costs[v]['cold']['layer']:.0f}" for v in letters) + " |")
     lines.append("| units: sum / critical (s) | " + " | ".join(f"{costs[v]['cold']['units-sum']:.0f} / {costs[v]['cold']['units-critical']:.0f}" for v in letters) + " |")
     lines.append("| cold work (s) | " + " | ".join(f"{costs[v]['cold']['work']:.0f}" for v in letters) + " |")
-    lines.append("| peak (MiB) | " + " | ".join(f"{costs[v]['peak-kib'] / 1024:.0f}" for v in letters) + " |")
+    lines.append(
+        "| peak (MiB, at cores) | "
+        + " | ".join(f"{costs[v]['peak-kib'] / 1024:.0f} at {costs[v]['peak-cores']}" for v in letters)
+        + " |"
+    )
     lines.append("| every release program (MB) | " + " | ".join(sized(costs, v, None) for v in letters) + " |")
     for program in moved_programs(costs, letters):
         lines.append(f"| {program} (MB) | " + " | ".join(sized(costs, v, program) for v in letters) + " |")
     lines.append("")
     lines.append(f"Winner: **{result['winner']}** (ranking {', '.join(result['ranking']) or 'none'}).")
     lines.append("")
+    cores = {costs[v]["peak-cores"] for v in letters}
+    if len(cores) > 1:
+        lines.append(
+            "- the peaks were measured at different cores ("
+            + ", ".join(f"{v}: {costs[v]['peak-unit']} at {costs[v]['peak-cores']}" for v in letters)
+            + "): a peak grows with its cores, so they are not compared"
+        )
     for v in letters:
         if summary[v]["reasons"]:
             lines.append(f"- {v} not acceptable: " + "; ".join(summary[v]["reasons"]))

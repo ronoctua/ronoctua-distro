@@ -457,7 +457,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | `timedate1` | `ronoctua-clock` |
 | Syncthing | `ronoctua-syncthing` (cobra `one-syncthing-boundary`) |
 | Tailscale e Tor | `ronoctua-tunnel` |
-| câmera (V4L2) | `ronoctua-camera` — só a `Capture` abre uma para quadros (cobra `the-camera-has-one-door`); ler a lista abre cada nó e pisca a luz, então só depois de um gesto da pessoa, nunca na partida (cobra `camera-vm`) |
+| câmera (V4L2) | `ronoctua-camera` — só a `Capture` abre uma para quadros (cobra `the-camera-has-one-door`); ler a lista abre cada nó e pisca a luz, então só depois de um gesto da pessoa, nunca na partida, nem pelo WirePlumber da sessão (`ronoctua.camera.pipewireCameras`, desligado; cobra `camera-vm`) |
 | o disco, para o gerenciador de arquivos | `ronoctua-files` |
 | decodificar imagem, vídeo, documento e 3D | `ronoctua-inspect` |
 | HTTP (redirecionamento e gzip só em `web`) | `ronoctua-http` (cobra `one-http-writer`) |
@@ -656,6 +656,11 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
   ponteiro leem a mesma resposta (`paint::bar_box`; cobram `a-bar-is-grabbed-where-it-is-drawn` e
   `the-pointer-lights-what-the-click-takes`). Numa linha de várias linhas, o controle é pego só na
   linha em que foi desenhado (`player_rows::controls_under`).
+- **O ponteiro acende só o que o clique toma, linha a linha** (ou célula a célula): a vista dá uma
+  resposta por linha (`Row::takes`, `View::takes`), lida pelo `Row::takes` da região, pelo
+  `Content::takes` da janela e pelo próprio clique — nunca uma para a vista inteira. A lista da porta
+  acende e entrega o clique só onde ela diz, e o rodapé acende campo só em linha que toma clique
+  (cobram `the-pointer-lights-row-by-row` e `the-pointer-lights-what-the-click-takes`).
 - A coluna da barra é dela enquanto ela é desenhada: toda pintura de barra anota a trilha
   (`canvas.bar` nas portas, `bars_drawn.record` no rodapé), o ponteiro sobre a trilha sai das linhas
   e as faixas param onde a trilha começa (`bars.rs`; cobra `a-bar-owns-its-column`).
@@ -681,7 +686,9 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
 ### Perguntas, recusas e honestidade
 
 - Pergunta que aparece sozinha, ou sobre algo que não se desfaz, desenha o `não` primeiro e o cursor
-  nasce nele.
+  nasce nele. A pergunta, o menu ou o consentimento que um clique abre nasce sob o ponteiro: o
+  primeiro clique numa linha dele só a seleciona — a do cursor inclusive — e o segundo responde
+  (`files::Picker::aimed`), senão um clique duplo responde por quem não escolheu.
 - Recusa é um valor com frase, nunca uma ausência: na tela, painel vazio e painel recusado são
   iguais.
 - Opção que ainda não faz nada diz isso na tela, em vez de parecer funcionar.
@@ -750,10 +757,12 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
   commitado (`nix run .#rust-plan` depois de mexer num `Cargo.toml`; um plano velho é recusado), e
   cada unidade — lib, programa, teste, clippy, rustfmt, terceiro — é uma derivation
   (`rust.{release,loop,test}`; cobra `our-crates-are-built-unit-by-unit`).
-- **A classe de uma unidade é medida** (leve, média ou pesada, do `metrics/peak-kib`) e mora só em
-  `nix/rust/unit-classes.json`: `nix run .#rust-peaks -- --write` a regrava depois de um build (e
-  depois de um lock novo, sem build), e uma unidade cujo pico e a folga passam da fatia da sua
-  classe é recusada (cobram `unit-classes-fit-the-measures` e
+- **A classe de uma unidade é medida** (leve, média, grande ou pesada, do `metrics/peak-kib`: o pico
+  do que o build inteiro segura e o orçamento paga — memória anônima, shmem, swap e tabelas de
+  página, nunca a página de arquivo —, a um núcleo) e mora só em `nix/rust/unit-classes.json`:
+  `nix run .#rust-peaks -- --write` a regrava depois de um build (com a folga; e depois de um lock
+  novo, sem build), e uma unidade que passa da fatia da sua classe é recusada; medida em outros
+  núcleos, é só dita (cobram `unit-classes-fit-the-measures` e
   `unit-classes-name-units-of-the-index`). O plano leva a fatia em MiB em cada linha: quem o lê é o
   programa do sistema em uso.
 - **Cada programa é a sua unidade** (`rust.bins.<bin>`, `rust.brain`…), com o papel que o crate

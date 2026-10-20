@@ -74,10 +74,14 @@ in
     # machine, `ronoctua.browser.enable = true` downloads 0,42 GiB, against the
     # 23,2 GiB of installing the full profile to get at it.
     browser.enable = lib.mkDefault full;
-    # Emacs 30 and its daemon, ~0,5 GiB: measured on 2026-10-19 as what the
-    # package's closure adds to either profile, counted as the figures above
-    # are (a ceiling). It is Emacs alone now — the Doom framework's tools that
-    # rode along until then were another 0,23 GiB, most of it pandoc.
+    # Emacs 30 and its daemon, ~0,5 GiB: what the package's closure adds to
+    # either profile, counted as the figures above are (a ceiling). Measured
+    # again for the pure-GTK build that replaced the X11 one (2026-10-19):
+    # 491 MiB to `full` and 493 to `minimal`, against the X11 build's 503 and
+    # 506 — GTK 3 is there already for other programs, and the X toolkit's
+    # libraries (Xaw3d, Xt, m17n) leave with it. It is Emacs alone now — the
+    # Doom framework's tools that rode along until then were another
+    # 0,23 GiB, most of it pandoc.
     editor.emacs = lib.mkDefault full;
     # VLC, mpv, imagemagick, ghostscript and the gstreamer plugins.
     #

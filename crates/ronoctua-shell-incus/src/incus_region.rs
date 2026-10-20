@@ -179,9 +179,41 @@ impl Region for IncusRegion {
         lines
             .into_iter()
             .map(|l| Row {
-                takes: l.zones.iter().any(|z| z.target.acts()),
+                takes: l.takes(),
                 fields: l.fields,
             })
+            .collect()
+    }
+
+    /// THE CONSENT ROW'S LINES LIGHT TOGETHER: a row of the detail drawn
+    /// over several lines is one control, whose click any of them takes
+    /// (`View::control_of`, the lines the window lights together too).
+    fn control_of(&self, row: usize, seen: &Seen<'_>) -> usize {
+        View::control_of(&self.open.lines(seen.columns, LAYOUT, 0, seen.texts), row)
+    }
+
+    /// The lines laid out once, each with its control (`Told::control`):
+    /// asked row by row, [`Self::control_of`] lays them out again for each.
+    fn told(&self, seen: &Seen<'_>, skip: usize, take: usize) -> Vec<crate::region::Told> {
+        let lines = self.open.lines(seen.columns, LAYOUT, 0, seen.texts);
+        self.cursor_at
+            .set(self.open.view.cursor_line(&lines, &self.open.readings));
+        let controls: Vec<usize> = (0..lines.len())
+            .map(|n| View::control_of(&lines, n))
+            .collect();
+        lines
+            .into_iter()
+            .zip(controls)
+            .map(|(l, control)| crate::region::Told {
+                row: Row {
+                    takes: l.takes(),
+                    fields: l.fields,
+                },
+                control: Some(control),
+                ..crate::region::Told::default()
+            })
+            .skip(skip)
+            .take(take)
             .collect()
     }
 
@@ -487,36 +519,119 @@ mod tests {
         );
     }
 
-    /// FAILS IF: the pointer lights over the strip something other than what
-    /// a click there takes.
+    /// The region on the instances, as a photograph's footer opens it, with
+    /// `presses` pressed after: the list (none), an instance's detail
+    /// (`Press::Right`), a remote's with the row that lets its hosts.
+    fn pressed(presses: &[Press]) -> IncusRegion {
+        let mut r = region(OPEN_COMMAND);
+        let mut w = way();
+        for p in presses {
+            r.press(*p, &mut w);
+        }
+        r
+    }
+
+    /// The list, an instance's detail, and a remote's detail with the
+    /// consent's row — what the light is held to the click over.
+    const STATES: [&[Press]; 3] = [
+        &[],
+        &[Press::Right],
+        &[Press::NextKind, Press::NextKind, Press::Right],
+    ];
+
+    /// FAILS IF: a resting pointer lights, at any cell of a line of the
+    /// footer's region — the strip of kinds, a row of the list, the detail's
+    /// title, a tab, a fact, a heading, a note, a line of the consent's row,
+    /// the margin before them — a cell where a click takes nothing, or
+    /// leaves unlit one where a click takes something; or lights anything
+    /// with no cell under it. THE LIGHT IS THE CLICK, CELL BY CELL, as the
+    /// footer lights and clicks a row (`Row::takes`, then `Region::lit` and
+    /// `Region::clicked_at` on the row's control, `Region::control_of`):
+    /// every cell where a stretch begins or ends clicked once, on a view of
+    /// its own, and lit exactly where something happened. The cursor's own
+    /// place — the kind shown, the tab shown, the line the cursor is on —
+    /// lights all the same, a click there having nothing left to do.
     #[test]
     fn the_pointer_lights_what_the_click_takes() {
+        use crate::incus::tests::{own_place, probes};
         let t = texts();
         let zone = ronoctua_files::when::Zone::utc();
         let seen = Seen {
             texts: &t,
             columns: 100,
-            lines: 20,
+            lines: 40,
             zone: &zone,
             photographing: true,
             lent: crate::region::Lent::none(),
         };
-        let r = region(OPEN_COMMAND);
-        let lines = r.open.lines(100, LAYOUT, 0, &t);
-        let (row, stretch) = lines
-            .iter()
-            .enumerate()
-            .find_map(|(n, l)| {
-                l.zones
+        for presses in STATES {
+            let first = pressed(presses);
+            let lines = first.open.lines(seen.columns, LAYOUT, 0, &t);
+            let rows = first.rows(&seen);
+            let cursor = first.cursor_in(&seen);
+            let (mut lit_once, mut dark_once) = (false, false);
+            let mut wrong = Vec::new();
+            for (n, line) in lines.iter().enumerate() {
+                assert_eq!(first.lit(n, None, &seen), Lit::Nothing, "line {n}");
+                let control = first.control_of(n, &seen);
+                for cell in probes(line) {
+                    let lit =
+                        rows[n].takes && first.lit(control, Some(cell), &seen) != Lit::Nothing;
+                    lit_once |= lit;
+                    dark_once |= !lit;
+                    let mut r = pressed(presses);
+                    let mut w = way();
+                    let before = crate::region::seen(&r, &w.owed, &seen);
+                    r.clicked_at(control, Some(cell), &mut w);
+                    let did = crate::region::seen(&r, &w.owed, &seen) != before;
+                    let own = cursor == Some(n) || own_place(&first.open.view, line, cell);
+                    if lit != did && !(lit && own) {
+                        wrong.push(format!(
+                            "{presses:?}, line {n}, cell {cell}: lit {lit}, did {did}"
+                        ));
+                    }
+                }
+            }
+            assert!(lit_once && dark_once, "{presses:?}: all lit, or none");
+            assert!(wrong.is_empty(), "{wrong:#?}");
+        }
+    }
+
+    /// FAILS IF: the lines of the consent's row — the hosts, then what for —
+    /// are not ONE control in the footer: a line of it its own control lights
+    /// alone, while a click on any of them takes the row
+    /// (`Region::control_of`); or a line of another row is taken for one of
+    /// the consent's.
+    #[test]
+    fn the_consent_lines_light_together() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let r = pressed(STATES[2]);
+        let lines = r.open.lines(seen.columns, LAYOUT, 0, &t);
+        let consent: Vec<usize> = (0..lines.len())
+            .filter(|&n| {
+                lines[n]
+                    .zones
                     .iter()
-                    .find(|z| matches!(z.target, crate::incus::Target::Kind(_)))
-                    .map(|z| (n, (z.from, z.to)))
+                    .any(|z| matches!(z.target, crate::incus::Target::Consent(_)))
             })
-            .expect("the strip of kinds is drawn");
-        assert_eq!(
-            r.lit(row, Some(stretch.0), &seen),
-            Lit::Cells(stretch.0, stretch.1)
-        );
-        assert_eq!(r.lit(row, None, &seen), Lit::Nothing);
+            .collect();
+        assert!(consent.len() >= 2, "the consent's row on {consent:?}");
+        for n in 0..lines.len() {
+            let control = r.control_of(n, &seen);
+            if consent.contains(&n) {
+                assert_eq!(control, consent[0], "line {n} of the consent's row");
+            } else {
+                assert_eq!(control, n, "line {n} is not the consent's");
+            }
+        }
     }
 }

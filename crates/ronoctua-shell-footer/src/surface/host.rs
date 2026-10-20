@@ -680,10 +680,9 @@ impl Footer {
             .enumerate()
             .map(|(k, told)| {
                 let n = skip + k;
-                let click = told
-                    .row
-                    .takes
-                    .then(|| Click::Region(region.control_of(n, &seen)));
+                let click = told.row.takes.then(|| {
+                    Click::Region(told.control.unwrap_or_else(|| region.control_of(n, &seen)))
+                });
                 let description = told.about.or_else(|| region.about(n, &seen));
                 match told.pair {
                     // THE FOOTER'S OWN TWO COLUMNS, laid by its grid.
@@ -1071,6 +1070,32 @@ impl Footer {
                 )))
             }
         }
+    }
+
+    /// Whether a click on `line` where THIS pointer rests takes something —
+    /// the row has a click, and the shown region does not say the cell under
+    /// the pointer takes none (`Region::lit`'s `Lit::Nothing`). What a field
+    /// under the pointer is lit by, as the band is: a title, a note or the
+    /// dead stretch of a row lights nothing, since it takes nothing.
+    ///
+    /// IN SECTIONS, the sections' own answer at the point (`Sectioned::takes_at`),
+    /// as the frame already asked it once (`lit`, `Sectioned::lit_at`): a
+    /// line there is every section's, and the line's click says only that
+    /// one of them has something on it.
+    pub(super) fn takes_under_pointer(
+        &self,
+        line: &ExpansionRow,
+        lit: Option<&crate::sections::LitAt>,
+    ) -> bool {
+        line.click.is_some()
+            && self.hosted_band(
+                line.click,
+                self.here.cell_under_pointer,
+                tokens::metrics::cell_width(tokens::text::size()),
+            ) != Some(None)
+            && self
+                .sections()
+                .is_none_or(|_| lit.is_some_and(|l| l.taken.is_some()))
     }
 
     /// What the pointer lights over the shown region's row `row` (`None`: a

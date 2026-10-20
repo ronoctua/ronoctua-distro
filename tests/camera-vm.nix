@@ -21,9 +21,10 @@
 # second `ffmpeg`, and who holds the camera by `/proc`, which is what the
 # modeline's mark reads.
 #
-# NO SOUND: the VM has no PipeWire session, and the recording is asked for with
-# the microphone and the desktop off. Sound is proved on the host (a stereo AAC
-# track, `ffprobe`); here a missing audio server must not stop the video.
+# NO SOUND: the studio runs as root, outside the person's PipeWire session, and
+# the recording is asked for with the microphone and the desktop off. Sound is
+# proved on the host (a stereo AAC track, `ffprobe`); here a missing audio
+# server must not stop the video.
 #
 # NO CAMERA OPENS BEFORE A PERSON ASKS FOR ONE. Opening a UVC node powers the
 # camera up and its light blinks — and the footer and the studio, starting,
@@ -32,6 +33,21 @@
 # nodes while the studio and a footer start, and must see nothing until the
 # camera's settings are opened, and then see the node opened. It runs as soon
 # as the webcam is up, on this test's VM: no second boot, a footer more.
+#
+# NOR DOES THE PERSON'S LOGIN. The session's PipeWire is the distro's own
+# (`base.nix`, with `studio.nix` for its cameras), and WirePlumber's V4L2 and
+# libcamera monitors open every camera when it starts, to ask what each one
+# is. The watch is up before any login is allowed, it is fanotify and not
+# inotify because the question is WHO opened (the event carries the pid), and
+# it reports by file handle so that watching never opens a camera itself. The
+# person logs in — the one open allowed is udev's `v4l_id`, once per node for
+# the seat's `change`, counted against udev's own events, and only those the
+# kernel numbered after the watch was in place — their PipeWire and
+# WirePlumber start, and the watch must see nothing more; then the same
+# machine is switched to `pipewireCameras = true`, and
+# within the same window WirePlumber opens the webcam and publishes it as a
+# PipeWire node — so the switch switches, and the window is long enough to
+# catch what it is there to catch.
 {
   pkgs,
   lib,
@@ -39,6 +55,7 @@
   ronoctua-shell,
   studio,
   fonts,
+  ronoctua,
 }:
 
 let
@@ -130,6 +147,77 @@ let
         print(json.dumps(ask(json.loads(what))))
   '';
 
+  # WHO OPENS A CAMERA NODE: one fanotify group per node, so the event names
+  # its node without decoding a handle, and FAN_REPORT_FID, so no event
+  # carries a descriptor — a descriptor would be the watch opening the camera.
+  # One JSON line per event: the node, open and/or close, the pid and what
+  # that pid is. Ready (sd_notify) only once every mark is in place, and then
+  # it writes the kernel's uevent count: a uevent numbered past it was emitted
+  # with the marks in place, so whatever udev opened for it, the watch saw.
+  watch = pkgs.writeText "camera-opens.py" ''
+    import ctypes, json, os, select, socket, struct, sys, time
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.fanotify_init.argtypes = [ctypes.c_uint, ctypes.c_uint]
+    libc.fanotify_mark.argtypes = [
+        ctypes.c_int, ctypes.c_uint, ctypes.c_uint64, ctypes.c_int, ctypes.c_char_p,
+    ]
+    FAN_CLOEXEC, FAN_REPORT_FID, FAN_MARK_ADD = 0x1, 0x200, 0x1
+    FAN_CLOSE_WRITE, FAN_CLOSE_NOWRITE, FAN_OPEN = 0x8, 0x10, 0x20
+    AT_FDCWD = -100
+
+    out = open(sys.argv[1], "a", buffering=1)
+    groups = {}
+    for path in sys.argv[3:]:
+        fd = libc.fanotify_init(FAN_CLOEXEC | FAN_REPORT_FID, os.O_RDONLY)
+        if fd < 0:
+            raise OSError(ctypes.get_errno(), "fanotify_init")
+        mask = FAN_OPEN | FAN_CLOSE_WRITE | FAN_CLOSE_NOWRITE
+        if libc.fanotify_mark(fd, FAN_MARK_ADD, mask, AT_FDCWD, path.encode()) < 0:
+            raise OSError(ctypes.get_errno(), "fanotify_mark " + path)
+        groups[fd] = path
+
+    def proc(pid, name):
+        try:
+            with open(f"/proc/{pid}/{name}", "rb") as f:
+                return f.read().replace(b"\0", b" ").decode(errors="replace").strip()
+        except OSError:
+            return None
+
+    def about(pid):
+        status = proc(pid, "status") or ""
+        uid = [line.split()[1] for line in status.splitlines() if line.startswith("Uid:")]
+        return {"comm": proc(pid, "comm"), "cmdline": proc(pid, "cmdline"),
+                "uid": uid[0] if uid else None}
+
+    with open("/sys/kernel/uevent_seqnum") as f:
+        born = int(f.read())
+    with open(sys.argv[2], "w") as f:
+        f.write(f"{born}\n")
+
+    notify = os.environ.get("NOTIFY_SOCKET")
+    if notify:
+        address = "\0" + notify[1:] if notify.startswith("@") else notify
+        socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM).sendto(b"READY=1", address)
+
+    while True:
+        ready, _, _ = select.select(list(groups), [], [])
+        for fd in ready:
+            buf = os.read(fd, 65536)
+            at = round(time.time(), 3)
+            off = 0
+            while off + 24 <= len(buf):
+                length, _, _, _, mask, _, pid = struct.unpack_from("=IBBHQii", buf, off)
+                what = []
+                if mask & FAN_OPEN:
+                    what.append("open")
+                if mask & (FAN_CLOSE_WRITE | FAN_CLOSE_NOWRITE):
+                    what.append("close")
+                event = {"at": at, "node": groups[fd], "what": what, "pid": pid}
+                out.write(json.dumps({**event, **about(pid)}) + "\n")
+                off += length
+  '';
+
   # A studio file with nothing that needs an audio server.
   studioJson = pkgs.writeText "studio.json" (
     builtins.toJSON {
@@ -148,6 +236,29 @@ pkgs.testers.runNixOSTest {
   nodes.machine =
     { config, ... }:
     {
+      # THE PERSON'S SESSION IS THE DISTRO'S: `base.nix` declares the user and
+      # PipeWire, `studio.nix` what WirePlumber does with cameras. The studio's
+      # own unit stays off — this test runs the daemon by hand, as root, and
+      # loads its own two loopbacks below.
+      imports = [
+        ../nix/modules/base.nix
+        ../nix/modules/studio.nix
+      ];
+      _module.args.ronoctua = ronoctua;
+      ronoctua.studio.enable = false;
+      networking.hostName = lib.mkForce "noctua-camera";
+      users.users.root.hashedPassword = lib.mkForce null;
+      # A LOGIN AT THE SEAT, as the machine boots into one: the person's
+      # manager starts at boot, after the watch below.
+      services.getty.autologinUser = config.ronoctua.user;
+      # THE ONE INSTRUMENT ON WIREPLUMBER: its component loader says, at
+      # debug, every component it loads — what the two states are compared
+      # by. Everything else logs at the default level.
+      systemd.user.services.wireplumber.environment.WIREPLUMBER_DEBUG = "2,wp-internal-comp-loader:D";
+
+      # THE SAME MACHINE WITH THE MONITORS ON, switched to at the end.
+      specialisation.pipewire-cameras.configuration.ronoctua.camera.pipewireCameras = true;
+
       virtualisation.memorySize = 3072;
       virtualisation.cores = 4;
 
@@ -176,10 +287,83 @@ pkgs.testers.runNixOSTest {
       fonts.packages = [ fonts.noctua-iosevka-core ];
       hardware.graphics.enable = true;
       services.dbus.enable = true;
+
+      # THE WEBCAM IS PLUGGED IN BEFORE ANYBODY LOGS IN, the way a laptop's
+      # is: the writer gives node 10 its capture side (`exclusive_caps`), so
+      # what WirePlumber would find at login is a camera, not an output.
+      systemd.services.webcam = {
+        wantedBy = [ "multi-user.target" ];
+        after = [ "systemd-modules-load.service" ];
+        serviceConfig.ExecStart =
+          "${pkgs.ffmpeg-full}/bin/ffmpeg -loglevel error -re "
+          + "-f lavfi -i testsrc2=size=640x480:rate=30 -pix_fmt yuyv422 -f v4l2 /dev/video10";
+      };
+
+      # THE WATCH IS UP BEFORE ANY LOGIN IS ALLOWED: ready only once both
+      # marks are in place, and `systemd-user-sessions` (the gate every login
+      # waits for) is ordered after it. It starts once the writer holds its
+      # node and udev has settled, so neither of those is counted, and once
+      # udev's events are being logged, so no event numbered past the watch's
+      # birth goes unlogged.
+      systemd.services.login-opens = {
+        wantedBy = [ "multi-user.target" ];
+        after = [
+          "webcam.service"
+          "login-uevents.service"
+        ];
+        before = [ "systemd-user-sessions.service" ];
+        path = [
+          pkgs.coreutils
+          pkgs.gnugrep
+          config.systemd.package
+        ];
+        preStart = ''
+          for _ in $(seq 300); do
+            if ls -l /proc/[0-9]*/fd 2>/dev/null | grep -q /dev/video10; then break; fi
+            sleep 0.1
+          done
+          udevadm settle
+        '';
+        script = "exec ${pkgs.python3}/bin/python3 -u ${watch} /tmp/login-opens.jsonl /tmp/login-opens.born /dev/video10 /dev/video42";
+        serviceConfig = {
+          Type = "notify";
+          NotifyAccess = "main";
+        };
+      };
+
+      # WHAT UDEV DOES TO THE NODES MEANWHILE. As logind opens the session,
+      # udev processes a `change` on every video node (measured: at the
+      # login, once per node), runs its rules again, and
+      # `60-persistent-v4l.rules` runs `v4l_id`, which opens the node for a
+      # `QUERYCAP`. That open is udev's, not the session's, and this log is
+      # how the test tells the two apart: every event with its `SEQNUM`, and
+      # only one numbered past the watch's birth may excuse an open — an
+      # earlier one (the boot's `add`, still in udev's hands) may have opened
+      # its node before the marks were placed. Ready only once it listens
+      # (udevadm says its header after binding), and the watch is born after.
+      systemd.services.login-uevents = {
+        wantedBy = [ "multi-user.target" ];
+        before = [ "login-opens.service" ];
+        path = [
+          pkgs.gnugrep
+          config.systemd.package
+        ];
+        script = ''
+          udevadm monitor --udev --property --subsystem-match=video4linux > /tmp/login-uevents &
+          until grep -q '^UDEV - ' /tmp/login-uevents; do sleep 0.05; done
+          systemd-notify --ready
+          wait
+        '';
+        serviceConfig = {
+          Type = "notify";
+          NotifyAccess = "all";
+        };
+      };
     };
 
   testScript = ''
     import json
+    import re
     ${xvfb.prelude}
 
     def studio(what):
@@ -202,18 +386,161 @@ pkgs.testers.runNixOSTest {
         )[1]
         return [line for line in out.splitlines() if line.strip() and "testsrc2" not in line]
 
+    def login_opens():
+        # Every open or close of a camera node since before the login, with
+        # who did it, as the fanotify watch wrote them.
+        out = machine.succeed("cat /tmp/login-opens.jsonl 2>/dev/null || true")
+        return [json.loads(line) for line in out.splitlines() if line.strip()]
+
+    def udev_events():
+        # udev's events on the video nodes, as the monitor wrote them: a
+        # `UDEV  [time] action devpath` line, then `KEY=VALUE` lines.
+        events, event = [], None
+        for line in machine.succeed("cat /tmp/login-uevents").splitlines():
+            if line.startswith("UDEV  ["):
+                event = {}
+                events.append(event)
+            elif event is not None and "=" in line:
+                key, _, value = line.partition("=")
+                event[key] = value
+            else:
+                event = None
+        return events
+
+    def ran_after(events, born, node):
+        # The events udev ran its rules for on `node` — the rules that open it
+        # for `v4l_id` run on `add` and `change` — numbered past `born`. One
+        # without a number is not counted: it can excuse nothing.
+        return [
+            e for e in events
+            if e.get("DEVNAME") == node and e.get("ACTION") in ("add", "change")
+            and e.get("SEQNUM", "").isdigit() and int(e["SEQNUM"]) > born
+        ]
+
+    # THE WINDOW in which WirePlumber, once up, would have opened the cameras:
+    # with the monitors on, the first open lands well inside it (the last
+    # subtest asserts exactly that), so an empty window with them off is an
+    # answer and not an early look.
+    WINDOW = 10
+
+    def as_person(command):
+        # In the person's manager, as a session's program runs. By path: the
+        # manager's `PATH` has no profile in it (a bare name exits 203).
+        return machine.succeed(
+            f"systemd-run --machine={person}@ --user --pipe --wait --quiet /run/current-system/sw/bin/{command}"
+        )
+
+    def camera_nodes():
+        # The PipeWire nodes WirePlumber made of a V4L2 or libcamera device.
+        nodes = []
+        for o in json.loads(as_person("pw-dump")):
+            props = (o.get("info") or {}).get("props") or {}
+            camera = props.get("device.api") in ("v4l2", "libcamera") or any(
+                k.startswith(("api.v4l2.", "api.libcamera.")) for k in props
+            )
+            if o.get("type") == "PipeWire:Interface:Node" and camera:
+                nodes.append({k: props.get(k) for k in ("node.name", "media.class", "api.v4l2.path")})
+        return nodes
+
+    def spa_plugins():
+        # The SPA plugins the person's WirePlumber has loaded: every monitor
+        # loads its own as it starts, and one that is off never does.
+        pid = machine.succeed(f"pgrep -u {person} -x wireplumber").strip()
+        maps = machine.succeed(f"cat /proc/{pid}/maps")
+        return set(re.findall(r"libspa-[a-z0-9]+", maps))
+
+    CAMERA_PLUGINS = {"libspa-v4l2", "libspa-libcamera"}
+
+    def components():
+        # Every component the person's running WirePlumber loaded, as its
+        # loader said it (the one debug topic the node turns on).
+        pid = machine.succeed(f"pgrep -u {person} -x wireplumber").strip()
+        said = machine.succeed(f"journalctl -b _PID={pid} --no-pager -o cat")
+        return set(re.findall(r"loading component '([^']+)'", said))
+
+    def camera_component(name):
+        return any(word in name for word in ("v4l2", "libcamera", "video-capture"))
+
+    def start_wireplumber(verb):
+        # What the session's first audio client does: PipeWire is socket
+        # activated, and WirePlumber is wanted by it.
+        machine.succeed(f"systemctl --machine={person}@ --user {verb} pipewire.service wireplumber.service")
+        machine.wait_until_succeeds(
+            f"systemctl --machine={person}@ --user is-active wireplumber.service", timeout=60
+        )
+        machine.wait_until_succeeds(
+            f"systemd-run --machine={person}@ --user --pipe --wait --quiet /run/current-system/sw/bin/wpctl status",
+            timeout=60,
+        )
+        machine.sleep(WINDOW)
+
     machine.start()
     machine.wait_for_unit("multi-user.target")
 
     with subtest("a camera nobody made for this distro"):
         machine.succeed("mkdir -p /run/user/0 /root/.config/ronoctua /root/out && chmod 700 /run/user/0")
         machine.succeed("cp ${studioJson} /root/.config/ronoctua/studio.json")
-        machine.succeed(
-            "systemd-run --unit=webcam ${pkgs.ffmpeg-full}/bin/ffmpeg -loglevel error -re "
-            "-f lavfi -i testsrc2=size=640x480:rate=30 -pix_fmt yuyv422 -f v4l2 /dev/video10"
+        machine.wait_for_unit("webcam.service")
+        machine.wait_for_unit("login-opens.service")
+
+    with subtest("nothing opens a camera at login"):
+        # The person, from the seat's login and not from a name written here.
+        machine.wait_until_succeeds("loginctl list-users --no-legend | grep -q .", timeout=120)
+        person = machine.succeed("loginctl list-users --no-legend | awk 'NR == 1 { print $2 }'").strip()
+        machine.wait_until_succeeds(
+            f"systemctl --machine={person}@ --user is-system-running --wait | grep -E 'running|degraded'",
+            timeout=120,
         )
-        machine.wait_until_succeeds("test -e /dev/video10")
-        machine.sleep(2)
+        machine.succeed("udevadm settle")
+        # THE LOGIN: what opened a node between the watch and a settled seat.
+        # Only udev may have, once per event it ran its rules for — the
+        # `v4l_id` that reads the capabilities — and only per event the kernel
+        # numbered past the watch's birth: an earlier one may have opened its
+        # node before the marks, and would excuse an open it did not do. An
+        # open whose process was gone before the watch read `/proc` (no comm,
+        # no uid) is excused by those events and by nothing else. A process
+        # of the person, or one still alive (a daemon), is the session opening
+        # a camera.
+        at_login = login_opens()
+        born = int(machine.succeed("cat /tmp/login-opens.born"))
+        events = udev_events()
+        print(json.dumps(at_login, indent=1))
+        print("the watch was born after uevent", born)
+        print([(e.get("SEQNUM"), e.get("ACTION"), e.get("DEVNAME")) for e in events])
+        for node in ("/dev/video10", "/dev/video42"):
+            opens = [e for e in at_login if e["node"] == node and "open" in e["what"]]
+            ran = ran_after(events, born, node)
+            assert len(opens) <= len(ran), (
+                f"{node} opened {len(opens)} times at login, and udev ran its rules for it "
+                f"{len(ran)} times after the watch was in place: {opens}"
+            )
+        strangers = [e for e in at_login if e["comm"] not in ("v4l_id", None) or e["uid"] not in ("0", None)]
+        assert strangers == [], f"the login opened a camera, and not udev: {strangers}"
+        # THE SESSION'S AUDIO, which starts on its first client: nothing at all.
+        before = len(at_login)
+        start_wireplumber("start")
+        seen = login_opens()[before:]
+        print(json.dumps(seen, indent=1))
+        assert seen == [], f"the person's PipeWire opened a camera with nobody asking: {seen}"
+        # Neither monitor loaded its plugin, and libcamera's camera manager —
+        # which logs its version as it starts — never started.
+        plugins = spa_plugins()
+        print(sorted(plugins))
+        assert not plugins & CAMERA_PLUGINS, f"WirePlumber loaded a camera plugin: {sorted(plugins)}"
+        # AND THE REST OF THE PROFILE STAYED: the fragment is merged into
+        # `main`, not put in its place — an empty `main` would be a session
+        # with no sound and no camera either. Its sound and Bluetooth
+        # monitors are two of what `main` requires.
+        assert {"libspa-alsa", "libspa-bluez5"} <= plugins, f"WirePlumber's main profile is gone: {sorted(plugins)}"
+        loaded = components()
+        print(len(loaded), sorted(loaded))
+        assert not [c for c in loaded if camera_component(c)], f"a camera component loaded: {sorted(loaded)}"
+        assert any(c.startswith("policy.standard") for c in loaded), f"no policy loaded: {sorted(loaded)}"
+        plugins_off, components_off = plugins, loaded
+        journal = machine.succeed(f"journalctl -b _UID=$(id -u {person}) --no-pager")
+        assert "libcamera v" not in journal, "the libcamera monitor started at login"
+        assert camera_nodes() == [], f"a camera is a PipeWire node with the monitors off: {camera_nodes()}"
+        print(as_person("wpctl status"))
 
     with subtest("nothing opens a camera before somebody asks for one"):
         # THE WATCH FIRST, after the `testsrc` writer opened its node: from
@@ -398,5 +725,36 @@ pkgs.testers.runNixOSTest {
         assert readers() == [], f"nobody is watching, and the camera is still held: {readers()}"
         journal = machine.succeed("journalctl -u studio --no-pager")
         assert "panicked" not in journal, journal
+
+    with subtest("with pipewireCameras on, WirePlumber opens the camera and publishes it"):
+        # LAST, because from here on the person's WirePlumber holds a say over
+        # the webcam. The same machine with the one option flipped.
+        machine.succeed("/run/current-system/specialisation/pipewire-cameras/bin/switch-to-configuration test")
+        machine.succeed(f"systemctl --machine={person}@ --user daemon-reload")
+        before = len(login_opens())
+        start_wireplumber("restart")
+        seen = login_opens()[before:]
+        print(json.dumps(seen, indent=1))
+        by_wireplumber = [e for e in seen if e["node"] == "/dev/video10" and "open" in e["what"]
+                          and e["comm"] == "wireplumber"]
+        assert by_wireplumber, f"with the monitors on, WirePlumber did not open the webcam: {seen}"
+        plugins = spa_plugins()
+        print(sorted(plugins))
+        # THE SWITCH SWITCHES THE CAMERAS AND NOTHING ELSE: the two plugins and
+        # the camera components are the whole difference.
+        assert plugins - plugins_off == CAMERA_PLUGINS, (
+            f"on {sorted(plugins)} against off {sorted(plugins_off)}"
+        )
+        assert plugins_off <= plugins, f"on {sorted(plugins)} against off {sorted(plugins_off)}"
+        loaded = components()
+        print(len(loaded), sorted(loaded - components_off))
+        assert components_off <= loaded, f"on, these did not load: {sorted(components_off - loaded)}"
+        added = loaded - components_off
+        assert added and all(camera_component(c) for c in added), f"on, these loaded too: {sorted(added)}"
+        nodes = camera_nodes()
+        print(nodes)
+        assert any(n["api.v4l2.path"] == "/dev/video10" for n in nodes), (
+            f"with the monitors on, the webcam is not a PipeWire node: {nodes}"
+        )
   '';
 }

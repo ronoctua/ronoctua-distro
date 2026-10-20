@@ -8,6 +8,9 @@ of a name nobody declared stops the build."""
 
 import importlib.util
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -237,7 +240,7 @@ class Keeps(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d:
                 out, metrics = os.path.join(d, "out"), os.path.join(d, "metrics")
                 self.plant(out, files)
-                self.plant(metrics, ["seconds", "peak-kib"])
+                self.plant(metrics, ["format", "seconds", "peak-kib", "largest-kib", "cores"])
                 self.assertEqual(ru.kept_beyond(mode, out, metrics), [], mode)
 
     def test_a_deps_directory_is_refused_in_every_kind(self):
@@ -258,13 +261,13 @@ class Keeps(unittest.TestCase):
                 self.assertEqual(sorted(said), ["lib/incremental, which is not the crate compiled",
                                                 "lib/ronoctua_x-0123.d, which is not the crate compiled"], mode)
 
-    def test_a_measurement_is_two_numbers(self):
+    def test_a_measurement_is_its_numbers_and_nothing_else(self):
         with tempfile.TemporaryDirectory() as d:
             out, metrics = os.path.join(d, "out"), os.path.join(d, "metrics")
             self.plant(out, ["verdict"])
-            self.plant(metrics, ["seconds", "peak-kib", "rustc.log"])
+            self.plant(metrics, ["format", "seconds", "peak-kib", "rustc.log"])
             self.assertEqual(ru.kept_beyond("fmt", out, metrics),
-                             ["metrics/rustc.log, which is no measurement (peak-kib, seconds)"])
+                             ["metrics/rustc.log, which is no measurement (cores, format, largest-kib, peak-kib, seconds)"])
 
     def test_the_build_stops_naming_what_it_kept(self):
         with tempfile.TemporaryDirectory() as d:
@@ -276,6 +279,288 @@ class Keeps(unittest.TestCase):
     def test_an_unknown_kind_keeps_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(len(ru.kept_beyond("doc", d, None)), 1)
+
+
+class Measures(unittest.TestCase):
+    """A unit measures its whole build — the builder and every process below
+    it — by what the budget pays for (anonymous memory, shmem, swap and page
+    tables), sampled, and says the cores it was built with."""
+
+    def proc(self, d, pid, parent, name="rustc", held=None, rss=None, old_kernel=False, statm=None, started=100,
+             exe=None, layout=None):
+        """A process of a planted `/proc`: `held` its RssAnon (with 1 kB of
+        each other field of `HELD`), `rss` its VmRSS; `old_kernel` a status
+        with no split of its memory; `statm` a process with no status;
+        `started` when it started (field 22 of its stat); `exe` where its
+        `exe` link points; `layout` where `execve` laid it out (the fields
+        `LAYOUT` of its stat, which a planted stat has none of otherwise)."""
+        base = os.path.join(d, str(pid))
+        os.makedirs(base, exist_ok=True)
+        fields = f"S {parent} 1 1 0 -1 4194304 0 0 0 0 1 2 0 0 20 0 1 0 {started} 1000 10".split()
+        if layout is not None:
+            fields += ["0"] * (max(ru.LAYOUT) - 2 - len(fields))
+            for n, value in zip(ru.LAYOUT, layout):
+                fields[n - 3] = str(value)
+        with open(os.path.join(base, "stat"), "w") as f:
+            f.write(f"{pid} ({name}) " + " ".join(fields) + "\n")
+        link = os.path.join(base, "exe")
+        if os.path.lexists(link):
+            os.remove(link)
+        if exe is not None:
+            os.symlink(exe, link)
+        if held is not None or rss is not None:
+            lines = [f"Name:\t{name}", f"VmHWM:\t{(rss or 0) + 999} kB", f"VmRSS:\t{rss or 0} kB"]
+            if not old_kernel:
+                lines += [f"RssAnon:\t{held or 0} kB", f"RssFile:\t{(rss or 0) - (held or 0)} kB",
+                          "RssShmem:\t1 kB", "VmSwap:\t1 kB", "VmPTE:\t1 kB"]
+            with open(os.path.join(base, "status"), "w") as f:
+                f.write("\n".join(lines) + "\n")
+        if statm is not None:
+            with open(os.path.join(base, "statm"), "w") as f:
+                f.write(f"9999 {statm} 10 1 0 100 0\n")
+
+    def test_the_parent_is_read_past_a_name_with_parentheses_and_spaces(self):
+        self.assertEqual(ru.parent_of("4242 (rustc (x) y) S 17 4242 1 0 -1"), 17)
+        stat = "4242 (rustc (x) y) S 17 4242 1 0 -1 4194304 0 0 0 0 1 2 0 0 20 0 1 0 98765 1000 10"
+        self.assertEqual(ru.started_of(stat), 98765)
+        self.assertIsNone(ru.started_of("4242 (rustc) S 17 4242 1 0 -1"))
+
+    def test_the_tree_is_the_root_and_everything_below_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.proc(d, 10, 1, "python3")
+            self.proc(d, 11, 10)
+            self.proc(d, 12, 10, "cc")
+            self.proc(d, 13, 12, "ld (gold) x")
+            self.proc(d, 20, 1, "other")
+            self.proc(d, 21, 20)
+            os.makedirs(os.path.join(d, "30"))  # gone before its stat was read
+            os.makedirs(os.path.join(d, "self"))
+            self.assertEqual(sorted(ru.build_tree(10, d)), [10, 11, 12, 13])
+            self.assertEqual(ru.build_tree(99, d), [99])
+
+    def test_a_process_is_what_it_holds_and_never_its_file_pages(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.proc(d, 10, 1, held=1000, rss=4000)
+            # RssAnon, and the shmem, swap and page tables beside it; never
+            # the 3000 kB of file pages.
+            self.assertEqual(ru.memory_kib(10, d), (1003, "held"))
+            self.assertEqual(ru.memory_kib(99, d), (0, "gone"))
+            # A zombie's status says no memory: it holds nothing.
+            with open(os.path.join(d, "10", "status"), "w") as f:
+                f.write("Name:\trustc\nState:\tZ (zombie)\n")
+            self.assertEqual(ru.memory_kib(10, d), (0, "gone"))
+
+    def test_what_is_readable_is_read_when_the_split_is_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            # A kernel before 4.5: no RssAnon, the whole resident set.
+            self.proc(d, 10, 1, rss=4000, old_kernel=True)
+            self.assertEqual(ru.memory_kib(10, d), (4000, "rss"))
+            # No status at all: statm's resident pages.
+            self.proc(d, 11, 10, statm=25)
+            self.assertEqual(ru.memory_kib(11, d), (25 * os.sysconf("SC_PAGE_SIZE") // 1024, "rss"))
+            # Nothing readable but the stat: nothing.
+            self.proc(d, 12, 10)
+            self.assertEqual(ru.memory_kib(12, d), (0, "gone"))
+
+    def test_a_kernel_that_does_not_split_its_memory_still_measures(self):
+        # The first reading of an old kernel's `/proc` is its RSS, never a
+        # reading of nothing that stops the build.
+        with tempfile.TemporaryDirectory() as d:
+            self.proc(d, 10, 1, "bash", rss=5000, old_kernel=True)
+            self.proc(d, 11, 10, "python3", statm=100)
+            s = ru.Sampler(10, proc=d, period=60)
+            s.start()
+            s.stop()
+            self.assertEqual(s.most_kib, 5000 + 100 * os.sysconf("SC_PAGE_SIZE") // 1024)
+            self.assertEqual(s.by_rss, 2)
+
+    def test_a_reading_sums_the_tree_and_the_most_is_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.proc(d, 9, 1, "bash", held=5000, rss=8000)
+            self.proc(d, 10, 9, "python3", held=20000, rss=30000)
+            self.proc(d, 11, 10, "rustc", held=400000, rss=700000)
+            self.proc(d, 12, 11, "rust-lld", held=300000, rss=1300000)
+            self.proc(d, 20, 1, "outside", held=900000, rss=900000)
+            s = ru.Sampler(9, proc=d)
+            self.assertEqual(s.sample(), 725000 + 4 * 3)
+            shutil.rmtree(os.path.join(d, "12"))
+            self.assertEqual(s.sample(), 425000 + 3 * 3)
+            self.assertEqual((s.most_kib, s.most_processes, s.samples), (725012, 4, 2))
+            self.assertEqual(s.largest_kib, 400003)
+
+    def test_each_live_process_counts_at_the_most_it_held(self):
+        # The compiler freed what it held before it ran the linker, and its
+        # allocator had not yet given it back — or had: which, depends on
+        # the moment. Each process counts at its own most while it lives,
+        # so both builds measure the same.
+        with tempfile.TemporaryDirectory() as d:
+            self.proc(d, 9, 1, "bash", held=5000, rss=8000)
+            self.proc(d, 11, 9, "rustc", held=400000, rss=700000)
+            s = ru.Sampler(9, proc=d)
+            s.sample()
+            self.proc(d, 11, 9, "rustc", held=100000, rss=400000)
+            self.proc(d, 12, 11, "rust-lld", held=300000, rss=1300000)
+            self.assertEqual(s.sample(), 5003 + 400003 + 300003)
+            self.assertEqual(s.most_kib, 705009)
+            # Ended, a process holds nothing; and a pid given again is
+            # another process, which starts from what it holds.
+            shutil.rmtree(os.path.join(d, "12"))
+            self.proc(d, 11, 9, "rustc", held=1000, rss=9000, started=500)
+            self.assertEqual(s.sample(), 5003 + 1003)
+            self.assertEqual(sorted(s.held), [(9, 100), (11, 500)])
+
+    def test_a_fork_copy_is_not_counted_and_its_exec_starts_from_what_it_holds(self):
+        # `rustc` starts the linker with a plain fork: until the `execve`,
+        # the child's status says rustc's memory, copied on write. Read
+        # then and kept as the child's most while it lives (it becomes
+        # `gcc`, waiting for the linker), rustc counted twice.
+        rustc = (93824992235520, 93824992235865, 140737488346224, 1, 2, 3, 140737488347199, 2, 2, 140737488351152)
+        gcc = (93824992100000, 93824992100500, 140737488346000, 4, 5, 6, 140737488347000, 7, 7, 140737488351152)
+        with tempfile.TemporaryDirectory() as d:
+            self.proc(d, 9, 1, "bash", held=5000, rss=8000, exe="/bin/bash", layout=(9,) * 10)
+            self.proc(d, 11, 9, "rustc", held=400000, rss=700000, exe="/bin/rustc", layout=rustc)
+            self.proc(d, 12, 11, "rustc", held=400000, rss=700000, exe="/bin/rustc", layout=rustc, started=200)
+            s = ru.Sampler(9, proc=d)
+            self.assertEqual(s.sample(), 5003 + 400003)
+            self.proc(d, 12, 11, "gcc", held=1021, rss=3000, exe="/bin/gcc", layout=gcc, started=200)
+            self.assertEqual(s.sample(), 5003 + 400003 + 1024)
+            self.assertEqual((s.most_kib, s.most_processes, s.copies), (5003 + 400003 + 1024, 3, 1))
+            # A process that exec'd holds what its new program holds: the
+            # most of the one before is not carried across (the shell of a
+            # wrapper that held 300 MiB, then the compiler it became).
+            self.proc(d, 13, 9, "sh", held=300000, rss=301000, exe="/bin/sh", layout=(3,) * 10, started=300)
+            self.assertEqual(s.sample(), 5003 + 400003 + 1024 + 300003)
+            self.proc(d, 13, 9, "cc1", held=1000, rss=2000, exe="/bin/cc1", layout=(4,) * 10, started=300)
+            self.assertEqual(s.sample(), 5003 + 400003 + 1024 + 1003)
+            # The same program again, laid out the same (no randomization),
+            # is the same image: its most is kept.
+            self.proc(d, 13, 9, "cc1", held=500, rss=2000, exe="/bin/cc1", layout=(4,) * 10, started=300)
+            self.assertEqual(s.sample(), 5003 + 400003 + 1024 + 1003)
+            # And a child laid out elsewhere runs another program, even if
+            # it is the same executable: counted.
+            self.proc(d, 14, 11, "rustc", held=2000, rss=4000, exe="/bin/rustc", layout=gcc, started=400)
+            self.assertEqual(s.sample(), 5003 + 400003 + 1024 + 1003 + 2003)
+
+    def test_with_no_layout_or_executable_to_read_a_copy_is_known_by_its_name(self):
+        # A kernel whose stat says no layout (before 3.5, or a process the
+        # reader may not see into) and no readable `exe`: the name alone.
+        with tempfile.TemporaryDirectory() as d:
+            self.proc(d, 9, 1, "bash", held=5000, rss=8000)
+            self.proc(d, 11, 9, "rustc", held=400000, rss=700000)
+            self.proc(d, 12, 11, "rustc", held=400000, rss=700000, started=200)
+            s = ru.Sampler(9, proc=d)
+            self.assertEqual(s.sample(), 5003 + 400003)
+            self.proc(d, 12, 11, "gcc", held=1021, rss=3000, started=200)
+            self.assertEqual(s.sample(), 5003 + 400003 + 1024)
+
+    def test_a_real_child_waiting_to_exec_is_not_its_parent_twice(self):
+        # A real process holding 128 MiB forks a child that waits a second
+        # before its `execve` (a stand-in for a busy machine, where the
+        # instant between the two is long), then runs `sleep` for a
+        # second. Counted at its parent's size while it waits, the child
+        # would be 128 MiB more.
+        sleep = shutil.which("sleep")
+        if sleep is None:
+            self.skipTest("no `sleep` to exec")
+        work = ("import os, sys, time\n"
+                "b = bytearray(128 << 20)\n"
+                "for i in range(0, len(b), 4096): b[i] = 1\n"
+                "sys.stdout.write('ready\\n'); sys.stdout.flush()\n"
+                "pid = os.fork()\n"
+                "if pid == 0:\n"
+                "    time.sleep(1.0)\n"
+                f"    os.execv({sleep!r}, ['sleep', '1'])\n"
+                "os.waitpid(pid, 0)\n")
+        big = subprocess.Popen([sys.executable, "-c", work], stdout=subprocess.PIPE, text=True)
+        self.assertEqual(big.stdout.readline().strip(), "ready")
+        s = ru.Sampler(os.getpid(), period=0.02, share=0.5)
+        s.start()
+        big.wait()
+        s.stop()
+        big.stdout.close()
+        self.assertGreaterEqual(s.most_kib, 128 * 1024)
+        self.assertGreater(s.copies, 5)
+        # This test's own process, the one holding 128 MiB and `sleep`: far
+        # less than twice the 128.
+        self.assertLess(s.most_kib, 128 * 1024 + 96 * 1024)
+
+    def test_reading_stays_a_share_of_a_core(self):
+        self.assertEqual(ru.next_wait(0.0001), ru.SAMPLE_SECONDS)
+        self.assertAlmostEqual(ru.next_wait(0.030), 0.030 * 19)
+        took, wait = 0.030, ru.next_wait(0.030)
+        self.assertLessEqual(took / (took + wait), ru.SAMPLE_SHARE + 1e-9)
+        with tempfile.TemporaryDirectory() as d:
+            self.proc(d, 10, 1, "python3", held=20000, rss=30000)
+            s = ru.Sampler(10, proc=d, period=0.2)
+            s.sample()
+            self.assertEqual(s.wait, 0.2)
+
+    def test_a_first_reading_of_nothing_stops_the_build(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(SystemExit):
+                ru.Sampler(10, proc=d).start()
+
+    def test_the_tree_is_read_from_the_builder(self):
+        self.assertEqual(ru.builder_pid(), os.getppid())
+
+    def test_the_build_runs_with_no_transparent_huge_page(self):
+        # Asked of a child, as every process of the build is: the setting is
+        # inherited, and kept across `execve`.
+        with open("/proc/self/status") as f:
+            if not any(line.startswith("THP_enabled:") for line in f):
+                self.skipTest("this kernel's status says nothing of transparent huge pages")
+        child = [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import importlib.util as u; "
+                 "s = u.spec_from_file_location('ru', sys.argv[2]); m = u.module_from_spec(s); s.loader.exec_module(m); "
+                 "m.no_huge_pages(); import subprocess; print(m.HUGE_PAGES); "
+                 "print(subprocess.run(['cat', '/proc/self/status'], capture_output=True, text=True).stdout)",
+                 os.path.dirname(os.path.abspath(ru.__file__)), os.path.abspath(ru.__file__)]
+        said = subprocess.run(child, capture_output=True, text=True, check=True).stdout
+        self.assertEqual(said.splitlines()[0], "off")
+        self.assertIn("THP_enabled:\t0", said)
+
+    def test_the_thread_reads_a_real_child_while_it_runs(self):
+        # A real child holding 64 MiB of its own for a while, read by the
+        # real `/proc` (outside a build's sandbox it lists every process of
+        # the machine, so the share is wide: the test asks for readings, not
+        # their cost).
+        s = ru.Sampler(os.getpid(), period=0.05, share=0.5)
+        s.start()
+        child = subprocess.run(
+            [sys.executable, "-c", "import time; b = b'x' * (64 << 20); time.sleep(1.0)"], check=True)
+        s.stop()
+        self.assertEqual(child.returncode, 0)
+        self.assertGreaterEqual(s.most_kib, 64 * 1024)
+        self.assertGreaterEqual(s.largest_kib, 64 * 1024)
+        self.assertGreaterEqual(s.most_processes, 2)
+        self.assertGreater(s.samples, 5)
+        self.assertEqual(s.by_rss, 0)
+
+    def test_the_peak_is_the_tree_and_says_its_cores(self):
+        m = ru.measurement(720000, 400000, 12.345, 3)
+        self.assertEqual(m, {"format": f"{ru.METRICS_FORMAT}\n", "peak-kib": "720000\n", "largest-kib": "400000\n",
+                             "seconds": "12.35\n", "cores": "3\n"})
+        self.assertEqual(set(m), ru.MEASURED)
+
+    def test_the_metrics_are_written_and_are_what_a_unit_may_keep(self):
+        with tempfile.TemporaryDirectory() as d:
+            saved = ru.METRICS, ru.SAMPLER, ru.CORES
+            try:
+                ru.METRICS, ru.CORES = os.path.join(d, "metrics"), 4
+                ru.SAMPLER = ru.Sampler(os.getpid())
+                ru.SAMPLER.most_kib, ru.SAMPLER.largest_kib = 1 << 40, 1 << 30
+                ru.write_metrics()
+                read = {}
+                for n in os.listdir(ru.METRICS):
+                    with open(os.path.join(ru.METRICS, n)) as f:
+                        read[n] = f.read()
+            finally:
+                ru.METRICS, ru.SAMPLER, ru.CORES = saved
+            self.assertEqual(set(read), ru.MEASURED)
+            self.assertEqual((read["format"], read["cores"], read["peak-kib"], read["largest-kib"]),
+                             ("3\n", "4\n", f"{1 << 40}\n", f"{1 << 30}\n"))
+            os.makedirs(os.path.join(d, "out"))
+            open(os.path.join(d, "out", "verdict"), "w").close()
+            self.assertEqual(ru.kept_beyond("fmt", os.path.join(d, "out"), os.path.join(d, "metrics")), [])
 
 
 class ThirdParty(unittest.TestCase):

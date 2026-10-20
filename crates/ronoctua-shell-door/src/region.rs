@@ -255,6 +255,11 @@ pub struct Told {
     /// row's own cells: it wears `surface.selection`, as the file manager's
     /// cursor does.
     pub chosen: Option<(u16, u16)>,
+    /// The row this row's click lands on, when it is a line of a control of
+    /// several — said with the row by a region that lays every row out to
+    /// tell them, so the footer does not ask [`Region::control_of`] row by
+    /// row, which lays them all out again for each. `None`: it asks.
+    pub control: Option<usize>,
 }
 
 impl From<Row> for Told {
@@ -2886,6 +2891,136 @@ impl<T> Post<T> {
         }
         true
     }
+}
+
+// ── THE LIGHT HELD TO THE CLICK, for every view's tests ─────────────────────
+//
+// Invariant 19: the pointer lights what the click takes. A view's test builds
+// the view fresh once per row, clicks the row ONCE — the click that selects —
+// and asks whether anything a person or the machine sees moved; the row was to
+// be lit exactly then. Once, and not the second click that is `RET`: a row the
+// first click does not take, the second does not either (the cursor did not
+// move), and a `RET` run on every row of a test reaches the machine — a
+// consent written, a clock turned. The row the cursor already stands on is
+// the one where the first click IS the `RET`, and it is not clicked
+// ([`Held::here`]). The window's half is `crate::door::held_to_the_click`.
+
+/// ONE ROW HELD TO THE RULE THAT THE POINTER LIGHTS WHAT THE CLICK TAKES:
+/// whether the door lights it under a resting pointer, and whether a click on
+/// it, in a view of its own, did anything.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Held {
+    /// The row, as drawn.
+    pub row: usize,
+    /// Whether a resting pointer lights it.
+    pub lit: bool,
+    /// Whether a click on it did anything that is seen.
+    pub did: bool,
+    /// Whether the fresh view's cursor was on it, or on the control it is a
+    /// line of — where the click is already the `RET`, and so it is not
+    /// clicked: lit, it is the click's all the same, since from any other
+    /// row the first click selects it.
+    pub here: bool,
+}
+
+/// Every row of a region `fresh` opens, [`Held`] to its click: lit by its
+/// [`Row::takes`] at `seen`, and clicked once through [`Region::clicked`] on a
+/// view of its own each time — but the row the cursor is on — and `witness`
+/// is what a click is seen by (the rows, the cursor, [`deeds`]).
+#[cfg(any(test, feature = "test-support"))]
+pub fn held_to_the_click<R: Region, D: Doorway, W: PartialEq>(
+    fresh: impl Fn() -> (R, D),
+    seen: &Seen<'_>,
+    witness: impl Fn(&R, &D) -> W,
+) -> Vec<Held> {
+    let first = fresh().0;
+    let lit: Vec<bool> = first.rows(seen).iter().map(|r| r.takes).collect();
+    // THE CURSOR'S CONTROL, every line of it (`Region::control_of`): a click
+    // on any of them lands where the cursor is, and is its `RET`.
+    let cursor = first.cursor_in(seen).map(|c| first.control_of(c, seen));
+    lit.iter()
+        .enumerate()
+        .map(|(row, &lit)| {
+            let here = cursor == Some(first.control_of(row, seen));
+            if here {
+                return Held {
+                    row,
+                    lit,
+                    did: false,
+                    here,
+                };
+            }
+            let (mut r, mut way) = fresh();
+            let before = witness(&r, &way);
+            r.clicked(row, &mut way);
+            Held {
+                row,
+                lit,
+                did: witness(&r, &way) != before,
+                here,
+            }
+        })
+        .collect()
+}
+
+/// What a region asked of its door that is SEEN — `owed` without the frames
+/// it asked for (a repaint, rows changed, the page following a cursor that
+/// did not move, a height measured again): a click that asks only those did
+/// nothing.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn deeds(owed: &[Effect]) -> Vec<Effect> {
+    owed.iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                Effect::Repaint
+                    | Effect::RowsChanged
+                    | Effect::Follow
+                    | Effect::FollowIfSeen(_)
+                    | Effect::Page(Paging::Follow)
+                    | Effect::Resized
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+/// What [`held_to_the_click`] sees of a region by default: its rows' fields
+/// at `at`, its cursor as drawn, and the [`deeds`] of what it asked (`owed`,
+/// the [`Recorder`]'s).
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn seen<R: Region>(
+    r: &R,
+    owed: &[Effect],
+    at: &Seen<'_>,
+) -> (Vec<Vec<crate::fields::Field>>, Option<usize>, Vec<Effect>) {
+    (
+        r.rows(at).into_iter().map(|row| row.fields).collect(),
+        r.cursor_in(at),
+        deeds(owed),
+    )
+}
+
+/// The rows [`held_to_the_click`] found lit without a click that does
+/// anything, or a click that does something without the light — empty when
+/// the light is the click. The row the cursor stood on is lit by being the
+/// cursor's ([`Held::here`]). Said whole, for an assertion's message.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn unheld(held: &[Held]) -> Vec<String> {
+    held.iter()
+        .filter(|h| h.lit != h.did && !(h.lit && h.here))
+        .map(|h| {
+            if h.lit {
+                format!("row {} is lit and a click on it does nothing", h.row)
+            } else {
+                format!("row {} is not lit and a click on it does something", h.row)
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -140,6 +140,17 @@ pub struct Row {
     pub spot: String,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on — and so
+    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
+    /// and click (the region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]).
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// A [`Target`] in a row that has to be `Eq` — the settings carry floats, and
 /// a row is compared by what it DRAWS, which the target is not part of.
 #[derive(Debug, Clone)]
@@ -225,7 +236,7 @@ impl View {
     /// Answers whether the cursor was ALREADY on that row: that is the second
     /// click, which the door turns into `RET` (invariant 19).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
-        if rows.get(n).is_some_and(|r| !r.heading) {
+        if rows.get(n).is_some_and(Row::takes) {
             let again = self.cursor == n;
             self.moved = true;
             self.cursor = n;
@@ -1216,51 +1227,56 @@ fn keys_reached() -> Vec<&'static str> {
         .collect()
 }
 
+/// One device of [`a_laptop`], its settings read.
+#[cfg(test)]
+fn device(id: &str, kind: DeviceKind) -> ronoctua_compositor::Device {
+    ronoctua_compositor::Device {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        kind,
+        settings: PointerSettings {
+            send_events: Some(SendEvents::Enabled),
+            natural_scroll: Some(false),
+            tap: (kind == DeviceKind::Touchpad).then_some(false),
+            accel_speed: Some(0.0),
+            ..PointerSettings::default()
+        },
+    }
+}
+
+/// A LAPTOP — a touchpad and a mouse, two cursors — built without the
+/// compositor: what the view's tests and both doors' read, and never this
+/// machine's.
+#[cfg(test)]
+pub(crate) fn a_laptop() -> Snapshot {
+    let devices = vec![
+        device("2:2:Touchpad", DeviceKind::Touchpad),
+        device("3:3:Dongle_Mouse", DeviceKind::Mouse),
+    ];
+    // Detection on, so the touchpad and the mouse are two cursors.
+    let prefs = prefs::Preferences {
+        detect: true,
+        ..prefs::Preferences::default()
+    };
+    let plan = ronoctua_pointers::plan::plan(&devices, &prefs);
+    Snapshot {
+        devices,
+        seats: Vec::new(),
+        prefs,
+        plan,
+        settings_failed: false,
+        settings_repaired: false,
+        connected: true,
+        keyboards: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_compositor::Device;
 
     fn texts() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").expect("the base language")
-    }
-
-    fn device(id: &str, kind: DeviceKind) -> Device {
-        Device {
-            id: id.to_owned(),
-            name: id.to_owned(),
-            kind,
-            settings: PointerSettings {
-                send_events: Some(SendEvents::Enabled),
-                natural_scroll: Some(false),
-                tap: (kind == DeviceKind::Touchpad).then_some(false),
-                accel_speed: Some(0.0),
-                ..PointerSettings::default()
-            },
-        }
-    }
-
-    fn a_laptop() -> Snapshot {
-        let devices = vec![
-            device("2:2:Touchpad", DeviceKind::Touchpad),
-            device("3:3:Dongle_Mouse", DeviceKind::Mouse),
-        ];
-        // Detection on, so the touchpad and the mouse are two cursors.
-        let prefs = prefs::Preferences {
-            detect: true,
-            ..prefs::Preferences::default()
-        };
-        let plan = ronoctua_pointers::plan::plan(&devices, &prefs);
-        Snapshot {
-            devices,
-            seats: Vec::new(),
-            prefs,
-            plan,
-            settings_failed: false,
-            settings_repaired: false,
-            connected: true,
-            keyboards: Vec::new(),
-        }
     }
 
     #[test]

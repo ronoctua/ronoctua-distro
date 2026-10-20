@@ -259,6 +259,18 @@ pub struct Row {
     pub heading: bool,
 }
 
+impl Row {
+    /// Whether a click takes it — the first line of a setting, which the
+    /// cursor stands on — and so whether a resting pointer lights it: ONE
+    /// ANSWER for both doors' light and click (the footer's row, the
+    /// window's `Content::takes`, [`View::clicked`]). A title, the air
+    /// before it, the rest of a wrapped label and a note take nothing.
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// The view: where the cursor is. Everything it draws is read from the
 /// preferences each door hands it, so the two doors draw one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -288,11 +300,12 @@ impl View {
         crate::chrome::hint_of(OF_THE_VIEW, texts)
     }
 
-    /// Puts the cursor where a click landed. Answers whether the cursor was
+    /// Puts the cursor where a click landed — on a row that takes one
+    /// ([`Row::takes`]), and nowhere else. Answers whether the cursor was
     /// ALREADY on that row: that is the second click, which the door turns
     /// into `RET` (invariant 19).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
-        if rows.get(n).is_some_and(|r| !r.heading) {
+        if rows.get(n).is_some_and(Row::takes) {
             let again = self.cursor == n;
             self.cursor = n;
             return again;

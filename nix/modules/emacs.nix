@@ -2,7 +2,7 @@
 #
 # WHAT THE DISTRO DOES, AND WHAT IT LEAVES ALONE
 # ----------------------------------------------
-# The package (`emacs30`, as nixpkgs builds it), the daemon (`services.emacs`,
+# The package (`emacs30-pgtk`, as nixpkgs builds it), the daemon (`services.emacs`,
 # a user unit, so `emacsclient` opens in a process that has already loaded
 # everything), the variable the file manager reaches `emacsclient` by, and the
 # switch. Nothing else: no `init.el`, no `default.el`, no file under
@@ -33,7 +33,25 @@
 
 let
   cfg = config.ronoctua;
-  emacsPkg = pkgs.emacs30;
+  # THE PURE-GTK BUILD, Wayland's own: its frames are `xdg_toplevel`s of the
+  # compositor, never X windows through XWayland. The session imports
+  # `WAYLAND_DISPLAY` and never `DISPLAY` (`scroll.nix`), and the X11 build's
+  # (`emacs30`, Lucid) `emacsclient -c` reads only `DISPLAY`: started from the
+  # session, it found no display and no terminal, and opened nothing.
+  #
+  # WHAT IT COSTS: GTK keeps a display it drew on, and leaves with it — a
+  # compositor that ends on its own (`s q q`, a crash) takes the daemon with
+  # it, through GDK's `_exit(1)`, and the unit's `Restart=always` brings it
+  # back empty: every buffer is gone, process buffers too (shells,
+  # compilations, TRAMP connections), and nobody was asked about the unsaved
+  # ones. And `_exit` skips `kill-emacs` whole: the edits since the last
+  # auto-save are not auto-saved, and `kill-emacs-hook` never runs (what
+  # savehist, recentf, bookmarks and desktop-save-mode write at the end is not
+  # written). The Lucid daemon outlived the same end. A STOP of the person's
+  # manager is not that: the unit is ordered so the daemon stops first, on a
+  # SIGTERM that runs `kill-emacs` (below). `tests/emacs-vm.nix` proves the
+  # frame native and holds the measure (`docs/ARCHITECTURE.md`).
+  emacsPkg = pkgs.emacs30-pgtk;
 
   # WHERE A FIRST CONFIGURATION IS BORN — before the daemon starts, an EMPTY
   # `$XDG_CONFIG_HOME/emacs` in a home that has none of the places Emacs
@@ -153,7 +171,25 @@ in
       # attribute set and not a dotted path: the dotted one spells the unit's
       # file name, which `brain-modules-are-sealed` reads as this file naming
       # the unit a brain module watches.
+      #
+      # AND IT STOPS BEFORE THE COMPOSITOR (`After=`, which systemd reverses
+      # at a stop). When the person's manager ends — a power-off, a reboot,
+      # the end of the last login — every unit is stopped at once unless an
+      # order says otherwise, and the pure-GTK daemon with a frame open raced
+      # the compositor: when the compositor went first, GDK ended the process
+      # (`_exit(1)`, after "Error reading events from display" or "Lost
+      # connection to Wayland compositor") in the middle of the SIGTERM's
+      # `kill-emacs` — measured, the hook had run and the auto-save had not,
+      # in four stops of six. Ordered, Emacs gets the SIGTERM while its
+      # display is still there, and the compositor waits for it to finish. It costs nothing at boot: the
+      # compositor has no job there (the login shell starts it), and an order
+      # with no job beside it waits for nothing — the daemon still comes up
+      # at `default.target` with no session. The compositor ENDING on its own
+      # (`s q q`, a crash) is not a stop of this unit, and still takes the
+      # daemon (`emacsPkg`, above). `tests/emacs-vm.nix` stops the manager
+      # with a frame open and an edit unsaved, again and again.
       systemd.user.services.emacs = {
+        after = [ "scroll.service" ];
         serviceConfig.ExecStartPre = "-${pkgs.runtimeShell} -c 'source ${config.system.build.setEnvironment}; exec ${emacsHome}'";
       };
 

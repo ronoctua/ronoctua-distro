@@ -1052,6 +1052,15 @@ impl Row {
         !self.heading && !self.continues
     }
 
+    /// Whether a click takes it — a row the cursor stops on, a line that
+    /// continues one, a shelf of the grid (by the cell under the pointer) —
+    /// and so whether a resting pointer lights it. Never a title, a note,
+    /// the air between sections or a line of a picture.
+    #[must_use]
+    pub fn takes(&self) -> bool {
+        !self.heading || !self.cells.is_empty()
+    }
+
     /// The row line `n` of `rows` belongs to.
     #[must_use]
     pub fn owner(rows: &[Self], n: usize) -> usize {
@@ -1358,11 +1367,39 @@ impl View {
         Some(texts.t(k))
     }
 
+    /// WHICH OF `rows` A CLICK TAKES, row by row — and so the only rows a
+    /// resting pointer lights, in both doors: the region's `Row::takes` and
+    /// the window's `Content::takes` read this, and [`View::clicked`] reads
+    /// the same [`Row::takes`]. While a description is edited, only its
+    /// lines and its question's answers take one ([`text_hit`]): a click
+    /// anywhere else does nothing.
+    ///
+    /// ONE ANSWER FOR THE LIGHT AND THE CLICK. The region said it in a line
+    /// of its own, and the window lit by another, which knew nothing of a
+    /// row of several lines.
+    #[must_use]
+    pub fn takes(&self, rows: &[Row]) -> Vec<bool> {
+        rows.iter()
+            .enumerate()
+            .map(|(n, r)| {
+                if self.editing.is_some() {
+                    text_hit(rows, n, 0).is_some()
+                } else {
+                    r.takes()
+                }
+            })
+            .collect()
+    }
+
     /// Puts the cursor where a click landed — on a row, or on the cell of a
-    /// shelf at `column` (a field's `at`). Answers whether the cursor was
-    /// ALREADY there: that is the second click, which the door turns into
-    /// `RET` (invariant 19). A click on a line being edited places the caret.
+    /// shelf at `column` (a field's `at`), and on no row that takes no click
+    /// ([`Row::takes`]). Answers whether the cursor was ALREADY there: that
+    /// is the second click, which the door turns into `RET` (invariant 19).
+    /// A click on a line being edited places the caret.
     pub fn clicked(&mut self, n: usize, column: u16, rows: &[Row]) -> bool {
+        if !rows.get(n).is_some_and(Row::takes) {
+            return false;
+        }
         let owner = Row::owner(rows, n);
         let Some(row) = rows.get(owner) else {
             return false;

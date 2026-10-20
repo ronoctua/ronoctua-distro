@@ -270,6 +270,19 @@ pub struct Row {
     pub target: Target,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on, a fact the
+    /// machine cannot change from here included — and so whether a resting
+    /// pointer lights it: ONE ANSWER for both doors' light and click (the
+    /// region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]). A title, the air between sections and a note take
+    /// nothing.
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// What the view wants done, after a key or a click.
 ///
 /// # A change, and never the whole record
@@ -1117,9 +1130,10 @@ fn acting(rows: &[Row]) -> impl Iterator<Item = &Row> {
     rows.iter().filter(|r| !r.heading)
 }
 
-/// Which acting row the DRAWN row `n` is, when it is one at all.
+/// Which acting row the DRAWN row `n` is, when it is one a click takes
+/// ([`Row::takes`]) at all.
 fn acting_index(rows: &[Row], n: usize) -> Option<usize> {
-    if rows.get(n)?.heading {
+    if !rows.get(n)?.takes() {
         return None;
     }
     Some(rows.iter().take(n).filter(|r| !r.heading).count())

@@ -23,8 +23,6 @@
 //! remote-viewer, which the CLI opens. Every value of the draft, a path, a
 //! snapshot's name is typed on this window's own line (`Ui::ask`).
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
@@ -131,8 +129,6 @@ type Bar = (Pane, Rect, Option<Rect>, ronoctua_design::Scroll);
 /// What one pointer keeps of its own over this window.
 #[derive(Debug, Default)]
 pub struct Pointed {
-    /// Which pointer this is, given on its first frame — `0` is "not yet".
-    number: u32,
     /// The cell along the line under it: three columns share a line.
     cell: Option<u16>,
     /// The column whose bar this pointer holds.
@@ -147,9 +143,6 @@ pub struct IncusWindow {
     open: Open,
     /// The cell the last press was on — what `clicked` reads.
     click_cell: Option<u16>,
-    /// Every pointer's line and cell, by its number — for the hover bands.
-    pointers: BTreeMap<u32, (Option<usize>, Option<u16>)>,
-    hands: u32,
     /// The drawn line the keyboard's cursor is on, stacked.
     cursor_at: Option<usize>,
     /// What it opens on, once the first listing is here.
@@ -169,8 +162,6 @@ impl IncusWindow {
         Self {
             open: Open::new(view, feed, zone, queue_keys),
             click_cell: None,
-            pointers: BTreeMap::new(),
-            hands: 0,
             cursor_at: None,
             opening: (opening == Opening::New).then_some(opening),
         }
@@ -300,6 +291,12 @@ impl IncusWindow {
     }
 
     /// The cell a pixel is in, counted as the fields are.
+    ///
+    /// THE MARGIN IS CELL 0, as the footer counts it (`Footer::cell_at`):
+    /// outside every stretch, so nothing lights there and a click there takes
+    /// nothing. Read as no cell, it lit nothing while its click took the
+    /// line's first stretch (`View::clicked` with no cell) — the first kind,
+    /// the first tab.
     fn cell_at(ui: &Ui, x: f64) -> Option<u16> {
         let cell = f64::from(tokens::metrics::cell_width(tokens::text::size()));
         if cell <= 0.0 || x < 0.0 {
@@ -307,7 +304,24 @@ impl IncusWindow {
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let which = (x / cell) as u16;
-        which.checked_sub(ui.margin)
+        Some(which.saturating_sub(ui.margin))
+    }
+
+    /// The stretches a pointer at `x` on drawn line `row` lights, as
+    /// `(line, from, to)` — the zone a press there takes and, for a row drawn
+    /// over several lines (the consent's), each of its lines
+    /// (`View::hover_spans`, which reads the zones `View::clicked` does), at
+    /// the cell [`IncusWindow::cell_at`] counts for the press too: one answer
+    /// for the band and the click.
+    fn lit_at(
+        lines: &[crate::incus::Line],
+        ui: &Ui,
+        row: usize,
+        x: Option<f32>,
+    ) -> Vec<(usize, u16, u16)> {
+        x.and_then(|x| Self::cell_at(ui, f64::from(x)))
+            .map(|cell| View::hover_spans(lines, row, cell))
+            .unwrap_or_default()
     }
 
     /// Each scrolling column's bar, placed — one function for the paint and
@@ -474,6 +488,16 @@ impl Content for IncusWindow {
         self.lines(ui).into_iter().map(|l| l.fields).collect()
     }
 
+    /// A click reaches `clicked` on a line where some stretch takes one — the
+    /// view's one answer (`incus::Line::takes`), which the footer's region
+    /// gives too; which stretch, the press's cell says.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.lines(ui)
+            .iter()
+            .map(crate::incus::Line::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         // THE PANES SCROLL INSIDE THEMSELVES; stacked, the door follows the
         // cursor's line — after a key or a click.
@@ -495,10 +519,6 @@ impl Content for IncusWindow {
     }
 
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<Pointed>, events: &[PointerEvent]) {
-        if hand.extra.number == 0 {
-            self.hands = self.hands.wrapping_add(1).max(1);
-            hand.extra.number = self.hands;
-        }
         let before = hand.extra.cell;
         for e in events {
             match e.kind {
@@ -516,8 +536,6 @@ impl Content for IncusWindow {
         if !self.panes_pointer(ui, hand, events) {
             crate::door::list::pointer(self, ui, hand, events);
         }
-        self.pointers
-            .insert(hand.extra.number, (hand.row_under_pointer, hand.extra.cell));
         // A NEW CELL CAN BE A NEW COLUMN: the band follows the column.
         if before != hand.extra.cell {
             ui.ask_paint();
@@ -547,11 +565,10 @@ impl Content for IncusWindow {
             // (`Ui::settle_offset`); it never brings it back to the cursor.
             ui.settle_offset(rows.len());
         }
-        // THE LINES WITHOUT THEIR HOVER, which is drawn below by zone.
-        let lit = canvas.lit;
-        canvas.lit = &[];
-        crate::door::list::body(ui, canvas, &rows);
-        canvas.lit = lit;
+        // THE LINES WITHOUT THEIR HOVER, which is drawn below by zone: no row
+        // is lit whole.
+        let (lit, lit_x) = (canvas.lit, canvas.lit_x);
+        crate::door::list::body(ui, canvas, &rows, &[], None);
         let first = ui.first_of_list();
         let f = ui.frame(first);
         let cell = f.cell();
@@ -584,24 +601,22 @@ impl Content for IncusWindow {
             }
         }
         // EVERY CURSOR'S HOVER, in its own colour, over the stretch of the
-        // line the pointer is in: a column, a kind on the strip, a tab.
+        // line ITS pointer is in — a column, a kind on the strip, a tab, every
+        // line of the consent's row — read from where that pointer is across
+        // the surface (`Canvas::lit_x`, in `Canvas::lit`'s order). Each colour
+        // once: a colour that walked every pointer on its row painted another
+        // pointer's stretch too.
         let line_px = f.line();
         let room = ui.room_for_rows();
-        for &(color, row) in lit {
+        for (&(color, row), &x) in lit.iter().zip(lit_x) {
             let Some(row) = row else {
                 continue;
             };
-            if row < ui.offset || row >= ui.offset + room {
-                continue;
-            }
-            for (r, c) in self.pointers.values() {
-                if *r != Some(row) {
+            for (at, from, to) in Self::lit_at(&lines, ui, row, x) {
+                if at < ui.offset || at >= ui.offset + room {
                     continue;
                 }
-                let Some((from, to)) = c.and_then(|c| View::hover_span(&lines, row, c)) else {
-                    continue;
-                };
-                let y = f.y_of(first + u16::try_from(row - ui.offset).unwrap_or(0));
+                let y = f.y_of(first + u16::try_from(at - ui.offset).unwrap_or(0));
                 canvas.under.push(ronoctua_render::quad::Quad {
                     x: f32::from(ui.margin + from) * cell,
                     y,
@@ -760,5 +775,144 @@ mod tests {
         assert!(!drawn(&w, &ui).contains("alpine/3.22"));
         w.pressed(&mut ui, crate::incus::Press::Allow);
         assert!(drawn(&w, &ui).contains("alpine/3.22"), "{}", drawn(&w, &ui));
+    }
+
+    /// The list, an instance's detail, and a remote's detail with the
+    /// consent's row — what the light is held to the click over.
+    const STATES: [&[crate::incus::Press]; 3] = [
+        &[],
+        &[crate::incus::Press::Right],
+        &[
+            crate::incus::Press::NextKind,
+            crate::incus::Press::NextKind,
+            crate::incus::Press::Right,
+        ],
+    ];
+
+    /// A window over the scene, on the instances, `columns` wide — stacked
+    /// below `panesFrom`, the panes from it — with `presses` pressed once it
+    /// took the listing.
+    fn a_pressed_window(columns: u16, presses: &[crate::incus::Press]) -> (IncusWindow, Ui) {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut ui = Ui::for_tests(texts);
+        ui.columns = columns;
+        let mut w = IncusWindow {
+            open: Open::on(
+                crate::incus::Kind::Instances,
+                Feed::detached(Some(scene())),
+                ronoctua_files::when::Zone::default(),
+                String::new(),
+            ),
+            click_cell: None,
+            cursor_at: None,
+            opening: None,
+        };
+        w.take_now(&mut ui);
+        w.settled(&mut ui, false);
+        for p in presses {
+            w.pressed(&mut ui, *p);
+        }
+        (w, ui)
+    }
+
+    /// FAILS IF: a resting pointer lights, at any pixel of a line of the
+    /// window — the strip of kinds, a row of the list, a column of the
+    /// panes, the detail's title, a tab, a fact, a heading, a note, a line of
+    /// the consent's row, the margin before them — a stretch where a press
+    /// takes nothing, or leaves unlit one where a press takes something:
+    /// above all the margin, which lit nothing while a press there took the
+    /// line's first stretch. THE LIGHT IS THE CLICK, PIXEL BY PIXEL, through
+    /// the window's own count of the cell (`IncusWindow::cell_at`) and the
+    /// gate the door's list hands a press through (`Content::takes`): every
+    /// probe pressed once, on a window of its own. The cursor's own place —
+    /// the kind shown, the tab shown, the line the cursor is on — lights all
+    /// the same. The footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        use crate::incus::tests::{own_place, probes};
+        let cell_px = tokens::metrics::cell_width(tokens::text::size());
+        for (columns, presses) in [
+            (80, STATES[0]),
+            (80, STATES[1]),
+            (80, STATES[2]),
+            (140, STATES[0]),
+            (140, STATES[2]),
+        ] {
+            let (first, ui) = a_pressed_window(columns, presses);
+            let lines = first.lines(&ui);
+            let cursor = first.cursor();
+            let (mut lit_once, mut dark_once) = (false, false);
+            let mut wrong = Vec::new();
+            for (n, line) in lines.iter().enumerate() {
+                // THE MARGIN'S PIXEL, then every probe of the line's cells.
+                let pixels =
+                    std::iter::once(0).chain(probes(line).into_iter().map(|c| c + ui.margin));
+                for pixel in pixels {
+                    let x = (f32::from(pixel) + 0.5) * cell_px;
+                    let lit = IncusWindow::lit_at(&lines, &ui, n, Some(x))
+                        .iter()
+                        .any(|(at, _, _)| *at == n);
+                    lit_once |= lit;
+                    dark_once |= !lit;
+                    let (mut w, mut its) = a_pressed_window(columns, presses);
+                    let before = crate::door::seen(&w, &its);
+                    w.click_cell = IncusWindow::cell_at(&its, f64::from(x));
+                    if w.takes(&its).get(n).copied().unwrap_or(false) {
+                        w.clicked(&mut its, n);
+                    }
+                    let did = crate::door::seen(&w, &its) != before;
+                    let cell = IncusWindow::cell_at(&ui, f64::from(x)).unwrap_or(0);
+                    let own = cursor == Some(n) || own_place(&first.open.view, line, cell);
+                    if lit != did && !(lit && own) {
+                        wrong.push(format!(
+                            "{columns} columns, {presses:?}, line {n}, pixel cell {pixel}: \
+                             lit {lit}, did {did}"
+                        ));
+                    }
+                }
+            }
+            assert!(
+                lit_once && dark_once,
+                "{columns}, {presses:?}: all lit, or none"
+            );
+            assert!(wrong.is_empty(), "{wrong:#?}");
+        }
+    }
+
+    /// FAILS IF: a pointer on any line of the consent's row — the hosts,
+    /// then what for — lights anything but every line of it, stacked or in
+    /// the panes: a click on any of them takes the row (`View::clicked`),
+    /// and a line that lit alone said the others were something else. The
+    /// footer's region has its own.
+    #[test]
+    fn the_windows_consent_lines_light_together() {
+        let cell_px = tokens::metrics::cell_width(tokens::text::size());
+        for columns in [80, 140] {
+            let (w, ui) = a_pressed_window(columns, STATES[2]);
+            let lines = w.lines(&ui);
+            let consent: Vec<(usize, u16)> = lines
+                .iter()
+                .enumerate()
+                .filter_map(|(n, l)| {
+                    l.zones
+                        .iter()
+                        .find(|z| matches!(z.target, crate::incus::Target::Consent(_)))
+                        .map(|z| (n, z.from))
+                })
+                .collect();
+            assert!(
+                consent.len() >= 2,
+                "{columns}: the consent's row on {consent:?}"
+            );
+            let every: Vec<usize> = consent.iter().map(|(n, _)| *n).collect();
+            for &(n, from) in &consent {
+                let x = (f32::from(from + ui.margin) + 0.5) * cell_px;
+                let lit: Vec<usize> = IncusWindow::lit_at(&lines, &ui, n, Some(x))
+                    .into_iter()
+                    .map(|(at, _, _)| at)
+                    .collect();
+                assert_eq!(lit, every, "{columns}: the pointer on line {n}");
+            }
+        }
     }
 }

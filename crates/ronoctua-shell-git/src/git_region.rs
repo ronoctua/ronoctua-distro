@@ -448,13 +448,16 @@ impl Region for GitRegion {
     /// Its columns laid onto the region's lines, each line every column's
     /// fields at the region's cells (`git_browser::Drawn`) — one click per
     /// line, and the view says which column and row the pointer's cell is.
+    /// A line takes a click where something along it does
+    /// (`Drawn::takes_line`), and the band then lights only what the click
+    /// at the pointer's cell takes ([`Self::band`]).
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
         let (columns, room) = shape_of(seen.columns, usize::from(seen.lines));
         let drawn = self.git.view.drawn(columns, room);
         (0..drawn.room)
             .map(|n| Row {
                 fields: drawn.line(n),
-                takes: true,
+                takes: drawn.takes_line(n),
             })
             .collect()
     }

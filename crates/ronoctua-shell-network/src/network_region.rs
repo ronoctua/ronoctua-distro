@@ -1012,7 +1012,7 @@ impl crate::region::Region for NetworkRegion {
         self.rows_at(seen.columns, seen.texts)
             .into_iter()
             .map(|r| crate::region::Row {
-                takes: !r.heading,
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -1562,5 +1562,51 @@ mod tests {
         let (_, said) = named(10, "kettle");
         with_kept(|k| k.back())(said);
         assert_eq!(rang(&second_rang), 1, "a closed view was woken");
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, a sentence, a shelf's blank — or
+    /// leaves unlit one it takes. THE LIGHT IS THE CLICK: every row clicked
+    /// once, on a view of its own, and lit exactly where something
+    /// happened. Safe to click through: the process keeps a wire with no
+    /// daemon (every order is refused), the region has no tunnel thread, and
+    /// a photograph's doorway starts no sweep, scan or measurement — so the
+    /// second click's `RET` reaches nothing of the machine.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        // THE ZONE BY ITS DEFAULT: the view writes no date, and this crate
+        // names no `ronoctua-files` to ask for UTC by name.
+        let zone = Default::default();
+        let seen = Seen {
+            texts: &t,
+            // `way()`'s width: a click builds the rows at the doorway's.
+            columns: 80,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let fresh = || {
+            with_kept(|k| k.wire = Some(Wire::planted(machine(), Vec::new())));
+            let r = NetworkRegion {
+                view: View::fresh(),
+                net: machine(),
+                tunnels: ronoctua_tunnel::Scene::default(),
+                hand: None,
+                remember: None,
+                opened: true,
+            };
+            (r, way())
+        };
+        let held = crate::region::held_to_the_click(fresh, &seen, |r, w: &Recorder| {
+            crate::region::seen(r, &w.owed, &seen)
+        });
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

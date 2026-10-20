@@ -322,6 +322,16 @@ impl Content for SecurityWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, and only that row lights
+    /// under the pointer — the view's one answer
+    /// ([`crate::security::Row::takes`]), which the footer's region gives too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::security::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.open.view.cursor())
     }
@@ -928,5 +938,67 @@ mod tests {
                 Some(ui.texts.t(crate::security_words::refusal(why)))
             );
         }
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections, a note, a fact, the
+    /// lines a pair wrapped onto — or leaves unlit one it takes. THE LIGHT IS
+    /// THE CLICK: every row clicked on a window of its own, and lit exactly
+    /// where something was seen to happen. The footer's region has its own.
+    ///
+    /// ONCE, AND NEVER ON THE CURSOR'S ROW (as `crate::door::held_to_the_click`
+    /// clicks): a second click would be the row's `RET`, and a `RET` on
+    /// this page forgets the person's VirusTotal key, queues an upload, opens
+    /// the file picker over the home — what a test must not reach. One click
+    /// is enough for the light: from any other row it selects, and the cursor
+    /// moving is seen; on the cursor's row it is already the `RET`, which is
+    /// why that row is not clicked.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        // SETTLED, as the window opens: the cursor on the first row that
+        // acts, which is the one a first click is the `RET` on.
+        let fresh = || {
+            let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+            let mut ui = Ui::for_tests(texts);
+            let mut w = SecurityWindow::over(
+                Scene {
+                    read: true,
+                    settings: Some(ronoctua_security::firewall::Settings::default()),
+                    ..Scene::default()
+                },
+                None,
+            );
+            w.settle(&mut ui);
+            (w, ui)
+        };
+        let (first, ui) = fresh();
+        let lit = first.takes(&ui);
+        let cursor = first.cursor();
+        let held: Vec<crate::region::Held> = (0..first.rows(&ui).len())
+            .map(|row| {
+                let here = cursor == Some(row);
+                let (mut w, mut ui) = fresh();
+                let before = crate::door::seen(&w, &ui);
+                if !here {
+                    w.clicked(&mut ui, row);
+                }
+                crate::region::Held {
+                    row,
+                    lit: lit.get(row).copied().unwrap_or(false),
+                    did: crate::door::seen(&w, &ui) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        assert!(
+            held.iter().any(|h| h.here && h.lit),
+            "the cursor stands on no row a click takes: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

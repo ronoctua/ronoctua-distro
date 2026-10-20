@@ -186,6 +186,15 @@ fn list_rows(view: &View, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Vec
     rows
 }
 
+/// Which of `rows` rows a click takes, row by row — the view's one answer
+/// ([`View::takes`]), which the footer's region gives too: a manual of the
+/// list, and never its heading, the filter's line, the sentence that says
+/// nothing matched or a line of an open manual.
+fn takes_of(view: &View, rows: usize, texts: &ronoctua_i18n::Texts) -> Vec<bool> {
+    let takes = view.takes(texts);
+    (0..rows).map(|row| takes.contains(&row)).collect()
+}
+
 /// The manual's lines as the rows of a list, placed in cells.
 ///
 /// THE KEY COLUMN is as wide as the widest key, or the drawings' column when
@@ -282,6 +291,12 @@ impl Content for Manual {
         }
     }
 
+    /// A click takes a manual of the list, and only that row lights under
+    /// the pointer ([`takes_of`]).
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        takes_of(&self.view, self.rows(ui).len(), &ui.texts)
+    }
+
     /// The list's cursor, as a row — a manual has none: it is read.
     fn cursor(&self) -> Option<usize> {
         self.view
@@ -291,15 +306,10 @@ impl Content for Manual {
     }
 
     /// THE CLICK SELECTS, AND THE SECOND ONE OPENS — invariant 19, by the
-    /// view's own `clicked`, which the footer's click reaches too.
+    /// view's own `clicked`, which the footer's click reaches too, and which
+    /// takes nothing on a row [`View::takes`] leaves out.
     fn clicked(&mut self, ui: &mut Ui, row: usize) {
-        if self.view.which().is_some() {
-            return;
-        }
-        let Some(n) = row.checked_sub(FIRST_OF_FOUND) else {
-            return;
-        };
-        let errand = self.view.clicked(n, &ui.texts);
+        let errand = self.view.clicked(row, &ui.texts);
         self.apply(ui, errand);
     }
 
@@ -326,7 +336,10 @@ impl Content for Manual {
             |_| hint,
         );
         let rows = self.rows(ui);
-        crate::door::list::body(ui, canvas, &rows);
+        // LIT ONLY WHERE A CLICK TAKES: a manual of the list, never its
+        // heading nor a line of an open manual.
+        let takes = takes_of(&self.view, rows.len(), &ui.texts);
+        crate::door::list::body(ui, canvas, &rows, &takes, None);
         let manual = self.manual(ui);
 
         // THE DRAWING, when every line of its gesture is on screen — see the
@@ -463,6 +476,48 @@ mod tests {
         w.clicked(&mut ui, 0);
         w.clicked(&mut ui, 0);
         assert_eq!(w.view.which(), None);
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — the list's heading, the filter's line, the sentence that
+    /// says nothing matched, a line of an open manual, its air included — or
+    /// leaves unlit one it takes. THE LIGHT IS THE CLICK: every row clicked
+    /// once, on a window of its own, and lit exactly where something
+    /// happened — on the list, on a list the filter emptied, and in an open
+    /// manual. The footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let list = crate::door::held_to_the_click(|| (Manual::at(None), ui()), crate::door::seen);
+        assert!(
+            list.iter().any(|h| h.lit) && list.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {list:?}"
+        );
+        let unheld = crate::region::unheld(&list);
+        assert!(unheld.is_empty(), "the list: {unheld:?}");
+        let emptied = || {
+            let mut w = Manual::at(None);
+            let mut ui = ui();
+            for c in ["z", "z", "z"] {
+                key(&mut w, &mut ui, c);
+            }
+            (w, ui)
+        };
+        let manual = || (Manual::at(Some(Which::Shortcuts)), ui());
+        for (what, held) in [
+            (
+                "a list the filter emptied",
+                crate::door::held_to_the_click(emptied, crate::door::seen),
+            ),
+            (
+                "an open manual",
+                crate::door::held_to_the_click(manual, crate::door::seen),
+            ),
+        ] {
+            assert!(held.len() > FIRST_OF_FOUND, "{what}: {held:?}");
+            assert!(held.iter().all(|h| !h.lit), "{what}: {held:?}");
+            let unheld = crate::region::unheld(&held);
+            assert!(unheld.is_empty(), "{what}: {unheld:?}");
+        }
     }
 
     /// `C-v` ASKS THE DOOR FOR THE CLIPBOARD, read off the loop, and what

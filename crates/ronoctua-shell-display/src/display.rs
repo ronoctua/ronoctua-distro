@@ -238,6 +238,17 @@ pub struct Row {
     pub disabled: bool,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on — and so
+    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
+    /// and click (the region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]).
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// What a standing question is about, and what answering it does.
 ///
 /// # Why there are two natures and not one
@@ -1279,7 +1290,7 @@ impl View {
         let Some(row) = rows.get(n) else {
             return false;
         };
-        if row.heading {
+        if !row.takes() {
             return false;
         }
         let again = self.cursor == n;

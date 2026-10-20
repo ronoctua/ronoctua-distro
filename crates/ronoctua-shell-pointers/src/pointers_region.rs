@@ -103,8 +103,9 @@ impl Region for Pointers {
             .rows(self.snapshot.as_deref(), seen.columns, seen.texts)
             .into_iter()
             .map(|r| Row {
-                // A HEADING IS NOT A ROW TO CLICK ON.
-                takes: !r.heading,
+                // A HEADING IS NOT A ROW TO CLICK ON — the row's own answer
+                // (`pointers::Row::takes`), which the window gives too.
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -347,5 +348,45 @@ mod tests {
         way.owed.clear();
         Region::heard(&mut pointers, &(), &mut way);
         assert!(way.owed.is_empty(), "{:?}", way.owed);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a
+    /// sentence, a cursor's or a device's name — or leaves unlit one it
+    /// takes. THE LIGHT IS THE CLICK: every row clicked once, on a view of
+    /// its own over the same laptop (`pointers::a_laptop`), and lit exactly
+    /// where something happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        // AS `open` OPENS IT on the footer's reading — a view of its own.
+        let laptop = Rc::new(crate::pointers::a_laptop());
+        let fresh = || {
+            let mut view = View::fresh();
+            view.settle_in(Some(&*laptop), 100, &t);
+            let opened = Pointers {
+                view,
+                snapshot: Some(Rc::clone(&laptop)),
+            };
+            (opened, footer(Vec::new()))
+        };
+        let held = crate::region::held_to_the_click(fresh, &seen, |r, w: &region::Recorder| {
+            crate::region::seen(r, &w.owed, &seen)
+        });
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

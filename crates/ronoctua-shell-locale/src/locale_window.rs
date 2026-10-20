@@ -320,6 +320,16 @@ impl Content for LocaleWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, and only that row lights
+    /// under the pointer — the view's one answer ([`crate::locale::Row::takes`]),
+    /// which the footer's region gives too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::locale::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.drawn)
     }
@@ -598,6 +608,70 @@ mod tests {
             w.cursor() > Some(w.view.cursor()),
             "no title or note was passed"
         );
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections, a note — or leaves
+    /// unlit one it takes. THE LIGHT IS THE CLICK: every row clicked, on a
+    /// window of its own, and lit exactly where something was seen to
+    /// happen. The footer's region has its own.
+    ///
+    /// CLICKED ONCE, AND NEVER ON THE CURSOR'S ROW — as
+    /// `door::held_to_the_click` clicks too: a second click would be the `RET`, and a
+    /// `RET` here writes this machine's language, dates and places and turns
+    /// its clock-keeping (`locale_region::carry_out`), which no test may do.
+    /// One click is enough for the light: from any other row it selects, and
+    /// the cursor moving is seen; on the cursor's row it is already the
+    /// `RET`, and that row is lit by being the cursor's (`Held::here`). The
+    /// window is opened with its drawn cursor TAKEN, as a key or a click
+    /// takes it, so the row the view calls the cursor's is the one skipped.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let fresh = || {
+            let (mut w, ui) = a_window();
+            w.took_the_cursor(&ui);
+            (w, ui)
+        };
+        // THE ROWS' TONES AND PLACES, and not their words: a row of this view
+        // says the time to the minute, and a minute turning between the two
+        // readings is no click's doing. A click that selects moves a tone.
+        let tinted = |w: &LocaleWindow, ui: &Ui| {
+            let (rows, cursor, deeds) = crate::door::seen(w, ui);
+            let tones: Vec<Vec<(u16, ronoctua_tokens::Color)>> = rows
+                .iter()
+                .map(|f| f.iter().map(|x| (x.at, x.color)).collect())
+                .collect();
+            (tones, cursor, deeds)
+        };
+        let (first, ui) = fresh();
+        let lit = first.takes(&ui);
+        let cursor = first.cursor();
+        let held: Vec<crate::region::Held> = (0..first.rows(&ui).len())
+            .map(|row| {
+                let here = cursor == Some(row);
+                let (mut w, mut ui) = fresh();
+                let before = tinted(&w, &ui);
+                if !here {
+                    w.clicked(&mut ui, row);
+                }
+                crate::region::Held {
+                    row,
+                    lit: lit.get(row).copied().unwrap_or(false),
+                    did: tinted(&w, &ui) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        assert!(
+            held.iter().all(|h| !h.here || h.lit),
+            "the cursor stands on a row a click does not take: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 
     /// FAILS IF: one of the camera's planted scenes stops building.

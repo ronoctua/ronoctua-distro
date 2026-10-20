@@ -363,6 +363,19 @@ pub struct Row {
     pub shelf: Option<(Shelf, usize)>,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on — and so
+    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
+    /// and click (the region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]). A title, a shelf's blank and every row under the
+    /// question "keep it?" take nothing; a fact and a note take it — a click
+    /// selects them, and their `RET` copies them.
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// What the view wants done, after a key or a click.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Errand {
@@ -1892,21 +1905,22 @@ impl View {
     /// Answers whether the cursor was ALREADY on that row: that is the second
     /// click, which the door turns into `RET` (invariant 19).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        // ONLY A ROW THAT TAKES A CLICK ([`Row::takes`]), the answer the
+        // pointer's light is drawn by: the picker's title and its sentences
+        // are rows of it too, and a click there put the cursor on a title.
+        let Some(row) = rows.get(n).filter(|r| r.takes()) else {
+            return false;
+        };
         // A ROW OF THE PICKER is chosen there: its cursor, and the second
         // click its `RET`.
-        if let (Some(h), Some(Target::Pick(t))) =
-            (self.picking.as_mut(), rows.get(n).map(|r| &r.target))
-        {
+        if let (Some(h), Target::Pick(t)) = (self.picking.as_mut(), &row.target) {
             let again = h.clicked(t.clone());
             self.cursor = n;
             return again;
         }
-        if rows.get(n).is_some_and(|r| !r.heading) {
-            let again = self.cursor == n;
-            self.cursor = n;
-            return again;
-        }
-        false
+        let again = self.cursor == n;
+        self.cursor = n;
+        again
     }
 
     /// Keeps the cursor on a row that EXISTS.

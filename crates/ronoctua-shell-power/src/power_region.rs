@@ -259,7 +259,7 @@ impl Region for Power {
             )
             .into_iter()
             .map(|r| Row {
-                takes: !r.heading,
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -421,8 +421,12 @@ pub fn carry_out(
             }
             send(Order::SetProfile(profile), orders, way);
             // NOT WRITTEN IS SAID: a profile that comes back as the old one at
-            // the next start is a profile somebody thinks they chose.
-            if let Some(dir) = ronoctua_power::prefs::home()
+            // the next start is a profile somebody thinks they chose. AND A
+            // PHOTOGRAPH'S DOOR, OR A TEST'S, WRITES NOTHING OF THE PERSON'S
+            // (`Doorway::photographing`): the wish moves, and `power.json` —
+            // under the home of whoever runs the door — is left as it is.
+            if !way.photographing()
+                && let Some(dir) = ronoctua_power::prefs::home()
                 && let Err(e) = ronoctua_power::prefs::persist(&dir, profile)
             {
                 tracing::warn!(error = %e, file = ronoctua_power::prefs::FILE, "a preference could not be written");
@@ -681,5 +685,45 @@ mod tests {
         way.owed.clear();
         Region::heard(&mut power, &(), &mut way);
         assert!(way.owed.is_empty(), "{:?}", way.owed);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections — or
+    /// leaves unlit one it takes: a fact and a line of a note are rows the
+    /// cursor stands on, and `RET` there copies. THE LIGHT IS THE CLICK:
+    /// every row clicked once, on a view of its own over the same laptop
+    /// (`power::laptop`), and lit exactly where something happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        // AS `open` OPENS IT on the footer's reading and wish — a view, and a
+        // wish, of its own.
+        let laptop = Rc::new(crate::power::laptop());
+        let fresh = || {
+            let power = Power {
+                view: View::fresh(),
+                snapshot: Some(Rc::clone(&laptop)),
+                wish: Rc::new(Cell::new(Profile::Balanced)),
+            };
+            (power, footer(Vec::new()))
+        };
+        let held = crate::region::held_to_the_click(fresh, &seen, |r, w: &region::Recorder| {
+            crate::region::seen(r, &w.owed, &seen)
+        });
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

@@ -242,8 +242,8 @@ impl Region for Syncthing {
             .rows(self.snapshot.as_deref(), seen.columns, seen.texts)
             .into_iter()
             .map(|r| Row {
-                // A HEADING IS NOT A ROW TO CLICK ON.
-                takes: !r.heading,
+                // A HEADING IS NOT A ROW TO CLICK ON — the view's one answer.
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -655,5 +655,63 @@ mod tests {
         way.owed.clear();
         Region::heard(&mut syncthing, &(), &mut way);
         assert!(way.owed.is_empty(), "{:?}", way.owed);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, any line
+    /// of the service's complaint — or leaves unlit one it takes. THE LIGHT
+    /// IS THE CLICK: every row clicked on a view of its own, and lit exactly
+    /// where something was seen to happen.
+    ///
+    /// ONE CLICK, AND NONE ON THE CURSOR'S ROW — as the region's
+    /// `held_to_the_click` clicks: a second click would be the row's `RET`, and `RET` on the mark's row writes the person's own
+    /// `syncthing.json` ([`carry_out`]'s `Keep`, through the real store)
+    /// under `cargo test`. One click is enough for the light: from any other
+    /// row it selects, and the cursor moving is seen; on the cursor's row it
+    /// is already the `RET`, which is why that row is not clicked.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        // THE RECORDER'S WIDTH, so the rows lit are the rows clicked.
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: region::Lent::none(),
+        };
+        let fresh = || Syncthing {
+            view: View::fresh(Preferences::default()),
+            snapshot: Some(Rc::new(crate::syncthing_window::complaining())),
+        };
+        let first = fresh();
+        let cursor = first.cursor_in(&seen);
+        let held: Vec<region::Held> = first
+            .rows(&seen)
+            .iter()
+            .enumerate()
+            .map(|(row, drawn)| {
+                let here = cursor == Some(row);
+                let (mut r, mut w) = (fresh(), footer(Vec::new()));
+                let before = region::seen(&r, &w.owed, &seen);
+                if !here {
+                    r.clicked(row, &mut w);
+                }
+                region::Held {
+                    row,
+                    lit: drawn.takes,
+                    did: region::seen(&r, &w.owed, &seen) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

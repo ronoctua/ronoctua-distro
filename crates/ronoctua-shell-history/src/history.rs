@@ -475,6 +475,28 @@ impl View {
             .collect()
     }
 
+    /// Which of [`View::rows`] a click takes: a row a key acts on — never a
+    /// heading, a fact, a sentence or the air between them, where
+    /// [`View::clicked`] takes nothing.
+    ///
+    /// AND SO WHAT A RESTING POINTER LIGHTS, in both doors: the region's
+    /// `Row::takes` and the window's `Content::takes` read this, and the
+    /// click reads the same targets — one answer for the light and for the
+    /// click. The region had said yes for every row, and the window lit
+    /// whatever row the pointer was on.
+    #[must_use]
+    pub fn takes(
+        &self,
+        facts: &Facts<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<bool> {
+        self.build(facts, columns, texts)
+            .iter()
+            .map(|(_, target)| !matches!(target, Target::Nothing))
+            .collect()
+    }
+
     /// Paints the row the keyboard is on.
     ///
     /// TWO HALVES AND TWO ANSWERS, which is the split `network.rs` arrived at

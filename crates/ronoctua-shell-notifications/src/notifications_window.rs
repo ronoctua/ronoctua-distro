@@ -628,6 +628,16 @@ impl Content for Notifications {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row where the view says one does along it — the
+    /// view's one answer (`View::takes`), which the footer's region gives
+    /// too; the stretch the band lights is the cell's (`View::takes_at`).
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        let rows = self.view_rows(ui).len();
+        let lists = crate::notifications::Lists::of(&self.records, &self.book);
+        self.view
+            .takes(&lists, &self.book, ui.columns, rows, &ui.texts)
+    }
+
     /// A CLICK IS THE `RET` OF THE ROW IT LANDS ON — `View::clicked` answers
     /// with the same errand the key would (`open_here`), invariant 19.
     ///
@@ -638,8 +648,14 @@ impl Content for Notifications {
     fn clicked(&mut self, ui: &mut Ui, row: usize) {
         let errand = {
             let lists = crate::notifications::Lists::of(&self.records, &self.book);
-            self.view
-                .clicked(row, self.click_cell, &lists, &self.book, ui.columns)
+            self.view.clicked(
+                row,
+                self.click_cell,
+                &lists,
+                &self.book,
+                ui.columns,
+                &ui.texts,
+            )
         };
         self.apply(ui, errand);
     }
@@ -770,9 +786,7 @@ impl Content for Notifications {
         // THE LIST WITHOUT ITS HOVER, which is drawn below by column.
         let rows = self.rows(ui);
         let lit = canvas.lit;
-        canvas.lit = &[];
-        crate::door::list::body(ui, canvas, &rows);
-        canvas.lit = lit;
+        crate::door::list::body(ui, canvas, &rows, &[], None);
         // AND AN OPEN RECORD'S TWO BARS, one per half that does not fit.
         for b in self.record_bars(ui) {
             canvas.bar(Some(crate::bars::Track::of(b.track)));
@@ -812,21 +826,33 @@ impl Content for Notifications {
         let width = ui.room.band_width();
         // ONE BAND PER ROW AND HALF, so two cursors on one line but in
         // different columns are two bands, and on the same half the first
-        // wins.
+        // wins. AND ONLY WHERE A CLICK AT THAT CELL TAKES SOMETHING
+        // (`View::takes_at`, the click's own answer): never a title, the
+        // blank between the columns or a fact.
+        let lists = crate::notifications::Lists::of(&self.records, &self.book);
         let mut seen: Vec<(usize, bool)> = Vec::new();
         for &(color, row) in lit {
             let Some(row) = row else {
                 continue;
             };
-            let mut halves: Vec<bool> = self
+            let takes = |cell: Option<u16>| {
+                self.view
+                    .takes_at(row, cell, &lists, &self.book, ui.columns, &ui.texts)
+            };
+            let on_it: Vec<Option<u16>> = self
                 .pointers
                 .values()
                 .filter(|(r, _)| *r == Some(row))
-                .map(|(_, c)| self.on_the_right(ui, *c))
+                .map(|(_, c)| *c)
                 .collect();
-            if halves.is_empty() {
-                halves.push(false);
-            }
+            // A HAND THAT IS NO POINTER (a finger) lights the row where the
+            // keyboard's column is, as before.
+            let cells = if on_it.is_empty() { vec![None] } else { on_it };
+            let halves: Vec<bool> = cells
+                .into_iter()
+                .filter(|c| takes(*c))
+                .map(|c| self.on_the_right(ui, c))
+                .collect();
             for right in halves {
                 if seen.contains(&(row, right)) {
                     continue;
@@ -1016,5 +1042,99 @@ mod tests {
             crate::notifications::deed_of(&r, 0),
             Some(Deed::Invoke("reply".into()))
         );
+    }
+
+    /// The window over three records from three apps, none filtered out.
+    fn with_three_records() -> (Notifications, Ui) {
+        let (mut w, ui) = a_window();
+        let mut q = ronoctua_notify::Queue::fresh_one();
+        for (id, app) in [(1, "mail"), (2, "chat"), (3, "build")] {
+            let mut n = ronoctua_notify::Notification::fresh_one(
+                id,
+                app.into(),
+                None,
+                format!("{app} said something"),
+                "body".into(),
+                ronoctua_notify::Urgency::Normal,
+            );
+            // TWO ACTIONS, each a line of the open record a click selects and
+            // a second click runs.
+            n.actions = vec![
+                ronoctua_notify::Action {
+                    id: "reply".into(),
+                    label: ronoctua_notify::Label::Key("k".into()),
+                    doing: ronoctua_notify::Doing::Invoke,
+                },
+                ronoctua_notify::Action {
+                    id: "see".into(),
+                    label: ronoctua_notify::Label::Key("k".into()),
+                    doing: ronoctua_notify::Doing::Command("bluetooth-open".into()),
+                },
+            ];
+            let p = w.book.decide(&n);
+            q.enqueue(n, p, std::time::Instant::now());
+        }
+        w.records = q.history().to_vec();
+        (w, ui)
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a column's title, the blank between them, an empty
+    /// column's sentence — or leaves unlit one it takes. THE LIGHT IS THE
+    /// CLICK: every row clicked once, on a window of its own, and lit
+    /// exactly where something happened. The footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let held = crate::door::held_to_the_click(with_three_records, crate::door::seen);
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
+    }
+
+    /// FAILS IF: side by side, the answer the window's band is laid by
+    /// (`View::takes_at`, per cell) is not what a click at that cell does —
+    /// on the list, and on an open record's two halves.
+    #[test]
+    fn the_windows_band_is_where_the_click_takes() {
+        for (columns, steps) in [(160_u16, &[][..]), (200, &["RET"][..])] {
+            let fresh = || {
+                let (mut w, mut ui) = with_three_records();
+                ui.columns = columns;
+                for step in steps {
+                    press(&mut w, &mut ui, step);
+                }
+                ui.message = None;
+                (w, ui)
+            };
+            let (first, ui) = fresh();
+            let rows = first.rows(&ui).len();
+            let lists = crate::notifications::Lists::of(&first.records, &first.book);
+            let split = crate::notifications::split_at(columns);
+            for n in 0..rows {
+                for cell in [2, split + 2] {
+                    let lit =
+                        first
+                            .view
+                            .takes_at(n, Some(cell), &lists, &first.book, columns, &ui.texts);
+                    // AND WHICH HALF HAS THE KEYBOARD: a click there gives it
+                    // — which the lit divider says side by side, and the
+                    // arrows' next turn stacked.
+                    let (mut w, mut ui) = fresh();
+                    let before = (crate::door::seen(&w, &ui), w.view.facts_have_the_keyboard());
+                    w.click_cell = Some(cell);
+                    w.clicked(&mut ui, n);
+                    let did =
+                        (crate::door::seen(&w, &ui), w.view.facts_have_the_keyboard()) != before;
+                    let here = steps.is_empty() && n == 1 && cell < split;
+                    assert!(
+                        lit == did || (lit && here),
+                        "{columns} columns: row {n} at {cell} is lit {lit} and a click did {did}"
+                    );
+                }
+            }
+        }
     }
 }

@@ -199,6 +199,17 @@ pub struct Row {
     pub spot: String,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on, the file
+    /// picker's included — and so whether a resting pointer lights it: ONE
+    /// ANSWER for both doors' light and click (the region's `Row::takes`,
+    /// the window's `Content::takes`, [`View::clicked`]).
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// A question the view asks: the command that asks it — whose `ask-<id>` is
 /// the sentence, and under whose id the answer comes back — and whether what
 /// is typed is hidden.
@@ -304,6 +315,24 @@ pub enum Errand {
         /// Its new value.
         value: i32,
     },
+}
+
+impl Errand {
+    /// Whether carrying it out reaches the machine — writes a file, turns a
+    /// camera's control, asks the studio — which a photograph's door, or a
+    /// test's, never does ([`carry_in`]).
+    const fn reaches_the_machine(&self) -> bool {
+        !matches!(
+            self,
+            Self::Nothing
+                | Self::Copy(_)
+                | Self::Close
+                | Self::Run(_)
+                | Self::Ask(_)
+                | Self::Said(_)
+                | Self::Paste
+        )
+    }
 }
 
 /// Everything a row reads.
@@ -738,7 +767,7 @@ impl View {
             self.cursor = n;
             return again;
         }
-        if rows.get(n).is_some_and(|r| !r.heading) {
+        if rows.get(n).is_some_and(Row::takes) {
             let again = self.cursor == n;
             if !again {
                 self.armed = false;
@@ -1542,6 +1571,13 @@ pub enum Carried {
 /// doorway's. THE ONE HANDLER OF THE VIEW'S ERRANDS: the footer's region and
 /// the window both call it.
 pub fn carry_in(errand: Errand, snap: &Snapshot, way: &mut dyn crate::region::Doorway) -> Carried {
+    // A PHOTOGRAPH'S DOOR, OR A TEST'S, REACHES NOTHING OF THE MACHINE
+    // (`Doorway::photographing`): no file under the home of whoever runs it
+    // is written, no camera turned, no studio asked — the errand is let go,
+    // as the footer lets a photograph's camera keys go (`remote`).
+    if way.photographing() && errand.reaches_the_machine() {
+        return Carried::Quiet;
+    }
     match carry_out(errand, snap, way.texts()) {
         Ok(Some(said)) => {
             way.say(said, crate::echo::Echo::Normal);

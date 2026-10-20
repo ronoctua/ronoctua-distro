@@ -143,15 +143,15 @@ impl crate::region::Region for GeoRegion {
         ID
     }
 
-    /// A heading is not a row to click on, and neither is a note: both
-    /// answer `heading`, so both are skipped here for the reason the cursor
-    /// skips them.
+    /// A heading is not a row to click on, and neither is a note: the
+    /// view's one answer ([`crate::geo::Row::takes`]) skips both here for the
+    /// reason the cursor skips them.
     fn rows(&self, seen: &Seen<'_>) -> Vec<crate::region::Row> {
         self.view
             .rows(seen.columns, seen.texts)
             .into_iter()
             .map(|r| crate::region::Row {
-                takes: !r.heading,
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -341,5 +341,70 @@ mod tests {
         let down = ronoctua_keymap::Key::parse("<down>").expect("a key");
         assert_eq!(r.key(down, &mut w), Taken::Yes);
         assert_eq!(r.command("network-open", None, &mut w), Taken::No);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a note —
+    /// or leaves unlit one it takes. THE LIGHT IS THE CLICK: every row
+    /// clicked, on a view of its own over a planted catalogue
+    /// (`View::planted`), and lit exactly where something was seen to happen.
+    ///
+    /// CLICKED ONCE, AND NEVER ON THE CURSOR'S ROW — as
+    /// `region::held_to_the_click` clicks too: a second click would be the `RET`, and
+    /// a `RET` on a region puts a download in this machine's transfer queue
+    /// (`carry_out`), which no test may do. One click is enough for the
+    /// light: from any other row it selects, and the cursor moving is seen;
+    /// on the cursor's row it is already the `RET`, and that row is lit by
+    /// being the cursor's (`Held::here`).
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let fresh = || GeoRegion {
+            view: View::planted(
+                std::env::temp_dir().join("ronoctua-geo-region-tests-none"),
+                80,
+            ),
+            opened: true,
+        };
+        let t = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 80,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let first = fresh();
+        let cursor = first.cursor_in(&seen);
+        let held: Vec<crate::region::Held> = first
+            .rows(&seen)
+            .iter()
+            .enumerate()
+            .map(|(row, drawn)| {
+                let here = cursor == Some(row);
+                let (mut r, mut w) = (fresh(), way());
+                let before = crate::region::seen(&r, &w.owed, &seen);
+                if !here {
+                    r.clicked(row, &mut w);
+                }
+                crate::region::Held {
+                    row,
+                    lit: drawn.takes,
+                    did: crate::region::seen(&r, &w.owed, &seen) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        assert!(
+            held.iter().all(|h| !h.here || h.lit),
+            "the cursor stands on a row a click does not take: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

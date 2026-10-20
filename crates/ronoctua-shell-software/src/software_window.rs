@@ -339,6 +339,12 @@ fn picture_area(
     }
 }
 
+/// The row whose control each of `rows` is ([`View::control_of`]): one
+/// answer for the window's light and the footer's.
+fn controls_of(rows: &[crate::software::Row]) -> Vec<usize> {
+    (0..rows.len()).map(|n| View::control_of(n, rows)).collect()
+}
+
 impl Content for Software {
     /// A thread of the view's woke the loop — a search's batch, a sheet's
     /// details, a picture, `software.json` moved, the copied image kept, the
@@ -396,6 +402,23 @@ impl Content for Software {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, and every line of a
+    /// consent row, and only those light under the pointer — the view's one
+    /// answer ([`crate::software::Row::takes`]), which the footer's region
+    /// gives too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::software::Row::takes)
+            .collect()
+    }
+
+    /// A consent row's later lines are the row: they light together, as in
+    /// the footer (`View::control_of`, the answer the click lands by).
+    fn controls(&self, ui: &Ui) -> Option<Vec<usize>> {
+        Some(controls_of(&self.view_rows(ui)))
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.cursor)
     }
@@ -417,6 +440,10 @@ impl Content for Software {
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
         crate::door::list::header(self, ui, canvas);
         let rows = self.view_rows(ui);
+        // LIT WHERE A CLICK TAKES, by the rows drawn (`Content::takes`), and
+        // on every line of a control (`Content::controls`).
+        let takes: Vec<bool> = rows.iter().map(crate::software::Row::takes).collect();
+        let controls = controls_of(&rows);
         // THE OFFSET KEPT INSIDE THE LIST before the visible rows are known —
         // what `list::body` would do first, and which rows those are decides
         // which pictures are asked for.
@@ -452,7 +479,7 @@ impl Content for Software {
             }
             fields.push(f);
         }
-        crate::door::list::body(ui, canvas, &fields);
+        crate::door::list::body(ui, canvas, &fields, &takes, Some(&controls));
         let frame = ui.frame(0);
         let pool = self.reading.pictures();
         for (key, column, line) in placed {
@@ -1244,5 +1271,102 @@ mod tests {
             "into the next line"
         );
         assert!((a.width - side).abs() < f32::EPSILON);
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections, a sentence — or
+    /// leaves unlit one it takes, a later line of a consent row among them.
+    /// THE LIGHT IS THE CLICK: every row of the advanced page clicked on a
+    /// window of its own, and lit exactly where something was seen to
+    /// happen. The footer's region has its own.
+    ///
+    /// ONE CLICK, AND NONE ON THE CURSOR'S CONTROL — as
+    /// `crate::door::held_to_the_click` clicks, but over the cursor's whole control: a second click
+    /// would be the row's `RET`, and a `RET` on a consent row lets its catalogue's
+    /// hosts in this machine's `consent.json`. One click is enough for the
+    /// light: from any other row it selects, and the cursor moving is seen;
+    /// on the cursor's own control it is already the `RET`.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        // THE CURSOR COUNTED, as a window counts it once it has drawn: the
+        // fixture is born at row 0.
+        let fresh = || {
+            let (mut w, ui) = a_window(Opening::Advanced);
+            w.recount(&ui);
+            (w, ui)
+        };
+        let (first, ui) = fresh();
+        let rows = first.view_rows(&ui);
+        let lit = first.takes(&ui);
+        let cursor = first.cursor().expect("a cursor");
+        let here = View::control_of(cursor, &rows);
+        assert!(
+            (0..rows.len()).any(|n| View::control_of(n, &rows) != n),
+            "no later line of a consent row: the fixture lost what it holds"
+        );
+        let held: Vec<crate::region::Held> = (0..rows.len())
+            .map(|row| {
+                let here = View::control_of(row, &rows) == here;
+                let (mut w, mut ui) = fresh();
+                let before = crate::door::seen(&w, &ui);
+                if !here {
+                    w.clicked(&mut ui, row);
+                }
+                crate::region::Held {
+                    row,
+                    lit: lit.get(row).copied().unwrap_or(false),
+                    did: crate::door::seen(&w, &ui) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
+    }
+
+    /// FAILS IF: the window lights one line of a consent row alone where
+    /// the footer lights the whole row: every line of a control lights with
+    /// the one under the pointer (`Content::controls`, the `View::control_of`
+    /// the click lands by), and nothing else does.
+    #[test]
+    fn a_line_of_the_consent_lights_the_whole_row() {
+        let (mut w, ui) = a_window(Opening::Advanced);
+        w.recount(&ui);
+        let rows = w.view_rows(&ui);
+        let takes = w.takes(&ui);
+        let controls = w.controls(&ui).expect("the window says its controls");
+        assert_eq!(controls.len(), rows.len(), "a control for each row");
+        let later = (0..rows.len())
+            .find(|&n| controls[n] != n)
+            .expect("no later line of a consent row: the fixture lost what it holds");
+        let whole: Vec<usize> = (0..rows.len())
+            .filter(|&k| controls[k] == controls[later] && takes[k])
+            .collect();
+        assert!(whole.len() > 1, "the consent row is one line: {whole:?}");
+        let line_px = ronoctua_tokens::metrics::line_height(ronoctua_tokens::text::size());
+        let bands = crate::door::list::hover_bands(
+            &[(ronoctua_tokens::color::SURFACE_HOVER, Some(later))],
+            &takes,
+            Some(&controls),
+            0,
+            rows.len(),
+            rows.len(),
+            0,
+            100.0,
+        );
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let mut lit: Vec<usize> = bands
+            .iter()
+            .map(|q| (q.y / line_px).round() as usize)
+            .collect();
+        lit.sort_unstable();
+        assert_eq!(
+            lit, whole,
+            "the pointer on line {later} lit another set of rows"
+        );
     }
 }

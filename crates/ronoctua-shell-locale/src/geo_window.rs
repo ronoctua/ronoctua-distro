@@ -121,6 +121,17 @@ impl Content for GeoWindow {
             .collect()
     }
 
+    /// A click takes a row the cursor stands on, and only that row lights
+    /// under the pointer — the view's one answer ([`crate::geo::Row::takes`]),
+    /// which the footer's region gives too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view
+            .rows(ui.columns, &ui.texts)
+            .iter()
+            .map(crate::geo::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -234,6 +245,64 @@ mod tests {
         w.answered(&mut ui, "geo-remove", "brazil");
         assert_eq!(w.view.filter(), "");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections, a note — or leaves
+    /// unlit one it takes. THE LIGHT IS THE CLICK: every row clicked, on a
+    /// window of its own over a planted catalogue (`geo::View::planted`), and
+    /// lit exactly where something was seen to happen. The footer's region
+    /// has its own.
+    ///
+    /// CLICKED ONCE, AND NEVER ON THE CURSOR'S ROW — as
+    /// `door::held_to_the_click` clicks too: a second click would be the `RET`, and a
+    /// `RET` on a region puts a download in this machine's transfer queue
+    /// (`geo_region::carry_out`), which no test may do. One click is enough
+    /// for the light: from any other row it selects, and the cursor moving
+    /// is seen; on the cursor's row it is already the `RET`, and that row is
+    /// lit by being the cursor's (`Held::here`). In the language the view
+    /// settles its cursor in (`geo::View::settle`), so the row it calls the
+    /// cursor's is one it draws.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let fresh = || {
+            let texts =
+                ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+            let root = std::env::temp_dir().join("ronoctua-geo-window-tests-none");
+            let me = GeoWindow {
+                view: crate::geo::View::planted(root, FIRST_COLUMNS),
+            };
+            (me, Ui::for_tests(texts))
+        };
+        let (first, ui) = fresh();
+        let lit = first.takes(&ui);
+        let cursor = first.cursor();
+        let held: Vec<crate::region::Held> = (0..first.rows(&ui).len())
+            .map(|row| {
+                let here = cursor == Some(row);
+                let (mut w, mut ui) = fresh();
+                let before = crate::door::seen(&w, &ui);
+                if !here {
+                    w.clicked(&mut ui, row);
+                }
+                crate::region::Held {
+                    row,
+                    lit: lit.get(row).copied().unwrap_or(false),
+                    did: crate::door::seen(&w, &ui) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        assert!(
+            held.iter().all(|h| !h.here || h.lit),
+            "the cursor stands on a row a click does not take: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 
     /// THE TWO DOORS READ A KEY ONE WAY: every row of the table is its own

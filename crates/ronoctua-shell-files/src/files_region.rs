@@ -44,7 +44,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
-use crate::fields::{Axis, Pane, Panes, Room, Row, Section, Target};
+use crate::fields::{Axis, Hit, Pane, Panes, Room, Row, Section, Target};
 use crate::files_manager::{Door, Manager, Panels};
 use crate::region::{Closed, Doorway, Entry, Framing, Region, Seen, Shape, Taken};
 use crate::report::Report;
@@ -730,6 +730,15 @@ impl Sectioned for FilesRegion {
     }
     fn band_belongs(&self, pane: Pane) -> bool {
         self.manager.view.band_belongs(pane)
+    }
+    fn takes_at(&self, width: u16, room: usize, line: usize, cell: u16) -> bool {
+        self.manager.view.takes_at(width, room, line, cell)
+    }
+    fn grid_lit_at(&self, width: u16, room: usize, line: usize, cell: u16) -> Option<Hit> {
+        self.manager.view.grid_lit_at(width, room, line, cell)
+    }
+    fn lit_at(&self, width: u16, room: usize, line: usize, cell: u16) -> crate::sections::LitAt {
+        self.manager.view.lit_at(width, room, line, cell)
     }
     fn band_cells_at(&self, width: u16, room: usize, line: usize, cell: u16) -> Option<(u16, u16)> {
         self.manager.view.band_cells_at(width, room, line, cell)

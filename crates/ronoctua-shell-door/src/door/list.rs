@@ -176,7 +176,24 @@ pub fn question_pieces(
 ///
 /// The bar is written down in `ui.room` as it is drawn, which is what gives
 /// it its own column for the pointer — see [`crate::chrome::Room`].
-pub fn body(ui: &mut Ui, canvas: &mut Canvas<'_>, rows: &[Vec<crate::fields::Field>]) {
+///
+/// THE HOVER LIGHTS ONLY A ROW `takes` SAYS A CLICK TAKES ([`Content::takes`],
+/// one answer per row): a heading, a blank row or a fact under the pointer
+/// is not lit, because a click there does nothing. A window that lights by
+/// a stretch of the row (a zone, a half) passes none and lays its own bands.
+///
+/// AND ON EVERY LINE OF ITS CONTROL, where one control is drawn over several
+/// rows — a consent's note wrapped under its row: `controls[n]` is the row
+/// whose control row `n` is ([`Content::controls`]), and the pointer over any
+/// line of one lights every line of it, as the footer's region lights it
+/// (`region::Region::control_of`). `None` is a row per control.
+pub fn body(
+    ui: &mut Ui,
+    canvas: &mut Canvas<'_>,
+    rows: &[Vec<crate::fields::Field>],
+    takes: &[bool],
+    controls: Option<&[usize]>,
+) {
     let size = ronoctua_tokens::text::size();
     ui.settle_offset(rows.len());
     let first = ui.first_of_list();
@@ -199,9 +216,13 @@ pub fn body(ui: &mut Ui, canvas: &mut Canvas<'_>, rows: &[Vec<crate::fields::Fie
     #[allow(clippy::cast_precision_loss)]
     let (w, h) = (ui.width as f32, ui.height as f32);
     ui.room = crate::chrome::Room::of(scroll, w, h);
-    // EVERY CURSOR'S HOVER, in its own colour — and to the BAR, never under it.
-    canvas.under.extend(crate::chrome::hover_bands(
-        canvas.lit.iter().copied(),
+    // EVERY CURSOR'S HOVER, in its own colour — and to the BAR, never under
+    // it — on a row a click takes, and on no other; on every line of its
+    // control.
+    canvas.under.extend(hover_bands(
+        canvas.lit,
+        takes,
+        controls,
         ui.offset,
         room,
         rows.len(),
@@ -215,11 +236,56 @@ pub fn body(ui: &mut Ui, canvas: &mut Canvas<'_>, rows: &[Vec<crate::fields::Fie
     canvas.bar(crate::chrome::list_track(scroll, first, w, h));
 }
 
-/// The default frame: [`header`], then [`body`].
+/// Every cursor's hover band over a list of `total` rows, laid ONLY on a row
+/// `takes` says a click takes — its own function, and not lines of [`body`],
+/// so a test holds it: a frame's canvas needs a GPU.
+///
+/// EACH LIT ROW WIDENED TO EVERY LINE OF ITS CONTROL (`controls`, as
+/// [`body`] takes it): every row a click takes that shares the lit row's
+/// control lights with it — a press on any of them takes the same thing, and
+/// a line of it lighting alone said the others were something else.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn hover_bands(
+    lit: &[(ronoctua_tokens::Color, Option<usize>)],
+    takes: &[bool],
+    controls: Option<&[usize]>,
+    offset: usize,
+    room: usize,
+    total: usize,
+    first: u16,
+    width: f32,
+) -> Vec<ronoctua_render::quad::Quad> {
+    let taken = |n: usize| takes.get(n).copied().unwrap_or(false);
+    let control = |n: usize| controls.and_then(|c| c.get(n).copied()).unwrap_or(n);
+    crate::chrome::hover_bands(
+        lit.iter().flat_map(|&(colour, row)| {
+            let lines: Vec<usize> = match row.filter(|n| taken(*n)) {
+                None => Vec::new(),
+                Some(n) if controls.is_none() => vec![n],
+                Some(n) => (0..total)
+                    .filter(|k| taken(*k) && control(*k) == control(n))
+                    .collect(),
+            };
+            lines.into_iter().map(move |k| (colour, Some(k)))
+        }),
+        offset,
+        room,
+        total,
+        first,
+        width,
+    )
+}
+
+/// The default frame: [`header`], then [`body`], lit where the window says a
+/// click takes ([`Content::takes`]) — on every line of a control
+/// ([`Content::controls`]).
 pub fn paint<C: Content>(c: &mut C, ui: &mut Ui, canvas: &mut Canvas<'_>) {
     header(c, ui, canvas);
     let rows = c.rows(ui);
-    body(ui, canvas, &rows);
+    let takes = c.takes(ui);
+    let controls = c.controls(ui);
+    body(ui, canvas, &rows, &takes, controls.as_deref());
 }
 
 /// What one pointer did to the header, the bar and the list.
@@ -365,10 +431,15 @@ fn pointer_here<C: Content>(
     }
     // THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19. Which of the
     // two a click is, is the window's (`Content::clicked`); following the
-    // cursor after it is everybody's.
+    // cursor after it is everybody's. AND ONLY ON A ROW THAT TAKES ONE
+    // (`Content::takes`), the answer the hover was lit by: a click on a row
+    // that did not light does nothing, as the footer hands a region no click
+    // on a row that does not take one.
     if let Some(row) = clicked.or(right) {
         if clicked.is_some() {
-            c.clicked(ui, row);
+            if c.takes(ui).get(row).copied().unwrap_or(false) {
+                c.clicked(ui, row);
+            }
         } else {
             c.right_clicked(ui, row);
         }
@@ -534,5 +605,59 @@ mod tests {
             let pieces = crate::door::list::question_pieces(line, &texts, 120);
             assert!(!pieces[0].text.contains('…'), "{:?}", pieces[0].text);
         }
+    }
+
+    /// FAILS IF: the pointer over one line of a control drawn over several
+    /// rows lights only that line — or lights a row of another control, or
+    /// one whose click takes nothing — and a list of a row per control does
+    /// not light the row alone.
+    #[test]
+    fn a_control_over_several_rows_lights_every_line_of_it() {
+        let colour = ronoctua_tokens::color::SURFACE_HOVER;
+        let line_px = ronoctua_tokens::metrics::line_height(ronoctua_tokens::text::size());
+        // A HEADING, a consent row and the two lines of its note, a row of
+        // its own, and a blank.
+        let takes = [false, true, true, true, true, false];
+        let controls = [0, 1, 1, 1, 4, 5];
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let lit_rows = |quads: Vec<ronoctua_render::quad::Quad>| -> Vec<usize> {
+            let mut rows: Vec<usize> = quads
+                .iter()
+                .map(|q| (q.y / line_px).round() as usize)
+                .collect();
+            rows.sort_unstable();
+            rows
+        };
+        let bands = |row: usize, controls: Option<&[usize]>| {
+            lit_rows(crate::door::list::hover_bands(
+                &[(colour, Some(row))],
+                &takes,
+                controls,
+                0,
+                takes.len(),
+                takes.len(),
+                0,
+                100.0,
+            ))
+        };
+        for row in [1, 2, 3] {
+            assert_eq!(
+                bands(row, Some(&controls)),
+                vec![1, 2, 3],
+                "the pointer on row {row} lit only part of its control"
+            );
+            assert_eq!(
+                bands(row, None),
+                vec![row],
+                "a row per control lit more than the row"
+            );
+        }
+        assert_eq!(
+            bands(4, Some(&controls)),
+            vec![4],
+            "a control of one row lit more"
+        );
+        assert!(bands(0, Some(&controls)).is_empty(), "the heading lit");
+        assert!(bands(5, Some(&controls)).is_empty(), "the blank lit");
     }
 }

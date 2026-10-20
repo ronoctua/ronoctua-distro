@@ -8,7 +8,7 @@
 //! footer's own two columns ([`Pair`]), laid by the footer's grid as the
 //! shortcuts are — the colon at the widest key of the whole manual.
 
-use crate::manual::{FIRST_OF_FOUND, Scroll, Tone, Turn, View, Which};
+use crate::manual::{Scroll, Tone, Turn, View, Which};
 use crate::region::{
     Closed, Doorway, Entry, Paging, Pair, Picture, Region, Row, Seen, Shape, Taken, Told,
 };
@@ -79,11 +79,21 @@ impl Manuals {
     }
 
     /// Every line it shows — the list, or the manual open from it.
+    ///
+    /// A LINE TAKES A CLICK, and so lights under a resting pointer, only
+    /// where the view says one does (`View::takes`, the window's answer
+    /// too): a manual of the list, and no heading, sentence or line of an
+    /// open manual.
     fn every_line(&self, seen: &Seen<'_>) -> Vec<Told> {
-        match self.view.which() {
+        let mut lines = match self.view.which() {
             None => self.list(seen),
             Some(which) => Self::manual(which, seen),
+        };
+        let takes = self.view.takes(seen.texts);
+        for (n, line) in lines.iter_mut().enumerate() {
+            line.row.takes = takes.contains(&n);
         }
+        lines
     }
 
     /// The list's rows: a heading, what has been typed, and every manual it
@@ -123,10 +133,6 @@ impl Manuals {
             let here = i == self.view.cursor();
             let (key_tone, text_tone) = crate::chrome::Kind::ListedSetting.tones(here);
             rows.push(Told {
-                row: Row {
-                    fields: Vec::new(),
-                    takes: true,
-                },
                 about: Some(about.clone()),
                 pair: Some(Pair {
                     lit: self.view.lit(&name),
@@ -254,12 +260,10 @@ impl Region for Manuals {
     }
 
     /// SELECT, AND THE SECOND CLICK OPENS (invariant 19): the click is the
-    /// cursor, and `RET` on the cursor is what opens.
+    /// cursor, and `RET` on the cursor is what opens — on a row the view
+    /// says a click takes (`View::takes`), and nothing on any other.
     fn clicked(&mut self, row: usize, way: &mut dyn Doorway) {
-        let Some(n) = row.checked_sub(FIRST_OF_FOUND) else {
-            return;
-        };
-        let errand = self.view.clicked(n, way.texts());
+        let errand = self.view.clicked(row, way.texts());
         self.carry(errand, way);
     }
 
@@ -292,6 +296,7 @@ impl Region for Manuals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manual::FIRST_OF_FOUND;
     use crate::region::{Effect, Lent, Recorder};
 
     fn texts() -> std::rc::Rc<ronoctua_i18n::Texts> {
@@ -429,6 +434,57 @@ mod tests {
             assert!(keys.contains(&p.key), "{} is drawn and never put up", p.key);
         }
         assert!(m.picture("gesture:none").is_none());
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — the list's heading, the filter's line, the
+    /// sentence that says nothing matched, a line of an open manual, its air
+    /// included — or leaves unlit one it takes. THE LIGHT IS THE CLICK:
+    /// every row clicked once, on a view of its own, and lit exactly where
+    /// something happened — on the list, on a list the filter emptied, and
+    /// in an open manual.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let at = seen(&t, &zone);
+        let held = |view: View| {
+            crate::region::held_to_the_click(
+                || {
+                    let region = Manuals {
+                        view: view.clone(),
+                        shown: true,
+                    };
+                    (region, way(&t))
+                },
+                &at,
+                // THE VIEW IS SEEN TOO: the region's rows are the footer's
+                // pairs, with no fields, and its cursor a colour of them.
+                |r: &Manuals, w: &Recorder| (r.view.clone(), crate::region::seen(r, &w.owed, &at)),
+            )
+        };
+        let list = held(View::fresh());
+        assert!(
+            list.iter().any(|h| h.lit) && list.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {list:?}"
+        );
+        let unheld = crate::region::unheld(&list);
+        assert!(unheld.is_empty(), "the list: {unheld:?}");
+        let mut emptied = View::fresh();
+        for letter in ["z", "z", "z"] {
+            let _ = emptied.key(key(letter), &t);
+        }
+        assert!(emptied.found(&t).is_empty(), "the filter left a manual");
+        for (what, view) in [
+            ("a list the filter emptied", emptied),
+            ("an open manual", View::on(Which::Shortcuts)),
+        ] {
+            let rows = held(view);
+            assert!(rows.len() > FIRST_OF_FOUND, "{what}: {rows:?}");
+            assert!(rows.iter().all(|h| !h.lit), "{what}: {rows:?}");
+            let unheld = crate::region::unheld(&rows);
+            assert!(unheld.is_empty(), "{what}: {unheld:?}");
+        }
     }
 
     /// FAILS IF: what was pasted no longer narrows the list, or a closed

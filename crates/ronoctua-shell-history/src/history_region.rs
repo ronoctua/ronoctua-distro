@@ -116,15 +116,18 @@ impl Region for History {
     }
 
     /// THE SHELL'S HISTORY, through its own view — its rows already resolved
-    /// their own columns, so the region only places them; every row takes a
-    /// click.
+    /// their own columns, so the region only places them. A row takes a
+    /// click, and so lights under a resting pointer, only where a key acts
+    /// on it (`View::takes`, which the window asks too).
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
         let facts = Facts { shot: &self.shot };
+        let takes = self.view.takes(&facts, seen.columns, seen.texts);
         self.view
             .rows(&facts, seen.columns, seen.texts)
             .into_iter()
-            .map(|r| Row {
-                takes: true,
+            .enumerate()
+            .map(|(n, r)| Row {
+                takes: takes.get(n).copied().unwrap_or(false),
                 fields: r.fields,
             })
             .collect()
@@ -381,5 +384,49 @@ mod tests {
         way.owed.clear();
         Region::heard(&mut history, &(), &mut way);
         assert!(way.owed.is_empty(), "{:?}", way.owed);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a
+    /// sentence — or leaves unlit one it takes. THE LIGHT IS THE CLICK:
+    /// every row clicked once, on a view of its own, and lit exactly where
+    /// something happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let held = crate::region::held_to_the_click(
+            || {
+                let shot = Snapshot {
+                    present: true,
+                    logged_in: true,
+                    syncing: true,
+                    address: "https://history.example.org".to_owned(),
+                    username: "someone".to_owned(),
+                    ..Snapshot::default()
+                };
+                let view = History {
+                    view: View::fresh(),
+                    shot: Rc::new(shot),
+                };
+                (view, footer(Vec::new()))
+            },
+            &seen,
+            |r, w: &crate::region::Recorder| crate::region::seen(r, &w.owed, &seen),
+        );
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

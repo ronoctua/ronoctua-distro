@@ -332,9 +332,9 @@ let
     }
   );
 
-  # THE PLANTED MEASUREMENTS of `.#rust-peaks`, and the classes it is
-  # handed: the class each planned unit is built by is `classesOf`'s, the
-  # plans' own resolution.
+  # THE PLANTED MEASUREMENTS of `.#rust-peaks` — each a peak in MiB and the
+  # cores it was taken at —, and the classes it is handed: the class each
+  # planned unit is built by is `classesOf`'s, the plans' own resolution.
   peaks =
     let
       n = sizing.numbers;
@@ -342,23 +342,41 @@ let
       medium = (lib.elemAt n.classes 1).name;
       sl = (lib.elemAt n.classes 0).slotMiB;
       sm = (lib.elemAt n.classes 1).slotMiB;
-      unit = kind: flavour: mib: { inherit kind flavour mib; };
+      unit = kind: flavour: mib: cores: {
+        inherit
+          kind
+          flavour
+          mib
+          cores
+          ;
+      };
       units = {
-        "release/libs/small" = unit "libs" "release" 100;
-        "release/libs/grew" = unit "libs" "release" (sl + 10);
-        "release/deps/mid" = unit "deps" "release" (sl + 50);
-        "release/libs/new" = unit "libs" "release" (sm + 10);
-        "release/bins/shell" = unit "bins" "release" (n.shellMiB + 100);
-        "release/bins/other" = unit "bins" "release" null;
-        "release/libs/footer" = unit "libs" "release" (sm / 2);
-        # Just past the light slot with the headroom, under it without.
-        "test/clippy/edge" = unit "clippy" "test" (sl * 100 / (100 + n.headroomPercent) + 1);
-        "test/testBins/never" = unit "testBins" "test" null;
+        "release/libs/small" = unit "libs" "release" 100 1;
+        "release/libs/grew" = unit "libs" "release" (sl + 10) 1;
+        "release/deps/mid" = unit "deps" "release" (sl + 50) 1;
+        "release/libs/new" = unit "libs" "release" (sm + 10) 1;
+        # Heavy at one core and past every slot: heavy still, and past what
+        # a heavy unit is planned at with one core.
+        "release/bins/shell" = unit "bins" "release" (n.shellMiB + 100) 1;
+        "release/bins/other" = unit "bins" "release" null 1;
+        # Heavy, alone at twelve cores, under the medium slot: kept heavy.
+        "release/libs/footer" = unit "libs" "release" (sm / 2) 12;
+        # Heavy, measured at one core under the third class's slot: it leaves.
+        "release/libs/demoted" = unit "libs" "release" (sm + 10) 1;
+        # Just past the light slot with the headroom, inside it without:
+        # judged by the slot, it fits; `--write` moves it.
+        "test/clippy/edge" = unit "clippy" "test" (sl * 100 / (100 + n.headroomPercent) + 1) 1;
+        # At the light slot itself: inside it.
+        "test/clippy/full" = unit "clippy" "test" sl 1;
+        # Light, built at twelve cores (a `nix build` not sized), past the
+        # light slot: neither judged nor moved.
+        "test/clippy/wide" = unit "clippy" "test" (sl * 2) 12;
+        "test/testBins/never" = unit "testBins" "test" null 1;
         # Renamed by a lock change: one never measured since, and one
         # measured past the class it carried.
-        "release/deps/renamed@1.0.0/lib:renamed/build/o3/bbbbbbbbbbbb" = unit "deps" "release" null;
-        "release/deps/moved@1.0.0/lib:moved/build/o3/dddddddddddd" = unit "deps" "release" (sl + 100);
-        "aggregate/rust-tests" = unit "aggregate" null null;
+        "release/deps/renamed@1.0.0/lib:renamed/build/o3/bbbbbbbbbbbb" = unit "deps" "release" null 1;
+        "release/deps/moved@1.0.0/lib:moved/build/o3/dddddddddddd" = unit "deps" "release" (sl + 100) 1;
+        "aggregate/rust-tests" = unit "aggregate" null null 1;
       };
       classes = {
         "release/libs/small" = light;
@@ -367,7 +385,10 @@ let
         "release/bins/shell" = "heavy";
         "release/bins/other" = "heavy";
         "release/libs/footer" = "heavy";
+        "release/libs/demoted" = "heavy";
         "test/clippy/edge" = light;
+        "test/clippy/full" = light;
+        "test/clippy/wide" = light;
         "test/testBins/never" = medium;
         "release/libs/gone" = light;
         "release/deps/renamed@1.0.0/lib:renamed/build/o3/aaaaaaaaaaaa" = light;
@@ -523,7 +544,7 @@ in
                 wrong.append(f"the ceiling of {own} is {cgroup(own)!r}, not {want!r}")
 
         floor(len(machines), 4, "machines sized")
-        floor(len(N["classes"]), 2, "classes of unit")
+        floor(len(N["classes"]), 3, "classes of unit")
         if wrong:
             print("ERROR: the build sizing does not fit the machine it measures:", file=sys.stderr)
             for w in wrong:
@@ -537,11 +558,11 @@ in
   # PASSES THE BUDGET.
   #
   # `sized_units` itself, sourced, over a planted plan of forty units in
-  # layers — lights, mediums, a class no distro has (`large`, as a newer
+  # layers — lights, mediums, a class no distro has (`vast`, as a newer
   # plan would say) and two heavy ones whose `alone` numbers are planted
   # too, each built from units below it, the last layer started last — with
   # the budget and the processors set (two mediums or four lights fit, a
-  # large beside a light and never beside a medium, never more than four at
+  # vast beside a light and never beside a medium, never more than four at
   # once), and a `nix` that takes each unit's time and writes down when
   # each ran. Every unit is built once, in its own `nix build --max-jobs 1`,
   # never before what it is built from ended; at no instant do the costs
@@ -608,7 +629,7 @@ in
         CLIENT = N["clientMiB"] * 1024
         # THE PLAN'S OWN NUMBERS, in MiB: the distro's two classes, one no
         # distro has, and a heavy unit's planted `alone`.
-        SLOT = {LIGHT: N["classes"][0]["slotMiB"], MEDIUM: N["classes"][1]["slotMiB"], "large": 3000}
+        SLOT = {LIGHT: N["classes"][0]["slotMiB"], MEDIUM: N["classes"][1]["slotMiB"], "vast": 3000}
         COST = {c: str(s) for c, s in SLOT.items()} | {"heavy": "alone:2000+1000"}
         BUDGET = 2 * (SLOT[MEDIUM] * 1024 + CLIENT) + 64 * 1024
         CPUS, JOBS, CORES = 4, 2, 2
@@ -617,7 +638,7 @@ in
         wrong = []
 
         # FORTY UNITS IN LAYERS: each built from up to three of the layer
-        # below; every fourth a medium, two large, two heavy in the middle;
+        # below; every fourth a medium, two vast, two heavy in the middle;
         # the last layer started last (nothing is built from it).
         units = []
         for layer in range(8):
@@ -625,7 +646,7 @@ in
                 i = len(units)
                 below = [j for j in range(len(units)) if units[j]["layer"] == layer - 1]
                 deps = [below[(k + s) % len(below)] for s in range(min(3, len(below)))] if below else []
-                cls = ("heavy" if (layer, k) in ((3, 2), (5, 0)) else "large" if i in (9, 22)
+                cls = ("heavy" if (layer, k) in ((3, 2), (5, 0)) else "vast" if i in (9, 22)
                        else MEDIUM if i % 4 == 1 else LIGHT)
                 how = "carried" if i % 7 == 3 else "default" if i % 11 == 5 else "named"
                 units.append({"id": f"u/{i}", "layer": layer, "deps": sorted(set(deps)), "class": cls, "how": how,
@@ -694,8 +715,8 @@ in
                 wrong.append(f"all: {u['id']} ({u['class']}) built with --max-jobs {jobs} --cores {cores}, not {want_cores}")
             if u["class"] == "heavy" and overlapping(flat, d):
                 wrong.append(f"all: the heavy {u['id']} ran beside {overlapping(flat, d)[:3]}")
-            if u["class"] == "large" and any(by_drv[o]["class"] == MEDIUM for o in overlapping(flat, d)):
-                wrong.append(f"all: the large {u['id']} ran beside a medium: its line's 3000 MiB was not what it was planned at")
+            if u["class"] == "vast" and any(by_drv[o]["class"] == MEDIUM for o in overlapping(flat, d)):
+                wrong.append(f"all: the vast {u['id']} ran beside a medium: its line's 3000 MiB was not what it was planned at")
             if int(u["id"][2:]) >= LATE and s < early_end:
                 wrong.append(f"all: {u['id']}, of the lines started last, started before every other unit ended")
         heaviest = heaviest_moment(flat, weight)
@@ -720,7 +741,7 @@ in
         n_carried = sum(1 for u in units if u["how"] == "carried")
         n_default = sum(1 for u in units if u["how"] == "default")
         for needle in (f"-- {len(units)} units to build (of {len(units)} in the plan)",
-                       f": large, 3000 MiB each",
+                       f": vast, 3000 MiB each",
                        f": heavy, alone with {HEAVY} cores (2000 MiB and 1000 MiB a core more)",
                        f"-- {n_carried} of them carry the class of the unit a lock change renamed",
                        f"-- {n_default} of them the class data does not name",
@@ -917,7 +938,9 @@ in
 
         floor(len(units), 40, "planted units")
         floor(sum(1 for u in units if u["class"] == "heavy"), 2, "heavy units")
-        floor(sum(1 for u in units if u["class"] == "large"), 2, "units of a class no distro has")
+        floor(sum(1 for u in units if u["class"] == "vast"), 2, "units of a class no distro has")
+        if "vast" in [c["name"] for c in N["classes"]]:
+            wrong.append("the planted class `vast` is a class of the distro's: it no longer stands for a newer plan's")
         if wrong:
             print("ERROR: the units are not started by their line's cost within the budget:", file=sys.stderr)
             for w in wrong:
@@ -1346,27 +1369,41 @@ in
     '';
 
   # `.#rust-peaks` HOLDS EACH UNIT TO ITS CLASS, WITH THE HEADROOM, AND
-  # WRITES THE CLASSES.
+  # WRITES THE CLASSES — BY A MEASUREMENT AT THE CORES THE CLASS BUILDS WITH.
   #
-  # Over planted measurements and planted classes, each unit judged by the
-  # class it is built by (`classesOf`, the plans' resolution): a light unit
-  # past the light slot fails it and is the one named; one under the slot
-  # but past it with the headroom fails too — the rule `--write` classes by
-  # —; a medium unit past the light slot and under its own does not; a unit
-  # the data does not name, past the medium slot, fails it (it is medium
-  # until measured); a unit a lock change renamed is judged by the class it
-  # carried, and fails it when measured past it; a heavy unit past every
-  # slot does not, and one past what a heavy unit is planned at is said; a
-  # unit never built is not counted; what was measured into another class
-  # is said; a heavy unit measured under a lighter slot (alone, at its heavy
-  # cores) is said and stays heavy. `--write` puts every other measured unit
-  # in the first class whose slot holds its peak and the headroom more,
-  # keeps the class of a unit not measured and of every heavy one, writes
-  # the carried class of a renamed unit not measured since, drops a unit the
-  # index no longer has — and what it writes is what `nix/build-sizing.nix`
-  # reads. With the light unit back under its slot, it passes. And over
-  # data written for other slots, `--write` drops every class it did not
-  # measure here but a heavy one, and says how many.
+  # Over planted measurements (each a peak and its cores) and planted
+  # classes, each unit judged by the slot of the class it is built by
+  # (`classesOf`, the plans' resolution): a light unit past the light slot
+  # fails it and is the one named; one inside the slot but past it with the
+  # headroom does not — the headroom is the margin between the measurement
+  # that wrote a class and the one that judges it — and is said, as is one
+  # at the slot itself; a medium unit past the light slot and under its own
+  # does not; a unit the data does not name, past the medium slot, fails it
+  # (it is medium until measured); a unit a lock change renamed is judged by
+  # the class it carried, and fails it when measured past it; a heavy unit
+  # past every slot does not, and one past what a heavy unit is planned at
+  # with its cores is said; a unit never built is not counted; a light unit
+  # measured at twelve cores past its slot is neither judged nor moved, and
+  # is said by name with no command (its next sized build measures it again;
+  # a rooted measurement is not deleted), and it fails nothing: with the one
+  # light unit past its slot back under it, the report passes while that one
+  # is still at twelve cores. What was measured into another class is said: a heavy
+  # unit measured at ONE core under the third class's slot leaves heavy, one
+  # measured alone at its twelve cores under a lighter slot is said and
+  # stays heavy. `--write` puts every unit measured at one core in the first
+  # class whose slot holds its peak and the headroom more, a heavy one
+  # included; keeps the class of a unit not measured, or measured at other
+  # cores; writes the carried class of a renamed unit not measured since;
+  # drops a unit the index no longer has — and what it writes is what
+  # `nix/build-sizing.nix` reads. With the light unit back under its slot,
+  # it passes. Over data written for other slots, a unit `--write` did not
+  # measure here at one core keeps the first class whose slot holds the one
+  # it was written for — a large one of a larger old slot goes heavy, one of
+  # an old class of a smaller slot large —, one no heavier than the class of
+  # a unit no measurement names is dropped (it is built as that), and it
+  # says how many of each. And a measurement of another format (the largest
+  # process's RSS with no cores, or the PSS of the tree) is refused with a
+  # sentence naming it, and `--write` writes nothing.
   rust-peaks-names-what-is-past-the-slot =
     mkCheck "rust-peaks-names-what-is-past-the-slot" [ pkgs.python3 ]
       ''
@@ -1381,22 +1418,26 @@ in
         N = json.loads('${numbersJson}')
         P = json.load(open("${peaks}"))
         tmp = pathlib.Path(os.environ["TMPDIR"])
-        LIGHT, MEDIUM = N["classes"][0]["name"], N["classes"][1]["name"]
+        LIGHT, MEDIUM, LARGE = (N["classes"][i]["name"] for i in range(3))
         SLOTS = {c["name"]: c["slotMiB"] for c in N["classes"]}
         H = N["headroomPercent"]
         RENAMED = "release/deps/renamed@1.0.0/lib:renamed/build/o3/bbbbbbbbbbbb"
         MOVED = "release/deps/moved@1.0.0/lib:moved/build/o3/dddddddddddd"
-        def measured(name, mib, seconds=1.5):
+        def measured(name, mib, cores, seconds=1.5, old=False, fmt=3):
             d = tmp / name.replace("/", "_")
             d.mkdir(exist_ok=True)
             (d / "peak-kib").write_text(f"{mib * 1024}\n")
             (d / "seconds").write_text(f"{seconds}\n")
+            if not old:
+                (d / "format").write_text(f"{fmt}\n")
+                (d / "largest-kib").write_text(f"{mib * 1024 // 2}\n")
+                (d / "cores").write_text(f"{cores}\n")
             return str(d)
         units = {}
         for uid, u in P["units"].items():
-            metrics = None if u["kind"] == "aggregate" else str(tmp / "never-built") if u["mib"] is None else measured(uid, u["mib"])
+            metrics = None if u["kind"] == "aggregate" else str(tmp / "never-built") if u["mib"] is None else measured(uid, u["mib"], u["cores"])
             units[uid] = {"kind": u["kind"], "flavour": u["flavour"], "metrics": metrics}
-        classes = {"format": 1, "headroomPercent": H, "slots": SLOTS, "units": P["classes"]}
+        classes = {"format": 2, "headroomPercent": H, "slots": SLOTS, "units": P["classes"]}
         facts = {"units": units, "classes": classes, "resolved": P["resolved"], "how": P["how"],
                  "order": [c["name"] for c in N["classes"]],
                  "slots": SLOTS, "headroomPercent": H, "unclassed": N["unclassed"],
@@ -1410,20 +1451,26 @@ in
         wrong = []
         if (P["how"][RENAMED], P["resolved"][RENAMED], P["how"][MOVED]) != ("carried", LIGHT, "carried"):
             wrong.append(f"the renamed units were not carried by classesOf: {P['how'][RENAMED]} {P['resolved'][RENAMED]} {P['how'][MOVED]}")
+        if (SLOTS[MEDIUM] + 10) * (100 + H) > SLOTS[LARGE] * 100:
+            wrong.append(f"the planted demoted unit ({SLOTS[MEDIUM] + 10} MiB) does not fit the third class's slot {SLOTS[LARGE]} with the headroom")
         ran = ask("--json")
         r = json.loads(ran.stdout)
         if ran.returncode != 1:
             wrong.append(f"a light unit past its slot answered {ran.returncode}, not 1")
-        want_past = ["release/libs/new", MOVED, "release/libs/grew", "test/clippy/edge"]
+        want_past = ["release/libs/new", MOVED, "release/libs/grew"]
         if r["past-the-slot"] != want_past:
-            wrong.append(f"past the slot: {r['past-the-slot']}, not {want_past} (the unnamed one past medium, the carried one, the light one past light, the edge one past it with the headroom)")
-        if "release/libs/grew" not in ran.stderr or "test/clippy/edge" not in ran.stderr or "release/deps/mid" in ran.stderr:
+            wrong.append(f"past the slot: {r['past-the-slot']}, not {want_past} (the unnamed one past medium, the carried one, the light one past light)")
+        if r["within-the-headroom"] != ["test/clippy/edge", "test/clippy/full"]:
+            wrong.append(f"inside the slot, past it with the headroom: {r['within-the-headroom']}, not the edge and the full one")
+        if ("release/libs/grew" not in ran.stderr or "test/clippy/edge" in ran.stderr or "test/clippy/full" in ran.stderr
+                or "release/deps/mid" in ran.stderr or "test/clippy/wide" in ran.stderr):
             wrong.append(f"the error names {ran.stderr!r}")
-        if r["heavy-past-the-plan"] != ["release/bins/shell"] or len(r["measured"]) != 8:
-            wrong.append(f"heavy past the plan {r['heavy-past-the-plan']}, measured {sorted(r['measured'])}")
+        if r["heavy-past-the-plan"] != ["release/bins/shell"] or len(r["measured"]) != 11 or r["judged"] != 7:
+            wrong.append(f"heavy past the plan {r['heavy-past-the-plan']}, measured {sorted(r['measured'])}, judged {r['judged']}")
         moves = {u: (m["from"], m["to"]) for u, m in r["would-move"].items()}
-        want_moves = {"release/libs/grew": (LIGHT, MEDIUM), "release/libs/new": (None, "heavy"),
-                      "test/clippy/edge": (LIGHT, MEDIUM), MOVED: (None, MEDIUM)}
+        want_moves = {"release/libs/grew": (LIGHT, MEDIUM), "release/libs/new": (None, LARGE),
+                      "test/clippy/edge": (LIGHT, MEDIUM), "test/clippy/full": (LIGHT, MEDIUM), MOVED: (None, MEDIUM),
+                      "release/libs/demoted": ("heavy", LARGE)}
         if moves != want_moves:
             wrong.append(f"would move {moves}, not {want_moves}")
         gone = sorted(["release/libs/gone", "release/deps/renamed@1.0.0/lib:renamed/build/o3/aaaaaaaaaaaa",
@@ -1431,10 +1478,21 @@ in
         if r["unclassed"] != ["release/libs/new"] or r["carried"] != [MOVED, RENAMED] or r["gone"] != gone:
             wrong.append(f"unclassed {r['unclassed']}, carried {r['carried']}, gone {r['gone']}")
         if r["could-leave-heavy"] != ["release/libs/footer"]:
-            wrong.append(f"a heavy unit measured under the medium slot is not said: {r['could-leave-heavy']}")
+            wrong.append(f"a heavy unit measured at twelve cores under the medium slot is not said: {r['could-leave-heavy']}")
+        if r["other-cores"] != ["test/clippy/wide"] or r["other-format"]:
+            wrong.append(f"measured at other cores {r['other-cores']}, of another format {r['other-format']}")
+        said = r["other-cores-said"] or ""
+        if not said.startswith("1 unit(s) of a class with a slot were measured at other cores") or "test/clippy/wide" not in said:
+            wrong.append(f"the units at other cores are not said by name and how many: {said!r}")
+        if "nix store delete" in said or "nix-store" in said:
+            wrong.append(f"the note gives a command, which a kept root refuses: {said!r}")
         text = ask().stdout
-        for needle in ("measured: 8 of 11 units", "release/bins/shell:", "--write` moves them",
-                       "release/libs/footer is heavy and measured under a lighter class's slot",
+        for needle in ("measured: 11 of 14 units", "7 of them at the 1 core", "release/bins/shell:", "--write` moves them",
+                       "release/libs/footer is heavy and measured under a lighter class's slot alone at 12 cores",
+                       "note: 1 unit(s) of a class with a slot were measured at other cores", "test/clippy/wide",
+                       "2 unit(s) are inside the slot of their class but past it with the headroom",
+                       "until its next sized build (`.#sized-build`, a battery, a machine's apply)",
+                       "release/libs/demoted: heavy -> " + LARGE,
                        "built as " + N["unclassed"], "2 unit(s) a lock change renamed carry the class",
                        "no unit any more"):
             if needle not in text:
@@ -1445,13 +1503,14 @@ in
         ran = ask("--write", str(out))
         written = json.loads(out.read_text()) if out.exists() else {}
         want = {"release/libs/small": LIGHT, "release/libs/grew": MEDIUM, "release/deps/mid": MEDIUM,
-                "release/libs/new": "heavy", "release/bins/shell": "heavy", "release/bins/other": "heavy",
-                "release/libs/footer": "heavy", "test/clippy/edge": MEDIUM, "test/testBins/never": MEDIUM,
-                RENAMED: LIGHT, MOVED: MEDIUM}
+                "release/libs/new": LARGE, "release/bins/shell": "heavy", "release/bins/other": "heavy",
+                "release/libs/footer": "heavy", "release/libs/demoted": LARGE, "test/clippy/edge": MEDIUM,
+                "test/clippy/full": MEDIUM, "test/clippy/wide": LIGHT, "test/testBins/never": MEDIUM, RENAMED: LIGHT,
+                MOVED: MEDIUM}
         if ran.returncode != 0 or written.get("units") != want:
             wrong.append(f"--write wrote {written.get('units')} ({ran.returncode} {ran.stderr!r}), not {want}")
-        if (written.get("format"), written.get("slots"), written.get("headroomPercent")) != (1, SLOTS, H):
-            wrong.append(f"--write wrote the numbers {written.get('slots')} {written.get('headroomPercent')}")
+        if (written.get("format"), written.get("slots"), written.get("headroomPercent")) != (2, SLOTS, H):
+            wrong.append(f"--write wrote the numbers {written.get('format')} {written.get('slots')} {written.get('headroomPercent')}")
         lines = out.read_text().splitlines() if out.exists() else []
         if sum(1 for l in lines if l.startswith('"release/') or l.startswith('"test/')) != len(want):
             wrong.append("--write did not write one unit a line")
@@ -1462,31 +1521,72 @@ in
                      resolved={u: written["units"].get(u, N["unclassed"]) for u in P["resolved"]},
                      how={u: "named" if u in written["units"] else "default" for u in P["how"]})
         after["units"] = dict(units)
-        after["units"]["release/libs/grew"] = dict(units["release/libs/grew"], metrics=measured("grew2", 100))
+        after["units"]["release/libs/grew"] = dict(units["release/libs/grew"], metrics=measured("grew2", 100, 1))
         f.write_text(json.dumps(after))
-        ran = ask()
+        ran = ask("--json")
         if ran.returncode != 0:
             wrong.append(f"after --write, and the unit back under its slot, it still failed: {ran.stderr!r}")
+        elif json.loads(ran.stdout)["other-cores"] != ["test/clippy/wide"]:
+            wrong.append("after --write, the unit at twelve cores is not the one that passes measured at other cores")
 
-        # WRITTEN FOR OTHER NUMBERS: only what this store measured is
-        # classed again; an unmeasured class is dropped, a heavy one kept.
-        stale = dict(facts, classes=dict(classes, slots={LIGHT: SLOTS[LIGHT] - 68, MEDIUM: SLOTS[MEDIUM]}))
+        # WRITTEN FOR OTHER NUMBERS: only what this store measured at one
+        # core is classed again; a unit it did not keeps a slot no smaller
+        # than the one it was written for — the large one of an old large
+        # slot past the new one goes heavy (it peaks past the new slot, at
+        # one core, measured only at twelve), the one of an old class whose
+        # slot the new large holds goes large —; one whose slot is no larger
+        # than the medium one is dropped, and built as medium.
+        BIG, BIGGER = "release/libs/big", "release/libs/bigger"
+        stale_units = dict(units)
+        stale_units[BIG] = {"kind": "libs", "flavour": "release", "metrics": measured("big", SLOTS[LARGE] - 200, 12)}
+        stale_units[BIGGER] = {"kind": "libs", "flavour": "release", "metrics": str(tmp / "never-built")}
+        stale = dict(facts, units=stale_units,
+                     classes=dict(classes, units=dict(P["classes"], **{BIG: LARGE, BIGGER: "huge"}),
+                                  slots=dict(SLOTS, **{LIGHT: SLOTS[LIGHT] - 68, LARGE: SLOTS[LARGE] + 84,
+                                                       "huge": SLOTS[LARGE] - 100})),
+                     resolved=dict(P["resolved"], **{BIG: LARGE, BIGGER: N["unclassed"]}),
+                     how=dict(P["how"], **{BIG: "named", BIGGER: "named"}))
         f.write_text(json.dumps(stale))
         ran = ask("--write", str(out))
         written = json.loads(out.read_text()) if out.exists() else {}
-        if ran.returncode != 0 or "test/testBins/never" in written.get("units", {}) or RENAMED in written.get("units", {}):
-            wrong.append(f"over stale data, --write kept a class it did not measure: {sorted(written.get('units', {}))}")
-        if written.get("units", {}).get("release/bins/other") != "heavy":
-            wrong.append("over stale data, --write dropped a heavy unit it did not measure")
-        if "the 1 unit(s) this store did not measure are dropped from it and built as " + N["unclassed"] not in ran.stdout:
-            wrong.append(f"over stale data, --write did not say what it dropped: {ran.stdout!r}")
-        floor(len(units), 12, "planted units")
+        kept = written.get("units", {})
+        if ran.returncode != 0 or "test/testBins/never" in kept or RENAMED in kept or "test/clippy/wide" in kept:
+            wrong.append(f"over stale data, --write kept a class no heavier than medium it did not measure at one core: {sorted(kept)}")
+        if kept.get("release/bins/other") != "heavy" or kept.get("release/libs/footer") != "heavy":
+            wrong.append("over stale data, --write dropped a heavy unit it did not measure at one core")
+        if (kept.get(BIG), kept.get(BIGGER)) != ("heavy", LARGE):
+            wrong.append(f"over stale data, the large unit of a larger old slot went {kept.get(BIG)} (not heavy), "
+                         f"the one of a smaller old class {kept.get(BIGGER)} (not {LARGE})")
+        if ("of the units this store did not measure at one core, 4 keep the first class whose slot holds the one they "
+                "were written for (the heavy ones stay heavy), and 2 are dropped from it and built as " + N["unclassed"]) not in ran.stdout:
+            wrong.append(f"over stale data, --write did not say what it kept and dropped: {ran.stdout!r}")
+
+        # ANOTHER FORMAT: the largest process's RSS and no cores (format 1),
+        # or the PSS of the tree (format 2), refused by name; and nothing
+        # is written.
+        old = dict(facts)
+        old["units"] = dict(units)
+        old["units"]["release/libs/small"] = dict(units["release/libs/small"], metrics=measured("small-old", 100, 1, old=True))
+        old["units"]["release/deps/mid"] = dict(units["release/deps/mid"], metrics=measured("mid-pss", 100, 1, fmt=2))
+        f.write_text(json.dumps(old))
+        ran = ask()
+        if (ran.returncode != 1 or "release/libs/small (format 1)" not in ran.stderr
+                or "release/deps/mid (format 2)" not in ran.stderr or "another format than 3" not in ran.stderr):
+            wrong.append(f"measurements of formats 1 and 2 were not refused by name: {ran.returncode} {ran.stderr!r}")
+        before = out.read_text()
+        ran = ask("--write", str(out))
+        if ran.returncode != 1 or out.read_text() != before or "nothing is written" not in ran.stderr:
+            wrong.append(f"--write over a measurement of format 1 wrote, or did not say it would not: {ran.returncode} {ran.stderr!r}")
+
+        floor(len(units), 15, "planted units")
         if wrong:
             print("ERROR: .#rust-peaks does not hold each unit to its class:", file=sys.stderr)
             for w in wrong:
                 print("  " + w, file=sys.stderr)
             sys.exit(1)
-        print("OK: the units past their class's slot with the headroom named and failing, a carried class judged, the moves said, --write writes the classes as measured and drops what stale data cannot say")
+        print("OK: the units past their class's slot at one core named and failing, those inside it within the headroom said, a carried class judged, "
+              "a measure at other cores neither judged nor moved nor failing and said by name, a heavy unit leaving by its one-core peak, the moves said, --write writes the "
+              "classes as measured, keeps over stale data a slot no smaller than the one written, and a measurement of another format is refused")
         END
       '';
 
@@ -1494,13 +1594,22 @@ in
   #
   # The check `nix/rust/unit-classes.json` is held to, as `plan.json` is to
   # the planner: over every unit's own measurement (`metrics`, an input of
-  # this check, so every unit is built before it), `.#rust-peaks` finds no
-  # unit that is not heavy whose peak and the headroom more are past the
-  # slot of the class it is built by (named, or carried from the unit a
-  # lock change renamed) — the slot it is started by beside others in every
-  # build that schedules it, by the same rule `--write` classes by. A unit
-  # measured into another class, or the data naming none, is said and
-  # passes: built by a class it fits, nothing is oversubscribed.
+  # this check, so every unit is built before it — at least two thousand),
+  # `.#rust-peaks` finds no unit that is not heavy whose whole build's peak
+  # at one core is past the slot of the class it is built by (named, or
+  # carried from the unit a lock change renamed) — the slot it is started by
+  # beside others in every build that schedules it —, and no measurement of
+  # another format. A unit measured into another class, or the data naming
+  # none, is said and passes: built by a class it fits, nothing is
+  # oversubscribed. A unit of a class with a slot measured at other cores
+  # than the one its class builds it with — by a `nix build` that was not
+  # sized (`nix flake check`, `.#vm`, `.#iso`, `.#png`) — is judged by no
+  # measurement, and is said by name and how many, never failed and with no
+  # command: its next sized build measures it again, and the store refuses
+  # to delete a measurement a root holds, which a battery's
+  # `ronoctua-keep-sources` makes of the release graph's units and the
+  # loop's third-party ones. The floor counts every unit measured, at any
+  # cores.
   unit-classes-fit-the-measures =
     let
       planned = lib.filterAttrs (_: e: lib.elem e.kind sizing.plannedKinds) rust.unitIndex;
@@ -1538,15 +1647,21 @@ in
       ran = subprocess.run(["python3", "${../nix/scripts/rust-peaks.py}", "--json", "${facts}"],
                            capture_output=True, text=True)
       r = json.loads(ran.stdout)
+      # A CHECK THAT STOPPED REACHING THE UNITS: their measurements are its
+      # inputs, whatever cores they were taken at.
       floor(len(r["measured"]), 2000, "units measured")
       if ran.returncode != 0:
-          print("ERROR: a unit outgrew the slot of its class, with the headroom, in nix/rust/unit-classes.json:", file=sys.stderr)
+          print("ERROR: a unit outgrew the slot of its class in nix/rust/unit-classes.json, "
+                "or a measurement is of another format:", file=sys.stderr)
           print(ran.stderr, file=sys.stderr)
           print("       Run, after a build of the units: nix run .#rust-peaks -- --write", file=sys.stderr)
           sys.exit(1)
-      print(f"OK: {len(r['measured'])} units measured, none past the slot of its class with the headroom; "
-            f"{len(r['would-move'])} measured into another class, {len(r['unclassed'])} with none, "
-            f"{len(r['carried'])} carried (said by .#rust-peaks)")
+      if r["other-cores-said"]:
+          print("NOTE: " + r["other-cores-said"])
+      print(f"OK: {len(r['measured'])} units measured, {r['judged']} at one core and none of those past the slot of "
+            f"its class; {len(r['within-the-headroom'])} inside it within the headroom, {len(r['would-move'])} measured "
+            f"into another class, {len(r['unclassed'])} with none, {len(r['carried'])} carried, "
+            f"{len(r['other-cores'])} at other cores (said by .#rust-peaks)")
       END
     '';
 

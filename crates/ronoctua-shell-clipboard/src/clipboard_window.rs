@@ -180,24 +180,22 @@ pub(crate) struct ClipboardWindow {
 }
 
 impl ClipboardWindow {
-    /// The list's hover bands, one per pointer, laid ONLY on a row a click
-    /// takes (`Clip::takes`, which the footer's region asks too) — never on
-    /// the heading, a fact or the air between, where the click takes
-    /// nothing. Its own function, and not two lines of [`Content::paint`],
-    /// so a test can hold it: a frame's canvas needs a GPU.
+    /// The list's hover bands, one per pointer, as the door's list lays
+    /// them: ONLY on a row a click takes (`Content::takes`, `Clip::takes`,
+    /// which the footer's region asks too) — never on the heading, a fact or
+    /// the air between, where the click takes nothing. Asked by the test
+    /// alone: a frame's canvas needs a GPU.
+    #[cfg(test)]
     fn hover(
         &self,
         ui: &Ui,
         lit: &[(ronoctua_tokens::Color, Option<usize>)],
     ) -> Vec<ronoctua_render::quad::Quad> {
-        let takes = self.clip.takes(ui.columns, &ui.texts);
-        crate::chrome::hover_bands(
-            lit.iter().map(|&(colour, row)| {
-                (
-                    colour,
-                    row.filter(|n| takes.get(*n).copied().unwrap_or(false)),
-                )
-            }),
+        let takes = self.takes(ui);
+        crate::door::list::hover_bands(
+            lit,
+            &takes,
+            None,
             ui.offset,
             ui.room_for_rows(),
             takes.len(),
@@ -284,6 +282,13 @@ impl Content for ClipboardWindow {
         self.clip.rows(ui.columns, &ui.texts)
     }
 
+    /// THE POINTER LIGHTS WHAT THE CLICK TAKES: an entry, a line of the
+    /// sync — the view's one answer (`Clip::takes`), which the footer's
+    /// region and the click read too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.clip.takes(ui.columns, &ui.texts)
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.clip.cursor())
     }
@@ -295,16 +300,10 @@ impl Content for ClipboardWindow {
     }
 
     /// The rows, and the shown entry's picture or its code in the box the
-    /// view left for it — the footer's drawing, by the same functions.
-    ///
-    /// THE POINTER LIGHTS WHAT THE CLICK TAKES: the list is drawn without
-    /// its hover, and the hover is [`ClipboardWindow::hover`]'s.
+    /// view left for it — the footer's drawing, by the same functions. The
+    /// list lights what the click takes (`Content::takes`).
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
-        let lit = canvas.lit;
-        canvas.lit = &[];
         crate::door::list::paint(self, ui, canvas);
-        canvas.lit = lit;
-        canvas.under.extend(self.hover(ui, lit));
         if !self.clip.heard() {
             return;
         }

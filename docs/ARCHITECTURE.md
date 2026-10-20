@@ -524,8 +524,9 @@ mediu ao lado dela: com o shell num crate só, o harness de teste dele mediu 435
 programa de release 228 MiB por núcleo a mais, e o `nix/build-sizing.nix` usa 4864 e 320 MiB, com
 margem (`shellMiB`, `besideMiB`). Antes das unidades eram workspaces do crane — o shell sob
 `release`, uma unidade de código só com LTO fino, mediu 5120 MiB sozinho. Hoje pesada é a classe
-medida de uma unidade (`nix/rust/unit-classes.json`: o programa de release do shell e a biblioteca de
-release do rodapé), e o `.#rust-peaks` falha quando uma unidade passou da fatia da classe dela.
+medida de uma unidade (`nix/rust/unit-classes.json`: o programa de release do shell; a biblioteca de
+release do rodapé passou à classe grande no M1), e o `.#rust-peaks` falha quando uma unidade passou
+da fatia da classe dela.
 
 **E avaliar também não é de graça.** Um teste de VM é um sistema NixOS, e avaliá-lo segura ~260 MiB
 até o avaliador sair. O `nix build` da bateria avaliava as 31 VMs num processo só — 8,2 GiB de RSS,
@@ -3772,6 +3773,74 @@ uma enquanto pergunta, e o `Ui` de toda porta também (`Ui::asking`, aberta por 
   aperto sozinho o botão Voltar não fazia nada numa janela de buffer e deixava o `Esc` preso para a
   tecla seguinte.
 
+#### O ponteiro acende só o que o clique toma — linha a linha, nas duas portas
+
+A lista da porta acendia QUALQUER linha sob o ponteiro e entregava qualquer clique ao
+`Content::clicked`: em toda janela, o título, o ar entre duas seções e um fato acendiam, e o clique ali
+não fazia nada. O rodapé já sabia dizer isso por linha (`region::Row::takes`: linha que não toma
+clique não ganha faixa nem clique), mas três regiões davam uma resposta para a vista inteira — o
+clipboard (`self.clip.heard`), o histórico do shell e as notificações (`true`) — e um título aceso
+nelas também não pegava nada.
+
+- **Uma resposta por linha, da vista, lida por todos.** Cada vista diz o que o clique toma em cada
+  linha (`Row::takes`, ou `View::takes` quando a resposta depende de mais que a linha), e o
+  `Row::takes` da região, o `Content::takes` da janela e o próprio clique leem a mesma. A lista da
+  porta acende só onde ela diz (`door::list::body`, `list::hover_bands`) e só ali entrega o clique
+  (`list::pointer`) — o mesmo que o rodapé faz com a linha da região. O padrão do `Content::takes` é
+  NENHUMA linha: com o padrão "todas", a janela que esquecesse de dizer voltaria a acender o título
+  calada; com nenhuma, o esquecimento é uma janela sem luz e sem clique, que se vê na primeira foto,
+  e o `the-pointer-lights-row-by-row` recusa antes.
+- **Onde uma linha são duas coisas, a resposta é da célula.** A página de um dispositivo Bluetooth
+  lado a lado e as duas colunas das notificações descreviam a metade em que o TECLADO estava: o
+  ponteiro sobre a outra metade não acendia o controle que o clique pegava, e sobre o branco ao
+  lado acendia uma linha cujo clique — pior — apertava `RET` na linha do cursor. Agora a vista
+  responde por célula (`takes_at`), o rodapé recorta pelo `Region::lit` e a janela pela própria
+  conta, as duas com a mesma função. Do mesmo jeito: as zonas dos containers e do Incus (a célula da
+  margem, que clicava a primeira zona sem acender nada), um título do player (acende só o controle
+  dele), um tipo e a coluna sem o teclado no histórico do git (pegavam o clique sem acender).
+- **No rodapé, o campo sob o ponteiro também.** Ele pintava o campo sob o ponteiro no acento mesmo
+  numa linha sem clique — o título de uma seção na cor do cursor; agora só onde a linha toma o
+  clique naquela célula (`Footer::takes_under_pointer`).
+- **O gerenciador de arquivos tem a mesma resposta, por ponto.** `View::takes` é a tabela do
+  `View::click` lida sem rodá-la, e `View::takes_at` é o que a faixa (`band_row`), o acento do campo
+  e o rodapé (`Sectioned::takes_at`) perguntam: o caminho acende só no trecho que leva a algum
+  lugar, a nota de pasta vazia e os fatos que não se editam não acendem, uma entrada de playlist
+  acende onde o clique a toca. Uma linha do rodapé em seções só podia acender se a LISTAGEM tivesse
+  algo nela, e a barra lateral ao lado de uma linha vazia pegava o clique apagada. A grade
+  continua sem faixa (decisão do dono), e o nome da célula acende onde quer que o ponteiro esteja
+  nela (`grid_lit_at`) — antes só com a mão sobre as letras.
+- **O teste é o clique.** As vistas têm, em cada porta que mudou, um teste que abre a vista de novo
+  para cada linha, clica nela UMA vez e cobra que ela acenda exatamente onde algo mudou
+  (`region::held_to_the_click`, `door::held_to_the_click`). Uma vez, e não as duas do
+  seleciona-e-age: uma linha que o primeiro clique não toma o segundo também não toma, e um `RET`
+  rodado em toda linha de um teste alcança a máquina — um consentimento gravado, o relógio
+  virado. O controle em que o cursor já está — a linha dele, e toda linha que o clique leva a ela
+  (`Region::control_of`) — é onde o primeiro clique JÁ é o `RET`, e não é clicado.
+- **O que o clique passou a tomar, onde a regra pedia o ponteiro.** O que o teclado alcançava e o
+  ponteiro não (inv. 19) virou clique, em vez de apagar a luz: a folha, o rascunho e a pergunta de
+  publicar das notificações (o primeiro clique escolhe o botão, a linha, a resposta; o segundo é o
+  `RET`), toda linha do consentimento dos programas e do Incus (uma linha só, acesa inteira), o
+  grupo, o tamanho e o bit especial de um arquivo no acesso rápido. E o contrário, onde o clique
+  tomava o que não devia: o título e as frases do seletor de arquivos na rede não movem mais o
+  cursor, e uma fotografia não grava `audio.json`, `power.json` nem fala com o estúdio ao `RET`.
+- **O que um clique abre nasce sob o ponteiro, e o primeiro clique ali só seleciona.** A linha de
+  um menu ou de uma pergunta do gerenciador de arquivos passou a tomar o clique na largura toda, e
+  ela respondia no primeiro clique: o clique duplo numa letra de permissão abria "mudar para
+  0355?" e o segundo aperto caía no `sim`, e o `chmod` saía sem ninguém escolher. Agora o primeiro
+  clique numa resposta, num item de menu ou na linha de consentimento da calculadora só seleciona,
+  e o segundo responde — nas duas portas, que chamam o mesmo `View::click`. Isso vale também para
+  a linha em que o cursor nasceu (`Picker::aimed`, `View::menu_aimed`, `calc::View::allow_picked`):
+  só onde a PESSOA pôs o cursor (uma seta, um clique) o clique é o `RET`. Sem isso, o clique duplo
+  no dono de um arquivo, desenhado na linha em que a pergunta põe a primeira pessoa, dava o arquivo
+  ao `root`. Para o `não` nascido no cursor, são dois cliques — o preço de a posição não decidir.
+  Um clique triplo ainda responde: é seleciona-e-responde.
+- **A luz do gerenciador é uma disposição por quadro.** Cada pergunta da luz (`band_row`,
+  `takes_at`, `taken_line`, `grid_lit_at`) dispunha a coluna sob o ponteiro de novo — a faixa duas
+  vezes —, cinco por quadro nas duas portas. `View::lit_at` (`Sectioned::lit_at`, `LitAt`) responde
+  tudo de uma disposição, e cada porta pergunta uma vez por quadro. E a janela acende toda linha de
+  um controle quebrado em várias, como o rodapé (`Content::controls`, `list::body`): o
+  consentimento do pendrive e dos programas acendia só a linha sob o ponteiro.
+
 ## 5. Buffers nativos e o protocolo
 
 ### Buffers nativos
@@ -4631,7 +4700,7 @@ do próprio `mkIf`, e o `nix/dev.nix` para o laço aninhado. Quem perguntou foi 
 #### O Emacs é o puro, e a configuração é da pessoa
 
 Decisão do dono (2026-10-19): a distro não instala o Doom e não escreve configuração nenhuma do
-Emacs. O `nix/modules/emacs.nix` traz o pacote (`emacs30`), o daemon (`services.emacs`, unidade de
+Emacs. O `nix/modules/emacs.nix` traz o pacote (`emacs30-pgtk`), o daemon (`services.emacs`, unidade de
 usuário: o `e`, o `$EDITOR` e o gerenciador de arquivos abrem com `emacsclient` num processo que já
 carregou tudo), o `RONOCTUA_EMACSCLIENT` e o interruptor — e só. Nenhum `init.el` ou `default.el`,
 nenhum arquivo em `~/.config/emacs` ou `~/.emacs.d`, nada em `/etc` que o Emacs leia; no máximo a
@@ -4655,6 +4724,90 @@ Tirar um passo da atualização não passa por livro-razão: o id vive na tabela
 `brain.json` não casa com passo nenhum e não faz nada; uma linha `ronoctua.update.steps.doom-sync`
 no `host.nix` de uma máquina passa a recusar a avaliação, como todo id que não existe — de propósito:
 um erro de digitação que não ligasse nada seria pior. Nenhuma versão foi publicada com o passo.
+
+#### O Emacs é o pure-GTK, e um compositor que acaba leva o daemon
+
+O pacote é o `emacs30-pgtk` (2026-10-19). O `emacs30` do nixpkgs é o build X11 com o toolkit Lucid
+(Xaw3d), não GTK — e na sessão daqui ele não abria janela nenhuma: a linha da sessão importa para o
+gerente do usuário o `WAYLAND_DISPLAY` e nunca o `DISPLAY` (`scroll.nix`), e o `emacsclient` do
+build X11 só lê o `DISPLAY`. Disparado como o rodapé dispara (é assim que o gerenciador de
+arquivos abre um texto), o `-c` saía com 1 sem quadro; com `DISPLAY=:0` à mão, abria pelo XWayland
+em 1,2 s. O `emacsclient` do pgtk lê o `WAYLAND_DISPLAY` primeiro, e o quadro é um
+`xdg_toplevel` do compositor.
+
+O `tests/emacs-vm.nix` prova, no compositor da distro e com o compositor como unidade da pessoa,
+como na sessão: o daemon sobe no `default.target` sem display nenhum no ambiente; `emacsclient -t`
+(o `e` e o `$EDITOR`) funciona sem display; `emacsclient -c` disparado como o rodapé dispara abre,
+em 1,2 s, um quadro `xdg_shell` com `app_id` `emacs`, e o XWayland (preguiçoso, como na sessão)
+nunca sobe; o daemon sobrevive ao quadro fechado pelo compositor. O `app_id` concorda, ignorando
+caixa, com o `StartupWMClass=Emacs` das entradas que o registro lista (`ronoctua.apps.emacs`), mas
+nada no shell casa uma janela do Emacs com a entrada dela: o `ronoctua_apps::declared_window` só é
+perguntado sobre as janelas do Chrome (`daemon::mode_label`), e a modeline mostra o último pedaço do
+`app_id` depois do ponto — `emacs`, no lugar da classe X `Emacs`. Nenhuma regra do compositor nomeia
+o Emacs (a tabela `FLOATING` é só das nossas janelas). A vigia do cérebro reconhece o processo pelo
+`argv[0]`, que o embrulho do pgtk preserva (`--inherit-argv0`; o binário real é
+`.emacs-30.2-wrapped`) — o `why.md` dela e o `vm.nix` da pasta provam com os programas da máquina.
+
+**O preço, medido: um compositor que acaba leva o daemon que desenhou nele.** Um Emacs GTK nunca
+solta um display em que abriu um quadro (o `frame.c` mantém a conexão de um build GTK depois do
+último quadro, pelo bug do GTK que o próprio Emacs cita), e o GDK do Wayland sai do processo quando
+a conexão cai. O daemon avisa ao subir: *"Due to a limitation in GTK 3, Emacs built with PGTK will
+simply exit when a display connection is closed"*. Medido nas duas builds com o mesmo roteiro, três
+fins de compositor cada:
+
+| fim do compositor | `emacs30-pgtk` | `emacs30` (Lucid, com `DISPLAY` à mão) |
+|---|---|---|
+| depois de um quadro, já fechado | sai com 1 (`Error reading events from display: Broken pipe`), volta no mesmo segundo | vive |
+| com o quadro aberto e um buffer modificado | sai com 1, volta; o buffer some, e o auto-save (`#arquivo#`) fica com o que foi salvo até ele | vive, com o buffer modificado intacto |
+| num compositor em que nunca desenhou | vive | vive |
+
+Sem core dump: o GDK chama `_exit(1)` (`gdk/wayland/gdkeventsource.c`), e o `_exit` pula o
+`kill-emacs` inteiro. Perde-se mais que as edições desde o último auto-save: o `kill-emacs-hook` não
+roda (o que o savehist, o recentf, os bookmarks e o desktop-save-mode gravam no fim não é gravado), e
+o daemon que o `Restart=always` traz de volta no mesmo segundo volta vazio — os buffers de processo
+(shell, compilação, as conexões do TRAMP) se vão, e ninguém foi perguntado sobre os buffers não
+salvos. A sessão seguinte abre quadro de novo. O `emacs-vm` segura as três linhas da primeira
+coluna, e um GTK que aprendesse a soltar o display o faria falhar. Pelo desenho da sessão, o
+compositor acaba sozinho, sem o gerente do usuário acabar, no `s q q` (o shell de login do tty fica)
+e numa queda dele. É o motivo de a escolha estar no `PENDING.md`: nativo e alcançável pela sessão,
+contra um daemon que sobrevive ao compositor.
+
+**O fim do gerente do usuário não é esse fim** — desligar, reiniciar, o último logout. A unidade do
+daemon é ordenada depois da do compositor (`after = [ "scroll.service" ]`, no `emacs.nix`), e o
+systemd para na ordem inversa: o daemon recebe o SIGTERM com o display ainda de pé, roda o
+`kill-emacs` (o hook e o auto-save), e o compositor espera por ele. Sem a ordem, as duas paravam
+juntas, e era corrida: na revisão, de duas paradas do gerente com um quadro aberto, uma saiu pelo
+`_exit(1)` ("Lost connection to Wayland compositor.") e a outra pelo SIGTERM. O `emacs-vm` para o
+gerente seis vezes, cada uma com um quadro aberto, uma edição não salva e o auto-save periódico
+desligado, e cobra em todas que o `#arquivo#` tem a edição, que o `kill-emacs-hook` rodou e que o
+display não caiu antes; com a ordem, 6 de 6, o daemon parado antes do compositor em todas. Sem a
+ordem (tirada do `emacs.nix` para provar), o compositor parou antes do daemon nas seis, e a edição
+se perdeu em quatro: o SIGTERM chegou, o `kill-emacs-hook` rodou, e o GDK saiu (`Error
+reading events from display: Broken pipe`) antes do auto-save do fim. A ordem não custa nada no
+boot: o compositor não tem trabalho no `default.target` (quem o sobe é o shell de login), e uma
+ordem sem trabalho ao lado não espera nada — o daemon sobe sem sessão, e o cliente de terminal
+funciona, como o `emacs-vm` cobra antes de tudo.
+
+**O laço de desenvolvimento** (`nix/dev.nix`) dá ao rodapé dele o `emacsclient` do pgtk preso à
+sessão em que o `.#dev` foi aberto (`loopEmacsclient`). O do build X11, que ele usava, só lê o
+`DISPLAY`, que a sessão instalada nunca exporta: não abria nada. E o do pgtk solto abriria o quadro
+no compositor aninhado — o `WAYLAND_DISPLAY` do laço é o dele —, e o daemon da pessoa (o mesmo
+`$XDG_RUNTIME_DIR`) ficaria preso lá: o pgtk trata todo nome `wayland-N` como o único display
+Wayland que já tem aberto (`pgtk_display_info_for_name`, `src/pgtkfns.c`), então todo quadro
+seguinte da sessão de verdade abriria dentro da janela aninhada, até o `.#dev` acabar e levar o
+daemon junto. O embrulho devolve ao cliente o `WAYLAND_DISPLAY` que o laço guardou antes de apontá-lo
+para o aninhado (`RONOCTUA_DEV_HOST_WAYLAND_DISPLAY`; vazio num host X11, e o cliente cai no
+`DISPLAY` do host, que o laço não muda) e tira as duas marcas do laço: o quadro é da sessão de
+verdade, o ambiente que ele dá aos programas que o Emacs abre também, e a varredura do próximo
+`.#dev` não toma o cliente por sobra (fecharia o quadro). O `emacs-vm` roda esse mesmo embrulho,
+com o ambiente do rodapé do laço, contra um compositor aninhado dentro da sessão e um daemon sem
+display nenhum: o quadro abre na sessão, e o fim do aninhado não toca o daemon. Sem a devolução
+(tirada do embrulho para provar), o quadro abriu no aninhado (`wayland-2`). O que ainda prende o
+daemon ao aninhado é um `et` num terminal aberto dentro do laço, quando o daemon não tem display
+nenhum aberto.
+
+O pacote fica do mesmo tamanho: o pgtk acrescenta 491 MiB ao `full` e 493 ao `minimal`, contra 503
+e 506 do Lucid (o GTK 3 já está lá por outros programas; saem as bibliotecas do X toolkit).
 
 #### Uma pergunta vaga e duas respostas em chave crua
 
@@ -8276,6 +8429,44 @@ executável do shell — pelo nome dele, nunca pela linhagem, porque o que o she
 alguém (`events::holders_of`). O `camera-vm` vigia `IN_OPEN` nos dois nós enquanto o estúdio e um
 rodapé sobem e não vê nada até os ajustes abrirem. Fica de fora o que não é nosso: o `v4l_id` do udev
 abre o nó quando ele é conectado.
+
+**Nem o WirePlumber da sessão abre uma câmera.** Medido no `camera-vm`, com o PipeWire e o WirePlumber
+da própria distro na sessão da pessoa e um vigia fanotify, que diz o pid de quem abre e não abre o nó
+ele mesmo (o evento vem por identificador de arquivo, sem descritor). O perfil `main` do WirePlumber
+0.5.14 pinado exige `hardware.video-capture`, que quer os monitores V4L2 e libcamera, e o PipeWire é
+ativado por socket: no primeiro cliente de áudio da sessão, logo depois do login, o `wireplumber`
+abriu a webcam duas vezes e a câmera virtual duas, e o `pipewire` abriu a webcam várias vezes (três
+ou quatro, conforme a rodada). Cada contagem é um piso, porque o fanotify junta num evento só os
+eventos seguidos de um mesmo processo num mesmo nó. O `camera-vm` conta e não mede tempo: os tempos
+vêm de uma VM de medida avulsa, fora do repositório, com o mesmo PipeWire 1.6.6, o mesmo WirePlumber
+e um vigia fanotify do mesmo jeito. Nela o `wireplumber` abriu 0,54 s depois de o PipeWire ser
+iniciado e o `pipewire`, 1,55 s depois (o nó é criado no servidor, depois do
+`camera-discovery-timeout` de 1 s), e cada abertura fechou em ~2 ms. Numa webcam UVC, cada uma é a
+luz piscando sem ninguém pedir.
+O monitor libcamera também roda: o `CameraManager` sobe dentro do WirePlumber (`libcamera v0.7.0` no
+journal), com os pipelines `uvcvideo`, `ipu3` e `simple`. Na VM não existe dispositivo de mídia e ele
+não abre nada, e numa câmera UVC de verdade ele não foi medido: o QEMU não tem webcam, e um gadget UVC
+sobre o `dummy_hcd` não sobe, porque o `f_uvc` precisa de um endpoint isócrono e o `dummy_hcd` não
+tem. Por isso `ronoctua.camera.pipewireCameras` (no `studio.nix`, fora do interruptor do estúdio,
+porque a luz é da pessoa com ou sem ele) nasce `false` e desliga `hardware.video-capture`: os dois
+monitores de uma vez, num fragmento mesclado no `main` e não posto no lugar dele (medido: o
+WirePlumber carrega 87 componentes contra 98, e os onze que faltam são os de câmera; o teste confere
+que ligar a opção acrescenta só esses e os dois plugins de câmera). Nada da distro lê câmera pelo
+PipeWire: o estúdio, o Chrome (sem `WebRtcPipeWireCamera`) e quem lê a câmera virtual abrem o nó V4L2.
+Desligado, perde-se a câmera como nó do PipeWire: o portal de câmera responde que não há câmera, e quem
+só lê câmera por ele (um Flatpak sem acesso a dispositivos, a fonte PipeWire do OBS) não vê nenhuma. O
+`camera-vm` prova os dois lados na mesma janela de dez segundos: desligado, nada da sessão abre um nó e
+nenhum plugin de câmera é carregado; ligado (a mesma máquina numa especialização), o `wireplumber` abre
+a webcam e ela vira um nó `Video/Source`. O que ainda abre no login é do udev: no instante em que o
+logind abre a sessão, o udev processa um `change` em cada nó, roda as regras de novo e o `v4l_id`
+abre o nó para o `QUERYCAP`, uma vez por nó (medido). O teste aceita só essa abertura, contada contra
+os eventos que o udev processou e que o kernel numerou (`SEQNUM`) depois de o vigia estar no lugar.
+Um evento anterior, como o `add` do boot ainda nas mãos do udev, pode ter aberto o nó antes do vigia,
+e desculparia uma abertura que ele não fez: a de um processo que já tinha saído quando o vigia leu o
+`/proc`, e que chega sem nome e sem uid. A primeira troca para esta configuração reinicia o
+WirePlumber da pessoa, porque o fragmento muda o `XDG_DATA_DIRS` da unidade e o
+`switch-to-configuration` reinicia a unidade de usuário que mudou: o som corta uma vez, na
+atualização.
 
 ## 7. Memória, disco, boot e instalação
 
@@ -18445,6 +18636,8 @@ compilados e o `withPersonModules` trocava o workspace. Segundos de relógio:
 | a mesma, cada unidade pela sua classe (S1, antes dos consertos) | 15 | 111,6 | 20,8 | 21,0 | 3,6 | 157,0 |
 | a mesma, a fatia única (a árvore final) | 15 | 108,5 | 20,2 | 19,7 | 2,6 | 150,9 |
 | a mesma, cada unidade pela sua classe (a árvore final) | 15 | 109,3 | 20,5 | 20,3 | 2,9 | **152,9** |
+| uma linha do `ronoctua-xdg`, o pico do que o orçamento paga e a classe grande (M1; duas rodadas, orçamento de 8 192 MiB; antes, no mesmo, 1 394,7 e 1 396,1) | 690 | 409,4 · 415,4 | 304,1 · 306,3 | 507,4 · 512,5 | 47,5 · 48,0 | **1 268,4 · 1 282,3** |
+| uma linha do pendrive, o mesmo (M1; antes 157,0 e 156,2) | 15 | 110,9 · 111,3 | 20,8 · 20,8 | 20,0 · 20,0 | 2,6 · 2,6 | **154,3 · 154,7** |
 | antes (crane), qualquer uma delas | o workspace inteiro em cada derivation | 700 | 272 | ~500 | 65 | 1 537 |
 
 Avaliar o flake editado custa mais ~11 s (~20 s quando o hub muda), uma vez por `nix build`. A
@@ -18474,7 +18667,8 @@ consertos: 3,8 GiB e 7 236 MiB); o pico medido das unidades que rodaram juntas n
 num orçamento de ~8,4 GiB, e nada foi morto. O ganho é menor que o da simulação (1 085 s) porque dez
 compiladores em seis núcleos físicos ficam mais lentos cada um (o trabalho das unidades do release
 subiu de 1 398 para 1 709 s) e cada unidade paga ~0,5 s do próprio `nix build`; e o release ainda
-termina com as duas pesadas sozinhas (65 e 96 s).
+terminava com as duas pesadas sozinhas (65 e 96 s) — a biblioteca do rodapé passou à classe grande
+no M1 ("O pico é do build inteiro (M1)", abaixo).
 
 A edição do pendrive não ficou mais lenta: 152,9 s por classe, 150,9 s pela fatia única sobre a
 mesma árvore (outra rodada da fatia única deu 149,2: os 2 s são o ruído e o `nix build` próprio de
@@ -19386,11 +19580,11 @@ Uma fatia só para todo compilador — o pico do pior, 1 792 MiB — guardava o 
 desperdiçava: das 2 310 unidades medidas (`metrics/peak-kib`, 2026-10-19), 2 116 picam até 512 MiB e
 só 21 passam de 1 GiB, e numa máquina de doze processadores com ~8 GiB de orçamento a edição de um
 hub construía quatro compiladores pequenos por vez (F5: 1 531 s, o mesmo do workspace do crane).
-Então toda unidade tem uma CLASSE, medida: leve (fatia de 768 MiB), média (2 048 MiB) e pesada, a
-que nenhuma fatia descreve — o programa de release do shell (o link thin LTO do rodapé inteiro) e a
-biblioteca de release do rodapé —, construída sozinha. As fatias saíram de uma simulação sobre as
-unidades, os tempos e o grafo da edição do xdg do F5 (640, 768 ou 1 024 por 1 792 ou 2 048): uma
-fatia leve menor põe unidades demais na média, uma maior deixa caber menos de uma vez.
+Então toda unidade tem uma CLASSE, medida: leve (fatia de 768 MiB), média (2 048 MiB), grande
+(2 816 MiB, desde o M1, abaixo) e pesada, a que nenhuma fatia descreve — o programa de release do
+shell, o link thin LTO do rodapé inteiro —, construída sozinha. As fatias leve e média saíram de uma
+simulação sobre as unidades, os tempos e o grafo da edição do xdg do F5 (640, 768 ou 1 024 por 1 792
+ou 2 048): uma fatia leve menor põe unidades demais na média, uma maior deixa caber menos de uma vez.
 
 A classe de cada unidade está num lugar só, `nix/rust/unit-classes.json`, dado commitado como o
 `plan.json`: escrito por `nix run .#rust-peaks -- --write` a partir do `metrics/peak-kib` das
@@ -19401,24 +19595,26 @@ na avaliação (o plano da máquina e das baterias é avaliado antes de qualquer
 editada é uma derivation nova, sem medida; o id do índice (`release/libs/ronoctua-xdg`) não muda
 com a edição, e a medida é do id. Uma unidade vai para a primeira classe cuja fatia cabe o pico dela
 e mais um décimo (`headroomPercent`): crescendo um pouco, continua dentro da fatia, e só a medida a
-muda de classe. O check julga pela MESMA regra: uma unidade cujo pico e mais um décimo passa da fatia
-da classe por que é construída é recusada — o `.#rust-peaks` sai com erro e o check falha,
-nomeando-a —, nunca construída ao lado de outras por uma fatia que não a cabe. Julgada só pelo pico
-(sem a folga), uma unidade a 700 MiB passava na fatia leve que o `--write` já não lhe daria, e o
-`peak-kib` é do maior processo, não da árvore (o `docs/PENDING.md` diz quanto falta). Uma que o
-arquivo não nomeia (um crate novo) é média até ser medida, e todo build diz quantas, com o comando
-que as mede. Uma pesada continua pesada: ela é medida sozinha, com os
-núcleos da pesada, e o pico a um núcleo pode ser maior — a biblioteca de release do rodapé picou
-2 279 MiB a um núcleo ao lado de outras (F5) e 1 534 MiB sozinha a doze (S1). Rebaixada pelo pico de
-doze núcleos, ela seria construída a um, passaria da fatia e voltaria; o `--write` a mantém pesada e
-o relatório diz que ela poderia sair, o que é uma medida dela a um núcleo e uma edição à mão. A
-lista de pesadas escrita à mão (`rust.heavyUnits`) saiu: pesada é uma classe como as outras, e a
-lista envelhecia calada (o F5 achou a biblioteca do rodapé fora dela).
+muda de classe. O check julga pela fatia: uma unidade cujo pico passa da fatia da classe por que é
+construída é recusada — o `.#rust-peaks` sai com erro e o check falha, nomeando-a —, nunca construída
+ao lado de outras por uma fatia que não a cabe. A folga é a margem entre as duas medidas: a que
+escreveu a classe e a seguinte, que a julga, podem diferir dela antes de o check falhar. Julgado
+também com a folga, como foi até o M1, o check falhava na segunda medida de uma unidade escrita na
+borda, por qualquer diferença: o `ronoctua-render-png` de loop, medido 622 MiB na reconstrução e 747
+na edição seguinte, foi recusado. Uma unidade dentro da fatia e além dela com a folga passa, e o
+relatório a diz: o `--write` a move. O pico é o do build inteiro, a um núcleo, da memória que o
+orçamento paga (o M1, abaixo, diz por quê). Uma que o arquivo não nomeia (um
+crate novo) é média até ser medida, e todo build diz quantas, com o comando que as mede. A lista de
+pesadas escrita à mão (`rust.heavyUnits`) saiu: pesada é uma classe como as outras, e a lista
+envelhecia calada (o F5 achou a biblioteca do rodapé fora dela).
 
 Um arquivo escrito para outras fatias, outra folga ou outro formato não é lido pela avaliação, e o
-`--write` sobre ele não guarda classe que não mediu neste store: ela é de números que não existem
-mais. A unidade sai do arquivo (e é construída como média até ser medida), menos a pesada, que fica
-pesada — sozinha, ela nunca passa de fatia —, e o `--write` diz quantas saíram.
+`--write` sobre ele não guarda a classe que não mediu neste store a um núcleo: ela é de números que
+não existem mais. Mas guarda a fatia: a unidade vai para a primeira classe cuja fatia de agora cabe a
+que ela tinha (pesada além da última; a pesada fica pesada), e só sai do arquivo — construída como
+média até ser medida — quando essa classe não é mais pesada que a média. Saindo sempre, uma
+unidade escrita numa grande de 2 900 MiB e medida só a doze núcleos voltava à média, de 2 048: uma
+fatia menor que a que a medida dela, a um núcleo, tinha pedido. O `--write` diz quantas ficaram e quantas saíram.
 
 **Um lock novo renomeia metade das dependências.** O id de uma unidade de terceiro termina num
 digest do que ela é construída com (`key` do `rust-plan.py`: as features, o perfil, o tipo, os tipos
@@ -19521,6 +19717,217 @@ A soma das fatias do que roda junto nunca passa do orçamento, e toda unidade pi
 dela (o check acima): é esse o limite da memória do build, provado no `sized-units-keep-to-the-budget`
 (quarenta unidades plantadas e o que rodou junto a cada instante) e medido no build de verdade ("As
 edições medidas", acima).
+
+#### O pico é do build inteiro (M1)
+
+O `peak-kib` de uma unidade era o `ru_maxrss` do maior filho, e duas coisas ficavam fora dele. Uma
+unidade que liga roda o `rustc` e o linker juntos: o harness de teste do `ronoctua-shell-kit` media
+667 MiB assim e 790 MiB com todo processo do build somado, passando da fatia leve de 768. E o pico
+depende dos núcleos com que a unidade foi construída — o RSS da biblioteca de release do rodapé,
+2 279 MiB a um núcleo e 1 534 sozinha a doze —, e o `metrics` não dizia quantos: uma pesada nunca era
+rebaixada, porque a medida dela era de outros núcleos que os da fatia. Era essa a biblioteca que
+fechava o release ao lado do link do shell, sozinha, 65 s de um fio só com onze núcleos parados.
+
+**A medida é do que o orçamento paga, no build inteiro.** O orçamento sai do `MemAvailable`
+(`sizing_measure`), que conta como disponível o cache de páginas limpo. As bibliotecas do compilador,
+os rlibs que ele mapeia e o que o linker escreve são página de arquivo: estão no RSS de quem as
+mapeia e não saem do orçamento. O que sai é a memória que nenhuma reclamação devolve: a anônima e a
+shmem, residentes ou em swap, e as tabelas de página. Então o executor (`nix/scripts/rust-unit.py`)
+tem uma thread que lê, a cada 10 ms, o `/proc/<pid>/status` do builder (o pai do executor: num
+sandbox, o primeiro processo do build) e de todo processo abaixo dele, e soma de cada um
+`RssAnon + RssShmem + VmSwap + VmPTE` — cada processo vivo no máximo que já segurou. E o build roda
+sem página enorme transparente (`no_huge_pages`).
+
+**Um filho antes do `execve` é cópia do pai, e não conta.** O `rustc` chama o linker com um `fork`
+simples e depois o `execve` do `cc`; até o `execve`, o `status` do filho conta a memória do `rustc`,
+copiada na escrita — a mesma, segurada uma vez. Uma leitura nesse instante, guardada como o máximo
+do filho pelo resto da vida dele (ele vira o `cc`, que espera o linker), somava o `rustc` duas
+vezes. O link de um `rustc` de verdade, medido pelo próprio executor num namespace de pid como o do
+sandbox, deu 377 a 405 MiB parado e 481 a 533 com o `execve` segurado 5 ms (`strace -e
+inject=execve:delay_enter=5000`, no lugar de uma máquina ocupada), o filho lido primeiro como
+`rustc` e depois como `gcc`; e o `ronoctua-render-png` de release mediu 1 238 MiB numa das cinco
+rodadas da série abaixo, 1 043 a 1 045 nas outras. Agora um processo é o programa que roda
+(`image_of`: o nome, o executável e onde o `execve` o pôs na memória — código, dados, pilha,
+argumentos e ambiente, campos do `stat` que o `fork` copia e o `execve` refaz). Um filho com a
+imagem do pai ainda não fez o `execve` e não conta, e o máximo de um processo é do programa que ele
+roda agora: um que fez o `execve` recomeça do que segura. O mesmo link deu 378 a 393 MiB com o
+`execve` segurado 5 ms e 378 a 394 parado. Um build roda sem randomização de endereço (o sandbox do
+Nix a tira), então o mesmo programa com argumentos e ambiente do mesmo tamanho tem a mesma
+disposição e é a mesma imagem; e o que um filho escreve antes do `execve` (num build, o subshell de
+um shell) não conta.
+
+**Por que não o PSS, que foi a primeira medida do M1.** A revisão achou o pico do PSS da árvore (com
+o `ru_maxrss` do maior filho de piso) irreprodutível: o `ronoctua-render-png` de loop mediu 622 MiB
+na reconstrução, 570 e 747 nas duas edições seguintes, e com 747 o `.#rust-peaks` já falhava; das
+1 352 unidades das duas edições, 71 mediram 10 % ou mais acima da reconstrução. Duas causas: o pico
+curto do `rustc` com o linker cai entre duas leituras de meio segundo, e o PSS divide a página de
+arquivo com quem mais a mapeia — outro build ao lado, que mapeia os mesmos rlibs e as mesmas
+bibliotecas do compilador. Para decidir, 22 unidades das que mais variaram (os programas de loop que
+ligam, harnesses de teste do shell, as maiores bibliotecas, um terceiro grande, um clippy, uma
+execução de teste) foram construídas de novo cada uma a um núcleo, três vezes sozinhas e duas ao
+lado de outras (lotes de três e de seis), com um executor de ensaio que lê toda medida candidata no
+mesmo build (as unidades abaixo delas no store, cada build uma derivation própria). Duas séries
+de 110 builds: primeiro com a página enorme como o núcleo deste host a dá (`always`), depois sem
+ela. Em cada célula, a maior diferença relativa entre o maior e o menor build da mesma unidade (das
+de 300 MiB ou mais), a maior em MiB, e a mediana das 21 unidades que compilam (a execução de teste
+fica à parte); a última linha é uma terceira série, com o executor deste passo como ele é (as
+unidades da árvore dele no store):
+
+| Medida | com a página enorme do host | sem ela |
+|---|---:|---:|
+| o PSS da árvore, com o piso do maior filho (a primeira do M1) | 37 % · 228 MiB · 17,0 % | 45 % · 360 MiB · 17,6 % |
+| o `ru_maxrss` do maior filho (a de antes do M1) | 4 % · 26 MiB · 1,0 % | 19 % · 360 MiB · 0,5 % |
+| a soma do `VmHWM` dos processos vivos | 3 % · 36 MiB · 1,5 % | 19 % · 361 MiB · 1,3 % |
+| a soma do `VmRSS` | 23 % · 176 MiB · 3,9 % | 20 % · 361 MiB · 3,2 % |
+| a soma de `Pss_Anon` + `Pss_Shmem`, e o maior `RssFile` | 25 % · 116 MiB · 5,2 % | 32 % · 327 MiB · 17,0 % |
+| a soma de `RssAnon` + `RssShmem`, e o maior `RssFile` | 20 % · 130 MiB · 3,5 % | 19 % · 361 MiB · 3,4 % |
+| a soma de `RssAnon` + `RssShmem` | 41 % · 199 MiB · 7,1 % | 41 % · 350 MiB · 4,1 % |
+| a mesma, mais `VmSwap` + `VmPTE` | 65 % · 197 MiB · 7,0 % | 41 % · 140 MiB · 1,7 % |
+| `RssAnon` + `RssShmem`, cada processo vivo no máximo dele | 55 % · 255 MiB · 3,3 % | 23 % · 350 MiB · 0,6 % |
+| **a do executor** (o máximo de cada processo vivo, com `VmSwap` e `VmPTE`, sem página enorme) | — | 3 % · 13 MiB · 0,7 % |
+
+A soma do `RssAnon` lida a cada instante ainda variava, por duas razões que não são da medida: o
+`rustc` libera o que segurou antes de chamar o linker, e o alocador devolve isso ao núcleo quando
+quer — antes do link num build, durante ele no seguinte (o harness do `fast-access`, 337 ou 477
+MiB) —; e, com a página enorme, um processo segura os 2 MiB inteiros de uma página de que tocou um
+pouco, sempre que o núcleo tem uma livre: numa das cinco rodadas, toda unidade segurou 10 a 26 MiB a
+mais e dois harnesses 55 % a mais. Contar cada processo vivo no máximo que já segurou dá o pior dos
+dois casos do alocador em todo build. E a página enorme sai do build: uma máquina da distro só a dá a
+quem pede (`madvise`, o kernel do nixpkgs), nada no build pede, e a biblioteca do rodapé compilou no
+mesmo tempo com ela e sem ela (64,4 a 65,1 s com, 64,7 sem). Numa rodada ao lado de outras, o núcleo
+mandou ao swap 350 MiB da biblioteca do rodapé — são os 350 a 361 MiB da coluna da direita, nas
+medidas de RSS e de `RssAnon` —, e com o `VmSwap` somado a medida não mudou. O executor, que junta
+as três coisas, deu a mesma unidade a 3 % no pior caso (o harness do `catalogue`, 10 MiB), 13 MiB
+no pior em MiB (a biblioteca do player), nenhuma a mais de 5 %.
+
+O que o `nix-daemon` conta de memória anônima no cgroup dele, lido de fora a cada 10 ms em cada
+build sozinho, é a medida mais 8 a 47 MiB — o processo do daemon que serve o build, que o plano cobra
+no `clientMiB` —, onde o RSS e o PSS contavam as páginas de arquivo: o link do shell de loop é ~665
+MiB no cgroup e mediu até 1 566 no PSS, 1,3 GiB de RSS.
+
+**Ler é barato, então é frequente.** O `status` são contadores, não a varredura das páginas que o
+`smaps_rollup` faz (~30 ms numa biblioteca de 2,3 GiB). Uma leitura dos processos de um build leva
+0,25 a 0,39 ms com o build sozinho, e a cada 10 ms custa 2,4 a 3,7 % de um núcleo; na reconstrução,
+com dez de uma vez, a leitura levou 0,5 ms (a mediana) e somou 4,4 % do tempo das unidades. A espera
+depois de uma leitura cresce com o que ela levou, para que ler nunca passe de `SAMPLE_SHARE` (5 %;
+fora de um sandbox a lista é de todo processo da máquina). O pico de um link dura décimos de
+segundo. O que leituras mais espaçadas perderiam do máximo lido a cada 10 ms, na pior fase:
+
+| Intervalo | 20 ms | 50 ms | 100 ms | 200 ms | 500 ms |
+|---|---:|---:|---:|---:|---:|
+| o que se perde, no pior das 22 unidades | 14 MiB | 36 | 88 | 145 | 178 |
+
+**A folga é a margem entre duas medidas.** O `--write` põe a unidade na primeira classe cuja fatia
+cabe o pico e mais um décimo, e o `.#rust-peaks` (e o check) a julga pela fatia: a medida que
+escreveu a classe e a seguinte podem diferir de um décimo antes de o check falhar. As duas regras
+eram uma só, e com ela o check falhava na segunda medida de uma unidade escrita na borda, por
+qualquer diferença. A medida escolhida difere menos que isso entre builds da mesma unidade (acima);
+uma execução de teste varia pelo próprio trabalho (a do `ronoctua-index`, 80 a 122 MiB), longe de
+qualquer borda. A segunda medida, de verdade, depois da segunda reconstrução (abaixo): duas edições
+do hub (release, loop e testes) construíram de novo 568 e 569 unidades, e o `.#rust-peaks` sobre
+elas ficou verde as duas vezes — nenhuma passou da fatia, nenhuma ficou na folga. 502 e 510 mediram
+a 5 % ou menos da reconstrução; das 216 de 200 MiB ou mais, 215 e 214 (as outras, o harness do
+`ronoctua-files`, 220 → 237 MiB nas duas, e o programa de release `ronoctua-install`, 285 → 268). A
+maior diferença foi de 31 MiB (a execução de teste do `ronoctua-index`, 136 → 106); as que mais
+variam em proporção são execuções de teste de 11 a 18 MiB. Com o executor que contava a cópia do
+`fork`, as mesmas edições pegavam um harness de teste no link, um por vez e em cada edição outro: o
+do `ronoctua-shell-containers` 355 → 515 MiB e o do `ronoctua-notify` 295 → 389 numa, o do
+`ronoctua-shell-icons` 313 → 457 na outra — 94 a 160 MiB a mais, a ordem do `rustc` deles sozinho
+(200 e 245 MiB). Não era memória que o build segurou: era o `rustc` contado de novo no filho que ele
+ainda não tinha trocado pelo `cc`. Agora os três mediram 342 a 354, 289 e 291, e 312.
+
+**Uma medida classifica só nos núcleos da classe.** Toda classe com fatia é construída a um núcleo,
+então o `.#rust-peaks` julga uma unidade contra a fatia, e o `--write` a põe numa, só por uma medida
+a um núcleo. Uma pesada é construída sozinha com os núcleos que o orçamento deixa, e uma medida
+nesses núcleos a mantém pesada; medida a um núcleo, ela é classificada como qualquer outra e sai da
+pesada quando uma fatia a cabe. A regra de nunca rebaixar ficou só para a pesada sem medida a um
+núcleo, e o relatório diz como medi-la: nomeá-la à mão na classe que caberia, e o build seguinte é a
+um núcleo. Uma unidade de classe com fatia medida em outros núcleos — construída por um `nix build`
+que não foi dimensionado (`nix flake check`, `.#vm`, `.#iso`, `.#png`), com os núcleos do `nix.conf`
+— não é julgada nem movida: o `.#rust-peaks` e o `unit-classes-fit-the-measures` a dizem, pelo nome
+e quantas, sem falhar e sem comando. Ela fica na classe que o dado lhe dá até o build dimensionado
+seguinte dela — a próxima vez que o que a constrói mudar — medi-la a um núcleo, e nenhum comando a
+mede antes: o `ronoctua-keep-sources` que toda bateria e o `.#dev` rodam faz do `out` e do `metrics`
+de cada unidade do release (e de cada terceiro do loop) uma raiz indireta (`nix/keep-units.nix`) —
+são as que um build cru mais constrói —, e o Nix recusa apagar o que uma raiz segura (`still alive`;
+provado com uma medida enraizada como o conjunto enraíza, e sem a raiz o mesmo comando a apagou). O
+check falhava aí e dava esse comando, que só funcionava sem as raízes: depois de um `.#iso` ou de um
+`nix build` cru, toda bateria falhava, e o comando não a destravava. O piso dele é de duas mil
+unidades medidas, em quaisquer núcleos: o que ele cobra é alcançar as unidades.
+
+**A terceira classe, grande** (2 816 MiB, 2,75 GiB), construída a um núcleo ao lado de outras como a
+leve e a média, para o que nenhuma fatia média cabe com a folga. A biblioteca de release do rodapé,
+que era pesada, mede 1 904 MiB a um núcleo (2 094 com a folga) e o `cranelift-codegen` de release 1
+936 (2 130): os dois passam da média de 2 048 só pela folga. A fatia foi escolhida quando o pico da
+biblioteca era o PSS, 2 296 MiB (2 526 com a folga); com a medida de agora ela deixa ~700 MiB para
+crescer, e uma menor poria mais de uma vez ao lado dela (não foi simulada; o `docs/PENDING.md`
+guarda a das fatias). A pesada ficou só com o que nenhuma fatia descreve, o programa de release do
+shell (4 121 MiB a doze núcleos, 95 s).
+
+**A reconstrução.** O executor é entrada de toda unidade, e trocá-lo constrói as 2 320 de novo, a
+frio, pelo agendador de classes. A primeira, com as classes que o PSS tinha escrito, levou 1 933 s
+(no máximo dez de uma vez, 8 384 MiB planejados num orçamento de 8 455, a menor memória disponível 7
+166 MiB, nada morto), e o `--write` moveu 42 unidades, todas da média para a leve — o link do shell
+de loop (673 MiB, onde o PSS dava 1 338), o harness do shell, bibliotecas do shell e terceiros como
+o `wgpu-core`, o `zbus` e o `wasmparser` de release: o que tinham a mais era página de arquivo. A
+segunda, depois de a cópia do `fork` sair da medida, levou 1 861 s (no máximo dez de uma vez, 8 384
+MiB planejados em 8 566, a menor disponível 6 886 MiB, nada morto): 2 311 unidades ficaram a 20 MiB
+ou menos da primeira, cinco caíram mais (o programa de teste `ronoctua-install`, 175 → 121 MiB, e o
+harness do `ronoctua-consent`, 117 → 73), quatro subiram até 27, e o `--write` não moveu nenhuma —
+numa reconstrução a cópia quase nunca é lida (220 leituras em 182 unidades, no máximo três numa); é
+na rodada cheia que ela pesava (as edições do hub, acima). Medidas: 2 319 a um núcleo e o programa
+do shell a doze (4 121 MiB). A árvore passa do maior processo dela em 304 unidades por 20 MiB ou
+mais, em 88 por 50 ou mais e em 46 por 100 ou mais — harnesses de teste e programas de loop, que
+ligam —, a maior por 209 (o harness do shell); a mediana, 12 MiB, é o builder e o executor. O
+harness do kit mediu 491 MiB, o maior processo dele 367: o `rustc` no máximo dele e o linker.
+Ficaram 2 284 leves, 33 médias, as 2 grandes (o `cranelift-codegen` de release, 1 936 MiB, e a
+biblioteca do rodapé, 1 904: com a folga, passam da média) e a pesada. O check
+`unit-classes-fit-the-measures` passa sobre as 2 320.
+
+**O formato.** O `metrics` diz `peak-kib`, `largest-kib` (o máximo de um processo só), `seconds`,
+`cores` e `format`, agora 3; o `.#rust-peaks` e o `.#profile-bench` recusam, com a frase e as
+unidades, uma medida de outro formato — o 1 era o RSS do maior filho, o 2 o PSS da árvore —, e o
+`--write` então não escreve nada. O `nix/rust/unit-classes.json` ficou no formato 2: o arquivo e a
+regra são os mesmos, e o `--write` sobre a medida de toda unidade o reescreveu inteiro.
+
+**O plano não precisou mudar.** Cada linha do plano já leva o custo (`PHASES_FORMAT` 3: a fatia em
+MiB, ou o `alone:` da pesada), e o nome da classe é só dito: uma unidade grande é a linha
+`… large named 2816 …`, que um `ronoctua-build-units` de antes já constrói pelos próprios números (o
+`machine-builds-by-the-distros-plan` cobra uma classe que nenhuma distro tem; o
+`sized-units-keep-to-the-budget` a planta como `vast`).
+
+**As edições medidas, antes e depois, no mesmo orçamento.** O método do F5 (o `.#sized-build` de
+cada árvore, os quatro conjuntos um depois do outro, a edição reescrevendo o arquivo, store quente),
+duas rodadas de cada lado, alternadas, cada edição com uma linha que nenhuma medida anterior usou —
+uma linha já construída não é build: a primeira rodada daqui repetiu as linhas do primeiro M1, não
+construiu nada e foi jogada fora. Antes: a árvore do `e438755` (outro checkout, com o executor e as
+classes dela); depois, a deste passo. O orçamento das duas é o mesmo, 8 192 MiB: o `/proc/meminfo`
+que o `sizing_measure` lê trocado, num namespace de usuário e de montagem, por um cujo `MemAvailable`
+dá esse orçamento, e o `nix` falando com o daemon como sempre (a memória de verdade, 10,8 a 11,1 GiB
+disponíveis no começo de cada rodada, cabia nele). As do primeiro M1 não tinham o mesmo: 8 340 e 8 218
+MiB antes, 8 526 e 8 310 depois. Segundos de relógio:
+
+| Edição | release | loop | testes | clippy | total |
+|---|---:|---:|---:|---:|---:|
+| uma linha do `ronoctua-xdg`, antes | 503,1 · 504,8 | 304,3 · 304,5 | 537,6 · 536,6 | 49,7 · 50,2 | 1 394,7 · 1 396,1 |
+| a mesma, depois | 409,4 · 415,4 | 304,1 · 306,3 | 507,4 · 512,5 | 47,5 · 48,0 | 1 268,4 · 1 282,3 |
+| uma linha do pendrive, antes | 113,2 · 113,1 | 20,6 · 20,5 | 20,3 · 19,9 | 2,9 · 2,7 | 157,0 · 156,2 |
+| a mesma, depois | 110,9 · 111,3 | 20,8 · 20,8 | 20,0 · 20,0 | 2,6 · 2,6 | 154,3 · 154,7 |
+
+O release do hub caiu de 503 e 505 s para 409 e 415 (−92 s), e os testes de 538 e 537 para 507 e 513
+(−28 s: 42 unidades passaram à leve, e cabem mais de uma vez); loop e clippy ficaram onde estavam, e
+o pendrive também (−2 s). A biblioteca do rodapé fica pronta aos ~152 s antes e ~167 depois; pesada,
+ela esperou que nada mais rodasse — 182 e 185 s —, e o shell, que espera por ela, começou aos 399 e
+401 s; grande, ela entra quando a fatia cabe ao lado de outras — esperou 70 e 72 s —, e o shell
+começou aos 305 e 310. Não começa assim que fica pronta porque o `sized_units` começa a primeira
+pronta que cabe, na ordem da cadeia em unidades, e ela, com só o programa do shell acima, vem atrás
+das leves de cadeia mais alta (o `docs/PENDING.md` guarda). A memória: a menor disponível no release
+7,0 a 7,3 GiB dos dois lados, a anônima do `nix-daemon` e dos clientes até ~3,8 GiB dos dois (o link
+do shell), até 3,3 GiB nos testes depois e 2,7 antes; nada morto. Depois de a cópia do `fork` sair
+da medida, as classes não mudaram, e duas rodadas da mesma edição do hub (sem o clippy, no mesmo
+orçamento) deram 412,7 e 412,3 s no release, 305,1 e 305,2 no loop e 510,0 e 509,4 nos testes,
+dentro das de cima — a menor disponível 7,2 GiB no release e 7,7 nos testes, nada morto —: a tabela
+vale.
 
 #### A fase 1 da bateria é o build Rust inteiro
 

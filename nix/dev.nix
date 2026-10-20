@@ -73,8 +73,11 @@
   cargoDirs,
   # The editor the manager sends text to. It is a parameter and not an
   # `option_env!` for the reason `nix/rust.nix` writes out: baked into the
-  # binary, its store path is a reference no profile switch can remove.
-  emacs30,
+  # binary, its store path is a reference no profile switch can remove. The
+  # installed system's build (`emacsPkg` in `nix/modules/emacs.nix`), so the
+  # client speaks to the person's daemon as the session's does.
+  emacs30-pgtk,
+  writeShellScript,
   # The screenshot editor, for the notification a capture raises.
   swappy,
   grim,
@@ -117,6 +120,49 @@ let
   # the rest of the session. The whole mechanism, and the measurement, are in
   # the header of `nix/keyboard-nested.nix`.
   nestedKeymap = callPackage ./keyboard-nested.nix { };
+
+  # THE LOOP'S EDITOR CLIENT OPENS ITS FRAMES IN THE REAL SESSION, never in
+  # the nested compositor.
+  #
+  # The client the loop hands the footer (`RONOCTUA_EMACSCLIENT`) talks to the
+  # person's own daemon — the socket is under the same `$XDG_RUNTIME_DIR` —,
+  # and a frame is opened on the display the client names. The loop's
+  # `WAYLAND_DISPLAY` is the NESTED compositor's (it is exported for the
+  # footer, further down), so the plain client would put the frame in there,
+  # and the pure-GTK daemon then keeps that display: it treats every
+  # `wayland-N` name as the one Wayland display it already has open
+  # (`pgtk_display_info_for_name`, `src/pgtkfns.c`), so every later frame of
+  # the real session would open inside the nested window, and the end of the
+  # loop would take the daemon with it (GTK leaves with its display —
+  # `docs/ARCHITECTURE.md`, the Emacs section). The X11 build's client it
+  # replaces reads only `DISPLAY`, which the installed session never sets: it
+  # found no display and no terminal, and opened nothing.
+  #
+  # So this puts back the display the loop was started in, which the script
+  # keeps before it points `WAYLAND_DISPLAY` anywhere (`hostDisplay`): the
+  # frame opens in the real session whatever the daemon already holds, and so
+  # do the programs Emacs starts from it (the client hands the frame its
+  # environment). Empty on an X11 host, where the client falls back to the
+  # host's `DISPLAY`, which the loop never changes. And without the loop's
+  # two marks: the frame is the real session's, and the sweep at the next
+  # loop's start would otherwise take this client for a leftover and close
+  # the frame with it.
+  #
+  # `tests/emacs-vm.nix` runs this very script against a nested compositor.
+  hostDisplay = "RONOCTUA_DEV_HOST_WAYLAND_DISPLAY";
+  loopEmacsclient = writeShellScript "ronoctua-dev-emacsclient" ''
+    if [ -z "''${${hostDisplay}+set}" ]; then
+      echo "ronoctua-dev-emacsclient: ${hostDisplay} is not set; only the nested loop runs this client" >&2
+      exit 1
+    fi
+    if [ -n "''${${hostDisplay}}" ]; then
+      export WAYLAND_DISPLAY="''${${hostDisplay}}"
+    else
+      unset WAYLAND_DISPLAY
+    fi
+    unset RONOCTUA_INSTANCE RONOCTUA_DEV_PID
+    exec ${emacs30-pgtk}/bin/emacsclient "$@"
+  '';
 
   # WHAT THE BUILD BAKES, EXPORTED FOR THE BINARY THIS LOOP COMPILES.
   #
@@ -554,6 +600,12 @@ let
       ${keepSources}
 
       ${graphicsHost.prelude}
+
+      # THE SESSION THE LOOP WAS STARTED IN, kept before anything here points
+      # `WAYLAND_DISPLAY` at the nested compositor: the loop's editor client
+      # opens its frames there (`loopEmacsclient`, above). Empty on an X11
+      # host.
+      export ${hostDisplay}="''${WAYLAND_DISPLAY:-}"
 
       # AND ONE VARIABLE THE SHARED PRELUDE DOES NOT SET, because until the
       # compositor changed nothing needed it.
@@ -1186,8 +1238,10 @@ let
       export RONOCTUA_ATLAS="${atlasData}/world.atlas"
       # AND THE EDITOR, for the same reason: it is out of the compilation so
       # that `ronoctua.editor.emacs = false` can really remove it, which means
-      # somebody has to put it back for the nested loop.
-      export RONOCTUA_EMACSCLIENT="${emacs30}/bin/emacsclient"
+      # somebody has to put it back for the nested loop. The client pinned to
+      # the session the loop runs in, never the nested one (`loopEmacsclient`
+      # says why).
+      export RONOCTUA_EMACSCLIENT="${loopEmacsclient}"
       # AND THE SCREENSHOT'S EDITOR, third of the same family: the notification
       # a capture raises offers to edit it, and `swappy` is out of the
       # compilation so `ronoctua.media.enable = false` can really remove it.
@@ -1526,5 +1580,11 @@ in
 app.overrideAttrs (previous: {
   passthru = (previous.passthru or { }) // {
     config = nestedConfig;
+    # AND THE EDITOR CLIENT, with the variable it reads: `tests/emacs-vm.nix`
+    # runs it against a nested compositor.
+    editor = {
+      client = loopEmacsclient;
+      variable = hostDisplay;
+    };
   };
 })

@@ -1043,6 +1043,15 @@ impl Row {
     pub const fn heading(&self) -> bool {
         self.target.is_none()
     }
+
+    /// Whether a click takes it — a row the cursor stands on — and so
+    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
+    /// and click (the region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]).
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading()
+    }
 }
 
 /// One entry of a section, before the section is laid out whole.
@@ -1776,7 +1785,11 @@ impl View {
     /// ALREADY on that row: that is the second click, which the door turns
     /// into `RET` (invariant 19).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
-        let Some(target) = rows.get(n).and_then(|r| r.target.clone()) else {
+        let Some(target) = rows
+            .get(n)
+            .filter(|r| r.takes())
+            .and_then(|r| r.target.clone())
+        else {
             return false;
         };
         let again = self.cursor == n;

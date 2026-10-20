@@ -390,12 +390,36 @@ impl View {
         }
     }
 
-    /// A click on manual `n` of the list: THE FIRST SELECTS, AND THE SECOND
-    /// OPENS it (invariant 19) — `RET` on the cursor, by the same path.
-    pub fn clicked(&mut self, n: usize, texts: &Texts) -> Errand {
-        if self.which.is_some() || n >= self.found(texts).len() {
+    /// THE ROWS A CLICK TAKES, in either door — and so the only rows a
+    /// resting pointer lights: the list's manuals, from [`FIRST_OF_FOUND`].
+    /// Never the list's heading, the filter's line or the sentence that says
+    /// nothing matched, and no line of an open manual, which is read and has
+    /// no cursor.
+    ///
+    /// ONE ANSWER FOR THE LIGHT AND THE CLICK: the region's `Row::takes`, the
+    /// window's `Content::takes` and [`View::clicked`] read it. The window
+    /// lit every row under the pointer — the heading and a manual's air
+    /// included — and the region said it with a `true` of its own.
+    #[must_use]
+    pub fn takes(&self, texts: &Texts) -> std::ops::Range<usize> {
+        let found = if self.which.is_some() {
+            0
+        } else {
+            self.found(texts).len()
+        };
+        FIRST_OF_FOUND..FIRST_OF_FOUND + found
+    }
+
+    /// A click on row `row` of either door: on a manual of the list, THE
+    /// FIRST SELECTS it, AND THE SECOND OPENS it (invariant 19) — `RET` on
+    /// the cursor, by the same path. On a row [`View::takes`] leaves out,
+    /// nothing.
+    pub fn clicked(&mut self, row: usize, texts: &Texts) -> Errand {
+        let takes = self.takes(texts);
+        if !takes.contains(&row) {
             return Errand::Nothing;
         }
+        let n = row - takes.start;
         if self.cursor == n {
             return self.open_here(texts);
         }
@@ -838,23 +862,31 @@ mod tests {
         assert_eq!(v.query(), "");
     }
 
-    /// THE FIRST CLICK SELECTS, AND THE SECOND OPENS — invariant 19.
+    /// THE FIRST CLICK SELECTS, AND THE SECOND OPENS — invariant 19 — and
+    /// only on a row the view says a click takes (`View::takes`).
     #[test]
     fn the_first_click_selects_and_the_second_opens() {
-        use super::{Errand, View};
+        use super::{Errand, FIRST_OF_FOUND, View};
         let t = en();
         let mut v = View::fresh();
-        assert_eq!(v.clicked(1, &t), Errand::Changed);
+        let second = FIRST_OF_FOUND + 1;
+        assert!(v.takes(&t).contains(&second));
+        assert_eq!(v.clicked(second, &t), Errand::Changed);
         assert_eq!(v.cursor(), 1);
         assert_eq!(v.which(), None);
-        assert_eq!(v.clicked(1, &t), Errand::Level);
+        assert_eq!(v.clicked(second, &t), Errand::Level);
         assert_eq!(v.which(), v.found(&t).get(1).copied());
+        assert!(v.takes(&t).is_empty(), "an open manual takes a click");
         assert_eq!(
-            v.clicked(0, &t),
+            v.clicked(FIRST_OF_FOUND, &t),
             Errand::Nothing,
             "a manual's lines take no click"
         );
         let mut v = View::fresh();
+        for row in 0..FIRST_OF_FOUND {
+            assert!(!v.takes(&t).contains(&row), "row {row} takes a click");
+            assert_eq!(v.clicked(row, &t), Errand::Nothing, "row {row}");
+        }
         assert_eq!(v.clicked(9, &t), Errand::Nothing, "past the list");
     }
 

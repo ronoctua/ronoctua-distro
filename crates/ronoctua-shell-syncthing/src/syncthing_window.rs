@@ -226,6 +226,16 @@ impl Content for SyncthingWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, and only that row lights
+    /// under the pointer — the view's one answer
+    /// ([`crate::syncthing::Row::takes`]), which the footer's region gives too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::syncthing::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -247,11 +257,71 @@ impl Content for SyncthingWindow {
     }
 }
 
+/// A service that is up, with one folder, one other machine and an
+/// offered folder waiting — for both doors' tests (the region's too).
+#[cfg(test)]
+pub(crate) fn offered() -> ronoctua_syncthing::Snapshot {
+    let folder = ronoctua_syncthing::Folder {
+        id: "papers".to_owned(),
+        kind: "sendreceive".to_owned(),
+        completion: 100,
+        raw: serde_json::json!({
+            "id": "papers",
+            "label": "",
+            "path": "/somewhere",
+            "type": "sendreceive",
+            "devices": [],
+        }),
+        ..ronoctua_syncthing::Folder::default()
+    };
+    let device = |id: &str, me: bool| ronoctua_syncthing::Device {
+        id: id.to_owned(),
+        name: id.to_lowercase(),
+        me,
+        raw: serde_json::json!({ "deviceID": id, "name": id }),
+        ..ronoctua_syncthing::Device::default()
+    };
+    ronoctua_syncthing::Snapshot {
+        service: ronoctua_syncthing::Service::Up(Box::new(ronoctua_syncthing::Running {
+            id: "ME".to_owned(),
+            address: "127.0.0.1:8384".to_owned(),
+            ..ronoctua_syncthing::Running::default()
+        })),
+        folders: vec![folder],
+        devices: vec![device("ME", true), device("THEM", false)],
+        invitations: vec![ronoctua_syncthing::Invitation::Folder {
+            folder: "shared".to_owned(),
+            label: "the shared one".to_owned(),
+            from: "THEM".to_owned(),
+            who: String::new(),
+        }],
+        unit: ronoctua_syncthing::unit::Standing::Running,
+        ..ronoctua_syncthing::Snapshot::default()
+    }
+}
+
+/// [`offered`], with the service complaining twice — the second complaint
+/// long enough to wrap: a complaint is prose whose first line carries a spot,
+/// and no line of it is a row the cursor stands on.
+#[cfg(test)]
+pub(crate) fn complaining() -> ronoctua_syncthing::Snapshot {
+    let mut s = offered();
+    if let ronoctua_syncthing::Service::Up(running) = &mut s.service {
+        running.errors = vec![
+            "folder papers: the folder path is missing".to_owned(),
+            "listening on tcp://0.0.0.0:22000 failed: the address is already in use by \
+             another program, and the relay pool could not be reached either"
+                .to_owned(),
+        ];
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::syncthing::{Ask, Press, Spot};
-    use ronoctua_syncthing::{Invitation, Snapshot};
+    use ronoctua_syncthing::Snapshot;
 
     /// A window with no Syncthing thread behind it: every order it gives is
     /// answered with "Syncthing is not running" on its own line — which is
@@ -265,48 +335,6 @@ mod tests {
             _watch: None,
         };
         (me, Ui::for_tests(texts))
-    }
-
-    /// A service that is up, with one folder, one other machine and an
-    /// offered folder waiting.
-    fn offered() -> Snapshot {
-        let folder = ronoctua_syncthing::Folder {
-            id: "papers".to_owned(),
-            kind: "sendreceive".to_owned(),
-            completion: 100,
-            raw: serde_json::json!({
-                "id": "papers",
-                "label": "",
-                "path": "/somewhere",
-                "type": "sendreceive",
-                "devices": [],
-            }),
-            ..ronoctua_syncthing::Folder::default()
-        };
-        let device = |id: &str, me: bool| ronoctua_syncthing::Device {
-            id: id.to_owned(),
-            name: id.to_lowercase(),
-            me,
-            raw: serde_json::json!({ "deviceID": id, "name": id }),
-            ..ronoctua_syncthing::Device::default()
-        };
-        Snapshot {
-            service: ronoctua_syncthing::Service::Up(Box::new(ronoctua_syncthing::Running {
-                id: "ME".to_owned(),
-                address: "127.0.0.1:8384".to_owned(),
-                ..ronoctua_syncthing::Running::default()
-            })),
-            folders: vec![folder],
-            devices: vec![device("ME", true), device("THEM", false)],
-            invitations: vec![Invitation::Folder {
-                folder: "shared".to_owned(),
-                label: "the shared one".to_owned(),
-                from: "THEM".to_owned(),
-                who: String::new(),
-            }],
-            unit: ronoctua_syncthing::unit::Standing::Running,
-            ..Snapshot::default()
-        }
     }
 
     /// Puts the cursor on the row that is `spot`, by a click.
@@ -433,5 +461,47 @@ mod tests {
         let line = ui.asking.take().expect("the path is asked here");
         w.unanswered(&mut ui, line.id);
         assert_eq!(w.view.asking(), None);
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections, any line of the
+    /// service's complaint — or leaves unlit one it takes. THE LIGHT IS THE
+    /// CLICK: every row clicked on a window of its own, and lit exactly where
+    /// something happened. The footer's region has its own.
+    ///
+    /// ONE CLICK, AND NONE ON THE CURSOR'S ROW — as the door's
+    /// `held_to_the_click` clicks: a second click would be
+    /// the row's `RET`, and `RET` on the mark's row writes the person's own
+    /// `syncthing.json` (`carry_out`'s `Keep`, through the real store) under
+    /// `cargo test`. One click is enough for the light: from any other row it
+    /// selects, and the cursor moving is seen; on the cursor's row it is
+    /// already the `RET`, which is why that row is not clicked.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let (first, ui) = a_window(complaining());
+        let lit = first.takes(&ui);
+        let cursor = first.cursor();
+        let held: Vec<crate::region::Held> = (0..first.rows(&ui).len())
+            .map(|row| {
+                let here = cursor == Some(row);
+                let (mut w, mut ui) = a_window(complaining());
+                let before = crate::door::seen(&w, &ui);
+                if !here {
+                    w.clicked(&mut ui, row);
+                }
+                crate::region::Held {
+                    row,
+                    lit: lit.get(row).copied().unwrap_or(false),
+                    did: crate::door::seen(&w, &ui) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

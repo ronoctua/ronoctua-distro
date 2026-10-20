@@ -39,3 +39,14 @@ confere que a unidade existe, é da pessoa e roda o daemon.
 
 O aviso de "este Emacs não é o cliente" não tem botão de propósito: o que está aberto é o trabalho de
 alguém, com buffers que nada aqui sabe se foram salvos. A tela diz o que é, e a pessoa decide.
+
+## Como ela reconhece um Emacs
+
+Pelo nome com que o processo foi chamado (o último pedaço do `argv[0]`, no `ronoctua-memory`), e
+não pelo `comm`: o Emacs da distro é o build pure-GTK, cujos programas são embrulhos do nixpkgs que
+rodam um binário escondido (`.emacs-30.2-wrapped`, `comm` `.emacs-30.2-wra`) com o nome de quem
+chamou (`--inherit-argv0`). Um embrulho que trocasse esse nome deixaria a vigia sem ver Emacs
+nenhum — e uma vigia que não vê nada não diz nada, igual a uma máquina em ordem. O `vm.nix` desta
+pasta prova isso com os programas que a máquina instala: o daemon e um cliente não dizem nada, um
+segundo Emacs ao lado diz que não é o cliente, o daemon parado diz que caiu, e sem Emacs nenhum ela
+se cala.

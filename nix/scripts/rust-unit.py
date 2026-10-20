@@ -26,6 +26,7 @@ without its engine): either the name is declared, and the value is given or
 declared absent, or the build stops.
 """
 
+import ctypes
 import json
 import os
 import re
@@ -34,6 +35,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 STARTED = time.monotonic()
@@ -701,7 +703,7 @@ KEEPS = {
 }
 # And what a library's `lib/` holds: the crate, compiled.
 LIBRARY_FILES = (".rlib", ".rmeta", ".so")
-MEASURED = {"seconds", "peak-kib"}
+MEASURED = {"format", "seconds", "peak-kib", "largest-kib", "cores"}
 
 
 def kept_beyond(mode, out, metrics):
@@ -738,15 +740,361 @@ def keep_only_the_product(mode):
         )
 
 
+# --- what a unit measures --------------------------------------------------------
+#
+# WHAT THE BUDGET PAYS FOR, OF THE WHOLE BUILD. A unit is planned at the slot
+# of its class (`nix/rust/unit-classes.json`) beside other builds, and the
+# slots are charged against a budget taken from `MemAvailable`
+# (`sizing_measure`, nix/build-sizing.nix), which counts the clean page cache
+# as available. So what a build takes from the budget is the memory no
+# reclaim gives back: its anonymous pages and shmem, resident or swapped,
+# and the page tables that map them. The rest of its RSS is page cache —
+# the compiler's own libraries, the rlibs it maps, the output the linker
+# writes —, counted available while the build holds it and shared with
+# every build that maps the same files.
+#
+# And of everything the build runs at once: a unit that links runs `rustc`
+# and the linker together, a build script runs `cc`, a test run its
+# harnesses. So a thread reads `/proc/<pid>/status` of the builder (this
+# driver's parent: in a sandbox, the build's first process) and of every
+# process below it, and adds `RssAnon + RssShmem + VmSwap + VmPTE` of each —
+# EACH LIVE PROCESS AT THE MOST IT HAS HELD. A compiler that freed what it
+# held before it ran its linker gives that back to the kernel when its
+# allocator decides to: before the link in one build, during it in the next
+# (the shell's fast-access test harness, 337 MiB or 477). Counted at its
+# most while it lives, a process is the worst of the two in every build; one
+# that ended holds nothing. And the build runs with no transparent huge page
+# (`no_huge_pages`): with them, the same unit held more whenever the kernel
+# had huge pages free.
+#
+# A PROCESS IS THE PROGRAM IT RUNS (`image_of`). `rustc` starts the linker
+# with a plain `fork`, and until the child's `execve` its status counts
+# rustc's memory, copied on write and so held once; read in that instant —
+# longer on a busy machine — and kept as the child's most for the rest of
+# its life (it becomes `cc`, waiting for the linker), it counted rustc twice:
+# the reviewer's link of a real `rustc` 377 to 405 MiB, 481 to 533 with its
+# `execve` held 5 ms (2026-10-20), and in one round of five the loop
+# `ronoctua-render-png` 1238 MiB, 1043 to 1045 in the others. So a child that
+# runs what its parent runs — the same name, executable and layout — has not
+# exec'd yet and is not counted (what it writes before its `execve` is lost:
+# in a build, a shell's subshell); and a process's most is of the program it
+# runs now, so one that exec'd starts again from what it holds.
+#
+# WHY NOT RSS OR PSS (docs/ARCHITECTURE.md, section "O pico é do build inteiro (M1)").
+# The largest child's `ru_maxrss`, all a unit recorded before, saw one
+# process, file pages included. The PSS of the tree (`smaps_rollup`) split
+# each shared page with whoever else mapped it, so a unit read another
+# number beside other builds than alone: the loop `ronoctua-render-png`
+# 570 to 747 MiB, the loop shell 1199 to 1593 (2026-10-19). A link maps the
+# rlibs it reads, and that is page cache: the loop shell's link adds some
+# 665 MiB to nix-daemon's own count of anonymous memory, where its PSS said
+# up to 1566 and its RSS 1.3 GiB. What a process holds anonymously is its
+# own, read from counters: a unit reads the same number beside others as
+# alone (22 units built five times each, docs/ARCHITECTURE.md as above).
+#
+# A READING IS CHEAP, SO IT IS OFTEN. `status` is counters, not a walk of the
+# pages: a reading of a build's processes takes about 0.3 ms, so one every
+# `SAMPLE_SECONDS` (10 ms) costs some 3 % of one core, and the wait after a
+# reading is longer when it took longer, so that reading stays under
+# `SAMPLE_SHARE` (5 %; outside a sandbox the listing is of every process of
+# the machine). A link's peak lasts tenths of a second: read every 0.2 s,
+# the loop `ronoctua-render-png` peaked 108 MiB lower at the worst phase,
+# read every 20 ms, none. What a process held for less than the 10 ms
+# between two readings is lost (measured: at most 14 MiB).
+#
+# And THE CORES it was built with: a peak depends on them (the RSS of the
+# footer's release library peaked at 2279 MiB at one core, 1534 at twelve),
+# and a class is a slot at one core — so a measurement says its cores, and
+# `.#rust-peaks` classes a unit only by one taken at the cores its class
+# builds it with.
+#
+# The output is versioned (`format`): a reader refuses a measurement of
+# another format, which is of another quantity — 1 was the largest child's
+# RSS, 2 the PSS of the tree.
+METRICS_FORMAT = 3
+SAMPLE_SECONDS = 0.01
+SAMPLE_SHARE = 0.05
+# The fields of `/proc/<pid>/status` (kB) a process holds that no reclaim
+# gives back.
+HELD = ("RssAnon", "RssShmem", "VmSwap", "VmPTE")
+# `prctl(2)`: no transparent huge page for this process and every process it
+# starts (inherited across `fork` and kept across `execve`, Linux 3.15).
+PR_SET_THP_DISABLE = 41
+PR_GET_THP_DISABLE = 42
+HUGE_PAGES = "as the kernel says"
+# The fields of `/proc/<pid>/stat` that say where `execve` laid a program out
+# — its code, data and heap, its stack, its arguments and its environment
+# (26-28 and 45-51) —: a `fork` copies them with the memory, an `execve` sets
+# them anew. Zero where the reader may not see them, absent before Linux 3.5.
+LAYOUT = (26, 27, 28, 45, 46, 47, 48, 49, 50, 51)
+
+
+def no_huge_pages():
+    """THE BUILD RUNS WITH NO TRANSPARENT HUGE PAGE. Where the kernel gives
+    one to every large anonymous mapping (`always`), a process holds the
+    whole 2 MiB of a page it touched a little of, whenever the kernel has
+    one free — so the same unit held more in one build than in the next: the
+    release `ronoctua-xdg` library 35 MiB without them and 46 to 55 with, and
+    in one round of five every unit 10 to 26 MiB more and two of the shell's
+    test harnesses 55 % more (2026-10-20). A machine of the distro gives them
+    only where a program asks (`madvise`, nixpkgs' kernel), and nothing in a
+    build asks: with them off, a unit holds the same on any host, what a
+    machine of the distro holds, and compiles in the same time (the footer's
+    release library 64.4 to 65.1 s with them, 64.7 without). Where the call
+    does not exist, the build runs as the kernel says, and the log says so."""
+    global HUGE_PAGES
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0) == 0 and libc.prctl(PR_GET_THP_DISABLE, 0, 0, 0, 0) == 1:
+            HUGE_PAGES = "off"
+    except (OSError, AttributeError):
+        pass
+
+
+def parent_of(stat):
+    """The parent's pid in a `/proc/<pid>/stat` line: the second field after
+    the LAST `)`, since a command's name may hold spaces and parentheses."""
+    return int(stat[stat.rindex(")") + 2 :].split()[1])
+
+
+def started_of(stat):
+    """When a process started, in clock ticks since boot, from its
+    `/proc/<pid>/stat` line (field 22), or None when the line has none:
+    with its pid, which process it is, even after a pid is given again."""
+    fields = stat[stat.rindex(")") + 2 :].split()
+    return int(fields[19]) if len(fields) > 19 and fields[19].isdigit() else None
+
+
+def image_of(stat, exe=None):
+    """What program a process runs, from its `/proc/<pid>/stat` line and the
+    target of its `exe` link (None where it is not readable): its name, its
+    executable and where `execve` laid it out (`LAYOUT`, as many of those
+    fields as the line has). A `fork` copy has its parent's. An `execve` gives
+    another: of another program, or of the same one with arguments or an
+    environment of other lengths — a build runs with no address
+    randomization (Nix's sandbox), so the same program run with the same
+    lengths is laid out the same, and is the same image."""
+    fields = stat[stat.rindex(")") + 2 :].split()
+    layout = tuple(fields[n - 3] for n in LAYOUT if n - 3 < len(fields))
+    return stat[stat.index("(") + 1 : stat.rindex(")")], exe, layout
+
+
+def build_tree(root, proc="/proc", stats=None):
+    """`root` and every live process below it, at any depth, by the parents
+    `/proc` says now; and into `stats`, when given, the `stat` line each
+    process of the listing had. A process gone between the listing and its
+    read is no process of the tree."""
+    children = {}
+    for entry in os.listdir(proc):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, entry, "stat")) as f:
+                stat = f.read()
+            parent = parent_of(stat)
+        except (OSError, ValueError, IndexError):
+            continue
+        if stats is not None:
+            stats[int(entry)] = stat
+        children.setdefault(parent, []).append(int(entry))
+    found, seen, todo = [root], {root}, [root]
+    while todo:
+        for child in children.get(todo.pop(), ()):
+            if child not in seen:
+                seen.add(child)
+                found.append(child)
+                todo.append(child)
+    return found
+
+
+def memory_kib(pid, proc="/proc"):
+    """(KiB, how) of one process: what it holds that no reclaim gives back,
+    `HELD` of its status ("held"); from what is readable when that is not —
+    a kernel whose status does not split its memory (before 4.5), a
+    `/proc` with no status — its whole resident set, `VmRSS` or `statm`'s,
+    which is never less ("rss"); 0 for one that ended, or a zombie, whose
+    status says no memory ("gone")."""
+    base = os.path.join(proc, str(pid))
+    fields = {}
+    try:
+        with open(os.path.join(base, "status")) as f:
+            for line in f:
+                name, _, rest = line.partition(":")
+                if name in HELD or name == "VmRSS":
+                    fields[name] = int(rest.split()[0])
+    except FileNotFoundError:
+        if not os.path.isdir(base):
+            return 0, "gone"
+        try:
+            with open(os.path.join(base, "statm")) as f:
+                return int(f.read().split()[1]) * (os.sysconf("SC_PAGE_SIZE") // 1024), "rss"
+        except (OSError, ValueError, IndexError):
+            return 0, "gone"
+    except (OSError, ValueError, IndexError):
+        return 0, "gone"
+    if "RssAnon" in fields:
+        return sum(fields.get(name, 0) for name in HELD), "held"
+    if "VmRSS" in fields:
+        return fields["VmRSS"], "rss"
+    return 0, "gone"
+
+
+def next_wait(took, period=SAMPLE_SECONDS, share=SAMPLE_SHARE):
+    """Seconds to wait after a reading that took `took`: at least `period`,
+    and enough that reading is at most `share` of the time."""
+    return max(period, took * (1 - share) / share)
+
+
+class Sampler:
+    """The most the builder and everything below it held at once of what
+    the budget pays for (`memory_kib`), each live process at the most it
+    has held while running the program it runs now, and no child that has
+    not exec'd since its `fork`, in KiB, read by a thread of its own at least
+    `period` seconds apart and so that reading takes at most `share` of one
+    core; the most one process held; and what reading cost."""
+
+    def __init__(self, root, period=SAMPLE_SECONDS, proc="/proc", share=SAMPLE_SHARE):
+        self.root, self.period, self.proc, self.share = root, period, proc, share
+        self.most_kib = 0
+        self.most_processes = 0
+        self.largest_kib = 0
+        # The most each live process has held, by (pid, when it started),
+        # and the program it held it running (`image_of`).
+        self.held = {}
+        self.images = {}
+        self.samples = 0
+        self.spent = 0.0
+        self.slowest = 0.0
+        self.by_rss = 0
+        self.copies = 0
+        self.wait = period
+        self._stop = threading.Event()
+        self._thread = None
+
+    def image(self, pid, stat):
+        try:
+            exe = os.readlink(os.path.join(self.proc, str(pid), "exe"))
+        except OSError:
+            exe = None
+        return image_of(stat, exe)
+
+    def sample(self):
+        began = time.monotonic()
+        stats = {}
+        pids = build_tree(self.root, self.proc, stats)
+        images = {pid: self.image(pid, stats[pid]) for pid in pids if pid in stats}
+        total = 0
+        held, kept = {}, {}
+        for pid in pids:
+            image = images.get(pid)
+            if image is not None and image == images.get(parent_of(stats[pid])):
+                # A FORK COPY, not yet exec'd: its status counts its
+                # parent's memory, which the parent holds.
+                self.copies += 1
+                continue
+            kib, how = memory_kib(pid, self.proc)
+            if how == "gone":
+                continue
+            key = (pid, started_of(stats[pid]) if pid in stats else None)
+            # The most of the program it runs now: an `execve` starts again.
+            most = self.held.get(key, 0) if self.images.get(key) == image else 0
+            held[key], kept[key] = max(most, kib), image
+            total += held[key]
+            self.largest_kib = max(self.largest_kib, held[key])
+            if how == "rss":
+                self.by_rss += 1
+        # A process that ended holds nothing: its most is forgotten.
+        self.held, self.images = held, kept
+        took = time.monotonic() - began
+        self.samples += 1
+        self.spent += took
+        self.slowest = max(self.slowest, took)
+        self.wait = next_wait(took, self.period, self.share)
+        if total > self.most_kib:
+            self.most_kib, self.most_processes = total, len(held)
+        return total
+
+    def start(self):
+        """The first reading, of the builder and this driver, and then the
+        thread. A first reading of nothing — no process of the build is
+        readable at all — is no measurement: the build stops, never writing
+        a peak it did not take."""
+        if self.sample() <= 0:
+            die(
+                f"no memory read for this build (pid {self.root}) under {self.proc}: a unit "
+                "measures its build's peak there, and one it cannot measure is not written"
+            )
+        self._thread = threading.Thread(target=self._run, name="peak", daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop.wait(self.wait):
+            self.sample()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+
+
+SAMPLER = None
+
+
+def builder_pid():
+    """The process the build's tree is read from: the builder that runs this
+    driver (its parent: in a sandbox, the build's first process), or this
+    driver when it has none it can see."""
+    parent = os.getppid()
+    return parent if parent > 0 else os.getpid()
+
+
+def start_measuring():
+    global SAMPLER
+    if METRICS and SAMPLER is None:
+        SAMPLER = Sampler(builder_pid())
+        SAMPLER.start()
+
+
+def measurement(sampled_kib, largest_kib, seconds, cores):
+    """What `metrics` holds, by file: the build's peak (the tree at its most),
+    the most one of its processes held, the seconds and the cores, in format
+    `METRICS_FORMAT`."""
+    return {
+        "format": f"{METRICS_FORMAT}\n",
+        "peak-kib": f"{sampled_kib}\n",
+        "largest-kib": f"{largest_kib}\n",
+        "seconds": f"{seconds:.2f}\n",
+        "cores": f"{cores}\n",
+    }
+
+
 def write_metrics():
     if not METRICS:
         return
+    sampler = SAMPLER or Sampler(builder_pid())
+    sampler.stop()
+    rss = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    files = measurement(sampler.most_kib, sampler.largest_kib, time.monotonic() - STARTED, CORES)
     os.makedirs(METRICS, exist_ok=True)
-    peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-    with open(os.path.join(METRICS, "seconds"), "w") as f:
-        f.write(f"{time.monotonic() - STARTED:.2f}\n")
-    with open(os.path.join(METRICS, "peak-kib"), "w") as f:
-        f.write(f"{peak}\n")
+    for name, text in files.items():
+        with open(os.path.join(METRICS, name), "w") as f:
+            f.write(text)
+    # What the measurement cost, in the log (`nix log`): how the sampling
+    # period was chosen, and how it is checked again. The largest child's
+    # RSS, file pages included, is said beside it, never measured by.
+    print(
+        f"rust-unit: peak {sampler.most_kib // 1024} MiB at {CORES} core(s), anonymous, shmem, swap and "
+        f"page tables over {sampler.most_processes} process(es) at most, the largest process "
+        f"{sampler.largest_kib // 1024} MiB (the largest child's RSS, file pages included, {rss // 1024} MiB); "
+        f"{sampler.samples} readings at least {sampler.period} s apart and at most {sampler.share:.0%} of a core "
+        f"took {sampler.spent:.3f} s, the slowest {sampler.slowest * 1000:.1f} ms; transparent huge pages "
+        f"{HUGE_PAGES}"
+        + (f"; {sampler.by_rss} by RSS" if sampler.by_rss else "")
+        + (f"; {sampler.copies} reading(s) of a child not yet exec'd, not counted" if sampler.copies else ""),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def out_dir_of(crate):
@@ -1348,6 +1696,8 @@ def mode_fmt():
 
 def main():
     setup()
+    no_huge_pages()
+    start_measuring()
     mode = sys.argv[1] if len(sys.argv) > 1 else UNIT.get("mode")
     {
         "lib": mode_lib,

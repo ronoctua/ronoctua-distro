@@ -2901,12 +2901,23 @@ let
   # THE CAMERA STUDIO in a VM, with a camera that is nobody's hardware — a
   # loopback fed by `testsrc` — and every assertion made from outside the
   # screen: the preview memfd, `ffprobe`, a second reader of the virtual
-  # camera, and `/proc` for who holds the device.
+  # camera, and `/proc` for who holds the device. And the person's login: the
+  # session's own PipeWire and WirePlumber open no camera.
   cameraVm = import ./camera-vm.nix {
     inherit pkgs lib fonts;
     inherit scroll;
     ronoctua-shell = rust.shell;
     studio = rust.studio;
+    # The modules' argument, as `powerVm` builds it: base.nix reads the
+    # themes out of it.
+    ronoctua = {
+      inherit fonts fontconfigConf;
+      inherit themes themed defaultTheme;
+      inherit cursors;
+
+      shell = rust.shell;
+      iconSuperpack = self.packages.${system}.noctua-icon-theme;
+    };
   };
 
   # THE PLAYER in a VM: every family of format through the decoder its table
@@ -19646,6 +19657,40 @@ let
                 bad.append(f"{door} does not ask which field is lit; it cannot be "
                            f"drawing the pointer's subject")
 
+        # AND A ROW LIGHTS ONLY WHERE ITS CLICK TAKES, in the base of both
+        # doors (`the-pointer-lights-row-by-row` keeps each view saying it
+        # row by row). PARSED: the door's list lights a band, and hands a
+        # window its click, only through the window's own answer
+        # (`Content::takes`); the footer lights a field under the pointer only
+        # on a row whose click takes there (`takes_under_pointer`), as its
+        # band already was.
+        listing = code_of(shell_file("door/list.rs").read_text())
+        floor(len(listing), 3000, "characters of door/list.rs")
+        bands = must(body_of(listing, "hover_bands"), "door::list::hover_bands")
+        if "takes.get(" not in bands:
+            bad.append("door::list::hover_bands lights a row without asking what a "
+                       "click takes on it: a heading lights under the pointer")
+        drawn = must(body_of(listing, "body"), "door::list::body")
+        if not re.search(r"\bhover_bands\([^;]*\btakes\b", drawn):
+            bad.append("door::list::body lays its hover without the rows' `takes`")
+        handed = must(body_of(listing, "pointer_here"), "door::list::pointer_here")
+        if not re.search(r"c\.takes\(ui\)[^;{]*\{\s*c\.clicked\(ui, row\)", handed):
+            bad.append("door::list::pointer hands a click to a row whose `takes` says "
+                       "no: the light and the click are two answers again")
+        footer = code_of(shell_source("surface.rs"))
+        floor(len(footer), 100000, "characters of the footer's module")
+        under = must(body_of(footer, "takes_under_pointer"), "Footer::takes_under_pointer")
+        for needle, why in [("line.click.is_some()", "the row's click"),
+                            ("hosted_band(", "the region's answer at the cell")]:
+            if needle not in under:
+                bad.append(f"Footer::takes_under_pointer no longer asks {why}")
+        if not re.search(r"let on_this_row = [^;]*takes_under_pointer", footer):
+            bad.append("the footer lights the field under the pointer on a row whose "
+                       "click takes nothing — a title, a note")
+        if not re.search(r"let lit_hit = [^;]*takes_under_pointer", footer):
+            bad.append("the footer lights the runs that go with the field under the "
+                       "pointer on a row whose click takes nothing")
+
         if bad:
             for b in bad:
                 print("ERROR: " + b, file=sys.stderr)
@@ -19653,6 +19698,221 @@ let
         print("OK: one walk answers both 'which field lights' and 'which field is clicked'")
         END
       '';
+
+  # THE POINTER LIGHTS WHAT THE CLICK TAKES — ROW BY ROW.
+  #
+  # # Why this is a check
+  #
+  # Because the answer was given for a whole view, three times in one shape,
+  # and each time it lit what a click took nothing on. The clipboard's region
+  # said every row took a click once its history arrived (`takes:
+  # self.clip.heard`), the history's and the notifications' said `true`, and
+  # every window of the door's list lit whatever row the pointer was on: a
+  # heading, the air between two sections, a fact. Each was fixed by saying it
+  # per row — the view's own `Row::takes` or `View::takes`, read by the
+  # region's `Row::takes`, by the window's `Content::takes` and by the click —
+  # and this keeps a new view from writing the shortcut again: a region's
+  # row whose `takes` no value of the row reaches, and a window that draws the
+  # door's list without saying it. Whether each answer is RIGHT is the view's
+  # own tests' (`the_pointer_lights_what_the_click_takes`: every row clicked,
+  # lit exactly where something happened); this is the shape that makes them
+  # possible.
+  the-pointer-lights-row-by-row = mkCheck "the-pointer-lights-row-by-row" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
+
+    # PARSED: the offence is a hover answer given for a WHOLE VIEW and not row
+    # by row — a region's `Row { takes: … }` that no row's own value reaches
+    # (`true`, `false`, a field of the view), and a window that draws the door's
+    # list without saying, row by row, what a click takes (`Content::takes`). Each
+    # `Row` literal and each `impl Content` is read by its braces in the code
+    # alone (`code_of`), its tests cut (`outside_tests`).
+    bad = []
+
+    files = [f for f in shell_files() if f.suffix == ".rs"]
+    floor(len(files), 300, "files of the shell")
+
+    # --- ONE. A region's row says whether ITS click takes ---------------------
+    #
+    # `takes:` inside a `Row {` literal — the footer's row (`region::Row`), by
+    # that name or its whole path. Its value has to name what the row was built
+    # from: a name a closure or a `for` bound for this row (`|r|`, `|(n, row)|`,
+    # `for (n, line) in …`), or the field shorthand of one. A literal, or a path
+    # through `self` alone, is one answer for every row — the clipboard's
+    # `takes: self.clip.heard`, the history's and the notifications' `true`.
+    ROW = re.compile(r"(?<![\w:])(?<!struct )(?:crate::region::|region::)?Row\s*\{")
+    BINDS = re.compile(r"(?:\|([^|\n]*)\||\bfor\s+(.+?)\s+in\b)")
+    LETS = re.compile(r"\blet\s+(?:mut\s+)?([a-z_][a-z0-9_]*)\s*(?::[^=]*)?=\s*([^;]*);")
+    WORD = re.compile(r"\b[a-z_][a-z0-9_]*\b")
+
+
+    def per_row(scope_text):
+        # The names this row's own values go by: what the nearest closure's or
+        # `for`'s pattern bound, and every `let` after them computed from one.
+        bound = set()
+        for b in BINDS.finditer(scope_text):
+            bound |= set(WORD.findall(b.group(1) or b.group(2) or ""))
+        bound -= {"mut", "ref", "_", "move"}
+        grew = True
+        while grew:
+            grew = False
+            for l in LETS.finditer(scope_text):
+                if l.group(1) not in bound and set(WORD.findall(l.group(2))) & bound:
+                    bound.add(l.group(1))
+                    grew = True
+        return bound
+
+
+    def scope_before(code, start):
+        # The function the text at `start` is in, up to it.
+        walls = [code.rfind(w, 0, start) for w in ("\n    fn ", "\nfn ", "\npub fn ", "\n    pub fn ", "\n    pub(crate) fn ")]
+        return code[max(max(walls), 0) : start]
+
+
+    def refuse(f, line, value):
+        bad.append(
+            f"{shell_name(f)}:~{line} a region's row says `takes: {value}` — one "
+            "answer for the whole view, which no row's own value reaches: a "
+            "heading, a fact or the air between would light under the pointer "
+            "where the click takes nothing (or the reverse). Say it from what "
+            "the row is (`Row::takes`, `View::takes`)"
+        )
+
+
+    literals = 0
+    ASSIGNED = re.compile(r"\brow\.takes\s*=\s*([^;=][^;]*);")
+    for f in files:
+        code = code_of(outside_tests(f.read_text()))
+        # A ROW'S `takes` SET AFTER IT WAS BUILT, row by row (`line.row.takes = …`).
+        for m in ASSIGNED.finditer(code):
+            literals += 1
+            value = m.group(1).strip()
+            line = code[: m.start()].count("\n") + 1
+            if value == "true" or (value != "false" and not (set(WORD.findall(value)) & per_row(scope_before(code, m.start())))):
+                refuse(f, line, value)
+        for m in ROW.finditer(code):
+            start = m.end() - 1
+            depth, end = 0, len(code)
+            for k in range(start, len(code)):
+                if code[k] == "{":
+                    depth += 1
+                elif code[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = k
+                        break
+            body = code[start + 1 : end]
+            # THE `takes` FIELD at the literal's own depth: its value up to the
+            # next comma or the brace that closes the literal.
+            depth, at, value = 0, None, None
+            for k, c in enumerate(body):
+                if c in "([{":
+                    depth += 1
+                elif c in ")]}":
+                    depth -= 1
+                elif depth == 0 and body.startswith("takes", k) and not body[k - 1 : k].isalnum() and body[k - 1 : k] != "_":
+                    rest = body[k + len("takes") :]
+                    stripped = rest.lstrip()
+                    if stripped.startswith(":") and not stripped.startswith("::"):
+                        at = k
+                        v, d = [], 0
+                        for c2 in stripped[1:]:
+                            if c2 in "([{":
+                                d += 1
+                            elif c2 in ")]}":
+                                if d == 0:
+                                    break
+                                d -= 1
+                            elif c2 == "," and d == 0:
+                                break
+                            v.append(c2)
+                        value = "".join(v).strip()
+                    elif stripped[:1] in (",", "}", "") or stripped.startswith("\n"):
+                        at, value = k, "takes"
+                    break
+            if at is None:
+                continue
+            literals += 1
+            line = code[: start].count("\n") + 1
+            # WHAT THIS ROW WAS BUILT FROM: the names the nearest closure or
+            # `for` before the literal bound, within the function it is in.
+            names = set(WORD.findall(value))
+            if value == "true" or (value != "false" and not (names & per_row(scope_before(code, start)))):
+                refuse(f, line, value)
+    floor(literals, 25, "`takes` of a region's rows")
+
+    # --- TWO. A window that draws the door's list says what a click takes -----
+    #
+    # Every `impl … Content for …` whose pointer is the door's list — no
+    # `fn pointer` of its own, or one that hands the frame to `list::pointer` —
+    # and that draws rows (`fn rows`) defines `fn takes`; the door then lights a
+    # row, and hands it a click, only where `takes` says so (`door/list.rs`).
+    # Without it the default takes nothing, and the window answers no click. Its
+    # answer is the rows', never one for all of them.
+    IMPL = re.compile(r"\bimpl\b[^{;]*?\bContent\s+for\s+(\w+)[^{;]*\{")
+    # ONE ANSWER FOR EVERY ROW, however it is spelled: `vec![true; n]`,
+    # `[true].repeat(n)`, `iter::repeat(true)` and `iter::repeat_n(true, n)`,
+    # and a closure that answers the literal `true` whatever row it is handed
+    # (`|_| true`, `|_row| true`, `|(_, _r)| { true }`, `|r| true`) — a body
+    # that is `true` and nothing after it reads no row.
+    WHOLE = re.compile(
+        r"vec!\[\s*true\s*;"
+        r"|\[\s*true\s*\]\s*\.\s*repeat\("
+        r"|\brepeat(?:_n)?\(\s*true\b"
+        r"|(?<!\|)\|(?!\|)[^|\n]+\|\s*(?:\{\s*)?true\b(?!\s*(?:&&|\|\||==|!=|\.|\(|\[|::))"
+    )
+    windows = 0
+    for f in files:
+        code = code_of(outside_tests(f.read_text()))
+        for m in IMPL.finditer(code):
+            start = m.end() - 1
+            depth, end = 0, len(code)
+            for k in range(start, len(code)):
+                if code[k] == "{":
+                    depth += 1
+                elif code[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = k
+                        break
+            body = code[start + 1 : end]
+            if not re.search(r"\n    fn rows\(", body):
+                continue
+            pointer = body_of(body, "pointer")
+            if pointer is not None and "list::pointer(" not in pointer:
+                continue
+            windows += 1
+            line = code[: start].count("\n") + 1
+            takes = body_of(body, "takes")
+            if takes is None:
+                bad.append(
+                    f"{shell_name(f)}:~{line} the window `{m.group(1)}` draws the door's "
+                    "list with no `fn takes`: it lights no row and the door hands it "
+                    "no click — say, row by row, what a click takes"
+                )
+            elif re.fullmatch(r"\s*(?:Vec::new\(\)|vec!\[\s*\])\s*", takes):
+                bad.append(
+                    f"{shell_name(f)}:~{line} the window `{m.group(1)}` says no row takes a "
+                    "click — and the door then hands it none: say, row by row, what a "
+                    "click takes"
+                )
+            elif WHOLE.search(takes):
+                bad.append(
+                    f"{shell_name(f)}:~{line} the window `{m.group(1)}` says every row "
+                    "takes a click — one answer for the whole list; say it from what "
+                    "each row is"
+                )
+    floor(windows, 20, "windows that draw the door's list")
+
+    if bad:
+        for b in bad:
+            print("ERROR: " + b, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {literals} region rows and {windows} windows say, row by row, what a click takes")
+    END
+  '';
 
   # THE CRATE THAT BELONGS TO NO APP STAYS THAT WAY.
   #
@@ -20570,11 +20830,17 @@ let
     if "_ => Some(sec.offset + inside - sec.above)," not in row_of:
         bad.append("row_of_line() adds a panel's reserve to its row index")
     # AND BOTH READINGS GO THROUGH IT. A second one written out would be the
-    # defect this file exists to refuse, one column along.
-    for who in ("hit", "row_under"):
+    # defect this file exists to refuse, one column along. The press reads it in
+    # `hit_in`, the one place a point already resolved to its section turns into
+    # a target: `hit` and the light (`lit_at`, one layout a frame) both ask it.
+    for who in ("hit_in", "row_under"):
         body = must(body_of(files, who), f"files.rs's `{who}`")
         if "row_of_line(" not in body:
             bad.append(f"{who}() works the row out itself instead of asking row_of_line()")
+    for who in ("hit", "lit_at"):
+        body = must(body_of(files, who), f"files.rs's `{who}`")
+        if ".hit_in(" not in body:
+            bad.append(f"{who}() does not go through hit_in(), where the row is asked of row_of_line()")
     # THE FACTS' ROOM IS THE PANEL'S, and the panel is `inspection::Panel`:
     # the paging key, the wheel and the grid ask it there.
     panels = code_of(without_tests(shell_file("inspection.rs").read_text()))
@@ -20991,6 +21257,26 @@ let
     inherit pkgs lib fonts;
     inherit scroll;
     ronoctua-shell = rust.shell;
+  };
+
+  # THE EDITOR ON THE COMPOSITOR: the daemon at `default.target` with no
+  # display, a terminal client, a native frame from the session, and what a
+  # session's end does to the daemon (`tests/emacs-vm.nix`).
+  emacsVm = import ./emacs-vm.nix {
+    inherit pkgs lib fonts;
+    inherit scroll;
+    # The nested loop's editor client, the very script `.#dev` exports — a
+    # derivation of its own, so the loop's footer is not built for it.
+    loopEditor = devApp.editor;
+    # The modules' argument, as `displayVm` builds it: base.nix reads the
+    # fonts, the themes and the shell out of it.
+    ronoctua = {
+      inherit fonts fontconfigConf;
+      inherit themes themed defaultTheme;
+      inherit cursors;
+      shell = rust.shell;
+      iconSuperpack = self.packages.${system}.noctua-icon-theme;
+    };
   };
 
   # The root's wipe, proved between two boots (milestone 7).
@@ -27394,7 +27680,7 @@ let
       # THE WORKSHOP (`workshop.enable`): Blender and OrcaSlicer, ~3,3 GiB
       # measured. The agents and rust LEFT this list (2026-10-05): working on
       # the distro is in both profiles, and they are on the other one.
-      for app in -android-studio- -google-chrome- -emacs-30 -vlc- \
+      for app in -android-studio- -google-chrome- -emacs-pgtk-30 -vlc- \
                  -flutter- -dart- -go-1 -noctua-iosevka-ttf-3 \
                  -noctua-icon-theme- -waydroid- -appimage-run \
                  -blender-5 -orca-slicer-; do
@@ -50215,6 +50501,7 @@ let
     clipboard-vm = clipboardVm;
     terminal-vm = terminalVm;
     x11-vm = x11Vm;
+    emacs-vm = emacsVm;
     keyboard-vm = keyboardVm;
     rescue-vm = rescueVm;
     tpm-vm = tpmVm;
@@ -50276,6 +50563,7 @@ let
       a-dead-footer-stays-dead
       the-dev-loop-ends-with-the-session
       the-pointer-lights-what-the-click-takes
+      the-pointer-lights-row-by-row
       atlas-crate-is-pure
       atlas-returns-a-role
       atlas-is-at-run-time
@@ -50504,6 +50792,7 @@ let
       a-dead-footer-stays-dead
       the-dev-loop-ends-with-the-session
       the-pointer-lights-what-the-click-takes
+      the-pointer-lights-row-by-row
       atlas-crate-is-pure
       atlas-returns-a-role
       atlas-is-at-run-time

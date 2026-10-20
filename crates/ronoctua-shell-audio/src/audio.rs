@@ -185,6 +185,17 @@ pub struct Row {
     pub disabled: bool,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on — and so
+    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
+    /// and click (the region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]).
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// What the door has to do about a key.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Errand {
@@ -358,7 +369,7 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> bool {
-        let Some(row) = rows.get(n).filter(|r| !r.heading) else {
+        let Some(row) = rows.get(n).filter(|r| r.takes()) else {
             return false;
         };
         let again = self.cursor == n;
@@ -1106,82 +1117,88 @@ fn keys_reached() -> Vec<&'static str> {
         .collect()
 }
 
+/// One node of [`a_machine`], on its one card.
+#[cfg(test)]
+fn node(id: u32, kind: Kind, name: &str, volume: u8) -> ronoctua_audio::Node {
+    ronoctua_audio::Node {
+        id,
+        kind: Some(kind),
+        name: name.to_owned(),
+        description: name.to_owned(),
+        device: Some(52),
+        volume,
+        muted: false,
+        app: None,
+        address: None,
+    }
+}
+
+/// A MACHINE OF ONE CARD — a speaker, two microphones, two sockets out —
+/// built without PipeWire: what the view's tests and both doors' read, and
+/// never this machine's.
+#[cfg(test)]
+pub(crate) fn a_machine() -> Snapshot {
+    Snapshot {
+        devices: vec![ronoctua_audio::Device {
+            id: 52,
+            name: "alsa_card".to_owned(),
+            description: "The card".to_owned(),
+            profiles: vec![
+                ronoctua_audio::Profile {
+                    index: 0,
+                    name: "off".to_owned(),
+                    description: "Off".to_owned(),
+                    available: ronoctua_audio::Available::Yes,
+                },
+                ronoctua_audio::Profile {
+                    index: 2,
+                    name: "hifi".to_owned(),
+                    description: "HiFi".to_owned(),
+                    available: ronoctua_audio::Available::Yes,
+                },
+            ],
+            active_profile: 2,
+            routes: vec![
+                ronoctua_audio::Route {
+                    index: 0,
+                    name: "[Out] Speaker".to_owned(),
+                    description: "Speaker".to_owned(),
+                    direction: Direction::Output,
+                    available: ronoctua_audio::Available::Unknown,
+                    devices: vec![0],
+                },
+                ronoctua_audio::Route {
+                    index: 3,
+                    name: "[Out] Headphones".to_owned(),
+                    description: "Headphones".to_owned(),
+                    direction: Direction::Output,
+                    available: ronoctua_audio::Available::No,
+                    devices: vec![3],
+                },
+            ],
+            active_routes: vec![0],
+        }],
+        nodes: vec![
+            node(60, Kind::Sink, "Speaker", 38),
+            node(61, Kind::Source, "Stereo mic", 74),
+            node(62, Kind::Source, "Digital mic", 100),
+        ],
+        defaults: ronoctua_audio::Defaults {
+            sink: Some("Speaker".to_owned()),
+            source: Some("Stereo mic".to_owned()),
+            configured_sink: Some("Speaker".to_owned()),
+            configured_source: None,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_audio::{Available, Defaults, Device, Node, Profile, Route};
+    use ronoctua_audio::{Available, Node, Profile, Route};
 
     fn texts() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").expect("the base language")
-    }
-
-    fn node(id: u32, kind: Kind, name: &str, volume: u8) -> Node {
-        Node {
-            id,
-            kind: Some(kind),
-            name: name.to_owned(),
-            description: name.to_owned(),
-            device: Some(52),
-            volume,
-            muted: false,
-            app: None,
-            address: None,
-        }
-    }
-
-    fn a_machine() -> Snapshot {
-        Snapshot {
-            devices: vec![Device {
-                id: 52,
-                name: "alsa_card".to_owned(),
-                description: "The card".to_owned(),
-                profiles: vec![
-                    Profile {
-                        index: 0,
-                        name: "off".to_owned(),
-                        description: "Off".to_owned(),
-                        available: Available::Yes,
-                    },
-                    Profile {
-                        index: 2,
-                        name: "hifi".to_owned(),
-                        description: "HiFi".to_owned(),
-                        available: Available::Yes,
-                    },
-                ],
-                active_profile: 2,
-                routes: vec![
-                    Route {
-                        index: 0,
-                        name: "[Out] Speaker".to_owned(),
-                        description: "Speaker".to_owned(),
-                        direction: Direction::Output,
-                        available: Available::Unknown,
-                        devices: vec![0],
-                    },
-                    Route {
-                        index: 3,
-                        name: "[Out] Headphones".to_owned(),
-                        description: "Headphones".to_owned(),
-                        direction: Direction::Output,
-                        available: Available::No,
-                        devices: vec![3],
-                    },
-                ],
-                active_routes: vec![0],
-            }],
-            nodes: vec![
-                node(60, Kind::Sink, "Speaker", 38),
-                node(61, Kind::Source, "Stereo mic", 74),
-                node(62, Kind::Source, "Digital mic", 100),
-            ],
-            defaults: Defaults {
-                sink: Some("Speaker".to_owned()),
-                source: Some("Stereo mic".to_owned()),
-                configured_sink: Some("Speaker".to_owned()),
-                configured_source: None,
-            },
-        }
     }
 
     fn view() -> View {

@@ -13003,7 +13003,15 @@ impl Footer {
         (0..take.min(lines))
             .map(|n| {
                 let mut fields = Vec::new();
-                let mut listing_has_something = false;
+                // WHETHER ANY SECTION HAS SOMETHING ON THIS LINE — the
+                // sidebar's place, a panel's fact — and not only the listing:
+                // a line with a field anywhere may light, and where along it
+                // is the sections' to say (`Sectioned::takes_at`, which the
+                // band and the field's light read). Asked of the listing
+                // alone, a sidebar row beside an empty line of the listing
+                // lit nothing, while its click — which reaches the sections
+                // from any line — took it.
+                let mut something_here = false;
                 // AND HOW TALL THE RUNS ON THIS LINE ARE. The listing's, because
                 // it is the only section that ever asks for more than one line
                 // — a thumbnail's fallback glyph — and the panels beside it draw
@@ -13012,9 +13020,7 @@ impl Footer {
                     let Some(line) = sec.content.get(n) else {
                         continue;
                     };
-                    if matches!(sec.pane, crate::fields::Pane::Listing) {
-                        listing_has_something = !line.fields.is_empty();
-                    }
+                    something_here |= !line.fields.is_empty();
                     // AND A FIELD CARRIES ITS OWN SIZE, which is why four
                     // sections' runs can be poured into one line at all: the
                     // sidebar's `trash` and the facts' `owner:group` sit beside
@@ -13031,7 +13037,7 @@ impl Footer {
                         .get(n)
                         .copied()
                         .flatten()
-                        .or_else(|| listing_has_something.then_some(Click::Sections)),
+                        .or_else(|| something_here.then_some(Click::Sections)),
                     fields,
                     ..ExpansionRow::empty_one()
                 }
@@ -15088,12 +15094,28 @@ impl Footer {
                 _ => None,
             })
             .collect();
+        // WHAT THE POINTER THAT SPOKE LAST IS OVER, IN SECTIONS, asked ONCE A
+        // FRAME (`Sectioned::lit_at`): one layout of the column under it is
+        // its band here, the field's accent and a grid cell's name below. Each
+        // was a layout of its own, five a frame for a hand at rest.
+        let lit_here = shown_sections.and_then(|v| {
+            let (row, cell) = self
+                .here
+                .row_under_pointer
+                .zip(self.here.cell_under_pointer)?;
+            Some(v.lit_at(columns_now, grid.lines, row, cell))
+        });
         let mut lit = Vec::new();
         for (color, p) in self.pointers.lit(&self.here) {
             let place = match shown_sections {
                 Some(v) => p.row_under_pointer.and_then(|line| {
                     let cell = p.cell_under_pointer.unwrap_or(0);
-                    let (pane, at) = v.band_row(columns_now, grid.lines, line, cell)?;
+                    let here = (p.row_under_pointer, p.cell_under_pointer)
+                        == (self.here.row_under_pointer, self.here.cell_under_pointer);
+                    let (pane, at) = match &lit_here {
+                        Some(lit) if here => lit.band?,
+                        _ => v.band_row(columns_now, grid.lines, line, cell)?,
+                    };
                     v.band_belongs(pane).then_some(at)
                 }),
                 None => p.row_under_pointer,
@@ -15982,14 +16004,28 @@ impl Footer {
             // the run that lights WITH the one under the hand is not on the line
             // being drawn — it cannot be found from inside this loop. See
             // `fields::lit_with`.
-            let lit_hit = self
-                .here
-                .row_under_pointer
-                .and_then(|r| visible.get(r))
-                .zip(self.here.cell_under_pointer)
-                .and_then(|(line, c)| {
-                    crate::fields::lit_field(&line.fields, c).map(|k| line.fields[k].hit.clone())
-                });
+            //
+            // AND ONLY WHERE A CLICK TAKES: a title, a note or the dead stretch
+            // of a row lights no field, as it takes no click
+            // (`Footer::takes_under_pointer`).
+            //
+            // IN A GRID, THE CELL'S NAME, wherever in the cell the pointer
+            // rests (`Sectioned::grid_lit_at`): a grid has no band, and most
+            // of a cell is its picture, so lit by the field under the pointer
+            // a cell lit only with the hand on its letters while a click on
+            // its picture took it.
+            let in_a_cell = lit_here.as_ref().and_then(|lit| lit.grid.clone());
+            let lit_hit = in_a_cell.clone().or_else(|| {
+                self.here
+                    .row_under_pointer
+                    .and_then(|r| visible.get(r))
+                    .filter(|line| self.takes_under_pointer(line, lit_here.as_ref()))
+                    .zip(self.here.cell_under_pointer)
+                    .and_then(|(line, c)| {
+                        crate::fields::lit_field(&line.fields, c)
+                            .map(|k| line.fields[k].hit.clone())
+                    })
+            });
             // A REGION'S COLOUR CHIPS, gathered with their lines and painted
             // with the grounds, over the bands the pointer lights and under the
             // glyphs — `chrome::chip`, the window's drawing.
@@ -16112,7 +16148,10 @@ impl Footer {
                     let hosted_lights = self.hosted_lights();
                     let lights = self.view() != ViewState::Themes
                         && hosted_lights.is_none_or(|l| l == crate::region::Lights::Field);
-                    let on_this_row = self.here.row_under_pointer == Some(i) && lights;
+                    let on_this_row = self.here.row_under_pointer == Some(i)
+                        && lights
+                        && in_a_cell.is_none()
+                        && self.takes_under_pointer(line, lit_here.as_ref());
                     // WHICH field, asked ONCE and by the walk the click makes.
                     // See `fields::Row::field_index_at`: `covers` answers "may
                     // this field own the cell", and two packed fields both say

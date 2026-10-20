@@ -248,16 +248,38 @@ impl crate::region::Region for BluetoothRegion {
         ID
     }
 
-    /// THE BLUETOOTH VIEW'S ROWS, as `fields`: two columns of its own.
+    /// THE BLUETOOTH VIEW'S ROWS, as `fields`: two columns of its own. A
+    /// row takes a click where one of its halves does (`View::takes`, the
+    /// window's answer too), and the band then lights that half alone
+    /// ([`Self::lit`]).
     fn rows(&self, seen: &Seen<'_>) -> Vec<crate::region::Row> {
+        let takes = self.view.takes(&self.scene, seen.columns, seen.texts);
         self.view
             .rows(&self.scene, seen.columns, seen.texts)
             .into_iter()
-            .map(|r| crate::region::Row {
-                takes: !r.heading,
+            .zip(takes)
+            .map(|(r, takes)| crate::region::Row {
+                takes,
                 fields: r.fields,
             })
             .collect()
+    }
+
+    /// ON A DEVICE'S PAGE SIDE BY SIDE, the half under the pointer — where a
+    /// click there takes something (`View::takes_at`, which the click asks
+    /// too), and nothing where it does not; the whole row everywhere else.
+    fn lit(&self, row: usize, cell: Option<u16>, seen: &Seen<'_>) -> crate::region::Lit {
+        let Some((from, to)) = self.view.half_at(cell, seen.columns) else {
+            return crate::region::Lit::Row;
+        };
+        if self
+            .view
+            .takes_at(row, cell, &self.scene, seen.columns, seen.texts)
+        {
+            crate::region::Lit::Cells(from, to)
+        } else {
+            crate::region::Lit::Nothing
+        }
     }
 
     /// WHAT THE POINTER ASKS: a label is two or three words, and some of
@@ -369,6 +391,16 @@ impl crate::region::Region for BluetoothRegion {
     /// aiming: yes must not be one movement of a hand from an unknown device.
     fn clicked_at(&mut self, row: usize, cell: Option<u16>, way: &mut dyn Doorway) {
         let columns = way.columns();
+        // A CLICK WHERE IT TAKES NOTHING DOES NOTHING — a heading, a
+        // sentence, the blank beside the other half's row: it used to press
+        // `RET` on whatever row the cursor was on (`View::takes_at`, the
+        // answer the light is drawn by).
+        if !self
+            .view
+            .takes_at(row, cell, &self.scene, columns, way.texts())
+        {
+            return;
+        }
         self.view.aim(cell, columns);
         let rows = self.view.rows(&self.scene, columns, way.texts());
         self.view.clicked(row, cell, columns, &rows);
@@ -563,5 +595,150 @@ mod tests {
         r.carry(Errand::Order(ronoctua_bluetooth::Ask::Scan(true)), &mut w);
         let said = w.texts().t(crate::key::BLUETOOTH_NO_DAEMON);
         assert_eq!(w.owed.first(), Some(&Effect::Say(said, Echo::Normal)));
+    }
+
+    /// A radio with one paired keyboard that may wake the machine — a
+    /// second half to its page, with no address: nothing asks PipeWire.
+    fn a_scene() -> ronoctua_bluetooth::Scene {
+        ronoctua_bluetooth::Scene {
+            adapters: vec![ronoctua_bluetooth::Adapter {
+                at: "/org/bluez/hci0".to_owned(),
+                alias: "this machine".to_owned(),
+                powered: true,
+                ..ronoctua_bluetooth::Adapter::default()
+            }],
+            devices: vec![ronoctua_bluetooth::Device {
+                at: "/d/1".to_owned(),
+                label: "the keyboard".to_owned(),
+                name: "the keyboard".to_owned(),
+                kind: ronoctua_bluetooth::Kind::Keyboard,
+                paired: true,
+                wake: Some(false),
+                ..ronoctua_bluetooth::Device::default()
+            }],
+            daemon: true,
+        }
+    }
+
+    /// The region over [`a_scene`], on the list or on the keyboard's page.
+    fn over_the_scene(page: bool) -> BluetoothRegion {
+        let scene = a_scene();
+        let mut view = if page {
+            View::fresh_at("/d/1")
+        } else {
+            View::fresh()
+        };
+        view.look_at_the_device(&scene);
+        BluetoothRegion {
+            view,
+            scene,
+            hand: None,
+            standing: None,
+            opened: true,
+        }
+    }
+
+    fn wide_way() -> Recorder {
+        let texts = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        Recorder::new(
+            std::rc::Rc::new(texts),
+            WIDE,
+            true,
+            ronoctua_shell_door::sudo::Gate::window(),
+            ronoctua_shell_kit::wake::Wake::new(|| {}),
+        )
+    }
+
+    /// Wide enough for a device's page to be two halves side by side.
+    const WIDE: u16 = 120;
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a heading, a sentence — or leaves unlit one
+    /// it takes, on the list. THE LIGHT IS THE CLICK: every row clicked
+    /// once, on a view of its own, and lit exactly where something
+    /// happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: WIDE,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let held = crate::region::held_to_the_click(
+            || (over_the_scene(false), wide_way()),
+            &seen,
+            |r, w: &Recorder| crate::region::seen(r, &w.owed, &seen),
+        );
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
+    }
+
+    /// FAILS IF: on a device's page side by side, the pointer over one half
+    /// of a line lights what a click there does not take — the blank beside
+    /// a row of the other half, a heading — or leaves unlit a half whose
+    /// click takes it, or lights across both halves; or a click where
+    /// nothing lights does something (it pressed `RET` on the cursor's row).
+    /// The light came from the half the keyboard was in, wrong both ways.
+    #[test]
+    fn a_devices_page_lights_the_half_a_click_takes() {
+        use crate::region::Lit;
+        let t = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: WIDE,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let split = crate::bluetooth::split_at(WIDE);
+        let first = over_the_scene(true);
+        let rows = first.rows(&seen);
+        assert!(rows.len() >= 3, "{} rows", rows.len());
+        let mut lit_left = false;
+        let mut lit_right = false;
+        let mut dark = false;
+        for (n, row) in rows.iter().enumerate() {
+            for cell in [2, split + 2] {
+                let lit = first.lit(n, Some(cell), &seen);
+                let lights = row.takes && lit != Lit::Nothing;
+                if let Lit::Cells(from, to) = lit {
+                    assert!(
+                        (from..to).contains(&cell) && (to <= split || from >= split),
+                        "row {n} at {cell} lights {from}..{to}, across the halves"
+                    );
+                }
+                let mut r = over_the_scene(true);
+                let mut w = wide_way();
+                let before = crate::region::seen(&r, &w.owed, &seen);
+                r.clicked_at(n, Some(cell), &mut w);
+                let did = crate::region::seen(&r, &w.owed, &seen) != before;
+                // THE ROW THE CURSOR STANDS ON, in the half the keyboard is
+                // in, is the click's whatever its `RET` does
+                // (`region::Held::here`).
+                let here = n == first.view.cursor() && cell < split;
+                assert!(
+                    lights == did || (lights && here),
+                    "row {n} at cell {cell} is lit {lights} and a click there did {did}"
+                );
+                lit_left |= lights && cell < split;
+                lit_right |= lights && cell >= split;
+                dark |= !lights;
+            }
+        }
+        assert!(
+            lit_left && lit_right && dark,
+            "the halves were not both reached"
+        );
     }
 }

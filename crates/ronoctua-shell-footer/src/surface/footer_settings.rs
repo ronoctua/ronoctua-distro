@@ -75,7 +75,9 @@ impl Footer {
         rows.iter()
             .enumerate()
             .map(|(n, r)| ExpansionRow {
-                click: (!r.heading).then_some(Click::FooterSettings(n)),
+                // ONLY A ROW A CLICK TAKES (`Row::takes`, the window's answer
+                // too) has a click — and so a band under the pointer.
+                click: r.takes().then_some(Click::FooterSettings(n)),
                 fields: r.fields.clone(),
                 description: crate::footer_settings::View::about(&rows, n, &self.texts),
                 foot: false,

@@ -487,10 +487,20 @@ impl Page {
         }
     }
 
+    /// Whether a click takes row `n` — and so whether a resting pointer
+    /// lights it, in both doors: a row of the page, and NONE while the grave
+    /// question is asked, whose answers take the click then. The rows stayed
+    /// lit under the question while a click on them did nothing.
+    #[must_use]
+    pub fn takes(&self, n: usize, r: &Readings) -> bool {
+        self.confirm.is_none() && n < rows_of(r).len()
+    }
+
     /// A click on the row `n`: the first puts the cursor there, the second
-    /// does what `RET` does (invariant 19).
+    /// does what `RET` does (invariant 19) — where [`Page::takes`] says a
+    /// click takes it.
     pub fn clicked(&mut self, n: usize, r: &Readings) -> Errand {
-        if self.confirm.is_some() || n >= rows_of(r).len() {
+        if !self.takes(n, r) {
             return Errand::Nothing;
         }
         if n == self.cursor {

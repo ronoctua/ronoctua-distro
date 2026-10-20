@@ -20,7 +20,7 @@
 //! feed behind it — a region whose door is a photograph's reaches nothing.
 
 use crate::region::{Closed, Doorway, Entry, Region, Row, Seen, Taken};
-use crate::stick::{Act, Feed, Open, Readings, View, press_of, press_of_key};
+use crate::stick::{Feed, Open, Readings, View, press_of, press_of_key};
 
 /// The id the footer ranks the view under (`surface::PRECEDENCE`).
 pub const ID: &str = "stick";
@@ -82,15 +82,46 @@ impl Region for StickRegion {
     }
 
     /// A click selects and a second acts; a line of the consent row's note
-    /// is that row's click too (`View::clicked`).
+    /// is that row's click too (`View::clicked`). A row takes a click, and
+    /// so lights under a resting pointer, wherever the click does something
+    /// — a fact the cursor stands on included (`View::takes`, the window's
+    /// answer too).
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
-        self.open
-            .rows(seen.columns, seen.texts)
-            .into_iter()
-            .map(|r| Row {
-                takes: r.act != Act::Nothing,
+        let rows = self.open.rows(seen.columns, seen.texts);
+        let takes = View::takes(&rows);
+        rows.into_iter()
+            .zip(takes)
+            .map(|(r, takes)| Row {
+                takes,
                 fields: r.fields,
             })
+            .collect()
+    }
+
+    /// THE CONSENT ROW'S NOTE LIGHTS WITH IT: its lines are one control
+    /// (`View::control_of`).
+    fn control_of(&self, row: usize, seen: &Seen<'_>) -> usize {
+        View::control_of(row, &self.open.rows(seen.columns, seen.texts))
+    }
+
+    /// The rows laid out once, each with its control (`Told::control`):
+    /// asked row by row, [`Self::control_of`] lays them out again for each.
+    fn told(&self, seen: &Seen<'_>, skip: usize, take: usize) -> Vec<crate::region::Told> {
+        let rows = self.open.rows(seen.columns, seen.texts);
+        let takes = View::takes(&rows);
+        (0..rows.len())
+            .map(|n| View::control_of(n, &rows))
+            .zip(rows.iter().zip(takes))
+            .map(|(control, (r, takes))| crate::region::Told {
+                row: Row {
+                    takes,
+                    fields: r.fields.clone(),
+                },
+                control: Some(control),
+                ..crate::region::Told::default()
+            })
+            .skip(skip)
+            .take(take)
             .collect()
     }
 
@@ -225,8 +256,12 @@ mod tests {
         let view = r.open.rows(100, &t);
         assert_eq!(rows.len(), view.len());
         floor_of(rows.len(), 3);
-        for (drawn, row) in rows.iter().zip(&view) {
-            assert_eq!(drawn.takes, row.act != Act::Nothing);
+        // A ROW TAKES A CLICK WHEREVER THE CLICK DOES SOMETHING — a fact
+        // the cursor stands on included — and never on a heading
+        // (`the_pointer_lights_what_the_click_takes` holds it to the click).
+        for (drawn, (row, takes)) in rows.iter().zip(view.iter().zip(View::takes(&view))) {
+            assert_eq!(drawn.takes, takes);
+            assert!(!row.heading || row.act != crate::stick::Act::Nothing || !takes);
             assert_eq!(drawn.fields.len(), row.fields.len());
         }
         assert_eq!(r.cursor(), Some(r.open.view.cursor()));
@@ -267,5 +302,35 @@ mod tests {
 
     fn floor_of(n: usize, least: usize) {
         assert!(n >= least, "{n} rows, fewer than {least}");
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a
+    /// sentence — or leaves unlit one it takes. THE LIGHT IS THE CLICK:
+    /// every row clicked once, on a view of its own, and lit exactly where
+    /// something happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let held = crate::region::held_to_the_click(
+            || (region(), way()),
+            &seen,
+            |r, w: &crate::region::Recorder| crate::region::seen(r, &w.owed, &seen),
+        );
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

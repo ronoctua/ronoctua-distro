@@ -505,7 +505,7 @@ impl Region for SecurityRegion {
             .iter()
             .map(|r| Row {
                 fields: r.fields.clone(),
-                takes: !r.heading,
+                takes: r.takes(),
             })
             .collect()
     }
@@ -995,5 +995,76 @@ mod tests {
         );
         assert!(r.lingers(), "a work in flight does not keep the centre");
         assert!(w.owed.contains(&Effect::Repaint));
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a note,
+    /// a fact, the lines a pair wrapped onto — or leaves unlit one it takes.
+    /// THE LIGHT IS THE CLICK: every row clicked on a view of its own, and
+    /// lit exactly where something was seen to happen.
+    ///
+    /// ONCE, AND NEVER ON THE CURSOR'S ROW (as `crate::region::held_to_the_click`
+    /// clicks): a second click would be the row's `RET`, and a `RET` on
+    /// this page forgets the person's VirusTotal key, queues an upload, opens
+    /// the file picker over the home — what a test must not reach. One click
+    /// is enough for the light: from any other row it selects, and the cursor
+    /// moving is seen; on the cursor's row it is already the `RET`, which is
+    /// why that row is not clicked.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        // THE RECORDER'S WIDTH, which is what a click builds its rows at.
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 60,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        // SHOWN AND SETTLED, as the footer draws it: the cursor on the first
+        // row that acts, which is the one a first click is the `RET` on.
+        let fresh = || {
+            let mut r = region(Scene {
+                read: true,
+                settings: Some(ronoctua_security::firewall::Settings::default()),
+                ..Scene::default()
+            });
+            r.open.shown = true;
+            let _ = r.open.settle_on(seen.columns, &t);
+            (r, way())
+        };
+        let first = fresh().0;
+        let cursor = first.cursor_in(&seen);
+        let held: Vec<crate::region::Held> = first
+            .rows(&seen)
+            .iter()
+            .enumerate()
+            .map(|(row, drawn)| {
+                let here = cursor == Some(row);
+                let (mut r, mut w) = fresh();
+                let before = crate::region::seen(&r, &w.owed, &seen);
+                if !here {
+                    r.clicked(row, &mut w);
+                }
+                crate::region::Held {
+                    row,
+                    lit: drawn.takes,
+                    did: crate::region::seen(&r, &w.owed, &seen) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        assert!(
+            held.iter().any(|h| h.here && h.lit),
+            "the cursor stands on no row a click takes: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

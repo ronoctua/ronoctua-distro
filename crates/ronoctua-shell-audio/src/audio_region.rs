@@ -132,8 +132,9 @@ impl Region for Sound {
             .rows(self.snapshot.as_deref(), seen.columns, seen.texts)
             .into_iter()
             .map(|r| Row {
-                // A HEADING IS NOT A ROW TO CLICK ON.
-                takes: !r.heading,
+                // A HEADING IS NOT A ROW TO CLICK ON — the row's own answer
+                // (`audio::Row::takes`), which the window gives too.
+                takes: r.takes(),
                 fields: r.fields,
             })
             .collect()
@@ -321,6 +322,15 @@ pub fn carry_out(
                 way.say(said, crate::echo::Echo::Normal);
             }
         },
+        // A PHOTOGRAPH'S DOOR, OR A TEST'S, WRITES NOTHING OF THE PERSON'S
+        // (`Doorway::photographing`): the setting turns in the view and in
+        // the footer's copy, and `audio.json` — under the home of whoever
+        // runs the door — is left as it is.
+        Errand::Keep(prefs) if way.photographing() => {
+            if let Some(kept) = kept {
+                kept.set(prefs);
+            }
+        }
         Errand::Keep(prefs) => {
             keep_settings(&ronoctua_audio::prefs::store(), prefs, kept, way);
         }
@@ -532,5 +542,43 @@ mod tests {
         way.owed.clear();
         Region::heard(&mut sound, &(), &mut way);
         assert!(way.owed.is_empty(), "{:?}", way.owed);
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a
+    /// sentence about a whole section — or leaves unlit one it takes. THE
+    /// LIGHT IS THE CLICK: every row clicked once, on a view of its own over
+    /// the same machine (`audio::a_machine`), and lit exactly where something
+    /// happened.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let fresh = || {
+            let mut way = footer(vec![
+                Rc::new(Cell::new(Preferences::default())) as region::Kept,
+                Rc::new(crate::audio::a_machine()) as region::Kept,
+            ]);
+            let sound = opened(&mut way);
+            way.owed.clear();
+            (sound, way)
+        };
+        let held = crate::region::held_to_the_click(fresh, &seen, |r, w: &region::Recorder| {
+            crate::region::seen(r, &w.owed, &seen)
+        });
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

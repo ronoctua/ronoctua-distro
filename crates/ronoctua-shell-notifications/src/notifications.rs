@@ -1154,7 +1154,8 @@ impl View {
             // THE SHEET IS SHORT BY CONSTRUCTION and has a cursor of its own;
             // the catalogue's index would send the region thirty rows down a
             // list of eight.
-            Level::Sheet(knob) => return *knob,
+            // THE KNOB'S DRAWN ROW: the entry's name is row 0 (`sheet_rows`).
+            Level::Sheet(knob) => return *knob + 1,
             Level::Draft(d) => return d.line,
             // THE QUESTION IS READ FROM THE ANSWERS. What it is about is
             // drawn above them, and what has to be on screen is the sentence
@@ -1240,6 +1241,7 @@ impl View {
         lists: &Lists<'_>,
         book: &Book,
         columns: u16,
+        texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         // THE SHEET IS NOT A LIST, and a click in it moves nothing.
         //
@@ -1253,6 +1255,9 @@ impl View {
         // at all.
         if let Level::Open { at, line } = self.level {
             return self.open_clicked(at, line, row, cell, lists, columns);
+        }
+        if let Some(errand) = self.level_clicked(row, lists, book, columns, texts) {
+            return errand;
         }
         if !matches!(self.level, Level::List) {
             return Errand::Nothing;
@@ -1301,6 +1306,184 @@ impl View {
             Hit::ToggleRead => Errand::Read(key),
             Hit::Delete => Errand::Forget(key),
         }
+    }
+
+    /// The row a click on the SHEET, the DRAFT or the QUESTION takes: the
+    /// knob, the line or the answer drawn there, as the arrows reach it —
+    /// `None` where a click takes nothing (the sheet's name, a fact of the
+    /// question, its sentence), or on a level that is none of the three.
+    fn level_row(
+        &self,
+        row: usize,
+        book: &Book,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<usize> {
+        match &self.level {
+            // ROW 0 IS THE ENTRY'S NAME, and the knobs follow it.
+            Level::Sheet(_) => row.checked_sub(1).filter(|i| *i < Knob::ALL.len()),
+            // ONE ROW PER LINE of the draft (`draft_rows`).
+            Level::Draft(d) => (row < draft_lines(d).len()).then_some(row),
+            // THE TWO ANSWERS ARE THE LAST TWO ROWS — and there are none when
+            // the name cannot go to the repository: the sentence says why.
+            Level::Publish { id, yes } => {
+                if !ronoctua_notify::is_shareable_name(id) {
+                    return None;
+                }
+                let (at, room) = extent_of(Pane::Catalogue, columns);
+                let len = self.publish_rows(id, *yes, book, at, room, texts).len();
+                (row + 2 >= len && row < len).then(|| row + 2 - len)
+            }
+            Level::List | Level::Open { .. } => None,
+        }
+    }
+
+    /// A click on the SHEET, the DRAFT or the QUESTION: the first selects
+    /// the knob, the line or the answer, and the second is its `RET`
+    /// (invariant 19) — the sheet and the draft had no pointer at all, and
+    /// the arrows were the only way to a knob. `None` on the list and on an
+    /// open record, which have their own.
+    fn level_clicked(
+        &mut self,
+        row: usize,
+        lists: &Lists<'_>,
+        book: &Book,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<Errand> {
+        if matches!(self.level, Level::List | Level::Open { .. }) {
+            return None;
+        }
+        let Some(at) = self.level_row(row, book, columns, texts) else {
+            return Some(Errand::Nothing);
+        };
+        let here = match &mut self.level {
+            Level::Sheet(knob) => std::mem::replace(knob, at) == at,
+            Level::Draft(d) => std::mem::replace(&mut d.line, at) == at,
+            Level::Publish { yes, .. } => std::mem::replace(yes, at == 1) == (at == 1),
+            Level::List | Level::Open { .. } => return None,
+        };
+        Some(if here {
+            self.key(Press::Enter, lists, book, columns)
+        } else {
+            Errand::Nothing
+        })
+    }
+
+    /// Whether a click on drawn row `row`, at cell `cell` of it, takes
+    /// something — what [`Self::clicked`] does there, asked without doing
+    /// it: an item of a list (in the column the cell is in, side by side), a
+    /// knob, a line of the draft, an answer, an action of an open record, or
+    /// the half of it the keyboard is not in (a click gives it the
+    /// keyboard). Never a title, the blank between two columns, an empty
+    /// column's sentence or a fact.
+    ///
+    /// ONE ANSWER FOR THE LIGHT AND THE CLICK, in both doors: the region's
+    /// `Region::lit`, the window's band and its `Content::takes` read this.
+    /// The region had said every row took a click, headings included.
+    #[must_use]
+    pub fn takes_at(
+        &self,
+        row: usize,
+        cell: Option<u16>,
+        lists: &Lists<'_>,
+        book: &Book,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> bool {
+        match self.level {
+            Level::List => self.place_of(lists, columns, row, cell).is_some(),
+            Level::Open { at, .. } => lists.record(at).is_some_and(|r| {
+                self.open_takes(
+                    &self.open_drawn(r, lists, columns),
+                    row,
+                    cell,
+                    lists,
+                    columns,
+                )
+            }),
+            _ => self.level_row(row, book, columns, texts).is_some(),
+        }
+    }
+
+    /// Which drawn rows a click takes somewhere along them — the region's
+    /// `Row::takes`, the window's `Content::takes`; side by side, the band
+    /// then lights the half the pointer is in ([`Self::takes_at`],
+    /// [`Self::hover_span`]).
+    #[must_use]
+    pub fn takes(
+        &self,
+        lists: &Lists<'_>,
+        book: &Book,
+        columns: u16,
+        rows: usize,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<bool> {
+        let cells = [None, Some(0), Some(split_at(columns).saturating_add(1))];
+        // AN OPEN RECORD'S PLAN, laid out once for all its rows.
+        if let Level::Open { at, .. } = self.level {
+            let Some(r) = lists.record(at) else {
+                return vec![false; rows];
+            };
+            let drawn = self.open_drawn(r, lists, columns);
+            return (0..rows)
+                .map(|row| {
+                    cells
+                        .iter()
+                        .any(|cell| self.open_takes(&drawn, row, *cell, lists, columns))
+                })
+                .collect();
+        }
+        (0..rows)
+            .map(|row| {
+                cells
+                    .iter()
+                    .any(|cell| self.takes_at(row, *cell, lists, book, columns, texts))
+            })
+            .collect()
+    }
+
+    /// What an open record's message half is drawn as: its place, its plan
+    /// and the line its window starts at — what [`Self::open_takes`] reads.
+    fn open_drawn(
+        &self,
+        r: &Record,
+        lists: &Lists<'_>,
+        columns: u16,
+    ) -> (HalfPlace, Vec<Told>, usize) {
+        let [said, _] = self.places_of(r, columns);
+        (
+            said,
+            self.open_plan(r, columns),
+            self.half_offset(Half::First, lists, columns),
+        )
+    }
+
+    /// [`Self::takes_at`] on an open record, as [`Self::open_clicked`]
+    /// decides it: the half the keyboard is not in takes the click, and in
+    /// the message's half an action does.
+    fn open_takes(
+        &self,
+        (said, plan, offset): &(HalfPlace, Vec<Told>, usize),
+        row: usize,
+        cell: Option<u16>,
+        lists: &Lists<'_>,
+        columns: u16,
+    ) -> bool {
+        let half = self
+            .half_at(lists, columns, row, cell.unwrap_or(0))
+            .unwrap_or(Half::First);
+        if (half == Half::Second) != self.open_facts {
+            return true;
+        }
+        if half == Half::Second {
+            return false;
+        }
+        row.checked_sub(said.row)
+            .filter(|i| *i < said.room)
+            .map(|i| offset + i)
+            .and_then(|n| plan.get(n))
+            .is_some_and(|t| matches!(t, Told::Act(_)))
     }
 
     /// A click on an open record: it SELECTS an action, and the second click
@@ -1583,6 +1766,22 @@ impl View {
     #[must_use]
     pub const fn in_sheet(&self) -> bool {
         matches!(self.level, Level::Sheet(_))
+    }
+
+    /// Is a record open? Read by the doors' tests.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn is_open(&self) -> bool {
+        matches!(self.level, Level::Open { .. })
+    }
+
+    /// Whether an open record's facts have the keyboard — what a click in
+    /// that half gives them, side by side or stacked. Read by the doors'
+    /// tests.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn facts_have_the_keyboard(&self) -> bool {
+        self.open_facts
     }
 
     /// A fresh view at a chosen column, keeping what the DOOR gave this one.
@@ -4425,7 +4624,7 @@ mod tests {
         let _ = v.key(Press::Enter, &lists, &b, 200);
         assert!(v.in_sheet());
         let was = v.cursor();
-        let did = v.clicked(3, Some(4), &lists, &b, 120);
+        let did = v.clicked(3, Some(4), &lists, &b, 120, &texts());
         assert_eq!(did, Errand::Nothing);
         assert_eq!(v.cursor(), was, "the click moved which entry is open");
     }
@@ -4453,7 +4652,7 @@ mod tests {
         v.pane = Pane::Suppressed;
         let (at, room) = v.row_extent(120);
         assert_eq!(
-            v.clicked(0, Some(at + room - 3), &lists, &b, 120),
+            v.clicked(0, Some(at + room - 3), &lists, &b, 120, &texts()),
             Errand::Nothing
         );
     }
@@ -4683,11 +4882,11 @@ mod tests {
         // Newest first, so drawn row 1 is id 2 — which is also the unread one
         // here, and was so under the old order for a different reason.
         assert_eq!(
-            v.clicked(1, Some(at + room - 3), &lists, &b, 200),
+            v.clicked(1, Some(at + room - 3), &lists, &b, 200, &texts()),
             Errand::Read(named(2))
         );
         assert_eq!(
-            v.clicked(2, Some(at + room - 3), &lists, &b, 200),
+            v.clicked(2, Some(at + room - 3), &lists, &b, 200, &texts()),
             Errand::Unread(named(1))
         );
     }
@@ -4705,7 +4904,10 @@ mod tests {
         let (at, room) = v.row_extent(200);
         // Row 0 of the drawing is the heading; newest first, so drawn row 1
         // is id 2 and drawn row 2 is id 1.
-        assert_eq!(v.clicked(1, Some(at + 5), &lists, &b, 200), Errand::Nothing);
+        assert_eq!(
+            v.clicked(1, Some(at + 5), &lists, &b, 200, &texts()),
+            Errand::Nothing
+        );
         assert_eq!(v.cursor(), 0, "the click on the row did not aim");
         let opened = Level::Open {
             at: named(2),
@@ -4724,19 +4926,19 @@ mod tests {
         // THE TWO CONTROLS AT THE RIGHT EDGE ARE ASKED FIRST: a click there is
         // that control, and not the row it sits on.
         assert_eq!(
-            v.clicked(2, Some(at + room - 3), &lists, &b, 200),
+            v.clicked(2, Some(at + room - 3), &lists, &b, 200, &texts()),
             Errand::Read(named(1))
         );
         assert_eq!(v.level, Level::List, "the envelope opened the record too");
         assert_eq!(
-            v.clicked(2, Some(at + room - 1), &lists, &b, 200),
+            v.clicked(2, Some(at + room - 1), &lists, &b, 200, &texts()),
             Errand::Forget(named(1))
         );
         assert_eq!(v.level, Level::List, "the bin opened the record too");
         // AND THE HEADING IS NOT A ROW OF THE LIST: a click on it does nothing
         // and moves nothing, rather than acting on whatever shares its index.
         assert_eq!(
-            v.clicked(0, Some(at + room - 1), &lists, &b, 200),
+            v.clicked(0, Some(at + room - 1), &lists, &b, 200, &texts()),
             Errand::Nothing
         );
         assert_eq!(v.level, Level::List, "a heading opened something");
@@ -4840,14 +5042,17 @@ mod tests {
         // Drawn row 0 is the pair of headings; row 1 holds both columns' first
         // item, and the CELL says which of the two the pointer means.
         assert_eq!(
-            v.clicked(1, Some(at + room - 1), &lists, &b, 120),
+            v.clicked(1, Some(at + room - 1), &lists, &b, 120, &texts()),
             Errand::Forget(named(2)),
             "the right column's bin did not answer"
         );
         assert_eq!(v.pane, Pane::Suppressed);
         // And a click back on the left column brings the cursor home — and
         // opens what it landed on, which is what a click on a row now does.
-        assert_eq!(v.clicked(1, Some(3), &lists, &b, 120), Errand::Nothing);
+        assert_eq!(
+            v.clicked(1, Some(3), &lists, &b, 120, &texts()),
+            Errand::Nothing
+        );
         assert_eq!(v.pane, Pane::Happened);
         assert!(
             matches!(v.level, Level::Open { .. }),
@@ -4860,10 +5065,16 @@ mod tests {
         // which is the same rule read down instead of across.
         let mut v = View::fresh();
         // 0 title, 1 the record, 2 air, 3 title, 4 the suppressed one.
-        assert_eq!(v.clicked(4, Some(3), &lists, &b, 50), Errand::Nothing);
+        assert_eq!(
+            v.clicked(4, Some(3), &lists, &b, 50, &texts()),
+            Errand::Nothing
+        );
         assert_eq!((v.pane, v.cursor()), (Pane::Suppressed, 0));
         // And a title is not a row of a list: it moves nothing.
-        assert_eq!(v.clicked(0, Some(3), &lists, &b, 50), Errand::Nothing);
+        assert_eq!(
+            v.clicked(0, Some(3), &lists, &b, 50, &texts()),
+            Errand::Nothing
+        );
         assert_eq!(v.pane, Pane::Suppressed, "a title took the keyboard");
 
         // AND A CLICK BELOW THE SHORTER COLUMN'S LAST ITEM DOES NOTHING.
@@ -4882,7 +5093,10 @@ mod tests {
         ];
         let lists = Lists::of(&records, &b);
         let mut v = View::fresh();
-        assert_eq!(v.clicked(3, Some(at), &lists, &b, 120), Errand::Nothing);
+        assert_eq!(
+            v.clicked(3, Some(at), &lists, &b, 120, &texts()),
+            Errand::Nothing
+        );
         assert_eq!((v.pane, v.cursor()), (Pane::Happened, 0), "it moved anyway");
     }
 
@@ -5400,18 +5614,18 @@ mod tests {
             .position(|r| r.fields.iter().any(|f| f.text.contains("copy the path")))
             .unwrap();
         assert_eq!(
-            v.clicked(row, Some(2), &lists, &b, 200),
+            v.clicked(row, Some(2), &lists, &b, 200, &texts()),
             Errand::Nothing,
             "the first selects"
         );
         assert_eq!(
-            v.clicked(row, Some(2), &lists, &b, 200),
+            v.clicked(row, Some(2), &lists, &b, 200, &texts()),
             Errand::Act(named(1), 1),
             "the second runs it"
         );
         // AND A CLICK IN THE FACTS GIVES THEM THE KEYBOARD, and runs nothing.
         assert_eq!(
-            v.clicked(row, Some(split_at(200) + 1), &lists, &b, 200),
+            v.clicked(row, Some(split_at(200) + 1), &lists, &b, 200, &texts()),
             Errand::Nothing
         );
         assert!(v.open_facts);

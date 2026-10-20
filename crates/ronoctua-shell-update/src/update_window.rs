@@ -1482,6 +1482,16 @@ impl View {
         self.cache.as_ref()
     }
 
+    /// Whether a click takes row `n` of the binary cache's page — the page's
+    /// one answer (`binary_cache::Page::takes`), which both doors light and
+    /// click by: none while its grave question is asked.
+    #[must_use]
+    pub fn cache_takes(&self, n: usize) -> bool {
+        self.cache
+            .as_ref()
+            .is_some_and(|c| c.page.takes(n, &c.readings))
+    }
+
     /// The keys this view teaches now: the steps', or the binary cache's
     /// page's — what both doors' hints draw.
     #[must_use]
@@ -1948,7 +1958,9 @@ impl View {
                 })
                 .chain(page.into_iter().map(|l| RegionRow {
                     fields: l.fields,
-                    target: l.row.map(Target::Cache),
+                    // A ROW TAKES THE CLICK ONLY WHERE THE PAGE SAYS SO —
+                    // never under the grave question (`View::cache_takes`).
+                    target: l.row.filter(|n| self.cache_takes(*n)).map(Target::Cache),
                 }));
             return rows.skip(skip).take(take).collect();
         }
@@ -3037,6 +3049,7 @@ impl UpdateWindow {
             .cache_lines(0, ui.columns, &ui.texts)
             .get(n)
             .and_then(|l| l.row)
+            .filter(|row| self.open.view.cache_takes(*row))
     }
 
     /// The first line of the page that keeps its cursor in `room` lines.
@@ -3250,6 +3263,7 @@ impl Content for UpdateWindow {
                     break;
                 }
                 if let Some(row) = l.row
+                    && self.open.view.cache_takes(row)
                     && let Some((color, _)) = canvas
                         .lit
                         .iter()
@@ -4767,5 +4781,58 @@ mod tests {
         let kept = w.would_have();
         assert_eq!(kept.len(), 3, "{kept:?}");
         assert!(kept[2].contains("on this connection"), "{kept:?}");
+    }
+
+    /// FAILS IF: under the binary cache page's grave question a row of the
+    /// page is still what the window's pointer takes — lit, while the click
+    /// there is the question's — or, with no question asked, no row of the
+    /// page is. The band and the click read one answer (`target_at`).
+    #[test]
+    fn the_windows_cache_rows_take_no_click_under_the_question() {
+        use crate::binary_cache::{Readings, Row as PageRow, TokenState, rows_of};
+        for grave in [false, true] {
+            let readings = Readings {
+                named: ronoctua_cachix::settings::Named::Cache(
+                    ronoctua_person::options::BinaryCache {
+                        name: "someone".to_owned(),
+                        public_key:
+                            "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ="
+                                .to_owned(),
+                        visibility: ronoctua_person::options::Visibility::Public,
+                    },
+                ),
+                token: TokenState::Kept,
+                ..Readings::default()
+            };
+            let (mut w, mut ui) = a_window();
+            ui.lines = 60;
+            w.open.view = w.open.view.clone().with_cache(readings);
+            if grave && let Some(c) = w.open.view.cache.as_mut() {
+                let remove = rows_of(&c.readings)
+                    .iter()
+                    .position(|r| *r == PageRow::Remove)
+                    .expect("a cache is removable");
+                let _ = c.page.clicked(remove, &c.readings);
+                let _ = c.page.clicked(remove, &c.readings);
+                assert!(c.page.confirm().is_some(), "the removal asked nothing");
+            }
+            let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+            let taken = (0..ui.lines)
+                .filter(|line| {
+                    matches!(
+                        w.target_at(&ui, 40.0, (f64::from(*line) + 0.5) * line_px),
+                        Some(Target::Cache(_))
+                    )
+                })
+                .count();
+            if grave {
+                assert_eq!(
+                    taken, 0,
+                    "a row of the page takes the click under the question"
+                );
+            } else {
+                assert!(taken >= 3, "{taken} rows of the page take a click");
+            }
+        }
     }
 }

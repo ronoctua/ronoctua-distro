@@ -229,10 +229,13 @@ impl VideoMetrics {
     /// that continue a row, and each thumbnail over its lines as a COVER —
     /// with its picture's key and size, once it is decoded — and what the
     /// pointer lights: a shelf of the grid the CELL under it, a line of a
-    /// picture or a title nothing, any other row its band.
+    /// picture or a title nothing, any other row its band. A line takes a
+    /// click where the view says one does (`View::takes`, the window's
+    /// answer too).
     fn told_whole(&self, seen: &Seen<'_>) -> Vec<Told> {
         let kept = self.kept.borrow();
         let rows = self.view.rows(&kept.readings, seen.columns, seen.texts);
+        let takes = self.view.takes(&rows);
         rows.iter()
             .enumerate()
             .map(|(n, r)| {
@@ -268,7 +271,7 @@ impl VideoMetrics {
                 Told {
                     row: Row {
                         fields: r.fields.clone(),
-                        takes: !r.heading || !r.cells.is_empty(),
+                        takes: takes.get(n).copied().unwrap_or(false),
                     },
                     about: View::about(&rows, n, seen.texts),
                     caret: r.caret,
@@ -582,15 +585,43 @@ mod tests {
     use super::*;
     use crate::region::{Effect, Recorder};
 
+    /// The width the region is drawn at — the doorway's ([`way`]).
+    const COLUMNS: u16 = 120;
+
     fn way() -> Recorder {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
         Recorder::new(
             Rc::new(texts),
-            120,
+            COLUMNS,
             true,
             crate::sudo::Gate::window(),
             crate::wake::Wake::new(|| {}),
         )
+    }
+
+    /// The region over the fixture's readings, on `page` — on the grid when
+    /// `grid` — with NO FEED: what a click asks of the catalogue, the brain
+    /// or the player reaches nothing of this machine.
+    fn over(page: &Page, grid: bool) -> VideoMetrics {
+        let mut kept = fresh();
+        kept.feed = None;
+        kept.readings = crate::video_metrics::tests::readings();
+        let (view, _) = View::fresh(page.clone());
+        let mut region = VideoMetrics {
+            kept: Rc::new(RefCell::new(kept)),
+            view,
+            first: None,
+            covers: HashMap::new(),
+        };
+        if grid {
+            let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+            let rows = region.view_rows(COLUMNS, &texts);
+            let kept = Rc::clone(&region.kept);
+            let _ = region
+                .view
+                .press(Press::Layout, &rows, &kept.borrow().readings);
+        }
+        region
     }
 
     /// FAILS IF: with the region closed, its opening or a question stops
@@ -726,6 +757,89 @@ mod tests {
         }
     }
 
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, a note, the air between sections,
+    /// a line of a picture — or leaves unlit one it takes, a line that
+    /// continues a row included; or a shelf of the grid takes nothing where
+    /// a click on one of its cells lands. THE LIGHT IS THE CLICK: every row
+    /// clicked once, on a view of its own, and lit exactly where something
+    /// happened — on every page the fixture fills, the list and the grid.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &texts,
+            columns: COLUMNS,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let video = Page::Video(ronoctua_video_metrics::VideoId("video000000".to_owned()));
+        let witness = |r: &VideoMetrics, w: &Recorder| crate::region::seen(r, &w.owed, &seen);
+        let mut shelves = 0;
+        for (page, grid) in [
+            (Page::Home, false),
+            (Page::Channels, false),
+            (Page::Rules, false),
+            (Page::Weights, false),
+            (Page::Videos, false),
+            (Page::Videos, true),
+            (video, false),
+        ] {
+            let fresh = || (over(&page, grid), way());
+            let first = over(&page, grid);
+            let rows = first.view_rows(COLUMNS, &texts);
+            let cursor = first.cursor_in(&seen);
+            let owner = |n: usize| crate::video_metrics::Row::owner(&rows, n);
+            let held: Vec<crate::region::Held> =
+                crate::region::held_to_the_click(fresh, &seen, witness)
+                    .into_iter()
+                    .map(|mut h| {
+                        // A ROW OF SEVERAL LINES IS THE CURSOR'S on every
+                        // line: a click on any of them is a click on it.
+                        h.here = h.here || cursor == Some(owner(h.row));
+                        // A SHELF IS CLICKED WHERE A CELL IS: the footer
+                        // hands the cell under the pointer, and the
+                        // generic click has none — the air before the
+                        // first cell, which takes nothing and lights
+                        // nothing (`LineLights::UnderCell`).
+                        let cells = rows.get(owner(h.row)).map(|o| o.cells.clone());
+                        if let Some(cells) = cells.filter(|c| !c.is_empty()) {
+                            shelves += 1;
+                            h.did = cells.iter().all(|c| {
+                                let (mut r, mut w) = fresh();
+                                let before = witness(&r, &w);
+                                let under = crate::region::Under {
+                                    at: (0.0, 0.0),
+                                    line: None,
+                                    row: Some(h.row),
+                                    cell: Some(c.from),
+                                    base: 0,
+                                    ctrl: false,
+                                    shift: false,
+                                    frame: None,
+                                };
+                                r.clicked_under(h.row, &under, &mut w);
+                                r.clicked_under(h.row, &under, &mut w);
+                                witness(&r, &w) != before
+                            });
+                        }
+                        h
+                    })
+                    .collect();
+            let what = format!("{page:?}, grid {grid}");
+            assert!(
+                held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+                "{what}: no row lit, or every row lit: {held:?}"
+            );
+            let unheld = crate::region::unheld(&held);
+            assert!(unheld.is_empty(), "{what}: {unheld:?}");
+        }
+        assert!(shelves > 0, "the grid drew no shelf");
+    }
+
     /// FAILS IF: the region's rows stop naming the pictures the footer draws
     /// over them, or a line of a picture or a title lights a band.
     #[test]
@@ -756,7 +870,7 @@ mod tests {
             if r.heading && r.cells.is_empty() {
                 assert_eq!(row.lights, crate::region::LineLights::Nothing, "row {n}");
             }
-            assert_eq!(row.row.takes, !r.heading || !r.cells.is_empty(), "row {n}");
+            assert_eq!(row.row.takes, r.takes(), "row {n}");
             assert_eq!(row.continues, r.continues, "row {n}");
         }
         assert_eq!(

@@ -839,4 +839,120 @@ mod tests {
         );
         assert!(!r.lingers());
     }
+
+    /// The update turned to the binary cache's page over a public cache with
+    /// a token kept — and, `grave`, with the removal's question asked: its
+    /// row clicked twice, as a person asks it.
+    fn on_the_page(grave: bool) -> (UpdateRegion, crate::region::Recorder) {
+        use crate::binary_cache::{Readings, Row as PageRow, TokenState, rows_of};
+        let readings = Readings {
+            named: ronoctua_cachix::settings::Named::Cache(ronoctua_person::options::BinaryCache {
+                name: "someone".to_owned(),
+                public_key: "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ="
+                    .to_owned(),
+                visibility: ronoctua_person::options::Visibility::Public,
+            }),
+            token: TokenState::Kept,
+            ..Readings::default()
+        };
+        let remove = rows_of(&readings)
+            .iter()
+            .position(|r| *r == PageRow::Remove)
+            .expect("a cache is removable");
+        let view = View::of(
+            module::steps(),
+            crate::update_window::Verdicts::of(&[]),
+            Vec::new(),
+        )
+        .with_cache(readings);
+        let mut r = UpdateRegion {
+            open: Open::new(view, Reach::Kept(Vec::new()), None),
+            on_the_step: true,
+        };
+        let mut w = way();
+        if grave {
+            let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+            let zone = ronoctua_files::when::Zone::utc();
+            // THE ROW, found again before each click: the first moves the
+            // cursor, and what the head says above the page moves with it.
+            let removal = |r: &UpdateRegion| {
+                (0..r.row_count(&seen_at(&t, &zone)))
+                    .find(|n| {
+                        r.open
+                            .view
+                            .region_rows(*n, 1, 100, &t)
+                            .first()
+                            .and_then(|x| x.target)
+                            == Some(crate::update_window::Target::Cache(remove))
+                    })
+                    .expect("the removal is drawn")
+            };
+            let row = removal(&r);
+            r.clicked(row, &mut w);
+            let row = removal(&r);
+            r.clicked(row, &mut w);
+            assert!(
+                r.open
+                    .view
+                    .cache_page()
+                    .is_some_and(|c| c.page.confirm().is_some()),
+                "the removal asked nothing"
+            );
+            w.owed.clear();
+        }
+        (r, w)
+    }
+
+    fn seen_at<'a>(t: &'a ronoctua_i18n::Texts, zone: &'a ronoctua_files::when::Zone) -> Seen<'a> {
+        Seen {
+            texts: t,
+            columns: 100,
+            lines: 60,
+            zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        }
+    }
+
+    /// FAILS IF: on the binary cache's page a resting pointer lights a row a
+    /// click takes nothing on — the heading, the air before it, and every
+    /// row of the page while its grave question is asked, when the click is
+    /// the question's — or leaves unlit one it takes: a row, an answer.
+    /// THE LIGHT IS THE CLICK: every row clicked once, on a page of its
+    /// own, and lit exactly where something happened. The rows stayed lit
+    /// under the question.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = seen_at(&t, &zone);
+        for grave in [false, true] {
+            let held = crate::region::held_to_the_click(
+                || on_the_page(grave),
+                &seen,
+                |r, w: &crate::region::Recorder| crate::region::seen(r, &w.owed, &seen),
+            );
+            assert!(
+                held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+                "grave {grave}: no row lit, or every row lit: {held:?}"
+            );
+            let unheld = crate::region::unheld(&held);
+            assert!(unheld.is_empty(), "grave {grave}: {unheld:?}");
+            if grave {
+                let r = on_the_page(true).0;
+                let rows = r.rows(&seen);
+                let page_rows = (0..rows.len())
+                    .filter(|n| {
+                        r.open
+                            .view
+                            .region_rows(*n, 1, 100, &t)
+                            .first()
+                            .is_some_and(|x| x.fields.iter().any(|f| !f.text.is_empty()))
+                            && !rows[*n].takes
+                    })
+                    .count();
+                assert!(page_rows >= 3, "the page's rows lit under the question");
+            }
+        }
+    }
 }

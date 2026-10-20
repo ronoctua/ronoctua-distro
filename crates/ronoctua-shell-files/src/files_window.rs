@@ -2719,24 +2719,41 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // The FIELD's own accent (below) still needs the deep answer, and that is
     // right: it says which word the click would reach, and over dead space it
     // reaches none.
-    let hover_at = s.line_under_pointer.and_then(|line| {
+    //
+    // AND THE ACCENT'S LINE IS WHERE THE CLICK TAKES, and not where a band may
+    // be drawn. It was the band's line, so the accent went wherever the band
+    // went: off a film's controls, a picture's expand button and the path over
+    // a grid — all of which a click takes — and onto a fact that is only read,
+    // which it does not. `View::taken_line` is the click's own answer, and the
+    // footer's accent asks the same one.
+    //
+    // ALL OF IT ASKED ONCE A FRAME (`View::lit_at`): one layout of the column
+    // under the pointer answers the accent's line, a grid cell's name and the
+    // band of the pointer that spoke last. Each was a layout of its own.
+    let lit_here = s.line_under_pointer.map(|line| {
         let cell = s.cell_under_pointer.unwrap_or(0);
-        let (pane, at) = s.view.band_row(s.geo.columns, s.geo.room(), line, cell)?;
-        s.view
-            .band_belongs_at(
-                cell,
-                s.geo.columns,
-                pane == crate::fields::Pane::Preview || pane == crate::fields::Pane::Info,
-            )
-            .then_some((pane, at))
+        s.view.lit_at(s.geo.columns, s.geo.room(), line, cell)
     });
+    let aimed_at = lit_here.as_ref().and_then(|lit| lit.line);
+    // AND IN A GRID THE CELL'S NAME, wherever in the cell the hand rests — a
+    // grid has no band, and its picture carries no field (`View::grid_lit_at`).
+    let in_a_cell = lit_here
+        .as_ref()
+        .filter(|_| s.cell_under_pointer.is_some())
+        .and_then(|lit| lit.grid.clone());
+    let on_a_cell = in_a_cell.is_some();
     // ONE BAND PER POINTER, each in its own cursor's colour (`ronoctua_shell_kit::seats`):
     // the same question asked for every hand, so two cursors over the listing
     // light two rows.
     for (color, line_p, cell_p) in &s.hovers {
         let hover_p = line_p.and_then(|line| {
             let cell = cell_p.unwrap_or(0);
-            let (pane, at) = s.view.band_row(s.geo.columns, s.geo.room(), line, cell)?;
+            let here = (*line_p, cell_p.unwrap_or(0))
+                == (s.line_under_pointer, s.cell_under_pointer.unwrap_or(0));
+            let (pane, at) = match &lit_here {
+                Some(lit) if here => lit.band?,
+                _ => s.view.band_row(s.geo.columns, s.geo.room(), line, cell)?,
+            };
             s.view
                 .band_belongs_at(
                     cell,
@@ -2818,7 +2835,8 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // A thumbnail's name is up to two runs on two LINES of one cell, so the run
     // that lights WITH the one under the hand is not on the line being drawn —
     // it cannot be found from inside this loop. See `fields::lit_with`.
-    let lit_hit = hover_at.and_then(|(pane, at)| {
+    let lit_hit = in_a_cell.or_else(|| {
+        let (pane, at) = aimed_at?;
         let sec = sections.iter().find(|s| s.pane == pane)?;
         let line = sec.content.get(at.checked_sub(sec.top)?)?;
         let k = s.cell_under_pointer.and_then(|c| line.field_index_at(c))?;
@@ -2828,10 +2846,11 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         for (i, line) in sec.content.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
             let y = s.geo.metric.first + (sec.top + i) as u16;
-            // THE SAME ROW THE BAND LIT, and not a second opinion about it:
+            // THE ROW THE CLICK TAKES, and not a second opinion about it:
             // through the target, the accent and the band disagreed over every
-            // cell that belongs to no field.
-            let lit = hover_at == Some((sec.pane, sec.top + i));
+            // cell that belongs to no field. In a grid the cell's name lights
+            // by `lit_hit` alone, and never the glyph that fills its picture.
+            let lit = !on_a_cell && aimed_at == Some((sec.pane, sec.top + i));
             // WHICH field, asked ONCE and by the walk the click makes. Asking
             // `covers` per field lights every field that MAY own the cell, and
             // the gap rule gives a packed cell to two of them — the owner read
@@ -3687,6 +3706,130 @@ mod tests {
                 );
             }
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: in a grid, the pointer resting on a cell's PICTURE leaves
+    /// that cell's name dark — a click there takes the cell — or lights
+    /// another cell's name, or lights the glyph that fills a picture's room.
+    /// This door's half of `files::View::grid_lit_at`, measured in what the
+    /// frame paints, with the pointer off the grid and on it.
+    #[test]
+    fn a_grid_cell_under_the_pointer_lights_its_name_and_nothing_else() {
+        use crate::fields::{Hit, Ink, Pane};
+        let dir = scratch("grid-name");
+        for n in 0..12 {
+            std::fs::write(dir.join(format!("f{n:02}.txt")), b"x").unwrap();
+        }
+        let texts = ronoctua_i18n::Texts::from_env();
+        let mut view = a_view(&dir);
+        view.reread();
+        // THE PANELS OFF, and the entries side by side.
+        for keys in ["C-v", "C-i", "C-g"] {
+            let key = ronoctua_keymap::Key::parse(keys)
+                .unwrap_or_else(|_| panic!("`{keys}` is not a key"));
+            let _ = view.key(key);
+        }
+        assert!(view.grid_shown(), "`C-g` did not turn the entries over");
+        let columns = 100u16;
+        let geo = Geometry {
+            metric: a_frame(1200.0, 900.0),
+            columns,
+            strip: view.panes(columns).strip,
+            chrome: 1,
+        };
+        let chrome = view.chrome_rows(columns, &texts);
+        let sec = view
+            .sections(&chrome, geo.room(), columns, &texts)
+            .into_iter()
+            .find(|s| s.pane == Pane::Listing)
+            .expect("the listing is a section");
+        let (from, _) = sec.cells_of(2).expect("the third entry is drawn");
+        let line = sec.line_of(2).expect("the third entry is on screen");
+        // WHERE EACH OF AN ENTRY'S RUNS IS PAINTED, the glyph that fills its
+        // picture apart.
+        let runs = |n: usize, fills: bool| -> Vec<(u16, String)> {
+            sec.content
+                .iter()
+                .flat_map(|r| r.fields.iter())
+                .filter(|f| f.hit == Hit::Name(n) && matches!(f.ink, Ink::Fills(_)) == fills)
+                .map(|f| (super::CONTENT_MARGIN + f.at, f.text.clone()))
+                .collect()
+        };
+        let accented = |painted: &super::Painted, run: &(u16, String)| {
+            painted.spans.iter().any(|s| {
+                s.column == run.0
+                    && s.text == run.1
+                    && s.color == ronoctua_tokens::color::STATE_ACCENT
+            })
+        };
+        let painted_at = |view: &mut crate::files::View, at: Option<(usize, u16)>| {
+            let mut hinted = crate::chrome::Hinted::default();
+            frame(&mut Scene {
+                geo,
+                view,
+                texts: &texts,
+                message: None,
+                question: None,
+                cell_under_pointer: at.map(|(_, c)| c),
+                line_under_pointer: at.map(|(l, _)| l),
+                hovers: Vec::new(),
+                under_pointer: None,
+                fold: crate::fold::Fold::default(),
+                fold_control: None,
+                fold_wrapped: 0,
+                hinted: &mut hinted,
+                fold_lit: false,
+                fold_scroll: ronoctua_design::Scroll {
+                    total: 0,
+                    lines: 0,
+                    offset: 0,
+                    top: 0,
+                },
+            })
+        };
+        let name = runs(2, false);
+        assert!(!name.is_empty(), "the third entry has no name drawn");
+        // THE POINTER OFF THE GRID: the name is not lit, so what lights below
+        // is the pointer's doing and not the cursor's.
+        let away = painted_at(&mut view, None);
+        assert!(
+            name.iter().all(|r| !accented(&away, r)),
+            "the third entry's name is lit with no pointer on it"
+        );
+        // AND ON ITS PICTURE, where no field is.
+        let on = painted_at(&mut view, Some((line, from)));
+        assert!(
+            name.iter().all(|r| accented(&on, r)),
+            "the pointer on the third entry's picture left its name dark"
+        );
+        assert!(
+            runs(3, false).iter().all(|r| !accented(&on, r)),
+            "the pointer on the third entry lit the fourth's name"
+        );
+        // AND ON THE GLYPH THAT FILLS ITS PICTURE'S ROOM, which is a field of
+        // the cell's own: the name lights, and the glyph keeps its colour —
+        // that colour is a fact about the file (`glyph_colour_of`).
+        let (glyph_line, glyph_at) = sec
+            .content
+            .iter()
+            .enumerate()
+            .find_map(|(i, r)| {
+                r.fields
+                    .iter()
+                    .find(|f| f.hit == Hit::Name(2) && matches!(f.ink, Ink::Fills(_)))
+                    .map(|f| (sec.top + i, f.at))
+            })
+            .expect("the third entry has no picture, so a glyph fills its room");
+        let over = painted_at(&mut view, Some((glyph_line, glyph_at)));
+        assert!(
+            name.iter().all(|r| accented(&over, r)),
+            "the pointer on the third entry's glyph left its name dark"
+        );
+        assert!(
+            runs(2, true).iter().all(|r| !accented(&over, r)),
+            "the glyph that fills the picture's room lit under the pointer"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

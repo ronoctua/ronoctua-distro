@@ -208,15 +208,23 @@ avaliação; estas coisas não:
 
 - **Câmera MIPI atrás do libcamera** (muitos laptops novos com sensor Intel IPU): ela não é um nó
   V4L2 de captura comum e não aparece. Acaba quando uma dessas é fonte, provada numa máquina que a
-  tem. Médio.
+  tem; uma ponte pelo nó libcamera do PipeWire passaria pelo `ronoctua.camera.pipewireCameras`,
+  desligado por causa da luz (`docs/ARCHITECTURE.md`, "A câmera e o estúdio"). Médio.
 - **Câmera só multiplanar não grava.** A varredura lê os formatos dela (`VIDEO_CAPTURE_MPLANE`), e
   tamanhos e taxas aparecem na vista ao lado da frase `camera-about-cannot-stream`; quem não a abre
   é a entrada V4L2 do ffmpeg, que só fala plano único. Acaba com a mesma ponte do item de cima (o
   libcamera, ou um `v4l2-relayd` declarado). Médio.
-- **A luz da câmera ao entrar na sessão instalada não foi medida.** O rodapé e o estúdio não abrem
-  mais nenhum nó ao subir (`camera-vm`), mas o monitor V4L2 do WirePlumber da sessão pode abrir cada
-  câmera para perguntar o que ela é. Acaba com o `inotifywait -m -e open /dev/video*` num login da
-  `.#vm -- --cameras` e, se ele abrir, com a decisão do dono sobre o monitor. Pequeno.
+- **O `v4l_id` do udev abre cada câmera a cada login.** No instante em que o logind abre a sessão,
+  o udev processa um `change` em cada nó de vídeo, e a regra `60-persistent-v4l.rules` roda o
+  `v4l_id`, que abre o nó para um `QUERYCAP` (o `camera-vm` mede uma abertura por nó, e a aceita só
+  contada contra os eventos que o udev processou depois de o vigia estar no lugar). Se esse
+  `QUERYCAP` acende a luz de uma webcam UVC não foi medido: a VM não tem uma. Acaba com a medida numa
+  câmera de verdade e, se acender, com a decisão do dono sobre a regra, que também dá as propriedades
+  `ID_V4L_*` que outros leem. Pequeno.
+- **Um Flatpak que só lê câmera pelo portal não vê nenhuma, e nada na tela diz por quê.** Com
+  `ronoctua.camera.pipewireCameras` desligado (o padrão, por causa da luz), o portal de câmera
+  responde que não há câmera, e o programa diz isso ou fica calado. A central de programas, na ficha
+  de um Flatpak, ou os ajustes da câmera poderiam dizer o motivo. Pequeno.
 - **O recuo para `wlr-screencopy` nunca rodou contra um compositor de verdade.** Ele existe
   (`ronoctua-studio`, `screen.rs`) e a conversão de pixels é testada, mas o pinado anuncia o
   `ext-image-copy-capture-v1`, então só outro compositor o exercita. Pequeno.
@@ -1107,6 +1115,52 @@ frase da página dos pertences, nunca resolvido por ela:
 - acabou quando: o dono decidir se os dois somem (um pacote do Emacs sem `share/applications` no
   `services.emacs.package`) ou ficam, e o `distro-apps-are-registered` continuar verde
 
+### O daemon do Emacs cai com o compositor em que desenhou · decisão do dono, e pequeno depois
+
+O Emacs é o pure-GTK (`emacs30-pgtk`), e um Emacs GTK não solta um display em que abriu um quadro:
+quando o compositor acaba sozinho (`s q q`, uma queda dele, o fim de um `.#dev` em que um `et` de
+um terminal do laço desenhou), o daemon sai pelo `_exit(1)` do GDK, que pula o `kill-emacs`
+inteiro. Perdem-se as edições desde o último auto-save, o que o `kill-emacs-hook` gravaria
+(savehist, recentf, bookmarks, desktop-save-mode), os buffers de processo (shell, compilação,
+TRAMP) e a pergunta sobre os buffers não salvos; o `Restart=always` o traz de volta vazio no mesmo
+segundo. O Lucid (`emacs30`) sobreviveu ao mesmo fim com o buffer intacto, mas não abre quadro a
+partir da sessão (o item abaixo) e só desenharia pelo XWayland. O fim do gerente do usuário
+(desligar, reiniciar) não perde nada disso: a unidade para antes do compositor. Medido no
+`tests/emacs-vm.nix` (a tabela está no `ARCHITECTURE.md`, seção do Emacs).
+
+- acabou quando: o dono decidir se o preço fica ou qual saída toma — o Lucid com o display do
+  XWayland exportado pela sessão, ou outra —, e o `emacs-vm` segurar a decisão.
+
+### Um programa X11 aberto pelo rodapé não acha o XWayland · médio
+
+A linha da sessão (`scroll.nix`) importa o `WAYLAND_DISPLAY` e nunca o `DISPLAY`, e o rodapé passa
+o próprio ambiente a tudo o que abre (`foreign::start_in_scope`, cuja docstring diz que um programa
+X11 abre como um Wayland). Medido no palco do `emacs-vm` com o `emacsclient` do build X11: disparado
+como o rodapé dispara, saiu com 1 sem janela; com `DISPLAY=:0` à mão, abriu pelo XWayland em 1,2 s.
+O `x11-vm` dá o `DISPLAY` ao programa à mão, e por isso não vê a falta.
+
+- acabou quando: a sessão exportar o display do XWayland (ou o rodapé o der a quem abre) e um teste
+  de VM abrir um programa só-X11 com o ambiente da sessão.
+
+### O painel de memória chama um programa embrulhado pelo nome do embrulho · pequeno, e caro de compilar
+
+O `ronoctua-memory` nomeia cada processo pelo `comm` (`scan.rs`, `scan::ram`), e é esse nome que o
+painel de memória (`LEADER s m`) e o console de resgate mostram. Um programa que o nixpkgs embrulha
+(`makeWrapper`) roda um binário escondido, `.<nome>-wrapped`, e o `comm` é o nome dele cortado em 15
+bytes: o daemon do Emacs aparece como `.emacs-30.2-wra`, e não `emacs` (medido no palco do
+`emacs-vm`). Vale para todo programa embrulhado da máquina, não só para o Emacs.
+
+- o conserto: quando o `comm` começa com `.` e é o começo do nome do binário do `exe` terminado em
+  `-wrapped`, usar o último pedaço do `argv[0]` (`/proc/<pid>/cmdline`), que o embrulho preserva com
+  `--inherit-argv0` — a vigia do Emacs já o lê assim (`ronoctua-memory/src/emacs.rs`); uma leitura de
+  `cmdline` a mais só por processo embrulhado.
+- o custo: medido com o `.#rebuild-cost` (um byte a mais no `scan.rs`), 346 de 2 323 entradas,
+  ~3 778 s de trabalho e 228 s no caminho crítico; sete programas religados, o `ronoctua-shell`, o
+  cérebro e o resgate entre eles, e os testes de 56 crates de novo. Por isso não entrou na leva do
+  pgtk, que não toca Rust.
+- acabou quando: um teste do `scan` com um `comm` cortado e um `argv[0]` der o nome de quem chamou,
+  e o painel mostrar `emacs` para o daemon numa VM.
+
 ### O apk do F-Droid é fixado pelo que chegou, não pelo índice assinado · pequeno
 
 O `nix run .#distro-pins` fixa o hash do apk que baixou por HTTPS da versão que o F-Droid sugere;
@@ -1680,18 +1734,11 @@ cada passo deixou por fazer, por assunto.
   false`. A primeira atualização depois de instalar que muda o código de um crate compila tudo o que
   está abaixo dos programas que mudaram — se mudou o shell, toda lib abaixo dele. Levar o
   `rust.release.keep` (~1,95 GiB) na semente custaria isso no ISO: decisão do dono.
-- **`metrics` não diz os núcleos**: o `peak-kib` de uma unidade pesada depende do `$NIX_BUILD_CORES`
-  com que foi construída — a biblioteca de release do rodapé, 2 279 MiB a um núcleo e 1 534 sozinha
-  a doze —, e por isso uma pesada nunca é rebaixada pelo `--write` do `.#rust-peaks`. Gravar `cores`
-  ao lado (`rust-unit.py`) reconstrói toda unidade uma vez, e deixaria classificar a pesada pela
-  medida certa.
-- **As duas pesadas fecham o release sozinhas** (65 s a biblioteca do rodapé, de um fio só, e 96 s o
-  link do shell, S1): uma terceira classe de ~2,75 GiB poria a biblioteca ao lado de outras unidades
-  (−~60 s num release), ao preço de medi-la a um núcleo e de menos médias de uma vez.
 - **`shellMiB`/`besideMiB` são do shell de um crate só** (o harness e o programa de release a 1, 3 e
-  6 núcleos, 2026-10-15). As pesadas de agora (`nix/rust/unit-classes.json`) são o programa de
-  release do shell (3,8 GiB a oito núcleos) e a biblioteca de release do rodapé (2,3 GiB a um);
-  medi-las a 1, 3 e 6 núcleos daria a elas mais núcleos.
+  6 núcleos, 2026-10-15, pelo RSS do maior processo). A pesada de agora (`nix/rust/unit-classes.json`)
+  é só o programa de release do shell (4 121 MiB a doze núcleos, do que o orçamento paga no build
+  inteiro, M1); medi-lo a 1, 3 e 6 núcleos — o `metrics` agora diz os núcleos — daria a ele mais
+  núcleos.
   - acabou quando: os números do `nix/build-sizing.nix` são das pesadas de agora, e o `.#rust-peaks`
     passa.
 - **O teto do cgroup do root só é provado nas funções** (`sizing_cgroup_ceiling` sobre pastas
@@ -1703,17 +1750,24 @@ cada passo deixou por fazer, por assunto.
   mas um `nix build` à mão ainda as põe ao lado de um `rustc` (o teste de 20 ms do
   `ronoctua-broadcast` falhou assim uma vez).
   - acabou quando: o teste mede tempo de CPU.
-- **O `peak-kib` é do maior processo, não da unidade**: o `rust-unit.py` grava o `ru_maxrss` do
-  maior filho, e uma unidade que liga roda o `rustc` e o linker juntos. O harness de teste do
-  `ronoctua-shell-kit` mede 667 MiB de `peak-kib`; refeito sozinho a um núcleo, com o RSS de todo
-  processo do build somado a cada 0,1 s (2026-10-19), chegou a 790 MiB no pior instante (`rustc`
-  412 + `rust-lld` 340 + python 22 + o resto 16): 123 MiB (18 %) a mais que a classe vê, além da
-  folga de um décimo e 22 MiB além da fatia leve de 768. A soma conta duas vezes as páginas que os
-  processos dividem, então o pico de verdade fica entre os dois. Medir a árvore de processos
-  (somar o RSS dos filhos vivos, ou o `memory.peak` de um cgroup por build) muda o executor, que é
-  entrada de toda unidade: reconstrói todas uma vez, um build frio inteiro, e depois o `--write`
-  reclassifica.
-  - acabou quando: o `metrics` diz o pico da árvore, e o `.#rust-peaks` classifica por ele.
+- **As fatias leve e média foram simuladas sobre o RSS** (F5: o maior processo, com as páginas de
+  arquivo), e o pico de agora é do que o orçamento paga (M1): das 2 319 unidades a um núcleo, 2 055
+  picam até 256 MiB e 2 253 até 512, onde a fatia leve é de 768. Com doze processadores e ~8,3 GiB de
+  orçamento, a leve de 768 já põe dez de uma vez; uma menor só ganha onde o orçamento, e não os
+  processadores, limita. Simular de novo (a mesma simulação do F5, sobre os picos novos) diria se
+  outra fatia ganha.
+  - acabou quando: as fatias são as que a simulação sobre os picos de agora escolhe.
+- **A grande espera atrás das leves**: na edição do xdg, a biblioteca de release do rodapé fica pronta
+  aos ~167 s e começa 70 a 72 s depois (M1, com a medida do que o orçamento paga; 71 a 94 com a do
+  PSS), porque o `sized_units` começa a primeira pronta que cabe, na
+  ordem da cadeia em unidades, e ela, com só o programa do shell acima, vem atrás das leves de cadeia
+  mais alta; quando sobra a fatia dela, já não há mais leves. Uma simulação do agendador sobre o
+  plano, as unidades e os tempos de uma rodada reproduz a rodada a ±2 s, e nenhuma regra simples
+  ganhou em todo orçamento: começar primeiro a unidade de mais de um terço do orçamento e
+  guardar o lugar dela deu −30 s a 8 526 MiB, −12 a 8 366 e +79 a 4 096; a ordem pelo caminho
+  crítico em segundos (com os tempos de verdade) deu +71 s a 8 366.
+  - acabou quando: uma regra medida em mais de um orçamento põe a grande no build quando fica pronta
+    sem atrasar nenhum conjunto além do ruído.
 - **O `.#rebuild-cost -- <arquivo>` não simula um dado**: só reescreve fonte de crate, então num
   `.ftl` diz 0 entradas e numa semente recusa, onde a edição de verdade move 67 e 65 execuções de
   teste (F5). Sem argumento ele compara com o `HEAD`.
@@ -1788,6 +1842,51 @@ par muda o desenho das regiões que usam a forma que sai:
   `says_when_its_rows_change`, e para as outras o hospedeiro mede de novo depois do quadro; e
   `Doorway::resized` ao lado de `rows_changed`.
 - acabou quando: cada ideia tem uma forma só, e a matriz da linha de base sai igual.
+
+### O ponteiro acende o que o clique toma (H1) — o que ficou · pequeno cada
+
+Cada vista diz agora, linha a linha, o que o clique toma, e as duas portas acendem por essa resposta
+(`ARCHITECTURE.md`, "O ponteiro acende só o que o clique toma"). Ficou:
+
+- **A folha e o rascunho das notificações não giram pelo ponteiro.** O clique escolhe o botão ou a
+  linha, mas o valor só gira pelas setas: o `RET` ali não faz nada, e o segundo clique é o `RET`.
+  O invariante 19 pede "mudar valor". Decidir se o segundo clique gira para a frente (como o anel do
+  histórico do shell, cujo `RET` gira) e ensinar isso na dica. Acabou quando um segundo clique num
+  botão da folha muda o valor nas duas portas, com teste.
+- **Empilhado, a metade de um registro aberto que tem o teclado não se vê.** O divisor que a acende
+  só existe lado a lado; o clique que dá o teclado aos fatos acende, e a mudança só aparece na seta
+  seguinte. Acabou quando os dois arranjos mostram onde o teclado está.
+- **Oito janelas sem câmera**: histórico do shell, notificações, som, energia, ponteiros, Syncthing,
+  manuais e geo — a luz delas foi provada por teste, não por foto. Acabou quando
+  `photograph --door <cada uma>` desenha a janela.
+- **Bluetooth**: um dispositivo com `wake: None` e sem som desenha a metade de ajustes que nem o
+  ponteiro nem o `TAB` alcançam. Acabou quando a página só desenha o que se alcança.
+- **Acesso rápido**: a frase de recusa de uma entrada de playlist remota é descartada (a linha acende
+  e o clique não diz nada), e todo clique leva o foco ao detalhe, mesmo onde não toma nada. Acabou
+  quando a recusa é dita e o clique que não toma nada não move o foco.
+- **Gerenciador de arquivos**: o ar com marcas toma o clique (larga as marcas) e não acende — fica
+  para o dono decidir —, e o globo e uma linha de dispositivo sem estado de montagem divergem entre
+  `View::takes` e `View::click`. Acabou quando o dono decidir o ar e as duas respostas forem uma.
+- **Linhas quebradas de um ajuste** na segurança, nos agentes, nos pertences e nas configurações do
+  rodapé tomam o clique e acendem só na primeira linha: coerente, mas diferente do pendrive, dos
+  programas, da calculadora e do Incus, que acendem a frase inteira nas duas portas
+  (`Region::control_of` no rodapé, `Content::controls` ou a conta da própria janela). Acabou quando
+  toda frase quebrada que é um controle acende inteira nas duas portas.
+- **O custo por quadro do gerenciador de arquivos**: a luz agora dispõe a coluna sob o ponteiro uma
+  vez por quadro (`View::lit_at`), além da disposição de todas as colunas que a pintura já faz:
+  numa pasta de 10 000 entradas, ~83 µs contra ~100 µs da pintura (eram cinco disposições, ~410 µs;
+  `files::tests::the_pointers_cost_a_frame`, perfil `loop`). Acabou quando a luz ler as seções que a
+  pintura dispôs, ou quando `nix run .#bench` medir o quadro com o ponteiro sobre a listagem.
+- **Cliques que agem no primeiro, sob o ponteiro que abriu o que eles tocam** (fora o gerenciador de
+  arquivos e a calculadora, consertados): o menu da janela na modeline e a grade do quiosque
+  ("um clique roda": a grade não tem cursor — decisão a confirmar com o dono, porque um grupo
+  aberto por um clique troca a grade sob a mão e o clique duplo roda a célula que cair ali); a
+  página do rádio Bluetooth ("um clique é o `RET`", regra do dono — o clique duplo na linha do
+  rádio desliga o rádio); a pergunta da linha de vida, de abrir o relatório no Claude Code (o
+  `não` primeiro só por posição); a grade da leader, o lançador e o `M-x`, abertos por tecla. E o que aparece
+  sozinho e age num clique: o cartão de pareamento Bluetooth na faixa, com "aceitar" como primeira
+  ação, e os botões da faixa de contagem do cérebro. Acabou quando o dono decidir cada um e o que
+  ficar respeitar "o primeiro clique seleciona".
 
 ### O shell em crates — o que ficou · pequeno cada
 

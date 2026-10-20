@@ -1045,16 +1045,14 @@ fn draw_line(
         height: line_px,
         color: colour,
     };
-    // A LIST'S ROW LIGHTS ITS BAND under a hand; a strip's or a grid's CELL
-    // lights alone.
-    let one_per_line = matches!(
-        line.kind,
-        Kind::Pair(_) | Kind::Part(..) | Kind::Question(Some(_))
-    );
+    // EVERY CELL LIGHTS THE STRETCH A PRESS TAKES, the one the pointer reads
+    // (`Lay::target_at`): a list's line its whole width, a strip's or a
+    // grid's cell alone. A BAR DRAWN BESIDE takes its column from the band
+    // and the press alike — the door cuts every band at a track
+    // (`bars::Drawn::clip`), and the pointer reads the bar first.
     for (colour, t) in lit {
         if let Some(c) = line.cells.iter().find(|c| c.target == *t) {
-            let width = if one_per_line { room } else { c.width };
-            out.under.push(band(c.from, width, *colour));
+            out.under.push(band(c.from, c.width, *colour));
         }
     }
     match &line.kind {
@@ -2198,6 +2196,65 @@ mod tests {
             )),
         ] {
             assert_eq!(Target::of_code(t.code()), t, "{t:?}");
+        }
+    }
+
+    /// FAILS IF: a result's line lights a band that is not the stretch a
+    /// press there takes — its last cell taken and dark while no bar is
+    /// drawn, or a lit cell that takes nothing while one is — in either door,
+    /// which both draw and press through `draw` and `Lay::target_at`, and cut
+    /// every band at a track (`the-pointer-lights-what-the-click-takes`,
+    /// invariant 19).
+    #[test]
+    fn a_lines_band_is_where_a_press_takes_it() {
+        let t = texts();
+        let at = area(160, 30);
+        for many in [3usize, 80] {
+            let hits: Vec<Hit> = (0..many).map(file).collect();
+            let view = view_of(
+                "f",
+                vec![Section {
+                    id: SectionId::Files,
+                    filled: Filled::Hits(hits),
+                }],
+            );
+            let lay = Lay::of(&view, at, &t);
+            assert_eq!(lay.bar(view.offset).is_some(), many > 3, "{many} hits");
+            let first = lay.first(view.offset);
+            let mut pairs = 0;
+            for (k, line) in lay.lines.iter().enumerate().skip(first).take(lay.room()) {
+                let Kind::Pair(place) = line.kind else {
+                    continue;
+                };
+                pairs += 1;
+                let row = lay.results.top + u16::try_from(k - first).expect("a line");
+                let mut drawn = Drawing::default();
+                let lit = [(tokens::color::SURFACE_HOVER, Target::Hit(place))];
+                draw(&view, at, true, &lit, &t, &mut drawn);
+                // AS THE DOORS DO: no band runs under a bar the frame drew.
+                let mut bars = crate::bars::Drawn::default();
+                for track in &drawn.tracks {
+                    bars.record(*track);
+                }
+                bars.clip(&mut drawn.under);
+                let y = Area::y_of(row) + Area::line() / 2.0;
+                for column in 0..at.left + at.columns {
+                    let x = Area::x_of(column) + Area::cell() / 2.0;
+                    let taken = lay.target_at(&view, x, y, &t) == Some(Target::Hit(place));
+                    let banded = drawn.under.iter().any(|q| {
+                        q.color == tokens::color::SURFACE_HOVER
+                            && x >= q.x
+                            && x < q.x + q.width
+                            && y >= q.y
+                            && y < q.y + q.height
+                    });
+                    assert_eq!(
+                        banded, taken,
+                        "{many} hits, line {row}, column {column}: lit {banded}, taken {taken}"
+                    );
+                }
+            }
+            assert!(pairs > 0, "{many} hits drew no pair");
         }
     }
 }

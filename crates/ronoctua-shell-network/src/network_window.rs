@@ -652,6 +652,16 @@ impl Content for Network {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, and only that row lights
+    /// under the pointer — the view's one answer
+    /// ([`crate::network::Row::takes`]), which the footer's region gives too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::network::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -780,19 +790,22 @@ impl Content for Network {
         // THE LIST, WITHOUT ITS HOVER — drawn below, cut to the shelves.
         let fields: Vec<Vec<crate::fields::Field>> =
             rows.iter().map(|r| r.fields.clone()).collect();
+        let takes: Vec<bool> = rows.iter().map(crate::network::Row::takes).collect();
         let lit = canvas.lit;
         canvas.lit = &[];
-        crate::door::list::body(ui, canvas, &fields);
+        crate::door::list::body(ui, canvas, &fields, &takes, None);
         canvas.lit = lit;
         // EVERY CURSOR'S HOVER, in its own colour — see `ronoctua_shell_kit::seats`. A row
         // on the page stops at the PAGE's bar (`Room::band_width`); a row
         // inside a shelf is CUT to the shelf's box — the band says which line
         // of THAT list is under the pointer, and a band past the box would
         // paint over the page — and stops at the SHELF's bar while one is
-        // drawn: a scrollbar's column is its own while it is drawn.
+        // drawn: a scrollbar's column is its own while it is drawn. AND ONLY
+        // ON A ROW A CLICK TAKES (`Content::takes`, the same answer): a
+        // title, a sentence, a shelf's blank under the pointer is not lit.
         let barred = self.bands(ui, &rows);
         for &(color, row) in lit {
-            let Some(row) = row else {
+            let Some(row) = row.filter(|n| takes.get(*n).copied().unwrap_or(false)) else {
                 continue;
             };
             let shelf = shelves
@@ -1165,5 +1178,24 @@ mod tests {
             assert!(photographed(scene).is_ok(), "{scene}");
         }
         assert!(photographed("nothing").is_err());
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, a sentence, a shelf's blank — or leaves unlit
+    /// one it takes. THE LIGHT IS THE CLICK: every row clicked once, on a
+    /// window of its own, and lit exactly where something happened. Safe to
+    /// click through: `a_window`'s wire has no daemon (every order is
+    /// refused), and it has no tunnel thread and no sweep, so the second
+    /// click's `RET` reaches nothing of the machine. The footer's region has
+    /// its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let held = crate::door::held_to_the_click(a_window, crate::door::seen);
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

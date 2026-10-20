@@ -256,6 +256,34 @@ impl Line {
         Some((f.at, f.at + ronoctua_render::layout::width(&f.text) + 1))
     }
 
+    /// Whether this line goes on the control the line `above` it is a line
+    /// of: both take ONE press whole, the same over the same cells — a
+    /// sentence wrapped over several lines (the consent's row, a failed
+    /// fetch's), whose lines light together and take the one press. Lines of
+    /// a list that take each its own press (the answers kept, the units) are
+    /// each a control of its own.
+    #[must_use]
+    pub fn continues(&self, above: &Self) -> bool {
+        match (self.bands.as_slice(), above.bands.as_slice()) {
+            ([band], [over]) => band == over,
+            _ => false,
+        }
+    }
+
+    /// The line where the control line `n` of `lines` is a line of begins —
+    /// its first line ([`Line::continues`]), which the footer lights and
+    /// clicks for every line of it (`Region::control_of`); `n` itself for
+    /// every other line.
+    #[must_use]
+    pub fn control_of(lines: &[Self], n: usize) -> usize {
+        let goes_on = |k: usize| k > 0 && k < lines.len() && lines[k].continues(&lines[k - 1]);
+        let mut first = n;
+        while goes_on(first) {
+            first -= 1;
+        }
+        first
+    }
+
     /// A line that acts as a whole, `[from, to)`: every field and the gaps
     /// between them reach the same target.
     fn whole(mut self, target: Target, from: u16, to: u16) -> Self {
@@ -547,6 +575,19 @@ pub struct View {
     pub convert: Converter,
     /// The exchange rates.
     money: Money,
+    /// Whether a click picked the rates' row — the consent's, or a failed
+    /// fetch's — so the next click on it is its press (invariant 19).
+    ///
+    /// # Why the row needs a first click of its own
+    ///
+    /// Because the row comes up under the pointer that asked for it: a
+    /// category of the ring chosen by a click wants the rates, the consent's
+    /// lines are drawn above the ring, and the ring moves down under the
+    /// hand. The second press of a double click on a currency let the host
+    /// and fetched, with nobody choosing to. Every other view's consent row
+    /// is selected by the first click and pressed by the second; this was the
+    /// one whose first click let the host.
+    allow_picked: bool,
     /// Now, in milliseconds since the epoch — what `now` and `today` are, and
     /// the moment an answer is kept at. The door sets it before every press.
     now_ms: u64,
@@ -575,6 +616,7 @@ impl View {
             picked: None,
             convert: Converter::default(),
             money: Money::Unlooked,
+            allow_picked: false,
             now_ms: 0,
             zone,
             zoneinfo,
@@ -711,6 +753,7 @@ impl View {
 
     /// The consent was written: the rates are being fetched.
     pub fn allowed(&mut self) {
+        self.allow_picked = false;
         if !matches!(self.money, Money::Have(_)) {
             self.money = Money::Fetching;
         }
@@ -880,6 +923,8 @@ impl View {
     /// Rates wanted anew, once more: a category of the ring chosen, or a
     /// currency typed, after the last look found nothing to want.
     fn money_again(&mut self) {
+        // A ROW ASKED ANEW IS NOT THE ROW THAT WAS PICKED.
+        self.allow_picked = false;
         if matches!(self.money, Money::Asking | Money::Failed(_)) {
             self.money = Money::Unlooked;
         }
@@ -995,6 +1040,10 @@ impl View {
     /// the history or a unit of the list picks it; the second does what
     /// `RET` does (invariant 19).
     pub fn clicked(&mut self, target: Target, texts: &ronoctua_i18n::Texts) -> Errand {
+        // A CLICK ANYWHERE ELSE lets go of the rates' row picked.
+        if target != Target::Allow {
+            self.allow_picked = false;
+        }
         match target {
             Target::Mode(m) => {
                 self.go_to_mode(m, texts);
@@ -1031,7 +1080,16 @@ impl View {
                 }
             }
             Target::Swap => self.press(Press::Swap, texts),
-            Target::Allow => Errand::Allow,
+            // THE FIRST CLICK PICKS THE ROW, the second lets the host — see
+            // `View::allow_picked`.
+            Target::Allow if !self.allow_picked => {
+                self.allow_picked = true;
+                Errand::Nothing
+            }
+            Target::Allow => {
+                self.allow_picked = false;
+                Errand::Allow
+            }
         }
     }
 
@@ -1166,7 +1224,9 @@ impl View {
                         what: "calc-rates-for",
                     },
                     room,
-                    false,
+                    // PICKED BY A FIRST CLICK, it is drawn as a row the
+                    // cursor is on: the second click is its press.
+                    self.allow_picked,
                     texts,
                 )
                 .into_iter()
@@ -2250,6 +2310,55 @@ mod tests {
         assert_eq!(ronoctua_calc::format(back, '.', 4), "6.2137");
     }
 
+    /// FAILS IF: the first click on the rates' row lets the host — the row
+    /// comes up under the pointer that chose a currency, and a double click
+    /// let it — or the first click does not show the row picked, or a click
+    /// elsewhere between the two leaves it picked (invariant 19).
+    #[test]
+    fn the_rates_row_is_picked_by_one_click_and_let_by_the_second() {
+        let t = texts("en-GB");
+        let mut v = view();
+        typed(&mut v, "1 0 SPC U S D SPC i n SPC E U R", &t);
+        assert!(v.to_look('.'));
+        let _ = v.looked(
+            Probe {
+                cached: None,
+                allowed: false,
+            },
+            &t,
+        );
+        assert_eq!(v.money(), &Money::Asking);
+        let tone = |v: &View| {
+            v.top_lines(80, &t)
+                .into_iter()
+                .find(|l| l.targets.contains(&Some(Target::Allow)))
+                .and_then(|l| l.fields.first().map(|f| f.color))
+        };
+        let before = tone(&v);
+        assert_eq!(
+            v.clicked(Target::Allow, &t),
+            Errand::Nothing,
+            "the first click let the host"
+        );
+        assert_ne!(
+            tone(&v),
+            before,
+            "the first click did not show the row picked"
+        );
+        // A CLICK ELSEWHERE LETS GO of the row picked.
+        let _ = v.clicked(Target::Swap, &t);
+        assert_eq!(
+            v.clicked(Target::Allow, &t),
+            Errand::Nothing,
+            "a click elsewhere left the row picked"
+        );
+        assert_eq!(
+            v.clicked(Target::Allow, &t),
+            Errand::Allow,
+            "the second click let nothing"
+        );
+    }
+
     /// FAILS IF: a currency conversion asks the host before the person let
     /// it, or does not ask once they did — and stale rates are not drawn
     /// while fresh ones come.
@@ -2273,6 +2382,13 @@ mod tests {
             rows.iter()
                 .any(|l| l.targets.contains(&Some(Target::Allow))),
             "no row names the host"
+        );
+        // THE FIRST CLICK PICKS THE ROW, and lets nothing (invariant 19).
+        assert_eq!(v.clicked(Target::Allow, &t), Errand::Nothing);
+        assert_eq!(
+            v.money(),
+            &Money::Asking,
+            "the first click asked for the rates"
         );
         assert_eq!(v.clicked(Target::Allow, &t), Errand::Allow);
         v.allowed();

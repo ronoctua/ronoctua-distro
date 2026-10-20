@@ -30,7 +30,7 @@
 use std::cell::Cell;
 
 use crate::containers::{
-    BUILD, LOGIN, LOGIN_PASSWORD, PULL, Press, Target, View, answered, press_of, press_of_key,
+    BUILD, LOGIN, LOGIN_PASSWORD, PULL, Press, View, answered, press_of, press_of_key,
 };
 use crate::containers_feed::Feed;
 use crate::containers_open::{Open, carry_out, closed_press};
@@ -160,7 +160,7 @@ impl Region for ContainersRegion {
         lines
             .into_iter()
             .map(|l| Row {
-                takes: l.zones.iter().any(|z| z.target != Target::Nothing),
+                takes: l.takes(),
                 fields: l.fields,
             })
             .collect()
@@ -366,38 +366,73 @@ mod tests {
         }
     }
 
-    /// FAILS IF: the pointer lights over the strip something other than what
-    /// a click there takes — the whole line, or a stretch the click reads
-    /// otherwise — or lights anything with no cell under it.
+    /// The region over three containers listed — and, `opened`, with the
+    /// first one's detail open over the list: its title, its tabs, its
+    /// facts, headings and notes.
+    fn listed(opened: bool) -> ContainersRegion {
+        let mut r = region();
+        let mut w = way();
+        r.open.readings.listing = crate::containers::tests::readings().listing;
+        r.settle(&mut w);
+        if opened {
+            r.press(Press::Enter, &mut w);
+        }
+        r
+    }
+
+    /// FAILS IF: a resting pointer lights, at any cell of a line of the
+    /// footer's region — the strip of kinds, a row of the list, the detail's
+    /// title, a tab, a fact, a heading, a note, the air between them, the
+    /// margin before them — a cell where a click takes nothing, or leaves
+    /// unlit one where a click takes something; or lights anything with no
+    /// cell under it. THE LIGHT IS THE CLICK, CELL BY CELL, as the footer
+    /// lights a row (`Row::takes`, then `Region::lit`): every cell where a
+    /// stretch begins or ends clicked once, on a view of its own, and lit
+    /// exactly where something happened. The cursor's own place — the kind
+    /// shown, the tab shown, the line the cursor is on — lights all the
+    /// same, a click there having nothing left to do.
     #[test]
     fn the_pointer_lights_what_the_click_takes() {
+        use crate::containers::tests::{own_place, probes};
         let t = texts();
         let zone = ronoctua_files::when::Zone::utc();
         let seen = Seen {
             texts: &t,
             columns: 100,
-            lines: 20,
+            lines: 40,
             zone: &zone,
             photographing: true,
             lent: crate::region::Lent::none(),
         };
-        let r = region();
-        let lines = r.open.lines(100, LAYOUT, 0, &t);
-        let strip = lines
-            .iter()
-            .position(|l| l.zones.iter().any(|z| matches!(z.target, Target::Kind(_))))
-            .expect("the strip of kinds is drawn");
-        let zone_at = &lines[strip]
-            .zones
-            .iter()
-            .find(|z| matches!(z.target, Target::Kind(_)))
-            .expect("a kind");
-        assert_eq!(
-            r.lit(strip, Some(zone_at.from), &seen),
-            Lit::Cells(zone_at.from, zone_at.to),
-            "one kind of the strip, never the whole line"
-        );
-        assert_eq!(r.lit(strip, None, &seen), Lit::Nothing);
+        for opened in [false, true] {
+            let first = listed(opened);
+            let lines = first.open.lines(seen.columns, LAYOUT, 0, &t);
+            let rows = first.rows(&seen);
+            let cursor = first.cursor_in(&seen);
+            let (mut lit_once, mut dark_once) = (false, false);
+            let mut wrong = Vec::new();
+            for (n, line) in lines.iter().enumerate() {
+                assert_eq!(first.lit(n, None, &seen), Lit::Nothing, "line {n}");
+                for cell in probes(line) {
+                    let lit = rows[n].takes && first.lit(n, Some(cell), &seen) != Lit::Nothing;
+                    lit_once |= lit;
+                    dark_once |= !lit;
+                    let mut r = listed(opened);
+                    let mut w = way();
+                    let before = crate::region::seen(&r, &w.owed, &seen);
+                    r.clicked_at(n, Some(cell), &mut w);
+                    let did = crate::region::seen(&r, &w.owed, &seen) != before;
+                    let own = cursor == Some(n) || own_place(&first.open.view, line, cell);
+                    if lit != did && !(lit && own) {
+                        wrong.push(format!(
+                            "opened {opened}, line {n}, cell {cell}: lit {lit}, did {did}"
+                        ));
+                    }
+                }
+            }
+            assert!(lit_once && dark_once, "opened {opened}: all lit, or none");
+            assert!(wrong.is_empty(), "{wrong:#?}");
+        }
     }
 
     /// FAILS IF: an empty answer to one of the view's typed questions — an

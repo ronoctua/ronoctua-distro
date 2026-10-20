@@ -1691,8 +1691,10 @@ impl Player {
                 crate::region::Told {
                     row: Row {
                         fields: r.fields.clone(),
-                        // A TITLE WITH A CONTROL takes a click too.
-                        takes: !r.heading || !r.cells.is_empty(),
+                        // A TITLE WITH A CONTROL takes a click too — on the
+                        // control alone (`player_rows::takes`, the lighting's
+                        // own cells).
+                        takes: crate::player_rows::takes(&rows, n),
                     },
                     chips: r.chips.iter().map(|c| c.at).collect(),
                     caret: r.caret,

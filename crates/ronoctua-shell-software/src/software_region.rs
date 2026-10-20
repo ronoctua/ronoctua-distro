@@ -364,13 +364,19 @@ impl SoftwareRegion {
         let side = self.side();
         let rows = self.reading.rows(v, seen.columns, seen.texts);
         self.cursor.set(View::cursor(&rows));
+        // EACH ROW'S CONTROL, from the rows laid out once (`Told::control`).
+        let controls: Vec<usize> = (0..rows.len())
+            .map(|n| View::control_of(n, &rows))
+            .collect();
         rows.into_iter()
-            .map(|r| {
+            .zip(controls)
+            .map(|(r, control)| {
                 let ready = r.picture.as_ref().and_then(|p| {
                     self.reading
                         .pictures()
                         .and_then(|pictures| pictures.ready(p, side))
                 });
+                let takes = r.takes();
                 let mut fields = r.fields;
                 // THE GLYPH'S CELL IS WHERE THE PICTURE GOES, and the glyph
                 // leaves the row the moment the picture takes it.
@@ -381,11 +387,9 @@ impl SoftwareRegion {
                     })
                 });
                 Told {
-                    row: Row {
-                        fields,
-                        takes: !r.heading,
-                    },
+                    row: Row { fields, takes },
                     picture,
+                    control: Some(control),
                     ..Told::default()
                 }
             })
@@ -402,6 +406,15 @@ impl Region for SoftwareRegion {
     /// pictures.
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
         self.told_rows(seen).into_iter().map(|t| t.row).collect()
+    }
+
+    /// A CONSENT ROW IS ONE CONTROL: every line of it lights with the one
+    /// under the pointer, and a click on any is a click on its first
+    /// (`View::control_of`, the answer `View::clicked` lands by).
+    fn control_of(&self, row: usize, seen: &Seen<'_>) -> usize {
+        self.view.as_ref().map_or(row, |v| {
+            View::control_of(row, &self.reading.rows(v, seen.columns, seen.texts))
+        })
     }
 
     /// The rows as drawn, each with its picture once it is here.
@@ -963,5 +976,68 @@ mod tests {
         );
         job.stage = ronoctua_transfers::Stage::Running;
         job
+    }
+
+    /// The region open on the advanced page, with a consent row for every
+    /// catalogue whatever this machine's `consent.json` says: rows of every
+    /// kind — titles, the air between them, rings, facts, doors, and the
+    /// lines of a consent row.
+    fn advanced() -> SoftwareRegion {
+        let (mut r, _) = opened("software-open", Some("advanced"));
+        r.reading.readings.consents = ronoctua_consent::Consents::default();
+        r
+    }
+
+    /// FAILS IF: a resting pointer lights a row of the footer's region a
+    /// click takes nothing on — a title, the air between sections, a
+    /// sentence — or leaves unlit one it takes, a later line of a consent row
+    /// among them. THE LIGHT IS THE CLICK: every row clicked on a view of its
+    /// own, and lit exactly where something was seen to happen.
+    ///
+    /// ONE CLICK, AND NONE ON THE CURSOR'S CONTROL — as
+    /// `crate::region::held_to_the_click` clicks, but over the cursor's whole
+    /// control: a second click would be the row's `RET`, and a `RET` on a consent row lets its
+    /// catalogue's hosts in this machine's `consent.json`
+    /// (`consent_rows::allow`). One click is enough for the light: from any
+    /// other row it selects, and the cursor moving is seen; on the cursor's
+    /// own control it is already the `RET`.
+    #[test]
+    fn the_pointer_lights_what_the_click_takes() {
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let at = seen(&t, &zone);
+        let first = advanced();
+        // THE ROWS FIRST: they count the cursor the region answers.
+        let rows = first.rows(&at);
+        let cursor = first.cursor_in(&at).expect("a cursor");
+        let here = first.control_of(cursor, &at);
+        assert!(
+            (0..rows.len()).any(|n| first.control_of(n, &at) != n),
+            "no later line of a consent row: the fixture lost what it holds"
+        );
+        let held: Vec<crate::region::Held> = rows
+            .iter()
+            .enumerate()
+            .map(|(row, drawn)| {
+                let here = first.control_of(row, &at) == here;
+                let (mut r, mut w) = (advanced(), way());
+                let before = crate::region::seen(&r, &w.owed, &at);
+                if !here {
+                    r.clicked(row, &mut w);
+                }
+                crate::region::Held {
+                    row,
+                    lit: drawn.takes,
+                    did: crate::region::seen(&r, &w.owed, &at) != before,
+                    here,
+                }
+            })
+            .collect();
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

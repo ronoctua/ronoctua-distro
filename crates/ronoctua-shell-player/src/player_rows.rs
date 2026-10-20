@@ -103,8 +103,23 @@ pub enum Lighting {
 
 /// What line `n` of `rows` lights under the pointer — the ONE answer the
 /// window's bands and the footer's read.
+///
+/// A TITLE LIGHTS ITS CONTROLS ALONE, on the line they are drawn on: a title
+/// is no place the cursor stops, and a click on it takes only a control
+/// (`View::clicked_at`) — a title with none lights nothing. It lit whole, and
+/// a click beside its control did nothing.
 #[must_use]
 pub fn lighting(rows: &[Row], n: usize) -> Lighting {
+    let owner = Row::owner(rows, n);
+    if rows.get(owner).is_some_and(|r| r.heading) {
+        return Lighting::Cell(rows.get(n).map_or_else(Vec::new, |r| {
+            r.cells
+                .iter()
+                .filter(|c| !c.control || n == owner)
+                .map(|c| (c.from, c.width))
+                .collect()
+        }));
+    }
     match rows.get(n).map(|r| r.lit) {
         Some(Lit::From(column)) => Lighting::From(column),
         Some(Lit::Controls) => Lighting::Cell(
@@ -126,6 +141,19 @@ pub fn lighting(rows: &[Row], n: usize) -> Lighting {
                 Lighting::Cell(cells)
             }
         }
+    }
+}
+
+/// Whether a click takes something somewhere along line `n` of `rows` — the
+/// footer's `Row::takes`: a row the cursor stands on, or a title's line with
+/// a control on it; WHERE along it is [`lighting`]'s, the click's own cells.
+#[must_use]
+pub fn takes(rows: &[Row], n: usize) -> bool {
+    match lighting(rows, n) {
+        Lighting::Cell(cells) => {
+            !cells.is_empty() || !rows.get(Row::owner(rows, n)).is_some_and(|r| r.heading)
+        }
+        Lighting::Whole | Lighting::From(_) => true,
     }
 }
 

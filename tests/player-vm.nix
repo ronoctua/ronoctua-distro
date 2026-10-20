@@ -314,13 +314,27 @@ pkgs.testers.runNixOSTest {
         assert after["id"] == before["id"] and after["kind"] == "set", (before, after)
         assert after["lanes"] == 4, after
         machine.sleep(6)
-        s = player({"ask": "look"})
-        other = next(l for l in s["lane_states"] if l["lane"] == 3)
+        # HELD, AND NOT ONE READING. A picture 40 ms or more out
+        # (`sync::STILL_MS`) is nudged back at a few per cent of the speed,
+        # and the position it reports moves a frame (33 ms) at a time, so a
+        # single reading taken mid-nudge says 67 ms of a lane being brought
+        # back: the same player binary read 33 on one VM and 67 on another
+        # that differed only in what else was in its store (2026-10-20).
+        # Held is: it comes back, and three readings in a row stay near.
+        deadline = time.time() + 20
+        near = 0
+        while True:
+            s = player({"ask": "look"})
+            other = next(l for l in s["lane_states"] if l["lane"] == 3)
+            print(f"lane 3 is {other['drift_ms']} ms from the film's sound")
+            near = near + 1 if abs(other["drift_ms"]) < 60 else 0
+            if near == 3 or time.time() > deadline:
+                break
+            machine.sleep(1)
         master = [l["lane"] for l in s["lane_states"] if l["master"]]
-        print(f"lane 3 is {other['drift_ms']} ms from the film's sound")
         assert other["status"]["status"] == "playing", other
         assert master == [2], f"the film's sound does not keep the time: {s['lane_states']}"
-        assert abs(other["drift_ms"]) < 60, f"lane 3 is {other['drift_ms']} ms away"
+        assert near == 3, f"lane 3 is {other['drift_ms']} ms away, and did not stay near"
         # `other.mp4` HAS NO SOUND: its sound lane says so, once it is loaded,
         # in a sentence of its own — never a silence that looks like playing.
         sound = next(l for l in s["lane_states"] if l["lane"] == 4)

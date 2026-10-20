@@ -437,6 +437,14 @@ impl Content for VideoMetricsWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stops on, every line of one, a shelf
+    /// of the grid — and only those light under the pointer: the view's one
+    /// answer (`View::takes`), which the footer's region gives too. Never a
+    /// title, a note, the air between sections or a line of a picture.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view.takes(&self.view_rows(ui))
+    }
+
     /// Where the cursor was when the rows were last built — the door asks
     /// this with no width, and the rows depend on one.
     fn cursor(&self) -> Option<usize> {
@@ -514,7 +522,8 @@ impl Content for VideoMetricsWindow {
         // `cursor()` without one.
         let fields: Vec<Vec<crate::fields::Field>> =
             rows.iter().map(|r| r.fields.clone()).collect();
-        body(ui, canvas, &rows, &fields, self.pointer_x);
+        let takes = self.view.takes(&rows);
+        body(ui, canvas, &rows, &fields, &takes, self.pointer_x);
         let first = ui.first_of_list();
         let room = ui.room_for_rows();
         let shown: Vec<&Row> = rows.iter().skip(ui.offset).take(room).collect();
@@ -581,13 +590,15 @@ impl Content for VideoMetricsWindow {
 }
 
 /// The rows under the header: their text, the hover of every pointer — a
-/// shelf's CELL on the grid, and no band on a line of a picture — and the
+/// shelf's CELL on the grid, a row of several lines whole, and nothing on a
+/// row a click takes nothing on (`takes`, the view's answer) — and the
 /// list's bar, recorded as its own column.
 fn body(
     ui: &mut Ui,
     canvas: &mut Canvas<'_>,
     rows: &[Row],
     fields: &[Vec<crate::fields::Field>],
+    takes: &[bool],
     pointer_x: Option<f64>,
 ) {
     let size = ronoctua_tokens::text::size();
@@ -617,13 +628,14 @@ fn body(
         ronoctua_tokens::metrics::cell_width(px),
         ronoctua_tokens::metrics::line_height(px),
     );
-    // EVERY POINTER'S HOVER, in its own colour. A line of a picture is a
-    // figure and lights nothing; a line of a shelf lights the CELL under the
-    // pointer, over the shelf's lines — a band across it would light seven
-    // videos to say the pointer is on one.
+    // EVERY POINTER'S HOVER, in its own colour, and only on a row a click
+    // takes: a title, a note, the air and a line of a picture light nothing.
+    // A line of a shelf lights the CELL under the pointer, over the shelf's
+    // lines — a band across it would light seven videos to say the pointer
+    // is on one.
     let mut plain: Vec<(ronoctua_tokens::Color, Option<usize>)> = Vec::new();
     for &(colour, at) in canvas.lit {
-        let Some(n) = at.filter(|n| *n < rows.len()) else {
+        let Some(n) = at.filter(|n| takes.get(*n).copied().unwrap_or(false)) else {
             continue;
         };
         let owner = Row::owner(rows, n);
@@ -659,10 +671,14 @@ fn body(
             }
             continue;
         }
-        if !rows[n].thumbs.is_empty() || rows[n].heading {
+        if !rows[n].thumbs.is_empty() {
             continue;
         }
-        plain.push((colour, Some(n)));
+        // A ROW OF SEVERAL LINES LIGHTS WHOLE — a wrapped label, a video's
+        // title and what is said under it — as a click on any of its lines
+        // takes it whole (`Row::owner`), and as the footer lights it.
+        let lines = Row::lines_of(rows, owner);
+        plain.extend((owner..owner + lines).map(|line| (colour, Some(line))));
     }
     canvas.under.extend(crate::chrome::hover_bands(
         plain.into_iter(),
@@ -676,4 +692,114 @@ fn body(
         .under
         .extend(crate::chrome::list_bar(scroll, first, w, h));
     canvas.bar(crate::chrome::list_track(scroll, first, w, h));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The width the window is drawn at: ten videos make two shelves of the
+    /// grid, of several cells each.
+    const COLUMNS: u16 = 100;
+
+    /// A window over the fixture's readings, on `page` — on the grid when
+    /// `grid` — as a paint leaves it (its cursor's row measured). Its feed
+    /// answers on the spot (`Direct`), over a catalogue under `blocked`, a
+    /// FILE where its folder would be: what a click writes is refused and
+    /// said, nothing is made, and what it would ask of another process is
+    /// printed, never done.
+    fn a_window(blocked: &std::path::Path, page: &Page, grid: bool) -> (VideoMetricsWindow, Ui) {
+        let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
+        ui.columns = COLUMNS;
+        let catalogue = blocked.join(ronoctua_video_metrics::FILE);
+        let mut w = VideoMetricsWindow::detached(catalogue, page.clone(), String::new());
+        w.readings = crate::video_metrics::tests::readings();
+        if grid {
+            let rows = w.view_rows(&ui);
+            let _ = w
+                .view
+                .press(crate::video_metrics::Press::Layout, &rows, &w.readings);
+        }
+        let rows = w.view_rows(&ui);
+        w.cursor_row.set(Some(w.cursor_of(&rows)));
+        (w, ui)
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, a note, the air between sections, a line of a
+    /// picture — or leaves unlit one it takes, a line that continues a row
+    /// included; or a shelf of the grid takes nothing where a click on one
+    /// of its cells lands. THE LIGHT IS THE CLICK: every row clicked once,
+    /// on a window of its own, and lit exactly where something happened —
+    /// on every page the fixture fills, the list and the grid. The footer's
+    /// region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let blocked = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-window-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&blocked);
+        std::fs::write(&blocked, b"").expect("a file where the catalogue's folder would be");
+        let video = Page::Video(ronoctua_video_metrics::VideoId("video000000".to_owned()));
+        // THE CURSOR AS DRAWN is seen too: a first click moves it, and the
+        // door's `cursor` is measured only by a paint.
+        let witness = |w: &VideoMetricsWindow, ui: &Ui| {
+            (crate::door::seen(w, ui), w.cursor_of(&w.view_rows(ui)))
+        };
+        let mut shelves = 0;
+        let mut every = Vec::new();
+        for (page, grid) in [
+            (Page::Home, false),
+            (Page::Channels, false),
+            (Page::Rules, false),
+            (Page::Weights, false),
+            (Page::Videos, false),
+            (Page::Videos, true),
+            (video, false),
+        ] {
+            let fresh = || a_window(&blocked, &page, grid);
+            let (first, ui) = fresh();
+            let rows = first.view_rows(&ui);
+            let cursor = first.cursor();
+            let owner = |n: usize| Row::owner(&rows, n);
+            let held: Vec<crate::region::Held> = crate::door::held_to_the_click(fresh, witness)
+                .into_iter()
+                .map(|mut h| {
+                    // A ROW OF SEVERAL LINES IS THE CURSOR'S on every line:
+                    // a click on any of them is a click on it.
+                    h.here = h.here || cursor == Some(owner(h.row));
+                    // A SHELF IS CLICKED WHERE A CELL IS — the pointer over
+                    // it — and the generic click has no pointer: the air
+                    // before the first cell, which takes nothing and lights
+                    // nothing.
+                    let cells = rows.get(owner(h.row)).map(|o| o.cells.clone());
+                    if let Some(cells) = cells.filter(|c| !c.is_empty()) {
+                        shelves += 1;
+                        h.did = cells.iter().all(|c| {
+                            let (mut w, mut ui) = fresh();
+                            let cell = f64::from(crate::chrome::cell_width());
+                            w.pointer_x = Some(cell * (f64::from(ui.margin + c.from) + 0.5));
+                            let before = witness(&w, &ui);
+                            w.clicked(&mut ui, h.row);
+                            w.clicked(&mut ui, h.row);
+                            witness(&w, &ui) != before
+                        });
+                    }
+                    h
+                })
+                .collect();
+            every.push((format!("{page:?}, grid {grid}"), held));
+        }
+        let _ = std::fs::remove_file(&blocked);
+        for (what, held) in every {
+            assert!(
+                held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+                "{what}: no row lit, or every row lit: {held:?}"
+            );
+            let unheld = crate::region::unheld(&held);
+            assert!(unheld.is_empty(), "{what}: {unheld:?}");
+        }
+        assert!(shelves > 0, "the grid drew no shelf");
+    }
 }

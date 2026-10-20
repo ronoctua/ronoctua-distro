@@ -28,8 +28,35 @@ use std::path::PathBuf;
 use ronoctua_files::mode::Explanation;
 use ronoctua_render::image::{Area, Rgba};
 
-use crate::fields::{Axis, Pane, Panes, Room, Row, Section, Target};
+use crate::fields::{Axis, Hit, Pane, Panes, Room, Row, Section, Target};
 use crate::region::Doorway;
+
+/// EVERY ANSWER THE POINTER'S LIGHT ASKS OF ONE POINT ([`Sectioned::lit_at`]),
+/// from ONE layout of the column under it.
+///
+/// # Why one value, and not a question each
+///
+/// Because each question laid the column out again, and a frame asks all of
+/// them of the same point: the band ([`Sectioned::band_row`], which asked
+/// [`Sectioned::takes_at`] inside it), a grid cell's name
+/// ([`Sectioned::grid_lit_at`]) and, twice, whether the field under the
+/// pointer may light — five layouts of the column a frame for the hand
+/// resting on it, beside the one the paint itself makes. A door asks this
+/// once a frame and reads every answer off it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LitAt {
+    /// What a press there takes — `None` wherever the pointer lights
+    /// nothing ([`Sectioned::takes_at`]).
+    pub taken: Option<Target>,
+    /// The section and its own line the band lights
+    /// ([`Sectioned::band_row`]).
+    pub band: Option<(Pane, usize)>,
+    /// The section and its own line the field's accent lights — wider than
+    /// where a band may be: a grid, a picture's button.
+    pub line: Option<(Pane, usize)>,
+    /// In a grid, what the cell lights with ([`Sectioned::grid_lit_at`]).
+    pub grid: Option<Hit>,
+}
 
 /// THE QUESTIONS A REGION IN SECTIONS ANSWERS THE FOOTER — see the module.
 ///
@@ -86,6 +113,18 @@ pub trait Sectioned {
     fn band_row(&self, width: u16, room: usize, line: usize, cell: u16) -> Option<(Pane, usize)>;
     /// Whether a band may light that section — never over a picture.
     fn band_belongs(&self, pane: Pane) -> bool;
+    /// Whether a press at a point takes anything — the click's own table
+    /// read without running it, the ONE answer the band and the field under
+    /// the pointer are lit by, in both doors.
+    fn takes_at(&self, width: u16, room: usize, line: usize, cell: u16) -> bool;
+    /// In a grid, what the cell under a point lights with — its name, the
+    /// target its click takes — and `None` off a cell, or where the click
+    /// takes nothing: a grid has no band, so its cell's name is the light.
+    fn grid_lit_at(&self, width: u16, room: usize, line: usize, cell: u16) -> Option<Hit>;
+    /// The four answers above, and the target, from ONE layout of the
+    /// column under the point — what a frame asks once and reads all its
+    /// light from ([`LitAt`]).
+    fn lit_at(&self, width: u16, room: usize, line: usize, cell: u16) -> LitAt;
     /// The cells the band under the pointer covers, when they are not the
     /// section's whole width.
     fn band_cells_at(&self, width: u16, room: usize, line: usize, cell: u16) -> Option<(u16, u16)>;

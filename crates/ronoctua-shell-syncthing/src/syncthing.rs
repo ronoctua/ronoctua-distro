@@ -394,6 +394,19 @@ pub struct Row {
     pub disabled: bool,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on, a refusing one
+    /// included — and so whether a resting pointer lights it: ONE ANSWER for
+    /// both doors' light and click (the region's `Row::takes`, the window's
+    /// `Content::takes`, [`View::clicked`]). A daemon's complaint is not one,
+    /// though its first line carries a spot: the spot is its identity across
+    /// a rebuild, and the cursor never stands on it.
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// What the door has to do about a key.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Errand {
@@ -719,7 +732,7 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> bool {
-        let Some(row) = rows.get(n).filter(|r| !r.heading) else {
+        let Some(row) = rows.get(n).filter(|r| r.takes()) else {
             return false;
         };
         // A ROW OF THE PICKER is chosen there: its cursor, and the second

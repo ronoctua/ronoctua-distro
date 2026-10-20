@@ -528,13 +528,15 @@ class Report(unittest.TestCase):
     """A directory a run could have left: two variants, five rounds each,
     their cost files, metrics and layer logs."""
 
-    def unit_dir(self, root, name, seconds):
+    def unit_dir(self, root, name, seconds, peak_kib=1024, cores=1, fmt=pb.METRICS_FORMAT):
         d = os.path.join(root, "store", name)
         os.makedirs(d)
-        with open(os.path.join(d, "seconds"), "w") as f:
-            f.write(f"{seconds}\n")
-        with open(os.path.join(d, "peak-kib"), "w") as f:
-            f.write("1024\n")
+        said = {"seconds": seconds, "peak-kib": peak_kib}
+        if fmt is not None:
+            said.update({"format": fmt, "largest-kib": peak_kib, "cores": cores})
+        for name, value in said.items():
+            with open(os.path.join(d, name), "w") as f:
+                f.write(f"{value}\n")
         return d
 
     def bundle(self, root, letter, shell_bytes):
@@ -546,7 +548,7 @@ class Report(unittest.TestCase):
         return os.path.dirname(where)
 
     def variant(self, root, letter, lto, cgu, shell_lib, shell_bin, layout, shared=None, shell_bytes=1000,
-                layer_log=None, sizing=None):
+                layer_log=None, sizing=None, shell_peak=(4096, 11), fmt=pb.METRICS_FORMAT):
         shared = shared or {}
         units = [
             ("ronoctua-bench-layout-0.1.0", "bin", "ronoctua-render", ["rust-lib-ronoctua-xdg"], 1),
@@ -581,7 +583,9 @@ class Report(unittest.TestCase):
                     "kind": kind,
                     "crate": crate,
                     "deps": deps,
-                    "metrics": where if os.path.isdir(where) else self.unit_dir(root, f"{owner}-{name}", seconds),
+                    "metrics": where if os.path.isdir(where) else self.unit_dir(
+                        root, f"{owner}-{name}", seconds,
+                        *(shell_peak if crate == "ronoctua-shell" else (1024, 1)), fmt=fmt),
                 }
             )
         layer = os.path.join(root, "store", f"layer-{letter}")
@@ -648,6 +652,36 @@ class Report(unittest.TestCase):
                          sizing={"max-jobs": 2, "cores": 2})
             result = pb.report(os.path.join(root, "out"), ["A"])
             self.assertEqual(result["costs"]["A"]["sizing"], {"max-jobs": 2, "cores": 2})
+
+    def test_the_peak_says_its_cores_and_peaks_at_other_cores_are_not_compared(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as root:
+            self.variant(root, "A", "thin", 1, shell_lib=60, shell_bin=500, layout="0.0033", shell_peak=(4096 * 1024, 11))
+            self.variant(root, "C", "false", 16, shell_lib=120, shell_bin=10, layout="0.0034", shell_peak=(3072 * 1024, 7))
+            out = os.path.join(root, "out")
+            result = pb.report(out, ["A", "C"])
+            self.assertEqual((result["costs"]["A"]["peak-kib"], result["costs"]["A"]["peak-cores"]), (4096 * 1024, 11))
+            self.assertEqual(result["costs"]["C"]["peak-unit"], "ronoctua-shell-0.1.0")
+            with open(os.path.join(out, "report.md")) as f:
+                md = f.read()
+            self.assertIn("| peak (MiB, at cores) | 4096 at 11 | 3072 at 7 |", md)
+            self.assertIn("the peaks were measured at different cores (A: ronoctua-shell-0.1.0 at 11, "
+                          "C: ronoctua-shell-0.1.0 at 7)", md)
+        # At the same cores, nothing is said.
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as root:
+            self.variant(root, "A", "thin", 1, shell_lib=60, shell_bin=500, layout="0.0033")
+            self.variant(root, "C", "false", 16, shell_lib=120, shell_bin=10, layout="0.0034")
+            out = os.path.join(root, "out")
+            pb.report(out, ["A", "C"])
+            with open(os.path.join(out, "report.md")) as f:
+                self.assertNotIn("different cores", f.read())
+
+    def test_a_measurement_of_another_format_is_refused(self):
+        for fmt, said in ((None, "format 1"), (2, "format 2")):
+            with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as root:
+                self.variant(root, "A", "thin", 1, shell_lib=60, shell_bin=500, layout="0.0033", fmt=fmt)
+                with self.assertRaises(SystemExit) as refused:
+                    pb.report(os.path.join(root, "out"), ["A"])
+                self.assertIn(f"is a measurement of {said}, not {pb.METRICS_FORMAT}", str(refused.exception))
 
     def test_noise_in_a_shared_program_does_not_refuse_a_variant(self):
         with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as root:

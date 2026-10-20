@@ -546,6 +546,16 @@ impl Content for Display {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, and only that row lights
+    /// under the pointer — the view's one answer
+    /// ([`crate::display::Row::takes`]), which the footer's region gives too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::display::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.view.cursor())
     }
@@ -605,6 +615,15 @@ mod tests {
         all.iter().map(|w| (*w).to_owned()).collect()
     }
 
+    /// The window as its camera opens it, over two planted screens
+    /// (`photo::scene`): no reader thread and no watch, nothing of this
+    /// machine read.
+    fn a_window() -> (Display, Ui) {
+        let snapshot = crate::photo::scene("two").expect("the scene of two screens");
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        (photographed(snapshot), Ui::for_tests(texts))
+    }
+
     /// FAILS IF: a word of the screens' camera is lost, a walk is not taken,
     /// another door is taken for this one, or a reading of `display.json`
     /// other than the three is let through.
@@ -643,5 +662,21 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, the air between sections, a sentence — or
+    /// leaves unlit one it takes. THE LIGHT IS THE CLICK: every row clicked
+    /// once, on a window of its own, and lit exactly where something
+    /// happened. The footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let held = crate::door::held_to_the_click(a_window, crate::door::seen);
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
     }
 }

@@ -695,17 +695,97 @@ impl View {
     /// the rows describe whichever half has the keyboard, so it has to know
     /// before it builds them.
     pub fn aim(&mut self, cell: Option<u16>, columns: u16) {
-        if let Some(cell) = cell
+        if let Some(pane) = self.pane_at(cell, columns) {
+            self.pane = pane;
+        }
+    }
+
+    /// The half a pointer at `cell` is over — `None` where the line is not
+    /// two halves side by side (no pointer, too narrow, not a device's page
+    /// or one with nothing to turn, or a pairing question over it, whose
+    /// rows are whole), and the line is the rows' own.
+    fn pane_at(&self, cell: Option<u16>, columns: u16) -> Option<Pane> {
+        let cell = cell?;
+        (self.question.is_none()
             && two_columns(columns)
             && matches!(self.level, Level::Device(_))
-            && self.settings
-        {
-            self.pane = if cell >= split_at(columns) {
-                Pane::Settings
-            } else {
-                Pane::Facts
-            };
+            && self.settings)
+            .then(|| {
+                if cell >= split_at(columns) {
+                    Pane::Settings
+                } else {
+                    Pane::Facts
+                }
+            })
+    }
+
+    /// The cells of the line a pointer at `cell` lights, when the line is
+    /// two halves side by side: the half under it — a band across both
+    /// would say the two rows on it were one. `None` for a line of one row.
+    #[must_use]
+    pub fn half_at(&self, cell: Option<u16>, columns: u16) -> Option<(u16, u16)> {
+        Some(match self.pane_at(cell, columns)? {
+            Pane::Facts => (0, split_at(columns)),
+            Pane::Settings => (split_at(columns), columns),
+        })
+    }
+
+    /// Whether a click on row `n` at `cell` takes something — what
+    /// [`Self::clicked`] does there: aimed at the half under the cell, a row
+    /// one can stand on; never a heading, a sentence or the blank beside a
+    /// row of the other half. `None` for the cell is a caller with no
+    /// pointer, and the half the keyboard is in.
+    ///
+    /// ONE ANSWER FOR THE LIGHT AND THE CLICK, in both doors. The rows
+    /// describe the half the keyboard is in, so a row's own `heading` was the
+    /// wrong question on a device's page side by side, in both directions:
+    /// the pointer over the other half's control lit nothing, and over the
+    /// blank beside the keyboard's row it lit a line whose click there did
+    /// nothing.
+    #[must_use]
+    pub fn takes_at(
+        &self,
+        n: usize,
+        cell: Option<u16>,
+        scene: &Scene,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> bool {
+        let mut aimed = self.clone();
+        aimed.aim(cell, columns);
+        aimed
+            .rows(scene, columns, texts)
+            .get(n)
+            .is_some_and(|r| !r.heading)
+    }
+
+    /// Which rows a click takes somewhere along them — the region's
+    /// `Row::takes`, the window's `Content::takes`: a row whose half under
+    /// the pointer the band then lights ([`Self::takes_at`],
+    /// [`Self::half_at`]), side by side; the row itself, everywhere else.
+    #[must_use]
+    pub fn takes(&self, scene: &Scene, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<bool> {
+        let rows = self.rows(scene, columns, texts);
+        if self.half_at(Some(0), columns).is_none() {
+            return rows.iter().map(|r| !r.heading).collect();
         }
+        // EACH HALF'S ROWS, built once — as [`Self::takes_at`] builds them
+        // for a click there.
+        let halves: Vec<Vec<Row>> = [0, split_at(columns)]
+            .into_iter()
+            .map(|cell| {
+                let mut aimed = self.clone();
+                aimed.aim(Some(cell), columns);
+                aimed.rows(scene, columns, texts)
+            })
+            .collect();
+        (0..rows.len())
+            .map(|n| {
+                halves
+                    .iter()
+                    .any(|half| half.get(n).is_some_and(|r| !r.heading))
+            })
+            .collect()
     }
 
     /// Puts the cursor on row `n`, when it is a row one can stand on.

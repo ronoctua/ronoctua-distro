@@ -1409,6 +1409,18 @@ pub struct Row {
     pub section: Section,
 }
 
+impl Row {
+    /// Whether a click takes it — a row the cursor stands on — and so
+    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
+    /// and click (the region's `Row::takes`, the window's `Content::takes`,
+    /// [`View::clicked`]). A picker's row takes one by the same answer: it
+    /// carries its act exactly when it is no heading.
+    #[must_use]
+    pub const fn takes(&self) -> bool {
+        !self.heading
+    }
+}
+
 /// A key, already reduced to what the view cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Press {
@@ -1804,13 +1816,15 @@ impl View {
         // click its `RET`.
         if let (Some(h), Some(Act::Pick(t))) = (
             self.picking.as_mut(),
-            rows.get(n).and_then(|r| r.act.as_ref()),
+            rows.get(n)
+                .filter(|r| r.takes())
+                .and_then(|r| r.act.as_ref()),
         ) {
             let again = h.clicked(t.clone());
             self.place(n);
             return again;
         }
-        if rows.get(n).is_some_and(|r| !r.heading) {
+        if rows.get(n).is_some_and(Row::takes) {
             let again = self.cursor == n;
             self.place(n);
             return again;

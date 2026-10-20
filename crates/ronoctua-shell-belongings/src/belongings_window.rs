@@ -244,6 +244,17 @@ impl Content for BelongingsWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
+    /// A click takes a row the cursor stands on, and only that row lights
+    /// under the pointer — the view's one answer
+    /// ([`crate::belongings::Row::takes`]), which the footer's region gives
+    /// too.
+    fn takes(&self, ui: &Ui) -> Vec<bool> {
+        self.view_rows(ui)
+            .iter()
+            .map(crate::belongings::Row::takes)
+            .collect()
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.open.view.cursor())
     }
@@ -383,6 +394,28 @@ mod tests {
         );
         w.unanswered(&mut ui, line.id);
         assert!(w.open.view.asking().is_none());
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: the window's resting pointer lights a row a click takes
+    /// nothing on — a title, a sentence, the rest of a wrapped label — or
+    /// leaves unlit one it takes. THE LIGHT IS THE CLICK: every row clicked
+    /// once, on a window of its own over files laid again for it, and lit
+    /// exactly where something happened. The footer's region has its own.
+    #[test]
+    fn the_windows_pointer_lights_what_the_click_takes() {
+        let fresh = || {
+            let (w, ui, _) = a_window("pointer");
+            (w, ui)
+        };
+        let held = crate::door::held_to_the_click(fresh, crate::door::seen);
+        assert!(
+            held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
+            "no row lit, or every row lit: {held:?}"
+        );
+        let unheld = crate::region::unheld(&held);
+        assert!(unheld.is_empty(), "{unheld:?}");
+        let (_, _, places) = a_window("pointer");
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 }
