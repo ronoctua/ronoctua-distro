@@ -2696,6 +2696,7 @@ fn declared_machine() -> Snapshot {
     let distro = |id: &str, name: &str, essential: Option<&str>| DistroRow {
         app: DistroApp {
             id: id.into(),
+            name: None,
             source: ronoctua_software::person::declared::Source::Nix,
             desktop_ids: vec![format!("{id}.desktop")],
             essential: essential.map(str::to_owned),
@@ -2780,6 +2781,7 @@ fn declared_machine() -> Snapshot {
             distro("btop", "btop", None),
         ],
         unreadable: Vec::new(),
+        registry_unreadable: None,
         reported: true,
         android_pending: Vec::new(),
         leaving: Vec::new(),
@@ -2859,7 +2861,10 @@ fn declined_list_is_drawn() {
     walk_to(&mut v, &r, &Spot::Deed("bring-back"));
     assert_eq!(
         queued(&press(&mut v, Press::Enter, &r)),
-        vec![Order::Undecline { id: "gimp".into() }]
+        vec![Order::Undecline {
+            id: "gimp".into(),
+            everywhere: false
+        }]
     );
 }
 
@@ -3065,13 +3070,15 @@ fn a_distro_program_is_declined_here_or_everywhere_after_a_question() {
 /// A decline is always reachable from its page, whatever came of it.
 ///
 /// FAILS IF: a decline of other computers only does not also offer keeping
-/// the program uninstalled HERE (the launcher's removal asks exactly that);
-/// a decline the system refused because the distro needs the program, or
-/// one of a program the distro no longer carries, cannot be brought back
-/// from either door; or a program no longer declined here, which the
-/// system still leaves out, does not say it comes back with the next update.
+/// the program uninstalled HERE (the launcher's removal asks exactly that),
+/// or offers bringing it back from here — which would bring it back on the
+/// computers that declined it — instead of saying so; a decline the system
+/// refused because the distro needs the program, or one of a program the
+/// distro no longer carries, cannot be brought back from either door; or a
+/// program no longer declined here, which the system still leaves out, does
+/// not say it comes back with the next update.
 #[test]
-fn every_decline_can_be_brought_back_and_kept_here_too() {
+fn a_decline_is_brought_back_where_it_applies_and_kept_here_too() {
     let r = readings(Some(declared_machine()));
     let deeds = |level: Level, r: &Readings| -> Vec<Deed> {
         let mut v = open(Opening::Home, r);
@@ -3084,12 +3091,33 @@ fn every_decline_can_be_brought_back_and_kept_here_too() {
             })
             .collect()
     };
-    // DECLINED ON LAPTOP ONLY: here too, or everywhere, or back.
+    // DECLINED ON LAPTOP ONLY: here too, or everywhere — and laptop brings
+    // it back, never this computer alone; the page says so, and offers it
+    // back on every computer, after a question.
     let htop = deeds(Level::Distro("htop".into()), &r);
     assert!(
-        htop.iter()
-            .any(|d| matches!(d, Deed::BringBack { id, .. } if id == "htop"))
+        !htop.iter().any(|d| matches!(d, Deed::BringBack { .. })),
+        "another computer's decline is brought back from here"
     );
+    assert!(
+        htop.iter()
+            .any(|d| matches!(d, Deed::BringBackEverywhere { id, .. } if id == "htop"))
+    );
+    for t in every_language() {
+        let mut v = open(Opening::Home, &r);
+        v.level = Level::Distro("htop".into());
+        let said = drawn(&rows_of(&v, &r, &t));
+        let first: String = t
+            .t(crate::key::SOFTWARE_DECLARED_BACK_ELSEWHERE)
+            .chars()
+            .take(40)
+            .collect();
+        assert!(
+            said.contains(&first),
+            "{}: where it is brought back is not said:\n{said}",
+            t.language()
+        );
+    }
     assert!(htop.iter().any(|d| matches!(
         d,
         Deed::KeepUninstalled { id, everywhere: false, .. } if id == "htop"
@@ -3138,7 +3166,10 @@ fn every_decline_can_be_brought_back_and_kept_here_too() {
     walk_to(&mut v, &r, &Spot::Deed("bring-back"));
     assert_eq!(
         queued(&press(&mut v, Press::Enter, &r)),
-        vec![Order::Undecline { id: "zsh".into() }]
+        vec![Order::Undecline {
+            id: "zsh".into(),
+            everywhere: false
+        }]
     );
     // A PROGRAM THE DISTRO NO LONGER CARRIES: its page, and back.
     let mut v = open(Opening::Declined, &r);
@@ -3149,7 +3180,8 @@ fn every_decline_can_be_brought_back_and_kept_here_too() {
     assert_eq!(
         queued(&press(&mut v, Press::Enter, &r)),
         vec![Order::Undecline {
-            id: "old-thing".into()
+            id: "old-thing".into(),
+            everywhere: false
         }]
     );
     // NO LONGER DECLINED, STILL LEFT OUT: it comes back with the update.
@@ -3319,4 +3351,187 @@ fn every_shelf_and_every_end_has_words() {
             said_well(&t, body);
         }
     }
+}
+
+/// BRINGING BACK SAYS WHERE: the sheet's value says which of the two the
+/// press does — every computer at once for a decline of every computer,
+/// only here for one of a list, with how many others keep it out — in both
+/// languages, and the press queues the one order that does it.
+///
+/// FAILS IF: a decline of a list says it comes back on every computer, a
+/// decline of every computer says only here, the count of the others is
+/// not the list's less this computer, or the press does not bring it back.
+#[test]
+fn bringing_back_says_where() {
+    use ronoctua_software::declaration::{DeclineState, DeclinedRow};
+    use ronoctua_software::person::declined::Declining;
+    let mut snap = declared_machine();
+    let at = snap.declarations.declined[0].declining.edited_at.clone();
+    snap.declarations.declined.push(DeclinedRow {
+        declining: Declining {
+            id: "libreoffice".into(),
+            machines: Some(vec!["laptop".to_owned(), "noctua".to_owned()]),
+            edited_at: at.clone(),
+            edited_on: "laptop".into(),
+        },
+        name: "LibreOffice".into(),
+        state: DeclineState::Honoured,
+    });
+    snap.declarations.declined.push(DeclinedRow {
+        declining: Declining {
+            id: "onlyoffice".into(),
+            machines: Some(vec!["noctua".to_owned()]),
+            edited_at: at,
+            edited_on: "noctua".into(),
+        },
+        name: "ONLYOFFICE".into(),
+        state: DeclineState::Honoured,
+    });
+    let r = readings(Some(snap));
+    for t in every_language() {
+        let value = |id: &str| {
+            let mut v = open(Opening::Home, &r);
+            v.level = Level::Distro(id.into());
+            rows_of(&v, &r, &t)
+                .into_iter()
+                .find(|x| x.spot == Spot::Deed("bring-back"))
+                .map(|x| drawn(&[x]))
+                .unwrap_or_else(|| panic!("{id}: no way to bring it back"))
+        };
+        let everywhere = t.t(crate::key::SOFTWARE_DECLARED_BRING_BACK_VALUE);
+        let one_other = t.t_args(
+            crate::key::SOFTWARE_DECLARED_BRING_BACK_HERE,
+            &[("others", ronoctua_i18n::Arg::Number(1))],
+        );
+        let alone = t.t_args(
+            crate::key::SOFTWARE_DECLARED_BRING_BACK_HERE,
+            &[("others", ronoctua_i18n::Arg::Number(0))],
+        );
+        assert_ne!(one_other, alone, "{}: the count says nothing", t.language());
+        assert!(
+            value("gimp").contains(&everywhere),
+            "{}: {}",
+            t.language(),
+            value("gimp")
+        );
+        let libre = value("libreoffice");
+        assert!(libre.contains(&one_other), "{}: {libre}", t.language());
+        assert!(!libre.contains(&everywhere), "{}: {libre}", t.language());
+        let only = value("onlyoffice");
+        assert!(only.contains(&alone), "{}: {only}", t.language());
+        assert!(!only.contains(&one_other), "{}: {only}", t.language());
+    }
+    let mut v = open(Opening::Home, &r);
+    v.level = Level::Distro("libreoffice".into());
+    walk_to(&mut v, &r, &Spot::Deed("bring-back"));
+    assert_eq!(
+        queued(&press(&mut v, Press::Enter, &r)),
+        vec![Order::Undecline {
+            id: "libreoffice".into(),
+            everywhere: false
+        }]
+    );
+}
+
+/// BRINGING BACK EVERYWHERE ASKS FIRST: a decline of other computers only —
+/// one that no longer exists, maybe — comes back on every computer from
+/// here only after a question that says what the yes does, with "no" first
+/// and the cursor born on it, in both languages; "no" does nothing, and the
+/// yes queues the one order that takes the decline whole.
+#[test]
+fn bringing_back_everywhere_asks_first() {
+    let r = readings(Some(declared_machine()));
+    for t in every_language() {
+        let mut v = open(Opening::Home, &r);
+        v.level = Level::Distro("htop".into());
+        walk_to(&mut v, &r, &Spot::Deed("bring-back-everywhere"));
+        assert_eq!(press(&mut v, Press::Enter, &r), Errand::Nothing);
+        let rows = rows_of(&v, &r, &t);
+        let said = drawn(&rows);
+        for k in [
+            crate::key::SOFTWARE_DECLARED_BACK_EVERYWHERE_OTHERS,
+            crate::key::SOFTWARE_DECLARED_BACK_EVERYWHERE_HERE,
+        ] {
+            let first: String = t.t(k).chars().take(20).collect();
+            assert!(
+                said.contains(&first),
+                "{k} is not said in {}:\n{said}",
+                t.language()
+            );
+        }
+        let answers: Vec<&Row> = rows.iter().filter(|x| !x.heading).collect();
+        assert_eq!(answers[0].target, Target::Answer(Answer::No));
+        assert!(answers[0].focused, "the cursor was not born on no");
+        assert_eq!(answers.len(), 2, "no, and yes");
+    }
+    let mut v = open(Opening::Home, &r);
+    v.level = Level::Distro("htop".into());
+    walk_to(&mut v, &r, &Spot::Deed("bring-back-everywhere"));
+    press(&mut v, Press::Enter, &r);
+    assert_eq!(press(&mut v, Press::Enter, &r), Errand::Nothing, "no");
+    walk_to(&mut v, &r, &Spot::Deed("bring-back-everywhere"));
+    press(&mut v, Press::Enter, &r);
+    v.at = Spot::Answer(Answer::Yes);
+    assert_eq!(
+        queued(&press(&mut v, Press::Enter, &r)),
+        vec![Order::Undecline {
+            id: "htop".into(),
+            everywhere: true
+        }]
+    );
+}
+
+/// A REGISTRY THAT DOES NOT READ IS SAID: when this system's list of the
+/// distro's programs does not read, the declined level and a program's page
+/// say so in the danger tone, in both languages — never an empty list of the
+/// distro's programs with nothing said.
+#[test]
+fn a_registry_that_does_not_read_is_said() {
+    for (why, k) in [
+        (
+            ronoctua_software::person::Why::NotJson,
+            crate::key::SOFTWARE_DECLARED_REGISTRY_BROKEN,
+        ),
+        (
+            ronoctua_software::person::Why::Newer,
+            crate::key::SOFTWARE_DECLARED_REGISTRY_NEWER,
+        ),
+    ] {
+        let mut snap = declared_machine();
+        snap.declarations.distro.clear();
+        snap.declarations.registry_unreadable = Some(why);
+        let r = readings(Some(snap));
+        for t in every_language() {
+            for level in [Level::Declined, Level::Distro("gimp".into())] {
+                let mut v = open(Opening::Home, &r);
+                v.level = level.clone();
+                let rows = rows_of(&v, &r, &t);
+                let first: String = t.t(k).chars().take(30).collect();
+                let row = rows
+                    .iter()
+                    .find(|x| drawn(std::slice::from_ref(*x)).contains(&first))
+                    .unwrap_or_else(|| {
+                        panic!("{level:?}, {}: not said:\n{}", t.language(), drawn(&rows))
+                    });
+                assert!(
+                    row.fields
+                        .iter()
+                        .any(|f| f.color == tokens::color::STATE_ERROR),
+                    "not in the danger tone"
+                );
+            }
+        }
+    }
+    // A REGISTRY THAT READS says nothing of it.
+    let r = readings(Some(declared_machine()));
+    let t = en();
+    let mut v = open(Opening::Home, &r);
+    v.level = Level::Declined;
+    let said = drawn(&rows_of(&v, &r, &t));
+    let first: String = t
+        .t(crate::key::SOFTWARE_DECLARED_REGISTRY_BROKEN)
+        .chars()
+        .take(30)
+        .collect();
+    assert!(!said.contains(&first), "{said}");
 }

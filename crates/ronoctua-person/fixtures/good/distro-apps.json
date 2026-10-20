@@ -3,6 +3,7 @@
   "apps": [
     {
       "id": "gimp",
+      "name": "GNU Image Manipulation Program",
       "source": "nix",
       "desktop-ids": [
         "gimp.desktop"
@@ -14,6 +15,7 @@
     },
     {
       "id": "chrome",
+      "name": null,
       "source": "nix",
       "desktop-ids": [
         "google-chrome.desktop"

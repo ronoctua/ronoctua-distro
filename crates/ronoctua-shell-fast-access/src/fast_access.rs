@@ -2915,6 +2915,7 @@ mod tests {
             working_directory: None,
             startup_wm_class: None,
             key: ronoctua_apps::fold::fold(name),
+            fallback: true,
         }
     }
 

@@ -227,6 +227,19 @@ impl File {
         }
     }
 
+    /// Where it is in the person's mirror under `roots` — the declines by
+    /// the person's data's own spelling (`ronoctua_person::mirror_declined`),
+    /// the one the installer seeds them at.
+    #[must_use]
+    pub fn path(self, roots: &Roots) -> PathBuf {
+        match self {
+            Self::Declined => {
+                ronoctua_person::mirror_declined(&roots.state.join(ronoctua_xdg::name()))
+            }
+            Self::Declared => mirror(roots).join(self.rel()),
+        }
+    }
+
     /// The most root reads of it — and so the most it may be here.
     #[must_use]
     pub const fn most_bytes(self) -> u64 {
@@ -272,7 +285,7 @@ fn bytes_of(path: &Path, most: u64) -> Result<Option<Vec<u8>>, ronoctua_person::
 
 /// A document of the mirror: its default when it is not there yet.
 fn read_doc<T: Document + Default>(roots: &Roots, file: File) -> Result<T, ronoctua_person::Why> {
-    match bytes_of(&mirror(roots).join(file.rel()), file.most_bytes())? {
+    match bytes_of(&file.path(roots), file.most_bytes())? {
         None => Ok(T::default()),
         Some(bytes) => ronoctua_person::parse(&bytes).map_err(|r| r.why),
     }
@@ -298,8 +311,8 @@ pub fn read_declined(roots: &Roots) -> Result<Declined, ronoctua_person::Why> {
 
 /// Write a document of the mirror, whole and atomically, in its canonical
 /// form. The folder is made when it is missing.
-fn write_doc<T: Serialize>(mirror: &Path, file: File, doc: &T) -> Result<(), Failure> {
-    let path = mirror.join(file.rel());
+fn write_doc<T: Serialize>(roots: &Roots, file: File, doc: &T) -> Result<(), Failure> {
+    let path = file.path(roots);
     let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(Failure::trouble(format!(
             "{} is not a file",
@@ -346,7 +359,7 @@ fn change_doc<T: Document + Default>(
     file: File,
     mut what: impl FnMut(&mut T) -> Result<(), Failure>,
 ) -> Result<T, Failure> {
-    let path = mirror(roots).join(file.rel());
+    let path = file.path(roots);
     for _ in 0..CHANGE_TRIES {
         let before = bytes_of(&path, file.most_bytes()).map_err(|why| unreadable(file, why))?;
         let mut doc: T = match &before {
@@ -362,7 +375,7 @@ fn change_doc<T: Document + Default>(
         if bytes_of(&path, file.most_bytes()).ok() != Some(before) {
             continue;
         }
-        write_doc(&mirror(roots), file, &doc)?;
+        write_doc(roots, file, &doc)?;
         return Ok(doc);
     }
     Err(Failure::trouble(format!(
@@ -436,53 +449,6 @@ pub fn without(doc: &mut Declared, id: &str) -> bool {
     doc.apps.len() != before
 }
 
-/// Decline the distro's `id` on `machines` (`None`: every machine of the
-/// person). A decline already there takes the new machines too: declined
-/// here after being declined elsewhere is declined on both; declined
-/// everywhere already stays so. Answers whether anything changed.
-pub fn decline(doc: &mut Declined, id: &str, machines: Option<Vec<String>>, edit: &Edit) -> bool {
-    match doc.apps.iter_mut().find(|d| d.id == id) {
-        Some(d) => {
-            let joined = match (&d.machines, machines) {
-                (None, _) | (_, None) => None,
-                (Some(were), Some(more)) => {
-                    let mut all = were.clone();
-                    for m in more {
-                        if !all.contains(&m) {
-                            all.push(m);
-                        }
-                    }
-                    Some(all)
-                }
-            };
-            if joined == d.machines {
-                return false;
-            }
-            d.machines = joined;
-            d.edited_at = edit.at.clone();
-            d.edited_on.clone_from(&edit.on);
-            true
-        }
-        None => {
-            doc.apps.push(Declining {
-                id: id.to_owned(),
-                machines,
-                edited_at: edit.at.clone(),
-                edited_on: edit.on.clone(),
-            });
-            true
-        }
-    }
-}
-
-/// Bring the distro's `id` back: the decline goes, on every machine. Answers
-/// whether there was one.
-pub fn undecline(doc: &mut Declined, id: &str) -> bool {
-    let before = doc.apps.len();
-    doc.apps.retain(|d| d.id != id);
-    doc.apps.len() != before
-}
-
 /// Keep `png` among the mirror's pictures, named by its SHA-256, and answer
 /// that name — `None` for what root would refuse: not a PNG, or over its cap
 /// (a declaration without a picture is a declaration; one root refuses is
@@ -526,18 +492,27 @@ pub fn icon_path(roots: &Roots, sha: &str) -> PathBuf {
 /// One of Nix's reports, when it is there and reads; anything else is
 /// "nothing known" (and a line in the journal).
 fn report<T: Document>(roots: &Roots, name: &str) -> Option<T> {
+    report_read(roots, name).ok().flatten()
+}
+
+/// A report of the system, `None` when it is not there — or why it does
+/// not read: `NotJson` for one that cannot be read at all.
+fn report_read<T: Document>(roots: &Roots, name: &str) -> Result<Option<T>, ronoctua_person::Why> {
     let path = roots.system.reports.join(name);
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
             tracing::warn!(error = %e, file = %path.display(), "a report of the system could not be read");
-            return None;
+            return Err(ronoctua_person::Why::NotJson);
         }
     };
     ronoctua_person::parse(&bytes)
-        .map_err(|r| tracing::warn!(refusal = %r, file = %path.display(), "a report of the system does not read"))
-        .ok()
+        .map(Some)
+        .map_err(|r| {
+            tracing::warn!(refusal = %r, file = %path.display(), "a report of the system does not read");
+            r.why
+        })
 }
 
 /// `person-applied.json`: what this system applied, skipped, and did with
@@ -641,7 +616,8 @@ pub struct DeclinedRow {
 pub struct DistroRow {
     /// The registry's entry, as `distro-apps.json` has it.
     pub app: DistroApp,
-    /// Its name, from its launcher entry, else its id (data).
+    /// Its name: its launcher entry's, else the registry's, else its id
+    /// ([`distro_name`]; data).
     pub name: String,
 }
 
@@ -659,6 +635,13 @@ pub struct Declarations {
     pub distro: Vec<DistroRow>,
     /// The mirror's documents that do not read here.
     pub unreadable: Vec<Unreadable>,
+    /// Why this system's list of the distro's programs
+    /// (`/etc/ronoctua/distro-apps.json`) does not read, when it does not —
+    /// `NotJson` too for one that is not there: none of the distro's
+    /// programs is known then, and the screen says so instead of listing
+    /// none.
+    #[serde(default)]
+    pub registry_unreadable: Option<ronoctua_person::Why>,
     /// Whether this system says what it applied (`person-applied.json`): a
     /// machine whose system predates the declaration says nothing, and every
     /// entry waits.
@@ -828,6 +811,19 @@ pub fn entry_name(data_dirs: &[PathBuf], desktop_id: &str) -> Option<String> {
     })
 }
 
+/// What one of the distro's programs is called: the name its launcher
+/// entry gives where the entry is on this machine, else the registry's
+/// (`distro-apps.json`'s `name` — a program declined before it was ever
+/// installed has no entry here), else its id.
+#[must_use]
+pub fn distro_name(app: &DistroApp, data_dirs: &[PathBuf]) -> String {
+    app.desktop_ids
+        .iter()
+        .find_map(|id| entry_name(data_dirs, id))
+        .or_else(|| app.name.clone())
+        .unwrap_or_else(|| app.id.clone())
+}
+
 /// Everything, read from the files: the mirror, the system's reports and
 /// this crate's ledger.
 #[must_use]
@@ -859,16 +855,16 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
         });
         Declined::default()
     });
-    let distro: Vec<DistroRow> = distro_apps(roots)
-        .map(|d| d.apps)
-        .unwrap_or_default()
+    let (registry, registry_unreadable) = match report_read::<DistroApps>(roots, names::DISTRO_APPS)
+    {
+        Ok(Some(d)) => (d.apps, None),
+        Ok(None) => (Vec::new(), Some(ronoctua_person::Why::NotJson)),
+        Err(why) => (Vec::new(), Some(why)),
+    };
+    let distro: Vec<DistroRow> = registry
         .into_iter()
         .map(|app| {
-            let name = app
-                .desktop_ids
-                .iter()
-                .find_map(|id| entry_name(&roots.data_dirs, id))
-                .unwrap_or_else(|| app.id.clone());
+            let name = distro_name(&app, &roots.data_dirs);
             DistroRow { app, name }
         })
         .collect();
@@ -909,6 +905,7 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
         declined: declined_rows,
         distro,
         unreadable,
+        registry_unreadable,
         reported: applied.is_some(),
         android_pending,
         leaving,
@@ -923,11 +920,10 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
 /// reconciler's ledger (an Android app gone in).
 #[must_use]
 pub fn watched(roots: &Roots) -> Vec<PathBuf> {
-    let m = mirror(roots);
     let reports = &roots.system.reports;
     vec![
-        m.join(names::DECLARED),
-        m.join(names::DECLINED),
+        File::Declared.path(roots),
+        File::Declined.path(roots),
         reports.join(names::PERSON_APPLIED),
         reports.join(names::DISTRO_APPS),
         reports.join(names::DECLARED_ANDROID),
@@ -1195,51 +1191,6 @@ mod tests {
         );
     }
 
-    /// FAILS IF: a decline here after one elsewhere does not join the two, a
-    /// decline everywhere does not stay everywhere, an unchanged decline
-    /// counts as a change, or bringing back leaves anything.
-    #[test]
-    fn declining_joins_the_machines_and_bringing_back_removes_it() {
-        let edit = Edit {
-            at: stamp(),
-            on: "noctua".into(),
-        };
-        let mut doc = Declined::default();
-        assert!(decline(
-            &mut doc,
-            "gimp",
-            Some(vec!["laptop".into()]),
-            &edit
-        ));
-        assert!(decline(
-            &mut doc,
-            "gimp",
-            Some(vec!["noctua".into()]),
-            &edit
-        ));
-        assert_eq!(
-            doc.apps[0].machines,
-            Some(vec!["laptop".into(), "noctua".into()])
-        );
-        assert!(!decline(
-            &mut doc,
-            "gimp",
-            Some(vec!["noctua".into()]),
-            &edit
-        ));
-        assert!(decline(&mut doc, "gimp", None, &edit));
-        assert_eq!(doc.apps[0].machines, None);
-        assert!(!decline(
-            &mut doc,
-            "gimp",
-            Some(vec!["noctua".into()]),
-            &edit
-        ));
-        assert!(undecline(&mut doc, "gimp"));
-        assert!(!undecline(&mut doc, "gimp"));
-        assert!(doc.apps.is_empty());
-    }
-
     /// FAILS IF: an upsert moves an entry, appends a second of the same id,
     /// or calls a re-declaration of the same thing an edit.
     #[test]
@@ -1315,7 +1266,7 @@ mod tests {
                 // THE BELONGINGS LAND A MERGE: another computer declared fd.
                 let mut merged = read_declared(&roots).unwrap();
                 upsert(&mut merged, nix("fd", Some(vec!["laptop".into()])));
-                write_doc(&mirror(&roots), File::Declared, &merged).unwrap();
+                write_doc(&roots, File::Declared, &merged).unwrap();
             }
             upsert(d, nix("hello", None));
             Ok(())
@@ -1334,7 +1285,7 @@ mod tests {
             n += 1;
             let mut other = read_declared(&roots).unwrap();
             upsert(&mut other, nix(&format!("moved{n}"), None));
-            write_doc(&mirror(&roots), File::Declared, &other).unwrap();
+            write_doc(&roots, File::Declared, &other).unwrap();
             upsert(d, nix("never", None));
             Ok(())
         })
@@ -1355,7 +1306,7 @@ mod tests {
         let roots = Roots::under(&root);
         let mut doc = Declared::default();
         upsert(&mut doc, nix("ripgrep", None));
-        write_doc(&mirror(&roots), File::Declared, &doc).unwrap();
+        write_doc(&roots, File::Declared, &doc).unwrap();
         std::fs::create_dir_all(&roots.system.reports).unwrap();
         let mut r = report();
         r.applied.push("nix:hello".into());
@@ -1516,6 +1467,7 @@ mod tests {
             distro: vec![DistroRow {
                 app: DistroApp {
                     id: "gimp".into(),
+                    name: None,
                     source: ronoctua_person::declared::Source::Nix,
                     desktop_ids: vec!["gimp.desktop".into()],
                     essential: None,
@@ -1572,6 +1524,7 @@ mod tests {
             d.distro.push(DistroRow {
                 app: DistroApp {
                     id: id.into(),
+                    name: None,
                     source,
                     desktop_ids: vec![desktop.into()],
                     essential: None,
@@ -1674,31 +1627,43 @@ mod tests {
         let mut doc = Declared::default();
         upsert(&mut doc, nix("ripgrep", None));
         upsert(&mut doc, nix("gone", None));
-        write_doc(&mirror(&roots), File::Declared, &doc).unwrap();
+        write_doc(&roots, File::Declared, &doc).unwrap();
         let mut declined = Declined::default();
-        let edit = Edit {
-            at: stamp(),
-            on: "noctua".into(),
-        };
-        decline(&mut declined, "gimp", None, &edit);
-        write_doc(&mirror(&roots), File::Declined, &declined).unwrap();
+        declined.decline("gimp", None, &stamp(), "noctua");
+        declined.decline(
+            "libreoffice",
+            Some(vec!["noctua".into()]),
+            &stamp(),
+            "noctua",
+        );
+        declined.decline("htop", None, &stamp(), "noctua");
+        write_doc(&roots, File::Declined, &declined).unwrap();
         std::fs::create_dir_all(&roots.system.reports).unwrap();
         std::fs::write(
             roots.system.reports.join(names::PERSON_APPLIED),
             ronoctua_person::to_json(&report()),
         )
         .unwrap();
+        let app = |id: &str, name: Option<&str>, desktop: &str| DistroApp {
+            id: id.into(),
+            name: name.map(str::to_owned),
+            source: ronoctua_person::declared::Source::Nix,
+            desktop_ids: vec![desktop.into()],
+            essential: None,
+            group: "graphics".into(),
+            on_this_machine: true,
+            declined_here: true,
+        };
+        // GIMP's entry is here, and wins over the registry's name;
+        // LibreOffice was declined before it was ever installed: no entry,
+        // the registry's name; htop has neither, and is its id.
         let registry = DistroApps {
             format: 1,
-            apps: vec![DistroApp {
-                id: "gimp".into(),
-                source: ronoctua_person::declared::Source::Nix,
-                desktop_ids: vec!["gimp.desktop".into()],
-                essential: None,
-                group: "graphics".into(),
-                on_this_machine: true,
-                declined_here: true,
-            }],
+            apps: vec![
+                app("gimp", Some("GIMP"), "gimp.desktop"),
+                app("libreoffice", Some("LibreOffice"), "startcenter.desktop"),
+                app("htop", None, "htop.desktop"),
+            ],
         };
         std::fs::write(
             roots.system.reports.join(names::DISTRO_APPS),
@@ -1727,8 +1692,35 @@ mod tests {
         assert_eq!(d.declined[0].name, "GNU Image Manipulation Program");
         assert_eq!(d.declined[0].state, DeclineState::Honoured);
         assert_eq!(d.distro[0].name, "GNU Image Manipulation Program");
+        assert_eq!(d.declined[1].name, "LibreOffice", "the registry's name");
+        assert_eq!(d.declined[2].name, "htop", "no name at all: the id");
+        assert_eq!(d.registry_unreadable, None);
+        // THE SYSTEM'S LIST THAT DOES NOT READ is said, never an empty one:
+        // broken, newer, or not there.
+        let registry_file = roots.system.reports.join(names::DISTRO_APPS);
+        for (bytes, why) in [
+            (&b"{"[..], ronoctua_person::Why::NotJson),
+            (
+                &b"{\"format\": 9, \"apps\": []}"[..],
+                ronoctua_person::Why::Newer,
+            ),
+        ] {
+            std::fs::write(&registry_file, bytes).unwrap();
+            let d = read(&roots, "noctua");
+            assert_eq!(d.registry_unreadable, Some(why));
+            assert!(d.distro.is_empty());
+            assert_eq!(
+                d.declined[1].name, "libreoffice",
+                "named by nothing but its id"
+            );
+        }
+        std::fs::remove_file(&registry_file).unwrap();
+        assert_eq!(
+            read(&roots, "noctua").registry_unreadable,
+            Some(ronoctua_person::Why::NotJson)
+        );
         // A FILE THAT DOES NOT READ is said, and the rest is still read.
-        std::fs::write(mirror(&roots).join(names::DECLINED), b"{").unwrap();
+        std::fs::write(File::Declined.path(&roots), b"{").unwrap();
         let d = read(&roots, "noctua");
         assert_eq!(
             d.unreadable,

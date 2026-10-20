@@ -12,11 +12,11 @@
     },
     {
       "source": "nix",
-      "id": "nix:vscode",
+      "id": "nix:obsidian",
       "machines": null,
       "edited-at": "2026-10-05T12:00:02Z",
       "edited-on": "noctua-reference",
-      "attr": "vscode",
+      "attr": "obsidian",
       "unfree": true
     },
     {

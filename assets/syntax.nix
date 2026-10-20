@@ -42,14 +42,32 @@
 #
 # WHAT THE GENERATOR REFUSES
 # --------------------------
-# Thirteen things, each naming the offending `id` and the reason. The short
+# Seventeen things, each naming the offending `id` and the reason. The short
 # version: a type the database does not have; two languages claiming one type;
 # a claim on prose or on a container; a language nothing can ever select; a
 # `code` row with no words at all; a delimiter over four bytes or not ASCII; a
 # comment marker that also opens a string; a block comment with no close; a
 # word that is not a word; a word in two of the three lists; a repeated id or
-# fence tag; a value outside a closed vocabulary; and a table that came out
-# below its floors.
+# fence tag; a value outside a closed vocabulary; a field it does not know; a
+# `word-chars` that is not ASCII punctuation, or that holds the first
+# character of a comment, a string, an attribute or a character literal; a
+# `colon-is-constant` with no `:` among the word characters; a `char-prefix`
+# that is not a short ASCII marker, or that would hide a comment or a string;
+# and a table that came out below its floors.
+#
+# WHAT A WORD IS, AND THE TWO OPTIONAL FIELDS
+# -------------------------------------------
+# A word is letters, digits and `_`, `$` and `?` — unless a row says otherwise
+# in `word-chars`, the characters besides letters and digits ITS words are
+# made of. Lisp is why: `let*`, `multiple-value-bind`, `*standard-output*` and
+# `&optional` are one word each, and by the default rule `when-let` lit
+# `when`. A row's words are words by its own rule, and the generator checks
+# each against it.
+#
+# `char-prefix` opens a character literal: `#\` in Common Lisp, where `#\"` is
+# the quote and `#\;` the semicolon, opening neither a string nor a comment.
+# The literal is the prefix, one character, and the word characters after it
+# (`#\Space`).
 #
 # THE CLOSED VOCABULARIES
 # -----------------------
@@ -57,7 +75,11 @@
 #   numbers     = none | plain | c
 #   property    = none | colon | equals
 #   sniff-shape = none | json-object
-#   shapes      subset of { capitalised-is-type, screaming-is-constant }
+#   shapes      subset of { capitalised-is-type, screaming-is-constant,
+#                           colon-is-constant }
+#
+# `colon-is-constant`: a word that starts with `:` is a constant — a Lisp
+# keyword (`:test`), never a symbol of a package (`cl:car`).
 #
 # The Rust matches each of them exhaustively, and a check compares the two
 # vocabularies — so a value invented here is a build failure and not a row that
@@ -3434,19 +3456,196 @@
       ];
     }
 
-    # ONE ROW FOR THE FAMILY: Common Lisp, Emacs Lisp and Scheme share the comment,
-    # the string and the words that matter, and three rows would be three copies.
+    # COMMON LISP, A ROW OF ITS OWN (2026-10-20): the distro ships it in both
+    # profiles (`nix/common-lisp/`), and its words are not the family's.
+    # `word-chars` is the reader's constituents (the characters a symbol is
+    # made of), `#\` opens a character, a word that starts with `:` is a
+    # keyword, and a docstring reaches across lines. `numbers = "c"` for the
+    # exponent's sign (`1.5e-3`); a sign before a digit is a numeral's
+    # (`-1`), and a numeral that runs into a symbol's character is a symbol
+    # (`1+`). The keywords are the twenty-five special operators, the
+    # standard's defining forms, its control and binding macros, its
+    # `with-` macros, `declare` and the eight lambda-list keywords. Guessed
+    # by `(in-package `, which a file of anything else does not write.
+    {
+      id = "common-lisp";
+      label = "Common Lisp";
+      kind = "code";
+      mime = [ "text/x-common-lisp" ];
+      tags = [
+        "common-lisp"
+        "lisp"
+        "cl"
+      ];
+      guessable = true;
+      shebang = [
+        "sbcl"
+        "ccl"
+        "ecl"
+      ];
+      sniff = [ "(in-package " ];
+      sniff-shape = "none";
+      word-chars = "-_*+/<>=!?%&$.:@^~";
+      char-prefix = "#\\";
+      line-comment = [ ";" ];
+      block-comment = {
+        open = "#|";
+        close = "|#";
+        nests = true;
+      };
+      strings = [
+        {
+          open = "\"";
+          close = "\"";
+          escape = "\\";
+          spans-lines = true;
+          hashes = false;
+          max = null;
+        }
+      ];
+      interpolation = [ ];
+      attribute = null;
+      numbers = "c";
+      property = "none";
+      shapes = [ "colon-is-constant" ];
+      call = false;
+      fences = [ ];
+      keywords = [
+        "&allow-other-keys"
+        "&aux"
+        "&body"
+        "&environment"
+        "&key"
+        "&optional"
+        "&rest"
+        "&whole"
+        "and"
+        "assert"
+        "block"
+        "case"
+        "catch"
+        "ccase"
+        "check-type"
+        "cond"
+        "ctypecase"
+        "decf"
+        "declaim"
+        "declare"
+        "defclass"
+        "defconstant"
+        "defgeneric"
+        "define-compiler-macro"
+        "define-condition"
+        "define-method-combination"
+        "define-modify-macro"
+        "define-setf-expander"
+        "define-symbol-macro"
+        "defmacro"
+        "defmethod"
+        "defpackage"
+        "defparameter"
+        "defsetf"
+        "defstruct"
+        "deftype"
+        "defun"
+        "defvar"
+        "destructuring-bind"
+        "do"
+        "do*"
+        "do-all-symbols"
+        "do-external-symbols"
+        "do-symbols"
+        "dolist"
+        "dotimes"
+        "ecase"
+        "etypecase"
+        "eval-when"
+        "flet"
+        "function"
+        "go"
+        "handler-bind"
+        "handler-case"
+        "if"
+        "ignore-errors"
+        "in-package"
+        "incf"
+        "labels"
+        "lambda"
+        "let"
+        "let*"
+        "load-time-value"
+        "locally"
+        "loop"
+        "loop-finish"
+        "macrolet"
+        "multiple-value-bind"
+        "multiple-value-call"
+        "multiple-value-list"
+        "multiple-value-prog1"
+        "multiple-value-setq"
+        "nth-value"
+        "or"
+        "pop"
+        "prog"
+        "prog*"
+        "prog1"
+        "prog2"
+        "progn"
+        "progv"
+        "psetf"
+        "psetq"
+        "push"
+        "pushnew"
+        "quote"
+        "restart-bind"
+        "restart-case"
+        "return"
+        "return-from"
+        "rotatef"
+        "setf"
+        "setq"
+        "shiftf"
+        "symbol-macrolet"
+        "tagbody"
+        "the"
+        "throw"
+        "typecase"
+        "unless"
+        "unwind-protect"
+        "when"
+        "with-accessors"
+        "with-compilation-unit"
+        "with-condition-restarts"
+        "with-hash-table-iterator"
+        "with-input-from-string"
+        "with-open-file"
+        "with-open-stream"
+        "with-output-to-string"
+        "with-package-iterator"
+        "with-simple-restart"
+        "with-slots"
+        "with-standard-io-syntax"
+      ];
+      types = [ ];
+      constants = [
+        "nil"
+        "t"
+      ];
+    }
+
+    # ONE ROW FOR THE REST OF THE FAMILY: Emacs Lisp, Scheme and Clojure share
+    # the comment, the string and the words that matter, and three rows would
+    # be three copies. Their symbols are made of the same characters as Common
+    # Lisp's, so `when-let` is one word and does not light `when`.
     {
       id = "lisp";
       label = "Lisp";
       kind = "code";
       mime = [
-        "text/x-common-lisp"
         "text/x-emacs-lisp"
         "text/x-scheme"
       ];
       tags = [
-        "lisp"
         "elisp"
         "emacs-lisp"
         "scheme"
@@ -3459,6 +3658,7 @@
       shebang = [ ];
       sniff = [ ];
       sniff-shape = "none";
+      word-chars = "-_*+/<>=!?%&$.:@^~";
       line-comment = [ ";" ];
       block-comment = {
         open = "#|";

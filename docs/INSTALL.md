@@ -18,8 +18,10 @@ que guarda o repositório.
    flake, e sem eles o flake não avalia numa máquina que não tenha os 4,1 GB no disco.
 2. **Os pertences, sincronizados** (`LEADER s v`). O repositório privado deles é de onde a máquina
    nova restaura a sua configuração e, por padrão, também `~/.ssh` (menos a chave de acesso ao próprio
-   repositório), a configuração do git, `~/.gnupg`, `~/.shellrc.local` e a sua configuração do Emacs
-   em `~/.config/emacs` (sem os pacotes e caches, que se baixam de novo). Se o seu Emacs lê outro
+   repositório), a configuração do git, `~/.gnupg`, `~/.shellrc.local`, a sua configuração do VS Code
+   em `~/.config/Code/User` (com a lista das suas extensões, que a máquina nova oferece reinstalar) e
+   a sua configuração do Emacs em `~/.config/emacs` (sem os pacotes e caches, que se baixam de
+   novo). Se o seu Emacs lê outro
    lugar (`~/.emacs.d`, `~/.emacs`, ou um `$XDG_CONFIG_HOME` fora de `~/.config`), ele não viaja:
    mova a configuração para `~/.config/emacs` (e desfaça o `$XDG_CONFIG_HOME` que o desvia) — a
    página dos pertences diz qual lugar o Emacs lê. O que você marcou como "não guardar" não vai:
@@ -59,6 +61,7 @@ os dois, e a chave do repositório é adicionada no meio dela.
 | idioma | português ou inglês. É a primeira porque o resto é desenhado nela |
 | disco de destino | será apagado por inteiro |
 | instalação | `full` ou `minimal` — veja a seção abaixo |
+| programas opcionais | só na `full`: os programas pesados, cada um marcado ou não. O desmarcado fica de fora desta máquina — veja a seção abaixo |
 | layout do teclado | o nome do xkb: `br`, `us`, `gb`. É onde você vai digitar a frase-secreta |
 | variante do teclado | `abnt2`, `nodeadkeys`, ou nenhuma |
 | tecla de acentos | qual tecla compõe acentos. O padrão é o `Caps Lock` — e os dois Shifts juntos passam a ser o Caps Lock |
@@ -83,16 +86,27 @@ teclado não: o `nixos-facter` lê hardware, e layout é o que os seus dedos esp
 
 | | `full` | `minimal` |
 |---|---|---|
-| tamanho | ~29 GiB | ~11,8 GiB |
-| o que traz | tudo | o sistema e o trabalho nele (o toolchain do devshell, o rust e os agentes de código), sem os aplicativos |
-| fica de fora | — | Android Studio e Flutter, os outros compiladores (go, python, node, gcc), o Blender e o OrcaSlicer, o Chrome, o Emacs, os players de mídia e as variantes extras da fonte |
+| tamanho | ~37 GiB com tudo; ~35,5 com as escolhas padrão da instalação (sem o LibreOffice) | ~12,5 GiB |
+| o que traz | tudo | o sistema e o trabalho nele (o toolchain do devshell, o rust, o Common Lisp e os agentes de código), sem os aplicativos |
+| fica de fora | — | Android Studio e Flutter, os outros compiladores (go, python, node, gcc), o Blender e o OrcaSlicer, o ONLYOFFICE e o LibreOffice, os Crafting Apps, o Chrome, o Emacs, o VS Code, os players de mídia e as variantes extras da fonte |
 
 **A recomendada é a `full`**: ela é a que não pede uma segunda decisão depois.
+
+**Na `full`, a tela seguinte lista os programas pesados** — Android Studio, Flutter, o Android SDK, o
+VS Code, o Blender, o OrcaSlicer, o VLC, o ONLYOFFICE, o LibreOffice e as Crafting Apps —, cada um
+marcado ou não; o LibreOffice vem desmarcado. `Enter` (ou espaço) numa linha marca ou desmarca, e
+`Enter` em "Seguir com estes" continua. O desmarcado não é baixado agora, e nenhuma atualização o
+traz, **só nesta máquina**: ele vira uma recusa sua, válida só para o nome desta máquina e gravada
+no seu repositório — assinada e enviada antes de o disco ser tocado quando o repositório já tem algo;
+num repositório vazio, assinada pelo `init`, depois da instalação. Um programa marcado que esta
+máquina (pelo mesmo nome) deixou de fora antes volta; só uma recusa que os seus pertences têm para
+todas as máquinas continua valendo, e a instalação a diz. Para trazer um programa de volta depois, é
+a central de programas ("Trazer de volta"), nunca o `host.nix`.
 
 A `minimal` não é outra distro — compositor, rodapé, fonte, teclado, rede, impermanência e terminal
 continuam lá. O que muda é que ela **baixa uma fração** do que a `full` baixa, e é por isso que ela
 existe: quem trabalha NA distro reinstala com frequência, e quem só quer experimentar um aplicativo o
-instala nela em vez de baixar 29 GiB para chegar nele.
+instala nela em vez de baixar 35,5 GiB para chegar nele.
 
 **Ligar um grupo depois é uma linha** em `/etc/nixos/host.nix`, seguida do rebuild de
 [A pasta da máquina](#a-pasta-da-máquina) (`sudo systemctl start ronoctua-rescue-rebuild.service`):
@@ -100,11 +114,14 @@ instala nela em vez de baixar 29 GiB para chegar nele.
 ```
 ronoctua.browser.enable = true;    # o Chrome
 ronoctua.editor.emacs   = true;    # o Emacs, com o daemon (a configuração é a sua)
+ronoctua.editor.vscode  = true;    # o VS Code, sem telemetria (~0,91 GiB; a configuração é a sua)
 ronoctua.media.enable   = true;    # VLC, mpv, gstreamer (o ffmpeg vem sempre)
-ronoctua.dev.toolchains = true;    # rust, go, python, node, gcc
+ronoctua.dev.toolchains = true;    # go, python, node, gcc (o rust e o Common Lisp vêm sempre)
 ronoctua.dev.android    = true;    # Android Studio, SDK, Flutter
 ronoctua.dev.agents     = true;    # Claude Code e Codex
 ronoctua.workshop.enable = true;   # Blender e OrcaSlicer (que abre .stl, .3mf e .step)
+ronoctua.office.enable  = true;    # ONLYOFFICE e LibreOffice (~3 GiB)
+ronoctua.crafts.enable  = true;    # os Crafting Apps: PhotoCraft, VectorCraft, FilmCraft… (~2,2 GiB)
 ronoctua.fonts.full     = true;    # as 27 variantes da Iosevka
 ```
 
@@ -150,6 +167,20 @@ Na sua configuração, duas linhas diminuem o que uma queda leva:
 (auto-save-visited-mode 1)  ; grava os arquivos abertos sozinho, com o teclado parado
 (desktop-save-mode 1)       ; guarda de tempos em tempos quais buffers estão abertos, e os reabre
 ```
+
+### O VS Code
+
+É a build da Microsoft, no ambiente FHS do nixpkgs (onde o servidor de uma extensão feito para outras
+distros — o do rust-analyzer, por exemplo — roda), com a telemetria desligada por política
+(`/etc/vscode/policy.json`): a configuração aparece como gerenciada, e o seu `settings.json` não a
+religa. A sua configuração (`~/.config/Code/User`) viaja nos pertences; as extensões não, e sim a
+lista das do Marketplace, do perfil padrão (`ronoctua-extensions.json`, ao lado), que a máquina
+atualiza sozinha: uma extensão que você instala entra, uma que você desinstala sai — e sai das outras
+máquinas também, sem voltar pela cópia delas. Na máquina nova, a página dos pertences oferece
+reinstalar as que faltam, com o "não" primeiro, dizendo de quais hosts do Marketplace elas vêm; o
+"sim" libera esses hosts e as baixa, uma de cada vez, na fila de transferências. Enquanto faltar
+alguma, a página mantém uma linha que as instala (para tentar de novo depois de uma falha), e
+`ronoctua-vscode install`, num terminal, faz o mesmo quando os hosts já foram liberados.
 
 <!-- anchor: L03 -->
 
@@ -264,9 +295,12 @@ são os que construíram o sistema, e a atualização ainda não a passa ao rele
 
 Sem terminal (`ronoctua-install` lendo o ambiente), o acesso é o **arquivo** da chave ou do token
 (`RONOCTUA_INST_BELONGINGS_ACCESS`) e a senha vem em `RONOCTUA_INST_BELONGINGS_PASSPHRASE`; as mesmas
-conferências rodam antes do primeiro passo. Para ver as telas novas sem instalar nada:
-`ronoctua-install --show access` (ou `network`, `token`, `passphrase`, `passphrase-new`, `hop`,
-`review`).
+conferências rodam antes do primeiro passo. Os programas que a `full` deixa de fora vêm em
+`RONOCTUA_INST_LEFT_OUT`: os ids separados por vírgula (`blender,libreoffice`) ou `none`; sem ela,
+fica de fora o que a tela traz desmarcado, e o ensaio imprime, depois do plano, a escolha que seria
+assinada (os desmarcados e os marcados), sob o caminho em que é escrita. Para ver as telas novas sem instalar nada: `ronoctua-install --show access` (ou
+`network`, `token`, `passphrase`, `passphrase-new`, `hop`, `review`, `left-out`) — num terminal, no
+tamanho e nas cores dele.
 
 A instalação responde ao mouse num terminal que o mande (por SSH, por exemplo): um clique escolhe a
 linha de uma lista, um segundo a confirma, e as teclas da última linha (`Enter`, `Esc`, `Ctrl+C`) são

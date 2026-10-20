@@ -16,7 +16,7 @@
 //! # What is never walked
 //!
 //! `searchSkip` (`assets/cache.nix`: `.git`, `target`, `node_modules`,
-//! `.cache`, `/nix`) plus the person's `skip` — a bare word is a NAME
+//! `.cache`, `.qlot`, `/nix`) plus the person's `skip` — a bare word is a NAME
 //! anywhere, a word starting with `/` a PATH and everything under it (anything
 //! else is refused where it is read: `crate::settings::skip_entry`) — and,
 //! unless the person asked, hidden entries (a name that starts with `.`).

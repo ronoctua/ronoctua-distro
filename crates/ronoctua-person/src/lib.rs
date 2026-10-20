@@ -30,7 +30,8 @@
 //! JSON, kebab-case, `"format": 1`, and an unknown field refused — a newer
 //! machine's file is refused as [`Why::Newer`] before its fields are read, so
 //! an older one never rewrites what it does not understand. Every list
-//! carries an `id`, and two copies of a list meet through [`merge::merge_by_id`].
+//! carries an `id`, and two copies of a list meet through [`merge::merge_by_id`]
+//! — the declines machine by machine ([`merge::merge_declined`]).
 //!
 //! # Pure
 //!
@@ -51,6 +52,7 @@
 #![forbid(unsafe_code)]
 
 pub mod approve;
+pub mod choice;
 pub mod declared;
 pub mod declined;
 pub mod local;
@@ -299,6 +301,15 @@ pub fn to_json<T: Serialize>(value: &T) -> String {
     text
 }
 
+/// The person's declined programs in their mirror, under `ours` — our
+/// folder of the person's state root (`$XDG_STATE_HOME/ronoctua[-dev]`,
+/// whose name is `ronoctua-xdg`'s): `<ours>/person/software/declined.json`.
+/// The one spelling of that path, for whoever reads or seeds it.
+#[must_use]
+pub fn mirror_declined(ours: &std::path::Path) -> std::path::PathBuf {
+    ours.join(names::MIRROR).join(names::DECLINED)
+}
+
 /// Whether `host` may name a machine (lower-case RFC 1123 label).
 #[must_use]
 pub fn is_hostname(host: &str) -> bool {
@@ -332,6 +343,16 @@ mod tests {
             assert_eq!(Stamp::parse(bad), None, "{bad}");
         }
         assert!(Stamp::parse("2026-10-05T12:00:00Z") < Stamp::parse("2026-10-05T12:00:01Z"));
+    }
+
+    /// FAILS IF: the mirror's declined programs are spelled anywhere but
+    /// under the mirror, in the file the staged tree names.
+    #[test]
+    fn the_mirrors_declines_are_under_the_mirror() {
+        assert_eq!(
+            mirror_declined(std::path::Path::new("/h/.local/state/ronoctua")),
+            std::path::Path::new("/h/.local/state/ronoctua/person/software/declined.json")
+        );
     }
 
     #[test]

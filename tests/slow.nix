@@ -45,6 +45,11 @@
   # program ships — the same weight as the line above, which builds the
   # whole system the path is part of.
   "distro-apps-are-registered"
+  # What a file opens in, asked of BUILT systems: the full one's
+  # `system.path`, and three full machines' (both office suites, each one
+  # declined) — the weight of the line above, three times over.
+  "files-open-by-choice"
+  "documents-open-in-their-suite"
   # The ISO, measured at 3712 MiB. It has no ceiling any more — see the
   # check itself — but building the image is still building an installation.
   "iso-is-measured"

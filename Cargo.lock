@@ -3816,6 +3816,7 @@ dependencies = [
  "ronoctua-person",
  "ronoctua-pq",
  "ronoctua-store",
+ "ronoctua-vscode",
  "ronoctua-xdg",
  "rustix 1.1.4",
  "serde",
@@ -6034,6 +6035,17 @@ dependencies = [
  "ronoctua-xml",
  "ronoctua-ytdlp",
  "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ronoctua-vscode"
+version = "0.1.0"
+dependencies = [
+ "ronoctua-consent",
+ "ronoctua-store",
+ "ronoctua-xdg",
  "serde",
  "serde_json",
 ]

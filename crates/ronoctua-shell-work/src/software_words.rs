@@ -176,6 +176,7 @@ pub const fn refusal_key(why: Refusal) -> &'static str {
         Refusal::ApplyFailed => key::SOFTWARE_DECLARED_REFUSAL_APPLY_FAILED,
         Refusal::MachineUnnamed => key::SOFTWARE_DECLARED_REFUSAL_MACHINE_UNNAMED,
         Refusal::LeavesAtNextApply => key::SOFTWARE_DECLARED_REFUSAL_LEAVES_AT_NEXT_APPLY,
+        Refusal::DeclinedElsewhere => key::SOFTWARE_DECLARED_REFUSAL_DECLINED_ELSEWHERE,
     }
 }
 

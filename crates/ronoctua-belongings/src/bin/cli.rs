@@ -8,11 +8,17 @@
 //! verify-passphrase [--home <dir> --runtime <dir> [--repository <url> [--user <name>]]] [--json]
 //! probe --address <url> --credential <file> [--user <name>] [--known-hosts <file>] [--json]
 //! plain pull|push [--json]                              the plain part alone (the update, the machine)
-//! plain --repository <url> --keys <dir> --out <dir> [--user <name>] [--passphrase <file> --signer <file>] [--json]
+//! plain --repository <url> --keys <dir> --out <dir> [--user <name>] [--passphrase <file> --signer <file> [--decline <file>]] [--json]
 //! take --home <dir> --runtime <dir> --path <logical> --out <file> [--repository <url> [--user <name>]] [--json]
 //! sign [--json]                                         this machine's plain part signed here, no network
 //! forget [--everywhere] [--progress]                    this instance's kept identity; every one's
 //! ```
+//!
+//! `plain … --decline <file>` says the installer's choice for the machine it
+//! installs (`ronoctua_person::choice::Choice`: the programs left out, and
+//! those kept) in the repository's `declined.json`, signs it with the key the
+//! passphrase opens and pushes it before the copy — only with `--passphrase`:
+//! a decline is signed, or not made.
 //!
 //! `sign` with `--progress` is the queue's order (`Op::Sign`); without it, its
 //! last line is `signed <counter>`, `unchanged` or `refused <why>` — what the
@@ -49,22 +55,24 @@ use ronoctua_belongings::order::{Beat, Op};
 use ronoctua_belongings::places::Places;
 
 /// The usage, in English (invariant 18: a command line's help).
-const USAGE: &str = "usage: ronoctua-belongings <prepare|apply|abandon|keygen|rekey|compact|sync-plain|forget|restore|probe|init|verify-passphrase|sign> [--progress]
+const USAGE: &str = "usage: ronoctua-belongings <prepare|apply|abandon|keygen|rekey|compact|sync-plain|forget|restore|probe|init|verify-passphrase|sign|vscode-extensions> [--progress]
        ronoctua-belongings forget [--everywhere] [--progress]
        ronoctua-belongings restore --home <dir> --runtime <dir> --machine <host> [--repository <url> [--user <name>]] [--progress]
        ronoctua-belongings init [--home <dir> --runtime <dir> --machine <host> [--repository <url> [--user <name>]]] [--progress]
        ronoctua-belongings verify-passphrase [--home <dir> --runtime <dir> [--repository <url> [--user <name>]]] [--json]
        ronoctua-belongings probe --address <url> --credential <file> [--user <name>] [--known-hosts <file>] [--json]
        ronoctua-belongings plain pull|push [--json]
-       ronoctua-belongings plain --repository <url> --keys <dir> --out <dir> [--user <name>] [--passphrase <file> --signer <file>] [--json]
+       ronoctua-belongings plain --repository <url> --keys <dir> --out <dir> [--user <name>] [--passphrase <file> --signer <file> [--decline <file>]] [--json]
        ronoctua-belongings take --home <dir> --runtime <dir> --path <logical> --out <file> [--repository <url> [--user <name>]] [--json]
        ronoctua-belongings sign [--json]
 take writes ONE file of the sealed part at <file>, 0600 (the installer's, before nixos-install).
+plain --decline <file> (the installer's choice for one machine: the programs left out, and those kept) says it in the repository's declined.json, signs it with the key the passphrase opens and pushes it before copying.
 With --home and no --repository, <home>/.config/ronoctua/belongings.json must name the repository.
-forget takes this instance's kept identity; --everywhere, every instance's (the end of a session, a sleep).";
+forget takes this instance's kept identity; --everywhere, every instance's (the end of a session, a sleep).
+vscode-extensions installs the VS Code extensions of your list that are missing here (the yes to the offer).";
 
 /// The flags that take a value.
-const VALUED: [&str; 13] = [
+const VALUED: [&str; 14] = [
     "--home",
     "--runtime",
     "--address",
@@ -78,6 +86,7 @@ const VALUED: [&str; 13] = [
     "--path",
     "--passphrase",
     "--signer",
+    "--decline",
 ];
 
 /// A command line, read: its words, its switches and its flags' values.
@@ -211,6 +220,7 @@ fn main() -> ExitCode {
                 "--user",
                 "--passphrase",
                 "--signer",
+                "--decline",
             ]) =>
         {
             plain_out(&line)
@@ -346,15 +356,13 @@ fn plain_out(line: &Line) -> ExitCode {
     ) else {
         return usage();
     };
-    // THE PASSPHRASE AND WHERE ITS KEY GOES, together or not at all: a key
-    // opened and left nowhere would be a check the installer cannot pin.
-    let (passphrase, signer) = (line.path("--passphrase"), line.path("--signer"));
-    if passphrase.is_some() != signer.is_some() {
+    let Some(opening) = opening_of(line) else {
         return usage();
-    }
+    };
     let opened = engine::Opened {
-        passphrase: passphrase.as_deref(),
-        signer: signer.as_deref(),
+        passphrase: opening.passphrase.as_deref(),
+        signer: opening.signer.as_deref(),
+        choice: opening.choice.as_deref(),
     };
     match engine::plain_out(address, &keys, &out, line.value("--user"), opened) {
         Ok(report) => {
@@ -365,6 +373,34 @@ fn plain_out(line: &Line) -> ExitCode {
         }
         Err(r) => refused("plain", r.why, line.json),
     }
+}
+
+/// What `plain` opens, as files.
+#[derive(Debug, PartialEq, Eq)]
+struct Opening {
+    passphrase: Option<PathBuf>,
+    signer: Option<PathBuf>,
+    /// `--decline`: the installer's choice.
+    choice: Option<PathBuf>,
+}
+
+/// What `plain` opens, or `None` for a line that breaks a rule: the
+/// passphrase and where its key goes come together or not at all (a key
+/// opened and left nowhere would be a check the installer cannot pin), and
+/// a choice only with the passphrase — a decline is signed with the key the
+/// passphrase opens, or not made.
+fn opening_of(line: &Line) -> Option<Opening> {
+    let opening = Opening {
+        passphrase: line.path("--passphrase"),
+        signer: line.path("--signer"),
+        choice: line.path("--decline"),
+    };
+    if opening.passphrase.is_some() != opening.signer.is_some()
+        || (opening.choice.is_some() && opening.passphrase.is_none())
+    {
+        return None;
+    }
+    Some(opening)
 }
 
 /// `take --home <dir> --runtime <dir> --path <logical> --out <file>`: one
@@ -588,5 +624,55 @@ mod tests {
         );
         assert_eq!(named(Op::Init, &["init"]), Some(Named::default()));
         assert_eq!(named(Op::Prepare, &with(&[])), None, "a sync takes no home");
+    }
+
+    /// FAILS IF: `plain` takes declines without the passphrase whose key
+    /// signs them, a passphrase without where its key goes (or the other way
+    /// round), or loses one of the three files it names.
+    #[test]
+    fn a_decline_comes_only_with_the_passphrase() {
+        let opening = |args: &[&str]| {
+            let base = ["plain", "--repository", "git@example.org:s/b.git"];
+            line(&base.iter().chain(args).copied().collect::<Vec<_>>()).and_then(|l| opening_of(&l))
+        };
+        assert_eq!(
+            opening(&["--decline", "/run/i/declines.json"]),
+            None,
+            "a decline with no passphrase"
+        );
+        assert_eq!(
+            opening(&["--passphrase", "/run/i/p", "--decline", "/run/i/d"]),
+            None,
+            "a passphrase whose key goes nowhere"
+        );
+        assert_eq!(opening(&["--signer", "/run/i/s"]), None);
+        assert_eq!(
+            opening(&[
+                "--passphrase",
+                "/run/i/p",
+                "--signer",
+                "/run/i/s",
+                "--decline",
+                "/run/i/d"
+            ]),
+            Some(Opening {
+                passphrase: Some(PathBuf::from("/run/i/p")),
+                signer: Some(PathBuf::from("/run/i/s")),
+                choice: Some(PathBuf::from("/run/i/d")),
+            })
+        );
+        assert_eq!(
+            opening(&[]),
+            Some(Opening {
+                passphrase: None,
+                signer: None,
+                choice: None,
+            })
+        );
+        assert_eq!(
+            opening(&["--decline", "/a", "--decline", "/b"]),
+            None,
+            "declines named twice"
+        );
     }
 }

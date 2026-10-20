@@ -67,15 +67,27 @@ impl Drop for Held {
 /// [`Why::Busy`] when another run holds it; [`Why::Failed`] when the state
 /// folder or the file cannot be made.
 pub fn hold(places: &Places) -> Result<Held, Refusal> {
+    hold_at(&places.lock())
+}
+
+/// [`hold`], on another lock of the belongings' own folder — the install
+/// of VS Code's extensions has its own (`offers::extensions_lock`).
+///
+/// # Errors
+///
+/// As [`hold`].
+pub fn hold_at(lock: &std::path::Path) -> Result<Held, Refusal> {
     let failed = |_| Refusal::of(Why::Failed);
-    make_private_dir(&places.own()).map_err(failed)?;
+    if let Some(dir) = lock.parent() {
+        make_private_dir(dir).map_err(failed)?;
+    }
     let file = File::options()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .open(places.lock())
+        .open(lock)
         .map_err(failed)?;
     let until = Instant::now() + PATIENCE;
     loop {

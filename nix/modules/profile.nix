@@ -45,14 +45,27 @@
 #
 # ESTIMATED on 2026-10-05, after the devshell's toolchain and the coding
 # agents went into both profiles (the arithmetic is at the end of the table,
-# after the L15 anchor): `full` ~29 GiB, `minimal` ~11,8 GiB — the figures
-# `docs/INSTALL.md`'s table gives. Estimates and not measurements: neither
-# toplevel was built for them, and `docs/PENDING.md` keeps the measurement.
+# after the L15 anchor): `full` ~29 GiB, `minimal` ~11,8 GiB. MEASURED on
+# 2026-10-20, `nix path-info -S` of the two built toplevels: `full` 31,0 GiB
+# before the office and the Crafting Apps and 35,6 with them, `minimal`
+# 11,9 GiB (with Common Lisp and VS Code, below: ~37 and ~12,5; ~35,5
+# for a `full` installed with the installer's defaults, which leave
+# LibreOffice out). The office adds
+# 2,65 GiB to `full` (ONLYOFFICE 1,03 and LibreOffice 1,62 counted alone)
+# and 2,96 to `minimal`; the Crafting Apps 1,97 GiB to `full` (each image
+# 46 to 236 MiB unpacked; the FHS environment they run in is
+# `appimage-run`'s, already there) and 2,24 to `minimal`. Each measured as
+# the toplevel with the group minus the toplevel without it.
 #
-# | profile   | 2026-08-14 / 09-30 (measured) | 2026-10-05 (estimated) |
-# |-----------|-------------------------------|------------------------|
-# | `full`    | 23,2 → 26,7 GiB               | ~29 GiB                |
-# | `minimal` | 6,9 GiB                       | ~11,8 GiB              |
+# And Common Lisp went into both the same day (the end of the table, after
+# the L15 anchor): 0,63 GiB measured against a toplevel of each; and VS
+# Code (0,91 GiB, `full` only, below) — so `full` ~37,1 GiB (~35,5 with the
+# installer's defaults) and `minimal` ~12,5.
+#
+# | profile   | 2026-08-14 / 09-30 (measured) | 2026-10-05 (estimated) | 2026-10-20 (measured) |
+# |-----------|-------------------------------|------------------------|-----------------------|
+# | `full`    | 23,2 → 26,7 GiB               | ~29 GiB                | 31,0 → 35,6 → 37,1 GiB |
+# | `minimal` | 6,9 GiB                       | ~11,8 GiB              | 11,9 → 12,5 GiB       |
 { config, lib, ... }:
 
 let
@@ -83,6 +96,13 @@ in
     # Doom framework's tools that rode along until then were another
     # 0,23 GiB, most of it pandoc.
     editor.emacs = lib.mkDefault full;
+    # VS CODE, ~0,91 GiB: measured on 2026-10-20 as the figures above are —
+    # the program's closure is 1,46 GiB, and all of it but the program itself
+    # (627 MiB) and a few small tools is what OrcaSlicer, Blender, Emacs, mpv
+    # and VLC bring already (WebKitGTK, Python, GTK); its FHS environment
+    # (`nix/vscode.nix`) adds 286 MiB more, 222 MiB of them every glibc
+    # locale (the environment's own). A ceiling, like the others.
+    editor.vscode = lib.mkDefault full;
     # VLC, mpv, imagemagick, ghostscript and the gstreamer plugins.
     #
     # THE DECODERS ARE NO LONGER IN HERE. `ffmpeg-full`, `exiftool` and
@@ -147,6 +167,15 @@ in
     # `ronoctua.workshop.enable = true;`. (The coding agents left this line:
     # see the end of the table.)
     workshop.enable = lib.mkDefault full;
+    # THE OFFICE, ONLYOFFICE and LibreOffice (2,65 GiB measured, 2,96 on a
+    # reduced machine): programs one installs to USE.
+    # `ronoctua.office.enable = true;` in `host.nix` brings them to a
+    # reduced machine.
+    office.enable = lib.mkDefault full;
+    # THE CRAFTING APPS, thirteen AppImages (1,97 GiB measured, 2,24 on a
+    # reduced machine, which lacks the FHS environment): the same, and the
+    # same line, `ronoctua.crafts.enable = true;`.
+    crafts.enable = lib.mkDefault full;
 
     # THE 2026-10-05 WAVE: one region per package, after its anchor.
     # ── anchor: L04 ──
@@ -180,6 +209,17 @@ in
     # (1,8), OVMF with the EDK2 source it keeps (1,3) and QEMU (0,94).
     # The reduced profile is then ~11,8 GiB (6,9 + 4,4 + the agents' 0,5).
     # The full one gains 2,35 GiB by the same count — rust was in it, but
-    # Incus brings a QEMU and an OVMF of its own, not these — so ~29 GiB.
+    # Incus brings a QEMU and an OVMF of its own, not these — so ~29 GiB
+    # (estimated; measured on 2026-10-20 at 31,0 before the office and the
+    # Crafting Apps — see the header).
+    #
+    # AND COMMON LISP (2026-10-20), in both with no switch here either, like
+    # rust: `ronoctua.apps.common-lisp` (`when = true`, `nix/modules/dev.nix`)
+    # — SBCL with its libraries, CCL, ECL, qlot, alive-lsp,
+    # `quicklisp-install` and rlwrap. MEASURED with `nix path-info -S` of each
+    # path of its closure, minus every path a toplevel of each profile built
+    # before it already held: 0,63 GiB added to either (644 MiB to the reduced
+    # one, 642 to the full) — SBCL with its source and manual 374 MiB, CCL 93,
+    # qlot 22, ECL 18, the libraries and their sources the rest.
   };
 }

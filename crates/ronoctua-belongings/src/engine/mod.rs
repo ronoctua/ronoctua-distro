@@ -1589,6 +1589,8 @@ pub fn order(op: Op, places: &Places, beat: &mut dyn FnMut(Beat)) -> Result<u32,
             return signing::sign_verb(places).map(|_| 0);
         }
         // ── anchor: L10 ──
+        // THE YES TO THE EXTENSIONS' OFFER: no repository, no passphrase.
+        Op::VscodeExtensions => return crate::offers::install_extensions(places, beat),
         Op::Prepare | Op::Apply | Op::Rekey => {}
     }
     let prefs = read_prefs(places);
@@ -1620,7 +1622,8 @@ pub fn order(op: Op, places: &Places, beat: &mut dyn FnMut(Beat)) -> Result<u32,
         | Op::Probe
         | Op::Init
         | Op::VerifyPassphrase
-        | Op::Sign => Ok(0),
+        | Op::Sign
+        | Op::VscodeExtensions => Ok(0),
     }
 }
 

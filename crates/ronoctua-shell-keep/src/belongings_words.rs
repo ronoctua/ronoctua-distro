@@ -44,6 +44,8 @@ pub const fn refusal_key(why: Why) -> &'static str {
         Why::Newer => key::BELONGINGS_REFUSED_NEWER,
         Why::PlainTooLarge => key::BELONGINGS_REFUSED_PLAIN_TOO_LARGE,
         Why::NotPostQuantum => key::BELONGINGS_REFUSED_NOT_POST_QUANTUM,
+        Why::ChoiceUnread => key::BELONGINGS_REFUSED_CHOICE_UNREAD,
+        Why::CopyUnwritten => key::BELONGINGS_REFUSED_COPY_UNWRITTEN,
     }
 }
 
@@ -124,6 +126,7 @@ pub const fn op_key(op: Op) -> &'static str {
         Op::Init => key::BELONGINGS_OP_INIT,
         Op::VerifyPassphrase => key::BELONGINGS_OP_VERIFY_PASSPHRASE,
         Op::Sign => key::BELONGINGS_OP_SIGN,
+        Op::VscodeExtensions => key::BELONGINGS_OP_VSCODE_EXTENSIONS,
     }
 }
 

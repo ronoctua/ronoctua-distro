@@ -31,7 +31,7 @@ inst-system-locale-help = Date, number and units. Not the interface language, wh
 inst-timezone = Time zone
 inst-timezone-help = Where the machine is. It decides the clock and the log's timestamps.
 inst-profile = Installation
-inst-profile-help = `full` brings everything and is the recommended one. `minimal` leaves out Android, the toolchains, the browser, the editor, media and the font variants — it installs in minutes, and each group comes back with one line in host.nix.
+inst-profile-help = `full` brings everything and is the recommended one. `minimal` leaves out Android, the toolchains other than Rust and Common Lisp, the browser, the editor, media and the font variants — it installs in minutes, and each group comes back with one line in host.nix.
 inst-resume-offset = Swap offset
 inst-resume-offset-help = Computed once the disk exists; not typed.
 
@@ -138,3 +138,33 @@ inst-step-passphrase = Hand the passphrase to the restore
 inst-step-restore = Restore your belongings into your home
 inst-step-init = Make the repository, keeping this machine's settings in it
 inst-step-skipped = Nothing to do here.
+
+## Installer — the eighteenth question (the programs a full installation leaves out)
+
+inst-left-out = Optional programs
+inst-left-out-help = Every program marked is installed, unless your belongings decline it on every machine. One unmarked is not downloaded now, and no update brings it, on this machine alone — the software centre brings it back.
+inst-left-out-continue = Continue with these
+inst-left-out-kept = install
+inst-left-out-out = leave out
+inst-left-out-review = Left out of this machine: { $names }
+inst-keys-check = ↑↓ choose · Enter marks or continues · Esc goes back
+inst-invalid-left-out = Only programs of the list are left out, each once; or none.
+inst-step-left-out = Write the programs this machine leaves out
+inst-step-plain-declining = Sign this machine's choice of programs into your repository, and fetch your declarations
+inst-step-left-out-home = Write the programs left out into your home
+inst-left-out-review-kept = A program marked that this machine left out before comes back; one your belongings decline on every machine stays out — the software centre brings it back.
+inst-left-out-dropped = This release no longer lists { $ids }: none of that is left out. Unmark again what to leave out.
+inst-left-out-not-applied = The declarations applied to this machine do not say its choice of programs; the disk was not touched.
+inst-step-left-out-applied = Check that this machine's choice of programs was applied
+inst-more-above = ↑ { $count } more
+inst-more-below = ↓ { $count } more
+inst-review-below = ↓ { $count ->
+        [one] one more step
+       *[other] { $count } more steps
+    } below — { $marked ->
+        [0] none of them erases the disk
+        [one] one of them erases the disk
+       *[other] { $marked } of them erase the disk
+    }
+inst-step-choice = Write which programs this machine keeps and which it leaves out
+inst-kept-everywhere = Marked, and still declined on every machine by your belongings: { $names }. The software centre brings them back.

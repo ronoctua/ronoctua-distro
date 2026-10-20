@@ -27,13 +27,15 @@ let
 
   declared = import syntaxFile;
 
-  # THE NEGATIVE FIXTURE, and it plants TWO defects rather than one.
+  # THE NEGATIVE FIXTURE, and it plants THREE defects rather than one.
   #
-  # One steals a type another language already claims; the other claims prose.
-  # Two, because the two refusals are different in kind — one is about the
-  # table disagreeing with itself, the other about the table disagreeing with
-  # what colouring is for — and a fixture that only exercised one would leave
-  # the other free to rot.
+  # One steals a type another language already claims; one claims prose; and
+  # one makes its comment's marker a word character, so `foo;bar` would never
+  # reach the comment. Three, because the refusals are different in kind —
+  # the table disagreeing with itself, the table disagreeing with what
+  # colouring is for, and a row whose own words would swallow its own
+  # syntax — and a fixture that only exercised one would leave the others
+  # free to rot.
   fixture = {
     languages = declared.languages ++ [
       {
@@ -71,6 +73,31 @@ let
         sniff = [ ];
         sniff-shape = "none";
         line-comment = [ "#" ];
+        block-comment = null;
+        strings = [ ];
+        interpolation = [ ];
+        fences = [ ];
+        attribute = null;
+        numbers = "none";
+        property = "none";
+        shapes = [ ];
+        call = false;
+        keywords = [ "fixture" ];
+        types = [ ];
+        constants = [ ];
+      }
+      {
+        id = "fixture-hides-a-comment";
+        label = "Fixture";
+        kind = "code";
+        mime = [ ];
+        tags = [ "fixture-hides" ];
+        guessable = false;
+        shebang = [ ];
+        sniff = [ ];
+        sniff-shape = "none";
+        word-chars = "-;";
+        line-comment = [ ";" ];
         block-comment = null;
         strings = [ ];
         interpolation = [ ];
@@ -133,19 +160,20 @@ let
 
             if [ "$rc" = 0 ]; then
               echo "ERROR: the generator ACCEPTED a table in which one language steals" >&2
-              echo "       another's type and another claims prose. The guard guards" >&2
-              echo "       nothing." >&2
+              echo "       another's type, another claims prose and a third makes its" >&2
+              echo "       comment's marker a word character. The guard guards nothing." >&2
               exit 1
             fi
-            # AND IT FAILED FOR THE RIGHT REASONS, both of them. A refusal for
-            # the wrong reason is a refusal that will not survive the next edit.
-            for owed in "application/json" "fixture-steals-json" "text/plain" "fixture-claims-prose"; do
+            # AND IT FAILED FOR THE RIGHT REASONS, all three. A refusal for the
+            # wrong reason is a refusal that will not survive the next edit.
+            for owed in "application/json" "fixture-steals-json" "text/plain" "fixture-claims-prose" \
+                        "fixture-hides-a-comment" "word-chars"; do
               grep -q "$owed" $out/out_text.txt || {
                 echo "ERROR: it refused without naming \"$owed\"" >&2
                 exit 1
               }
             done
-            echo "OK: refused, and named both defects"
+            echo "OK: refused, and named the three defects"
             runHook postBuild
           ''
         else

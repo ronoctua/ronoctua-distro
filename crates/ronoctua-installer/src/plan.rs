@@ -34,6 +34,46 @@
 //!    repository made here has a new signing key, and the machine pins it
 //!    from what `init` left (`ronoctua-person pin --owner`).
 //!
+//! # The programs left out
+//!
+//! A `full` installation's unmarked programs ([`Answers::left_out_ids`]) are
+//! the person's DECLINES, for this hostname alone (`software/declined.json`,
+//! [`left_out_declined`]) — and a decline is only honoured, by this
+//! installation and every update after it, where it reaches the machine as
+//! the person's data:
+//!
+//! - **A repository with something in it** has the machine's key pinned
+//!   before anything of the person's is applied, so an unsigned decline would
+//!   be held back. The copy of the plain part SIGNS THE MACHINE'S CHOICE in
+//!   first (`ronoctua-belongings plain --decline <choice>`, a
+//!   `ronoctua_person::choice::Choice`: each program left out declined on
+//!   this machine, each one ticked brought back on it — a reinstall or a
+//!   retry under the same name undoes what an earlier attempt left out —
+//!   signed with the key the passphrase opened, pushed), so the pinned apply
+//!   takes it, `nixos-install` leaves the programs out, and the restore lands
+//!   the declines in the person's mirror. A `full` installation from such a
+//!   repository ALWAYS hands its choice over, a tick bringing back being as
+//!   much an answer as an untick. Written into the repository BEFORE the
+//!   disk is touched: a push that fails stops the installation with the disk
+//!   intact. A decline the person made for EVERY machine stays: the
+//!   installer's tick is about this one ([`ronoctua_person::choice`]).
+//! - **An empty repository** has no key yet, and a machine with none pinned
+//!   takes the declarations as staged: the declines are staged root's (in a
+//!   folder of their own, which nothing else fills) and applied before the
+//!   disk, and the same document goes into the person's mirror before
+//!   `init`, whose first sync signs it with the new key and pushes it.
+//!
+//! In both, a step right after the apply READS the working flake's
+//! `declined.json` and stops before the disk unless it says the choice
+//! ([`LEFT_OUT_APPLIED`]): every program left out declined there for this
+//! machine, and no program ticked declined for it but by a decline of every
+//! machine. A signature that did not cover the joined file would have the
+//! applier keep what the machine had — nothing — and say so only as a
+//! warning.
+//!
+//! A run starts from nothing an earlier one left ([`leftovers`]): a retry
+//! would otherwise apply that attempt's copy, or honour its declines.
+//!
 //! # The person's binary cache
 //!
 //! When the person's options name a binary cache (their own Cachix cache,
@@ -265,6 +305,22 @@ impl Scratch {
     pub fn binary_cache_netrc(&self) -> String {
         format!("{}/netrc", self.binary_cache())
     }
+
+    /// The machine's choice of the offered programs, which the copy of the
+    /// plain part signs into the repository (`plain --decline`): root's,
+    /// public — ids and a hostname, nothing secret.
+    #[must_use]
+    pub fn choice(&self) -> String {
+        format!("{}/choice.json", self.root)
+    }
+
+    /// The staged tree of an EMPTY repository's declines, in the plain
+    /// part's shape — a folder of their own, so root's applier never reads
+    /// a copy of the plain part an earlier attempt left.
+    #[must_use]
+    pub fn staged(&self) -> String {
+        format!("{}/staged-declines", self.root)
+    }
 }
 
 /// An internal command: the push token of the person's PRIVATE binary cache,
@@ -329,6 +385,111 @@ pub fn plain_passphrase() -> String {
 #[must_use]
 pub fn scratch_signer() -> String {
     Scratch::installer().signer()
+}
+
+/// [`Scratch::choice`] of the installer's.
+#[must_use]
+pub fn choice_file() -> String {
+    Scratch::installer().choice()
+}
+
+/// [`Scratch::staged`] of the installer's.
+#[must_use]
+pub fn staged_dir() -> String {
+    Scratch::installer().staged()
+}
+
+/// Where an EMPTY repository's declines are staged for root's applier: the
+/// plain part's own shape (`person/software/declined.json`).
+#[must_use]
+pub fn staged_declined() -> String {
+    format!(
+        "{}/{}/{}",
+        staged_dir(),
+        ronoctua_person::tree::PERSON,
+        ronoctua_person::names::DECLINED
+    )
+}
+
+/// The same declines in the person's mirror on the target
+/// (`~/.local/state/ronoctua/person/software/declined.json`), where the
+/// software centre reads them and `init`'s first sync signs them — spelled
+/// by the person's data (`ronoctua_person::mirror_declined`).
+#[must_use]
+pub fn target_mirror_declined() -> String {
+    let ours = format!("{}/.local/state/{}", target_home(), ronoctua_xdg::NAME);
+    ronoctua_person::mirror_declined(std::path::Path::new(&ours))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The declines the working flake's `person/` holds once root's applier
+/// took the person's tree — what [`LEFT_OUT_APPLIED`] reads.
+#[must_use]
+pub fn applied_declined() -> String {
+    format!(
+        "{WORK_DIRECTORY}/{}/{}",
+        ronoctua_person::names::MACHINE_PERSON,
+        ronoctua_person::names::DECLINED
+    )
+}
+
+/// An internal command: the working flake's declines are READ, and the
+/// installation stops before the disk unless they say the machine's choice:
+/// every program left out declined there for this machine, and no program
+/// ticked declined for it — but by a decline of every machine, the person's
+/// own, which stays and is said.
+pub const LEFT_OUT_APPLIED: &str = "left-out-applied";
+
+/// What a run clears before its first step: the working flake, the copy of
+/// the plain part and the staged declines an earlier attempt left — the
+/// template is copied over the working flake, and a copy or a decline of
+/// that attempt would be applied as this one's.
+#[must_use]
+pub fn leftovers() -> [String; 3] {
+    [WORK_DIRECTORY.to_owned(), plain_dir(), staged_dir()]
+}
+
+/// The machine's choice of the offered programs, made `at` here: the ones
+/// left out and the ones ticked (`ronoctua_person::choice`). `None` unless
+/// the installation is `full` — the one that was asked. Pure.
+#[must_use]
+pub fn machine_choice(
+    r: &Answers,
+    at: &ronoctua_person::Stamp,
+) -> Option<ronoctua_person::choice::Choice> {
+    let owned = |ids: Vec<&str>| ids.into_iter().map(ToOwned::to_owned).collect();
+    (r.profile == crate::model::FULL_PROFILE && !crate::model::OFFERED.is_empty()).then(|| {
+        ronoctua_person::choice::Choice::new(
+            &r.hostname,
+            at.clone(),
+            owned(r.left_out_ids()),
+            owned(r.kept_ids()),
+        )
+    })
+}
+
+/// The programs left out of this machine as the person's declines: each
+/// left-out id on this hostname alone, edited `at` here. `None` when
+/// nothing is left out. Pure.
+#[must_use]
+pub fn left_out_declined(
+    r: &Answers,
+    at: &ronoctua_person::Stamp,
+) -> Option<ronoctua_person::declined::Declined> {
+    let ids = r.left_out_ids();
+    (!ids.is_empty()).then(|| ronoctua_person::declined::Declined {
+        format: ronoctua_person::FORMAT,
+        apps: ids
+            .into_iter()
+            .map(|id| ronoctua_person::declined::Declining {
+                id: id.to_owned(),
+                machines: Some(vec![r.hostname.clone()]),
+                edited_at: at.clone(),
+                edited_on: r.hostname.clone(),
+            })
+            .collect(),
+    })
 }
 
 /// Where the person's `init` leaves the signing key it made, in their
@@ -790,6 +951,10 @@ pub const PERSON: &str = "ronoctua-person";
 pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
     let work_flake = format!("path:{WORK_DIRECTORY}");
     let empty = r.belongings_empty == Some(true);
+    // WHETHER THIS MACHINE LEAVES PROGRAMS OUT, and whether it was asked
+    // the list at all — see the module's header.
+    let leaving = !r.left_out_ids().is_empty();
+    let choosing = r.profile == crate::model::FULL_PROFILE && !crate::model::OFFERED.is_empty();
     let mut sequence = vec![Step::root(
         // BEFORE partitioning, and not alongside: `disko` reads the file in the
         // first second, and a step that fails for a missing file is
@@ -896,7 +1061,16 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
             vec![WRITE.into(), plain_passphrase()],
             false,
         ));
-        let plain = vec![
+        // THE MACHINE'S CHOICE, for the copy to sign in — whenever the list
+        // was asked: a tick brings back what an earlier attempt left out.
+        if choosing {
+            sequence.push(Step::root(
+                key::INST_STEP_CHOICE,
+                vec![WRITE.into(), choice_file()],
+                false,
+            ));
+        }
+        let mut plain = vec![
             BELONGINGS.into(),
             "plain".into(),
             "--repository".into(),
@@ -909,14 +1083,28 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
             plain_passphrase(),
             "--signer".into(),
             scratch_signer(),
-            "--json".into(),
         ];
+        // SIGNED INTO THE REPOSITORY AND PUSHED before anything is copied
+        // out — so the label says the repository is written, before the
+        // disk, and a refused push stops the installation here.
+        if choosing {
+            plain.extend(["--decline".into(), choice_file()]);
+        }
+        plain.push("--json".into());
         // THE ADDRESS is on this command line because that is how the CLI
         // takes it, and it is no secret; the access and the passphrase are
         // FILES (`--keys`, `--passphrase`).
         sequence.push(Step {
             env: home_env(&scratch_home()),
-            ..Step::root(key::INST_STEP_PLAIN, plain, false)
+            ..Step::root(
+                if choosing {
+                    key::INST_STEP_PLAIN_DECLINING
+                } else {
+                    key::INST_STEP_PLAIN
+                },
+                plain,
+                false,
+            )
         });
         // THE KEY THE PASSPHRASE OPENED, pinned in the working flake's
         // `local/` before anything of the person's is applied there — so
@@ -957,6 +1145,9 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
                 false,
             )
         });
+        if choosing {
+            sequence.push(applied_check());
+        }
         sequence.push(Step {
             env: vec![("RONOCTUA_NIX".to_owned(), origin.nix.clone())],
             only_if: Some(format!(
@@ -991,6 +1182,40 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
                 false,
             )
         });
+    } else if leaving {
+        // AN EMPTY REPOSITORY'S DECLINES, staged root's in the plain part's
+        // shape and applied to the working flake by root's applier — which,
+        // with no key pinned yet, takes them as staged — so `nixos-install`
+        // already leaves the programs out.
+        sequence.push(Step::root(
+            key::INST_STEP_LEFT_OUT,
+            vec![WRITE.into(), staged_declined()],
+            false,
+        ));
+        sequence.push(Step {
+            only_if: Some(format!(
+                "{}/{}",
+                staged_dir(),
+                ronoctua_person::tree::PERSON
+            )),
+            ..Step::root(
+                key::INST_STEP_PERSON,
+                vec![
+                    PERSON.into(),
+                    "apply".into(),
+                    "--staged".into(),
+                    staged_dir(),
+                    "--machine".into(),
+                    WORK_DIRECTORY.into(),
+                    "--owner".into(),
+                    "root".into(),
+                    "--lock".into(),
+                    person_lock(),
+                ],
+                false,
+            )
+        });
+        sequence.push(applied_check());
     }
     sequence.push(Step::root(
         key::INST_STEP_PARTITION,
@@ -1138,6 +1363,16 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
         vec![WRITE.into(), person_passphrase()],
         true,
     ));
+    // AN EMPTY REPOSITORY'S DECLINES, in the person's mirror before `init`:
+    // its first sync signs them with the key it makes and pushes them, so
+    // the repository holds what this machine was installed without.
+    if empty && leaving {
+        sequence.push(Step::root(
+            key::INST_STEP_LEFT_OUT_HOME,
+            vec![WRITE.into(), target_mirror_declined()],
+            true,
+        ));
+    }
     let verb = if empty { "init" } else { "restore" };
     sequence.push(Step {
         runs_as: Runner::Person,
@@ -1197,6 +1432,16 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
     sequence
 }
 
+/// The step that reads what root's applier made of the declines — see
+/// [`LEFT_OUT_APPLIED`]. It waits on nothing: no file is a refusal too.
+fn applied_check() -> Step {
+    Step::root(
+        key::INST_STEP_LEFT_OUT_APPLIED,
+        vec![LEFT_OUT_APPLIED.into(), applied_declined()],
+        false,
+    )
+}
+
 /// A disk's LUKS partition, per section 7.2's layout.
 ///
 /// `p2` on NVMe and MMC (which number with a `p`), `2` on the rest. Getting that wrong makes
@@ -1235,6 +1480,10 @@ mod tests {
             // `minimal`, and not the default: a fixture that answers the default
             // proves the field reaches `host.nix` even when it is being dropped.
             profile: "minimal".into(),
+            // Left out, and read only by a `full` installation: on this one
+            // the answer must change nothing.
+            left_out: "blender".into(),
+            left_out_at: ronoctua_person::Stamp::parse("2026-10-20T12:00:00Z"),
             resume_offset: Some(123_456),
             belongings: "git@example.org:someone/belongings.git".into(),
             belongings_access: format!("{}/deploy", scratch_keys()),
@@ -1250,6 +1499,286 @@ mod tests {
             distro: "/etc/ronoctua/distro".into(),
             aimed: false,
             nix: "/run/current-system/sw/bin/nix".into(),
+        }
+    }
+
+    /// A `full` installation leaving two programs out, its repository empty
+    /// or not.
+    fn leaving(empty: bool) -> Answers {
+        Answers {
+            profile: crate::model::FULL_PROFILE.into(),
+            left_out: "blender,libreoffice".into(),
+            belongings_empty: Some(empty),
+            ..answers()
+        }
+    }
+
+    /// Every shape of the plan the tests below must hold for: the fixture,
+    /// and a `full` one leaving programs out of a repository with something
+    /// in it and of an empty one.
+    fn every_plan() -> Vec<Vec<Step>> {
+        vec![
+            steps(&answers(), &origin()),
+            steps(&leaving(false), &origin()),
+            steps(&leaving(true), &origin()),
+        ]
+    }
+
+    /// The value after `flag` on a step's command line.
+    fn flag(s: &Step, f: &str) -> Option<String> {
+        s.command
+            .iter()
+            .position(|a| a == f)
+            .and_then(|i| s.command.get(i + 1))
+            .cloned()
+    }
+
+    /// FAILS IF: the programs left out of a repository with something in it
+    /// are not handed to the copy of the plain part to sign in — or reach it
+    /// after the disk is touched, or after the key is pinned and applied, or
+    /// without the passphrase that signs them; or the review does not say
+    /// the repository is written; or they are written into the mirror by the
+    /// installer (the restore lands them, signed).
+    #[test]
+    fn left_out_declines_are_signed_before_the_disk() {
+        let p = steps(&leaving(false), &origin());
+        let order = [
+            key::INST_STEP_PLAIN_PASSPHRASE,
+            key::INST_STEP_CHOICE,
+            key::INST_STEP_PLAIN_DECLINING,
+            key::INST_STEP_PIN,
+            key::INST_STEP_PERSON,
+            key::INST_STEP_LEFT_OUT_APPLIED,
+            key::INST_STEP_VERIFY,
+            key::INST_STEP_PARTITION,
+            key::INST_STEP_INSTALL,
+            key::INST_STEP_RESTORE,
+        ];
+        let places: Vec<usize> = order.iter().map(|l| at(&p, l)).collect();
+        assert!(
+            places.windows(2).all(|w| w[0] < w[1]),
+            "out of order: {places:?}"
+        );
+        let written = &p[at(&p, key::INST_STEP_CHOICE)];
+        assert_eq!(written.command, [WRITE.to_owned(), choice_file()]);
+        assert!(!written.destructive);
+        assert!(!p.iter().any(|s| s.label == key::INST_STEP_LEFT_OUT));
+        let plain = &p[at(&p, key::INST_STEP_PLAIN_DECLINING)];
+        assert_eq!(plain.command[..2], [BELONGINGS, "plain"]);
+        assert_eq!(flag(plain, "--decline"), Some(choice_file()));
+        assert_eq!(flag(plain, "--passphrase"), Some(plain_passphrase()));
+        assert_eq!(plain.command.last().map(String::as_str), Some("--json"));
+        assert!(!p.iter().any(|s| s.label == key::INST_STEP_PLAIN));
+        assert!(!p.iter().any(|s| s.label == key::INST_STEP_LEFT_OUT_HOME));
+        // WHAT THE APPLIER MADE OF THEM IS READ, and waits on nothing: no
+        // file is a refusal, never a skip.
+        let read = &p[at(&p, key::INST_STEP_LEFT_OUT_APPLIED)];
+        assert_eq!(
+            read.command,
+            [LEFT_OUT_APPLIED.to_owned(), applied_declined()]
+        );
+        assert_eq!(read.only_if, None);
+        assert!(!read.destructive);
+        assert_eq!(
+            applied_declined(),
+            format!("{WORK_DIRECTORY}/person/software/declined.json")
+        );
+        assert!(
+            !p.iter()
+                .any(|s| s.command.get(1) == Some(&staged_declined()))
+        );
+        assert!(
+            !choice_file().starts_with(&plain_dir()),
+            "the choice would be applied unsigned"
+        );
+        // THE CHOICE: both halves of the answer, for this machine alone.
+        let r = leaving(false);
+        let choice = machine_choice(&r, r.left_out_at.as_ref().unwrap()).unwrap();
+        assert_eq!(choice.machine, "noctua-portatil");
+        assert_eq!(choice.declined, ["blender", "libreoffice"]);
+        assert_eq!(choice.kept, r.kept_ids());
+        assert!(
+            !choice.kept.is_empty() && !choice.kept.iter().any(|k| choice.declined.contains(k))
+        );
+        assert_eq!(choice.kept.len() + 2, crate::model::OFFERED.len());
+        // AND THE DECLINES an empty repository stages: each on this hostname.
+        let declined = left_out_declined(&r, r.left_out_at.as_ref().unwrap()).unwrap();
+        let ids: Vec<&str> = declined.apps.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["blender", "libreoffice"]);
+        for d in &declined.apps {
+            assert_eq!(
+                d.machines.as_deref(),
+                Some(&["noctua-portatil".to_owned()][..])
+            );
+            assert_eq!(d.edited_on, "noctua-portatil");
+            assert_eq!(d.edited_at, r.left_out_at.clone().unwrap());
+        }
+    }
+
+    /// FAILS IF: an empty repository's declines are not staged for root's
+    /// applier (unpinned: taken as staged) and applied to the working flake
+    /// before the disk, or not put in the person's mirror before `init` —
+    /// whose first sync is what signs them — or the key is pinned before
+    /// `init` made it.
+    #[test]
+    fn an_empty_repository_stages_its_declines_unpinned_and_init_signs_them() {
+        let p = steps(&leaving(true), &origin());
+        let staged = at(&p, key::INST_STEP_LEFT_OUT);
+        let apply = at(&p, key::INST_STEP_PERSON);
+        let read = at(&p, key::INST_STEP_LEFT_OUT_APPLIED);
+        let partition = at(&p, key::INST_STEP_PARTITION);
+        assert!(
+            at(&p, key::INST_STEP_ATTRIBUTE) < staged
+                && staged < apply
+                && apply < read
+                && read < partition
+        );
+        assert_eq!(p[staged].command, [WRITE.to_owned(), staged_declined()]);
+        // A FOLDER OF THEIR OWN: never the copy of the plain part, which an
+        // earlier attempt may have left whole.
+        assert_eq!(
+            staged_declined(),
+            format!("{}/person/software/declined.json", staged_dir())
+        );
+        assert!(!staged_dir().starts_with(&plain_dir()) && !plain_dir().starts_with(&staged_dir()));
+        let applier = &p[apply];
+        assert_eq!(applier.command[..2], [PERSON, "apply"]);
+        assert_eq!(flag(applier, "--staged"), Some(staged_dir()));
+        assert_eq!(flag(applier, "--machine").as_deref(), Some(WORK_DIRECTORY));
+        assert_eq!(flag(applier, "--owner").as_deref(), Some("root"));
+        assert_eq!(
+            applier.only_if,
+            Some(format!(
+                "{}/{}",
+                staged_dir(),
+                ronoctua_person::tree::PERSON
+            ))
+        );
+        assert_eq!(
+            p[read].command,
+            [LEFT_OUT_APPLIED.to_owned(), applied_declined()]
+        );
+        // NOTHING IS PINNED before `init` makes the key: pinned, the
+        // applier would hold the unsigned declines back.
+        assert!(at(&p, key::INST_STEP_PIN) > at(&p, key::INST_STEP_INIT));
+        for gone in [
+            key::INST_STEP_PLAIN,
+            key::INST_STEP_PLAIN_DECLINING,
+            key::INST_STEP_VERIFY,
+        ] {
+            assert!(!p.iter().any(|s| s.label == gone), "{gone}");
+        }
+        // AND THE MIRROR, the person's, before `init` signs it.
+        let home = at(&p, key::INST_STEP_LEFT_OUT_HOME);
+        assert_eq!(
+            p[home].command,
+            [WRITE.to_owned(), target_mirror_declined()]
+        );
+        assert_eq!(
+            target_mirror_declined(),
+            "/mnt/home/noctua/.local/state/ronoctua/person/software/declined.json"
+        );
+        assert!(at(&p, key::INST_STEP_INSTALL) < home);
+        assert!(at(&p, key::INST_STEP_PASSPHRASE) < home);
+        assert!(home < at(&p, key::INST_STEP_INIT));
+    }
+
+    /// FAILS IF: a `full` installation that leaves nothing out from a
+    /// repository with something in it does not hand its choice over —
+    /// every program ticked, so an earlier attempt's declines of this
+    /// machine come back — or the check of it is not made.
+    #[test]
+    fn a_full_choice_is_handed_over_even_when_nothing_is_left_out() {
+        let r = Answers {
+            left_out: crate::model::LEFT_OUT_NONE.into(),
+            ..leaving(false)
+        };
+        let p = steps(&r, &origin());
+        assert!(at(&p, key::INST_STEP_CHOICE) < at(&p, key::INST_STEP_PLAIN_DECLINING));
+        assert_eq!(
+            flag(&p[at(&p, key::INST_STEP_PLAIN_DECLINING)], "--decline"),
+            Some(choice_file())
+        );
+        assert!(at(&p, key::INST_STEP_LEFT_OUT_APPLIED) < at(&p, key::INST_STEP_PARTITION));
+        let choice = machine_choice(&r, r.left_out_at.as_ref().unwrap()).unwrap();
+        assert!(choice.declined.is_empty());
+        assert_eq!(choice.kept.len(), crate::model::OFFERED.len());
+        // A `minimal` one was never asked: no choice.
+        assert!(machine_choice(&answers(), answers().left_out_at.as_ref().unwrap()).is_none());
+    }
+
+    /// FAILS IF: a `minimal` installation, or a `full` one from an empty
+    /// repository that leaves nothing out, writes declines or hands the copy
+    /// a `--decline`.
+    #[test]
+    fn nothing_is_declined_when_nothing_is_left_out() {
+        let none = |empty: bool| Answers {
+            left_out: crate::model::LEFT_OUT_NONE.into(),
+            ..leaving(empty)
+        };
+        for r in [
+            answers(),
+            none(true),
+            Answers {
+                belongings_empty: Some(true),
+                ..answers()
+            },
+        ] {
+            let p = steps(&r, &origin());
+            for s in &p {
+                assert!(
+                    ![
+                        key::INST_STEP_LEFT_OUT,
+                        key::INST_STEP_LEFT_OUT_HOME,
+                        key::INST_STEP_LEFT_OUT_APPLIED,
+                        key::INST_STEP_CHOICE,
+                        key::INST_STEP_PLAIN_DECLINING
+                    ]
+                    .contains(&s.label),
+                    "{} for {:?}/{:?}",
+                    s.label,
+                    r.profile,
+                    r.left_out
+                );
+                assert!(
+                    !s.command.iter().any(|a| a == "--decline"),
+                    "{:?}",
+                    s.command
+                );
+            }
+            assert!(left_out_declined(&r, r.left_out_at.as_ref().unwrap()).is_none());
+        }
+        // An empty repository with nothing left out applies nothing.
+        let empty = steps(&none(true), &origin());
+        assert!(!empty.iter().any(|s| s.label == key::INST_STEP_PERSON));
+    }
+
+    /// FAILS IF: a run does not start from nothing an earlier attempt left —
+    /// the working flake the template is copied over, the copy of the plain
+    /// part, or the staged declines — or would clear anything else.
+    #[test]
+    fn a_run_clears_what_an_earlier_attempt_left() {
+        let cleared = leftovers();
+        assert_eq!(
+            cleared,
+            [WORK_DIRECTORY.to_owned(), plain_dir(), staged_dir()]
+        );
+        for path in [
+            staged_declined(),
+            applied_declined(),
+            aimed_flake(),
+            HOST_NIX_WORK_PATH.to_owned(),
+        ] {
+            assert!(
+                cleared.iter().any(|c| path.starts_with(&format!("{c}/"))),
+                "{path}"
+            );
+        }
+        for kept in [scratch_keys(), scratch_home(), person_lock(), choice_file()] {
+            assert!(
+                !cleared.iter().any(|c| kept.starts_with(c.as_str())),
+                "{kept} would be cleared"
+            );
         }
     }
 
@@ -1663,7 +2192,23 @@ mod tests {
         let mut r = answers();
         r.wifi_ssid = "home-5g".into();
         r.wifi_password = "Zq7-radio-password".into();
-        for p in steps(&r, &origin()) {
+        let every: Vec<Step> = [
+            r.clone(),
+            Answers {
+                wifi_ssid: r.wifi_ssid.clone(),
+                wifi_password: r.wifi_password.clone(),
+                ..leaving(false)
+            },
+            Answers {
+                wifi_ssid: r.wifi_ssid.clone(),
+                wifi_password: r.wifi_password.clone(),
+                ..leaving(true)
+            },
+        ]
+        .iter()
+        .flat_map(|a| steps(a, &origin()))
+        .collect();
+        for p in every {
             let shown = p.shown();
             for secret in [
                 &r.password,
@@ -1847,8 +2392,9 @@ mod tests {
     fn partitioning_is_the_first_destructive_step() {
         // The TUI warns before the FIRST destructive one. Warning at every step is
         // not warning.
-        let p = steps(&answers(), &origin());
-        let first = p.iter().position(|x| x.destructive).unwrap();
-        assert_eq!(p[first].label, key::INST_STEP_PARTITION);
+        for p in every_plan() {
+            let first = p.iter().position(|x| x.destructive).unwrap();
+            assert_eq!(p[first].label, key::INST_STEP_PARTITION);
+        }
     }
 }

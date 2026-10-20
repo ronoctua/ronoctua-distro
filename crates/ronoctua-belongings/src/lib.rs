@@ -218,11 +218,17 @@ pub enum Why {
     /// The repository's host offered no post-quantum key exchange, and the
     /// belongings' SSH asks for one.
     NotPostQuantum,
+    /// The installer's choice of programs (`plain --decline <file>`) does
+    /// not read: nothing was declined or brought back, nothing sent.
+    ChoiceUnread,
+    /// The installer's copy of the plain part (`plain --out`, `--signer`)
+    /// could not be written where it asked.
+    CopyUnwritten,
 }
 
 impl Why {
     /// Every refusal, for the census of their sentences.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 21] = [
         Self::NoRepository,
         Self::NoPassphrase,
         Self::WrongPassphrase,
@@ -242,6 +248,8 @@ impl Why {
         Self::Newer,
         Self::PlainTooLarge,
         Self::NotPostQuantum,
+        Self::ChoiceUnread,
+        Self::CopyUnwritten,
     ];
 
     /// Its kebab-case name, the suffix of its key.
@@ -267,6 +275,8 @@ impl Why {
             Self::Newer => "newer",
             Self::PlainTooLarge => "plain-too-large",
             Self::NotPostQuantum => "not-post-quantum",
+            Self::ChoiceUnread => "choice-unread",
+            Self::CopyUnwritten => "copy-unwritten",
         }
     }
 

@@ -109,7 +109,7 @@ fn usage() -> &'static str {
      \x20      ronoctua-person read KIND FILE\n\
      \x20      ronoctua-person record [--state DIR] [--into DIR] [--host NAME] [--rehearse]\n\
      KIND: declared declined held approved options person-applied distro-apps\n\
-     \x20     declared-android state verdict request approve-verdict signer"
+     \x20     declared-android state verdict request approve-verdict signer choice"
 }
 
 /// The value of `--name`, the positional words, and whether `--rehearse`
@@ -625,7 +625,9 @@ fn write_verdict<T: serde::Serialize>(file: &str, verdict: &T) -> Result<(), Str
 /// `read KIND FILE`: the canonical text, or `refused <why> <pointer>`;
 /// `None` for a kind that is not one.
 fn read(kind: &str, file: &str) -> Option<ExitCode> {
-    use ronoctua_person::{approve, declared, declined, local, options, reports, state, tree};
+    use ronoctua_person::{
+        approve, choice, declared, declined, local, options, reports, state, tree,
+    };
     fn one<T: Document>(bytes: &[u8]) -> Result<String, ronoctua_person::Refusal> {
         ronoctua_person::parse::<T>(bytes).map(|d| ronoctua_person::to_json(&d))
     }
@@ -643,6 +645,7 @@ fn read(kind: &str, file: &str) -> Option<ExitCode> {
         "request" => one::<approve::Request>,
         "approve-verdict" => one::<approve::Verdict>,
         "signer" => one::<local::Signer>,
+        "choice" => one::<choice::Choice>,
         _ => return None,
     };
     let bytes = match std::fs::read(file) {

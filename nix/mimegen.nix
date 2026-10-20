@@ -184,10 +184,133 @@ let
       '';
       installPhase = "true";
     };
+
+  # THE THIRD, for the `drop` block, and for the same reason as the second:
+  # a row that removes a glob leaves nothing in the table to say it is there.
+  # This one drops a glob from a type that does not claim it — the day
+  # upstream stops giving `*.fasl` to Lisp source — and the build has to
+  # refuse rather than keep a row that removes nothing.
+  dropFixture =
+    let
+      broken = writeText "mime-glyphs-stale-drop.json" (
+        builtins.toJSON (
+          let
+            t = import mimeTableFile;
+          in
+          t
+          // {
+            drop = map (r: r // { mime = "application/pdf"; }) t.drop;
+          }
+        )
+      );
+    in
+    stdenvNoCC.mkDerivation {
+      name = "ronoctua-mimedb-stale-drop";
+      nativeBuildInputs = [ python3 ];
+      dontUnpack = true;
+      dontConfigure = true;
+      buildPhase = ''
+        runHook preBuild
+        # NO PIPE, for the reason the first fixture gives.
+        set +e
+        python3 ${./scripts/gen-mimedb.py} \
+          --mime-dir ${shared-mime-info}/share/mime \
+          --glyphs ${broken} \
+          --icons ${glyphdb.db}/icons.json \
+          --out /dev/null \
+          --version ${version} > output.txt 2>&1
+        rc=$?
+        set -e
+        cat output.txt
+        if [ "$rc" = 0 ]; then
+          echo "ERROR: the generator ACCEPTED a `drop` row whose type does not" >&2
+          echo "      claim the pattern. The row would remove nothing and say so" >&2
+          echo "      to nobody." >&2
+          exit 1
+        fi
+        grep -q "drop" output.txt || {
+          echo "ERROR: it failed for another reason; the message does not name `drop`" >&2
+          exit 1
+        }
+        mkdir -p $out
+        echo "OK: it refused a stale drop, and said which pattern" > $out/verdict
+        runHook postBuild
+      '';
+      installPhase = "true";
+    };
+
+  # AND THE `claims` REFUSALS, each built broken on its own: a row whose
+  # `shares` names a type that does not claim the glob (a tie that is not
+  # one), a row that shares a glob upstream claims at another weight (it
+  # would not tie), and a row with `content` and no `shares` (nothing to
+  # settle). Each must fail, and say the reason it was planted for.
+  refusedClaim =
+    name: row: owed:
+    let
+      broken = writeText "mime-glyphs-${name}.json" (
+        builtins.toJSON ((import mimeTableFile) // { claims = [ row ]; })
+      );
+    in
+    stdenvNoCC.mkDerivation {
+      name = "ronoctua-mimedb-${name}";
+      nativeBuildInputs = [ python3 ];
+      dontUnpack = true;
+      dontConfigure = true;
+      buildPhase = ''
+        runHook preBuild
+        # NO PIPE, for the reason the first fixture gives.
+        set +e
+        python3 ${./scripts/gen-mimedb.py} \
+          --mime-dir ${shared-mime-info}/share/mime \
+          --glyphs ${broken} \
+          --icons ${glyphdb.db}/icons.json \
+          --out /dev/null \
+          --version ${version} > output.txt 2>&1
+        rc=$?
+        set -e
+        cat output.txt
+        if [ "$rc" = 0 ]; then
+          echo "ERROR: the generator ACCEPTED the claim planted as ${name}." >&2
+          exit 1
+        fi
+        grep -qF ${lib.escapeShellArg owed} output.txt || {
+          echo "ERROR: it failed for another reason; the message does not say: ${owed}" >&2
+          exit 1
+        }
+        mkdir -p $out
+        echo "OK: it refused ${name}, and said why" > $out/verdict
+        runHook postBuild
+      '';
+      installPhase = "true";
+    };
+  claimsFixtures = {
+    not-a-tie = refusedClaim "claim-not-a-tie" {
+      glob = "*.lsp";
+      mime = "text/x-common-lisp";
+      shares = "text/x-opencl-src";
+      content = [ "(in-package" ];
+    } "the tie is not the one written here";
+    wrong-weight = refusedClaim "claim-wrong-weight" {
+      glob = "*.sage";
+      mime = "text/x-common-lisp";
+      shares = "text/x-sagemath";
+      content = [ "(in-package" ];
+    } "it would not tie";
+    content-alone = refusedClaim "claim-content-alone" {
+      glob = "*.lsp";
+      mime = "text/x-common-lisp";
+      content = [ "(in-package" ];
+    } "has `content` and no `shares`";
+  };
 in
 base
 // {
-  inherit negativeFixture preferenceFixture;
+  inherit
+    negativeFixture
+    preferenceFixture
+    dropFixture
+    claimsFixtures
+    ;
   # What the check compares against `share/mime/version`.
   pinnedVersion = version;
 }

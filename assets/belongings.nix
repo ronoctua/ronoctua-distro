@@ -45,14 +45,16 @@
   # ── the 2026-10-05 wave: format 2 ─────────────────────────────────────
   #
   # THE PREDEFINED ENCRYPTED TARGETS (`~/.ssh`, git, GnuPG, the shell's own
-  # file, the Emacs configuration), by id: `paths` (logical); `skip`, what is
-  # never kept below them, each with its reason — a name pattern matches a
-  # name at ANY depth, and one written `/name` only the first name below the
-  # target's path (its root); `carry`, paths below a path that are kept
-  # although a `skip` names a folder they are in, each name a pattern
-  # (`straight/versions/*.el`); `private` (restored 0700/0600); `merge` (per
-  # file name or `default`: `choose` or `union`); `offers` (`ssh-signing`,
-  # `pam-u2f`).
+  # file, the Emacs and the VS Code configurations, Common Lisp's init
+  # files), by id: `paths`
+  # (logical); `skip`, what is never kept below them, each with its reason —
+  # a name pattern matches a name at ANY depth, and one written `/name` only
+  # the first name below the target's path (its root); `carry`, paths below
+  # a path that are kept although a `skip` names a folder they are in, each
+  # name a pattern (`straight/versions/*.el`); `private` (restored
+  # 0700/0600); `merge` (per file name or `default`: `choose`, `union`, or
+  # `set` — a document that is a set, joined three ways: VS Code's list of
+  # extensions); `offers` (`ssh-signing`, `pam-u2f`, `vscode-extensions`).
   # ── anchor: L10 ──
   # Kept ENCRYPTED like the rest of the sealed part, on every machine, by
   # default. Each can be taken out on one machine ("not here": its paths go
@@ -192,6 +194,77 @@
       merge = {
         default = "choose";
       };
+    };
+    # THE PERSON'S COMMON LISP: the three Lisps' init files, which the system
+    # writes only where one is missing (`nix/modules/dev.nix`) — SBCL's, and
+    # CCL's and ECL's under both of the names each reads — and
+    # `~/.config/common-lisp`, where ASDF reads the person's own
+    # configuration. `~/quicklisp` does NOT travel: it is libraries, fetched again
+    # by `quicklisp-install` and Quicklisp itself. An editor's drafts beside
+    # them are never kept, and Lisp merged by hunk can make an init file that
+    # no longer loads: a file both sides changed is a choice.
+    common-lisp = {
+      paths = [
+        "home/.sbclrc"
+        "home/ccl-init.lisp"
+        "home/.ccl-init.lisp"
+        "home/.ecl"
+        "home/.eclrc"
+        "home/.config/common-lisp"
+      ];
+      skip = {
+        ".#*" = "editor-draft";
+        "#*#" = "editor-draft";
+        "*~" = "editor-draft";
+      };
+      merge = {
+        default = "choose";
+      };
+    };
+    # THE PERSON'S VS CODE CONFIGURATION: `~/.config/Code/User` — settings,
+    # keybindings, snippets, tasks, MCP servers, prompts, the profiles — and
+    # the list of their Marketplace extensions (`ronoctua-extensions.json`,
+    # ours, written by `ronoctua-vscode record` from what changed here; the
+    # default profile's), whose arrival with ids missing here offers to
+    # install them (`vscode-extensions`). The extensions themselves
+    # (`~/.vscode/extensions`) never travel: other people's code, fetched
+    # again from the Marketplace.
+    #
+    # WHAT IT SKIPS, at any depth (a profile has its own): what VS Code keeps
+    # of this machine — the state database and the extensions' storage
+    # (`globalStorage`, `workspaceStorage`, where extensions keep their
+    # tokens), the local history of edits (`History`), Settings Sync's own
+    # bookkeeping (`sync`) and a profile's manifest of its extensions
+    # (`extensions.json`: paths of this machine's `~/.vscode/extensions`) —
+    # and other people's code: the agent plugins (`/agent-plugins`, at the
+    # root: git clones of plugin marketplaces and the sources they fetch;
+    # its `installed.json` lists the clones by their place on this machine,
+    # so it does not travel without them), a git repository's own folder
+    # and any `node_modules`. (VS Code's caches live in `~/.config/Code`,
+    # beside this folder, never in it.)
+    #
+    # JSON merged by hunk can make a settings file that no longer opens: a
+    # file both sides changed is a choice — but the list of extensions is a
+    # SET, joined three ways (`set`: what either side added, minus what
+    # either side took out), so an install on one machine and an uninstall
+    # on another both hold, and nobody is asked.
+    vscode = {
+      paths = [ "home/.config/Code/User" ];
+      skip = {
+        "globalStorage" = "editor-state";
+        "workspaceStorage" = "editor-state";
+        "History" = "editor-state";
+        "sync" = "editor-state";
+        "extensions.json" = "machine";
+        "/agent-plugins" = "packages";
+        "node_modules" = "packages";
+        ".git" = "git-folder";
+      };
+      merge = {
+        default = "choose";
+        "ronoctua-extensions.json" = "set";
+      };
+      offers = [ "vscode-extensions" ];
     };
   };
 
@@ -489,6 +562,14 @@
     "state/world-cache.json" = {
       kept = false;
       reason = "cache";
+    };
+    # The VS Code extensions this machine saw installed the last time
+    # (`ronoctua-vscode record`): an id uninstalled HERE leaves the person's
+    # list by it, and another machine's never does — so it is this
+    # machine's, and never travels.
+    "state/vscode-seen.json" = {
+      kept = false;
+      reason = "machine";
     };
     # THE STORES THAT WERE WRITTEN BY HAND until the lenient store
     # (2026-10-05), and the files `write_atomically` puts under a root.

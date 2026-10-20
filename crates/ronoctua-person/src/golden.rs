@@ -1,6 +1,7 @@
 //! The golden fixtures: every good file reads and writes back byte for byte,
 //! and every bad one is refused for the reason it was written to show.
 
+use crate::choice::Choice;
 use crate::declared::Declared;
 use crate::declined::Declined;
 use crate::local::{Approved, Held, Signer};
@@ -41,6 +42,7 @@ fn every_good_fixture_reads_and_writes_back_byte_for_byte() {
     round_trips::<MachineState>("state", include_str!("../fixtures/good/state.json"));
     round_trips::<Options>("options", include_str!("../fixtures/good/options.json"));
     round_trips::<Signer>("signer", include_str!("../fixtures/good/signer.json"));
+    round_trips::<Choice>("choice", include_str!("../fixtures/good/choice.json"));
 }
 
 fn refused<T: Document + std::fmt::Debug>(name: &str, text: &str, why: Why) {

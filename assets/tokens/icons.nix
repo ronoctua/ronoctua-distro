@@ -653,6 +653,9 @@
   git-commit = "oct-git_commit";
   rust = "md-language_rust";
   nix = "md-nix";
+  # Common Lisp's own mark (Nerd Fonts' custom set), for a `.lisp`, `.lsp`,
+  # `.asd` and a Lisp `.cl` in the file manager.
+  common-lisp = "custom-common_lisp";
   container = "md-docker";
 
   # ===================================================================

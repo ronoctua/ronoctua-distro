@@ -661,6 +661,15 @@ pub enum Question {
         /// On every computer of the person's, or this one.
         everywhere: bool,
     },
+    /// Bring a program declined on OTHER computers back on all of them at
+    /// once: the decline goes whole — the one way to undo it for a
+    /// computer that no longer exists.
+    BringBackEverywhere {
+        /// The registry's id.
+        id: String,
+        /// Its name.
+        name: String,
+    },
 }
 
 /// One answer to a question.
@@ -787,6 +796,14 @@ pub enum Deed {
         /// Its name.
         name: String,
     },
+    /// Bring a program declined on other computers only back on every
+    /// computer, after a question.
+    BringBackEverywhere {
+        /// The registry's id.
+        id: String,
+        /// Its name.
+        name: String,
+    },
     /// Look for newer downloads of the declared programs.
     RefreshPins,
     /// Search for something to take the place of a program this computer
@@ -854,6 +871,7 @@ impl Deed {
                 everywhere: true, ..
             } => "keep-uninstalled-everywhere",
             Self::BringBack { .. } => "bring-back",
+            Self::BringBackEverywhere { .. } => "bring-back-everywhere",
             Self::RefreshPins => "refresh-pins",
             Self::FindReplacement(_) => "find-replacement",
             Self::Edit(_) => "edit",
@@ -2440,6 +2458,14 @@ impl View {
                 name,
                 r,
             ),
+            Question::BringBackEverywhere { id, name } => self.queue_signed(
+                Order::Undecline {
+                    id,
+                    everywhere: true,
+                },
+                name,
+                r,
+            ),
         }
     }
 
@@ -2559,7 +2585,18 @@ impl View {
                 });
                 Errand::Nothing
             }
-            Deed::BringBack { id, name } => self.queue_signed(Order::Undecline { id }, name, r),
+            Deed::BringBack { id, name } => self.queue_signed(
+                Order::Undecline {
+                    id,
+                    everywhere: false,
+                },
+                name,
+                r,
+            ),
+            Deed::BringBackEverywhere { id, name } => {
+                self.ask_it(Question::BringBackEverywhere { id, name });
+                Errand::Nothing
+            }
             Deed::RefreshPins => self.queue_signed(
                 Order::RefreshPins,
                 texts.t(crate::key::SOFTWARE_DECLARED_DOOR),
@@ -4787,7 +4824,7 @@ fn distro_job<'a>(r: &'a Readings, id: &str) -> Option<&'a ronoctua_transfers::J
         .filter(|j| match &j.work {
             ronoctua_transfers::Work::Software { order, .. } => matches!(
                 order.as_ref(),
-                Order::Decline { id: x, .. } | Order::Undecline { id: x } if x == id
+                Order::Decline { id: x, .. } | Order::Undecline { id: x, .. } if x == id
             ),
             _ => false,
         })
@@ -4895,6 +4932,21 @@ fn unreadable_rows(b: &mut Builder<'_>, d: &Declarations) {
         let said = b.texts.t_with(why, &[("file", b.texts.t(file).as_str())]);
         b.said(said, tokens::color::STATE_ERROR);
     }
+}
+
+/// This system's list of the distro's programs, when it does not read: said
+/// in the danger tone, never an empty list of the distro's programs.
+fn registry_rows(b: &mut Builder<'_>, d: &Declarations) {
+    use crate::key;
+    let Some(why) = d.registry_unreadable else {
+        return;
+    };
+    let said = b.texts.t(if why == ronoctua_software::person::Why::Newer {
+        key::SOFTWARE_DECLARED_REGISTRY_NEWER
+    } else {
+        key::SOFTWARE_DECLARED_REGISTRY_BROKEN
+    });
+    b.said(said, tokens::color::STATE_ERROR);
 }
 
 /// One declared entry: what it is, where it goes, how this computer stands
@@ -5087,6 +5139,7 @@ fn declined_level(b: &mut Builder<'_>, r: &Readings) {
         return;
     };
     unreadable_rows(b, d);
+    registry_rows(b, d);
     if d.declined.is_empty() {
         let t = b.texts.t(key::SOFTWARE_DECLARED_NONE_DECLINED);
         b.said(t, tokens::color::TEXT_DIM);
@@ -5164,11 +5217,16 @@ fn declined_level(b: &mut Builder<'_>, r: &Readings) {
 /// A decline is always reachable here, whatever came of it: one the system
 /// refused because the distro needs the program, one of a program the
 /// distro stopped carrying, one of other computers only (and then keeping
-/// it uninstalled HERE too is offered, as the launcher's removal asks).
+/// it uninstalled HERE too is offered, as the launcher's removal asks). It
+/// is brought back per computer: here, or everywhere for a decline of every
+/// computer — never from here on the others.
 fn distro_rows(b: &mut Builder<'_>, r: &Readings, id: &str) {
     use crate::key;
     let decls = declarations(r);
     let host = decls.map_or("", |x| x.host.as_str());
+    if let Some(x) = decls {
+        registry_rows(b, x);
+    }
     let d = decls.and_then(|x| x.distro(id));
     let declined = decls.and_then(|x| x.decline_of(id));
     if let Some(d) = d {
@@ -5216,15 +5274,35 @@ fn distro_rows(b: &mut Builder<'_>, r: &Readings, id: &str) {
                 said,
                 Spot::Fact("declined"),
             );
-            b.deed(
-                key::SOFTWARE_DECLARED_ROW_BRING_BACK,
-                b.texts.t(key::SOFTWARE_DECLARED_BRING_BACK_VALUE),
-                Deed::BringBack {
-                    id: id.to_owned(),
-                    name: d.map_or_else(|| row.name.clone(), |d| d.name.clone()),
-                },
-                None,
-            );
+            // BRINGING IT BACK IS PER COMPUTER, and the row says which: a
+            // decline of every computer comes back everywhere, one of a list
+            // only here (the others keep it out). A decline of other
+            // computers only is theirs to bring back, and the note says so.
+            if row.declining.applies_to(host) {
+                b.deed(
+                    key::SOFTWARE_DECLARED_ROW_BRING_BACK,
+                    bring_back_said(&row.declining, host, b.texts),
+                    Deed::BringBack {
+                        id: id.to_owned(),
+                        name: d.map_or_else(|| row.name.clone(), |d| d.name.clone()),
+                    },
+                    None,
+                );
+            } else {
+                // OTHER COMPUTERS' DECLINE: theirs to bring back — or every
+                // computer's at once from here, asked first, for one that no
+                // longer exists and so never will.
+                b.note(key::SOFTWARE_DECLARED_BACK_ELSEWHERE);
+                b.deed(
+                    key::SOFTWARE_DECLARED_ROW_BRING_BACK_EVERYWHERE,
+                    String::new(),
+                    Deed::BringBackEverywhere {
+                        id: id.to_owned(),
+                        name: d.map_or_else(|| row.name.clone(), |d| d.name.clone()),
+                    },
+                    None,
+                );
+            }
             if let Some(d) = declinable {
                 if !row.declining.applies_to(host) {
                     keep_uninstalled(b, d, false);
@@ -5240,6 +5318,28 @@ fn distro_rows(b: &mut Builder<'_>, r: &Readings, id: &str) {
                 keep_uninstalled(b, d, true);
             }
         }
+    }
+}
+
+/// What "bring it back" does, as its value: everywhere at once for a
+/// decline of every computer; here for one of a list of computers, with how
+/// many others keep it out.
+fn bring_back_said(
+    declining: &ronoctua_software::person::declined::Declining,
+    host: &str,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    use crate::key;
+    use ronoctua_i18n::Arg;
+    match declining.machines.as_deref() {
+        None => texts.t(key::SOFTWARE_DECLARED_BRING_BACK_VALUE),
+        Some(hosts) => texts.t_args(
+            key::SOFTWARE_DECLARED_BRING_BACK_HERE,
+            &[(
+                "others",
+                Arg::Number(count(hosts.iter().filter(|h| *h != host).count())),
+            )],
+        ),
     }
 }
 
@@ -5780,6 +5880,10 @@ fn explanation_of(q: &Question) -> Vec<&'static str> {
             key::SOFTWARE_DECLARED_DECLINE_REBUILD,
             key::SOFTWARE_DECLARED_DECLINE_BACK,
         ],
+        Question::BringBackEverywhere { .. } => vec![
+            key::SOFTWARE_DECLARED_BACK_EVERYWHERE_OTHERS,
+            key::SOFTWARE_DECLARED_BACK_EVERYWHERE_HERE,
+        ],
         _ => Vec::new(),
     }
 }
@@ -5900,6 +6004,14 @@ fn question(b: &mut Builder<'_>, q: &Question) {
                 &[("app", name.as_str())],
             ),
             key::SOFTWARE_DECLARED_YES_DECLINE,
+            None,
+        ),
+        Question::BringBackEverywhere { name, .. } => (
+            t.t_with(
+                key::SOFTWARE_DECLARED_SURE_BRING_BACK_EVERYWHERE,
+                &[("app", name.as_str())],
+            ),
+            key::SOFTWARE_DECLARED_YES_BRING_BACK_EVERYWHERE,
             None,
         ),
     };

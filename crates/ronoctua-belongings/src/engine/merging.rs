@@ -270,7 +270,9 @@ impl Engine<'_> {
         }
         let favor = match kept::merge_rule(logical) {
             MergeRule::Union => Favor::Union,
-            MergeRule::Auto | MergeRule::Choose => Favor::None,
+            // A SET IS JOINED AS JSON above (`merge_json`'s list); a file
+            // under the rule that is not one is merged as any other text.
+            MergeRule::Auto | MergeRule::Choose | MergeRule::Set => Favor::None,
         };
         let Some(merged) = self.merge_text(three, favor) else {
             return Ok(Tried::Not);

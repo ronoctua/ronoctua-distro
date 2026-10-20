@@ -142,6 +142,7 @@ assert positive "videoMetricsThumbsMib" declared.videoMetricsThumbsMib;
 # bound of nothing would list an archive again at every step into it, and
 # extract a member only to throw it away before it opened.
 assert positive "archiveListings" declared.archiveListings;
+assert positive "mimeTieEntries" declared.mimeTieEntries;
 assert positive "archiveOpenedMib" declared.archiveOpenedMib;
 # THE GIT BROWSER'S OLD VERSIONS: a bound of nothing would remove every copy
 # the moment it was made, before the program opening it had read it.
@@ -246,6 +247,9 @@ writeTextFile {
 
     /// How many archive listings a process keeps, in listings.
     pub const ARCHIVE_LISTINGS: usize = ${toString declared.archiveListings};
+
+    /// The most answers to a tied name a process keeps, in entries.
+    pub const MIME_TIE_ENTRIES: usize = ${toString declared.mimeTieEntries};
 
     /// The most the members opened out of archives may weigh, in MiB.
     pub const ARCHIVE_OPENED_MIB: u32 = ${toString declared.archiveOpenedMib};

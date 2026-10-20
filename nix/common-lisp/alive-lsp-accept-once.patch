@@ -1,0 +1,72 @@
+--- a/src/server.lisp
++++ b/src/server.lisp
+@@ -178,13 +178,20 @@
+                      :do-load (lambda (path &key stdin-fn stdout-fn stderr-fn) (alive/file:do-load path :stdin-fn stdin-fn :stdout-fn stdout-fn :stderr-fn stderr-fn)))))
+ 
+ 
++;; The session's reader thread, which SESSION:START announces with a
++;; SPAWNED-THREAD condition and does not return.
+ (defun accept-conn (server log)
+     (let* ((conn (usocket:socket-accept (socket server) :element-type '(unsigned-byte 8)))
+            (state (state:create :log log))
+            (deps (create-deps :input-stream (flexi-streams:make-flexi-stream (usocket:socket-stream conn))
+                               :output-stream (usocket:socket-stream conn)
+-                              :state state)))
+-        (session:start deps state)))
++                              :state state))
++           (reader nil))
++        (handler-bind ((spawn:spawned-thread (lambda (c)
++                                                 (unless reader
++                                                     (setf reader (spawn:thread c))))))
++            (session:start deps state))
++        reader))
+ 
+ 
+ (defun wait-for-conn (server log)
+@@ -211,7 +218,10 @@
+               (setf (socket server) nil))))
+ 
+ 
+-(defun listen-for-conns (server log port)
++;; ACCEPT-ONCE: the listener closes after the first client is accepted, and
++;; the server lives as long as that client's session. One editor behind a
++;; bridge is then the only client there can ever be.
++(defun listen-for-conns (server log port accept-once)
+     (let ((socket (usocket:socket-listen "127.0.0.1" port :reuse-address T)))
+         (format T "[~A][STARTING] Started on port ~A~%" (alive/utils:get-timestamp) (usocket:get-local-port socket))
+ 
+@@ -220,15 +230,21 @@
+                        (setf (running server) T)
+ 
+                        (loop :while (running server)
+-                             :do (wait-for-conn server log)))
++                             :do (let ((reader (wait-for-conn server log)))
++                                     (when (and accept-once reader)
++                                           (bt:with-recursive-lock-held ((lock server))
++                                               (setf (running server) NIL)
++                                               (usocket:socket-close (socket server))
++                                               (setf (socket server) NIL))
++                                           (bt:join-thread reader)))))
+             (stop-server server))))
+ 
+ 
+-(defun start-server (server log port)
++(defun start-server (server log port accept-once)
+     (let ((stdout *standard-output*))
+         (bt:make-thread (lambda ()
+                             (let ((*standard-output* stdout))
+-                                (listen-for-conns server log port)))
++                                (listen-for-conns server log port accept-once)))
+                         :name "Alive LSP Server")))
+ 
+ 
+@@ -238,7 +254,7 @@
+     (stop-server server))
+ 
+ 
+-(defun start (&key (port *default-port*))
++(defun start (&key (port *default-port*) accept-once)
+     (let ((log (logger:create *standard-output* logger:*info*))
+           (server (make-instance 'lsp-server)))
+-        (start-server server log port)))
++        (start-server server log port accept-once)))

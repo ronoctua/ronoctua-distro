@@ -52,11 +52,15 @@ pub enum Op {
     /// kept or the passphrase a door wrote — no network.
     Sign,
     // ── anchor: L10 ──
+    /// Install the VS Code extensions of the person's list that are missing
+    /// here, one at a time (`offers::install_extensions`) — the yes to
+    /// `status::Offer::VscodeExtensions`. No passphrase, no repository.
+    VscodeExtensions,
 }
 
 impl Op {
     /// Every one, for the census of their texts.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Prepare,
         Self::Apply,
         Self::Abandon,
@@ -70,6 +74,7 @@ impl Op {
         Self::Init,
         Self::VerifyPassphrase,
         Self::Sign,
+        Self::VscodeExtensions,
     ];
 
     /// The CLI's word for it, and the suffix of its text key.
@@ -89,6 +94,7 @@ impl Op {
             Self::Init => "init",
             Self::VerifyPassphrase => "verify-passphrase",
             Self::Sign => "sign",
+            Self::VscodeExtensions => "vscode-extensions",
         }
     }
 
@@ -123,11 +129,13 @@ pub enum Phase {
     Compacting,
     // ── anchor: L08 ──
     // ── anchor: L09 ──
+    /// Installing what a yes to an offer brings (VS Code's extensions).
+    Installing,
 }
 
 impl Phase {
     /// Every one, for the census of their texts.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Fetching,
         Self::Unlocking,
         Self::Reading,
@@ -137,6 +145,7 @@ impl Phase {
         Self::Keying,
         Self::Merging,
         Self::Compacting,
+        Self::Installing,
     ];
 
     /// Its word, the suffix of its text key.
@@ -152,6 +161,7 @@ impl Phase {
             Self::Keying => "keying",
             Self::Merging => "merging",
             Self::Compacting => "compacting",
+            Self::Installing => "installing",
         }
     }
 

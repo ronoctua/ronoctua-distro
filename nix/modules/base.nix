@@ -163,12 +163,14 @@ in
       ];
       default = "full";
       description = ''
-        `full` brings everything (~29 GiB of closure, estimated on 2026-10-05 from the 2026-08-14
-        measurement; see `profile.nix`) and is the recommended one.
+        `full` brings everything and is the recommended one: ~37 GiB of closure with every
+        program, ~35,5 with the installer's defaults (LibreOffice left out) — measured on
+        2026-10-20, plus VS Code and Common Lisp measured apart; see `profile.nix`.
 
         `minimal` leaves out Android, the other compilers (go, python, node, gcc),
-        the browser, the editor, the media, the font's 27 variants and the icon
-        superpack — ~11,8 GiB, estimated the same way. It leaves out nothing of what MAKES the distro: the compositor,
+        the browser, the editor, the media, the office suites, the Crafting Apps, the font's 27
+        variants and the icon superpack — ~12,5 GiB with Common Lisp, measured the same day. It leaves out
+        nothing of what MAKES the distro: the compositor,
         the footer, the primary font, the keyboard, the network, impermanence and the terminal stay —
         and neither does it leave out working ON the distro: the devshell's toolchain, rust and
         the coding agents are in both.

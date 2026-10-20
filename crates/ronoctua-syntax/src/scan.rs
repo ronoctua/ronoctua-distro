@@ -10,19 +10,24 @@
 //!
 //! # The order of the tests is the design
 //!
-//! A line comment is tried FIRST and returns immediately. That is what makes
-//! "the comment beats the quotes" true rather than hoped for: without it,
+//! A character literal is tried first, in a grammar that has one: Common
+//! Lisp's `#\;` is the semicolon and `#\"` the quote, and read as anything
+//! else they would open a comment or a string.
+//!
+//! Then a line comment, which returns immediately. That is what makes "the
+//! comment beats the quotes" true rather than hoped for: without it,
 //! `# "this"` would open a string that never closes and paint the rest of the
 //! block one colour.
 //!
 //! Then: a block comment, then a string opener (longest first, so `"""` beats
 //! `"`), then an attribute prefix, then a numeral at a word boundary, then a
 //! whole word. Never a prefix of a word — by prefix, `iffy` would be a
-//! half-coloured `if`.
+//! half-coloured `if`. What a word is made of is the grammar's (`word_chars`):
+//! in Lisp `when-let` is one word, and does not light `when`.
 
 use alloc::vec::Vec;
 
-use crate::{Grammar, Open, Range, Role, State, is_word_char, push};
+use crate::{Grammar, Open, Range, Role, State, in_word, is_word_char, push};
 
 /// One line of a language read as code.
 pub(crate) fn code(text: &str, grammar: &Grammar, state: State, out: &mut Vec<Range>) -> State {
@@ -68,6 +73,17 @@ pub(crate) fn code(text: &str, grammar: &Grammar, state: State, out: &mut Vec<Ra
     }
 
     while at < bytes.len() {
+        // 0. A CHARACTER LITERAL, before the comment and the quotes it may
+        //    hold: `#\;` is the semicolon and `#\"` the quote.
+        if let Some(prefix) = grammar.char_prefix
+            && starts(bytes, at, prefix)
+        {
+            let end = char_literal_end(bytes, at + prefix.len(), grammar);
+            push(out, at, end, Role::Constant);
+            at = end;
+            continue;
+        }
+
         // 1. A COMMENT TO THE END OF THE LINE, and it RETURNS. That return is
         //    what makes "comment beats quotes" a property rather than an order
         //    somebody has to remember.
@@ -146,7 +162,7 @@ pub(crate) fn code(text: &str, grammar: &Grammar, state: State, out: &mut Vec<Ra
                 Some(close) => {
                     find(bytes, at + a.prefix.len(), close).map_or(text.len(), |n| n + close.len())
                 }
-                None => word_end(bytes, at + a.prefix.len()),
+                None => word_end(bytes, at + a.prefix.len(), grammar),
             };
             if end > from {
                 push(out, from, end, Role::Attribute);
@@ -159,19 +175,18 @@ pub(crate) fn code(text: &str, grammar: &Grammar, state: State, out: &mut Vec<Ra
 
         // 5. A NUMERAL, and only at a word boundary — inside `utf8` the `8` is
         //    part of the word, not a number.
-        if c.is_ascii_digit()
-            && !matches!(grammar.numbers, crate::Numbers::None)
-            && at_boundary(bytes, at)
+        if !matches!(grammar.numbers, crate::Numbers::None)
+            && at_boundary(bytes, at, grammar)
+            && let Some(end) = numeral(bytes, at, grammar)
         {
-            let end = number_end(bytes, at, matches!(grammar.numbers, crate::Numbers::C));
             push(out, at, end, Role::Number);
             at = end;
             continue;
         }
 
         // 6. A WHOLE WORD, never a prefix of one.
-        if is_word_char(c) && at_boundary(bytes, at) {
-            let end = word_end(bytes, at);
+        if in_word(c, grammar) && at_boundary(bytes, at, grammar) {
+            let end = word_end(bytes, at, grammar);
             let word = &text[at..end];
             if let Some(role) = classify(word, bytes, end, grammar) {
                 push(out, at, end, role);
@@ -260,12 +275,12 @@ pub(crate) fn markup(text: &str, grammar: &Grammar, state: State, out: &mut Vec<
         if c_at(bytes, at) == Some(b'<') {
             let closed = find(bytes, at, ">");
             let end = closed.map_or(text.len(), |n| n + 1);
-            tag(text, at, end, out);
+            tag(text, at, end, grammar, out);
             // AN ELEMENT WHOSE CONTENT IS ANOTHER LANGUAGE hands the text
             // after its opening tag to that language, up to its closing tag —
             // on this line, or on a later one through the state.
             if closed.is_some()
-                && let Some((element, inner)) = embeds(bytes, at, end)
+                && let Some((element, inner)) = embeds(bytes, at, end, grammar)
             {
                 let close = EMBEDDED
                     .get(usize::from(element))
@@ -320,12 +335,17 @@ const EMBEDDED: [(&str, &str); 2] = [("script", "javascript"), ("style", "css")]
 /// Whether the tag in `from..to` OPENS one of [`EMBEDDED`] — not its closing
 /// tag, and not a self-closed `<script src=… />`, which holds nothing — and
 /// which, with the language its content is drawn in.
-fn embeds(bytes: &[u8], from: usize, to: usize) -> Option<(u8, crate::Language)> {
+fn embeds(
+    bytes: &[u8],
+    from: usize,
+    to: usize,
+    grammar: &Grammar,
+) -> Option<(u8, crate::Language)> {
     let name_at = from + 1;
     if c_at(bytes, name_at) == Some(b'/') || to < 2 || c_at(bytes, to - 2) == Some(b'/') {
         return None;
     }
-    let name_end = word_end(bytes, name_at);
+    let name_end = word_end(bytes, name_at, grammar);
     let name = bytes.get(name_at..name_end)?;
     EMBEDDED
         .iter()
@@ -385,13 +405,13 @@ fn embedded(
 }
 
 /// The pieces of one `<…>`: the element's name, then its attributes.
-fn tag(text: &str, from: usize, to: usize, out: &mut Vec<Range>) {
+fn tag(text: &str, from: usize, to: usize, grammar: &Grammar, out: &mut Vec<Range>) {
     let bytes = text.as_bytes();
     let mut at = from + 1;
     if c_at(bytes, at) == Some(b'/') {
         at += 1;
     }
-    let name = word_end(bytes, at);
+    let name = word_end(bytes, at, grammar);
     push(out, at, name, Role::Tag);
     at = name;
 
@@ -405,8 +425,8 @@ fn tag(text: &str, from: usize, to: usize, out: &mut Vec<Range>) {
             at = end;
             continue;
         }
-        if is_word_char(c) && at_boundary(bytes, at) {
-            let end = word_end(bytes, at);
+        if in_word(c, grammar) && at_boundary(bytes, at, grammar) {
+            let end = word_end(bytes, at, grammar);
             // AN ATTRIBUTE'S NAME IS THE KEY SIDE OF A PAIR, which is what the
             // role means — the same role a JSON key gets, and deliberately so.
             if c_at(bytes, end) == Some(b'=') {
@@ -431,6 +451,11 @@ fn classify(word: &str, bytes: &[u8], end: usize, grammar: &Grammar) -> Option<R
         return Some(Role::Type);
     }
     if grammar.constants.binary_search(&word).is_ok() {
+        return Some(Role::Constant);
+    }
+    // A LISP KEYWORD, `:test`: a word that starts with the colon. A symbol
+    // of a package, `cl:car`, has its colon inside, and is a name.
+    if grammar.colon_is_constant && word.len() > 1 && word.starts_with(':') {
         return Some(Role::Constant);
     }
     if grammar.screaming_is_constant && is_screaming(word) {
@@ -498,7 +523,7 @@ fn quoted(text: &str, grammar: &Grammar, from: usize, to: usize, out: &mut Vec<R
             } else if marker.ends_with('(') {
                 find(bytes, at, ")").map_or(to, |n| n + 1).min(to)
             } else {
-                word_end(bytes, at + marker.len()).min(to)
+                word_end(bytes, at + marker.len(), grammar).min(to)
             };
             if end > at {
                 push(out, cut, at, Role::String);
@@ -683,16 +708,72 @@ fn next_visible(bytes: &[u8], at: usize) -> Option<u8> {
     None
 }
 
-/// Is `at` the first byte of a word?
-fn at_boundary(bytes: &[u8], at: usize) -> bool {
-    at == 0 || !is_word_char(bytes[at - 1])
+/// Is `at` the first byte of a word, by this grammar's word characters?
+fn at_boundary(bytes: &[u8], at: usize, grammar: &Grammar) -> bool {
+    at == 0 || !in_word(bytes[at - 1], grammar)
 }
 
 /// Where the word starting at `at` ends.
-fn word_end(bytes: &[u8], at: usize) -> usize {
+fn word_end(bytes: &[u8], at: usize, grammar: &Grammar) -> usize {
     let mut end = at;
-    while end < bytes.len() && is_word_char(bytes[end]) {
+    while end < bytes.len() && in_word(bytes[end], grammar) {
         end += 1;
+    }
+    end
+}
+
+/// Where the numeral starting at `at` ends, if one starts there.
+///
+/// A digit starts one. So does a SIGN BEFORE A DIGIT where the grammar reads
+/// the sign as part of a word — Lisp's `-1` is one token, and its `-` is no
+/// operator; in a grammar where `-` is punctuation the sign stays out and the
+/// digits are the numeral, as they always were. Lisp's ratio `1/2` is one
+/// numeral too, for the same reason.
+///
+/// AND A NUMERAL THAT RUNS INTO A CHARACTER ONLY THIS GRAMMAR CALLS PART OF A
+/// WORD IS NOT ONE: Lisp's `1+` is a function and `1-2-3` a symbol. The
+/// default word characters never count here, so a grammar that declares none
+/// reads every numeral as it did before rows could declare them.
+fn numeral(bytes: &[u8], at: usize, grammar: &Grammar) -> Option<usize> {
+    let c = bytes[at];
+    let digits = if c.is_ascii_digit() {
+        at
+    } else if (c == b'-' || c == b'+')
+        && in_word(c, grammar)
+        && c_at(bytes, at + 1).is_some_and(|n| n.is_ascii_digit())
+    {
+        at + 1
+    } else {
+        return None;
+    };
+    let c_like = matches!(grammar.numbers, crate::Numbers::C);
+    let mut end = number_end(bytes, digits, c_like);
+    if c_at(bytes, end) == Some(b'/')
+        && in_word(b'/', grammar)
+        && c_at(bytes, end + 1).is_some_and(|n| n.is_ascii_digit())
+    {
+        end = number_end(bytes, end + 1, c_like);
+    }
+    if c_at(bytes, end).is_some_and(|n| in_word(n, grammar) && !is_word_char(n)) {
+        return None;
+    }
+    Some(end)
+}
+
+/// Where a character literal ends, its prefix already read: one character —
+/// whatever it is, a quote, a semicolon, an accented letter — and, when that
+/// one is part of a word, the word characters after it (`#\Space`,
+/// `#\Newline`). At the end of the line the literal is the prefix alone: the
+/// character it names is the line break.
+fn char_literal_end(bytes: &[u8], body: usize, grammar: &Grammar) -> usize {
+    let Some(first) = c_at(bytes, body) else {
+        return bytes.len().min(body);
+    };
+    let mut end = (body + char_len(first)).min(bytes.len());
+    if in_word(first, grammar) {
+        while end < bytes.len() && in_word(bytes[end], grammar) {
+            end += 1;
+        }
     }
     end
 }

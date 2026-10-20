@@ -451,11 +451,25 @@ pkgs.testers.runNixOSTest {
           environ = machine.succeed(f"tr '\\0' '\\n' < /proc/{pid}/environ")
           for name in ("WAYLAND_DISPLAY", "DISPLAY"):
               assert not re.search(rf"^{name}=", environ, re.M), f"the daemon has {name}:\n{environ}"
-          # THE DISTRO'S PACKAGE, and the daemon is answering.
+          # THE DISTRO'S PACKAGE, and the daemon is answering. The package is
+          # a join over the build (`emacsPkg`, which renames one launcher), so
+          # the program is the one its `bin/emacs` leads to.
           exe = machine.succeed(f"readlink /proc/{pid}/exe").strip()
-          assert exe.startswith("${emacs}/"), exe
+          build = machine.succeed("dirname $(readlink -f ${emacs}/bin/emacs)").strip()
+          assert exe.startswith(build + "/"), (exe, build)
           assert ask_emacs("(daemonp)") == "t"
           print("the daemon's frames before any client: " + json.dumps(frames()))
+
+      with subtest("the launcher names the entry that is not the daemon's"):
+          # What the locator lists (`LEADER a`) is each entry's `Name=`, read
+          # from the system's applications: the client's keeps its own, and
+          # the one that starts a second Emacs says not to use it.
+          def name_of(entry):
+              text = machine.succeed(f"cat /run/current-system/sw/share/applications/{entry}")
+              return re.findall(r"^Name=(.*)$", text, re.M)[0]
+
+          assert name_of("emacs.desktop") == "Emacs (non-client, so don't use it)", name_of("emacs.desktop")
+          assert name_of("emacsclient.desktop") == "Emacs (Client)", name_of("emacsclient.desktop")
 
       with subtest("a terminal client works with no display"):
           before = daemon()

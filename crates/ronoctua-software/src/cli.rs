@@ -452,7 +452,7 @@ pub fn name_of(order: &Order) -> String {
         | Order::Upgrade {
             scope: Scope::One { key },
         } => key.id().to_owned(),
-        Order::Decline { id, .. } | Order::Undecline { id } => id.clone(),
+        Order::Decline { id, .. } | Order::Undecline { id, .. } => id.clone(),
         Order::Reconcile {
             source: Some(source),
         } => source.word().to_owned(),
@@ -1293,7 +1293,10 @@ mod tests {
                 id: "gimp".into(),
                 machines: None,
             },
-            Order::Undecline { id: "gimp".into() },
+            Order::Undecline {
+                id: "gimp".into(),
+                everywhere: false,
+            },
             Order::Reconcile {
                 source: Some(Source::Android),
             },

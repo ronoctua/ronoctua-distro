@@ -213,6 +213,47 @@ belongings-targets-note = Suas chaves de SSH, seu chaveiro do GnuPG e suas chave
 # What a sync that brought a target's files offers ("no" drawn first).
 belongings-offer-ssh-signing = Assinar seus commits e tags do git com { $key }? Toda máquina que tem esta chave vai assinar; as outras seguem sem assinatura.
 belongings-offer-pam-u2f = Trazer para esta máquina as chaves de segurança que você registrou nas outras? Cada uma responde ao sudo aqui no lugar da senha, que continua valendo.
+belongings-offer-vscode-extensions = { $n ->
+    [one] Reinstalar a extensão do VS Code da sua lista que falta nesta máquina?
+   *[other] Reinstalar as { $n } extensões do VS Code da sua lista que faltam nesta máquina?
+  } Elas vêm do Visual Studio Marketplace, uma de cada vez, na fila de transferências, e o sim libera { $hosts ->
+    [one] este host:
+   *[other] estes { $hosts } hosts:
+  }
+# Your VS Code extensions on this machine: what the last install did, and what is missing.
+belongings-extensions = Suas extensões do VS Code
+belongings-extensions-missing = { $n ->
+    [one] Uma extensão da sua lista falta aqui. Instalá-la libera { $hosts ->
+        [one] este host:
+       *[other] estes { $hosts } hosts:
+      }
+   *[other] { $n } extensões da sua lista faltam aqui. Instalá-las libera { $hosts ->
+        [one] este host:
+       *[other] estes { $hosts } hosts:
+      }
+  }
+belongings-extensions-install = { $n ->
+    [one] Instalar
+   *[other] Instalar todas
+  }
+belongings-extensions-installing = Instalando na fila de transferências…
+belongings-extensions-stopped = A última instalação parou antes do fim: o que entrou está instalado, e o resto continua faltando.
+belongings-extensions-entered = { $n ->
+    [0] Nenhuma extensão entrou.
+    [one] Uma extensão entrou.
+   *[other] { $n } extensões entraram.
+  }
+belongings-extensions-failed = { $n ->
+    [one] Uma não pôde ser instalada, e o VS Code disse por quê:
+   *[other] { $n } não puderam ser instaladas, e o VS Code disse por quê:
+  }
+belongings-extensions-refused = Não foi instalado: { $why }
+belongings-extensions-refused-no-code = o VS Code não está nesta máquina
+belongings-extensions-refused-newer = sua lista de extensões foi escrita por uma máquina mais nova: atualize esta primeiro
+belongings-extensions-refused-malformed = sua lista de extensões não pôde ser lida, e nada foi instalado
+belongings-extensions-refused-not-let = estes hosts não foram liberados, e nada foi pedido:
+belongings-extensions-refused-busy = outra instalação delas estava rodando
+belongings-extensions-refused-files = um arquivo do VS Code daqui não pôde ser lido ou escrito; o log do sistema diz qual
 # The identity kept for the session (`keep_unlocked`).
 belongings-unlock-switch = Lembrar a senha durante esta sessão
 belongings-unlock-note = Guardada na memória do kernel, nunca no disco, até você sair, a máquina dormir ou passarem { $hours } horas.
@@ -257,6 +298,9 @@ belongings-offer-taken = Ligado.
 belongings-offer-refused = Não foi ligado: { $why }
 about-belongings-offer-no = Deixa desligado: só volta a ser oferecido quando a chave mudar em outra máquina
 about-belongings-offer-yes = Liga isto, nesta máquina
+about-belongings-offer-no-extensions = Deixa de fora: só volta a ser oferecido quando sua lista mudar em outra máquina, e a página mantém uma linha que as instala
+about-belongings-offer-yes-extensions = Libera os hosts acima e as instala nesta máquina, na fila de transferências
+about-belongings-extensions-install = Libera os hosts acima e as instala nesta máquina, na fila de transferências, uma de cada vez
 # The files a lenient read repaired.
 belongings-repairs = Consertado na leitura
 belongings-repairs-note = Esta máquina não conseguiu ler parte destes arquivos. O que ela não leu continua em cada arquivo como está escrito, e ela seguiu sem isso. Grave o conserto para pôr os valores desta máquina no lugar, ou deixe o arquivo como está.

@@ -74,6 +74,8 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use ronoctua_git::{Credentials, Repo, Tools};
+use ronoctua_person::choice::Choice;
+use ronoctua_person::declined::Declined;
 
 use super::merging::{Joined, Merges, Three, Tried, write_with_mode};
 use super::signing::{self, Pair, Signing, Vouched};
@@ -927,6 +929,7 @@ impl Engine<'_> {
                 too_large: base.too_large,
                 held: base.held,
                 unsigned: base.unsigned,
+                ..Report::default()
             });
         }
         Err(Refusal::of(Why::Raced))
@@ -1136,8 +1139,9 @@ fn count(n: usize) -> u32 {
 }
 
 /// What the installer hands [`plain_out`] beside the address and the access:
-/// the passphrase's file (`0600`, consumed), and where the signing key the
-/// passphrase opened is written for the installer to pin.
+/// the passphrase's file (`0600`, consumed), where the signing key the
+/// passphrase opened is written for the installer to pin, and the person's
+/// choice of the distro's programs for the machine being installed.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Opened<'a> {
     /// The passphrase's file; `None`: nothing is verified, and root's
@@ -1145,28 +1149,52 @@ pub struct Opened<'a> {
     pub passphrase: Option<&'a Path>,
     /// Where the signing key's public half goes (`0600`, new).
     pub signer: Option<&'a Path>,
+    /// The installer's choice (`ronoctua_person::choice::Choice`): said in
+    /// the repository's `declined.json`, signed with the key the passphrase
+    /// opens and pushed before the copy — only with the passphrase: a
+    /// decline is signed, or not made.
+    pub choice: Option<&'a Path>,
 }
 
-/// `plain --repository <url> --keys <dir> --out <dir> [--passphrase <file>
-/// --signer <file>]`: the plain part of a repository, copied into `out`
-/// (`out/<at>/…`, the repository's `plain/` layout, with its manifest and
-/// signature) — for the installer, which stages the person's declarations
-/// before `nixos-install`, with no home and no settings. The access is the
-/// address's kind: a deploy key (`keys/deploy`, with `keys/known_hosts`) for
-/// SSH, a token (`keys/token`) for HTTPS. With the passphrase, `key.age` is
-/// opened, the signature must hold under ITS signing key, and that key's
-/// public half is written to `signer` — the key the installer pins, read
-/// from the passphrase and never from the repository's copy. The clone is
-/// made beside `out` and removed, however it ends. Nothing is pushed.
+/// `plain --repository <url> --keys <dir> --out <dir> [--user <name>] [--passphrase <file>
+/// --signer <file> [--decline <file>]]`: the plain part of a repository,
+/// copied into `out` (`out/<at>/…`, the repository's `plain/` layout, with
+/// its manifest and signature) — for the installer, which stages the
+/// person's declarations before `nixos-install`, with no home and no
+/// settings. The access is the address's kind: a deploy key (`keys/deploy`,
+/// with `keys/known_hosts`) for SSH, a token (`keys/token`) for HTTPS. With
+/// the passphrase, `key.age` is opened, the signature must hold under ITS
+/// signing key, and that key's public half is written to `signer` — the key
+/// the installer pins, read from the passphrase and never from the
+/// repository's copy. The clone is made beside `out` and removed, however it
+/// ends.
+///
+/// Nothing is pushed but the person's CHOICE for the machine being installed
+/// (`choice`, [`Choice`]): read before any network, said in the repository's
+/// `declined.json` ([`Choice::apply`]: each program left out declined on
+/// that machine alone, each one kept brought back on it — a decline of every
+/// machine stays, and the report names it), which must be as the person
+/// signed it; signed with the key the passphrase opened (the counter one
+/// past the repository's) and pushed, again on top of another machine's
+/// push, BEFORE the copy: the copy then carries it signed, and a machine
+/// that pins that key takes it. A choice the repository says already pushes
+/// nothing ([`crate::plain::ChoiceThere::AlreadyThere`]), so an installation
+/// tried again changes nothing — and one that ticks now what an earlier
+/// attempt left out brings it back.
 ///
 /// # Errors
 ///
 /// [`Why::NoRepository`] for an address that is not plain, [`Why::NoTools`],
 /// [`Why::NeedsAccess`] without the access file, [`Why::Empty`],
-/// [`Why::Newer`], [`Why::NoPassphrase`], [`Why::WrongPassphrase`],
-/// [`Why::Corrupt`] for a plain part whose signature does not hold under the
-/// key the passphrase opened, [`Why::Failed`] when `out` could not be
-/// written, and the network's (on a pass for the host, as every fetch).
+/// [`Why::Newer`] (the repository's, or its `declined.json`'s),
+/// [`Why::NoPassphrase`] (a choice without one included),
+/// [`Why::WrongPassphrase`], [`Why::Corrupt`] for a plain part whose
+/// signature does not hold under the key the passphrase opened — or whose
+/// `declined.json` is not as it signed —, [`Why::Raced`] when another machine
+/// pushed first every time, [`Why::ChoiceUnread`] for a choice that does not
+/// read, [`Why::CopyUnwritten`] when `out` or `signer` could not be written,
+/// [`Why::Failed`] for a file of the scratch clone, and the network's (on a
+/// pass for the host, as every fetch).
 pub fn plain_out(
     address: &str,
     keys: &Path,
@@ -1201,6 +1229,12 @@ pub(super) fn copy_out(
         read
     });
     let passphrase = passphrase.transpose()?;
+    // THE CHOICE, read and checked before any network: a decline is
+    // signed with the key the passphrase opens, or not made.
+    let choice = opened.choice.map(read_choice).transpose()?;
+    if choice.is_some() && passphrase.is_none() {
+        return Err(Refusal::of(Why::NoPassphrase));
+    }
     let mut prefs = Belongings::with_repository(address);
     prefs.user = user.map(str::to_owned);
     let credentials = access_of(address, keys, user, &mut prefs)?;
@@ -1216,9 +1250,28 @@ pub(super) fn copy_out(
         credentials: Some(credentials),
         ..Engine::for_plain(&places, &prefs, tools)
     };
-    let copied = engine.copy_plain(out, passphrase.as_ref(), opened.signer);
+    let copied = engine.copy_plain(out, passphrase.as_ref(), opened.signer, choice.as_ref());
     let _ = std::fs::remove_dir_all(&scratch);
     copied
+}
+
+/// The choice the installer wrote: a regular file within the plain part's
+/// cap, and a [`Choice`] this distro reads.
+fn read_choice(path: &Path) -> Result<Choice, Refusal> {
+    let bytes = plain_bytes(path).ok_or(Refusal::of(Why::ChoiceUnread))?;
+    ronoctua_person::parse(&bytes).map_err(|_| Refusal::of(Why::ChoiceUnread))
+}
+
+/// What saying the installer's choice in the repository came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChosenThere {
+    /// Said, signed and pushed.
+    Pushed,
+    /// The repository said it already: nothing pushed.
+    Unchanged,
+    /// Another machine pushed first — or the push went in and was reported
+    /// failed: the round goes again on top of what is there now.
+    Lost,
 }
 
 impl Engine<'_> {
@@ -1226,7 +1279,9 @@ impl Engine<'_> {
     /// part into `out` (`out/<at>/…`, its manifest and signature beside) —
     /// what [`plain_out`] does in a clone of its own. With `passphrase`, the
     /// signature must hold under the key it opens, whose public half goes to
-    /// `signer`.
+    /// `signer`; with `choice` too, the choice is said, signed and pushed
+    /// first ([`Self::choose_there`]), again while another machine pushes
+    /// first.
     ///
     /// # Errors
     ///
@@ -1236,41 +1291,85 @@ impl Engine<'_> {
         out: &Path,
         passphrase: Option<&age::secrecy::SecretString>,
         signer: Option<&Path>,
+        choice: Option<&Choice>,
     ) -> Result<Report, Refusal> {
-        let ground = self.ground()?;
-        let Some(head) = ground.head.clone() else {
-            return Err(Refusal::of(Why::Empty));
-        };
-        self.checkout(&ground.repo, &head)?;
-        if self.format()? > crate::FORMAT_VERSION {
-            return Err(Refusal::of(Why::Newer));
+        if choice.is_some() && passphrase.is_none() {
+            return Err(Refusal::of(Why::NoPassphrase));
         }
-        // THE KEY THE PASSPHRASE OPENS, and the signature held to it: the
-        // installer pins that key, never the repository's copy of it. A
-        // plain part that key did not sign at all is refused; a file of one
-        // it signed that is not as signed is left out, and named.
-        let mut vouched = None;
-        if let Some(passphrase) = passphrase {
-            let ring = Keyring::open(&self.read_repo(super::KEY_FILE)?, passphrase)?;
-            let key = ring.signing().public();
-            let v = self.vouched(Some(key), &Seen::default());
-            if v.manifest.is_err() {
-                return Err(Refusal::of(Why::Corrupt));
+        for _ in 0..TRIES {
+            let ground = self.ground()?;
+            let Some(head) = ground.head.clone() else {
+                return Err(Refusal::of(Why::Empty));
+            };
+            self.checkout(&ground.repo, &head)?;
+            if self.format()? > crate::FORMAT_VERSION {
+                return Err(Refusal::of(Why::Newer));
             }
-            if let Some(signer) = signer {
-                let _ = std::fs::remove_file(signer);
-                crate::secret::write_private(signer, format!("{key}\n").as_bytes())
-                    .map_err(|_| Refusal::of(Why::Failed))?;
+            // THE KEY THE PASSPHRASE OPENS, and the signature held to it: the
+            // installer pins that key, never the repository's copy of it. A
+            // plain part that key did not sign at all is refused; a file of
+            // one it signed that is not as signed is left out, and named.
+            let mut vouched = None;
+            let mut pushed = Vec::new();
+            let mut chosen = None;
+            let mut kept_everywhere = Vec::new();
+            if let Some(passphrase) = passphrase {
+                let ring = Keyring::open(&self.read_repo(super::KEY_FILE)?, passphrase)?;
+                let key = ring.signing().public();
+                let mut v = self.vouched(Some(key), &Seen::default());
+                if v.manifest.is_err() {
+                    return Err(Refusal::of(Why::Corrupt));
+                }
+                if let Some(signer) = signer {
+                    let _ = std::fs::remove_file(signer);
+                    crate::secret::write_private(signer, format!("{key}\n").as_bytes())
+                        .map_err(|_| Refusal::of(Why::CopyUnwritten))?;
+                }
+                if let Some(choice) = choice {
+                    let (there, everywhere) =
+                        self.choose_there(&ground.repo, ring.signing(), &v, choice)?;
+                    kept_everywhere = everywhere;
+                    match there {
+                        ChosenThere::Lost => continue,
+                        ChosenThere::Unchanged => {
+                            // ALREADY SAID THERE — by an attempt before this
+                            // one too, whose push went in and was reported
+                            // failed: the choice is up all the same.
+                            chosen = Some(crate::plain::ChoiceThere::AlreadyThere);
+                        }
+                        ChosenThere::Pushed => {
+                            // WHAT WENT UP is the signature the copy carries.
+                            v = self.vouched(Some(key), &Seen::default());
+                            if v.manifest.is_err() {
+                                return Err(Refusal::of(Why::Corrupt));
+                            }
+                            pushed.extend(crate::plain::declined_logical());
+                            chosen = Some(crate::plain::ChoiceThere::Pushed);
+                        }
+                    }
+                }
+                vouched = Some(v);
             }
-            vouched = Some(v);
+            let mut report = self.copy_there(out, vouched.as_ref())?;
+            report.pushed = pushed;
+            report.choice = chosen;
+            report.kept_everywhere = kept_everywhere;
+            return Ok(report);
         }
+        Err(Refusal::of(Why::Raced))
+    }
+
+    /// Copies the work tree's plain part into `out`, its manifest and
+    /// signature beside — leaving out, and naming, a signed file `vouched`
+    /// does not hold as signed.
+    fn copy_there(&self, out: &Path, vouched: Option<&Vouched>) -> Result<Report, Refusal> {
         // THE MANIFEST AND ITS SIGNATURE travel with the copy: root's
         // applier holds it to the key the machine pinned.
         for name in [crate::plain::MANIFEST_FILE, crate::plain::SIGNATURE_FILE] {
             let from = self.places.repo().join(crate::plain::DIR).join(name);
             if let Ok(bytes) = std::fs::read(&from) {
                 write_with_mode(&out.join(name), &bytes, PLAIN_MODE)
-                    .map_err(|_| Refusal::of(Why::Failed))?;
+                    .map_err(|_| Refusal::of(Why::CopyUnwritten))?;
             }
         }
         let there = walk_there(&self.places.repo());
@@ -1282,7 +1381,7 @@ impl Engine<'_> {
             let Some(rel) = crate::plain::repo_path(path) else {
                 continue;
             };
-            if let Some(v) = &vouched
+            if let Some(v) = vouched
                 && signed(path)
                 && let Err(why) = v.holds(path, Some(file))
             {
@@ -1295,10 +1394,78 @@ impl Engine<'_> {
             let bytes = std::fs::read(self.places.repo().join(&rel))
                 .map_err(|_| Refusal::of(Why::Corrupt))?;
             write_with_mode(&out.join(inside), &bytes, PLAIN_MODE)
-                .map_err(|_| Refusal::of(Why::Failed))?;
+                .map_err(|_| Refusal::of(Why::CopyUnwritten))?;
             report.changed.push(path.clone());
         }
         Ok(report)
+    }
+
+    /// Says `choice` in the work tree's `declined.json` ([`Choice::apply`])
+    /// and pushes it, signed with `key` — with the kept ids the person
+    /// declined on every machine, which stay. The file there must be what
+    /// the person signed
+    /// (`vouched`, under that key's signature) — or absent and unsigned:
+    /// signing over content the person did not sign would launder it for
+    /// every machine. What goes up is signed one past the repository's
+    /// counter, over exactly what the person's manifest named and the
+    /// joined file: a change of the repository's it does not hold — a file
+    /// changed, added or DELETED without the person — keeps the person's
+    /// line (or none), and so stays held everywhere. Nothing changed (the
+    /// choice said there already): nothing pushed.
+    fn choose_there(
+        &self,
+        repo: &Repo,
+        key: &ronoctua_pq::sign::SigningKey,
+        vouched: &Vouched,
+        choice: &Choice,
+    ) -> Result<(ChosenThere, Vec<String>), Refusal> {
+        let logical = crate::plain::declined_logical().ok_or(Refusal::of(Why::Failed))?;
+        let rel = crate::plain::repo_path(&logical).ok_or(Refusal::of(Why::Failed))?;
+        let path = self.places.repo().join(&rel);
+        let bytes = match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err(Refusal::of(Why::Corrupt)),
+            Ok(_) => Some(plain_bytes(&path).ok_or(Refusal::of(Why::Corrupt))?),
+        };
+        let file = bytes.as_ref().map(|b| PlainFile {
+            sha256: super::merging::sha256(b),
+            size_bytes: b.len() as u64,
+            mode: PLAIN_MODE,
+        });
+        if vouched.holds(&logical, file.as_ref()).is_err() {
+            return Err(Refusal::of(Why::Corrupt));
+        }
+        let mut going = vouched
+            .manifest
+            .as_ref()
+            .map_err(|_| Refusal::of(Why::Corrupt))?
+            .files
+            .clone();
+        let mut joined = match &bytes {
+            None => Declined::default(),
+            Some(b) => ronoctua_person::parse::<Declined>(b).map_err(|r| {
+                Refusal::of(if r.why == ronoctua_person::Why::Newer {
+                    Why::Newer
+                } else {
+                    Why::Corrupt
+                })
+            })?,
+        };
+        let applied = choice.apply(&mut joined);
+        if !applied.changed {
+            return Ok((ChosenThere::Unchanged, applied.everywhere));
+        }
+        let text = ronoctua_person::to_json(&joined);
+        write_with_mode(&path, text.as_bytes(), PLAIN_MODE)
+            .map_err(|_| Refusal::of(Why::Failed))?;
+        let signed_as = crate::plain::signed_path(&logical).ok_or(Refusal::of(Why::Failed))?;
+        going.insert(signed_as, super::merging::sha256(text.as_bytes()));
+        let (pair, _) = self.sign_going(key, &going, vouched, &Seen::default())?;
+        self.write_signed_there(&pair, key.public())?;
+        if !self.commit_and_push(repo, &Written::default(), COMMIT_MESSAGE)? {
+            return Ok((ChosenThere::Lost, applied.everywhere));
+        }
+        Ok((ChosenThere::Pushed, applied.everywhere))
     }
 }
 

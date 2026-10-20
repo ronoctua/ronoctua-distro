@@ -2226,9 +2226,13 @@ let
   #
   # Flake inputs are out of scope on purpose: `flake.lock` holds their revision
   # and hash, so the address in `flake.nix` is not what decides the bytes.
+  #
+  # AND THE DISTRO'S PINS (`assets/distro-pins.json`, written by
+  # `nix run .#distro-pins`): an address there is a download like any other,
+  # and an F-Droid apk names its version code in the file (`<package>_<code>.apk`).
   downloads-are-pinned = mkCheck "downloads-are-pinned" [ pkgs.python3 ] ''
     python3 - <<'END'
-    import pathlib, re, sys
+    import json, pathlib, re, sys
     exec(open("${pyPrelude}").read())
 
     # FILE-WIDE: an address is a literal wherever it is written, and the
@@ -2273,6 +2277,17 @@ let
                 wrong.append(f"{f.relative_to(root)}: {url}")
 
     floor(seen, 5, "download addresses under nix/")
+
+    # PARSED: the pins file is JSON, a table of pins per kind.
+    pins = json.load(open("${../assets/distro-pins.json}"))
+    apk = r"_\d+\.apk$"
+    pinned_files = 0
+    for kind in ("appimage", "android"):
+        for id_, pin in sorted(pins.get(kind, {}).items()):
+            pinned_files += 1
+            url = pin.get("url", "")
+            if not any(re.search(p, url) for p in pinned + ([apk] if kind == "android" else [])):
+                wrong.append(f"assets/distro-pins.json: `{id_}`: {url}")
     if wrong:
         print("ERROR: these downloads name no version, commit or capture (or a", file=sys.stderr)
         print("      capture stamp that is no moment, such as 99999999999999):", file=sys.stderr)
@@ -2282,7 +2297,7 @@ let
         print("      pinned hash the first time the store copy is collected. Point it at", file=sys.stderr)
         print("      a versioned release, or at a capture — see `snapshot` in nix/atlas.nix.", file=sys.stderr)
         sys.exit(1)
-    print(f"OK: {seen} download addresses, every one pinned")
+    print(f"OK: {seen} download addresses under nix/ and {pinned_files} in the distro's pins, every one pinned")
     END
   '';
 
@@ -6232,8 +6247,9 @@ let
   # AND THE GENERATOR REFUSES, for the RIGHT reasons.
   #
   # It does not re-run anything: `nix/syntax.nix` builds a fixture in which one
-  # language steals another's MIME type and another claims prose, records what
-  # the generator said, and this reads it. Both sentences are demanded rather
+  # language steals another's MIME type, another claims prose and a third
+  # makes its comment's marker a word character (`word-chars`), records what
+  # the generator said, and this reads it. Every sentence is demanded rather
   # than a non-zero exit, because a refusal for the WRONG reason is a refusal
   # that will not survive the next edit — the argument the update sequence's
   # own refusal check makes, in its brain module.
@@ -6244,7 +6260,8 @@ let
       exit 1
     }
     failed=0
-    for owed in "application/json" "fixture-steals-json" "text/plain" "fixture-claims-prose"; do
+    for owed in "application/json" "fixture-steals-json" "text/plain" "fixture-claims-prose" \
+                "fixture-hides-a-comment" "word-chars"; do
       grep -q "$owed" "$said" || {
         echo "ERROR: the refusal does not name \"$owed\"" >&2
         failed=1
@@ -6256,7 +6273,7 @@ let
       echo "refuses for the wrong reason is a guard that will not survive an edit." >&2
       exit 1
     fi
-    echo "OK: the generator refused, and named both defects"
+    echo "OK: the generator refused, and named the three defects"
   '';
 
   # AND NO LANGUAGE CLAIMS PROSE.
@@ -8024,6 +8041,24 @@ let
   mime-preference-is-live = mkCheck "mime-preference-is-live" [ ] ''
     test -s ${mimeDb.preferenceFixture}/verdict
     cat ${mimeDb.preferenceFixture}/verdict
+  '';
+
+  # AND THE DROP STILL DROPS. `drop` takes `*.fasl` from Lisp source, and
+  # while it works nothing in the table says it is there — so the row is
+  # broken on purpose and the build has to refuse; see `nix/mimegen.nix`.
+  mime-drop-is-live = mkCheck "mime-drop-is-live" [ ] ''
+    test -s ${mimeDb.dropFixture}/verdict
+    cat ${mimeDb.dropFixture}/verdict
+  '';
+
+  # AND A CLAIM THAT WOULD TIE IN SILENCE IS REFUSED, each way it can: a
+  # `shares` with nobody to share with, a weight that would not tie, a
+  # `content` with no tie to settle. Built broken in `nix/mimegen.nix`.
+  mime-claims-refuse = mkCheck "mime-claims-refuse" [ ] ''
+    ${lib.concatMapStrings (f: ''
+      test -s ${f}/verdict
+      cat ${f}/verdict
+    '') (lib.attrValues mimeDb.claimsFixtures)}
   '';
 
   # EVERY PLAYLIST TYPE IS EITHER READ OR REFUSED, AND NEVER NEITHER.
@@ -15350,7 +15385,9 @@ let
     # AND THE FOOTER KEEPS NONE FOR IT EITHER. A cursor is moved by a key or a
     # click, and the footer's two menu paths are where one would be: the key
     # goes to the menu whole (`Esc` up a level, every other key a cell), and a
-    # click runs the cell it lands on.
+    # click goes to the view's own `clicked`, which runs the cell it lands on —
+    # or only picks it where the grid came up under the hand that clicked, the
+    # owner's two-click rule for what a click opened (2026-10-20).
     keys = must(scope(src, r"fn window_menu_key\b"), "the footer's window-menu key path")
     own = set(re.findall(r"Sym::(\w+)", keys)) - {"Esc", "Backspace"}
     if "cursor" in keys or ".pressed(" not in keys or own:
@@ -15359,8 +15396,8 @@ let
             "instead of handing every key to the menu; it may be walking a cursor"
         )
     click = must(scope(src, r"fn window_menu_click\b"), "the footer's window-menu click")
-    if "cursor" in click or ".choose(" not in click:
-        bad.append("a click on the window menu no longer runs the cell it lands on; it may be selecting")
+    if "cursor" in click or ".clicked(" not in click:
+        bad.append("a click on the window menu no longer goes to the view's `clicked`; the footer may be selecting")
 
     # BY BRACES, never by the next `\n    }`: a nested block that closes at
     # that indent ends the capture early, and everything after it reads as
@@ -20946,7 +20983,7 @@ let
       ${../tests/corpus-vt} ${../tests/golden-vt}
   '';
 
-  installer-dryrun = mkCheck "installer-dryrun" [ ] ''
+  installer-dryrun = mkCheck "installer-dryrun" [ pkgs.python3 ] ''
     # The palettes and the texts (`rust.keyed`): this binary is the unwrapped
     # one, and the colours and the words are data it reads at run time.
     export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
@@ -21066,6 +21103,66 @@ let
     [ ! -e /tmp/disko-luks.key ] || {
       echo "ERROR: the rehearsal wrote the LUKS key" >&2; exit 1; }
 
+    # THE PROGRAMS A `full` INSTALLATION LEAVES OUT, and the ones it keeps:
+    # the machine's CHOICE, signed into the repository by the copy of the
+    # plain part (`--decline`, the file the step before writes) before the
+    # disk — every `full` run hands one over, since a tick brings back what
+    # an earlier attempt left out of this machine — and the dry run prints
+    # it after the plan, under the path it is written to. The `minimal` run
+    # above was asked nothing, and hands nothing over.
+    choice=/run/ronoctua-install/choice.json
+    offered='${builtins.toJSON (map (r: r.id) (import ../assets/distro-apps.nix).offered)}'
+    if echo "$out_text" | grep -q -e '--decline' -e "--- $choice ---"; then
+      echo "ERROR: a minimal installation hands a choice of programs over" >&2; exit 1
+    fi
+    # The choice printed under its path, as the steps write it: `$1` the
+    # dry run, `$2` the ids it must leave out.
+    chosen() {
+      echo "$1" | grep -qF -- "--decline $choice" || {
+        echo "ERROR: the copy of the plain part is not handed the machine's choice ($choice)" >&2
+        echo "$1" | grep -F 'plain' >&2 || true
+        exit 1; }
+      echo "$1" | OFFERED="$offered" LEFT="$2" CHOICE="$choice" python3 -c '
+    import json, os, sys
+    text = sys.stdin.read()
+    head = "--- " + os.environ["CHOICE"] + " ---\n"
+    if head not in text:
+        sys.exit("ERROR: the dry run of a full installation prints no choice under " + os.environ["CHOICE"])
+    if text.index(head) < text.index("--- host.nix ---"):
+        sys.exit("ERROR: the choice is printed before the host.nix whoever reads the plan reads first")
+    doc, _ = json.JSONDecoder().raw_decode(text.split(head, 1)[1])
+    left = [i for i in os.environ["LEFT"].split(",") if i]
+    kept = [i for i in json.loads(os.environ["OFFERED"]) if i not in left]
+    want = {"format": 1, "machine": "noctua-teste", "declined": left, "kept": kept}
+    if {k: doc.get(k) for k in want} != want or set(doc) != set(want) | {"at"}:
+        sys.exit(f"ERROR: the choice is {doc}, not {left} left out and every other offered program kept, on noctua-teste")
+    '
+    }
+    full_text=$(RONOCTUA_INST_PROFILE=full RONOCTUA_INST_LEFT_OUT=blender,libreoffice \
+      ${rust.bins.ronoctua-install}/bin/ronoctua-install)
+    chosen "$full_text" blender,libreoffice
+    # AND WHAT ROOT'S APPLIER MADE OF IT IS READ before the disk: a
+    # signature that did not cover the joined file leaves the machine none.
+    # `|| true`: a pipeline that finds nothing must reach the sentence below,
+    # not end the script in silence under `pipefail`.
+    applied=$(echo "$full_text" | grep -n 'left-out-applied /tmp/ronoctua-flake/person/software/declined.json' | cut -d: -f1 | head -1 || true)
+    disko=$(echo "$full_text" | grep -n 'disko --mode' | cut -d: -f1 | head -1 || true)
+    [ -n "$applied" ] && [ "$applied" -lt "$disko" ] || {
+      echo "ERROR: nothing reads the applied declines before the disk is touched" >&2; exit 1; }
+    # A PROGRAM THE LIST DOES NOT OFFER is refused, before anything: a typo
+    # would decline nothing and install what the person meant to leave out.
+    if RONOCTUA_INST_PROFILE=full RONOCTUA_INST_LEFT_OUT=zsh \
+      ${rust.bins.ronoctua-install}/bin/ronoctua-install > refused.txt 2>&1; then
+      echo "ERROR: leaving out \`zsh\`, which the installer does not offer, was taken" >&2
+      cat refused.txt >&2
+      exit 1
+    fi
+    # AND `none` LEAVES NOTHING OUT — and still hands the choice over, every
+    # program kept: an earlier attempt's declines of this machine come back.
+    none_text=$(RONOCTUA_INST_PROFILE=full RONOCTUA_INST_LEFT_OUT=none \
+      ${rust.bins.ronoctua-install}/bin/ronoctua-install)
+    chosen "$none_text" ""
+
     # The SAME plan in EVERY language: same number of steps, same commands. A
     # `.ftl` that lost a key would come out with `[inst-` and would already have
     # died above; what this catches is the subtler case of the language
@@ -21087,7 +21184,8 @@ let
         echo "ERROR: the plan is not the same in every language ($steps )" >&2; exit 1; }
     done
 
-    echo "OK: $howmany steps in every language, four PCRs, a rehearsal by default"
+    echo "OK: $howmany steps in every language, four PCRs, a rehearsal by default,"
+    echo "    and a full installation's choice of programs signed in for it alone"
   '';
 
   # The whole chain: signed UKI, Secure Boot and the proof of PCR 15 (milestone 8).
@@ -21270,6 +21368,27 @@ let
     loopEditor = devApp.editor;
     # The modules' argument, as `displayVm` builds it: base.nix reads the
     # fonts, the themes and the shell out of it.
+    ronoctua = {
+      inherit fonts fontconfigConf;
+      inherit themes themed defaultTheme;
+      inherit cursors;
+      shell = rust.shell;
+      iconSuperpack = self.packages.${system}.noctua-icon-theme;
+    };
+  };
+
+  # VS CODE ON THE COMPOSITOR: its telemetry off by the machine's policy,
+  # proved from its own log (and not without the file), a window of the
+  # compositor's own, the person's extensions recorded by the path unit, a
+  # real install from a stand-in Marketplace through the queue's child, with
+  # its consent — and why the distro's VS Code is the FHS environment
+  # (`tests/vscode-vm.nix`).
+  vscodeVm = import ./vscode-vm.nix {
+    inherit pkgs lib fonts;
+    inherit scroll;
+    vscodeTool = rust.vscode;
+    belongingsTool = rust.belongings;
+    # The modules' argument, as `emacsVm` builds it.
     ronoctua = {
       inherit fonts fontconfigConf;
       inherit themes themed defaultTheme;
@@ -27680,10 +27799,18 @@ let
       # THE WORKSHOP (`workshop.enable`): Blender and OrcaSlicer, ~3,3 GiB
       # measured. The agents and rust LEFT this list (2026-10-05): working on
       # the distro is in both profiles, and they are on the other one.
+      #
+      # THE OFFICE AND THE CRAFTING APPS (2026-10-20, `office.enable` and
+      # `crafts.enable`): ONLYOFFICE, LibreOffice and the distro's wrapped
+      # AppImages, whose names all start `ronoctua-appimage-`. VS CODE
+      # (`editor.vscode`), ~0,91 GiB: its FHS environment holds the program,
+      # whose store name this is.
       for app in -android-studio- -google-chrome- -emacs-pgtk-30 -vlc- \
                  -flutter- -dart- -go-1 -noctua-iosevka-ttf-3 \
                  -noctua-icon-theme- -waydroid- -appimage-run \
-                 -blender-5 -orca-slicer-; do
+                 -blender-5 -orca-slicer- \
+                 -onlyoffice-desktopeditors- -libreoffice- -ronoctua-appimage- \
+                 -vscode-1; do
         grep -q -e "$app" ${full}/store-paths || {
           echo "ERROR: $app is not in the full profile — did the name change?" >&2
           failed=1
@@ -27723,10 +27850,16 @@ let
       #
       # AND WORKING ON THE DISTRO (2026-10-05): the devshell's rust, QEMU and
       # OVMF kept for `nix develop`, and the two coding agents.
+      #
+      # AND COMMON LISP (2026-10-20), in the terminal of both: the three
+      # Lisps, alive-lsp, qlot, the two editor servers among the libraries,
+      # `quicklisp-install` and rlwrap.
       for kept in -scroll- -noctua-iosevka-ttf-nerdfonts- -ghostty- \
                   -networkmanager- -systemd- -ffmpeg-full- -exiftool- -flatpak- \
                   -rustc-1 -rust-std-1.*-wasm32-wasip2 -qemu-1 -OVMF- \
                   -claude-code- -codex- \
+                  -sbcl-2 -ccl-1 -ecl-2 -alive-lsp -qlot- -sbcl-swank- -sbcl-slynk- \
+                  -quicklisp-install -rlwrap- \
                   -ronoctua-iconset \
                   -ronoctua-buffer-memory- -ronoctua-buffer-keyboard- \
                   -ronoctua-buffer-transfers- \
@@ -35242,6 +35375,290 @@ let
       echo "OK: .stl, .3mf, .step and .stp open in OrcaSlicer, and the .step only by the default"
     '';
 
+  # A DOCUMENT OPENS IN ITS SUITE — Microsoft's formats (OOXML, the binary
+  # `.doc`, `.xls` and `.ppt`, and `.rtf`) in ONLYOFFICE, the open ones in
+  # LibreOffice, and each family in the other suite where one is declined
+  # (`nix/modules/office.nix`).
+  #
+  # Three full machines — both suites; ONLYOFFICE declined; LibreOffice
+  # declined, which is what the installer leaves out by default — each BUILT
+  # as far as the opener reads it: its `system.path` (every launcher entry
+  # the machine has, the Crafting Apps' that claim documents too) and its
+  # `/etc/xdg/mimeapps.list`, and each one's `officeEntries`, the build-time
+  # reading of every entry the module names. The shell's `opener` then
+  # answers for a file of each kind on each machine — the answer both file
+  # doors act on. At evaluation, the declined suite is really gone from each
+  # variant, and the reduced machine names no default for these types.
+  documents-open-in-their-suite =
+    let
+      full = self.nixosConfigurations.noctua;
+      minimal = self.nixosConfigurations.minimal;
+      host = full.config.networking.hostName;
+      declining =
+        id:
+        full.extendModules {
+          modules = [
+            {
+              ronoctua.person.declined = lib.mkForce (
+                builtins.toFile "declined.json" (
+                  builtins.toJSON {
+                    format = 1;
+                    apps = [
+                      {
+                        inherit id;
+                        machines = [ host ];
+                        edited-at = "2026-10-20T12:00:00Z";
+                        edited-on = host;
+                      }
+                    ];
+                  }
+                )
+              );
+            }
+          ];
+        };
+      machines = {
+        both = full;
+        no-onlyoffice = declining "onlyoffice";
+        no-libreoffice = declining "libreoffice";
+      };
+      # One file of each kind, by its own type: asked here, and not through
+      # the module's tables.
+      types = {
+        doc = "application/msword";
+        docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        pptx = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        rtf = "application/rtf";
+        odt = "application/vnd.oasis.opendocument.text";
+        ods = "application/vnd.oasis.opendocument.spreadsheet";
+        odp = "application/vnd.oasis.opendocument.presentation";
+        odg = "application/vnd.oasis.opendocument.graphics";
+      };
+      oo = "onlyoffice-desktopeditors";
+      libre = {
+        doc = "writer";
+        docx = "writer";
+        xlsx = "calc";
+        pptx = "impress";
+        rtf = "writer";
+        odt = "writer";
+        ods = "calc";
+        odp = "impress";
+        odg = "draw";
+      };
+      expected = {
+        both = libre // {
+          doc = oo;
+          docx = oo;
+          xlsx = oo;
+          pptx = oo;
+          rtf = oo;
+        };
+        no-onlyoffice = libre;
+        no-libreoffice = lib.mapAttrs (_: _: oo) types;
+      };
+      installedOf = s: s.config.ronoctua.distroApps.installed;
+      variantsHold =
+        (installedOf machines.both).onlyoffice
+        && (installedOf machines.both).libreoffice
+        && !(installedOf machines.no-onlyoffice).onlyoffice
+        && (installedOf machines.no-onlyoffice).libreoffice
+        && (installedOf machines.no-libreoffice).onlyoffice
+        && !(installedOf machines.no-libreoffice).libreoffice;
+      inMinimal = lib.filter (ext: minimal.config.xdg.mime.defaultApplications ? ${types.${ext}}) (
+        lib.attrNames types
+      );
+      facts = pkgs.writeText "documents-open-in-their-suite.json" (
+        builtins.toJSON (
+          lib.mapAttrs (name: m: {
+            path = "${m.config.system.path}";
+            list = "${m.config.environment.etc."xdg/mimeapps.list".source}";
+            entries = "${m.config.system.build.officeEntries}";
+            want = expected.${name};
+          }) machines
+        )
+      );
+    in
+    assert lib.assertMsg variantsHold
+      "documents-open-in-their-suite: a declined suite is still installed, or the full profile lacks one";
+    assert lib.assertMsg (
+      inMinimal == [ ]
+    ) "documents-open-in-their-suite: the minimal profile names a default for ${toString inMinimal}";
+    mkCheck "documents-open-in-their-suite" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, os, pathlib, subprocess, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the machines' facts are JSON, and the opener answers one
+      # `<file> TAB <entry id>` line per file.
+      # FILE-WIDE: a machine's whole list of defaults is the question — any
+      # line of it decides what opens a document, so it is copied whole.
+      facts = json.load(open("${facts}"))
+      here = pathlib.Path.cwd()
+      docs = here / "docs"
+      docs.mkdir()
+      for ext in ${builtins.toJSON (lib.attrNames types)}:
+          (docs / f"part.{ext}").write_text("")
+      wrong, asked = [], 0
+      for name, m in sorted(facts.items()):
+          if not pathlib.Path(m["entries"]).exists():
+              wrong.append(f"{name}: the office entries were not read at build")
+          xdg = here / f"xdg-{name}"
+          xdg.mkdir()
+          (xdg / "mimeapps.list").write_text(pathlib.Path(m["list"]).read_text())
+          env = {
+              "HOME": str(here / "home"),
+              "XDG_CONFIG_HOME": str(here / "home/.config"),
+              "XDG_DATA_HOME": str(here / "home/.local/share"),
+              "XDG_CONFIG_DIRS": str(xdg),
+              "XDG_DATA_DIRS": m["path"] + "/share",
+              # The palettes, the texts and the brain's catalogue
+              # (`rust.keyed`): this binary is the unwrapped one.
+              "RONOCTUA_THEMES": "${rust.keyed.RONOCTUA_THEMES}",
+              "RONOCTUA_TEXTS": "${rust.keyed.RONOCTUA_TEXTS}",
+              "RONOCTUA_BRAIN_CATALOGUE": "${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}",
+          }
+          said = subprocess.run(
+              ["${rust.bins.ronoctua-shell}/bin/ronoctua-shell", "opener", *sorted(map(str, docs.iterdir()))],
+              env=env, capture_output=True, text=True, check=True,
+          ).stdout
+          got = {}
+          for line in said.splitlines():
+              path, _, entry = line.partition("\t")
+              got[pathlib.Path(path).suffix[1:]] = entry
+          print(f"{name}: {json.dumps(got, sort_keys=True)}")
+          for ext, want in sorted(m["want"].items()):
+              asked += 1
+              if got.get(ext) != want:
+                  wrong.append(f"{name}: .{ext} opens in {got.get(ext)}, not {want}")
+      floor(asked, 27, "documents asked of the three machines")
+      if wrong:
+          print("ERROR: a document does not open in its suite:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: {asked} documents on three machines open in their suite, or in the other where one is declined")
+      END
+    '';
+
+  # A FILE OPENS IN WHAT WAS CHOSEN — never in a program of the distro by the
+  # order of names, and text in the client of the editor for `xdg-open` too.
+  #
+  # The full system, BUILT: its `system.path` (every launcher entry, the
+  # `mimeinfo.cache` and the player's own `mimeapps.list` in it) and its
+  # `/etc/xdg/mimeapps.list`.
+  #
+  # 1. THE SHELL'S `opener` (the answer both file doors act on), for common
+  #    files of every kind — pictures, sound, films, documents, text,
+  #    archives: no answer is a distro AppImage (`ronoctua-appimage-*`). The
+  #    Crafting Apps declare most of those types, and the catalogue is sorted
+  #    by name; their `fallback = false` (`assets/distro-apps.nix`) is what
+  #    passes them by. And sound and films answer the player: its entry is
+  #    `NoDisplay`, out of the catalogue the launcher lists, and only its own
+  #    list names it — a default reaching an entry the menu does not list.
+  # 2. THE REAL `xdg-mime` (what `xdg-open` asks): every text type, and every
+  #    type the Emacs entries declare, for which the order of
+  #    `mimeinfo.cache` puts first the Emacs that is not the daemon's, a
+  #    suite or a Crafting App answers `emacsclient.desktop`
+  #    (`nix/modules/emacs.nix`). The types are read from the built cache, so
+  #    a program that comes first for a new text type fails here until the
+  #    default names it.
+  files-open-by-choice =
+    let
+      full = self.nixosConfigurations.noctua;
+      list = full.config.environment.etc."xdg/mimeapps.list".source;
+    in
+    mkCheck "files-open-by-choice" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import os, pathlib, re, subprocess, sys
+      exec(open("${pyPrelude}").read())
+
+      path = pathlib.Path("${full.config.system.path}")
+      here = pathlib.Path.cwd()
+      xdg = here / "xdg"
+      xdg.mkdir()
+      (xdg / "mimeapps.list").write_text(pathlib.Path("${list}").read_text())
+      env = {
+          "PATH": os.environ["PATH"],
+          "HOME": str(here / "home"),
+          "XDG_CONFIG_HOME": str(here / "home/.config"),
+          "XDG_DATA_HOME": str(here / "home/.local/share"),
+          "XDG_CONFIG_DIRS": str(xdg),
+          "XDG_DATA_DIRS": str(path / "share"),
+          "RONOCTUA_THEMES": "${rust.keyed.RONOCTUA_THEMES}",
+          "RONOCTUA_TEXTS": "${rust.keyed.RONOCTUA_TEXTS}",
+          "RONOCTUA_BRAIN_CATALOGUE": "${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}",
+      }
+      wrong = []
+
+      # 1. THE OPENER.
+      kinds = {
+          "pictures": "png jpg jpeg gif webp svg bmp tif tiff heic avif ico exr psd kra ora cr2 nef dng xcf",
+          "sound": "mp3 wav flac ogg opus m4a aiff mid",
+          "films": "mp4 mkv webm mov avi m4v 3gp mpg mxf",
+          "documents": "pdf doc docx dot xls xlsx ppt pptx odt ods odp odg rtf epub djvu idml dxf dwg",
+          "text": "txt md csv html json py rs",
+          "archives": "zip tar gz 7z rar",
+      }
+      files = here / "files"
+      files.mkdir()
+      for words in kinds.values():
+          for ext in words.split():
+              (files / f"a.{ext}").write_text("")
+      said = subprocess.run(
+          ["${rust.bins.ronoctua-shell}/bin/ronoctua-shell", "opener", *sorted(map(str, files.iterdir()))],
+          env=env, capture_output=True, text=True, check=True,
+      ).stdout
+      # PARSED: one `<file> TAB <answer>` line per file.
+      # FILE-WIDE: the built system's whole list and catalogue are the
+      # question — what opens a file is decided by every line of them.
+      got = {}
+      for line in said.splitlines():
+          file, _, answer = line.partition("\t")
+          got[pathlib.Path(file).suffix[1:]] = answer
+      print("the opener: " + ", ".join(f"{e}={a}" for e, a in sorted(got.items())))
+      floor(len(got), 50, "files the opener answered for")
+      for ext, answer in sorted(got.items()):
+          if answer.startswith("ronoctua-appimage-"):
+              wrong.append(f".{ext} opens in {answer}, a distro AppImage, by the order of names")
+      for ext in "mp3 flac ogg wav mp4 mkv webm mov avi".split():
+          if got.get(ext) != "br.ronoctua.player":
+              wrong.append(f".{ext} opens in {got.get(ext)}, not the player its own list names")
+
+      # 2. XDG-MIME.
+      cache = (path / "share/applications/mimeinfo.cache").read_text()
+      emacs = (path / "share/applications/emacsclient.desktop").read_text()
+      declared = set(re.search(r"^MimeType=(.*)$", emacs, re.M).group(1).strip(";").split(";"))
+      losers = re.compile(r"^(emacs|onlyoffice-desktopeditors|startcenter|writer|calc|impress|draw|math|base|ronoctua-appimage-.*)\.desktop$")
+      owed = []
+      # PARSED: `mimeinfo.cache` is `type=id;id;…` a line, under one group.
+      for line in cache.splitlines():
+          kind, eq, ids = line.partition("=")
+          if not eq or not (kind.startswith("text/") or kind in declared):
+              continue
+          first = ids.split(";")[0]
+          if losers.match(first):
+              owed.append(kind)
+      floor(len(owed), 15, "text types the cache would give to another program")
+      for kind in owed:
+          answer = subprocess.run(
+              ["${pkgs.xdg-utils}/bin/xdg-mime", "query", "default", kind],
+              env=env, capture_output=True, text=True,
+          ).stdout.strip()
+          if answer != "emacsclient.desktop":
+              wrong.append(f"xdg-mime opens {kind} with {answer or 'nothing'}, not the editor's client")
+
+      if wrong:
+          print("ERROR: a file opens in what nobody chose:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: {len(got)} files, none in a distro AppImage, sound and films in the player; "
+            f"{len(owed)} text types in the editor's client for xdg-open")
+      END
+    '';
+
   # THE SEARCH OVER EVERYTHING ON A BOOTED MACHINE: the index its own unit
   # writes in a person's manager, read by the footer's view and the windows;
   # `LEADER d` and the generated `Super+d` opening the view, `LEADER SPC` a
@@ -40669,7 +41086,7 @@ let
   # `allowUnfree` on, and the predicate is never asked). Its host turned the
   # system's Flatpak on by hand while the distro's switch is off, so
   # nix-flatpak's per-person list does not exist. It declares, from fixture
-  # packages an overlay plants: vscode with consent (applied — by the
+  # packages an overlay plants: obsidian with consent (applied — by the
   # predicate, its name in `unfreeNames`), discord without (refused), a
   # consented package whose reading `abort`s — which `tryEval` cannot catch —
   # held by its current fingerprint, a consented unfree package that needs
@@ -40732,7 +41149,7 @@ let
                 builtins.toJSON {
                   format = 1;
                   apps = [
-                    (nixEntry "vscode" true)
+                    (nixEntry "obsidian" true)
                     (nixEntry "discord" false)
                     (nixEntry "fixtureAborts" true)
                     (nixEntry "fixtureUnfreeOuter" true)
@@ -40785,7 +41202,7 @@ let
               builtins.unsafeDiscardStringContext
                 minimal.home-manager.users.${user}.home.activationPackage.drvPath;
             verified = {
-              vscode = evaluates verify."nix:vscode";
+              obsidian = evaluates verify."nix:obsidian";
               fixtureUnfreeOuter = evaluates verify."nix:fixtureUnfreeOuter";
             };
             verifiable = builtins.attrNames verify;
@@ -40829,7 +41246,7 @@ let
           return {s["id"]: (s["reason"], s["detail"]) for s in report["skipped"]}
 
       r = f["report"]
-      expected_applied = ["nix:cowsay", "nix:vscode", "nix:sl", "flatpak:org.example.Fixture",
+      expected_applied = ["nix:cowsay", "nix:obsidian", "nix:sl", "flatpak:org.example.Fixture",
                           "appimage:fixture-tool", "web:fixture-web", "android:org.example.fixture"]
       if r["applied"] != expected_applied:
           wrong.append(f"applied: {r['applied']}")
@@ -40875,7 +41292,7 @@ let
                        f"{m['flatpakSwitch']}, services.flatpak.enable {m['systemFlatpak']}): "
                        "it proves nothing")
       mr = m["report"]
-      if mr["applied"] != ["nix:vscode", "nix:fixtureUnfreeOuter"]:
+      if mr["applied"] != ["nix:obsidian", "nix:fixtureUnfreeOuter"]:
           wrong.append(f"minimal, applied: {mr['applied']} (a consented unfree package must go in "
                        "through the predicate, and one that needs another unfree one by its consent)")
       mw = why(mr)
@@ -40887,15 +41304,15 @@ let
       }
       if set(mw) != set(want) or any(mw[k][0] != r or s not in mw[k][1] for k, (r, s) in want.items()):
           wrong.append(f"minimal, skipped: {mw}")
-      if m["unfreeNames"] != ["vscode", "fixture-unfree-outer"]:
+      if m["unfreeNames"] != ["obsidian", "fixture-unfree-outer"]:
           wrong.append(f"minimal, the consented names: {m['unfreeNames']} (a held entry is never read "
                        "for its name, and a consent widens no name)")
       if not m["etc"].endswith(".drv") or not m["home"].endswith(".drv"):
           wrong.append("the minimal machine's /etc or the person's generation did not instantiate")
-      if sorted(m["verifiable"]) != sorted(["nix:vscode", "nix:discord", "nix:fixtureAborts",
+      if sorted(m["verifiable"]) != sorted(["nix:obsidian", "nix:discord", "nix:fixtureAborts",
                                             "nix:fixtureUnfreeOuter", "nix:fixtureFreeOuter"]):
           wrong.append(f"minimal, the entries the update verifies: {m['verifiable']}")
-      if m["verified"] != {"vscode": True, "fixtureUnfreeOuter": True}:
+      if m["verified"] != {"obsidian": True, "fixtureUnfreeOuter": True}:
           wrong.append("the update's verification of a consented entry fails while a sibling that "
                        f"aborts is not held yet: {m['verified']}")
       if wrong:
@@ -40950,7 +41367,7 @@ let
       import json, sys
       f = json.load(open("${facts}"))
       wrong = []
-      for name in ("cowsay", "vscode", "sl", "ronoctua-appimage-fixture-tool",
+      for name in ("cowsay", "obsidian", "sl", "ronoctua-appimage-fixture-tool",
                    "ronoctua-web-fixture-web.desktop"):
           if name not in f["home"]:
               wrong.append(f"{name} is not in the person's profile")
@@ -41309,7 +41726,7 @@ let
 
     # AND THE REGISTRY'S FILE SAYS SO, in the shape `ronoctua-person` reads
     # (`reports::DistroApps`, unknown fields refused).
-    keys = {"id", "source", "desktop-ids", "essential", "group", "on-this-machine", "declined-here"}
+    keys = {"id", "name", "source", "desktop-ids", "essential", "group", "on-this-machine", "declined-here"}
     for side, name in ((before, "before"), (after, "after")):
         registry = side["registry"]
         if set(registry) != {"format", "apps"} or registry["format"] != 1:
@@ -41345,6 +41762,14 @@ let
     carried = lambda r: {a["id"]: a["on-this-machine"] for a in r["apps"]}
     if carried(before["registry"]) != carried(after["registry"]):
         wrong.append("a decline changed what `on-this-machine` says the machine carries")
+    # A DECLINED PROGRAM KEEPS ITS NAME in the registry's file: its launcher
+    # entry left with it, and the software centre names it from here
+    # (`name`), or by its id where the registry gives none.
+    names = {a["id"]: a.get("name", "absent") for a in after["registry"]["apps"]}
+    for app, name in (("vlc", "VLC"), ("android-sdk", "Android SDK"), ("flutter", "Flutter"),
+                      ("orca-slicer", "OrcaSlicer"), ("htop", None), ("zsh", None)):
+        if names.get(app, "absent") != name:
+            wrong.append(f"distro-apps.json names `{app}` {names.get(app, 'absent')!r}, not {name!r}")
 
     # AND A DECLINED ORCASLICER NAMES NO LAUNCHER ENTRY: reading the name is
     # import-from-derivation, which a machine without it must never pay.
@@ -41500,6 +41925,186 @@ let
     print(f"OK: {len(ledger)} ids in the ledger, every one still answering, and a rename keeps its decline")
     END
   '';
+
+  # WHAT THE INSTALLER OFFERS TO LEAVE OUT IS THE REGISTRY'S TO TAKE.
+  #
+  # The installer lists the ledger's `offered` (`nix/offered.nix`) on a `full`
+  # installation only, and an unmarked program becomes the person's decline
+  # for that hostname. Each half of that rests on the evaluated systems, never
+  # on the modules' text: every offered id is a program of `noctua`'s
+  # registry that may be declined (no essential reason, not the base the
+  # system is made of), carried by `full` and NOT ON `minimal` — not its
+  # `when` alone: none of its packages (`package` and every one of
+  # `extraPackages`) is in `minimal`'s system packages or session variables,
+  # since a switch that does not switch would let one in by another way — so
+  # skipping the screen on `minimal` loses nothing; and the decline the
+  # installer writes takes it off: declined for this host, it is not
+  # installed and none of its packages is in the system's packages nor in the
+  # session's variables; declined for another host, every one is still there
+  # (which is also what shows the probe finds them at all).
+  offeredRegistry =
+    let
+      discard = builtins.unsafeDiscardStringContext;
+      base = self.nixosConfigurations.noctua;
+      host = base.config.networking.hostName;
+      offered = map (r: r.id) distroAppsTable.offered;
+      declinedOn =
+        machines:
+        builtins.toFile "offered-declined.json" (
+          builtins.toJSON {
+            format = 1;
+            apps = map (id: {
+              inherit id machines;
+              edited-at = "2026-10-20T12:00:00Z";
+              edited-on = host;
+            }) offered;
+          }
+        );
+      # FORCED: the machine's own flake may name a declined file of its own.
+      declining =
+        machines:
+        base.extendModules {
+          modules = [ { ronoctua.person.declined = lib.mkForce (declinedOn machines); } ];
+        };
+      # WHAT SAYS THE PROGRAM IS THERE: a nixpkgs entry's package and each
+      # of its companions, by their store paths; an AppImage's wrapper, by
+      # the name the registry gives it (`ronoctua-appimage-<key>-<version>`).
+      # Any other source is said. Asked of the FULL machine's registry, where
+      # each program evaluates — and then looked for on every machine.
+      markOf =
+        e:
+        if e.package != null then
+          {
+            by = "path";
+            marks = map (p: discard p.outPath) ([ e.package ] ++ e.extraPackages);
+          }
+        else if e.appimage != null then
+          {
+            by = "name";
+            marks = [ "ronoctua-appimage-${e.appimage.key}-" ];
+          }
+        else
+          {
+            by = "unknown";
+            marks = [ ];
+          };
+      # The registry's word on each offered id.
+      entriesOf =
+        c:
+        lib.genAttrs offered (
+          id:
+          if c.ronoctua.apps ? ${id} then
+            {
+              known = true;
+              inherit (c.ronoctua.apps.${id}) essential group when;
+              installed = c.ronoctua.distroApps.installed.${id};
+            }
+          else
+            { known = false; }
+        );
+      # WHAT A MACHINE HOLDS: its system packages, by path and by name, and
+      # what its session's variables name.
+      holdsOf = c: {
+        paths = map (p: discard (p.outPath or "")) c.environment.systemPackages;
+        names = map (p: p.name or "") c.environment.systemPackages;
+        carried = lib.mapAttrsToList (_: v: discard (toString v)) c.environment.sessionVariables;
+      };
+      factsOf =
+        system:
+        holdsOf system.config
+        // {
+          apps = entriesOf system.config;
+        };
+      # THE MARKS, from the full machine's registry only: a program `minimal`
+      # does not carry may be one its nixpkgs refuses to evaluate (an unfree
+      # one it never consented to), so its packages are named where they
+      # evaluate and looked for in what `minimal` holds.
+      fullConfig = base.config;
+      marks = lib.genAttrs offered (
+        id: if fullConfig.ronoctua.apps ? ${id} then markOf fullConfig.ronoctua.apps.${id} else null
+      );
+    in
+    pkgs.writeText "offered-registry.json" (
+      builtins.toJSON {
+        inherit host offered marks;
+        full = factsOf base;
+        minimal = factsOf self.nixosConfigurations.minimal;
+        here = factsOf (declining [ host ]);
+        elsewhere = factsOf (declining [ "elsewhere" ]);
+      }
+    );
+
+  offered-programs-are-the-registrys =
+    mkCheck "offered-programs-are-the-registrys" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import json, sys
+
+        # PARSED: the ledger's offered ids and four evaluated machines, JSON.
+        f = json.load(open("${offeredRegistry}"))
+        wrong = []
+        if not f["offered"]:
+            print("ERROR: the ledger offers nothing; this check stopped reaching it", file=sys.stderr)
+            sys.exit(1)
+
+        def found(side, app):
+            # Each of the program's packages the machine holds, by its mark.
+            m = f["marks"][app]
+            if m["by"] == "path":
+                return [p for p in m["marks"] if p in f[side]["paths"]]
+            return [k for k in m["marks"] if any(n.startswith(k) for n in f[side]["names"])]
+
+        def carried(side, app):
+            return [v for v in f[side]["carried"] for k in f["marks"][app]["marks"] if k in v]
+
+        for app in f["offered"]:
+            full, minimal = f["full"]["apps"][app], f["minimal"]["apps"][app]
+            if not full["known"]:
+                wrong.append(f"`{app}` is offered and is no program of the full machine's registry")
+                continue
+            if full["essential"] is not None:
+                wrong.append(f"`{app}` is offered and essential ({full['essential']}): its decline would be refused")
+            if full["group"] == "base":
+                wrong.append(f"`{app}` is offered and of the base group: `minimal` would carry it and never be asked")
+            if not full["when"]:
+                wrong.append(f"`{app}` is offered and the full installation does not carry it")
+            if minimal.get("known") and minimal["when"]:
+                wrong.append(f"`{app}` is carried by `minimal`, which is never asked the list: it could not be left out there")
+            m = f["marks"][app]
+            if m["by"] == "unknown":
+                wrong.append(f"`{app}` comes from a source this check cannot see leave the machine")
+                continue
+            # NOTHING OF IT ON `minimal`, whatever its switch says.
+            for p in found("minimal", app):
+                wrong.append(f"`{app}` is on `minimal` all the same, by another way in: {p}")
+            for value in carried("minimal", app):
+                wrong.append(f"`{app}` is named by a session variable of `minimal`: {value}")
+            # DECLINED ELSEWHERE: still here, every package of it — and found,
+            # so the absence below is the decline's and not the probe's.
+            if not f["elsewhere"]["apps"][app]["installed"]:
+                wrong.append(f"`{app}` declined for another machine is not installed on this one")
+            for k in m["marks"]:
+                if k not in found("elsewhere", app):
+                    wrong.append(f"`{app}` declined for another machine is missing {k} (or the probe cannot find it)")
+            # DECLINED HERE: gone, every package of it, from the packages and
+            # the variables.
+            if f["here"]["apps"][app]["installed"]:
+                wrong.append(f"`{app}` declined for this machine is still installed")
+            for p in found("here", app):
+                wrong.append(f"`{app}` declined for this machine is still in `environment.systemPackages`: {p}")
+            for value in carried("here", app):
+                wrong.append(f"`{app}` declined for this machine is still named by a session variable: {value}")
+
+        if wrong:
+            print("ERROR: what the installer offers to leave out is not what the registry takes off:", file=sys.stderr)
+            for w in wrong:
+                print("  " + w, file=sys.stderr)
+            sys.exit(1)
+        held = sum(len(f["marks"][a]["marks"]) for a in f["offered"] if f["marks"][a])
+        print(f"OK: {len(f['offered'])} offered programs ({held} packages), each carried by full and "
+              f"nothing of it on minimal, gone when declined for {f['host']} and kept when declined elsewhere")
+        END
+      '';
 
   # EVERY LAUNCHER ENTRY HAS AN OWNER.
   #
@@ -41706,7 +42311,10 @@ let
   # release whose tag moves (`continuous`); an entry that
   # follows nothing keeps its hand-written pin, and is refused without one;
   # F-Droid's suggested version becomes the apk's address; a pin whose entry
-  # left is dropped. And what can be asked WITHOUT the network
+  # left is dropped. Every download is named as the build names it
+  # (`nix/distro-downloads.nix`, asked here for the same two files), so the
+  # tool's download is the build's source and nothing is fetched twice. And
+  # what can be asked WITHOUT the network
   # (`offline_problems`, which `--check` asks first) is asked of planted
   # files and then of the tree's own: the file is in the tool's form, every
   # pin belongs to an entry of its kind and has a pin's fields, and every
@@ -41714,6 +42322,31 @@ let
   # table follows its first source, that would need the network, and this
   # check would fail for having no network rather than for a wrong pin.
   distroPinsTable = pkgs.writeText "distro-apps-table.json" (builtins.toJSON distroAppsTable.apps);
+  # THE BUILD'S NAMES for the two fixtures below — the derivations' names,
+  # never built.
+  distroPinsBuildNames =
+    let
+      downloads = import ../nix/distro-downloads.nix { inherit (pkgs) fetchurl; };
+      sri = "sha256-${lib.concatStrings (lib.replicate 43 "A")}=";
+    in
+    pkgs.writeText "distro-pins-build-names.json" (
+      builtins.toJSON {
+        appimage =
+          (downloads.appimage {
+            key = "demo";
+            version = "1.2.3";
+            url = "https://example.org/v1.2.3/Demo.AppImage";
+            hash = sri;
+          }).name;
+        apk =
+          (downloads.apk {
+            package = "org.fdroid.fdroid";
+            versionCode = "1021050";
+            url = "https://f-droid.org/repo/org.fdroid.fdroid_1021050.apk";
+            hash = sri;
+          }).name;
+      }
+    );
   distro-pins-move-only-what-follows =
     mkCheck "distro-pins-move-only-what-follows" [ pkgs.python3 ]
       ''
@@ -41731,8 +42364,8 @@ let
                 return self.releases[repo]
             def fdroid(self, package):
                 return self.fdroid_info[package]
-            def hash(self, url):
-                self.hashed.append(url)
+            def hash(self, url, name):
+                self.hashed.append((url, name))
                 return "sha256-" + "A" * 43 + "="
             def now(self):
                 return datetime.datetime(2026, 10, 5, 12, 0, tzinfo=datetime.timezone.utc)
@@ -41760,7 +42393,9 @@ let
                pin.get("url") == "https://example.org/v1.2.3/Demo.AppImage")
         expect("the tag `v1.2.3` is version `1.2.3`", pin.get("version") == "1.2.3")
         expect("the pin carries its moment", pin.get("pinned-at") == "2026-10-05T12:00:00Z")
-        expect("the asset was hashed once", ask.hashed == ["https://example.org/v1.2.3/Demo.AppImage"])
+        build = json.load(open("${distroPinsBuildNames}"))
+        expect(f"the asset was hashed once, under the build's name {build['appimage']}: {ask.hashed}",
+               ask.hashed == [("https://example.org/v1.2.3/Demo.AppImage", build["appimage"])])
 
         # THE SAME RELEASE AGAIN: unchanged, and nothing downloaded.
         again = Fake({"o/demo": release("v1.2.3")})
@@ -41809,6 +42444,8 @@ let
         expect("F-Droid's suggested version is pinned",
                got.get("url") == "https://f-droid.org/repo/org.fdroid.fdroid_1021050.apk"
                and got.get("version") == "1.21.1" and got.get("version-code") == 1021050)
+        expect(f"the apk was hashed under the build's name {build['apk']}: {ask.hashed}",
+               ask.hashed == [("https://f-droid.org/repo/org.fdroid.fdroid_1021050.apk", build["apk"])])
         again = Fake(fdroid={"org.fdroid.fdroid": info})
         pins.plan({"fdroid": droid}, apk, again)
         expect("an unchanged F-Droid version is not downloaded again", again.hashed == [])
@@ -42108,6 +42745,13 @@ let
                   source = "flatpak";
                   appId = 7;
                 };
+                t-fallback = {
+                  source = "appimage";
+                  key = "tfallback";
+                  name = "T";
+                  follows = null;
+                  fallback = "no";
+                };
               };
               ronoctua.distroApps.pins = {
                 format = 2;
@@ -42153,6 +42797,37 @@ let
                   package = pkgs.hello;
                   desktopIds = [ "vlc.desktop" ];
                 };
+                bad-name = {
+                  package = pkgs.hello;
+                  name = "two\nlines";
+                };
+                blank-name = {
+                  package = pkgs.hello;
+                  name = " ";
+                };
+                tab-name = {
+                  package = pkgs.hello;
+                  name = "a\tb";
+                };
+                # THE EDGES `ronoctua_person::reports::is_name` decides the
+                # same way: a non-breaking space alone and a C1 control are
+                # refused; one inside a name, and letters past ASCII, are not.
+                nbsp-name = {
+                  package = pkgs.hello;
+                  name = builtins.fromJSON ''"\u00a0"'';
+                };
+                c1-name = {
+                  package = pkgs.hello;
+                  name = builtins.fromJSON ''"Libre\u0085Office"'';
+                };
+                c1-last-name = {
+                  package = pkgs.hello;
+                  name = builtins.fromJSON ''"Libre\u009fOffice"'';
+                };
+                good-name = {
+                  package = pkgs.hello;
+                  name = builtins.fromJSON ''"Libre\u00a0Office Café ☕"'';
+                };
                 bad-flatpak.flatpak = {
                   appId = "org.x";
                   origin = "flathub";
@@ -42169,6 +42844,14 @@ let
                   url = "http://example.org/x";
                   hash = "md5-x";
                   version = "1 0";
+                  fallback = "no";
+                };
+                untext-appimage.appimage = {
+                  key = true;
+                  name = "Untext";
+                  url = "https://example.org/x";
+                  hash = "sha256-x=";
+                  version = "1";
                 };
                 bad-web.web = {
                   slug = "-x";
@@ -42241,6 +42924,19 @@ let
         inherit (png) entry;
         vector = svg.entry;
         escape = escape.entry;
+        # OUT OF THE NAME ORDER (`fallback = false`), on the PNG fixture.
+        refusing =
+          (builders.appimage {
+            key = "refusing";
+            name = "Planted refusing";
+            version = "1.0";
+            fallback = false;
+            src = distroAppsFixture {
+              key = "planted";
+              icon = "png";
+              link = "planted.png";
+            };
+          }).entry;
       };
       inherit escapeImage;
       web = builders.web {
@@ -42269,17 +42965,19 @@ let
 
     # ONE GOOD ENTRY OF EACH SOURCE reaches everything that reads the table.
     expect(f"a good table has problems: {good['problems']}", good["problems"] == [])
+    # The name is the table's for an AppImage and a web app, and none for
+    # the two sources whose line has none.
     shape = {
-        "planted-flatpak": ("flatpak", ["org.example.Planted.desktop"]),
-        "planted-appimage": ("appimage", ["ronoctua-appimage-planted.desktop"]),
-        "planted-web": ("web", ["ronoctua-web-planted.desktop"]),
-        "planted-android": ("android", ["waydroid.org.example.planted.desktop"]),
+        "planted-flatpak": ("flatpak", ["org.example.Planted.desktop"], None),
+        "planted-appimage": ("appimage", ["ronoctua-appimage-planted.desktop"], "Planted"),
+        "planted-web": ("web", ["ronoctua-web-planted.desktop"], "Planted Web"),
+        "planted-android": ("android", ["waydroid.org.example.planted.desktop"], None),
     }
     for side, name, declined_here in ((good, "good", False), (declined, "declined", True)):
         said = {a["id"]: a for a in side["registry"]}
-        for id_, (source, desktop) in shape.items():
+        for id_, (source, desktop, called) in shape.items():
             got = said.get(id_)
-            if got is None or (got["source"], got["desktop-ids"], got["on-this-machine"], got["declined-here"]) != (source, desktop, True, declined_here):
+            if got is None or (got["source"], got["desktop-ids"], got.get("name", "absent"), got["on-this-machine"], got["declined-here"]) != (source, desktop, called, True, declined_here):
                 wrong.append(f"{name}: distro-apps.json says {got} for `{id_}`")
     for package in ("ronoctua-appimage-planted-1.0", "ronoctua-web-planted.desktop"):
         expect(f"`{package}` is not in the planted machine's packages", package in good["packages"])
@@ -42314,6 +43012,12 @@ let
         "ronoctua.apps: `vlc` is both an id and a former id",
         "ronoctua.apps: `gone-twice` is the former id of two entries",
         "ronoctua.apps: the launcher entry `vlc.desktop` is owned by two entries",
+        "ronoctua.apps.bad-name.name is not a name",
+        "ronoctua.apps.blank-name.name is not a name",
+        "ronoctua.apps.tab-name.name is not a name",
+        "ronoctua.apps.nbsp-name.name is not a name",
+        "ronoctua.apps.c1-name.name is not a name",
+        "ronoctua.apps.c1-last-name.name is not a name",
         "ronoctua.apps.bad-flatpak.flatpak.appId `org.x` is not a Flatpak id",
         "ronoctua.apps.lacking-flatpak.flatpak lacks origin",
         "ronoctua.apps.extra-flatpak.flatpak has fields no flatpak entry takes: url",
@@ -42322,6 +43026,8 @@ let
         "ronoctua.apps.bad-appimage.appimage.url is not an https address",
         "ronoctua.apps.bad-appimage.appimage.hash is not an SRI hash",
         "ronoctua.apps.bad-appimage.appimage.version `1 0` cannot name a store path",
+        "ronoctua.apps.bad-appimage.appimage.fallback is neither true nor false",
+        "ronoctua.apps.untext-appimage.appimage: key is not a line of text",
         "ronoctua.apps.bad-web.web.slug `-x` is not a slug",
         "ronoctua.apps.bad-web.web.name is empty or spans lines",
         "ronoctua.apps.bad-web.web.url is not an http(s) address",
@@ -42342,6 +43048,7 @@ let
         "assets/distro-apps.nix: `t-from`: `from` is \"play\", not f-droid or direct",
         "assets/distro-pins.json: `t-from`: `version-code` is not a number",
         "assets/distro-apps.nix: `t-number`: `appId` is not a line of text",
+        "assets/distro-apps.nix: `t-fallback`: `fallback` is neither true nor false",
         "assets/distro-pins.json: format 2, and this distro reads 1",
         "assets/distro-pins.json: `gone-image` is pinned and the table has no AppImage",
         "assets/distro-pins.json: `gone-apk` is pinned and the table has no Android app",
@@ -42350,6 +43057,8 @@ let
     for sentence in owed:
         expect(f"the registry does not say: {sentence}", any(p.startswith(sentence) for p in bad["problems"]))
     expect(f"a malformed table line reached the registry: {bad['entered']}", bad["entered"] == [])
+    expect("a name with a non-breaking space inside and letters past ASCII was refused",
+           not any(p.startswith("ronoctua.apps.good-name") for p in bad["problems"]))
     for what, fired in bad["refused"].items():
         expect(f"with problems, `{what}` still evaluates: the refusal stopped firing", fired)
 
@@ -42358,6 +43067,7 @@ let
         "planted": ("${distroAppsSources.entries.entry}", "png"),
         "vector": ("${distroAppsSources.entries.vector}", "svg"),
         "escape": ("${distroAppsSources.entries.escape}", None),
+        "refusing": ("${distroAppsSources.entries.refusing}", "png"),
     }
     for key, (out, icon) in entries.items():
         out = pathlib.Path(out)
@@ -42370,7 +43080,7 @@ let
             "Comment=A planted program",
             "Categories=Utility;",
             f"Exec=/run/current-system/sw/bin/{program} %U",
-        ] + ([f"Icon={program}"] if icon else [])
+        ] + ([f"Icon={program}"] if icon else []) + (["X-Ronoctua-Fallback=false"] if key == "refusing" else [])
         expect(f"{key}: the AppImage's launcher entry is\n{text}", text == "\n".join(lines) + "\n")
         pictures = sorted(p.name for p in (out / "share/pixmaps").iterdir()) if (out / "share/pixmaps").is_dir() else []
         expect(f"{key}: the icons are {pictures}", pictures == ([f"{program}.{icon}"] if icon else []))
@@ -42404,7 +43114,7 @@ let
             print("  " + w, file=sys.stderr)
         sys.exit(1)
     print(f"OK: one entry of each source built, installed and declined; {len(owed)} malformed shapes said "
-          "by name and refused; three AppImage entries and a web app built as the launcher reads them")
+          "by name and refused; four AppImage entries (one out of the opener's name order) and a web app built as the launcher reads them")
     END
   '';
   # ── anchor: L05 ──
@@ -47262,6 +47972,24 @@ let
             claude = if footer ? RONOCTUA_CLAUDE then discard footer.RONOCTUA_CLAUDE else null;
             codex = if footer ? RONOCTUA_CODEX then discard footer.RONOCTUA_CODEX else null;
           };
+          # COMMON LISP (2026-10-20): the entry's programs, whether each is on
+          # the PATH, the libraries its `sbcl` sees, the seeds' activation and
+          # the curl Quicklisp's fetcher names by the system's path.
+          commonLisp =
+            let
+              entry = c.ronoctua.apps.common-lisp;
+              seeds = c.system.activationScripts.commonLispInit or null;
+            in
+            {
+              installed = c.ronoctua.distroApps.installed.common-lisp;
+              programs = map (p: {
+                inherit (p) name;
+                there = builtins.elem (discard p.outPath) packages;
+              }) ([ entry.package ] ++ entry.extraPackages);
+              libraries = map (p: p.pname) entry.package.libraries;
+              seeds = if seeds == null then null else discard seeds.text;
+              curl = builtins.any (p: lib.hasPrefix "curl-" (p.name or "")) c.environment.systemPackages;
+            };
         };
     in
     pkgs.writeText "dev-tools-facts.json" (
@@ -47455,6 +48183,508 @@ let
     print("OK: Claude Code and Codex on the PATH of both profiles, and in the footer's environment")
     END
   '';
+  # COMMON LISP IN BOTH PROFILES (2026-10-20), in the terminal: the three
+  # Lisps, qlot, alive-lsp's command, `quicklisp-install` and rlwrap on the
+  # PATH; the seventeen libraries and alive-lsp in what `sbcl` sees; the
+  # three init files seeded once, never over a file or a link; and the curl
+  # Quicklisp's fetcher names by the system's path.
+  common-lisp-in-both-profiles =
+    let
+      # THE ACTIVATION'S OWN LINE, with its context: the seed script it runs
+      # is an input of this check, and is run below.
+      seedLine = self.nixosConfigurations.noctua.config.system.activationScripts.commonLispInit.text;
+      user = self.nixosConfigurations.noctua.config.ronoctua.user;
+    in
+    mkCheck "common-lisp-in-both-profiles" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the evaluated systems.
+      facts = json.load(open("${devToolsFacts}"))
+      systems = facts["systems"]
+      floor(len(systems), 2, "profiles asked")
+      libraries = {
+          "alexandria", "serapeum", "cl-ppcre", "str", "bordeaux-threads", "lparallel",
+          "iterate", "trivia", "local-time", "dexador", "com.inuoe.jzon", "log4cl",
+          "fiveam", "parachute", "cffi", "swank", "slynk",
+      }
+      programs = ["sbcl-", "ccl-", "ecl-", "qlot", "alive-lsp", "quicklisp-install", "rlwrap-"]
+      wrong = []
+      lines = set()
+      for name, s in systems.items():
+          cl = s["commonLisp"]
+          if not cl["installed"]:
+              wrong.append(f"{name}: common-lisp is not installed")
+          for prefix in programs:
+              found = [p for p in cl["programs"] if p["name"].startswith(prefix)]
+              if not found:
+                  wrong.append(f"{name}: no {prefix}… among the entry's programs")
+              elif not all(p["there"] for p in found):
+                  wrong.append(f"{name}: {prefix}… is not on the PATH")
+          seen = set(cl["libraries"])
+          for missing in sorted((libraries | {"alive-lsp"}) - seen):
+              wrong.append(f"{name}: `sbcl` does not see {missing}")
+          text = cl["seeds"]
+          if text is None:
+              wrong.append(f"{name}: the init files are not seeded")
+          else:
+              # THE SEED RUNS AS THE PERSON: the script, the home, the user, the group.
+              if not re.fullmatch(r"\s*/nix/store/\S+/bin/ronoctua-common-lisp-seed /home/${user} ${user} \S+\s*", text):
+                  wrong.append(f"{name}: the activation does not seed as the person: {text!r}")
+              lines.add(text.strip())
+          if not cl["curl"]:
+              wrong.append(f"{name}: no curl on the PATH, which Quicklisp's fetcher runs")
+      if len(lines) > 1:
+          wrong.append(f"the two profiles seed with different scripts: {sorted(lines)}")
+      if wrong:
+          print("ERROR: Common Lisp is not what both profiles promise:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          sys.exit(1)
+      END
+
+      # AND THE SEED DOES WHAT IT SAYS, in a home of this check's: a file
+      # that is there and a dangling link stay as they are, and only the
+      # missing one is written, readable and the person's to change.
+      set -- ${seedLine}
+      seed=$1
+      home=$TMPDIR/home
+      mkdir -p "$home"
+      echo "mine" > "$home/.sbclrc"
+      ln -s "$TMPDIR/nowhere" "$home/.ccl-init.lisp"
+      "$seed" "$home"
+      [ "$(cat "$home/.sbclrc")" = mine ] || { echo "ERROR: the seed wrote over a file that was there" >&2; exit 1; }
+      [ -L "$home/.ccl-init.lisp" ] && [ ! -e "$TMPDIR/nowhere" ] \
+        || { echo "ERROR: the seed followed or replaced a dangling link" >&2; exit 1; }
+      [ -f "$home/.eclrc" ] && [ ! -L "$home/.eclrc" ] || { echo "ERROR: the missing .eclrc was not written" >&2; exit 1; }
+      grep -q '(require "asdf")' "$home/.eclrc" || { echo "ERROR: the .eclrc written is not the seed" >&2; exit 1; }
+      [ "$(stat -c %a "$home/.eclrc")" = 644 ] || { echo "ERROR: the .eclrc is $(stat -c %a "$home/.eclrc"), not 644" >&2; exit 1; }
+      # A SECOND RUN changes nothing.
+      echo "changed" > "$home/.eclrc"
+      "$seed" "$home"
+      [ "$(cat "$home/.eclrc")" = changed ] || { echo "ERROR: a second activation wrote over the person's .eclrc" >&2; exit 1; }
+      echo "OK: in both profiles, seven programs on the PATH, 17 libraries and alive-lsp in sbcl; the seed runs as the person, writes only what is missing, follows no link"
+    '';
+
+  # WHAT THE SYSTEM SHIPS, by the programs the reference machine installs:
+  # the checks below run THEM, not a second instantiation of
+  # `nix/common-lisp/`.
+  shippedLisp =
+    let
+      entry = self.nixosConfigurations.noctua.config.ronoctua.apps.common-lisp;
+      named =
+        prefix:
+        lib.findFirst (
+          p: lib.hasPrefix prefix (p.name or "")
+        ) (throw "common-lisp ships no ${prefix}…") entry.extraPackages;
+    in
+    {
+      sbcl = entry.package;
+      ccl = named "ccl-";
+      ecl = named "ecl-";
+      aliveLsp = named "alive-lsp";
+      quicklispInstall = named "quicklisp-install";
+    };
+
+  # THE LIBRARIES LOAD WITH NO NETWORK, in all three Lisps, through the init
+  # files the system seeds. SBCL's come compiled (Hydra builds them), so
+  # loading the whole set and alive-lsp writes no fasl anywhere; CCL and ECL
+  # compile the same sources the first time, into `~/.cache/common-lisp` —
+  # a portable core of the set, since not every library supports every Lisp.
+  common-lisp-loads-offline = mkCheck "common-lisp-loads-offline" [ pkgs.findutils ] ''
+    export HOME=$TMPDIR/home XDG_CACHE_HOME=$TMPDIR/cache XDG_CONFIG_HOME=$TMPDIR/config
+    mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME"
+    cp ${../assets/common-lisp/sbclrc.lisp} "$HOME/.sbclrc"
+    cp ${../assets/common-lisp/ccl-init.lisp} "$HOME/.ccl-init.lisp"
+    cp ${../assets/common-lisp/eclrc.lisp} "$HOME/.eclrc"
+
+    every='"alexandria" "serapeum" "cl-ppcre" "str" "bordeaux-threads" "lparallel" "iterate" "trivia" "local-time" "dexador" "com.inuoe.jzon" "log4cl" "fiveam" "parachute" "cffi" "swank" "slynk" "alive-lsp"'
+    core='"alexandria" "bordeaux-threads" "cl-ppcre" "iterate" "trivia" "fiveam" "parachute" "local-time" "slynk"'
+    loads() {
+      echo "(handler-case (progn (dolist (s (list $1)) (asdf:load-system s)) (format t \"~&LOADED ~a~%\" (length (list $1))) (uiop:quit 0)) (error (e) (format *error-output* \"~&FAILED: ~a~%\" e) (uiop:quit 1)))"
+    }
+
+    ${shippedLisp.sbcl}/bin/sbcl --non-interactive --eval "$(loads "$every")" > sbcl.out 2>&1 \
+      || { tail -30 sbcl.out >&2; echo "ERROR: SBCL did not load its libraries" >&2; exit 1; }
+    grep -q '^LOADED 18$' sbcl.out || { tail -30 sbcl.out >&2; echo "ERROR: SBCL did not say it loaded all eighteen" >&2; exit 1; }
+    compiled=$(find "$XDG_CACHE_HOME" -name '*.fasl' | wc -l)
+    [ "$compiled" = 0 ] || { echo "ERROR: SBCL compiled $compiled fasls into the cache: the store's were not used" >&2; exit 1; }
+
+    ${shippedLisp.ccl}/bin/ccl --batch --eval "$(loads "$core")" > ccl.out 2>&1 \
+      || { tail -30 ccl.out >&2; echo "ERROR: CCL did not load the portable core" >&2; exit 1; }
+    grep -q '^LOADED 9$' ccl.out || { tail -30 ccl.out >&2; echo "ERROR: CCL did not say it loaded the core" >&2; exit 1; }
+    ccl=$(find "$XDG_CACHE_HOME/common-lisp" -name '*.lx64fsl' | wc -l)
+    [ "$ccl" -gt 50 ] || { echo "ERROR: CCL left $ccl compiled files in the cache, not the core's" >&2; exit 1; }
+
+    ${shippedLisp.ecl}/bin/ecl --eval "$(loads "$core")" > ecl.out 2>&1 < /dev/null \
+      || { tail -30 ecl.out >&2; echo "ERROR: ECL did not load the portable core" >&2; exit 1; }
+    grep -q '^LOADED 9$' ecl.out || { tail -30 ecl.out >&2; echo "ERROR: ECL did not say it loaded the core" >&2; exit 1; }
+    ecl=$(find "$XDG_CACHE_HOME/common-lisp" -name '*.fas' | wc -l)
+    [ "$ecl" -gt 50 ] || { echo "ERROR: ECL left $ecl compiled files in the cache, not the core's" >&2; exit 1; }
+
+    # THE PERSON'S OWN SYSTEM, through a `CL_SOURCE_REGISTRY` of theirs that
+    # ends in `//:` ("and then the rest"): each Lisp finds it AND a library of
+    # the store. With the variables prefixed (nixpkgs' wrapper, ours before
+    # it) that was two inherits, and ASDF refused to start.
+    mkdir -p "$TMPDIR/mine"
+    echo '(defsystem "mine" :components ((:file "mine")))' > "$TMPDIR/mine/mine.asd"
+    echo '(defpackage #:mine (:use #:cl)) (in-package #:mine) (defun answer () 42)' > "$TMPDIR/mine/mine.lisp"
+    both='"mine" "alexandria"'
+    CL_SOURCE_REGISTRY="$TMPDIR/mine//:" ${shippedLisp.sbcl}/bin/sbcl --non-interactive --eval "$(loads "$both")" > sbcl-mine.out 2>&1 \
+      && grep -q '^LOADED 2$' sbcl-mine.out \
+      || { tail -30 sbcl-mine.out >&2; echo "ERROR: SBCL with the person's CL_SOURCE_REGISTRY did not find both" >&2; exit 1; }
+    CL_SOURCE_REGISTRY="$TMPDIR/mine//:" ${shippedLisp.ccl}/bin/ccl --batch --eval "$(loads "$both")" > ccl-mine.out 2>&1 \
+      && grep -q '^LOADED 2$' ccl-mine.out \
+      || { tail -30 ccl-mine.out >&2; echo "ERROR: CCL with the person's CL_SOURCE_REGISTRY did not find both" >&2; exit 1; }
+    CL_SOURCE_REGISTRY="$TMPDIR/mine//:" ${shippedLisp.ecl}/bin/ecl --eval "$(loads "$both")" > ecl-mine.out 2>&1 < /dev/null \
+      && grep -q '^LOADED 2$' ecl-mine.out \
+      || { tail -30 ecl-mine.out >&2; echo "ERROR: ECL with the person's CL_SOURCE_REGISTRY did not find both" >&2; exit 1; }
+
+    # CCL AND ECL STARTED FROM SBCL inherit its environment — the ASDF
+    # configuration, SBCL's own `ASDF` — and still load the core: nothing
+    # of SBCL's (its fasl, its store translated onto itself) reaches them.
+    export OTHER_FORM
+    OTHER_FORM=$(loads "$core")
+    from_sbcl() {
+      OTHER_LISP=$1 OTHER_BATCH=$2 ${shippedLisp.sbcl}/bin/sbcl --non-interactive \
+        --eval '(uiop:quit (nth-value 2 (uiop:run-program
+                  (remove "" (list (uiop:getenv "OTHER_LISP") (uiop:getenv "OTHER_BATCH")
+                                   "--eval" (uiop:getenv "OTHER_FORM"))
+                          :test (function string=))
+                  :output t :error-output t :ignore-error-status t)))'
+    }
+    from_sbcl ${shippedLisp.ccl}/bin/ccl --batch > ccl-from-sbcl.out 2>&1 \
+      && grep -q '^LOADED 9$' ccl-from-sbcl.out \
+      || { tail -30 ccl-from-sbcl.out >&2; echo "ERROR: CCL started from SBCL did not load the core" >&2; exit 1; }
+    from_sbcl ${shippedLisp.ecl}/bin/ecl "" > ecl-from-sbcl.out 2>&1 \
+      && grep -q '^LOADED 9$' ecl-from-sbcl.out \
+      || { tail -30 ecl-from-sbcl.out >&2; echo "ERROR: ECL started from SBCL did not load the core" >&2; exit 1; }
+
+    echo "OK: SBCL loaded the eighteen from the store and wrote nothing; CCL ($ccl files) and ECL ($ecl) compiled the core into the cache; each found the person's system beside the store's under a CL_SOURCE_REGISTRY ending in //:, and CCL and ECL loaded the core started from SBCL"
+  '';
+
+  # ALIVE-LSP ANSWERS ON STANDARD INPUT, to its bridge alone, and goes when
+  # the bridge goes. The bridge (`--stdio`) is what an editor starts; the
+  # server behind it listens on a free loopback port, takes ONE connection
+  # (`:accept-once`, our patch) and refuses every other — a second client is
+  # code anybody on the machine can run as you. Closing the editor's side
+  # stops it, and so does killing the bridge outright (`--pdeathsig`), and
+  # nothing stays in the runtime folder either way.
+  alive-lsp-answers = mkCheck "alive-lsp-answers" [ pkgs.python3 ] ''
+    export HOME=$TMPDIR/home XDG_CACHE_HOME=$TMPDIR/cache XDG_RUNTIME_DIR=$TMPDIR/run
+    mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+    python3 - <<'END'
+    import json, os, re, select, signal, socket, subprocess, sys, threading, time
+
+    command = "${shippedLisp.aliveLsp}/bin/alive-lsp"
+    marker = os.path.join(os.environ["TMPDIR"], "ran")
+
+    def frame(obj):
+        body = json.dumps(obj).encode()
+        return b"Content-Length: %d\r\n\r\n" % len(body) + body
+
+    def starts():
+        lsp = subprocess.Popen([command, "--stdio"], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               start_new_session=True)
+        # STANDARD ERROR IS READ ON A THREAD: a server the bridge left behind
+        # keeps it open, and a read to its end would wait for ever instead of
+        # failing below.
+        heard = []
+        def hears():
+            for chunk in iter(lambda: os.read(lsp.stderr.fileno(), 65536), b""):
+                heard.append(chunk)
+        threading.Thread(target=hears, daemon=True).start()
+        return lsp, heard
+
+    def port_of(heard, lsp):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            found = re.search(rb"Started on port (\d+)", b"".join(heard))
+            if found:
+                return int(found.group(1))
+            time.sleep(0.1)
+        lsp.kill()
+        print("ERROR: the server never said its port: " + b"".join(heard).decode(errors="replace")[-1000:], file=sys.stderr)
+        sys.exit(1)
+
+    def refuses(port, why):
+        probe = socket.socket()
+        probe.settimeout(5)
+        try:
+            probe.connect(("127.0.0.1", port))
+        except ConnectionRefusedError:
+            return
+        print(f"ERROR: port {port} still answers {why}", file=sys.stderr)
+        os._exit(1)
+
+    def runtime_is_empty(why):
+        left = os.listdir(os.environ["XDG_RUNTIME_DIR"])
+        if left:
+            print(f"ERROR: {left} left in the runtime directory {why}", file=sys.stderr)
+            os._exit(1)
+
+    def nothing_lives(why):
+        # THE SERVER AND THE BRIDGE'S socat, by what only they run.
+        alive = []
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                line = open(f"/proc/{pid}/cmdline", "rb").read()
+            except OSError:
+                continue
+            if b"accept-once" in line or (b"socat" in line and b"TCP:127.0.0.1" in line):
+                alive.append(line.replace(b"\0", b" ")[:120])
+        if alive:
+            print(f"ERROR: still running {why}: {alive}", file=sys.stderr)
+            os._exit(1)
+
+    # 1. THE BRIDGE ANSWERS `initialize`.
+    lsp, heard = starts()
+    lsp.stdin.write(frame({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                           "params": {"processId": None, "rootUri": None, "capabilities": {}}}))
+    lsp.stdin.flush()
+    deadline = time.monotonic() + 60
+    got = b""
+    answer = None
+    while time.monotonic() < deadline and answer is None:
+        ready, _, _ = select.select([lsp.stdout], [], [], 1)
+        if not ready:
+            continue
+        chunk = os.read(lsp.stdout.fileno(), 65536)
+        if not chunk:
+            break
+        got += chunk
+        head = re.search(rb"Content-Length: (\d+)\r\n\r\n", got)
+        if head and len(got) >= head.end() + int(head.group(1)):
+            answer = json.loads(got[head.end():head.end() + int(head.group(1))])
+    if answer is None or answer.get("id") != 1 or "capabilities" not in answer.get("result", {}):
+        lsp.kill()
+        print(f"ERROR: no answer to `initialize` within 60 s: {got[:300]!r}", file=sys.stderr)
+        print(b"".join(heard).decode(errors="replace")[-2000:], file=sys.stderr)
+        sys.exit(1)
+    port = port_of(heard, lsp)
+    runtime_is_empty("while the bridge runs")
+
+    # 2. A SECOND CLIENT, while the editor's bridge is connected, is refused —
+    #    and the code it would have sent never runs.
+    try:
+        intruder = socket.create_connection(("127.0.0.1", port), timeout=5)
+        intruder.sendall(frame({"jsonrpc": "2.0", "id": 7, "method": "$/alive/eval",
+                                "params": {"package": "cl-user",
+                                           "text": '(with-open-file (s "%s" :direction :output) (write-string "ran" s))' % marker}}))
+        time.sleep(3)
+        print(f"ERROR: a second client connected to port {port} under --stdio", file=sys.stderr)
+        os._exit(1)
+    except (ConnectionRefusedError, ConnectionResetError, BrokenPipeError):
+        pass
+    if os.path.exists(marker):
+        print("ERROR: a second client's code ran as the person", file=sys.stderr)
+        os._exit(1)
+
+    # 3. CLOSING THE EDITOR'S SIDE ends it, and the port refuses.
+    lsp.stdin.close()
+    try:
+        code = lsp.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        lsp.kill()
+        print("ERROR: closing standard input did not end alive-lsp", file=sys.stderr)
+        sys.exit(1)
+    time.sleep(1)
+    refuses(port, "after the bridge closed")
+    runtime_is_empty("after the bridge closed")
+
+    nothing_lives("after the bridge closed")
+
+    # 4. KILLING THE BRIDGE OUTRIGHT — no trap runs — ends the server and the
+    #    socat too, once the server listens...
+    lsp, heard = starts()
+    killed_port = port_of(heard, lsp)
+    time.sleep(0.5)
+    os.kill(lsp.pid, signal.SIGKILL)
+    lsp.wait()
+    time.sleep(3)
+    refuses(killed_port, "after the bridge was killed (SIGKILL)")
+    runtime_is_empty("after the bridge was killed")
+    nothing_lives("after the bridge was killed")
+
+    # 5. ...and while it is still starting, before any socat: the server
+    #    alone is bound to the bridge's life.
+    lsp, heard = starts()
+    time.sleep(0.3)
+    os.kill(lsp.pid, signal.SIGKILL)
+    lsp.wait()
+    time.sleep(3)
+    nothing_lives("after the bridge was killed while the server started")
+    runtime_is_empty("after the bridge was killed while the server started")
+    print(f"OK: `initialize` answered on standard input; a second client refused; closed ({code}) and killed, the server went and port {port} refuses")
+    END
+  '';
+
+  # QUICKLISP FETCHES OVER HTTPS, WHOLE, OR NOT AT ALL. `quicklisp-install`
+  # builds `~/quicklisp` from the store and puts its fetcher in
+  # `local-init/`, which Quicklisp loads before its first download; the
+  # fetcher is pointed here at a curl of this check's (written by a child
+  # `/bin/sh`), which records what it is asked and answers what it is told
+  # to: a file, an HTTP error page, a refusal, a cut transfer. Neither an
+  # error page nor half a file may ever land where Quicklisp would trust it,
+  # and an HTTP error must reach Quicklisp as its own condition, which its
+  # fallbacks catch. Quicklisp's own client would have used plain HTTP: the
+  # same start WITHOUT the fetcher never reaches the fake curl, which proves
+  # this measures the fetcher. And the command's other promises: a list of
+  # libraries that is not whole is fetched again, a Quicklisp that is whole
+  # only gets its fetcher back, and a folder that holds something else is
+  # refused.
+  quicklisp-fetches-over-https = mkCheck "quicklisp-fetches-over-https" [ pkgs.gnugrep ] ''
+    export HOME=$TMPDIR/home XDG_CACHE_HOME=$TMPDIR/cache
+    mkdir -p "$HOME" "$XDG_CACHE_HOME"
+    install=${shippedLisp.quicklispInstall}/bin/quicklisp-install
+    sbcl=${shippedLisp.sbcl}/bin/sbcl
+    ql=$TMPDIR/ql
+    fake=$TMPDIR/curl
+    asked=$TMPDIR/asked
+    mode=$TMPDIR/mode
+    fail() { echo "ERROR: $*" >&2; exit 1; }
+
+    # The install itself. Its first download, the list of libraries, cannot
+    # happen here (no network, no /run/current-system), so it stops there,
+    # with the client in place.
+    if "$install" --path "$ql" > install.out 2>&1; then
+      fail "quicklisp-install said it finished with no network to download with"
+    fi
+    for f in setup.lisp asdf.lisp client-info.sexp quicklisp/quicklisp.asd local-init/ronoctua-https.lisp; do
+      [ -f "$ql/$f" ] || { cat install.out >&2; fail "quicklisp-install did not put $f in place"; }
+      [ -w "$ql/$f" ] || fail "$f is not writable: the client could not update itself"
+    done
+    for said in "beta.quicklisp.org" "plain HTTP" "HTTPS" "signs nothing" "did not arrive whole"; do
+      grep -q "$said" install.out || { cat install.out >&2; fail "quicklisp-install did not say \"$said\""; }
+    done
+
+    # THE FAKE CURL: `ok` a file and 200, `404` an error page and 404 (what
+    # curl says without `--fail`), `22` curl's own refusal, `18` half a file
+    # and a cut transfer.
+    /bin/sh -c "cat > '$fake' <<'SH'
+    #!/bin/sh
+    printf '%s\n' \"\$@\" > '$asked'
+    out=
+    while [ \$# -gt 0 ]; do
+      if [ \"\$1\" = --output ]; then out=\$2; fi
+      shift
+    done
+    case \"\$(cat '$mode' 2>/dev/null || echo ok)\" in
+      ok) printf 'the whole file' > \"\$out\"; printf 200; exit 0 ;;
+      404) printf '<html>not found</html>' > \"\$out\"; printf 404; exit 0 ;;
+      22) echo 'curl: (22) The requested URL returned error: 404' >&2; exit 22 ;;
+      18) printf 'the who' > \"\$out\"; printf 200; echo 'curl: (18) transfer closed' >&2; exit 18 ;;
+    esac
+    SH
+    chmod +x '$fake'"
+
+    lisp() {
+      "$sbcl" --noinform --non-interactive --no-userinit \
+        --eval '(unless (find-package "ASDF") (load (sb-ext:posix-getenv "ASDF")))' \
+        --eval '(defpackage #:ronoctua-quicklisp-https (:use #:cl) (:export #:fetch))' \
+        --eval "(defvar ronoctua-quicklisp-https::*curl* \"$fake\")" \
+        --load "$ql/setup.lisp" "$@"
+    }
+
+    # Quicklisp's first start with the fake curl in the fetcher's place. The
+    # list that did not arrive left `dists/`, which Quicklisp takes for a
+    # list that did: it goes, as `quicklisp-install` makes it go.
+    starts() {
+      rm -rf "$ql/dists"
+      lisp > "$1" 2>&1 || true
+    }
+
+    echo ok > "$mode"
+    starts with.out
+    [ -s "$asked" ] || { cat with.out >&2; fail "Quicklisp never ran the fetcher's curl"; }
+    grep -qx 'https://beta.quicklisp.org/dist/quicklisp.txt' "$asked" \
+      || { cat "$asked" >&2; fail "the first download was not the list of libraries over https://"; }
+    if grep -q '^http://' "$asked"; then fail "an http:// address reached curl"; fi
+    tr '\n' ' ' < "$asked" > flags
+    for flag in "--location" "--proto =https" "--proto-redir =https" "--tlsv1.2" \
+                "--curves X25519MLKEM768:X25519:P-256" "--write-out %{http_code}"; do
+      grep -qF -- "$flag" flags || fail "curl was not given $flag: $(cat flags)"
+    done
+
+    # ONE DOWNLOAD, by Quicklisp's own `ql-http:fetch`, in each of the
+    # fake's answers. What is said is the condition Quicklisp sees.
+    fetches() {
+      echo "$1" > "$mode"
+      rm -rf "$TMPDIR/into" "$asked"
+      mkdir -p "$ql/dists"
+      lisp --eval "$2" \
+        --eval '(handler-case
+                    (progn (ql-http:fetch "http://beta.quicklisp.org/dist/x.txt"
+                                          (merge-pathnames "into/x.txt" (uiop:ensure-directory-pathname (uiop:getenv "TMPDIR"))))
+                           (format t "~&FETCHED~%"))
+                  (ql-http:unexpected-http-status (c)
+                    (format t "~&HTTP ~A~%" (ql-http:unexpected-http-status-code c)))
+                  (error (c)
+                    (format t "~&FAILED ~A~%" c)))' > "fetch-$1.out" 2>&1 || true
+    }
+    nothing_left() {
+      if [ -e "$TMPDIR/into/x.txt" ]; then fail "$1 left a file Quicklisp would trust: $(cat "$TMPDIR/into/x.txt")"; fi
+      if [ -e "$TMPDIR/into/x.txt.part" ]; then fail "$1 left its .part behind"; fi
+    }
+
+    fetches ok '(setf ql-http:*proxy-url* "http://proxy.example:3128")'
+    grep -q '^FETCHED' fetch-ok.out || { cat fetch-ok.out >&2; fail "a whole file with a 200 was not fetched"; }
+    [ "$(cat "$TMPDIR/into/x.txt")" = "the whole file" ] || fail "the fetched file is not what was sent"
+    [ ! -e "$TMPDIR/into/x.txt.part" ] || fail "a fetched file left its .part behind"
+    tr '\n' ' ' < "$asked" | grep -qF -- "--proxy http://proxy.example:3128" \
+      || fail "Quicklisp's proxy did not reach curl: $(tr '\n' ' ' < "$asked")"
+
+    fetches 404 nil
+    grep -q '^HTTP 404' fetch-404.out \
+      || { cat fetch-404.out >&2; fail "an HTTP 404 did not reach Quicklisp as its own unexpected-http-status"; }
+    nothing_left "an HTTP 404"
+
+    fetches 22 nil
+    grep -q '^FAILED' fetch-22.out || { cat fetch-22.out >&2; fail "curl's refusal (22) was not an error"; }
+    nothing_left "curl's refusal (22)"
+
+    fetches 18 nil
+    grep -q '^FAILED' fetch-18.out || { cat fetch-18.out >&2; fail "a cut transfer (18) was not an error"; }
+    nothing_left "a cut transfer (18)"
+
+    # THE CONTROL: without the fetcher, Quicklisp's own HTTP — the fake curl
+    # is never asked, and the client goes to port 80.
+    echo ok > "$mode"
+    rm -f "$ql/local-init/ronoctua-https.lisp" "$asked"
+    starts without.out
+    [ ! -e "$asked" ] || fail "curl was run with no fetcher in local-init: the check would measure nothing"
+    grep -qF '"beta.quicklisp.org" 80' without.out \
+      || { cat without.out >&2; fail "Quicklisp's own client did not try its plain-HTTP download (port 80)"; }
+
+    # A LIST THAT IS NOT WHOLE is fetched again, with the fetcher written back.
+    rm -rf "$ql/dists" && mkdir -p "$ql/dists/quicklisp" && echo half > "$ql/dists/quicklisp/distinfo.txt"
+    if "$install" --path "$ql" > again.out 2>&1; then
+      fail "the list fetched again said it finished with no network"
+    fi
+    grep -q "not whole" again.out || { cat again.out >&2; fail "quicklisp-install did not fetch the list again"; }
+    [ -f "$ql/local-init/ronoctua-https.lisp" ] || fail "fetching again did not write the fetcher back"
+
+    # A QUICKLISP THAT IS WHOLE gets its fetcher back, and nothing else.
+    rm "$ql/local-init/ronoctua-https.lisp"
+    mkdir -p "$ql/dists/quicklisp"
+    for f in distinfo.txt systems.txt releases.txt; do echo "the $f" > "$ql/dists/quicklisp/$f"; done
+    "$install" --path "$ql" > done.out 2>&1 || { cat done.out >&2; fail "quicklisp-install failed on a Quicklisp that is whole"; }
+    grep -q "already" done.out || fail "quicklisp-install did not say Quicklisp was there"
+    [ -f "$ql/local-init/ronoctua-https.lisp" ] || fail "quicklisp-install did not write the fetcher back"
+    [ "$(cat "$ql/dists/quicklisp/systems.txt")" = "the systems.txt" ] || fail "a whole Quicklisp's list was touched"
+
+    # A FOLDER THAT HOLDS SOMETHING ELSE is refused, and left as it was.
+    mkdir -p "$TMPDIR/other" && echo mine > "$TMPDIR/other/notes"
+    if "$install" --path "$TMPDIR/other" > other.out 2>&1; then fail "a folder of the person's was taken"; fi
+    [ "$(ls -A "$TMPDIR/other")" = notes ] || fail "a refused folder was written into"
+
+    echo "OK: https:// with the protocol pinned and the post-quantum curve first, the proxy passed on; a 404 is Quicklisp's own condition, a refusal and a cut transfer errors, and none leaves a file; without the fetcher curl was never asked"
+  '';
+
   # ── anchor: L16 ──
   # THE PERSON'S BINARY CACHE AS THE SYSTEMS SEE IT: the judge of what a
   # person names (`nix/binary-cache.nix`) over the table the Rust validator is
@@ -48314,7 +49544,7 @@ let
   # `nix/release-unfree.nix` answers (the licence of the package of that
   # name, the machine's predicate, and `android…` with Android on) of the
   # names the machine carries (`nix/modules/binary-cache.nix`). That question
-  # is asked here with the same function, of the evaluated reference machine: Chrome, Claude Code, the SDK's pieces — and
+  # is asked here with the same function, of the evaluated reference machine: Chrome, Claude Code, VS Code (and its FHS environment, `code`), the SDK's pieces — and
   # the two that come in by a nixpkgs of their own, by their REAL store
   # names: `uade` (the player's, `nix/player-tools.nix`, which no predicate
   # of the system names) and `unrar` (the archives'). And of everything the
@@ -48360,6 +49590,8 @@ let
         unrar
         "google-chrome-141.0.7390.65"
         "claude-code-2.0.30"
+        "vscode-1.119.0"
+        "code-1.119.0"
         "platform-tools-37.0.0"
         "androidsdk"
         "android-studio-stable-2025.1.4.8"
@@ -48399,7 +49631,7 @@ let
       uade, unrar = facts["uade"], facts["unrar"]
       if not uade.startswith("uade-") or not unrar.startswith("unrar-"):
           wrong.append(f"the player's and the archives' programs are {uade!r} and {unrar!r}")
-      want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.0.30",
+      want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.0.30", "vscode-1.119.0", "code-1.119.0",
               "platform-tools-37.0.0", "androidsdk", "android-studio-stable-2025.1.4.8"}
       if set(unfree) != want:
           wrong.append(f"the release calls unfree {sorted(unfree)}, not {sorted(want)}")
@@ -48991,8 +50223,10 @@ let
   # what the decline did on this machine — removed, still here through
   # another program (in the danger tone, name and all), kept with the
   # distro's reason, no longer known, declined on the person's other machine
-  # (named), leaving with the next update — and, in the window, the rest of
-  # the distro's programs after them, each once.
+  # (named), leaving with the next update — a program declined before it
+  # was ever installed by the registry's name, its launcher entry not being
+  # there — and, in the window, the rest of the distro's programs after
+  # them, each once.
   #
   # PARSED: frames and the `.ftl` files are read, never searched as source.
   declined-list-is-drawn = mkCheck "declined-list-is-drawn" [ pkgs.python3 ] ''
@@ -49020,6 +50254,10 @@ let
         ("gimp", "software-declared-decline-unknown"),
         ("Htop", "software-declared-decline-elsewhere"),
         ("btop++", "software-declared-decline-waiting"),
+        # DECLINED BEFORE IT WAS EVER INSTALLED: no launcher entry in the
+        # room, so the name is the registry's (`distro-apps.json`), never
+        # the id.
+        ("LibreOffice", "software-declared-decline-honoured"),
     ]
     REST = ["Google Chrome", "Emacs", "mpv Media Player", "Ghostty"]
     wrong = []
@@ -50196,6 +51434,8 @@ let
       mime-table-generated
       mime-unknown-icon-fails
       mime-preference-is-live
+      mime-drop-is-live
+      mime-claims-refuse
 
       iconset-is-at-run-time
       one-icon-search
@@ -50401,6 +51641,8 @@ let
       mime-table-generated
       mime-unknown-icon-fails
       mime-preference-is-live
+      mime-drop-is-live
+      mime-claims-refuse
       gate-fetches-what-no-cache-has
       trap-calls-something-that-exists
       dev-exports-before-it-starts
@@ -50506,6 +51748,7 @@ let
     terminal-vm = terminalVm;
     x11-vm = x11Vm;
     emacs-vm = emacsVm;
+    vscode-vm = vscodeVm;
     keyboard-vm = keyboardVm;
     rescue-vm = rescueVm;
     tpm-vm = tpmVm;
@@ -50651,6 +51894,8 @@ let
       installer-writes-belongings-into-the-home
 
       models-open-in-orca
+      documents-open-in-their-suite
+      files-open-by-choice
 
       layer-surfaces-are-the-ones-we-know
       a-column-is-a-column
@@ -51210,6 +52455,7 @@ let
       declining-an-app-removes-it
       essential-apps-say-why
       distro-app-ids-are-stable
+      offered-programs-are-the-registrys
       distro-apps-are-registered
       distro-pins-move-only-what-follows
       distro-app-sources-are-checked
@@ -51312,6 +52558,13 @@ let
       kvm-is-ready
       direnv-sources-nix-direnv
       agents-in-both-profiles
+      ;
+    # Common Lisp in both profiles (2026-10-20).
+    inherit
+      common-lisp-in-both-profiles
+      common-lisp-loads-offline
+      alive-lsp-answers
+      quicklisp-fetches-over-https
       ;
     # ── anchor: L16 ──
     inherit

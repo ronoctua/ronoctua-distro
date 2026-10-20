@@ -4499,6 +4499,25 @@ existem: `application/x-iso9660-image`, `application/x-sqlite3` e `text/x-rust` 
 qualquer um juraria certos, e a base os escreve `application/vnd.efi.iso`, `application/vnd.sqlite3`
 e `text/rust`. Linha que não casa com nada parece proposital e ninguém audita.
 
+**Um empate feito de propósito, e um glob tirado** (2026-10-20, o Common Lisp). O bloco `claims` de
+`assets/icons/mime-glyphs.nix` dá um glob a um tipo que a base TEM (o `ours` é para o tipo que não
+existe): `*.lsp` vira `text/x-common-lisp`, que o upstream não dava a ninguém. O `*.cl` é do OpenCL no
+upstream e do Common Lisp também, e a linha diz `shares`: entra no mesmo peso, depois das do
+upstream, e faz um EMPATE — que o `of_path` já resolve lendo o começo do arquivo. Lá o magic decide
+primeiro; depois a primeira linha de `SHARED_CONTENT` cujo glob casa e um de cujos marcadores está no
+começo (`(in-package`, `(defpackage`, `(defsystem`, `(uiop:define-package`, sem caixa); senão fica o
+tipo do upstream, que é o primeiro do empate. Um kernel OpenCL não escreve nenhum deles e continua
+OpenCL. Um arquivo de nome empatado é lido UMA vez: a resposta fica guardada pelo arquivo
+(dispositivo, inode, data de modificação e tamanho; no máximo `mimeTieEntries`, de
+`assets/cache.nix`), porque a listagem pergunta de novo a cada releitura, no laço que desenha — e
+debaixo do `/private` nada é lido com o cofre fechado ou suspenso (`ronoctua_private::may_touch`):
+vale a primeira resposta do nome. E o bloco `drop` tira do `text/x-common-lisp` o `*.fasl`, que é a Lisp COMPILADA: a prévia
+mostraria bytes de um carregador como texto colorido. As três recusam ficar velhas — o tipo que some,
+o glob que o upstream deixa de dar, o empate que deixa de ser empate, a linha sem `shares` que
+empataria calada — e o `mime-drop-is-live` e o `mime-claims-refuse` quebram o `drop` e as
+reivindicações de propósito (um `shares` sem par, um peso que não empata, um `content` sem empate) e
+veem o build recusar.
+
 #### Um cursor que não se vê é uma tecla que não funciona
 
 O gerenciador foi entregue com as setas funcionando e **a tela sem mostrar nada**. O relatório que
@@ -4809,6 +4828,10 @@ Tirar um passo da atualização não passa por livro-razão: o id vive na tabela
 no `host.nix` de uma máquina passa a recusar a avaliação, como todo id que não existe — de propósito:
 um erro de digitação que não ligasse nada seria pior. Nenhuma versão foi publicada com o passo.
 
+O Common Lisp entrou nos dois perfis (2026-10-20) sem tocar no Emacs: o SLIME, o SLY ou um cliente
+LSP são da configuração da pessoa, e o swank, o slynk e o alive-lsp estão no sistema para quem
+conecta (seção "Common Lisp nos dois perfis").
+
 #### O Emacs é o pure-GTK, e um compositor que acaba leva o daemon
 
 O pacote é o `emacs30-pgtk` (2026-10-19). O `emacs30` do nixpkgs é o build X11 com o toolkit Lucid
@@ -4930,6 +4953,25 @@ nenhum aberto.
 
 O pacote fica do mesmo tamanho: o pgtk acrescenta 491 MiB ao `full` e 493 ao `minimal`, contra 503
 e 506 do Lucid (o GTK 3 já está lá por outros programas; saem as bibliotecas do X toolkit).
+
+#### Os dois lançadores ficam, e o que não é do daemon diz isso no nome
+
+O pacote traz dois lançadores, e o localizador (`LEADER a`) lista os dois pelo `Name=`: o
+`emacsclient.desktop` ("Emacs (Client)") abre um quadro do daemon, que tem os buffers da pessoa e a
+configuração já carregada; o `emacs.desktop` ("Emacs") sobe um SEGUNDO Emacs, que não vê nenhum
+daqueles buffers e carrega tudo de novo. Decisão do dono (2026-10-20): os dois ficam — o segundo é
+como se chega a um Emacs com o daemon quebrado —, e o segundo passa a se chamar `Emacs (non-client,
+so don't use it)` (inglês: um lançador tem um idioma só, invariante 18). O `emacsPkg` do `emacs.nix`
+é um `symlinkJoin` do build que reescreve só aquela linha, como o `ghosttyPerWindow` faz com o
+lançador do Ghostty: nada é recompilado, todo o resto é link para o build, e o `bin/emacs` continua
+sendo o embrulho do build (`--inherit-argv0`; a vigia do cérebro ainda vê um `emacs`). O build se
+recusa quando a entrada não é a que ele conhece — o arquivo mudou de lugar, ou tem um segundo `Name=`
+ou um traduzido, que um localizador em outro idioma mostraria no lugar —, para o nome velho nunca
+ficar na tela calado. O daemon, o registro e o `RONOCTUA_EMACSCLIENT` usam o mesmo pacote, e o nome
+da derivação continua com `emacs-pgtk-30`. No registro, a entrada do cliente vem primeiro: a central
+de programas nomeia um programa da distro pela primeira entrada que acha, e o editor é o cliente. O
+`emacs-vm` cobra os dois nomes no `share/applications` do sistema e que o daemon roda o build a que
+o `bin/emacs` do pacote leva.
 
 #### Uma pergunta vaga e duas respostas em chave crua
 
@@ -8331,6 +8373,28 @@ distinguir os dois. E **um delimitador com teto (`max`) RECUSA em vez de fechar 
 tentativa fechava, e o teste pegou — o `&'a str` do Rust saía como um texto que ia até a próxima
 aspa, engolindo o tipo depois dele.
 
+##### O que é uma palavra é da linguagem (2026-10-20)
+
+Até o Common Lisp, uma palavra era letra, dígito, `_`, `$` e `?` em toda linguagem. Na Lisp isso
+corta o símbolo: `let*` acendia `let` e deixava a estrela de fora, `multiple-value-bind` não acendia
+nada, e `when-let` acendia `when`. Uma linha diz agora do que as palavras DELA são feitas
+(`word-chars`, opcional; o padrão é a regra de antes, e um teste confere os 256 bytes), e o gerador
+confere cada palavra das listas pela regra da linha. Ele recusa o caractere de palavra que começa um
+comentário, um texto, um atributo ou um literal de caractere: a palavra é lida inteira, e `foo;bar`
+nunca chegaria ao comentário. Vale só ASCII, porque um byte de caractere multibyte nunca pode ser
+parte de palavra — senão a palavra terminaria no meio do `é`.
+
+Vieram junto três coisas que a Lisp pede e o resto não vê. O literal de caractere (`char-prefix`,
+`#\`) é testado ANTES do comentário: `#\;` é o ponto e vírgula e `#\"` é a aspa, e lidos como
+qualquer outra coisa abririam um comentário ou um texto que nunca fecha. Uma palavra que começa com
+`:` é constante (`colon-is-constant`: `:test`), e `cl:car` não é. E o numeral: um sinal antes de um
+dígito é dele quando a linguagem lê o sinal como parte da palavra (`-1`, e a razão `1/2`), e um
+numeral que encosta num caractere que só esta linguagem chama de palavra não é numeral (`1+` é uma
+função). Os caracteres de palavra do padrão nunca contam nessa última regra, e por isso nenhuma
+linha que não declara `word-chars` mudou de cor. O `of_shebang` também aprendeu o `env -S`
+(`#!/usr/bin/env -S sbcl --script`). O porquê da linha `common-lisp` está na seção "Common Lisp nos
+dois perfis".
+
 ##### O que os testes cobram, e os três defeitos que eles acharam
 
 Trinta e três testes, e o que carrega a feature é um só: **realçar a linha 40 a partir de
@@ -8339,7 +8403,9 @@ mostraria cores diferentes das que ela tem quando se chega nela de cima.
 
 Três defeitos saíram deles na primeira execução: o `max` que fechava em vez de recusar; o raw string
 do Rust, cujos `#` ficam **entre** o marcador e a aspa (`r#"a"b"#` fechava na aspa de dentro); e a
-conta de deslocamento absoluto do texto inteiro. E dois testes nasceram sem morder — o de fronteira
+conta de deslocamento absoluto do texto inteiro. E um defeito antigo saiu depois (2026-10-20): o
+`guess` cortava o começo do texto no byte 4096, que pode cair dentro de um caractere — e isso era um
+pânico na prévia; agora o corte recua até o início do caractere. E dois testes nasceram sem morder — o de fronteira
 de caractere só passou a pegar quando ganhou uma semente com **barra invertida imediatamente antes de
 um caractere multibyte**, que é a única forma que faz o escape terminar dentro do `é`.
 
@@ -9202,19 +9268,19 @@ dois wipes no mesmo segundo davam `@root` aninhado, sem erro.
 
 ---
 
-### Instalador: dezessete perguntas, e o "só" continua sendo o critério
+### Instalador: dezoito perguntas, e o "só" continua sendo o critério
 
-A TUI coleta idioma, disco, instalação, o trio do teclado, locale, fuso, hostname, senha,
-frase-secreta, a rede sem fio (e a senha dela), as três do repositório da pessoa — endereço, acesso e
-senha dos pertences, obrigatórias desde 2026-10-05 (seção do L20) — e o `resume_offset`, que é
-calculado. O "só" é a parte difícil, e por isso a lista é um enum fechado com um teste que conta os
-casos — acrescentar uma pergunta quebra o teste, que é como uma décima oitava para de entrar por
-desatenção.
+A TUI coleta idioma, disco, instalação, os programas que a `full` deixa de fora, o trio do teclado,
+locale, fuso, hostname, senha, frase-secreta, a rede sem fio (e a senha dela), as três do repositório
+da pessoa — endereço, acesso e senha dos pertences, obrigatórias desde 2026-10-05 (seção do L20) — e
+o `resume_offset`, que é calculado. O "só" é a parte difícil, e por isso a lista é um enum fechado
+com um teste que conta os casos — acrescentar uma pergunta quebra o teste, que é como uma décima nona
+para de entrar por desatenção.
 
 Eram seis, e cada uma que entrou desde então entrou por não ter alternativa: **o teclado**, porque o
 xkb não recusa layout inexistente e a frase-secreta é digitada às cegas; **o locale e o fuso**, porque
 são do lugar e não do hardware; **a rede**, porque sem ela a instalação não roda numa máquina sem
-porta Ethernet; e **a instalação**, abaixo.
+porta Ethernet; **a instalação** e **os programas que ela deixa de fora**, abaixo.
 
 O que **não** se pergunta — vídeo, sistema de arquivos, tamanho de partição, gerenciador de boot,
 hibernação — ou o `nixos-facter` detecta, ou a distro já decidiu.
@@ -9237,11 +9303,15 @@ instalação, e depois seria tarde.
 
 #### Duas instalações, e por que é uma OPÇÃO e não um segundo sistema
 
-`ronoctua.profile` vale `full` ou `minimal`, e a diferença é **~29 GiB contra ~11,8** (uma conta
-sobre o store; a medida dos dois sistemas construídos está no `docs/PENDING.md`). Sai o Android
-(6,5), saem os outros compiladores (go, python, node, gcc), saem as variantes da fonte (2,0), saem o
-navegador, o editor e a mídia (2,0), e saem o Blender e o OrcaSlicer. O trabalho na distro — o
-toolchain do devshell, o rust, o KVM e os agentes de código — fica nos dois (seção do L15).
+`ronoctua.profile` vale `full` ou `minimal`, e a diferença é **~37 GiB contra ~12,5** (~35,5 na `full`
+com o padrão do instalador, que deixa o LibreOffice de fora; os dois sistemas construídos foram medidos
+em 2026-10-20, antes do Common Lisp, que soma 0,63 GiB a cada um, e do VS Code, que soma 0,91 à
+`full`; a tabela das medidas está no
+`nix/modules/profile.nix`). Sai o Android (6,5), saem os outros compiladores (go, python, node, gcc),
+saem as variantes da fonte (2,0), saem o navegador, o editor e a mídia (2,0), saem o Blender e o
+OrcaSlicer, e saem o escritório (2,65) e os Crafting Apps (1,97). O trabalho na distro — o toolchain do
+devshell, o rust, o Common Lisp, o KVM e os agentes de código — fica nos dois (seção do L15 e "Common
+Lisp nos dois perfis").
 
 **É uma opção, e não um `nixosConfigurations` a mais.** O flake de uma máquina constrói um atributo
 só, com o nome da pessoa (`ronoctua.machine.attr`), nos dois casos; o perfil é uma linha no
@@ -9271,6 +9341,60 @@ Duas coisas apareceram ao medir isto, e as duas eram interruptores que não inte
   caminho do superpacote GRAVADO por `option_env!` (`RONOCTUA_ICONS`), e é instalado nos dois
   perfis. Por isso ele está **fora** da tabela: listá-lo seria anunciar uma economia que não
   acontece. Fechar isso é mudança no shell, não na tabela — está no `PENDING`.
+
+#### A décima oitava pergunta: os programas que a `full` deixa de fora (2026-10-20)
+
+Alguns programas da `full` pesam gigabytes que a pessoa talvez nunca abra (o Android Studio, o
+Blender, as suítes de escritório, as Crafting Apps). Logo depois da instalação, uma tela lista esses
+programas, cada um marcado ou não, e o desmarcado não é baixado nesta máquina nem por atualização
+nenhuma, até a central de programas o trazer de volta. É uma pergunta pelo mesmo motivo da
+instalação: diz para que a máquina serve, e nada no hardware diz isso.
+
+- **A lista mora no livro-razão** (`offered` em `assets/distro-apps.nix`): a ordem da tela e o estado
+  inicial de cada linha (o LibreOffice vem desmarcado: o ONLYOFFICE abre os mesmos documentos). O
+  `nix/offered.nix` a escreve como tabela do instalador (`RONOCTUA_OFFERED_RS`) e recusa a linha
+  que a tela não saberia desenhar ou que nenhuma recusa saberia nomear: id fora do `ids`, repetido
+  ou `none`, nome vazio, de duas linhas ou igual a outro. O build do instalador lê um arquivo, não
+  avalia a máquina; o que a lista promete do registro — cada id é um programa que a `full` carrega
+  e a `minimal` não, que se pode recusar e que sai quando recusado — o
+  `offered-programs-are-the-registrys` pergunta às máquinas avaliadas. Por isso a tela só existe na
+  `full`: na `minimal` não há o que deixar de fora.
+- **O nome de um programa é dado, não chave de texto** (inv. 8): é nome próprio, igual em todo
+  idioma, como o `Name=` de um `.desktop`. A moldura — rótulo, ajuda, "seguir com estes", as palavras
+  de valor e a linha da revisão — sai de chaves.
+- **Uma palavra de valor, e não um glifo.** O instalador roda no console, cuja fonte (PSF) não tem os
+  ícones da área de uso privado. Cada linha é o nome, alinhado pelo mais longo, e a palavra que diz o
+  que acontece com ele (`instalar` / `deixar de fora`); o tom diz o mesmo — o mantido no tom do
+  texto com a palavra de resposta, o deixado de fora todo apagado.
+- **A resposta é o estado.** Ela é a lista dos ids desmarcados separados por vírgula, ou `none` —
+  nunca vazia, para cruzar o arquivo de salto do release como qualquer outra. `Enter` ou espaço numa
+  linha de programa a marca ou desmarca; `Enter` na primeira linha segue. `Esc`, o salto e a
+  retomada carregam as marcas de graça. Sem terminal, `RONOCTUA_INST_LEFT_OUT` recusa um id que a
+  lista não oferece (`Invalid::NotOffered`, nomeando-o): um erro de digitação ali instalaria o que a
+  pessoa quis deixar de fora.
+- **Um salto não pula a lista.** Todo salto vem de um instalador MAIS VELHO, e um mais velho que a
+  lista não a perguntou: retomar no repositório recusaria o padrão (o LibreOffice) sem ninguém ter
+  visto. Numa `full` cujo arquivo de salto não traz a resposta, o instalador do release abre a lista
+  primeiro, e "Seguir com estes" vai para onde o salto parou (`State::resume_to`); `Esc` dali volta
+  às perguntas, sem pulo. Uma resposta que nomeia um programa que este release não oferece mais
+  também abre a lista, e a frase da tela o nomeia (`State::dropped`): a pessoa está ali para decidir
+  de novo, e uma recusa sem o que consertar seria um beco. Sem terminal é recusa antes do primeiro
+  passo, porque ninguém está ali para decidir.
+- **O que um clique abre não toma o clique**, agora no instalador inteiro: numa tela recém-aberta, o
+  primeiro clique numa linha só a seleciona — a do cursor inclusive (`State::aimed`) —, e o primeiro
+  clique numa dica da linha de teclas só a acende (`State::untouched`); só o seguinte faz o que a
+  tecla faz. Sem isso, o segundo clique de um clique duplo no `full` (na linha, ou no `Enter` da linha
+  de teclas, que fica nas mesmas colunas tela após tela) caía na tela nova e passava pela lista.
+- **O que não cabe diz que existe.** O console do ISO é a `noctua-iosevka-32.psf` (células de 19 × 32
+  px): 71 × 24 a 1366 × 768, 101 × 33 a 1920 × 1080. Uma lista que não cabe — a de programas
+  inclusive — guarda a primeira e a última linha para dizer quantas opções há acima e abaixo, e um
+  clique nelas mostra a página; a revisão faz o mesmo com o plano, que ROLA (setas, PgUp/PgDn, roda,
+  clique), e a linha de baixo diz quantos passos faltam e quantos deles apagam o disco — a ajuda da
+  tela diz que os marcados apagam, e a 71 × 24 nenhum deles cabia. A confirmação continua fixada
+  embaixo. O que a pintura desenha e o que o ponteiro acerta é a mesma resposta (`Rows`, `Plan`).
+
+O desmarcado vira uma recusa da pessoa, e o porquê de ela ser assinada antes do disco está na seção
+do L20.
 
 #### O ISO carrega o que a máquina alvo compilaria
 
@@ -12960,7 +13084,9 @@ chamada.
 - **Um valor que não significa nada é recusado.** No `index.json`, uma raiz relativa ou um `skip` que
   não é nome (sem `/`) nem caminho absoluto (`Videos/raw`) faz o arquivo não ler; a unidade diz o
   porquê no log e continua pelo que tinha. O `--skip` da linha de comando (`searchSkip`) segue a
-  mesma regra, e a unidade não sobe com um inválido.
+  mesma regra, e a unidade não sobe com um inválido. O `.qlot` está nele desde 2026-10-20: é a cópia
+  das bibliotecas de um projeto Common Lisp que o `qlfile.lock` traz de volta, saída de máquina como
+  o `node_modules` (seção "Common Lisp nos dois perfis").
 
 **O que a unidade tomou de cada fonte vai no commit.** O payload do tantivy guarda o formato e as
 assinaturas: onde as pastas de manual resolvem, o arquivo do índice Nix (caminho real, tamanho,
@@ -14465,10 +14591,27 @@ marca nomeia (`MarkId::opens`, o mesmo caminho das marcas dos containers), não 
   (`ronoctua_apps::defaults`), na ordem da especificação: `$XDG_CONFIG_HOME`, cada
   `$XDG_CONFIG_DIRS` (o `/etc/xdg` da distro), `$XDG_DATA_HOME/applications` e cada
   `$XDG_DATA_DIRS/applications` (o do player), com o `<desktop>-mimeapps.list` antes do comum em
-  cada pasta. Ganha o primeiro id que está no catálogo; um que não está instalado é pulado. Só o tipo
+  cada pasta. Ganha o primeiro id instalado, listado ou não; um que não está instalado é pulado. Só o tipo
   exato (ou um apelido dele) conta: o padrão do pai não responde pelo filho, porque foi pela herança
   que o `.step` (`model/step`, filho de `text/plain` no banco) ia para o editor. Lido a cada
   abertura, sem cache: um padrão que a pessoa muda vale na próxima.
+- **Um padrão alcança o que o lançador não lista** (2026-10-20). O catálogo é o que o lançador
+  LISTA, e o `NoDisplay=true` deixa uma entrada de fora; mas o `NoDisplay` diz "não me mostre num
+  menu", não "não abra arquivos comigo". A entrada do player é `NoDisplay`, e a lista do próprio
+  player a nomeia para todo tipo de áudio e vídeo: o `opens` só procurava no catálogo, achava nada,
+  pulava o padrão como "não instalado" e entregava o filme a quem o declarasse primeiro — o VLC no
+  `full`. Era um defeito antigo, que os Crafting Apps expuseram ao tomar os filmes do VLC. Agora o id
+  que uma lista nomeia e o catálogo não tem é lido do disco (`ronoctua_apps::named`: o primeiro
+  diretório que o tem responde; `Hidden=true` é a entrada apagada), só para aquele tipo e só ao
+  abrir um arquivo; e o lançador continua sem listá-lo.
+- **Uma entrada pode recusar a ordem dos nomes** (2026-10-20). Sem padrão, abre o primeiro que
+  declara o tipo, e o catálogo é ordenado pelo nome. Uma entrada com `X-Ronoctua-Fallback=false`
+  (`DesktopEntry::fallback`) é pulada nessa ordem — pelo tipo exato e pelo pai, nossa ou de
+  qualquer um —, continua no "abrir com" (que filtra pelo `MimeType=`) e ainda vence onde um padrão
+  a nomeia. Quem escreve a chave é o registro, nos lançadores que ele escreve (`fallback = false` na
+  tabela de `assets/distro-apps.nix`; hoje, os treze Crafting Apps). O `files-open-by-choice` roda
+  o `opener` sobre o `system.path` construído do `full`: nenhum arquivo comum abre numa AppImage da
+  distro, e som e filme abrem no player.
 - **O id do OrcaSlicer é lido do pacote na avaliação** — a decisão e o custo estão na seção da
   varredura do sistema, mais abaixo. O `system.checks` confere que a entrada é aplicação e declara
   `model/stl`; o `models-open-in-orca` prova o caminho inteiro com o `ronoctua-shell opener`, e prova
@@ -15544,9 +15687,48 @@ achar um deles não é achar o programa. A recusa é lida por um leitor só: o
 `ronoctua.person.declinedHere` do módulo da pessoa, quando existe; até lá, uma cópia do mesmo filtro
 (uma linha de forma desconhecida fica de fora, nunca para a avaliação).
 
+**Uma regra de recusa, num lugar só, e trazer de volta é por máquina (2026-10-20).** A regra mora
+no `declined.rs` do `ronoctua-person`: recusar, trazer de volta aqui, trazer de volta em todos os
+computadores, juntar recusas e mesclar duas cópias são funções dele, e todo escritor e toda mescla
+da lista as chamam — a central de programas, a escolha do instalador (`choice.rs`, aplicada pelo
+`plain --decline` dos pertences) e o `merge_declined` que a sincronização usa. Recusar só alarga:
+recusado aqui depois de em outra máquina fica nas duas, e recusado em todas continua em todas.
+Trazer de volta é por máquina, porque o instalador recusa "só nesta máquina" (decisão do dono): de
+uma lista de máquinas, esta sai, as outras continuam sem o programa, e a entrada some quando a lista
+esvazia; a recusa de todas as máquinas (`null`) some inteira, porque não há uma lista "das outras"
+para guardar. "Última mudança" nunca anda para trás: uma edição carimbada antes, que chega depois,
+junta as máquinas e mantém o carimbo e a máquina da edição mais nova.
+
+**Duas cópias se encontram máquina a máquina.** Antes a mescla tratava a recusa inteira como um
+valor: duas máquinas trazendo o programa de volta ao mesmo tempo (`[a, b]` vira `[b]` numa e `[a]`
+na outra), ou duas recusando ao mesmo tempo (`[a]` e a do instalador, `[novo]`), viravam um conflito
+que nenhuma escolha resolvia — qualquer lado desfazia a decisão do outro. Agora cada recusa se mescla
+como CONJUNTO de máquinas: a base, mais o que um dos lados acrescentou, menos o que um dos lados tirou.
+O `null` que um lado fez absorve o resto; o `null` da base guarda só o que os dois lados guardaram
+dele; conjunto vazio, a recusa some. A mescla da lista de recusas nunca tem conflito.
+
+**A página diz o que o botão faz.** "Em todos os computadores, e aqui na hora" só para a recusa de
+todas; "aqui na hora", com quantos outros computadores continuam sem ele, para a de uma lista. A
+recusa só de outras máquinas não se traz de volta daqui sozinha — cada uma a traz por conta própria,
+e a `Order::Undecline` dessa recusa é recusada com frase própria (`DeclinedElsewhere`) —, mas a página
+oferece trazê-la de volta EM TODOS os computadores, depois de uma pergunta com o "não" primeiro:
+sem isso, a recusa de um computador que não existe mais nunca sairia da lista.
+
+**O nome do programa está no relatório.** O `distro-apps.json` leva o `name` do registro: o da
+tabela para um AppImage ou um web app, o `name` da entrada para um pacote (hoje nos programas que o
+instalador oferece), `null` nos outros. Um programa recusado antes de ser instalado não tem `.desktop`
+na máquina, e sem isso a central o mostraria pelo id (`libreoffice`): ela procura o `Name=` do
+lançador, depois o `name` do relatório, e só então o id. É dado, como o `Name=`, nunca chave de
+texto (inv. 8). O campo tem padrão no Rust (`#[serde(default)]`): o relatório de um sistema anterior
+a ele continua lendo. Nome é UMA regra nos dois lados — nenhum caractere de controle (C0, DEL e C1)
+e não só espaço (o `White_Space` do Unicode, U+00A0 inclusive) —, o `is_name` do Rust e o `isName`
+do registro, que compara caracteres e não classes de regex: estas veem bytes no locale C e deixariam
+passar U+0080–U+009F e um U+00A0 sozinho. E quando o `distro-apps.json` não se lê (quebrado, mais
+novo, ausente), a central diz isso, em vez de mostrar uma lista vazia de programas da distro.
+
 **As outras fontes da distro: formas da pessoa, pins num arquivo da ferramenta.** Flatpaks,
-AppImages, web apps e apps Android da distro vêm de `assets/distro-apps.nix` (vazio hoje), nas
-formas das declarações da pessoa, e os pins ficam em `assets/distro-pins.json`. O que é declarado à
+AppImages, web apps e apps Android da distro vêm de `assets/distro-apps.nix` (hoje, as AppImages dos
+Crafting Apps), nas formas das declarações da pessoa, e os pins ficam em `assets/distro-pins.json`. O que é declarado à
 mão e o que a ferramenta escreve moram em arquivos separados, como `flake.nix` e `flake.lock`: o
 `nix run .#distro-pins` move só o que segue uma fonte (a release mais nova de um repositório do
 GitHub, a versão que o F-Droid sugere), mantém o pin escrito à mão do que não segue nada, recusa uma
@@ -15559,7 +15741,8 @@ pessoa recebe — uma chave nunca esconde um programa de mesmo nome. O lançador
 imagem no build, sem import-from-derivation, numa derivação à parte do embrulho (o ambiente FHS são
 centenas de pacotes; o lançador só precisa da imagem aberta), e o lançador é ESCRITO, não copiado:
 um AppImage é arquivo de outra pessoa e o lançador dele não escolhe o que roda. Ficam só as chaves
-de que um lançador precisa; `Name=` é o da tabela, `Exec=` é o caminho estável do embrulho mais o
+de que um lançador precisa, mais uma nossa, `X-Ronoctua-Fallback=false`, onde a linha da tabela diz
+`fallback = false`; `Name=` é o da tabela, `Exec=` é o caminho estável do embrulho mais o
 código de campo que a imagem pediu, e as ações ficam para trás (cada uma nomeia um programa de
 dentro da imagem, que nenhum caminho de fora alcança). O ícone é o `.DirIcon`, seguido só enquanto
 fica dentro da imagem e só quando É um PNG ou um SVG. O id é `ronoctua-appimage-<chave>.desktop`, o
@@ -15571,22 +15754,112 @@ declarações da pessoa lista no `declared-android.json` com `from` = `distro`.
 **Toda recusa é uma frase numa lista.** Uma entrada, uma linha da tabela ou um pin malformado nunca
 vira um "attribute missing" de dentro de um builder: o `ronoctua.distroApps.problems` diz cada um
 pelo nome, a linha malformada da tabela não chega ao registro, e os pacotes do sistema e o
-`distro-apps.json` se recusam a avaliar enquanto a lista não estiver vazia. Como a tabela está
-vazia, nada na árvore alcança esse código; o `distro-app-sources-are-checked` planta uma tabela e
-pins (as opções internas `table` e `pins` existem para isso): uma entrada boa de cada fonte, que tem
+`distro-apps.json` se recusam a avaliar enquanto a lista não estiver vazia. A tabela da árvore só
+tem AppImages, então as outras fontes só o check alcança: o `distro-app-sources-are-checked` planta
+uma tabela e pins (as opções internas `table` e `pins` existem para isso): uma entrada boa de cada fonte, que tem
 de chegar a tudo o que lê a tabela e sair de novo com a recusa; todas as formas ruins de uma vez,
 cada uma dita pelo nome; e os builders construídos sobre AppImages minúsculos feitos ali (um
 cabeçalho ELF que diz `AI 2` e um squashfs atrás, que é tudo o que o `appimageTools.extract` lê). O
 `nix run .#distro-pins -- --check` pergunta primeiro o que não precisa de rede (`offline_problems`:
 o arquivo na forma da ferramenta, cada pin de uma entrada do seu tipo, cada entrada com o seu pin),
-e é isso, e não o planejador inteiro, que o check pergunta ao arquivo da árvore: no dia em que a
-tabela seguir a primeira fonte, o planejador precisaria de rede.
+e é isso, e não o planejador inteiro, que o check pergunta ao arquivo da árvore: com a tabela
+seguindo fontes (os Crafting Apps seguem o GitHub), o planejador precisaria de rede.
 
 **O Emacs aparece no lançador, e o comentário dizia que não.** O `emacs.nix` afirmava que
 `services.emacs.install = false` mantinha `emacs.desktop` e `emacsclient.desktop` fora do lançador.
 No nixpkgs pinado, `enable` sozinho põe o pacote no `systemPackages`, com os dois. O registro agora
-os declara como do Emacs, e o comentário diz o que acontece; esconder os dois é decisão aberta
-(`docs/PENDING.md`).
+os declara como do Emacs, e o comentário diz o que acontece. Os dois ficam, e o que não usa o
+daemon diz isso no nome (decisão do dono, 2026-10-20; na seção do Emacs).
+
+### O escritório e os Crafting Apps (2026-10-20)
+
+**Dois grupos novos do perfil.** `office` (`nix/modules/office.nix`: o ONLYOFFICE e o LibreOffice
+`fresh`, do nixpkgs) e `crafts` (`nix/modules/crafts.nix`, que só declara o interruptor; os apps são
+linhas da tabela de `assets/distro-apps.nix`). Os dois ligam com o `full` e com uma linha no
+`host.nix`, e cada programa é uma entrada do registro, que a pessoa recusa uma a uma (a lista do
+instalador traz o LibreOffice desmarcado). Medidos como o `toplevel` com o grupo menos o sem ele: o
+escritório acrescenta 2,65 GiB ao `full` e 2,96 ao `minimal`; os Crafting Apps, 1,97 e 2,24 (o
+ambiente FHS em que rodam é o do `appimage-run`, que o `full` já tem).
+
+**O ONLYOFFICE não é não livre.** No nixpkgs pinado ele é `agpl3Plus`, um build do `.deb` de upstream
+(`binaryNativeCode`): o predicado do não livre não o nomeia, e o censo do cache público fica igual. O
+Qt que ele traz desenha pelo XWayland (`QT_QPA_PLATFORM=xcb`, do embrulho do nixpkgs). E ele recusa
+root ("App can't working correctly under admin rights.") com um diálogo GTK desenhado antes de
+existir display, e cai com SIGSEGV: medido numa VM, como root cai sempre, como pessoa abre `.docx` e
+`.odt`.
+
+**Quem abre o quê.** As duas suítes declaram as duas famílias, e sem padrão o gerenciador de arquivos
+entregaria o documento a quem o catálogo encontrasse primeiro — e o catálogo é ordenado pelo nome,
+que é decisão de ninguém. Os formatos da Microsoft (OOXML — `.docx`, `.xlsx`, `.pptx`, modelos e variantes com
+macro — e os binários `.doc`, `.xls` e `.ppt`) abrem no ONLYOFFICE, cujo motor é feito em volta
+deles, e o `.rtf` do Word; os abertos (ODF — `.odt`, `.ods`, `.odp`, `.odg`, modelos e XML plano)
+no LibreOffice, a referência do formato. Só os tipos que AS DUAS declaram ganham padrão. Cada família cai na outra
+suíte onde uma foi recusada, porque o padrão segue o `installed`, no molde do OrcaSlicer: um padrão
+que nomeia uma entrada ausente é pulado calado por todo leitor. Os binários entraram para a família
+não ter duas respostas: pelo nome, "LibreOffice Writer" vem antes de "ONLYOFFICE", e um `.doc`
+abriria no LibreOffice ao lado de um `.docx` no ONLYOFFICE. Os nomes das entradas são escritos no módulo (lê-los
+do pacote seria import-from-derivation de dois gigabytes em toda avaliação), e o `system.checks` lê
+cada uma no build: existe, é aplicação e declara o tipo. O `documents-open-in-their-suite` constrói
+o `system.path`, a lista e essa leitura de três máquinas `full` — as duas suítes, o ONLYOFFICE
+recusado, o LibreOffice recusado (o padrão do instalador) — e pergunta ao `opener` do shell por um
+arquivo de cada tipo, sobre o catálogo de verdade de cada uma, com o WordCraft, o GridCraft e o
+DeckCraft, que também declaram documentos.
+
+**O `xdg-open` também manda texto ao cliente do Emacs.** O gerenciador de arquivos manda todo
+`text/*` ao editor sozinho, mas o `xdg-open` — o que um download do navegador, um terminal, qualquer
+outro programa roda — pergunta os `mimeapps.list` e depois a ordem do `mimeinfo.cache`, e ali o
+primeiro de `text/plain` e dos tipos de código era o `emacs.desktop`, o que sobe um segundo Emacs; o
+`text/markdown` ia ao ONLYOFFICE, os separados por vírgula e por tabulação e o MathML ao LibreOffice,
+o `text/rtf` ao WordCraft. Com o editor instalado, o `emacs.nix` nomeia o `emacsclient.desktop` no
+`/etc/xdg` para todo tipo que a entrada do cliente declara e para esses. O `files-open-by-choice`
+pergunta ao `xdg-mime` de verdade do sistema construído, e tira os tipos do `mimeinfo.cache` dele:
+um tipo de texto novo que uma suíte ou um Crafting App pegue primeiro falha ali até o padrão o
+nomear.
+
+**Por que AppImage, e a cadência.** Os Crafting Apps (`storytold/<app>` no GitHub, Apache-2.0, Rust
+puro, do projeto ArtCraft) não estão no nixpkgs, e cada release traz um AppImage x86_64. O
+`appimageOf` do registro o embrulha (`appimageTools.wrapType2`) como `ronoctua-appimage-<chave>`,
+com o lançador escrito a partir da imagem; os 13 têm um `.desktop` só na raiz, e todos foram
+construídos. O `assetPattern` (`<app>-*-linux-x86_64.AppImage`) casa uma imagem só — o `.zsync` e a
+aarch64 ficam de fora —, e o `nix run .#distro-pins` move o pin para a release mais nova. As releases
+são quase diárias (as treze de agora saíram entre 17 e 18/10); mover os pins é do dono, que roda a
+ferramenta, lê o diff e faz o commit: o pin é o que o gate testou. Ficaram de fora o ArtCraft em si
+(o motor de IA: as releases só têm macOS e Windows), o Craft Launcher (baixa e atualiza os apps
+sozinho, fora do flake — invariante 6) e o AniCraft (sem release). Padrão de MIME não há: os apps são
+0.x — e eles declaram fotos, filmes, som e documentos, e o `opener`, que sem padrão vai pela ordem
+dos nomes, os entregava a eles: o FigCraft vinha antes do Google Chrome nas imagens, o FilmCraft e o
+SoundCraft antes do VLC, o LightCraft e o PhotoCraft eram os únicos a declarar TIFF, HEIC, RAW, BMP
+e ICO. Decisão (2026-10-20, seguindo o plano aprovado): um Crafting App nunca ganha um tipo pela
+ordem dos nomes — `fallback = false` na tabela, `X-Ronoctua-Fallback=false` no lançador —, fica no "abrir
+com", e um padrão, da distro ou da pessoa, ainda o alcança. Um tipo que só um Crafting App declara
+fica sem quem abra ("nada abre isto"), e a pessoa escolhe o app no "abrir com". Abertos numa VM (o
+compositor sobre o Xvfb, sem GPU): os treze abrem janela, uns pelo Wayland
+(`app_id` `ai.storyteller.<app>`), outros pelo XWayland; doze dizem no log que acharam o llvmpipe
+pelo Vulkan do `/run/opengl-driver` (o FilmCraft não diz, e desenha), e o PhotoCraft, o LightCraft
+e o DesignCraft avisam que passaram a desenhar na CPU.
+
+**Uma imagem nunca se instala sozinha** (invariante 6). O `AppRun` do PhotoCraft e do FigCraft
+escreve um lançador próprio em `~/.local/share/applications` e os ícones em `~/.local/share/icons`
+quando acha que roda de um arquivo AppImage — a convenção é o `$APPIMAGE` nomear o arquivo —, e esse
+lançador nomearia um programa que a pessoa não roda e que o registro não recusa. O embrulho do
+`appimageTools` roda a imagem já aberta e não define `$APPIMAGE`, mas deixaria passar um de quem o
+chamou; então o programa que o sistema roda (o `wrapper` do `appimageOf`) tira o `$APPIMAGE` e põe o
+`<CHAVE>_NO_DESKTOP_INTEGRATION=1` que o `AppRun` deles lê (procurado com `strings` nos treze: só os
+dois o leem; numa imagem que não o lê, a variável não custa nada).
+
+**O que os apps fazem e a distro não segura.** O "tornar padrão" do WordCraft roda `xdg-mime` com o
+id dele (`ai.storyteller.wordcraft.desktop`), que não existe aqui — o lançador é
+`ronoctua-appimage-wordcraft.desktop` —: o padrão que ele grava no `~/.config/mimeapps.list` da
+pessoa é morto, e todo leitor o pula. E o "Verificar atualizações" do PdfCraft, à mão, pergunta ao
+GitHub pela release mais nova e anuncia uma versão que a distro não entrega até o dono mover o pin.
+Os dois estão no `docs/PENDING.md`.
+
+**Os arquivos fixados têm um nome só** (`nix/distro-downloads.nix`): o `nix run .#distro-pins` baixa
+cada release nova para tirar o hash com o mesmo nome que o `fetchurl` do build dá, então o download
+da ferramenta é a fonte do build, e nada é baixado duas vezes (o `distro-pins-move-only-what-follows`
+cobra os dois nomes). Os arquivos ficam presos pela raiz das fontes guardadas (`nix/kept-sources.nix`,
+~0,95 GB): uma release que o upstream apaga não volta. E o `downloads-are-pinned` lê o
+`assets/distro-pins.json` também.
 
 
 <!-- anchor: L05 -->
@@ -16470,6 +16743,32 @@ rede que caiu, um acesso que falta ou um repositório mais novo não dizem nada 
 pediria a senha de novo sem um motivo para dar. A restauração a apaga como quer que termine. Toda
 chamada de rede segura um pass do host, como as da sincronização.
 
+**A escolha do instalador sobe assinada antes do disco (2026-10-20).** O `plain` ganhou
+`--decline <arquivo>`, que só vale com `--passphrase`: uma recusa se assina com a chave que a senha
+abre, ou não se faz. O arquivo é a ESCOLHA do instalador para uma máquina (`ronoctua_person::choice::
+Choice`: a máquina, o carimbo, os programas deixados de fora e os mantidos), e não uma lista de
+recusas: o instalador pergunta de novo a cada tentativa, e uma reinstalação com o mesmo hostname
+também, então um programa desmarcado numa tentativa que falhou e marcado agora tem de voltar. Cada
+deixado de fora é recusado só naquela máquina, cada mantido é trazido de volta só nela, e a recusa de
+todas as máquinas, que a pessoa fez num outro dia, fica — o relatório a nomeia (`kept-everywhere`).
+O documento não sabe dizer `null` nem outra máquina: o que o instalador não decide pelos outros
+computadores da pessoa ele não consegue escrever.
+
+O arquivo é lido e validado antes de qualquer rede; depois o `plain` diz a escolha no
+`declined.json` do repositório, que tem de estar como a pessoa o assinou — senão `Corrupt`, porque
+assinar por cima seria lavar, para toda máquina, um conteúdo que ela não assinou; num formato mais
+novo, `Newer`. Assina exatamente o que o manifesto da pessoa já garantia mais o arquivo novo, com o
+contador um acima do do repositório: uma mudança que ela não assinou (um arquivo trocado,
+acrescentado ou APAGADO) continua com a linha dela, e retida em toda máquina. Empurra, refaz por cima
+quando outra máquina empurrou antes, e só então copia: a cópia leva o manifesto novo, a aplicação
+com a chave fixada aceita a recusa assinada, e o disco ainda não foi tocado. Uma escolha que o
+repositório já diz não empurra nada, e o relatório diz `already-there` — também quando o envio
+anterior entrou e foi dado como falho. Uma recusa empurrada fica lá mesmo se a instalação falhar
+depois: vale só para aquele hostname, e a próxima tentativa, que pergunta de novo, a desfaz se a
+pessoa marcar o programa. Uma escolha que não se lê e uma cópia que não se escreve têm cada uma a
+sua frase (`choice-unread`, `copy-unwritten`). Quando, na ordem, o instalador escreve o arquivo e
+roda esse passo está na seção do instalador.
+
 <!-- anchor: L10 -->
 
 ### Sudo, o lado root: chaves de segurança, dedo e a janela sem senha (2026-10-11)
@@ -16710,6 +17009,15 @@ duas diferentes, uma pergunta). Um `doom` no `dropped` do índice não casa com 
 derruba nada, e um pedido sobre ele é recusado (`Request::is_known`). Nenhuma versão foi publicada
 com o alvo, então nenhuma casa instalada precisa de nada.
 
+**Os arquivos de início do Common Lisp viajam; o `~/quicklisp`, não (2026-10-20).** O alvo
+`common-lisp` leva o `~/.sbclrc`, os do CCL e do ECL pelos dois nomes que cada um lê
+(`~/ccl-init.lisp` e `~/.ccl-init.lisp`; `~/.ecl` e `~/.eclrc`), e o `~/.config/common-lisp`, onde o
+ASDF lê a configuração da pessoa. O sistema escreve cada arquivo só onde ele falta
+(`nix/modules/dev.nix`), então o que está lá é da pessoa — e uma Lisp mesclada por trecho pode dar um
+arquivo de início que não carrega: um arquivo mudado dos dois lados é escolha. Os rascunhos de editor
+ao lado ficam. O `~/quicklisp` não é alvo: são bibliotecas, baixadas de novo pelo `quicklisp-install`
+e pelo próprio Quicklisp (seção "Common Lisp nos dois perfis").
+
 **Privado é o dono, e é medido igual nos três pontos.** Um alvo `private` (`ssh`, `gnupg`) viaja com
 os bits do dono e só (`kept::kept_mode`): o `0644` de uma `.pub` vira `0600`, e uma chave `0400` fica
 `0400`. A conta é feita na LEITURA (o walk e o push) e na escrita (o pull), não só na volta: se o
@@ -16829,6 +17137,153 @@ laço). O porquê inteiro está no `why.md` do módulo.
 retido com o motivo, e a regra antiga (`plain::HELD`, que fazia deles conflito em toda execução) saiu.
 O porquê está em "Pertences: a parte em claro, assinada com a chave da pessoa". A restauração
 continua o gesto da pessoa, com a senha dela: o que ela traz passa pela mesma assinatura.
+
+### VS Code: a build da Microsoft, a telemetria desligada por política e as extensões que viajam (2026-10-20)
+
+**A build da Microsoft, e não o VSCodium**, por decisão do dono: a pessoa pediu o VS Code pelo nome.
+Os termos do Marketplace só admitem os produtos da Microsoft, e várias das extensões com que se
+trabalha (desenvolvimento remoto, Pylance, Copilot) são da Microsoft e se recusam a rodar em outra
+build. É `pkgs.vscode`, não livre — o nome está no `allowUnfreePredicate` com o motivo, junto com o
+`code` do ambiente FHS (abaixo), e o `release-cache-holds-only-free-builds` conta os dois entre os
+que nunca vão a um cache público. Entra pelo registro no grupo `vscode` (`ronoctua.editor.vscode`,
+`mkDefault full`), com o comando `ronoctua-vscode` da pessoa no `extraPackages` da entrada. É
+Wayland nativo sem nada nosso: a sessão exporta `NIXOS_OZONE_WL`, que o embrulho do nixpkgs traduz
+em `--ozone-platform-hint=auto`, e o `auto` do Electron decide pelo `XDG_SESSION_TYPE=wayland` que a
+sessão dá ao gerente — como o do Chrome; sem ele, medido no `vscode-vm`, o Electron escolhe X11 e,
+sem display X, acaba.
+
+**No ambiente FHS do nixpkgs, porque uma extensão traz programas de outras distros**
+(`nix/vscode.nix`). O VSIX linux-x64 do rust-analyzer traz o `server/rust-analyzer`, ligado contra o
+`/lib64/ld-linux-x86-64.so.2`, que o NixOS não tem. Medido no `vscode-vm`, com a extensão instalada
+de verdade e um projeto Rust aberto: rodado na máquina, o carregador de mentira do NixOS recusa o
+programa (127); com o pacote puro a extensão não consegue executá-lo ("Failed to execute …
+--version") e nenhum servidor sobe; no ambiente FHS (`pkgs.vscode.fhs`, bubblewrap) ele roda. O
+ambiente é CONTIDO — do VS Code e dos filhos dele —, onde o `programs.nix-ld` poria um carregador
+naquele caminho para todo programa da máquina. O rust-analyzer em especial tem um caminho próprio
+para o NixOS: ao ver `ID=nixos` no `/etc/os-release` (que o ambiente também mostra), copia o servidor
+para o armazenamento dele e o remenda com `nix-build` contra o `<nixpkgs>`; o teste desliga isso
+(`rust-analyzer.server.path` apontando o servidor que vem no pacote) para medir o programa, e não o
+remendo (`docs/PENDING.md`). O ambiente faz o próprio `/etc` com uma lista de
+entradas do host, e o `/etc/vscode` não está nela: lá dentro o VS Code não acharia a política. Por
+isso o pacote é o `.fhs` de um `pkgs.vscode` cujo `customizeFHSEnv` acrescenta `--ro-bind-try
+/etc/vscode /etc/vscode` (o derivation do VS Code em si não muda; muda só o ambiente).
+
+**A telemetria sai por política, e a política é da máquina.** Uma linha no `settings.json` seria um
+arquivo da pessoa — que a distro nunca escreve, e que os pertences trazem de volta como ELA o
+deixou. A política o VS Code lê antes de toda configuração, mostra a configuração como gerenciada, e
+o `settings.json` da pessoa não a religa. Onde ela mora foi lido no código da versão pinada (1.119,
+`out/main.js`), não na documentação: no Linux o serviço de política é um `FilePolicyService` sobre o
+caminho fixo `/etc/vscode/policy.json` — não `/etc/<applicationName>/` (que seria `/etc/code/`): o
+caminho está escrito no programa, diga o `product.json` o que disser. `{"TelemetryLevel": "off"}` é a
+política do `telemetry.telemetryLevel` (desde a 1.99), e `off` não manda nada, relatório de crash
+inclusive. O `tests/vscode-vm.nix` prova pelo log do próprio VS Code, dentro do ambiente FHS:
+começado como a sessão o começa, e com um `settings.json` que pede `all`, o log principal (em
+`trace`) diz `PolicyConfiguration#changed [ [ 'telemetry.telemetryLevel', 'off' ] ]`; com o arquivo
+tirado do lugar, a mesma partida não diz nada disso; a tela de configurações mostra o ajuste como
+gerenciado ("Managed by organization"). A janela é do compositor (`xdg_shell`, `app_id` `code`, o
+mesmo nome do `code.desktop`), nunca pelo XWayland. A política não cala tudo: medido na mesma VM,
+sem rede, o VS Code ainda pergunta ao Marketplace, ao subir, pela versão mais nova do Copilot Chat
+que ele traz — é busca de atualização de extensão, não telemetria (`docs/PENDING.md`).
+
+**A configuração viaja, as extensões não.** O alvo `vscode` dos pertences leva
+`~/.config/Code/User` — configurações, atalhos, snippets, tarefas, servidores MCP, prompts, os
+perfis — e pula, em qualquer profundidade (um perfil tem os seus), o que o VS Code guarda desta
+máquina: o banco de estado e o armazenamento das extensões (`globalStorage`, `workspaceStorage`, onde
+as extensões guardam os tokens delas), o histórico local de edições (`History`) e a contabilidade do
+Settings Sync (`sync`), com o motivo `editor-state` (cuja frase deixou de nomear o Emacs), e o
+manifesto de extensões de um perfil (`extensions.json`, caminhos do `~/.vscode/extensions` desta
+máquina, `machine`). Pula também código de outras pessoas: os plugins de agente da 1.119
+(`/agent-plugins`, na raiz: clones git dos marketplaces de plugins e o que eles buscam de npm e pip
+— o `installed.json` dali lista os plugins pelo lugar do clone NESTA máquina, então sem os clones ele
+não serve e não viaja), a pasta de um repositório git e todo `node_modules`. Os caches do VS Code
+moram em `~/.config/Code`, ao lado da pasta, nunca nela. JSON juntado por pedaço pode virar uma
+configuração que não abre: um arquivo que os dois lados mudaram é uma escolha (`choose`) — menos a
+lista das extensões, que é um conjunto (abaixo). As extensões em si (`~/.vscode/extensions`) não
+viajam: são código de outras pessoas, buscado de novo no Marketplace.
+
+**A lista das extensões é nossa, e só o que mudou AQUI a move.** Um crate só fala com os arquivos e
+a CLI do VS Code, o `ronoctua-vscode`. O `record` lê o manifesto do VS Code
+(`~/.vscode/extensions/extensions.json`, o do perfil padrão — a lista segue só esse perfil),
+defensivamente, e só as extensões do Marketplace (`metadata.source` `gallery`, ou, sem fonte, um
+uuid do Marketplace, como o próprio VS Code lê): uma instalada de um arquivo `.vsix` não tem id que
+outra máquina possa instalar. Escreve a lista da pessoa dentro do alvo
+(`~/.config/Code/User/ronoctua-extensions.json`, `{"format": 1, "extensions": [...],
+"pre-release": [...]}`, ordenada, em minúsculas como o VS Code compara, inteira e atômica), com a
+regra simétrica, decisão do dono depois da revisão: lista' = (lista − (vistas − instaladas)) ∪
+(instaladas − vistas), e vistas' = instaladas. As "vistas" são o que esta máquina viu instalado da
+última vez (`$XDG_STATE_HOME/ronoctua/vscode-seen.json`, um `Store` que não viaja, no censo como
+`machine`). Assim só uma instalação NOVA aqui entra e só uma desinstalação aqui sai; um id que veio
+de outra máquina fica, e um que outra máquina tirou fica de fora mesmo com esta máquina o tendo
+instalado. A regra anterior (∪ instaladas) devolvia à lista o que uma máquina desinstalou assim que
+outra, ainda com a extensão, gravava — a desinstalação nunca pegava, e a primeira máquina era
+oferecida de novo para sempre (a simulação da revisão; o teste
+`an_uninstall_travels_and_is_never_put_back` a refaz). A escolha de pré-lançamento
+(`metadata.preRelease`) segue a mesma regra num segundo conjunto, e a instalação a pede
+(`--pre-release`). Sem manifesto, nada é escrito: "nada aqui" não é "tudo desinstalado". Uma lista que
+não lê (mexida à mão, de formato mais novo, com um id que o `code` leria como opção ou arquivo — fora
+do padrão de id do próprio VS Code, ou com o nome `vsix`, que o `code` toma por um `.vsix` em disco)
+nunca é sobrescrita, e as vistas não andam: a lista é escrita antes das vistas.
+
+**A lista é um conjunto, juntado como um.** Duas máquinas que mudam as extensões entre duas
+sincronizações mudam a lista dos dois lados; os pertences a juntam em três vias — a base, mais o que
+cada lado acrescentou, menos o que cada lado tirou (`ronoctua_vscode::merge`, a regra `set` do alvo
+para esse arquivo, que o `merge_json` despacha pelo caminho, como as listas da pessoa) —, nunca um
+conflito. Por isso a base dela é guardada, ao contrário dos arquivos `choose`.
+
+**Evento, não relógio.** Uma unidade `.path` de usuário (`PathChanged=` no manifesto e na própria
+lista) roda o `record` quando o VS Code reescreve o manifesto — no lugar, várias vezes por instalação
+— ou quando uma sincronização traz a lista, e ele roda também uma vez quando o gerente da pessoa
+sobe, pelo que mudou com ele parado. Enquanto o serviço roda, a unidade não vigia: por isso o
+`record` relê o manifesto depois de escrever e volta até ele parar de mudar (no máximo cinco
+voltas). O systemd vigia um caminho que ainda não existe a partir da pasta mais próxima que existe,
+e o `vscode-vm` prova a unidade ativa, sem falha, numa casa sem `~/.vscode`. O serviço não tem teto
+de partidas (`startLimitIntervalSec = 0`): instalar dez extensões reescreve o manifesto dez vezes em
+segundos, e o teto padrão faria a própria `.path` falhar e parar de vigiar. Não há laço: um `record`
+que escreveu a lista a dispara uma vez mais, e essa não acha nada novo nem escreve. O `ExecStart`
+leva `-`: uma lista que ele se recusa a sobrescrever é dita no journal, nunca uma falha da sessão.
+
+**Instalar o que falta pede consentimento, como toda rede.** O `code --install-extension` alcança
+os hosts do Marketplace, lidos no `product.json` pinado e no código da instalação: o serviço
+(`marketplace.visualstudio.com` — a versão mais nova de cada extensão e a consulta), o reserva da
+versão mais nova (`www.vscode-unpkg.net`), a lista de extensões maliciosas (`main.vscode-cdn.net`) e,
+por publicador (a primeira metade de todo id), o host de assets
+(`<publicador>.gallery.vsassets.io`, de onde o pacote é pedido) e a CDN para a qual ele redireciona
+(`<publicador>.gallerycdn.vsassets.io`) — `ronoctua_vscode::hosts_of`. Um `Pass` não atravessa para
+o `code`, então quem instala cunha um para cada host no momento em que pede (o molde do `job::run` do
+Incus: `ronoctua_consent::pass` no produto, o arquivo de consentimento do próprio teste nos testes),
+e com um host não liberado não pede nada e diz quais. O `vscode-vm` instala de verdade de um
+Marketplace substituto (`tests/vscode-gallery.py`, alcançado pelos nomes reais, com um certificado
+assinado por uma CA que a máquina confia): o VSIX pinado do rust-analyzer entra, o VS Code escreve o
+manifesto, o `record` segue, um id que o Marketplace não tem falha com as palavras do VS Code, e todo
+host que o VS Code alcançou é um dos liberados.
+
+**A oferta `vscode-extensions`, e a linha que fica.** Uma sincronização (ou a restauração da
+instalação) que TROUXE a lista, com ids que faltam aqui, oferece reinstalá-los — no molde da
+assinatura: outro arquivo do alvo não oferece nada, e o "não" não precisa ser lembrado (a oferta
+volta quando a lista muda em outra máquina). O motor oferece pelo que os arquivos dizem, porque a
+restauração do instalador não sabe se a máquina nova terá o VS Code; a porta, que sabe
+(`RONOCTUA_VSCODE`, posto no rodapé e na fila só onde ele está instalado), desenha a oferta só onde o
+"sim" pode funcionar, contando o que falta AGORA e nomeando cada host que o "sim" libera, um por
+linha, antes do "não" e do "sim". E a página guarda, nas duas portas, uma seção das extensões: a
+qualquer momento em que a lista diz que falta alguma e o VS Code está aqui (não só logo depois de uma
+sincronização), uma linha que as instala, com os hosts — uma tentativa que falhou, que ficou sem
+rede ou que foi parada se refaz dali. O "sim" (da oferta ou da linha) libera exatamente esses hosts
+no `consent.json` da pessoa — dizer sim é o consentimento — e, como são minutos de rede, nunca roda
+numa thread de porta: a porta põe na fila a ordem `vscode-extensions` dos pertences
+(`Op::VscodeExtensions`, o `Work::Belongings` de sempre, sem senha e sem repositório), e a fila
+recusada é dita na linha da porta, como toda ordem. O filho da fila segura um lock próprio
+(`state/belongings/extensions.lock`) a corrida inteira — uma segunda é recusada —, grava que começou,
+e no fim o que entrou, o que falhou com a frase do `code` sobre cada id (a causa, que ele diz primeiro, e nunca o resumo com que ele fecha toda falha), ou por que nada foi
+tentado (`offer-extensions.json`). As duas portas leem o arquivo e o lock: instalando, enquanto o lock
+está preso; parada antes do fim, quando o registro diz que começou e ninguém segura o lock (um
+cancelamento na fila ou um `kill` — o kernel solta o lock como quer que o processo acabe); quantas
+entraram e, uma linha por id, as que falharam com as palavras do VS Code (dado; `RET` copia); ou "Não
+foi instalado: …" com a frase do motivo e, sem consentimento, os hosts. O registro aparece enquanto é
+mais novo que a última sincronização. O trabalho termina como falha na fila quando alguma não entrou.
+
+**O comando da pessoa.** `ronoctua-vscode` está no `PATH` (embrulhado com o `code` da máquina): o
+`install` faz num terminal o mesmo que a fila, e sem os hosts liberados não pede nada e diz quais
+liberar — a página dos pertences os libera ao instalar.
 
 <!-- anchor: L11 -->
 
@@ -17447,7 +17902,8 @@ módulo do brain e a vista (L24) perguntam ao crate; o shell só lê o arquivo q
   bibliotecas wasm (1,8), o OVMF com o fonte do EDK2 que ele mantém (1,3) e o QEMU (0,94). Com os
   agentes, o `minimal` vai de 6,9 a ~11,8 GiB. A `full` ganha 2,35 GiB pela mesma conta — o rust
   já estava nela, mas o Incus traz um QEMU e um OVMF dele, não estes —, e fica em ~29 GiB
-  (`nix/modules/profile.nix`).
+  (estimado; medido em 2026-10-20, 31,0 antes do escritório e dos Crafting Apps —
+  `nix/modules/profile.nix`).
 - **O KVM segue a CPU, e quem lista o módulo é o nixos-facter.** O `facter.json` da máquina tem as
   flags da CPU, e o módulo dele carrega `kvm-intel` para `vmx` e `kvm-amd` para `svm`. Listar os dois
   às cegas parece mais simples e é pior: o do outro fabricante recusa carregar e deixa o
@@ -17493,6 +17949,137 @@ módulo do brain e a vista (L24) perguntam ao crate; o shell só lê o arquivo q
   dependência nenhuma. O clone roda numa thread e volta como o mesmo comando com um argumento que
   ninguém digita (começa com NUL), pelo canal que já roda um comando com argumento no laço; pronto,
   o gerenciador de arquivos abre na pasta.
+
+### Common Lisp nos dois perfis (2026-10-20)
+
+- **Só no terminal, e o Emacs intocado.** Decisão do dono: SBCL, CCL e ECL, as bibliotecas de uso
+  comum, swank e slynk, qlot, o alive-lsp, o Quicklisp por comando e os arquivos de início nos
+  pertences, nos dois perfis — a entrada `common-lisp` do registro, com `when = true`, como o rust
+  (`nix/modules/dev.nix`). O Emacs fica como a decisão de 2026-10-19 o deixou: o SLIME, o SLY ou um
+  cliente LSP são da configuração da pessoa, e os três servidores estão aqui para quem conecta.
+  Recusar a entrada tira tudo isso do PATH.
+- **Os joins.** Tudo sai de `nix/common-lisp/default.nix`, que o `dev.nix` e o `flake.nix` leem
+  (este para a raiz do `kept-sources`: o tag do alive-lsp e os arquivos do Quicklisp, que moram num
+  servidor só). O `sbcl` é um `symlinkJoin` do pacote do nixpkgs cujo `bin/sbcl` é reembrulhado:
+  ficam o manual, o info e o `lib/sbcl` com o fonte que o `M-.` alcança. É um join, e não um segundo
+  pacote com `hiPrio` ao lado, porque dois `bin/sbcl` no `system.path` são decididos pela ordem da
+  lista, calados. CCL e ECL são joins com o binário reembrulhado (`makeBinaryWrapper`); o ECL guarda o
+  `ecl-config` e o manual.
+- **O ASDF é configurado por uma PASTA, não pelas variáveis dele.** O embrulho do `withPackages` do
+  nixpkgs prefixa o `CL_SOURCE_REGISTRY` e o `ASDF_OUTPUT_TRANSLATIONS` com valores que terminam em
+  `:` ("e depois o que já estava configurado"). Um valor da pessoa que também termina em `:`
+  (`CL_SOURCE_REGISTRY=$PWD/meu//:`), ou o do SBCL herdado por um CCL aberto dele, fazia DUAS heranças,
+  e o ASDF se recusa a começar ("Only one inherited configuration allowed"). Então as três Lisps não
+  tocam nas duas variáveis: cada uma põe primeiro no `XDG_CONFIG_DIRS` uma pasta do store
+  (`asdfConfig`), onde o ASDF lê a configuração do sistema — DEPOIS da variável e dos arquivos da
+  pessoa, nunca no lugar deles — e o `/etc/xdg` por último, o padrão da especificação que a variável
+  vazia perderia. O que é só do SBCL — a tradução do store nele mesmo, o swank e o alive-lsp — vem
+  sob `#+sbcl`, e um CCL que herda a pasta não lê nada disso.
+- **As bibliotecas chegam prontas e carregam sem rede.** Dezessete — alexandria, serapeum, cl-ppcre,
+  str, bordeaux-threads, lparallel, iterate, trivia, local-time, dexador, jzon, log4cl, fiveam,
+  parachute, cffi, swank e slynk — e o alive-lsp. O Hydra constrói o `sbclPackages`, então elas
+  são um download e nenhuma compilação, e cada fonte do store é traduzido nele mesmo: carregar o
+  conjunto inteiro leva ~1 s e não escreve fasl nenhuma (medido, com o cache vazio). O `ASDF` do
+  embrulho é o ASDF com que o conjunto foi construído, que o `~/.sbclrc` carrega — e, se ele não
+  carregar, o do próprio SBCL. O `str` e o `dexador` são os mais pesados e ficaram por serem dos mais
+  usados.
+- **CCL e ECL compilam as MESMAS fontes, no primeiro uso.** O registro deles são as saídas do
+  conjunto do SBCL (o fecho do `lispLibs`) — árvores de fonte com as fasl do SBCL ao lado, que outra
+  Lisp ignora — e cada biblioteca compila uma vez em `~/.cache/common-lisp` (medido no núcleo
+  portátil: 4 s no CCL, ~100 s no ECL, que passa pelo gcc; e de novo depois da varredura de 40 dias
+  do `~/.cache`). Um `ccl.withPackages` não foi o caminho porque o Hydra não o constrói: seria
+  compilado em cada máquina a cada rebuild, ou semeado no ISO. O embrulho tira o `ASDF` (a fasl do
+  SBCL, que uma semente lida por engano carregaria no CCL) e põe no `LD_LIBRARY_PATH` as bibliotecas
+  nativas que o conjunto declara (o OpenSSL do cl+ssl). Uma biblioteca que não suporta uma
+  implementação falha ao carregar, nunca no build.
+- **O alive-lsp é nosso** (`nix/common-lisp/alive-lsp.nix`, v0.4.5, Unlicense), porque o nixpkgs
+  não o tem; só o sistema do servidor é construído, nunca o de teste. Com um patch nosso: o
+  `alive/server:start` aceita `:accept-once t`, que fecha a escuta depois do primeiro cliente e mantém
+  o servidor vivo enquanto a sessão dele durar. O comando `alive-lsp [--port N] [--stdio]`:
+  - **`--stdio` é o recomendado, e o que um editor deve subir.** O servidor escuta numa porta livre
+    do loopback, com `:accept-once`; a porta é lida de `Started on port N` num pipe anônimo (nada é
+    criado numa pasta que uma ponte morta deixaria para trás); o resto do log vai para o stderr (que
+    o cliente LSP mantém longe do protocolo); e o `socat` liga a entrada e a saída padrão à porta.
+    O único cliente é a ponte: um segundo, de qualquer usuário ou app, é recusado. Fechar a entrada
+    termina a sessão e o servidor com ela; matar a ponte de qualquer jeito, até com SIGKILL (nenhum
+    `trap` roda), também, porque o servidor nasce sob `setpriv --pdeathsig KILL` — e a morte dele
+    fecha a conexão do `socat`, que também nasce assim. O que resta é a janela entre o servidor
+    escutar e a ponte conectar, de milissegundos (cobra `alive-lsp-answers`: o `initialize`, a recusa
+    do segundo cliente e do código dele, a porta que recusa depois de fechar e depois de matar a
+    ponte, e nenhum processo vivo depois de matá-la, nem enquanto o servidor ainda subia).
+  - **`--port N` é o do upstream**, para um editor que conecta sozinho, talvez mais de uma vez: na
+    porta 0 por padrão (a que o sistema der; decisão do dono). **Enquanto roda, qualquer processo
+    desta máquina — de outro usuário, ou um app do Flatpak com rede — pode conectar e rodar código
+    como a pessoa**, o mesmo risco do swank e do slynk de um SLIME. A ajuda do comando diz isso e
+    recomenda o `--stdio`.
+- **O transporte do Quicklisp, medido no cliente.** O `quicklisp.lisp` que a página oficial manda
+  carregar só baixa por `http://` e não confere hash nenhum; o cliente que ele instala baixa tudo por
+  HTTP e confere só o tamanho de cada arquivo — o `client-info.sexp` publica sha256 do cliente, que
+  ninguém lê. O `quicklisp-install [--path DIR]` monta o `~/quicklisp` a partir de quatro arquivos
+  pinados no store por HTTPS, com os hashes que o próprio `client-info.sexp` publica: o tar do cliente
+  2021-02-13, o `setup.lisp` 2021-02-11, o `asdf.lisp` 3.2.1 e o `client-info.sexp`. O
+  `quicklisp.lisp` não é pinado: não serve para nada que estes quatro não façam. Em `local-init/`, que
+  o Quicklisp carrega antes do primeiro download (a lista de bibliotecas), vai o buscador
+  `assets/common-lisp/quicklisp-https.lisp`:
+  - todo `http-fetch` vira `curl --location --proto =https --proto-redir =https --tlsv1.2 --curves
+    X25519MLKEM768:X25519:P-256` — o híbrido pós-quântico primeiro (medido: o `beta.quicklisp.org`
+    negocia o `X25519MLKEM768`) e um redirecionamento só para HTTPS. **HTTPS prova o host que
+    respondeu**: o `beta.quicklisp.org`, ou o host HTTPS que um redirecionamento dele nomear —
+    redirecionar entre hosts fica permitido, porque um espelho que mudasse de host quebraria o
+    Quicklisp, e a recusa do HTTP já tira o pior. Não prova os autores: o Quicklisp não assina
+    nada, e a tela diz isso antes do primeiro download;
+  - **um download é inteiro ou não existe**: ele cai em `ARQUIVO.part` e vira o arquivo só com 200 e
+    o curl terminado bem. Uma conexão cortada (curl 18) e uma página de erro (404, que o curl sem
+    `--fail` grava como se fosse o arquivo) não deixam nada que o Quicklisp tomaria pelo arquivo —
+    ele busca um índice que falta, mas confia num que está lá;
+  - **um erro HTTP é a condição do próprio Quicklisp** (`ql-http:unexpected-http-status`, com o
+    código, lido de `--write-out %{http_code}`), e por isso as voltas dele funcionam como com o
+    buscador dele: o arquivo simples quando o `.gz` falta, uma versão de cliente que não existe;
+  - o proxy do Quicklisp (`ql-http:*proxy-url*`) vira o `--proxy` do curl;
+  - o curl é o `/run/current-system/sw/bin/curl`: o arquivo mora na home, e um caminho do store nele
+    duraria menos que ele.
+
+  Numa instalação que já existe, o comando só escreve o buscador de novo — salvo quando a lista de
+  bibliotecas não está inteira (o `distinfo.txt`, o `systems.txt` e o `releases.txt` da dist
+  `quicklisp`): o Quicklisp cria o `dists/` antes do primeiro download e nunca mais tenta, então a
+  dist incompleta sai e é buscada de novo, pelo nome se o `dists/` tiver outras. Uma pasta que tem
+  outra coisa é recusada, um download que falha é dito numa frase, não num backtrace, e o "pronto"
+  só diz que as sementes carregam o Quicklisp quando ele está no `~/quicklisp`, o único que elas
+  carregam. O `quicklisp-fetches-over-https` aponta o buscador para um curl de mentira: vê o
+  `https://`, as flags e o proxy; um 404, uma recusa (22) e um corte (18) que não deixam arquivo nem
+  `.part`, e o 404 chegando como a condição do Quicklisp; e, sem o buscador, que o curl nunca é
+  chamado e o cliente do Quicklisp vai à porta 80, que é o que prova que mede o buscador.
+- **O qlot só vê o projeto.** É o `sbclPackages.qlot-cli` num embrulho que tira a pasta do ASDF do
+  sistema do `XDG_CONFIG_DIRS`, desliga o `ASDF` e o `ASDF_OUTPUT_TRANSLATIONS` (um qlot aberto de
+  dentro do nosso `sbcl` herda os três) e põe as Lisps PURAS à frente do PATH: com as nossas, um
+  projeto carregaria as bibliotecas do store antes das do `qlfile.lock`, que é o que o qlot existe
+  para impedir. O nosso curl vai à frente também, mas o buscador HTTPS do próprio qlot roda
+  `curl -sSL` sem `--proto-redir`: um redirecionamento dele pode cair em HTTP. É limite do qlot, e
+  fica escrito aqui.
+- **Os arquivos de início são da pessoa.** `~/.sbclrc`, `~/.ccl-init.lisp` e `~/.eclrc` (de
+  `assets/common-lisp/`) são escritos só onde faltam — na primeira ativação e de novo na seguinte se a
+  pessoa apagar um —, nunca sobre um arquivo nem sobre um link, nem um pendurado: o molde do
+  `~/.shellrc.local`. A cópia é feita COMO a pessoa (`ronoctua-common-lisp-seed`, sob `setpriv`),
+  nunca como root numa pasta dela: root seguiria um link que a pessoa plantou para um lugar onde só
+  root escreve (o `~/.shellrc.local` passou a ser semeado igual). Carregam o ASDF e o
+  `~/quicklisp/setup.lisp` quando ele existe, nunca sob o qlot, que nomeia o do projeto em
+  `QUICKLISP_HOME`. Viajam no alvo `common-lisp` dos pertences.
+- **No shell**, o `rlwrap` vai à frente dos três REPLs (o histórico em `$XDG_STATE_HOME/rlwrap`) por
+  uma FUNÇÃO, não um alias: o rlwrap recusa um terminal que diz ter largura zero ("is it emacs?"), e
+  a Lisp não começava; lá, e quando a entrada não é um terminal, a Lisp roda sozinha. O `v` mostra
+  as três versões.
+- **E o resto da distro aprendeu a Lisp:** uma linha `common-lisp` no realce, com as palavras dela
+  (seção do realce de sintaxe); o `*.lsp` reivindicado, o `*.cl` empatado com o OpenCL e desempatado
+  pelo conteúdo, o `*.fasl` largado (seção da base de MIME); o glifo `custom-common_lisp` do Nerd
+  Fonts; o `.qlot` fora do índice. Os checks: `common-lisp-in-both-profiles` (o PATH, as bibliotecas
+  que o `sbcl` vê, a semente rodada numa casa de mentira com um arquivo, um link pendurado e uma
+  falta), `common-lisp-loads-offline` (as três Lisps no sandbox, pelas sementes; o CCL e o ECL
+  abertos de dentro do SBCL; e cada uma com um `CL_SOURCE_REGISTRY` que termina em `//:`, achando
+  uma biblioteca do store e um sistema da pessoa) e os dois acima.
+- **O custo, medido:** 0,63 GiB nos dois perfis (`nix path-info -S` de cada caminho do fecho, menos
+  o que um `toplevel` de cada perfil construído antes já tinha) — o SBCL com fonte e manual 374 MiB,
+  o CCL 93, o qlot 22, o ECL 18, as bibliotecas e os fontes delas o resto. O `minimal` vai a
+  ~12,5 GiB e o `full` a ~37 (com o VS Code; tabela no `nix/modules/profile.nix`).
 
 <!-- anchor: L16 -->
 
@@ -17967,11 +18554,15 @@ valor longo, o motivo vai numa linha própria ("Por quê"): a coluna de valor co
 o motivo é o que a pessoa veio ler. Cada recusa diz o que fez aqui — fora deste computador, ainda
 aqui por outro programa que o traz (perigo), mantido porque a distro precisa (com o motivo), não
 conhecido, recusado em outro computador (nomeado), sai com a próxima atualização —, e depois vêm os
-outros programas da distro, cada um a um `C-d` de ficar desinstalado. Toda recusa se traz de volta
-pela página dela, seja qual for o resultado: a que o sistema recusou porque a distro precisa do
-programa, a de um programa que a distro não traz mais, e a só de outros computadores (que oferece
-também manter desinstalado AQUI, como pergunta a remoção pelo lançador). Um programa que não está
-mais recusado aqui e o sistema ainda deixa de fora diz que volta na próxima atualização.
+outros programas da distro, cada um a um `C-d` de ficar desinstalado. Toda recusa que vale aqui se
+traz de volta pela página dela, seja qual for o resultado — a que o sistema recusou porque a distro
+precisa do programa, a de um programa que a distro não traz mais —, e o botão diz se volta em todos
+os computadores ou só aqui (L04, "Uma regra de recusa"). A só de outros computadores oferece manter
+desinstalado AQUI também, como pergunta a remoção pelo lançador, diz que cada computador que a fez
+a traz de volta por conta própria, e oferece trazê-la de volta em todos de uma vez, depois de uma
+pergunta (a de um computador que não existe mais). Um programa recusado antes de ser instalado aparece pelo nome do
+registro. Um programa que não está mais recusado aqui e o sistema ainda deixa de fora diz que volta
+na próxima atualização.
 
 **A leitura segue os arquivos, não a fila.** Enquanto a vista está aberta (é quanto vive a `Feed`,
 nas duas portas), a central vigia o que a leitura da declaração lê (`declaration::watched`): os dois
@@ -18076,7 +18667,7 @@ O instalador passou a fazer a máquina **da pessoa**, e não uma máquina que el
 decisões do dono (2026-10-05) mudaram o que ele pergunta e em que ordem: o repositório privado é
 obrigatório, a rede é exigida, e a máquina segue a branch `release`.
 
-**As perguntas são dezessete.** As três do repositório vêm depois da rede, cada uma provada antes da
+**As perguntas são dezoito.** As três do repositório vêm depois da rede, cada uma provada antes da
 seguinte: o endereço (só o endereço, como antes), o **acesso** e a **senha dos pertences**.
 
 - **O acesso de um endereço SSH não é digitado.** O instalador faz uma chave de implantação para esta
@@ -18123,6 +18714,53 @@ nasce com os programas da pessoa. Depois, na home dela: o acesso (`0700`/`0600`,
 de comando da restauração não nomeia nem o repositório nem o acesso) e a restauração, rodada **como a
 pessoa** (`setpriv` com o uid e o gid do `/etc/passwd` do alvo). A restauração escreve o espelho em
 `~/.local/state/ronoctua/person/`, e o `last.json` dela é a base da primeira sincronização.
+
+**O programa que a pessoa desmarca (a décima oitava pergunta) é uma RECUSA dela, não uma linha do
+`host.nix`.** É a decisão da pessoa sobre um programa, e não um fato da máquina: vai para o
+`software/declined.json` dela, só para este hostname (`machines: ["<hostname>"]`, decisão do dono:
+desmarcar aqui não tira o programa das outras máquinas), e é o mesmo dado que toda atualização honra
+e que a central desfaz ("Trazer de volta"). Uma linha no `host.nix` seria um segundo mecanismo, que
+a central não alcança. Escrever o arquivo não basta, porque a próxima aplicação troca o `person/` da
+máquina inteiro pelo espelho da pessoa, e uma máquina com chave fixada retém documento que o
+manifesto assinado não cobre. Por isso a recusa precisa estar, assinada, no repositório, no espelho e
+na cópia da máquina antes do `nixos-install` (`plan.rs`, `executor.rs`):
+
+- **Repositório com algo dentro: a ESCOLHA da máquina, assinada e enviada antes do disco.** O
+  instalador escreve em `/run/ronoctua-install/choice.json` as duas metades da resposta para este
+  hostname (`ronoctua_person::choice::Choice`: os desmarcados e os marcados), e a cópia da parte em
+  claro a aplica ao `declined.json` do repositório — cada desmarcado recusado nesta máquina, cada
+  marcado trazido de volta nela —, assina com a chave que a senha abriu (o contador sobe) e envia
+  (`ronoctua-belongings plain --decline`, só com `--passphrase`) antes de copiar para fora. Uma `full`
+  entrega a escolha SEMPRE, mesmo sem nada desmarcado: uma reinstalação, ou uma nova tentativa, com o
+  mesmo nome traz de volta o que a anterior deixou de fora. O rótulo do passo diz que o repositório é
+  escrito antes do disco, e a revisão, que o marcado volta. O `apply` com a chave fixada aceita a
+  recusa assinada, o `nixos-install` já não instala o programa e a restauração a leva ao espelho. Um
+  envio que falha para a instalação ali, com o disco intacto e a frase da recusa (`Event::Refused`, a
+  última linha `--json` do programa). Uma escolha enviada fica no repositório mesmo que a instalação
+  falhe depois: vale só para aquele hostname, e repetir não envia nada de novo.
+- **Repositório vazio: aplicada sem assinatura antes do `pin`, e o `init` a assina.** Não há chave para
+  assinar, e uma máquina sem chave fixada aceita as declarações como vieram (a regra do `tree.rs`, que
+  só tira programas). O documento vai para o staging de root no formato da parte em claro, numa pasta
+  própria (`staged-declines/person/software/declined.json`, `0644` em pastas `0755`, como o walker
+  exige) e o `apply` o leva ao `person/` do flake antes do disco; depois do `nixos-install`, o mesmo
+  documento vai para o espelho da pessoa, dela, antes do `init`, cuja primeira sincronização o assina
+  com a chave nova e o envia. Só então vem o `pin`.
+- **Nos dois casos, o que o aplicador fez é LIDO antes do disco** (`left-out-applied`): se o
+  `declined.json` do flake de trabalho não recusa cada desmarcado para este hostname, ou recusa um
+  marcado com uma recusa DESTA máquina, a instalação para ali, com a frase. Uma assinatura que não
+  cobrisse o arquivo juntado faria o aplicador guardar o que a máquina tinha (nada) com um aviso só, e
+  o `nixos-install` instalaria o que a pessoa deixou de fora. Ler é permitido fora do
+  `ronoctua-person`; escrever, não.
+- **Uma execução começa do zero**: o flake de trabalho, a cópia da parte em claro e as recusas
+  preparadas de uma tentativa anterior são apagados antes do primeiro passo (`plan::leftovers`) — o
+  template é copiado por cima do flake de trabalho, e a cópia ou as recusas daquela tentativa seriam
+  aplicadas como desta. As recusas de um repositório vazio têm pasta própria, que nada mais enche.
+- **Uma recusa de TODAS as máquinas continua**, mesmo de um programa marcado: é a decisão da pessoa,
+  gravada pela central em outro dia, e a marca do instalador é sobre esta máquina só. A cópia a nomeia
+  (`kept-everywhere` no `--json`), e o instalador a diz depois do passo (`Event::Said`); a ajuda da
+  lista e a revisão já diziam.
+- **Um carimbo por execução** (`Answers::left_out_at`): as cópias saem byte a byte iguais. Sem
+  carimbo o passo falha, nunca inventa um.
 
 **Nenhum filho herda uma resposta.** No modo sem terminal as senhas chegam pelo ambiente, e todo
 programa que o instalador inicia as herdaria — `mkpasswd`, `lsblk`, `btrfs`, o `systemd-creds` que o
@@ -18188,20 +18826,23 @@ continua rodando na thread dela; com um arquivo só para todas, a seguinte escre
 e apagava, e a CLI da segunda não lia nada — uma senha certa recusada como "sem senha".
 
 **A TUI responde ao ponteiro** (invariante 19): um terminal por SSH manda eventos de mouse. A linha de
-uma lista é escolhida no primeiro clique e tomada no segundo, a roda anda na lista, cada tecla da linha
-de teclas é um clique (`Enter`, `Esc`, `Ctrl+C` — lidas pela primeira palavra de cada dica, que é o
-nome da tecla e não se traduz), e o que está sob o ponteiro acende. O que a pintura desenha e o que o
-ponteiro acerta é uma resposta só (`tui::places`), e a lista guarda onde rolou (`State::scroll`): rolar
-a partir da escolha a cada quadro mexia a lista entre os dois cliques, e o segundo caía em outra linha.
-As linhas que quebram (a ajuda, a recusa, o texto da chave) são contadas pelo mesmo quebrador que as
-desenha (`Paragraph::line_count`), nunca por caracteres ÷ largura; o estado do acesso tem linhas
-próprias, que o texto acima não empurra para fora.
+uma lista é escolhida no primeiro clique e tomada no segundo (numa tela recém-aberta, a do cursor
+também: `State::aimed`), a roda anda na lista, cada tecla da linha de teclas é um clique (`Enter`,
+`Esc`, `Ctrl+C` — lidas pela primeira palavra de cada dica, que é o nome da tecla e não se traduz), e o
+que está sob o ponteiro acende. O que a pintura desenha e o que o ponteiro acerta é uma resposta só
+(`tui::places`), e a lista guarda onde rolou (`State::scroll`): rolar a partir da escolha a cada quadro
+mexia a lista entre os dois cliques, e o segundo caía em outra linha. As linhas que quebram (a ajuda, a
+recusa, o texto da chave) são contadas pelo mesmo quebrador que as desenha (`Paragraph::line_count`),
+nunca por caracteres ÷ largura; o estado do acesso tem linhas próprias, que o texto acima não empurra
+para fora.
 
 **A TUI se fotografa sem disco.** `ronoctua-install --show <tela>` desenha, de uma fixture e sem rede,
-as telas que conferem a rede e o repositório; o QR da chave foi lido de volta por um leitor de QR a
-partir das cores que a TUI pinta (os testes conferem módulo a módulo que o desenho é o código). O QR é
-desenhado em meios-blocos (`ratatui::symbols::half_block`, o glifo é da biblioteca), com as cores dos
-tokens, e não é desenhado cortado: um código pela metade não é lido por câmera nenhuma.
+as telas que conferem a rede e o repositório e a lista de programas (`left-out`) — num terminal, no
+tamanho e nas cores dele (SGR de 24 bits, `tui::painted`); num arquivo, só o texto em 100 × 34. O QR da
+chave foi lido de volta por um leitor de QR a partir das cores que a TUI pinta (os testes conferem
+módulo a módulo que o desenho é o código). O QR é desenhado em meios-blocos
+(`ratatui::symbols::half_block`, o glifo é da biblioteca), com as cores dos tokens, e não é desenhado
+cortado: um código pela metade não é lido por câmera nenhuma.
 
 
 <!-- anchor: L21 -->

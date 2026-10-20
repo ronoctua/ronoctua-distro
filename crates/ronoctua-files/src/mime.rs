@@ -19,7 +19,10 @@
 //! frame that draws it, which is the shape of defect `ronoctua_shell_door::launch`
 //! already paid for once with icon lookups.
 
+use std::collections::{HashMap, VecDeque};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use crate::Kind;
 
@@ -183,9 +186,23 @@ pub fn claims(mime: &str, name: &str) -> bool {
 ///
 /// The cost is bounded by how many names tie, which is a property of the
 /// DATABASE and not of the folder: measured over the owner's own directory,
-/// eight names of sixty-four, and every one of them a media container or a
-/// playlist. Everything else — every `.jpg`, `.rs`, `.pdf` — is still answered
-/// without touching the file.
+/// eight names of sixty-four, and every one of them a media container, a
+/// playlist — or, since `*.cl` ties on purpose (below), a `.cl`. Everything
+/// else — every `.jpg`, `.rs`, `.pdf` — is still answered without touching
+/// the file. And a tied file is read ONCE: its answer is kept by the file
+/// (device, inode, modification time, size; [`settled`]), because a listing
+/// asks again at every reread, on the loop that draws it. Under `/private`
+/// nothing is read unless the vault is open (`ronoctua_private::may_touch`):
+/// a suspended vault freezes whoever touches it, and the name's first answer
+/// is given instead.
+///
+/// # A tie made on purpose
+///
+/// `assets/icons/mime-glyphs.nix` makes one: `*.cl` is OpenCL's upstream and
+/// Common Lisp's too (`claims` with `shares`). The magic still decides first;
+/// then a row of [`SHARED_CONTENT`] whose pattern matches and one of whose
+/// markers is in the head (`(in-package`, which no kernel source writes); and
+/// otherwise upstream's type, which is the first of the tie.
 #[must_use]
 pub fn of_path(path: &Path, kind: Kind, read_content: bool) -> &'static str {
     match kind {
@@ -201,16 +218,7 @@ pub fn of_path(path: &Path, kind: Kind, read_content: bool) -> &'static str {
         if found.sure {
             return found.mime;
         }
-        // THE BYTES BREAK THE TIE, and only among the types that claim this
-        // name: a file whose magic names something with no glob for it is a
-        // file lying about its extension, and the extension is what the person
-        // typed.
-        if let Some(said) = read_head(path).as_deref().and_then(by_content)
-            && claims(said, &name)
-        {
-            return said;
-        }
-        return found.mime;
+        return settled(path, &name, found.mime, &ronoctua_private::may_touch);
     }
     if !read_content {
         return UNKNOWN;
@@ -219,6 +227,97 @@ pub fn of_path(path: &Path, kind: Kind, read_content: bool) -> &'static str {
         .as_deref()
         .and_then(by_content)
         .unwrap_or(UNKNOWN)
+}
+
+/// A file whose tied name its bytes settled, as the kernel knows it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TiedFile {
+    dev: u64,
+    ino: u64,
+    mtime_s: i64,
+    mtime_ns: i64,
+    size: u64,
+    name: String,
+}
+
+/// The answers kept, and the order they came in (the oldest goes first).
+type Settled = (HashMap<TiedFile, &'static str>, VecDeque<TiedFile>);
+
+fn kept() -> &'static Mutex<Settled> {
+    static KEPT: OnceLock<Mutex<Settled>> = OnceLock::new();
+    KEPT.get_or_init(|| Mutex::new((HashMap::new(), VecDeque::new())))
+}
+
+/// What a tied name is, by the file's first bytes — read once per file.
+///
+/// THE BYTES BREAK THE TIE, and only among the types that claim this name: a
+/// file whose magic names something with no glob for it is a file lying about
+/// its extension, and the extension is what the person typed. Then a tie made
+/// on purpose ([`SHARED_CONTENT`]), then `first`, the name's own answer.
+///
+/// `may_touch` is `ronoctua_private::may_touch`, handed in so a test can say
+/// "the vault is closed" without one.
+fn settled(
+    path: &Path,
+    name: &str,
+    first: &'static str,
+    may_touch: &dyn Fn(&Path) -> bool,
+) -> &'static str {
+    if !may_touch(path) {
+        return first;
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return first;
+    };
+    let file = TiedFile {
+        dev: meta.dev(),
+        ino: meta.ino(),
+        mtime_s: meta.mtime(),
+        mtime_ns: meta.mtime_nsec(),
+        size: meta.size(),
+        name: name.to_owned(),
+    };
+    if let Some(known) = kept().lock().ok().and_then(|k| k.0.get(&file).copied()) {
+        return known;
+    }
+    // A FILE THAT COULD NOT BE READ is not kept: what changes its permission
+    // does not change what the key is made of.
+    let Some(head) = read_head(path) else {
+        return first;
+    };
+    let said = by_content(&head)
+        .filter(|said| claims(said, name))
+        .or_else(|| shared_by_content(name, &head))
+        .unwrap_or(first);
+    if let Ok(mut k) = kept().lock() {
+        let (answers, order) = &mut *k;
+        if answers.insert(file.clone(), said).is_none() {
+            order.push_back(file);
+        }
+        while order.len() > crate::archive::policy::MIME_TIE_ENTRIES {
+            if let Some(oldest) = order.pop_front() {
+                answers.remove(&oldest);
+            }
+        }
+    }
+    said
+}
+
+/// The type a tie made on purpose resolves to, by a marker in the head.
+///
+/// Case is not asked: Common Lisp reads `(IN-PACKAGE` as `(in-package`.
+fn shared_by_content(name: &str, head: &[u8]) -> Option<&'static str> {
+    let folded = name.to_lowercase();
+    SHARED_CONTENT
+        .iter()
+        .find(|(pattern, _, markers)| {
+            matches(pattern, &folded)
+                && markers.iter().any(|m| {
+                    head.windows(m.len())
+                        .any(|w| w.eq_ignore_ascii_case(m.as_bytes()))
+                })
+        })
+        .map(|(_, mime, _)| *mime)
 }
 
 /// The type, with the content consulted even when the name already answered.
@@ -677,6 +776,91 @@ mod tests {
             by_name("lying.ogg").unwrap()
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the claims `mime-glyphs.nix` adds or removes stop reaching
+    /// the table: a `.lsp` back to no type, a `.fasl` back to Lisp SOURCE (and
+    /// the preview showing compiled bytes as text), or `*.cl` settled by
+    /// the table's order instead of reported as a tie.
+    #[test]
+    fn common_lisp_names_are_claimed_and_a_fasl_is_not_source() {
+        assert_eq!(by_name("init.lsp"), Some("text/x-common-lisp"));
+        assert_eq!(by_name("app.asd"), Some("text/x-common-lisp"));
+        assert_eq!(by_name("app.lisp"), Some("text/x-common-lisp"));
+        assert_eq!(by_name("app.fasl"), None);
+        let cl = named("kernel.cl").expect("the database knows `*.cl`");
+        assert!(!cl.sure, "`*.cl` came back as settled");
+        // UPSTREAM'S TYPE IS THE FIRST OF THE TIE, so a name alone still says
+        // what it said before.
+        assert_eq!(cl.mime, "text/x-opencl-src");
+    }
+
+    /// FAILS IF: the tie `*.cl` is made on stops being broken by the head —
+    /// a Lisp file keeps OpenCL's type and draws as C — or starts taking a
+    /// kernel source, or anything that says neither, for Lisp.
+    #[test]
+    fn a_cl_file_is_lisp_only_when_its_head_says_so() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-mime-cl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the test directory");
+        let lisp = dir.join("package.cl");
+        std::fs::write(&lisp, b";;;; The package.\n\n(IN-PACKAGE #:cl-user)\n").expect("write");
+        assert_eq!(of_path(&lisp, Kind::File, false), "text/x-common-lisp");
+        let system = dir.join("app.cl");
+        std::fs::write(
+            &system,
+            b"(defsystem \"app\" :components ((:file \"a\")))\n",
+        )
+        .expect("write");
+        assert_eq!(of_path(&system, Kind::File, false), "text/x-common-lisp");
+        let kernel = dir.join("blur.cl");
+        std::fs::write(
+            &kernel,
+            b"__kernel void blur(__global float *a) { a[0] = 1; }\n",
+        )
+        .expect("write");
+        assert_eq!(of_path(&kernel, Kind::File, false), "text/x-opencl-src");
+        let neither = dir.join("notes.cl");
+        std::fs::write(&neither, b"nothing that says what this is\n").expect("write");
+        assert_eq!(of_path(&neither, Kind::File, false), "text/x-opencl-src");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a tied name's file is read again at every reread of the
+    /// listing — on the loop that draws it — or its kept answer outlives a
+    /// change of the file; or a file under a vault that may not be touched is
+    /// read at all.
+    #[test]
+    fn a_tied_file_is_read_once_and_never_in_a_closed_vault() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("ronoctua-mime-kept-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the test directory");
+        let lisp = dir.join("kept.cl");
+        std::fs::write(&lisp, b"(in-package #:kept)\n").expect("write");
+        assert_eq!(of_path(&lisp, Kind::File, false), "text/x-common-lisp");
+        // UNREADABLE NOW, and the same file by its stamp: the answer kept is
+        // the answer given, with no read.
+        std::fs::set_permissions(&lisp, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let unreadable = std::fs::read(&lisp).is_err();
+        let again = of_path(&lisp, Kind::File, false);
+        std::fs::set_permissions(&lisp, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        if unreadable {
+            assert_eq!(again, "text/x-common-lisp", "the file was read again");
+        }
+        // A CHANGED FILE is read again.
+        std::fs::write(&lisp, b"__kernel void k(void) {}\n/* a longer kernel */\n").expect("write");
+        assert_eq!(of_path(&lisp, Kind::File, false), "text/x-opencl-src");
+        // AND A VAULT THAT MAY NOT BE TOUCHED is not read: the name's answer.
+        let vaulted = dir.join("vaulted.cl");
+        std::fs::write(&vaulted, b"(in-package #:vaulted)\n").expect("write");
+        assert_eq!(
+            settled(&vaulted, "vaulted.cl", "text/x-opencl-src", &|_| false),
+            "text/x-opencl-src"
+        );
+        assert_eq!(
+            settled(&vaulted, "vaulted.cl", "text/x-opencl-src", &|_| true),
+            "text/x-common-lisp"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

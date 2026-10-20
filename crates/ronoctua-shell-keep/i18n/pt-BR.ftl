@@ -74,10 +74,13 @@ belongings-decide-take-merged-ours = Mesclar, mantendo o desta máquina onde con
 belongings-decide-take-merged-theirs = Mesclar, pegando o do repositório onde conflitam
 belongings-plain-already = Isso já viaja, em claro, com a parte em claro.
 belongings-op-forget = o esquecimento da chave da sessão
+belongings-op-vscode-extensions = a instalação das suas extensões do VS Code
 belongings-target-git = as configurações do git e suas chaves de segurança registradas
 belongings-target-gnupg = seu chaveiro do GnuPG
 belongings-target-shell = o arquivo próprio do seu shell
 belongings-target-emacs = sua configuração do Emacs
+belongings-target-common-lisp = seus arquivos de inicialização do Common Lisp
+belongings-target-vscode = sua configuração do VS Code e a lista das suas extensões
 # What a target leaves out, each by its own reason. Short: the listing's
 # widest value moves its column.
 belongings-reason-socket = um socket de um programa que está rodando
@@ -86,7 +89,7 @@ belongings-reason-random-seed = a semente aleatória do agente: cada máquina te
 belongings-reason-lock = uma trava de um programa que está rodando
 belongings-reason-packages = pacotes, baixados de novo a partir da sua configuração
 belongings-reason-compiled = compilado de novo a partir do que viaja
-belongings-reason-editor-state = o que o Emacs guarda das sessões desta máquina
+belongings-reason-editor-state = o que o editor guarda das sessões desta máquina
 belongings-reason-editor-draft = o backup, o salvamento automático ou a trava de um editor
 belongings-reason-git-folder = a pasta própria de um repositório git: um clone a traz
 belongings-state-synced = em dia

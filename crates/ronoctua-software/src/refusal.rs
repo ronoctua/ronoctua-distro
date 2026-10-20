@@ -111,11 +111,14 @@ pub enum Refusal {
     /// machine when it was removed, or another computer removed it). Why it
     /// was not removed NOW, and an installed row's trouble until then.
     LeavesAtNextApply,
+    /// Brought back HERE, and the decline names other computers only: it
+    /// is theirs to bring back — or every computer's at once, asked first.
+    DeclinedElsewhere,
 }
 
 impl Refusal {
     /// Every one, for `software-words-are-total`.
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 44] = [
         Self::UnfreeNeedsConsent,
         Self::UnverifiedNeedsConsent,
         Self::BigNeedsConsent,
@@ -159,6 +162,7 @@ impl Refusal {
         Self::ApplyFailed,
         Self::MachineUnnamed,
         Self::LeavesAtNextApply,
+        Self::DeclinedElsewhere,
     ];
 
     /// The stem of its text key (`software-refusal-<word>`).
@@ -208,6 +212,7 @@ impl Refusal {
             Self::ApplyFailed => "apply-failed",
             Self::MachineUnnamed => "machine-unnamed",
             Self::LeavesAtNextApply => "leaves-at-next-apply",
+            Self::DeclinedElsewhere => "declined-elsewhere",
         }
     }
 }

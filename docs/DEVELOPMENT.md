@@ -452,9 +452,9 @@ buffers wasm e as fontes vão no `isoImage.storeContents`, sempre: a distro não
 máquina alvo não compila nada; o resto ela baixa do `cache.nixos.org` — e do cache binário da pessoa,
 quando os pertences dela nomeiam um.
 
-**A instalação `minimal` tem ~11,8 GiB contra ~29 da `full`.** Ela deixa de fora os aplicativos, não a
-distro nem o trabalho nela — o toolchain do devshell e os agentes estão nas duas — e um deles é uma
-linha depois:
+**A instalação `minimal` tem ~12,5 GiB contra ~37 da `full` (~35,5 com o padrão do instalador).** Ela
+deixa de fora os aplicativos, não a distro nem o trabalho nela — o toolchain do devshell, o Common Lisp
+e os agentes estão nas duas — e um deles é uma linha depois:
 
 ```
 ronoctua.browser.enable = true;    # no host.nix da máquina, depois sudo systemctl start ronoctua-rescue-rebuild.service

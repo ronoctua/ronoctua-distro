@@ -21,6 +21,9 @@ WHAT IT REFUSES
 - an icon token that is not in `icons.nix`;
 - a row of `exact` naming a type the database does not have — five of the first
   ones written did exactly that;
+- a `prefer`, `claims` or `drop` row that no longer applies to the database it
+  reads (a type gone, a glob no longer claimed, a tie upstream settled), and a
+  `claims` row that would tie with upstream in silence;
 - a table that came out shorter than the floors below, which is how a parser
   that silently stopped understanding the format is caught.
 """
@@ -347,6 +350,97 @@ def main() -> int:
             continue
         globs = [g for g in globs if not (g[1] == loser and g[2] == pattern)]
 
+    # --- a name upstream gives a type its files are not --------------------
+    #
+    # The row REMOVES upstream's glob: `*.fasl` is compiled Lisp, not the
+    # Lisp source upstream calls it. A row that no longer removes anything
+    # is refused, like a stale `prefer`.
+    for row in table.get("drop", []):
+        where = f"`drop` for `{row.get('glob')}`"
+        unknown = sorted(set(row) - {"glob", "mime"})
+        if unknown:
+            refuse(f"{where} has the fields {unknown}, which this generator does not know.")
+            continue
+        pattern, mime = row["glob"], row["mime"]
+        if mime not in types:
+            refuse(f"{where} names `{mime}`, which the database does not have.")
+            continue
+        if not any(g[1] == mime and g[2] == pattern for g in globs):
+            refuse(
+                f"{where} says `{mime}` claims it, and in this database it does not. "
+                "Upstream changed and the row no longer removes anything."
+            )
+            continue
+        globs = [g for g in globs if not (g[1] == mime and g[2] == pattern)]
+
+    # --- a name a type of the database answers here too --------------------
+    #
+    # Added at the database's own weight, after upstream's rows, like `ours`
+    # — but for a type that EXISTS. A row that would tie with another type
+    # must say so (`shares`), and say how the bytes tell the two apart
+    # (`content`): the tie is then settled by `mime::of_path`, which reads a
+    # tied name's head anyway. Every way the row could stop meaning what it
+    # says is refused.
+    claimed: list[tuple[str, str]] = []
+    shared_content: list[tuple[str, str, list[str]]] = []
+    for row in table.get("claims", []):
+        where = f"`claims` for `{row.get('glob')}`"
+        unknown = sorted(set(row) - {"glob", "mime", "shares", "content"})
+        if unknown:
+            refuse(f"{where} has the fields {unknown}, which this generator does not know.")
+            continue
+        pattern, mime = row["glob"], row["mime"]
+        shares, content = row.get("shares"), row.get("content")
+        if mime not in types:
+            refuse(f"{where} names `{mime}`, which the database does not have.")
+            continue
+        if any(g[1] == mime and g[2] == pattern for g in globs):
+            refuse(f"{where}: `{mime}` already claims it upstream, and the row does nothing.")
+            continue
+        others = sorted({g[1] for g in globs if g[2] == pattern})
+        if shares is None:
+            if others:
+                refuse(
+                    f"{where} is claimed upstream by {others}. Without `shares` the two "
+                    "would tie in silence, and the first in the table would win."
+                )
+                continue
+            if content is not None:
+                refuse(f"{where} has `content` and no `shares`: there is no tie to settle.")
+                continue
+        else:
+            if shares not in types:
+                refuse(f"{where} shares with `{shares}`, which the database does not have.")
+                continue
+            if others != [shares]:
+                refuse(
+                    f"{where} says it shares with `{shares}`, and upstream's claimants are "
+                    f"{others}. Upstream changed and the tie is not the one written here."
+                )
+                continue
+            weights = {g[0] for g in globs if g[2] == pattern}
+            if weights != {50}:
+                refuse(
+                    f"{where}: `{shares}` claims it at weight {sorted(weights)}, not the "
+                    "50 this row is added at — it would not tie."
+                )
+                continue
+            if (
+                not isinstance(content, list)
+                or not content
+                or not all(
+                    isinstance(m, str) and m and m.isascii() and m.isprintable() and len(m) <= 64
+                    for m in content
+                )
+            ):
+                refuse(
+                    f"{where} shares with `{shares}` and has no `content` that could tell "
+                    "them apart: a list of short printable ASCII markers."
+                )
+                continue
+            shared_content.append((pattern, mime, content))
+        claimed.append((mime, pattern))
+
     floors = [
         ("globs", len(globs), FLOOR_GLOBS),
         ("magic", len(magic), FLOOR_MAGIC),
@@ -369,7 +463,7 @@ def main() -> int:
 
     # OUR rows go in with the database's own default weight, so they compete
     # on the same terms as everything else rather than winning by construction.
-    for mime, pattern in ours:
+    for mime, pattern in ours + claimed:
         globs.append((50, mime, pattern, False))
     # OUR TYPES JOIN THE HIERARCHY, so `is_a` answers about them the way it
     # answers about everything else. Appended rather than merged, because the
@@ -471,6 +565,14 @@ def main() -> int:
     pairs("ALIASES", "`(old name, current name)`.", aliases)
     pairs("GENERIC", "`(type, its generic icon name)`.", generic)
 
+    out.append("/// `(pattern, type, markers)`: a name `mime-glyphs.nix` makes a tie on purpose")
+    out.append("/// (`claims` with `shares`), and what in a file's head says it is this type.")
+    out.append(f"pub static SHARED_CONTENT: [(&str, &str, &[&str]); {len(shared_content)}] = [")
+    for pattern, mime, markers in shared_content:
+        inner = ", ".join(json.dumps(m) for m in markers)
+        out.append(f"    ({json.dumps(pattern)}, {json.dumps(mime)}, &[{inner}]),")
+    out.append("];")
+    out.append("")
     out.append("/// `(generic icon name, glyph)` — the end of `assets/icons/mime-glyphs.nix`.")
     out.append(f"pub static ICON_OF_GENERIC: [(&str, char); {len(of_generic)}] = [")
     for name in sorted(of_generic):

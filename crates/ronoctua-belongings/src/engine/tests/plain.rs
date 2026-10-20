@@ -14,8 +14,10 @@ use super::*;
 use crate::engine::merging::{BASE_SUFFIX, sha256};
 use crate::engine::plain::{Opened, copy_out};
 use crate::engine::restore::{Initialized, probe_with};
-use crate::plain::{HeldWhy, Report};
+use crate::plain::{ChoiceThere, HeldWhy, Report};
 use crate::plan::{DecisionsFile, Merging};
+use ronoctua_person::choice::Choice;
+use ronoctua_person::declined::Declined;
 
 /// The plain part alone, as `sync-plain` (push) or `plain pull` runs it.
 fn plain(m: &Machine, push: bool) -> Report {
@@ -1252,6 +1254,7 @@ fn the_installer_pins_the_key_the_passphrase_opened() {
             Opened {
                 passphrase: Some(&pass),
                 signer: Some(signer),
+                choice: None,
             },
         );
         assert!(!pass.exists(), "the passphrase outlived the copy");
@@ -1330,7 +1333,7 @@ fn the_plain_part_is_copied_out_as_the_repository_lays_it() {
     a.sync();
     let e = Machine::new(&root, "installer", &remote);
     let out = root.join("staged");
-    let report = e.engine().copy_plain(&out, None, None).unwrap();
+    let report = e.engine().copy_plain(&out, None, None, None).unwrap();
     assert_eq!(
         report.changed,
         [
@@ -1775,5 +1778,531 @@ fn the_installers_questions_keep_the_passphrase_through_the_network() {
     );
     a.engine().restore(&mut |_| {}).unwrap();
     assert!(!a.places.passphrase().exists(), "the restore kept it");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The person's declined programs, where the plain part keeps them.
+const DECLINED: &str = "state/person/software/declined.json";
+/// The same, in the repository.
+const DECLINED_THERE: &str = "plain/person/software/declined.json";
+
+/// When the installer's person chose.
+fn chosen_at() -> ronoctua_person::Stamp {
+    ronoctua_person::Stamp::parse("2026-10-20T10:00:00Z").unwrap()
+}
+
+/// The installer's choice for `host`: `declined` left out, `kept` kept.
+fn choice(host: &str, declined: &[&str], kept: &[&str]) -> Choice {
+    let ids = |l: &[&str]| l.iter().map(|&i| i.to_owned()).collect();
+    Choice::new(host, chosen_at(), ids(declined), ids(kept))
+}
+
+/// A `declined.json` of `host`'s declines, as a machine of the person's
+/// writes it.
+fn declined_on(host: &str, ids: &[&str]) -> String {
+    let mut doc = Declined::default();
+    for id in ids {
+        doc.decline(id, Some(vec![host.to_owned()]), &chosen_at(), host);
+    }
+    ronoctua_person::to_json(&doc)
+}
+
+/// The remote's manifest, opened with `key`.
+fn remote_manifest(
+    remote_dir: &Path,
+    root: &Path,
+    key: &ronoctua_pq::sign::PublicKey,
+) -> ronoctua_pq::sign::Manifest {
+    let json = remote_file(remote_dir, root, "plain/signed.json").expect("a manifest");
+    let sig = remote_file(remote_dir, root, "plain/signed.sig").expect("a signature");
+    ronoctua_pq::sign::open_manifest(&json, &sig, key).expect("signed by the person's key")
+}
+
+/// Where each decline of the remote's `declined.json` holds, by id.
+fn remote_declines(remote_dir: &Path, root: &Path) -> Vec<(String, Option<Vec<String>>)> {
+    remote_file(remote_dir, root, DECLINED_THERE)
+        .map(|b| ronoctua_person::parse::<Declined>(&b).unwrap())
+        .unwrap_or_default()
+        .apps
+        .into_iter()
+        .map(|d| (d.id, d.machines))
+        .collect()
+}
+
+fn on(hosts: &[&str]) -> Option<Vec<String>> {
+    Some(hosts.iter().map(|&h| h.to_owned()).collect())
+}
+
+/// FAILS IF: the installer's choice is not said in the repository's
+/// declines — another machine's decline lost, ours not scoped to the new
+/// machine — not signed by the key the passphrase opened one past the
+/// repository's counter, not pushed, or not copied out as pushed; or a
+/// machine that pins the key, and one that saw the older counter, do not
+/// take it; or the same choice a second time pushes anything; or a choice
+/// that ticks now what an earlier attempt left out does not bring it back,
+/// or undoes the person's decline of every machine without saying so.
+#[test]
+fn the_installers_choice_is_signed_pushed_and_copied_out() {
+    let root = scratch("plain-decline");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::keeping(&root, "machine-alpha", &remote);
+    a.write("state/person/options.json", OPTIONS);
+    a.write(DECLINED, &declined_on("machine-alpha", &["gimp"]));
+    a.sync();
+    let mut b = Machine::new(&root, "machine-beta", &remote);
+    b.pin_from(&remote_dir, &root);
+    let key = b.pinned.clone().unwrap();
+    let before = remote_manifest(&remote_dir, &root, &key).counter;
+
+    let e = Machine::new(&root, "installer", &remote);
+    let secret = crate::crypt::passphrase(PASSPHRASE.to_owned());
+    let signer = root.join("signer.pub");
+    let mine = choice("new-host", &["gimp", "libreoffice"], &["blender"]);
+    let out = root.join("staged");
+    let report = e
+        .engine()
+        .copy_plain(&out, Some(&secret), Some(&signer), Some(&mine))
+        .unwrap();
+    assert_eq!(report.pushed, [DECLINED]);
+    assert_eq!(report.choice, Some(ChoiceThere::Pushed));
+    assert!(report.held.is_empty(), "{report:?}");
+    assert!(report.changed.iter().any(|p| p == DECLINED), "{report:?}");
+
+    // SIGNED ONE PAST, over the new file and what was signed before.
+    let there = remote_file(&remote_dir, &root, DECLINED_THERE).unwrap();
+    let manifest = remote_manifest(&remote_dir, &root, &key);
+    assert_eq!(manifest.counter, before + 1);
+    assert_eq!(
+        manifest.files.get("person/software/declined.json"),
+        Some(&sha256(&there))
+    );
+    assert_eq!(
+        manifest.files.get("person/options.json"),
+        Some(&sha256(OPTIONS.as_bytes())),
+        "the new signature left a signed file out"
+    );
+    assert_eq!(
+        remote_declines(&remote_dir, &root),
+        [
+            ("gimp".to_owned(), on(&["machine-alpha", "new-host"])),
+            ("libreoffice".to_owned(), on(&["new-host"])),
+        ]
+    );
+
+    // COPIED OUT AS PUSHED, with the signature that covers it.
+    assert_eq!(
+        std::fs::read(out.join("person/software/declined.json")).unwrap(),
+        there
+    );
+    assert_eq!(
+        std::fs::read(out.join("signed.json")).unwrap(),
+        remote_file(&remote_dir, &root, "plain/signed.json").unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&signer).unwrap().trim(),
+        key.to_string()
+    );
+
+    // A MACHINE THAT PINS THE KEY, and the one that saw the older counter,
+    // take it as signed.
+    let report = plain(&b, false);
+    assert!(report.held.is_empty(), "{report:?}");
+    assert_eq!(
+        b.read(DECLINED).map(String::into_bytes),
+        Some(there.clone())
+    );
+    let report = plain(&a, false);
+    assert!(report.held.is_empty(), "{report:?}");
+    assert_eq!(
+        a.read(DECLINED).map(String::into_bytes),
+        Some(there.clone())
+    );
+
+    // THE SAME CHOICE AGAIN (an installation tried again): nothing pushed.
+    let head = remote_head(&remote_dir);
+    let again = root.join("staged-again");
+    let report = e
+        .engine()
+        .copy_plain(&again, Some(&secret), Some(&signer), Some(&mine))
+        .unwrap();
+    assert!(report.pushed.is_empty(), "{report:?}");
+    assert_eq!(report.choice, Some(ChoiceThere::AlreadyThere));
+    assert_eq!(remote_head(&remote_dir), head, "a second run pushed");
+    assert_eq!(
+        std::fs::read(again.join("person/software/declined.json")).unwrap(),
+        there
+    );
+
+    // TICKED NOW what the attempt before left out, and kept what the person
+    // declined on every machine (another day, by hand): the first comes
+    // back on this machine alone, the second stays, and is said.
+    a.write(
+        DECLINED,
+        &String::from_utf8(there).unwrap().replace(
+            "\n  ]\n}",
+            ",\n    {\n      \"id\": \"vlc\",\n      \"machines\": null,\n      \"edited-at\": \"2026-10-21T10:00:00Z\",\n      \"edited-on\": \"machine-alpha\"\n    }\n  ]\n}",
+        ),
+    );
+    a.sync();
+    let ticked = choice("new-host", &["gimp"], &["libreoffice", "vlc"]);
+    let report = e
+        .engine()
+        .copy_plain(
+            &root.join("staged-ticked"),
+            Some(&secret),
+            Some(&signer),
+            Some(&ticked),
+        )
+        .unwrap();
+    assert_eq!(report.choice, Some(ChoiceThere::Pushed));
+    assert_eq!(report.kept_everywhere, ["vlc"]);
+    assert_eq!(
+        remote_declines(&remote_dir, &root),
+        [
+            ("gimp".to_owned(), on(&["machine-alpha", "new-host"])),
+            ("vlc".to_owned(), None),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: the installer signs its choice over a `declined.json` the
+/// person did not sign — laundering it for every machine that pins the key
+/// — or over one in a format this machine does not read, instead of
+/// refusing with nothing pushed and nothing copied out.
+#[test]
+fn a_choice_over_a_file_not_as_signed_or_newer_is_refused() {
+    let root = scratch("plain-decline-tampered");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    a.write(DECLINED, &declined_on("machine-alpha", &["gimp"]));
+    a.sync();
+    let evil = declined_on("machine-alpha", &["gimp", "zsh"]);
+    tamper(&remote_dir, &root, |w| {
+        std::fs::write(w.join(DECLINED_THERE), &evil).unwrap();
+    });
+    let e = Machine::new(&root, "installer", &remote);
+    let refused = |e: &Machine, out: &Path| {
+        e.engine()
+            .copy_plain(
+                out,
+                Some(&crate::crypt::passphrase(PASSPHRASE.to_owned())),
+                Some(&root.join("signer.pub")),
+                Some(&choice("new-host", &["libreoffice"], &[])),
+            )
+            .unwrap_err()
+            .why
+    };
+    let head = remote_head(&remote_dir);
+    let out = root.join("staged");
+    assert_eq!(refused(&e, &out), Why::Corrupt);
+    assert_eq!(
+        remote_head(&remote_dir),
+        head,
+        "pushed over a tampered file"
+    );
+    assert!(!out.exists(), "copied out after a refusal");
+
+    // A NEWER FORMAT the person signed on a newer machine, in a repository
+    // of its own: not read, not written over.
+    let newer_dir = root.join("newer.git");
+    let newer = bare(&newer_dir);
+    let n = Machine::new(&root, "machine-newer", &newer);
+    n.write(DECLINED, "{\"format\": 2, \"apps\": []}\n");
+    n.sync();
+    let e = Machine::new(&root, "installer-newer", &newer);
+    let head = remote_head(&newer_dir);
+    let out = root.join("staged-newer");
+    assert_eq!(refused(&e, &out), Why::Newer);
+    assert_eq!(remote_head(&newer_dir), head, "pushed over a newer file");
+    assert!(!out.exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: the installer's choice, beaten to the repository by another
+/// machine's push of its own declines, is lost or pushed over it instead of
+/// said on top of it and signed past its counter — or a race that never
+/// ends is not refused after the tries.
+#[test]
+fn a_choice_that_loses_the_race_goes_again_on_top() {
+    let root = scratch("plain-decline-race");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::keeping(&root, "machine-alpha", &remote);
+    a.write("state/person/options.json", OPTIONS);
+    a.sync();
+    let mut b = Machine::new(&root, "machine-beta", &remote);
+    b.pin_from(&remote_dir, &root);
+    let key = b.pinned.clone().unwrap();
+    let before = remote_manifest(&remote_dir, &root, &key).counter;
+    let theirs = declined_on("machine-alpha", &["gimp", "libreoffice"]);
+    let raced = Cell::new(0);
+    let race = || {
+        if raced.get() == 0 {
+            a.write(DECLINED, &theirs);
+            assert_eq!(plain(&a, true).pushed, [DECLINED]);
+        }
+        raced.set(raced.get() + 1);
+    };
+    let e = Machine::new(&root, "installer", &remote);
+    let secret = crate::crypt::passphrase(PASSPHRASE.to_owned());
+    let mut engine = e.engine();
+    engine.before_push = Some(&race);
+    let out = root.join("staged");
+    let report = engine
+        .copy_plain(
+            &out,
+            Some(&secret),
+            Some(&root.join("signer.pub")),
+            Some(&choice("new-host", &["libreoffice"], &[])),
+        )
+        .unwrap();
+    assert_eq!(raced.get(), 2, "the installer did not try again");
+    assert_eq!(report.pushed, [DECLINED]);
+    let manifest = remote_manifest(&remote_dir, &root, &key);
+    assert_eq!(
+        manifest.counter,
+        before + 2,
+        "not signed past the other push"
+    );
+    assert_eq!(
+        remote_declines(&remote_dir, &root),
+        [
+            ("gimp".to_owned(), on(&["machine-alpha"])),
+            ("libreoffice".to_owned(), on(&["machine-alpha", "new-host"])),
+        ],
+        "the other machine's declines were lost, or ours"
+    );
+    assert_eq!(
+        std::fs::read(out.join("person/software/declined.json")).unwrap(),
+        remote_file(&remote_dir, &root, DECLINED_THERE).unwrap()
+    );
+
+    // A RACE THAT NEVER ENDS: refused after the tries, nothing copied out.
+    let n = Cell::new(0);
+    let forever = || {
+        n.set(n.get() + 1);
+        a.write(
+            "config/brain-modules/my-tea/module.rs",
+            &format!("// {}\n", n.get()),
+        );
+        plain(&a, true);
+    };
+    let mut engine = e.engine();
+    engine.before_push = Some(&forever);
+    let never = root.join("staged-never");
+    let refused = engine
+        .copy_plain(
+            &never,
+            Some(&secret),
+            Some(&root.join("signer.pub")),
+            Some(&choice("new-host", &["blender"], &[])),
+        )
+        .unwrap_err();
+    assert_eq!(refused.why, Why::Raced);
+    assert_eq!(n.get(), TRIES);
+    assert!(!never.exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: a push of the installer's choice that went in and was reported
+/// failed — the round goes again and finds nothing to change — is reported
+/// as a choice that never went up, rather than one the repository has.
+#[test]
+fn a_choice_whose_push_went_in_and_was_reported_failed_is_said_there() {
+    let root = scratch("plain-decline-accepted");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::keeping(&root, "machine-alpha", &remote);
+    a.write("state/person/options.json", OPTIONS);
+    a.sync();
+    let e = Machine::new(&root, "installer", &remote);
+    // THE PUSH GOES IN — as the installer's own commit — and another
+    // machine pushes on top before the answer comes back, so the
+    // installer's push is refused and looks lost.
+    let once = Cell::new(true);
+    let went_in = || {
+        if once.replace(false) {
+            Repo::discover(&e.places.repo())
+                .unwrap()
+                .with_tools(tools())
+                .output(
+                    None,
+                    "push",
+                    &["-q", "origin", "HEAD:refs/heads/main"],
+                    1 << 20,
+                )
+                .unwrap();
+            a.write("state/person/machines/machine-alpha.json", RECORD);
+            plain(&a, true);
+        }
+    };
+    let mut engine = e.engine();
+    engine.before_push = Some(&went_in);
+    let out = root.join("staged");
+    let report = engine
+        .copy_plain(
+            &out,
+            Some(&crate::crypt::passphrase(PASSPHRASE.to_owned())),
+            Some(&root.join("signer.pub")),
+            Some(&choice("new-host", &["libreoffice"], &[])),
+        )
+        .unwrap();
+    assert!(!once.get(), "the push was never tried");
+    assert_eq!(report.choice, Some(ChoiceThere::AlreadyThere), "{report:?}");
+    assert_eq!(
+        remote_declines(&remote_dir, &root),
+        [("libreoffice".to_owned(), on(&["new-host"]))]
+    );
+    assert!(out.join("person/software/declined.json").is_file());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: the installer's choice reaches the network when it cannot be
+/// said — a file that does not read, the old list of declines in its
+/// place, or no passphrase to sign it with — or the passphrase outlives the
+/// refusal.
+#[test]
+fn the_installers_choice_is_read_before_the_network() {
+    let root = scratch("plain-decline-read");
+    // NO REPOSITORY AT ALL: a refusal that reached the network would be
+    // another one.
+    let remote = format!("file://{}", root.join("none.git").display());
+    let keys = root.join("keys");
+    std::fs::create_dir_all(&keys).unwrap();
+    std::fs::write(
+        keys.join(crate::places::DEPLOY_KEY),
+        "a local remote asks for none",
+    )
+    .unwrap();
+    let pass = root.join("pass");
+    let signer = root.join("signer.pub");
+    let chosen = root.join("choice.json");
+    let out = root.join("staged");
+    let copy = |with_passphrase: bool| {
+        say_into(&pass, PASSPHRASE);
+        let got = copy_out(
+            &remote,
+            &keys,
+            &out,
+            None,
+            tools(),
+            Opened {
+                passphrase: with_passphrase.then_some(pass.as_path()),
+                signer: with_passphrase.then_some(signer.as_path()),
+                choice: Some(&chosen),
+            },
+        );
+        if with_passphrase {
+            assert!(!pass.exists(), "the passphrase outlived the refusal");
+        }
+        got.map(|_| ()).unwrap_err().why
+    };
+    std::fs::write(&chosen, "{\"format\": 1, \"machine\": ").unwrap();
+    assert_eq!(copy(true), Why::ChoiceUnread, "a file that does not read");
+    std::fs::write(&chosen, declined_on("new-host", &["libreoffice"])).unwrap();
+    assert_eq!(
+        copy(true),
+        Why::ChoiceUnread,
+        "declines in place of a choice"
+    );
+    std::fs::write(
+        &chosen,
+        ronoctua_person::to_json(&choice("new-host", &["libreoffice"], &[])),
+    )
+    .unwrap();
+    assert_eq!(copy(false), Why::NoPassphrase, "a choice no key signs");
+    assert!(!out.exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// FAILS IF: the signature the installer's choice goes up with vouches for
+/// a change of the repository's the person never signed — a file changed,
+/// one added, one DELETED — so that a machine pinning the key takes it,
+/// instead of every such change staying held as it was.
+#[test]
+fn a_choice_never_signs_what_the_person_did_not() {
+    let root = scratch("plain-decline-launder");
+    let remote_dir = root.join("remote.git");
+    let remote = bare(&remote_dir);
+    let a = Machine::new(&root, "machine-alpha", &remote);
+    const DECLARED: &str = "state/person/software/declared.json";
+    let mine = declarations(&[]);
+    a.write("state/person/options.json", OPTIONS);
+    a.write(DECLARED, &mine);
+    a.sync();
+    let mut b = Machine::new(&root, "machine-beta", &remote);
+    b.pin_from(&remote_dir, &root);
+    let key = b.pinned.clone().unwrap();
+    assert!(plain(&b, false).held.is_empty());
+
+    // WHOEVER CAN WRITE THE REPOSITORY deletes the options, changes a
+    // declaration and adds a module.
+    let evil = declarations(&[declared_app("evil", "6.6", "2026-10-11T10:00:00Z")]);
+    tamper(&remote_dir, &root, |w| {
+        std::fs::remove_file(w.join("plain/person/options.json")).unwrap();
+        std::fs::write(w.join("plain/person/software/declared.json"), &evil).unwrap();
+        std::fs::create_dir_all(w.join("plain/brain-modules/my-evil")).unwrap();
+        std::fs::write(w.join("plain/brain-modules/my-evil/module.rs"), "evil()").unwrap();
+    });
+    let e = Machine::new(&root, "installer", &remote);
+    let out = root.join("staged");
+    let report = e
+        .engine()
+        .copy_plain(
+            &out,
+            Some(&crate::crypt::passphrase(PASSPHRASE.to_owned())),
+            Some(&root.join("signer.pub")),
+            Some(&choice("new-host", &["libreoffice"], &[])),
+        )
+        .unwrap();
+    assert_eq!(report.pushed, [DECLINED]);
+    let manifest = remote_manifest(&remote_dir, &root, &key);
+    assert_eq!(
+        manifest.files.get("person/options.json"),
+        Some(&sha256(OPTIONS.as_bytes())),
+        "the deletion was signed"
+    );
+    assert_eq!(
+        manifest.files.get("person/software/declared.json"),
+        Some(&sha256(mine.as_bytes())),
+        "the changed declaration was signed"
+    );
+    assert!(
+        !manifest
+            .files
+            .contains_key("brain-modules/my-evil/module.rs"),
+        "the added module was signed"
+    );
+    assert!(manifest.files.contains_key("person/software/declined.json"));
+    for held in [DECLARED, "config/brain-modules/my-evil/module.rs"] {
+        assert_eq!(
+            report.held.get(held),
+            Some(&HeldWhy::NotAsSigned),
+            "{report:?}"
+        );
+    }
+    assert!(!out.join("brain-modules/my-evil/module.rs").exists());
+
+    // A MACHINE THAT PINS THE KEY takes the choice, and holds the rest.
+    let report = plain(&b, false);
+    assert_eq!(
+        b.read("state/person/options.json").as_deref(),
+        Some(OPTIONS),
+        "an unsigned deletion was taken"
+    );
+    assert_eq!(b.read(DECLARED).as_deref(), Some(mine.as_str()));
+    assert_eq!(b.read("config/brain-modules/my-evil/module.rs"), None);
+    assert!(
+        b.read(DECLINED).is_some(),
+        "the signed choice was not taken"
+    );
+    assert_eq!(
+        report.held.get("state/person/options.json"),
+        Some(&HeldWhy::NotAsSigned),
+        "{report:?}"
+    );
     let _ = std::fs::remove_dir_all(root);
 }

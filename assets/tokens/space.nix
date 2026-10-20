@@ -1534,4 +1534,13 @@
     handleCells = 12;
   };
 
+  # THE INSTALLER'S LIST OF PROGRAMS (`crates/ronoctua-installer`, the
+  # eighteenth question): the cells between the longest program's name and
+  # the column of the words that say what happens to each. Two, the gap
+  # between modeline segments: a name and its word are two things, and one
+  # cell would read them as one phrase.
+  installer = {
+    checklistGap = 2;
+  };
+
 }

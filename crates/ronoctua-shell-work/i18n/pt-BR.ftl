@@ -230,6 +230,7 @@ software-declared-decline-unknown = esta distro não o conhece mais
 software-declared-decline-elsewhere = recusado em { $machines }
 software-declared-decline-waiting = sai com a próxima atualização
 software-declared-refusal-leaves-at-next-apply = Sai na próxima atualização deste computador: a sua declaração não o tem mais, e o sistema daqui ainda tem.
+software-declared-refusal-declined-elsewhere = Ele é recusado só nos seus outros computadores, então este não tem o que trazer de volta: cada um deles o traz, ou todos de uma vez pela página dele.
 
 ## AS CHAVES DA CENTRAL DE SEGURANÇA, e a contagem da janela sem senha.
 

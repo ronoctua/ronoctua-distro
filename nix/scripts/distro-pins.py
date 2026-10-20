@@ -57,6 +57,16 @@ def version_of_tag(tag):
     return tag
 
 
+def file_name_of(entry, version):
+    """The store name a pinned file is downloaded under: the one the build's
+    `fetchurl` gives it (`nix/distro-downloads.nix`), so the download that
+    hashes a release is the build's source and nothing is fetched twice.
+    `version` is the AppImage's version, or the apk's version code."""
+    if entry.get("source") == "appimage":
+        return f"{entry['key']}-{version}.AppImage"
+    return f"{entry['package']}_{version}.apk"
+
+
 def pick_asset(id_, assets, pattern):
     """The ONE asset of a release whose name matches the pattern."""
     hits = [a for a in assets if fnmatch.fnmatchcase(a.get("name", ""), pattern)]
@@ -78,7 +88,8 @@ def plan(table, pins, ask):
 
     `table` is the `apps` of `assets/distro-apps.nix`; `pins` is the current
     `assets/distro-pins.json`. A hash is asked only for an address that is
-    new: an unchanged release is never downloaded again."""
+    new: an unchanged release is never downloaded again, and the one download
+    is named as the build names it (`file_name_of`)."""
     if pins.get("format") != FORMAT:
         raise Refusal(f"{PINS} says format {pins.get('format')!r}; this tool writes {FORMAT}")
     old_appimage = pins.get("appimage", {})
@@ -120,7 +131,7 @@ def plan(table, pins, ask):
                 continue
             new["appimage"][id_] = {
                 "url": url,
-                "hash": ask.hash(url),
+                "hash": ask.hash(url, file_name_of(entry, version)),
                 "version": version,
                 "pinned-at": stamp(ask.now()),
             }
@@ -158,7 +169,7 @@ def plan(table, pins, ask):
                 continue
             new["android"][id_] = {
                 "url": url,
-                "hash": ask.hash(url),
+                "hash": ask.hash(url, file_name_of(entry, code)),
                 "version": names[0],
                 "version-code": code,
             }
@@ -249,9 +260,9 @@ class Ask:
     def fdroid(self, package):
         return self._get(f"https://f-droid.org/api/v1/packages/{package}")
 
-    def hash(self, url):
+    def hash(self, url, name):
         out = subprocess.run(
-            ["nix", "store", "prefetch-file", "--json", "--hash-type", "sha256", url],
+            ["nix", "store", "prefetch-file", "--json", "--hash-type", "sha256", "--name", name, url],
             check=True,
             capture_output=True,
             text=True,

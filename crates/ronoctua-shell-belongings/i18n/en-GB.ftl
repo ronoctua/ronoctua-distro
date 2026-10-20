@@ -212,6 +212,47 @@ belongings-targets-note = Your SSH keys, your GnuPG keyring and your security ke
 # What a sync that brought a target's files offers ("no" drawn first).
 belongings-offer-ssh-signing = Sign your git commits and tags with { $key }? Every machine that has this key will; the others go on unsigned.
 belongings-offer-pam-u2f = Bring the security keys you registered on your other machines to this one? Each answers sudo here in place of your password, which keeps working.
+belongings-offer-vscode-extensions = { $n ->
+    [one] Reinstall the VS Code extension of your list that this machine lacks?
+   *[other] Reinstall the { $n } VS Code extensions of your list that this machine lacks?
+  } They come from the Visual Studio Marketplace, one at a time, in the transfer queue, and yes lets { $hosts ->
+    [one] this host:
+   *[other] these { $hosts } hosts:
+  }
+# Your VS Code extensions on this machine: what the last install did, and what is missing.
+belongings-extensions = Your VS Code extensions
+belongings-extensions-missing = { $n ->
+    [one] One extension of your list is missing here. Installing it lets { $hosts ->
+        [one] this host:
+       *[other] these { $hosts } hosts:
+      }
+   *[other] { $n } extensions of your list are missing here. Installing them lets { $hosts ->
+        [one] this host:
+       *[other] these { $hosts } hosts:
+      }
+  }
+belongings-extensions-install = { $n ->
+    [one] Install it
+   *[other] Install them
+  }
+belongings-extensions-installing = Installing in the transfer queue…
+belongings-extensions-stopped = The last install stopped before it ended: what entered is installed, and the rest is still missing.
+belongings-extensions-entered = { $n ->
+    [0] No extension entered.
+    [one] One extension entered.
+   *[other] { $n } extensions entered.
+  }
+belongings-extensions-failed = { $n ->
+    [one] One could not be installed, and VS Code said why:
+   *[other] { $n } could not be installed, and VS Code said why:
+  }
+belongings-extensions-refused = Not installed: { $why }
+belongings-extensions-refused-no-code = VS Code is not on this machine
+belongings-extensions-refused-newer = your list of extensions was written by a newer machine: update this one first
+belongings-extensions-refused-malformed = your list of extensions does not read, and nothing was installed
+belongings-extensions-refused-not-let = these hosts were not let, and nothing was asked:
+belongings-extensions-refused-busy = another install of them was running
+belongings-extensions-refused-files = a file of VS Code's here could not be read or written; the system log says which
 # The identity kept for the session (`keep_unlocked`).
 belongings-unlock-switch = Remember the passphrase for this session
 belongings-unlock-note = Kept in the kernel's memory, never on disk, until you log out, the machine sleeps or { $hours } hours pass.
@@ -256,6 +297,9 @@ belongings-offer-taken = Turned on.
 belongings-offer-refused = Not turned on: { $why }
 about-belongings-offer-no = Leaves it off: it is offered again only when the key changes on another machine
 about-belongings-offer-yes = Turns it on, on this machine
+about-belongings-offer-no-extensions = Leaves them out: offered again only when your list changes on another machine, and the page keeps a row that installs them
+about-belongings-offer-yes-extensions = Lets the hosts above and installs them on this machine, in the transfer queue
+about-belongings-extensions-install = Lets the hosts above and installs them on this machine, in the transfer queue, one at a time
 # The files a lenient read repaired.
 belongings-repairs = Repaired when read
 belongings-repairs-note = This machine could not read part of these files. What it could not read stays in each file as written, and the machine went on without it. Write the fix to put this machine's values in its place, or leave the file as it is.

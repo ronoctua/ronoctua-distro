@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file>]
-//! ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review>
+//! ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out>
 //! ```
 //!
 //! # Two modes, and why there are two
@@ -36,9 +36,19 @@
 //!
 //! # `--show`
 //!
-//! Prints one of the screens that check the network or the repository, drawn as the TUI
-//! draws it, from a fixture and with no network: what a person (or a reviewer) looks at
-//! without a disk to install on.
+//! Prints one of the screens that check the network or the repository (or the list of
+//! programs a `full` installation leaves out), drawn as the TUI draws it, from a fixture and
+//! with no network: what a person (or a reviewer) looks at without a disk to install on. To a
+//! terminal, at its size and in its colours, so a narrow console is looked at as it is; to a
+//! file, its text at 100 × 34 cells.
+//!
+//! # The programs left out
+//!
+//! The terminal-less dry run prints, after the plan, what the installation would write of
+//! the programs a `full` installation leaves out (`RONOCTUA_INST_LEFT_OUT`, the unmarked ids
+//! joined by commas, or `none`), each under the path it goes to (`--- <path> ---`): the
+//! machine's choice the copy of the plain part signs into a repository with something in it
+//! (left out and kept, on this machine alone), or the declines an empty one stages and seeds.
 //!
 //! # The answers leave the environment first
 //!
@@ -58,10 +68,12 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context as _, Result, bail};
 use ronoctua_i18n::Texts;
-use ronoctua_installer::executor::{Event, run_command};
+use ronoctua_installer::executor::{Event, run_command, stamp_now, write_of};
 use ronoctua_installer::key;
 use ronoctua_installer::model::{ANSWER_PREFIX, Answers, Question, sentence, validate_it};
-use ronoctua_installer::plan::{Origin, host_nix, steps};
+use ronoctua_installer::plan::{
+    Origin, choice_file, host_nix, staged_declined, steps, target_mirror_declined,
+};
 use ronoctua_installer::reach::{Reach, Refused};
 use ronoctua_installer::release::{
     ANSWERS, DISTRO, FLAKE_DIR, FROM_RELEASE, Follow, Hop, hop_arguments, is_development,
@@ -71,7 +83,11 @@ use ronoctua_installer::tui;
 /// The usage, in English (invariant 18: a command line's help).
 const USAGE: &str =
     "usage: ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file|->]
-       ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review>";
+       ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out>";
+
+/// The size `--show` draws at when it does not print to a terminal: the
+/// review's plan fits it, and the tests read it.
+const SHOWN: (u16, u16) = (100, 34);
 
 /// The `--answers` that names this process's standard input: the answers
 /// the installer handed itself when it shed them from its environment.
@@ -164,7 +180,18 @@ fn install(line: &Line) -> Result<ExitCode> {
         ronoctua_tokens::theme::set(theme);
     }
     if let Some(screen) = &line.show {
-        let Some(drawn) = tui::show(screen, &texts) else {
+        // TO A TERMINAL, AT ITS SIZE AND IN ITS COLOURS: a console of sixty
+        // columns is looked at as it is, and the tones are part of what a
+        // screen says. To a file, the text alone at the size the tests read.
+        let (size, how) = if std::io::stdout().is_terminal() {
+            (
+                crossterm::terminal::size().unwrap_or(SHOWN),
+                tui::Shown::Painted,
+            )
+        } else {
+            (SHOWN, tui::Shown::Text)
+        };
+        let Some(drawn) = tui::show(screen, &texts, size, how) else {
             bail!("no screen called `{screen}`\n{USAGE}");
         };
         print!("{drawn}");
@@ -207,8 +234,11 @@ fn install(line: &Line) -> Result<ExitCode> {
         }
     } else {
         let vars = given.as_deref().map(vars_of).unwrap_or_default();
-        let answers =
+        let mut answers =
             from_vars(&|name| vars.get(name).cloned().or_else(|| std::env::var(name).ok()))?;
+        // THE MOMENT THE PROGRAMS ARE LEFT OUT, once: the plan prints the
+        // declines with it, and the steps write the same bytes.
+        answers.left_out_at = Some(stamp_now());
         if !line.execute {
             // THE DRY RUN ASKS NOTHING OF THE NETWORK: it prints what would
             // run, as a development build would run it when that is what
@@ -264,6 +294,8 @@ fn install(line: &Line) -> Result<ExitCode> {
         }
         Event::Line(l) => println!("  {l}"),
         Event::Skipped { .. } => println!("  {}", texts.t(key::INST_STEP_SKIPPED)),
+        Event::Refused { key } => println!("  {}", texts.t(key)),
+        Event::Said { key, names } => println!("  {}", texts.t_with(key, &[("names", &names)])),
         Event::Finished { .. } => {}
     });
 
@@ -442,8 +474,17 @@ fn from_vars(get: &dyn Fn(&str) -> Option<String>) -> Result<Answers> {
             .or_else(|| q.default_answer().map(ToOwned::to_owned))
             .unwrap_or_default();
         if let Err(e) = validate_it(q, &v, &languages, &layouts) {
+            // A PROGRAM THIS INSTALLER DOES NOT OFFER is named: a hop's
+            // answer may carry one an older release listed, and nobody is
+            // here to choose again — so nothing is touched.
+            let named = ronoctua_installer::model::not_offered(&v);
+            let named = if q == Question::LeftOut && !named.is_empty() {
+                format!(" (not offered here: {})", named.join(", "))
+            } else {
+                String::new()
+            };
             bail!(
-                "{} ({}): {e}\n\
+                "{} ({}): {e}{named}\n\
                  \n\
                  Set {var}. The TUI does that by asking; without a terminal,\n\
                  the environment is the way to answer.",
@@ -456,15 +497,28 @@ fn from_vars(get: &dyn Fn(&str) -> Option<String>) -> Result<Answers> {
     Ok(r)
 }
 
-/// Shows the `host.nix` and the sequence, without running anything.
+/// Shows the `host.nix` and the sequence, without running anything — and,
+/// AFTER them, the machine's choice of programs and the declines, each under
+/// the path a step writes it to (whoever reads the `host.nix` off the top
+/// keeps reading it so).
 fn print_plan(r: &Answers, origin: &Origin, texts: &Texts) {
     println!("--- host.nix ---\n{}", host_nix(r));
     println!("--- {} ---", texts.t(key::INST_REVIEW));
-    for (i, p) in steps(r, origin).iter().enumerate() {
+    let plan = steps(r, origin);
+    for (i, p) in plan.iter().enumerate() {
         let mark = if p.destructive { "!" } else { " " };
         println!("{mark} {}. {} — {}", i + 1, texts.t(p.label), p.shown());
     }
     println!("\n{}: {}", texts.t(key::INST_DESTRUCTIVE), r.disk);
+    // WHAT IS WRITTEN WHERE: the very content the step writes.
+    let shown = [choice_file(), staged_declined(), target_mirror_declined()];
+    for p in &plan {
+        if let Ok(Some(w)) = write_of(p, r)
+            && shown.contains(&w.path)
+        {
+            print!("\n--- {} ---\n{}", w.path, w.content);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -223,6 +223,8 @@ pub const fn refusal_key(why: Why) -> &'static str {
         Why::Newer => key::BELONGINGS_REFUSED_NEWER,
         Why::PlainTooLarge => key::BELONGINGS_REFUSED_PLAIN_TOO_LARGE,
         Why::NotPostQuantum => key::BELONGINGS_REFUSED_NOT_POST_QUANTUM,
+        Why::ChoiceUnread => key::BELONGINGS_REFUSED_CHOICE_UNREAD,
+        Why::CopyUnwritten => key::BELONGINGS_REFUSED_COPY_UNWRITTEN,
     }
 }
 

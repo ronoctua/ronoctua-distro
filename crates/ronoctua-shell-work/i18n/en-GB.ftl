@@ -230,6 +230,7 @@ software-declared-decline-unknown = this distro no longer knows it
 software-declared-decline-elsewhere = declined on { $machines }
 software-declared-decline-waiting = leaves with the next update
 software-declared-refusal-leaves-at-next-apply = Leaves at this computer's next update: your declaration no longer has it, and the system here still does.
+software-declared-refusal-declined-elsewhere = It is declined on your other computers only, so this one has nothing to bring back: each of them brings it back, or all of them at once from its page.
 
 ## THE SECURITY CENTRE'S KEYS, and the passwordless window's count.
 

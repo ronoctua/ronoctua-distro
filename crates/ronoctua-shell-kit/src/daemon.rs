@@ -392,6 +392,7 @@ mod tests {
             working_directory: None,
             startup_wm_class: class.map(ToOwned::to_owned),
             key: ronoctua_apps::fold::fold(name),
+            fallback: true,
         }
     }
 

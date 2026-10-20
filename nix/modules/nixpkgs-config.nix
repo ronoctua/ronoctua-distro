@@ -65,6 +65,12 @@ in
         "google-chrome" # asked for by name
         "android-studio"
         "claude-code" # asked for by name; prebuilt, unfree
+        "vscode" # asked for by name: Microsoft's build (`nix/modules/vscode.nix`)
+        # The same VS Code in its FHS environment (`nix/vscode.nix`), by the
+        # name its store path has: nixpkgs asks the environment as `vscode`
+        # (its `pname`), and the release asks it by this one
+        # (`nix/release-unfree.nix`), so a public cache never takes it.
+        "code"
       ]
       # The SDK is not one package: it is dozens of them, and the inner ones are
       # named after the ZIP they came from (`platform-tools_r37.0.0-linux.zip`),

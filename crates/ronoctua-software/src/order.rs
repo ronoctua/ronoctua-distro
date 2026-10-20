@@ -162,10 +162,17 @@ pub enum Order {
         #[serde(default)]
         machines: Option<Vec<String>>,
     },
-    /// Bring a declined program of the distro back.
+    /// Bring a declined program of the distro back on this machine: it
+    /// leaves the decline's list of machines (the others keep it out), and
+    /// a decline of every machine goes whole. With `everywhere`, the
+    /// decline goes whole whatever machines it names — one of computers
+    /// that no longer exist, asked first.
     Undecline {
         /// The distro registry's id.
         id: String,
+        /// On every computer of the person's, not this one alone.
+        #[serde(default)]
+        everywhere: bool,
     },
     /// Make this machine match the declaration — only within its own ledger
     /// (`declared-applied.json`).
@@ -703,7 +710,10 @@ mod tests {
                 id: "gimp".into(),
                 machines: None,
             },
-            Order::Undecline { id: "gimp".into() },
+            Order::Undecline {
+                id: "gimp".into(),
+                everywhere: true,
+            },
             Order::Reconcile { source: None },
             Order::RefreshPins,
             // ── anchor: L18 ──
@@ -757,6 +767,20 @@ mod tests {
             let text = serde_json::to_string(&o).unwrap();
             assert_eq!(serde_json::from_str::<Order>(&text).unwrap(), o);
         }
+    }
+
+    /// FAILS IF: a bring-back queued before `everywhere` existed reads as
+    /// one on every computer — or at all differently from "here".
+    #[test]
+    fn bringing_back_is_here_unless_asked_everywhere() {
+        let o: Order = serde_json::from_str(r#"{"order":"undecline","id":"gimp"}"#).unwrap();
+        assert_eq!(
+            o,
+            Order::Undecline {
+                id: "gimp".into(),
+                everywhere: false
+            }
+        );
     }
 
     #[test]

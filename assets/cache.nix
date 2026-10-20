@@ -336,12 +336,15 @@
   # NEVER WALKED: a bare word is a NAME anywhere in a root, a word starting
   # with `/` a PATH. Build trees and caches are machine output a person does
   # not look for by name, and they churn: `target` alone rewrites thousands of
-  # files a build, each an inotify event and a document.
+  # files a build, each an inotify event and a document. `.qlot` is a Common
+  # Lisp project's own copy of its libraries (qlot's `qlfile.lock`), fetched
+  # again from the lock like `node_modules`.
   searchSkip = [
     ".git"
     "target"
     "node_modules"
     ".cache"
+    ".qlot"
     "/nix"
   ];
 
@@ -363,6 +366,15 @@
   # again. Eight is the archives one goes back and forth between; each holds
   # the members' names and sizes, not their contents.
   archiveListings = 8;
+
+  # THE TIED NAMES' ANSWERS A PROCESS KEEPS, in entries (`ronoctua_files::
+  # mime::of_path`): a name several types claim at one weight (`*.ogg`, a
+  # playlist, a `.cl` that is Lisp or OpenCL) is settled by the file's first
+  # bytes, and a listing asks again at every reread. Kept by the file —
+  # device, inode, modification time and size — so a file that changed is
+  # read again; past the bound, the oldest goes. A few hundred bytes an
+  # entry: a folder of tied files is a few thousand at most.
+  mimeTieEntries = 4096;
 
   # WHAT THE MEMBERS OPENED OUT OF ARCHIVES MAY WEIGH, in MiB
   # (`~/.cache/ronoctua/archive`). Opening a member extracts it there first,

@@ -19,8 +19,8 @@ REFUSES, naming what it refused:
     does not know, no `paths`, a path that is not logical, a `skip` that is
     not a name pattern (or `/` and one) with a reason, a `carry` that is not
     a relative path of name patterns or that nothing it skips holds, a
-    `private` that is not a boolean, a `merge` that is not `choose` or
-    `union`, or an offer it does not know;
+    `private` that is not a boolean, a `merge` that is not `choose`,
+    `union` or `set`, or an offer it does not know;
   - a plain root (`plain.<path>`) that is not logical, with a field it does
     not know, an `at` that is not a plain relative path or a bad reason, two
     roots that overlap (by path or by `at`), or one that overlaps a path
@@ -48,8 +48,8 @@ TOP = {
 NEVER = {"name", "path", "reason", "hard"}
 STORE = {"kept", "reason"}
 TARGET = {"paths", "skip", "carry", "private", "merge", "offers"}
-MERGES = {"choose", "union"}
-OFFERS = {"ssh-signing", "pam-u2f"}
+MERGES = {"choose", "union", "set"}
+OFFERS = {"ssh-signing", "pam-u2f", "vscode-extensions"}
 PLAIN = {"at", "reason"}
 CHUNK = {"minKiB", "avgKiB", "maxKiB"}
 BUDGET = {"pushMB", "recommendMB", "warnMB", "historyOverTree", "keepDays"}
@@ -95,8 +95,8 @@ def plain_rust(plain):
 
 # ── anchor: L10 ──
 # THE PREDEFINED TARGETS: what may not overlap them, and their Rust table.
-MERGE_RULES = {"choose": "Choose", "union": "Union"}
-OFFERINGS = {"ssh-signing": "SshSigning", "pam-u2f": "PamU2f"}
+MERGE_RULES = {"choose": "Choose", "union": "Union", "set": "Set"}
+OFFERINGS = {"ssh-signing": "SshSigning", "pam-u2f": "PamU2f", "vscode-extensions": "VscodeExtensions"}
 
 
 def target_refusals(targets, plain, nevers, trees, files):

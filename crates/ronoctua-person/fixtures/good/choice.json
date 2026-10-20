@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "machine": "new-host",
+  "at": "2026-10-20T10:00:00Z",
+  "declined": [
+    "libreoffice"
+  ],
+  "kept": [
+    "blender",
+    "vlc"
+  ]
+}

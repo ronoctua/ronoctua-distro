@@ -41,6 +41,8 @@
   keyd,
   # The cache policy, generated from `assets/cache.nix`.
   cacheRs,
+  # The programs the installer offers to leave out, from the ledger's `offered`.
+  offeredRs,
   # The camera's effects, generated from `assets/camera-effects.nix`.
   cameraEffectsRs,
   # The person-segmentation model (`nix/segment-model.nix`), read at run time.
@@ -284,6 +286,10 @@ let
     # can keep alone, so the number comes from one file and the build refuses
     # the pair that breaks it.
     RONOCTUA_CACHE_RS = "${cacheRs}/cache.rs";
+    # THE PROGRAMS A `full` INSTALLATION LISTS, and which come unmarked: the
+    # installer's eighteenth question reads the ledger's `offered` as a table,
+    # so its build never evaluates a machine (`nix/offered.nix`).
+    RONOCTUA_OFFERED_RS = "${offeredRs}/offered.rs";
     # THE CAMERA'S EFFECTS, one declaration for the studio's arithmetic and
     # the text keys both languages owe. See `nix/camera-effects.nix`.
     RONOCTUA_CAMERA_EFFECTS_RS = "${cameraEffectsRs}/effects.rs";
@@ -1327,7 +1333,7 @@ rec {
   #                and the compositor's binds point at
   #   loopShell    the same over the loop's programs, which `nix run .#dev`
   #                runs
-  #   installer, rescue, brain, …   the 29 programs a module, an app or the
+  #   installer, rescue, brain, …   the 30 programs a module, an app or the
   #                ISO runs, each its own unit (a painter under the palettes'
   #                wrapper): a derivation references what its bytes cite, and
   #                a unit's bytes are one program's — the "extract the binary"
@@ -1377,5 +1383,6 @@ rec {
     stickWrite
     networkConsole
     networkAgent
+    vscode
     ;
 }

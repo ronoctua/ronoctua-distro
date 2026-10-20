@@ -315,6 +315,20 @@ pub struct Readings {
     pub kept_until: Option<i64>,
     /// What the person answered of the offers the last sync made.
     pub answered: Answered,
+    /// What the last install of the person's VS Code extensions did
+    /// (`offers::ExtensionsDone`), drawn under the offer that asked for it.
+    pub extensions: Option<ronoctua_belongings::offers::ExtensionsDone>,
+    /// Whether VS Code is on this machine: its extensions are offered only
+    /// where the yes can work (`offers::vscode_here`).
+    pub vscode_here: bool,
+    /// Whether an install of the extensions runs now (its lock is held,
+    /// `offers::extensions_running`).
+    pub extensions_running: bool,
+    /// The extensions of the person's list missing here, read now
+    /// (`offers::extensions_missing_here`).
+    pub extensions_missing: ronoctua_belongings::offers::ExtensionSet,
+    /// The hosts installing them reaches (`offers::extension_hosts`).
+    pub extension_hosts: Vec<String>,
     /// What goes to the repository, one row per file — counted off the
     /// loop ([`Counting`]); `None` until the first count is in.
     pub count: Option<Arc<Counted>>,
@@ -382,6 +396,7 @@ impl Readings {
         // from; under a photograph's folder or a test's, that folder's.
         let unlet = prefs::host_of(&prefs.repository)
             .filter(|host| !ronoctua_consent::allows_under(&p.config, host));
+        let missing = ronoctua_belongings::offers::extensions_missing_here(&p);
         let kept_until = ronoctua_belongings::unlock::Marker::read(&p)
             .filter(|m| prefs.keep_unlocked && m.holds(&prefs.repository, now_s))
             .map(|m| m.until_s);
@@ -394,6 +409,11 @@ impl Readings {
                 .is_some_and(|f| f.newest_here()),
             kept_until,
             answered: Answered::read(&p),
+            extensions: ronoctua_belongings::offers::ExtensionsDone::read(&p),
+            vscode_here: ronoctua_belongings::offers::vscode_here(),
+            extensions_running: ronoctua_belongings::offers::extensions_running(&p),
+            extension_hosts: ronoctua_belongings::offers::extension_hosts(&missing),
+            extensions_missing: missing,
             count: None,
             pin: machine_pin(),
             pinning: Pinning::read(&p),
@@ -689,7 +709,9 @@ pub fn answer(places: &Places, at_s: i64, offer: &Offer, said: Said) -> Result<(
 /// of its own — SSH signing runs git; the security keys are root's list, so
 /// their yes is a root gesture of the door's (`gate`), asked in the sudo bar
 /// in the same gesture as the yes — whose ending is written where both
-/// doors read it ([`ANSWERED_FILE`], the file is the broadcast).
+/// doors read it ([`ANSWERED_FILE`], the file is the broadcast). VS Code's
+/// extensions never come here: their yes is the queue's
+/// ([`install_extensions`]).
 pub fn accept_in_background(places: Places, at_s: i64, offer: Offer, gate: crate::sudo::Gate) {
     if let Err(said) = answer(&places, at_s, &offer, Said::Turning) {
         tracing::warn!(said, "the offer is turned on without saying so first");
@@ -1273,6 +1295,25 @@ where
             }
         }
     }
+    // VS CODE'S LIST AND MANIFEST, where they are: an extension installed or
+    // recorded moves the page's count of what is missing here.
+    for logical in [
+        ronoctua_belongings::offers::EXTENSIONS_LIST.to_owned(),
+        format!("home/{}", ronoctua_belongings::offers::MANIFEST_IN_HOME),
+    ] {
+        let Some(file) = places.resolve(&logical) else {
+            continue;
+        };
+        let (Some(dir), Some(name)) = (file.parent(), file.file_name().and_then(|n| n.to_str()))
+        else {
+            continue;
+        };
+        if dir.is_dir()
+            && let Ok(n) = Notice::on_file(dir, name, Pace::Coalesced, ring.clone())
+        {
+            out.push(n);
+        }
+    }
     // THE STATE FOLDER (a sync's record, the offers answered, the
     // machines), THE RUNTIME FOLDER (the session, the decisions, the marker
     // of a remembered passphrase) AND THE REPAIR LEDGER (a store that
@@ -1374,6 +1415,9 @@ pub enum Target {
     /// What a sync offered — the offer itself, never its place in the
     /// list, which a later sync may reorder: yes or no.
     Offer(Offer, bool),
+    /// Install the VS Code extensions of the person's list missing here
+    /// (the page's lasting row, `extensions_section`).
+    InstallExtensions,
     /// Whether the session remembers the passphrase.
     Unlock,
     /// Compact the history: a question first, "no" first.
@@ -1480,6 +1524,13 @@ impl Target {
             Self::DecideField(..) => key::ABOUT_BELONGINGS_FIELD_OURS,
             Self::WriteFix(_) => key::ABOUT_BELONGINGS_WRITE_FIX,
             Self::LeaveIt(_) => key::ABOUT_BELONGINGS_LEAVE_IT,
+            Self::Offer(Offer::VscodeExtensions { .. }, false) => {
+                key::ABOUT_BELONGINGS_OFFER_NO_EXTENSIONS
+            }
+            Self::Offer(Offer::VscodeExtensions { .. }, true) => {
+                key::ABOUT_BELONGINGS_OFFER_YES_EXTENSIONS
+            }
+            Self::InstallExtensions => key::ABOUT_BELONGINGS_EXTENSIONS_INSTALL,
             Self::Offer(_, false) => key::ABOUT_BELONGINGS_OFFER_NO,
             Self::Offer(_, true) => key::ABOUT_BELONGINGS_OFFER_YES,
             Self::Unlock => key::ABOUT_BELONGINGS_UNLOCK,
@@ -2209,6 +2260,7 @@ impl View {
         }
         status_section(&mut b, r, zone);
         offers_section(&mut b, r);
+        extensions_section(&mut b, r);
         sync_section(&mut b, r);
         if r.plan.as_ref().is_some_and(|p| !p.conflicts.is_empty()) {
             conflicts_section(&mut b, r, zone);
@@ -2509,6 +2561,9 @@ impl View {
                 if !r.offers().contains(&offer) {
                     return Errand::Nothing;
                 }
+                if yes && matches!(offer, Offer::VscodeExtensions { .. }) {
+                    return install_extensions(r, Some((status.at_s, &offer)), texts);
+                }
                 if yes {
                     return Errand::Accept(status.at_s, offer);
                 }
@@ -2517,6 +2572,7 @@ impl View {
                     Err(said) => Errand::Say(texts.t(said)),
                 }
             }
+            Target::InstallExtensions => install_extensions(r, None, texts),
             Target::Unlock => self.flip_unlock(r, texts),
             Target::Compact => self.ask_page(Question::Compact, r, zone, columns, texts),
             // AN ANSWER ON THE LIST is no answer: the page is gone.
@@ -2988,6 +3044,35 @@ fn let_host(r: &Readings, host: &str, texts: &ronoctua_i18n::Texts) -> Errand {
     }
 }
 
+/// THE YES TO VS CODE'S EXTENSIONS — the sync's offer's, or the page's
+/// lasting row: the hosts the install reaches let in the person's
+/// `consent.json` (the ones the page named: saying yes is the consent), the
+/// offer answered, and the order put on the queue, whose child mints a
+/// `Pass` for each and installs (`offers::install_extensions`).
+fn install_extensions(
+    r: &Readings,
+    answering: Option<(i64, &Offer)>,
+    texts: &ronoctua_i18n::Texts,
+) -> Errand {
+    let Some(places) = r.places.as_ref() else {
+        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
+    };
+    if r.extensions_running || r.extensions_missing.ids.is_empty() {
+        return Errand::Nothing;
+    }
+    let hosts: Vec<&str> = r.extension_hosts.iter().map(String::as_str).collect();
+    if let Err(why) = ronoctua_consent::let_hosts_under(&places.config, &hosts, true) {
+        tracing::warn!(why = why.id(), "the extensions' hosts could not be let");
+        return Errand::Say(crate::consent_rows::unkept(why, &hosts, texts));
+    }
+    if let Some((at_s, offer)) = answering
+        && let Err(said) = answer(places, at_s, offer, Said::Turning)
+    {
+        return Errand::Say(texts.t(said));
+    }
+    Errand::Queue(Op::VscodeExtensions)
+}
+
 /// What stands in the way of a new run: a sync prepared and waiting — a new
 /// `prepare` would throw the person's decisions away — or a run that holds
 /// the lock now.
@@ -3122,7 +3207,7 @@ pub fn forget_unsent(op: Op, places: &Places) {
         Op::Compact | Op::Restore | Op::Init | Op::VerifyPassphrase => {
             vec![places.passphrase()]
         }
-        Op::SyncPlain | Op::Forget | Op::Probe => Vec::new(),
+        Op::SyncPlain | Op::Forget | Op::Probe | Op::VscodeExtensions => Vec::new(),
     };
     for file in typed {
         if let Err(e) = std::fs::remove_file(&file)
@@ -4223,6 +4308,24 @@ fn offers_section(b: &mut Builder<'_>, r: &Readings) {
                 &[("key", &shown_path(public, r.places.as_ref(), false))],
             ),
             Offer::PamU2f => t.t(key::BELONGINGS_OFFER_PAM_U2F),
+            // ONLY WHERE VS CODE IS, AND WHILE SOME ARE MISSING: elsewhere
+            // its yes could install nothing, and the list waits for a
+            // machine that has it. Once answered, the page's own section
+            // says the rest (`extensions_section`).
+            Offer::VscodeExtensions { .. }
+                if !r.vscode_here
+                    || r.extensions_missing.ids.is_empty()
+                    || r.answer_of(offer).is_some() =>
+            {
+                continue;
+            }
+            Offer::VscodeExtensions { .. } => t.t_args(
+                key::BELONGINGS_OFFER_VSCODE_EXTENSIONS,
+                &[
+                    ("n", count(r.extensions_missing.ids.len())),
+                    ("hosts", count(r.extension_hosts.len())),
+                ],
+            ),
         };
         match r.answer_of(offer) {
             None => {
@@ -4230,6 +4333,10 @@ fn offers_section(b: &mut Builder<'_>, r: &Readings) {
                     e.push(Entry::Air);
                 }
                 e.push(note(said));
+                // THE HOSTS THE YES LETS, named before it: data, a line each.
+                if matches!(offer, Offer::VscodeExtensions { .. }) {
+                    e.extend(host_rows(&r.extension_hosts));
+                }
                 e.push(pair(
                     t.t(key::BELONGINGS_ANSWER_NO),
                     String::new(),
@@ -4264,6 +4371,116 @@ fn offers_section(b: &mut Builder<'_>, r: &Readings) {
     }
     if !e.is_empty() {
         b.section(&t.t(key::BELONGINGS_OFFERS), e);
+    }
+}
+
+/// Why the extensions' install tried nothing, as a sentence.
+const fn extensions_refusal_key(why: ronoctua_belongings::offers::VscodeWhy) -> &'static str {
+    use ronoctua_belongings::offers::VscodeWhy as W;
+    match why {
+        W::NoCode => key::BELONGINGS_EXTENSIONS_REFUSED_NO_CODE,
+        W::Newer => key::BELONGINGS_EXTENSIONS_REFUSED_NEWER,
+        W::Malformed => key::BELONGINGS_EXTENSIONS_REFUSED_MALFORMED,
+        W::NotLet => key::BELONGINGS_EXTENSIONS_REFUSED_NOT_LET,
+        W::Busy => key::BELONGINGS_EXTENSIONS_REFUSED_BUSY,
+        W::Unreadable | W::Unwritable | W::NoHome => key::BELONGINGS_EXTENSIONS_REFUSED_FILES,
+    }
+}
+
+/// Hosts, a line each, in under the sentence that names them — data, never
+/// joined by a hand-written separator.
+fn host_rows(hosts: &[String]) -> impl Iterator<Item = Entry> + '_ {
+    hosts
+        .iter()
+        .map(|h| Entry::NoteIn(h.clone(), tokens::space::VIEW_NESTCELLS))
+}
+
+/// THE PERSON'S VS CODE EXTENSIONS ON THIS MACHINE — both doors, and not
+/// only after a sync: where VS Code is, what the last install did (while it
+/// is newer than the last sync) — installing while its lock is held, stopped
+/// before its end once it is not, what entered and what failed with VS
+/// Code's own line, or why nothing was tried — and, while some of the
+/// person's list are missing here and none installs now, the hosts
+/// installing them reaches and the row that does it. A failed or offline
+/// attempt is retried from here. While the sync's offer is still asked, the
+/// offer is the question and this keeps only the record.
+fn extensions_section(b: &mut Builder<'_>, r: &Readings) {
+    use ronoctua_belongings::offers::InstallState;
+    let t = b.texts;
+    if !r.vscode_here {
+        return;
+    }
+    let since = r.status.as_ref().map_or(i64::MIN, |s| s.at_s);
+    let record = r.extensions.as_ref().filter(|d| d.at_s >= since);
+    let asked = r
+        .offers()
+        .iter()
+        .any(|o| matches!(o, Offer::VscodeExtensions { .. }) && r.answer_of(o).is_none());
+    let missing = r.extensions_missing.ids.len();
+    let mut e = Vec::new();
+    let warn = |text: String| Entry::Note(text, tokens::color::STATE_WARNING);
+    if r.extensions_running {
+        e.push(note(t.t(key::BELONGINGS_EXTENSIONS_INSTALLING)));
+    } else if let Some(done) = record {
+        match done.state {
+            InstallState::Installing => e.push(warn(t.t(key::BELONGINGS_EXTENSIONS_STOPPED))),
+            InstallState::Refused => {
+                let why = done.refused.map_or(
+                    key::BELONGINGS_EXTENSIONS_REFUSED_FILES,
+                    extensions_refusal_key,
+                );
+                e.push(warn(t.t_with(
+                    key::BELONGINGS_EXTENSIONS_REFUSED,
+                    &[("why", &t.t(why))],
+                )));
+                e.extend(host_rows(&done.hosts));
+            }
+            InstallState::Done => {
+                e.push(note(t.t_args(
+                    key::BELONGINGS_EXTENSIONS_ENTERED,
+                    &[("n", count(done.entered.len()))],
+                )));
+                if !done.failed.is_empty() {
+                    e.push(warn(t.t_args(
+                        key::BELONGINGS_EXTENSIONS_FAILED,
+                        &[("n", count(done.failed.len()))],
+                    )));
+                    // EACH FAILED ID, AND VS CODE'S OWN LINE: `RET` copies it.
+                    for failed in &done.failed {
+                        e.push(Entry::Pair {
+                            label: failed.id.clone(),
+                            value: failed.said.clone(),
+                            kind: crate::chrome::Kind::Fact,
+                            target: Target::Fact(format!("extension:{}", failed.id)),
+                            tint: Some(tokens::color::STATE_WARNING),
+                            indent: tokens::space::VIEW_NESTCELLS,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    if !r.extensions_running && missing > 0 && !asked {
+        if !e.is_empty() {
+            e.push(Entry::Air);
+        }
+        e.push(note(t.t_args(
+            key::BELONGINGS_EXTENSIONS_MISSING,
+            &[
+                ("n", count(missing)),
+                ("hosts", count(r.extension_hosts.len())),
+            ],
+        )));
+        e.extend(host_rows(&r.extension_hosts));
+        e.push(pair(
+            t.t_args(key::BELONGINGS_EXTENSIONS_INSTALL, &[("n", count(missing))]),
+            String::new(),
+            Target::InstallExtensions,
+            true,
+        ));
+    }
+    if !e.is_empty() {
+        b.section(&t.t(key::BELONGINGS_EXTENSIONS), e);
     }
 }
 
@@ -6535,6 +6752,259 @@ mod tests {
         )
         .unwrap();
         assert_eq!(counted(&places, 1_700_000_500).offers_waiting().len(), 1);
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// What the queue's install of the extensions wrote, as its child writes
+    /// it (`offers::ExtensionsDone`).
+    fn extensions_did(places: &Places, done: &ronoctua_belongings::offers::ExtensionsDone) {
+        ronoctua_belongings::secret::write_private(
+            &places
+                .own()
+                .join(ronoctua_belongings::offers::EXTENSIONS_FILE),
+            &serde_json::to_vec(done).expect("done"),
+        )
+        .expect("done written");
+    }
+
+    /// The person's list of VS Code extensions, planted in the home.
+    fn vscode_list(places: &Places, ids: &[&str]) {
+        let quoted: Vec<String> = ids.iter().map(|i| format!("\"{i}\"")).collect();
+        put(
+            places,
+            ronoctua_belongings::offers::EXTENSIONS_LIST,
+            format!("{{\"format\": 1, \"extensions\": [{}]}}", quoted.join(", ")).as_bytes(),
+        );
+    }
+
+    /// The readings where VS Code is (its variable is the session's, never
+    /// a test's).
+    fn with_vscode(places: &Places) -> Readings {
+        let mut r = counted(places, 1_700_000_500);
+        r.vscode_here = true;
+        r
+    }
+
+    /// FAILS IF: VS Code's extensions are offered where VS Code is not; the
+    /// offer does not count what is missing NOW in both languages, name
+    /// every host its yes lets — a line each — and ask "no" first; its yes
+    /// does not let exactly those hosts and put the install on the queue;
+    /// the page does not keep a row that installs what is missing once the
+    /// offer is answered (no, or a failed or stopped attempt); or it does
+    /// not say an install running, one stopped before its end, what entered
+    /// and what failed with VS Code's own line, or why nothing was tried —
+    /// in its own words ("Not installed").
+    #[test]
+    fn the_extensions_are_offered_named_and_kept_installable() {
+        use ronoctua_belongings::offers::{
+            ExtensionFailed, ExtensionsDone, InstallState, VscodeWhy,
+        };
+        let places = scratch("extensions");
+        ready(&places);
+        vscode_list(&places, &["a.x", "b.y", "rust-lang.rust-analyzer"]);
+        let offer = Offer::VscodeExtensions { count: 3 };
+        status(&places, synced(vec![offer.clone()], None));
+        // THE GALLERY'S THREE, AND EACH PUBLISHER'S ASSET HOST AND CDN.
+        let hosts: Vec<String> = [
+            "a.gallery.vsassets.io",
+            "a.gallerycdn.vsassets.io",
+            "b.gallery.vsassets.io",
+            "b.gallerycdn.vsassets.io",
+            "main.vscode-cdn.net",
+            "marketplace.visualstudio.com",
+            "rust-lang.gallery.vsassets.io",
+            "rust-lang.gallerycdn.vsassets.io",
+            "www.vscode-unpkg.net",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let no = Target::Offer(offer.clone(), false);
+        let yes = Target::Offer(offer, true);
+        let page = |r: &Readings, t: &ronoctua_i18n::Texts| {
+            View::fresh(r, &zone(), 100, t).rows(r, &zone(), 100, t)
+        };
+        let text = |rows: &[Row]| drawn(rows).replace(" | ", " ");
+        let has = |rows: &[Row], target: &Target| {
+            rows.iter().any(|row| row.target.as_ref() == Some(target))
+        };
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let mut r = counted(&places, 1_700_000_500);
+            r.vscode_here = false;
+            let rows = page(&r, &t);
+            assert!(
+                !has(&rows, &no) && !has(&rows, &Target::InstallExtensions),
+                "{language}: offered where VS Code is not"
+            );
+            let r = with_vscode(&places);
+            assert_eq!(r.extension_hosts, hosts);
+            let v = View::fresh(&r, &zone(), 100, &t);
+            let rows = v.rows(&r, &zone(), 100, &t);
+            assert_eq!(rows[v.cursor()].target, Some(no.clone()), "{language}");
+            let at = |target: &Target| {
+                rows.iter()
+                    .position(|row| row.target.as_ref() == Some(target))
+            };
+            assert!(at(&no) < at(&yes), "{language}: \"yes\" is drawn first");
+            let said = t.t_args(
+                key::BELONGINGS_OFFER_VSCODE_EXTENSIONS,
+                &[
+                    ("n", ronoctua_i18n::Arg::Number(3)),
+                    (
+                        "hosts",
+                        ronoctua_i18n::Arg::Number(i64::try_from(hosts.len()).unwrap()),
+                    ),
+                ],
+            );
+            assert!(text(&rows).contains(&said), "{language}: {said}");
+            for host in &hosts {
+                assert!(
+                    rows.iter()
+                        .any(|row| row.fields.iter().any(|f| f.text == *host)),
+                    "{language}: {host} is not named on a line of its own"
+                );
+            }
+            assert!(
+                !has(&rows, &Target::InstallExtensions),
+                "{language}: the page's row is drawn beside the offer it repeats"
+            );
+            assert_eq!(
+                no.about(&t),
+                Some(t.t(key::ABOUT_BELONGINGS_OFFER_NO_EXTENSIONS))
+            );
+            assert_eq!(
+                yes.about(&t),
+                Some(t.t(key::ABOUT_BELONGINGS_OFFER_YES_EXTENSIONS))
+            );
+            assert_eq!(
+                Target::InstallExtensions.about(&t),
+                Some(t.t(key::ABOUT_BELONGINGS_EXTENSIONS_INSTALL))
+            );
+        }
+        let t = texts("en-GB");
+        // YES: the hosts let, exactly those, and the install queued.
+        let r = with_vscode(&places);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(&mut v, &r, &yes, &t);
+        assert!(!ronoctua_consent::allows_under(&places.config, &hosts[0]));
+        assert_eq!(
+            v.press(Press::Enter, &r, &zone(), 100, &t),
+            Errand::Queue(Op::VscodeExtensions)
+        );
+        for host in &hosts {
+            assert!(
+                ronoctua_consent::allows_under(&places.config, host),
+                "{host} not let"
+            );
+        }
+        assert!(!ronoctua_consent::allows_under(
+            &places.config,
+            "a.gallery.vsassets.io.example"
+        ));
+        // ANSWERED: the offer is gone, and the page keeps its own row.
+        let r = with_vscode(&places);
+        let rows = page(&r, &t);
+        assert!(!has(&rows, &no), "an offer said yes to is still asked");
+        assert!(
+            has(&rows, &Target::InstallExtensions),
+            "nothing installs what is missing"
+        );
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(&mut v, &r, &Target::InstallExtensions, &t);
+        assert_eq!(
+            v.press(Press::Enter, &r, &zone(), 100, &t),
+            Errand::Queue(Op::VscodeExtensions)
+        );
+        // RUNNING: said, and no second install offered.
+        {
+            let _held = ronoctua_belongings::running::hold_at(
+                &ronoctua_belongings::offers::extensions_lock(&places),
+            )
+            .unwrap();
+            let r = with_vscode(&places);
+            let rows = page(&r, &t);
+            assert!(text(&rows).contains(&t.t(key::BELONGINGS_EXTENSIONS_INSTALLING)));
+            assert!(!has(&rows, &Target::InstallExtensions));
+        }
+        // STOPPED BEFORE ITS END: the record says installing, nobody holds the
+        // lock — and the row is back.
+        let began = |state| ExtensionsDone {
+            at_s: 1_700_000_200,
+            state,
+            entered: vec![],
+            failed: vec![],
+            refused: None,
+            hosts: vec![],
+        };
+        extensions_did(&places, &began(InstallState::Installing));
+        let rows = page(&with_vscode(&places), &t);
+        assert!(text(&rows).contains(&t.t(key::BELONGINGS_EXTENSIONS_STOPPED)));
+        assert!(has(&rows, &Target::InstallExtensions));
+        // WHAT ENTERED, AND WHAT FAILED with VS Code's own line, a row each.
+        extensions_did(
+            &places,
+            &ExtensionsDone {
+                entered: vec!["a.x".into(), "b.y".into()],
+                failed: vec![ExtensionFailed {
+                    id: "rust-lang.rust-analyzer".into(),
+                    said: "Extension 'rust-lang.rust-analyzer' not found.".into(),
+                }],
+                ..began(InstallState::Done)
+            },
+        );
+        let rows = page(&with_vscode(&places), &t);
+        let entered = t.t_args(
+            key::BELONGINGS_EXTENSIONS_ENTERED,
+            &[("n", ronoctua_i18n::Arg::Number(2))],
+        );
+        assert!(text(&rows).contains(&entered), "{}", text(&rows));
+        let failed = rows
+            .iter()
+            .find(|row| {
+                row.target == Some(Target::Fact("extension:rust-lang.rust-analyzer".into()))
+            })
+            .expect("the failed id has no row");
+        let fields: Vec<&str> = failed.fields.iter().map(|f| f.text.as_str()).collect();
+        assert!(fields.contains(&"rust-lang.rust-analyzer"), "{fields:?}");
+        assert!(
+            fields.iter().any(|f| f.contains("not found")),
+            "VS Code's line is not on the row: {fields:?}"
+        );
+        // NOTHING TRIED, in its own words, and the hosts not let.
+        extensions_did(
+            &places,
+            &ExtensionsDone {
+                refused: Some(VscodeWhy::NotLet),
+                hosts: vec!["rust-lang.gallery.vsassets.io".into()],
+                ..began(InstallState::Refused)
+            },
+        );
+        let rows = page(&with_vscode(&places), &t);
+        let refused = t.t_with(
+            key::BELONGINGS_EXTENSIONS_REFUSED,
+            &[("why", &t.t(key::BELONGINGS_EXTENSIONS_REFUSED_NOT_LET))],
+        );
+        assert!(text(&rows).contains(&refused), "{}", text(&rows));
+        assert!(text(&rows).contains("rust-lang.gallery.vsassets.io"));
+        // A RECORD OLDER THAN THE LAST SYNC is not this page's news.
+        extensions_did(
+            &places,
+            &ExtensionsDone {
+                at_s: 1_700_000_050,
+                ..began(InstallState::Installing)
+            },
+        );
+        assert!(
+            !text(&page(&with_vscode(&places), &t))
+                .contains(&t.t(key::BELONGINGS_EXTENSIONS_STOPPED))
+        );
+        // EVERY REASON NOTHING WAS TRIED has its sentence, in every language.
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            for why in VscodeWhy::ALL {
+                assert!(t.has(extensions_refusal_key(why)), "{language}: {why:?}");
+            }
+        }
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 

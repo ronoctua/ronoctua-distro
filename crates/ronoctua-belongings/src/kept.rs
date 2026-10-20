@@ -207,6 +207,10 @@ pub enum MergeRule {
     Choose,
     /// Text whose lines are each a fact (`known_hosts`): both sides' lines.
     Union,
+    /// A document that is a SET (VS Code's list of extensions,
+    /// `ronoctua_vscode::merge`): the base, plus what either side added,
+    /// minus what either side took out — never a conflict.
+    Set,
 }
 
 /// The merge rule of `path`: as its content allows, unless a predefined
@@ -304,11 +308,14 @@ pub enum Offering {
     SshSigning,
     /// Let a security key answer for the password (`pam_u2f`, sufficient).
     PamU2f,
+    /// Install the VS Code extensions of the person's list that are missing
+    /// here (`ronoctua_vscode`).
+    VscodeExtensions,
 }
 
 impl Offering {
     /// Every one.
-    pub const ALL: [Self; 2] = [Self::SshSigning, Self::PamU2f];
+    pub const ALL: [Self; 3] = [Self::SshSigning, Self::PamU2f, Self::VscodeExtensions];
 
     /// Its word, as the table writes it.
     #[must_use]
@@ -316,6 +323,7 @@ impl Offering {
         match self {
             Self::SshSigning => "ssh-signing",
             Self::PamU2f => "pam-u2f",
+            Self::VscodeExtensions => "vscode-extensions",
         }
     }
 }
@@ -468,6 +476,17 @@ mod target_tests {
             ("home/.config/emacs/transient/values.el", "emacs"),
             ("home/.config/emacs/transient/levels.el", "emacs"),
             ("home/.config/emacs/straight/versions/default.el", "emacs"),
+            // COMMON LISP: the three Lisps' init files, under each name the
+            // Lisp reads, and ASDF's own configuration.
+            ("home/.sbclrc", "common-lisp"),
+            ("home/.ccl-init.lisp", "common-lisp"),
+            ("home/ccl-init.lisp", "common-lisp"),
+            ("home/.eclrc", "common-lisp"),
+            ("home/.ecl", "common-lisp"),
+            (
+                "home/.config/common-lisp/source-registry.conf.d/50-mine.conf",
+                "common-lisp",
+            ),
         ] {
             assert!(
                 matches!(by_default(path), Verdict::Target(t) if t.id == id),
@@ -509,6 +528,8 @@ mod target_tests {
             ("home/.config/emacs/#init.el#", "editor-draft"),
             ("home/.config/emacs/init.el~", "editor-draft"),
             ("home/.config/emacs/.#init.el", "editor-draft"),
+            ("home/.config/common-lisp/#asdf.conf#", "editor-draft"),
+            ("home/.config/common-lisp/asdf.conf~", "editor-draft"),
             // AND AT ITS ROOT, what Emacs keeps of this machine's sessions.
             (
                 "home/.config/emacs/var/straight/build/magit/magit.elc",
@@ -582,6 +603,11 @@ mod target_tests {
             // more: a repository's copy of it stays where it is
             // (`merge::tests::a_path_no_target_names_any_more_stays_put`).
             "home/.config/doom/local.el",
+            // QUICKLISP IS LIBRARIES, fetched again; and a name that only
+            // begins like an init file is not one.
+            "home/quicklisp/setup.lisp",
+            "home/.sbclrc.bak",
+            "home/.eclrc-old",
         ] {
             assert!(target_of(near).is_none(), "{near}");
         }
@@ -649,7 +675,8 @@ mod target_tests {
     }
 
     /// FAILS IF: a key ring's file is merged instead of chosen, a known host
-    /// or a trusted signer is not the union of both sides, or a path no
+    /// or a trusted signer is not the union of both sides, VS Code's list of
+    /// extensions is not joined as a set (or its settings are), or a path no
     /// target names stops merging as its content allows.
     #[test]
     fn a_target_merges_by_its_own_rule() {
@@ -669,6 +696,15 @@ mod target_tests {
             MergeRule::Choose
         );
         assert_eq!(merge_rule("config/theme.json"), MergeRule::Auto);
+        // A SETTINGS FILE IS A CHOICE; THE LIST OF EXTENSIONS, A SET.
+        assert_eq!(
+            merge_rule("home/.config/Code/User/settings.json"),
+            MergeRule::Choose
+        );
+        assert_eq!(
+            merge_rule("home/.config/Code/User/ronoctua-extensions.json"),
+            MergeRule::Set
+        );
     }
 
     /// FAILS IF: a private target's file keeps group or other bits (they

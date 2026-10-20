@@ -417,6 +417,7 @@ mod tests {
             terminal: false,
             startup_wm_class: None,
             key: ronoctua_apps::fold::fold(name),
+            fallback: true,
         }
     }
 
@@ -492,12 +493,55 @@ mod tests {
         let c = Arc::new(vec![mpv, ours]);
         let none = ronoctua_apps::defaults::Defaults::default();
         assert_eq!(
-            crate::launch::opens_by(&c, &none, "video/mp4").map(|e| e.id.as_str()),
+            crate::launch::opens_by(&c, &[], &none, "video/mp4").map(|e| e.id.as_str()),
             Some("br.ronoctua.player")
         );
         assert_eq!(
-            crate::launch::opens_by(&c, &none, "text/plain").map(|e| e.id.as_str()),
+            crate::launch::opens_by(&c, &[], &none, "text/plain").map(|e| e.id.as_str()),
             None
+        );
+    }
+
+    /// FAILS IF: a program that declines the name order
+    /// (`X-Ronoctua-Fallback=false`) still takes a type by its name — by the
+    /// type or by a parent —, or a default naming it no longer wins, or a
+    /// default naming an entry the launcher does not list (the player's, which
+    /// is `NoDisplay`) is skipped.
+    #[test]
+    fn a_program_out_of_the_name_order_opens_only_by_choice() {
+        let mut browser = input_of("google-chrome", "Google Chrome", &[]);
+        browser.mime_types = vec!["image/png".into()];
+        let mut design = input_of("design", "A Design Tool", &[]);
+        design.mime_types = vec![
+            "image/png".into(),
+            "image/svg+xml".into(),
+            "text/plain".into(),
+        ];
+        design.fallback = false;
+        let c = Arc::new(vec![design, browser]);
+        let none = ronoctua_apps::defaults::Defaults::default();
+        let opener = |unlisted: &[DesktopEntry], d: &ronoctua_apps::defaults::Defaults, t: &str| {
+            crate::launch::opens_by(&c, unlisted, d, t).map(|e| e.id.clone())
+        };
+        assert_eq!(
+            opener(&[], &none, "image/png").as_deref(),
+            Some("google-chrome")
+        );
+        assert_eq!(
+            opener(&[], &none, "image/svg+xml"),
+            None,
+            "a parent type let it in"
+        );
+        let chosen = ronoctua_apps::defaults::Defaults::of_text(
+            "[Default Applications]\nimage/png=design.desktop\nvideo/mp4=br.ronoctua.player.desktop\n",
+        );
+        assert_eq!(opener(&[], &chosen, "image/png").as_deref(), Some("design"));
+        let mut player = input_of("br.ronoctua.player", "Player", &[]);
+        player.mime_types = vec!["video/mp4".into()];
+        assert_eq!(opener(&[], &chosen, "video/mp4"), None);
+        assert_eq!(
+            opener(std::slice::from_ref(&player), &chosen, "video/mp4").as_deref(),
+            Some("br.ronoctua.player")
         );
     }
 
@@ -514,7 +558,7 @@ mod tests {
         orca.mime_types = vec!["model/stl".into(), "model/3mf".into()];
         let c = Arc::new(vec![editor, orca]);
         let opener = |defaults: &ronoctua_apps::defaults::Defaults, t: &str| {
-            crate::launch::opens_by(&c, defaults, t).map(|e| e.id.clone())
+            crate::launch::opens_by(&c, &[], defaults, t).map(|e| e.id.clone())
         };
 
         let none = ronoctua_apps::defaults::Defaults::default();

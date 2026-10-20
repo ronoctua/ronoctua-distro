@@ -93,6 +93,18 @@ pub fn signed(logical: &str) -> bool {
     signed_path(logical).is_some_and(|rel| ronoctua_person::tree::signed(&rel))
 }
 
+/// The logical path of the person's declined programs: the plain root kept
+/// at `plain/person/` (`ronoctua_person::tree::PERSON`) joined with
+/// `ronoctua_person::names::DECLINED` — `state/person/software/declined.json`.
+/// `None` only for a build whose plain table lost the person's root. Pure.
+#[must_use]
+pub fn declined_logical() -> Option<String> {
+    plain_roots()
+        .iter()
+        .find(|r| r.at == ronoctua_person::tree::PERSON)
+        .map(|r| format!("{}/{}", r.path, ronoctua_person::names::DECLINED))
+}
+
 /// Why a change of the repository's to a signed file was not taken by
 /// itself — each a sentence on screen (`belongings-held-<id>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -290,6 +302,25 @@ pub struct Report {
     pub held: BTreeMap<String, HeldWhy>,
     /// This machine's changes to signed files that wait for a signature.
     pub unsigned: Vec<String>,
+    /// What became of the installer's choice (`plain --decline`), when it
+    /// gave one.
+    pub choice: Option<ChoiceThere>,
+    /// The programs the installer's choice kept that the person declined on
+    /// every machine: the person's own "everywhere", which a tick in the
+    /// installer does not undo — they stay declined.
+    pub kept_everywhere: Vec<String>,
+}
+
+/// What became of the installer's choice in the repository.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChoiceThere {
+    /// Said, signed and pushed by this run.
+    Pushed,
+    /// The repository said it already, and nothing was pushed: an attempt
+    /// before — one whose push went in and was reported failed, too — took
+    /// it up. Either way the choice is in the repository.
+    AlreadyThere,
 }
 
 #[cfg(test)]
@@ -334,6 +365,14 @@ mod tests {
         ] {
             assert_eq!(repo_path(not), None, "{not}");
         }
+        // THE DECLINES the installer signs in are the person's own file.
+        let declined = declined_logical().unwrap();
+        assert_eq!(declined, "state/person/software/declined.json");
+        assert_eq!(
+            repo_path(&declined).as_deref(),
+            Some("plain/person/software/declined.json")
+        );
+        assert!(signed(&declined));
         for not in [
             "plain",
             "plain/",
@@ -358,10 +397,13 @@ mod tests {
                 HeldWhy::BadSignature,
             )]),
             unsigned: vec!["state/person/options.json".to_owned()],
+            choice: Some(ChoiceThere::AlreadyThere),
+            kept_everywhere: vec!["vlc".to_owned()],
         };
         let line = serde_json::to_string(&report).unwrap();
         assert!(!line.contains('\n'));
         assert!(line.contains("\"too-large\""), "{line}");
+        assert!(line.contains("\"choice\":\"already-there\""), "{line}");
         assert_eq!(serde_json::from_str::<Report>(&line).unwrap(), report);
     }
 

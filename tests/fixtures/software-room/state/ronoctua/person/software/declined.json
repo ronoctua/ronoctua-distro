@@ -38,6 +38,14 @@
       "machines": null,
       "edited-at": "2026-10-05T08:00:00Z",
       "edited-on": "noctua"
+    },
+    {
+      "id": "libreoffice",
+      "machines": [
+        "noctua"
+      ],
+      "edited-at": "2026-10-20T10:00:00Z",
+      "edited-on": "noctua"
     }
   ]
 }

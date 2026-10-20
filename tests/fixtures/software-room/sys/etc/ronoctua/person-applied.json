@@ -31,7 +31,8 @@
   "declined": {
     "honoured": [
       "blender",
-      "vlc"
+      "vlc",
+      "libreoffice"
     ],
     "refused": [
       {

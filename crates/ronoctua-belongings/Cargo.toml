@@ -51,10 +51,12 @@ crypt = [
 # never the keyring.
 keyring = [ "prefs", "dep:linux-keyutils", "dep:zeroize" ]
 # WHAT A RESTORE OFFERS, and saying yes to it (`offers`): the person's
-# `options.json` (`ronoctua-person`, the data alone) and git's global
-# configuration (`ronoctua-git`) — for the CLI, and for the door that draws
-# the offers.
-offers = [ "prefs", "dep:ronoctua-git", "dep:ronoctua-person" ]
+# `options.json` (`ronoctua-person`, the data alone), git's global
+# configuration (`ronoctua-git`) and VS Code's extensions (`ronoctua-vscode`:
+# the list that travels, what is installed here, `code`; and the consent
+# `Pass` of every Marketplace host its install reaches) — for the CLI, and
+# for the door that draws the offers.
+offers = [ "prefs", "dep:ronoctua-git", "dep:ronoctua-person", "dep:ronoctua-vscode", "dep:ronoctua-consent" ]
 
 [dependencies]
 serde.workspace = true
@@ -93,6 +95,10 @@ zeroize = { workspace = true, optional = true }
 ronoctua-person = { path = "../ronoctua-person", default-features = false, optional = true }
 # THE IDENTITY KEPT FOR THE SESSION: the kernel's keyring (`@u`), never a file.
 linux-keyutils = { workspace = true, optional = true }
+# THE PERSON'S VS CODE EXTENSIONS (`offers`): which of their list are missing
+# here, and the install a yes puts on the queue — the one crate that talks to
+# VS Code's files and CLI.
+ronoctua-vscode = { path = "../ronoctua-vscode", optional = true }
 
 [dev-dependencies]
 # A test's own consent file (`pass_in`, `let_hosts_in`): only here, never in a

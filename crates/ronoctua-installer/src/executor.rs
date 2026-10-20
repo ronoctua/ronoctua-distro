@@ -30,11 +30,13 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::model::Answers;
 use crate::plan::{
-    ATTRIBUTE, BINARY_CACHE_NETRC, BINARY_CACHE_OPTIONS, BINARY_CACHE_TOKEN, Capture,
-    HOST_NIX_PATH, HOST_NIX_WORK_PATH, INSTALL_ACCESS, LET_HOST, LUKS_KEY_PATH, Origin,
-    PASSWORD_HASH_PATH, PERSON_UID, Runner, SCRATCH, SEAL, SWAPFILE_PATH, Scratch, Step,
+    ATTRIBUTE, BELONGINGS, BINARY_CACHE_NETRC, BINARY_CACHE_OPTIONS, BINARY_CACHE_TOKEN, Capture,
+    HOST_NIX_PATH, HOST_NIX_WORK_PATH, INSTALL_ACCESS, LEFT_OUT_APPLIED, LET_HOST, LUKS_KEY_PATH,
+    Origin, PASSWORD_HASH_PATH, PERSON_UID, Runner, SCRATCH, SEAL, SWAPFILE_PATH, Scratch, Step,
     TARGET_PASSWD, WIFI_PROFILE_PATH, WORK_DIRECTORY, WRITE, aimed_flake, belongings_path,
-    host_nix, person_passphrase, plain_passphrase, steps, target_netrc, target_user, wifi_profile,
+    choice_file, host_nix, left_out_declined, leftovers, machine_choice, person_passphrase,
+    plain_passphrase, staged_declined, steps, target_mirror_declined, target_netrc, target_user,
+    wifi_profile,
 };
 
 /// What happens during execution.
@@ -64,6 +66,21 @@ pub enum Event {
     Skipped {
         /// The index, from zero.
         index: usize,
+    },
+    /// The person's repository refused what the step asked (a push that did
+    /// not go, a passphrase that did not open): the sentence's text key,
+    /// said before the step's failure.
+    Refused {
+        /// The refusal's text key (invariant 8).
+        key: &'static str,
+    },
+    /// A step's answer the person should hear, which names programs: the
+    /// sentence's text key, and the programs' names joined (`$names`).
+    Said {
+        /// The sentence's text key (invariant 8).
+        key: &'static str,
+        /// The programs it names, by their own names.
+        names: String,
     },
 }
 
@@ -196,6 +213,22 @@ pub fn write_of(step: &Step, r: &Answers) -> Result<Option<Write>> {
             owner: None,
             private: true,
         },
+        // THE MACHINE'S CHOICE, for the copy to sign into the repository:
+        // root's, public — ids, a hostname and a moment.
+        choice if choice == choice_file() => root_public(path, choice_document(r)?),
+        // THE PROGRAMS LEFT OUT, as the person's declines, where an EMPTY
+        // repository's go: staged for root's applier — root's and readable
+        // (`0644` in `0755` folders: the applier refuses a tree somebody
+        // else may write) — and in the person's mirror, theirs, for `init`
+        // to sign. Public: ids, a hostname and a moment.
+        declines if declines == staged_declined() => root_public(path, left_out_document(r)?),
+        mirror if mirror == target_mirror_declined() => Write {
+            path,
+            content: left_out_document(r)?,
+            secrecy: Secrecy::Public,
+            owner: Some(target_user().to_owned()),
+            private: false,
+        },
         otherwise => bail!(
             "a write step for `{otherwise}`, which this module does not know.\n\
              \n\
@@ -204,6 +237,115 @@ pub fn write_of(step: &Step, r: &Answers) -> Result<Option<Write>> {
         ),
     };
     Ok(Some(e))
+}
+
+/// The programs left out as the declines' canonical document — the same
+/// bytes for every copy, from the one stamp of the run.
+///
+/// # Errors
+///
+/// No stamp (it is set once per run, never defaulted here), or nothing left
+/// out: a step that writes the declines exists only when something is.
+fn left_out_document(r: &Answers) -> Result<String> {
+    let declined = left_out_declined(r, moment_of(r)?)
+        .context("a step writes the programs left out, and the answers leave none out")?;
+    Ok(ronoctua_person::to_json(&declined))
+}
+
+/// The machine's choice as its canonical document — the same moment as the
+/// declines'.
+///
+/// # Errors
+///
+/// No stamp, or an installation that was not asked the list.
+fn choice_document(r: &Answers) -> Result<String> {
+    let choice = machine_choice(r, moment_of(r)?)
+        .context("a step writes the machine's choice, and the installation was not asked it")?;
+    Ok(ronoctua_person::to_json(&choice))
+}
+
+/// The run's one moment for the programs left out — never a default.
+fn moment_of(r: &Answers) -> Result<&ronoctua_person::Stamp> {
+    r.left_out_at
+        .as_ref()
+        .context("the programs left out have no moment: it is set once per run, before the steps")
+}
+
+/// This moment, as the person's files write one. The installer's clock is
+/// the only one it has.
+#[must_use]
+pub fn stamp_now() -> ronoctua_person::Stamp {
+    let unix_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    ronoctua_person::Stamp::from_unix_s(unix_s)
+}
+
+/// Where the declines in `declined` (the working flake's, as root's applier
+/// left them — `None` when it left none) do not say the machine's choice:
+/// each program left out that is not declined for this machine, and each
+/// one ticked that is — by a decline of THIS machine; one of every machine
+/// is the person's own, which the tick does not undo and the review said.
+/// Empty when they say it. Pure.
+#[must_use]
+pub fn not_as_chosen(r: &Answers, declined: Option<&[u8]>) -> Vec<&'static str> {
+    let doc = declined.and_then(|bytes| {
+        ronoctua_person::parse::<ronoctua_person::declined::Declined>(bytes).ok()
+    });
+    let here = |id: &str, scoped: bool| {
+        doc.as_ref().is_some_and(|d| {
+            d.apps.iter().any(|a| {
+                a.id == id && a.applies_to(&r.hostname) && (!scoped || a.machines.is_some())
+            })
+        })
+    };
+    let out = r.left_out_ids().into_iter().filter(|id| !here(id, false));
+    let kept = r.kept_ids().into_iter().filter(|id| here(id, true));
+    out.chain(kept).collect()
+}
+
+/// The programs a belongings' copy kept that the person declined on every
+/// machine, by their names — from its last line (`--json`:
+/// `"kept-everywhere": [<id>…]`). Empty when it names none. Pure.
+#[must_use]
+pub fn kept_everywhere_in(line: &str) -> Vec<String> {
+    let said: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
+    said.get("kept-everywhere")
+        .and_then(serde_json::Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(|id| {
+                    crate::model::OFFERED
+                        .iter()
+                        .find(|o| o.id == id)
+                        .map_or_else(|| id.to_owned(), |o| o.name.to_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Clears what an earlier attempt left at `paths` (`plan::leftovers`): each
+/// folder, whole; one that is not there is nothing to clear.
+fn clear_leftovers(paths: &[String]) -> Result<()> {
+    for path in paths {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("clear {path}, an earlier attempt's")),
+        }
+    }
+    Ok(())
+}
+
+/// The refusal a belongings' step said on its last line (`--json`:
+/// `{"refused": "<why>"}`), as its sentence's text key. Pure.
+#[must_use]
+pub fn refusal_in(line: &str) -> Option<&'static str> {
+    let said: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let why = ronoctua_belongings::Why::of_id(said.get("refused")?.as_str()?)?;
+    Some(crate::access::refusal_key(why))
 }
 
 /// Reads the swap's offset from `btrfs inspect-internal map-swapfile`'s output.
@@ -742,6 +884,15 @@ pub fn run_command(r: &Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> 
     let mut r = r.clone();
     // AN AIMED MACHINE KEEPS ITS TREE: `host.nix` says so (see `Origin`).
     r.aimed = origin.aimed;
+    // ONE MOMENT FOR THE PROGRAMS LEFT OUT, whichever copies are written —
+    // the one the plan printed, when it printed one.
+    if r.left_out_at.is_none() {
+        r.left_out_at = Some(stamp_now());
+    }
+    // FROM NOTHING AN EARLIER ATTEMPT LEFT: the template is copied over the
+    // working flake, and that attempt's copy of the plain part or its
+    // declines would be applied as this one's.
+    clear_leftovers(&leftovers())?;
     if r.swap.is_none() {
         r.swap = crate::swap::measure(&r.disk);
     }
@@ -826,6 +977,31 @@ fn run_steps(r: &mut Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> Re
                     }
                 }
             }
+            // WHAT ROOT'S APPLIER MADE OF THE DECLINES, read before the disk:
+            // a signature that did not cover them leaves the machine none,
+            // and the applier says that only as a warning.
+            Some(LEFT_OUT_APPLIED) => {
+                let at = step
+                    .command
+                    .get(1)
+                    .context("a check of the declines with no file")?;
+                let read = std::fs::read(at).ok();
+                let wrong = not_as_chosen(r, read.as_deref());
+                if !wrong.is_empty() {
+                    ver(Event::Refused {
+                        key: crate::key::INST_LEFT_OUT_NOT_APPLIED,
+                    });
+                    return Err(anyhow::anyhow!(
+                        "{at} does not say this machine's choice for {} on {}: the \
+                         declarations applied to it would install what was left out, or \
+                         leave out what was ticked",
+                        wrong.join(", "),
+                        r.hostname
+                    ))
+                    .with_context(context);
+                }
+                ver(Event::Line(at.clone()));
+            }
             Some(BINARY_CACHE_NETRC) => {
                 let from = Scratch::installer().binary_cache_netrc();
                 install_netrc(Path::new(&from), Path::new(&target_netrc()))
@@ -865,7 +1041,37 @@ fn run_steps(r: &mut Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> Re
                         ver(Event::Line(name.clone()));
                         attribute = Some(name);
                     }
-                    None => run(command, ver).with_context(context)?,
+                    None => {
+                        // THE REPOSITORY'S REFUSAL IS SAID IN ITS SENTENCE:
+                        // the belongings answer on their last line, and a
+                        // push that did not go (the programs left out) stops
+                        // the installation here, before the disk.
+                        let mut last = String::new();
+                        let done = run(command, &mut |e| {
+                            if let Event::Line(l) = &e {
+                                last.clone_from(l);
+                            }
+                            ver(e);
+                        });
+                        if done.is_err()
+                            && step.command.first().map(String::as_str) == Some(BELONGINGS)
+                            && let Some(key) = refusal_in(&last)
+                        {
+                            ver(Event::Refused { key });
+                        }
+                        done.with_context(context)?;
+                        // WHAT THE CHOICE COULD NOT BRING BACK: ticked, and
+                        // declined on every machine by the person.
+                        if step.command.first().map(String::as_str) == Some(BELONGINGS) {
+                            let names = kept_everywhere_in(&last);
+                            if !names.is_empty() {
+                                ver(Event::Said {
+                                    key: crate::key::INST_KEPT_EVERYWHERE,
+                                    names: names.join(", "),
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1140,7 +1346,226 @@ mod tests {
             format!("{}/deploy", scratch_keys()),
         );
         r.set(Question::BelongingsPassphrase, "Qw4-belongings".into());
+        // A `full` installation leaving two programs out, at one moment.
+        r.set(Question::Profile, crate::model::FULL_PROFILE.into());
+        r.set(Question::LeftOut, "blender,libreoffice".into());
+        r.left_out_at = ronoctua_person::Stamp::parse("2026-10-20T12:00:00Z");
         r
+    }
+
+    /// FAILS IF: the choice a repository with something in it signs is not
+    /// both halves of the answer for this hostname alone, or the declines an
+    /// empty one stages and seeds in the mirror are not the programs left out
+    /// on this hostname alone — readable by root's applier (`0644`, root's)
+    /// where it reads them, theirs in their mirror — or the copies differ,
+    /// or a write goes on without the run's moment.
+    #[test]
+    fn the_choice_and_the_declines_are_written_where_each_goes() {
+        use ronoctua_person::choice::Choice;
+        use ronoctua_person::declined::Declined;
+        let mut r = answers();
+        let mut written = Vec::new();
+        for empty in [false, true] {
+            r.belongings_empty = Some(empty);
+            for step in steps(&r, &origin(false)) {
+                let Some(w) = write_of(&step, &r).unwrap() else {
+                    continue;
+                };
+                if [choice_file(), staged_declined(), target_mirror_declined()].contains(&w.path) {
+                    written.push(w);
+                }
+            }
+        }
+        let paths: Vec<&str> = written.iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [choice_file(), staged_declined(), target_mirror_declined()],
+            "the choice for the repository, the declines staged and in the mirror"
+        );
+        // THE CHOICE: both halves, this machine, the run's moment.
+        let choice: Choice = ronoctua_person::parse(written[0].content.as_bytes()).unwrap();
+        assert_eq!(choice.machine, "noctua-teste");
+        assert_eq!(choice.declined, ["blender", "libreoffice"]);
+        assert_eq!(choice.kept, r.kept_ids());
+        assert_eq!(Some(&choice.at), r.left_out_at.as_ref());
+        for w in &written {
+            assert_eq!(w.secrecy, Secrecy::Public, "{}", w.path);
+            assert!(!w.private, "{}", w.path);
+            let owner = if w.path == target_mirror_declined() {
+                Some(target_user())
+            } else {
+                None
+            };
+            assert_eq!(w.owner.as_deref(), owner, "{}", w.path);
+        }
+        for w in &written[1..] {
+            let declined: Declined = ronoctua_person::parse(w.content.as_bytes())
+                .unwrap_or_else(|e| panic!("{}: {e}", w.path));
+            let ids: Vec<&str> = declined.apps.iter().map(|d| d.id.as_str()).collect();
+            assert_eq!(ids, ["blender", "libreoffice"]);
+            for d in &declined.apps {
+                assert_eq!(d.machines, Some(vec!["noctua-teste".to_owned()]));
+                assert_eq!(d.edited_on, "noctua-teste");
+                assert_eq!(d.edited_at, choice.at);
+            }
+            assert_eq!(w.content, written[1].content, "the copies differ");
+        }
+        // BORN AS THE APPLIER WANTS THEM: the file `0644`, its folders
+        // `0755` — the walker refuses what somebody else may write.
+        let dir = scratch("declines");
+        let at = Write {
+            path: dir
+                .join("plain/person/software/declined.json")
+                .to_string_lossy()
+                .into_owned(),
+            ..written[1].clone()
+        };
+        write_out(&at).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(Path::new(&at.path)), 0o644);
+        for folder in ["plain", "plain/person", "plain/person/software"] {
+            assert_eq!(mode(&dir.join(folder)), 0o755, "{folder}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+        // NO MOMENT, NO DECLINE AND NO CHOICE: never a default.
+        r.left_out_at = None;
+        for path in [staged_declined(), choice_file()] {
+            r.belongings_empty = Some(path == staged_declined());
+            let step = steps(&r, &origin(false))
+                .into_iter()
+                .find(|s| s.command.get(1) == Some(&path))
+                .unwrap();
+            assert!(write_of(&step, &r).is_err(), "{path}");
+        }
+    }
+
+    /// FAILS IF: the check after root's applier passes declines that do not
+    /// say the choice — a program left out not declined here (none at all, a
+    /// file it cannot read, a decline for another machine or of another
+    /// program), or a program ticked declined for THIS machine — or refuses
+    /// declines that do: left out here or everywhere, and a ticked program
+    /// declined on another machine, or on every one (the person's own).
+    #[test]
+    fn the_applied_declines_must_say_the_choice() {
+        let r = answers();
+        let doc = |apps: &[(&str, Option<&[&str]>)]| {
+            ronoctua_person::to_json(&ronoctua_person::declined::Declined {
+                format: ronoctua_person::FORMAT,
+                apps: apps
+                    .iter()
+                    .map(|(id, machines)| ronoctua_person::declined::Declining {
+                        id: (*id).to_owned(),
+                        machines: machines.map(|m| m.iter().map(|h| (*h).to_owned()).collect()),
+                        edited_at: ronoctua_person::Stamp::from_unix_s(0),
+                        edited_on: "noctua-other".to_owned(),
+                    })
+                    .collect(),
+            })
+        };
+        let both = ["blender", "libreoffice"];
+        assert_eq!(not_as_chosen(&r, None), both);
+        assert_eq!(not_as_chosen(&r, Some(b"{not json")), both);
+        let elsewhere = doc(&[("blender", Some(&["noctua-other"])), ("libreoffice", None)]);
+        assert_eq!(not_as_chosen(&r, Some(elsewhere.as_bytes())), ["blender"]);
+        let other = doc(&[("zsh", None), ("libreoffice", Some(&["noctua-teste"]))]);
+        assert_eq!(not_as_chosen(&r, Some(other.as_bytes())), ["blender"]);
+        let here = doc(&[
+            ("blender", Some(&["noctua-other", "noctua-teste"])),
+            ("libreoffice", None),
+        ]);
+        assert!(not_as_chosen(&r, Some(here.as_bytes())).is_empty());
+        // A PROGRAM TICKED: declined for this machine is wrong; on another
+        // machine, or on every one (the person's, which stays), is not.
+        let ticked = |vlc: Option<&[&str]>| {
+            doc(&[
+                ("blender", Some(&["noctua-teste"])),
+                ("libreoffice", Some(&["noctua-teste"])),
+                ("vlc", vlc),
+            ])
+        };
+        assert_eq!(
+            not_as_chosen(
+                &r,
+                Some(ticked(Some(&["noctua-other", "noctua-teste"])).as_bytes())
+            ),
+            ["vlc"]
+        );
+        assert!(not_as_chosen(&r, Some(ticked(Some(&["noctua-other"])).as_bytes())).is_empty());
+        assert!(not_as_chosen(&r, Some(ticked(None).as_bytes())).is_empty());
+        // NOTHING LEFT OUT: nothing to find, and every tick checked.
+        let mut none = answers();
+        none.set(Question::LeftOut, crate::model::LEFT_OUT_NONE.into());
+        assert!(not_as_chosen(&none, None).is_empty());
+        assert_eq!(
+            not_as_chosen(
+                &none,
+                Some(doc(&[("vlc", Some(&["noctua-teste"]))]).as_bytes())
+            ),
+            ["vlc"]
+        );
+    }
+
+    /// FAILS IF: the programs the copy kept and the person declined on every
+    /// machine are not read off its last line by their names, or anything
+    /// else is.
+    #[test]
+    fn what_the_choice_could_not_bring_back_is_named() {
+        assert_eq!(
+            kept_everywhere_in(
+                r#"{"changed":[],"choice":"pushed","kept-everywhere":["vlc","no-such"]}"#
+            ),
+            ["VLC", "no-such"]
+        );
+        for none in [
+            r#"{"choice":"pushed","kept-everywhere":[]}"#,
+            r#"{"changed":[]}"#,
+            "",
+            "x",
+        ] {
+            assert!(kept_everywhere_in(none).is_empty(), "{none}");
+        }
+    }
+
+    /// FAILS IF: a run's clearing leaves an earlier attempt's folder, fails
+    /// on one that is not there, or reaches past the folders it is given.
+    #[test]
+    fn an_earlier_attempt_is_cleared_and_nothing_else() {
+        let dir = scratch("leftovers");
+        let old = dir.join("plain/person/software");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("declined.json"), "{}").unwrap();
+        std::fs::write(dir.join("kept"), "k").unwrap();
+        let paths = [
+            dir.join("plain").to_string_lossy().into_owned(),
+            dir.join("never-made").to_string_lossy().into_owned(),
+        ];
+        clear_leftovers(&paths).unwrap();
+        assert!(!dir.join("plain").exists());
+        assert!(dir.join("kept").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: the repository's refusal on a belongings' last line is not
+    /// read as its sentence, or anything else is.
+    #[test]
+    fn a_refusal_of_the_repository_is_said_in_its_sentence() {
+        assert_eq!(
+            refusal_in("{\"refused\": \"refused\"}\n"),
+            Some(crate::key::BELONGINGS_REFUSED_REFUSED)
+        );
+        assert_eq!(
+            refusal_in("{\"refused\":\"unreachable\"}"),
+            Some(crate::key::BELONGINGS_REFUSED_UNREACHABLE)
+        );
+        for not in [
+            "",
+            "{\"refused\": \"no-such\"}",
+            "{\"copied\": true}",
+            "refused",
+        ] {
+            assert_eq!(refusal_in(not), None, "{not}");
+        }
+        assert!(stamp_now().unix_s() > 0);
     }
 
     fn origin(aimed: bool) -> Origin {

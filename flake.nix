@@ -224,6 +224,9 @@
           downloads =
             atlasData.sources
             ++ broadcastRs.sources
+            # COMMON LISP'S: alive-lsp's tag and the Quicklisp client's four
+            # files, which live on one server (`nix/common-lisp/`).
+            ++ (import ./nix/common-lisp { inherit pkgs; }).sources
             ++ [
               pkgs.bibata-cursors.src
               # yt-dlp's tag, pinned by nix/yt-dlp.nix: an old tag is never
@@ -235,7 +238,14 @@
               # is current: `kiosk-vm` (in `.#most`) and the `full` profile's
               # browser build from it, and no cache has an unfree source.
               unfreePkgs.google-chrome.src
-            ];
+            ]
+            # THE DISTRO'S APPIMAGES AND APKS at their pins (the Crafting
+            # Apps, ~0,95 GB): a release upstream deletes is gone for good,
+            # and the pin is what the gate tested. See nix/distro-downloads.nix.
+            ++ (import ./nix/distro-downloads.nix { inherit (pkgs) fetchurl; }).pinned {
+              table = (import ./assets/distro-apps.nix).apps;
+              pins = builtins.fromJSON (builtins.readFile ./assets/distro-pins.json);
+            };
           # AND THE COMPILED UNITS of this checkout's tree: the release
           # graph's, and the loop's third-party ones the tests build on.
           units = {
@@ -717,6 +727,7 @@
           atuinOptionsRs
           keyboardsRs
           cacheRs
+          offeredRs
           cameraEffectsRs
           segmentModel
           handModels
@@ -831,6 +842,14 @@
       # wrong. No generator script: four integers and a word do not need one.
       cacheRs = pkgs.callPackage ./nix/cache.nix {
         cacheFile = ./assets/cache.nix;
+      };
+
+      # THE PROGRAMS THE INSTALLER OFFERS TO LEAVE OUT, generated from the
+      # ledger's `offered` (`assets/distro-apps.nix`): the installer's table,
+      # and the refusal of a row the screen could not draw or a decline could
+      # not name (see `nix/offered.nix`).
+      offeredRs = pkgs.callPackage ./nix/offered.nix {
+        ledgerFile = ./assets/distro-apps.nix;
       };
 
       # THE CAMERA'S EFFECTS, generated from `assets/camera-effects.nix`: the
@@ -1195,6 +1214,10 @@
         ./nix/modules/nixpkgs-config.nix
         ./nix/modules/browser.nix
         ./nix/modules/emacs.nix
+        # VS Code, its telemetry off by policy, and the unit that records the
+        # person's extensions into the list their belongings carry — a
+        # function of the EXTRACTED `ronoctua-vscode`. On in the full profile.
+        (import ./nix/modules/vscode.nix { vscodeTool = rust.vscode; })
         # THE PERSON'S OWN PROGRAMS (invariant 6's dated exception): the CLI's
         # wrapper and the units' tools, then the three supports it drives —
         # Flatpak (with nix-flatpak, ready and declaring nothing but Flathub),
@@ -1258,6 +1281,12 @@
         # Blender and OrcaSlicer, and OrcaSlicer as the default for the three
         # model types in `/etc/xdg/mimeapps.list`. On in the full profile.
         ./nix/modules/workshop.nix
+        # ONLYOFFICE and LibreOffice, each the default for its own family of
+        # documents (Microsoft's, the open ones). On in the full profile.
+        ./nix/modules/office.nix
+        # The Crafting Apps' switch (the apps are AppImages of the table in
+        # `assets/distro-apps.nix`). On in the full profile.
+        ./nix/modules/crafts.nix
 
         # THE 2026-10-05 WAVE: the machine's own flake, the person's
         # declarations and the distro's program registry — options only until
@@ -1545,8 +1574,9 @@
         inherit texts;
 
         # THE HIGHLIGHTER'S TABLE, and its negative fixture: `syntax-negative`
-        # is a table in which one language steals another's type and another
-        # claims prose, and it must FAIL to build. (The update sequence's pair
+        # is a table in which one language steals another's type, another
+        # claims prose and a third makes its comment's marker a word
+        # character, and it must FAIL to build. (The update sequence's pair
         # travels with its brain module, whose checks build it.)
         syntax-rs = syntaxTable.table;
         syntax-negative = syntaxTable.negativeFixture;

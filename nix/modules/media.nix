@@ -215,6 +215,7 @@ in
           # The one that opens what mpv refuses.
           vlc = {
             package = pkgs.vlc;
+            name = "VLC";
             desktopIds = [ "vlc.desktop" ];
           };
 

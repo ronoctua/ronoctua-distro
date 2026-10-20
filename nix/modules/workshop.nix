@@ -98,6 +98,7 @@ in
       # them, and a person may decline either.
       ronoctua.apps.blender = {
         package = pkgs.blender;
+        name = "Blender";
         group = "workshop";
         desktopIds = [ "blender.desktop" ];
       };
@@ -109,6 +110,7 @@ in
       # not go round.
       ronoctua.apps.orca-slicer = {
         package = orca;
+        name = "OrcaSlicer";
         group = "workshop";
         desktopIds = lib.optional config.ronoctua.distroApps.installed.orca-slicer orcaEntry;
       };

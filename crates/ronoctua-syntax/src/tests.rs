@@ -43,6 +43,9 @@ const fn bare() -> Grammar {
         capitalised_is_type: false,
         screaming_is_constant: false,
         call: false,
+        word_chars: "_$?",
+        char_prefix: None,
+        colon_is_constant: false,
     }
 }
 
@@ -161,6 +164,43 @@ const fn pythonish() -> Grammar {
             },
         ],
         keywords: &["def", "return"],
+        ..bare()
+    }
+}
+
+/// Common Lisp's, cut to what the tests exercise: the reader's word
+/// characters, the character literal, the keyword's colon, the signed
+/// numeral, and a docstring that spans lines.
+const fn lispish() -> Grammar {
+    Grammar {
+        line_comments: &[";"],
+        block_comment: Some(Block {
+            open: "#|",
+            close: "|#",
+            nests: true,
+        }),
+        strings: &[Delimiter {
+            open: "\"",
+            close: "\"",
+            escape: "\\",
+            spans_lines: true,
+            hashes: false,
+            max: None,
+        }],
+        // SORTED BY `Ord`, as the generator emits them.
+        keywords: &[
+            "&optional",
+            "defun",
+            "let",
+            "let*",
+            "multiple-value-bind",
+            "when",
+        ],
+        constants: &["nil", "t"],
+        numbers: Numbers::C,
+        word_chars: "-_*+/<>=!?%&$.:@^~",
+        char_prefix: Some("#\\"),
+        colon_is_constant: true,
         ..bare()
     }
 }
@@ -502,9 +542,11 @@ fn odd_lines_do_not_blow_up() {
         markdownish(),
         diffish(),
         markupish(),
+        lispish(),
     ] {
         for text in [
-            "", "\t", "   ", "\"", "'", "/*", "```", "<a href=", "#[", "${", "r#\"",
+            "", "\t", "   ", "\"", "'", "/*", "```", "<a href=", "#[", "${", "r#\"", "#\\", "#|",
+            "-", "+1", "1/", ":", "#\\é",
         ] {
             let _ = line(text, &grammar, State::fresh());
         }
@@ -625,6 +667,12 @@ fn ranges_are_ordered_non_overlapping_and_on_char_boundaries() {
         "+ação",
         "## Título ☕",
         "```rust\nlet á = 1;\n```",
+        // A CHARACTER LITERAL OF A MULTI-BYTE CHARACTER, which is the shape
+        // that ends the literal inside the character when the scanner takes
+        // one byte after the prefix instead of one character.
+        "(list #\\é #\\☕ #\\ação)",
+        "#\\é",
+        ":ação -1é",
     ];
     for grammar in [
         rustish(),
@@ -633,6 +681,7 @@ fn ranges_are_ordered_non_overlapping_and_on_char_boundaries() {
         markdownish(),
         diffish(),
         markupish(),
+        lispish(),
     ] {
         for seed in seeds {
             for row in seed.lines() {
@@ -870,7 +919,7 @@ fn the_second_wave_is_reached_by_type_and_by_tag() {
     for (mime, id) in [
         ("text/x-erlang", "erlang"),
         ("text/x-elixir", "elixir"),
-        ("text/x-common-lisp", "lisp"),
+        ("text/x-common-lisp", "common-lisp"),
         ("text/x-emacs-lisp", "lisp"),
         ("text/x-scheme", "lisp"),
         ("text/x-ocaml", "ocaml"),
@@ -915,4 +964,262 @@ fn the_second_wave_is_reached_by_type_and_by_tag() {
     let seen = seen_in("elixir", elixir);
     assert!(seen.contains(&(Role::Keyword, "defmodule")), "{seen:?}");
     assert!(seen.contains(&(Role::Comment, "# x")), "{seen:?}");
+}
+
+// ---------------------------------------------------------------------
+// Common Lisp, and a word made of the grammar's own characters
+// ---------------------------------------------------------------------
+
+/// FAILS IF: a grammar's word characters are ignored, and the default rule
+/// cuts a Lisp symbol at its hyphen: `multiple-value-bind` would light
+/// nothing, and `when-let` would light `when`.
+#[test]
+fn a_hyphenated_symbol_is_one_word() {
+    let grammar = lispish();
+    let text = "(multiple-value-bind (a b) (when-let ((x 1)) x))";
+    let seen = painted(text, &one(text, &grammar));
+    assert!(
+        seen.contains(&(Role::Keyword, "multiple-value-bind")),
+        "{seen:?}"
+    );
+    assert!(
+        !seen.contains(&(Role::Keyword, "when")),
+        "`when-let` lit `when`: {seen:?}"
+    );
+}
+
+/// FAILS IF: `*` stops being a word character in Lisp, and `let*` lights
+/// `let` and leaves the star out.
+#[test]
+fn let_star_is_its_own_keyword() {
+    let grammar = lispish();
+    let text = "(let* ((x 1)) (let ((y 2)) y))";
+    let seen = painted(text, &one(text, &grammar));
+    assert!(seen.contains(&(Role::Keyword, "let*")), "{seen:?}");
+    // ONE `let`, the inner one: the star did not cut the outer word.
+    let lets = seen.iter().filter(|(_, w)| *w == "let").count();
+    assert_eq!(lets, 1, "{seen:?}");
+}
+
+/// FAILS IF: the character literal is not tried first. `#\"` would open a
+/// string that runs to the next quote, and `#\;` would turn the rest of the
+/// line into a comment.
+#[test]
+fn a_character_literal_opens_neither_a_string_nor_a_comment() {
+    let grammar = lispish();
+    let text = "(list #\\\" #\\; #\\Space #\\( \"a\")";
+    let (out, carried) = line(text, &grammar, State::fresh());
+    let seen = painted(text, &out);
+    assert_eq!(
+        seen,
+        vec![
+            (Role::Constant, "#\\\""),
+            (Role::Constant, "#\\;"),
+            (Role::Constant, "#\\Space"),
+            (Role::Constant, "#\\("),
+            (Role::String, "\"a\""),
+        ],
+        "{seen:?}"
+    );
+    assert!(carried.is_fresh(), "a literal left something open");
+    // AND AT THE END OF A LINE the literal is the prefix alone, which names
+    // the line break.
+    assert_eq!(
+        painted("#\\", &one("#\\", &grammar)),
+        vec![(Role::Constant, "#\\")]
+    );
+}
+
+/// FAILS IF: a Lisp string stops reaching across lines, and a docstring's
+/// second line comes out as code.
+#[test]
+fn a_docstring_spans_lines() {
+    let grammar = lispish();
+    let (first, carried) = line("(defun f () \"First line,", &grammar, State::fresh());
+    assert_eq!(
+        painted("(defun f () \"First line,", &first).last(),
+        Some(&(Role::String, "\"First line,"))
+    );
+    assert!(!carried.is_fresh(), "the docstring did not carry");
+    let text = "and the second.\" 42)";
+    let (second, done) = line(text, &grammar, carried);
+    let seen = painted(text, &second);
+    assert_eq!(seen[0], (Role::String, "and the second.\""), "{seen:?}");
+    assert!(seen.contains(&(Role::Number, "42")), "{seen:?}");
+    assert!(done.is_fresh());
+}
+
+/// FAILS IF: the colon rule is dropped, or widened to any word with a colon
+/// in it: `:test` is a keyword, a constant; `cl:car` is a symbol of a package.
+#[test]
+fn a_keyword_is_a_constant_and_a_package_symbol_is_not() {
+    let grammar = lispish();
+    let text = "(find x y :test #'equal :key #:foo cl:car)";
+    let seen = painted(text, &one(text, &grammar));
+    assert!(seen.contains(&(Role::Constant, ":test")), "{seen:?}");
+    assert!(seen.contains(&(Role::Constant, ":key")), "{seen:?}");
+    assert!(seen.contains(&(Role::Constant, ":foo")), "{seen:?}");
+    assert!(
+        !seen.iter().any(|(_, w)| w.contains("car")),
+        "`cl:car` was coloured: {seen:?}"
+    );
+    // AND A GRAMMAR WITHOUT THE SHAPE colours none of them.
+    let plain = Grammar {
+        colon_is_constant: false,
+        ..lispish()
+    };
+    assert!(
+        !painted(text, &one(text, &plain))
+            .iter()
+            .any(|(_, w)| w.starts_with(':')),
+        "a keyword was coloured with no shape asking for it"
+    );
+}
+
+/// FAILS IF: a signed numeral is read as a symbol, or a symbol that starts
+/// with digits as a numeral: `-1` and `1/2` are numbers, `1+` is a function.
+#[test]
+fn a_signed_numeral_is_a_number_and_one_plus_is_not() {
+    let grammar = lispish();
+    let text = "(+ -1 +2 1/2 1.5e-3 (1+ x) x-1)";
+    let seen = painted(text, &one(text, &grammar));
+    for numeral in ["-1", "+2", "1/2", "1.5e-3"] {
+        assert!(
+            seen.contains(&(Role::Number, numeral)),
+            "{numeral}: {seen:?}"
+        );
+    }
+    assert!(
+        !seen.iter().any(|(_, w)| w.starts_with("1+") || *w == "1"),
+        "`1+` or `x-1` was read as a number: {seen:?}"
+    );
+    // AND A GRAMMAR WHERE `-` IS PUNCTUATION reads the digits alone, as it
+    // always did: `x-1` there is a name, a minus and a numeral.
+    let text = "let y = x-1;";
+    let seen = painted(text, &one(text, &rustish()));
+    assert!(seen.contains(&(Role::Number, "1")), "{seen:?}");
+}
+
+/// FAILS IF: the default word rule drifts from the one every grammar used
+/// before rows could declare theirs — a byte that was part of a word stops
+/// being one, or the reverse, and every language's words move.
+#[test]
+fn the_default_word_rule_is_the_old_one_for_every_byte() {
+    let grammar = bare();
+    for b in 0..=u8::MAX {
+        let old = b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b == b'?';
+        assert_eq!(crate::in_word(b, &grammar), old, "byte {b:#04x}");
+        assert_eq!(crate::is_word_char(b), old, "byte {b:#04x}");
+    }
+    // AND EVERY ROW OF THE TABLE THAT DECLARES NO WORD CHARACTERS HAS THE
+    // DEFAULT ONES: only the two Lisp rows say otherwise.
+    for g in Language::all() {
+        if g.word_chars != "_$?" {
+            assert!(
+                ["common-lisp", "lisp"].contains(&g.id),
+                "{} declares word characters: {:?}",
+                g.id,
+                g.word_chars
+            );
+        }
+    }
+    // AND NO BYTE OF A MULTI-BYTE CHARACTER IS EVER PART OF A WORD, whatever
+    // a grammar written by hand says.
+    let wild = Grammar {
+        word_chars: "é",
+        ..bare()
+    };
+    for b in 0x80..=u8::MAX {
+        assert!(!crate::in_word(b, &wild), "byte {b:#04x}");
+    }
+}
+
+/// FAILS IF: a word of a row's lists cannot be reached by the scanner — a
+/// dead row that looks deliberate. Each word, alone on a line, is drawn
+/// whole and with its list's role.
+#[test]
+fn every_table_word_is_a_word_by_its_grammar() {
+    for g in Language::all() {
+        if g.kind != Kind::Code {
+            continue;
+        }
+        for (list, role) in [
+            (g.keywords, Role::Keyword),
+            (g.types, Role::Type),
+            (g.constants, Role::Constant),
+        ] {
+            for word in list {
+                assert!(
+                    word.bytes().all(|b| crate::in_word(b, g)),
+                    "{}: `{word}` is not a word by its own characters",
+                    g.id
+                );
+                assert_eq!(
+                    painted(word, &one(word, g)),
+                    vec![(role, *word)],
+                    "{}: `{word}` alone is not drawn as itself",
+                    g.id
+                );
+            }
+        }
+    }
+}
+
+/// FAILS IF: Common Lisp stops being reached by its type, its tags, an
+/// `env -S` shebang or its sniff — or the family's row takes it back.
+#[test]
+fn common_lisp_has_a_row_of_its_own() {
+    assert_eq!(of_mime("text/x-common-lisp"), Some(Language::CommonLisp));
+    for tag in ["common-lisp", "lisp", "cl"] {
+        assert_eq!(of_tag(tag), Some(Language::CommonLisp), "{tag}");
+    }
+    assert_eq!(of_mime("text/x-emacs-lisp"), Some(Language::Lisp));
+    assert_eq!(of_tag("elisp"), Some(Language::Lisp));
+    assert_eq!(
+        of_shebang("#!/usr/bin/sbcl --script"),
+        Some(Language::CommonLisp)
+    );
+    assert_eq!(
+        of_shebang("#!/usr/bin/env -S sbcl --script"),
+        Some(Language::CommonLisp)
+    );
+    assert_eq!(of_shebang("#!/usr/bin/env ecl"), Some(Language::CommonLisp));
+    // A FLAG BEFORE `env` IS NOT SKIPPED: only what env is told.
+    assert_eq!(of_shebang("#!/bin/sh -e"), Some(Language::Shell));
+    assert_eq!(
+        guess("(in-package :my-app)\n\n(defun main () (print :hello))\n"),
+        Some(Language::CommonLisp)
+    );
+    let g = Language::CommonLisp.grammar();
+    assert_eq!(g.label, "Common Lisp");
+    let text = "(defun f (x &optional (y #\\;)) (let* ((z :key)) z)) ; done";
+    let seen = painted(text, &one(text, g));
+    assert!(seen.contains(&(Role::Keyword, "defun")), "{seen:?}");
+    assert!(seen.contains(&(Role::Keyword, "&optional")), "{seen:?}");
+    assert!(seen.contains(&(Role::Constant, "#\\;")), "{seen:?}");
+    assert!(seen.contains(&(Role::Keyword, "let*")), "{seen:?}");
+    assert!(seen.contains(&(Role::Constant, ":key")), "{seen:?}");
+    assert!(seen.contains(&(Role::Comment, "; done")), "{seen:?}");
+}
+
+/// FAILS IF: `guess` cuts its head inside a character. A text whose 4096th
+/// byte falls in the middle of `é` or `☕` panicked there — in a preview,
+/// which is the footer.
+#[test]
+fn a_guess_never_cuts_a_character() {
+    for filler in ["é", "☕", "a"] {
+        for shift in 0..4 {
+            let mut text = alloc::string::String::from("x").repeat(4096 - 1 - shift);
+            while text.len() < 4100 {
+                text.push_str(filler);
+            }
+            let _ = guess(&text);
+        }
+    }
+    // AND THE CUT STILL SEES WHAT IS BEFORE IT.
+    let mut text = alloc::string::String::from("(in-package :x)\n");
+    while text.len() < 5000 {
+        text.push('é');
+    }
+    assert_eq!(guess(&text), Some(Language::CommonLisp));
 }

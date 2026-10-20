@@ -3,6 +3,7 @@
   "apps": [
     {
       "id": "chrome",
+      "name": null,
       "source": "nix",
       "desktop-ids": [
         "google-chrome.desktop"
@@ -14,6 +15,7 @@
     },
     {
       "id": "emacs",
+      "name": null,
       "source": "nix",
       "desktop-ids": [
         "emacs.desktop"
@@ -25,6 +27,7 @@
     },
     {
       "id": "blender",
+      "name": "Blender",
       "source": "nix",
       "desktop-ids": [
         "blender.desktop"
@@ -36,6 +39,7 @@
     },
     {
       "id": "vlc",
+      "name": "VLC",
       "source": "nix",
       "desktop-ids": [
         "vlc.desktop"
@@ -47,6 +51,7 @@
     },
     {
       "id": "mpv",
+      "name": null,
       "source": "nix",
       "desktop-ids": [
         "mpv.desktop"
@@ -58,6 +63,7 @@
     },
     {
       "id": "zsh",
+      "name": null,
       "source": "nix",
       "desktop-ids": [],
       "essential": "the-login-shell",
@@ -67,6 +73,7 @@
     },
     {
       "id": "htop",
+      "name": null,
       "source": "nix",
       "desktop-ids": [
         "htop.desktop"
@@ -78,6 +85,7 @@
     },
     {
       "id": "btop",
+      "name": null,
       "source": "nix",
       "desktop-ids": [
         "btop.desktop"
@@ -89,6 +97,7 @@
     },
     {
       "id": "ghostty",
+      "name": null,
       "source": "nix",
       "desktop-ids": [
         "com.mitchellh.ghostty.desktop"
@@ -97,6 +106,20 @@
       "group": "base",
       "on-this-machine": true,
       "declined-here": false
+    },
+    {
+      "id": "libreoffice",
+      "name": "LibreOffice",
+      "source": "nix",
+      "desktop-ids": [
+        "startcenter.desktop",
+        "writer.desktop",
+        "calc.desktop"
+      ],
+      "essential": null,
+      "group": "office",
+      "on-this-machine": true,
+      "declined-here": true
     }
   ]
 }

@@ -1222,6 +1222,7 @@ mod tests {
             terminal: false,
             startup_wm_class: None,
             key: ronoctua_apps::fold::fold(id),
+            fallback: true,
         };
         let catalogue: crate::launch::Catalogue = std::sync::Arc::new(vec![entry]);
         r.heard(&catalogue, &mut w);

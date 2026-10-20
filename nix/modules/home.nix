@@ -217,7 +217,7 @@ in
     };
   };
 
-  # `~/.shellrc.local` — created once, never overwritten.
+  # `~/.shellrc.local` — created where it is missing, never overwritten.
   #
   # It is the file that holds what belongs to ONE machine. The system must give
   # it a shape, and then get out of the way: rewriting it on every rebuild would
@@ -247,13 +247,18 @@ in
     '';
   };
 
+  # The copy is made AS the person (`setpriv`): root writing into a folder
+  # the person owns would follow a link the person planted there, to a
+  # place only root may write. Born `0600` by `install`, never readable in
+  # between. Nothing that is there is touched, a dangling link included.
   system.activationScripts.shellrcLocal = {
     deps = [ "users" ];
     text = ''
-      if [ ! -e ${home}/.shellrc.local ]; then
-        cp ${shellrcLocalTemplate} ${home}/.shellrc.local
-        chown ${cfg.user}:users ${home}/.shellrc.local
-        chmod 600 ${home}/.shellrc.local
+      if [ ! -e ${home}/.shellrc.local ] && [ ! -L ${home}/.shellrc.local ]; then
+        ${pkgs.util-linux}/bin/setpriv --reuid=${cfg.user} --regid=${
+          config.users.users.${cfg.user}.group
+        } --init-groups \
+          ${pkgs.coreutils}/bin/install -m 0600 ${shellrcLocalTemplate} ${home}/.shellrc.local
       fi
     '';
   };

@@ -65,8 +65,10 @@ export LESSHISTFILE="$XDG_STATE_HOME/less/history"
 export STARSHIP_CACHE="$XDG_CACHE_HOME/starship"
 export NPM_CONFIG_CACHE="$XDG_CACHE_HOME/npm"
 export PYTHONPYCACHEPREFIX="$XDG_CACHE_HOME/python"
+# rlwrap's per-command histories (`sbcl`, `ccl`, `ecl` below).
+export RLWRAP_HOME="$XDG_STATE_HOME/rlwrap"
 
-mkdir -p "$XDG_STATE_HOME/less" "$STARSHIP_CACHE"
+mkdir -p "$XDG_STATE_HOME/less" "$STARSHIP_CACHE" "$RLWRAP_HOME"
 
 # NO RUSTUP_HOME. On this distro the toolchain comes from the flake
 # (`rust-overlay`), and a second `rustup` would be a second source of truth for
@@ -236,6 +238,34 @@ if command -v emacsclient >/dev/null 2>&1; then
     alias et="emacsclient -c -n -a ''"
 fi
 
+# THE THREE LISPS' REPLs READ A LINE WITH NOTHING: no history, no arrow
+# keys. `rlwrap` gives them both, its history under `$RLWRAP_HOME`. Only at
+# the prompt — a script, a pipe and `alive-lsp` call the program itself.
+#
+# A FUNCTION AND NOT AN ALIAS, because rlwrap refuses a terminal that says it
+# has no width ("is it emacs?") and then the Lisp never starts: there, and
+# where the input is not a terminal at all, the Lisp runs bare. `command`
+# reaches the program and never the function.
+_ronoctua_rlwrapped() {
+    _ronoctua_columns=$(stty size 2>/dev/null | cut -d ' ' -f 2)
+    if [ -n "$_ronoctua_columns" ] && [ "$_ronoctua_columns" -gt 0 ] 2>/dev/null; then
+        unset _ronoctua_columns
+        rlwrap "$@"
+    else
+        unset _ronoctua_columns
+        command "$@"
+    fi
+}
+if command -v rlwrap >/dev/null 2>&1 && command -v sbcl >/dev/null 2>&1; then
+    sbcl() { _ronoctua_rlwrapped sbcl "$@"; }
+fi
+if command -v rlwrap >/dev/null 2>&1 && command -v ccl >/dev/null 2>&1; then
+    ccl() { _ronoctua_rlwrapped ccl "$@"; }
+fi
+if command -v rlwrap >/dev/null 2>&1 && command -v ecl >/dev/null 2>&1; then
+    ecl() { _ronoctua_rlwrapped ecl "$@"; }
+fi
+
 
 # -----------------------------------------------------------------------------
 # Aliases: system
@@ -303,9 +333,9 @@ scan() {
 # Versions of what is installed. Every line is guarded, so the output is a map
 # of the machine and not a wall of "command not found".
 v() {
-    for tool in rustc cargo go python3 node bun deno dart flutter emacs nix git; do
+    for tool in rustc cargo go python3 node bun deno dart flutter sbcl ccl ecl emacs nix git; do
         if command -v "$tool" >/dev/null 2>&1; then
-            printf '%-10s %s\n' "$tool" "$("$tool" --version 2>&1 | head -1)"
+            printf '%-10s %s\n' "$tool" "$(command "$tool" --version 2>&1 | head -1)"
         fi
     done
 }

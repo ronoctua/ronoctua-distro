@@ -22,6 +22,12 @@
 let
   cfg = config.ronoctua.dev;
 
+  # COMMON LISP (2026-10-20): SBCL with its libraries, CCL, ECL, qlot,
+  # alive-lsp and the Quicklisp installer — `nix/common-lisp/`, the one file
+  # `flake.nix` also reads for what it downloads.
+  commonLisp = import ../common-lisp { inherit pkgs; };
+  home = config.users.users.${config.ronoctua.user}.home;
+
   # The SDK, composed. `androidenv` builds a directory that Studio, gradle and
   # flutter all accept — which is what `ANDROID_HOME` has to point at.
   androidSdk = pkgs.androidenv.composeAndroidPackages {
@@ -130,6 +136,29 @@ in
         group = "dev-toolchains";
       };
 
+      # ---- common lisp ----
+      #
+      # IN BOTH PROFILES (`when`), in the terminal: SBCL whose `sbcl` sees the
+      # libraries (alexandria to slynk, and alive-lsp), CCL and ECL compiling
+      # the same libraries' sources on first use, qlot for a project's pinned
+      # ones, alive-lsp's command, `quicklisp-install`, and `rlwrap`, which
+      # the shell puts in front of the three REPLs (`assets/shell/shellrc.sh`).
+      # Emacs is not touched (the 2026-10-19 decision). See
+      # `nix/common-lisp/default.nix`.
+      common-lisp = {
+        package = commonLisp.sbcl;
+        when = true;
+        extraPackages = [
+          commonLisp.ccl
+          commonLisp.ecl
+          commonLisp.qlot
+          commonLisp.aliveLspCommand
+          commonLisp.quicklisp.install
+          pkgs.rlwrap
+        ];
+        group = "dev-toolchains";
+      };
+
       # ---- go ----
       go = {
         package = pkgs.go;
@@ -197,11 +226,13 @@ in
       # ---- android ----
       android-studio = {
         package = pkgs.android-studio;
+        name = "Android Studio";
         group = "dev-android";
         desktopIds = [ "android-studio.desktop" ];
       };
       android-sdk = {
         package = androidSdk.androidsdk;
+        name = "Android SDK";
         extraPackages = with pkgs; [
           android-tools # adb, fastboot
           jdk17 # what gradle and Studio expect
@@ -210,6 +241,7 @@ in
       };
       flutter = {
         package = pkgs.flutter;
+        name = "Flutter";
         extraPackages = [ pkgs.dart ];
         group = "dev-android";
       };
@@ -245,6 +277,25 @@ in
     # in both profiles. A person can still decline it
     # (`software/declined.json`) and get the PATH back — the store keeps it
     # either way, for `nix develop`.
+
+    # THE THREE LISPS' INIT FILES, written where each is MISSING — at the
+    # first activation with Common Lisp, and again at the next one if the
+    # person deletes it — and never over a file or a link that is there, a
+    # dangling one included: the shape of `~/.shellrc.local` in
+    # `nix/modules/home.nix`, and for its reason. They are the person's
+    # (they travel in the belongings' `common-lisp` target), and rewriting
+    # them at every rebuild would eat what they wrote. The copy is made AS
+    # the person (`setpriv`, in `ronoctua-common-lisp-seed`), never as root
+    # in a folder the person owns. Each loads ASDF, and Quicklisp once
+    # `quicklisp-install` put it in the home (`assets/common-lisp/`).
+    system.activationScripts.commonLispInit =
+      lib.mkIf config.ronoctua.distroApps.installed.common-lisp
+        {
+          deps = [ "users" ];
+          text = "${lib.getExe commonLisp.seed} ${home} ${config.ronoctua.user} ${
+            config.users.users.${config.ronoctua.user}.group
+          }\n";
+        };
 
     # KVM, for the VM tests and `nix run .#vm`.
     #

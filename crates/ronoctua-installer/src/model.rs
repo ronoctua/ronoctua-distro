@@ -34,6 +34,12 @@
 //! [`Question::skipped_one`]. Whoever goes by cable answers fifteen screens;
 //! whoever chooses a network answers sixteen.
 //!
+//! # And the list of programs is one too
+//!
+//! [`Question::LeftOut`] only appears for a `full` installation: the
+//! programs it lists are none of them on a `minimal` machine, so there is
+//! nothing to leave out of one. A `full` installation answers one screen more.
+//!
 //! # And the network is a GATE now
 //!
 //! The person's repository became mandatory (2026-10-05): the installation
@@ -44,7 +50,7 @@
 
 use crate::key;
 
-/// The questions. **Seventeen, and the test counts them.**
+/// The questions. **Eighteen, and the test counts them.**
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Question {
     /// Which disk to install on. It erases everything.
@@ -108,6 +114,21 @@ pub enum Question {
     /// with that line changed and the machine applied again (the update, or
     /// `ronoctua-machine apply`).
     Profile,
+    /// Which of the heavy programs a `full` installation leaves out of this
+    /// machine (`OFFERED`, the ledger's `offered`).
+    ///
+    /// # Why it is asked, and why its answer is not a line of `host.nix`
+    ///
+    /// The same reason as the installation's own: it says what the machine
+    /// is FOR, and some of these programs weigh gigabytes a person may never
+    /// open. But a program left out is the PERSON'S decision about a program,
+    /// not a fact about the machine — so it is a decline in their own
+    /// `declined.json`, scoped to this hostname, which every update honours
+    /// and the software centre undoes, and never a switch in `host.nix`.
+    ///
+    /// The answer is the unmarked ids joined by commas, or [`LEFT_OUT_NONE`]
+    /// — never empty, so it crosses the answers' file like any other.
+    LeftOut,
     /// The system's locale: date, number, paper and units.
     ///
     /// NOT the same as `Language`, and the difference is the reason there are
@@ -169,7 +190,7 @@ impl Question {
     /// the passphrase is typed blind, is not echoed, and cannot be corrected
     /// later — typing it on the wrong layout is the one mistake here with no
     /// recovery.
-    pub const ALL_KEYS: [Self; 17] = [
+    pub const ALL_KEYS: [Self; 18] = [
         Self::Language,
         Self::Disk,
         // WHICH installation, right after WHERE it goes. It comes before the
@@ -177,6 +198,9 @@ impl Question {
         // everything after it takes, and the person deserves that in front of
         // them early rather than at the end of a form.
         Self::Profile,
+        // AND WHAT OF IT, right after: the list only exists for `full`, and
+        // it changes the download as much as the installation does.
+        Self::LeftOut,
         Self::Keyboard,
         Self::KeyboardVariant,
         Self::ComposeKey,
@@ -220,6 +244,7 @@ impl Question {
             Self::SystemLocale => key::INST_SYSTEM_LOCALE,
             Self::Timezone => key::INST_TIMEZONE,
             Self::Profile => key::INST_PROFILE,
+            Self::LeftOut => key::INST_LEFT_OUT,
             Self::ResumeOffset => key::INST_RESUME_OFFSET,
             Self::Wifi => key::INST_WIFI,
             Self::WifiPassword => key::INST_WIFI_PASSWORD,
@@ -247,6 +272,7 @@ impl Question {
             Self::SystemLocale => key::INST_SYSTEM_LOCALE_HELP,
             Self::Timezone => key::INST_TIMEZONE_HELP,
             Self::Profile => key::INST_PROFILE_HELP,
+            Self::LeftOut => key::INST_LEFT_OUT_HELP,
             Self::ResumeOffset => key::INST_RESUME_OFFSET_HELP,
             // THE NETWORK'S HELP NAMES THE HOSTS IT WILL REACH — answering
             // the question is the consent to reach them (`$hosts`).
@@ -314,6 +340,9 @@ impl Question {
             Self::SystemLocale => Some(DEFAULT_LOCALE),
             Self::Timezone => Some(DEFAULT_TIMEZONE),
             Self::Profile => Some(DEFAULT_PROFILE),
+            // The ledger's unmarked rows: what pressing Enter through the
+            // list leaves out.
+            Self::LeftOut => Some(DEFAULT_LEFT_OUT),
             // The variant and the network default to empty, which `optional`
             // already accepts — writing it here too would say the same thing twice.
             _ => None,
@@ -345,9 +374,15 @@ impl Question {
     /// on the review screen would land on the password screen for a network nobody chose —
     /// a field asking for the password of nothing, with no way out other
     /// than typing something.
+    ///
+    /// The list of programs is skipped for any installation but `full`: none
+    /// of them is on a `minimal` machine (`offered-programs-are-the-registrys`
+    /// proves it of the evaluated systems), so a decline there would decline
+    /// nothing.
     #[must_use]
     pub fn skipped_one(self, r: &Answers) -> bool {
-        self == Self::WifiPassword && r.wifi_ssid.is_empty()
+        (self == Self::WifiPassword && r.wifi_ssid.is_empty())
+            || (self == Self::LeftOut && (r.profile != FULL_PROFILE || OFFERED.is_empty()))
     }
 }
 
@@ -377,6 +412,9 @@ pub enum Invalid {
     /// The access named is not a file's absolute path (the terminal-less
     /// mode names the deploy key's or the token's file, never its content).
     AccessNotAFile,
+    /// A program to leave out that the list does not offer, or one named
+    /// twice, or `none` beside a program.
+    NotOffered,
 }
 
 impl Invalid {
@@ -397,6 +435,7 @@ impl Invalid {
             Self::UnknownProfile => key::INST_INVALID_PROFILE,
             Self::Belongings(why) => crate::access::invalid_key(*why),
             Self::AccessNotAFile => key::INST_INVALID_ACCESS,
+            Self::NotOffered => key::INST_INVALID_LEFT_OUT,
         }
     }
 }
@@ -465,6 +504,10 @@ impl std::fmt::Display for Invalid {
             }
             Self::AccessNotAFile => {
                 "name the file that holds the deploy key or the token, by its absolute path"
+            }
+            Self::NotOffered => {
+                "the programs left out are ids of the installer's list, separated by commas and \
+                 each named once, or `none`"
             }
         };
         f.write_str(s)
@@ -741,12 +784,16 @@ pub const DEFAULT_LANGUAGE: &str = ronoctua_i18n::DEFAULT;
 /// here would bring inches and Fahrenheit along with the language.
 pub const DEFAULT_LOCALE: &str = "en_GB.UTF-8";
 
+/// The complete installation's name — the one that offers the list of
+/// programs ([`Question::LeftOut`]).
+pub const FULL_PROFILE: &str = "full";
+
 /// The two installations, in the order they appear on screen.
 ///
 /// The names are the ones `ronoctua.profile` takes in `host.nix`, and they are
 /// written ONCE: the answer goes into the generated file verbatim, so a second
 /// spelling here would be a machine that fails to evaluate on the target.
-pub const PROFILES: [&str; 2] = ["full", "minimal"];
+pub const PROFILES: [&str; 2] = [FULL_PROFILE, "minimal"];
 
 /// The complete installation, and it is the recommended one.
 ///
@@ -754,7 +801,82 @@ pub const PROFILES: [&str; 2] = ["full", "minimal"];
 /// everything is there. The reduced one is for whoever knows what they are
 /// leaving out — and it is what a machine used to WORK ON this distro wants,
 /// since installing it takes minutes instead of the best part of an afternoon.
-pub const DEFAULT_PROFILE: &str = "full";
+pub const DEFAULT_PROFILE: &str = FULL_PROFILE;
+
+/// One program a `full` installation lists ([`Question::LeftOut`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Offered {
+    /// The registry's id (`ronoctua.apps.<id>`): what a decline names.
+    pub id: &'static str,
+    /// The program's own name, the same in every language — data, like a
+    /// launcher entry's `Name=`, and never a text key (invariant 8 frames it).
+    pub name: &'static str,
+    /// Whether it comes marked: installed unless the person unmarks it.
+    pub checked: bool,
+}
+
+// `OFFERED` and `DEFAULT_LEFT_OUT`, written from the ledger's `offered` by
+// `nix/offered.nix`, which refuses a row the screen could not draw.
+include!(env!("RONOCTUA_OFFERED_RS"));
+
+/// The answer that leaves nothing out. No offered id may be it
+/// (`nix/offered.nix` refuses one).
+pub const LEFT_OUT_NONE: &str = "none";
+
+/// The ids an answer names, as written (trimmed), `none` naming none. Pure.
+fn named(answer: &str) -> Vec<&str> {
+    if answer.trim() == LEFT_OUT_NONE || answer.trim().is_empty() {
+        return Vec::new();
+    }
+    answer.split(',').map(str::trim).collect()
+}
+
+/// Whether `answer` leaves `id` out. Pure.
+#[must_use]
+pub fn is_left_out(answer: &str, id: &str) -> bool {
+    named(answer).contains(&id)
+}
+
+/// The ids `answer` names that the list does not offer — what an older
+/// installer's answer carries for a program this one no longer lists. Pure.
+#[must_use]
+pub fn not_offered(answer: &str) -> Vec<String> {
+    named(answer)
+        .into_iter()
+        .filter(|id| !OFFERED.iter().any(|o| o.id == *id))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// `answer` written as this list writes it: its offered ids in the list's
+/// order, or [`LEFT_OUT_NONE`]. Pure.
+#[must_use]
+pub fn canonical(answer: &str) -> String {
+    let out: Vec<&str> = OFFERED
+        .iter()
+        .map(|o| o.id)
+        .filter(|id| is_left_out(answer, id))
+        .collect();
+    if out.is_empty() {
+        LEFT_OUT_NONE.to_owned()
+    } else {
+        out.join(",")
+    }
+}
+
+/// `answer` with `id` marked if it was left out, and left out if it was
+/// marked — written in the list's order, or [`LEFT_OUT_NONE`] when nothing
+/// is left out. An id the list does not offer changes nothing. Pure.
+#[must_use]
+pub fn toggle(answer: &str, id: &str) -> String {
+    let flips = OFFERED.iter().any(|o| o.id == id);
+    let out: Vec<&str> = OFFERED
+        .iter()
+        .map(|o| o.id)
+        .filter(|o| is_left_out(answer, o) != (flips && *o == id))
+        .collect();
+    canonical(&out.join(","))
+}
 
 /// Validates an answer.
 ///
@@ -819,6 +941,21 @@ pub fn validate_it(
         Question::Profile => {
             if !PROFILES.contains(&answer) {
                 return Err(Invalid::UnknownProfile);
+            }
+        }
+        // THE LIST'S OWN IDS, each once, or `none` alone: the terminal-less
+        // mode reads it from the environment, and a typo there would decline
+        // nothing — and install a program the person meant to leave out.
+        Question::LeftOut => {
+            if answer.trim() != LEFT_OUT_NONE {
+                let ids = named(answer);
+                let mut seen: Vec<&str> = Vec::new();
+                for id in ids {
+                    if !OFFERED.iter().any(|o| o.id == id) || seen.contains(&id) {
+                        return Err(Invalid::NotOffered);
+                    }
+                    seen.push(id);
+                }
             }
         }
         // AGAINST THE REAL LIST, and not a shape check: xkb accepts a layout
@@ -895,6 +1032,14 @@ pub struct Answers {
     pub timezone: String,
     /// Which of the two installations: `full` or `minimal`.
     pub profile: String,
+    /// The programs left out of this machine: offered ids joined by `,`, or
+    /// `none`. Read only for a `full` installation ([`Answers::left_out_ids`]).
+    pub left_out: String,
+    /// When they were left out — ONE stamp per run, set by
+    /// [`run_command`](crate::executor::run_command) (or the dry run), so
+    /// every copy of the declines it writes is byte for byte the same.
+    /// Computed; never asked.
+    pub left_out_at: Option<ronoctua_person::Stamp>,
     /// The swap's offset, computed once the disk exists.
     pub resume_offset: Option<u64>,
     /// The chosen Wi-Fi network. Empty = going by cable.
@@ -1019,6 +1164,7 @@ impl Answers {
             Question::SystemLocale => &self.system_locale,
             Question::Timezone => &self.timezone,
             Question::Profile => &self.profile,
+            Question::LeftOut => &self.left_out,
             Question::Wifi => &self.wifi_ssid,
             Question::WifiPassword => &self.wifi_password,
             Question::BelongingsAddress => &self.belongings,
@@ -1026,6 +1172,36 @@ impl Answers {
             Question::BelongingsPassphrase => &self.belongings_passphrase,
             Question::ResumeOffset => "",
         }
+    }
+
+    /// The ids this machine leaves out, in the list's order: none unless the
+    /// installation is `full` and the answer names some.
+    #[must_use]
+    pub fn left_out_ids(&self) -> Vec<&'static str> {
+        if self.profile != FULL_PROFILE {
+            return Vec::new();
+        }
+        OFFERED
+            .iter()
+            .filter(|o| is_left_out(&self.left_out, o.id))
+            .map(|o| o.id)
+            .collect()
+    }
+
+    /// The offered ids this machine KEEPS — the ones ticked — in the list's
+    /// order: none unless the installation is `full`. With
+    /// [`Answers::left_out_ids`], the whole answer: a reinstall under the
+    /// same name brings back what an earlier one left out.
+    #[must_use]
+    pub fn kept_ids(&self) -> Vec<&'static str> {
+        if self.profile != FULL_PROFILE {
+            return Vec::new();
+        }
+        OFFERED
+            .iter()
+            .filter(|o| !is_left_out(&self.left_out, o.id))
+            .map(|o| o.id)
+            .collect()
     }
 
     /// Writes an answer.
@@ -1042,6 +1218,7 @@ impl Answers {
             Question::SystemLocale => self.system_locale = v,
             Question::Timezone => self.timezone = v,
             Question::Profile => self.profile = v,
+            Question::LeftOut => self.left_out = v,
             Question::Wifi => self.wifi_ssid = v,
             Question::WifiPassword => self.wifi_password = v,
             Question::BelongingsAddress => self.belongings = v,
@@ -1063,7 +1240,7 @@ mod tests {
     const LAYOUTS: &[&str] = &["br", "us", "gb"];
 
     #[test]
-    fn there_are_exactly_seventeen_questions() {
+    fn there_are_exactly_eighteen_questions() {
         // Milestone 8's CRITERION still holds: one asks what ONLY THE PERSON
         // knows, and nothing beyond. One more question is a decision the project
         // handed back to the person after already making it (section 7.1).
@@ -1088,11 +1265,16 @@ mod tests {
         // 2026-10-05): where the person keeps their configuration, how this
         // machine reaches it and what opens it are theirs alone to know, and
         // they are what makes the new machine theirs before its first boot.
-        assert_eq!(Question::ALL_KEYS.len(), 17);
+        //
+        // THE PROGRAMS LEFT OUT (owner, 2026-10-20) are the eighteenth: which
+        // heavy programs a `full` machine is for is the person's to say, like
+        // the installation itself, and nothing on the hardware tells it. It
+        // is only asked of a `full` installation, which alone carries them.
+        assert_eq!(Question::ALL_KEYS.len(), 18);
         let mut views: Vec<_> = Question::ALL_KEYS.to_vec();
         views.sort();
         views.dedup();
-        assert_eq!(views.len(), 17, "there is a repeated question in the list");
+        assert_eq!(views.len(), 18, "there is a repeated question in the list");
     }
 
     /// FAILS IF: the repository's questions come before the network they
@@ -1152,6 +1334,10 @@ mod tests {
         r.set(Question::Password, "Zq7 with = and spaces".into());
         r.set(Question::Wifi, "home-5g".into());
         r.set(Question::WifiPassword, "Zq7-radio".into());
+        r.set(Question::Profile, FULL_PROFILE.into());
+        // THE PROGRAMS LEFT OUT cross too, commas and all: a hop that lost
+        // them would install what the person unmarked.
+        r.set(Question::LeftOut, "blender,libreoffice".into());
         r.resume_offset = Some(1);
         let text = r.lines(Question::BelongingsAddress);
         assert!(
@@ -1164,6 +1350,7 @@ mod tests {
             assert_eq!(back.get(q), r.get(q), "{q:?}");
         }
         assert_eq!(back.resume_offset, None);
+        assert_eq!(back.left_out_ids(), ["blender", "libreoffice"]);
         // A line from a newer installer, and nonsense, are skipped.
         let (_, none) = Answers::from_lines("RONOCTUA_INST_FROM_THE_FUTURE=x\nnonsense\n");
         assert_eq!(none, None);
@@ -1186,6 +1373,7 @@ mod tests {
             Invalid::UnknownProfile,
             Invalid::Belongings(Why::PlainHttp),
             Invalid::AccessNotAFile,
+            Invalid::NotOffered,
         ];
         let mut keys: Vec<&str> = all.iter().map(Invalid::key).collect();
         keys.sort_unstable();
@@ -1237,11 +1425,120 @@ mod tests {
         assert!(Question::WifiPassword.skipped_one(&r));
         r.wifi_ssid = "some-network".into();
         assert!(!Question::WifiPassword.skipped_one(&r));
-        // The others are never skipped for any answer.
+        // The others are never skipped for any answer — but the list of
+        // programs, which is the installation's (see below).
+        r.profile = FULL_PROFILE.into();
         for q in Question::ALL_KEYS {
             if q != Question::WifiPassword {
                 assert!(!q.skipped_one(&r), "{q:?} was skipped");
             }
+        }
+    }
+
+    /// FAILS IF: the list of programs is asked of an installation that does
+    /// not carry them (a decline there declines nothing), is not asked of a
+    /// `full` one, or comes before the installation it depends on.
+    #[test]
+    fn the_checklist_is_asked_only_of_the_full_installation() {
+        let at = |q: Question| Question::ALL_KEYS.iter().position(|x| *x == q).unwrap();
+        assert_eq!(at(Question::LeftOut), at(Question::Profile) + 1);
+        let mut r = Answers::default();
+        for profile in PROFILES {
+            r.profile = profile.into();
+            assert_eq!(
+                Question::LeftOut.skipped_one(&r),
+                profile != FULL_PROFILE,
+                "{profile}"
+            );
+        }
+        // Not even the default: a blank profile is not `full`.
+        r.profile.clear();
+        assert!(Question::LeftOut.skipped_one(&r));
+        assert!(!OFFERED.is_empty(), "the ledger offers nothing");
+        // AND WHAT A `minimal` ANSWER LEFT OUT IS NOTHING, whatever it says.
+        r.profile = "minimal".into();
+        r.left_out = "blender".into();
+        assert!(r.left_out_ids().is_empty());
+        r.profile = FULL_PROFILE.into();
+        assert_eq!(r.left_out_ids(), ["blender"]);
+        // THE REST IS KEPT, and the two halves are the whole list.
+        let kept = r.kept_ids();
+        assert!(!kept.contains(&"blender"));
+        assert_eq!(kept.len() + 1, OFFERED.len());
+        r.profile = "minimal".into();
+        assert!(r.kept_ids().is_empty());
+        assert_eq!(Question::LeftOut.variable(), "RONOCTUA_INST_LEFT_OUT");
+        assert!(!Question::LeftOut.secret_one() && !Question::LeftOut.optional());
+    }
+
+    /// FAILS IF: an answer names a program the list does not offer, names
+    /// one twice or `none` beside one and is taken — or `none` and the
+    /// default are refused; `toggle` does not mark and unmark in the list's
+    /// order; `none` could be a program's id; or the default is not the
+    /// ledger's unmarked rows.
+    #[test]
+    fn the_left_out_answer_is_offered_ids_or_none() {
+        let check = |v: &str| validate_it(Question::LeftOut, v, LANGUAGES, LAYOUTS);
+        for bad in [
+            "zsh",
+            "blender,blender",
+            "none,blender",
+            "blender,none",
+            "blender,",
+            "Blender",
+        ] {
+            assert_eq!(check(bad), Err(Invalid::NotOffered), "{bad}");
+        }
+        assert_eq!(check(""), Err(Invalid::Blank));
+        for good in [
+            LEFT_OUT_NONE,
+            DEFAULT_LEFT_OUT,
+            "blender, vlc",
+            "vlc,blender",
+        ] {
+            assert_eq!(check(good), Ok(()), "{good}");
+        }
+        for o in OFFERED {
+            assert_eq!(check(o.id), Ok(()), "{}", o.id);
+        }
+        assert!(!OFFERED.iter().any(|o| o.id == LEFT_OUT_NONE));
+        let unmarked: Vec<&str> = OFFERED
+            .iter()
+            .filter(|o| !o.checked)
+            .map(|o| o.id)
+            .collect();
+        assert_eq!(
+            DEFAULT_LEFT_OUT,
+            if unmarked.is_empty() {
+                LEFT_OUT_NONE.to_owned()
+            } else {
+                unmarked.join(",")
+            }
+        );
+        assert_eq!(Question::LeftOut.default_answer(), Some(DEFAULT_LEFT_OUT));
+        // TOGGLE, both ways, in the list's order — whatever order it came in.
+        let first = OFFERED[0].id;
+        let last = OFFERED[OFFERED.len() - 1].id;
+        let both = toggle(&toggle(LEFT_OUT_NONE, last), first);
+        assert_eq!(both, format!("{first},{last}"));
+        assert!(is_left_out(&both, first) && is_left_out(&both, last));
+        assert_eq!(toggle(&toggle(&both, first), last), LEFT_OUT_NONE);
+        assert_eq!(
+            toggle(&toggle(DEFAULT_LEFT_OUT, first), first),
+            DEFAULT_LEFT_OUT
+        );
+        assert_eq!(toggle("vlc,blender", "zsh"), "blender,vlc");
+        // AN OLDER LIST'S IDS are named, and dropped when written again.
+        assert_eq!(
+            not_offered("vlc,no-such-program, blender"),
+            ["no-such-program"]
+        );
+        assert!(not_offered(LEFT_OUT_NONE).is_empty());
+        assert_eq!(canonical("no-such-program,vlc"), "vlc");
+        assert_eq!(canonical("no-such-program"), LEFT_OUT_NONE);
+        assert!(!is_left_out(LEFT_OUT_NONE, LEFT_OUT_NONE));
+        for o in OFFERED {
+            assert_eq!(check(&toggle(LEFT_OUT_NONE, o.id)), Ok(()), "{}", o.id);
         }
     }
 

@@ -120,13 +120,20 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    (`/var/lib/ronoctua-binary-cache/netrc`, `0600`), escrito só pelo gesto dela pela porta do sudo
    (`binary-cache-netrc`) e pelo instalador, e removido quando o token ou o cache privado saem; o
    netrc e o token nunca entram no flake, no store nem em `/etc`.
+   Exceção no mesmo molde (2026-10-20, aprovada no plano da leva): **as extensões do VS Code e o
+   Quicklisp da pessoa**. Só pelo gesto dela — a oferta dos pertences ou `ronoctua-vscode install`,
+   com o `Pass` de cada host que `hosts_of` nomeia; `quicklisp-install`, digitado — o que a distro
+   instala fica no home dela (`~/.vscode/extensions`, `~/quicklisp`), a partir de uma lista que é
+   dado dela ou de arquivos pinados; nada disso entra no flake, em `/etc` nem no repositório.
 
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta. Só o
    `nix run .#gate` roda tudo.
 8. **Zero string literal em UI.** Todo texto sai de uma `text-key`, completa em todos os idiomas
    declarados. Exceções aprovadas: a linha do log do brain (2026-09-25), o texto que a pessoa digita
    num lembrete e a amostra de código que um buffer mostra (o `example`, 2026-10-04) são dado, como
-   o conteúdo de um arquivo; a moldura em volta deles continua em chaves.
+   o conteúdo de um arquivo, e também o nome próprio de um programa — o `name` do registro e o
+   `Name=` de um `.desktop`, igual em todo idioma (2026-10-20, aprovado no plano da leva); a moldura
+   em volta deles continua em chaves.
 9. **Zero valor visual escrito à mão** — cor, fonte, tamanho, espaçamento, codepoint: tudo por
    token. (A cor de um efeito de câmera é aritmética sobre a imagem, não interface.)
 10. **Ícone de interface é glifo de fonte.** O superpacote de ícones é só fallback de pixmap para
@@ -230,10 +237,11 @@ livre nunca é assado na compilação (`generated`): vai no `atRunTime`, senão 
 fica fora de qualquer cache público (cobra `release-cache-holds-only-free-builds`).
 
 Tudo é app do flake — nunca justfile nem Makefile. Um passo que precise de instrução escrita
-deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "full"` (~29 GiB) ou
-`"minimal"` (~11,8 GiB), com a tabela em `nix/modules/profile.nix`. Os dois trazem o trabalho na
-distro: o toolchain do devshell no store (`nix/toolchain.nix`, a fonte única), o rust e os agentes no
-PATH, o KVM e o `nix-direnv`.
+deveria ser automático. A instalação tem dois perfis, `ronoctua.profile = "full"` (~37 GiB; ~35,5 com o
+padrão do instalador, sem o LibreOffice) ou `"minimal"` (~12,5 GiB), com a tabela em
+`nix/modules/profile.nix`. Os dois trazem o trabalho na distro: o toolchain do devshell no store
+(`nix/toolchain.nix`, a fonte única), o rust, o Common Lisp e os agentes no PATH, o KVM e o
+`nix-direnv`.
 
 ## Como o sistema é montado
 
@@ -493,6 +501,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | `bootctl`, as variáveis EFI e o diretório da máquina | `ronoctua-machine` (cobra `one-bootctl-driver`) |
 | os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/held.json`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
 | o Cachix: o cache binário da pessoa, o token de envio, o netrc do root e o envio depois da atualização | `ronoctua-cachix` (cobra `binary-cache-token-never-prints`) |
+| o VS Code: o manifesto das extensões instaladas, a lista da pessoa que viaja nos pertences e o `code --install-extension` | `ronoctua-vscode` |
 
 <!-- anchor: L01 -->
 

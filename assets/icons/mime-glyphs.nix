@@ -228,6 +228,10 @@
       token = "rust";
     }
     {
+      mime = "text/x-common-lisp";
+      token = "common-lisp";
+    }
+    {
       mime = "application/x-shellscript";
       token = "terminal";
     }
@@ -303,6 +307,60 @@
       glob = "*.obj";
       mime = "model/obj";
       over = "application/x-tgif";
+    }
+  ];
+
+  # A NAME A TYPE OF THE DATABASE ANSWERS HERE, AND UPSTREAM DOES NOT GIVE IT.
+  #
+  # Common Lisp (2026-10-20). `*.lsp` is one of its extensions, and upstream
+  # gives it no type at all: a `.lsp` was plain text, with the text glyph and
+  # no highlighting. A row adds the glob to a type the database HAS, at the
+  # database's own weight, after upstream's rows — `ours` is for a type that
+  # does not exist, and this one does.
+  #
+  # `*.cl` IS CLAIMED TWICE, ON PURPOSE. Upstream gives it to OpenCL
+  # (`text/x-opencl-src`), and Common Lisp writes `.cl` too. A row with
+  # `shares` joins upstream's claimant at the same weight: a TIE, which
+  # `mime::named` reports as unsettled and `mime::of_path` reads the head for
+  # (the `*.ogg` case). There the magic decides first; then the first row
+  # here whose glob matches and one of whose `content` markers is in the head
+  # — markers only a Lisp file writes; and otherwise upstream's type stands,
+  # so an OpenCL kernel, which writes none of them, stays OpenCL.
+  #
+  # AND IT REFUSES TO GO STALE: the type has to exist; a row that does not
+  # say `shares` has to be its glob's only claimant (or it would tie in
+  # silence); the type it `shares` with has to claim that glob upstream at
+  # the same weight; and `content` comes with `shares`, and only with it.
+  claims = [
+    {
+      glob = "*.lsp";
+      mime = "text/x-common-lisp";
+    }
+    {
+      glob = "*.cl";
+      mime = "text/x-common-lisp";
+      shares = "text/x-opencl-src";
+      content = [
+        "(in-package"
+        "(defpackage"
+        "(defsystem"
+        "(uiop:define-package"
+      ];
+    }
+  ];
+
+  # A NAME UPSTREAM GIVES A TYPE ITS FILES ARE NOT.
+  #
+  # `*.fasl` is Common Lisp's COMPILED file — bytes for one implementation's
+  # loader — and upstream gives it `text/x-common-lisp`, under `text/plain`:
+  # the preview would show a fasl as text and colour it as Lisp. The row
+  # removes the glob; with no claimant left, a fasl is what its bytes say, or
+  # unknown, which is the truth. Refused when upstream stops making the
+  # claim, since the row would then be doing nothing while looking deliberate.
+  drop = [
+    {
+      glob = "*.fasl";
+      mime = "text/x-common-lisp";
     }
   ];
 

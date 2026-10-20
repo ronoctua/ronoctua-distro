@@ -29,6 +29,13 @@
 //! (`/apps/<id>`). A file that does not read as that document (a newer
 //! format, a broken one) is joined by the general rules.
 //!
+//! # VS Code's list of extensions
+//!
+//! `home/.config/Code/User/ronoctua-extensions.json` is a SET of ids
+//! (`ronoctua_vscode::merge`): the base, plus what either side added, minus
+//! what either side took out — so an uninstall on one machine and an install
+//! on the other both hold, and nobody is asked.
+//!
 //! # What it is not
 //!
 //! It never reads a file nor writes one: the engine hands the bytes in
@@ -97,6 +104,9 @@ pub enum List {
     Declared,
     /// `software/declined.json`.
     Declined,
+    /// VS Code's list of the person's extensions, a set
+    /// (`ronoctua_vscode::merge`) — the `vscode` target's.
+    Extensions,
 }
 
 /// The person's list `logical` is (`state/person/software/declared.json`…).
@@ -104,6 +114,9 @@ pub enum List {
 #[must_use]
 pub fn list_of(logical: &str) -> Option<List> {
     use ronoctua_person::names::{DECLARED, DECLINED, MIRROR};
+    if logical == crate::offers::EXTENSIONS_LIST {
+        return Some(List::Extensions);
+    }
     let rest = logical.strip_prefix("state/")?.strip_prefix(MIRROR)?;
     match rest.strip_prefix('/')? {
         r if r == DECLARED => Some(List::Declared),
@@ -139,6 +152,12 @@ pub fn merge(
         let joined = match list {
             List::Declared => person::<Declared>(base, ours, theirs, pick),
             List::Declined => person::<Declined>(base, ours, theirs, pick),
+            // A SET, joined as one: what either side added or took out,
+            // never a clash.
+            List::Extensions => ronoctua_vscode::merge(base, ours, theirs).map(|bytes| Joined {
+                bytes,
+                clashes: Vec::new(),
+            }),
         };
         if joined.is_some() {
             return joined;
@@ -563,5 +582,44 @@ mod tests {
         assert_eq!(pointers, ["/apps/appimage:one"]);
         let picked = merge(PATH, &base, &ours, &theirs, &|_: &str| Some(Pick::Theirs)).unwrap();
         assert!(text(&picked).contains("\"desk\""));
+    }
+
+    /// FAILS IF: VS Code's list of extensions is not joined as a SET when
+    /// both machines changed it — an install on one side and an uninstall on
+    /// the other both kept, never a clash — or the same document under
+    /// another name is (its array is ONE value there, and both changed it).
+    #[test]
+    fn the_vscode_list_merges_as_a_set() {
+        let list = |ids: &[&str]| {
+            let quoted: Vec<String> = ids.iter().map(|i| format!("\"{i}\"")).collect();
+            format!(
+                "{{\"format\": 1, \"extensions\": [{}]}}\n",
+                quoted.join(", ")
+            )
+            .into_bytes()
+        };
+        let base = list(&["a.x", "z.z"]);
+        let ours = list(&["a.x", "n.ours", "z.z"]);
+        let theirs = list(&["a.x"]);
+        let joined = merge(
+            crate::offers::EXTENSIONS_LIST,
+            &base,
+            &ours,
+            &theirs,
+            &|_| None,
+        )
+        .unwrap();
+        assert!(joined.clashes.is_empty(), "{:?}", joined.clashes);
+        let ids = ronoctua_vscode::parse_list(&joined.bytes).unwrap().ids;
+        assert_eq!(
+            ids.into_iter().collect::<Vec<_>>(),
+            ["a.x", "n.ours"],
+            "an addition or a removal was lost"
+        );
+        let elsewhere = merge("config/some-list.json", &base, &ours, &theirs, &|_| None).unwrap();
+        assert!(
+            !elsewhere.clashes.is_empty(),
+            "the general rules joined the set"
+        );
     }
 }

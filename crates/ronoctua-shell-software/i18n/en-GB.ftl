@@ -372,6 +372,13 @@ software-declared-not-on-this-machine = This computer's profile does not carry i
 software-declared-row-declined = Declined
 software-declared-row-bring-back = Bring it back
 software-declared-bring-back-value = on every computer, and here at once
+software-declared-bring-back-here = { $others ->
+        [0] here at once
+        [one] here at once; your other computer keeps it out
+       *[other] here at once; your { $others } other computers keep it out
+    }
+software-declared-back-elsewhere = Each computer that declined it brings it back itself; from here, it comes back on all of them at once.
+software-declared-row-bring-back-everywhere = Bring it back on every computer
 software-declared-row-decline-here = Keep it uninstalled here
 software-declared-row-decline-everywhere = Keep it uninstalled on all your computers
 software-declared-row-for-me = Install only for you
@@ -391,5 +398,11 @@ software-declared-decline-rebuild = This computer is rebuilt now, without it.
 software-declared-decline-others = Your other computers leave it out at their next update.
 software-declared-decline-back = Declined by you brings it back.
 software-declared-yes-decline = Yes, keep it uninstalled
+software-declared-sure-bring-back-everywhere = Bring { $app } back on every computer?
+software-declared-back-everywhere-others = Every computer that declined it installs it again at its next update — a computer you no longer have included, whose decline nothing else could undo.
+software-declared-back-everywhere-here = This computer does not change: it never left it out.
+software-declared-yes-bring-back-everywhere = Yes, bring it back everywhere
+software-declared-registry-broken = This computer's list of the distro's programs does not read, so none of them is shown here. The next update of this computer writes it again.
+software-declared-registry-newer = This computer's list of the distro's programs was written by a newer distro, so none of them is shown here: update this computer.
 software-declared-returning = No longer declined here: this computer's next update brings it back.
 software-declared-web-edit = It is declared: saving changes your declaration, and your other computers take the change at their next update.

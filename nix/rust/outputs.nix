@@ -5,7 +5,7 @@
 #
 #   bins.<bin>       every release program but an `apart` one, as built — what
 #                    a check runs where it used to run `${workspace}/bin/<bin>`
-#   <name>           the 29 named programs a module, an app or the ISO runs
+#   <name>           the 30 named programs a module, an app or the ISO runs
 #                    (`installer`, `rescue`, `brain`, …), the unit itself or,
 #                    for one that paints, the unit under a wrapper that carries
 #                    the palettes
@@ -157,6 +157,8 @@ let
     incusJob = program "ronoctua-incus-job" "its [[bin]] requires the feature cli, and no member of the build enabled it";
     # The LLM CLI, the push to the person's cache, the stick's root writer.
     llm = program "ronoctua-llm" plainly;
+    # VS Code's extensions: the record the user path unit runs.
+    vscode = program "ronoctua-vscode" plainly;
     cachix = program "ronoctua-cachix" plainly;
     stickWrite = program "ronoctua-stick-write" plainly;
     # NetworkManager's secret agent and the console that asks a Wi-Fi

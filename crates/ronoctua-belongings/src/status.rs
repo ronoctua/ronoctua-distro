@@ -115,6 +115,12 @@ pub enum Offer {
     },
     /// Let a security key answer for the password (`pam_u2f`, sufficient).
     PamU2f,
+    /// Install the VS Code extensions of the person's list that are missing
+    /// here — through the queue (`order::Op::VscodeExtensions`).
+    VscodeExtensions {
+        /// How many were missing when the sync offered it.
+        count: u32,
+    },
 }
 
 /// What the repository weighs, against its budget.

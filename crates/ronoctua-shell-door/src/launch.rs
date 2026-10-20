@@ -479,24 +479,51 @@ fn subdirectories(
 /// `mimeapps.list` files (`ronoctua_apps::defaults`, read now, in the
 /// specification's order): the person's own, the distribution's `/etc/xdg`
 /// (`nix/modules/workshop.nix` sends models to OrcaSlicer there), a
-/// package's. The first entry a list names that IS in the catalogue wins;
-/// one that is not installed is skipped. Only when no list names an
+/// package's. The first entry a list names that IS installed wins (listed
+/// or not, below); one that is not installed is skipped. Only when no list names an
 /// installed entry for the type do the declarations below answer — and that
 /// order is what keeps a `.step`, which the database makes a `text/plain`,
 /// out of the first editor that declares `text/plain`.
+///
+/// # A default may name what the launcher does not list
+///
+/// The catalogue is what the launcher LISTS, and `NoDisplay=true` keeps an
+/// entry out of it; but a default naming such an entry is a choice like any
+/// other — the player's own list names its entry, which is `NoDisplay`, for
+/// every audio and video type. So the ids a list names that the catalogue
+/// lacks are looked up in the directories themselves
+/// ([`ronoctua_apps::named`]), only for this type and only when a file is
+/// opened.
 #[must_use]
-pub fn opens<'a>(
-    catalogue: &'a Catalogue,
-    of_type: &str,
-) -> Option<&'a ronoctua_apps::DesktopEntry> {
-    opens_by(catalogue, &ronoctua_apps::defaults(), of_type)
+pub fn opens(catalogue: &Catalogue, of_type: &str) -> Option<ronoctua_apps::DesktopEntry> {
+    let defaults = ronoctua_apps::defaults();
+    let wanted = ronoctua_files::mime::canonical(of_type);
+    let unlisted: Vec<ronoctua_apps::DesktopEntry> = defaults
+        .for_type(|m| ronoctua_files::mime::canonical(m) == wanted)
+        .filter(|id| !catalogue.iter().any(|e| e.id == *id))
+        // The name is not shown: the entry only says what runs.
+        .filter_map(|id| ronoctua_apps::named(id, "C"))
+        .collect();
+    opens_by(catalogue, &unlisted, &defaults, of_type).cloned()
 }
 
-/// [`opens`], with the defaults given — what a test hands in, so it never
-/// reads the machine's own lists.
+/// [`opens`], with the defaults and the entries the catalogue does not list
+/// given — what a test hands in, so it never reads the machine's own files.
+///
+/// # A program may decline the name order
+///
+/// Without a default, the first entry that declares the type opens it, and
+/// the catalogue is sorted by name: a design tool that declares every image
+/// type, and whose name sorts before the browser's, took every photograph
+/// from the browser. An entry that says
+/// `X-Ronoctua-Fallback=false` ([`ronoctua_apps::DesktopEntry::fallback`]) is
+/// passed by in that order — by type or by parent type, ours or anybody's —
+/// and still wins where a default names it, and is still offered where a
+/// person chooses (`open with`).
 #[must_use]
 pub fn opens_by<'a>(
     catalogue: &'a Catalogue,
+    unlisted: &'a [ronoctua_apps::DesktopEntry],
     defaults: &ronoctua_apps::defaults::Defaults,
     of_type: &str,
 ) -> Option<&'a ronoctua_apps::DesktopEntry> {
@@ -505,10 +532,16 @@ pub fn opens_by<'a>(
     // `application/vnd.ms-3mfdocument`, and both name one type.
     let chosen = defaults
         .for_type(|m| ronoctua_files::mime::canonical(m) == wanted)
-        .find_map(|id| catalogue.iter().find(|e| e.id == id));
+        .find_map(|id| {
+            catalogue
+                .iter()
+                .find(|e| e.id == id)
+                .or_else(|| unlisted.iter().find(|e| e.id == id))
+        });
     if chosen.is_some() {
         return chosen;
     }
+    let catalogue = || catalogue.iter().filter(|e| e.fallback);
     // OURS FIRST, then anybody's. The player claims every audio and video
     // type, and so do the mpv and the VLC the full profile installs; the
     // catalogue's order between entries of one directory is the order the
@@ -521,17 +554,16 @@ pub fn opens_by<'a>(
             .iter()
             .any(|m| ronoctua_files::mime::is_a(wanted, m))
     };
-    catalogue
-        .iter()
+    catalogue()
         .filter(ours)
         .find(exact)
         // EXACTLY the type first. A handler for `text/plain` will open a
         // `text/x-rust` — every editor does — but so will fifty other
         // applications, and picking one of those over the one that named the
         // type is how a `.rs` file ends up in a mail client.
-        .or_else(|| catalogue.iter().find(exact))
-        .or_else(|| catalogue.iter().filter(ours).find(parent))
-        .or_else(|| catalogue.iter().find(parent))
+        .or_else(|| catalogue().find(exact))
+        .or_else(|| catalogue().filter(ours).find(parent))
+        .or_else(|| catalogue().find(parent))
 }
 
 /// The prefix of this system's own desktop entries.
@@ -596,9 +628,8 @@ pub fn opener_of_type(catalogue: &crate::launch::Catalogue, of_type: &'static st
     if of_type.starts_with("text/") || of_type == ronoctua_files::mime::UNKNOWN {
         return Opener::Editor;
     }
-    crate::launch::opens(catalogue, of_type).map_or(Opener::Nothing(of_type), |e| {
-        Opener::App(Box::new(e.clone()))
-    })
+    crate::launch::opens(catalogue, of_type)
+        .map_or(Opener::Nothing(of_type), |e| Opener::App(Box::new(e)))
 }
 
 /// The editor's command for `file` — the program, its arguments and the

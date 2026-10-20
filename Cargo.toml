@@ -110,6 +110,10 @@ members = [
   # THE 2026-10-11 WAVE: the person's binary cache (Cachix) — a boundary of
   # its own (AGENTS.md's table).
   "crates/ronoctua-cachix",
+  # THE 2026-10-20 WAVE: VS Code's files and CLI — the person's list of
+  # extensions that travels, and what installs it — a boundary of its own
+  # (AGENTS.md's table).
+  "crates/ronoctua-vscode",
   # THE SHELL IN CRATES (the 2026-10-12 wave): the foundation below the
   # binary — the kit, the door, the report, the keep, the work, the inspection
   # panels — and the leaves that stand on it alone, the lifeline, the overlays,

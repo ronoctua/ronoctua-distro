@@ -84,7 +84,24 @@ pub struct DesktopEntry {
     /// Computed ONCE during the scan. Folding per keystroke would redo the
     /// work of hundreds of entries on every letter typed.
     pub key: String,
+    /// Whether opening a file may fall to it by the catalogue's order: `false`
+    /// when the entry says `X-Ronoctua-Fallback=false` ([`FALLBACK_KEY`]).
+    ///
+    /// What opens a type no list chose is the first entry that declares it,
+    /// and the catalogue is sorted by name — so a design tool that declares
+    /// every image type, and whose name sorts before the browser's, took every
+    /// photograph from the browser. An entry that says
+    /// `false` keeps its `MimeType=` (it is still offered where a person
+    /// chooses a program, `open with`) and a default that names it still
+    /// wins; only the name order passes it by. The distro writes the key on
+    /// the launchers it makes (`appimageOf`, `nix/modules/distro-apps.nix`).
+    pub fallback: bool,
 }
+
+/// The launcher key that takes an entry out of the opener's name order
+/// ([`DesktopEntry::fallback`]). Written by the distro's own launchers; an
+/// entry without it is a fallback like any other.
+pub const FALLBACK_KEY: &str = "X-Ronoctua-Fallback";
 
 /// The `applications` directories, in priority order.
 ///
@@ -149,7 +166,7 @@ pub fn scan_in(dirs: &[PathBuf], language: &str) -> Vec<DesktopEntry> {
         // order must not decide anything.
         found.sort();
         for path in found {
-            let Some((id, input_of)) = read(&path, dir, language) else {
+            let Some((id, input_of)) = read(&path, dir, language, Listing::Listed) else {
                 continue;
             };
             // The FIRST wins: the directories already come in priority order.
@@ -165,6 +182,43 @@ pub fn scan_in(dirs: &[PathBuf], language: &str) -> Vec<DesktopEntry> {
 #[must_use]
 pub fn scan(language: &str) -> Vec<DesktopEntry> {
     scan_in(&directories(), language)
+}
+
+/// The entry with this id, in the environment's directories — LISTED OR NOT.
+/// See [`named_in`].
+#[must_use]
+pub fn named(id: &str, language: &str) -> Option<DesktopEntry> {
+    named_in(&directories(), id, language)
+}
+
+/// The entry with this id, `NoDisplay=true` included: what a DEFAULT may
+/// name.
+///
+/// # Why a default reaches what the launcher does not list
+///
+/// `NoDisplay` says "do not show me in a menu", not "do not open files with
+/// me": the specification's own example is a program that only exists to
+/// handle a type. The player's entry is one (`nix/modules/player.nix`): it
+/// opens every audio and video type, the player's `mimeapps.list` names it
+/// for each, and it is no program to launch by itself — so it is not in the
+/// catalogue the launcher lists. The opener asked the catalogue alone, found
+/// no such entry, skipped the default as "not installed" and handed films to
+/// whatever declared them first.
+///
+/// The first directory that has the id answers, as in [`scan_in`]; a
+/// `Hidden=true` file there is the entry deleted, and answers nothing.
+/// `TryExec` and the rest of the reading are the catalogue's.
+#[must_use]
+pub fn named_in(dirs: &[PathBuf], id: &str, language: &str) -> Option<DesktopEntry> {
+    for dir in dirs {
+        let mut found = Vec::new();
+        collect_from(dir, 0, &mut found);
+        found.sort();
+        if let Some(path) = found.iter().find(|p| id_of(p, dir).as_deref() == Some(id)) {
+            return read(path, dir, language, Listing::Any).map(|(_, entry)| entry);
+        }
+    }
+    None
 }
 
 /// The defaults the environment's `mimeapps.list` files choose, most
@@ -235,8 +289,22 @@ fn collect_from(dir: &Path, level: usize, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Which entries a reading takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Listing {
+    /// What a menu lists: `NoDisplay=true` stays out.
+    Listed,
+    /// What a default may name: `NoDisplay=true` too ([`named_in`]).
+    Any,
+}
+
 /// A `.desktop` becoming `(id, DesktopEntry)`. `None` when it should not appear.
-fn read(path: &Path, root: &Path, language: &str) -> Option<(String, DesktopEntry)> {
+fn read(
+    path: &Path,
+    root: &Path,
+    language: &str,
+    listing: Listing,
+) -> Option<(String, DesktopEntry)> {
     let text = std::fs::read_to_string(path).ok()?;
     let fields = desktop::fields(&text);
 
@@ -246,7 +314,9 @@ fn read(path: &Path, root: &Path, language: &str) -> Option<(String, DesktopEntr
     if desktop::raw_bytes(&fields, "Type") != Some("Application") {
         return None;
     }
-    if desktop::boolean(&fields, "NoDisplay") || desktop::boolean(&fields, "Hidden") {
+    if (listing == Listing::Listed && desktop::boolean(&fields, "NoDisplay"))
+        || desktop::boolean(&fields, "Hidden")
+    {
         return None;
     }
     // `TryExec` is the spec's answer to "a `.desktop` orphaned by a removed package".
@@ -328,6 +398,10 @@ fn read(path: &Path, root: &Path, language: &str) -> Option<(String, DesktopEntr
                 .map(str::trim)
                 .filter(|c| !c.is_empty())
                 .map(str::to_owned),
+            // ONLY `false` says no: a key that is absent, or says anything
+            // else, leaves the entry a fallback like any other.
+            fallback: !desktop::raw_bytes(&fields, FALLBACK_KEY)
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("false")),
         },
     ))
 }
@@ -372,7 +446,7 @@ fn exists_on_path(program: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{DesktopEntry, scan_in};
+    use super::{DesktopEntry, named_in, scan_in};
     use std::path::PathBuf;
 
     /// Writes `.desktop` files into a temporary directory and scans.
@@ -431,6 +505,94 @@ mod tests {
             r.iter().map(|e| &e.name).collect::<Vec<_>>()
         );
         assert_eq!(r[0].name, "Bom");
+    }
+
+    /// FAILS IF: a default cannot reach a `NoDisplay` entry (the player's,
+    /// which opens every film and is no program to launch), or a `Hidden`
+    /// one — the entry deleted — comes back, or a lower directory answers
+    /// for an id a higher one has.
+    #[test]
+    fn a_default_reaches_an_entry_the_menu_does_not_list() {
+        let base = std::env::temp_dir().join(format!(
+            "ronoctua-apps-named-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let (mine, system) = (base.join("mine"), base.join("system"));
+        let write = |dir: &PathBuf, name: &str, text: &str| {
+            let target = dir.join(name);
+            std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+            std::fs::write(target, text).expect("write");
+        };
+        write(
+            &system,
+            "br.ronoctua.player.desktop",
+            "[Desktop Entry]\nType=Application\nName=Player\nExec=play %U\nNoDisplay=true\n",
+        );
+        write(
+            &system,
+            "gone.desktop",
+            "[Desktop Entry]\nType=Application\nName=Gone\nExec=gone\n",
+        );
+        write(
+            &mine,
+            "gone.desktop",
+            "[Desktop Entry]\nType=Application\nName=Gone\nExec=gone\nHidden=true\n",
+        );
+        write(
+            &system,
+            "kde4/deep.desktop",
+            "[Desktop Entry]\nType=Application\nName=Deep\nExec=deep\nNoDisplay=true\n",
+        );
+        let dirs = vec![mine, system];
+        let listed = scan_in(&dirs, "pt_BR");
+        let player = named_in(&dirs, "br.ronoctua.player", "pt_BR");
+        let gone = named_in(&dirs, "gone", "pt_BR");
+        let deep = named_in(&dirs, "kde4-deep", "pt_BR");
+        let nobody = named_in(&dirs, "nobody", "pt_BR");
+        std::fs::remove_dir_all(&base).ok();
+        assert!(
+            listed.iter().all(|e| e.id != "br.ronoctua.player"),
+            "the menu lists a NoDisplay entry"
+        );
+        assert_eq!(
+            player.map(|e| e.command.1),
+            Some(vec![]),
+            "a default cannot reach the player"
+        );
+        assert_eq!(gone, None, "a Hidden entry is the entry deleted");
+        assert_eq!(deep.map(|e| e.name), Some("Deep".to_owned()));
+        assert_eq!(nobody, None);
+    }
+
+    /// FAILS IF: the opener's name order cannot be told to pass an entry by
+    /// (`X-Ronoctua-Fallback=false`), or anything but `false` does it.
+    #[test]
+    fn only_false_takes_an_entry_out_of_the_name_order() {
+        let r = with_it(&[
+            (
+                "a.desktop",
+                "[Desktop Entry]\nType=Application\nName=A\nExec=a\nX-Ronoctua-Fallback=false\n",
+            ),
+            (
+                "b.desktop",
+                "[Desktop Entry]\nType=Application\nName=B\nExec=b\nX-Ronoctua-Fallback= FALSE \n",
+            ),
+            (
+                "c.desktop",
+                "[Desktop Entry]\nType=Application\nName=C\nExec=c\nX-Ronoctua-Fallback=no\n",
+            ),
+            (
+                "d.desktop",
+                "[Desktop Entry]\nType=Application\nName=D\nExec=d\n",
+            ),
+        ]);
+        let fallback: Vec<(&str, bool)> = r.iter().map(|e| (e.id.as_str(), e.fallback)).collect();
+        assert_eq!(
+            fallback,
+            [("a", false), ("b", false), ("c", true), ("d", true)]
+        );
     }
 
     /// THE DEFECT: `read_dir` is the filesystem's order, and the item under the

@@ -21,8 +21,8 @@ comparing the two vocabularies. Here there is no second copy to compare.
 
 WHAT IT REFUSES
 ---------------
-Thirteen things, each naming the offending id. They are listed in the header of
-`assets/syntax.nix` and each `fail()` below says why.
+Seventeen things, each naming the offending id. They are listed in the header
+of `assets/syntax.nix` and each `fail()` below says why.
 """
 
 import argparse
@@ -41,7 +41,41 @@ KINDS = ("code", "markup", "markdown", "diff")
 NUMBERS = ("none", "plain", "c")
 PROPERTIES = ("none", "colon", "equals")
 SNIFF_SHAPES = ("none", "json-object")
-SHAPES = ("capitalised-is-type", "screaming-is-constant")
+SHAPES = ("capitalised-is-type", "screaming-is-constant", "colon-is-constant")
+
+# EVERY FIELD A ROW MAY HAVE. Two are optional (`word-chars`, `char-prefix`),
+# and an optional field misspelt would be a row that silently keeps the
+# default — so a field outside this list is refused by name.
+FIELDS = (
+    "id",
+    "label",
+    "kind",
+    "mime",
+    "tags",
+    "guessable",
+    "shebang",
+    "sniff",
+    "sniff-shape",
+    "word-chars",
+    "char-prefix",
+    "line-comment",
+    "block-comment",
+    "strings",
+    "interpolation",
+    "attribute",
+    "numbers",
+    "property",
+    "shapes",
+    "call",
+    "fences",
+    "keywords",
+    "types",
+    "constants",
+)
+
+# WHAT A WORD IS MADE OF, besides ASCII letters and digits, when a row does
+# not say: the scanner's rule from before rows could say (`is_word_char`).
+DEFAULT_WORD_CHARS = "_$?"
 
 ID = re.compile(r"^[a-z][a-z0-9-]*$")
 TAG = re.compile(r"^[a-z0-9+#-]+$")
@@ -66,14 +100,21 @@ def fail(message: str) -> None:
     failed = True
 
 
-def is_word_char(ch: str) -> bool:
-    """The scanner's own rule, and the generator has to use the SAME one.
+def is_word_char(ch: str, extra: str = DEFAULT_WORD_CHARS) -> bool:
+    """The scanner's own rule (`in_word`), and the generator has to use the
+    SAME one: an ASCII letter or digit, or one of the row's word characters.
 
     A keyword the scanner could never match is a dead row that looks
     deliberate — the shape `gen-mimedb.py` already refuses for a glob that
-    matches nothing.
+    matches nothing. ASCII, as the scanner's bytes are: a letter of another
+    script is never part of a word there.
     """
-    return ch.isalnum() or ch in "_$?"
+    return (ch.isascii() and ch.isalnum()) or ch in extra
+
+
+def word_chars(lang: dict) -> str:
+    """The characters besides letters and digits this row's words are made of."""
+    return lang.get("word-chars", DEFAULT_WORD_CHARS)
 
 
 def fold(mime: str, aliases: dict[str, str]) -> str:
@@ -130,8 +171,9 @@ def variant(identifier: str) -> str:
 
 
 def check_words(lang: dict, field: str, words: list[str]) -> None:
+    extra = word_chars(lang)
     for w in words:
-        if not w or not all(is_word_char(c) for c in w):
+        if not w or not all(is_word_char(c, extra) for c in w):
             fail(
                 f"`{lang['id']}` lists `{w}` under `{field}`, which is not a word by the "
                 "scanner's own rule. It could never match, and a row that matches nothing "
@@ -139,10 +181,105 @@ def check_words(lang: dict, field: str, words: list[str]) -> None:
             )
 
 
+def check_word_chars(lang: dict) -> None:
+    """A row's own word characters, and what they may not swallow.
+
+    The scanner reads a whole word at once, so a word character that also
+    starts a comment, a string, an attribute or a character literal would
+    hide that opener inside any word it follows: `foo;bar` would never reach
+    the `;` comment. Letters and digits are words already, whitespace never
+    is one, and a character of another script is a byte sequence the scanner
+    must never cut.
+    """
+    ident = lang["id"]
+    extra = lang.get("word-chars", DEFAULT_WORD_CHARS)
+    if not isinstance(extra, str):
+        fail(f"`{ident}` sets `word-chars` to {extra!r}, which is not a string of characters")
+        return
+    for ch in extra:
+        if not ch.isascii() or ch.isspace() or ch.isalnum() or not ch.isprintable():
+            fail(
+                f"`{ident}`'s `word-chars` holds {ch!r}, which is not ASCII punctuation. "
+                "Letters and digits are words already, whitespace never is one, and a "
+                "character of another script would be cut by the scanner's bytes."
+            )
+    if len(set(extra)) != len(extra):
+        fail(f"`{ident}`'s `word-chars` names a character twice: {extra!r}")
+    openers = list(lang["line-comment"]) + [d["open"] for d in lang["strings"]]
+    if lang["block-comment"] is not None:
+        openers.append(lang["block-comment"]["open"])
+    if lang["attribute"] is not None:
+        openers.append(lang["attribute"]["prefix"])
+    if lang.get("char-prefix"):
+        openers.append(lang["char-prefix"])
+    for opener in openers:
+        if opener and opener[0] in extra:
+            fail(
+                f"`{ident}`'s `word-chars` holds {opener[0]!r}, which starts {opener!r}. "
+                "A word is read whole, so that opener would vanish inside any word it "
+                "follows."
+            )
+    if "colon-is-constant" in lang["shapes"] and ":" not in extra:
+        fail(
+            f"`{ident}` says `colon-is-constant` and `:` is not among its word "
+            "characters. No word could start with one, so the shape would mean nothing."
+        )
+
+
+def check_char_prefix(lang: dict) -> None:
+    """A character literal's opener, when the row has one.
+
+    The literal is tried before anything else on a line, so a prefix that
+    begins a comment or a string marker would hide every one of them, and one
+    that a marker begins would hide the comments and strings that start with
+    it; and a prefix that starts with a word character would fire inside
+    words.
+    """
+    ident = lang["id"]
+    prefix = lang.get("char-prefix")
+    if prefix is None:
+        return
+    if (
+        not isinstance(prefix, str)
+        or not prefix
+        or not prefix.isascii()
+        or not prefix.isprintable()
+        or any(ch.isspace() for ch in prefix)
+        or len(prefix.encode("utf-8")) > DELIMITER_MAX
+    ):
+        fail(
+            f"`{ident}`'s `char-prefix` {prefix!r} is not a marker of one to "
+            f"{DELIMITER_MAX} ASCII characters without spaces."
+        )
+        return
+    if is_word_char(prefix[0], word_chars(lang)):
+        fail(
+            f"`{ident}`'s `char-prefix` {prefix!r} starts with a word character, so it "
+            "would open a character literal in the middle of a word."
+        )
+    openers = list(lang["line-comment"]) + [d["open"] for d in lang["strings"]]
+    if lang["block-comment"] is not None:
+        openers.append(lang["block-comment"]["open"])
+    for opener in openers:
+        if opener.startswith(prefix) or prefix.startswith(opener):
+            fail(
+                f"`{ident}`'s `char-prefix` {prefix!r} and the opener {opener!r} begin "
+                "alike. The literal is tried first, so what that opener starts would be "
+                "read as a character."
+            )
+
+
 def check_one(lang: dict) -> None:
     ident = lang["id"]
     if not ID.match(ident):
         fail(f"`{ident}` is not lower-case kebab; it becomes a Rust variant (invariant 18)")
+
+    for field in lang:
+        if field not in FIELDS:
+            fail(
+                f"`{ident}` has the field `{field}`, which the generator does not know. "
+                "A misspelt optional field would be a row that keeps the default in silence."
+            )
 
     for field, allowed in (
         ("kind", KINDS),
@@ -183,6 +320,9 @@ def check_one(lang: dict) -> None:
             "keyword, no type and no constant. It would draw a grey wall, which is what "
             "the highlighter exists to remove."
         )
+
+    check_word_chars(lang)
+    check_char_prefix(lang)
 
     for field in ("keywords", "types", "constants"):
         check_words(lang, field, lang[field])
@@ -467,6 +607,13 @@ def emit(declared: list[dict], resolved: dict[str, tuple[str, int]], tags: dict[
         "    pub screaming_is_constant: bool,",
         "    /// Whether a word before `(` is a function.",
         "    pub call: bool,",
+        "    /// The characters besides ASCII letters and digits its words are made",
+        "    /// of: `_$?` unless the row says otherwise (Lisp's `let*`, `when-let`).",
+        "    pub word_chars: &'static str,",
+        "    /// What opens a character literal (`#\\` in Common Lisp), when one does.",
+        "    pub char_prefix: Option<&'static str>,",
+        "    /// Whether a word that starts with `:` is a constant (a Lisp keyword).",
+        "    pub colon_is_constant: bool,",
         "}",
         "",
         "/// The languages the highlighter knows.",
@@ -558,6 +705,11 @@ def emit(declared: list[dict], resolved: dict[str, tuple[str, int]], tags: dict[
             f"        capitalised_is_type: {'true' if 'capitalised-is-type' in lang['shapes'] else 'false'},",
             f"        screaming_is_constant: {'true' if 'screaming-is-constant' in lang['shapes'] else 'false'},",
             f"        call: {'true' if lang['call'] else 'false'},",
+            f"        word_chars: {rust_str(word_chars(lang))},",
+            "        char_prefix: "
+            + ("None" if lang.get("char-prefix") is None else f"Some({rust_str(lang['char-prefix'])})")
+            + ",",
+            f"        colon_is_constant: {'true' if 'colon-is-constant' in lang['shapes'] else 'false'},",
             "    },",
         ]
     out += ["];", ""]

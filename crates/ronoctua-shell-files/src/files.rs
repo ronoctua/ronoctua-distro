@@ -11924,6 +11924,7 @@ mod tests {
             terminal: false,
             startup_wm_class: None,
             key: ronoctua_apps::fold::fold(id),
+            fallback: true,
         }
     }
 

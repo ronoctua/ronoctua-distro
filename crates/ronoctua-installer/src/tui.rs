@@ -33,6 +33,12 @@
 //! one, the wheel moves the list, every key in the keys line is a click
 //! (`Enter`, `Esc`, `Ctrl+C`), and what the pointer rests on is lit. What the
 //! drawing paints and what the pointer hits are ONE answer ([`places`]).
+//!
+//! **What a click opens is born under the pointer** (AGENTS, "Perguntas"): a
+//! screen that a click brought takes no click of its own until one SELECTED
+//! a row of it ([`State::aimed`]) — the cursor's row included. Without that,
+//! the second click of a double click on `full` landed on the next screen's
+//! first row and took it.
 
 use std::io::Stdout;
 use std::time::Duration;
@@ -55,7 +61,7 @@ use ratatui::symbols::half_block;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Widget, Wrap};
 use ronoctua_belongings::prefs::Auth;
-use ronoctua_i18n::Texts;
+use ronoctua_i18n::{Arg, Texts};
 use ronoctua_tokens::{Color, color};
 
 use crate::access::{self, Probed, QUIET, Qr};
@@ -208,6 +214,12 @@ pub enum Hit {
     Row(usize),
     /// One of the keys line's hints, by its index in [`Places::hints`].
     Key(usize),
+    /// The row that says what a list or the plan has above what it shows:
+    /// a click shows it.
+    Earlier,
+    /// The row that says what a list or the plan has below what it shows:
+    /// a click shows it.
+    Later,
 }
 
 /// What a hint of the keys line does when clicked.
@@ -237,14 +249,44 @@ pub struct Hint {
 }
 
 /// A list, where it is drawn.
+///
+/// A list that does not fit keeps its first and last rows for saying what
+/// it does not show — above and below — and its options take the rows
+/// between: on a console of twenty-four rows the list of programs ended in
+/// the middle with nothing saying more followed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rows {
-    /// Its rows' area.
+    /// Its options' rows.
     pub area: Rect,
     /// The option its first row shows.
     pub offset: usize,
     /// How many options it has.
     pub count: usize,
+    /// The row saying how many options are above, while some are.
+    pub above: Option<Rect>,
+    /// The row saying how many options are below, while some are.
+    pub below: Option<Rect>,
+}
+
+/// The review's plan, where it is drawn — the same shape as a list's: a plan
+/// that does not fit keeps its first and last rows for saying what it does
+/// not show, and SCROLLS (the keys, the wheel, a click on those rows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Plan {
+    /// The rows its lines are drawn in.
+    pub area: Rect,
+    /// The first line drawn.
+    pub offset: usize,
+    /// How many lines are drawn from it.
+    pub shown: usize,
+    /// How many lines the plan has.
+    pub count: usize,
+    /// The row saying what is above, while something is.
+    pub above: Option<Rect>,
+    /// The row saying what is below, while something is.
+    pub below: Option<Rect>,
+    /// The first line it may start at for its last one to be drawn.
+    pub last_offset: usize,
 }
 
 /// Where everything on the screen is — what [`draw`] paints and what the
@@ -263,6 +305,8 @@ pub struct Places {
     pub key_line: String,
     /// The list, when the screen is one.
     pub list: Option<Rows>,
+    /// The plan, when the screen is the review.
+    pub plan: Option<Plan>,
     /// The keys line's hints.
     pub hints: Vec<Hint>,
 }
@@ -278,6 +322,18 @@ impl Places {
                 .iter()
                 .position(|h| h.act.is_some() && x >= h.x && x < h.x + h.width)
                 .map(Hit::Key);
+        }
+        let on = |r: Option<Rect>| r.is_some_and(inside);
+        let (above, below) = match (self.list, self.plan) {
+            (Some(rows), _) => (rows.above, rows.below),
+            (None, Some(plan)) => (plan.above, plan.below),
+            (None, None) => return None,
+        };
+        if on(above) {
+            return Some(Hit::Earlier);
+        }
+        if on(below) {
+            return Some(Hit::Later);
         }
         let rows = self.list?;
         if !inside(rows.area) {
@@ -352,6 +408,28 @@ pub struct State {
     /// leaves the rows, so a row stays under the pointer between its two
     /// clicks.
     pub scroll: usize,
+    /// The row a click selected on this screen: only a click on it, while
+    /// it is still the cursor's, does what `Enter` does. `None` on a screen
+    /// just shown — so the click that opened it is never taken by it.
+    pub aimed: Option<usize>,
+    /// Whether the screen was just shown and has taken nothing yet — no key,
+    /// no click. A click on a hint of the keys line then only lights it:
+    /// `Enter` stands in the same columns on screen after screen, and the
+    /// second click of a double click would press the next screen's.
+    pub untouched: bool,
+    /// The review's first line, as the plan was last drawn
+    /// ([`State::drawn`]): the plan scrolls by the keys, the wheel and its
+    /// two "more" rows.
+    pub review_scroll: usize,
+    /// How many lines the review's plan showed when last drawn, and the
+    /// first line it may start at: a page, and how far it scrolls.
+    pub review_page: (usize, usize),
+    /// Where a resumed installation goes on once the list of programs it
+    /// had to show first is answered (the question the hop handed on).
+    pub resume_to: Option<usize>,
+    /// The ids the hop's answer left out that this release no longer
+    /// offers: said on the list, which shows them gone.
+    pub dropped: Vec<String>,
 }
 
 impl State {
@@ -383,6 +461,12 @@ impl State {
             stay: None,
             hover: None,
             scroll: 0,
+            aimed: None,
+            untouched: true,
+            review_scroll: 0,
+            review_page: (0, 0),
+            resume_to: None,
+            dropped: Vec::new(),
         };
         e.choice = e.default_choice();
         e
@@ -395,6 +479,19 @@ impl State {
     /// before the hop is always among them: going back to the network
     /// question must land on it, and a list without it would turn the
     /// carried answer into "no Wi-Fi".
+    ///
+    /// # The list of programs comes FIRST when the hop did not answer it
+    ///
+    /// Every hop is from an OLDER installer, and one older than the list
+    /// never asked it: resuming at the repository would leave out the
+    /// list's default — LibreOffice, declined and pushed — with nobody
+    /// having seen it. So a `full` installation whose answers carry no list
+    /// opens on the list, and "continue" goes on to where the hop left.
+    /// And an answer that names a program this release no longer offers
+    /// opens it too, saying so ([`State::dropped`]): the person is there to
+    /// decide again, and a refusal with nothing to fix would be a dead end
+    /// (without a terminal it IS a refusal — `validate_it` — because
+    /// nobody is there to decide).
     #[must_use]
     pub fn resumed(
         disks: Vec<Disk>,
@@ -408,11 +505,31 @@ impl State {
         let mut e = Self::fresh(disks, networks);
         e.answers = answers;
         e.stay = Some(Stay::FromRelease);
-        let n = Question::ALL_KEYS
-            .iter()
-            .position(|q| *q == at)
-            .unwrap_or_default();
-        e.screen = Screen::Asking(n);
+        let at_of = |q: Question| {
+            Question::ALL_KEYS
+                .iter()
+                .position(|x| *x == q)
+                .unwrap_or_default()
+        };
+        let n = at_of(at);
+        let list = at_of(Question::LeftOut);
+        let carried = e.answers.left_out.clone();
+        let dropped = model::not_offered(&carried);
+        if n > list
+            && !Question::LeftOut.skipped_one(&e.answers)
+            && (carried.is_empty() || !dropped.is_empty())
+        {
+            e.answers.left_out = if carried.is_empty() {
+                model::DEFAULT_LEFT_OUT.to_owned()
+            } else {
+                model::canonical(&carried)
+            };
+            e.dropped = dropped;
+            e.resume_to = Some(n);
+            e.screen = Screen::Asking(list);
+        } else {
+            e.screen = Screen::Asking(n);
+        }
         e.choice = e.default_choice();
         e
     }
@@ -470,6 +587,7 @@ impl State {
                     | Question::SystemLocale
                     | Question::Timezone
                     | Question::Profile
+                    | Question::LeftOut
             )
         )
     }
@@ -529,6 +647,11 @@ impl State {
             // THE ONLY LIST HERE THAT COMES FROM NO FILE, and so the only one
             // that cannot be empty.
             Some(Question::Profile) => model::PROFILES.iter().map(|p| (*p).to_owned()).collect(),
+            // "CONTINUE" FIRST, as "no Wi-Fi" is: an empty value, drawn with
+            // its own words; then one row per program, by its name.
+            Some(Question::LeftOut) => std::iter::once(String::new())
+                .chain(model::OFFERED.iter().map(|o| o.name.to_owned()))
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -616,6 +739,9 @@ impl State {
                 .get(self.choice)
                 .map(|p| (*p).to_owned())
                 .unwrap_or_default(),
+            // THE ANSWER IS THE STATE: the marks are kept in it as they are
+            // made, so `Esc`, the hop and a resume carry them for free.
+            Some(Question::LeftOut) => self.answers.left_out.clone(),
             // Index 0 is "no Wi-Fi", and returns an empty string — which is
             // what makes the password screen be skipped.
             Some(Question::Wifi) => self
@@ -654,12 +780,22 @@ impl State {
         self.status = None;
         self.first_passphrase = None;
         self.scroll = 0;
-        let mut i = n + 1;
+        self.aimed = None;
+        self.untouched = true;
+        self.review_scroll = 0;
+        self.dropped.clear();
+        // A RESUMED INSTALLATION goes on where the hop left, once the list
+        // it had to show first is answered.
+        let mut i = match self.resume_to.take() {
+            Some(target) if target > n => target,
+            _ => n + 1,
+        };
         while let Some(q) = Question::ALL_KEYS.get(i) {
             if !q.computed() && !q.skipped_one(&self.answers) {
                 self.screen = Screen::Asking(i);
                 self.typing.clear();
                 self.error = None;
+                self.landed_on(*q);
                 // AFTER setting the screen: `default_choice` asks which question
                 // is showing, and the answer is the one just set.
                 self.choice = self.default_choice();
@@ -677,6 +813,11 @@ impl State {
         self.status = None;
         self.first_passphrase = None;
         self.scroll = 0;
+        self.aimed = None;
+        self.untouched = true;
+        // GOING BACK walks the questions again from there: no jump ahead.
+        self.resume_to = None;
+        self.dropped.clear();
         let current = match &self.screen {
             Screen::Asking(n) => *n,
             // The hop's screen is the network's answer: back to it.
@@ -706,20 +847,55 @@ impl State {
                 self.answers.get(*q).to_owned()
             };
             self.error = None;
-            // GOING BACK lands on what was ANSWERED, not on the default.
-            self.choice = self
-                .options()
-                .iter()
-                .position(|o| {
-                    o.starts_with(self.answers.get(*q)) && !self.answers.get(*q).is_empty()
-                })
-                .unwrap_or_else(|| self.default_choice());
+            self.landed_on(*q);
+            // GOING BACK lands on what was ANSWERED, not on the default — but
+            // on the list of programs, whose answer is every row's mark, on
+            // its first row.
+            self.choice = if *q == Question::LeftOut {
+                0
+            } else {
+                self.options()
+                    .iter()
+                    .position(|o| {
+                        o.starts_with(self.answers.get(*q)) && !self.answers.get(*q).is_empty()
+                    })
+                    .unwrap_or_else(|| self.default_choice())
+            };
             // THE ACCESS IS ASKED AGAIN when its screen is shown again.
             if *q == Question::BelongingsAccess && !self.by_token() {
                 self.ask_probe(0);
             }
             return;
         }
+    }
+
+    /// A page of the review's plan, in lines: what it showed, but one, so a
+    /// line of the page before stays in sight.
+    fn review_step(&self) -> isize {
+        isize::try_from(self.review_page.0.saturating_sub(1).max(1)).unwrap_or(1)
+    }
+
+    /// The review's plan moved by `lines` (back when negative), within what
+    /// it has as it was last drawn.
+    fn scroll_review(&mut self, lines: isize) -> Next {
+        let most = self.review_page.1;
+        self.review_scroll = self.review_scroll.saturating_add_signed(lines).min(most);
+        Next::Stay
+    }
+
+    /// A screen of `q` was just shown: the list of programs opens on its
+    /// default marks when nothing was marked yet, and keeps them otherwise.
+    fn landed_on(&mut self, q: Question) {
+        if q == Question::LeftOut && self.answers.left_out.is_empty() {
+            self.answers.left_out = model::DEFAULT_LEFT_OUT.to_owned();
+        }
+    }
+
+    /// The program on the list's row `choice` (row 0 is "continue").
+    fn offered_at(&self, choice: usize) -> Option<&'static model::Offered> {
+        (self.question_of() == Some(Question::LeftOut))
+            .then(|| choice.checked_sub(1).and_then(|i| model::OFFERED.get(i)))
+            .flatten()
     }
 
     /// Asks the repository whether the deploy key reads and writes, after
@@ -932,6 +1108,8 @@ impl State {
     /// **Testable without a terminal**: it is the reason key reading and
     /// drawing are in functions other than this one.
     pub fn key(&mut self, k: KeyCode) -> Next {
+        // A KEY TOUCHES THE SCREEN: a hint clicked after it acts at once.
+        self.untouched = false;
         let languages: Vec<&str> = ronoctua_i18n::LANGUAGES.to_vec();
         // THE LAYOUTS THE ISO CARRIES, read from xkeyboard-config itself.
         let layouts = crate::model::layout_names();
@@ -959,6 +1137,17 @@ impl State {
                         self.typing.push(c);
                         self.error = None;
                     }
+                    // A PROGRAM'S ROW IS MARKED OR UNMARKED, by Enter as by
+                    // the space bar: the answer itself changes, and the
+                    // screen stays. Enter on "continue" takes the answer.
+                    KeyCode::Enter | KeyCode::Char(' ')
+                        if self.offered_at(self.choice).is_some() =>
+                    {
+                        if let Some(o) = self.offered_at(self.choice) {
+                            self.answers.left_out = model::toggle(&self.answers.left_out, o.id);
+                            self.error = None;
+                        }
+                    }
                     KeyCode::Enter => {
                         let v = if self.is_list() {
                             self.choice_value()
@@ -984,6 +1173,12 @@ impl State {
                     self.go_back();
                     Next::Stay
                 }
+                // THE PLAN SCROLLS — what is typed here is the disk's path,
+                // and no arrow is part of one.
+                KeyCode::Up => self.scroll_review(-1),
+                KeyCode::Down => self.scroll_review(1),
+                KeyCode::PageUp => self.scroll_review(-self.review_step()),
+                KeyCode::PageDown => self.scroll_review(self.review_step()),
                 KeyCode::Backspace => {
                     self.confirmation.pop();
                     self.error = None;
@@ -1028,18 +1223,34 @@ impl State {
             }
             Pointer::WheelUp if self.is_list() => self.key(KeyCode::Up),
             Pointer::WheelDown if self.is_list() => self.key(KeyCode::Down),
+            // THE REVIEW'S PLAN, a line a notch.
+            Pointer::WheelUp if self.screen == Screen::Reviewing => self.key(KeyCode::Up),
+            Pointer::WheelDown if self.screen == Screen::Reviewing => self.key(KeyCode::Down),
             Pointer::WheelUp | Pointer::WheelDown => Next::Stay,
             Pointer::Click => {
                 self.hover = hit;
+                let untouched = std::mem::replace(&mut self.untouched, false);
                 match hit {
+                    // THE FIRST CLICK ON A ROW SELECTS IT — the cursor's
+                    // too, on a screen just shown — and only a second one
+                    // on the row it selected does what `Enter` does.
                     Some(Hit::Row(i)) if self.waiting.is_none() && self.is_list() => {
-                        if i == self.choice {
+                        if i == self.choice && self.aimed == Some(i) {
                             self.key(KeyCode::Enter)
                         } else {
                             self.choice = i;
+                            self.aimed = Some(i);
                             Next::Stay
                         }
                     }
+                    // WHAT IS ABOVE OR BELOW what a list or the plan shows,
+                    // a page of it.
+                    Some(Hit::Earlier) => self.page(places, false),
+                    Some(Hit::Later) => self.page(places, true),
+                    // A HINT ON A SCREEN JUST SHOWN only lights: the click
+                    // may be the second of a double click on the screen
+                    // before, whose `Enter` stood in the same columns.
+                    Some(Hit::Key(_)) if untouched => Next::Stay,
                     Some(Hit::Key(j)) => match places.hints.get(j).and_then(|h| h.act) {
                         Some(Act::Key(k)) => self.key(k),
                         Some(Act::Quit) => Next::GiveUp,
@@ -1051,10 +1262,39 @@ impl State {
         }
     }
 
+    /// A page of a list or of the review's plan, as drawn at `places`:
+    /// `later` the one below what is shown, else the one above. A list's
+    /// cursor goes with it, to the page's first row.
+    fn page(&mut self, places: &Places, later: bool) -> Next {
+        if let Some(rows) = places.list {
+            let page = usize::from(rows.area.height.max(1));
+            let last = rows.count.saturating_sub(page);
+            let top = if later {
+                (rows.offset + page).min(last)
+            } else {
+                rows.offset.saturating_sub(page)
+            };
+            self.scroll = top;
+            self.choice = top;
+            self.aimed = None;
+            return Next::Stay;
+        }
+        if self.screen == Screen::Reviewing {
+            let step = self.review_step();
+            return self.scroll_review(if later { step } else { -step });
+        }
+        Next::Stay
+    }
+
     /// The screen was drawn at `at`: what the list showed is kept, so the
-    /// next drawing scrolls from there ([`State::scroll`]).
+    /// next drawing scrolls from there ([`State::scroll`]) — and where the
+    /// review's plan is, and how far it goes.
     pub fn drawn(&mut self, at: &Places) {
         self.scroll = at.list.map_or(0, |rows| rows.offset);
+        if let Some(plan) = at.plan {
+            self.review_scroll = plan.offset;
+            self.review_page = (plan.shown, plan.last_offset);
+        }
     }
 
     /// Where the installation takes its distro from, as the plan shows it.
@@ -1106,6 +1346,17 @@ fn said_of(e: &State, texts: &Texts) -> (String, bool) {
     if let Some(k) = e.error {
         return (sentence(texts, k), true);
     }
+    // WHAT THE HOP CARRIED AND THIS RELEASE NO LONGER OFFERS, said where
+    // the person marks again.
+    if e.question_of() == Some(Question::LeftOut) && !e.dropped.is_empty() {
+        return (
+            texts.t_with(
+                key::INST_LEFT_OUT_DROPPED,
+                &[("ids", &e.dropped.join(", "))],
+            ),
+            true,
+        );
+    }
     let help = match e.screen {
         Screen::Asking(_) => e
             .question_of()
@@ -1120,6 +1371,9 @@ fn said_of(e: &State, texts: &Texts) -> (String, bool) {
 /// The keys line of the screen.
 fn keys_of(e: &State, texts: &Texts) -> String {
     match e.screen {
+        Screen::Asking(_) if e.question_of() == Some(Question::LeftOut) && e.is_list() => {
+            texts.t(key::INST_KEYS_CHECK)
+        }
         Screen::Asking(_) if e.is_list() => texts.t(key::INST_KEYS_CHOOSE),
         Screen::Asking(_) | Screen::Hopping(_) => texts.t(key::INST_KEYS_EDIT),
         Screen::Reviewing => texts.t(key::INST_KEYS_REVIEW),
@@ -1182,6 +1436,27 @@ fn list_offset(scroll: usize, choice: usize, height: u16) -> usize {
     }
 }
 
+/// `area` without its first and last rows, and those two rows — when what
+/// is drawn in it (`needs` rows) does not fit and it has rows to spare.
+fn kept_for_more(area: Rect, needs: usize) -> (Rect, Option<(Rect, Rect)>) {
+    if needs <= usize::from(area.height) || area.height < 3 {
+        return (area, None);
+    }
+    let row = |y| Rect {
+        y,
+        height: 1,
+        ..area
+    };
+    (
+        Rect {
+            y: area.y + 1,
+            height: area.height - 2,
+            ..area
+        },
+        Some((row(area.y), row(area.y + area.height - 1))),
+    )
+}
+
 /// The list on a body of `area`, when the screen is one.
 fn list_rows(e: &State, area: Rect) -> Option<Rows> {
     if !matches!(e.screen, Screen::Asking(_)) || !e.is_list() {
@@ -1192,11 +1467,142 @@ fn list_rows(e: &State, area: Rect) -> Option<Rows> {
         return None;
     }
     let (area, _) = split_status(area, e.status.is_some());
+    // A LIST THAT DOES NOT FIT says what it does not show, above and below.
+    let (area, more) = kept_for_more(area, count);
+    let offset = list_offset(e.scroll, e.choice, area.height);
     Some(Rows {
         area,
-        offset: list_offset(e.scroll, e.choice, area.height),
+        offset,
         count,
+        above: more.filter(|_| offset > 0).map(|(above, _)| above),
+        below: more
+            .filter(|_| offset + usize::from(area.height) < count)
+            .map(|(_, below)| below),
     })
+}
+
+/// One line of the review, and what it is.
+struct Said {
+    /// The line.
+    line: Line<'static>,
+    /// `Some(destructive)` for a step of the plan, `None` for what is said
+    /// above them.
+    step: Option<bool>,
+}
+
+/// The review's lines, as they are drawn: why the installer stays with its
+/// own distro, what this machine leaves out, then the steps — each marked
+/// when it erases the disk.
+fn review_lines(e: &State, texts: &Texts) -> Vec<Said> {
+    let said = |line: Line<'static>| Said { line, step: None };
+    let mut lines = Vec::new();
+    if let Some(k) = e.stay.and_then(Stay::key) {
+        lines.push(said(Line::from(Span::styled(
+            texts.t(k),
+            Style::default().fg(color(color::STATE_WARNING)),
+        ))));
+        lines.push(said(Line::from("")));
+    }
+    // WHAT THIS MACHINE LEAVES OUT, by the programs' names — and, from a
+    // repository with something in it, that what it already declines stays
+    // declined: the plan below says the repository is written before the
+    // disk.
+    let secondary = Style::default().fg(color(color::TEXT_SECONDARY));
+    let mut told = false;
+    if let Some(left) = left_out_review(&e.answers, texts) {
+        lines.push(said(Line::from(Span::styled(left, secondary))));
+        told = true;
+    }
+    if e.answers.profile == model::FULL_PROFILE && e.answers.belongings_empty != Some(true) {
+        lines.push(said(Line::from(Span::styled(
+            texts.t(key::INST_LEFT_OUT_REVIEW_KEPT),
+            secondary,
+        ))));
+        told = true;
+    }
+    if told {
+        lines.push(said(Line::from("")));
+    }
+    for (i, p) in e.build_plan(&review_origin()).iter().enumerate() {
+        let mark = if p.destructive { "!" } else { " " };
+        let style = if p.destructive {
+            Style::default().fg(color(color::STATE_CRITICAL))
+        } else {
+            Style::default().fg(color(color::TEXT_SECONDARY))
+        };
+        lines.push(Said {
+            line: Line::from(Span::styled(
+                format!("{mark} {}. {}", i + 1, texts.t(p.label)),
+                style,
+            )),
+            step: Some(p.destructive),
+        });
+    }
+    lines
+}
+
+/// The rows `line` takes on `width` cells, wrapped by words as drawn.
+fn rows_of(line: &Line<'static>, width: u16) -> usize {
+    Paragraph::new(line.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(width.max(1))
+        .max(1)
+}
+
+/// The review's plan on a body of `area`, when the screen is the review:
+/// above the confirmation, which keeps the last rows whatever the plan is.
+fn plan_rows(e: &State, texts: &Texts, area: Rect) -> Option<Plan> {
+    if e.screen != Screen::Reviewing {
+        return None;
+    }
+    let area = review_parts(area)[0];
+    let heights: Vec<usize> = review_lines(e, texts)
+        .iter()
+        .map(|s| rows_of(&s.line, area.width))
+        .collect();
+    let count = heights.len();
+    let (area, more) = kept_for_more(area, heights.iter().sum());
+    let room = usize::from(area.height);
+    // THE FIRST LINE IT MAY START AT and still draw its last.
+    let mut last_offset = count;
+    let mut used = 0;
+    while last_offset > 0 && used + heights[last_offset - 1] <= room {
+        last_offset -= 1;
+        used += heights[last_offset];
+    }
+    let last_offset = last_offset.min(count.saturating_sub(1));
+    let offset = e.review_scroll.min(last_offset);
+    let mut shown = 0;
+    let mut used = 0;
+    for h in &heights[offset..] {
+        if used + h > room && shown > 0 {
+            break;
+        }
+        used += h;
+        shown += 1;
+    }
+    Some(Plan {
+        area,
+        offset,
+        shown,
+        count,
+        above: more.filter(|_| offset > 0).map(|(above, _)| above),
+        below: more
+            .filter(|_| offset + shown < count)
+            .map(|(_, below)| below),
+        last_offset,
+    })
+}
+
+/// The review's body: the plan, and the confirmation pinned below it — the
+/// plan grew to two dozen steps, and on a console of thirty rows a
+/// confirmation drawn after them fell off the screen, the one line the
+/// person has to read.
+fn review_parts(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .split(area)
 }
 
 /// Where everything is on a screen of `area` — the one answer the drawing
@@ -1235,6 +1641,7 @@ pub fn places(area: Rect, e: &State, texts: &Texts) -> Places {
         hints: hints_of(&key_line, footer[1].x),
         key_line,
         list: list_rows(e, areas[1]),
+        plan: plan_rows(e, texts, areas[1]),
     }
 }
 
@@ -1270,7 +1677,7 @@ fn draw(f: &mut ratatui::Frame, e: &State, texts: &Texts) {
         at.head,
     );
 
-    body(f, e, texts, at.body, base, at.list);
+    body(f, e, texts, base, &at);
 
     let dim = Style::default().fg(color(color::TEXT_DIM));
     let (said, refused) = said_of(e, texts);
@@ -1327,14 +1734,8 @@ fn status_line(e: &State, texts: &Texts) -> Option<Line<'static>> {
 
 /// The middle part, which changes with the screen. `list`: where
 /// [`places`] put the list, when the screen is one.
-fn body(
-    f: &mut ratatui::Frame,
-    e: &State,
-    texts: &Texts,
-    area: Rect,
-    base: Style,
-    list: Option<Rows>,
-) {
+fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Places) {
+    let area = at.body;
     match &e.screen {
         Screen::Asking(_)
             if e.question_of() == Some(Question::BelongingsAccess) && !e.by_token() =>
@@ -1342,7 +1743,7 @@ fn body(
             access_body(f, e, texts, area, base);
         }
         Screen::Asking(_) if e.is_list() => {
-            let Some(rows) = list else {
+            let Some(rows) = at.list else {
                 f.render_widget(
                     Paragraph::new(texts.t(key::INST_NO_DISK))
                         .style(base.fg(color(color::STATE_ERROR))),
@@ -1355,6 +1756,10 @@ fn body(
             // empty, and an empty line at the top of the list read as no
             // option at all.
             let wifi = e.question_of() == Some(Question::Wifi);
+            // THE LIST OF PROGRAMS draws its rows itself: a name and the
+            // word that says what happens to it (`checklist_lines`).
+            let checklist = (e.question_of() == Some(Question::LeftOut))
+                .then(|| checklist_lines(&e.answers.left_out, texts));
             // THE ROW UNDER THE POINTER is lit, and it is not the cursor:
             // the selection keeps its own band.
             let hovering = Style::default().bg(color(color::SURFACE_HOVER));
@@ -1363,7 +1768,9 @@ fn body(
                 .into_iter()
                 .enumerate()
                 .map(|(i, o)| {
-                    let item = if wifi && o.is_empty() {
+                    let item = if let Some(line) = checklist.as_ref().and_then(|c| c.get(i)) {
+                        ListItem::new(line.clone())
+                    } else if wifi && o.is_empty() {
                         ListItem::new(texts.t(key::INST_WIFI_NONE))
                     } else {
                         ListItem::new(o)
@@ -1389,6 +1796,12 @@ fn body(
                 rows.area,
                 &mut st,
             );
+            // WHAT THE LIST DOES NOT SHOW, said where it is not shown.
+            let below = rows
+                .count
+                .saturating_sub(rows.offset + usize::from(rows.area.height));
+            more_row(f, e, texts, base, rows.above, rows.offset, Hit::Earlier);
+            more_row(f, e, texts, base, rows.below, below, Hit::Later);
             if let (Some(line), Some(at)) = (status_line(e, texts), status_area) {
                 f.render_widget(Paragraph::new(line).style(base), at);
             }
@@ -1430,38 +1843,49 @@ fn body(
             );
         }
         Screen::Reviewing => {
-            let mut lines: Vec<Line> = Vec::new();
-            if let Some(said) = e.stay.and_then(Stay::key) {
-                lines.push(Line::from(Span::styled(
-                    texts.t(said),
-                    Style::default().fg(color(color::STATE_WARNING)),
-                )));
-                lines.push(Line::from(""));
+            // THE PLAN FROM WHERE IT IS SCROLLED, as `places` measured it,
+            // and the confirmation PINNED below it (`review_parts`).
+            let parts = review_parts(area);
+            if let Some(plan) = at.plan {
+                let all = review_lines(e, texts);
+                let lines: Vec<Line> = all
+                    .iter()
+                    .skip(plan.offset)
+                    .take(plan.shown)
+                    .map(|s| s.line.clone())
+                    .collect();
+                f.render_widget(
+                    Paragraph::new(lines).style(base).wrap(Wrap { trim: false }),
+                    plan.area,
+                );
+                // WHAT IS BELOW, honestly: how many steps, and how many of
+                // them erase the disk — the help says the marked ones do.
+                let hidden = &all[(plan.offset + plan.shown).min(all.len())..];
+                let steps = hidden.iter().filter(|s| s.step.is_some()).count();
+                let marked = hidden.iter().filter(|s| s.step == Some(true)).count();
+                more_row(f, e, texts, base, plan.above, plan.offset, Hit::Earlier);
+                if let Some(row) = plan.below {
+                    let said = texts.t_args(
+                        key::INST_REVIEW_BELOW,
+                        &[
+                            (
+                                "count",
+                                Arg::Number(i64::try_from(steps).unwrap_or(i64::MAX)),
+                            ),
+                            (
+                                "marked",
+                                Arg::Number(i64::try_from(marked).unwrap_or(i64::MAX)),
+                            ),
+                        ],
+                    );
+                    let tone = if marked > 0 {
+                        color::STATE_CRITICAL
+                    } else {
+                        color::TEXT_SECONDARY
+                    };
+                    lit_row(f, e, base, row, said, tone, Hit::Later);
+                }
             }
-            for (i, p) in e.build_plan(&review_origin()).iter().enumerate() {
-                let mark = if p.destructive { "!" } else { " " };
-                let style = if p.destructive {
-                    Style::default().fg(color(color::STATE_CRITICAL))
-                } else {
-                    Style::default().fg(color(color::TEXT_SECONDARY))
-                };
-                lines.push(Line::from(Span::styled(
-                    format!("{mark} {}. {}", i + 1, texts.t(p.label)),
-                    style,
-                )));
-            }
-            // THE CONFIRMATION IS PINNED to the bottom: the plan grew to two
-            // dozen steps, and on a console of thirty rows a confirmation
-            // drawn after them fell off the screen — the one line the
-            // person has to read.
-            let parts = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(1), Constraint::Length(3)])
-                .split(area);
-            f.render_widget(
-                Paragraph::new(lines).style(base).wrap(Wrap { trim: false }),
-                parts[0],
-            );
             f.render_widget(
                 Paragraph::new(vec![
                     Line::from(""),
@@ -1501,6 +1925,112 @@ fn body(
             f.render_widget(Paragraph::new(lines).style(base), area);
         }
     }
+}
+
+/// The row that says how many of a list's options (or of the plan's lines)
+/// are `hidden` above or below — `hit` is which, and a click on it shows
+/// them; nothing when it is not there.
+fn more_row(
+    f: &mut ratatui::Frame,
+    e: &State,
+    texts: &Texts,
+    base: Style,
+    row: Option<Rect>,
+    hidden: usize,
+    hit: Hit,
+) {
+    let Some(row) = row else {
+        return;
+    };
+    let k = if hit == Hit::Earlier {
+        key::INST_MORE_ABOVE
+    } else {
+        key::INST_MORE_BELOW
+    };
+    let said = texts.t_args(
+        k,
+        &[(
+            "count",
+            Arg::Number(i64::try_from(hidden).unwrap_or(i64::MAX)),
+        )],
+    );
+    lit_row(f, e, base, row, said, color::TEXT_SECONDARY, hit);
+}
+
+/// A row of its own that takes a click: in `tone`, and lit while the
+/// pointer rests on it (`hit`).
+fn lit_row(
+    f: &mut ratatui::Frame,
+    e: &State,
+    base: Style,
+    row: Rect,
+    said: String,
+    tone: Color,
+    hit: Hit,
+) {
+    let style = if e.hover == Some(hit) {
+        base.bg(color(color::SURFACE_HOVER))
+    } else {
+        base
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            said,
+            Style::default().fg(color(tone)),
+        )))
+        .style(style),
+        row,
+    );
+}
+
+/// The list of programs' rows, as drawn: "continue", then each program's
+/// name — padded to the longest, so the words stand in one column — and the
+/// word that says what happens to it. NO GLYPH: the installer runs on the
+/// console, whose font (PSF) has none of the icons. The tone says it too: a
+/// program kept is drawn in the text's tone with its word as an answer, one
+/// left out all dim.
+fn checklist_lines(answer: &str, texts: &Texts) -> Vec<Line<'static>> {
+    let widest = model::OFFERED
+        .iter()
+        .map(|o| cells(o.name))
+        .max()
+        .unwrap_or_default();
+    let (kept, out) = (
+        texts.t(key::INST_LEFT_OUT_KEPT),
+        texts.t(key::INST_LEFT_OUT_OUT),
+    );
+    let mut lines = vec![Line::from(texts.t(key::INST_LEFT_OUT_CONTINUE))];
+    for o in model::OFFERED {
+        let left = model::is_left_out(answer, o.id);
+        let (name, word) = if left {
+            let dim = Style::default().fg(color(color::TEXT_DIM));
+            (dim, dim)
+        } else {
+            (
+                Style::default().fg(color(color::TEXT_PRIMARY)),
+                Style::default().fg(color(color::TEXT_ANSWER)),
+            )
+        };
+        let gap = usize::from(widest.saturating_sub(cells(o.name)))
+            + usize::from(ronoctua_tokens::space::INSTALLER_CHECKLISTGAP);
+        lines.push(Line::from(vec![
+            Span::styled(format!("{}{}", o.name, " ".repeat(gap)), name),
+            Span::styled(if left { out.clone() } else { kept.clone() }, word),
+        ]));
+    }
+    lines
+}
+
+/// The review's line of the programs left out, by name — none when nothing
+/// is (or the installation is not `full`).
+fn left_out_review(r: &Answers, texts: &Texts) -> Option<String> {
+    let names: Vec<&str> = r
+        .left_out_ids()
+        .into_iter()
+        .filter_map(|id| model::OFFERED.iter().find(|o| o.id == id).map(|o| o.name))
+        .collect();
+    (!names.is_empty())
+        .then(|| texts.t_with(key::INST_LEFT_OUT_REVIEW, &[("names", &names.join(", "))]))
 }
 
 /// The review's origin: only whether the flake is aimed matters to the
@@ -1785,11 +2315,27 @@ fn pointer_of(kind: MouseEventKind) -> Option<Pointer> {
     }
 }
 
-/// One of the screens that check the network or the repository, drawn from
-/// a fixture as the TUI draws it — `ronoctua-install --show <screen>`;
-/// `None` for a name that is not one.
+/// How `--show` gives a screen back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shown {
+    /// Its text alone ([`rendered`]) — for a file, and what the tests read.
+    Text,
+    /// Its text with its colours ([`painted`]) — for a terminal, which
+    /// paints it as the TUI does.
+    Painted,
+}
+
+/// One of the screens that check the network or the repository (or the list
+/// of programs), drawn from a fixture as the TUI draws it, `width × height`
+/// cells — `ronoctua-install --show <screen>`; `None` for a name that is not
+/// one.
 #[must_use]
-pub fn show(screen: &str, texts: &Texts) -> Option<String> {
+pub fn show(
+    screen: &str,
+    texts: &Texts,
+    (width, height): (u16, u16),
+    how: Shown,
+) -> Option<String> {
     let mut e = State::fresh(Vec::new(), vec!["home-5g".into(), "home-2g".into()]);
     e.hosts = "github.com, cache.nixos.org".into();
     let at = |e: &mut State, q: Question| {
@@ -1870,12 +2416,82 @@ pub fn show(screen: &str, texts: &Texts) -> Option<String> {
                 "git@github.com:someone/belongings.git".into(),
             );
             e.answers.belongings_empty = Some(false);
+            e.answers.set(Question::Profile, model::FULL_PROFILE.into());
+            e.answers
+                .set(Question::LeftOut, model::DEFAULT_LEFT_OUT.into());
             e.stay = Some(Stay::Unreachable);
             e.screen = Screen::Reviewing;
         }
+        // THE LIST OF PROGRAMS, with one more unmarked than the default (the
+        // first marked one) and the cursor on the row below it, so a dim
+        // row and the cursor's are both on screen.
+        "left-out" => {
+            e.answers.set(Question::Profile, model::FULL_PROFILE.into());
+            at(&mut e, Question::LeftOut);
+            e.answers.left_out = model::DEFAULT_LEFT_OUT.into();
+            let unmarked = model::OFFERED
+                .iter()
+                .position(|o| o.checked)
+                .unwrap_or_default();
+            if let Some(o) = model::OFFERED.get(unmarked) {
+                e.answers.left_out = model::toggle(&e.answers.left_out, o.id);
+            }
+            e.choice = (unmarked + 2).min(model::OFFERED.len());
+        }
         _ => return None,
     }
-    Some(rendered(&e, texts, 100, 34))
+    Some(match how {
+        Shown::Text => rendered(&e, texts, width, height),
+        Shown::Painted => painted(&e, texts, width, height),
+    })
+}
+
+/// The screen drawn into a buffer of `width × height` cells, as the TUI
+/// draws it.
+fn drawn(e: &State, texts: &Texts, width: u16, height: u16) -> Option<Buffer> {
+    let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(width, height)).ok()?;
+    terminal.draw(|f| draw(f, e, texts)).ok()?;
+    Some(terminal.backend().buffer().clone())
+}
+
+/// The screen as a terminal paints it: its text, and each run of cells in
+/// its colours (24-bit SGR) and weight — what `ronoctua-install --show`
+/// prints to a terminal, so a screen is looked at in its tones and not only
+/// its words.
+#[must_use]
+pub fn painted(e: &State, texts: &Texts, width: u16, height: u16) -> String {
+    let Some(buffer) = drawn(e, texts, width, height) else {
+        return String::new();
+    };
+    let sgr = |c: ratatui::style::Color, ground: u8| match c {
+        ratatui::style::Color::Rgb(r, g, b) => format!("{ground}8;2;{r};{g};{b}"),
+        _ => format!("{ground}9"),
+    };
+    let mut out = String::new();
+    for y in 0..height {
+        let mut last = None;
+        for x in 0..width {
+            let Some(cell) = buffer.cell((x, y)) else {
+                continue;
+            };
+            let bold = cell.modifier.contains(Modifier::BOLD);
+            if last != Some((cell.fg, cell.bg, bold)) {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut out,
+                    format_args!(
+                        "\x1b[0;{}{};{}m",
+                        if bold { "1;" } else { "" },
+                        sgr(cell.fg, 3),
+                        sgr(cell.bg, 4)
+                    ),
+                );
+                last = Some((cell.fg, cell.bg, bold));
+            }
+            out.push_str(cell.symbol());
+        }
+        out.push_str("\x1b[0m\n");
+    }
+    out
 }
 
 /// The screen as text, at `width × height` — what the tests look at, and
@@ -1883,13 +2499,9 @@ pub fn show(screen: &str, texts: &Texts) -> Option<String> {
 /// without a disk to install on.
 #[must_use]
 pub fn rendered(e: &State, texts: &Texts, width: u16, height: u16) -> String {
-    let Ok(mut terminal) = Terminal::new(ratatui::backend::TestBackend::new(width, height)) else {
+    let Some(buffer) = drawn(e, texts, width, height) else {
         return String::new();
     };
-    if terminal.draw(|f| draw(f, e, texts)).is_err() {
-        return String::new();
-    }
-    let buffer = terminal.backend().buffer();
     let mut out = String::new();
     for y in 0..height {
         for x in 0..width {
@@ -2012,6 +2624,12 @@ mod tests {
                 | Question::Profile => {
                     e.key(KeyCode::Enter);
                 }
+                // THE LIST OF PROGRAMS opens on "continue", with the
+                // default marks: Enter takes them as they are.
+                Question::LeftOut => {
+                    assert_eq!(e.choice, 0, "the list of programs opened off its first row");
+                    e.key(KeyCode::Enter);
+                }
                 // THE LAYOUT MOVES OFF THE DEFAULT ON PURPOSE: a list that
                 // ignored the cursor would pass otherwise.
                 Question::Keyboard => {
@@ -2062,12 +2680,15 @@ mod tests {
         let mut e = with_disks();
         let views = walk(&mut e, &kind, false);
         assert_eq!(e.screen, Screen::Reviewing);
-        // FIFTEEN screens for whoever goes by cable: the seventeen questions
-        // minus the offset, which is computed, and the Wi-Fi password, which
-        // is skipped with no network.
-        assert_eq!(views.len(), 15, "the TUI showed {views:?}");
+        // SIXTEEN screens for whoever goes by cable into a `full`
+        // installation: the eighteen questions minus the offset, which is
+        // computed, and the Wi-Fi password, which is skipped with no network.
+        assert_eq!(views.len(), 16, "the TUI showed {views:?}");
         assert!(!views.contains(&Question::ResumeOffset));
         assert!(!views.contains(&Question::WifiPassword));
+        assert!(views.contains(&Question::LeftOut));
+        assert_eq!(e.answers.profile, crate::model::FULL_PROFILE);
+        assert_eq!(e.answers.left_out, crate::model::DEFAULT_LEFT_OUT);
         assert_eq!(e.answers.disk, "/dev/nvme0n1");
         assert_eq!(e.answers.hostname, "noctua-teste");
         assert_eq!(e.answers.language, ronoctua_i18n::LANGUAGES[0]);
@@ -2095,6 +2716,453 @@ mod tests {
         assert!(views.contains(&Question::WifiPassword));
         assert_eq!(e.answers.wifi_ssid, "home-5g");
         assert_eq!(e.answers.wifi_password, "Zq7-test-phrase");
+    }
+
+    /// FAILS IF: a `minimal` installation is shown the list of programs it
+    /// does not carry — going forward or coming back.
+    #[test]
+    fn a_minimal_installation_is_not_shown_the_programs() {
+        let mut e = with_disks();
+        walk_to(&mut e, Question::Profile);
+        e.key(KeyCode::Down);
+        e.key(KeyCode::Enter);
+        assert_eq!(e.answers.profile, "minimal");
+        assert_eq!(e.question_of(), Some(Question::Keyboard));
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Profile));
+        e.key(KeyCode::Down);
+        e.key(KeyCode::Enter);
+        let views = walk(&mut e, &kind, false);
+        assert!(!views.contains(&Question::LeftOut), "{views:?}");
+        assert_eq!(e.screen, Screen::Reviewing);
+        assert!(e.answers.left_out_ids().is_empty());
+        assert!(
+            e.build_plan(&review_origin())
+                .iter()
+                .all(|s| s.label != key::INST_STEP_LEFT_OUT)
+        );
+    }
+
+    /// FAILS IF: on the list of programs Enter or the space bar on a
+    /// program's row does not mark and unmark it (or leaves the screen),
+    /// the space bar on "continue" does anything, Enter there does not take
+    /// the marks; a click takes a row it did not first select; the marks
+    /// are lost going back; a row's name, its word or the keys line is cut
+    /// at 60 to 100 columns in either language; or a program left out is
+    /// not drawn dim, and one kept in the text's tones.
+    #[test]
+    fn the_checklist_toggles_by_key_and_pointer() {
+        use crate::model::{DEFAULT_LEFT_OUT, OFFERED, is_left_out};
+        let mut e = with_disks();
+        walk_to(&mut e, Question::LeftOut);
+        assert_eq!(
+            (e.choice, e.answers.left_out.as_str()),
+            (0, DEFAULT_LEFT_OUT)
+        );
+        // THE SPACE BAR ON "CONTINUE" DOES NOTHING; Enter there would go on.
+        e.key(KeyCode::Char(' '));
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        assert_eq!(e.answers.left_out, DEFAULT_LEFT_OUT);
+        // ENTER AND SPACE mark and unmark a program's row, and stay.
+        let first = OFFERED[0].id;
+        e.key(KeyCode::Down);
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        assert!(is_left_out(&e.answers.left_out, first));
+        e.key(KeyCode::Char(' '));
+        assert!(!is_left_out(&e.answers.left_out, first));
+        e.key(KeyCode::Char(' '));
+        assert!(is_left_out(&e.answers.left_out, first));
+        // THE POINTER: the first click on a row selects it, the second
+        // marks it — the third unmarks.
+        let t = texts();
+        let area = Rect::new(0, 0, 100, 34);
+        let at = places(area, &e, &t);
+        e.drawn(&at);
+        let rows = at.list.expect("the list of programs is a list");
+        let second = OFFERED[1].id;
+        let y = rows.area.y + 2 - u16::try_from(rows.offset).unwrap();
+        assert_eq!(at.hit(3, y), Some(Hit::Row(2)));
+        let before = e.answers.left_out.clone();
+        e.pointer(Pointer::Click, 3, y, &at);
+        assert_eq!(
+            (e.choice, &e.answers.left_out),
+            (2, &before),
+            "the first click took the row"
+        );
+        e.pointer(Pointer::Click, 3, y, &at);
+        assert!(is_left_out(&e.answers.left_out, second));
+        e.pointer(Pointer::Click, 3, y, &at);
+        assert!(!is_left_out(&e.answers.left_out, second));
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        // THE MARKS SURVIVE GOING BACK, and coming again.
+        let marked = e.answers.left_out.clone();
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Profile));
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        assert_eq!((e.choice, &e.answers.left_out), (0, &marked));
+        // NEVER CUT, in either language, 60 to 100 columns: each program's
+        // name with its word, the keys line whole, the help's end.
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = Texts::fresh(language).unwrap();
+            let (kept, out) = (t.t(key::INST_LEFT_OUT_KEPT), t.t(key::INST_LEFT_OUT_OUT));
+            let keys = t.t(key::INST_KEYS_CHECK);
+            let help = t.t(key::INST_LEFT_OUT_HELP);
+            let end = help
+                .split_whitespace()
+                .last()
+                .unwrap()
+                .trim_end_matches('.')
+                .to_owned();
+            for width in 60..=100 {
+                let shown = rendered(&e, &t, width, 34);
+                for o in OFFERED {
+                    let word = if is_left_out(&e.answers.left_out, o.id) {
+                        &out
+                    } else {
+                        &kept
+                    };
+                    let row = shown
+                        .lines()
+                        .find(|l| l.trim_start().starts_with(o.name))
+                        .unwrap_or_else(|| {
+                            panic!("{language}, {width}: `{}` is not drawn:\n{shown}", o.name)
+                        });
+                    assert!(
+                        row.trim_end().ends_with(word.as_str()),
+                        "{language}, {width}: `{}` lost its word `{word}`:\n{shown}",
+                        o.name
+                    );
+                }
+                assert!(
+                    shown.contains(&t.t(key::INST_LEFT_OUT_CONTINUE)),
+                    "{language}, {width}"
+                );
+                assert!(
+                    shown.lines().any(|l| l.trim_end() == keys),
+                    "{language}, {width}: the keys line is cut:\n{shown}"
+                );
+                assert!(
+                    shown.contains(&end),
+                    "{language}, {width}: the help lost its end:\n{shown}"
+                );
+            }
+        }
+        // THE TONE SAYS IT TOO, away from the cursor: a program left out
+        // all dim, one kept in the text's tone with its word an answer's.
+        let buf = drawn(&e, &t, 100, 34).unwrap();
+        let at = places(area, &e, &t);
+        let rows = at.list.unwrap();
+        let tone = |i: usize, x: u16| {
+            let y = rows.area.y + u16::try_from(i - rows.offset).unwrap();
+            buf.cell((rows.area.x + x, y)).unwrap().fg
+        };
+        let widest = OFFERED.iter().map(|o| cells(o.name)).max().unwrap();
+        let word_x = widest + ronoctua_tokens::space::INSTALLER_CHECKLISTGAP;
+        for (n, o) in OFFERED.iter().enumerate() {
+            let i = n + 1;
+            if i == e.choice {
+                continue;
+            }
+            if is_left_out(&e.answers.left_out, o.id) {
+                assert_eq!(tone(i, 0), color(color::TEXT_DIM), "{}", o.id);
+                assert_eq!(tone(i, word_x), color(color::TEXT_DIM), "{}", o.id);
+            } else {
+                assert_eq!(tone(i, 0), color(color::TEXT_PRIMARY), "{}", o.id);
+                assert_eq!(tone(i, word_x), color(color::TEXT_ANSWER), "{}", o.id);
+            }
+        }
+        assert_ne!(
+            color(color::TEXT_DIM),
+            color(color::TEXT_PRIMARY),
+            "the tones would say nothing"
+        );
+        // ENTER ON "CONTINUE" TAKES THE MARKS and goes on.
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::Keyboard));
+        assert_eq!(e.answers.left_out, marked);
+        // AND THE REVIEW NAMES WHAT IS LEFT OUT, by name.
+        let mut r = with_disks();
+        r.answers.profile = crate::model::FULL_PROFILE.into();
+        r.answers.left_out = "blender,libreoffice".into();
+        r.answers.disk = "/dev/nvme0n1".into();
+        r.screen = Screen::Reviewing;
+        let shown = rendered(&r, &t, 100, 60);
+        let said = t.t_with(
+            key::INST_LEFT_OUT_REVIEW,
+            &[("names", "Blender, LibreOffice")],
+        );
+        assert!(shown.contains(&said), "{shown}");
+        assert!(
+            shown.contains(&t.t(key::INST_STEP_PLAIN_DECLINING)),
+            "{shown}"
+        );
+    }
+
+    /// A review of a `full` installation leaving programs out of a
+    /// repository with something in it, the release unreachable: the
+    /// longest the plan gets.
+    fn reviewing() -> State {
+        let mut e = with_disks();
+        e.answers.disk = "/dev/nvme0n1".into();
+        e.answers.hostname = "noctua-teste".into();
+        e.answers.belongings = "git@github.com:someone/belongings.git".into();
+        e.answers.belongings_empty = Some(false);
+        e.answers.profile = crate::model::FULL_PROFILE.into();
+        e.answers.left_out = "blender,libreoffice".into();
+        e.stay = Some(Stay::Unreachable);
+        e.screen = Screen::Reviewing;
+        e
+    }
+
+    /// The text drawn on the row `y` of a screen drawn as text.
+    fn row_at(shown: &str, y: u16) -> String {
+        shown
+            .lines()
+            .nth(usize::from(y))
+            .unwrap_or_default()
+            .trim_end()
+            .to_owned()
+    }
+
+    /// FAILS IF: on the ISO's console (19 × 32 cells: 71 × 24 at 1366 × 768,
+    /// 101 × 33 at 1920 × 1080) the review's plan is cut with nothing
+    /// saying so — or says how many steps are below without how many of
+    /// them erase the disk — does not scroll by the keys, the wheel and its
+    /// two rows to its last step and back, loses the confirmation, or paints
+    /// its rows elsewhere than the pointer takes them.
+    #[test]
+    fn the_review_scrolls_and_says_what_it_does_not_show() {
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = Texts::fresh(language).unwrap();
+            for (width, height) in [(71, 24), (101, 33)] {
+                let area = Rect::new(0, 0, width, height);
+                let mut e = reviewing();
+                let at = places(area, &e, &t);
+                e.drawn(&at);
+                let plan = at.plan.expect("the review has a plan");
+                assert!(
+                    plan.shown < plan.count,
+                    "{language} {width}×{height}: it fits, and proves nothing"
+                );
+                assert_eq!((plan.offset, plan.above), (0, None));
+                let below = plan.below.expect("nothing says more is below");
+                let all = review_lines(&e, &t);
+                let hidden = &all[plan.shown..];
+                let marked = hidden.iter().filter(|l| l.step == Some(true)).count();
+                assert!(
+                    marked > 0,
+                    "{language} {width}×{height}: every step that erases is in sight"
+                );
+                let said = t.t_args(
+                    key::INST_REVIEW_BELOW,
+                    &[
+                        (
+                            "count",
+                            Arg::Number(
+                                i64::try_from(hidden.iter().filter(|l| l.step.is_some()).count())
+                                    .unwrap(),
+                            ),
+                        ),
+                        ("marked", Arg::Number(i64::try_from(marked).unwrap())),
+                    ],
+                );
+                let shown = rendered(&e, &t, width, height);
+                assert_eq!(
+                    row_at(&shown, below.y),
+                    said,
+                    "{language} {width}×{height}:\n{shown}"
+                );
+                assert_eq!(at.hit(1, below.y), Some(Hit::Later));
+                assert!(
+                    shown.contains(&t.t(key::INST_CONFIRM)),
+                    "the confirmation fell off:\n{shown}"
+                );
+                // DOWN TO THE LAST STEP, by the keys — every step drawn once
+                // on the way, the first that erases among them.
+                let steps = all.iter().filter(|l| l.step.is_some()).count();
+                let mut seen = std::collections::BTreeSet::new();
+                for _ in 0..all.len() {
+                    let at = places(area, &e, &t);
+                    e.drawn(&at);
+                    let shown = rendered(&e, &t, width, height);
+                    for n in 1..=steps {
+                        if shown.lines().any(|l| {
+                            l.trim_start_matches(['!', ' '])
+                                .starts_with(&format!("{n}. "))
+                        }) {
+                            seen.insert(n);
+                        }
+                    }
+                    e.key(KeyCode::Down);
+                }
+                assert_eq!(
+                    seen.len(),
+                    steps,
+                    "{language} {width}×{height}: steps never reached: {seen:?}"
+                );
+                let at = places(area, &e, &t);
+                e.drawn(&at);
+                let plan = at.plan.unwrap();
+                assert_eq!(
+                    plan.offset + plan.shown,
+                    plan.count,
+                    "it did not reach the end"
+                );
+                assert!(plan.below.is_none());
+                let above = plan.above.expect("nothing says more is above");
+                assert_eq!(at.hit(1, above.y), Some(Hit::Earlier));
+                // A CLICK ON "ABOVE" pages back, the wheel a line, PgUp to the top.
+                let before = e.review_scroll;
+                e.pointer(Pointer::Click, 1, above.y, &at);
+                assert!(e.review_scroll < before, "the click on `above` did nothing");
+                let at = places(area, &e, &t);
+                e.drawn(&at);
+                let before = e.review_scroll;
+                e.pointer(Pointer::WheelDown, 1, at.plan.unwrap().area.y, &at);
+                assert_eq!(
+                    e.review_scroll,
+                    before + 1,
+                    "the wheel did not scroll the plan"
+                );
+                e.pointer(Pointer::WheelUp, 1, at.plan.unwrap().area.y, &at);
+                assert_eq!(e.review_scroll, before);
+                for _ in 0..all.len() {
+                    e.key(KeyCode::PageUp);
+                }
+                assert_eq!(e.review_scroll, 0);
+                // AND TYPING STILL TYPES the disk's path.
+                type_in(&mut e, "/dev/nvme0n1");
+                assert_eq!(e.confirmation, "/dev/nvme0n1");
+            }
+        }
+    }
+
+    /// FAILS IF: the list of programs on a console of 71 × 24 ends in the
+    /// middle with nothing saying more follows, or the rows that say so do
+    /// not bring the rest into sight when clicked.
+    #[test]
+    fn the_checklist_says_what_it_does_not_show() {
+        use crate::model::OFFERED;
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = Texts::fresh(language).unwrap();
+            let area = Rect::new(0, 0, 71, 24);
+            let mut e = with_disks();
+            e.answers.language = language.to_owned();
+            walk_to(&mut e, Question::LeftOut);
+            let at = places(area, &e, &t);
+            e.drawn(&at);
+            let rows = at.list.unwrap();
+            let below = rows
+                .below
+                .expect("the list of programs fits 71 × 24, and proves nothing");
+            let hidden = rows.count - rows.offset - usize::from(rows.area.height);
+            let shown = rendered(&e, &t, 71, 24);
+            assert_eq!(
+                row_at(&shown, below.y),
+                t.t_args(
+                    key::INST_MORE_BELOW,
+                    &[("count", Arg::Number(i64::try_from(hidden).unwrap()))]
+                ),
+                "{language}:\n{shown}"
+            );
+            // A CLICK ON IT shows the page below — to the last program.
+            e.pointer(Pointer::Click, 1, below.y, &at);
+            let at = places(area, &e, &t);
+            e.drawn(&at);
+            let rows = at.list.unwrap();
+            assert!(rows.offset > 0 && rows.below.is_none(), "{rows:?}");
+            let shown = rendered(&e, &t, 71, 24);
+            assert!(shown.contains(OFFERED[OFFERED.len() - 1].name), "{shown}");
+            assert_eq!(
+                e.question_of(),
+                Some(Question::LeftOut),
+                "a page took a row"
+            );
+            let above = rows.above.expect("nothing says more is above");
+            e.pointer(Pointer::Click, 1, above.y, &at);
+            let at = places(area, &e, &t);
+            e.drawn(&at);
+            assert_eq!(at.list.unwrap().offset, 0);
+        }
+    }
+
+    /// FAILS IF: a double click on `Enter` in the keys line goes past the
+    /// list of programs: `Enter` stands in the same columns on the screen
+    /// before it, and the second click must only light it.
+    #[test]
+    fn a_double_click_on_enter_does_not_skip_the_list() {
+        let t = texts();
+        let area = Rect::new(0, 0, 100, 34);
+        let mut e = with_disks();
+        walk_to(&mut e, Question::Profile);
+        let at = places(area, &e, &t);
+        e.drawn(&at);
+        // THE PERSON TOUCHED THE SCREEN first: `full`, by its row.
+        let rows = at.list.unwrap();
+        e.pointer(Pointer::Click, 2, rows.area.y, &at);
+        let enter = |at: &Places| {
+            at.hints
+                .iter()
+                .find(|h| h.act == Some(Act::Key(KeyCode::Enter)))
+                .map(|h| h.x)
+                .expect("no Enter in the keys line")
+        };
+        let x = enter(&at);
+        e.pointer(Pointer::Click, x, at.keys.y, &at);
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        let at = places(area, &e, &t);
+        e.drawn(&at);
+        assert_eq!(
+            enter(&at),
+            x,
+            "the two screens' Enter moved apart; the test asks nothing"
+        );
+        e.pointer(Pointer::Click, x, at.keys.y, &at);
+        assert_eq!(
+            e.question_of(),
+            Some(Question::LeftOut),
+            "the second click went past the list"
+        );
+        // A THIRD, deliberate, takes the list as it is.
+        e.pointer(Pointer::Click, x, at.keys.y, &at);
+        assert_eq!(e.question_of(), Some(Question::Keyboard));
+    }
+
+    /// FAILS IF: the click that opened a screen — the second of a double
+    /// click — is taken by the screen it opened: a double click on `full`
+    /// would go past the list of programs.
+    #[test]
+    fn a_freshly_shown_screens_cursor_row_is_not_taken_by_a_single_click() {
+        let t = texts();
+        let area = Rect::new(0, 0, 100, 34);
+        let mut e = with_disks();
+        walk_to(&mut e, Question::Profile);
+        let click_cursor = |e: &mut State| {
+            let at = places(area, e, &t);
+            e.drawn(&at);
+            let rows = at.list.unwrap();
+            let y = rows.area.y + u16::try_from(e.choice - rows.offset).unwrap();
+            e.pointer(Pointer::Click, 2, y, &at)
+        };
+        // ON THE CURSOR'S ROW of a screen just shown: selected, not taken.
+        click_cursor(&mut e);
+        assert_eq!(e.question_of(), Some(Question::Profile));
+        click_cursor(&mut e);
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        // THE NEXT SCREEN does not take the click that would have been the
+        // double click's second.
+        click_cursor(&mut e);
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        assert_eq!(e.answers.left_out, crate::model::DEFAULT_LEFT_OUT);
+        click_cursor(&mut e);
+        assert_eq!(e.question_of(), Some(Question::Keyboard));
+        // GOING BACK is a screen shown again: the same rule.
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        click_cursor(&mut e);
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
     }
 
     /// Walks to `wanted`, taking the pre-selected answer on every list before it.
@@ -2343,10 +3411,76 @@ mod tests {
         let mut answers = Answers::default();
         answers.set(Question::Language, "en-GB".into());
         answers.set(Question::Disk, "/dev/sda".into());
+        answers.set(Question::Profile, "minimal".into());
         let e = State::resumed(Vec::new(), Vec::new(), answers, Question::BelongingsAddress);
         assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
         assert_eq!(e.answers.disk, "/dev/sda");
         assert_eq!(e.stay, Some(Stay::FromRelease));
+        assert!(e.answers.left_out.is_empty() && e.resume_to.is_none());
+    }
+
+    /// FAILS IF: a `full` installation hopping from an installer that never
+    /// asked the list of programs (every hop is from an older one) resumes
+    /// past it — the default would be declined and pushed with nobody
+    /// having seen it — or the list, once answered, does not go on to where
+    /// the hop left; or an id the hop carried that this release no longer
+    /// offers vanishes without a word; or one that carried a list it can
+    /// read is asked it again.
+    #[test]
+    fn a_hop_without_the_list_shows_it_before_resuming() {
+        let full = |left_out: &str| {
+            let mut answers = Answers::default();
+            answers.set(Question::Language, "en-GB".into());
+            answers.set(Question::Disk, "/dev/sda".into());
+            answers.set(Question::Profile, crate::model::FULL_PROFILE.into());
+            answers.set(Question::LeftOut, left_out.into());
+            State::resumed(Vec::new(), Vec::new(), answers, Question::BelongingsAddress)
+        };
+        // NO ANSWER: the list first, on its default marks and first row.
+        let mut e = full("");
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        assert_eq!(
+            (e.choice, e.answers.left_out.as_str()),
+            (0, crate::model::DEFAULT_LEFT_OUT)
+        );
+        e.key(KeyCode::Down);
+        e.key(KeyCode::Enter);
+        e.key(KeyCode::Up);
+        let marked = e.answers.left_out.clone();
+        e.key(KeyCode::Enter);
+        assert_eq!(
+            e.question_of(),
+            Some(Question::BelongingsAddress),
+            "it did not go on to where the hop left"
+        );
+        assert_eq!(e.answers.left_out, marked);
+        // AN ANSWER IT CAN READ: no list again.
+        let e = full(crate::model::LEFT_OUT_NONE);
+        assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
+        // AN ID THIS RELEASE NO LONGER OFFERS: the list, saying so.
+        let mut e = full("no-such-program,blender");
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        assert_eq!(e.dropped, ["no-such-program"]);
+        assert_eq!(e.answers.left_out, "blender");
+        let t = Texts::fresh("en-GB").unwrap();
+        let shown = rendered(&e, &t, 100, 34);
+        let joined: String = shown
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains("no-such-program"), "{shown}");
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
+        assert!(e.dropped.is_empty());
+        // GOING BACK from the list walks the questions again, no jump ahead.
+        let mut e = full("");
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Profile));
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::LeftOut));
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::Keyboard));
     }
 
     /// FAILS IF: going back to the network question in the release's
@@ -2503,7 +3637,8 @@ mod tests {
         e.pointer(Pointer::Click, 3, y, &at);
         assert_eq!(e.answers.timezone, options[wanted]);
         assert_eq!(e.question_of(), Some(Question::Hostname));
-        // THE KEYS LINE: `Esc` goes back, by the keyboard's own path.
+        // THE KEYS LINE: `Esc` goes back, by the keyboard's own path — on a
+        // screen just shown, the first click only lights it.
         let at = places(area, &e, &t);
         let esc = at
             .hints
@@ -2511,6 +3646,9 @@ mod tests {
             .position(|h| h.act == Some(Act::Key(KeyCode::Esc)))
             .expect("no Esc in the keys line");
         let x = at.hints[esc].x;
+        e.pointer(Pointer::Click, x, at.keys.y, &at);
+        assert_eq!(e.question_of(), Some(Question::Hostname));
+        assert_eq!(e.hover, Some(Hit::Key(esc)));
         e.pointer(Pointer::Click, x, at.keys.y, &at);
         assert_eq!(e.question_of(), Some(Question::Timezone));
         // EVERY HINT IS WHERE IT IS HIT: the drawing and the pointer read
@@ -2545,6 +3683,11 @@ mod tests {
             .expect("no Ctrl+C in the keys line");
         assert_eq!(
             e.pointer(Pointer::Click, quit.x, at.keys.y, &at),
+            Next::Stay,
+            "a hint of a screen just shown took the first click"
+        );
+        assert_eq!(
+            e.pointer(Pointer::Click, quit.x, at.keys.y, &at),
             Next::GiveUp
         );
         // THE ACCESS SCREEN of a deploy key, which has no list: Enter and
@@ -2562,6 +3705,7 @@ mod tests {
             .find(|h| h.act == Some(Act::Key(KeyCode::Enter)))
             .expect("no Enter in the keys line");
         e.pointer(Pointer::Click, enter.x, at.keys.y, &at);
+        e.pointer(Pointer::Click, enter.x, at.keys.y, &at);
         assert_eq!(e.question_of(), Some(Question::BelongingsPassphrase));
     }
 
@@ -2574,6 +3718,7 @@ mod tests {
             for k in [
                 key::INST_KEYS_EDIT,
                 key::INST_KEYS_CHOOSE,
+                key::INST_KEYS_CHECK,
                 key::INST_KEYS_REVIEW,
                 key::INST_KEYS_QUIT,
             ] {
@@ -2679,13 +3824,19 @@ mod tests {
             }
             for aimed in [false, true] {
                 for empty in [false, true] {
-                    answers.belongings_empty = Some(empty);
-                    let o = Origin {
-                        aimed,
-                        ..review_origin()
-                    };
-                    for p in steps(&answers, &o) {
-                        keys.push(p.label);
+                    // AND A `full` INSTALLATION LEAVING PROGRAMS OUT, whose
+                    // plan has steps of its own in both shapes.
+                    for (profile, left_out) in [("minimal", ""), ("full", "blender")] {
+                        answers.belongings_empty = Some(empty);
+                        answers.profile = profile.into();
+                        answers.left_out = left_out.into();
+                        let o = Origin {
+                            aimed,
+                            ..review_origin()
+                        };
+                        for p in steps(&answers, &o) {
+                            keys.push(p.label);
+                        }
                     }
                 }
             }
@@ -2743,6 +3894,19 @@ mod tests {
                 key::INST_BELONGINGS_PASSPHRASE_DIFFERS,
                 key::INST_NETWORK_HELP_UNNAMED,
                 key::INST_STEP_SKIPPED,
+                key::INST_KEYS_CHECK,
+                key::INST_LEFT_OUT_CONTINUE,
+                key::INST_LEFT_OUT_KEPT,
+                key::INST_LEFT_OUT_OUT,
+                key::INST_LEFT_OUT_REVIEW,
+                key::INST_INVALID_LEFT_OUT,
+                key::INST_KEPT_EVERYWHERE,
+                key::INST_LEFT_OUT_REVIEW_KEPT,
+                key::INST_LEFT_OUT_DROPPED,
+                key::INST_LEFT_OUT_NOT_APPLIED,
+                key::INST_MORE_ABOVE,
+                key::INST_MORE_BELOW,
+                key::INST_REVIEW_BELOW,
             ]);
             for c in keys {
                 let s = t.t(c);

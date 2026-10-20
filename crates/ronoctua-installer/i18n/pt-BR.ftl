@@ -30,8 +30,8 @@ inst-system-locale = Formato do sistema
 inst-system-locale-help = Data, numero e unidade. Nao e o idioma da interface, que ja foi escolhido.
 inst-timezone = Fuso horario
 inst-timezone-help = Onde a maquina fica. E o que decide a hora do relogio e do log.
-inst-profile = Instalacao
-inst-profile-help = `full` traz tudo e e a recomendada. `minimal` deixa de fora Android, compiladores, navegador, editor, midia e as variantes de fonte — instala em minutos, e cada grupo volta com uma linha no host.nix.
+inst-profile = Instalação
+inst-profile-help = `full` traz tudo e é a recomendada. `minimal` deixa de fora Android, os compiladores além do Rust e do Common Lisp, navegador, editor, mídia e as variantes de fonte — instala em minutos, e cada grupo volta com uma linha no host.nix.
 inst-resume-offset = Deslocamento do swap
 inst-resume-offset-help = Calculado depois que o disco existir; não se digita.
 
@@ -138,3 +138,33 @@ inst-step-passphrase = Passar a senha à restauração
 inst-step-restore = Restaurar os seus pertences na sua home
 inst-step-init = Criar o repositório, guardando nele as configurações desta máquina
 inst-step-skipped = Nada a fazer aqui.
+
+## Installer — the eighteenth question (the programs a full installation leaves out)
+
+inst-left-out = Programas opcionais
+inst-left-out-help = Todo programa marcado é instalado, a não ser que os seus pertences o recusem em todas as máquinas. Um desmarcado não é baixado agora, e nenhuma atualização o traz, só nesta máquina — a central de programas o traz de volta.
+inst-left-out-continue = Seguir com estes
+inst-left-out-kept = instalar
+inst-left-out-out = deixar de fora
+inst-left-out-review = Fica de fora desta máquina: { $names }
+inst-keys-check = ↑↓ escolhem · Enter marca ou segue · Esc volta
+inst-invalid-left-out = Só programas da lista ficam de fora, cada um uma vez; ou nenhum.
+inst-step-left-out = Escrever os programas que esta máquina deixa de fora
+inst-step-plain-declining = Assinar no seu repositório a escolha de programas desta máquina, e buscar as suas declarações
+inst-step-left-out-home = Escrever na sua home os programas deixados de fora
+inst-left-out-review-kept = Um programa marcado que esta máquina deixou de fora antes volta; um que os seus pertences recusam em todas as máquinas fica de fora — a central de programas o traz de volta.
+inst-left-out-dropped = Esta versão não lista mais { $ids }: nada disso fica de fora. Desmarque de novo o que deixar de fora.
+inst-left-out-not-applied = As declarações aplicadas a esta máquina não dizem a escolha de programas dela; o disco não foi tocado.
+inst-step-left-out-applied = Conferir que a escolha de programas desta máquina foi aplicada
+inst-more-above = ↑ mais { $count }
+inst-more-below = ↓ mais { $count }
+inst-review-below = ↓ { $count ->
+        [one] mais um passo
+       *[other] mais { $count } passos
+    } abaixo — { $marked ->
+        [0] nenhum deles apaga o disco
+        [one] um deles apaga o disco
+       *[other] { $marked } deles apagam o disco
+    }
+inst-step-choice = Escrever quais programas esta máquina mantém e quais deixa de fora
+inst-kept-everywhere = Marcados, e ainda recusados em todas as máquinas pelos seus pertences: { $names }. A central de programas os traz de volta.

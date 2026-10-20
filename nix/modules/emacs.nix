@@ -2,10 +2,11 @@
 #
 # WHAT THE DISTRO DOES, AND WHAT IT LEAVES ALONE
 # ----------------------------------------------
-# The package (`emacs30-pgtk`, as nixpkgs builds it), the daemon (`services.emacs`,
-# a user unit, so `emacsclient` opens in a process that has already loaded
-# everything), the variable the file manager reaches `emacsclient` by, and the
-# switch. Nothing else: no `init.el`, no `default.el`, no file under
+# The package (`emacs30-pgtk`, as nixpkgs builds it, with one launcher's name
+# rewritten: `emacsPkg`, below), the daemon (`services.emacs`, a user unit, so
+# `emacsclient` opens in a process that has already loaded everything), the
+# variable the file manager reaches `emacsclient` by, and the switch. Nothing
+# else: no `init.el`, no `default.el`, no file under
 # `~/.config/emacs` or `~/.emacs.d`, nothing in `/etc` that Emacs reads — at
 # most the EMPTY folder `$XDG_CONFIG_HOME/emacs` (`emacsHome`, below). The owner's
 # decision (2026-10-19): the configuration is the PERSON's, and it travels
@@ -56,7 +57,40 @@ let
   # restarts the daemon before it asks the compositor to leave (below). The
   # buffers still go, but through `kill-emacs`. `tests/emacs-vm.nix` proves
   # the frame native and holds the measure (`docs/ARCHITECTURE.md`).
-  emacsPkg = pkgs.emacs30-pgtk;
+  emacsBuild = pkgs.emacs30-pgtk;
+
+  # THE ENTRY THAT IS NOT THE DAEMON'S SAYS SO (the owner's decision,
+  # 2026-10-20). The package ships two launchers: `emacsclient.desktop`
+  # opens a frame of the daemon, which holds the person's buffers and
+  # configuration already loaded; `emacs.desktop` starts a second Emacs that
+  # sees none of those buffers and loads everything again. Both stay — the
+  # second is how one gets an Emacs while the daemon is broken — and the
+  # second's name tells the person which to pick in the locator (`LEADER a`),
+  # where both are listed by their `Name=`. English: a launcher entry has one
+  # language (invariant 18).
+  #
+  # A JOIN, and only the one line rewritten: `symlinkJoin` costs no rebuild of
+  # Emacs, every other file is a link to the build, and `bin/emacs` keeps the
+  # build's own wrapper (`--inherit-argv0`, so the brain's watch still sees a
+  # program called `emacs`). The rewrite refuses the build where the entry is
+  # not the one it knows: a moved file, a second `Name=`, or a translated one
+  # (which a locator in another language would show instead) would leave the
+  # old name on screen with nothing saying so. The name keeps the build's
+  # (`emacs-pgtk-30…`), which `profile-minimal-closes` looks for.
+  emacsPkg = pkgs.symlinkJoin {
+    name = "${emacsBuild.name}-entries";
+    paths = [ emacsBuild ];
+    postBuild = ''
+      entry=share/applications/emacs.desktop
+      test -e "$out/$entry" || { echo "ERROR: Emacs's desktop entry moved: $entry" >&2; exit 1; }
+      if [ "$(grep -c '^Name=' "${emacsBuild}/$entry")" != 1 ] || grep -q '^Name\[' "${emacsBuild}/$entry"; then
+        echo "ERROR: $entry no longer has one untranslated Name= line" >&2
+        exit 1
+      fi
+      rm "$out/$entry"
+      sed -e "s/^Name=.*/Name=Emacs (non-client, so don't use it)/" "${emacsBuild}/$entry" > "$out/$entry"
+    '';
+  };
 
   # WHERE A FIRST CONFIGURATION IS BORN — before the daemon starts, an EMPTY
   # `$XDG_CONFIG_HOME/emacs` in a home that has none of the places Emacs
@@ -140,12 +174,16 @@ in
       # OUTSIDE the `mkIf` below, because the switch reads the registry (its
       # `apply`, above): an entry inside it would make the registry's names
       # depend on the switch (see `distro-apps.nix`).
+      #
+      # The CLIENT'S ENTRY FIRST: the software view names a program of the
+      # registry by the first of its entries it finds (`declaration.rs`), and
+      # the editor is the daemon's client, not the entry that warns it is not.
       ronoctua.apps.emacs = {
         package = emacsPkg;
         group = "editor";
         desktopIds = [
-          "emacs.desktop"
           "emacsclient.desktop"
+          "emacs.desktop"
           "emacs-mail.desktop"
           "emacsclient-mail.desktop"
         ];
@@ -220,11 +258,60 @@ in
         # puts `package` in `systemPackages` whenever `enable` is on, so both
         # entries are there either way. The registry owns them now
         # (`distro-apps-are-registered` reads the built `system.path`), and
-        # `docs/PENDING.md` keeps the question of hiding them.
+        # the one that does not use the daemon says so in its name
+        # (`emacsPkg`, above).
         install = false;
         defaultEditor = false; # `$EDITOR` is set by assets/shell/shellrc.sh
         startWithGraphical = false; # a terminal Emacs must work without a session
       };
+    })
+
+    # TEXT OPENS IN THE CLIENT FOR `xdg-open` TOO. The file manager sends
+    # every `text/*` to the editor by itself (`launch::opener_of_type`), but
+    # `xdg-open` — what a browser's download, a terminal, any other program
+    # runs — asks the `mimeapps.list` files and then the order of
+    # `mimeinfo.cache`, and there the first entry for `text/plain` and the
+    # code types was `emacs.desktop`, the one that starts a second Emacs;
+    # `text/markdown` went to ONLYOFFICE, the comma- and tab-separated and
+    # MathML ones to LibreOffice, `text/rtf` to WordCraft (measured in the full
+    # profile's `mimeinfo.cache`, 2026-10-20). So every type the client's
+    # entry declares, and every text type a suite or a Crafting App came
+    # first for, names `emacsclient.desktop` in `/etc/xdg`. Only where the
+    # editor is INSTALLED — a decline takes the defaults with it, and a
+    # default naming a missing entry is skipped in silence by every reader.
+    # A choice in the person's own `~/.config/mimeapps.list` still wins.
+    # `files-open-by-choice` asks the real `xdg-mime` of the built system,
+    # and derives the types from that system's `mimeinfo.cache`.
+    (lib.mkIf config.ronoctua.distroApps.installed.emacs {
+      xdg.mime.enable = true;
+      xdg.mime.defaultApplications = lib.genAttrs [
+        # The client's entry's own types (`emacsclient.desktop`).
+        "text/plain"
+        "text/english"
+        "text/x-makefile"
+        "text/x-c++hdr"
+        "text/x-c++src"
+        "text/x-chdr"
+        "text/x-csrc"
+        "text/x-java"
+        "text/x-moc"
+        "text/x-pascal"
+        "text/x-tcl"
+        "text/x-tex"
+        "application/x-shellscript"
+        "text/x-c"
+        "text/x-c++"
+        # The text types a suite or a Crafting App came first for.
+        "text/markdown"
+        "text/rtf"
+        "text/csv"
+        "text/x-csv"
+        "text/comma-separated-values"
+        "text/x-comma-separated-values"
+        "text/tab-separated-values"
+        "text/spreadsheet"
+        "text/mathml"
+      ] (_: "emacsclient.desktop");
     })
   ];
 }

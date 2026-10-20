@@ -51,7 +51,7 @@
 # # The distro's other sources
 #
 # Flatpaks, AppImages, web apps and Android apps of the distro come from
-# `assets/distro-apps.nix` (empty today), pinned in
+# `assets/distro-apps.nix` (the Crafting Apps' AppImages, today), pinned in
 # `assets/distro-pins.json` (`nix run .#distro-pins`). A Flatpak goes to the
 # person's `--user` installation through nix-flatpak (`flatpak.nix`), an
 # AppImage is wrapped (`appimageTools.wrapType2`) and a web app is a launcher
@@ -76,6 +76,10 @@
 
 let
   ledger = import ../../assets/distro-apps.nix;
+  # THE PINNED FILES, named once (`nix/distro-downloads.nix`): the same name
+  # `nix run .#distro-pins` downloads them under, so its download is the
+  # build's source.
+  downloads = import ../distro-downloads.nix { inherit (pkgs) fetchurl; };
   cfg = config.ronoctua.distroApps;
   table = cfg.table;
   pins = cfg.pins;
@@ -113,6 +117,11 @@ let
       "editor"
       "emacs"
     ];
+    vscode = carried [
+      "ronoctua"
+      "editor"
+      "vscode"
+    ];
     media = carried [
       "ronoctua"
       "media"
@@ -121,6 +130,16 @@ let
     workshop = carried [
       "ronoctua"
       "workshop"
+      "enable"
+    ];
+    office = carried [
+      "ronoctua"
+      "office"
+      "enable"
+    ];
+    crafts = carried [
+      "ronoctua"
+      "crafts"
       "enable"
     ];
     dev-toolchains = carried [
@@ -155,7 +174,11 @@ let
   };
 
   # THE FIELDS EACH SOURCE TAKES, closed: an unknown one is refused by name
-  # rather than ignored.
+  # rather than ignored. `optionalFieldsOf` are the ones an entry may leave
+  # out.
+  optionalFieldsOf = {
+    appimage = [ "fallback" ];
+  };
   fieldsOf = {
     flatpak = [
       "appId"
@@ -214,7 +237,9 @@ let
     if e.flatpak != null then
       [ "${e.flatpak.appId or ""}.desktop" ]
     else if e.appimage != null then
-      [ "ronoctua-appimage-${e.appimage.key or ""}.desktop" ]
+      # `toString`: a key that is not text is refused in `problems`, and
+      # must reach the sentence rather than stop the evaluation here.
+      [ "ronoctua-appimage-${toString (e.appimage.key or "")}.desktop" ]
     else if e.web != null then
       [ "ronoctua-web-${e.web.slug or ""}.desktop" ]
     else if e.android != null then
@@ -245,9 +270,15 @@ let
           description = "A Flatpak: `{ appId; origin; }`.";
         };
         appimage = lib.mkOption {
-          type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
+          type = lib.types.nullOr (lib.types.attrsOf (lib.types.either lib.types.str lib.types.bool));
           default = null;
-          description = "An AppImage: `{ key; name; url; hash; version; }`.";
+          description = ''
+            An AppImage: `{ key; name; url; hash; version; }`, and `fallback`
+            (a boolean, `true` when left out): `false` writes
+            `X-Ronoctua-Fallback=false` in its launcher entry, so the file
+            manager's opener never hands it a type by name order — only a
+            default or a person's choice does.
+          '';
         };
         web = lib.mkOption {
           type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
@@ -292,6 +323,24 @@ let
           type = lib.types.enum (builtins.attrNames groups);
           default = "base";
           description = "The `profile.nix` group it belongs to; `when` follows that group's switch.";
+        };
+        name = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default =
+            if config.appimage != null then
+              config.appimage.name or null
+            else if config.web != null then
+              config.web.name or null
+            else
+              null;
+          defaultText = lib.literalMD "the table's `name` for an AppImage or a web app, else none";
+          description = ''
+            The program's name, one line (`distro-apps.json`'s `name`): what
+            the software centre says of a program whose launcher entry is not
+            on the machine — one declined before it was ever installed, which
+            would otherwise be named by its id. Data, like a `.desktop`'s
+            `Name=`, never a text key.
+          '';
         };
       };
     }
@@ -369,24 +418,54 @@ let
   # which no path outside it reaches). The icon is the image's `.DirIcon`,
   # followed only while it stays inside the image and only when it IS a PNG
   # or an SVG.
+  #
+  # `fallback = false` adds one key of ours, `X-Ronoctua-Fallback=false`: the
+  # file manager's opener then never hands the program a type by name order
+  # (`ronoctua_apps::DesktopEntry::fallback`) — a default or a person's choice
+  # still reaches it, and its `MimeType=` keeps it in "open with". The
+  # image's own `X-` keys never survive the writing, so the key is always
+  # this table's.
+  #
+  # AND THE IMAGE NEVER INSTALLS ITSELF (invariant 6). An `AppRun` may write
+  # its own launcher and icons into `~/.local/share` when it believes it runs
+  # from an AppImage file — the AppImage convention is that `$APPIMAGE` names
+  # the file — and that launcher would name a program the person cannot run
+  # and the registry cannot decline. The wrapper runs the image already
+  # unpacked and never sets `$APPIMAGE`, but it would pass one through from
+  # whoever started it; so the program the system runs (`wrapper`) unsets it
+  # and sets the opt-out the Crafting Apps' `AppRun` reads,
+  # `<KEY>_NO_DESKTOP_INTEGRATION=1` (`PHOTOCRAFT_…`, `FIGCRAFT_…`, the two
+  # that have one), from the key — a variable an image does not read costs
+  # nothing. Measured in a VM: with `$APPIMAGE` pointing at a file, nothing
+  # is written.
   appimageOf =
     {
       key,
       name,
       version,
       src,
+      fallback ? true,
     }:
     let
       pname = "ronoctua-appimage-${key}";
       # The same arguments `wrapType2` hands its own `extract`, so the two
       # are one derivation and the image is unpacked once.
       contents = pkgs.appimageTools.extract { inherit pname version src; };
-      wrapper = pkgs.appimageTools.wrapType2 { inherit pname version src; };
+      fhs = pkgs.appimageTools.wrapType2 { inherit pname version src; };
+      optOut = "${lib.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] key)}_NO_DESKTOP_INTEGRATION";
+      wrapper =
+        pkgs.runCommand "${pname}-guarded-${version}" { nativeBuildInputs = [ pkgs.makeBinaryWrapper ]; }
+          ''
+            makeBinaryWrapper ${fhs}/bin/${pname} $out/bin/${pname} \
+              --unset APPIMAGE \
+              --set ${optOut} 1
+          '';
       entry =
         pkgs.runCommand "${pname}-entry-${version}"
           {
             NAME = name;
             PROGRAM = "/run/current-system/sw/bin/${pname}";
+            FALLBACK = if fallback then "true" else "false";
           }
           ''
             set -- ${contents}/*.desktop
@@ -435,12 +514,13 @@ let
               END {
                 printf "[Desktop Entry]\nType=Application\nName=%s\n%sExec=%s%s\n", ENVIRON["NAME"], kept, ENVIRON["PROGRAM"], code
                 if (ENVIRON["ICON"] != "") printf "Icon=%s\n", ENVIRON["ICON"]
+                if (ENVIRON["FALLBACK"] == "false") printf "X-Ronoctua-Fallback=false\n"
               }
             ' "$1" > $out/share/applications/${pname}.desktop
           '';
     in
     {
-      inherit wrapper entry;
+      inherit fhs wrapper entry;
       package = pkgs.symlinkJoin {
         name = "${pname}-${version}";
         paths = [
@@ -475,9 +555,13 @@ let
   apkOf = a: {
     id = "android:${a.package}";
     inherit (a) package image;
-    apk = "${pkgs.fetchurl {
-      inherit (a) url hash;
-      name = "${a.package}_${a.versionCode}.apk";
+    apk = "${downloads.apk {
+      inherit (a)
+        package
+        versionCode
+        url
+        hash
+        ;
     }}";
     version-code = lib.toInt a.versionCode;
     from = "distro";
@@ -491,9 +575,14 @@ let
       appimage = [
         (appimageOf {
           inherit (e.appimage) key name version;
-          src = pkgs.fetchurl {
-            inherit (e.appimage) url hash;
-            name = "${e.appimage.key}-${e.appimage.version}.AppImage";
+          fallback = e.appimage.fallback or true;
+          src = downloads.appimage {
+            inherit (e.appimage)
+              key
+              version
+              url
+              hash
+              ;
           };
         }).package
       ];
@@ -537,6 +626,7 @@ let
       "key"
       "name"
       "follows"
+      "fallback"
     ];
     web = [
       "slug"
@@ -654,14 +744,21 @@ let
         wrong = lib.subtractLists (tableFields.common ++ tableFields.${source}) (builtins.attrNames t);
         lacking = lib.subtractLists (builtins.attrNames t) tableNeeds.${source};
         text = builtins.filter (f: t ? ${f} && !(builtins.isString t.${f})) (
-          lib.subtractLists [ "follows" ] tableFields.${source}
+          lib.subtractLists [
+            "follows"
+            "fallback"
+          ] tableFields.${source}
         );
       in
       lib.optional (wrong != [ ]) "${at} has fields no ${source} entry takes: ${toString wrong}"
       ++ lib.optional (lacking != [ ]) "${at} lacks ${toString lacking}"
       ++ map (f: "${at}: `${f}` is not a line of text") text
       ++ lib.optionals (source == "appimage") (
-        followsProblems id (t.follows or null) ++ pinProblems "appimage" id
+        lib.optional (
+          t ? fallback && !(builtins.isBool t.fallback)
+        ) "${at}: `fallback` is neither true nor false"
+        ++ followsProblems id (t.follows or null)
+        ++ pinProblems "appimage" id
       )
       ++ lib.optionals (source == "android") (
         lib.optional (
@@ -691,7 +788,8 @@ let
           {
             inherit (t) key name;
             inherit (p) url hash version;
-          };
+          }
+          // lib.optionalAttrs (t ? fallback) { inherit (t) fallback; };
         web = {
           inherit (t) slug name url;
           profile = t.profile or "Default";
@@ -721,6 +819,42 @@ let
   # ---------------------------------------------------------------------
   isSlug = s: builtins.match "[a-z0-9][a-z0-9-]{0,63}" s != null;
   isLine = s: builtins.match "[^\n\r]*" s != null && s != "";
+  # A NAME A SCREEN DRAWS — ONE RULE with `ronoctua_person::reports::is_name`:
+  # no control character (C0, DEL and C1: Unicode's `Cc`) and not white space
+  # alone (Unicode's `White_Space`, what Rust's `trim` takes off). Compared as
+  # CHARACTERS, never with a regex's classes, which see bytes in the C
+  # locale: `[[:cntrl:]]` misses U+0080–U+009F and `[[:space:]]` misses
+  # U+00A0. A Nix string has no `\u`, so each character is a JSON escape.
+  charOf = hex: builtins.fromJSON "\"\\u${hex}\"";
+  hex4 = n: lib.fixedWidthString 4 "0" (lib.toHexString n);
+  # U+0000 cannot be in a Nix string at all.
+  controlChars = map (n: charOf (hex4 n)) (lib.range 1 31 ++ lib.range 127 159);
+  spaceChars = map charOf (
+    [
+      "0009"
+      "000A"
+      "000B"
+      "000C"
+      "000D"
+      "0020"
+      "0085"
+      "00A0"
+      "1680"
+    ]
+    ++ map hex4 (lib.range 8192 8202)
+    ++ [
+      "2028"
+      "2029"
+      "202F"
+      "205F"
+      "3000"
+    ]
+  );
+  isName =
+    s:
+    builtins.isString s
+    && !(builtins.any (c: lib.hasInfix c s) controlChars)
+    && builtins.replaceStrings spaceChars (map (_: "") spaceChars) s != "";
   isSri = h: builtins.match "(sha256|sha512)-[A-Za-z0-9+/]+=*" h != null;
   isHttps = u: builtins.match "https://[^[:space:]]+" u != null;
   isWeb = u: builtins.match "https?://[^[:space:]]+" u != null;
@@ -730,7 +864,7 @@ let
       s = sourceOf id e;
       a = e.${s};
       missing = lib.subtractLists (builtins.attrNames a) fieldsOf.${s};
-      extra = lib.subtractLists fieldsOf.${s} (builtins.attrNames a);
+      extra = lib.subtractLists (fieldsOf.${s} ++ optionalFieldsOf.${s} or [ ]) (builtins.attrNames a);
       at = "ronoctua.apps.${id}.${s}";
     in
     lib.optionals (s != "nix") (
@@ -742,14 +876,25 @@ let
             builtins.length (lib.splitString "." a.appId) < 3
             || builtins.match "[A-Za-z0-9_.-]+" a.appId == null
           ) "${at}.appId `${a.appId}` is not a Flatpak id";
+          # THE ONE FIELD THAT IS NOT TEXT is `fallback`; a text field that
+          # is a boolean is said, and never reaches the matches below.
           appimage =
-            lib.optional (!isSlug a.key) "${at}.key `${a.key}` is not a slug"
-            ++ lib.optional (!isLine a.name) "${at}.name is empty or spans lines"
-            ++ lib.optional (!isHttps a.url) "${at}.url is not an https address"
-            ++ lib.optional (!isSri a.hash) "${at}.hash is not an SRI hash"
-            ++ lib.optional (
-              builtins.match "[A-Za-z0-9._+-]{1,64}" a.version == null
-            ) "${at}.version `${a.version}` cannot name a store path";
+            let
+              notText = builtins.filter (f: !(builtins.isString a.${f})) fieldsOf.appimage;
+            in
+            lib.optional (!(builtins.isBool (a.fallback or true))) "${at}.fallback is neither true nor false"
+            ++ (
+              if notText != [ ] then
+                [ "${at}: ${toString notText} is not a line of text" ]
+              else
+                lib.optional (!isSlug a.key) "${at}.key `${a.key}` is not a slug"
+                ++ lib.optional (!isLine a.name) "${at}.name is empty or spans lines"
+                ++ lib.optional (!isHttps a.url) "${at}.url is not an https address"
+                ++ lib.optional (!isSri a.hash) "${at}.hash is not an SRI hash"
+                ++ lib.optional (
+                  builtins.match "[A-Za-z0-9._+-]{1,64}" a.version == null
+                ) "${at}.version `${a.version}` cannot name a store path"
+            );
           web =
             lib.optional (!isSlug a.slug) "${at}.slug `${a.slug}` is not a slug"
             ++ lib.optional (!isLine a.name) "${at}.name is empty or spans lines"
@@ -780,6 +925,9 @@ let
       n = builtins.length (sourcesSet e);
     in
     lib.optional (!isSlug id) "ronoctua.apps.${id}: an id is a slug ([a-z0-9-], at most 64)"
+    ++ lib.optional (
+      e.name != null && !isName e.name
+    ) "ronoctua.apps.${id}.name is not a name: a control character, or white space alone"
     ++ lib.concatMap (
       old: lib.optional (!isSlug old) "ronoctua.apps.${id}.formerly: `${old}` is not a slug"
     ) e.formerly
@@ -830,11 +978,14 @@ let
   # whether the person declined it for this machine: two facts, so the
   # software view can tell a program the profile lacks from one the person
   # only declined — and knows that undeclining the second brings it back.
-  # Installed is the first without an honoured second.
+  # Installed is the first without an honoured second. `name` is the
+  # registry's name or null: a program declined before it was ever
+  # installed has no launcher entry to be named by.
   report = {
     format = 1;
     apps = map (id: {
       inherit id;
+      name = apps.${id}.name;
       source = sourceOf id apps.${id};
       desktop-ids = apps.${id}.desktopIds;
       essential = apps.${id}.essential;
@@ -916,9 +1067,10 @@ in
       defaultText = lib.literalMD "the builders of the table's sources";
       description = ''
         The builders the table's entries go through, for a check to build
-        on a fixture: `appimage { key; name; version; src; }` gives
-        `{ wrapper; entry; package; }`, `web` a launcher entry, `apk` a
-        `declared-android.json` record.
+        on a fixture: `appimage { key; name; version; src; fallback ? true; }`
+        gives `{ fhs; wrapper; entry; package; }` (`wrapper` is the guarded
+        program, `fhs` the environment it runs), `web` a launcher entry,
+        `apk` a `declared-android.json` record.
       '';
     };
     honoured = lib.mkOption {

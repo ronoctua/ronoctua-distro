@@ -98,7 +98,7 @@ pub fn run_on(
         } => declare(ctx, key, *consent, machines.as_deref(), &edit, net, report),
         Order::Forget { key, keep_data } => forget(ctx, key, *keep_data, report),
         Order::Decline { id, machines } => decline(ctx, id, machines.clone(), &edit, report),
-        Order::Undecline { id } => undecline(ctx, id, &host, report),
+        Order::Undecline { id, everywhere } => undecline(ctx, id, *everywhere, &edit, report),
         Order::RefreshPins => refresh_pins(ctx, &host, net, report),
         _ => Err(Failure::refused(Refusal::UnknownItem)),
     }
@@ -645,7 +645,7 @@ fn decline(
         .is_none_or(|hosts| hosts.contains(&edit.on));
     change_and_apply(ctx, report, |ctx| {
         decl::change_declined(&ctx.roots, |doc| {
-            decl::decline(doc, id, machines.clone(), edit);
+            doc.decline(id, machines.clone(), &edit.at, &edit.on);
             Ok(())
         })
         .map(|_| ())
@@ -658,25 +658,47 @@ fn decline(
     Ok(Outcome::default())
 }
 
-/// Bring a declined program of the distro back, on every machine.
-fn undecline(ctx: &Context, id: &str, host: &str, report: &mut dyn Report) -> Done {
-    let was_here = decl::read_declined(&ctx.roots)
+/// Bring a declined program of the distro back HERE
+/// ([`ronoctua_person::declined::Declined::undecline`]): a decline of every
+/// machine goes whole — there is no list of the others to keep — and one of
+/// a list of machines loses this one, the others keeping it out. A decline
+/// of other machines only is theirs to bring back, and refused here
+/// ([`Refusal::DeclinedElsewhere`]) — unless `everywhere`, the person's
+/// answer to a question: then the decline goes whole whatever it names
+/// ([`ronoctua_person::declined::Declined::bring_back_everywhere`]), the
+/// one way to undo a decline of computers that no longer exist. This
+/// machine is rebuilt only when the decline held here.
+fn undecline(
+    ctx: &Context,
+    id: &str,
+    everywhere: bool,
+    edit: &Edit,
+    report: &mut dyn Report,
+) -> Done {
+    let here = decl::read_declined(&ctx.roots)
         .map_err(|why| decl::unreadable(decl::File::Declined, why))?
         .apps
         .into_iter()
         .find(|x| x.id == id)
-        .map(|d| d.applies_to(host));
-    let Some(was_here) = was_here else {
+        .map(|d| d.applies_to(&edit.on));
+    let Some(here) = here else {
         return Err(Failure::refused(Refusal::UnknownItem));
     };
+    if !here && !everywhere {
+        return Err(Failure::refused(Refusal::DeclinedElsewhere));
+    }
     change_and_apply(ctx, report, |ctx| {
         decl::change_declined(&ctx.roots, |doc| {
-            decl::undecline(doc, id);
+            if everywhere {
+                doc.bring_back_everywhere(id);
+            } else {
+                doc.undecline(id, &edit.on, &edit.at);
+            }
             Ok(())
         })
         .map(|_| ())
     })?;
-    if was_here {
+    if here {
         stage::rebuild(ctx, report)?;
         crate::reconcile::run(ctx, None, report)?;
     }
@@ -892,7 +914,12 @@ mod tests {
     }
 
     /// FAILS IF: an essential program of the distro can be declined, a
-    /// decline elsewhere rebuilds this machine, or a decline here does not.
+    /// decline elsewhere rebuilds this machine, or a decline here does not;
+    /// or bringing a program back here brings it back on the other machines
+    /// of its list, does not rebuild, or is taken — with no sentence of its
+    /// own — for a decline that names other machines only; or that one,
+    /// asked on every computer, does not go whole (without rebuilding here);
+    /// while a decline of every machine goes whole.
     #[test]
     fn a_decline_is_refused_for_what_the_distro_needs_and_rebuilds_only_here() {
         let root = scratch("decline");
@@ -957,26 +984,77 @@ mod tests {
             declined.apps[0].machines,
             Some(vec!["laptop".into(), "noctua".into()])
         );
-        // BROUGHT BACK: the decline goes; one that is not there is said.
+        // BROUGHT BACK HERE: this machine leaves the list, the other keeps
+        // it out; a decline that no longer names this machine is said.
+        std::fs::write(&log, b"").unwrap();
+        let back = |id: &str| {
+            run_on(
+                &ctx,
+                &Order::Undecline {
+                    id: id.into(),
+                    everywhere: false,
+                },
+                "noctua",
+                &canned,
+                &mut Vec::new(),
+            )
+        };
+        back("gimp").unwrap();
+        assert!(
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .contains(ronoctua_machine::UPDATE_APPLY_UNIT),
+            "brought back here and not rebuilt"
+        );
+        let declined = decl::read_declined(&ctx.roots).unwrap();
+        assert_eq!(declined.apps[0].machines, Some(vec!["laptop".into()]));
+        assert_eq!(declined.apps[0].edited_on, "noctua");
+        assert_eq!(
+            back("gimp").unwrap_err().refusal,
+            Some(Refusal::DeclinedElsewhere)
+        );
+        assert_eq!(
+            decl::read_declined(&ctx.roots).unwrap().apps[0].machines,
+            Some(vec!["laptop".into()]),
+            "another machine's decline was brought back from here"
+        );
+        // ON EVERY COMPUTER, the person's answer: the decline goes whole,
+        // and this machine, which never left it out, is not rebuilt.
+        std::fs::write(&log, b"").unwrap();
         run_on(
             &ctx,
-            &Order::Undecline { id: "gimp".into() },
+            &Order::Undecline {
+                id: "gimp".into(),
+                everywhere: true,
+            },
             "noctua",
             &canned,
             &mut Vec::new(),
         )
         .unwrap();
         assert!(decl::read_declined(&ctx.roots).unwrap().apps.is_empty());
+        assert!(
+            !std::fs::read_to_string(&log)
+                .unwrap()
+                .contains(ronoctua_machine::UPDATE_APPLY_UNIT),
+            "rebuilt for a decline that never held here"
+        );
+        // A DECLINE OF EVERY MACHINE goes whole.
+        run_on(
+            &ctx,
+            &Order::Decline {
+                id: "gimp".into(),
+                machines: None,
+            },
+            "noctua",
+            &canned,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        back("gimp").unwrap();
+        assert!(decl::read_declined(&ctx.roots).unwrap().apps.is_empty());
         assert_eq!(
-            run_on(
-                &ctx,
-                &Order::Undecline { id: "gimp".into() },
-                "noctua",
-                &canned,
-                &mut Vec::new()
-            )
-            .unwrap_err()
-            .refusal,
+            back("gimp").unwrap_err().refusal,
             Some(Refusal::UnknownItem)
         );
         let _ = std::fs::remove_dir_all(&root);

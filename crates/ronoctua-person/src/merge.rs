@@ -23,6 +23,14 @@
 //! # Order
 //!
 //! Our order first; what only theirs has is appended in their order.
+//!
+//! # The declines meet machine by machine
+//!
+//! `declined.json` keeps the order and the ids, and each decline meets as a
+//! SET of machines ([`Declining::merged`], the one rule of
+//! `crate::declined`): what either side added holds, and what either side
+//! took away holds. Two machines bringing a program back at once, or two
+//! declining it at once, are two edits that both hold — never a clash.
 
 use crate::Stamp;
 use crate::declared::{Declared, Entry};
@@ -170,20 +178,6 @@ impl Keyed for Entry {
     }
 }
 
-impl Keyed for Declining {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn edited_at(&self) -> &Stamp {
-        &self.edited_at
-    }
-
-    fn minor_change(&self, other: &Self) -> bool {
-        self.id == other.id && self.machines == other.machines
-    }
-}
-
 /// `declared.json` three ways.
 #[must_use]
 pub fn merge_declared(
@@ -201,20 +195,39 @@ pub fn merge_declared(
     )
 }
 
-/// `declined.json` three ways.
+/// `declined.json` three ways, each decline by its machines
+/// ([`Declining::merged`]): it never clashes, and the list of clashes is
+/// always empty — it is the shape every list of the person's merges into.
 #[must_use]
 pub fn merge_declined(
     base: &Declined,
     ours: &Declined,
     theirs: &Declined,
 ) -> (Declined, Vec<Clash<Declining>>) {
-    let m = merge_by_id(&base.apps, &ours.apps, &theirs.apps);
+    let find = |list: &'_ [Declining], id: &str| list.iter().find(|d| d.id == id).cloned();
+    let mut ids: Vec<&str> = ours.apps.iter().map(|d| d.id.as_str()).collect();
+    for d in &theirs.apps {
+        if !ids.contains(&d.id.as_str()) {
+            ids.push(d.id.as_str());
+        }
+    }
+    // An id only the base has was taken away on both sides: nothing to place.
+    let apps = ids
+        .into_iter()
+        .filter_map(|id| {
+            Declining::merged(
+                find(&base.apps, id).as_ref(),
+                find(&ours.apps, id).as_ref(),
+                find(&theirs.apps, id).as_ref(),
+            )
+        })
+        .collect();
     (
         Declined {
             format: crate::FORMAT,
-            apps: m.items,
+            apps,
         },
-        m.clashes,
+        Vec::new(),
     )
 }
 
@@ -320,5 +333,105 @@ mod tests {
                 theirs: Some(theirs[0].clone()),
             }]
         );
+    }
+
+    fn hosts(names: &[&str]) -> Option<Vec<String>> {
+        Some(names.iter().map(|&h| h.to_owned()).collect())
+    }
+
+    fn machines_of(doc: &Declined, id: &str) -> Option<Option<Vec<String>>> {
+        doc.apps
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| d.machines.clone())
+    }
+
+    /// FAILS IF: two machines that each bring a program back at once leave
+    /// a clash, or the other's decline behind — instead of both holding,
+    /// which is the decline gone.
+    #[test]
+    fn two_bring_backs_at_once_both_hold() {
+        let mut base = Declined::default();
+        base.decline("libreoffice", hosts(&["alpha", "beta"]), &at(0), "alpha");
+        base.decline("gimp", hosts(&["alpha", "beta", "gamma"]), &at(0), "alpha");
+        let mut ours = base.clone();
+        assert!(ours.undecline("libreoffice", "alpha", &at(5)));
+        assert!(ours.undecline("gimp", "alpha", &at(5)));
+        let mut theirs = base.clone();
+        assert!(theirs.undecline("libreoffice", "beta", &at(6)));
+        assert!(theirs.undecline("gimp", "beta", &at(6)));
+        let (merged, clashes) = merge_declined(&base, &ours, &theirs);
+        assert!(clashes.is_empty(), "{clashes:?}");
+        assert_eq!(machines_of(&merged, "libreoffice"), None, "{merged:?}");
+        assert_eq!(machines_of(&merged, "gimp"), Some(hosts(&["gamma"])));
+        let gimp = merged.apps.iter().find(|d| d.id == "gimp").unwrap();
+        assert_eq!(
+            (gimp.edited_at.clone(), gimp.edited_on.as_str()),
+            (at(6), "beta")
+        );
+    }
+
+    /// FAILS IF: two machines that each decline a program at once — one by
+    /// hand, one the installer's — clash or lose one of the two machines.
+    #[test]
+    fn two_declines_at_once_both_hold() {
+        use crate::Document as _;
+        let base = Declined::default();
+        let mut ours = base.clone();
+        ours.decline("libreoffice", hosts(&["alpha"]), &at(5), "alpha");
+        let mut theirs = base.clone();
+        theirs.decline("libreoffice", hosts(&["new-host"]), &at(6), "new-host");
+        let (merged, clashes) = merge_declined(&base, &ours, &theirs);
+        assert!(clashes.is_empty(), "{clashes:?}");
+        assert_eq!(
+            machines_of(&merged, "libreoffice"),
+            Some(hosts(&["alpha", "new-host"]))
+        );
+        let one = &merged.apps[0];
+        assert_eq!(
+            (one.edited_at.clone(), one.edited_on.as_str()),
+            (at(6), "new-host")
+        );
+        assert!(merged.validate().is_ok());
+    }
+
+    /// FAILS IF: a decline of every machine a side made does not absorb the
+    /// other side's list, one the base had survives a side bringing it back
+    /// whole, a side that changed nothing undoes the other's edit, or a
+    /// decline only one side has is lost.
+    #[test]
+    fn every_machine_absorbs_and_one_sided_edits_hold() {
+        let mut base = Declined::default();
+        base.decline("vlc", hosts(&["alpha"]), &at(0), "alpha");
+        base.decline("htop", None, &at(0), "alpha");
+        base.decline("btop", hosts(&["alpha"]), &at(0), "alpha");
+        let mut ours = base.clone();
+        ours.decline("vlc", None, &at(5), "alpha");
+        assert!(ours.undecline("htop", "alpha", &at(5)));
+        ours.decline("mpv", hosts(&["alpha"]), &at(5), "alpha");
+        let mut theirs = base.clone();
+        theirs.undecline("vlc", "alpha", &at(6));
+        theirs.decline("btop", hosts(&["beta"]), &at(6), "beta");
+        let (merged, clashes) = merge_declined(&base, &ours, &theirs);
+        assert!(clashes.is_empty(), "{clashes:?}");
+        assert_eq!(
+            machines_of(&merged, "vlc"),
+            Some(None),
+            "null did not absorb"
+        );
+        assert_eq!(
+            machines_of(&merged, "htop"),
+            None,
+            "brought back whole, and back"
+        );
+        assert_eq!(
+            machines_of(&merged, "btop"),
+            Some(hosts(&["alpha", "beta"]))
+        );
+        assert_eq!(machines_of(&merged, "mpv"), Some(hosts(&["alpha"])));
+        let ids: Vec<&str> = merged.apps.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["vlc", "btop", "mpv"], "our order, then theirs");
+        // NOTHING CHANGED on either side: the base, stamps and all.
+        assert_eq!(merge_declined(&base, &base, &base).0, base);
     }
 }

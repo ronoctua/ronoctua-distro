@@ -372,6 +372,13 @@ software-declared-not-on-this-machine = O perfil deste computador não o traz.
 software-declared-row-declined = Recusado
 software-declared-row-bring-back = Trazer de volta
 software-declared-bring-back-value = em todos os computadores, e aqui na hora
+software-declared-bring-back-here = { $others ->
+        [0] aqui na hora
+        [one] aqui na hora; o seu outro computador continua sem ele
+       *[other] aqui na hora; os seus { $others } outros computadores continuam sem ele
+    }
+software-declared-back-elsewhere = Cada computador que o recusou o traz de volta por conta própria; daqui, ele volta em todos de uma vez.
+software-declared-row-bring-back-everywhere = Trazer de volta em todos os computadores
 software-declared-row-decline-here = Manter desinstalado aqui
 software-declared-row-decline-everywhere = Manter desinstalado em todos os seus computadores
 software-declared-row-for-me = Instalar só para você
@@ -391,5 +398,11 @@ software-declared-decline-rebuild = Este computador é reconstruído agora, sem 
 software-declared-decline-others = Os seus outros computadores o deixam de fora na próxima atualização deles.
 software-declared-decline-back = Recusados por você o traz de volta.
 software-declared-yes-decline = Sim, manter desinstalado
+software-declared-sure-bring-back-everywhere = Trazer { $app } de volta em todos os computadores?
+software-declared-back-everywhere-others = Todo computador que o recusou o instala de novo na próxima atualização — inclusive um que você não tem mais, cuja recusa nada mais desfaria.
+software-declared-back-everywhere-here = Este computador não muda: ele nunca o deixou de fora.
+software-declared-yes-bring-back-everywhere = Sim, trazer de volta em todos
+software-declared-registry-broken = A lista de programas da distro deste computador não se lê, então nenhum deles aparece aqui. A próxima atualização deste computador a escreve de novo.
+software-declared-registry-newer = A lista de programas da distro deste computador foi escrita por uma distro mais nova, então nenhum deles aparece aqui: atualize este computador.
 software-declared-returning = Não está mais recusado aqui: a próxima atualização deste computador o traz de volta.
 software-declared-web-edit = Ele é declarado: salvar muda a sua declaração, e os seus outros computadores recebem a mudança na próxima atualização deles.

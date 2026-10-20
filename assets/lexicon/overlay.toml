@@ -81,6 +81,10 @@ pt = ["rust", "linguagem", "programacao"]
 en = ["nix", "nixos", "package manager", "reproducible"]
 pt = ["nix", "nixos", "gerenciador de pacotes", "reprodutivel"]
 
+[custom-common_lisp]
+en = ["lisp", "common lisp", "sbcl", "language", "programming"]
+pt = ["lisp", "common lisp", "sbcl", "linguagem", "programacao"]
+
 [md-harddisk]
 en = ["disk", "drive", "storage", "hdd"]
 pt = ["disco", "unidade", "armazenamento"]

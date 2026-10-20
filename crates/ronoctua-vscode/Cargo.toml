@@ -1,0 +1,43 @@
+[package]
+name = "ronoctua-vscode"
+description = "VS Code's files and CLI: the extensions its manifest says are installed here, the person's list of extensions that travels with their belongings, and `code --install-extension` — the one crate that talks to them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE CLI IS PART OF THE PRODUCT. A user path unit runs `ronoctua-vscode
+# record` whenever VS Code's manifest changes, and `install` is what the
+# person runs by hand (the belongings' offer runs the same function through
+# the queue). Extracted as `rust.vscode` (`nix/rust/outputs.nix`) and handed
+# to `nix/modules/vscode.nix` by the flake; `code` itself reaches it by the
+# environment (`RONOCTUA_VSCODE`, set where VS Code is installed) — never
+# `option_env!`: the belongings link this crate, and a store path baked here
+# would put VS Code in the closure of every machine.
+[[bin]]
+name = "ronoctua-vscode"
+path = "src/bin/cli.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# What was seen installed here (`state/vscode-seen.json`), a `Store`: read
+# leniently, written whole and atomically.
+ronoctua-store = { path = "../ronoctua-store" }
+# The state root, and the atomic write of the person's list.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+# THE INSTALL REACHES THE MARKETPLACE: a `Pass` for every host it reaches,
+# minted from the person's `consent.json` at the moment it asks.
+ronoctua-consent = { path = "../ronoctua-consent" }
+
+[dev-dependencies]
+# A test mints its passes from a consent file of its own; the helpers that
+# read one are `test-support`, never a product's.
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.

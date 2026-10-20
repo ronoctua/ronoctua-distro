@@ -923,6 +923,7 @@ mod tests {
             working_directory: None,
             startup_wm_class: None,
             key: "firefox".to_owned(),
+            fallback: true,
         }]);
         r.heard(&catalogue, &mut w);
         assert_eq!(r.search.ground.catalogue.len(), 1);

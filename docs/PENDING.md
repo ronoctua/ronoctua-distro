@@ -204,6 +204,13 @@ avaliação; estas coisas não:
   chave privada RSA de teste, e ela não entra num repositório público. O `entry.jar` de hoje não usa
   esse caminho.
 
+### 0.0000031. Flatpak e app Android da distro não têm nome no registro · pequeno
+
+O `name` do `distro-apps.json` vem da tabela só para AppImage e web app, e da entrada para um
+pacote; a linha de um Flatpak ou de um app Android da distro não leva nome, e um deles recusado
+antes de ser instalado apareceria na central pelo id. A tabela não tem nenhum hoje. Acabou quando:
+as duas formas aceitam `name` e o `distro-app-sources-are-checked` o planta.
+
 ### 0.0000035. O que a câmera ainda não faz · pequeno a médio cada
 
 - **Câmera MIPI atrás do libcamera** (muitos laptops novos com sensor Intel IPU): ela não é um nó
@@ -260,6 +267,26 @@ Chrome 151 real, offline, e o `kiosk-vm` repete o que importa. Isto a VM não mo
 
 - acabou quando: cada item foi visto no hardware do dono e virou frase no `ARCHITECTURE.md`, ou
   conserto
+
+### 0.0000037. O VS Code — o que ficou com o dono · pequeno cada
+
+O VS Code (`docs/ARCHITECTURE.md`, "VS Code: a build da Microsoft…") foi medido no `vscode-vm`,
+offline. Ficam duas decisões:
+
+- **A rede que ele abre sozinho.** Ao subir, mesmo com a telemetria desligada pela política, ele
+  pergunta ao Marketplace pela versão mais nova do Copilot Chat que traz (no log da VM: `Error while
+  getting the latest version for the extension GitHub.copilot-chat`). Falta decidir se a distro
+  declara mais alguma política (e qual) ou se isso é da pessoa.
+- **O laço `.#dev`** não exporta `RONOCTUA_VSCODE`: a oferta e a linha das extensões não aparecem no
+  rodapé aninhado.
+- **O remendo do rust-analyzer.** Ao ver `ID=nixos`, a extensão remenda o próprio servidor com
+  `nix-build` contra o `<nixpkgs>`, dentro do ambiente FHS também (o teste desliga isso para medir o
+  programa). Não foi medido numa sessão de verdade se esse caminho funciona numa máquina da distro
+  (o `NIX_PATH` dela, a construção com o store e sem rede), ou se a pessoa precisa apontar o
+  `rust-analyzer.server.path` para o servidor que vem no pacote, que no ambiente FHS roda (a distro
+  não escreve o `settings.json` dela).
+
+- acabou quando: cada item virou decisão escrita no `ARCHITECTURE.md`, ou conserto
 
 ### 0.0000039. As colunas: o que ficou para depois · pequeno
 
@@ -782,6 +809,16 @@ ferramentas de build no `extraDependencies`; custa ~1 h por tentativa e um fecho
 - acabou quando: `--execute` roda até o fim contra um disco virtual, o sistema que ele instala
   boota, e o teste volta para o `tests/checks.nix` (no `slow`)
 
+### A lista de programas do instalador — o que a pista não provou · pequeno cada
+
+- **A recusa semeada nunca correu de ponta a ponta.** O ensaio prova os comandos (`installer-dryrun`:
+  `--decline` no passo da cópia, o `declined.json` com o hostname, `zsh` recusado, `none` sem nada), e
+  cada ponta tem os seus testes (a ordem e os três arquivos no instalador, o `plain --decline` no
+  `ronoctua-belongings`), mas nenhuma execução juntou envio, `apply` com chave fixada, `nixos-install`
+  sem o programa e restauração. O `installer-vm` instala a `minimal`, offline, e a `full` tem ~37 GiB.
+  Acabou quando: uma instalação de verdade (ou a VM, com um perfil de teste que carregue um programa
+  oferecido) deixa um de fora e a máquina nasce sem ele, com a recusa no repositório e no espelho.
+
 ### Os painéis fora do gerenciador — o que a B1 deixou para depois · pequeno cada
 
 A B1 tirou a prévia e os fatos do `files::View` sem mudar nada na tela (`inspection.rs`,
@@ -1110,14 +1147,24 @@ frase da página dos pertences, nunca resolvido por ela:
   caminho de um alvo passa a ser o alvo — com uma migração que não quebre o "guardar de novo" nem uma
   máquina na versão anterior.
 
-### O Emacs tem dois lançadores que ninguém pediu · pequeno
+### Os Crafting Apps fazem o que a distro não segura · pequeno
 
-`services.emacs.enable` põe o pacote no `systemPackages`, e com ele `emacs.desktop` e
-`emacsclient.desktop`; o lançador lista dois Emacsen, e um deles não usa o daemon. O comentário do
-`emacs.nix` afirmava o contrário até o registro de programas medir o `system.path`.
+O que um Crafting App DECLARA abrir não abre mais nada sozinho (`fallback = false`; o
+`files-open-by-choice` cobra), mas dois deles fazem por conta própria o que a distro não acompanha:
 
-- acabou quando: o dono decidir se os dois somem (um pacote do Emacs sem `share/applications` no
-  `services.emacs.package`) ou ficam, e o `distro-apps-are-registered` continuar verde
+- **O "tornar padrão" do WordCraft grava um padrão morto.** Ele roda `xdg-mime` com o id que o app
+  espera, `ai.storyteller.wordcraft.desktop`, e o lançador daqui é
+  `ronoctua-appimage-wordcraft.desktop`: o `~/.config/mimeapps.list` da pessoa ganha linhas que todo
+  leitor pula, e o botão parece não fazer nada.
+  - acabou quando: o dono decidir entre dar ao lançador o id que o app espera (muda o id que o
+    registro e a central usam) e dizer em algum lugar que a pessoa leia que o padrão se escolhe pela
+    distro (o "abrir com" e o `mimeapps.list`)
+- **O "Verificar atualizações" do PdfCraft anuncia o que a distro não entrega.** À mão, ele pergunta
+  ao GitHub pela release mais nova e diz que há versão nova; ela só chega quando o dono move o pin
+  (`nix run .#distro-pins`) e a máquina se atualiza. O pedido é do app, fora do consentimento da
+  distro, como toda a rede dele.
+  - acabou quando: o dono decidir se os pins dos Crafting Apps andam sozinhos com a atualização da
+    máquina, ou onde a pessoa lê que a versão é a que a distro testou
 
 ### O apk do F-Droid é fixado pelo que chegou, não pelo índice assinado · pequeno
 
@@ -1366,19 +1413,6 @@ nada prova ainda que o Codex instalado escreve mesmo rollouts comprimidos ou o `
 
 <!-- anchor: L15 -->
 
-### Os dois perfis medidos construídos, com o trabalho na distro · pequeno
-
-Os números novos (`minimal` ~11,8 GiB, `full` ~29) saem de uma conta: o fechamento do toolchain do
-devshell e dos agentes menos o fechamento dos pacotes de cada perfil que este store já tinha
-(`nix path-info -S`). Os sistemas inteiros não foram construídos nesta leva, e o driver gráfico, as
-unidades e o que o store não tinha ficaram fora da subtração — por isso a Mesa e o LLVM foram
-descontados à mão.
-
-- acabou quando: o `profile-minimal-closes` passou com o rust, o QEMU, o OVMF e os agentes na lista
-  do que o `minimal` guarda, e `nix path-info -rS` dos dois `toplevel` deu os números que o
-  `nix/modules/profile.nix`, o `docs/INSTALL.md`, o `docs/DEVELOPMENT.md` e o `AGENTS.md` dizem (ou
-  eles foram corrigidos)
-
 <!-- anchor: L16 -->
 
 ### A primeira versão de verdade, e o que só ela mede · médio
@@ -1408,7 +1442,8 @@ distro não tem cache binário (decisão do dono, 2026-10-11): o ISO leva sempre
   licença do pacote de topo daquele nome, o predicado da distro e, com o Android, o prefixo
   `android` — o `uade`, que entra por um nixpkgs próprio, já era um caso, e é coberto pela licença.
   Fica de fora o não livre sem nome de topo, fora do predicado e sem `android` no nome: um AppImage
-  ou app Android que a distro registrar (`assets/distro-apps.nix`, hoje sem nenhum) não tem
+  ou app Android que a distro registrar (`assets/distro-apps.nix`; hoje, os treze Crafting Apps,
+  todos Apache-2.0) não tem
   `meta.license` do nixpkgs, e se for proprietário tem de entrar no predicado de
   `nix/modules/nixpkgs-config.nix`, senão o `.#release` o empurra para um cache público. O
   `release-cache-holds-only-free-builds` lista as portas do repositório por onde um não livre entra.
@@ -1484,7 +1519,8 @@ Cachix nem uma instalação.
   (`Refusal::LeavesAtNextApply`).
   - pronto quando: o fim do trabalho leva que a mudança espera, e a notificação diz isso.
 - **Os programas da distro de fora do Nix (Flatpak, AppImage, web, Android do registro) não passaram
-  pela vista**: as tabelas do L04 estão vazias; o `Declarations::distro_of` acha um Flatpak e um app
+  pela vista**: a tabela do L04 só tem as AppImages dos Crafting Apps (2026-10-20), e nenhuma foi
+  desenhada na central; o `Declarations::distro_of` acha um Flatpak e um app
   Android pelo `.desktop` e pela fonte (a instalação é uma só), e uma AppImage ou um web app da
   distro pela entrada do sistema, e nenhum foi desenhado.
   - pronto quando: o registro tiver um, e a foto das duas portas o mostrar recusável.

@@ -241,6 +241,13 @@ pub struct DistroApps {
 pub struct DistroApp {
     /// The registry id (`ronoctua.apps.<id>`).
     pub id: String,
+    /// The program's name, when the registry gives one (the table's for an
+    /// AppImage or a web app, the entry's own `name` for a package) — what
+    /// a screen says of a program whose launcher entry is not on this
+    /// machine (declined before it was ever installed). A report of a build
+    /// before the field has none.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Where it comes from (`nix` for a package).
     pub source: Source,
     /// Its desktop files' ids.
@@ -278,9 +285,29 @@ impl Document for DistroApps {
                     a.id.as_str(),
                 ));
             }
+            if let Some(name) = &a.name
+                && !is_name(name)
+            {
+                return Err(Refusal::new(
+                    Why::Invalid,
+                    format!("{at}/name"),
+                    name.as_str(),
+                ));
+            }
         }
         Ok(())
     }
+}
+
+/// Whether `name` is one a screen may draw as a program's name: no control
+/// character — C0, DEL and C1 (`char::is_control`, Unicode's `Cc`) — and
+/// not white space alone (Unicode's `White_Space`, what `str::trim` takes
+/// off: U+00A0 included). ONE RULE with the registry's `isName`
+/// (`nix/modules/distro-apps.nix`), which refuses the same names at
+/// evaluation; `distro-app-sources-are-checked` plants the edges there.
+#[must_use]
+pub fn is_name(name: &str) -> bool {
+    !name.trim().is_empty() && !name.chars().any(char::is_control)
 }
 
 /// `declared-android.json`.
@@ -353,5 +380,60 @@ impl Document for DeclaredAndroid {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry(app: &str) -> String {
+        format!(r#"{{"format": 1, "apps": [{app}]}}"#)
+    }
+
+    const LIBREOFFICE: &str = r#"{"id": "libreoffice", "source": "nix",
+        "desktop-ids": ["startcenter.desktop"], "essential": null, "group": "office",
+        "on-this-machine": true, "declined-here": true"#;
+
+    /// FAILS IF: the registry's name is not read, a report of a build before
+    /// the name stops reading (its programs would lose their page), or a
+    /// name that is not one line of text reaches a screen.
+    #[test]
+    fn a_program_is_named_by_the_registry_or_not_at_all() {
+        let named: DistroApps = crate::parse(
+            registry(&format!(r#"{LIBREOFFICE}, "name": "LibreOffice"}}"#)).as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(named.apps[0].name.as_deref(), Some("LibreOffice"));
+        let older: DistroApps =
+            crate::parse(registry(&format!("{LIBREOFFICE}}}")).as_bytes()).unwrap();
+        assert_eq!(older.apps[0].name, None);
+        for bad in [
+            r#""""#,
+            r#""  ""#,
+            r#""Libre\nOffice""#,
+            r#""Libre\tOffice""#,
+            r#""\u00a0""#,
+            r#""\u3000 \u2028""#,
+            r#""Libre\u0080Office""#,
+            r#""Libre\u0085Office""#,
+            r#""Libre\u009fOffice""#,
+            r#""Libre\u007fOffice""#,
+        ] {
+            let refused = crate::parse::<DistroApps>(
+                registry(&format!(r#"{LIBREOFFICE}, "name": {bad}}}"#)).as_bytes(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                (refused.why, refused.at.as_str()),
+                (Why::Invalid, "/apps/0/name"),
+                "{bad}"
+            );
+        }
+        // THE EDGES THE REGISTRY'S RULE AGREES ON: a non-breaking space
+        // inside a name and letters past ASCII are a name.
+        for good in ["Libre\u{a0}Office", "Café ☕", "Ünïcödé"] {
+            assert!(is_name(good), "{good}");
+        }
     }
 }
