@@ -148,6 +148,11 @@ pub const OF_THE_VIEW: &[(&str, &str, Column)] = &[
 ///
 /// A table of its own, like the sheet's and the open record's: the arrows turn
 /// what the focused line holds, and three letters do what no arrow can.
+///
+/// `RET` TYPES what cannot be turned (the name, a text to compare against) and
+/// TURNS what can, one value forward and round — so the second click, which is
+/// `RET`, changes a value from the pointer. Which of the two it does follows
+/// the focused line, and the line says it (`View::means`).
 pub const OF_THE_DRAFT: &[(&str, &str)] = &[
     ("<down>", "notif-down"),
     ("<up>", "notif-up"),
@@ -188,11 +193,17 @@ pub const OF_THE_OPEN: &[(&str, &str)] = &[
 /// marking everything read, and the arrows turn a knob rather than doing
 /// nothing. One key, one meaning per level, and the line says which level it
 /// is on by teaching only that level's keys.
+///
+/// `RET` TURNS the knob one value forward, and after the last comes the first —
+/// the shell history's ring, whose `RET` turns. It is what the second click on a
+/// knob does, and the pointer had no other way to change a value: the arrows
+/// were the only one (invariant 19).
 pub const OF_THE_SHEET: &[(&str, &str)] = &[
     ("<down>", "notif-down"),
     ("<up>", "notif-up"),
     ("<right>", "notif-knob-next"),
     ("<left>", "notif-knob-previous"),
+    ("RET", "notif-knob-turn"),
     ("r", "notif-restore"),
 ];
 
@@ -1712,7 +1723,9 @@ impl View {
         match &self.level {
             Level::Sheet(_) => crate::chrome::hint_of(OF_THE_SHEET, texts),
             Level::Open { .. } => crate::chrome::hint_of(OF_THE_OPEN, texts),
-            Level::Draft(_) => crate::chrome::hint_of(OF_THE_DRAFT, texts),
+            Level::Draft(_) => {
+                crate::chrome::hint_of_with(OF_THE_DRAFT, |id| self.means(id, lists), texts)
+            }
             Level::Publish { .. } => crate::chrome::hint_of(OF_THE_QUESTION, texts),
             Level::List => {
                 let here: Vec<(&str, &str)> = OF_THE_VIEW
@@ -1737,8 +1750,27 @@ impl View {
             // ADJUSTING IS FOR THE DISTRO'S; a filter the person WROTE is
             // opened and rewritten whole, conditions and all.
             "notif-adjust" => self.mine_here(lists).is_some().then_some("notif-edit"),
+            // ON THE DRAFT, `RET` types the name or a text, and TURNS the rest
+            // — the field, the comparison, a number, a knob.
+            "notif-draft-type" => self.draft_turns().then_some("notif-knob-turn"),
             _ => None,
         }
+    }
+
+    /// Whether `RET` TURNS the draft's focused line rather than typing it.
+    fn draft_turns(&self) -> bool {
+        let Level::Draft(d) = &self.level else {
+            return false;
+        };
+        turns(d, draft_lines(d).get(d.line).copied())
+    }
+
+    /// Whether `RET` turns a value on this level — the sheet's knob, or the
+    /// draft's line that is turned: what `notif-knob-turn`, run by its name,
+    /// presses, and nowhere else (on a list the same key opens a record).
+    #[must_use]
+    pub fn turns_here(&self) -> bool {
+        matches!(self.level, Level::Sheet(_)) || self.draft_turns()
     }
 
     /// The filter behind the focused catalogue row, when it is theirs.
@@ -2239,6 +2271,97 @@ pub fn turn(now: &Presentation, knob: Knob, step: i32, into: &mut Verdict) {
             let v = i32::from(now.level) + step;
             into.level = Some(v.clamp(0, i32::from(TOP_LEVEL)) as u8);
         }
+    }
+}
+
+/// `RET`'s turn: one value forward, and after the last the FIRST — the ring
+/// the second click walks (`OF_THE_SHEET`). The arrows stop at the ends of the
+/// level (`turn`); a click that stopped there would change nothing, from `100`,
+/// however many times it came.
+pub fn advance(now: &Presentation, knob: Knob, into: &mut Verdict) {
+    if knob == Knob::Level && now.level >= TOP_LEVEL {
+        into.level = Some(0);
+        return;
+    }
+    turn(now, knob, 1, into);
+}
+
+/// Which way a line of the draft turns: the arrows, back and forward, stop at
+/// a number's ends; `RET` goes forward and ROUND, from the last value to the
+/// first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Turning {
+    /// `←`.
+    Back,
+    /// `→`.
+    Forward,
+    /// `RET`, and the second click.
+    Round,
+}
+
+/// Turns what line `here` of the draft holds — the field, the comparison, a
+/// number, a knob. A name or a text is TYPED, not turned, and stays as it is.
+fn turn_line(d: &mut Draft, here: Option<Line>, way: Turning) {
+    let forward = way != Turning::Back;
+    match here {
+        Some(Line::Field(i)) => {
+            if let Some(t) = d.when.get_mut(i) {
+                let now = ronoctua_notify::Field::ALL
+                    .iter()
+                    .position(|f| *f == t.field)
+                    .unwrap_or(0);
+                t.field = ronoctua_notify::Field::ALL
+                    [wrap(now, ronoctua_notify::Field::ALL.len(), forward)];
+            }
+        }
+        Some(Line::Test(i)) => {
+            if let Some(t) = d.when.get_mut(i) {
+                let kinds = ronoctua_notify::Test::KINDS;
+                let now = kinds.iter().position(|k| *k == t.test.id()).unwrap_or(0);
+                t.test = t.test.of_kind(kinds[wrap(now, kinds.len(), forward)]);
+            }
+        }
+        // A NUMBER IS TURNED, not typed: `at-least` takes `0..=100` and the
+        // level knob already moves in tens for the reason nobody tells 63
+        // from 64.
+        Some(Line::Value(i)) => {
+            if let Some(t) = d.when.get_mut(i)
+                && t.test.is_numeric()
+            {
+                let now = t.test.against().parse::<i32>().unwrap_or(0);
+                let top = i32::from(TOP_LEVEL);
+                let next = if way == Turning::Round && now >= top {
+                    0
+                } else {
+                    (now + if forward { 10 } else { -10 }).clamp(0, top)
+                };
+                t.test = ronoctua_notify::Test::of_kind(
+                    &ronoctua_notify::Test::Is(next.to_string()),
+                    t.test.id(),
+                );
+            }
+        }
+        Some(Line::Knob(k)) => {
+            let mut now = Presentation::from_urgency(ronoctua_notify::Urgency::Normal);
+            d.apply.over(&mut now);
+            let mut into = d.apply.clone();
+            match way {
+                Turning::Round => advance(&now, Knob::ALL[k], &mut into),
+                Turning::Back => turn(&now, Knob::ALL[k], -1, &mut into),
+                Turning::Forward => turn(&now, Knob::ALL[k], 1, &mut into),
+            }
+            d.apply = into;
+        }
+        Some(Line::Name) | None => {}
+    }
+}
+
+/// Whether line `here` of the draft is TURNED by `RET` rather than typed.
+fn turns(d: &Draft, here: Option<Line>) -> bool {
+    match here {
+        Some(Line::Field(_) | Line::Test(_) | Line::Knob(_)) => true,
+        Some(Line::Value(i)) => d.when.get(i).is_some_and(|t| t.test.is_numeric()),
+        Some(Line::Name) | None => false,
     }
 }
 
@@ -3608,62 +3731,28 @@ impl View {
                 Errand::Nothing
             }
             Press::Left | Press::Right => {
-                let forward = press == Press::Right;
-                match here {
-                    Some(Line::Field(i)) => {
-                        if let Some(t) = d.when.get_mut(i) {
-                            let now = ronoctua_notify::Field::ALL
-                                .iter()
-                                .position(|f| *f == t.field)
-                                .unwrap_or(0);
-                            t.field = ronoctua_notify::Field::ALL
-                                [wrap(now, ronoctua_notify::Field::ALL.len(), forward)];
-                        }
-                    }
-                    Some(Line::Test(i)) => {
-                        if let Some(t) = d.when.get_mut(i) {
-                            let kinds = ronoctua_notify::Test::KINDS;
-                            let now = kinds.iter().position(|k| *k == t.test.id()).unwrap_or(0);
-                            t.test = t.test.of_kind(kinds[wrap(now, kinds.len(), forward)]);
-                        }
-                    }
-                    // A NUMBER IS TURNED, not typed: `at-least` takes `0..=100`
-                    // and the level knob already moves in tens for the reason
-                    // nobody tells 63 from 64.
-                    Some(Line::Value(i)) => {
-                        if let Some(t) = d.when.get_mut(i)
-                            && t.test.is_numeric()
-                        {
-                            let now = t.test.against().parse::<i32>().unwrap_or(0);
-                            let next = (now + if forward { 10 } else { -10 })
-                                .clamp(0, i32::from(TOP_LEVEL))
-                                .to_string();
-                            t.test = ronoctua_notify::Test::of_kind(
-                                &ronoctua_notify::Test::Is(next),
-                                t.test.id(),
-                            );
-                        }
-                    }
-                    Some(Line::Knob(k)) => {
-                        let mut now = Presentation::from_urgency(ronoctua_notify::Urgency::Normal);
-                        d.apply.over(&mut now);
-                        let mut into = d.apply.clone();
-                        turn(&now, Knob::ALL[k], if forward { 1 } else { -1 }, &mut into);
-                        d.apply = into;
-                    }
-                    Some(Line::Name) | None => {}
-                }
+                let way = if press == Press::Right {
+                    Turning::Forward
+                } else {
+                    Turning::Back
+                };
+                turn_line(d, here, way);
                 Errand::Nothing
             }
             // WHAT CANNOT BE TURNED IS TYPED — on the line of whichever door
             // this is: the footer's minibuffer, or the window's header. The
             // view remembers what it asked, and the answer comes back to
-            // `typed`.
+            // `typed`. AND WHAT CAN BE TURNED, TURNS, one value forward and
+            // round: `RET` is the second click, and the pointer had no other
+            // way to change a value here (invariant 19).
             Press::Enter => {
                 let asking = match here {
                     Some(Line::Name) => Asking::Name,
                     Some(Line::Value(i)) if !d.when[i].test.is_numeric() => Asking::Value(i),
-                    _ => return Errand::Nothing,
+                    _ => {
+                        turn_line(d, here, Turning::Round);
+                        return Errand::Nothing;
+                    }
                 };
                 self.asking = Some(asking);
                 Errand::Ask(asking)
@@ -3791,14 +3880,20 @@ impl View {
                 );
                 Errand::Adjusted(id.clone(), Some(v))
             }
+            // `RET` TURNS IT one value forward and round — the second click on
+            // a knob, which had no way at all to change its value.
+            Press::Enter => {
+                let (p, _) = in_force(book, id);
+                let mut v = book.adjustments.get(id).cloned().unwrap_or_default();
+                advance(&p, Knob::ALL[knob], &mut v);
+                Errand::Adjusted(id.clone(), Some(v))
+            }
             // BACK TO THE DISTRO'S. The adjustment is REMOVED, not set to the
             // default value: "yours" and "the distro's, which happens to be the
             // same" are different answers to "who decided this?", and the
             // manager draws the difference.
             Press::Letter('r') => Errand::Adjusted(id.clone(), None),
-            Press::Tab | Press::BackTab | Press::Enter | Press::Space | Press::Letter(_) => {
-                Errand::Nothing
-            }
+            Press::Tab | Press::BackTab | Press::Space | Press::Letter(_) => Errand::Nothing,
         }
     }
 }
@@ -3940,6 +4035,12 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
         ronoctua_cmd::Command {
             id: "notif-knob-previous",
             label: crate::key::CMD_NOTIF_KNOB_PREVIOUS,
+        },
+        // `RET` ON A KNOB, and on a line of the draft that is turned: one
+        // value forward, and round — what the second click does.
+        ronoctua_cmd::Command {
+            id: "notif-knob-turn",
+            label: crate::key::CMD_NOTIF_KNOB_TURN,
         },
         // `r` in the sheet: back to the distro's default. A command of its own
         // because the same letter on a list marks everything read, and one id
@@ -4609,6 +4710,127 @@ mod tests {
             0,
             "the cursor points at a row that is not there"
         );
+    }
+
+    /// FAILS IF: `RET` on a knob of the sheet does not turn it one value
+    /// forward — the second click is that `RET`, and the pointer had no other
+    /// way to change a value — or the level stops at the top instead of
+    /// going round.
+    #[test]
+    fn ret_turns_a_knob_forward_and_round() {
+        let b = Book::distro();
+        let lists = Lists::of(&[], &b);
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        assert!(v.in_sheet());
+        let (id, _) = lists.catalogue[v.cursor()].clone();
+        let (now, _) = in_force(&b, &id);
+        for (k, knob) in Knob::ALL.iter().enumerate() {
+            v.level = Level::Sheet(k);
+            let mut right = b.adjustments.get(&id).cloned().unwrap_or_default();
+            turn(&now, *knob, 1, &mut right);
+            let mut round = b.adjustments.get(&id).cloned().unwrap_or_default();
+            advance(&now, *knob, &mut round);
+            assert_eq!(
+                v.key(Press::Enter, &lists, &b, 200),
+                Errand::Adjusted(id.clone(), Some(round.clone())),
+                "{knob:?}: RET did not turn it"
+            );
+            // FORWARD, as `→` goes, everywhere but at the top of the level.
+            if *knob != Knob::Level || now.level < TOP_LEVEL {
+                assert_eq!(round, right, "{knob:?}: RET went another way than →");
+            }
+        }
+        // AND ROUND, where `→` stops.
+        let mut top = now;
+        top.level = TOP_LEVEL;
+        let mut v = Verdict::default();
+        advance(&top, Knob::Level, &mut v);
+        assert_eq!(v.level, Some(0), "the level did not go round");
+        let mut stops = Verdict::default();
+        turn(&top, Knob::Level, 1, &mut stops);
+        assert_eq!(stops.level, Some(TOP_LEVEL));
+    }
+
+    /// FAILS IF: `RET` on the draft stops typing the name or a text, or does
+    /// nothing on a line that can be turned — the field, the comparison, a
+    /// knob — which is what the second click on one of them is.
+    #[test]
+    fn ret_types_the_draft_text_and_turns_the_rest() {
+        let b = Book::distro();
+        let lists = Lists::of(&[], &b);
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        let _ = v.key(Press::Letter('n'), &lists, &b, 200);
+        let draft = |v: &View| match &v.level {
+            Level::Draft(d) => d.clone(),
+            other => panic!("not a draft: {other:?}"),
+        };
+        // THE NAME IS TYPED.
+        assert_eq!(
+            v.key(Press::Enter, &lists, &b, 200),
+            Errand::Ask(Asking::Name)
+        );
+        v.asking = None;
+        let lines = draft_lines(&draft(&v));
+        for (n, line) in lines.iter().enumerate() {
+            let mut d = draft(&v);
+            d.line = n;
+            v.level = Level::Draft(d.clone());
+            let did = v.key(Press::Enter, &lists, &b, 200);
+            v.asking = None;
+            let after = draft(&v);
+            match line {
+                Line::Name => assert_eq!(did, Errand::Ask(Asking::Name)),
+                Line::Value(i) => assert_eq!(did, Errand::Ask(Asking::Value(*i))),
+                Line::Field(_) | Line::Test(_) | Line::Knob(_) => {
+                    assert_eq!(did, Errand::Nothing);
+                    assert_ne!(after, d, "{line:?}: RET did not turn it");
+                    // THE SAME WAY `→` TURNS IT.
+                    let mut right = d.clone();
+                    turn_line(&mut right, Some(*line), Turning::Forward);
+                    assert_eq!(after, right, "{line:?}: RET went another way than →");
+                }
+            }
+        }
+        // A NUMBER GOES ROUND, from the top to nought.
+        let mut d = draft(&v);
+        d.when[0].test = ronoctua_notify::Test::of_kind(
+            &ronoctua_notify::Test::Is(TOP_LEVEL.to_string()),
+            "at-least",
+        );
+        turn_line(&mut d, Some(Line::Value(0)), Turning::Round);
+        assert_eq!(d.when[0].test.against(), "0");
+    }
+
+    /// FAILS IF: the line stops teaching what `RET` does on the sheet, or on
+    /// the draft says "type" over a line `RET` turns.
+    #[test]
+    fn the_line_teaches_what_ret_does_on_the_line_it_is_on() {
+        let t = texts();
+        let b = Book::distro();
+        let lists = Lists::of(&[], &b);
+        let said = |v: &View| -> String {
+            v.hint_of(None, &lists, &t)
+                .iter()
+                .map(|p| p.text.as_str())
+                .collect()
+        };
+        let (turns, types) = (t.t("notif-knob-turn"), t.t("notif-draft-type"));
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        let _ = v.key(Press::Enter, &lists, &b, 200);
+        assert!(said(&v).contains(&turns), "{}", said(&v));
+        let mut v = View::fresh();
+        v.pane = Pane::Catalogue;
+        let _ = v.key(Press::Letter('n'), &lists, &b, 200);
+        assert!(said(&v).contains(&types), "on the name: {}", said(&v));
+        assert!(!said(&v).contains(&turns), "on the name: {}", said(&v));
+        let _ = v.key(Press::Down, &lists, &b, 200);
+        assert!(said(&v).contains(&turns), "on the field: {}", said(&v));
+        assert!(!said(&v).contains(&types), "on the field: {}", said(&v));
+        assert!(v.turns_here());
     }
 
     #[test]

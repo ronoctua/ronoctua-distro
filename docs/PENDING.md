@@ -214,13 +214,17 @@ avaliação; estas coisas não:
   tamanhos e taxas aparecem na vista ao lado da frase `camera-about-cannot-stream`; quem não a abre
   é a entrada V4L2 do ffmpeg, que só fala plano único. Acaba com a mesma ponte do item de cima (o
   libcamera, ou um `v4l2-relayd` declarado). Médio.
-- **O `v4l_id` do udev abre cada câmera a cada login.** No instante em que o logind abre a sessão,
-  o udev processa um `change` em cada nó de vídeo, e a regra `60-persistent-v4l.rules` roda o
+- **O `v4l_id` do udev abre cada câmera a cada login.** No instante em que o logind abre a sessão, o
+  udev processa um `change` em cada nó de vídeo, e a regra `60-persistent-v4l.rules` roda o
   `v4l_id`, que abre o nó para um `QUERYCAP` (o `camera-vm` mede uma abertura por nó, e a aceita só
   contada contra os eventos que o udev processou depois de o vigia estar no lugar). Se esse
-  `QUERYCAP` acende a luz de uma webcam UVC não foi medido: a VM não tem uma. Acaba com a medida numa
-  câmera de verdade e, se acender, com a decisão do dono sobre a regra, que também dá as propriedades
-  `ID_V4L_*` que outros leem. Pequeno.
+  `QUERYCAP` acende a luz de uma webcam UVC não foi medido: a VM não tem uma, e só o dono mede, na
+  webcam do laptop, com os olhos no LED dela. Um login: reiniciar e olhar o LED no instante em que a
+  sessão entra sozinha (o autologin do tty1) — um piscar ali é o `v4l_id`, porque nada mais da
+  sessão abre câmera ao subir. E o mesmo evento sem reiniciar, quantas vezes for preciso:
+  `sudo udevadm trigger --action=change --subsystem-match=video4linux --settle`, que faz o udev
+  rodar a regra em cada nó como no login. Acaba com a medida e, se acender, com a decisão do dono
+  sobre a regra, que também dá as propriedades `ID_V4L_*` que outros leem. Pequeno.
 - **Um Flatpak que só lê câmera pelo portal não vê nenhuma, e nada na tela diz por quê.** Com
   `ronoctua.camera.pipewireCameras` desligado (o padrão, por causa da luz), o portal de câmera
   responde que não há câmera, e o programa diz isso ou fica calado. A central de programas, na ficha
@@ -1115,52 +1119,6 @@ frase da página dos pertences, nunca resolvido por ela:
 - acabou quando: o dono decidir se os dois somem (um pacote do Emacs sem `share/applications` no
   `services.emacs.package`) ou ficam, e o `distro-apps-are-registered` continuar verde
 
-### O daemon do Emacs cai com o compositor em que desenhou · decisão do dono, e pequeno depois
-
-O Emacs é o pure-GTK (`emacs30-pgtk`), e um Emacs GTK não solta um display em que abriu um quadro:
-quando o compositor acaba sozinho (`s q q`, uma queda dele, o fim de um `.#dev` em que um `et` de
-um terminal do laço desenhou), o daemon sai pelo `_exit(1)` do GDK, que pula o `kill-emacs`
-inteiro. Perdem-se as edições desde o último auto-save, o que o `kill-emacs-hook` gravaria
-(savehist, recentf, bookmarks, desktop-save-mode), os buffers de processo (shell, compilação,
-TRAMP) e a pergunta sobre os buffers não salvos; o `Restart=always` o traz de volta vazio no mesmo
-segundo. O Lucid (`emacs30`) sobreviveu ao mesmo fim com o buffer intacto, mas não abre quadro a
-partir da sessão (o item abaixo) e só desenharia pelo XWayland. O fim do gerente do usuário
-(desligar, reiniciar) não perde nada disso: a unidade para antes do compositor. Medido no
-`tests/emacs-vm.nix` (a tabela está no `ARCHITECTURE.md`, seção do Emacs).
-
-- acabou quando: o dono decidir se o preço fica ou qual saída toma — o Lucid com o display do
-  XWayland exportado pela sessão, ou outra —, e o `emacs-vm` segurar a decisão.
-
-### Um programa X11 aberto pelo rodapé não acha o XWayland · médio
-
-A linha da sessão (`scroll.nix`) importa o `WAYLAND_DISPLAY` e nunca o `DISPLAY`, e o rodapé passa
-o próprio ambiente a tudo o que abre (`foreign::start_in_scope`, cuja docstring diz que um programa
-X11 abre como um Wayland). Medido no palco do `emacs-vm` com o `emacsclient` do build X11: disparado
-como o rodapé dispara, saiu com 1 sem janela; com `DISPLAY=:0` à mão, abriu pelo XWayland em 1,2 s.
-O `x11-vm` dá o `DISPLAY` ao programa à mão, e por isso não vê a falta.
-
-- acabou quando: a sessão exportar o display do XWayland (ou o rodapé o der a quem abre) e um teste
-  de VM abrir um programa só-X11 com o ambiente da sessão.
-
-### O painel de memória chama um programa embrulhado pelo nome do embrulho · pequeno, e caro de compilar
-
-O `ronoctua-memory` nomeia cada processo pelo `comm` (`scan.rs`, `scan::ram`), e é esse nome que o
-painel de memória (`LEADER s m`) e o console de resgate mostram. Um programa que o nixpkgs embrulha
-(`makeWrapper`) roda um binário escondido, `.<nome>-wrapped`, e o `comm` é o nome dele cortado em 15
-bytes: o daemon do Emacs aparece como `.emacs-30.2-wra`, e não `emacs` (medido no palco do
-`emacs-vm`). Vale para todo programa embrulhado da máquina, não só para o Emacs.
-
-- o conserto: quando o `comm` começa com `.` e é o começo do nome do binário do `exe` terminado em
-  `-wrapped`, usar o último pedaço do `argv[0]` (`/proc/<pid>/cmdline`), que o embrulho preserva com
-  `--inherit-argv0` — a vigia do Emacs já o lê assim (`ronoctua-memory/src/emacs.rs`); uma leitura de
-  `cmdline` a mais só por processo embrulhado.
-- o custo: medido com o `.#rebuild-cost` (um byte a mais no `scan.rs`), 346 de 2 323 entradas,
-  ~3 778 s de trabalho e 228 s no caminho crítico; sete programas religados, o `ronoctua-shell`, o
-  cérebro e o resgate entre eles, e os testes de 56 crates de novo. Por isso não entrou na leva do
-  pgtk, que não toca Rust.
-- acabou quando: um teste do `scan` com um `comm` cortado e um `argv[0]` der o nome de quem chamou,
-  e o painel mostrar `emacs` para o daemon numa VM.
-
 ### O apk do F-Droid é fixado pelo que chegou, não pelo índice assinado · pequeno
 
 O `nix run .#distro-pins` fixa o hash do apk que baixou por HTTPS da versão que o F-Droid sugere;
@@ -1848,11 +1806,6 @@ par muda o desenho das regiões que usam a forma que sai:
 Cada vista diz agora, linha a linha, o que o clique toma, e as duas portas acendem por essa resposta
 (`ARCHITECTURE.md`, "O ponteiro acende só o que o clique toma"). Ficou:
 
-- **A folha e o rascunho das notificações não giram pelo ponteiro.** O clique escolhe o botão ou a
-  linha, mas o valor só gira pelas setas: o `RET` ali não faz nada, e o segundo clique é o `RET`.
-  O invariante 19 pede "mudar valor". Decidir se o segundo clique gira para a frente (como o anel do
-  histórico do shell, cujo `RET` gira) e ensinar isso na dica. Acabou quando um segundo clique num
-  botão da folha muda o valor nas duas portas, com teste.
 - **Empilhado, a metade de um registro aberto que tem o teclado não se vê.** O divisor que a acende
   só existe lado a lado; o clique que dá o teclado aos fatos acende, e a mudança só aparece na seta
   seguinte. Acabou quando os dois arranjos mostram onde o teclado está.
@@ -1877,16 +1830,6 @@ Cada vista diz agora, linha a linha, o que o clique toma, e as duas portas acend
   numa pasta de 10 000 entradas, ~83 µs contra ~100 µs da pintura (eram cinco disposições, ~410 µs;
   `files::tests::the_pointers_cost_a_frame`, perfil `loop`). Acabou quando a luz ler as seções que a
   pintura dispôs, ou quando `nix run .#bench` medir o quadro com o ponteiro sobre a listagem.
-- **Cliques que agem no primeiro, sob o ponteiro que abriu o que eles tocam** (fora o gerenciador de
-  arquivos e a calculadora, consertados): o menu da janela na modeline e a grade do quiosque
-  ("um clique roda": a grade não tem cursor — decisão a confirmar com o dono, porque um grupo
-  aberto por um clique troca a grade sob a mão e o clique duplo roda a célula que cair ali); a
-  página do rádio Bluetooth ("um clique é o `RET`", regra do dono — o clique duplo na linha do
-  rádio desliga o rádio); a pergunta da linha de vida, de abrir o relatório no Claude Code (o
-  `não` primeiro só por posição); a grade da leader, o lançador e o `M-x`, abertos por tecla. E o que aparece
-  sozinho e age num clique: o cartão de pareamento Bluetooth na faixa, com "aceitar" como primeira
-  ação, e os botões da faixa de contagem do cérebro. Acabou quando o dono decidir cada um e o que
-  ficar respeitar "o primeiro clique seleciona".
 
 ### O shell em crates — o que ficou · pequeno cada
 

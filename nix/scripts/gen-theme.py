@@ -1371,6 +1371,11 @@ CONTRAST_GATES = (
     ("brain.text", ("brain.background",), 90, 95),
     ("brain.dim", ("brain.background",), 44, 46),
     ("brain.countdown", ("brain.background",), 60, 70),
+    # THE CURSOR ON A LINE THAT APPEARS BY ITSELF: the action of the band's
+    # card, and the control of the brain's strip, a click picked — the one the
+    # next click runs. It is the cursor's own ink (`text.here.acts`), so it is
+    # read where those two grounds put it, at the floor every cursor holds.
+    ("text.here.acts", ("notification.background", "brain.background"), 45, 50),
     ("modeline.state.normal", ("modeline.background",), 15, 20),
     ("modeline.state.alternate", ("modeline.background",), 45, 60),
     # A BLUETOOTH DEVICE'S MARK, at the rung every other mark reads at.
@@ -1697,6 +1702,10 @@ DISTANCE_GATES = (
     # in the discreet register's loud tone.
     ("notification.acts-lit", "notification.acts", 0.012, 0.02),
     ("notification.acts", "text.subtle.strong", 0.04, 0.05),
+    # AND THE ACTION THE CURSOR IS ON, told from the ones beside it — and on
+    # the brain's strip, the picked control from the label of the next.
+    ("text.here.acts", "notification.acts", 0.04, 0.05),
+    ("text.here.acts", "brain.text", 0.04, 0.05),
     # THE GLANCE'S TWO GROUNDS, which are drawn EDGE TO EDGE on one line: one
     # place ends where the next begins, with nothing between them. If a theme
     # ever solved them to the same tone the alternation would simply not be

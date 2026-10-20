@@ -895,6 +895,7 @@ mod tests {
             "notif-draft-drop",
             "notif-draft-save",
             "notif-knob-previous",
+            "notif-knob-turn",
             "notif-restore",
             "display-open",
             "display-window",

@@ -688,7 +688,9 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
 - Pergunta que aparece sozinha, ou sobre algo que não se desfaz, desenha o `não` primeiro e o cursor
   nasce nele. A pergunta, o menu ou o consentimento que um clique abre nasce sob o ponteiro: o
   primeiro clique numa linha dele só a seleciona — a do cursor inclusive — e o segundo responde
-  (`files::Picker::aimed`), senão um clique duplo responde por quem não escolheu.
+  (`aim::Aim`, `files::Picker::aimed`), senão um clique duplo responde por quem não escolheu. O que
+  aparece sozinho (o cartão da faixa, a faixa do cérebro) também: um clique escolhe a ação, e só o
+  clique na escolhida age.
 - Recusa é um valor com frase, nunca uma ausência: na tela, painel vazio e painel recusado são
   iguais.
 - Opção que ainda não faz nada diz isso na tela, em vez de parecer funcionar.

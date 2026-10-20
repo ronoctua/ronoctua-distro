@@ -132,6 +132,22 @@ Três atalhos ficam fora dela de propósito, para o caso de a máquina parar de 
 `Ctrl+Alt+L` abre a lista quando o `Super` falha, `Ctrl+Shift+L` reinicia o `keyd` e
 `Ctrl+Alt+Esc` abre o monitor de processos numa janela flutuante.
 
+### O Emacs
+
+A distro não escreve configuração nenhuma do Emacs: o que ele lê é seu, em `~/.config/emacs`, que
+viaja nos pertences. O daemon sobe com a máquina, e o `e`, o `$EDITOR` e o gerenciador de arquivos
+abrem nele. Ele é o Emacs nativo do Wayland (pgtk), e um compositor que acaba sozinho — uma queda
+dele, ou o `Encerrar sessão`, que fecha só o compositor — leva o daemon junto: os buffers e o que
+foi editado desde o último auto-save se perdem, e o daemon volta vazio no mesmo segundo. Desligar e
+reiniciar não perdem nada: o daemon para antes do compositor, e salva.
+
+Na sua configuração, duas linhas diminuem o que uma queda leva:
+
+```elisp
+(auto-save-visited-mode 1)  ; grava os arquivos abertos sozinho, com o teclado parado
+(desktop-save-mode 1)       ; guarda de tempos em tempos quais buffers estão abertos, e os reabre
+```
+
 <!-- anchor: L03 -->
 
 ## A pasta da máquina

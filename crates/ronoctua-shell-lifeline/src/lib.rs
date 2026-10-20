@@ -13,7 +13,7 @@
 // THE KIT AND THE DOOR, by the names the module already uses
 // (`crate::chrome::…`, `crate::door::…`).
 use ronoctua_shell_door::{cursor_shape, door, photo};
-use ronoctua_shell_kit::{chrome, hidpi, language, seats, toolkits};
+use ronoctua_shell_kit::{aim, chrome, hidpi, language, seats, toolkits};
 
 pub mod key;
 pub mod lifeline;

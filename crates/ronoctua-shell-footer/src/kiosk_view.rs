@@ -371,6 +371,21 @@ pub struct View {
     pub level: Level,
     /// The list's cursor, by what it stands on.
     cursor: Target,
+    /// Whether a PERSON put the list's cursor where it is — an arrow, or a
+    /// click. Only there is a click on the cursor's row its `RET`: a list
+    /// opens with the cursor on the tab in front (or the one a mark named),
+    /// which the screen chose, and the second press of the double click that
+    /// opened the list landed on it — the file manager's `Picker::aimed`.
+    aimed: bool,
+    /// The cell of a grid a click picked, under the hand ([`View::clicked_cell`]).
+    aim: crate::aim::Aim<usize>,
+    /// Whether the grid on screen came up UNDER THE HAND that clicked: the
+    /// zoom's, opened by a click on its door, or the whole view, opened by a
+    /// click on a line of the region (the window menu's `B`). There a click
+    /// picks a cell and a click on the pick runs it. Opened by a key, or from
+    /// the modeline's `…` — it grows above the line clicked — a cell runs on
+    /// its click, as a cell of the leader does: the grid has no cursor.
+    under_the_hand: bool,
 }
 
 impl View {
@@ -381,18 +396,60 @@ impl View {
             window,
             level,
             cursor: Target::Nothing,
+            aimed: false,
+            aim: crate::aim::Aim::none(),
+            under_the_hand: false,
         }
     }
 
-    /// Goes to `level` — the tabs' cursor on `tab`, when one is named.
+    /// The same view, opened by a click on a line of the region — under the
+    /// hand that clicked, when `yes`.
+    #[must_use]
+    pub const fn opened_under_the_hand(mut self, yes: bool) -> Self {
+        self.under_the_hand = yes;
+        self
+    }
+
+    /// Goes to `level` — the tabs' cursor on `tab`, when one is named. The
+    /// cursor is the screen's there: a mark named the tab, nobody aimed it.
     pub fn go(&mut self, level: Level, tab: Option<i64>) {
         if self.level != level {
-            self.cursor = Target::Nothing;
+            self.landed();
         }
         self.level = level;
         if let Some(t) = tab {
             self.cursor = Target::Tab(t);
+            self.aimed = false;
         }
+    }
+
+    /// A new level is on screen: nothing on it was aimed at yet.
+    fn landed(&mut self) {
+        self.cursor = Target::Nothing;
+        self.aimed = false;
+        self.aim = crate::aim::Aim::none();
+        self.under_the_hand = false;
+    }
+
+    /// The cell of a grid the cursor is on — a click's pick, under the hand.
+    #[must_use]
+    pub fn picked(&self) -> Option<usize> {
+        self.aim.on().copied()
+    }
+
+    /// A CLICK on cell `n` of a grid: under the hand, the first click picks
+    /// it and a click on the pick runs it; elsewhere it runs, as its key
+    /// does. A level the click opens came up under the hand.
+    pub fn clicked_cell(&mut self, n: usize) -> Errand {
+        if self.under_the_hand && !self.aim.clicked(n) {
+            return Errand::Redraw;
+        }
+        let was = self.level;
+        let errand = self.choose(n);
+        if self.level != was {
+            self.under_the_hand = true;
+        }
+        errand
     }
 
     /// Whether the level on screen is a grid — which pages, like the
@@ -437,7 +494,7 @@ impl View {
         match c.opens {
             Some(level) => {
                 self.level = level;
-                self.cursor = Target::Nothing;
+                self.landed();
                 Errand::Redraw
             }
             None => Errand::Run {
@@ -448,8 +505,15 @@ impl View {
         }
     }
 
-    /// The key with this notation, when a cell of the grid has it.
+    /// The key with this notation, when a cell of the grid has it — and
+    /// `RET`, the picked cell: what the click on the pick does.
     pub fn pressed(&mut self, notation: &str) -> Errand {
+        if notation == "RET" {
+            return match self.picked() {
+                Some(n) => self.choose(n),
+                None => Errand::Redraw,
+            };
+        }
         let cells = match self.level {
             Level::Root => ROOT,
             Level::Zoom => ZOOM,
@@ -467,7 +531,7 @@ impl View {
             return Errand::Close;
         }
         self.level = Level::Root;
-        self.cursor = Target::Nothing;
+        self.landed();
         Errand::Redraw
     }
 
@@ -592,13 +656,16 @@ impl View {
     }
 
     /// A click on row `n` of a list: the cursor goes there, and whether it was
-    /// ALREADY there — the second click, which is `RET` (invariant 19).
+    /// ALREADY there, put by a person — the second click, which is `RET`
+    /// (invariant 19). On the row the cursor was born on, the first click
+    /// only makes it the person's (`aimed`).
     pub fn clicked(&mut self, r: Reading<'_>, n: usize, rows: &[Row]) -> bool {
         let Some(row) = rows.get(n).filter(|row| !row.heading) else {
             return false;
         };
-        let again = self.stood_on(r) == row.target;
+        let again = self.aimed && self.stood_on(r) == row.target;
         self.cursor = row.target.clone();
+        self.aimed = true;
         again
     }
 
@@ -619,6 +686,7 @@ impl View {
                     };
                     if rows.get(i).is_some_and(|row| !row.heading) {
                         self.cursor = rows[i].target.clone();
+                        self.aimed = true;
                         break;
                     }
                 }
@@ -968,6 +1036,76 @@ mod tests {
                 stays: false
             }
         );
+    }
+
+    /// FAILS IF: the double click on the zoom's door runs the step that came
+    /// up under the hand, a picked step does not run on a click on the pick
+    /// (again and again: a step is clicked several times in a row), or a
+    /// cell of the grid opened from the modeline stops running on its click.
+    #[test]
+    fn a_grid_a_click_opened_picks_before_it_runs() {
+        let mut v = View::fresh(7, Level::Root);
+        let door = ROOT
+            .iter()
+            .position(|c| c.opens == Some(Level::Zoom))
+            .expect("the zoom's door");
+        assert_eq!(v.clicked_cell(door), Errand::Redraw);
+        assert_eq!(v.level, Level::Zoom);
+        assert_eq!(v.clicked_cell(0), Errand::Redraw, "the second press ran it");
+        assert_eq!(v.picked(), Some(0));
+        let step = Errand::Run {
+            id: ZOOM[0].command,
+            arg: None,
+            stays: true,
+        };
+        assert_eq!(v.clicked_cell(0), step);
+        assert_eq!(v.clicked_cell(0), step, "the step did not run again");
+        assert_eq!(v.pressed("RET"), step);
+        // FROM THE MODELINE a cell runs on its click.
+        let mut v = View::fresh(7, Level::Root);
+        assert_eq!(
+            v.clicked_cell(0),
+            Errand::Run {
+                id: ROOT[0].command,
+                arg: None,
+                stays: ROOT[0].stays,
+            }
+        );
+        // AND OPENED BY A CLICK ON A LINE OF THE REGION (the window menu's
+        // `B`), the grid is under the hand from the start.
+        let mut v = View::fresh(7, Level::Root).opened_under_the_hand(true);
+        assert_eq!(v.clicked_cell(0), Errand::Redraw);
+        assert_ne!(v.clicked_cell(0), Errand::Redraw);
+    }
+
+    /// FAILS IF: a click on the row the list's cursor was BORN on — the tab
+    /// in front, which the second press of the double click on the tabs'
+    /// door lands on — is its `RET`, or a click on a row the person put the
+    /// cursor on is not.
+    #[test]
+    fn a_list_runs_only_where_a_person_put_the_cursor() {
+        let t = texts();
+        let k = kiosk(vec![tab(1, 0, true), tab(2, 1, false)]);
+        let r = Reading {
+            kiosk: Some(&k),
+            extensions: &[],
+            ours: None,
+        };
+        let mut v = View::fresh(7, Level::Root);
+        v.pressed("t");
+        let rows = v.rows(r, 80, &t);
+        let front = v.drawn_cursor(r, &rows).expect("the tab in front");
+        assert!(
+            !v.clicked(r, front, &rows),
+            "the born cursor ran on one click"
+        );
+        assert!(v.clicked(r, front, &rows), "the person's pick did not run");
+        // A ROW AN ARROW REACHED is the person's too.
+        let mut v = View::fresh(7, Level::Tabs);
+        let rows = v.rows(r, 80, &t);
+        v.press(Press::Down, r, &rows);
+        let at = v.drawn_cursor(r, &rows).expect("a cursor");
+        assert!(v.clicked(r, at, &rows));
     }
 
     /// FAILS IF: `Esc` does not go up to the grid, and from there close; or

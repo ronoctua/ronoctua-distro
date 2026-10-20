@@ -99,9 +99,7 @@ pub fn ram(p: &Places) -> Vec<Consumer> {
             if rss == 0 {
                 continue;
             }
-            let name = read(&path.join("comm"))
-                .map(|c| c.trim().to_owned())
-                .unwrap_or_else(|| pid.to_string());
+            let name = name_of(&path).unwrap_or_else(|| pid.to_string());
             out.push(Consumer {
                 kind: ConsumerKind::Process,
                 name,
@@ -114,6 +112,65 @@ pub fn ram(p: &Places) -> Vec<Consumer> {
     out.sort_by_key(|c| core::cmp::Reverse(c.bytes));
     out.truncate(CEILING);
     out
+}
+
+/// The name a person knows a process by: its `comm`, unless a wrapper hid it.
+///
+/// A program the nixpkgs wrapper runs (`makeWrapper`, `wrapProgram`) is a
+/// binary moved aside as `.<name>-wrapped`, and the kernel names the process
+/// after that file, cut at fifteen bytes: the Emacs daemon is
+/// `.emacs-30.2-wra`, and so is every wrapped program of the machine. Such a
+/// process is told apart by its `comm` beginning with `.` and being the start
+/// of its executable's file name, which ends in `-wrapped`. The `exe` link is
+/// read only for a `comm` with the dot and the `cmdline` only for a process
+/// that is wrapped: nothing more for anybody else. Any other `comm` — an
+/// ordinary program's, a dot program's own, one a program set itself — stays.
+fn name_of(dir: &Path) -> Option<String> {
+    let comm = read(&dir.join("comm"))?;
+    let comm = comm.trim();
+    if !comm.starts_with('.') {
+        return Some(comm.to_owned());
+    }
+    let exe = std::fs::read_link(dir.join("exe")).ok();
+    let file = exe
+        .as_deref()
+        .and_then(Path::file_name)
+        .and_then(|f| f.to_str());
+    let argv0 = || {
+        let raw = std::fs::read(dir.join("cmdline")).ok()?;
+        let first = raw.split(|b| *b == 0).next()?;
+        Some(String::from_utf8_lossy(first).into_owned())
+    };
+    Some(match file {
+        Some(file) => unwrapped(comm, file, argv0).unwrap_or_else(|| comm.to_owned()),
+        None => comm.to_owned(),
+    })
+}
+
+/// The wrapped program's own name, when `comm` and the executable's `file`
+/// name say it is one — see [`name_of`]; `argv0` is asked only then.
+///
+/// The last part of `argv[0]`, which a wrapper that inherits it
+/// (`wrapProgram`, `--inherit-argv0`) keeps as the word that started the
+/// program: `emacs`, `/run/current-system/sw/bin/emacs`. A wrapper that does
+/// not hands the hidden binary's own path, and a program that rewrote its
+/// command line (`setproctitle`: one string, with spaces) says nothing about
+/// its name: then it is the file name without the dot and the suffix, which
+/// is the name the wrapper was made from.
+fn unwrapped(comm: &str, file: &str, argv0: impl FnOnce() -> Option<String>) -> Option<String> {
+    // A BINARY REPLACED UNDER A RUNNING PROCESS — an update, a garbage
+    // collection — is still its executable, and the kernel says so after it.
+    let file = file.strip_suffix(" (deleted)").unwrap_or(file);
+    let hidden = file.strip_suffix("-wrapped")?;
+    if !file.starts_with(comm) {
+        return None;
+    }
+    let plain = hidden.strip_prefix('.').filter(|p| !p.is_empty())?;
+    let said = argv0().and_then(|a| {
+        let last = a.rsplit('/').next()?.to_owned();
+        (!last.is_empty() && last != file && !last.contains(char::is_whitespace)).then_some(last)
+    });
+    Some(said.unwrap_or_else(|| plain.to_owned()))
 }
 
 /// Resident bytes from `/proc/<pid>/statm`.
@@ -372,6 +429,133 @@ mod tests {
             Some(3021 * 4096)
         );
         assert_eq!(rss_from_statm(""), None);
+    }
+
+    /// A process of a planted `/proc`: `statm`, `comm`, the `exe` link and the
+    /// `cmdline` as the kernel writes them (`argv` joined by NULs).
+    fn plant(root: &Path, pid: u32, comm: &str, exe: &str, cmdline: &[u8]) {
+        let dir = root.join(pid.to_string());
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("statm"), format!("100 {pid} 0 0 0 0 0\n")).expect("statm");
+        std::fs::write(dir.join("comm"), format!("{comm}\n")).expect("comm");
+        std::os::unix::fs::symlink(exe, dir.join("exe")).expect("exe");
+        std::fs::write(dir.join("cmdline"), cmdline).expect("cmdline");
+    }
+
+    /// A WRAPPED PROGRAM IS NAMED BY THE WORD THAT STARTED IT, and nothing else
+    /// changes name. Read through `ram`, the function the memory panel and the
+    /// rescue console call, over a planted `/proc`.
+    #[test]
+    fn a_wrapped_program_is_named_by_its_own_name() {
+        let root = std::env::temp_dir().join(format!("ronoctua-scan-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = "/nix/store/0000-emacs-30.2/bin";
+        // The Emacs daemon, as `emacs-vm` measured it: `wrapProgram` keeps
+        // `argv[0]`, the word or the path that started it.
+        plant(
+            &root,
+            101,
+            ".emacs-30.2-wra",
+            &format!("{store}/.emacs-30.2-wrapped"),
+            b"emacs\0--fg-daemon\0",
+        );
+        plant(
+            &root,
+            102,
+            ".emacs-30.2-wra",
+            &format!("{store}/.emacs-30.2-wrapped"),
+            b"/run/current-system/sw/bin/emacs\0-nw\0",
+        );
+        // A wrapper that hands the hidden binary its own path, and a program
+        // whose binary went away under it: the name the wrapper was made from.
+        plant(
+            &root,
+            103,
+            ".foo-wrapped",
+            "/nix/store/0000-foo/bin/.foo-wrapped",
+            b"/nix/store/0000-foo/bin/.foo-wrapped\0",
+        );
+        plant(
+            &root,
+            104,
+            ".bar-wrapped",
+            "/nix/store/0000-bar/bin/.bar-wrapped (deleted)",
+            b"bar\0",
+        );
+        // A wrapped program that rewrote its command line says nothing there.
+        plant(
+            &root,
+            105,
+            ".baz-wrapped",
+            "/nix/store/0000-baz/bin/.baz-wrapped",
+            b"baz: worker process",
+        );
+        // NOT WRAPPED, and keeping its `comm` whatever its command line says:
+        // a dot program of the person's, a `comm` the program set itself that
+        // is no start of its file, and an ordinary one.
+        plant(&root, 106, ".hidden", "/home/person/.hidden", b"wrong\0");
+        plant(
+            &root,
+            107,
+            ".x",
+            "/nix/store/0000-qux/bin/.qux-wrapped",
+            b"wrong\0",
+        );
+        plant(
+            &root,
+            108,
+            "bash",
+            "/run/current-system/sw/bin/bash",
+            b"-bash\0",
+        );
+        let places = Places {
+            procfs: root.clone(),
+            sysfs: root.join("sys"),
+            cgroup: root.join("cgroup"),
+            uid: 1000,
+        };
+        let mut said: Vec<(u64, String)> =
+            ram(&places).into_iter().map(|c| (c.hint, c.name)).collect();
+        said.sort();
+        let want: Vec<(u64, String)> = [
+            (101, "emacs"),
+            (102, "emacs"),
+            (103, "foo"),
+            (104, "bar"),
+            (105, "baz"),
+            (106, ".hidden"),
+            (107, ".x"),
+            (108, "bash"),
+        ]
+        .into_iter()
+        .map(|(p, n)| (p, n.to_owned()))
+        .collect();
+        assert_eq!(said, want);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The command line is read only for a wrapped process.
+    #[test]
+    fn only_a_wrapped_process_has_its_command_line_read() {
+        let asked = std::cell::Cell::new(0);
+        let ask = || {
+            asked.set(asked.get() + 1);
+            Some("emacs".to_owned())
+        };
+        assert_eq!(unwrapped(".hidden", ".hidden", ask), None);
+        assert_eq!(unwrapped(".x", ".qux-wrapped", ask), None);
+        assert_eq!(
+            asked.get(),
+            0,
+            "a process that is not wrapped had its cmdline read"
+        );
+        assert_eq!(
+            unwrapped(".emacs-30.2-wra", ".emacs-30.2-wrapped", ask),
+            Some("emacs".to_owned())
+        );
+        assert_eq!(asked.get(), 1);
+        // `-wrapped` alone is no program.
+        assert_eq!(unwrapped(".-wrapped", ".-wrapped", || None), None);
     }
 
     #[test]

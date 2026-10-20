@@ -331,14 +331,17 @@
         "bluetooth-pairing"
         "bluetooth"
       ];
+      # "NO" FIRST, and the band's cursor is born on it: the card is a
+      # question that appears by itself, and a click there only picks an
+      # answer — the second click on the pick gives it (`band::with_the_cursor`).
       actions = [
-        {
-          id = "bluetooth-accept";
-          command = "bluetooth-accept";
-        }
         {
           id = "bluetooth-refuse";
           command = "bluetooth-refuse";
+        }
+        {
+          id = "bluetooth-accept";
+          command = "bluetooth-accept";
         }
         {
           id = "bluetooth-panel";

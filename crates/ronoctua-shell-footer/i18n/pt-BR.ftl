@@ -460,7 +460,7 @@ echo-power-profile-not-offered = { $wanted } não é oferecido por esta máquina
 notif-power-app = energia
 notif-bluetooth-app = bluetooth
 notif-bluetooth-pairing-summary = Algo quer parear
-notif-bluetooth-pairing-keys = { $yes } responde sim, { $no } responde não — depois que este aviso sai.
+notif-bluetooth-pairing-keys = { $no } responde não, { $yes } responde sim — depois que este aviso sai.
 # O QUE A MÁQUINA FEZ, dito na linha do minibuffer (`events.rs`). O resumo é a
 # linha; o corpo só é lido quando a linha estava ocupada e o evento veio como
 # notificação — e então a última frase diz isso.

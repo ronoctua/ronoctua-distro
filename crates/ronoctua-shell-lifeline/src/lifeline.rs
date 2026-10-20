@@ -155,8 +155,9 @@ pub(crate) enum Doing {
 }
 
 /// The question the line asks once the report is on screen — "no" FIRST,
-/// the answer `RET` gives (`Lifeline::asked`): a question about something
-/// leaving this machine answers NO to a stray key.
+/// with the cursor born on it (`Lifeline::answer`): a question about
+/// something leaving this machine answers NO to a stray key, and a click only
+/// picks an answer — the second click on the pick gives it.
 pub(crate) const ASKED: [(&str, &str, Doing); 2] = [
     ("n", crate::key::LIFELINE_AI_NO, Doing::AiNo),
     ("y", crate::key::LIFELINE_AI_YES, Doing::AiYes),
@@ -474,6 +475,7 @@ pub fn host_it(unit: &str) -> Result<()> {
         owed: false,
         gathered: gathered_sender,
         asking: None,
+        answer: crate::aim::Aim::none(),
     };
 
     WaylandSource::new(conn, queue)
@@ -561,6 +563,11 @@ struct Lifeline {
     gathered: channel::Sender<(String, String)>,
     /// The report on screen, while the line asks whether it may leave.
     asking: Option<std::path::PathBuf>,
+    /// The answer the question's cursor is on: born on "no" (`ASKED`'s
+    /// first), moved by a click, and given by `RET` or by a click on the
+    /// person's pick (`crate::aim`) — the question rose by itself, after the
+    /// report opened, and one click on "yes" sent it.
+    answer: crate::aim::Aim<Doing>,
 }
 
 /// What this window keeps for ONE pointer — see `crate::seats`.
@@ -771,6 +778,7 @@ impl Lifeline {
             return;
         }
         self.asking = Some(path);
+        self.answer = crate::aim::Aim::born(ASKED[0].2);
         self.said = Some(self.texts.t(crate::key::LIFELINE_AI_SHOWN));
         self.ask_paint();
     }
@@ -903,7 +911,7 @@ impl Lifeline {
             said: &said,
             evidence: &self.evidence(),
             offered: self.offered(),
-            asking: self.asking.is_some(),
+            cursor: self.asking.as_ref().and(self.answer.on().copied()),
             lit: &lit,
             columns: self.columns,
             texts: &self.texts,
@@ -981,8 +989,8 @@ pub(crate) struct Line<'a> {
     pub evidence: &'a str,
     /// The options on the second line.
     pub offered: &'static [(&'static str, &'static str, Doing)],
-    /// Whether the question about the report is up.
-    pub asking: bool,
+    /// The answer the question's cursor is on, while the question is up.
+    pub cursor: Option<Doing>,
     /// The options a pointer rests on.
     pub lit: &'a [Doing],
     /// How many cells the line has.
@@ -1077,16 +1085,19 @@ pub(crate) fn line_of(l: &Line<'_>) -> (Vec<ronoctua_render::Span>, Vec<Placed>)
             // AND THE ONE THAT CANNOT ACT READS AS SUCH. It is drawn, it
             // has a key, and pressing it says why — what it does not do is
             // look like the three that work.
-            color: if l.lit.contains(&doing)
-                // AND THE QUESTION'S "NO" IS WHERE THE CURSOR IS BORN —
-                // the answer `RET` gives.
-                || (l.asking && doing == Doing::AiNo)
-            {
+            // THE QUESTION'S CURSOR in the cursor's ink — born on "no",
+            // the answer `RET` gives, and moved by a click.
+            color: if l.cursor == Some(doing) {
+                tokens::color::TEXT_HERE_ACTS
+            } else if l.lit.contains(&doing) {
                 // AND THE POINTER LIGHTS THE ONE IT IS ON, which is the
                 // only thing on this line that says the mouse is being
                 // listened to at all — ANY cursor's, since every one of
-                // them can press it.
-                tokens::color::TEXT_HERE_ACTS
+                // them can press it. The lit tone of the words, and not
+                // the cursor's ink: a light under the pointer is not the
+                // cursor, and on the question it would read as the answer
+                // having moved to "yes".
+                crate::chrome::Register::ProseLit.color()
             } else {
                 crate::chrome::Register::Prose.color()
             },
@@ -1278,16 +1289,21 @@ impl KeyboardHandler for Lifeline {
         // `Esc` used to be handled off to the side, which is how the line came
         // to draw `x` for a gesture that two keys performed and the table knew
         // one of. Now it is a row like the others.
-        // A QUESTION ON SCREEN ANSWERS NO to `Esc` and to `RET`: the one
-        // answer that sends nothing anywhere.
-        if self.asking.is_some()
-            && matches!(
-                event.keysym,
-                Keysym::Escape | Keysym::Return | Keysym::KP_Enter
-            )
-        {
-            self.act(Doing::AiNo);
-            return;
+        // A QUESTION ON SCREEN ANSWERS NO to `Esc`, the one answer that
+        // sends nothing anywhere — and `RET` gives the answer the cursor is
+        // on, which is born on "no".
+        if self.asking.is_some() {
+            match event.keysym {
+                Keysym::Escape => {
+                    self.act(Doing::AiNo);
+                    return;
+                }
+                Keysym::Return | Keysym::KP_Enter => {
+                    self.act(self.answer.on().copied().unwrap_or(Doing::AiNo));
+                    return;
+                }
+                _ => {}
+            }
         }
         let typed = match event.keysym {
             Keysym::Escape => "ESC".to_owned(),
@@ -1411,6 +1427,19 @@ impl Lifeline {
                 _ => {}
             }
         }
+        // THE QUESTION PICKS BEFORE IT ANSWERS: a click puts the cursor on
+        // an answer, and a click on the person's pick gives it — the cursor
+        // born on "no" is the screen's, so it takes two as well.
+        if let Some(doing) = pressed
+            && self.asking.is_some()
+        {
+            if self.answer.clicked(doing) {
+                self.act(doing);
+            } else {
+                self.ask_paint();
+            }
+            return;
+        }
         if let Some(doing) = pressed {
             self.act(doing);
             return;
@@ -1509,7 +1538,7 @@ impl crate::photo::scenes::Scene for Camera {
             said: &said,
             evidence: &evidence,
             offered: if self.asking { &ASKED } else { &OFFERED },
-            asking: self.asking,
+            cursor: self.asking.then_some(ASKED[0].2),
             lit: &[],
             columns,
             texts: &texts,
@@ -1610,6 +1639,42 @@ mod tests {
             vec![Doing::Logs, Doing::Restart, Doing::Ai, Doing::Close],
             "the line stopped offering one of the four"
         );
+    }
+
+    /// FAILS IF: the question's cursor is not drawn on its answer in the
+    /// cursor's ink, or the pointer's light reads as the cursor — on the
+    /// question it would say the answer had moved to "yes".
+    #[test]
+    fn the_cursor_is_not_the_pointers_light() {
+        use super::{ASKED, Line, line_of};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let ink = |cursor: Option<Doing>, lit: &[Doing], of: Doing| {
+            let (spans, _) = line_of(&Line {
+                said: "said",
+                evidence: "",
+                offered: &ASKED,
+                cursor,
+                lit,
+                columns: 120,
+                texts: &t,
+            });
+            let label = t.t(ASKED.iter().find(|a| a.2 == of).expect("an answer").1);
+            spans
+                .iter()
+                .find(|s| s.text == label)
+                .map(|s| s.color)
+                .expect("the answer is drawn")
+        };
+        let here = super::tokens::color::TEXT_HERE_ACTS;
+        assert_eq!(ink(Some(Doing::AiNo), &[], Doing::AiNo), here);
+        assert_ne!(ink(Some(Doing::AiNo), &[], Doing::AiYes), here);
+        let lit = ink(Some(Doing::AiNo), &[Doing::AiYes], Doing::AiYes);
+        assert_ne!(lit, here, "the light under the pointer is the cursor's ink");
+        assert_ne!(lit, ink(Some(Doing::AiNo), &[], Doing::AiYes), "no light");
+        // AND BORN ON "NO", whose first click only picks it.
+        let mut answer = crate::aim::Aim::born(ASKED[0].2);
+        assert!(!answer.clicked(Doing::AiYes), "one click said yes");
+        assert!(answer.clicked(Doing::AiYes));
     }
 
     /// FAILS IF: the question about sending the report does not put "no"

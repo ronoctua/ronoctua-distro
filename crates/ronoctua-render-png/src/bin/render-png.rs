@@ -35,7 +35,9 @@
 //! `--mind <file>` closes that for the brain. The file is the daemon's own
 //! JSON — one line off `$XDG_RUNTIME_DIR/ronoctua-brain.sock` is a valid
 //! argument — and the conversion is the production one, so nothing here is a
-//! second shape invented for the tool. The other three still draw empty, and
+//! second shape invented for the tool. `--proc <dir>` does the same for the
+//! memory panel's list: the host's own scan (`ronoctua_memory::scan::ram`)
+//! over a `/proc` laid out in a folder. The other two still draw empty, and
 //! the same door is what they will use.
 //!
 //! Usage: `ronoctua-render-png <component.wasm> [options]`, `--help` for the list.
@@ -167,6 +169,9 @@ usage: ronoctua-render-png <component.wasm> [options]
                       delivered in order (open the task's page before it)
   --refused <module=words>  that module's page REFUSED, with the brain's words,
                       delivered in order like `--screen`
+  --proc <dir>        the memory panel's consumers: the processes of a `/proc`
+                      laid out in <dir>, read by the host's own scan,
+                      delivered in order as its survey
   --hover <col,line[,cursor]>  rests a pointer on a cell; the cursor number
                       (from 0) lets two hands rest at once
   --seat <cursor>     the keys after this are that cursor's keyboard's
@@ -397,6 +402,30 @@ fn parse() -> Result<Ask> {
                 ));
             }
             "--list" => me.list = true,
+            // THE MEMORY PANEL'S LIST, out of a `/proc` laid out in a folder
+            // (`<pid>/statm`, `comm`, the `exe` link, `cmdline`) and read by
+            // the scan the window's host runs (`ronoctua_memory::scan::ram`),
+            // so a name in the photograph is the name the scan gives — never
+            // one typed for it. Only the list: the gauges would be this
+            // machine's, and a photograph is deterministic.
+            "--proc" => {
+                let procfs = std::path::PathBuf::from(value()?);
+                anyhow::ensure!(
+                    procfs.is_dir(),
+                    "`--proc {}` is not a folder",
+                    procfs.display()
+                );
+                let places = ronoctua_memory::Places {
+                    sysfs: procfs.join("sys"),
+                    cgroup: procfs.join("cgroup"),
+                    procfs,
+                    uid: 0,
+                };
+                me.inputs.push(Input::Survey(ronoctua_protocol::Survey {
+                    consumers: ronoctua_memory::scan::ram(&places),
+                    ..Default::default()
+                }));
+            }
             // WHERE THE POINTER IS RESTING, as `column,line` in the buffer's
             // own cells.
             //

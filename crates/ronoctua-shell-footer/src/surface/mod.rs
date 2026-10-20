@@ -495,6 +495,17 @@ struct Footer {
     /// has to be what was DRAWN rather than what a second calculation says
     /// would be drawn.
     band_placed: Vec<crate::band::Line>,
+    /// The card's action the cursor is on, by the card's record — the one a
+    /// click picked (`crate::aim`): a card that rises by itself runs an
+    /// action only on a click on the person's pick (`band::with_the_cursor`).
+    band_aim: crate::aim::Aim<(ronoctua_notify::RecordKey, usize)>,
+    /// The brain strip's control a click picked, by what it acts on
+    /// (`brain::subject_of`) — the strip rises by itself too.
+    brain_aim: crate::aim::Aim<(crate::brain::Hit, String)>,
+    /// WHILE A CLICK ON A LINE OF THE REGION IS CARRIED OUT: what it opens
+    /// there opens under the hand that clicked, and its first click only
+    /// picks (the window menu's and the kiosk's `under_the_hand`).
+    clicking: bool,
     /// The last mind the brain pushed, KEPT with nothing on screen.
     ///
     /// `None` until the daemon answers for the first time — which is a
@@ -2749,6 +2760,9 @@ fn assemble(
         blink_on: true,
         update_tick: 0,
         band_placed: Vec::new(),
+        band_aim: crate::aim::Aim::none(),
+        brain_aim: crate::aim::Aim::none(),
+        clicking: false,
         brain: None,
         brain_placed: None,
         brain_hint: None,
@@ -3047,6 +3061,15 @@ pub(crate) fn photographed(
     // the marks, the strip and any height it asks for.
     if let Some(mind) = scene.mind {
         state.mind_arrived(mind);
+    }
+    // THE NOTIFICATIONS, by the door the bus's arrive through: the catalogue
+    // decides each one and the band shows the first.
+    if !scene.notifications.is_empty() {
+        let now = std::time::Instant::now();
+        for n in scene.notifications {
+            state.arrived(n, now);
+        }
+        state.after_the_queue_moved();
     }
     // WHAT THE PLAYER'S WATCH HEARS, by the door its thread delivers through:
     // the modeline's pair, and what the player's view is told.
@@ -4947,8 +4970,22 @@ impl Footer {
             // THE BUTTON IS THE ACTION OF THAT RECORD, by its whole name — the
             // order a window sends: the manager, open over the band, gets out
             // of the way of a command of ours first.
+            //
+            // ON A CLICK ON THE PICK, and only there: the card rose by
+            // itself, over whatever the hand was about to click, so the first
+            // click picks an action and paints the cursor on it
+            // (`band::with_the_cursor`). The cursor is born on the first
+            // action — the question's `no` — and is the screen's until a
+            // click makes it the person's.
             crate::band::Hit::Action(n) => {
-                self.run_with(crate::desk::ACT, Some(&crate::desk::act_order(key, n)));
+                if self.band_aim.on().is_none_or(|(k, _)| *k != key) {
+                    self.band_aim = crate::aim::Aim::born((key, 0));
+                }
+                if self.band_aim.clicked((key, n)) {
+                    self.run_with(crate::desk::ACT, Some(&crate::desk::act_order(key, n)));
+                } else {
+                    self.draw_and_paint();
+                }
             }
             // OPEN ON IT, whole, in the manager — never a toggle.
             crate::band::Hit::Open => {
@@ -4993,6 +5030,16 @@ impl Footer {
     /// click does not do a second thing: it runs the same command the key runs,
     /// through the same door.
     fn brain_clicked(&mut self, hit: crate::brain::Hit) {
+        // A CONTROL IS PICKED BEFORE IT RUNS, by what it acts on — the strip
+        // rose by itself (`brain::subject_of`). The `+N` has no subject: it
+        // opens the brain's page, on one click.
+        let shown = crate::brain::Shown::of(self.brain.as_ref());
+        if let Some(subject) = crate::brain::subject_of(&shown, hit)
+            && !self.brain_aim.clicked((hit, subject))
+        {
+            self.draw_and_paint();
+            return;
+        }
         match hit {
             crate::brain::Hit::Abort => self.run_command("brain-abort"),
             crate::brain::Hit::Proceed => self.run_command("brain-proceed"),
@@ -13704,6 +13751,14 @@ impl Footer {
     /// only by the mouse, and what the mouse does is always something the
     /// keyboard also does.
     fn click_at(&mut self, i: usize) {
+        // WHAT THIS CLICK OPENS OPENS UNDER THE HAND (`clicking`).
+        self.clicking = true;
+        self.click_the_line(i);
+        self.clicking = false;
+    }
+
+    /// The click [`Self::click_at`] carries out.
+    fn click_the_line(&mut self, i: usize) {
         let Some(line) = self.visible_row(i) else {
             return;
         };
@@ -15410,6 +15465,19 @@ impl Footer {
                     &crate::band::Words { texts: &self.texts },
                 ),
             };
+            // AND THE CARD'S CURSOR, on the action a click picked — or on
+            // the first, where it is born (`band::with_the_cursor`).
+            let mut band = band;
+            if self.alerts.showing().is_none()
+                && let Some(key) = self.notifications.showing().map(|s| s.notification.key())
+            {
+                let at = self
+                    .band_aim
+                    .on()
+                    .filter(|(k, _)| *k == key)
+                    .map_or(0, |(_, n)| *n);
+                crate::band::with_the_cursor(&mut band, at);
+            }
             // UNDER THE SUDO BAR, whose rows are the topmost while it asks.
             let band_top = self.sudo_rows();
             for (row, line) in band.iter().enumerate() {
@@ -15537,6 +15605,15 @@ impl Footer {
                     snooze_keys: &self.brain_keys(crate::leader::BRAIN_SNOOZE_KEYS),
                 },
             );
+            // AND THE CONTROL A CLICK PICKED, while it still acts on what
+            // the strip shows (`brain::subject_of`).
+            let mut brain = brain;
+            if let (Some(l), Some((hit, subject))) = (brain.as_mut(), self.brain_aim.on()) {
+                let shown = crate::brain::Shown::of(self.brain.as_ref());
+                if crate::brain::subject_of(&shown, *hit).as_ref() == Some(subject) {
+                    crate::brain::with_the_pick(l, *hit);
+                }
+            }
             if let Some(l) = &brain {
                 for piece in &l.pieces {
                     spans.extend(glyph_and_text(

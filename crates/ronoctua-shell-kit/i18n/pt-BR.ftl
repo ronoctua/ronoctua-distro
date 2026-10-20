@@ -67,7 +67,7 @@ hint-notif-open = tirar da faixa e abrir inteira no gerenciador
 notif-see-whole = ver inteira
 hint-notif-countdown = quanto tempo ela ainda tem
 hint-notif-paused = o tempo está parado enquanto o ponteiro está nela
-hint-notif-action = { $action } — clique, ou abra a notificação
+hint-notif-action = { $action } — um clique escolhe, e um clique no escolhido executa
 
 ## Installer — the interface
 

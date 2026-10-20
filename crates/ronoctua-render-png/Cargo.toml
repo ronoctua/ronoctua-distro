@@ -37,6 +37,8 @@ ronoctua-design = { path = "../ronoctua-design" }
 ronoctua-runtime = { path = "../ronoctua-runtime" }
 ronoctua-brain = { path = "../ronoctua-brain" }
 ronoctua-files = { path = "../ronoctua-files" }
+# `--proc`: the memory panel's list, by the scan its window's host runs.
+ronoctua-memory = { path = "../ronoctua-memory" }
 
 anyhow.workspace = true
 serde_json.workspace = true

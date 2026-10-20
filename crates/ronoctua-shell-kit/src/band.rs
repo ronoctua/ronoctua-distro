@@ -460,6 +460,30 @@ pub fn lines(
     out
 }
 
+/// The card's cursor, on action `at`: the one a click picked, or the first,
+/// where the cursor is born.
+///
+/// # Why the band has a cursor at all
+///
+/// Because a card APPEARS BY ITSELF, over whatever the hand was about to
+/// click — and an action ran on the first press. The pairing card's "yes" took
+/// the click meant for the window under it. So an action is picked by one
+/// click and run by a click on the pick (`crate::aim`), and the pick has to be
+/// SEEN: it wears the cursor's ink, the way every list's cursor does. Born on
+/// the first action, which is the question's `no` wherever a card asks one
+/// (`assets/notifications.nix` puts it first) — a cursor the screen put there,
+/// so its first click still only picks it.
+///
+/// A pass over the drawn lines and not an argument of [`lines`]: what the band
+/// lays out does not move with the pick, only one piece's ink.
+pub fn with_the_cursor(lines: &mut [Line], at: usize) {
+    for p in lines.iter_mut().flat_map(|l| l.pieces.iter_mut()) {
+        if p.hit == Some(Hit::Action(at)) {
+            p.color = tokens::color::TEXT_HERE_ACTS;
+        }
+    }
+}
+
 /// A line of the band, whole when it fits, and cut with a button at its end
 /// when it does not.
 ///
@@ -856,6 +880,29 @@ mod tests {
                 p.text
             );
         }
+    }
+
+    /// FAILS IF: the card's cursor lights another action, or none, or
+    /// anything that is not an action.
+    #[test]
+    fn the_cursor_wears_its_ink_on_its_action_alone() {
+        let t = words();
+        let w = Words { texts: &t };
+        let s = shown(Show::Full, "corpo", 3);
+        let mut out = lines(Some(&s), 120, Some(1.0), None, false, false, &w);
+        let before = out.clone();
+        with_the_cursor(&mut out, 1);
+        let changed: Vec<(Option<Hit>, tokens::Color)> = out
+            .iter()
+            .flat_map(|l| &l.pieces)
+            .zip(before.iter().flat_map(|l| &l.pieces))
+            .filter(|(a, b)| a != b)
+            .map(|(a, _)| (a.hit, a.color))
+            .collect();
+        assert_eq!(
+            changed,
+            vec![(Some(Hit::Action(1)), tokens::color::TEXT_HERE_ACTS)]
+        );
     }
 
     /// Whether a drawn piece is the dot between two actions.

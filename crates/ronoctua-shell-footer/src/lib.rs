@@ -48,7 +48,7 @@ use ronoctua_shell_door::{
     pasting, photo, queue, region, right_column, room, sections, sudo, tags,
 };
 use ronoctua_shell_kit::{
-    actions, band, bars, bindings, chrome, clipboard_copy, daemon, desk, echo, fields, fold,
+    actions, aim, band, bars, bindings, chrome, clipboard_copy, daemon, desk, echo, fields, fold,
     foreign, glyph, hidpi, ipc, keyboard, language, line, mind_wire, minibuffer, seats,
     security_words, sizes, text_select, theme, toolkits, wake, watchdog, wheel, when,
 };

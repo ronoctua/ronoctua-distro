@@ -95,7 +95,10 @@ impl Footer {
         if !self.region_is_free("kiosk-more") {
             return;
         }
-        let mut v = crate::kiosk_view::View::fresh(window, level);
+        // UNDER THE HAND when a click on a line of the region opened it (the
+        // window menu's `B`); from the modeline's `…` it grows above the line.
+        let mut v =
+            crate::kiosk_view::View::fresh(window, level).opened_under_the_hand(self.clicking);
         v.go(level, tab);
         self.kiosk_view = Some(v);
         self.first_page();
@@ -374,16 +377,17 @@ impl Footer {
         self.kiosk_view_errand(errand, before);
     }
 
-    /// A click on the view: a grid's cell runs, as a cell of the leader does;
-    /// a list's row is selected, and the second click is its `RET`
-    /// (invariant 19).
+    /// A click on the view: a grid's cell runs, as a cell of the leader does
+    /// — except under the hand that opened it, where the first click picks
+    /// (`View::clicked_cell`); a list's row is selected, and the second click
+    /// is its `RET` (invariant 19).
     pub(super) fn kiosk_view_clicked(&mut self, n: usize) {
         let Some(mut v) = self.kiosk_view.clone() else {
             return;
         };
         let before = v.level;
         let errand = if v.is_a_grid() {
-            v.choose(n)
+            v.clicked_cell(n)
         } else {
             let r = self.kiosk.reading(v.window);
             let rows = v.rows(r, self.screen_columns(), &self.texts);
@@ -433,12 +437,26 @@ impl Footer {
         // registry's sentence for the pointer, and the `,` sequence that
         // does the same outside the view — and a list is rows of fields.
         if v.is_a_grid() {
+            // AND THE CELL A CLICK PICKED, under the hand, in the cursor's
+            // ink — the window menu's.
+            let picked = v.picked();
             return v
                 .entries(self.kiosk_facts(v.window), &self.texts)
                 .into_iter()
                 .enumerate()
                 .map(|(n, e)| ExpansionRow {
                     key: e.key.to_owned(),
+                    here: picked == Some(n),
+                    key_color: if picked == Some(n) {
+                        tokens::color::STATE_ACCENT
+                    } else {
+                        tokens::color::TEXT_KEY
+                    },
+                    text_color: if picked == Some(n) {
+                        tokens::color::STATE_ACCENT
+                    } else {
+                        tokens::color::TEXT_SECONDARY
+                    },
                     text: e.label,
                     teaches: Some(format!(
                         "{} {} {}",
@@ -448,7 +466,6 @@ impl Footer {
                     )),
                     description: Some(e.about),
                     click: Some(Click::Kiosk(n)),
-                    text_color: tokens::color::TEXT_SECONDARY,
                     ..ExpansionRow::empty_one()
                 })
                 .collect();

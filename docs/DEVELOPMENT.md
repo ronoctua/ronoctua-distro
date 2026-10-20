@@ -194,7 +194,9 @@ nix run .#png -- "$RONOCTUA_BUFFER_KEYBOARD" --out teclados.png
 
 Um buffer vira PNG em 0,2 s, sem VM. Dentro do `nix develop`, cada componente tem a sua variável
 (`RONOCTUA_BUFFER_BRAIN`, `…_EXAMPLE`, `…_FORMAT` e os outros); `--help` lista as opções — tamanho,
-tema, idioma, e teclas e cliques para andar até a tela que se quer.
+tema, idioma, e teclas e cliques para andar até a tela que se quer. O painel de memória desenha a
+lista que a varredura do host (`ronoctua_memory::scan::ram`) tira de um `/proc` plantado numa pasta
+(`--proc <pasta>`: `<pid>/statm`, `comm`, o link `exe` e `cmdline`), nunca a desta máquina.
 
 ```
 nix run .#png -- --door column --size small --state look.json --frame 1=quadro.png \
@@ -223,7 +225,8 @@ cena dada inteira (cada câmera na tabela `CAMERAS` do crate da porta): a das te
 (`--door lifeline --result <palavra> [--asking]`) —, e o próprio rodapé (`--door footer`,
 `footer_photograph.rs`: modeline, minibuffer e região sobre um compositor substituto com um monitor;
 `--app`, `--state`, `--tone`, `--states` e `--local` descrevem a janela em foco, `--screens` e
-`--entry` dão as telas e o histórico, e os passos são `--leader`, `--key` e `--command`), tirada por
+`--entry` dão as telas e o histórico, `--notification` põe um aviso na faixa, e os passos são
+`--leader`, `--key` e `--command`), tirada por
 `ronoctua-shell photograph`; toda porta que lê o resto da linha diz as opções dela em
 `photograph --door <porta> --help`. No rodapé, as vistas do Incus, da segurança e do pendrive leem a
 cena que uma variável nomeia, no formato da câmera da janela delas, nunca a desta máquina

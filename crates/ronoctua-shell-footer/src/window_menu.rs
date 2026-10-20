@@ -176,6 +176,9 @@ impl Entry {
 pub enum Errand {
     /// Nothing but drawing again.
     Redraw,
+    /// A click PICKED a cell and ran nothing ([`View::clicked`]): drawn again,
+    /// on the page it is on — a new level's first page is `Redraw`'s.
+    Picked,
     /// Close the menu.
     Close,
     /// Run this command — on the window `on` names, focused first, when it
@@ -218,6 +221,22 @@ pub struct View {
     kiosk: bool,
     /// Where the grid is.
     pub level: Level,
+    /// The cell a click picked — or, on a question, its `no`, where the cursor
+    /// is born ([`View::picked`]).
+    aim: crate::aim::Aim<usize>,
+    /// Whether the level on screen appeared UNDER THE HAND that clicked.
+    ///
+    /// A click on a group, on the question's door or on its `no` replaces the
+    /// grid under the pointer, and the second press of a double click landed
+    /// on whatever cell came up there — and ran it. So a level a CLICK opened
+    /// (or the menu, opened by a click on a line of the region) picks a cell
+    /// on one click and runs it on a click on the pick ([`View::clicked`]).
+    ///
+    /// A level a KEY opened, and the menu opened from the modeline — it grows
+    /// above the line that was clicked, never under the pointer — run a cell
+    /// on its click, as a cell of the leader does: the grid has no cursor, and
+    /// what a cell does is written on it.
+    under_the_hand: bool,
 }
 
 impl View {
@@ -237,6 +256,8 @@ impl View {
             screens,
             kiosk: false,
             level: Level::Root,
+            aim: crate::aim::Aim::none(),
+            under_the_hand: false,
         }
     }
 
@@ -264,6 +285,8 @@ impl View {
             screens: 0,
             kiosk: false,
             level,
+            aim: crate::aim::Aim::none(),
+            under_the_hand: false,
         }
     }
 
@@ -286,6 +309,65 @@ impl View {
     pub fn with_drawer(mut self, drawer: Vec<Window>) -> Self {
         self.drawer = drawer;
         self
+    }
+
+    /// The same menu, opened by a click on a line of the region — under the
+    /// hand that clicked, when `yes` ([`View::clicked`]).
+    #[must_use]
+    pub const fn opened_under_the_hand(mut self, yes: bool) -> Self {
+        self.under_the_hand = yes;
+        self
+    }
+
+    /// Goes to `level` — opened from its mark, or by a click on a line of
+    /// the region when `under_the_hand`.
+    pub fn go(&mut self, level: Level, under_the_hand: bool) {
+        let was = self.level;
+        self.level = level;
+        self.landed(was);
+        self.under_the_hand = under_the_hand;
+    }
+
+    /// The cell the cursor is on, if the grid has one here: a click's pick,
+    /// or the question's `no`.
+    #[must_use]
+    pub fn picked(&self) -> Option<usize> {
+        self.aim.on().copied()
+    }
+
+    /// The grid moved from `was` to the level on screen: what was picked
+    /// there is not a cell of this one. A QUESTION is born with the cursor on
+    /// its `no`, the first cell — the screen's, so its first click picks it.
+    fn landed(&mut self, was: Level) {
+        if self.level == was {
+            return;
+        }
+        self.aim = match self.level {
+            Level::Confirm(_) => crate::aim::Aim::born(0),
+            _ => crate::aim::Aim::none(),
+        };
+        self.under_the_hand = false;
+    }
+
+    /// Whether a click on this level picks before it runs: under the hand,
+    /// or a question about what cannot be undone, wherever it was opened.
+    const fn picks(&self) -> bool {
+        self.under_the_hand || matches!(self.level, Level::Confirm(_))
+    }
+
+    /// A CLICK on cell `n`: on a level that [`picks`](Self::picks), the
+    /// first click picks it and only a click on the pick runs it; elsewhere
+    /// it runs, as its key does. A level the click opens is under the hand.
+    pub fn clicked(&mut self, n: usize, texts: &Texts) -> Errand {
+        if self.picks() && !self.aim.clicked(n) {
+            return Errand::Picked;
+        }
+        let was = self.level;
+        let errand = self.choose(n, texts);
+        if self.level != was {
+            self.under_the_hand = true;
+        }
+        errand
     }
 
     /// The same menu, knowing whether its window is a Chrome kiosk.
@@ -916,7 +998,8 @@ impl View {
             .aimed
             .then(|| self.window.as_ref().map(|w| w.id))
             .flatten();
-        match e.does {
+        let was = self.level;
+        let errand = match e.does {
             Does::Run(id) => Errand::Run {
                 id,
                 arg: None,
@@ -946,11 +1029,20 @@ impl View {
                 .map_or(Errand::Close, Errand::Kill),
             Does::TakeOut(id) => Errand::TakeOut(id),
             Does::Back => self.back(),
-        }
+        };
+        self.landed(was);
+        errand
     }
 
-    /// The key with this notation, if a cell of the level has it.
+    /// The key with this notation, if a cell of the level has it — and
+    /// `RET`, the cell the cursor is on: what the click on the pick does.
     pub fn pressed(&mut self, notation: &str, texts: &Texts) -> Errand {
+        if notation == "RET" {
+            return match self.picked() {
+                Some(n) => self.choose(n, texts),
+                None => Errand::Redraw,
+            };
+        }
         match self.entries(texts).iter().position(|e| e.key == notation) {
             Some(n) => self.choose(n, texts),
             None => Errand::Redraw,
@@ -959,6 +1051,14 @@ impl View {
 
     /// `Esc`: up one level, and from the first one, closed.
     pub fn back(&mut self) -> Errand {
+        let was = self.level;
+        let errand = self.went_back();
+        self.landed(was);
+        errand
+    }
+
+    /// Where `Esc` goes, from the level on screen.
+    fn went_back(&mut self) -> Errand {
         match self.level {
             Level::Root => Errand::Close,
             // A LEVEL OPENED ON ITS OWN, from its mark, has nowhere to go up
@@ -1273,6 +1373,80 @@ mod tests {
         assert_eq!(v.level, Level::Root);
         v.pressed("X", &t);
         assert_eq!(v.pressed("y", &t), Errand::Kill(4242));
+    }
+
+    /// The index of the cell with this key, on the level on screen.
+    fn cell(v: &View, key: &str) -> usize {
+        v.entries(&texts())
+            .iter()
+            .position(|e| e.key == key)
+            .unwrap_or_else(|| panic!("no cell `{key}` on {:?}", v.level))
+    }
+
+    /// FAILS IF: the double click on a group runs the cell that came up
+    /// under the hand, or a cell picked there does not run on a click on the
+    /// pick — or a cell of the menu opened from the modeline stops running
+    /// on its click.
+    #[test]
+    fn a_level_a_click_opened_picks_before_it_runs() {
+        let t = texts();
+        let mut v = View::fresh(window(false, false, false), spaces(1), 1);
+        // FROM THE MODELINE, the menu grows above the line clicked: a cell
+        // runs on its click, and a group opens on its click.
+        let group = cell(&v, "M");
+        assert_eq!(v.clicked(group, &t), Errand::Redraw);
+        assert_eq!(v.level, Level::Move);
+        // THE SECOND PRESS OF THE DOUBLE CLICK lands on what came up there:
+        // it picks, and runs nothing.
+        assert_eq!(v.clicked(group, &t), Errand::Picked);
+        assert_eq!(v.level, Level::Move);
+        assert_eq!(v.picked(), Some(group));
+        // A CLICK ON ANOTHER CELL moves the pick, and runs nothing either.
+        assert_eq!(v.clicked(0, &t), Errand::Picked);
+        assert_eq!(v.picked(), Some(0));
+        // THE CLICK ON THE PICK runs it — and `RET` is that click.
+        let ran = v.clone().clicked(0, &t);
+        assert!(matches!(ran, Errand::Run { .. }), "{ran:?}");
+        assert_eq!(v.pressed("RET", &t), ran);
+        // A KEY-OPENED LEVEL runs a cell on its click.
+        let mut keyed = View::fresh(window(false, false, false), spaces(1), 1);
+        keyed.pressed("M", &t);
+        assert!(matches!(keyed.clicked(0, &t), Errand::Run { .. }));
+        // AND THE MENU OPENED BY A CLICK ON A LINE OF THE REGION is under the
+        // hand from its first level.
+        let mut under =
+            View::fresh(window(false, false, false), spaces(1), 1).opened_under_the_hand(true);
+        let float = cell(&under, "f");
+        assert_eq!(under.clicked(float, &t), Errand::Picked);
+        assert!(matches!(under.clicked(float, &t), Errand::Run { .. }));
+    }
+
+    /// FAILS IF: the question about killing the window is not born with the
+    /// cursor on "no", answers on one click — wherever it was opened — or
+    /// the click that answered "no" lets the next press run a cell of the
+    /// level it went back to.
+    #[test]
+    fn the_question_picks_before_it_answers() {
+        let t = texts();
+        let mut v = View::fresh(window(false, false, false), spaces(1), 1);
+        // OPENED BY A KEY, and still two clicks: it cannot be undone.
+        v.pressed("X", &t);
+        assert_eq!(v.picked(), Some(0), "the cursor is not born on no");
+        assert_eq!(v.clicked(1, &t), Errand::Picked, "one click killed it");
+        assert_eq!(v.clicked(1, &t), Errand::Kill(4242));
+        // "NO" IS BORN UNDER THE CURSOR, and the screen's: two clicks too.
+        let mut v = View::fresh(window(false, false, false), spaces(1), 1);
+        v.pressed("X", &t);
+        assert_eq!(v.clicked(0, &t), Errand::Picked);
+        assert_eq!(v.clicked(0, &t), Errand::Redraw);
+        assert_eq!(v.level, Level::Root);
+        // AND THE ROOT IT WENT BACK TO CAME UP UNDER THE HAND.
+        assert_eq!(v.clicked(0, &t), Errand::Picked);
+        // `RET` on the question is its cursor's answer: "no".
+        let mut v = View::fresh(window(false, false, false), spaces(1), 1);
+        v.pressed("X", &t);
+        assert_eq!(v.pressed("RET", &t), Errand::Redraw);
+        assert_eq!(v.level, Level::Root);
     }
 
     /// Another screen is offered only where there is one.

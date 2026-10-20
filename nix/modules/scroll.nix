@@ -57,6 +57,10 @@ let
     ronoctua-shell = ronoctua.shell;
   };
 
+  # What the session line hands the person's manager, named once for this
+  # config and for the VM tests that stand in for a session.
+  sessionEnvironment = import ../session-environment.nix { inherit pkgs; };
+
   # WHERE A CAPTURE LANDS, from the same file the home's directories come from.
   #
   # It is NOT a line in the compositor's config any more: this compositor
@@ -130,8 +134,14 @@ let
     # `exec` AND NOT `exec_always`: the display view calls `reload` on every
     # screen change, and `exec_always` would restart the session target each
     # time.
-    exec ${pkgs.systemd}/bin/systemctl --user import-environment WAYLAND_DISPLAY SCROLLSOCK SWAYSOCK XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
-    exec ${pkgs.dbus}/bin/dbus-update-activation-environment --systemd WAYLAND_DISPLAY SCROLLSOCK SWAYSOCK XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+    #
+    # THE NAMES LIVE IN `nix/session-environment.nix`, which the VM tests that
+    # stand in for a session read too. `DISPLAY` among them, the compositor's
+    # XWayland: without it the footer, every unit and everything they open had
+    # no X server, and an X11-only program opened from the footer exited
+    # without a window (`tests/x11-vm.nix` opens them with the session's own
+    # environment).
+    ${sessionEnvironment.lines}
     exec ${pkgs.systemd}/bin/systemctl --user start scroll-session.target
 
     # --- input --------------------------------------------------------

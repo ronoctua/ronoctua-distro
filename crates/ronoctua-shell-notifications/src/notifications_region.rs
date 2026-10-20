@@ -157,6 +157,7 @@ fn of_the_view(command: &str) -> bool {
             | "notif-pane-previous"
             | "notif-knob-next"
             | "notif-knob-previous"
+            | "notif-knob-turn"
             | "notif-see"
             | "notif-restore"
     )
@@ -500,6 +501,14 @@ impl Region for Manager {
             "notif-pane-previous" => self.press(Press::BackTab, way),
             "notif-knob-next" => self.press(Press::Right, way),
             "notif-knob-previous" => self.press(Press::Left, way),
+            // `RET` IS THREE THINGS AT THREE LEVELS — open a record, type a
+            // line of the draft, turn a knob — so the command that names the
+            // third presses only where `RET` turns.
+            "notif-knob-turn" => {
+                if self.view.turns_here() {
+                    self.press(Press::Enter, way);
+                }
+            }
             // `r` IS TWO THINGS AT TWO LEVELS — all read on a list, the
             // distro's default in the sheet — so the command that names the
             // second one only presses when the sheet is open.
@@ -1104,6 +1113,58 @@ mod tests {
             let unheld = crate::region::unheld(&held);
             assert!(unheld.is_empty(), "{level}: {unheld:?}");
         }
+    }
+
+    /// FAILS IF: a second click on a knob of the sheet does not turn it — the
+    /// value changes, through the desk, one step forward — or the first one
+    /// does; or a second click on a line of the draft that is turned (its
+    /// field) leaves it as it was.
+    #[test]
+    fn a_second_click_turns_a_value_in_the_footer() {
+        let t = texts();
+        let queue = three_records();
+        let book = Book::distro();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: 100,
+            lines: 30,
+            zone: &zone,
+            photographing: true,
+            lent: Lent::of(vec![&queue, &book]),
+        };
+        let adjusted = |owed: &[Effect]| {
+            owed.iter().find_map(|e| match e {
+                Effect::Desk(Ask::Adjusted(id, Some(v))) => Some((id.clone(), v.clone())),
+                _ => None,
+            })
+        };
+        // THE SHEET: row 0 is the entry's name, row 2 its second knob (`life`).
+        let (mut m, mut w) = reached(&t, 100, (&queue, &book), Pane::Catalogue, &["RET"]);
+        m.clicked_at(2, Some(4), &mut w);
+        assert_eq!(adjusted(&w.way.owed), None, "the first click turned it");
+        m.clicked_at(2, Some(4), &mut w);
+        let (id, v) = adjusted(&w.way.owed).expect("the second click turned nothing");
+        let (now, _) = crate::notifications::in_force(&book, &id);
+        let mut next = book.adjustments.get(&id).cloned().unwrap_or_default();
+        crate::notifications::advance(&now, crate::notifications::Knob::Life, &mut next);
+        assert_eq!(v, next, "it did not go one value forward");
+        // THE DRAFT: row 1 is the first condition's field.
+        let (mut m, mut w) = reached(&t, 100, (&queue, &book), Pane::Catalogue, &["n"]);
+        // WHAT IT SAYS, and not its ink: the first click moves the cursor
+        // onto it, which is a colour.
+        let field = |m: &Manager| -> Vec<String> {
+            m.rows(&seen)[1]
+                .fields
+                .iter()
+                .map(|f| f.text.clone())
+                .collect()
+        };
+        let before = field(&m);
+        m.clicked_at(1, Some(4), &mut w);
+        assert_eq!(field(&m), before, "the first click turned the field");
+        m.clicked_at(1, Some(4), &mut w);
+        assert_ne!(field(&m), before, "the second click did not turn the field");
     }
 
     /// FAILS IF: on an open record, side by side or stacked, the pointer

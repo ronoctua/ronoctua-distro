@@ -62,6 +62,10 @@ usage: ronoctua-shell photograph --door footer [options] [steps]
   --mind <file>         what the brain says, as its socket sends it (one
                         mind, JSON): the modeline's marks, the strip's
                         notices — never this machine's brain
+  --notification <file> a notification as the bus delivers it (JSON, the
+                        history's shape): the band's card, its catalogue
+                        entry's actions and cursor — repeatable, never this
+                        machine's
   --player <file>       what the player says, as its watch hears it (one
                         state, JSON): the modeline's pair and what the
                         player's region shows — never this machine's player
@@ -157,6 +161,8 @@ pub(crate) struct Scene {
     pub clipboard: Vec<ronoctua_clipboard::Entry>,
     /// What the brain says, delivered as its socket's thread delivers it.
     pub mind: Option<ronoctua_brain::Mind>,
+    /// The notifications that arrive, as the bus delivers them.
+    pub notifications: Vec<ronoctua_notify::Notification>,
     /// What the player's watch hears — the queue's outline, then the state —
     /// delivered as its thread delivers them.
     pub player: Vec<ronoctua_player::client::Heard>,
@@ -185,6 +191,7 @@ struct Asked {
     screens: Option<String>,
     entries: Vec<String>,
     mind: Option<std::path::PathBuf>,
+    notifications: Vec<std::path::PathBuf>,
     player: Option<std::path::PathBuf>,
     queue: Option<std::path::PathBuf>,
     room: Option<std::path::PathBuf>,
@@ -241,6 +248,7 @@ fn parse(words: &[String]) -> Result<Asked> {
         screens: None,
         entries: Vec::new(),
         mind: None,
+        notifications: Vec::new(),
         player: None,
         queue: None,
         room: None,
@@ -311,6 +319,7 @@ fn parse(words: &[String]) -> Result<Asked> {
             "--screens" => me.screens = Some(value()?),
             "--entry" => me.entries.push(value()?),
             "--mind" => me.mind = Some(std::path::PathBuf::from(value()?)),
+            "--notification" => me.notifications.push(std::path::PathBuf::from(value()?)),
             "--player" => me.player = Some(std::path::PathBuf::from(value()?)),
             "--queue" => me.queue = Some(std::path::PathBuf::from(value()?)),
             "--room" => me.room = Some(std::path::PathBuf::from(value()?)),
@@ -584,6 +593,15 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
         std::fs::read_to_string(file)
             .with_context(|| format!("could not read `{}`", file.display()))
     };
+    // THE NOTIFICATIONS, read as the history keeps one.
+    let notifications = asked
+        .notifications
+        .iter()
+        .map(|file| -> Result<ronoctua_notify::Notification> {
+            serde_json::from_str(&read(file)?)
+                .with_context(|| format!("`{}` is not a notification", file.display()))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut player = Vec::new();
     if let Some(file) = asked.queue.as_deref() {
         let outline: ronoctua_player::queue::Outline = serde_json::from_str(&read(file)?)
@@ -616,6 +634,7 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
             .map(|e| ronoctua_clipboard::Entry::of_text(e.clone()))
             .collect(),
         mind,
+        notifications,
         player,
         steps: asked.steps.clone(),
     };

@@ -522,6 +522,41 @@ fn control(
     start
 }
 
+/// What a control of the strip ACTS ON — the countdown's task and the moment
+/// it starts, or the loudest notice by its module and id — so a pick survives
+/// a strip redrawn every second and is gone with what it was about. `None` for
+/// the `+N`, which acts on nothing, and for a control the strip does not show.
+///
+/// # Why a control is picked before it runs
+///
+/// Because the strip APPEARS BY ITSELF, under the minibuffer, where a hand may
+/// be on its way to click something else — and a click on `now` starts the
+/// machine's rebuild. So the first click picks a control and only a click on
+/// the pick runs it (`crate::aim`), the band's rule. The `+N` keeps its one
+/// click: it opens the brain's page, which a person reads and leaves.
+#[must_use]
+pub fn subject_of(shown: &Shown<'_>, hit: Hit) -> Option<String> {
+    match hit {
+        Hit::Abort | Hit::Proceed => shown
+            .countdown
+            .map(|a| format!("{}@{}", a.task, a.deadline)),
+        Hit::Act | Hit::Dismiss | Hit::Snooze => {
+            shown.top().map(|p| format!("{}/{}", p.module, p.what.id))
+        }
+        Hit::More => None,
+    }
+}
+
+/// The picked control, in the cursor's ink — its key and its label both, as
+/// the pointer answers the same thing over either half.
+pub fn with_the_pick(line: &mut Line, hit: Hit) {
+    for p in &mut line.pieces {
+        if p.hit == Some(hit) {
+            p.color = tokens::color::TEXT_HERE_ACTS;
+        }
+    }
+}
+
 /// Which piece of the strip is at cell `column` of its row `row`.
 ///
 /// From what was DRAWN, and not from a second calculation of where things would
@@ -1264,6 +1299,46 @@ mod tests {
         let gap = tokens::space::MODELINE_EDGELEFT + 1;
         assert!(at(Some(&line), 0, gap, None).is_none());
         assert!(at(None, 0, 0, None).is_none());
+    }
+
+    /// FAILS IF: a pick is kept across a countdown or a notice it was not
+    /// about, the `+N` asks for one, or the pick's ink lands anywhere but on
+    /// its control's two halves.
+    #[test]
+    fn a_control_is_picked_by_what_it_acts_on() {
+        let t = words();
+        let w = bundle(&t);
+        let m = a_mind(Some(announced(60, 1_000)), vec![a_notice(Level::Alarm, 5)]);
+        let shown = Shown::of(Some(&m));
+        let proceed = subject_of(&shown, Hit::Proceed).expect("the countdown");
+        assert_eq!(subject_of(&shown, Hit::Abort), Some(proceed.clone()));
+        let act = subject_of(&shown, Hit::Act).expect("the notice");
+        assert_ne!(proceed, act, "the countdown and the notice are one subject");
+        assert_eq!(subject_of(&shown, Hit::More), None);
+        // ANOTHER COUNTDOWN, ANOTHER NOTICE: a pick made on the old one is
+        // not one on these.
+        let later = a_mind(Some(announced(60, 2_000)), vec![a_notice(Level::Alarm, 6)]);
+        let later = Shown::of(Some(&later));
+        assert_ne!(subject_of(&later, Hit::Proceed), Some(proceed));
+        assert_ne!(subject_of(&later, Hit::Dismiss), Some(act));
+        // AND THE INK, on both halves of the control and nothing else.
+        let mut line = lines(&shown, 120, 940, &w).expect("the line");
+        let before = line.clone();
+        with_the_pick(&mut line, Hit::Proceed);
+        let changed: Vec<_> = line
+            .pieces
+            .iter()
+            .zip(&before.pieces)
+            .filter(|(a, b)| a != b)
+            .map(|(a, _)| (a.hit, a.color))
+            .collect();
+        assert_eq!(
+            changed,
+            vec![
+                (Some(Hit::Proceed), tokens::color::TEXT_HERE_ACTS),
+                (Some(Hit::Proceed), tokens::color::TEXT_HERE_ACTS)
+            ]
+        );
     }
 
     #[test]

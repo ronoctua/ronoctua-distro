@@ -839,6 +839,34 @@ DELE: o `pid` seria o mesmo para toda janela X11 e a correlação quebraria em s
 que havia um satellite por scope de buffer. Aqui o compositor reporta o PID do cliente X REAL, pela
 extensão XRes, então a correlação vale sem processo nenhum no meio.
 
+**O display do XWayland chega a quem abre um programa** (2026-10-20). A linha da sessão importava
+para o gerente do usuário o `WAYLAND_DISPLAY` e nunca o `DISPLAY`, e o rodapé passa o próprio
+ambiente — o do gerente — a tudo o que abre (`foreign::start_in_scope`): um programa só-X11 aberto
+por ele não achava servidor e saía sem janela (medido no palco do `emacs-vm` com o `emacsclient` do
+build X11). O compositor pinado põe o `DISPLAY` no próprio ambiente no `server_start`
+(`sway/server.c`), antes de o backend subir e antes de os `exec` adiados do config rodarem
+(`sway/main.c`), e é preguiçoso: o soquete é tomado ali e o servidor sobe no primeiro cliente X,
+então exportar o nome não sobe nada. Agora a linha importa o `DISPLAY` com os outros, no gerente e
+no ambiente de ativação do D-Bus. Os nomes moram num lugar só, `nix/session-environment.nix`, que o
+`scroll.nix` e os testes de VM que fazem as vezes de uma sessão leem — uma cópia escrita à mão num
+teste continuava passando quando a linha mudava, e o `x11-vm` dava o `DISPLAY` ao programa à mão e
+por isso não via a falta. Se o XWayland não nasce, o compositor tira o `DISPLAY`, e o
+`import-environment` pula a variável que não existe.
+
+Quem fala os dois protocolos continua escolhendo pela própria regra, e escolhe o Wayland: o GTK e o
+`emacsclient` do pgtk leem o `WAYLAND_DISPLAY` primeiro, o Chrome e o Qt vão pelo
+`XDG_SESSION_TYPE`. O `x11-vm` roda o compositor como unidade da pessoa com a linha da sessão e abre
+dois `xterm` como unidades do gerente dela, sem nada à mão: as janelas chegam pelo XWayland, cada
+uma no cgroup do próprio programa; sem o `DISPLAY` na linha (tirado para provar), o teste falha no
+primeiro passo. O `emacs-vm` abre o quadro do Emacs com os dois no ambiente, e ele continua
+`xdg_shell`, sem XWayland nenhum.
+
+**No laço, o XWayland é o do aninhado.** O rodapé do `.#dev` não é filho do compositor aninhado, e
+herdava o `DISPLAY` da sessão de onde o laço foi aberto: um programa X11 aberto dentro do laço abria
+fora dele. O `exec` do config aninhado diz os dois displays do compositor, o Wayland e o do XWayland
+dele (vazio quando não há), e o script dá esses ao rodapé; o da sessão fica guardado
+(`RONOCTUA_DEV_HOST_DISPLAY`) para o cliente do Emacs do laço, que abre na sessão de verdade.
+
 ---
 
 ### Multi-monitor
@@ -3833,13 +3861,69 @@ nelas também não pegava nada.
   só onde a PESSOA pôs o cursor (uma seta, um clique) o clique é o `RET`. Sem isso, o clique duplo
   no dono de um arquivo, desenhado na linha em que a pergunta põe a primeira pessoa, dava o arquivo
   ao `root`. Para o `não` nascido no cursor, são dois cliques — o preço de a posição não decidir.
-  Um clique triplo ainda responde: é seleciona-e-responde.
+  Um clique triplo ainda responde: é seleciona-e-responde. Decisão do dono (2026-10-20): fica
+  assim — uma resposta e um item de menu levam dois cliques.
 - **A luz do gerenciador é uma disposição por quadro.** Cada pergunta da luz (`band_row`,
   `takes_at`, `taken_line`, `grid_lit_at`) dispunha a coluna sob o ponteiro de novo — a faixa duas
   vezes —, cinco por quadro nas duas portas. `View::lit_at` (`Sectioned::lit_at`, `LitAt`) responde
   tudo de uma disposição, e cada porta pergunta uma vez por quadro. E a janela acende toda linha de
   um controle quebrado em várias, como o rodapé (`Content::controls`, `list::body`): o
   consentimento do pendrive e dos programas acendia só a linha sob o ponteiro.
+
+#### O primeiro clique escolhe — também no que apareceu sozinho ou sob a mão
+
+O inv. 19 diz que o primeiro clique seleciona e o segundo faz o que o `RET` faz, e havia lugares
+onde o primeiro já agia: o que aparece sozinho (o cartão da faixa, a faixa do cérebro, a pergunta
+da linha de vida) e o que um clique abre debaixo da própria mão (o submenu do menu da janela e a
+grade do quiosque, que trocam a grade sob o ponteiro, e o segundo aperto de um clique duplo rodava
+a célula que surgia ali). E um lugar onde o segundo clique não fazia nada: a folha e o rascunho das
+notificações, cujo valor só girava pelas setas.
+
+- **Uma escolha só, na base** (`aim::Aim`, no `ronoctua-shell-kit`): o que o cursor marca e se foi
+  uma PESSOA que o pôs lá. Um clique escolhe; só o clique na escolha da pessoa age. O cursor que a
+  tela pôs (`Aim::born`, o `não` de uma pergunta) é da tela: o primeiro clique nele só o torna da
+  pessoa — dois cliques, o preço já pago pelo `Picker::aimed` do gerenciador de arquivos. A escolha
+  fica depois de agir: um passo (zoom, tamanho) roda a cada clique seguinte.
+- **A folha e o rascunho das notificações giram pelo `RET`.** Na folha, `RET` gira o botão um valor
+  para a frente e, depois do último, volta ao primeiro (`notifications::advance`), como o anel do
+  histórico do shell; o segundo clique é esse `RET`, nas duas portas. O nível é o único que as setas
+  param nas pontas, e o `RET` dá a volta de 100 para 0: um clique que parasse em 100 não mudaria
+  mais nada. No rascunho, `RET` continua digitando o nome e o texto a comparar e gira o resto (o
+  campo, a comparação, um número, um botão); a linha de dicas ensina qual dos dois na linha em foco
+  (`View::means`, no registro alternado), e a tecla nova é um comando (`notif-knob-turn`), que pelo
+  nome só aperta onde o `RET` gira.
+- **O cartão da faixa escolhe a ação antes de rodá-la.** Ele sobe por cima do que a mão ia clicar, e
+  o "sim" do pareamento Bluetooth tomava o clique que era da janela embaixo. Uma ação é escolhida
+  por um clique e roda no clique sobre a escolhida; a escolha veste a tinta do cursor
+  (`band::with_the_cursor`, `text.here.acts`, medida contra o fundo da faixa). O cursor nasce na
+  primeira ação, e o catálogo põe o `não` primeiro onde o cartão pergunta (`bluetooth-refuse` antes
+  de `bluetooth-accept`). O envelope e o "abrir inteira" continuam com um clique: só mudam o que a
+  pessoa vê (marcar lida, abrir no gerenciador), e os dois se desfazem lá.
+- **A faixa do cérebro também.** "Agora", "não agora", a ação de um aviso, guardar e adiar rodam no
+  clique sobre a escolha, guardada pelo que o controle afeta (`brain::subject_of`: a contagem pela
+  tarefa e pelo prazo, o aviso pelo módulo e pelo id), para sobreviver à faixa redesenhada a cada
+  segundo e morrer com a contagem ou o aviso. Sem cursor nascido: a faixa não é uma pergunta com uma
+  resposta que não custa nada. O `+N` continua com um clique: abre a página do cérebro.
+- **A pergunta da linha de vida nasce com o cursor no `não`.** O `RET` responde o que o cursor marca
+  (era sempre `não`), um clique escolhe e o segundo responde; `Esc` continua sendo `não`. A luz do
+  ponteiro ali passou ao tom aceso das palavras: na tinta do cursor, o ponteiro parado sobre "sim"
+  parecia ter levado a resposta para lá. As quatro opções da linha continuam com um clique.
+- **O menu da janela e a grade do quiosque: sob a mão, escolhe; fora dela, roda.** Um nível que um
+  CLIQUE abriu (um grupo, a pergunta, o `não` que volta) e o menu ou o quiosque abertos por um
+  clique numa linha da região (`Footer::clicking`; o `B` do menu abre o quiosque) estão sob a mão:
+  uma célula é escolhida por um clique, vestida de acento, e roda no clique seguinte sobre ela (ou no
+  `RET`). Um nível aberto por TECLA, e o menu aberto pela modeline — ele cresce acima da linha
+  clicada, nunca sob o ponteiro —, rodam a célula no clique: a grade não tem cursor, e cada célula
+  diz o que faz. A pergunta do menu (matar, fechar as outras, apagar a trilha) nasce com o cursor no
+  `não` e pede dois cliques de onde quer que tenha sido aberta: ela não se desfaz. As listas do
+  quiosque (abas, extensões) já selecionavam no primeiro clique, mas o cursor nasce na aba da frente
+  e o segundo aperto do clique duplo na porta das abas caía nela: agora o clique na linha do cursor
+  só é o `RET` onde uma pessoa pôs o cursor (uma seta, um clique).
+- **O que fica como estava.** A página do rádio Bluetooth ("um clique é o `RET`", regra do dono), a
+  grade da leader, o lançador e o `M-x`, abertos por tecla.
+- **A foto.** O `photograph --door footer` ganhou `--notification <arquivo>`: um aviso como o bus o
+  entrega, decidido pelo catálogo, na faixa — o cartão de pareamento e a escolha de uma ação se
+  fotografam com `--press`.
 
 ## 5. Buffers nativos e o protocolo
 
@@ -4728,12 +4812,12 @@ um erro de digitação que não ligasse nada seria pior. Nenhuma versão foi pub
 #### O Emacs é o pure-GTK, e um compositor que acaba leva o daemon
 
 O pacote é o `emacs30-pgtk` (2026-10-19). O `emacs30` do nixpkgs é o build X11 com o toolkit Lucid
-(Xaw3d), não GTK — e na sessão daqui ele não abria janela nenhuma: a linha da sessão importa para o
-gerente do usuário o `WAYLAND_DISPLAY` e nunca o `DISPLAY` (`scroll.nix`), e o `emacsclient` do
-build X11 só lê o `DISPLAY`. Disparado como o rodapé dispara (é assim que o gerenciador de
-arquivos abre um texto), o `-c` saía com 1 sem quadro; com `DISPLAY=:0` à mão, abria pelo XWayland
-em 1,2 s. O `emacsclient` do pgtk lê o `WAYLAND_DISPLAY` primeiro, e o quadro é um
-`xdg_toplevel` do compositor.
+(Xaw3d), não GTK — e na sessão daqui ele não abria janela nenhuma: a linha da sessão importava para
+o gerente do usuário o `WAYLAND_DISPLAY` e nunca o `DISPLAY`, e o `emacsclient` do build X11 só lê o
+`DISPLAY` (hoje a sessão exporta os dois — "Xwayland", na seção 2). Disparado como o rodapé dispara
+(é assim que o gerenciador de arquivos abre um texto), o `-c` saía com 1 sem quadro; com
+`DISPLAY=:0` à mão, abria pelo XWayland em 1,2 s. O `emacsclient` do pgtk lê o `WAYLAND_DISPLAY`
+primeiro, e o quadro é um `xdg_toplevel` do compositor.
 
 O `tests/emacs-vm.nix` prova, no compositor da distro e com o compositor como unidade da pessoa,
 como na sessão: o daemon sobe no `default.target` sem display nenhum no ambiente; `emacsclient -t`
@@ -4769,8 +4853,13 @@ o daemon que o `Restart=always` traz de volta no mesmo segundo volta vazio — o
 salvos. A sessão seguinte abre quadro de novo. O `emacs-vm` segura as três linhas da primeira
 coluna, e um GTK que aprendesse a soltar o display o faria falhar. Pelo desenho da sessão, o
 compositor acaba sozinho, sem o gerente do usuário acabar, no `s q q` (o shell de login do tty fica)
-e numa queda dele. É o motivo de a escolha estar no `PENDING.md`: nativo e alcançável pela sessão,
-contra um daemon que sobrevive ao compositor.
+e numa queda dele.
+
+**Decisão do dono (2026-10-20): o pgtk fica.** O quadro nativo vale o preço, e o Lucid, que com o
+`DISPLAY` exportado agora abriria quadro pela sessão, desenharia pelo XWayland. A distro continua
+sem escrever configuração do Emacs: o que encurta a perda de uma queda é da configuração da pessoa,
+e o `docs/INSTALL.md` diz o quê (`auto-save-visited-mode`, que grava os arquivos abertos sozinho, e
+`desktop-save-mode`, que reabre os buffers), junto com o que se perde e o que não se perde.
 
 **O fim do gerente do usuário não é esse fim** — desligar, reiniciar, o último logout. A unidade do
 daemon é ordenada depois da do compositor (`after = [ "scroll.service" ]`, no `emacs.nix`), e o
@@ -4795,9 +4884,10 @@ no compositor aninhado — o `WAYLAND_DISPLAY` do laço é o dele —, e o daemo
 `$XDG_RUNTIME_DIR`) ficaria preso lá: o pgtk trata todo nome `wayland-N` como o único display
 Wayland que já tem aberto (`pgtk_display_info_for_name`, `src/pgtkfns.c`), então todo quadro
 seguinte da sessão de verdade abriria dentro da janela aninhada, até o `.#dev` acabar e levar o
-daemon junto. O embrulho devolve ao cliente o `WAYLAND_DISPLAY` que o laço guardou antes de apontá-lo
-para o aninhado (`RONOCTUA_DEV_HOST_WAYLAND_DISPLAY`; vazio num host X11, e o cliente cai no
-`DISPLAY` do host, que o laço não muda) e tira as duas marcas do laço: o quadro é da sessão de
+daemon junto. O embrulho devolve ao cliente o `WAYLAND_DISPLAY` e o `DISPLAY` que o laço guardou
+antes de apontá-los para o aninhado (`RONOCTUA_DEV_HOST_WAYLAND_DISPLAY`, vazio num host X11, e
+`RONOCTUA_DEV_HOST_DISPLAY`: o cliente do pgtk cai no `DISPLAY` quando o Wayland é recusado, e o do
+laço é o XWayland do aninhado) e tira as duas marcas do laço: o quadro é da sessão de
 verdade, o ambiente que ele dá aos programas que o Emacs abre também, e a varredura do próximo
 `.#dev` não toma o cliente por sobra (fecharia o quadro). O `emacs-vm` roda esse mesmo embrulho,
 com o ambiente do rodapé do laço, contra um compositor aninhado dentro da sessão e um daemon sem
@@ -5652,10 +5742,10 @@ borda de 2 px (`default_border pixel 2`), que o Chrome não preenche. Com as bar
   compositor não o define; a linha `import-environment` do config dizia "Environment variable
   $XDG_SESSION_TYPE not set, ignoring" e não importava nada. Todo programa aberto pelo rodapé (o
   quiosque, os web apps, o Chrome do lançador) herdava a sessão sem tipo: o Chrome escolhia o X11,
-  não achava `DISPLAY` (que ninguém importa) e saía (`Missing X server or $DISPLAY`). A VM de
-  medição passava o tipo à mão e não viu. Agora a unidade do compositor tem
-  `XDG_SESSION_TYPE=wayland` no ambiente, e a linha do config o leva ao gerenciador; o
-  `kiosk-vm` confere que ele chega ao gerenciador e ao rodapé.
+  não achava `DISPLAY` (que a sessão ainda não importava) e saía (`Missing X server or $DISPLAY`). A
+  VM de medição passava o tipo à mão e não viu. Agora a unidade do compositor tem
+  `XDG_SESSION_TYPE=wayland` no ambiente, e a linha do config o leva ao gerenciador; o `kiosk-vm`
+  confere que ele chega ao gerenciador e ao rodapé.
 
 
 ### A barra lateral — de onde se parte, e o que ela custou descobrir
@@ -8570,6 +8660,19 @@ do `/proc/meminfo` **sem** um `/proc` — inclusive o estouro que um teste achou
 um navegador com seis processos conta o binário mapeado seis vezes. O kernel já mantém o número certo
 por cgroup (`memory.current`), e um escopo é um cgroup por aplicativo por construção. RSS só vale
 **dentro** do grupo, para dizer qual dos seis.
+
+**Um programa embrulhado tem o nome de quem o chamou** (`scan::name_of`, 2026-10-20). O painel e o
+console de resgate nomeiam cada processo pelo `comm`, e um programa que o nixpkgs embrulha
+(`makeWrapper`, `wrapProgram`) roda um binário posto de lado, `.<nome>-wrapped`, que o kernel corta
+em quinze bytes: o daemon do Emacs aparecia como `.emacs-30.2-wra`, e assim todo programa embrulhado
+da máquina. Quando o `comm` começa com `.` e é o começo do nome do executável (o link `exe`), que
+termina em `-wrapped`, o nome é o último pedaço do `argv[0]`, que o embrulho que o herda
+(`--inherit-argv0`) guarda como a palavra que o chamou; um embrulho que passa o próprio caminho
+escondido, ou um programa que reescreveu a linha de comando (uma string só, com espaço), dá o nome
+do arquivo sem o ponto e sem o sufixo. O `exe` e o `cmdline` só são lidos para quem tem o ponto, e o
+`cmdline` só para quem é embrulhado de fato; um `comm` que o programa escolheu fica. O teste planta
+um `/proc` com cada caso e lê pelo `scan::ram`, e o `render-png` fotografa o painel com a lista que
+o mesmo `scan::ram` tira de um `/proc` plantado (`--proc <pasta>`).
 
 #### Duas velocidades, e a fronteira entre elas
 
@@ -19819,22 +19922,24 @@ segundo. O que leituras mais espaçadas perderiam do máximo lido a cada 10 ms, 
 
 **A folga é a margem entre duas medidas.** O `--write` põe a unidade na primeira classe cuja fatia
 cabe o pico e mais um décimo, e o `.#rust-peaks` (e o check) a julga pela fatia: a medida que
-escreveu a classe e a seguinte podem diferir de um décimo antes de o check falhar. As duas regras
-eram uma só, e com ela o check falhava na segunda medida de uma unidade escrita na borda, por
-qualquer diferença. A medida escolhida difere menos que isso entre builds da mesma unidade (acima);
-uma execução de teste varia pelo próprio trabalho (a do `ronoctua-index`, 80 a 122 MiB), longe de
-qualquer borda. A segunda medida, de verdade, depois da segunda reconstrução (abaixo): duas edições
-do hub (release, loop e testes) construíram de novo 568 e 569 unidades, e o `.#rust-peaks` sobre
-elas ficou verde as duas vezes — nenhuma passou da fatia, nenhuma ficou na folga. 502 e 510 mediram
-a 5 % ou menos da reconstrução; das 216 de 200 MiB ou mais, 215 e 214 (as outras, o harness do
-`ronoctua-files`, 220 → 237 MiB nas duas, e o programa de release `ronoctua-install`, 285 → 268). A
-maior diferença foi de 31 MiB (a execução de teste do `ronoctua-index`, 136 → 106); as que mais
-variam em proporção são execuções de teste de 11 a 18 MiB. Com o executor que contava a cópia do
-`fork`, as mesmas edições pegavam um harness de teste no link, um por vez e em cada edição outro: o
-do `ronoctua-shell-containers` 355 → 515 MiB e o do `ronoctua-notify` 295 → 389 numa, o do
-`ronoctua-shell-icons` 313 → 457 na outra — 94 a 160 MiB a mais, a ordem do `rustc` deles sozinho
-(200 e 245 MiB). Não era memória que o build segurou: era o `rustc` contado de novo no filho que ele
-ainda não tinha trocado pelo `cc`. Agora os três mediram 342 a 354, 289 e 291, e 312.
+escreveu a classe e a seguinte podem diferir de um décimo antes de o check falhar. Decisão do dono
+(2026-10-20): o check julga pela fatia, e o build roda sem página enorme transparente (acima). As
+duas regras eram uma só, e com ela o check falhava na segunda medida de uma unidade escrita na
+borda, por qualquer diferença. A medida escolhida difere menos que isso entre builds da mesma
+unidade (acima); uma execução de teste varia pelo próprio trabalho (a do `ronoctua-index`, 80 a 122
+MiB), longe de qualquer borda. A segunda medida, de verdade, depois da segunda reconstrução
+(abaixo): duas edições do hub (release, loop e testes) construíram de novo 568 e 569 unidades, e o
+`.#rust-peaks` sobre elas ficou verde as duas vezes — nenhuma passou da fatia, nenhuma ficou na
+folga. 502 e 510 mediram a 5 % ou menos da reconstrução; das 216 de 200 MiB ou mais, 215 e 214 (as
+outras, o harness do `ronoctua-files`, 220 → 237 MiB nas duas, e o programa de release
+`ronoctua-install`, 285 → 268). A maior diferença foi de 31 MiB (a execução de teste do
+`ronoctua-index`, 136 → 106); as que mais variam em proporção são execuções de teste de 11 a 18 MiB.
+Com o executor que contava a cópia do `fork`, as mesmas edições pegavam um harness de teste no link,
+um por vez e em cada edição outro: o do `ronoctua-shell-containers` 355 → 515 MiB e o do
+`ronoctua-notify` 295 → 389 numa, o do `ronoctua-shell-icons` 313 → 457 na outra — 94 a 160 MiB a
+mais, a ordem do `rustc` deles sozinho (200 e 245 MiB). Não era memória que o build segurou: era o
+`rustc` contado de novo no filho que ele ainda não tinha trocado pelo `cc`. Agora os três mediram
+342 a 354, 289 e 291, e 312.
 
 **Uma medida classifica só nos núcleos da classe.** Toda classe com fatia é construída a um núcleo,
 então o `.#rust-peaks` julga uma unidade contra a fatia, e o `--write` a põe numa, só por uma medida

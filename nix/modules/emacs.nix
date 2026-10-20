@@ -34,10 +34,13 @@
 let
   cfg = config.ronoctua;
   # THE PURE-GTK BUILD, Wayland's own: its frames are `xdg_toplevel`s of the
-  # compositor, never X windows through XWayland. The session imports
-  # `WAYLAND_DISPLAY` and never `DISPLAY` (`scroll.nix`), and the X11 build's
-  # (`emacs30`, Lucid) `emacsclient -c` reads only `DISPLAY`: started from the
-  # session, it found no display and no terminal, and opened nothing.
+  # compositor, never X windows through XWayland. Its `emacsclient -c` reads
+  # `WAYLAND_DISPLAY` first and `DISPLAY` only when the server refuses that
+  # name, so the session exporting XWayland's `DISPLAY` beside it
+  # (`nix/session-environment.nix`) changes nothing here — `tests/emacs-vm.nix`
+  # opens the frame with both. The X11 build's (`emacs30`, Lucid) reads only
+  # `DISPLAY`, which the session did not export when this was chosen: started
+  # from the session, it found no display and no terminal, and opened nothing.
   #
   # WHAT IT COSTS: GTK keeps a display it drew on, and leaves with it — a
   # compositor that ends on its own (`s q q`, a crash) takes the daemon with

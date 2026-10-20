@@ -29,6 +29,9 @@
 #![deny(unsafe_code)]
 
 pub mod actions;
+// WHERE A CLICK LANDS on what a person did not put under the pointer: the
+// first click picks, and only a click on the pick runs it.
+pub mod aim;
 pub mod band;
 // WHERE EVERY SCROLLBAR OF A FRAME WAS DRAWN: its column is the bar's, for
 // the pointer and for every band, whatever drew it.

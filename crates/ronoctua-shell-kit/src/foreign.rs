@@ -179,8 +179,12 @@ pub fn scope_command(
 /// ONE COMMAND, AND NO DISPLAY TO PICK. The compositor serves X11 itself, so
 /// an X11 program is launched exactly like a Wayland one — and the PID the
 /// compositor reports for its window is the program's own, which is what
-/// §7.5's correlation needs. The DIRECT command goes along: it is the one
-/// that runs when the scope cannot be created, and rebuilding it from the
+/// §7.5's correlation needs. The scope keeps the caller's environment, and
+/// the footer's is the person's manager's, into which the session line put
+/// `WAYLAND_DISPLAY` and XWayland's `DISPLAY` both
+/// (`nix/session-environment.nix`; `tests/x11-vm.nix` opens X11-only programs
+/// with nothing else). The DIRECT command goes along: it is the one that
+/// runs when the scope cannot be created, and rebuilding it from the
 /// `systemd-run` would mean taking that apart.
 ///
 /// The thread's NAME shows up in `perf` and in `gdb`: an anonymous thread

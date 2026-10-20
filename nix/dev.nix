@@ -143,22 +143,33 @@ let
   # frame opens in the real session whatever the daemon already holds, and so
   # do the programs Emacs starts from it (the client hands the frame its
   # environment). Empty on an X11 host, where the client falls back to the
-  # host's `DISPLAY`, which the loop never changes. And without the loop's
-  # two marks: the frame is the real session's, and the sweep at the next
-  # loop's start would otherwise take this client for a leftover and close
-  # the frame with it.
+  # host's `DISPLAY`. And without the loop's two marks: the frame is the real
+  # session's, and the sweep at the next loop's start would otherwise take
+  # this client for a leftover and close the frame with it.
+  #
+  # AND THE SESSION'S `DISPLAY` BESIDE IT (`hostXDisplay`): the loop points
+  # `DISPLAY` at the nested compositor's XWayland too (below, where the footer
+  # starts), and the pure-GTK client falls back to `DISPLAY` when the server
+  # refuses the Wayland name — a fallback into the nested compositor is the
+  # same trap. Empty when the host has no X server.
   #
   # `tests/emacs-vm.nix` runs this very script against a nested compositor.
   hostDisplay = "RONOCTUA_DEV_HOST_WAYLAND_DISPLAY";
+  hostXDisplay = "RONOCTUA_DEV_HOST_DISPLAY";
   loopEmacsclient = writeShellScript "ronoctua-dev-emacsclient" ''
-    if [ -z "''${${hostDisplay}+set}" ]; then
-      echo "ronoctua-dev-emacsclient: ${hostDisplay} is not set; only the nested loop runs this client" >&2
+    if [ -z "''${${hostDisplay}+set}" ] || [ -z "''${${hostXDisplay}+set}" ]; then
+      echo "ronoctua-dev-emacsclient: ${hostDisplay} or ${hostXDisplay} is not set; only the nested loop runs this client" >&2
       exit 1
     fi
     if [ -n "''${${hostDisplay}}" ]; then
       export WAYLAND_DISPLAY="''${${hostDisplay}}"
     else
       unset WAYLAND_DISPLAY
+    fi
+    if [ -n "''${${hostXDisplay}}" ]; then
+      export DISPLAY="''${${hostXDisplay}}"
+    else
+      unset DISPLAY
     fi
     unset RONOCTUA_INSTANCE RONOCTUA_DEV_PID
     exec ${emacs30-pgtk}/bin/emacsclient "$@"
@@ -285,7 +296,15 @@ let
     # outside and not passable in; the compositor itself is the only honest
     # source. It writes the name to the file the script named, and the script
     # waits for that file.
-    exec sh -c 'printf %s "$WAYLAND_DISPLAY" > "$RONOCTUA_SCROLL_DISPLAY_FILE"'
+    #
+    # AND ITS XWAYLAND'S, after a space: the compositor sets `DISPLAY` for its
+    # children to the X display it serves (lazy — the server starts at the
+    # first X client), and to nothing when XWayland could not be made. The
+    # footer is not one of its children, so the script hands it on: without
+    # it the nested footer kept the session's `DISPLAY`, and an X11 program
+    # opened in the loop opened outside it. One `printf`, one write: the
+    # script reads the file the moment it is not empty.
+    exec sh -c 'printf "%s %s" "$WAYLAND_DISPLAY" "$DISPLAY" > "$RONOCTUA_SCROLL_DISPLAY_FILE"'
 
     # ------------------------------------------------------------------
     # The leader, and the four emergency binds
@@ -602,10 +621,11 @@ let
       ${graphicsHost.prelude}
 
       # THE SESSION THE LOOP WAS STARTED IN, kept before anything here points
-      # `WAYLAND_DISPLAY` at the nested compositor: the loop's editor client
-      # opens its frames there (`loopEmacsclient`, above). Empty on an X11
-      # host.
+      # `WAYLAND_DISPLAY` and `DISPLAY` at the nested compositor: the loop's
+      # editor client opens its frames there (`loopEmacsclient`, above). Empty
+      # on an X11 host, and the second empty on a host with no X server.
       export ${hostDisplay}="''${WAYLAND_DISPLAY:-}"
+      export ${hostXDisplay}="''${DISPLAY:-}"
 
       # AND ONE VARIABLE THE SHARED PRELUDE DOES NOT SET, because until the
       # compositor changed nothing needed it.
@@ -1169,9 +1189,10 @@ let
       # about it. The `exec` in the config writes the name to the file named
       # above, which makes the compositor itself the only source.
       display=""
+      x_display=""
       for _ in $(seq 60); do
         if [ -s "$display_file" ]; then
-          display=$(cat "$display_file")
+          read -r display x_display < "$display_file" || true
           break
         fi
         # If the process died, waiting the full 30 s only delays the error.
@@ -1191,6 +1212,14 @@ let
       # at call time. What restarts the footer is the watcher, which is another
       # process: whatever the call needs to know is either exported or does not get there.
       export WAYLAND_DISPLAY="$display"
+      # AND THE NESTED XWAYLAND, or no X server at all: the session's `DISPLAY`
+      # (the session exports it, `nix/session-environment.nix`) is not this
+      # compositor's, and what the nested footer opens belongs in here.
+      if [ -n "$x_display" ]; then
+        export DISPLAY="$x_display"
+      else
+        unset DISPLAY
+      fi
       export RUST_LOG="$rustlog"
       # `SCROLLSOCK` and `SWAYSOCK` were exported before the compositor
       # started, so the footer and the watcher inherit them already.
@@ -1585,6 +1614,7 @@ app.overrideAttrs (previous: {
     editor = {
       client = loopEmacsclient;
       variable = hostDisplay;
+      xVariable = hostXDisplay;
     };
   };
 })

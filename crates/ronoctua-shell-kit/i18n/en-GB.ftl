@@ -68,7 +68,7 @@ hint-notif-open = take it off the band and open it whole in the manager
 notif-see-whole = see it whole
 hint-notif-countdown = how long it has left
 hint-notif-paused = the clock is stopped while the pointer is on it
-hint-notif-action = { $action } — click it, or open the notification
+hint-notif-action = { $action } — a click picks it, and a click on the pick runs it
 
 ## Installer — the interface
 

@@ -54,7 +54,10 @@ impl Footer {
                 .with_kiosk(kiosk)
                 .with_drawer(drawer)
                 .with_trails(self.windows.trails())
-                .with_selection(self.selection.clone()),
+                .with_selection(self.selection.clone())
+                // UNDER THE HAND when a click on a line of the region opened
+                // it; from the modeline it grows above the line clicked.
+                .opened_under_the_hand(self.clicking),
         );
         self.first_page();
         self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -79,7 +82,7 @@ impl Footer {
             }
         }
         if let Some(v) = self.window_menu.as_mut() {
-            v.level = level;
+            v.go(level, self.clicking);
             self.first_page();
             self.apply_geometry(KeyboardInteractivity::Exclusive);
             self.draw_and_paint();
@@ -113,7 +116,9 @@ impl Footer {
         if self.window_menu.is_some() || !self.region_is_free("drawer-open") {
             return;
         }
-        self.window_menu = Some(crate::window_menu::View::of_the_drawer(drawer));
+        self.window_menu = Some(
+            crate::window_menu::View::of_the_drawer(drawer).opened_under_the_hand(self.clicking),
+        );
         self.first_page();
         self.apply_geometry(KeyboardInteractivity::Exclusive);
         self.draw_and_paint();
@@ -134,6 +139,11 @@ impl Footer {
     /// not sent — were wrong, and are not in the code.
     pub(super) fn window_menu_errand(&mut self, errand: crate::window_menu::Errand) {
         use crate::window_menu::Errand;
+        // A CELL PICKED, NOTHING RUN: drawn again where the page is.
+        if matches!(errand, Errand::Picked) {
+            self.draw_and_paint();
+            return;
+        }
         if matches!(errand, Errand::Redraw) {
             // A NEW LEVEL starts on its first page.
             self.first_page();
@@ -143,7 +153,7 @@ impl Footer {
         }
         let stays = matches!(errand, Errand::Run { stays: true, .. });
         match errand {
-            Errand::Redraw | Errand::Close => {}
+            Errand::Redraw | Errand::Picked | Errand::Close => {}
             Errand::Run { id, arg, on, .. } => self.run_on(id, arg.as_deref(), on),
             Errand::TakeOut(id) => self.compositor_action(|wm| wm.take_out(id)),
             // THE PROCESS, by the pid the compositor gave for this window. A
@@ -213,12 +223,16 @@ impl Footer {
         // THE LEADER'S CELL: the key, the short label, and the registry's
         // whole sentence for the pointer resting on it. A group wears the
         // `+` and the group's tone, as the leader's do.
+        // AND THE CELL THE CURSOR IS ON, where the grid has one — a click's
+        // pick under the hand, or the question's `no` — in the cursor's ink,
+        // as the launcher's row is.
+        let picked = v.picked();
         v.entries(&self.texts)
             .into_iter()
             .enumerate()
             .map(|(n, e)| {
                 let group = e.is_group();
-                ExpansionRow {
+                let row = ExpansionRow {
                     key: e.key.to_owned(),
                     text: if group {
                         format!("{GROUP_MARK}{}", e.label)
@@ -234,6 +248,16 @@ impl Footer {
                         tokens::color::TEXT_SECONDARY
                     },
                     ..ExpansionRow::empty_one()
+                };
+                if picked == Some(n) {
+                    ExpansionRow {
+                        here: true,
+                        key_color: tokens::color::STATE_ACCENT,
+                        text_color: tokens::color::STATE_ACCENT,
+                        ..row
+                    }
+                } else {
+                    row
                 }
             })
             .collect()
@@ -242,11 +266,13 @@ impl Footer {
     /// A click on a line of the view — the view's own line of
     /// `Footer::click_at`.
     pub(super) fn window_menu_click(&mut self, n: usize) {
-        // ONE CLICK RUNS IT, as a cell of the leader does: the grid has
-        // no cursor to select with, and what a cell does is written on
-        // it. What cannot be undone opens a question instead.
+        // ONE CLICK RUNS IT, as a cell of the leader does — the grid has
+        // no cursor to select with, and what a cell does is written on it —
+        // EXCEPT where the grid came up under the hand that clicked, and on
+        // a question: there the first click picks (`View::clicked`). What
+        // cannot be undone opens a question instead.
         let errand = match self.window_menu.as_mut() {
-            Some(v) => v.choose(n, &self.texts),
+            Some(v) => v.clicked(n, &self.texts),
             None => return,
         };
         self.window_menu_errand(errand);

@@ -21252,11 +21252,11 @@ let
     };
   };
 
-  # One satellite per buffer scope, proved with TWO X11 apps (9.1).
+  # TWO X11 apps, each in its own cgroup (9.1), opened with the session's own
+  # environment: the display is what the session line exported.
   x11Vm = import ./x11-vm.nix {
     inherit pkgs lib fonts;
     inherit scroll;
-    ronoctua-shell = rust.shell;
   };
 
   # THE EDITOR ON THE COMPOSITOR: the daemon at `default.target` with no

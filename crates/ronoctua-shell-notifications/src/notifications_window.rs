@@ -969,6 +969,49 @@ mod tests {
         );
     }
 
+    /// FAILS IF: a second click on a knob of the window's sheet does not
+    /// turn its value — the adjustment the window writes — or the first one
+    /// does; or a second click on the draft's field leaves it as it was.
+    #[test]
+    fn a_second_click_turns_a_value_in_the_window() {
+        let (mut w, mut ui) = a_window();
+        w.view = View::fresh().reopened(Pane::Catalogue);
+        press(&mut w, &mut ui, "RET");
+        w.click_cell = Some(4);
+        w.clicked(&mut ui, 2);
+        assert!(w.book.adjustments.is_empty(), "the first click turned it");
+        w.clicked(&mut ui, 2);
+        let (id, v) = w
+            .book
+            .adjustments
+            .iter()
+            .next()
+            .expect("the second click turned nothing");
+        assert!(
+            v.life.is_some(),
+            "{id}: the knob turned was not the one clicked"
+        );
+        // THE DRAFT, whose second row is its first condition's field.
+        let (mut w, mut ui) = a_window();
+        w.view = View::fresh().reopened(Pane::Catalogue);
+        press(&mut w, &mut ui, "n");
+        // WHAT IT SAYS, and not its ink: the first click moves the cursor
+        // onto it, which is a colour.
+        let field = |w: &Notifications, ui: &Ui| -> Vec<String> {
+            w.view_rows(ui)[1]
+                .fields
+                .iter()
+                .map(|f| f.text.clone())
+                .collect()
+        };
+        let before = field(&w, &ui);
+        w.click_cell = Some(4);
+        w.clicked(&mut ui, 1);
+        assert_eq!(field(&w, &ui), before, "the first click turned the field");
+        w.clicked(&mut ui, 1);
+        assert_ne!(field(&w, &ui), before, "the second click did not turn it");
+    }
+
     /// A record with a foreign app's button, a command of ours and a path to
     /// copy.
     fn acting() -> ronoctua_notify::Record {

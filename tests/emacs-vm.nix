@@ -17,17 +17,18 @@
 #      works with no display;
 #   3. a graphical client started the way the session starts one — a unit of
 #      the person's manager, whose environment is what the compositor's
-#      session line imported (`WAYLAND_DISPLAY`, never `DISPLAY`) — opens a
-#      frame through `xdg_shell`, with the `app_id` the launcher entries the
-#      registry lists declare, while XWayland (lazy, as in the session) never
-#      starts;
+#      session line imported (`WAYLAND_DISPLAY`, and XWayland's `DISPLAY`
+#      beside it) — opens a frame through `xdg_shell`, with the `app_id` the
+#      launcher entries the registry lists declare, while XWayland (lazy, as
+#      in the session) never starts;
 #   4. the daemon survives that frame being closed;
 #   5. what the daemon does when the session's compositor ends — with its
 #      frame closed, with its frame open, and when it never drew on that
 #      compositor — and that the next session gets a frame either way;
 #   6. the nested loop's client (`nix/dev.nix`, the very script) opens its
 #      frame in the session the loop was started in, never in the nested
-#      compositor, and the nested compositor's end leaves the daemon alone;
+#      compositor, with the session's two displays and not the loop's, and
+#      the nested compositor's end leaves the daemon alone;
 #   7. a stop of the person's manager (a power-off, a reboot, the last
 #      logout) with a frame open and an edit unsaved stops the daemon first:
 #      `kill-emacs` runs, with its hook and its auto-save, every time.
@@ -49,9 +50,10 @@
 # The other VM tests run it as root (`compositor-xvfb.nix`); the daemon here
 # is the person's, and its socket and the compositor's have to be in the same
 # runtime directory, as they are in the session (`scroll.service`, a user
-# unit). Its config carries the session's own line that imports the display
-# into the manager, which is the only way a client started from the session
-# learns it.
+# unit). Its config carries the session's own line that imports the displays
+# into the manager (`nix/session-environment.nix`, the one the installed
+# config splices in), which is the only way a client started from the
+# session learns them.
 #
 # Section 7 runs the compositor under the session's own unit name
 # (`scroll.service`, `nix/modules/scroll.nix`), because that name is what the
@@ -74,10 +76,12 @@
 let
   xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
   gpu = import ../nix/software-gpu.nix { inherit pkgs lib; };
+  sessionEnvironment = import ../nix/session-environment.nix { inherit pkgs; };
 
-  # THE SESSION'S LINE, and XWayland as the session has it: lazy (the
-  # compositor's default, written out), so a frame that went through X would
-  # have started it. The rest is the minimal test config's.
+  # THE SESSION'S LINE, the installed config's own, and XWayland as the
+  # session has it: lazy (the compositor's default, written out), so a frame
+  # that went through X would have started it — with `DISPLAY` exported, a
+  # client that chose X would find it. The rest is the minimal test config's.
   session = pkgs.writeText "compositor-emacs-test.conf" ''
     animations enabled no
     default_border none
@@ -87,19 +91,20 @@ let
     output * scale 1
     scrollnag_command -
     xwayland enable
-    exec ${pkgs.systemd}/bin/systemctl --user import-environment WAYLAND_DISPLAY SCROLLSOCK SWAYSOCK XDG_SESSION_TYPE
+    ${sessionEnvironment.lines}
   '';
 
   # THE NESTED LOOP'S COMPOSITOR, as `nix/dev.nix` runs it: a window of the
-  # session's compositor (the Wayland backend), saying its own display the
-  # way the loop's config does, and importing nothing into the manager.
+  # session's compositor (the Wayland backend) with its own lazy XWayland,
+  # saying its two displays the way the loop's config does, and importing
+  # nothing into the manager.
   nestedSession = pkgs.writeText "compositor-emacs-nested.conf" ''
     animations enabled no
     default_border none
     output * scale 1
     scrollnag_command -
-    xwayland disable
-    exec sh -c 'printf %s "$WAYLAND_DISPLAY" > "$NESTED_DISPLAY_FILE"'
+    xwayland enable
+    exec sh -c 'printf "%s %s" "$WAYLAND_DISPLAY" "$DISPLAY" > "$NESTED_DISPLAY_FILE"'
   '';
 
   # A TERMINAL FOR A TERMINAL CLIENT. A unit has none, and `emacsclient -t`
@@ -169,6 +174,7 @@ pkgs.testers.runNixOSTest {
       # session's display in.
       loop_client = "${loopEditor.client}"
       loop_variable = "${loopEditor.variable}"
+      loop_x_variable = "${loopEditor.xVariable}"
       # The launcher entries the registry lists for the editor.
       entries = ${builtins.toJSON machine.ronoctua.apps.emacs.desktopIds}
 
@@ -252,6 +258,14 @@ pkgs.testers.runNixOSTest {
           return unit, sock
 
 
+      def session_display():
+          """XWayland's display, as the session line put it in the manager."""
+          env = manager("show-environment")
+          found = re.search(r"^DISPLAY=(:[0-9]+)$", env, re.M)
+          assert found, "the session did not export XWayland's display:\n" + env
+          return found.group(1)
+
+
       def end_session(unit):
           manager(f"stop {unit}")
           machine.wait_until_fails(
@@ -278,7 +292,7 @@ pkgs.testers.runNixOSTest {
 
       def start_nested():
           """The nested loop's compositor, a window of the session's: its
-          unit, its socket and the display it says it took."""
+          unit, its socket and the two displays it says it took."""
           unit = "nested"
           sock = f"{run_dir}/scroll-ipc.{unit}.sock"
           said = f"{run_dir}/nested-display"
@@ -294,9 +308,9 @@ pkgs.testers.runNixOSTest {
           )
           machine.wait_until_succeeds(f"test -s {said}", timeout=90)
           machine.wait_until_succeeds(f"test -S {sock}", timeout=60)
-          display = machine.succeed(f"cat {said}").strip()
+          display, x_display = (machine.succeed(f"cat {said}").split() + [""])[:2]
           assert display and display != "wayland-1", f"the nested compositor took `{display}`"
-          return unit, sock, display
+          return unit, sock, display, x_display
 
 
       def window_in(places, pid, timeout=90):
@@ -434,10 +448,22 @@ pkgs.testers.runNixOSTest {
 
       with subtest("a graphical client opens a native frame, and the daemon outlives it"):
           session, sock = start_session(1)
-          env = manager("show-environment")
-          assert not re.search(r"^DISPLAY=", env, re.M), "the session exported DISPLAY:\n" + env
+          # THE SESSION EXPORTS XWAYLAND'S DISPLAY TOO, and the pure-GTK client
+          # still takes the Wayland one: `open_frame` asks for `xdg_shell` and
+          # an XWayland that never started.
+          machine.wait_until_succeeds(
+              f"systemctl --user --machine={user}@ show-environment"
+              " | grep -x 'DISPLAY=:[0-9]*' > /dev/null",
+              timeout=60,
+          )
+          session_x = session_display()
           before = daemon()
           w = open_frame(sock, 1)
+          # AND THE CLIENT HAD BOTH, so the Wayland frame was its own choice.
+          client_env = machine.succeed(
+              f"tr '\\0' '\\n' < /proc/{facts('gui1')['MainPID']}/environ"
+          )
+          assert re.search(rf"^DISPLAY={session_x}$", client_env, re.M), client_env
           # CLOSED THE WAY A PERSON CLOSES A WINDOW: the compositor asks it to.
           machine.succeed(
               f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg '[con_id={w['id']}] kill'"
@@ -485,16 +511,23 @@ pkgs.testers.runNixOSTest {
           daemon()
           assert ask_emacs("(x-display-list)") == "nil", ask_emacs("(x-display-list)")
           session, sock = start_session(4)
-          nested, nested_sock, nested_display = start_nested()
-          print(f"the nested compositor took {nested_display}")
+          session_x = session_display()
+          nested, nested_sock, nested_display, nested_x = start_nested()
+          print(f"the nested compositor took {nested_display} and {nested_x}")
+          assert nested_x and nested_x != session_x, (
+              f"the nested compositor serves X on `{nested_x}`, the session on `{session_x}`"
+          )
           before = daemon()
           # AS THE LOOP'S FOOTER STARTS IT: in the loop's environment — the
-          # nested compositor's display, the loop's two marks (the owner's PID
-          # one no process has), and the session's display kept aside.
+          # nested compositor's two displays, the loop's two marks (the
+          # owner's PID one no process has), and the session's two displays
+          # kept aside.
           in_session(
               "loop", f"{loop_client} -c /home/{user}/loop.txt",
               f"WAYLAND_DISPLAY={nested_display}",
+              f"DISPLAY={nested_x}",
               f"{loop_variable}=wayland-1",
+              f"{loop_x_variable}={session_x}",
               "RONOCTUA_INSTANCE=dev",
               "RONOCTUA_DEV_PID=4194304",
           )
@@ -513,6 +546,7 @@ pkgs.testers.runNixOSTest {
           client_pid = int(facts("loop")["MainPID"])
           environ = machine.succeed(f"tr '\\0' '\\n' < /proc/{client_pid}/environ")
           assert re.search(r"^WAYLAND_DISPLAY=wayland-1$", environ, re.M), environ
+          assert re.search(rf"^DISPLAY={session_x}$", environ, re.M), environ
           assert not re.search(r"^RONOCTUA_(INSTANCE|DEV_PID)=", environ, re.M), environ
           # AND THE FRAME'S ENVIRONMENT IS THE SESSION'S, which is what a
           # program Emacs starts from it inherits.

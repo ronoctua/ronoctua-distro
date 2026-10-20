@@ -28,6 +28,18 @@
 # that is true until an upgrade, and silent when it stops being true. So the
 # test survives its own rewrite: same question, one layer down.
 #
+# AND THE APP FINDS XWAYLAND BY ITSELF
+# ------------------------------------
+# The footer hands what it opens its own environment, which is the person's
+# manager's, which is what the session line imported. That line imported
+# `WAYLAND_DISPLAY` and never `DISPLAY`, and this test gave `DISPLAY=:0` to
+# its app by hand, so it never saw that an X11 program opened from the footer
+# had no server to talk to. Now the compositor runs as a unit of the person's
+# manager with the session's own line in its config (`nix/session-
+# environment.nix`, the file `nix/modules/scroll.nix` splices in), and every
+# app here is a unit of that manager with nothing set by hand: the windows
+# arrive only if the session exported the display.
+#
 # WHY `xterm`
 # -----------
 # It does not go into the distro: it is the test's fixture. What is needed here
@@ -38,12 +50,14 @@
   pkgs,
   lib,
   scroll,
-  ronoctua-shell,
   fonts,
 }:
 
 let
   xvfb = import ./compositor-xvfb.nix { inherit pkgs lib; };
+  gpu = import ../nix/software-gpu.nix { inherit pkgs lib; };
+  # THE SESSION'S LINE, the very one the installed config carries.
+  session = import ../nix/session-environment.nix { inherit pkgs; };
   # XWAYLAND ON, WRITTEN OUT. It is the default, and this test is the one
   # place where the default being the default is the whole subject — a config
   # that turned it off would fail here as "the window never arrived", which
@@ -58,6 +72,8 @@ let
     titlebar_padding 1
     output * scale 1
     xwayland enable
+    scrollnag_command -
+    ${session.lines}
   '';
 in
 pkgs.testers.runNixOSTest {
@@ -67,9 +83,15 @@ pkgs.testers.runNixOSTest {
     virtualisation.memorySize = 3072;
     virtualisation.cores = 2;
 
+    # THE PERSON, whose manager is up at boot with nobody logged in: the
+    # compositor and the apps are units of it, as in the session.
+    users.users.person = {
+      isNormalUser = true;
+      linger = true;
+    };
+
     environment.systemPackages = [
       scroll
-      ronoctua-shell
       pkgs.xterm
       pkgs.util-linux
     ]
@@ -99,10 +121,16 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     ${xvfb.prelude}
+    import re
+
+
+    def manager(args):
+        """The person's manager, asked as root."""
+        return machine.succeed(f"systemctl --user --machine=person@ {args}")
 
 
     def open_x11(unit, label):
-        """Bring an X11 app up in a scope of its own, as the footer does.
+        """Bring an X11 app up in a unit of its own, as the footer does.
 
         `-name` AND NOT `-T`: a TITLE belongs to the application and it changes
         it whenever it likes. `xterm -T first` sets one and then replaces it
@@ -115,45 +143,89 @@ pkgs.testers.runNixOSTest {
         `-class` says. The first is the one an invocation owns, which is
         exactly what is needed to tell two `xterm`s apart.
 
-        `systemd-run` is what `foreign::launch` calls, and what is under test
-        is what lives inside the scope rather than who creates it. There is no
-        wrapper process any more: the app IS the scope's process, which is one
-        of the things the satellite's removal bought.
+        A UNIT OF THE PERSON'S MANAGER, whose environment is the manager's:
+        what the session line imported, and nothing set here. The footer's
+        own launch (`foreign::start_in_scope`) is a scope that keeps the
+        footer's environment, which is that same manager's — the footer is a
+        unit of it, started after the line ran. What is under test is what
+        lives inside the unit rather than who creates it: the app IS the
+        unit's process.
 
-        `DISPLAY` is the compositor's XWayland, not the `Xvfb` the compositor
-        itself runs on — `:99` is where the compositor draws and `:0` is where
-        it SERVES. Pointing an X11 app at the first would put it beside the
-        compositor instead of inside it, and the window would never arrive.
+        NO `DISPLAY` HERE, and that is the subject: `:99` is where the
+        compositor draws and its XWayland is where it SERVES, and the app
+        reaches the second only if the session said where it is.
         """
         machine.succeed(
-            f"systemd-run --unit={unit} ${xvfb.env} "
-            "--setenv=DISPLAY=:0 "
-            "--setenv=RUST_LOG=ronoctua_shell=debug "
+            f"systemd-run --user --machine=person@ --unit={unit} --quiet "
             f"${pkgs.xterm}/bin/xterm -fa Monospace -fs 12 -name {label} -e sleep 600"
         )
 
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
+    uid = machine.succeed("id -u person").strip()
+    run_dir = f"/run/user/{uid}"
+    machine.wait_for_unit(f"user@{uid}.service")
     start_xvfb()
-    start_compositor("compositor", "${scroll}", config="${configX11}")
-    sock = socket_of("compositor")
+
+    # THE COMPOSITOR AS A UNIT OF THE PERSON'S, as `scroll.service` is in the
+    # session: its socket in the person's runtime directory, and the session
+    # line in its config tells the person's manager what it serves. `:99` is
+    # the backend's own display, given to this unit alone.
+    sock = f"{run_dir}/scroll-ipc.compositor.sock"
+    machine.succeed(
+        "systemd-run --user --machine=person@ --unit=compositor --quiet "
+        "--setenv=DISPLAY=:99 --setenv=WLR_BACKENDS=x11 --setenv=WLR_X11_OUTPUTS=1 "
+        "${gpu.env} "
+        f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
+        "--setenv=XDG_SESSION_TYPE=wayland --setenv=PATH=${pkgs.bash}/bin "
+        "${scroll}/bin/scroll -c ${configX11}"
+    )
+    try:
+        machine.wait_until_succeeds(f"test -S {run_dir}/wayland-1", timeout=90)
+        machine.wait_until_succeeds(f"test -S {sock}", timeout=60)
+    except Exception:
+        print(machine.execute(f"journalctl --no-pager _UID={uid} | tail -80")[1])
+        raise
+
+    with subtest("the session hands the person's manager XWayland's display"):
+        # THE LINE RAN: the display the compositor serves X on is in the
+        # manager, beside the Wayland one — and it is not the backend's `:99`.
+        try:
+            machine.wait_until_succeeds(
+                "systemctl --user --machine=person@ show-environment"
+                " | grep -x 'DISPLAY=:[0-9]*' > /dev/null",
+                timeout=60,
+            )
+        except Exception:
+            print(manager("show-environment"))
+            print(machine.execute(f"journalctl --no-pager _UID={uid} | tail -80")[1])
+            raise
+        env = manager("show-environment")
+        found = re.search(r"^DISPLAY=(:[0-9]+)$", env, re.M)
+        assert found, env
+        display = found.group(1)
+        print(f"the session's X display: {display}")
+        assert display != ":99", f"the manager got the backend's display:\n{env}"
+        assert re.search(r"^WAYLAND_DISPLAY=wayland-1$", env, re.M), env
 
     with subtest("XWayland is the compositor's own, and it is serving"):
-        # THE SOCKET IS THE COMPOSITOR'S, and `:0` is the display it takes
-        # when nothing else has it. Without this the `xterm` below dies with
-        # "cannot open display" and the next subtest fails for another reason.
+        # THE SOCKET IS THE COMPOSITOR'S, taken when it started (XWayland is
+        # lazy: the server itself starts at the first X client). Without this
+        # the `xterm` below dies with "cannot open display" and the next
+        # subtest fails for another reason.
+        x_socket = f"/tmp/.X11-unix/X{display[1:]}"
         try:
-            machine.wait_until_succeeds("test -S /tmp/.X11-unix/X0", timeout=90)
+            machine.wait_until_succeeds(f"test -S {x_socket}", timeout=90)
         except Exception:
-            print(machine.execute("journalctl -u compositor --no-pager")[1])
+            print(machine.execute(f"journalctl --no-pager _UID={uid} | tail -80")[1])
             raise
         # AND NOTHING ELSE IS SERVING IT. `Xvfb` is on `:99`; a second X server
-        # on `:0` would mean the app below connected to something that is not
-        # the compositor, and every assertion after it would be about the
-        # wrong thing.
-        who = machine.succeed("ls /tmp/.X11-unix/")
-        assert "X0" in who and "X99" in who, who
+        # on the session's display would mean the app below connected to
+        # something that is not the compositor, and every assertion after it
+        # would be about the wrong thing.
+        who = machine.succeed("ls /tmp/.X11-unix/").split()
+        assert sorted(who) == sorted([f"X{display[1:]}", "X99"]), who
 
     def await_window(label):
         """Waits for a window with this title, by READING the tree.
@@ -187,8 +259,7 @@ pkgs.testers.runNixOSTest {
         try:
             await_window("first")
         except Exception:
-            print(machine.execute("journalctl -u bufx1 --no-pager")[1])
-            print(machine.execute("journalctl -u compositor --no-pager")[1])
+            print(machine.execute(f"journalctl --no-pager _UID={uid} | tail -80")[1])
             # WHAT THE WINDOW CALLS ITSELF, because every failure of this
             # subtest so far has been about the NAME and not about XWayland:
             # a title that changed under us, then a `-class` that `xterm`
@@ -200,6 +271,11 @@ pkgs.testers.runNixOSTest {
             print("--- processes:", machine.execute(
                 "ps -eo pid,args | grep -iE 'xterm|Xwayland' | grep -v grep")[1])
             raise
+        # THE DISPLAY CAME FROM THE SESSION, and only from it: the unit set
+        # nothing, so what the app has is what the manager had.
+        main = manager("show -p MainPID --value bufx1").strip()
+        environ = machine.succeed(f"tr '\\0' '\\n' < /proc/{main}/environ")
+        assert re.search(rf"^DISPLAY={display}$", environ, re.M), environ
 
     with subtest("the pid the compositor reports is the APP's, not XWayland's"):
         # THE WHOLE POINT, and the one thing a satellite used to arrange.

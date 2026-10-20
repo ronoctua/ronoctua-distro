@@ -4530,6 +4530,7 @@ dependencies = [
  "ronoctua-design",
  "ronoctua-files",
  "ronoctua-i18n",
+ "ronoctua-memory",
  "ronoctua-protocol",
  "ronoctua-render",
  "ronoctua-runtime",
