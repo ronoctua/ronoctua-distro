@@ -165,6 +165,23 @@ pub fn build_units(
     words
 }
 
+/// `nix flake archive` of a machine flake, only measured, as JSON: the
+/// store path of the flake and of every input, an input's inputs included,
+/// read off the lock — `--dry-run` fetches nothing, and no input moves.
+#[must_use]
+pub fn sources(dir: &Path) -> Vec<String> {
+    vec![
+        "flake".to_owned(),
+        "archive".to_owned(),
+        "--extra-experimental-features".to_owned(),
+        FEATURES.to_owned(),
+        "--no-update-lock-file".to_owned(),
+        "--dry-run".to_owned(),
+        "--json".to_owned(),
+        flake(dir),
+    ]
+}
+
 /// `ronoctua-keep-units` rooting, under `roots`, the set `set` of the paths
 /// listed in `paths` that the store holds.
 #[must_use]

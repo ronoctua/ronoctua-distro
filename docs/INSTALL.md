@@ -254,7 +254,8 @@ livre e nas fases que a distro descreve, só o que o Nix diz que falta —, troc
 ensaio de boot; um sistema novo que não sobe volta sozinho ao último bom. Depois de um build que deu
 certo, a máquina guarda as unidades compiladas da versão em uso
 (`/var/lib/ronoctua-machine/kept-units`, ~2 GiB), para a atualização seguinte recompilar só o que
-mudou. Com a atualização rodando, ele recusa por estar ocupado. O atributo do flake tem o nome da
+mudou, e os fontes de que o sistema foi avaliado (`kept-sources`: o flake da máquina, a distro e
+cada input dela), para a atualização seguinte não baixar de novo o que não mudou. Com a atualização rodando, ele recusa por estar ocupado. O atributo do flake tem o nome da
 pessoa (`noctua`), e não o da máquina.
 
 A pasta não aceita outra versão do nixpkgs nem de outro input além da que a distro testou: um

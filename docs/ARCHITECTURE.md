@@ -21080,6 +21080,24 @@ indiretas pelo próprio Nix da máquina. Não é configuração fora do flake (i
 máquina É muda; é a coleta de lixo deixando de levar o que o build dela fez, como as raízes que o
 apply já deixava durante o build — a decisão 4 do dono, e nenhuma emenda de invariante.
 
+**E os fontes de que o sistema foi avaliado** (regra do dono, 2026-10-21: um arquivo que não mudou e
+já está no computador não se baixa de novo). Avaliar a máquina pede o fonte de cada input do flake
+no store, e a coleta leva o que nada segura. Medido no grafo do sistema `full`: os arquivos das
+fontes (1,37 GB), os originais dos sons ambientes (695 MiB), o nixpkgs e o fonte do compositor
+ficam sozinhos — uma derivação do sistema os cita, e o Nix guarda a `.drv` de toda saída em uso
+(`keep-derivations`, o padrão, que a distro não muda: uma raiz na saída de um build de prova segurou
+o fonte dele, e sem ela o fonte saiu). Os inputs que são só código Nix — home-manager,
+rust-overlay, crane, disko, lanzaboote, nixos-hardware, sops-nix, nix-flatpak e
+nixos-facter-modules, 32 MiB —, o fonte da própria distro (48 MiB) e o do flake da máquina não são
+citados por derivação nenhuma: a coleta os levava, e a atualização seguinte os baixava de novo,
+iguais. Depois de um build que deu certo, o apply os enraíza como às unidades
+(`/var/lib/ronoctua-machine/kept-sources/`, `build::keep_sources`), pelo nome que o
+`nix flake archive --dry-run --json` do flake da máquina dá a cada um — tirado do lock, sem baixar
+nada (num flake de máquina travado na `release`, 24 fontes: o da máquina, a distro, os 16 inputs
+dela e os dos inputs) —, e solta os do build anterior: o que mudou se baixa uma vez, o que não mudou
+nunca mais. O que o store não tem não é enraizado (um input que a máquina nunca avaliou não é
+baixado para isso). Uma lista que o Nix não deu, ou que não se lê, é dita e não para o apply.
+
 #### O apply constrói o plano que a distro descreve
 
 `ronoctua.machine.phases` (formato 3) é o que o apply avalia, uma vez (`nix eval --json`, que

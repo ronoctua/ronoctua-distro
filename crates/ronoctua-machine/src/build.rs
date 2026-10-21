@@ -1,6 +1,6 @@
 //! Building the machine's system — its units first, each by its class, then
 //! the system, sized to the machine — and keeping the compiled units it was
-//! built from.
+//! built from, and the sources it was evaluated from.
 //!
 //! # Sized
 //!
@@ -65,6 +65,17 @@
 //! store holds are rooted under the machine's record ([`KEPT_DIR`]), by
 //! `ronoctua-keep-units` (`nix/keep-units.nix`), and the last version's are
 //! released. A failed build keeps the old ones.
+//!
+//! And the SOURCES it was evaluated from — the machine's flake, the distro
+//! and every input of either — are garbage too, wherever no derivation of
+//! the system cites them: an input that is only Nix code (the home manager,
+//! the overlays, the distro's own tree) was taken by the collection, and the
+//! next update fetched it again, unchanged. (The fonts' and the ambient
+//! sounds' archives the system's `.drv`s hold, and Nix keeps the `.drv` of
+//! every output still in use.) After a build that worked, the sources the
+//! store holds are rooted the same way ([`SOURCES_DIR`]) — named by
+//! `nix flake archive --dry-run`, which reads them off the lock and fetches
+//! nothing — and the last build's are released.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -80,6 +91,12 @@ pub const KEPT_DIR: &str = "kept-units";
 
 /// The name of their set there.
 pub const KEPT_SET: &str = "release";
+
+/// Where, under the machine's record, the sources of the last build are held.
+pub const SOURCES_DIR: &str = "kept-sources";
+
+/// The name of their set there.
+pub const SOURCES_SET: &str = "flake";
 
 /// The format of [`Phases`] this program reads.
 pub const PHASES_FORMAT: u32 = 3;
@@ -430,40 +447,145 @@ pub(crate) fn system(
 /// record, releasing the last build's. Never fails the apply: a build that
 /// worked is not undone because its units could not be kept, and is said.
 pub(crate) fn keep(m: &Machine, kept: &[String]) {
+    hold(
+        m,
+        KEPT_DIR,
+        KEPT_SET,
+        kept,
+        "the units",
+        "the next update may compile them again",
+    );
+}
+
+/// Roots the sources the build just evaluated — the machine's flake, the
+/// distro and every input of either, as `nix flake archive --dry-run` names
+/// them off the lock, fetching nothing — that the store holds, under the
+/// machine's record, releasing the last build's: an update that finds them
+/// unchanged fetches none of them again. Never fails the apply, as [`keep`].
+pub(crate) fn keep_sources(m: &Machine, nix: &Path) {
+    const LOST: &str = "the next update may fetch them again";
+    let Ok(ran) = run::capture(nix, &argv::sources(&m.places.dir)) else {
+        return;
+    };
+    if ran.code != Some(0) {
+        say(
+            4,
+            &format!(
+                "the sources of this build were not listed ({}): {LOST}",
+                ran.stderr.trim()
+            ),
+        );
+        return;
+    }
+    let Some(sources) = sources_of(&ran.stdout) else {
+        say(
+            4,
+            &format!(
+                "nix flake archive named its sources in words this program does not read: {LOST}"
+            ),
+        );
+        return;
+    };
+    hold(m, SOURCES_DIR, SOURCES_SET, &sources, "the sources", LOST);
+}
+
+/// Roots the `paths` the store holds as the set `set` under the machine's
+/// record's `dir`, by `ronoctua-keep-units`, which then releases the set's
+/// older generation; `what` they are and what is `lost` without them are
+/// said when it could not.
+fn hold(m: &Machine, dir: &str, set: &str, paths: &[String], what: &str, lost: &str) {
     let Some(program) = &m.system.keep_units else {
         say(
             4,
             &format!(
-                "{} is not set: the units of this build are not kept",
+                "{} is not set: {what} of this build are not kept",
                 system::KEEP_UNITS
             ),
         );
         return;
     };
-    let file = m.places.run.join("kept-units.txt");
-    let mut text = kept.join("\n");
+    let file = m.places.run.join(format!("{dir}.txt"));
+    let mut text = paths.join("\n");
     text.push('\n');
     if let Err(e) = disk::write_atomically(&file, text.as_bytes(), 0o644) {
-        say(
-            4,
-            &format!("{}: {e}: the units are not kept", file.display()),
-        );
+        say(4, &format!("{}: {e}: {what} are not kept", file.display()));
         return;
     }
-    let roots = m.places.state.join(KEPT_DIR);
-    match run::status(program, &argv::keep_units(&roots, KEPT_SET, &file)) {
+    let roots = m.places.state.join(dir);
+    match run::status(program, &argv::keep_units(&roots, set, &file)) {
         Ok(Some(0)) => {}
-        _ => say(
-            4,
-            "the units of this build were not kept: the next update may compile them again",
-        ),
+        _ => say(4, &format!("{what} of this build were not kept: {lost}")),
     }
     let _ = disk::remove(&file);
+}
+
+/// One flake as `nix flake archive --json` names it: its path in the store
+/// and its inputs, each one the same.
+#[derive(Deserialize)]
+struct Archived {
+    path: String,
+    #[serde(default)]
+    inputs: BTreeMap<String, Archived>,
+}
+
+/// Every path of the store `nix flake archive --json` names — the flake's
+/// own and every input's, an input's inputs included —, once each; `None`
+/// for an answer of another shape, or a path that is not one path of the
+/// store (a part of one included), never a plausible list.
+fn sources_of(json: &str) -> Option<Vec<String>> {
+    fn walk(a: &Archived, into: &mut BTreeSet<String>) -> bool {
+        if !is_store(&a.path) {
+            return false;
+        }
+        into.insert(a.path.clone());
+        a.inputs.values().all(|i| walk(i, into))
+    }
+    let top: Archived = serde_json::from_str(json).ok()?;
+    let mut paths = BTreeSet::new();
+    walk(&top, &mut paths).then(|| paths.into_iter().collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: a source `nix flake archive` names is left out — an input's
+    /// input, or one an input shares through `follows` named twice and kept
+    /// twice —, or an answer that is not that shape, or names a path that is
+    /// not one path of the store (a file inside one, a path outside it), is
+    /// read as a list at all; or a field a newer Nix adds stops the reading.
+    #[test]
+    fn the_sources_are_every_path_the_archive_names_once() {
+        let json = r#"{"path":"/nix/store/mmmm-source","inputs":{
+            "ronoctua":{"path":"/nix/store/dddd-source","inputs":{
+                "fonts":{"path":"/nix/store/ffff-source"},
+                "home-manager":{"path":"/nix/store/hhhh-source","inputs":{
+                    "nixpkgs":{"path":"/nix/store/nnnn-source","inputs":{}}}},
+                "nixpkgs":{"path":"/nix/store/nnnn-source","inputs":{}}},
+              "locked":{"rev":"abc"}}}}"#;
+        assert_eq!(
+            sources_of(json).unwrap(),
+            [
+                "/nix/store/dddd-source",
+                "/nix/store/ffff-source",
+                "/nix/store/hhhh-source",
+                "/nix/store/mmmm-source",
+                "/nix/store/nnnn-source",
+            ]
+        );
+        for bad in [
+            json.replace("/nix/store/ffff-source", "/nix/store/ffff-source/fonts"),
+            json.replace("/nix/store/hhhh-source", "/tmp/hhhh-source"),
+            json.replace(
+                r#""path":"/nix/store/nnnn-source","inputs":{}}}},"#,
+                r#""inputs":{}}}},"#,
+            ),
+            "not json".to_owned(),
+            "[]".to_owned(),
+        ] {
+            assert_eq!(sources_of(&bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn the_sizing_is_read_and_never_guessed() {

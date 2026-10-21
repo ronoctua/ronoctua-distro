@@ -151,6 +151,9 @@ case "$1" in
     case "$2" in
       lock) if [ -e "$root/lock-fails" ]; then exit 1; fi; cp "$root/new-lock" "$d/flake.lock" ;;
       update) cp "$root/updated-lock" "$d/flake.lock" ;;
+      archive)
+        if [ -e "$root/sources.json" ]; then cat "$root/sources.json"; exit 0; fi
+        echo "error: cannot read the lock" >&2; exit 1 ;;
     esac ;;
 esac
 "#
@@ -222,7 +225,7 @@ esac
         script(
             &s.path("bin/keep-units"),
             &format!(
-                "#!/bin/sh\necho \"keep-units $*\" >> '{root}/calls'\nfor a in \"$@\"; do last=\"$a\"; done\ncp \"$last\" '{root}/kept'\n"
+                "#!/bin/sh\necho \"keep-units $*\" >> '{root}/calls'\nset=''; prev=''\nfor a in \"$@\"; do [ \"$prev\" = --set ] && set=\"$a\"; prev=\"$a\"; last=\"$a\"; done\ncp \"$last\" \"{root}/kept-$set\"\n"
             ),
         );
         std::fs::create_dir_all(s.path("nix/store")).unwrap();
@@ -1210,6 +1213,7 @@ fn an_apply_builds_its_units_then_the_system_and_keeps_them() {
     let w = World::new("phases");
     std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
     std::fs::write(w.s.path("dry-says"), PLANNED).unwrap();
+    std::fs::write(w.s.path("sources.json"), SOURCES).unwrap();
     let b = w.toplevel("b", "quiet panic=10");
     w.builds(&b);
     assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
@@ -1228,7 +1232,9 @@ fn an_apply_builds_its_units_then_the_system_and_keeps_them() {
             "nix build" if l.contains("--dry-run") => "dry-run",
             "nix build" => "build",
             "build-units --nix" => "units",
+            "keep-units --roots" if l.contains(" --set flake ") => "keep-sources",
             "keep-units --roots" => "keep",
+            "nix flake" if l.contains(" archive ") => "sources",
             "nix-env --profile" => "profile",
             _ => "other",
         })
@@ -1237,7 +1243,15 @@ fn an_apply_builds_its_units_then_the_system_and_keeps_them() {
     assert_eq!(
         order,
         [
-            "sizing", "eval", "dry-run", "units", "build", "keep", "profile"
+            "sizing",
+            "eval",
+            "dry-run",
+            "units",
+            "build",
+            "keep",
+            "sources",
+            "keep-sources",
+            "profile"
         ],
         "{calls}"
     );
@@ -1287,13 +1301,67 @@ fn an_apply_builds_its_units_then_the_system_and_keeps_them() {
         "{keep}"
     );
     assert_eq!(
-        w.read("kept"),
+        w.read("kept-release"),
         "/nix/store/pppp-rust-lib-x-0.1.0\n/nix/store/qqqq-ronoctua-shell-0.1.0\n"
     );
     assert!(
         !w.m.places.run.join("units").exists() && !w.m.places.run.join("kept-units.txt").exists(),
         "what held the units while building does not outlive the apply"
     );
+    let archive = calls
+        .lines()
+        .find(|l| l.starts_with("nix flake archive"))
+        .unwrap();
+    assert!(
+        archive.ends_with(&format!(
+            " --no-update-lock-file --dry-run --json path:{}",
+            w.m.places.dir.display()
+        )),
+        "the machine's flake is only measured, off its lock: {archive}"
+    );
+    let sources = w.m.places.state.join(crate::build::SOURCES_DIR);
+    assert!(
+        calls.contains(&format!("--roots {} --set flake ", sources.display())),
+        "{calls}"
+    );
+    assert_eq!(
+        w.read("kept-flake"),
+        "/nix/store/dddd-source\n/nix/store/hhhh-source\n/nix/store/mmmm-source\n/nix/store/nnnn-source\n",
+        "every source the archive names, an input's input too, once"
+    );
+    assert!(!w.m.places.run.join("kept-sources.txt").exists());
+}
+
+/// What `nix flake archive --dry-run --json` names for a machine's flake:
+/// its own source, the distro, the distro's inputs and an input's input —
+/// the one the distro shares with it named twice.
+const SOURCES: &str = r#"{"path":"/nix/store/mmmm-source","inputs":{"ronoctua":{"path":"/nix/store/dddd-source","inputs":{"home-manager":{"path":"/nix/store/hhhh-source","inputs":{"nixpkgs":{"path":"/nix/store/nnnn-source","inputs":{}}}},"nixpkgs":{"path":"/nix/store/nnnn-source","inputs":{}}}}}}"#;
+
+/// FAILS IF: an apply whose sources could not be listed — `nix flake
+/// archive` failed, or answered what this program does not read — does not
+/// switch, or hands anything to what keeps them (the last build's stay); or
+/// the units are not kept all the same.
+#[test]
+fn sources_not_listed_are_not_kept_and_switch_all_the_same() {
+    for answer in [None, Some("{\"path\":\"/tmp/not-the-store\"}")] {
+        let w = World::new("sources");
+        std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
+        std::fs::write(w.s.path("dry-says"), PLANNED).unwrap();
+        if let Some(json) = answer {
+            std::fs::write(w.s.path("sources.json"), json).unwrap();
+        }
+        let b = w.toplevel("b", "quiet panic=10");
+        w.builds(&b);
+        assert_eq!(
+            w.m.apply(false).unwrap().result,
+            ApplyResult::Switched,
+            "{answer:?}"
+        );
+        let calls = w.read("calls");
+        assert!(calls.contains("nix flake archive"), "{calls}");
+        assert!(!calls.contains(" --set flake "), "{answer:?}: {calls}");
+        assert!(calls.contains(" --set release "), "{answer:?}: {calls}");
+    }
 }
 
 /// FAILS IF: a build that fails — its units, or the system after them —
@@ -1313,7 +1381,7 @@ fn a_failed_build_keeps_the_last_units() {
             "{knob}"
         );
         assert!(
-            !w.read("calls").contains("keep-units"),
+            !w.read("calls").contains("keep-units") && !w.read("calls").contains("flake archive"),
             "{knob}: {}",
             w.read("calls")
         );

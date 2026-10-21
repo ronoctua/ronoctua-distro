@@ -258,9 +258,10 @@ in
       description = ''
         The machine's record (`state.json`: the last good generation, the
         boot trial, a hold, the last apply), the lock snapshots, the old
-        layout a migration set aside and the roots of the units the last build
-        was compiled from (`kept-units/`). Persisted; the generations' trim
-        reads the record to keep the last good system and the one on trial.
+        layout a migration set aside, the roots of the units the last build
+        was compiled from (`kept-units/`) and of the sources it was evaluated
+        from (`kept-sources/`). Persisted; the generations' trim reads the
+        record to keep the last good system and the one on trial.
       '';
     };
 

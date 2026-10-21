@@ -15,12 +15,13 @@
 //! update leaves the folder as the machine runs, and the next apply builds
 //! what runs, not what failed.
 //!
-//! # Sized, unit by unit, and its units kept
+//! # Sized, unit by unit, and its units and sources kept
 //!
 //! The build is [`build::system`]: the units the distro's plan describes
 //! first, each by its class (`ronoctua-build-units`), then the system, sized
 //! to the machine (`ronoctua-build-sizing`); after it worked the compiled
-//! units it was built from are rooted for the next one ([`build::keep`]).
+//! units it was built from are rooted for the next one ([`build::keep`]),
+//! and so are the sources it was evaluated from ([`build::keep_sources`]).
 //!
 //! # A trial is judged before anything is built
 //!
@@ -200,6 +201,9 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
     if let Some(kept) = &made.kept {
         build::keep(m, kept);
     }
+    // AND THE SOURCES IT WAS EVALUATED FROM, kept as its units are: an update
+    // that finds them unchanged fetches none of them again.
+    build::keep_sources(m, &nix);
     drop(made);
     let Ok(built) = std::fs::canonicalize(&out) else {
         say(3, &format!("the build left no system at {}", out.display()));
