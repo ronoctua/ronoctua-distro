@@ -309,8 +309,8 @@ nix run .#adopt-machine
 ```
 
 O flake novo é construído ao lado do velho e só o substitui se construir; o velho fica guardado em
-`/var/lib/ronoctua-machine/legacy-<data>`. Enquanto a branch `release` não existir, diga de onde vem
-a distro: `nix run .#adopt-machine -- --distro github:ronoctua/ronoctua-distro/main`.
+`/var/lib/ronoctua-machine/legacy-<data>`. O flake novo segue a branch `release`; para seguir outra
+coisa, diga de onde vem a distro: `nix run .#adopt-machine -- --distro <flake>`.
 
 <!-- anchor: L20 -->
 

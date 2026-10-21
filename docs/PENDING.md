@@ -1411,15 +1411,11 @@ nada prova ainda que o Codex instalado escreve mesmo rollouts comprimidos ou o `
 O `.#release` e os três apps em volta existem e foram provados com substitutos (um `gh`, um `nix` e
 um gate que só anotam que foram chamados, num repositório com `origin` local:
 `release-refuses-dirty-tree`; o empacotamento e a junção do ISO: `iso-parts-reassemble`; a adoção e o
-`.#apply-here`, até o switch: `machine-apps-stop-before-the-switch`). Nada disso tocou o GitHub. A
+`.#apply-here`, até o switch: `machine-apps-stop-before-the-switch`). A primeira versão saiu pelo
+`.#release` em 2026-10-21 (`v2026.10.21-4d366d8`), e o `nix run
+github:ronoctua/ronoctua-distro/release#fetch-iso` juntou o ISO dela, interrompido uma vez no meio. A
 distro não tem cache binário (decisão do dono, 2026-10-11): o ISO leva sempre a semente.
 
-- **O `.#fetch-iso` só baixou de um servidor local.** O `iso-parts-reassemble` serve uma versão como o
-  GitHub serve (a resposta da API, o redirecionamento para o host dos assets, faixas de bytes) e prova
-  a retomada e a parte errada baixada de novo; o GitHub de verdade não foi visto. A numeração das
-  partes, que o pendrive deixou em aberto, é de `00`.
-  - acabou quando: `nix run github:ronoctua/ronoctua-distro/release#fetch-iso` junta o ISO da
-    primeira versão, uma vez interrompido no meio.
 - **`.#adopt-machine` e `.#apply-here` nunca rodaram numa máquina.** Não há VM para eles: o primeiro
   pede uma máquina do layout antigo (a do dono), o segundo uma máquina instalada e um checkout. O
   `migrate` que o primeiro chama é o que o `migration-keeps-the-machine` (L05) prova.
@@ -1467,10 +1463,9 @@ Cachix nem uma instalação.
 
 ### O pendrive do instalador: o que só uma máquina e uma versão de verdade provam · pequeno cada
 
-- **O formato da versão é contrato do L16 e não foi visto publicado**: a numeração das partes (de
-  `00`, como o `.#release` escreve), o `SHA256SUMS` com a linha da ISO inteira e o host do
-  redirecionamento do GitHub (`release-assets.githubusercontent.com` hoje; se mudar, o aria2 segue e
-  a linha de consentimento continua dizendo o antigo).
+- **O host do redirecionamento do GitHub é escrito**: a primeira versão publicada redireciona para
+  `release-assets.githubusercontent.com`; se mudar, o aria2 segue e a linha de consentimento continua
+  dizendo o antigo.
 - **O caminho inteiro numa máquina** — a vista, a senha, a fila, a gravação de uma ISO real e o boot
   dela — não foi feito: pede um pendrive e o dono.
 - **A barra da fila recomeça a cada parte baixada**; a gravação e a releitura somam uma barra só.
@@ -1560,8 +1555,7 @@ Cachix nem uma instalação.
   um release mais novo que o pendrive, e uma volta pediria ser reconhecida como volta.
 - **O salto para o instalador do release** (`nix run <release>#install`) compila no ISO as unidades
   do release para rodar o instalador novo (a semente leva os programas, nunca as unidades): a distro
-  não tem cache binário (decisão do dono, 2026-10-11). Ninguém saltou de verdade ainda — não existe
-  release publicado.
+  não tem cache binário (decisão do dono, 2026-10-11). Ninguém saltou de verdade ainda.
 - **O portão de rede numa máquina real**: o tempo de espera do link (30 s) e da medição (5 s) foram
   escolhidos, não medidos, e a frase da pergunta nomeia os servidores que o `nix config show
   substituters` responde no ISO.
