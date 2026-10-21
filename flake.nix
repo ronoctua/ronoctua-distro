@@ -105,6 +105,21 @@
       flake = false;
     };
 
+    # --- ambient sounds -------------------------------------------------
+    # THE APPROVED ORIGINALS of the player's ambient sounds (695 MiB of WAV,
+    # packed by `nix run .#ambience-release`), as the one asset of a Release of
+    # this repository under a tag of their own — the fonts' reason: recordings
+    # are not code, and git keeps every version for ever. `nix/ambience.nix`
+    # cuts the loops (42 MiB, all a system carries) from them and refuses any
+    # whose sha256 is not the one approved in `assets/ambience.nix`.
+    #
+    # `file+https://` for the fonts' reason too: a bare `https://` is taken
+    # for a tarball and unpacked into the store.
+    ambience-v1 = {
+      url = "file+https://github.com/ronoctua/ronoctua-distro/releases/download/ambience-v1/ambience-originals.tar.zst";
+      flake = false;
+    };
+
     # NOTE about icon data (glyphnames.json):
     #
     # There is NO `nerd-fonts` input here, on purpose. The Nerd Fonts
@@ -281,6 +296,11 @@
       broadcastRs = pkgs.callPackage ./nix/broadcast.nix {
         channelsFile = ./assets/channels.nix;
       };
+
+      # The player's ambient sounds: the approved recordings cut into loops that
+      # go round with no seam, every seam measured through the pinned mpv — see
+      # nix/ambience.nix, and `assets/ambience.nix` for the recordings.
+      ambience = pkgs.callPackage ./nix/ambience.nix { originals = inputs.ambience-v1; };
 
       # The languages of content (`ronoctua_player::tongues`): what a subtitle
       # is searched in and a stream is tagged with. One declaration, and the
@@ -952,6 +972,7 @@
 
       devApp = pkgs.callPackage ./nix/dev.nix {
         inherit
+          ambience
           atlasData
           keepSources
           cursors
@@ -1440,6 +1461,9 @@
               studio = rust.studio;
               # And the player's, for the same reason: libmpv, never the renderer.
               player = rust.player;
+              # And its ambient sounds, which its unit names
+              # (`RONOCTUA_AMBIENCE`, `nix/modules/player.nix`).
+              inherit ambience;
               # The software CLI, EXTRACTED for the same reason and one sharper:
               # the update runs it as root for the Android image, and its job is
               # a package manager's, never a desktop's. `nix/modules/software.nix`
@@ -1515,6 +1539,9 @@
         world-rs = worldRs;
         broadcast-rs = broadcastRs;
         tongues-rs = tonguesRs;
+        # The ambient sounds' loops and index, buildable on their own: the
+        # build is where every seam is measured.
+        inherit ambience;
 
         # Generated glyph layer: icons.json, glyphs.json, coverage.md.
         glyphdb = glyphdb.db;
@@ -1788,6 +1815,10 @@
                   # And the superpack's names, for the same reason as the
                   # superpack: nothing but this repository makes them.
                   iconNames
+                  # THE AMBIENT SOUNDS' LOOPS (42 MiB): cut from the originals
+                  # and measured through mpv by this repository alone. Their
+                  # originals travel too, as the input they are (below).
+                  ambience
                 ]
                 # AND THE FLAKE'S OWN INPUTS, as sources.
                 #
@@ -2502,9 +2533,9 @@
         # this prints, whoever packs. The files sit at the archive's root, which
         # is where `nix/ambience.nix` looks for them after unpacking.
         #
-        # The input it becomes, `ambience-v1`, is NOT in this flake yet: an input
-        # nobody can fetch stops every evaluation at the lock. The owner's steps,
-        # from the Release to the lock, are in `docs/PENDING.md`.
+        # The archive is the input `ambience-v1` (beside the fonts). A new sound
+        # is a new archive: a Release under a tag of its own and the input moved
+        # to it, locked alone.
         ambience-release =
           let
             table = import ./assets/ambience.nix;

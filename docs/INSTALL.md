@@ -4,7 +4,7 @@
 
 ## O que você precisa antes
 
-Um computador **x86_64 com UEFI e TPM 2.0**, um **pendrive de 4 GB ou mais** (todo o conteúdo dele
+Um computador **x86_64 com UEFI e TPM 2.0**, um **pendrive de 8 GB ou mais** (todo o conteúdo dele
 será apagado), e saber **qual disco** você quer usar.
 
 ## Passo zero — se a distro vai substituir a máquina onde ela foi escrita

@@ -11268,9 +11268,11 @@ o volume do player e o MPRIS são da fila e nunca chegam a eles; um som para qua
 "silenciar todos" ou quando o player fecha. Escolher toca na hora, para sempre. O volume de cada som
 é lembrado; que um som estava ligado, nunca — o player que sobe não toca nada sozinho.
 
-**Até o Release existir, a máquina diz que não tem.** A unidade só recebe `RONOCTUA_AMBIENCE` quando
-o flake tem os laços (`ronoctua ? ambience`), e sem ele o player diz `no-ambience` em vez de uma
-página vazia.
+**Os originais são um Release; os laços, do sistema.** As três gravações aprovadas (695 MiB) são o
+único asset do Release `ambience-v1`, input `file+https://` do flake como as fontes, e o build corta
+delas os laços (42 MiB), que são tudo o que a unidade recebe (`RONOCTUA_AMBIENCE`). O ISO leva os
+laços na semente e os originais como o input que são: a instalação não corta nem mede nada. Um
+player sem a variável (um teste, um palco sem catálogo) diz `no-ambience` em vez de uma página vazia.
 
 **Os sons ambientes são uma página, ao lado da fila** (`player_ambience`, `LEADER p e`, e a linha em
 Ouvir e assistir). Uma linha por som: o glifo do grupo dele (`ambience-*`; um grupo sem glifo veste

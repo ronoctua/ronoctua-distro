@@ -22,8 +22,8 @@
 # laid end to end. The route `assets/ambience.nix` names has to be exact; the
 # others are measured and written down beside it.
 #
-# `originals` is a directory holding them — a local copy while the Release
-# is not published — or the Release's archive of it (`ambience-v1`).
+# `originals` is the Release's archive of them (the input `ambience-v1`), or
+# a directory holding them — a local copy, for a sound still being approved.
 {
   lib,
   stdenvNoCC,

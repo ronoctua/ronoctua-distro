@@ -15,11 +15,12 @@
 #      or capture;
 #   2. the store was the only copy anyone could count on — which is this file.
 #
-# The second is not only about the atlas. The four font inputs point at a
-# release of this repository that does not exist on GitHub yet (measured: 404),
-# so the store is where they live, full stop. A collection that took them would
-# take them for good, and the only way back would be `nix run .#fonts-release`
-# from a folder on the owner's disk.
+# The second is not only about the atlas. The four font inputs and the
+# ambient sounds' originals point at releases of this repository, and a
+# release can go: when the repository was made again (2026-10-21) they were
+# published again from this store, byte for byte. A collection that took them
+# would have left only `nix run .#fonts-release` from a folder on the owner's
+# disk.
 #
 # # What this does
 #

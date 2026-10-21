@@ -262,6 +262,7 @@ pkgs.testers.runNixOSTest {
             "--setenv=RUST_LOG=ronoctua_player=debug,ronoctua_player_engine=debug "
             "--setenv=RONOCTUA_SHELL=${ronoctua-shell}/bin/ronoctua-shell "
             "--setenv=RONOCTUA_WORDS=${words} "
+            "--setenv=RONOCTUA_AMBIENCE=${media}/ambience "
             ${setenvOf playerBase}
             + ((${setenvOf playerDecoders} "") if tools else "")
             + "${ronoctua-player}/bin/ronoctua-player"

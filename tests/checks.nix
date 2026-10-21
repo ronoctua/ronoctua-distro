@@ -28050,6 +28050,7 @@ let
                   -ronoctua-buffer-format- \
                   -ronoctua-buffer-brain- \
                   -noctua-icon-theme- \
+                  -ronoctua-ambience- \
                   -noctua-iosevka-ttf-nerdfonts-; do
         grep -q -e "$ours" ${seed}/store-paths || {
           echo "ERROR: $ours does not go into the ISO — the target machine will compile it" >&2

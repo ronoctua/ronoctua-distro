@@ -907,8 +907,8 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
 - nixpkgs 26.05: `noto-fonts-emoji` → `noto-fonts-color-emoji`, `nixfmt-rfc-style` → `nixfmt`,
   `xorg.libX11` → `libx11`, `pkgs.system` → `pkgs.stdenv.hostPlatform.system`. Atributo dinâmico
   definido em duas sentenças é erro de avaliação: use um attrset só.
-- As fontes são asset de Release (4,1 GB), nunca git, e o input é `file+https://` — senão o Nix
-  infere tarball e descompacta. `/etc/nixos` e `/etc/fonts/conf.d` são somente leitura (use
+- As fontes (4,1 GB) e as gravações dos sons ambientes são asset de Release, nunca git, e o input é
+  `file+https://` — senão o Nix infere tarball e descompacta. `/etc/nixos` e `/etc/fonts/conf.d` são somente leitura (use
   `localConf`). O nome do ISO é `image.baseName`.
 - `fs::copy` de um arquivo do store herda o modo somente leitura: apague o destino antes de copiar,
   senão a segunda geração falha com "Permission denied" dentro de um `build.rs`.

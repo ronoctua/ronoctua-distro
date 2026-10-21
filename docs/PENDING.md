@@ -592,18 +592,12 @@ VM numa máquina com menos de 25 GB livres — então não foram feitas:
 
 - acabou quando: cada item acima sai daqui com a foto que o prova
 
-### 0.00034. Os sons ambientes sem gravações, e o par da modeline sem foto · pequeno cada
+### 0.00034. Os sons ambientes e o par da modeline sem foto · pequeno cada
 
-- **As gravações não foram publicadas.** Os laços saem de três originais aprovados de ouvido, que
-  vão num asset de Release `ambience-v1`: `nix run .#ambience-release -- <pasta dos originais>`
-  confere cada sha256 contra `assets/ambience.nix`, empacota o arquivo sempre com os mesmos bytes e
-  imprime as notas e o hash; o dono cria o Release e sobe o arquivo como o único asset. Depois: o
-  input `ambience-v1` (`file+https://`, pelo motivo das fontes) com `nix flake lock --update-input
-  ambience-v1`, o pacote `ambience` passado ao módulo e ao `.#dev`, e o `RONOCTUA_AMBIENCE` do
-  `player.nix` sem a condição `ronoctua ? ambience`. O palco do `.#shot` passa o catálogo de teste
-  (`--setenv=RONOCTUA_AMBIENCE=${MEDIA}/ambience`), para a página ser fotografada. Até lá o player diz na página que a máquina não tem sons ambientes, e a página, a
-  linha da home e o par da modeline só foram vistos com estados escritos para a foto. Sons novos só entram com
-  aprovação de ouvido do dono.
+- **A página não foi fotografada com um catálogo.** O palco do `.#shot` passa o catálogo de teste
+  (`tests/player-media.nix`: dois tons sob os ids reais), mas a página, a linha da home e o par da
+  modeline só foram vistos com estados escritos para a foto. Sons novos só entram com aprovação de
+  ouvido do dono.
 - **O par da modeline com só o ambiente não foi visto na tela.** A câmera não alcança o rodapé; o
   que existe é o teste da geometria (as mesmas células, o próximo no tom inerte, as frases sob o
   ponteiro). Falta o `.#shot`: um som ligado com a fila vazia, o par, o próximo apagado, um clique

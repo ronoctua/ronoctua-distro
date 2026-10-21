@@ -1,5 +1,17 @@
 {
   "nodes": {
+    "ambience-v1": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-Q5z95fYaZpzwWQxvPUYvf/1xjkuX+xxtWaS5NnganBs=",
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/ambience-v1/ambience-originals.tar.zst"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/ronoctua/ronoctua-distro/releases/download/ambience-v1/ambience-originals.tar.zst"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1785541369,
@@ -284,6 +296,7 @@
     },
     "root": {
       "inputs": {
+        "ambience-v1": "ambience-v1",
         "crane": "crane",
         "disko": "disko",
         "fonts-ttf": "fonts-ttf",

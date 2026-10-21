@@ -61,6 +61,9 @@
   catdoc,
   yt-dlp,
   playerTools,
+  # The ambient sounds' loops (`nix/ambience.nix`), which the installed
+  # player's unit names.
+  ambience,
   # The software centre's programs, from `nix/software-tools.nix` — the table
   # the installed system's units read.
   softwareTools,
@@ -1329,6 +1332,8 @@ let
 " (
         lib.mapAttrsToList (name: path: "export ${name}=${lib.escapeShellArg path}") playerTools
       )}
+      # AND THE AMBIENT SOUNDS, which the installed player's unit names.
+      export RONOCTUA_AMBIENCE="${ambience}"
       # AND YT-DLP BY ITS PATH, as the player's unit names it
       # (`nix/modules/player.nix`): the loop's player lists a YouTube playlist
       # through it (`ronoctua_ytdlp::flat`), and mpv's own hook finds it the

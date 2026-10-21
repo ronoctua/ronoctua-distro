@@ -188,19 +188,14 @@ in
           # `SupportedMimeTypes` is the list the desktop entry names.
           RONOCTUA_SHELL = "${ronoctua.shell}/bin/ronoctua-shell";
           RONOCTUA_PLAYER_TYPES = "${entry}/share/ronoctua/player-types";
+          # THE AMBIENT SOUNDS (`nix/ambience.nix`): the loops and the index
+          # the daemon reads, ~42 MiB, with the player and never without it.
+          RONOCTUA_AMBIENCE = "${ronoctua.ambience}";
         }
         # The minter's own three (`nix/pot-provider.nix`), never spelled here.
         // lib.optionalAttrs (
           config.ronoctua.transfers.poToken == "on-demand"
         ) ronoctua.potProvider.environment
-        # THE AMBIENT SOUNDS (`nix/ambience.nix`): the loops and the index the
-        # daemon reads, ~42 MiB, with the player and never without it. Named
-        # only where the flake has them — their originals are a Release asset
-        # (`ambience-v1`), and until it is published a player has none and
-        # says so on screen (`Trouble::NoAmbience`), never a silent list.
-        // lib.optionalAttrs (ronoctua ? ambience) {
-          RONOCTUA_AMBIENCE = "${ronoctua.ambience}";
-        }
         # THE WORLD, for the directories' globe (`engine/directory.rs`): where
         # each country's name goes on a map, so a radio or TV page arrives
         # with its marks placed and a door only draws them. The same table
