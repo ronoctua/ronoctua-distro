@@ -163,7 +163,7 @@ NixOS, uma imagem de disco, o ISO) ou são marcos. As VMs comuns ficam: cada rot
 Ao terminar, ele **lista o que não verificou**, pelo nome. `test-tiers-are-total` exige que a divisão
 não envelheça, e um check novo entra no `most` sozinho.
 
-O **`gate`** roda o `nix flake check` depois de **medir a memória livre**: ele limita quantas
+O **`gate`** faz as perguntas do `nix flake check` depois de **medir a memória livre**: ele limita quantas
 compilações correm juntas (`nix/build-sizing.nix`, a mesma conta do `ronoctua-machine apply`):
 cada unidade Rust começa quando a fatia da classe dela (medida, `nix/rust/unit-classes.json`) cabe
 ao lado do que roda, e as pesadas vão uma de cada vez. Sem
@@ -182,7 +182,9 @@ e quanto do orçamento ia junto), as execuções de teste depois de toda compila
 pelo nome; **2** o que as VMs bootam;
 **3** as VMs, sozinhas, tantas ao mesmo tempo quanto cabe na **memória que declaram**
 (`virtualisation.memorySize`, somada por nó) — cada uma aparece com `->` ao começar e `<-` ao
-acabar; **4** o resto. O gate termina no `nix flake check`.
+acabar; **4** o resto. O gate termina na **5**: o resto do que o `nix flake check` pergunta — o
+lock, cada app, pacote, shell, módulo, template e sistema —, um avaliador por grupo, porque o
+`nix flake check` num processo só já não cabe numa máquina de 14 GiB.
 
 > **`nix flake check` sem `-L` não mostra log** — silêncio não é sintoma.
 

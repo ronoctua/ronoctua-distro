@@ -1,4 +1,4 @@
-# `nix flake check`, sized to the RAM of whatever machine is running it.
+# What `nix flake check` asks, sized to the RAM of whatever machine is running it.
 #
 # # The defect this replaces
 #
@@ -46,9 +46,22 @@
 # So nothing is evaluated while something builds. Phase 0 asks for the `.drv`
 # of every target in batches whose evaluators fit the budget, one after
 # another, and every later phase builds those paths, which needs no evaluator
-# at all. The one exception is the gate's own last step, `nix flake check`,
-# which evaluates everything at once by design — by then there is nothing left
-# for it to build.
+# at all.
+#
+# # Nor is `nix flake check` one evaluator any more
+#
+# The gate used to END in `nix flake check`, which evaluates the whole flake in
+# one process by design, and the flake outgrew the machine: on 14 GiB it was
+# killed by `earlyoom` twice (2026-10-21) at 9.4 GiB, a quarter of the way
+# through the 720 checks — every one of them built and passed already. So the
+# last phase asks what `nix flake check` asks, in an evaluator per group of
+# outputs (measured that day: the apps 2.2 GiB, the packages 1.3, each system
+# 0.9 to 1.3, the rest 0.5): the lock needs no change; every app is an app
+# whose program is in the store; every package, shell and the formatter is a
+# derivation; every module and template has its shape; every system's
+# `toplevel` evaluates. The checks are the targets, which phases 0 to 4 asked
+# and built. An output it does not know how to ask about is a failure that
+# names it, never one it leaves out (invariant 7, as the owner amended it).
 #
 # # The order
 #
@@ -67,7 +80,8 @@
 #      compilations, because that is what they are;
 #   3. the VMs, as many at once as their declared memory and their cores fit;
 #   4. everything else, sized as compilations;
-#   5. the gate only: `nix flake check`, over a store that has it all.
+#   5. the gate only: what `nix flake check` asks of the rest of the flake,
+#      an evaluator per group.
 #
 # # A unit that failed is built once
 #
@@ -90,6 +104,7 @@
 # defect reappearing in a new command, with its fix sitting right next to it.
 {
   writeShellApplication,
+  writeText,
   callPackage,
   coreutils,
   gawk,
@@ -100,7 +115,8 @@
   system,
   # WHAT THE BATTERY IS CALLED, and what it does once the sizing is done.
   #
-  # `gate` ends in the whole `nix flake check`; `most` stops at its targets.
+  # `gate` ends in what `nix flake check` asks of the rest of the flake; `most`
+  # stops at its targets.
   # Everything before that point is shared.
   name ? "ronoctua-gate",
   what ? "gate",
@@ -192,6 +208,75 @@ let
 
   leftLines = lib.concatMapStringsSep "\n    " (t: "echo \"       ${t}\"") left;
 
+  # WHAT PHASE 5 ASKS, the questions `nix flake check` asks of the outputs
+  # that are not checks: each a function of an output that answers with the
+  # names failing it, `[ ]` when every one holds. Files and not text in the
+  # script, because they hold strings and the script hands them to `--apply`
+  # inside double quotes.
+  asks = {
+    apps = writeText "gate-asks-apps.nix" ''
+      # An app is `{ type = "app"; program = <a path in the store>; }`, its
+      # program carrying the derivation it comes from.
+      as:
+      let
+        store = builtins.storeDir + "/";
+        isApp =
+          a:
+          (a.type or null) == "app"
+          && builtins.isString (a.program or null)
+          && builtins.hasContext a.program
+          && builtins.substring 0 (builtins.stringLength store) a.program == store;
+      in
+      builtins.filter (n: !(isApp (builtins.getAttr n as))) (builtins.attrNames as)
+    '';
+    derivations = writeText "gate-asks-derivations.nix" ''
+      # Every value a derivation whose `.drv` evaluates.
+      ds:
+      builtins.filter (
+        n:
+        let
+          d = builtins.getAttr n ds;
+        in
+        !((d.type or null) == "derivation" && builtins.isString d.drvPath)
+      ) (builtins.attrNames ds)
+    '';
+    derivation = writeText "gate-asks-derivation.nix" ''
+      # One derivation whose `.drv` evaluates.
+      d: if (d.type or null) == "derivation" && builtins.isString d.drvPath then [ ] else [ "it" ]
+    '';
+    set = writeText "gate-asks-set.nix" ''
+      # A set, and nothing asked of what is in it: `nix flake check` does not
+      # go into `legacyPackages`.
+      s: if builtins.isAttrs s then [ ] else [ "it" ]
+    '';
+    modules = writeText "gate-asks-modules.nix" ''
+      # Every module a function, a set or a path.
+      ms:
+      builtins.filter (
+        n:
+        let
+          m = builtins.getAttr n ms;
+        in
+        !(builtins.isFunction m || builtins.isAttrs m || builtins.isPath m)
+      ) (builtins.attrNames ms)
+    '';
+    templates = writeText "gate-asks-templates.nix" ''
+      # Every template a path that exists, and a description.
+      ts:
+      builtins.filter (
+        n:
+        let
+          t = builtins.getAttr n ts;
+        in
+        !(t ? path && builtins.pathExists t.path && builtins.isString (t.description or null))
+      ) (builtins.attrNames ts)
+    '';
+    nixos = writeText "gate-asks-nixos.nix" ''
+      # A system whose `toplevel` evaluates to a derivation.
+      c: if builtins.isString c.config.system.build.toplevel.drvPath then [ ] else [ "its toplevel" ]
+    '';
+  };
+
   # THE TAIL, ASSEMBLED OUT HERE AND NOT INSIDE `text`.
   #
   # One doubled-quote fence inside another CLOSES the outer one: it ends at
@@ -200,18 +285,83 @@ let
   tail =
     if what == "gate" then
       ''
-        echo "== 5. the gate =="
+        echo "== 5. the gate: what nix flake check asks of the rest of the flake, an evaluator per group =="
         if [ "$failures" -gt 0 ]; then
-          # `nix flake check` would build what failed again, sized for
-          # nothing — the VMs among them four at a time. The gate is red
-          # already; the names are above.
+          # The gate is red already; the names are above.
           echo "not run: $failures target(s) failed above: ''${failed[*]}"
           exit 1
         fi
-        # In the background, waited for: a signal stops it at once.
-        nix flake check --keep-going -L --max-jobs "$jobs" --cores "$cores" "$@" &
+        # ONE QUESTION, in an evaluator of its own, in the background and
+        # waited for: the names of an output that fail the function in a
+        # file (`asks`), and what failing it means.
+        ask() {
+          local label=$1 installable=$2 question=$3 says=$4
+          nix eval --json "$installable" --apply "$(< "$question")" > "$work/answer.json" &
+          if ! wait "$!"; then
+            blame_memory
+            echo "<- $label: did not evaluate (above)"
+            fail "$label"
+            return 0
+          fi
+          if [ "$(jq length < "$work/answer.json")" = 0 ]; then
+            echo "<- $label: ok"
+          else
+            echo "<- $label: $(jq -r 'join(", ")' < "$work/answer.json") $says"
+            fail "$label"
+          fi
+        }
+        # THE LOCK, as `nix flake check` reads it: complete, and current.
+        nix flake metadata --no-update-lock-file --json > "$work/metadata.json" &
         if ! wait "$!"; then
-          blame_memory
+          echo "<- the lock: it needs a change, or the flake does not resolve (above)"
+          fail "the lock"
+        else
+          echo "<- the lock: ok"
+          # EVERY OUTPUT BY NAME, asked of the flake the lock resolved: one
+          # this phase does not know how to ask about is a failure that names
+          # it, never one left out.
+          url=$(jq -r .url < "$work/metadata.json")
+          nix eval --impure --json --expr "builtins.attrNames (builtins.getFlake \"$url\").outputs" > "$work/outputs.json" &
+          if ! wait "$!"; then
+            blame_memory
+            echo "<- the outputs: they were not listed (above)"
+            fail "the outputs"
+          else
+            mapfile -t kinds < <(jq -r '.[]' < "$work/outputs.json")
+            for kind in "''${kinds[@]}"; do
+              case "$kind" in
+                checks) echo "<- checks: the targets, asked and built by phases 0 to 4" ;;
+                apps) ask apps ".#apps.${system}" ${asks.apps} "not an app whose program is in the store" ;;
+                packages | devShells) ask "$kind" ".#$kind.${system}" ${asks.derivations} "not a derivation" ;;
+                formatter) ask formatter ".#formatter.${system}" ${asks.derivation} "not a derivation" ;;
+                legacyPackages) ask legacyPackages ".#legacyPackages.${system}" ${asks.set} "not a set" ;;
+                nixosModules) ask nixosModules ".#nixosModules" ${asks.modules} "not a module" ;;
+                templates) ask templates ".#templates" ${asks.templates} "without a path that exists or a description" ;;
+                nixosConfigurations)
+                  nix eval --json ".#nixosConfigurations" --apply builtins.attrNames > "$work/systems.json" &
+                  if ! wait "$!"; then
+                    blame_memory
+                    echo "<- nixosConfigurations: they were not listed (above)"
+                    fail nixosConfigurations
+                  else
+                    mapfile -t systems < <(jq -r '.[]' < "$work/systems.json")
+                    for c in "''${systems[@]}"; do
+                      ask "nixosConfigurations.$c" ".#nixosConfigurations.$c" ${asks.nixos} "does not evaluate to a derivation"
+                    done
+                  fi
+                  ;;
+                lib) echo "<- lib: no output nix flake check knows, which it only warns about" ;;
+                *)
+                  echo "<- $kind: an output phase 5 does not know how to ask about — nix/gate.nix has to learn what nix flake check asks of it"
+                  fail "$kind"
+                  ;;
+              esac
+            done
+          fi
+        fi
+        if [ "$failures" -gt 0 ]; then
+          echo ""
+          echo "$failures failed: ''${failed[*]}"
           exit 1
         fi
         echo ""
@@ -558,9 +708,8 @@ writeShellApplication {
       used_cores=$(( used_cores + c ))
       printf -- '-> %s (%s MiB declared, %s of %s MiB in use)\n' \
         "$n" "''${mib[$n]}" "$used_mib" "$vm_budget_mib"
-      # AN OUT-LINK IN `$work`, for phase 1's reason: a collection between
-      # here and phase 5 would take a test that passed, and `nix flake check`
-      # would boot its VM again.
+      # AN OUT-LINK IN `$work`, for phase 1's reason: what passed stays in
+      # the store for as long as the battery lasts.
       nix build --out-link "$work/vm-$n" -L --max-jobs 1 "''${drv[$n]}^*" &
       running[$!]=$n
     }
@@ -647,7 +796,7 @@ writeShellApplication {
   meta = {
     description =
       if what == "gate" then
-        "nix flake check, sized by the machine's RAM"
+        "what nix flake check asks, sized by the machine's RAM"
       else
         "the checks that do not build an installation, sized by the RAM";
     platforms = [ system ];

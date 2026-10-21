@@ -533,9 +533,15 @@ até o avaliador sair. O `nix build` da bateria avaliava as 31 VMs num processo 
 medido — e esse processo vivia o build inteiro, ao lado de cada compilador e de cada VM, sem entrar
 em conta nenhuma. Agora nada se avalia enquanto algo constrói: a fase 0 pede o `.drv` de cada alvo
 em lotes cujos avaliadores cabem no orçamento, um depois do outro, e as fases seguintes constroem
-esses caminhos, o que não precisa de avaliador. A exceção é o último passo do gate, o
-`nix flake check`, que avalia tudo de uma vez por definição — e a essa altura não tem mais nada para
-construir. A medição achou também um acoplamento: o check que lê o script do gate avaliava o app, e
+esses caminhos, o que não precisa de avaliador. O último passo do gate também deixou de ser um
+`nix flake check` inteiro, que avalia tudo num processo por definição: em 2026-10-21 ele passou de
+9,4 GiB com um quarto dos 720 checks, e o `earlyoom` o matou duas vezes, com tudo já construído e
+verde. A fase 5 faz as mesmas perguntas, um avaliador por grupo (medidos: os apps 2,2 GiB, os
+pacotes 1,3, cada sistema de 0,9 a 1,3): o lock sem mudança; cada app, um app com o programa no
+store; cada pacote, shell e o formatador, uma derivação; módulo e template na forma deles; o
+`toplevel` de cada sistema. Os checks são os alvos das fases 0 a 4. Uma saída que ela não sabe
+perguntar é falha com o nome, nunca pulada. Inteira, levou 114 s, com pico de 2,2 GiB (emenda do
+dono ao invariante 7). A medição achou também um acoplamento: o check que lê o script do gate avaliava o app, e
 um app que avaliasse as VMs no próprio texto custaria 8 GiB a esse check. Por isso os fatos das VMs
 são perguntados em tempo de execução, e não escritos no script.
 
@@ -15210,8 +15216,7 @@ regras que antes eram só palavra. Seis mudanças de código vieram com eles:
 - **Nenhuma bateria começa sobre um build dentro da árvore** (`nix/tree-guard.nix`): o `.#gate`, o
   `.#most` e o `.#quick` procuram um `CACHEDIR.TAG` na árvore antes de qualquer coisa e recusam
   dizendo o que mover. E as fases 3 e 4 do gate seguram o que construíram (`--out-link` em
-  `$work`), como a 1 e a 2: uma coleta no meio não faz o `nix flake check` da fase 5 bootar uma VM
-  de novo.
+  `$work`), como a 1 e a 2: o que passou fica no store enquanto a bateria dura.
 - **Arquivos publicados por outros para teste** ficam em `nix/test-vectors.nix`, por captura, e o
   `nix/kept-sources.nix` os segura; o primeiro é o `breakdance.avi` do moviehash. Um teste que só
   roda com eles é `#[ignore]` no `cargo test` comum e roda num check que estreita o `rust-tests`

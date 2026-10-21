@@ -138,7 +138,10 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    dado dela ou de arquivos pinados; nada disso entra no flake, em `/etc` nem no repositório.
 
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta. Só o
-   `nix run .#gate` roda tudo.
+   `nix run .#gate` roda tudo. Emenda aprovada pelo dono (2026-10-21): o gate faz as perguntas do
+   `nix flake check` em avaliadores que cabem na RAM — os checks nas fases 0 a 4, e o resto (o lock,
+   cada app, pacote, shell, módulo, template e sistema) na fase 5, um avaliador por grupo —, porque
+   o flake num processo só passou de 9 GiB com um quarto dos checks numa máquina de 14 GiB.
 8. **Zero string literal em UI.** Todo texto sai de uma `text-key`, completa em todos os idiomas
    declarados. Exceções aprovadas: a linha do log do brain (2026-09-25), o texto que a pessoa digita
    num lembrete e a amostra de código que um buffer mostra (o `example`, 2026-10-04) são dado, como
