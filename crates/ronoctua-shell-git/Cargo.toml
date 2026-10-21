@@ -44,6 +44,8 @@ tracing.workspace = true
 [dev-dependencies]
 # The door's and the kit's guards hold in these tests too (`test-support`).
 ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+# A consent file of a test's own, for the clone's pass (`test-support`).
+ronoctua-consent = { path = "../ronoctua-consent", features = [ "test-support" ] }
 
 [lints]
 workspace = true

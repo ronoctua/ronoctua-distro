@@ -59,8 +59,12 @@
 #      server that answers each with 127.0.0.1, the stand-in writing down
 #      every TLS greeting and answering the whole conversation, the
 #      window's cross-origin preflights included) — VS Code reaches only its CDN, the Marketplace
-#      and its asset hosts (the built-in Copilot Chat, updated to the end) and
-#      Google's dictionary redirector and mirror; `chat.disableAIFeatures`
+#      and its asset hosts (the built-in Copilot Chat, updated to the end), and
+#      never Google's dictionary redirector nor its mirror, which the stand-in
+#      answers too: the distro's `code` maps the redirector to nothing
+#      (`nix/vscode.nix`, Chromium's `--host-resolver-rules`), whose switch
+#      the program that runs carries — the launcher's entry, the person's
+#      `code` and `ronoctua-vscode`'s being that one; `chat.disableAIFeatures`
 #      leaves the Copilot Chat question as it is; `extensions.autoCheckUpdates`
 #      off asks the Marketplace nothing until a file the product recommends an
 #      extension for opens, and `extensions.ignoreRecommendations` quiets that.
@@ -180,9 +184,10 @@ let
   ];
   # AND THE NAMES ONLY THE MEASURES REACH, by the name server the script
   # starts (the hosts file never names them): Nix's two, for the patch on an
-  # online machine, and Google's two that VS Code's Electron asks at start-up
-  # (the redirector and the mirror it sends to) — so the stand-in hears each
-  # request, and not only its name.
+  # online machine, and Google's two that VS Code's Electron would ask at
+  # start-up without the distro's rule (the dictionary's redirector and the
+  # mirror it sends to) — so a request that slips past the rule is heard,
+  # and not only its name.
   measuredNames = [
     "channels.nixos.org"
     "cache.nixos.org"
@@ -400,6 +405,22 @@ pkgs.testers.runNixOSTest {
       with subtest("the policy is the machine's, where the pinned build reads it"):
           policy = json.loads(machine.succeed("cat /etc/vscode/policy.json"))
           assert policy == {"TelemetryLevel": "off"}, policy
+
+      with subtest("the launcher's entry, the person's `code` and their command all run the environment's"):
+          # THE ONE `code` THAT CARRIES THE RULE (`nix/vscode.nix`): what the
+          # launcher's entries name (by the `PATH`), what a terminal finds,
+          # and what `ronoctua-vscode` was built with.
+          fhs = machine.succeed(f"readlink -f {code}").strip()
+          found = as_person("readlink -f $(command -v code)").strip()
+          assert found == fhs, (found, fhs)
+          entries = machine.succeed(
+              "grep -h '^Exec=' /run/current-system/sw/share/applications/code.desktop"
+              " /run/current-system/sw/share/applications/code-url-handler.desktop"
+          ).splitlines()
+          print(entries)
+          assert entries and all(e.startswith("Exec=code ") for e in entries), entries
+          command = as_person("readlink -f $(command -v ronoctua-vscode)").strip()
+          machine.succeed(f"grep -aF '{code}' {command} > /dev/null")
 
       with subtest("the record waits on a folder that is not there, and does not fail"):
           machine.wait_until_succeeds(
@@ -857,13 +878,19 @@ pkgs.testers.runNixOSTest {
               raise
           machine.sleep(seconds)
           reached, requests = heard(since)
+          # WHAT EACH OF ITS PROCESSES WAS STARTED WITH, read while they run.
+          ran = machine.succeed(
+              f"for p in $(pgrep -f 'user-data-dir.{data[:-1]}[{data[-1]}]'); do"
+              " tr '\\0' '\\n' < /proc/$p/cmdline; echo '--- end'; done"
+          ).split("--- end\n")
           stop_as_person(unit, data)
           asked = sorted({(r["method"], r["host"], r["path"].split("?")[0], r["code"]) for r in requests})
           print(f"== {unit} {settings} {extra}")
           print(f"reached: {sorted(reached)}")
           for a in asked:
               print(f"  {a}")
-          return reached, {(h, p) for _, h, p, _ in asked}
+          started = [[a for a in r.splitlines() if a] for r in ran if r.strip()]
+          return reached, {(h, p) for _, h, p, _ in asked}, started
 
 
       # THE STAND-IN CANNOT SIGN: only here, so the update goes to its end.
@@ -872,41 +899,61 @@ pkgs.testers.runNixOSTest {
       # participants' list, the emergency alert), the Marketplace and its asset
       # hosts (the built-in Copilot Chat's latest version, its manifest and its
       # package — the fallback of the latest version too, though the stand-in
-      # never sends it there), and Google's dictionary redirector and mirror.
+      # never sends it there). NEVER Google's dictionary redirector nor the
+      # mirror it sends to, though the stand-in answers both as Google does:
+      # the distro's `code` maps the redirector to nothing (`nix/vscode.nix`).
       marketplace = {"marketplace.visualstudio.com", "www.vscode-unpkg.net",
                      "github.gallery.vsassets.io", "github.gallerycdn.vsassets.io"}
-      vendor = marketplace | {"main.vscode-cdn.net", "redirector.gvt1.com", "r1---sn-ronoctua.gvt1.com"}
+      google = {"redirector.gvt1.com", "r1---sn-ronoctua.gvt1.com"}
+      vendor = marketplace | {"main.vscode-cdn.net"}
       copilot = ("marketplace.visualstudio.com", "/_apis/public/gallery/vscode/github/copilot-chat/latest")
+      rule = "--host-resolver-rules=MAP redirector.gvt1.com ~NOTFOUND"
 
-      with subtest("at start-up, VS Code reaches its vendor and Google's dictionary, and nothing else"):
-          reached, asked = heard_at_start("start-shipped", unsigned, seconds=60)
+      with subtest("at start-up, VS Code reaches its vendor, and never Google's dictionary"):
+          reached, asked, started = heard_at_start("start-shipped", unsigned, seconds=60)
+          # THE DICTIONARY FIRST: without the rule, this is what fails.
+          assert not reached & google, f"VS Code asked Google's dictionary: {sorted(reached & google)}"
           assert reached <= vendor, f"VS Code reached {sorted(reached - vendor)} too"
           for wanted in (copilot,
                          ("main.vscode-cdn.net", "/extensions/marketplace.json"),
                          ("main.vscode-cdn.net", "/extensions/chat.json"),
-                         ("main.vscode-cdn.net", "/core/stable.json"),
-                         ("redirector.gvt1.com", "/edgedl/chrome/dict/en-us-10-1.bdic")):
+                         ("main.vscode-cdn.net", "/core/stable.json")):
               assert wanted in asked, f"{wanted} was not asked: {sorted(asked)}"
-          # THE UPDATE WENT TO ITS END: the newer Copilot Chat's package came.
+          # THE UPDATE WENT TO ITS END — the shared process's network, beside
+          # the rule: the newer Copilot Chat's package came.
           assert any("copilot-chat" in p and p.endswith("/Microsoft.VisualStudio.Services.VSIXPackage")
                      for _, p in asked), sorted(asked)
+          # AND THE RULE IS ON THE COMMAND LINE of the program that ran — the
+          # Electron that `code` starts, no child of it (`--type=`) and not
+          # the CLI's Node (`cli.js`).
+          for args in started:
+              print(" ".join(args)[:400])
+          main = [a for a in started
+                  if a[0].endswith("/lib/vscode/code")
+                  and not any(x.startswith("--type=") or x.endswith("/cli.js") for x in a)]
+          assert main, "VS Code's main process was not found"
+          assert all(rule in a for a in main), main
+          # WHERE CHROMIUM RESOLVES NAMES, said for the record.
+          print([rule in a for a in started if "--utility-sub-type=network.mojom.NetworkService" in a])
 
       with subtest("chat.disableAIFeatures does not stop the Copilot Chat question"):
-          reached, asked = heard_at_start("start-no-ai", {**unsigned, "chat.disableAIFeatures": True})
+          reached, asked, _ = heard_at_start("start-no-ai", {**unsigned, "chat.disableAIFeatures": True})
           assert copilot in asked, sorted(asked)
+          assert not reached & google, sorted(reached)
 
       with subtest("extensions.autoCheckUpdates off asks the Marketplace nothing"):
-          reached, asked = heard_at_start("start-no-check", {**unsigned, "extensions.autoCheckUpdates": False})
+          reached, asked, _ = heard_at_start("start-no-check", {**unsigned, "extensions.autoCheckUpdates": False})
           assert not reached & marketplace, sorted(reached)
           assert reached <= vendor, sorted(reached)
 
       with subtest("but a file the product recommends an extension for asks it"):
-          reached, asked = heard_at_start(
+          reached, asked, _ = heard_at_start(
               "start-no-check-py", {**unsigned, "extensions.autoCheckUpdates": False}, a_python_file)
           assert reached & marketplace, sorted(reached)
+          assert not reached & google, sorted(reached)
 
       with subtest("and extensions.ignoreRecommendations quiets that"):
-          reached, asked = heard_at_start(
+          reached, asked, _ = heard_at_start(
               "start-quiet-py",
               {**unsigned, "extensions.autoCheckUpdates": False, "extensions.ignoreRecommendations": True},
               a_python_file)

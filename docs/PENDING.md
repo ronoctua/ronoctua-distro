@@ -278,10 +278,6 @@ substitutos. Fica o que só uma sessão de verdade, com a rede de verdade, diz:
   o disco da VM, e o `systemd-coredump` chegou a 3 GiB de memória; o teste não guarda core nenhum
   (`Storage=none`). Medir numa sessão Wayland: o fim da sessão (`s q q`) com o VS Code aberto deixa
   um core? Se deixa, cada saída guarda gigabytes.
-- **O dicionário do corretor (`redirector.gvt1.com`).** O Electron o baixa para a língua da interface
-  a cada perfil novo, com o corretor desligado nas janelas. Um `--host-resolver-rules` no embrulho do
-  `code` o bloquearia; não foi adotado nem medido (a regra vale para toda a rede do Electron, e o
-  argumento tem de passar pela CLI do VS Code). Decidir se a distro o bloqueia.
 - **O Copilot Chat embutido, depois de uma troca do VS Code.** A cópia que o Marketplace atualizou
   fica em `~/.vscode/extensions` (fora da lista da pessoa); quando a distro move o VS Code e o
   embutido do pacote passa a ser mais novo, a 1.119 diz "Removing stale auto-update builtin
@@ -881,13 +877,6 @@ A B1 tirou a prévia e os fatos do `files::View` sem mudar nada na tela (`inspec
 - acabou quando: um pendrive espetado aparece no seletor aberto, e cada quadro acima tem foto
 
 ### 0.00000042. O navegador do git e os arquivos compactados: o que falta provar · pequeno cada
-
-- **O clone de desenvolvimento segue a reescrita global da pessoa** (`Repo::clone_with`, o `/ c`): o
-  passe é conferido para o host do endereço e o clone roda sem acesso nosso, com a config da pessoa,
-  então um `url.<base>.insteadOf` no `~/.gitconfig` dela leva o clone a outro host. Os pertences não
-  seguem mais (chamada com acesso nosso: sem config global nem do sistema); aqui a reescrita para o
-  MESMO host (https→ssh do GitHub) é uso comum, então a regra seria recusar quando o host efetivo
-  (`git ls-remote --get-url`) não é o do passe. Decisão do dono.
 
 - **O lançamento pelo `C-h` da janela do gerenciador**: ele lança `ronoctua-shell git-browser
   <raiz>` por `systemd-run --user --scope`, que só existe com o gerenciador de usuário. Fora da VM

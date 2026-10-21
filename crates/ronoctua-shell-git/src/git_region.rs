@@ -29,7 +29,8 @@ use std::sync::{Arc, mpsc};
 
 use crate::git_browser::{Errand, Heard, Need, View};
 use crate::region::{
-    Area, Band, Closed, Doorway, Entry, Grip, Lights, Region, RegionEasel, Row, Seen, Shape, Taken,
+    Area, Band, Closed, Doorway, Entry, Grip, Lights, Region, RegionEasel, Residence, Residing,
+    Row, Seen, Shape, Taken,
 };
 use ronoctua_tokens as tokens;
 
@@ -518,6 +519,16 @@ impl Region for GitRegion {
         }
     }
 
+    /// `LEADER / c`'s question, let go while the history is up: where it
+    /// found the address to lead goes with it.
+    fn unanswered(&mut self, id: &'static str, way: &mut dyn Doorway) {
+        if id == crate::dev_clone::COMMAND
+            && let Some(asked) = asked_of(way)
+        {
+            asked.borrow_mut().forget();
+        }
+    }
+
     /// ITS COLUMN'S BAND, on a row — and none where a click does nothing
     /// (`git_browser::hover_band`).
     fn band(&self, row: Option<usize>, cell: Option<u16>, area: &Area, seen: &Seen<'_>) -> Band {
@@ -648,25 +659,108 @@ pub fn dev_clone(argument: Option<&str>, way: &mut dyn Doorway) {
     clone_of(crate::dev_clone::address(), argument, way);
 }
 
+/// What the footer keeps for `LEADER / c` between its question and the
+/// answer ([`crate::dev_clone::Asked`]) — a question asked with the history
+/// closed too, which only a resident outlives.
+impl crate::region::Resident for crate::dev_clone::Asked {
+    /// The question was let go with the history closed.
+    fn let_go(&mut self, question: &str) {
+        if question == crate::dev_clone::COMMAND {
+            self.forget();
+        }
+    }
+}
+
+/// The resident, made when the footer starts.
+fn make() -> Residence {
+    Residence::of(crate::dev_clone::Asked::default())
+}
+
+/// What the footer keeps beside the history's entry, as the binary
+/// registers it.
+pub const RESIDING: Residing = Residing { id: ID, make };
+
+/// The question kept behind a doorway — the footer's always has it.
+fn asked_of(way: &dyn Doorway) -> Option<std::rc::Rc<std::cell::RefCell<crate::dev_clone::Asked>>> {
+    way.residence()?.as_a::<crate::dev_clone::Asked>()
+}
+
 /// [`dev_clone`] with the repository's address GIVEN: the build's — which a
 /// build is told once, when it is compiled (`option_env!`) — or a test's,
 /// so a build with no address is proven whatever the build was told.
 fn clone_of(address: Option<&str>, argument: Option<&str>, way: &mut dyn Doorway) {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let running = crate::dev_clone::running();
+    let kept = asked_of(way);
+    // A TYPED ANSWER TAKES what its question found — once: a second answer,
+    // or one for another address, is asked again.
+    let answering = argument.is_some_and(|a| !a.starts_with(crate::dev_clone::BACK));
+    let asked = if answering {
+        kept.as_ref().and_then(|k| k.borrow_mut().take_for(address))
+    } else {
+        None
+    };
     let step = crate::dev_clone::step(
         argument,
         address,
         home.as_deref(),
         running.as_deref(),
+        asked.as_deref(),
         way.texts(),
     );
     match step {
-        crate::dev_clone::Step::Ask { first, host } => {
+        // WHERE THE ADDRESS LEADS, read by git — on a thread whose answer
+        // comes back as this command; at once in a door with no loop to
+        // hear it (a photograph's), which asks the network nothing either.
+        crate::dev_clone::Step::Resolve { url, first } => {
+            if way.photographing() {
+                let back = crate::dev_clone::resolve(&url, &first);
+                clone_of(address, Some(&back), way);
+                return;
+            }
+            let orders = way.orders();
+            let spawned = std::thread::Builder::new()
+                .name("dev-clone-address".into())
+                .spawn(move || {
+                    orders.run(
+                        crate::dev_clone::COMMAND,
+                        crate::dev_clone::resolve(&url, &first),
+                    );
+                });
+            match spawned {
+                // SAID WHILE GIT READS: the question replaces it.
+                Ok(_) => way.hold(crate::dev_clone::reading(way.texts())),
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not read where the address leads");
+                    let said = way.texts().t(crate::key::DEV_CLONE_UNHEARD);
+                    way.say(said, crate::echo::Echo::Normal);
+                }
+            }
+        }
+        crate::dev_clone::Step::Ask {
+            first,
+            host,
+            from,
+            effective,
+            again,
+        } => {
+            // ASKED AGAIN BY A CLONE that found, from its folder, the address
+            // leading elsewhere: that clone is over.
+            if again {
+                crate::dev_clone::ended();
+            }
+            // A DOOR THAT KEEPS NOTHING between a question and its answer
+            // could not tie the answer to the host the question named: it
+            // asks nothing. The footer always keeps.
+            let Some(kept) = kept else {
+                let said = way.texts().t(crate::key::DEV_CLONE_UNHEARD);
+                way.say(said, crate::echo::Echo::Normal);
+                return;
+            };
+            kept.borrow_mut()
+                .asked(address.unwrap_or_default(), &effective);
             // THE QUESTION NAMES THE HOST: answering it lets it.
-            let mut line = crate::line::Line::new(crate::dev_clone::COMMAND, false, Some(&first));
-            line.asks_with = vec![("host", host)];
-            way.ask(line);
+            way.ask(crate::dev_clone::question(&first, host, from));
         }
         crate::dev_clone::Step::Say(said) => way.say(said, crate::echo::Echo::Normal),
         // A DOOR WITH NO LOOP TO HEAR THE ANSWER ON — a photograph's, a
@@ -957,7 +1051,8 @@ mod tests {
     /// question it cannot answer or starts anything — on the door, the
     /// sentence says why, whatever was typed; or `LEADER / c` with the
     /// history closed is not carried out without it — taken, and the door
-    /// told (this build's question, or its refusal).
+    /// told. HERMETIC: what git would read of this machine's settings is
+    /// handed in already read (the answer of git's thread), so no git runs.
     #[test]
     fn a_clone_this_build_cannot_make_is_said() {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
@@ -972,9 +1067,13 @@ mod tests {
             );
         }
         assert!(crate::dev_clone::running().is_none(), "a clone started");
-        let mut w = way();
+        let mut w = footers_way();
+        let read = crate::dev_clone::read_back(
+            Ok("https://github.com/ronoctua/ronoctua-distro.git".to_owned()),
+            "/home/ada/distro",
+        );
         assert_eq!(
-            closed(crate::dev_clone::COMMAND, None, &mut w),
+            closed(crate::dev_clone::COMMAND, Some(&read), &mut w),
             Closed::Taken
         );
         assert!(
@@ -984,24 +1083,113 @@ mod tests {
         );
     }
 
+    /// The footer's doorway, with the history's resident — `LEADER / c`'s
+    /// question kept until its answer.
+    fn footers_way() -> Recorder {
+        let mut w = way();
+        w.residence = Some(make());
+        w
+    }
+
+    /// What `/ c` asks once git said the address leads to `effective`.
+    fn asked_at(address: &str, effective: &str, w: &mut Recorder) {
+        let back = crate::dev_clone::read_back(Ok(effective.to_owned()), "/home/ada/distro");
+        clone_of(Some(address), Some(&back), w);
+    }
+
     /// FAILS IF: a door with no loop to hear the answer on — a photograph's
     /// — starts a clone: it would reach the network from a photograph, and
     /// its answer would go nowhere. The sentence says it would not be heard.
     #[test]
     fn a_door_with_no_loop_starts_no_clone() {
-        let mut w = way();
+        let address = "https://example.org/ronoctua-distro.git";
+        let mut w = footers_way();
         let into = std::env::temp_dir().join(format!(
             "ronoctua-git-region-no-clone-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&into);
-        clone_of(
-            Some("https://example.org/ronoctua-distro.git"),
-            Some(&into.to_string_lossy()),
-            &mut w,
+        asked_at(address, address, &mut w);
+        assert!(
+            matches!(w.owed.as_slice(), [Effect::Ask(_)]),
+            "{:?}",
+            w.owed
         );
+        w.owed.clear();
+        clone_of(Some(address), Some(&into.to_string_lossy()), &mut w);
         assert!(crate::dev_clone::running().is_none(), "a clone started");
         assert!(!into.exists(), "the folder was made");
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        assert_eq!(
+            w.owed,
+            vec![Effect::Say(
+                texts.t(crate::key::DEV_CLONE_UNHEARD),
+                crate::echo::Echo::Normal
+            )]
+        );
+    }
+
+    /// FAILS IF: the door's question for an address its person's settings
+    /// send elsewhere does not name where they send it (and why it is not the
+    /// address's host); the one for an address they leave alone, or send to
+    /// the same host, is not the question of before; or what the question
+    /// found is not kept for its answer — and forgotten when it is let go,
+    /// the history open or closed.
+    #[test]
+    fn the_door_asks_the_host_the_address_leads_to_and_keeps_it_for_the_answer() {
+        use crate::region::Resident as _;
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let address = "https://github.com/ronoctua/ronoctua-distro.git";
+        let elsewhere = "https://mirror.example.org/github/ronoctua/ronoctua-distro.git";
+        let asked = |w: &Recorder| match w.owed.as_slice() {
+            [Effect::Ask(line)] => line.question(&texts),
+            other => panic!("{other:?}"),
+        };
+        let kept = |w: &Recorder| {
+            asked_of(w)
+                .expect("the resident")
+                .borrow_mut()
+                .take_for(Some(address))
+        };
+        for effective in [address, "git@github.com:ronoctua/ronoctua-distro.git"] {
+            let mut w = footers_way();
+            asked_at(address, effective, &mut w);
+            assert_eq!(
+                asked(&w),
+                texts.t_with(crate::key::ASK_DEV_CLONE, &[("host", "github.com")])
+            );
+            assert_eq!(kept(&w).as_deref(), Some(effective));
+        }
+        let mut w = footers_way();
+        asked_at(address, elsewhere, &mut w);
+        let question = asked(&w);
+        assert!(
+            question.contains("mirror.example.org") && question.contains("github.com"),
+            "{question}"
+        );
+        assert_eq!(kept(&w).as_deref(), Some(elsewhere));
+        // LET GO, the history closed (the resident) or open (the region).
+        let mut w = footers_way();
+        asked_at(address, elsewhere, &mut w);
+        asked_of(&w)
+            .expect("the resident")
+            .borrow_mut()
+            .let_go(crate::dev_clone::COMMAND);
+        assert_eq!(kept(&w), None);
+        let mut w = footers_way();
+        asked_at(address, elsewhere, &mut w);
+        let mut r = GitRegion::at(std::path::Path::new("/"), &mut w);
+        r.unanswered(crate::dev_clone::COMMAND, &mut w);
+        assert_eq!(kept(&w), None);
+    }
+
+    /// FAILS IF: a door that keeps nothing between a question and its answer
+    /// asks one — its answer could not be tied to the host it named.
+    #[test]
+    fn a_door_that_keeps_nothing_asks_nothing() {
+        let address = "https://github.com/ronoctua/ronoctua-distro.git";
+        let mut w = way();
+        asked_at(address, address, &mut w);
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
         assert_eq!(
             w.owed,

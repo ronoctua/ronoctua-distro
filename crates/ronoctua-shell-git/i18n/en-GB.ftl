@@ -140,3 +140,7 @@ dev-clone-unheard = The footer could not hear the clone's answer, so it was not 
 dev-clone-unkept-no-home = There is no home folder to keep the consent in: nothing was cloned.
 dev-clone-unkept-unparseable = The consent file (consent.json) will not parse; it was left as it is, and nothing was cloned.
 dev-clone-unkept-unwritable = The consent file could not be written: nothing was cloned.
+dev-clone-elsewhere = Clone from { $host } (not { $from }) into
+dev-clone-unread = git could not read where your settings send the distro's address, so nothing was asked.
+dev-clone-reading = Reading where your git settings send the distro's address…
+dev-clone-no-host = Your git settings send the distro's address to { $to }, which is no host to ask: nothing was cloned.

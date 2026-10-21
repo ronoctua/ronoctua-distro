@@ -145,6 +145,7 @@ impl Footer {
                 // from what it is now — the address — and comes back as the
                 // same command's argument.
                 Errand::Ask { id, initial } => {
+                    self.the_line_moves_on();
                     self.mx.request_with(id, false, initial.as_deref());
                     self.apply_geometry(KeyboardInteractivity::Exclusive);
                 }

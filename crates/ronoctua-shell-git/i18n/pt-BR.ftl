@@ -140,3 +140,7 @@ dev-clone-unheard = O rodapé não ouviria a resposta do clone, então ele não 
 dev-clone-unkept-no-home = Não há pasta pessoal onde guardar o consentimento: nada foi clonado.
 dev-clone-unkept-unparseable = O arquivo de consentimento (consent.json) não lê; ficou como estava, e nada foi clonado.
 dev-clone-unkept-unwritable = O arquivo de consentimento não pôde ser gravado: nada foi clonado.
+dev-clone-elsewhere = Clonar de { $host } (não { $from }) em
+dev-clone-unread = O git não conseguiu ler para onde as suas configurações mandam o endereço da distro, então nada foi perguntado.
+dev-clone-reading = Lendo para onde as suas configurações do git mandam o endereço da distro…
+dev-clone-no-host = A sua configuração do git manda o endereço da distro para { $to }, que não é um host a perguntar: nada foi clonado.

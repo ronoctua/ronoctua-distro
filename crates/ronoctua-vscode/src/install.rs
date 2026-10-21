@@ -27,6 +27,10 @@ use ronoctua_consent::Pass;
 
 use crate::{EXTENSIONS_IN_HOME, Refusal, Why};
 
+/// The Chromium switch the distro's `code` starts VS Code with
+/// (`nix/vscode.nix`), by the name VS Code's CLI warns about.
+pub const DISTRO_SWITCH: &str = "host-resolver-rules";
+
 /// One extension that did not enter, and what `code` said of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
@@ -183,13 +187,25 @@ fn run(code: &Path, home: &Path, id: &str, pre_release: bool) -> Result<(), Stri
 /// it is the first error ("Error while installing extensions: connect
 /// ECONNREFUSED …"). The id is compared as VS Code compares it, ignoring
 /// case.
+///
+/// # Never the CLI's word on the distro's own switch
+///
+/// The distro's `code` starts VS Code with Chromium's
+/// `--host-resolver-rules` ([`DISTRO_SWITCH`], `nix/vscode.nix`), which
+/// the CLI does not know: every call begins its errors with a warning that
+/// names it ("Warning: 'host-resolver-rules' is not in the list of known
+/// options, but still passed to Electron/Chromium.", measured on the pinned
+/// 1.119) — the FIRST error line, so a failure that names no id would be
+/// said as that. That warning, by its own shape ([`the_switch_warning`]), is
+/// never the cause; any other line is kept, one that echoes the command line
+/// with the switch in it included.
 #[must_use]
 pub fn what_code_said(id: &str, stderr: &[u8], stdout: &[u8]) -> Option<String> {
     let lines = |bytes: &[u8]| -> Vec<String> {
         String::from_utf8_lossy(bytes)
             .lines()
             .map(str::trim)
-            .filter(|l| !l.is_empty())
+            .filter(|l| !l.is_empty() && !the_switch_warning(l))
             .map(str::to_owned)
             .collect()
     };
@@ -201,6 +217,15 @@ pub fn what_code_said(id: &str, stderr: &[u8], stdout: &[u8]) -> Option<String> 
         .or_else(|| errors.first())
         .cloned()
         .or_else(|| lines(stdout).pop())
+}
+
+/// Whether `line` is VS Code's CLI saying it does not know the distro's
+/// switch and passes it on: `Warning: '<switch>' is not in the list of known
+/// options…` (measured on the pinned 1.119, `code --version`).
+fn the_switch_warning(line: &str) -> bool {
+    line.strip_prefix("Warning: '")
+        .and_then(|rest| rest.strip_prefix(DISTRO_SWITCH))
+        .is_some_and(|rest| rest.starts_with("' is not in the list of known options"))
 }
 
 #[cfg(test)]
@@ -355,5 +380,42 @@ mod tests {
             Some("gave up")
         );
         assert_eq!(what_code_said("a.b", b"\n", b""), None);
+    }
+
+    /// FAILS IF: the warning VS Code's CLI writes first on every call of the
+    /// distro's `code` — about the switch `nix/vscode.nix` starts it with —
+    /// is kept as a failure's cause, as the pinned 1.119 writes it (measured,
+    /// `code --version`), when the cause names no id; or it is the only
+    /// thing said, and is kept for one.
+    #[test]
+    fn the_clis_word_on_the_distros_switch_is_never_the_cause() {
+        let warning = "Warning: 'host-resolver-rules' is not in the list of known options, but still passed to Electron/Chromium.\n";
+        assert!(warning.contains(DISTRO_SWITCH));
+        assert_eq!(
+            what_code_said(
+                "a.b",
+                format!("{warning}Error while installing extensions: connect ECONNREFUSED 127.0.0.1:443\n").as_bytes(),
+                b"Installing extensions...\n",
+            )
+            .as_deref(),
+            Some("Error while installing extensions: connect ECONNREFUSED 127.0.0.1:443")
+        );
+        assert_eq!(
+            what_code_said(
+                "nope.missing",
+                format!("{warning}Extension 'nope.missing' not found.\nFailed Installing Extensions: nope.missing\n").as_bytes(),
+                b"",
+            )
+            .as_deref(),
+            Some("Extension 'nope.missing' not found.")
+        );
+        assert_eq!(what_code_said("a.b", warning.as_bytes(), b""), None);
+        // A REAL ERROR that echoes the command line, the switch in it, is
+        // what `code` said, and kept.
+        let echoed = "Error: could not start /nix/store/x/code --host-resolver-rules=MAP redirector.gvt1.com ~NOTFOUND --install-extension a.b";
+        assert_eq!(
+            what_code_said("x.y", format!("{warning}{echoed}\n").as_bytes(), b"").as_deref(),
+            Some(echoed)
+        );
     }
 }

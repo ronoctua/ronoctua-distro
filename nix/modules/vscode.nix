@@ -14,7 +14,9 @@
 #   `XDG_SESSION_TYPE=wayland` (`scroll.nix` gives it to the manager), as
 #   Chrome's does: without it, measured in `tests/vscode-vm.nix`, Electron
 #   takes X11 and, with no X display, ends.
-# - Its telemetry OFF BY POLICY (`/etc/vscode/policy.json`).
+# - Its telemetry OFF BY POLICY (`/etc/vscode/policy.json`), and Chromium's
+#   spell-check dictionary never fetched (`nix/vscode.nix`, a rule of
+#   Chromium's own on every start's command line).
 # - `ronoctua-vscode` on the person's `PATH`, with `code` set
 #   (`RONOCTUA_VSCODE`) — `ronoctua-vscode install` reinstalls what is
 #   missing from a terminal —, the same variable for the footer and the

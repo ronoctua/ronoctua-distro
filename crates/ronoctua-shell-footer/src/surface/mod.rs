@@ -3103,8 +3103,12 @@ pub(crate) fn photographed(
                     state.draw_and_paint();
                 }
             }
+            // `<id> <argument>`, as the socket's line carries one.
             crate::footer_photograph::Step::Command(id) => {
-                state.run_with(&id, None);
+                match id.split_once(' ') {
+                    Some((id, argument)) => state.run_with(id, Some(argument)),
+                    None => state.run_with(&id, None),
+                }
                 state.draw_and_paint();
             }
             // THE WHEEL OVER A LIST moves the page, never the cursor — the
@@ -8339,6 +8343,7 @@ impl Footer {
                 self.brightness_by(id == "brightness-up");
             }
             "mx-open" => {
+                self.the_line_moves_on();
                 self.mx.open(self.command_registry);
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -8366,6 +8371,7 @@ impl Footer {
                     return;
                 }
                 tracing::info!(buffers = items.len(), "buffer chooser opened");
+                self.the_line_moves_on();
                 self.mx.open_over(items);
                 self.first_page();
                 self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -8602,6 +8608,7 @@ impl Footer {
     fn lost_the_keyboard(&mut self) {
         if self.grabbing() {
             tracing::debug!("keyboard focus lost; closing what was open");
+            self.the_line_moves_on();
             self.mx.close_it();
             self.apps = None;
             // THE REGIONS THAT GO WITH IT — the file manager first of all,
@@ -10509,6 +10516,7 @@ impl Footer {
         if acting.asks.is_some() && answer.is_none() {
             match crate::brainlink::question_of(&acting) {
                 Some((id, asks)) => {
+                    self.the_line_moves_on();
                     self.mx.request_asking(id, asks);
                     self.apply_geometry(KeyboardInteractivity::Exclusive);
                     self.draw_and_paint();

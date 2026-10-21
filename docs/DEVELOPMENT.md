@@ -482,7 +482,11 @@ devshell está no store, saída por saída e com o `stdenv` (o `nix develop` nã
 nenhum), o rust, o `cc` com que ele linka e os agentes de código estão no PATH, a pessoa está no grupo
 `kvm`, o daemon oferece as quatro `system-features` e o direnv do sistema já
 carrega o `nix-direnv`. **`LEADER / c`** clona este repositório numa pasta e a abre — a pergunta nomeia
-o host que o endereço nomeia, e respondê-la é deixá-lo ser consultado. O que o checkout gera (os ganchos, o WIT, os
+o host para onde as suas configurações do git mandam o endereço (e, se não é o dele, o dele ao lado), e
+respondê-la é deixá-lo ser consultado; um espelho privado que pede credenciais é recusado (o clone não
+roda o seu auxiliar de credenciais), e o SSH é o seu — um `Host` com outro `HostName` no
+`~/.ssh/config` (o `ssh.github.com` que o GitHub sugere) é perguntado pelo nome que o git usa. O que o
+checkout gera (os ganchos, o WIT, os
 buffers, as tabelas `-rs`) e os programas que o build assa seguem o commit: o primeiro `nix develop`
 os constrói, e o que essas construções pedem de fora (as crates de um buffer) ainda vem da rede. Em
 outro sistema, confira um a um:

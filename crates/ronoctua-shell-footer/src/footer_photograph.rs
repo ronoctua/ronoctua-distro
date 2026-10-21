@@ -99,7 +99,8 @@ Steps — walked in the order they appear:
   --leader              the leader, as the compositor's bind sends it
   --key <notation>      a key, as the keymap writes it: w, s, <down>, RET
   --command <id>        a command of the registry, as `ronoctua-shell
-                        command <id>` sends it
+                        command <id>` sends it — and `<id> <argument>`, one
+                        word, with its argument after the first space
   --wheel <lines>       the wheel over the region, in lines (negative: up)
   --click <line>        a press and a release on line <line> of the region
                         as it is drawn, counted from its top (0) — twice

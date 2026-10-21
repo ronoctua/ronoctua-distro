@@ -17295,7 +17295,8 @@ para o NixOS, que o ambiente evita (o parágrafo seguinte); o teste do ambiente 
 caminho. O ambiente faz o próprio `/etc` com uma lista de
 entradas do host, e o `/etc/vscode` não está nela: lá dentro o VS Code não acharia a política. Por
 isso o pacote é o `.fhs` de um `pkgs.vscode` cujo `customizeFHSEnv` acrescenta `--ro-bind-try
-/etc/vscode /etc/vscode` (o derivation do VS Code em si não muda; muda só o ambiente).
+/etc/vscode /etc/vscode` (o derivation do VS Code em si muda só no embrulho do `code`, pela regra do
+dicionário, abaixo).
 
 **O rust-analyzer: o ambiente diz `ID=linux`, e o servidor do pacote roda sem nada.** A extensão
 (0.3.3081, o VSIX de 2026-10-12) lê o `ID` do `/etc/os-release`; vendo `nixos`, não roda o servidor
@@ -17350,7 +17351,7 @@ mesmo nome do `code.desktop`), nunca pelo XWayland. A política não cala tudo �
 novo e nenhuma extensão da pessoa, o `vscode-vm` manda todo nome para a própria máquina (um servidor de
 nomes que responde 127.0.0.1 a tudo) e responde a conversa inteira: o substituto do Marketplace anota
 cada saudação TLS, atende o preflight CORS das janelas, oferece um Copilot Chat mais novo que o
-embutido e redireciona o dicionário como o Google redireciona. O VS Code alcança só isto:
+embutido e redireciona o dicionário do corretor como o Google redireciona. O VS Code alcança só isto:
 
 - a CDN dele, `main.vscode-cdn.net`: a lista de controle das extensões (`/extensions/marketplace.json`,
   as maliciosas e as obsoletas), a dos participantes de chat (`/extensions/chat.json`, o
@@ -17363,10 +17364,9 @@ embutido e redireciona o dicionário como o Google redireciona. O VS Code alcan�
   (`checkForUpdates`, na partida e de 12 em 12 horas): o `product.json` põe o Copilot Chat em
   `builtInExtensionsEnabledWithAutoUpdates`, a busca leva junto toda extensão que a pessoa instalou,
   e o `extensions.autoUpdate` instala o que ela acha; com a primeira pergunta falhando, o reserva é
-  `www.vscode-unpkg.net`;
-- o Google, pelo Electron: `redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic` e o espelho para
-  onde ele manda — o dicionário do corretor ortográfico do Chromium para a língua da interface,
-  baixado mesmo com o corretor desligado nas janelas do VS Code.
+  `www.vscode-unpkg.net`.
+
+O Google, nunca: o dicionário do corretor que o Electron baixaria é bloqueado pela distro (abaixo).
 
 Nada de telemetria: com ela desligada, o Marketplace recebe só a versão (`X-Market-Client-Id`,
 `User-Agent`); o id da máquina só iria com ela em `all` (lido no código pinado).
@@ -17385,10 +17385,26 @@ dela deixam de se atualizar sozinhas; a busca à mão continua), mas abrir um ar
 `product.json` recomenda uma extensão (um `.py`: `ms-python/python/latest` e a `extensionquery`) ainda
 pergunta; `"extensions.ignoreRecommendations": true` cala essa (e as recomendações todas). O
 `chat.disableAIFeatures` existe na 1.119 (esconde o chat e as entradas de IA e desliga a extensão
-embutida do Copilot Chat), mas não cala a pergunta nem a atualização dele (medido). A CDN e o
-dicionário não têm ajuste; um `--host-resolver-rules` no embrulho do `code` bloquearia o dicionário,
-e não foi adotado: a regra vale para toda a rede do Electron e o argumento passa pela CLI do VS Code,
-nada disso medido, por um download sem identidade (`docs/PENDING.md`).
+embutida do Copilot Chat), mas não cala a pergunta nem a atualização dele (medido). A CDN não tem
+ajuste.
+
+**O dicionário do corretor, a regra do próprio Chromium o bloqueia.** Sem nada, o Electron baixa o
+dicionário do corretor ortográfico do Chromium para a língua da interface
+(`redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic`, que o Google redireciona para um espelho
+dele) em todo perfil novo — com o corretor desligado em toda janela do VS Code e nada do VS Code que
+o leia —, e nenhuma política nem ajuste da 1.119 o impede (medido). A distro põe na linha de comando
+de toda partida `--host-resolver-rules="MAP redirector.gvt1.com ~NOTFOUND"` (`nix/vscode.nix`, o
+`commandLineArgs` do embrulho do nixpkgs, que o ambiente FHS roda: a entrada do lançador, o `code` de
+um terminal e o do `ronoctua-vscode` são esse): o pedido falha antes de qualquer nome ser perguntado,
+e todo outro host resolve como antes. A regra vale só para a rede do Chromium — a CLI e o host de
+extensões são Node, cujo resolvedor não a lê. O `vscode-vm` prova: o substituto responde o
+redirecionador e o espelho como o Google, e nenhuma partida medida pergunta o nome de um dos dois nem
+os alcança (sem a regra, alcança: a sabotagem); a regra está na linha de comando do Electron que roda;
+e as extensões continuam instalando (o `code --install-extension` da fila) e se atualizando (o
+Copilot Chat embutido, ao subir). O preço: a CLI do VS Code não conhece a opção, avisa a cada
+chamada, no erro padrão ("Warning: 'host-resolver-rules' is not in the list of known options, but
+still passed to Electron/Chromium.") e a passa adiante; o `ronoctua-vscode` pula essa linha ao ler por
+que uma instalação falhou (era a primeira linha de erro, e virava a causa de uma falha de rede).
 
 **A configuração viaja, as extensões não.** O alvo `vscode` dos pertences leva
 `~/.config/Code/User` — configurações, atalhos, snippets, tarefas, servidores MCP, prompts, os
@@ -18142,23 +18158,74 @@ módulo do brain e a vista (L24) perguntam ao crate; o shell só lê o arquivo q
   mais do que o daemon pode segurar, o kernel estrangulava os compiladores e o oomd matava a build.
   O oomd não foi afrouxado; uma máquina que só constrói sobe o teto no `host.nix`.
 - **`LEADER / c` clona a distro.** O endereço é da construção (`RONOCTUA_DISTRO_REPOSITORY`, em
-  `nix/rust.nix`), então o que se pergunta é ONDE, e a pergunta nomeia o host que o endereço
-  nomeia ("Clonar de github.com em", tirado do endereço e não escrito na chave: um fork pergunta
+  `nix/rust.nix`), então o que se pergunta é ONDE, e a pergunta nomeia o host para onde o endereço
+  leva ("Clonar de github.com em", tirado do endereço e não escrito na chave: um fork pergunta
   pelo host dele): a resposta é o consentimento, gravado no `consent.json` como o repositório
   digitado dos pertences, só então o `Pass` é cunhado, e a frase seguinte diz que o host ficou
-  permitido. Um redirecionamento não leva o clone a outro host (`http.followRedirects=false`; o
-  padrão do git, `initial`, segue a primeira resposta para qualquer lugar), e uma linha parada
-  desiste em 60 s abaixo de 1 KiB/s, porque o git por HTTPS não tem prazo próprio. Enquanto o clone
+  permitido. Um redirecionamento não leva o clone a outro host (`http.followRedirects=false`, e o
+  mesmo para o endereço efetivo, abaixo; o padrão do git, `initial`, segue a primeira resposta para
+  qualquer lugar), e uma linha parada desiste em 60 s abaixo de 1 KiB/s, porque o git por HTTPS não
+  tem prazo próprio. Enquanto o clone
   roda, a frase dele fica SEGURA na linha — é um estado, não um gesto — até a resposta a
   substituir, e um segundo `/ c` ouve que ainda há um clone rodando em vez de achar "ocupada" a
   pasta que o primeiro já criou. Uma pasta que já existe e não está vazia é recusada
   antes de qualquer pergunta à rede. O `Repo::clone(pass, url, into)` do `ronoctua-git` recusa um
-  endereço cujo host o passe não cobre (`host_of`), e clona endurecido como toda chamada — sem
-  gancho, sem template, sem submódulo, sem pergunta. Fica atrás da feature `clone` porque o
+  endereço cujo host efetivo o passe não cobre, e clona endurecido como toda chamada — sem gancho,
+  sem template, sem submódulo, sem pergunta. Fica atrás da feature `clone` porque o
   `ronoctua-git-askpass` é compilado do fonte do crate só com `rustc` (`nix/git-askpass.nix`), sem
   dependência nenhuma. O clone roda numa thread e volta como o mesmo comando com um argumento que
   ninguém digita (começa com NUL), pelo canal que já roda um comando com argumento no laço; pronto,
   o gerenciador de arquivos abre na pasta.
+- **O host perguntado é para onde o endereço leva com as configurações da pessoa** (decisão do
+  dono, 2026-10-21). O clone roda sem acesso nosso e com a config do git dela — o SSH dela, as
+  reescritas dela —, e um `url.<base>.insteadOf` do `~/.gitconfig` (ou do sistema) o leva a outro
+  host. Os pertences não seguem reescrita nenhuma (com acesso nosso, sem config global nem do
+  sistema); aqui a reescrita para o MESMO host (https→ssh do GitHub) é uso comum, então a config
+  fica e o que muda é o host perguntado. Antes da pergunta, `ronoctua_git::effective_url` lê de `/`
+  para onde o endereço leva (`git ls-remote --get-url`, que aplica o `insteadOf` sem perguntar nada
+  à rede), numa thread cuja resposta volta como o mesmo comando — "Lendo para onde…" fica na linha
+  enquanto isso; numa foto, na hora. Sem reescrita ou para o mesmo host, a pergunta de sempre; para
+  outro, a pergunta nomeia ESSE host e, ao lado, o do endereço ("Clonar de mirror.example.org (não
+  github.com) em", curta para caber com as teclas da linha a 1280 px); responder é permitir ele, e
+  nunca há recusa calada nem clone sem o passe dele. Uma reescrita para um caminho ou para um
+  auxiliar remoto (`gcrypt::…`, `ext::`, `fd::` — o `host_of` não dá host a nenhum, nem um com o nome
+  do auxiliar) é dita, e nada é clonado; o `pushInsteadOf` é de push, e o clone nunca o lê.
+- **O clone lê para onde vai DE DENTRO do repositório que ele faz.** De `/`, três coisas da config da
+  pessoa não aparecem, e um `git clone` as segue (medido no git pinado): uma reescrita num arquivo
+  incluído só para a pasta nova (`includeIf "gitdir:…"`) ou só para o endereço
+  (`"hasconfig:remote.*.url:…"`) — e uma dessas para o endereço INTEIRO vence qualquer regra nossa
+  para o mesmo endereço, porque num empate vale a primeira lida —, e um `remote.origin.url` global,
+  que o `git clone` lê antes do endereço que recebeu. Por isso o `Repo::prepare_clone` não chama
+  `git clone`: faz o repositório (`init`, sem template), zera a lista de URLs do `origin` (um valor
+  vazio a zera) antes de pôr o endereço, e lê ALI para onde o fetch vai (`ls-remote --get-url
+  origin`), com cada arquivo que a config inclui para aquela pasta ou aquele endereço; nada da rede
+  foi tocado. O `Prepared::fetch` só busca com o passe desse host, preso a ele
+  (`url.<efetivo>.insteadOf` no ambiente) e sem seguir redirecionamento: além do
+  `http.followRedirects=false`, o `http.<efetivo>.followRedirects=false`, lido por último e tão
+  específico quanto uma regra da pessoa pode ser — uma regra dela por URL vencia a chave simples
+  (medido); depois faz o checkout do ramo padrão do remoto e deixa o `origin` só com o endereço,
+  como um clone deixa. Quando, da pasta, o endereço leva a outro host que o da pergunta, o que foi
+  feito é desfeito, nada é alcançado, e a pergunta volta nomeando esse host, com a pasta oferecida
+  (`dev_clone::run`). Cada passo local tem prazo (`CLONE_LOCAL_MOST_S`: um arquivo incluído que
+  nunca termina de ser escrito, uma FIFO, prenderia a linha), e o fetch e o checkout também
+  (`CLONE_FETCH_MOST_S`, além do limite de velocidade do HTTPS, porque SSH e `git://` não têm um).
+- **A resposta é amarrada à pergunta.** O rodapé guarda o que a pergunta achou até a resposta
+  (`dev_clone::Asked`, o residente do git), e ele vai embora com a pergunta: com `Esc`, e sempre que
+  a linha passa a outra coisa sem a resposta — o `LEADER :`, o seletor de buffers, outra pergunta,
+  o teclado perdido (`Footer::the_line_moves_on`, para a pergunta de toda região). Antes, o rodapé
+  continuava tomando um comando posterior de mesmo id, com argumento, pela resposta, e um
+  `dev-clone <pasta>` clonaria ali sem ninguém responder (o check
+  `dev-clone-asks-where-the-address-leads`, sobre a câmera do rodapé). Uma resposta sem pergunta (o
+  comando rodado com a pasta) é perguntada antes, com a pasta oferecida.
+- **O que o clone não decide pela pessoa.** O auxiliar de credenciais dela não entra, como em toda
+  chamada endurecida (`credential.helper` vazio): um espelho privado que pede credenciais é recusado
+  ("precisa de credenciais"), e a pessoa clona ele à mão. O SSH é o dela: um `Host` do
+  `~/.ssh/config` com outro `HostName` — o próprio GitHub documenta `Host github.com` com
+  `HostName ssh.github.com` e a porta 443, para redes que fecham a 22 —, um `ProxyJump` ou um
+  `ProxyCommand` são a configuração SSH dela, e a pergunta nomeia o host que o git nomeia (o
+  `github.com` do exemplo). Perguntar o `hostname` do `ssh -G` foi pesado e descartado: seria rodar
+  outro programa por uma precisão que ele não tem (um `Match exec` ou um `ProxyCommand` decidem na
+  hora), e a decisão de manter o SSH da pessoa é do desenho.
 
 ### Common Lisp nos dois perfis (2026-10-20)
 
@@ -23508,7 +23575,10 @@ residente sem região ou dois para uma). Enquanto a região está aberta, ela ou
 e o despertador dela; enquanto está fechada, o residente ouve. A região e o residente seguram O
 MESMO valor (`region::Residence`: um `Rc<RefCell<…>>` visto como o trait pelo rodapé e como o tipo
 pela funcionalidade) — não há cópia para ficar velha. O despertador de uma região com residente é
-pendurado uma vez, para a sessão.
+pendurado uma vez, para a sessão. O git tem um também (2026-10-21): a pergunta do `LEADER / c`
+guardada até a resposta, com o histórico aberto ou fechado (`dev_clone::Asked`), esquecida quando a
+pergunta é largada (`Resident::let_go`, `Region::unanswered`) — e o rodapé a larga sempre que a
+linha passa a outra coisa sem a resposta (`Footer::the_line_moves_on`).
 
 ##### O que mais a porta e o hospedeiro ganharam (`region.rs`, `surface/host.rs`)
 

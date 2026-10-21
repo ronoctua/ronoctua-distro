@@ -217,9 +217,11 @@ e deixa de ter o servidor do lançamento da extensão, que pode trazer recursos 
 
 **A rede que ele abre sozinho.** O VS Code é um programa de terceiro que fala com o fabricante, como o
 Chrome: mesmo com a telemetria desligada, ao subir ele pede à CDN dele as listas de controle e o alerta
-de emergência, baixa do Google o dicionário do corretor e pergunta ao Marketplace se há versão nova
-das extensões — a do Copilot Chat embutido inclusive, que ele baixa e instala sozinho. Para calar o
-Marketplace, dois ajustes no seu `settings.json`:
+de emergência e pergunta ao Marketplace se há versão nova das extensões — a do Copilot Chat embutido
+inclusive, que ele baixa e instala sozinho. O dicionário do corretor que ele baixaria do Google, a
+distro bloqueia; por isso o `code` num terminal avisa, a cada chamada, que não conhece a opção
+`host-resolver-rules` e a passa adiante. Para calar o Marketplace, dois ajustes no seu
+`settings.json`:
 
 ```json
 "extensions.autoCheckUpdates": false,

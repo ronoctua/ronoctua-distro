@@ -85,10 +85,14 @@
 //! # And the one that reaches a new host
 //!
 //! [`Repo::clone`] (feature `clone`) makes a repository from an address, and
-//! the host it names is one nobody let yet: so it takes a
-//! [`ronoctua_consent::Pass`] for that host ([`host_of`]), and an address the
-//! pass does not cover starts nothing — nor does a redirect take the clone to
-//! another host (`http.followRedirects=false`).
+//! the host it reaches is one nobody let yet: so it takes a
+//! [`ronoctua_consent::Pass`] for that host, and an address the pass does not
+//! cover starts nothing — nor does a redirect take the clone to another host
+//! (`http.followRedirects=false`, for the address itself too). The host is
+//! where the address LEADS: a clone keeps the person's settings, and their
+//! `url.<base>.insteadOf` can send it elsewhere — so the repository is made
+//! first and read where its fetch will run ([`Repo::prepare_clone`]), and
+//! only then fetched ([`Prepared::fetch`]).
 
 #![forbid(unsafe_code)]
 
@@ -621,6 +625,100 @@ fn run(mut command: Command, most: usize) -> Result<Ran, Refusal> {
     })
 }
 
+/// [`run`], with git stopped when it has not ended within the limit given —
+/// the refusal then the [`Why`] given with it. A clone's (feature `clone`):
+/// every other call is bounded by what it reads.
+///
+/// THE CLOCK IS ONE THREAD, armed only while git runs: it waits on a channel
+/// the call closes when git ended, and kills git at the limit; nothing polls
+/// while git writes. Only after git closed its output does this ask, in short
+/// steps, whether it ended — the moment between the two is short, and a
+/// blocking wait there would hold the child where the clock cannot kill it.
+#[cfg(feature = "clone")]
+fn run_until(
+    mut command: Command,
+    most: usize,
+    limit: Option<(std::time::Duration, Why)>,
+) -> Result<Ran, Refusal> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| refused(Why::Unstartable))?;
+    let (Some(mut out), Some(mut err)) = (child.stdout.take(), child.stderr.take()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(refused(Why::Unstartable));
+    };
+    let child = Arc::new(Mutex::new(child));
+    let late = Arc::new(AtomicBool::new(false));
+    let (ended, ending) = std::sync::mpsc::channel::<()>();
+    let clock = limit.map(|(within, _)| {
+        let child = Arc::clone(&child);
+        let late = Arc::clone(&late);
+        std::thread::spawn(move || {
+            if ending.recv_timeout(within) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                late.store(true, Ordering::SeqCst);
+                if let Ok(mut c) = child.lock() {
+                    let _ = c.kill();
+                }
+            }
+        })
+    });
+    let errors = std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut buffer = [0u8; 4096];
+        while let Ok(n) = err.read(&mut buffer) {
+            if n == 0 {
+                break;
+            }
+            if kept.len() < ERR_MOST_BYTES {
+                kept.extend_from_slice(&buffer[..n]);
+            }
+        }
+        String::from_utf8_lossy(&kept).into_owned()
+    });
+    let mut bytes = Vec::new();
+    let read = (&mut out)
+        .take(u64::try_from(most).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes);
+    let too_large = bytes.len() > most;
+    if too_large && let Ok(mut c) = child.lock() {
+        let _ = c.kill();
+    }
+    drop(out);
+    let status = loop {
+        let polled = child.lock().map_err(|_| refused(Why::Failed))?.try_wait();
+        match polled {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(_) => return Err(refused(Why::Failed)),
+        }
+    };
+    drop(ended);
+    if let Some(clock) = clock {
+        let _ = clock.join();
+    }
+    let err = errors.join().unwrap_or_default();
+    if let Some((_, why)) = limit
+        && late.load(Ordering::SeqCst)
+    {
+        return Err(refused(why));
+    }
+    if too_large {
+        return Err(refused(Why::TooLarge));
+    }
+    read.map_err(|_| refused(Why::Failed))?;
+    Ok(Ran {
+        ok: status.success(),
+        code: status.code(),
+        out: bytes,
+        err,
+    })
+}
+
 /// Where a failed call went — which decides what its stderr can mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reach {
@@ -987,12 +1085,13 @@ const CLONE_SCHEMES: [&str; 4] = ["https", "http", "git", "ssh"];
 /// The host a remote's address names, as consent keeps it
 /// ([`ronoctua_consent::normal`]): `https://host/…`, `http://`, `git://`,
 /// `ssh://[user@]host[:port]/…`, and SSH's short form `[user@]host:path`.
-/// `None` for an address that names no host — a local path, `file://`,
-/// `ext::`, an option (`-…`) — or a host consent would not keep. Pure.
+/// `None` for an address that names no host — a local path, `file://`, a
+/// remote helper's `<transport>::<address>` (`ext::`, `fd::`, `gcrypt::…`),
+/// an option (`-…`) — or a host consent would not keep. Pure.
 #[cfg(feature = "clone")]
 #[must_use]
 pub fn host_of(url: &str) -> Option<String> {
-    if url.starts_with('-') || url.chars().any(char::is_whitespace) {
+    if url.starts_with('-') || url.chars().any(char::is_whitespace) || through_a_helper(url) {
         return None;
     }
     let authority = if let Some((scheme, rest)) = url.split_once("://") {
@@ -1012,6 +1111,403 @@ pub fn host_of(url: &str) -> Option<String> {
     let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
     let host = host.split_once(':').map_or(host, |(h, _)| h);
     ronoctua_consent::normal(host)
+}
+
+/// Whether git hands `url` to a remote helper — `<transport>::<address>`,
+/// the transport a letter and then letters, digits, `+`, `-` and `.` (git's
+/// own rule, `is_urlschemechar`): a program named after the transport
+/// reaches whatever it likes, so there is no host to ask, and never one named
+/// after the helper. Pure.
+#[cfg(feature = "clone")]
+fn through_a_helper(url: &str) -> bool {
+    url.split_once("::").is_some_and(|(transport, _)| {
+        transport
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+            && transport
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+    })
+}
+
+/// The most bytes an address git answers with is read as (a few KiB is
+/// already no address).
+#[cfg(feature = "clone")]
+const ADDRESS_MOST_BYTES: usize = 64 * 1024;
+
+/// How long a step of a clone that reads and writes only this machine may
+/// take (`init`, `config`, `ls-remote --get-url`), in seconds: a
+/// configuration that includes a file nobody ever finishes writing (a FIFO)
+/// would hold it, and the person's question, for ever.
+#[cfg(feature = "clone")]
+pub const CLONE_LOCAL_MOST_S: u64 = 120;
+
+/// How long the fetch and the checkout may take, in seconds. A stalled
+/// HTTPS line is given up sooner ([`CLONE_LOW_SPEED_S`]); SSH and `git://`
+/// have no such limit of git's, and this is theirs.
+#[cfg(feature = "clone")]
+pub const CLONE_FETCH_MOST_S: u64 = 3600;
+
+/// WHERE GIT READS THE PERSON'S SETTINGS for a call with no access of ours —
+/// the clone's: what this process inherited (their home, the system's file),
+/// in the product; a home and a system file of a test's own, planted.
+#[cfg(feature = "clone")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Settings {
+    planted: Option<(PathBuf, PathBuf)>,
+}
+
+#[cfg(feature = "clone")]
+impl Settings {
+    /// The person's own: what this process inherited.
+    #[must_use]
+    pub fn persons() -> Self {
+        Self::default()
+    }
+
+    /// A test's: `home` is the home git reads (its `.gitconfig`, and
+    /// `.config/git/config` under it) and `system` the system's file — never
+    /// those of the machine running the test.
+    #[must_use]
+    pub fn planted(home: &Path, system: &Path) -> Self {
+        Self {
+            planted: Some((home.to_path_buf(), system.to_path_buf())),
+        }
+    }
+
+    /// Says them on a [`base`] command.
+    fn on(&self, command: &mut Command) {
+        if let Some((home, system)) = &self.planted {
+            command
+                .env("HOME", home)
+                .env_remove("XDG_CONFIG_HOME")
+                .env_remove("GIT_CONFIG_GLOBAL")
+                .env_remove("GIT_CONFIG_NOSYSTEM")
+                .env("GIT_CONFIG_SYSTEM", system);
+        }
+    }
+}
+
+/// Where a clone of `url` would go, read from `/`: the address with the
+/// person's own rewrites applied (`url.<base>.insteadOf`, from their global
+/// configuration and the system's — a call with no access of ours reads
+/// both, [`base`]), as git itself expands it — `git ls-remote --get-url`,
+/// which asks the network nothing. What `LEADER / c` asks about before the
+/// folder is known: the common rewrite `https://github.com/` →
+/// `git@github.com:` keeps the host, and another can send the clone to one
+/// the person never let. `pushInsteadOf` is a push's, never a clone's.
+///
+/// The CLONE reads it again where it will fetch ([`Repo::prepare_clone`]):
+/// a rule only a file included for the new folder holds
+/// (`includeIf "gitdir:…"`, `"hasconfig:remote.*.url:…"`) is not seen from
+/// here.
+///
+/// # Errors
+///
+/// [`Why::Garbled`] for an address that names no host, or an answer that
+/// is not one address (empty, with a control character, an option);
+/// [`Why::NoGit`]… as [`base`]; [`Why::Failed`] when git could not read the
+/// configuration, or did not in [`CLONE_LOCAL_MOST_S`].
+#[cfg(feature = "clone")]
+pub fn effective_url(tools: &Tools, url: &str) -> Result<String, Refusal> {
+    effective_url_in(tools, &Settings::persons(), url)
+}
+
+/// [`effective_url`], with the person's settings read where `settings`
+/// says (a test plants its own).
+///
+/// # Errors
+///
+/// As [`effective_url`].
+#[cfg(feature = "clone")]
+pub fn effective_url_in(tools: &Tools, settings: &Settings, url: &str) -> Result<String, Refusal> {
+    if host_of(url).is_none() {
+        return Err(refused(Why::Garbled));
+    }
+    let mut command = base(tools, Path::new("/"), None)?;
+    settings.on(&mut command);
+    subcommand(&mut command, "ls-remote").args(["--get-url", "--", url]);
+    let ran = run_until(
+        command,
+        ADDRESS_MOST_BYTES,
+        Some((
+            std::time::Duration::from_secs(CLONE_LOCAL_MOST_S),
+            Why::Failed,
+        )),
+    )?;
+    if !ran.ok {
+        return Err(refused(verdict(&ran.err, Reach::Local)));
+    }
+    one_address(ran.out)
+}
+
+/// What git answered for `--get-url`, when it is one address.
+#[cfg(feature = "clone")]
+fn one_address(out: Vec<u8>) -> Result<String, Refusal> {
+    let text = String::from_utf8(out).map_err(|_| refused(Why::Garbled))?;
+    let effective = text.strip_suffix('\n').unwrap_or(&text);
+    if effective.is_empty() || effective.starts_with('-') || effective.chars().any(char::is_control)
+    {
+        return Err(refused(Why::Garbled));
+    }
+    Ok(effective.to_owned())
+}
+
+/// A CLONE MADE READY, and nothing reached ([`Repo::prepare_clone`]): the
+/// folder is a repository whose `origin` is the address — every URL the
+/// person's settings gave a remote `origin` let go first —, and where its
+/// fetch goes was read THERE, with every file the person's settings include
+/// for that folder. [`Prepared::fetch`] fetches and checks out with a pass
+/// for that host; [`Prepared::abandon`] takes back what was made.
+#[cfg(feature = "clone")]
+#[derive(Debug)]
+#[must_use]
+pub struct Prepared {
+    tools: Tools,
+    settings: Settings,
+    url: String,
+    effective: String,
+    into: PathBuf,
+    /// Whether the folder itself was made (else it was there, empty).
+    made: bool,
+}
+
+#[cfg(feature = "clone")]
+impl Prepared {
+    /// Where the fetch goes: the address as the person's settings send it
+    /// from the new repository.
+    #[must_use]
+    pub fn effective(&self) -> &str {
+        &self.effective
+    }
+
+    /// The host the fetch reaches ([`host_of`]) — `None` for a path or a
+    /// remote helper, which no pass covers.
+    #[must_use]
+    pub fn host(&self) -> Option<String> {
+        host_of(&self.effective)
+    }
+
+    /// A [`base`] call in `at` with the person's settings, kept inside the
+    /// new folder when it runs there: a `.git` gone missing never sends git
+    /// up to a repository that holds the folder.
+    fn call(&self, at: &Path) -> Result<Command, Refusal> {
+        let mut command = base(&self.tools, at, None)?;
+        self.settings.on(&mut command);
+        if at == self.into {
+            ceiling(&mut command, &self.into);
+        }
+        Ok(command)
+    }
+
+    /// A step in the new repository that reads and writes only this
+    /// machine, to its end.
+    fn local(&self, name: &str, args: &[&str]) -> Result<Ran, Refusal> {
+        let mut command = self.call(&self.into)?;
+        subcommand(&mut command, name).args(args);
+        let ran = run_until(
+            command,
+            ADDRESS_MOST_BYTES,
+            Some((
+                std::time::Duration::from_secs(CLONE_LOCAL_MOST_S),
+                Why::Failed,
+            )),
+        )?;
+        if ran.ok {
+            Ok(ran)
+        } else {
+            Err(refused(verdict(&ran.err, Reach::Local)))
+        }
+    }
+
+    /// Makes the repository, gives it `origin`, and reads where its fetch
+    /// goes. Nothing of the network is asked.
+    fn ready(&self) -> Result<String, Refusal> {
+        let mut init = self.call(Path::new("/"))?;
+        subcommand(&mut init, "init")
+            .args(["--quiet", "--template=", "--"])
+            .arg(&self.into);
+        let ran = run_until(
+            init,
+            ADDRESS_MOST_BYTES,
+            Some((
+                std::time::Duration::from_secs(CLONE_LOCAL_MOST_S),
+                Why::Failed,
+            )),
+        )?;
+        if !ran.ok {
+            return Err(refused(verdict(&ran.err, Reach::Local)));
+        }
+        // EVERY URL THE PERSON'S SETTINGS GAVE `origin` GOES FIRST — an empty
+        // value resets the list —, then the address: a global
+        // `remote.origin.url` would otherwise be the first, and the fetch's.
+        self.local("config", &["--", "remote.origin.url", ""])?;
+        self.local("config", &["--add", "--", "remote.origin.url", &self.url])?;
+        self.local(
+            "config",
+            &[
+                "--",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+        )?;
+        // WHERE THE FETCH GOES, read where it runs: the files the person's
+        // settings include for this folder (`gitdir:`) or for this address
+        // (`hasconfig:remote.*.url:`) are read here, as the fetch reads them.
+        one_address(self.local("ls-remote", &["--get-url", "origin"])?.out)
+    }
+
+    /// The second half of the clone: with a pass for the host the fetch goes
+    /// to, `origin` fetched — its branches and its tags — and its default
+    /// branch checked out and tracked, as `git clone` leaves a repository;
+    /// `origin` the address alone then. Hardened like every call ([`base`]),
+    /// no submodule, the remote's own `git-upload-pack`, and:
+    ///
+    /// * PINNED to where it was found to lead: `url.<effective>.insteadOf`
+    ///   for the whole address, through the environment (`GIT_CONFIG_KEY_0`),
+    ///   never `-c`, which splits at an address's first `=` — settings
+    ///   changed since [`Repo::prepare_clone`] read them do not move it;
+    /// * NO REDIRECT, to any host: `http.followRedirects=false`, and the same
+    ///   for the effective address itself (`http.<effective>.followRedirects`,
+    ///   read last and as specific as a rule of the person's can be) — git's
+    ///   default follows the first redirect anywhere, and a rule of the
+    ///   person's for that address would win over the plain key;
+    /// * A LOW-SPEED LIMIT ([`CLONE_LOW_SPEED_BYTES_PER_S`] for
+    ///   [`CLONE_LOW_SPEED_S`]) over HTTPS, and [`CLONE_FETCH_MOST_S`] for all.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::Garbled`] when the pass does not cover the host — nothing is
+    /// asked; [`Why::NeedsCredentials`], [`Why::Refused`],
+    /// [`Why::Unreachable`] (a fetch that did not end in time among them) and
+    /// [`Why::Failed`] from what git said. Whatever the refusal, what
+    /// [`Repo::prepare_clone`] made goes.
+    pub fn fetch(self, pass: &ronoctua_consent::Pass) -> Result<Repo, Refusal> {
+        match self.fetched(pass) {
+            Ok(repo) => Ok(repo),
+            Err(refusal) => {
+                self.abandon();
+                Err(refusal)
+            }
+        }
+    }
+
+    fn fetched(&self, pass: &ronoctua_consent::Pass) -> Result<Repo, Refusal> {
+        if !self.host().is_some_and(|host| pass.covers(&host)) {
+            return Err(refused(Why::Garbled));
+        }
+        let limit = std::time::Duration::from_secs(CLONE_FETCH_MOST_S);
+        let ran = run_until(
+            self.fetch_command()?,
+            LISTING_MOST_BYTES,
+            Some((limit, Why::Unreachable)),
+        )?;
+        if !ran.ok {
+            return Err(refused(verdict(&ran.err, Reach::Remote)));
+        }
+        // THE REMOTE'S DEFAULT BRANCH, which the fetch named
+        // (`refs/remotes/origin/HEAD`), checked out and tracked; a remote with
+        // no branch leaves the empty repository `git clone` leaves.
+        let mut head = self.call(&self.into)?;
+        subcommand(&mut head, "symbolic-ref").args(["--quiet", "refs/remotes/origin/HEAD"]);
+        let local = std::time::Duration::from_secs(CLONE_LOCAL_MOST_S);
+        let named = run_until(head, ADDRESS_MOST_BYTES, Some((local, Why::Failed)))?;
+        let named = String::from_utf8_lossy(&named.out).trim().to_owned();
+        if let Some(branch) = named.strip_prefix("refs/remotes/origin/") {
+            let mut checkout = self.call(&self.into)?;
+            subcommand(&mut checkout, "checkout")
+                .args([
+                    "--quiet",
+                    "--no-recurse-submodules",
+                    "-b",
+                    branch,
+                    "--track",
+                ])
+                .arg(&named);
+            let ran = run_until(checkout, LISTING_MOST_BYTES, Some((limit, Why::Failed)))?;
+            if !ran.ok {
+                return Err(refused(verdict(&ran.err, Reach::Local)));
+            }
+        }
+        self.local(
+            "config",
+            &["--replace-all", "--", "remote.origin.url", &self.url],
+        )?;
+        Ok(Repo {
+            root: self.into.clone(),
+            git_dir: self.into.join(".git"),
+            tools: Some(self.tools.clone()),
+        })
+    }
+
+    /// The fetch's command — what it carries is said at [`Prepared::fetch`].
+    fn fetch_command(&self) -> Result<Command, Refusal> {
+        let mut command = self.call(&self.into)?;
+        command
+            .args(["-c", "http.followRedirects=false", "-c"])
+            .arg(format!("http.lowSpeedLimit={CLONE_LOW_SPEED_BYTES_PER_S}"))
+            .arg("-c")
+            .arg(format!("http.lowSpeedTime={CLONE_LOW_SPEED_S}"));
+        let mut pins = vec![(
+            format!("url.{}.insteadOf", self.effective),
+            self.url.clone(),
+        )];
+        if over_http(&self.effective) {
+            pins.push((
+                format!("http.{}.followRedirects", self.effective),
+                "false".to_owned(),
+            ));
+        }
+        command.env("GIT_CONFIG_COUNT", pins.len().to_string());
+        for (n, (key, value)) in pins.into_iter().enumerate() {
+            command
+                .env(format!("GIT_CONFIG_KEY_{n}"), key)
+                .env(format!("GIT_CONFIG_VALUE_{n}"), value);
+        }
+        subcommand(&mut command, "fetch").args([
+            "--quiet",
+            "--no-recurse-submodules",
+            "--upload-pack=git-upload-pack",
+            "--tags",
+            "origin",
+        ]);
+        Ok(command)
+    }
+
+    /// Takes back what [`Repo::prepare_clone`] made: the folder, when it was
+    /// made, else what is in it (it was empty). Nothing was reached.
+    pub fn abandon(self) {
+        unmake(&self.into, self.made);
+    }
+}
+
+/// Whether an address is fetched over HTTP(S) — where a redirect can be.
+#[cfg(feature = "clone")]
+fn over_http(url: &str) -> bool {
+    url.split_once("://")
+        .is_some_and(|(scheme, _)| matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https"))
+}
+
+/// Removes what a clone made in `into`: the folder when it made it, else
+/// what is in it — it was empty. Never follows a link.
+#[cfg(feature = "clone")]
+fn unmake(into: &Path, made: bool) {
+    if made {
+        let _ = std::fs::remove_dir_all(into);
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(into) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = std::fs::remove_dir_all(&path);
+        } else {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 impl Repo {
@@ -1669,10 +2165,10 @@ impl Repo {
 
     /// Clones `url` into `into` — the one call of this crate that makes a
     /// repository, and so the one that takes a [`ronoctua_consent::Pass`]:
-    /// the person let the host the address names, or nothing is asked
-    /// (`LEADER / c`, the distro's own repository). Hardened like every call
-    /// ([`base`]): no hook, no template, no submodule, no prompt, the
-    /// remote's own `git-upload-pack`. The tools come from the environment.
+    /// the person let the host the fetch goes to, or nothing is asked
+    /// (`LEADER / c`, the distro's own repository). [`Repo::prepare_clone`]
+    /// with the person's settings, then [`Prepared::fetch`]. The tools come
+    /// from the environment.
     ///
     /// # Errors
     ///
@@ -1687,12 +2183,7 @@ impl Repo {
     ///
     /// # Errors
     ///
-    /// [`Why::Garbled`] for an address that names no host ([`host_of`]), one
-    /// whose host the pass does not cover, or a folder that is not an
-    /// absolute path — nothing is started; [`Why::NeedsCredentials`],
-    /// [`Why::Refused`], [`Why::Unreachable`] and [`Why::Failed`] (a folder
-    /// that is there and not empty among them) from what git said. git
-    /// removes what it made when it fails.
+    /// What [`Repo::prepare_clone`] and [`Prepared::fetch`] refuse.
     #[cfg(feature = "clone")]
     pub fn clone_with(
         tools: &Tools,
@@ -1700,20 +2191,69 @@ impl Repo {
         url: &str,
         into: &Path,
     ) -> Result<Self, Refusal> {
-        let covered = host_of(url).is_some_and(|host| pass.covers(&host));
-        if !covered || !into.is_absolute() {
+        Self::prepare_clone(tools, &Settings::persons(), url, into)?.fetch(pass)
+    }
+
+    /// The first half of a clone, which reaches nothing: `into` made a
+    /// repository (`init`, no template) whose `origin` is `url`, and where
+    /// its fetch goes read there ([`Prepared::effective`]).
+    ///
+    /// WHY NOT `git clone`. A clone keeps the person's settings, and three of
+    /// them send it somewhere only the new repository knows (all measured on
+    /// the pinned git): a rewrite in a file included for the new folder
+    /// (`includeIf "gitdir:…"`) or for the address (`"hasconfig:remote.*.url:…"`),
+    /// which `ls-remote --get-url` from anywhere else does not read and which
+    /// beats any rule of ours for the same whole address (the first read wins
+    /// a tie); and a global `remote.origin.url`, which `git clone` reads
+    /// before the address it was given. Made first, the repository is where
+    /// the fetch will run, read as it will read it — and `origin`'s URL list
+    /// is reset before the address goes in.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::Garbled`] for an address that names no host ([`host_of`]) or a
+    /// folder that is not an absolute path, and [`Why::Failed`] for a folder
+    /// that is there and not empty — nothing made or touched; what a step
+    /// refuses (git could not make or read the repository, or not in
+    /// [`CLONE_LOCAL_MOST_S`]), and then what was made goes.
+    #[cfg(feature = "clone")]
+    pub fn prepare_clone(
+        tools: &Tools,
+        settings: &Settings,
+        url: &str,
+        into: &Path,
+    ) -> Result<Prepared, Refusal> {
+        if host_of(url).is_none() || !into.is_absolute() {
             return Err(refused(Why::Garbled));
         }
-        let command = clone_command(tools, url, into)?;
-        let ran = run(command, LISTING_MOST_BYTES)?;
-        if !ran.ok {
-            return Err(refused(verdict(&ran.err, Reach::Remote)));
+        let made = match std::fs::symlink_metadata(into) {
+            Err(_) => true,
+            Ok(meta)
+                if meta.is_dir()
+                    && std::fs::read_dir(into).is_ok_and(|mut e| e.next().is_none()) =>
+            {
+                false
+            }
+            Ok(_) => return Err(refused(Why::Failed)),
+        };
+        let mut prepared = Prepared {
+            tools: tools.clone(),
+            settings: settings.clone(),
+            url: url.to_owned(),
+            effective: String::new(),
+            into: into.to_path_buf(),
+            made,
+        };
+        match prepared.ready() {
+            Ok(effective) => {
+                prepared.effective = effective;
+                Ok(prepared)
+            }
+            Err(refusal) => {
+                prepared.abandon();
+                Err(refusal)
+            }
         }
-        Ok(Self {
-            root: into.to_path_buf(),
-            git_dir: into.join(".git"),
-            tools: Some(tools.clone()),
-        })
     }
 }
 
@@ -1814,42 +2354,6 @@ pub fn merge_file(
         }),
         _ => Err(refused(Why::Failed)),
     }
-}
-
-/// The clone's command, hardened like every call ([`base`]) and then some:
-///
-/// * NO REDIRECT. git's default (`initial`) follows a redirect of the first
-///   request to ANY host, and the pass covers only the host the address
-///   names — so the clone would go where the person never let it. A remote
-///   that redirects is a failure.
-/// * A LOW-SPEED LIMIT ([`CLONE_LOW_SPEED_BYTES_PER_S`] for
-///   [`CLONE_LOW_SPEED_S`]): a stalled line ends with a refusal the person
-///   reads, instead of a clone that never ends.
-///
-/// # Errors
-///
-/// As [`base`].
-#[cfg(feature = "clone")]
-fn clone_command(tools: &Tools, url: &str, into: &Path) -> Result<Command, Refusal> {
-    // FROM THE ROOT, with the folder absolute: `-C` needs a folder that
-    // exists, and the clone makes the ones that do not.
-    let mut command = base(tools, Path::new("/"), None)?;
-    command
-        .args(["-c", "http.followRedirects=false", "-c"])
-        .arg(format!("http.lowSpeedLimit={CLONE_LOW_SPEED_BYTES_PER_S}"))
-        .arg("-c")
-        .arg(format!("http.lowSpeedTime={CLONE_LOW_SPEED_S}"));
-    subcommand(&mut command, "clone")
-        .args([
-            "--quiet",
-            "--no-recurse-submodules",
-            "--template=",
-            "--upload-pack=git-upload-pack",
-            "--",
-            url,
-        ])
-        .arg(into);
-    Ok(command)
 }
 
 /// Whether `key` may name a setting: `section.name` (a subsection between
@@ -3885,6 +4389,15 @@ mod tests {
             ("/srv/a.git", None),
             ("./a:b", None),
             ("ext::sh -c touch% /tmp/x", None),
+            // A REMOTE HELPER'S, whatever follows: never a host named after
+            // the helper.
+            ("ext::true", None),
+            ("fd::17", None),
+            ("gcrypt::git@example.org:a.git", None),
+            ("gcrypt::rsync://example.org/a", None),
+            ("persistent-https::example.org/a", None),
+            // `::` after a `/` or a `:` is no helper's.
+            ("https://example.org/a::b", Some("example.org")),
             ("--upload-pack=touch x", None),
             ("ftp://example.org/a", None),
             ("https://[::1]/a", None),
@@ -3951,22 +4464,48 @@ mod tests {
         assert!(!Path::new("relative").exists());
     }
 
-    /// FAILS IF: the clone's command stops refusing a redirect or loses its
-    /// low-speed limit — the two things only the clone adds to [`base`].
+    /// A clone made ready by hand over `effective`, for a look at its
+    /// commands — nothing is run.
+    #[cfg(feature = "clone")]
+    fn ready_over(effective: &str) -> Prepared {
+        Prepared {
+            tools: fake_tools(),
+            settings: Settings::persons(),
+            url: "https://github.com/ronoctua/ronoctua-distro.git".to_owned(),
+            effective: effective.to_owned(),
+            into: PathBuf::from("/home/ada/ronoctua-distro"),
+            made: true,
+        }
+    }
+
+    /// The variables a command sets.
+    #[cfg(feature = "clone")]
+    fn envs_of(command: &Command) -> BTreeMap<String, String> {
+        command
+            .get_envs()
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().into_owned(),
+                    v?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect()
+    }
+
+    /// FAILS IF: the fetch's command stops refusing a redirect — the plain
+    /// key, and the one for the address it goes to, which a rule of the
+    /// person's for that address would otherwise beat —, loses its low-speed
+    /// limit, or is not pinned to where the address was found to lead.
     #[cfg(feature = "clone")]
     #[test]
-    fn a_clone_follows_no_redirect_and_gives_up_on_a_stalled_line() {
-        let command = clone_command(
-            &fake_tools(),
-            "https://github.com/ronoctua/ronoctua-distro.git",
-            Path::new("/home/ada/ronoctua-distro"),
-        )
-        .unwrap();
+    fn the_fetch_follows_no_redirect_gives_up_on_a_stalled_line_and_is_pinned() {
+        let effective = "https://mirror.example.org/github/ronoctua/ronoctua-distro.git";
+        let command = ready_over(effective).fetch_command().unwrap();
         let args: Vec<String> = command
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        let clone_at = args.iter().position(|a| a == "clone").unwrap();
+        let fetch_at = args.iter().position(|a| a == "fetch").unwrap();
         for pair in [
             "http.followRedirects=false".to_owned(),
             format!("http.lowSpeedLimit={CLONE_LOW_SPEED_BYTES_PER_S}"),
@@ -3976,14 +4515,149 @@ mod tests {
                 panic!("{pair} is not in {args:?}");
             });
             // A `-c` pair is git's, so it goes before the subcommand.
-            assert!(at < clone_at && args[at - 1] == "-c", "{args:?}");
+            assert!(at < fetch_at && args[at - 1] == "-c", "{args:?}");
+        }
+        assert!(
+            args.ends_with(&["--tags".to_owned(), "origin".to_owned()]),
+            "{args:?}"
+        );
+        let envs = envs_of(&command);
+        assert_eq!(envs.get("GIT_CONFIG_COUNT").map(String::as_str), Some("2"));
+        assert_eq!(
+            envs.get("GIT_CONFIG_KEY_0").map(String::as_str),
+            Some(&*format!("url.{effective}.insteadOf"))
+        );
+        assert_eq!(
+            envs.get("GIT_CONFIG_VALUE_0").map(String::as_str),
+            Some("https://github.com/ronoctua/ronoctua-distro.git")
+        );
+        assert_eq!(
+            envs.get("GIT_CONFIG_KEY_1").map(String::as_str),
+            Some(&*format!("http.{effective}.followRedirects"))
+        );
+        assert_eq!(
+            envs.get("GIT_CONFIG_VALUE_1").map(String::as_str),
+            Some("false")
+        );
+        // OVER SSH THERE IS NO REDIRECT to refuse: the pin alone.
+        let by_ssh = ready_over("git@github.com:ronoctua/ronoctua-distro.git")
+            .fetch_command()
+            .unwrap();
+        assert_eq!(
+            envs_of(&by_ssh).get("GIT_CONFIG_COUNT").map(String::as_str),
+            Some("1")
+        );
+    }
+
+    /// A home of a test's own under `dir`, its `.gitconfig` saying `config`.
+    #[cfg(feature = "clone")]
+    fn home_saying(dir: &Path, name: &str, config: &str) -> PathBuf {
+        let home = dir.join(name);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".gitconfig"), config).unwrap();
+        home
+    }
+
+    /// FAILS IF: where a clone would go, read from `/`, is not the person's
+    /// own rewrite of the address — from their global file or the system's
+    /// —, a push's rewrite counts for a clone, or an address that names no
+    /// host is read at all. The three cases `LEADER / c` asks about: no
+    /// rewrite, a rewrite that keeps the host (https → ssh), one that sends
+    /// it to another host.
+    #[cfg(feature = "clone")]
+    #[test]
+    fn where_an_address_leads_is_the_persons_rewrite_of_it() {
+        let tools = real();
+        let scratch = Scratch::new("effective");
+        let dir = &scratch.0;
+        let address = "https://github.com/ronoctua/ronoctua-distro.git";
+        let none = Path::new("/dev/null");
+        let leads = |home: &Path, system: &Path| {
+            effective_url_in(&tools, &Settings::planted(home, system), address).unwrap()
+        };
+        // NO REWRITE: the address itself.
+        let bare = home_saying(dir, "bare", "");
+        assert_eq!(leads(&bare, none), address);
+        // THE SAME HOST, by another way: the common https → ssh.
+        let ssh = home_saying(
+            dir,
+            "ssh",
+            "[url \"git@github.com:\"]\n\tinsteadOf = https://github.com/\n",
+        );
+        let to = leads(&ssh, none);
+        assert_eq!(to, "git@github.com:ronoctua/ronoctua-distro.git");
+        assert_eq!(host_of(&to).as_deref(), Some("github.com"));
+        // ANOTHER HOST.
+        let mirror = home_saying(
+            dir,
+            "mirror",
+            "[url \"https://mirror.example.org/github/\"]\n\tinsteadOf = https://github.com/\n",
+        );
+        let to = leads(&mirror, none);
+        assert_eq!(
+            to,
+            "https://mirror.example.org/github/ronoctua/ronoctua-distro.git"
+        );
+        assert_eq!(host_of(&to).as_deref(), Some("mirror.example.org"));
+        // A PUSH'S REWRITE is a push's.
+        let push = home_saying(
+            dir,
+            "push",
+            "[url \"git@elsewhere.example.org:\"]\n\tpushInsteadOf = https://github.com/\n",
+        );
+        assert_eq!(leads(&push, none), address);
+        // THE SYSTEM'S FILE counts, as it does for the clone.
+        let system = dir.join("system-gitconfig");
+        std::fs::write(
+            &system,
+            "[url \"ssh://git@forge.example.net/\"]\n\tinsteadOf = https://github.com/\n",
+        )
+        .unwrap();
+        assert_eq!(
+            host_of(&leads(&bare, &system)).as_deref(),
+            Some("forge.example.net")
+        );
+        // A REWRITE TO A PATH, or TO A REMOTE HELPER, leads to no host — the
+        // clone refuses both.
+        for (to, rule) in [
+            ("/srv/mirror/", "/srv/mirror/ronoctua/ronoctua-distro.git"),
+            (
+                "gcrypt::git@example.org:",
+                "gcrypt::git@example.org:ronoctua/ronoctua-distro.git",
+            ),
+        ] {
+            let home = home_saying(
+                dir,
+                "nowhere",
+                &format!("[url \"{to}\"]\n\tinsteadOf = https://github.com/\n"),
+            );
+            let led = leads(&home, none);
+            assert_eq!(led, rule);
+            assert_eq!(host_of(&led), None, "{led}");
+        }
+        // AN ADDRESS THAT NAMES NO HOST is never read.
+        for url in [
+            "/srv/a.git",
+            "--upload-pack=touch x",
+            "file:///srv/a.git",
+            "ext::true",
+        ] {
+            assert_eq!(
+                effective_url(&tools, url).unwrap_err().why,
+                Why::Garbled,
+                "{url}"
+            );
         }
     }
 
     /// FAILS IF: a remote that answers with a redirect to ANOTHER host takes
-    /// the clone there. A real HTTP exchange on the loopback: the first host
-    /// (127.0.0.1, the one the pass lets) answers every request with a 302
-    /// to a second (127.0.0.2), which counts who reaches it.
+    /// the clone there — with the person's settings saying nothing of
+    /// redirects, or saying to follow them for this very address
+    /// (`http.<url>.followRedirects = true`, which beats a plain
+    /// `-c http.followRedirects=false`; measured). A real HTTP exchange on
+    /// the loopback: the first host (127.0.0.1, the one the pass lets)
+    /// answers every request with a 302 to a second (127.0.0.2), which counts
+    /// who reaches it and hangs up.
     #[cfg(feature = "clone")]
     #[test]
     fn a_redirect_to_another_host_is_not_followed() {
@@ -3992,9 +4666,8 @@ mod tests {
         let tools = real();
         let scratch = Scratch::new("clone-redirect");
         let dir = &scratch.0;
-        let elsewhere = std::net::TcpListener::bind("127.0.0.2:0").unwrap();
-        let elsewhere_port = elsewhere.local_addr().unwrap().port();
-        elsewhere.set_nonblocking(true).unwrap();
+        let elsewhere = Elsewhere::listening();
+        let elsewhere_port = elsewhere.port;
         let first = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = first.local_addr().unwrap().port();
         let served = std::sync::Arc::new(AtomicUsize::new(0));
@@ -4013,17 +4686,77 @@ mod tests {
         });
         let pass = pass_for(dir, "127.0.0.1");
         let url = format!("http://127.0.0.1:{port}/distro.git");
-        let into = dir.join("into");
-        let refusal = Repo::clone_with(&tools, &pass, &url, &into).unwrap_err();
+        let none = Path::new("/dev/null");
+        for (name, config) in [
+            ("silent", String::new()),
+            (
+                "follows",
+                format!(
+                    "[http \"http://127.0.0.1:{port}/distro.git\"]\n\tfollowRedirects = true\n"
+                ),
+            ),
+        ] {
+            let home = home_saying(dir, name, &config);
+            let into = dir.join(format!("into-{name}"));
+            let settings = Settings::planted(&home, none);
+            let refusal = Repo::prepare_clone(&tools, &settings, &url, &into)
+                .and_then(|p| p.fetch(&pass))
+                .unwrap_err();
+            assert!(
+                served.load(Ordering::SeqCst) >= 1,
+                "{name}: the first host was never asked: {refusal:?}"
+            );
+            assert_eq!(
+                elsewhere.reached(),
+                0,
+                "{name}: the clone followed the redirect to a host nobody let"
+            );
+            assert!(!into.exists(), "{name}: a failed clone left its folder");
+        }
+    }
+
+    /// FAILS IF: a step of a clone that does not end is not stopped at its
+    /// limit — and said as the limit's refusal —, or one that ends is.
+    /// A program of the test's own in git's place, which never ends.
+    #[cfg(feature = "clone")]
+    #[test]
+    fn a_step_that_does_not_end_is_stopped() {
+        let scratch = Scratch::new("clone-stalled");
+        let dir = &scratch.0;
+        let stalls = dir.join("stalls");
+        let status = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("printf '#!/bin/sh\\nwhile :; do :; done\\n' > \"$1\" && chmod 755 \"$1\"")
+            .arg("sh")
+            .arg(&stalls)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let started = std::time::Instant::now();
+        let mut stalling = Command::new(&stalls);
+        stalling.stdin(Stdio::null());
+        let refusal = run_until(
+            stalling,
+            ADDRESS_MOST_BYTES,
+            Some((std::time::Duration::from_millis(300), Why::Unreachable)),
+        )
+        .err()
+        .expect("a step that never ends ended");
+        assert_eq!(refusal.why, Why::Unreachable);
         assert!(
-            served.load(Ordering::SeqCst) >= 1,
-            "the first host was never asked: {refusal:?}"
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "it waited {:?}",
+            started.elapsed()
         );
-        assert!(
-            elsewhere.accept().is_err(),
-            "the clone followed the redirect to a host nobody let"
-        );
-        assert!(!into.exists(), "a failed clone left its folder");
+        let mut ends = Command::new("/bin/sh");
+        ends.args(["-c", "exit 0"]).stdin(Stdio::null());
+        let ran = run_until(
+            ends,
+            ADDRESS_MOST_BYTES,
+            Some((std::time::Duration::from_secs(30), Why::Unreachable)),
+        )
+        .unwrap();
+        assert!(ran.ok);
     }
 
     /// A real `git://` remote on a free port of the loopback, serving
@@ -4182,5 +4915,268 @@ mod tests {
         let refusal = Repo::clone_with(&tools, &pass, &gone, &lost).unwrap_err();
         assert_eq!(refusal.why, Why::Unreachable, "{refusal:?}");
         assert!(!lost.exists(), "a failed clone left its folder");
+    }
+
+    /// A host nobody let, on `127.0.0.2`: it counts who reaches it and hangs
+    /// up at once (a clone that reached it fails at once instead of waiting
+    /// for an answer). Dropped, the thread is woken and stops.
+    #[cfg(feature = "clone")]
+    struct Elsewhere {
+        port: u16,
+        reached: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        serving: Option<std::thread::JoinHandle<()>>,
+    }
+
+    #[cfg(feature = "clone")]
+    impl Elsewhere {
+        fn listening() -> Self {
+            use std::sync::atomic::Ordering;
+            let listener = std::net::TcpListener::bind("127.0.0.2:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let reached = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = std::sync::Arc::clone(&reached);
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stopped = std::sync::Arc::clone(&stop);
+            let serving = std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stopped.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if stream.is_ok() {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            });
+            Self {
+                port,
+                reached,
+                stop,
+                serving: Some(serving),
+            }
+        }
+
+        fn reached(&self) -> usize {
+            self.reached.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[cfg(feature = "clone")]
+    impl Drop for Elsewhere {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = std::net::TcpStream::connect(("127.0.0.2", self.port));
+            if let Some(serving) = self.serving.take() {
+                let _ = serving.join();
+            }
+        }
+    }
+
+    /// The bare repository a clone test serves, with one commit.
+    #[cfg(feature = "clone")]
+    fn served_distro(tools: &Tools, dir: &Path) -> PathBuf {
+        let source = dir.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        fixture(tools, &source, &["init", "-q", "-b", "main"]);
+        std::fs::write(source.join("flake.nix"), "{ }\n").unwrap();
+        fixture(tools, &source, &["add", "-A"]);
+        fixture(tools, &source, &["commit", "-q", "-m", "first"]);
+        let bare = dir.join("served/distro.git");
+        fixture(
+            tools,
+            dir,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                source.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        dir.join("served")
+    }
+
+    /// FAILS IF: a clone whose address the person's settings send to another
+    /// host goes there with the pass of the address's host — the consent
+    /// named one host and git reaches another — or does not go there with
+    /// that host's own pass; the repository's `origin` stops being the
+    /// address the clone was given; or a rewrite that keeps the host (only
+    /// the way changes, as https → ssh) does not go on with its pass.
+    #[cfg(feature = "clone")]
+    #[test]
+    fn a_clone_goes_where_the_address_leads_and_only_with_that_hosts_pass() {
+        let tools = real();
+        let scratch = Scratch::new("clone-rewritten");
+        let dir = &scratch.0;
+        let none = Path::new("/dev/null");
+        let address = "git://distro.example.invalid/distro.git";
+        // SENT ELSEWHERE, with the address's host let: nothing reaches it.
+        let elsewhere = Elsewhere::listening();
+        let away = home_saying(
+            dir,
+            "away",
+            &format!(
+                "[url \"git://127.0.0.2:{}/\"]\n\tinsteadOf = git://distro.example.invalid/\n",
+                elsewhere.port
+            ),
+        );
+        let named = pass_for(dir, "distro.example.invalid");
+        let into = dir.join("into");
+        let prepared =
+            Repo::prepare_clone(&tools, &Settings::planted(&away, none), address, &into).unwrap();
+        assert_eq!(prepared.host().as_deref(), Some("127.0.0.2"));
+        let refusal = prepared.fetch(&named).unwrap_err();
+        assert_eq!(refusal.why, Why::Garbled);
+        assert_eq!(
+            elsewhere.reached(),
+            0,
+            "the clone reached a host nobody let"
+        );
+        assert!(!into.exists(), "a refused clone left its folder");
+        // SENT TO A SERVED HOST, with THAT host let: the clone is made.
+        let remote = Remote::serving(&tools, &served_distro(&tools, dir));
+        let served = home_saying(
+            dir,
+            "served-home",
+            &format!(
+                "[url \"git://127.0.0.1:{}/\"]\n\tinsteadOf = git://distro.example.invalid/\n",
+                remote.port
+            ),
+        );
+        let let_there = pass_for(dir, "127.0.0.1");
+        let repo = Repo::prepare_clone(&tools, &Settings::planted(&served, none), address, &into)
+            .and_then(|p| p.fetch(&let_there))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(into.join("flake.nix")).unwrap(),
+            "{ }\n"
+        );
+        assert!(repo.head_commit().unwrap().is_some());
+        // ITS `origin` IS THE ADDRESS, alone: the person's rewrite goes on
+        // working; and the branch tracks it.
+        assert_eq!(
+            fixture(&tools, &into, &["config", "--get-all", "remote.origin.url"]).trim(),
+            address
+        );
+        assert_eq!(
+            fixture(&tools, &into, &["config", "branch.main.remote"]).trim(),
+            "origin"
+        );
+        // THE SAME HOST BY ANOTHER WAY (as https → ssh): the address's own
+        // host's pass, and the clone goes on.
+        let same = format!("http://127.0.0.1:{}/distro.git", remote.port);
+        let by_git = home_saying(
+            dir,
+            "same-host",
+            &format!(
+                "[url \"git://127.0.0.1:{0}/\"]\n\tinsteadOf = http://127.0.0.1:{0}/\n",
+                remote.port
+            ),
+        );
+        let again = dir.join("again");
+        Repo::prepare_clone(&tools, &Settings::planted(&by_git, none), &same, &again)
+            .and_then(|p| p.fetch(&let_there))
+            .unwrap();
+        assert!(again.join("flake.nix").exists());
+    }
+
+    /// FAILS IF: the clone does not go where the person's settings send it
+    /// FROM THE NEW REPOSITORY — read there, as its fetch reads them —, but
+    /// where they send the bare address from anywhere else. Five cases, each
+    /// measured on the pinned git: no rewrite; a global `remote.origin.url`,
+    /// which a plain `git clone` reads before the address it was given; a
+    /// rewrite of the WHOLE address in a file included for the new folder
+    /// (`includeIf "gitdir:…"`) or for the address
+    /// (`"hasconfig:remote.*.url:…"`) — a tie a rule of ours for the same
+    /// address loses, the first read winning —; and the same with a SHORTER
+    /// part of the address, which a whole-address rule of ours would have
+    /// beaten, leaving the person's settings unread. Where the fetch goes is
+    /// said, and only its host's pass fetches: nothing else is reached.
+    #[cfg(feature = "clone")]
+    #[test]
+    fn a_clone_reads_where_it_goes_in_the_new_repository() {
+        let tools = real();
+        let scratch = Scratch::new("clone-in-place");
+        let dir = &scratch.0;
+        let none = Path::new("/dev/null");
+        let address = "git://distro.example.invalid/distro.git";
+        let remote = Remote::serving(&tools, &served_distro(&tools, dir));
+        let elsewhere = Elsewhere::listening();
+        let served = format!("git://127.0.0.1:{}/", remote.port);
+        let away = format!("git://127.0.0.2:{}/", elsewhere.port);
+        let unconditional =
+            format!("[url \"{served}\"]\n\tinsteadOf = git://distro.example.invalid/\n");
+        let let_served = pass_for(dir, "127.0.0.1");
+        let work = dir.join("work");
+        let into = work.join("distro");
+        let included = dir.join("included.gitconfig");
+        for (case, config, rule) in [
+            ("no rewrite", String::new(), None),
+            (
+                "a global origin",
+                format!("[remote \"origin\"]\n\turl = {away}elsewhere.git\n"),
+                None,
+            ),
+            (
+                "the whole address, for the folder",
+                format!(
+                    "{unconditional}[includeIf \"gitdir:{}/\"]\n\tpath = {}\n",
+                    work.display(),
+                    included.display()
+                ),
+                Some(address.to_owned()),
+            ),
+            (
+                "the whole address, for the address",
+                format!(
+                    "{unconditional}[includeIf \"hasconfig:remote.*.url:git://distro.example.invalid/**\"]\n\tpath = {}\n",
+                    included.display()
+                ),
+                Some(address.to_owned()),
+            ),
+            (
+                "a shorter part, for the folder",
+                format!(
+                    "{unconditional}[includeIf \"gitdir:{}/\"]\n\tpath = {}\n",
+                    work.display(),
+                    included.display()
+                ),
+                Some("git://distro.example.invalid/distro".to_owned()),
+            ),
+        ] {
+            if let Some(rule) = &rule {
+                std::fs::write(
+                    &included,
+                    format!("[url \"{away}\"]\n\tinsteadOf = {rule}\n"),
+                )
+                .unwrap();
+            }
+            let home = home_saying(dir, "home", &config);
+            let settings = Settings::planted(&home, none);
+            // THE SERVED ADDRESS ITSELF where no rule rewrites it.
+            let url = if rule.is_some() {
+                address.to_owned()
+            } else {
+                format!("{served}distro.git")
+            };
+            let prepared = Repo::prepare_clone(&tools, &settings, &url, &into).unwrap();
+            if rule.is_some() {
+                // ELSEWHERE, said — and not fetched with the served host's pass.
+                assert_eq!(prepared.host().as_deref(), Some("127.0.0.2"), "{case}");
+                let refusal = prepared.fetch(&let_served).unwrap_err();
+                assert_eq!(refusal.why, Why::Garbled, "{case}");
+                assert!(!into.exists(), "{case}: a refused clone left its folder");
+            } else {
+                assert_eq!(prepared.host().as_deref(), Some("127.0.0.1"), "{case}");
+                prepared.fetch(&let_served).unwrap();
+                assert!(into.join("flake.nix").exists(), "{case}");
+                std::fs::remove_dir_all(&into).unwrap();
+            }
+            assert_eq!(
+                elsewhere.reached(),
+                0,
+                "{case}: a host nobody let was reached"
+            );
+        }
     }
 }

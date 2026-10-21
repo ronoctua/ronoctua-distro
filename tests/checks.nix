@@ -12443,6 +12443,32 @@ let
         ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
         ("clipboard_acted", "clipboard_told", "hosted_heard", "region_owed"),
         ("clipboard_acted", "clipboard_carry_out", "clipboard_moved", "clipboard_told", "hosted_heard", "region_owed"),
+        # THE LINE MOVING ON lets the region's question on it go
+        # (`the_line_moves_on` → `hosted_unanswered`, the region's `unanswered`
+        # through `with_region`), and what the region asks back is done like
+        # any ask — so every place the line moves on (another region's
+        # question, the finder and the buffer finder a command opens, the
+        # kiosk's and the radio's questions, the brain's) closes a ring
+        # through the region's answer. It turns once, by both halves: the
+        # footer TAKES `region_asking` before it calls the region, and moves
+        # on only while one is asking — a second visit in the same turn finds
+        # none; and a region told its question is over asks nothing back, no
+        # question and no command (THREE, `unanswered`).
+        ("hosted_unanswered", "region_owed", "the_line_moves_on", "with_region"),
+        ("hosted_unanswered", "region_owed", "run_with", "the_line_moves_on", "with_region"),
+        ("brain_act", "hosted_unanswered", "region_owed", "run_with", "the_line_moves_on", "with_region"),
+        ("hosted_unanswered", "kiosk_errands", "region_owed", "run_with", "the_line_moves_on", "with_region"),
+        ("hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_open", "region_owed", "run_with", "the_line_moves_on", "with_region"),
+        ("hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "region_owed", "run_with", "the_line_moves_on", "with_region"),
+        ("hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "kiosk_view_errand", "kiosk_view_press", "region_owed", "run_with", "the_line_moves_on", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "hosted_unanswered", "radio_commands", "region_owed", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("brain_act", "desk_asked", "hosted_unanswered", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "kiosk_errands", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_open", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "kiosk_view_errand", "kiosk_view_press", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_unanswered", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
     }
     # A RING IS ITS MEMBERS, in any order: the same methods calling round are
     # one fact, whichever of them a reader starts from.
@@ -12562,8 +12588,19 @@ let
     # registers: what its `heard`, `language_changed` and `locale_changed`
     # reach in its own module — its methods by `self.`/`Self::` and its free
     # functions by a bare name — never writes, runs nor asks the desk.
-    TOLD = ("heard", "language_changed", "locale_changed")
+    #
+    # AND A REGION TOLD ITS QUESTION IS OVER (`unanswered`, which the footer
+    # calls whenever the line moves on) asks no question back either, nor
+    # gives way to a command: the line moving on is what told it, and an ask
+    # there would move the line on again (the rings through
+    # `the_line_moves_on`, above).
     ASKS_BACK = (".written(", ".run(", ".desk(")
+    TOLD = {
+        "heard": ASKS_BACK,
+        "language_changed": ASKS_BACK,
+        "locale_changed": ASKS_BACK,
+        "unanswered": ASKS_BACK + (".ask(", ".give_way("),
+    }
     hosted = re.findall(r"(\w+)::ENTRY\b", uncommented(shell_file("regions.rs").read_text()))
     floor(len(hosted), 5, "regions the binary registers")
     told = 0
@@ -12608,19 +12645,20 @@ let
             named = set(re.findall(r"\b(?:self\.|Self::)(\w+)\s*\(", body))
             named |= set(re.findall(r"(?<![\w.:])(\w+)\s*\(", body))
             return named & set(functions)
-        for entry in TOLD:
+        for entry, needles in TOLD.items():
             if entry not in functions:
                 continue
             told += 1
             how, todo = {entry: [entry]}, [entry]
             while todo:
                 n = todo.pop()
-                for needle in ASKS_BACK:
+                for needle in needles:
                     if needle in functions[n]:
                         bad.append(
                             "`" + module + "`'s `" + entry + "` asks back (`" + needle + "…)`) "
                             "through " + " -> ".join(how[n]) + ": a region told what the "
-                            "footer read would send the footer round its own ring again"
+                            "footer read, or that its question is over, would send the "
+                            "footer round its own ring again"
                         )
                 for m in calls(functions[n]):
                     if m not in how:
@@ -12644,7 +12682,7 @@ let
     print(
         f"OK: {len(bodies)} methods of `Footer`, {len(found)} declared recursions and no "
         f"others, nothing under `metric` asks what the region holds, and the {told} "
-        f"ways a region is told what the footer read ask nothing back"
+        f"ways a region is told what the footer read, or that its question is over, ask nothing back"
     )
     END
   '';
@@ -33100,23 +33138,51 @@ let
     if "ext" in protocols or len(protocols) > 5:
         wrong.append(f"PROTOCOLS allows {protocols}; ext:: and remote helpers run commands")
     runs = re.findall(r"\brun\(", repo)
-    # THE CLONE IS THE THIRD, and the only call with no repository yet: no
-    # config of its own can name a filter driver, so it is built from `base`
-    # and `subcommand` (`clone_command`), never from `Repo::command`.
-    clone = body_of(repo, "clone_with")
-    allowed = 2
-    if clone is not None:
-        allowed = 3
-        if not re.search(r"let command = clone_command\(", clone) or not re.search(r"\brun\(command,", clone):
-            wrong.append("`Repo::clone_with` runs git without `clone_command`")
-        cc = must(body_of(lib, "clone_command"), "fn clone_command")
-        for needle in ("base(", "subcommand(", '"--template="', '"--no-recurse-submodules"',
-                       '"--upload-pack=git-upload-pack"'):
-            if needle not in cc:
-                wrong.append(f"`fn clone_command` no longer has {needle}")
-    if len(runs) != allowed:
-        wrong.append(f"`impl Repo` runs git in {len(runs)} places; they are `command` (the drivers), "
-                     "`ran` and the clone (`clone_with`)")
+    if len(runs) != 2:
+        wrong.append(f"`impl Repo` runs git in {len(runs)} places; they are `command` (the drivers) "
+                     "and `ran`")
+    # THE CLONE, the only call with no repository yet — no config of its own
+    # can name a filter driver, so its steps are built from `base` and
+    # `subcommand`, never from `Repo::command`. It is `Prepared`'s: every step
+    # through `Prepared::call` (the person's settings, kept inside the new
+    # folder) and a limited run; the repository made first, `origin`'s URL
+    # list reset before the address goes in, and where the fetch goes read
+    # THERE — a global `remote.origin.url` and a rule included only for the
+    # folder or the address send a plain `git clone` where `ls-remote` from
+    # anywhere else never looked (`a_clone_reads_where_it_goes_in_the_new_repository`);
+    # the fetch only with a pass for that host, pinned to it, and following no
+    # redirect — the plain key and the one for the address itself, which a
+    # rule of the person's for that address would beat
+    # (`a_redirect_to_another_host_is_not_followed`).
+    prepared = scope(lib, r"\nimpl Prepared\b")
+    if prepared is not None:
+        if re.search(r"\brun\(", prepared):
+            wrong.append("`impl Prepared` runs git without a limit; its steps are `run_until`'s")
+        call = must(body_of(prepared, "call"), "Prepared::call")
+        for needle in ("base(", "self.settings.on(", "ceiling("):
+            if needle not in call:
+                wrong.append(f"`Prepared::call` no longer has {needle}")
+        ready = must(body_of(prepared, "ready"), "Prepared::ready")
+        for needle in ('"--template="', '"remote.origin.url", ""', '"--get-url", "origin"'):
+            if needle not in ready:
+                wrong.append(f"`Prepared::ready` no longer has {needle}")
+        fetched = must(body_of(prepared, "fetched"), "Prepared::fetched")
+        if "pass.covers(" not in fetched or "self.host()" not in fetched:
+            wrong.append("`Prepared::fetched` no longer checks the pass against where the fetch goes")
+        fc = must(body_of(prepared, "fetch_command"), "Prepared::fetch_command")
+        for needle in ('"http.followRedirects=false"', '"--no-recurse-submodules"',
+                       '"--upload-pack=git-upload-pack"', '"url.{}.insteadOf"',
+                       '"http.{}.followRedirects"', "GIT_CONFIG_KEY_"):
+            if needle not in fc:
+                wrong.append(f"`Prepared::fetch_command` no longer has {needle}")
+        made = must(body_of(repo, "prepare_clone"), "Repo::prepare_clone")
+        if "ready()" not in made:
+            wrong.append("`Repo::prepare_clone` no longer makes the repository and reads where it goes")
+        eff = must(body_of(lib, "effective_url_in"), "fn effective_url_in")
+        for needle in ('base(tools, Path::new("/"), None)', 'subcommand(&mut command, "ls-remote")',
+                       '"--get-url"'):
+            if needle not in eff:
+                wrong.append(f"`fn effective_url_in` no longer has {needle}")
     ran = must(body_of(repo, "ran"), "Repo::ran")
     if "self.command(" not in ran or "subcommand(" not in ran:
         wrong.append("`Repo::ran` no longer builds its call from `Repo::command` and `subcommand`")
@@ -33134,6 +33200,85 @@ let
     print("OK: one door to git, and every door it would open is shut")
     END
   '';
+
+  # `LEADER / c` ASKS WHERE THE ADDRESS LEADS, AND ITS QUESTION GOES WITH THE
+  # LINE — the footer's own camera (the loop's shell), over a room whose
+  # person sends GitHub to a mirror (`url.<base>.insteadOf` in their
+  # `~/.gitconfig`), git reading it for real:
+  #
+  #   * the question names the mirror and, beside it, the address's own host,
+  #     in both languages;
+  #   * asked, then `LEADER :` taking the line, a later `dev-clone <folder>`
+  #     — the command run with its argument, nobody answering — is asked
+  #     again, never taken for the answer to the question the line dropped
+  #     (the footer lets the region's question go whenever the line moves on,
+  #     `Footer::the_line_moves_on`; before, it was taken, and a clone would
+  #     have started there with nobody answering).
+  dev-clone-asks-where-the-address-leads =
+    mkCheck "dev-clone-asks-where-the-address-leads" [ pkgs.python3 ]
+      ''
+        export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
+        export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+        export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
+        export VK_DRIVER_FILES=${xvfb.icd}
+        export VK_ICD_FILENAMES=${xvfb.icd}
+        export LIBGL_ALWAYS_SOFTWARE=1
+        export GIT_CONFIG_NOSYSTEM=1
+        shell=${rust.loop.bins.ronoctua-shell}/bin/ronoctua-shell
+        # A frame: its name, the language, then the camera's steps.
+        frame() {
+          name=$1 language=$2; shift 2
+          rm -rf "$PWD/room"
+          mkdir -p "$PWD/room/home"
+          printf '[url "https://mirror.example.org/github/"]\n\tinsteadOf = https://github.com/\n' \
+            > "$PWD/room/home/.gitconfig"
+          "$shell" photograph --door footer --room "$PWD/room" --language "$language" --list "$@" \
+            > "$PWD/$name.txt"
+        }
+        for language in en-GB pt-BR; do
+          frame "asked-$language" "$language" --command dev-clone
+        done
+        frame dropped en-GB --command dev-clone --command mx-open --command "dev-clone $PWD/room/home/elsewhere"
+        python3 - "$PWD" <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+
+        # PARSED: the frames (`--list`, one run a line) and the `.ftl` files
+        # (`key = value`) are read as data, never searched as source.
+        # FILE-WIDE: a frame is the footer's whole drawing, and the sentence
+        # the dropped question must not leave may be on any line of it.
+        here = pathlib.Path(sys.argv[1])
+        RUN = re.compile(r'^run line (\d+) column \d+ \S+ color\.[\w.]+ "(.*)"$', re.M)
+        def line_of(name, n):
+            return "".join(t for k, t in RUN.findall((here / f"{name}.txt").read_text()) if int(k) == n)
+        def keys_of(language):
+            text = pathlib.Path("${../crates/ronoctua-shell-git/i18n}", f"{language}.ftl").read_text()
+            keys = dict(re.findall(r"^([a-z0-9-]+) = (.+)$", text, re.M))
+            floor(len(keys), 10, f"keys of ronoctua-shell-git in {language}")
+            return keys
+
+        wrong = []
+        for language in ("en-GB", "pt-BR"):
+            keys = keys_of(language)
+            asked = keys["dev-clone-elsewhere"].replace("{ $host }", "mirror.example.org").replace("{ $from }", "github.com")
+            line = line_of(f"asked-{language}", 1)
+            if not line.startswith(asked):
+                wrong.append(f"{language}: the question is {line!r}, not {asked!r}")
+        keys = keys_of("en-GB")
+        line = line_of("dropped", 1)
+        # A LONG ANSWER IS CUT FROM THE LEFT: its end is what is drawn.
+        if "mirror.example.org" not in line or "room/home/elsewhere" not in line:
+            wrong.append(f"a dev-clone run after the line dropped its question was not asked again: {line!r}")
+        every = (here / "dropped.txt").read_text()
+        if keys["dev-clone-unheard"].split("{")[0].strip() in every:
+            wrong.append("a dev-clone run after the line dropped its question was taken for its answer")
+        for w in wrong:
+            print(f"ERROR: {w}", file=sys.stderr)
+        if wrong:
+            raise SystemExit(1)
+        print("OK: the question names where the address leads, in both languages, and goes with the line")
+        END
+      '';
 
   # sys-boundaries: 7ZZ, BSDTAR AND UNRAR ARE RUN BY ONE CRATE, AND A
   # PASSWORD IS NEVER AN ARGUMENT.
@@ -33922,7 +34067,11 @@ let
     if not re.search(r"fn ask\(&mut self, line: crate::line::Line\)\s*\{\s*crate::region::Doorway::ask\(self\.ui, line\)", window):
         wrong.append("the files window does not hand the manager's line to its door whole")
     footer = uncommented(without_tests(shell_source("surface.rs")))
-    if not re.search(r"Effect::Ask\(line\)\s*=>\s*\{[^}]*self\.mx\.request_line\(line\)", footer):
+    # THE ARM BY ITS BRACES: it lets the question on the line go first
+    # (`the_line_moves_on`, a block of its own), and then asks the new one.
+    owed = must(body_of(footer, "region_owed"), "Footer::region_owed")
+    arm = scope(owed, r"Effect::Ask\(line\)\s*=>")
+    if arm is None or "self.mx.request_line(line)" not in arm:
         wrong.append("the footer does not ask a region's line on the minibuffer as it came")
 
     for w in wrong:
@@ -53081,6 +53230,7 @@ let
 
       one-git-driver
       git-calls-are-hardened
+      dev-clone-asks-where-the-address-leads
       one-archive-driver
       one-podman-boundary
 

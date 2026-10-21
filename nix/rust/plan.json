@@ -2,7 +2,7 @@
 "features":["ronoctua-software/draw","ronoctua-software/net","ronoctua-video-metrics/net"],
 "format":1,
 "host":"x86_64-unknown-linux-gnu",
-"inputs":"01ae7cefbe90c58613f87c2c429991c5e7f2f035bf5ed03c52ed5abb2893e325",
+"inputs":"810a59d69c8a3b9bef7ebbe21bd013039efdd0470c20d95ab8f2645aea180f30",
 "links":{"aws-lc-rs@1.18.1":"aws_lc_rs_1_18_1_sys","aws-lc-sys@0.45.0":"aws_lc_0_45_0","libsqlite3-sys@0.38.2":"sqlite3","prettyplease@0.3.0":"prettyplease03","rayon-core@1.13.0":"rayon-core","ring@0.17.14":"ring_core_0_17_14_","wasm-bindgen-shared@0.2.126":"wasm_bindgen"},
 "rustc":"1.97.1",
 "packages":{

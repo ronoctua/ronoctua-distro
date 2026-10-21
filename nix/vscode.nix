@@ -42,6 +42,28 @@
 # would be on. So the policy's folder is bound, read only — the vm test
 # proves the policy read from inside.
 #
+# WHY CHROMIUM'S `--host-resolver-rules`
+# --------------------------------------
+# VS Code's Electron downloads Chromium's spell-check dictionary for the
+# interface's language (`redirector.gvt1.com/edgedl/chrome/dict/…`, which
+# Google redirects to a mirror of its own) in every new profile — though
+# every window of VS Code turns spell-check off and nothing of VS Code reads
+# it — and no policy or setting of the pinned 1.119 stops it (measured in
+# `tests/vscode-vm.nix`). Chromium's own rule maps that one host to "not
+# found": the request fails before a name is asked, and every other host is
+# resolved as before. It goes on the command line of every start, through
+# the wrapper nixpkgs makes (`commandLineArgs`), which this environment runs
+# — so the launcher's entry, a terminal's `code` and `ronoctua-vscode`'s all
+# carry it. It is Chromium's network alone: the CLI and the extension host
+# are Node, whose resolver never reads it. The vm test proves the host never
+# asked, and the switch on the command line of the program that runs.
+#
+# VS Code's CLI does not know the switch, says so on every call ("Warning:
+# 'host-resolver-rules' is not in the list of known options, but still
+# passed to Electron/Chromium.", on its standard error) and passes it on —
+# measured on the pinned 1.119; `ronoctua-vscode` skips that line when it
+# reads why an install failed.
+#
 # A function of `pkgs`, so the module and the vm test build the same thing
 # — the test from a `pkgs` of its own that admits the unfree package.
 {
@@ -51,6 +73,8 @@
 
 let
   inherit (pkgs) lib coreutils;
+  # THE ONE HOST, and nothing else: a rule names its host exactly.
+  dictionaryHost = "redirector.gvt1.com";
   # THE HOST'S `os-release` WITH `ID=linux`, made before the environment is
   # (`extraPreBwrapCmds` runs ahead of the loops that link the host's `/etc`
   # entries in): listed as one of the environment's own, it is bound in its
@@ -74,6 +98,9 @@ let
   '';
 in
 (pkgs.vscode.override {
+  # RAW SHELL TEXT in the wrapper's `exec` line (`--add-flags`), so the rule's
+  # spaces are quoted here: one argument.
+  commandLineArgs = ''--host-resolver-rules="MAP ${dictionaryHost} ~NOTFOUND"'';
   buildVscode =
     args:
     pkgs.buildVscode (

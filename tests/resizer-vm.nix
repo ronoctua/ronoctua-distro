@@ -95,8 +95,11 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell resizer"
         )
         machine.wait_until_succeeds(f"test -s {CUT} && test -s {KEEPER}", timeout=60)
+        # A CURTAIN IS THE KEEPER'S OWN PROGRAM, started by its path
+        # (`current_exe`): the wrapped binary, `.ronoctua-shell-wrapped` — so
+        # it is counted by its word, not by the wrapper's name.
         machine.wait_until_succeeds(
-            "test $(pgrep -fc 'ronoctua-shell [r]esizer-curtain') -eq 2", timeout=60
+            "test $(pgrep -fc '[r]esizer-curtain (right|bottom)$') -eq 2", timeout=60
         )
         c = cut()
         machine.wait_until_succeeds(
@@ -141,7 +144,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_fails(f"test -e {CUT}", timeout=30)
         machine.wait_until_fails(f"test -e {KEEPER}", timeout=30)
         machine.wait_until_succeeds(
-            "test $(pgrep -fc 'ronoctua-shell [r]esizer-curtain') -eq 0", timeout=30
+            "test $(pgrep -fc '[r]esizer-curtain (right|bottom)$') -eq 0", timeout=30
         )
         assert workspace_rect() == whole, "the screen did not come back whole"
 

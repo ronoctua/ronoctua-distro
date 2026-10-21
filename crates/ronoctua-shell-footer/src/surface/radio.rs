@@ -448,6 +448,7 @@ impl Footer {
             if let Some(q) = self.bluetooth_asked.clone() {
                 self.hosted_heard::<ronoctua_bluetooth::agent::Question>(&q);
             }
+            self.the_line_moves_on();
             self.mx.request(crate::bluez_words::ACCEPT, true);
             self.apply_geometry(KeyboardInteractivity::Exclusive);
             self.draw_and_paint();

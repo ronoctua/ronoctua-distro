@@ -13,10 +13,10 @@
 #
 #   1. the first boot is blessed — the bless unit hangs off the target the
 #      boot really reaches: what booted and lasted is the last good system;
-#   2. an apply of a system that CANNOT boot (its `init` exits at once, so
-#      PID 1 dies and the kernel panics) arms the trial — default on the last
-#      good entry, one-shot on the new one — and a bless in that same boot
-#      judges nothing: the trial has not been tried;
+#   2. an apply of a system that CANNOT boot (its `init` is no system's:
+#      stage 1 cannot activate it, and the kernel panics) arms the trial —
+#      default on the last good entry, one-shot on the new one — and a bless
+#      in that same boot judges nothing: the trial has not been tried;
 #   3. the reboot tries the trial ONCE — the console shows its panic — and
 #      comes back on the last good one by itself; the bless marks the trial
 #      `failed`, puts the system profile back on the last good system and
@@ -60,8 +60,9 @@ let
         ${good}/boot.json > $out/boot.json
     '';
 
-  # STAGE 1 HANDS OVER TO AN `init` THAT EXITS AT ONCE: PID 1 dies, and the
-  # kernel panics.
+  # STAGE 1 CANNOT HAND OVER: the `init` it is given is no system's (the
+  # systemd stage 1 looks for `prepare-root` beside it and finds none), so
+  # the activation fails and `boot.panic_on_fail` panics the kernel.
   broken =
     good: variant "trial-that-does-not-boot" good "${pkgs.coreutils}/bin/false" "ronoctua.trial=broken";
 
@@ -174,7 +175,10 @@ pkgs.testers.runNixOSTest {
       good = machine.succeed("readlink -f /run/booted-system").strip()
 
       with subtest("the first boot is blessed: what booted and lasted is the last good system"):
-          target = machine.succeed("systemctl get-default").strip()
+          # WHAT `default.target` IS, asked of PID 1 — the unit the boot
+          # reached. `systemctl get-default` reads the link from the files,
+          # and on a store-backed `/etc` systemd 260 answers its own name.
+          target = machine.succeed("systemctl show -p Id --value default.target").strip()
           assert target == "multi-user.target", target
           wanted = machine.succeed(f"systemctl show -p Wants --value {target}")
           assert "ronoctua-boot-bless.service" in wanted, wanted
@@ -203,8 +207,10 @@ pkgs.testers.runNixOSTest {
 
       with subtest("the trial is tried once, and the machine comes back on its own"):
           machine.reboot()
-          # The one-shot entry booted: its init died and the kernel said so.
-          machine.wait_for_console_text("Attempted to kill init")
+          # The one-shot entry booted — its own command line — and the
+          # kernel panicked in it.
+          machine.wait_for_console_text("Kernel command line: .*ronoctua.trial=broken")
+          machine.wait_for_console_text("Kernel panic - not syncing")
           machine.wait_for_unit("multi-user.target")
           assert machine.succeed("readlink -f /run/booted-system").strip() == good
           machine.wait_for_unit("ronoctua-boot-bless.service")

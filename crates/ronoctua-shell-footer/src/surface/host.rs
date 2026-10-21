@@ -364,6 +364,11 @@ impl Footer {
                 // state that stays true off the line; the next message does.
                 Effect::Hold(text) => self.echo_held(text),
                 Effect::Ask(line) => {
+                    // ANOTHER QUESTION TAKES THE LINE: the one on it is over.
+                    // The same region asking the same again replaced its own.
+                    if self.region_asking != Some((id, line.id)) {
+                        self.the_line_moves_on();
+                    }
                     self.region_asking = Some((id, line.id));
                     self.mx.request_line(line);
                     self.apply_geometry(KeyboardInteractivity::Exclusive);
@@ -1753,6 +1758,19 @@ impl Footer {
             self.follow_cursor();
         }
         self.draw_and_paint();
+    }
+
+    /// THE LINE MOVES ON without the answer to a region's question — the
+    /// finder (`LEADER :`), the buffer finder, another question, the
+    /// keyboard gone: the question is over, and the region lets it go, what
+    /// it kept for the answer with it, as after `Esc`
+    /// ([`Footer::hosted_unanswered`]). Without this the footer went on
+    /// taking a later command of the same id, run with an argument, for the
+    /// answer — and the region, for the question it had asked.
+    pub(super) fn the_line_moves_on(&mut self) {
+        if self.region_asking.is_some() {
+            self.hosted_unanswered();
+        }
     }
 
     /// The minibuffer's question was let go: the region that asked it lets

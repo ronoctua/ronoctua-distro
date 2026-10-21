@@ -58,6 +58,8 @@ pub const REGIONS: &[region::Entry] = &[
 /// What a feature keeps in the footer for the session, its region open or
 /// closed (`region::Resident`) — beside its region's entry, sorted by id.
 pub const RESIDENTS: &[region::Residing] = &[
+    // `LEADER / c`'s question, kept until its answer.
+    ronoctua_shell_git::git_region::RESIDING,
     ronoctua_shell_player::player_region::RESIDING,
     ronoctua_shell_video_metrics::video_metrics_region::RESIDING,
 ];
