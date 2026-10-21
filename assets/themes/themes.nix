@@ -44,10 +44,11 @@
     "darkside"
     "evilside"
     # THE FIRST LIGHT ONE, and it goes at the END on purpose. `themes-negative`
-    # spoils `builtins.head` and wants the build to fail on the HUE gate; the
-    # installer and the rescue export no `RONOCTUA_THEME` and so run at index
-    # zero; and the screenshot battery photographs the theme after the default.
-    # Three things read a position here, and none of them wants this one first.
+    # spoils `builtins.head` and wants the build to fail on the HUE gate, and
+    # the screenshot battery photographs the theme after the default. Two
+    # things read a position here, and neither wants this one first. (The
+    # installer and the rescue console read none: with no `RONOCTUA_THEME`
+    # they take `default`, below.)
     "flashbang"
     # The second light one: the same ladder, a warm sheet instead of a white
     # screen. Same reasons as above for being at the end.

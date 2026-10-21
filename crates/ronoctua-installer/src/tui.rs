@@ -50,6 +50,7 @@ use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use crossterm::style::Print;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -64,6 +65,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph, Widget, Wrap};
 use ronoctua_belongings::prefs::Auth;
 use ronoctua_i18n::{Arg, Texts};
 use ronoctua_tokens::{Color, color};
+use ronoctua_vt::{Console, Table};
 
 use crate::access::{self, Probed, QUIET, Qr};
 use crate::gate::Gate;
@@ -83,6 +85,33 @@ fn color(c: Color) -> ratatui::style::Color {
     let [r, g, b, _] = c.to_rgba8();
     ratatui::style::Color::Rgb(r, g, b)
 }
+
+/// The roles the TUI paints, each in the console's slot it takes — on the
+/// kernel's console, which keeps one bit of a 24-bit colour, the TUI paints
+/// by slot ([`ronoctua_vt`]).
+///
+/// THE FIRST EIGHT are the ones a background can be, so every role a cell's
+/// ground wears is there — the bands, and the QR code's two tones. Slots 0 and
+/// 7 are the console's own ground and text. Every colour any screen paints has
+/// a slot (`every_colour_has_a_slot`).
+const SLOTS: Table = Table::new(&[
+    color::SURFACE_BASE,
+    color::STATE_ERROR,
+    color::STATE_SUCCESS,
+    color::STATE_WARNING,
+    color::SURFACE_SELECTION,
+    color::STATE_ACCENT,
+    color::SURFACE_HOVER,
+    color::TEXT_PRIMARY,
+    color::TEXT_DIM,
+    color::STATE_CRITICAL,
+    color::TEXT_ANSWER,
+    color::TEXT_SUBTLE_LIT_KEY,
+    color::TEXT_HERE_ACTS,
+    color::TEXT_SECONDARY,
+    color::TEXT_LABEL_ACTS,
+    color::TEXT_HEADING,
+]);
 
 /// A candidate disk, as `lsblk` describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1807,9 +1836,12 @@ fn draw(f: &mut ratatui::Frame, e: &State, texts: &Texts) {
                     .fg(color(color::STATE_ACCENT))
                     .add_modifier(Modifier::BOLD),
             )),
+            // THE QUESTION IS THE HEADING of what is below it, in a hue no
+            // option wears: the answer's tone is the text's own warmed in
+            // half the themes, and one could not be told from the other.
             Line::from(Span::styled(
                 label_of(e, texts),
-                Style::default().fg(color(color::TEXT_PRIMARY)),
+                Style::default().fg(color(color::TEXT_HEADING)),
             )),
         ])
         .style(base),
@@ -1898,15 +1930,21 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
             // THE LIST OF PROGRAMS draws its rows itself: a name and the
             // word that says what happens to it (`checklist_lines`).
             let checklist = (e.question_of() == Some(Question::LeftOut))
-                .then(|| checklist_lines(&e.answers.left_out, texts));
-            // THE ROW UNDER THE POINTER is lit, and it is not the cursor:
-            // the selection keeps its own band.
-            let hovering = Style::default().bg(color(color::SURFACE_HOVER));
+                .then(|| checklist_lines(&e.answers.left_out, texts, e.choice));
             let items: Vec<ListItem> = e
                 .options()
                 .into_iter()
                 .enumerate()
                 .map(|(i, o)| {
+                    // AN OPTION IS AN ANSWER, and it is drawn in the tones of
+                    // one (`option_tone`): the question above it is the text's,
+                    // so what can be chosen is never read as what is asked.
+                    let mut style = Style::default().fg(color(option_tone(i == e.choice)));
+                    // THE ROW UNDER THE POINTER is lit, and it is not the
+                    // cursor: the selection keeps its own band.
+                    if e.hover == Some(Hit::Row(i)) && i != e.choice {
+                        style = style.bg(color(color::SURFACE_HOVER));
+                    }
                     let item = if let Some(line) = checklist.as_ref().and_then(|c| c.get(i)) {
                         ListItem::new(line.clone())
                     } else if wifi && o.is_empty() {
@@ -1914,24 +1952,19 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
                     } else {
                         ListItem::new(o)
                     };
-                    if e.hover == Some(Hit::Row(i)) && i != e.choice {
-                        item.style(hovering)
-                    } else {
-                        item
-                    }
+                    item.style(style)
                 })
                 .collect();
             // THE OFFSET IS `places`'s, so the row a click hits is the row
-            // drawn there.
+            // drawn there. THE CURSOR'S BAND IS A GROUND ONLY: its text is
+            // the row's, which already says it is the cursor's.
             let mut st = ListState::default()
                 .with_offset(rows.offset)
                 .with_selected(Some(e.choice));
             f.render_stateful_widget(
-                List::new(items).style(base).highlight_style(
-                    Style::default()
-                        .fg(color(color::TEXT_PRIMARY))
-                        .bg(color(color::SURFACE_SELECTION)),
-                ),
+                List::new(items)
+                    .style(base)
+                    .highlight_style(Style::default().bg(color(color::SURFACE_SELECTION))),
                 rows.area,
                 &mut st,
             );
@@ -1954,7 +1987,11 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
             } else {
                 e.typing.clone()
             };
-            let mut lines = vec![Line::from(format!("{shown}_"))];
+            // WHAT IS TYPED IS THE ANSWER, in its tone, as a chosen option is.
+            let mut lines = vec![Line::from(Span::styled(
+                format!("{shown}_"),
+                Style::default().fg(color(option_tone(true))),
+            ))];
             if q == Some(Question::BelongingsAccess)
                 && let Some(page) = access::token_page(&e.answers.belongings)
             {
@@ -2034,7 +2071,7 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
                     )),
                     Line::from(Span::styled(
                         format!("{}_", e.confirmation),
-                        Style::default().fg(color(color::TEXT_PRIMARY)),
+                        Style::default().fg(color(option_tone(true))),
                     )),
                 ])
                 .style(base),
@@ -2122,13 +2159,26 @@ fn lit_row(
     );
 }
 
+/// The tone of an option, which is the value of a row that acts — the
+/// shell's `chrome::Kind::Setting`: an answer's, and the accent's under the
+/// cursor (`text.here.acts`).
+fn option_tone(here: bool) -> Color {
+    if here {
+        color::TEXT_HERE_ACTS
+    } else {
+        color::TEXT_ANSWER
+    }
+}
+
 /// The list of programs' rows, as drawn: "continue", then each program's
 /// name — padded to the longest, so the words stand in one column — and the
 /// word that says what happens to it. NO GLYPH: the installer runs on the
 /// console, whose font (PSF) has none of the icons. The tone says it too: a
-/// program kept is drawn in the text's tone with its word as an answer, one
-/// left out all dim.
-fn checklist_lines(answer: &str, texts: &Texts) -> Vec<Line<'static>> {
+/// program kept is a row that acts, its name a label's and its word an
+/// answer's; one left out all dim. Under the cursor (`here`, the row's
+/// index) the name takes the accent and the word the cursor's answer, as
+/// every row of the shell does (`chrome::Kind::tones`).
+fn checklist_lines(answer: &str, texts: &Texts, here: usize) -> Vec<Line<'static>> {
     let widest = model::OFFERED
         .iter()
         .map(|o| cells(o.name))
@@ -2139,17 +2189,19 @@ fn checklist_lines(answer: &str, texts: &Texts) -> Vec<Line<'static>> {
         texts.t(key::INST_LEFT_OUT_OUT),
     );
     let mut lines = vec![Line::from(texts.t(key::INST_LEFT_OUT_CONTINUE))];
-    for o in model::OFFERED {
+    for (n, o) in model::OFFERED.iter().enumerate() {
         let left = model::is_left_out(answer, o.id);
-        let (name, word) = if left {
-            let dim = Style::default().fg(color(color::TEXT_DIM));
-            (dim, dim)
+        let (name, word) = if n + 1 == here {
+            (color::STATE_ACCENT, option_tone(true))
+        } else if left {
+            (color::TEXT_DIM, color::TEXT_DIM)
         } else {
-            (
-                Style::default().fg(color(color::TEXT_PRIMARY)),
-                Style::default().fg(color(color::TEXT_ANSWER)),
-            )
+            (color::TEXT_LABEL_ACTS, option_tone(false))
         };
+        let (name, word) = (
+            Style::default().fg(color(name)),
+            Style::default().fg(color(word)),
+        );
         let gap = usize::from(widest.saturating_sub(cells(o.name)))
             + usize::from(ronoctua_tokens::space::INSTALLER_CHECKLISTGAP);
         lines.push(Line::from(vec![
@@ -2315,7 +2367,10 @@ impl Widget for QrBlock<'_> {
 /// on the alternate screen: the person is left with a shell that does not echo what they
 /// type, and the only way out is closing the window. An installer cannot be the
 /// thing that breaks the terminal of whoever tried to use it.
-struct Guard(Terminal<CrosstermBackend<Stdout>>);
+///
+/// And on the console, its own palette: the slots the TUI wrote are the
+/// installer's, not the shell's that comes after it.
+struct Guard(Terminal<CrosstermBackend<Stdout>>, Option<Console>);
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -2325,6 +2380,9 @@ impl Drop for Guard {
             DisableMouseCapture,
             LeaveAlternateScreen
         );
+        if self.1.is_some() {
+            let _ = crossterm::execute!(self.0.backend_mut(), Print(Console::RESET));
+        }
         let _ = self.0.show_cursor();
     }
 }
@@ -2368,7 +2426,16 @@ pub fn collect(
     // mouse events, and a console without a mouse sends none.
     crossterm::execute!(output, EnterAlternateScreen, EnableMouseCapture)
         .context("alternate screen")?;
-    let mut g = Guard(Terminal::new(CrosstermBackend::new(output)).context("terminal")?);
+    // ON THE KERNEL'S CONSOLE, the palette's tones in its slots before the
+    // first frame, which paints by slot.
+    let console = Console::of_term(SLOTS);
+    if let Some(c) = &console {
+        crossterm::execute!(output, Print(c.palette())).context("the console's palette")?;
+    }
+    let mut g = Guard(
+        Terminal::new(CrosstermBackend::new(output)).context("terminal")?,
+        console,
+    );
     // THE JOBS RUN ON THREADS, one at a time as the screens ask them, and
     // their answers come back through this channel: the loop below keeps
     // drawing and reading keys while the radio and the remote take seconds.
@@ -2400,7 +2467,13 @@ pub fn collect(
         let size = g.0.size().context("the terminal's size")?;
         let at = places(Rect::new(0, 0, size.width, size.height), &e, texts);
         e.drawn(&at);
-        g.0.draw(|f| draw(f, &e, texts)).context("draw")?;
+        g.0.draw(|f| {
+            draw(f, &e, texts);
+            if let Some(c) = &g.1 {
+                c.paint(f.buffer_mut());
+            }
+        })
+        .context("draw")?;
         if !event::poll(Duration::from_millis(100)).context("poll")? {
             continue;
         }
@@ -2462,6 +2535,10 @@ pub enum Shown {
     /// Its text with its colours ([`painted`]) — for a terminal, which
     /// paints it as the TUI does.
     Painted,
+    /// The same in the console's slots ([`Console`]) — for the kernel's
+    /// console, as the TUI paints it there. The palette is written before
+    /// the screen and left: given back, it would recolour what was printed.
+    Console,
 }
 
 /// One of the screens that check the network or the repository (or the list
@@ -2475,6 +2552,16 @@ pub fn show(
     (width, height): (u16, u16),
     how: Shown,
 ) -> Option<String> {
+    let e = shown(screen)?;
+    Some(match how {
+        Shown::Text => rendered(&e, texts, width, height),
+        Shown::Painted => painted(&e, texts, width, height, None),
+        Shown::Console => painted(&e, texts, width, height, Some(&Console::resolved(SLOTS))),
+    })
+}
+
+/// The fixture of the screen [`show`] draws.
+fn shown(screen: &str) -> Option<State> {
     let mut e = State::fresh(Vec::new(), vec!["home-5g".into(), "home-2g".into()]);
     e.hosts = "github.com, cache.nixos.org".into();
     let at = |e: &mut State, q: Question| {
@@ -2582,10 +2669,7 @@ pub fn show(
         }
         _ => return None,
     }
-    Some(match how {
-        Shown::Text => rendered(&e, texts, width, height),
-        Shown::Painted => painted(&e, texts, width, height),
-    })
+    Some(e)
 }
 
 /// The screen drawn into a buffer of `width × height` cells, as the TUI
@@ -2599,17 +2683,28 @@ fn drawn(e: &State, texts: &Texts, width: u16, height: u16) -> Option<Buffer> {
 /// The screen as a terminal paints it: its text, and each run of cells in
 /// its colours (24-bit SGR) and weight — what `ronoctua-install --show`
 /// prints to a terminal, so a screen is looked at in its tones and not only
-/// its words.
+/// its words. On the kernel's `console`, by slot, after the palette.
 #[must_use]
-pub fn painted(e: &State, texts: &Texts, width: u16, height: u16) -> String {
-    let Some(buffer) = drawn(e, texts, width, height) else {
+pub fn painted(
+    e: &State,
+    texts: &Texts,
+    width: u16,
+    height: u16,
+    console: Option<&Console>,
+) -> String {
+    let Some(mut buffer) = drawn(e, texts, width, height) else {
         return String::new();
     };
     let sgr = |c: ratatui::style::Color, ground: u8| match c {
         ratatui::style::Color::Rgb(r, g, b) => format!("{ground}8;2;{r};{g};{b}"),
+        ratatui::style::Color::Indexed(n) => format!("{ground}8;5;{n}"),
         _ => format!("{ground}9"),
     };
     let mut out = String::new();
+    if let Some(c) = console {
+        c.paint(&mut buffer);
+        out.push_str(&c.palette());
+    }
     for y in 0..height {
         let mut last = None;
         for x in 0..width {
@@ -3000,7 +3095,9 @@ mod tests {
             }
         }
         // THE TONE SAYS IT TOO, away from the cursor: a program left out
-        // all dim, one kept in the text's tone with its word an answer's.
+        // all dim, one kept a row that acts — its name a label's, its word
+        // an answer's; under the cursor, the name the accent and the word
+        // the cursor's answer.
         let buf = drawn(&e, &t, 100, 34).unwrap();
         let at = places(area, &e, &t);
         let rows = at.list.unwrap();
@@ -3019,13 +3116,32 @@ mod tests {
                 assert_eq!(tone(i, 0), color(color::TEXT_DIM), "{}", o.id);
                 assert_eq!(tone(i, word_x), color(color::TEXT_DIM), "{}", o.id);
             } else {
-                assert_eq!(tone(i, 0), color(color::TEXT_PRIMARY), "{}", o.id);
+                assert_eq!(tone(i, 0), color(color::TEXT_LABEL_ACTS), "{}", o.id);
                 assert_eq!(tone(i, word_x), color(color::TEXT_ANSWER), "{}", o.id);
             }
         }
+        // UNDER THE CURSOR, on a program kept and on one left out alike.
+        let resting = e.choice;
+        for o in [
+            OFFERED
+                .iter()
+                .position(|o| is_left_out(&e.answers.left_out, o.id)),
+            OFFERED
+                .iter()
+                .position(|o| !is_left_out(&e.answers.left_out, o.id)),
+        ] {
+            e.choice = o.expect("the default keeps one program and leaves one out") + 1;
+            let buf = drawn(&e, &t, 100, 34).unwrap();
+            let rows = places(area, &e, &t).list.unwrap();
+            let y = rows.area.y + u16::try_from(e.choice - rows.offset).unwrap();
+            let fg = |x: u16| buf.cell((rows.area.x + x, y)).unwrap().fg;
+            assert_eq!(fg(0), color(color::STATE_ACCENT), "row {}", e.choice);
+            assert_eq!(fg(word_x), color(color::TEXT_HERE_ACTS), "row {}", e.choice);
+        }
+        e.choice = resting;
         assert_ne!(
             color(color::TEXT_DIM),
-            color(color::TEXT_PRIMARY),
+            color(color::TEXT_LABEL_ACTS),
             "the tones would say nothing"
         );
         // ENTER ON "CONTINUE" TAKES THE MARKS and goes on.
@@ -4332,5 +4448,144 @@ mod tests {
                 assert_eq!(painted, want, "module ({mx}, {my})");
             }
         }
+    }
+
+    /// Every screen the TUI draws, to `visit`: each question as the walk
+    /// reaches it — with the pointer on a row, on a key and on the rows that
+    /// say what a list does not show, and refusing —, the review, the run
+    /// and its end, and each of `--show`'s.
+    fn every_screen(visit: &mut dyn FnMut(&State)) -> usize {
+        let mut seen = 0;
+        let mut e = with_disks();
+        let limit = Question::ALL_KEYS.len() * 4;
+        loop {
+            for hover in [
+                None,
+                Some(Hit::Row(1)),
+                Some(Hit::Key(0)),
+                Some(Hit::Earlier),
+                Some(Hit::Later),
+            ] {
+                e.hover = hover;
+                visit(&e);
+                seen += 1;
+            }
+            e.hover = None;
+            e.error = Some(Gate::NoLink.key());
+            visit(&e);
+            e.error = None;
+            let Some(q) = e.question_of() else {
+                break;
+            };
+            walk_one(&mut e);
+            settle(&mut e, &kind);
+            assert!(
+                seen < limit * 6 && e.question_of() != Some(q),
+                "the screen {q:?} does not advance"
+            );
+        }
+        assert_eq!(e.screen, Screen::Reviewing);
+        e.screen = Screen::Running;
+        e.step = Some((0, 3, key::INST_RUNNING));
+        e.output = vec!["a line of output".into()];
+        visit(&e);
+        for ok in [true, false] {
+            e.screen = Screen::Finished(ok);
+            visit(&e);
+        }
+        for name in [
+            "network",
+            "access",
+            "token",
+            "passphrase",
+            "passphrase-new",
+            "hop",
+            "review",
+            "left-out",
+            "compose",
+        ] {
+            visit(&shown(name).unwrap_or_else(|| panic!("no screen `{name}`")));
+            seen += 1;
+        }
+        seen
+    }
+
+    /// One answer on the screen `e` is on, the walk's.
+    fn walk_one(e: &mut State) {
+        match e.question_of() {
+            Some(Question::Hostname) => type_in(e, "noctua-teste"),
+            Some(Question::Password | Question::Passphrase | Question::WifiPassword) => {
+                type_in(e, "Zq7-test-phrase");
+            }
+            Some(Question::BelongingsAddress) => type_in(e, "git@example.org:me/b.git"),
+            Some(Question::BelongingsPassphrase) => type_in(e, "Qw4-belongings-phrase"),
+            _ => {}
+        }
+        e.key(KeyCode::Enter);
+    }
+
+    /// FAILS IF: a screen paints a colour the console has no slot for — it
+    /// would come out the nearest slot's, which is another token's — or a
+    /// ground outside the eight slots a background can be, which the
+    /// console would draw in another slot's colour.
+    #[test]
+    fn every_colour_has_a_slot() {
+        let t = texts();
+        let console = Console::resolved(SLOTS);
+        let seen = every_screen(&mut |e| {
+            for (w, h) in [(100, 34), (60, 24)] {
+                let off = console.unslotted(&drawn(e, &t, w, h).unwrap());
+                assert!(off.is_empty(), "{:?}, {w}×{h}: {off:#?}", e.screen);
+            }
+        });
+        assert!(seen > 50, "the walk saw {seen} screens");
+    }
+
+    /// FAILS IF: on the kernel's console the cursor's row has the ground of
+    /// the rows around it, its option the tone of the others, or the
+    /// question the tone of its options — the three things the ISO's console
+    /// lost when it was handed 24-bit colours — or a cell keeps a 24-bit
+    /// colour or the bold that turns one slot into another.
+    #[test]
+    fn the_console_tells_the_cursor_and_the_question_apart() {
+        let t = texts();
+        let console = Console::resolved(SLOTS);
+        let mut e = with_disks();
+        e.screen = Screen::Asking(
+            Question::ALL_KEYS
+                .iter()
+                .position(|q| *q == Question::ComposeKey)
+                .unwrap(),
+        );
+        e.choice = 2;
+        let at = places(Rect::new(0, 0, 100, 34), &e, &t);
+        let rows = at.list.unwrap();
+        let mut buf = drawn(&e, &t, 100, 34).unwrap();
+        console.paint(&mut buf);
+        for cell in &buf.content {
+            for c in [cell.fg, cell.bg] {
+                assert!(
+                    matches!(c, ratatui::style::Color::Indexed(n) if usize::from(n) < ronoctua_vt::SLOTS),
+                    "{c:?} is not a slot"
+                );
+            }
+            assert!(!cell.modifier.contains(Modifier::BOLD), "a bold cell");
+        }
+        let cell = |i: usize| {
+            let y = rows.area.y + u16::try_from(i - rows.offset).unwrap();
+            buf.cell((rows.area.x, y)).unwrap().clone()
+        };
+        let (here, other) = (cell(e.choice), cell(e.choice + 1));
+        assert_ne!(here.bg, other.bg, "the cursor's row has no band");
+        assert_ne!(
+            here.fg, other.fg,
+            "the cursor's option is in the others' tone"
+        );
+        let question = buf.cell((at.head.x, at.head.y + 1)).unwrap();
+        assert_ne!(
+            question.fg, other.fg,
+            "the question is in its options' tone"
+        );
+        assert_ne!(question.fg, here.fg, "the question is in the cursor's tone");
     }
 }

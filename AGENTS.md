@@ -498,6 +498,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | Wikipedia, DuckDuckGo, SearXNG e Brave Search | `ronoctua-websearch` |
 | o super-índice do fast-access (tantivy) | `ronoctua-index` |
 | o journal do systemd (`journalctl --follow`) | `ronoctua-journal` |
+| a paleta do console do kernel (os 16 slots de um VT, `ESC ] P`) | `ronoctua-vt` |
 | podman | `ronoctua-containers` (cobra `one-podman-boundary`) |
 | PAM | `ronoctua-pam` (cobra `one-pam-boundary`) |
 | systemd-resolved (`resolve1`) | `ronoctua-resolve` (cobra `one-resolve-boundary`) |
@@ -960,7 +961,10 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
 - Só um teste chama `theme::set` e `theme::set_ground` (no `ronoctua-tokens`): os dois mudam o
   mesmo índice do processo, e os testes rodam em paralelo.
 - Consumidor Nix de cor lê o store (`${themed}/…`), nunca o `colors.nix`, que só tem receitas.
-- O nome de um glifo Nerd Font não leva `nf-` (a classe CSS leva). O console não usa TTF, e sim PSF.
+- O nome de um glifo Nerd Font não leva `nf-` (a classe CSS leva). O console não usa TTF, e sim PSF,
+  e o kernel recusa calado uma PSF que não tenha 256 ou 512 glifos e apaga com a posição 32 (cobra
+  `console-font-is-what-the-kernel-takes`). Uma cor de 24 bits chega ao VT com um bit por canal:
+  uma TUI no console pinta pelos 16 slots (`ronoctua-vt`), e só uma VM a vê (`installer-console-vm`).
   A família genérica é `sans-serif`.
 - Sem GPU: `WLR_BACKENDS=x11` (sobre `Xvfb`) ou `headless`, com `WLR_RENDERER=pixman`. O driver vem
   do Nix (`mesa`); do host, só o da NVIDIA. `LD_LIBRARY_PATH` vence o `DT_RUNPATH` e traz a `libc`

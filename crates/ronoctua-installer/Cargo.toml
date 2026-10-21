@@ -28,6 +28,9 @@ ronoctua-xdg = { path = "../ronoctua-xdg" }
 # boundary the footer uses: nobody talks to NetworkManager outside this crate.
 ronoctua-network = { path = "../ronoctua-network" }
 ronoctua-tokens = { path = "../ronoctua-tokens" }
+# THE KERNEL'S CONSOLE, where the ISO runs this TUI: its tokens in the
+# console's palette slots, shared with the rescue console's.
+ronoctua-vt = { path = "../ronoctua-vt" }
 # THE PERSON'S REPOSITORY IS MANDATORY (2026-10-05): the consent for its host
 # is written into the person's home (`consent.json` is this crate's), the
 # names of the person's data are `ronoctua-person`'s (the data alone, no

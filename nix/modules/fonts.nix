@@ -117,12 +117,13 @@ in
     # TTY — the Linux console does not consume TTF.
     #
     # Section 6.2 says TTF-nerdfonts is the default "everywhere... TTY",
-    # but the console wants PSF/PSFU with at most 512 glyphs. We generate a PSF2
-    # from the real file, which is what preserves the intent of the rule.
+    # but the console wants PSF/PSFU of 256 or 512 glyphs (any other count is
+    # refused, and the console keeps the kernel's font). We generate a PSF2 from
+    # the real file, which is what preserves the intent of the rule.
     # -----------------------------------------------------------------
     console = {
       earlySetup = true;
-      font = "${f.noctua-console-psf}/share/consolefonts/noctua-iosevka-32.psf";
+      font = f.consoleFont;
       # From the OPTION, for the same reason as the compositor's: the console
       # answering in a different layout from the session is worse than both
       # being wrong, because only one of them gets noticed.

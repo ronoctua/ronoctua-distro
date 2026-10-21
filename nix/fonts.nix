@@ -270,7 +270,7 @@ let
   # ---------------------------------------------------------------------
   # Console font. Section 6.2 demands TTF-nerdfonts be the default "everywhere...
   # TTY", but the Linux console does NOT consume TTF: it needs
-  # PSF/PSFU with at most 512 glyphs. We generate a PSF2 from the real file,
+  # PSF/PSFU of 256 or 512 glyphs. We generate a PSF2 from the real file,
   # which is what preserves the intent of the rule.
   # ---------------------------------------------------------------------
   noctua-console-psf = stdenvNoCC.mkDerivation {
@@ -320,6 +320,11 @@ in
     noctua-iosevka-woff2-nerdfonts
     noctua-console-psf
     ;
+
+  # THE CONSOLE'S FONT, the one file every console loads — the ISO's, every
+  # machine's (`nix/modules/fonts.nix`) and the VM tests that look at one —,
+  # named once.
+  consoleFont = "${noctua-console-psf}/share/consolefonts/noctua-iosevka-32.psf";
 
   # Consumed by nix/fontconfig.nix and by the modules. No crate names the
   # font directly (section 6.2): always through a token.

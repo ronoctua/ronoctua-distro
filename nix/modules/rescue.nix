@@ -179,6 +179,12 @@ in
 
     systemd.services.ronoctua-rescue = {
       description = "Rescue console on virtual console ${toString cfg.vt}";
+      # THE MACHINE'S THEME, as the session's programs get it (`scroll.nix`): a
+      # system unit inherits none of the session's environment, and without
+      # it the console painted the first theme of the chooser's order. What
+      # the person chose (`theme.json`) is not read on a VT that may have no
+      # session at all.
+      environment.RONOCTUA_THEME = config.ronoctua.theme;
       # `Type = "idle"` and not `simple`: with jobs still running, a TTY service
       # that starts at once writes over whatever else is printing on the console.
       serviceConfig = {

@@ -19,6 +19,7 @@
 //! installing: a `host.nix` that does not parse is a machine that will not
 //! rebuild, and finding that out at the next boot is finding it out too late.
 
+use std::io::Write as _;
 use std::path::Path;
 
 use crate::key;
@@ -34,6 +35,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ronoctua_i18n::Texts;
 use ronoctua_tokens::color;
+use ronoctua_vt::Console;
 
 /// Where the edited text waits for the unit that has the privilege.
 ///
@@ -152,6 +154,14 @@ pub fn edit_it(path: &Path, texts: &Texts) {
         return;
     }
     let _ = crossterm::execute!(output, EnterAlternateScreen);
+    // ON VT 8, THE CONSOLE'S SLOTS (`crate::tui::SLOTS`): the rescue gave the
+    // console its own palette back before handing the screen over, and takes
+    // it again when the screen comes back.
+    let console = Console::of_term(crate::tui::SLOTS);
+    if let Some(c) = &console {
+        let _ = write!(output, "{}", c.palette());
+        let _ = output.flush();
+    }
     let Ok(mut term) = Terminal::new(CrosstermBackend::new(output)) else {
         let _ = disable_raw_mode();
         return;
@@ -159,45 +169,10 @@ pub fn edit_it(path: &Path, texts: &Texts) {
 
     loop {
         let _ = term.draw(|f| {
-            let base = Style::default()
-                .fg(colour(color::TEXT_PRIMARY))
-                .bg(colour(color::SURFACE_BASE));
-            f.render_widget(Block::default().style(base), f.area());
-            let split = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(1), Constraint::Length(2)])
-                .split(f.area());
-
-            // The window follows the cursor: a file longer than the screen
-            // would otherwise be edited blind from the first page down.
-            let height = usize::from(split[0].height).max(1);
-            let top = sheet.line.saturating_sub(height / 2);
-            let shown: Vec<Line> = sheet
-                .lines
-                .iter()
-                .skip(top)
-                .take(height)
-                .map(|l| Line::from(l.clone()))
-                .collect();
-            f.render_widget(Paragraph::new(shown), split[0]);
-            f.render_widget(
-                Paragraph::new(vec![
-                    Line::from(Span::styled(
-                        sheet.said.clone(),
-                        Style::default().fg(colour(color::STATE_WARNING)),
-                    )),
-                    Line::from(Span::styled(
-                        format!("{}  {}", path.display(), texts.t(key::RESCUE_KEYS)),
-                        Style::default().fg(colour(color::TEXT_DIM)),
-                    )),
-                ]),
-                split[1],
-            );
-            #[expect(clippy::cast_possible_truncation, reason = "it fits on one screen")]
-            f.set_cursor_position((
-                split[0].x + sheet.column as u16,
-                split[0].y + (sheet.line - top) as u16,
-            ));
+            draw(f, &sheet, path, texts);
+            if let Some(c) = &console {
+                c.paint(f.buffer_mut());
+            }
         });
 
         let Ok(Event::Key(KeyEvent {
@@ -219,6 +194,53 @@ pub fn edit_it(path: &Path, texts: &Texts) {
 
     let _ = disable_raw_mode();
     let _ = crossterm::execute!(term.backend_mut(), LeaveAlternateScreen);
+    if console.is_some() {
+        let _ = write!(term.backend_mut(), "{}", Console::RESET);
+        let _ = term.backend_mut().flush();
+    }
+}
+
+/// The sheet on the screen, and the two lines under it.
+fn draw(f: &mut ratatui::Frame, sheet: &Sheet, path: &Path, texts: &Texts) {
+    let base = Style::default()
+        .fg(colour(color::TEXT_PRIMARY))
+        .bg(colour(color::SURFACE_BASE));
+    f.render_widget(Block::default().style(base), f.area());
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(f.area());
+
+    // The window follows the cursor: a file longer than the screen
+    // would otherwise be edited blind from the first page down.
+    let height = usize::from(split[0].height).max(1);
+    let top = sheet.line.saturating_sub(height / 2);
+    let shown: Vec<Line> = sheet
+        .lines
+        .iter()
+        .skip(top)
+        .take(height)
+        .map(|l| Line::from(l.clone()))
+        .collect();
+    f.render_widget(Paragraph::new(shown), split[0]);
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                sheet.said.clone(),
+                Style::default().fg(colour(color::STATE_WARNING)),
+            )),
+            Line::from(Span::styled(
+                format!("{}  {}", path.display(), texts.t(key::RESCUE_KEYS)),
+                Style::default().fg(colour(color::TEXT_DIM)),
+            )),
+        ]),
+        split[1],
+    );
+    #[expect(clippy::cast_possible_truncation, reason = "it fits on one screen")]
+    f.set_cursor_position((
+        split[0].x + sheet.column as u16,
+        split[0].y + (sheet.line - top) as u16,
+    ));
 }
 
 /// Stages the text and asks the unit to install it.
@@ -246,6 +268,18 @@ fn save_it(text: &str) -> Result<(), String> {
 fn colour(c: ronoctua_tokens::Color) -> ratatui::style::Color {
     let [r, g, b, _] = c.to_rgba8();
     ratatui::style::Color::Rgb(r, g, b)
+}
+
+/// The editor's screen, drawn into a buffer — what the console's tests
+/// look at (`tui::tests::every_colour_has_a_slot`).
+#[cfg(test)]
+pub(crate) fn drawn_for_tests(texts: &Texts) -> ratatui::buffer::Buffer {
+    let mut sheet = Sheet::of("{ }\n");
+    sheet.said = "saved".into();
+    let mut t = Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+    t.draw(|f| draw(f, &sheet, Path::new("host.nix"), texts))
+        .unwrap();
+    t.backend().buffer().clone()
 }
 
 #[cfg(test)]

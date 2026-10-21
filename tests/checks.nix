@@ -3129,6 +3129,89 @@ let
     echo "OK: the source range takes the build down, saying how many collide"
   '';
 
+  # THE CONSOLE FONT IS ONE THE KERNEL TAKES — and for as long as it existed it
+  # was not: every console, the ISO's and every machine's, fell back to the
+  # kernel's own font, and nothing said so but a line in the journal.
+  #
+  # Two rules, both the kernel's and neither the format's: the framebuffer
+  # console takes 256 or 512 glyphs and answers any other count with
+  # `KDFONTOP: Invalid argument` (the font had 498), and it erases a cell with
+  # glyph POSITION 32 whatever the unicode table says a space is (`@` stood
+  # there, and `setfont` said "background will look funny"). AND THE CELL IS
+  # THE FACE'S LINE BOX: the height was taken for the em, and the letters came
+  # out at 60% of their cell with their descenders cut — `█` filling its cell
+  # and `▀` exactly its top half is what says the box and the cell are one.
+  # Measured on the file the machines load, at both sizes; that the kernel then
+  # loads it is `installer-console-vm`'s.
+  console-font-is-what-the-kernel-takes =
+    mkCheck "console-font-is-what-the-kernel-takes" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, struct, sys
+
+        # PARSED: a PSF2 file, read field by field as the kernel and `setfont`
+        # read it; there is no text in it for a comment to hide in.
+        wrong = []
+        fonts = sorted(pathlib.Path("${fonts.noctua-console-psf}/share/consolefonts").glob("*.psf"))
+        if len(fonts) < 2:
+            print(f"ERROR: {len(fonts)} console fonts; the sizes stopped being built", file=sys.stderr)
+            raise SystemExit(1)
+        for f in fonts:
+            b = f.read_bytes()
+            magic, version, header, flags, count, charsize, height, width = struct.unpack("<4sIIIIIII", b[:32])
+            if magic != b"\x72\xb5\x4a\x86" or header != 32 or not flags & 1:
+                wrong.append(f"{f.name}: not a PSF2 with a unicode table")
+                continue
+            if count not in (256, 512):
+                wrong.append(f"{f.name}: {count} glyphs, and the console takes 256 or 512")
+            if charsize != height * ((width + 7) // 8):
+                wrong.append(f"{f.name}: {charsize} bytes a glyph for {width}x{height}")
+            glyph = lambda i: b[header + i * charsize : header + (i + 1) * charsize]
+            if any(glyph(32)):
+                wrong.append(f"{f.name}: position 32, which erases a cell, is not blank")
+            table = b[header + count * charsize :].split(b"\xff")
+            entries = [e.decode("utf-8") for e in table[:count]]
+            if len(entries) != count:
+                wrong.append(f"{f.name}: {len(entries)} unicode entries for {count} glyphs")
+                continue
+            for c in range(0x20, 0x7F):
+                if entries[c][:1] != chr(c):
+                    wrong.append(f"{f.name}: position {c:#x} draws {entries[c][:1]!r}, not {chr(c)!r}")
+            mapped = [cp for e in entries for cp in e]
+            twice = sorted({cp for cp in mapped if mapped.count(cp) > 1})
+            if twice:
+                wrong.append(f"{f.name}: mapped to two glyphs: {[hex(ord(c)) for c in twice]}")
+            if not any(glyph(ord("@"))):
+                wrong.append(f"{f.name}: `@` is blank — the sweep is reading the wrong positions")
+            def rows(cp):
+                at = next((i for i, e in enumerate(entries) if chr(cp) in e), None)
+                if at is None:
+                    return None
+                stride = (width + 7) // 8
+                bits = int.from_bytes(glyph(at), "big")
+                total = 8 * charsize
+                return [
+                    [bool(bits >> (total - 1 - (y * stride * 8 + x)) & 1) for x in range(width)]
+                    for y in range(height)
+                ]
+            full, upper = rows(0x2588), rows(0x2580)
+            if full is None or upper is None:
+                wrong.append(f"{f.name}: no `█` or `▀` to measure the cell with")
+            else:
+                if not all(all(r) for r in full):
+                    wrong.append(f"{f.name}: `█` leaves part of its {width}x{height} cell empty")
+                half = height // 2
+                if not (all(all(r) for r in upper[:half]) and not any(any(r) for r in upper[half:])):
+                    wrong.append(f"{f.name}: `▀` is not the top half of its cell")
+        if wrong:
+            print("ERROR: a console font the kernel does not take as it is:", file=sys.stderr)
+            for w in wrong:
+                print("  " + w, file=sys.stderr)
+            raise SystemExit(1)
+        print(f"OK: {len(fonts)} console fonts of 256 or 512 glyphs, position 32 blank, ASCII at its own, the cell the face's line box")
+        END
+      '';
+
   # THE MARKS THIS REPOSITORY DRAWS — the fourth face, and the only one with no
   # upstream font behind it.
   #
@@ -21415,6 +21498,20 @@ let
   #
   # The compositor module goes along because the test checks BOTH ends of the contract
   # — the key keyd emits and the one the compositor listens for.
+  # The installer's TUI on the kernel's console — the ISO's, with the ISO's
+  # font and the installer the ISO carries: the font the console holds, the
+  # cursor's band and colour read off `/dev/vcsa1`, the band's pixels the
+  # default theme's selection, and the palette given back.
+  installerConsoleVm = import ./installer-console-vm.nix {
+    inherit pkgs;
+    ronoctua = {
+      installer = rust.installer;
+      # The ISO's own setting, and not the path written a third time.
+      consoleFont = self.nixosConfigurations.installer.config.console.font;
+      inherit themed defaultTheme;
+    };
+  };
+
   # The rescue console's second door: `Ctrl+Alt+Del` with no compositor at all.
   rescueVm = import ./rescue-vm.nix {
     inherit pkgs lib;
@@ -53123,6 +53220,7 @@ let
     inherit one-vscode-boundary;
     keyboard-vm = keyboardVm;
     rescue-vm = rescueVm;
+    installer-console-vm = installerConsoleVm;
     tpm-vm = tpmVm;
     secureboot-vm = secureBootVm;
     inherit installer-dryrun;
@@ -53154,6 +53252,7 @@ let
       marks-are-in-the-font
       marks-range-taken-fails
       marks-unknown-token-fails
+      console-font-is-what-the-kernel-takes
       memory-instance-fast
       memory-driven
       brain-driven

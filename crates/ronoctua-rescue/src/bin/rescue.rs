@@ -23,9 +23,11 @@ fn main() -> Result<()> {
         ronoctua_i18n::refuse(&missing);
     }
     // The theme from the environment only: the console may be on VT 8 with no
-    // session, and a file it cannot read must not decide anything for it.
-    if let Some(theme) = ronoctua_tokens::theme::from_env() {
-        ronoctua_tokens::theme::set(theme);
-    }
+    // session, and a file it cannot read must not decide anything for it. The
+    // unit exports the machine's (`ronoctua.theme`); without it, the default,
+    // never the first theme of the chooser's order the process starts on.
+    ronoctua_tokens::theme::set(
+        ronoctua_tokens::theme::from_env().unwrap_or_else(ronoctua_tokens::theme::default_one),
+    );
     ronoctua_rescue::tui::run()
 }

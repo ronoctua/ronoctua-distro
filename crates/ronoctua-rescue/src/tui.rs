@@ -9,7 +9,9 @@
 //! **9:** not one colour by hand. `to_rgba8()` and never `to_linear()` — the
 //! terminal takes sRGB, which is the opposite of what the renderer takes, and
 //! passing linear here would darken everything (see the installer's TUI, which
-//! learned this first).
+//! learned this first). And on VT 8, by slot ([`SLOTS`]): the kernel's console
+//! keeps one bit of a 24-bit colour, and the cursor's band came out the black
+//! of the ground.
 //!
 //! # And the one it keeps by construction
 //!
@@ -38,6 +40,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
 use ronoctua_i18n::Texts;
 use ronoctua_tokens::{Color, color};
+use ronoctua_vt::{Console, Table};
 
 use crate::view::{Hand, Key, Pane, Step, View, logs, papers};
 use crate::{Action, Own, Run, Section, Tier, action, of_section};
@@ -51,6 +54,23 @@ fn colour(c: Color) -> ratatui::style::Color {
     ratatui::style::Color::Rgb(r, g, b)
 }
 
+/// The roles the console paints, each in the slot it takes on the kernel's
+/// console ([`ronoctua_vt`]): the three grounds among the first eight, the
+/// ground in 0 and the text in 7 — the console's own, so the shell a row hands
+/// the screen to is in the palette's tones until the reset. Every colour any
+/// screen paints has a slot (`every_colour_has_a_slot`); the editor's too.
+pub(crate) const SLOTS: Table = Table::new(&[
+    color::SURFACE_BASE,
+    color::STATE_WARNING,
+    color::TEXT_SECONDARY,
+    color::STATE_ACCENT,
+    color::SURFACE_SELECTION,
+    color::TEXT_HERE_ACTS,
+    color::SURFACE_CHROME,
+    color::TEXT_PRIMARY,
+    color::TEXT_DIM,
+]);
+
 /// How wide the sidebar is, in cells.
 ///
 /// Fixed and not proportional: on an 80-column VT a proportional sidebar would
@@ -63,8 +83,29 @@ const SIDEBAR: u16 = 18;
 /// It is the same guard the installer has, and for the reason written there: a
 /// `panic!` in the middle of drawing must not leave a terminal in raw mode. Here
 /// it matters more — the terminal it would ruin may be the only one the person
-/// still has.
-struct Guard(Terminal<CrosstermBackend<Stdout>>);
+/// still has. And on the console, its own palette.
+struct Guard(Terminal<CrosstermBackend<Stdout>>, Option<Console>);
+
+impl Guard {
+    /// The console's slots in the palette's tones — at the start, and again
+    /// when the screen comes back from what a row handed it to.
+    fn take_the_palette(&mut self) {
+        if let Some(c) = &self.1 {
+            let _ = write!(self.0.backend_mut(), "{}", c.palette());
+            let _ = self.0.backend_mut().flush();
+        }
+    }
+
+    /// The console's own palette back — on the way out, and before a row
+    /// hands the screen to a shell, a pager or the process monitor, which
+    /// paint in the console's colours and not in this console's slots.
+    fn give_the_palette_back(&mut self) {
+        if self.1.is_some() {
+            let _ = write!(self.0.backend_mut(), "{}", Console::RESET);
+            let _ = self.0.backend_mut().flush();
+        }
+    }
+}
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -74,6 +115,7 @@ impl Drop for Guard {
             DisableMouseCapture,
             LeaveAlternateScreen
         );
+        self.give_the_palette_back();
         let _ = self.0.show_cursor();
     }
 }
@@ -97,7 +139,11 @@ pub fn run() -> Result<()> {
     // The mouse is a bonus and never a requirement: on a VT nothing answers
     // this, and the console goes on being driven by the keyboard.
     let _ = crossterm::execute!(output, EnterAlternateScreen, EnableMouseCapture);
-    let mut guard = Guard(Terminal::new(CrosstermBackend::new(output)).context("terminal")?);
+    let mut guard = Guard(
+        Terminal::new(CrosstermBackend::new(output)).context("terminal")?,
+        Console::of_term(SLOTS),
+    );
+    guard.take_the_palette();
 
     let mut view = View::fresh();
     let places = ronoctua_memory::Places::default();
@@ -107,8 +153,13 @@ pub fn run() -> Result<()> {
     loop {
         guard
             .0
-            .draw(|f| draw(f, &view, &texts, &state_lines))
-            .context("desenhar")?;
+            .draw(|f| {
+                draw(f, &view, &texts, &state_lines);
+                if let Some(c) = &guard.1 {
+                    c.paint(f.buffer_mut());
+                }
+            })
+            .context("draw")?;
 
         if !event::poll(Duration::from_millis(200)).context("wait for a key")? {
             continue;
@@ -213,12 +264,14 @@ fn sidebar(f: &mut ratatui::Frame, at: Rect, view: &View, texts: &Texts) {
             .fg(colour(color::STATE_ACCENT))
             .add_modifier(Modifier::BOLD),
     ));
+    let open = Section::all_of().iter().position(|s| *s == view.section);
     let rows: Vec<ListItem> = Section::all_of()
         .iter()
         .map(|s| ListItem::new(Line::from(texts.t(s.label()))))
         .collect();
+    let rows = lit(rows, open, view.on_sidebar);
     let mut state = ListState::default();
-    state.select(Section::all_of().iter().position(|s| *s == view.section));
+    state.select(open);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -232,16 +285,32 @@ fn sidebar(f: &mut ratatui::Frame, at: Rect, view: &View, texts: &Texts) {
     );
 }
 
-/// The colour of what is under the cursor — never an outline (invariant 15).
+/// The band of what is under the cursor — never an outline (invariant 15).
+/// A GROUND ONLY: the row's text says it is the cursor's ([`lit`]), and a
+/// mark beside it (`needs a password`) keeps its own tone.
 fn highlight(sharp: bool) -> Style {
     let bg = if sharp {
         color::SURFACE_SELECTION
     } else {
         color::SURFACE_CHROME
     };
-    Style::default()
-        .fg(colour(color::TEXT_PRIMARY))
-        .bg(colour(bg))
+    Style::default().bg(colour(bg))
+}
+
+/// The rows, with the cursor's (`at`) in the accent while the keyboard is on
+/// their side (`sharp`) — the cursor is a colour, as on every screen of the
+/// shell (`text.here.acts`), and not only the band behind it.
+fn lit(rows: Vec<ListItem<'static>>, at: Option<usize>, sharp: bool) -> Vec<ListItem<'static>> {
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            if sharp && Some(i) == at {
+                row.style(Style::default().fg(colour(color::TEXT_HERE_ACTS)))
+            } else {
+                row
+            }
+        })
+        .collect()
 }
 
 /// Whatever the open section has to show.
@@ -303,7 +372,8 @@ fn content(f: &mut ratatui::Frame, at: Rect, view: &View, texts: &Texts, state_l
             .collect(),
     };
     f.render_stateful_widget(
-        List::new(rows).highlight_style(highlight(!view.on_sidebar)),
+        List::new(lit(rows, Some(view.row), !view.on_sidebar))
+            .highlight_style(highlight(!view.on_sidebar)),
         at,
         &mut state,
     );
@@ -533,6 +603,7 @@ fn hand_over(guard: &mut Guard, h: &Hand, texts: &Texts) -> Result<()> {
         DisableMouseCapture,
         LeaveAlternateScreen
     );
+    guard.give_the_palette_back();
 
     match h {
         Hand::Shell => match action::shell() {
@@ -554,6 +625,7 @@ fn hand_over(guard: &mut Guard, h: &Hand, texts: &Texts) -> Result<()> {
         EnterAlternateScreen,
         EnableMouseCapture
     );
+    guard.take_the_palette();
     guard.0.clear().context("clear")?;
     Ok(())
 }
@@ -618,4 +690,96 @@ fn wait_for_a_key() {
         }
     }
     let _ = disable_raw_mode();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+
+    fn texts() -> Texts {
+        Texts::fresh("pt-BR").expect("pt-BR has to load")
+    }
+
+    /// The screen drawn into a buffer, as the console draws it.
+    fn drawn(view: &View, texts: &Texts) -> Buffer {
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let state = vec!["ronoctua-footer: active".to_owned()];
+        t.draw(|f| draw(f, view, texts, &state)).unwrap();
+        t.backend().buffer().clone()
+    }
+
+    /// Every view: each section, the cursor on either side, a row armed and
+    /// a row that said something.
+    fn every_view() -> Vec<View> {
+        let mut all = Vec::new();
+        for section in Section::all_of() {
+            for on_sidebar in [true, false] {
+                for (pending, said) in [(None, None), (Some("reboot"), Some("ran".to_owned()))] {
+                    let mut v = View::fresh();
+                    v.section = section;
+                    v.on_sidebar = on_sidebar;
+                    v.pending = pending;
+                    v.said = said;
+                    v.panes = vec![Pane {
+                        name: "a window".into(),
+                        id: 1,
+                        pid: Some(1),
+                    }];
+                    all.push(v);
+                }
+            }
+        }
+        all
+    }
+
+    /// FAILS IF: a screen of the console — or of its editor — paints a
+    /// colour VT 8 has no slot for (it would come out in another token's),
+    /// or a ground outside the eight slots a background can be.
+    #[test]
+    fn every_colour_has_a_slot() {
+        let t = texts();
+        let console = Console::resolved(SLOTS);
+        let views = every_view();
+        assert!(views.len() > 20, "{} views", views.len());
+        for v in &views {
+            let off = console.unslotted(&drawn(v, &t));
+            assert!(
+                off.is_empty(),
+                "{:?} (sidebar: {}): {off:#?}",
+                v.section,
+                v.on_sidebar
+            );
+        }
+        let off = console.unslotted(&crate::edit::drawn_for_tests(&t));
+        assert!(off.is_empty(), "the editor: {off:#?}");
+    }
+
+    /// FAILS IF: the cursor's row has the ground of the rows around it on
+    /// the kernel's console — the band the console drew in the ground's own
+    /// black — or its text is the others' tone while the keyboard is on its
+    /// side, or a mark beside a row loses its own tone under the cursor.
+    #[test]
+    fn the_cursor_is_a_band_and_a_colour_on_the_console() {
+        let t = texts();
+        let console = Console::resolved(SLOTS);
+        for on_sidebar in [true, false] {
+            let mut v = View::fresh();
+            v.section = Section::all_of()[1];
+            v.on_sidebar = on_sidebar;
+            let mut buf = drawn(&v, &t);
+            console.paint(&mut buf);
+            // The sidebar's rows start one below its title; the content's at
+            // the top, right of the sidebar.
+            let (x, here, other) = if on_sidebar {
+                (0, 2, 3)
+            } else {
+                (SIDEBAR, 0, 1)
+            };
+            let at = |y: u16| buf.cell((x, y)).unwrap().clone();
+            assert_ne!(at(here).bg, at(other).bg, "sidebar {on_sidebar}: no band");
+            assert_ne!(at(here).fg, at(other).fg, "sidebar {on_sidebar}: no colour");
+        }
+    }
 }

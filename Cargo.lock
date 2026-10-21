@@ -4220,6 +4220,7 @@ dependencies = [
  "ronoctua-person",
  "ronoctua-protocol",
  "ronoctua-tokens",
+ "ronoctua-vt",
  "ronoctua-xdg",
  "serde",
  "serde_json",
@@ -4553,6 +4554,7 @@ dependencies = [
  "ronoctua-protocol",
  "ronoctua-scroll",
  "ronoctua-tokens",
+ "ronoctua-vt",
 ]
 
 [[package]]
@@ -6048,6 +6050,14 @@ dependencies = [
  "ronoctua-xdg",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ronoctua-vt"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "ronoctua-tokens",
 ]
 
 [[package]]

@@ -175,18 +175,27 @@ fn install(line: &Line) -> Result<ExitCode> {
     // the plan itself names the default theme.
     ronoctua_tokens::palettes::load();
     // THE THEME FROM THE ENVIRONMENT ONLY: the installer runs as root from the
-    // ISO, where nobody has chosen, and a `theme.json` must not reach it.
-    if let Some(theme) = ronoctua_tokens::theme::from_env() {
-        ronoctua_tokens::theme::set(theme);
-    }
+    // ISO, where nobody has chosen, and a `theme.json` must not reach it. AND
+    // THE DEFAULT WITHOUT IT, the one a fresh machine shows: the process
+    // starts on the first theme of the chooser's order, and the installer is
+    // the first screen of the system — another palette there would be
+    // another system.
+    ronoctua_tokens::theme::set(
+        ronoctua_tokens::theme::from_env().unwrap_or_else(ronoctua_tokens::theme::default_one),
+    );
     if let Some(screen) = &line.show {
         // TO A TERMINAL, AT ITS SIZE AND IN ITS COLOURS: a console of sixty
         // columns is looked at as it is, and the tones are part of what a
-        // screen says. To a file, the text alone at the size the tests read.
+        // screen says — on the kernel's console, in its slots, as the TUI
+        // paints there. To a file, the text alone at the size the tests read.
         let (size, how) = if std::io::stdout().is_terminal() {
             (
                 crossterm::terminal::size().unwrap_or(SHOWN),
-                tui::Shown::Painted,
+                if ronoctua_vt::here() {
+                    tui::Shown::Console
+                } else {
+                    tui::Shown::Painted
+                },
             )
         } else {
             (SHOWN, tui::Shown::Text)

@@ -31,6 +31,7 @@ members = [
   "crates/ronoctua-cmd",
   "crates/ronoctua-i18n",
   "crates/ronoctua-installer",
+  "crates/ronoctua-vt",
   "crates/ronoctua-notify",
   "crates/ronoctua-clipboard",
   "crates/ronoctua-apps",

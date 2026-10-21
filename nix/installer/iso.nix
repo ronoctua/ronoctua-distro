@@ -104,7 +104,7 @@ in
   # the Linux console does not consume TTF. See nix/scripts/make-console-psf.py.
   console = {
     earlySetup = true;
-    font = "${ronoctua.fonts.noctua-console-psf}/share/consolefonts/noctua-iosevka-32.psf";
+    font = ronoctua.fonts.consoleFont;
     keyMap = lib.mkDefault (import ../keyboard-xkb.nix).console;
   };
 

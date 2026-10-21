@@ -93,9 +93,24 @@ válido e perfeitamente inútil, e essa falha se parece com sucesso.
 
 #### O TTY não consome TTF
 
-O console do Linux quer PSF/PSFU, bitmap, máximo de 512 glifos. Instalar uma fonte de console alheia
-faria o TTY parecer com outra coisa — o oposto do que a regra queria. `make-console-psf.py`
-rasteriza um PSF2 **do arquivo real** com FreeType: 498 codepoints, com folga sob o limite.
+O console do Linux quer PSF/PSFU, bitmap. Instalar uma fonte de console alheia faria o TTY parecer
+com outra coisa — o oposto do que a regra queria. `make-console-psf.py` rasteriza um PSF2 **do
+arquivo real** com FreeType, e três regras são do kernel, não do formato — as três estavam
+quebradas, e todo console (o do ISO e o de cada máquina) caía calado na fonte do kernel:
+
+- **256 ou 512 glifos, e nenhum outro número.** O fbcon responde `KDFONTOP: Invalid argument` a
+  qualquer outra contagem; os 498 codepoints são completados com glifos em branco até 512.
+- **O ASCII imprimível na própria posição.** O console apaga uma célula com o glifo da POSIÇÃO 32,
+  seja qual for o glifo que a tabela Unicode dá ao espaço; com o repertório a partir da posição 0, o
+  `@` ficava ali (o `setfont` avisa "background will look funny").
+- **A célula é a caixa de linha da face** (ascendente a descendente, 1,25 em) pelo avanço (0,6 em):
+  15 × 32 e 8 × 16. A altura era tomada pelo em, e as letras saíam com 60% da célula e as
+  descendentes cortadas. Os traços de caixa e os blocos (U+2500–U+259F) são rasterizados sem
+  hinting e erguidos pela fração de pixel em que a linha de base cai, para que `█` preencha a célula
+  e `▀` exatamente a metade de cima — o que faz os meios-blocos do QR quadrados.
+
+O `console-font-is-what-the-kernel-takes` lê o arquivo; o `installer-console-vm` pergunta ao
+kernel que fonte o console tem.
 
 #### Duas cadeias de fallback, uma fonte
 
@@ -9397,12 +9412,12 @@ instalação: diz para que a máquina serve, e nada no hardware diz isso.
   clique numa dica da linha de teclas só a acende (`State::untouched`); só o seguinte faz o que a
   tecla faz. Sem isso, o segundo clique de um clique duplo no `full` (na linha, ou no `Enter` da linha
   de teclas, que fica nas mesmas colunas tela após tela) caía na tela nova e passava pela lista.
-- **O que não cabe diz que existe.** O console do ISO é a `noctua-iosevka-32.psf` (células de 19 × 32
-  px): 71 × 24 a 1366 × 768, 101 × 33 a 1920 × 1080. Uma lista que não cabe — a de programas
+- **O que não cabe diz que existe.** O console do ISO é a `noctua-iosevka-32.psf` (células de 15 × 32
+  px): 91 × 24 a 1366 × 768, 128 × 33 a 1920 × 1080. Uma lista que não cabe — a de programas
   inclusive — guarda a primeira e a última linha para dizer quantas opções há acima e abaixo, e um
   clique nelas mostra a página; a revisão faz o mesmo com o plano, que ROLA (setas, PgUp/PgDn, roda,
   clique), e a linha de baixo diz quantos passos faltam e quantos deles apagam o disco — a ajuda da
-  tela diz que os marcados apagam, e a 71 × 24 nenhum deles cabia. A confirmação continua fixada
+  tela diz que os marcados apagam, e a 91 × 24 nenhum deles cabia. A confirmação continua fixada
   embaixo. O que a pintura desenha e o que o ponteiro acerta é a mesma resposta (`Rows`, `Plan`).
 
 O desmarcado vira uma recusa da pessoa, e o porquê de ela ser assinada antes do disco está na seção
@@ -12187,6 +12202,10 @@ As adições ao grafo original, cada uma por um problema real:
   uma guarda copiada em cada um é a que o próximo leitor esquece. O `ronoctua-inspect` (3MF, AMF,
   DAE e os formatos de escritório) ainda lê pelo `roxmltree` direto; uma cena do DAE aninha fundo de
   verdade, e o teto dele é outra medida.
+- **`ronoctua-vt`.** Os 16 slots da paleta do console do kernel, sobre o ratatui sem backend: as duas
+  TUIs que rodam num VT (o instalador e o resgate) pintam por eles (veja "No console do kernel, a TUI
+  pinta por slot"), e nenhuma depende da outra. No `ronoctua-tokens`, que tudo linka, a peça faria o
+  workspace inteiro recompilar por uma coisa que dois programas usam.
 - **`ronoctua-player` e `ronoctua-player-engine`.** O cliente, o protocolo e as regras puras de um
   lado; o daemon, o único que cita o libmpv, do outro (veja "O player"). O `ronoctua-player` não
   tem rede nem processo: a fila, a sessão, a disposição e as legendas são funções que a porta e o
@@ -19161,6 +19180,36 @@ mexia a lista entre os dois cliques, e o segundo caía em outra linha. As linhas
 recusa, o texto da chave) são contadas pelo mesmo quebrador que as desenha (`Paragraph::line_count`),
 nunca por caracteres ÷ largura; o estado do acesso tem linhas próprias, que o texto acima não empurra
 para fora.
+
+**No console do kernel, a TUI pinta por slot.** O ISO roda o instalador no VT (`TERM=linux`), e o
+console reduz uma cor de 24 bits a mais ou menos um bit por canal: todo cinza da paleta virava
+branco, e as faixas do cursor e do ponteiro — tons escuros — viravam preto, a cor do fundo. No ISO,
+nenhuma tela dizia em que opção o cursor estava; no VT 8 do resgate, a mesma coisa. O console guarda
+16 slots que um programa pode reescrever (`ESC ] P`), e um fundo só alcança os 8 primeiros (com mais
+de 256 glifos, caso da fonte do console, o nono bit do glifo toma o quarto do fundo). As duas TUIs
+ficam sobre o `ronoctua-vt`: cada uma declara a sua `Table` (os papéis que pinta, com tudo o que um
+fundo veste nos 8 primeiros), escreve os tokens nos slots, pinta o quadro por slot e sem negrito (no
+console, negrito é a metade clara dos slots, e trocava um pelo outro) e devolve a paleta do console
+ao sair (`ESC ] R`) — o resgate também antes de passar a tela a um shell, ao journal ou ao monitor
+de processos, que pintam nas cores do console. O `--show` num VT pinta igual e deixa a paleta,
+porque devolvê-la recoloriria o que acabou de imprimir. Nas duas, o `every_colour_has_a_slot` cobra
+que toda cor de toda tela tenha slot exato (`Console::unslotted`), e um teste por TUI, que faixa,
+cursor e pergunta continuem distintos depois da troca; no console de verdade, o
+`installer-console-vm` e o `rescue-vm` leem o `/dev/vcsa` e conferem que o pixel da faixa é o
+`surface.selection` do tema.
+
+**O tema é o padrão, não o primeiro da lista.** Sem `RONOCTUA_THEME`, um processo começa no índice
+zero da ordem do seletor; o instalador e o resgate pintavam o `forest`, e o sistema que eles
+instalam e resgatam nasce no `default` (`cyber`). Os dois caem no `theme::default_one()`, e a
+unidade do VT 8, que não herda o ambiente da sessão, recebe o tema da máquina (`ronoctua.theme`).
+
+**A opção é uma resposta, e a pergunta é o título.** Pergunta e opções eram as duas `text.primary`,
+e só a posição dizia qual era qual. A opção é o valor de uma linha que age (`text.answer`, e no
+cursor `text.here.acts` sobre a faixa `surface.selection`), como o `chrome::Kind::Setting` do shell;
+numa linha de rótulo e valor (a lista de programas), o nome é `text.label.acts` e, no cursor, o
+acento; o que se digita é a resposta no tom do cursor. A pergunta é `text.heading`: em metade dos
+temas a resposta é o tom do texto aquecido — creme contra creme —, enquanto o título é de outra
+família.
 
 **A TUI se fotografa sem disco.** `ronoctua-install --show <tela>` desenha, de uma fixture e sem rede,
 as telas que conferem a rede e o repositório, a lista de programas (`left-out`) e a pergunta da tecla

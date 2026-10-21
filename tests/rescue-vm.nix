@@ -19,7 +19,12 @@
 #      rebooted and came back;
 #   3. it DREW. Read from `/dev/vcs8`, which is the console's own text — no
 #      OCR, no screenshot, no font. If the sidebar is there, the whole chain
-#      is: the unit, the VT switch, ratatui, and the translated text.
+#      is: the unit, the VT switch, ratatui, and the translated text;
+#   4. and the cursor can be SEEN there: the kernel's console keeps one bit of
+#      a 24-bit colour, and the band came out the black of the ground. Read
+#      off `/dev/vcsa8` (`tests/console-cells.py`), and the band's pixels are
+#      the machine's theme's selection — the slots hold the tokens, and the
+#      unit carries the machine's theme.
 {
   pkgs,
   lib,
@@ -45,6 +50,13 @@ pkgs.testers.runNixOSTest {
       # `fgconsole` and `chvt` — the unit uses them by store path, and the test
       # asks the same questions from the shell.
       environment.systemPackages = [ pkgs.kbd ];
+      # THE MACHINES' CONSOLE FONT, which `nix/modules/fonts.nix` sets: past
+      # 256 glyphs it changes how a cell's colours are kept, and the console
+      # has to be seen as a machine has it.
+      console = {
+        earlySetup = true;
+        font = ronoctua.fonts.consoleFont;
+      };
       networking.hostName = lib.mkForce "noctua-rescue";
       # No /persist in this VM — the same reason as the keyboard's: `base.nix`
       # points the password hash there and the test never logs in.
@@ -61,7 +73,10 @@ pkgs.testers.runNixOSTest {
   testScript =
     { nodes, ... }:
     ''
+      ${builtins.readFile ./console-cells.py}
+
       user_name = "${nodes.machine.ronoctua.user}"
+      themes, theme = "${ronoctua.themed}", "${nodes.machine.ronoctua.theme}"
 
       machine.start()
       machine.wait_for_unit("multi-user.target")
@@ -130,6 +145,23 @@ pkgs.testers.runNixOSTest {
           # Opening on a VT nobody is looking at is opening nothing.
           at = machine.succeed("fgconsole").strip()
           assert at == "8", f"the rescue opened on vt8 and the screen stayed on {at}"
+
+      with subtest("the cursor is a band and a colour on the console"):
+          glyphs, width, height = console_font(8)
+          machine.screenshot("rescue")
+          grid = cells(8, glyphs)
+          for line in grid[:4]:
+              print([(c, f, b) for c, f, b in line[:3]], text_of(line))
+          ground = grid[0][-1][2]
+          # The sidebar's title is row 0, and the open section (`State`, with
+          # the keyboard on the sidebar) row 1, under the cursor.
+          banded = [y for y in range(1, 8) if grid[y][0][2] != ground]
+          assert banded == [1], f"the band is on the sidebar's rows {banded}, not on 1"
+          assert grid[1][0][1] != grid[2][0][1], "the cursor's row has the others' tone"
+          shot = screen_dump()
+          band = pixel(shot, 2, height + height // 2)
+          wanted = token(themes, theme, "surface.selection")
+          assert band == wanted, f"the band is #{band}, and {theme}'s selection is #{wanted}"
 
       with subtest("the units it can ask for exist"):
           # A row whose unit does not exist fails in front of the person, and the

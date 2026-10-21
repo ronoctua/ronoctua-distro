@@ -20,10 +20,14 @@ path = "src/bin/rescue.rs"
 #
 # What is left is a terminal application: the two generated crates (text and
 # tokens), the two borders it needs to read (the compositor and `/proc`), and
-# ratatui — the same stack, the same versions, as the installer's TTY.
+# ratatui with the console's slots — the same stack, the same versions, as
+# the installer's TTY.
 [dependencies]
 ronoctua-i18n = { path = "../ronoctua-i18n" }
 ronoctua-tokens = { path = "../ronoctua-tokens" }
+# THE KERNEL'S CONSOLE, which VT 8 is: the tokens in its palette slots, shared
+# with the installer's TUI.
+ronoctua-vt = { path = "../ronoctua-vt" }
 # The compositor's border, to list and close a window (invariant 3).
 ronoctua-compositor = { path = "../ronoctua-compositor" }
 ronoctua-scroll = { path = "../ronoctua-scroll" }
