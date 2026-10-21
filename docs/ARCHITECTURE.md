@@ -21098,6 +21098,15 @@ dela e os dos inputs) —, e solta os do build anterior: o que mudou se baixa um
 nunca mais. O que o store não tem não é enraizado (um input que a máquina nunca avaliou não é
 baixado para isso). Uma lista que o Nix não deu, ou que não se lê, é dita e não para o apply.
 
+E a cada boot também (`ronoctua-keep-sources.service`, o verbo `ronoctua-machine keep-sources`),
+porque uma instalação não roda apply: o `nixos-install` deixa no disco os fontes que avaliou, e do
+primeiro boot ao build da primeira atualização nada os segurava. A unidade é ordenada depois do alvo
+padrão e do bless, então o boot não a espera (sem o `After=` do alvo, o alvo se ordenaria depois de
+uma unidade que ele quer, e o bless depois do alvo: um ciclo); roda só numa máquina com flake
+próprio (a condição é o `flake.lock` dela: a VM e os testes não têm, e uma unidade sem ele seria uma
+unidade falha); e uma máquina que um apply segura é respondida na hora, sem esperar: o apply guarda
+os fontes do próprio build (decisão do dono, 2026-10-21, entre isto e um passo do instalador).
+
 #### O apply constrói o plano que a distro descreve
 
 `ronoctua.machine.phases` (formato 3) é o que o apply avalia, uma vez (`nix eval --json`, que

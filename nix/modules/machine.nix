@@ -467,6 +467,40 @@ in
         stopIfChanged = false;
       };
 
+      # THE SOURCES, ONCE PER BOOT, after the bless.
+      #
+      # The apply roots the sources each build was evaluated from — the
+      # machine's flake, the distro, every input (`build::keep_sources`) —, so
+      # an update fetches none of them again unchanged. An installation runs
+      # no apply: from the first boot to the first update's build nothing held
+      # them, and a collection in between took them. So they are rooted at
+      # every boot too, after the default target and the bless: the boot
+      # waits for none of it. (`After=` the target is what keeps it off the
+      # boot's path: without it, the target would order itself after a unit
+      # it wants, and with the bless after the target, that is a cycle.) Only
+      # on a machine with its own flake — the VM's and a test's have none, and
+      # a unit run without one would be a failed unit —, and a machine an
+      # apply holds is answered at once: the apply keeps its own build's.
+      systemd.services.ronoctua-keep-sources = {
+        description = "Keeps the sources the machine's flake was evaluated from";
+        wantedBy = [ target ];
+        after = [
+          target
+          "ronoctua-boot-bless.service"
+        ];
+        unitConfig.ConditionPathExists = "${cfg.dir}/flake.lock";
+        environment = cfg.environment;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = "${tool} keep-sources";
+          CPUSchedulingPolicy = "idle";
+          IOSchedulingClass = "idle";
+        };
+        restartIfChanged = false;
+        stopIfChanged = false;
+      };
+
       # APPLY WITHOUT MOVING THE INPUTS — what the software centre starts after
       # the person declared or forgot a program, so it lands now and not at
       # the next weekly update. The update's lock first (`flock -n`: busy is

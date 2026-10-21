@@ -88,6 +88,9 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    import json
+
+
     def files(where):
         """Every file under `where`, with its hash, as one text."""
         return machine.succeed(
@@ -163,5 +166,25 @@ pkgs.testers.runNixOSTest {
         )
         status, out = migrate("${good}")
         assert status == 1 and out.strip().endswith("refused nothing-to-migrate"), out
+
+    with subtest("the sources the machine's flake was evaluated from outlive a collection"):
+        # WHAT `keep-sources` ROOTS — at every boot, and the apply after
+        # every build — is what `nix flake archive` names off the lock: here
+        # the machine's flake and the distro. Nothing else holds them: no
+        # derivation of a system cites them, and before the roots a
+        # collection would take them (a later update fetching them again).
+        names = json.loads(machine.succeed("nix flake archive --dry-run --json path:/etc/nixos"))
+        sources = [names["path"]] + [i["path"] for i in names["inputs"].values()]
+        assert len(sources) == 2, sources
+        dead = set(machine.succeed("nix-store --gc --print-dead 2>/dev/null").split())
+        assert dead & set(sources), "no source is garbage before the roots: this proves nothing"
+        status, out = machine.execute("ronoctua-machine keep-sources 2>&1")
+        print(out)
+        assert status == 0 and out.strip().endswith("sources kept"), out
+        dead = set(machine.succeed("nix-store --gc --print-dead 2>/dev/null").split())
+        assert not dead & set(sources), f"a source is still garbage: {dead & set(sources)}"
+        machine.succeed("nix-store --gc")
+        for path in sources:
+            machine.succeed(f"nix-store --check-validity {path}")
   '';
 }

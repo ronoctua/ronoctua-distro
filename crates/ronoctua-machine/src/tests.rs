@@ -1337,6 +1337,66 @@ fn an_apply_builds_its_units_then_the_system_and_keeps_them() {
 /// the one the distro shares with it named twice.
 const SOURCES: &str = r#"{"path":"/nix/store/mmmm-source","inputs":{"ronoctua":{"path":"/nix/store/dddd-source","inputs":{"home-manager":{"path":"/nix/store/hhhh-source","inputs":{"nixpkgs":{"path":"/nix/store/nnnn-source","inputs":{}}}},"nixpkgs":{"path":"/nix/store/nnnn-source","inputs":{}}}}}}"#;
 
+/// FAILS IF: `keep-sources` does not root, as the apply does, every source
+/// the machine's flake names (once each) under the machine's record, or says
+/// it kept them when it did not; or, while an apply holds the machine —
+/// whose build keeps its own —, waits for it, fails, or runs anything at
+/// all; or a list `nix` could not make is a refusal.
+#[test]
+fn keep_sources_roots_what_the_flake_names_and_never_waits() {
+    let w = World::new("keep-sources");
+    std::fs::write(w.s.path("sources.json"), SOURCES).unwrap();
+    assert_eq!(w.m.run(&crate::Verb::KeepSources).unwrap(), "sources kept");
+    let calls = w.read("calls");
+    assert!(
+        calls.contains(&format!(
+            "nix flake archive --extra-experimental-features nix-command flakes --no-update-lock-file --dry-run --json path:{}",
+            w.m.places.dir.display()
+        )),
+        "{calls}"
+    );
+    let sources = w.m.places.state.join(crate::build::SOURCES_DIR);
+    assert!(
+        calls.contains(&format!(
+            "keep-units --roots {} --set flake ",
+            sources.display()
+        )),
+        "{calls}"
+    );
+    assert_eq!(
+        w.read("kept-flake"),
+        "/nix/store/dddd-source\n/nix/store/hhhh-source\n/nix/store/mmmm-source\n/nix/store/nnnn-source\n"
+    );
+    assert!(!w.m.places.run.join("kept-sources.txt").exists());
+
+    let w = World::new("keep-sources-busy");
+    std::fs::write(w.s.path("sources.json"), SOURCES).unwrap();
+    {
+        let _apply = ronoctua_person::root::Lock::take(
+            &w.m.system.person_lock(),
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(
+            w.m.run(&crate::Verb::KeepSources).unwrap(),
+            "sources not kept"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "an apply's machine is not waited for"
+        );
+    }
+    assert_eq!(w.read("calls"), "", "nothing runs beside an apply");
+
+    let w = World::new("keep-sources-unlisted");
+    assert_eq!(
+        w.m.run(&crate::Verb::KeepSources).unwrap(),
+        "sources not kept"
+    );
+    assert!(!w.read("calls").contains("keep-units"));
+}
+
 /// FAILS IF: an apply whose sources could not be listed — `nix flake
 /// archive` failed, or answered what this program does not read — does not
 /// switch, or hands anything to what keeps them (the last build's stay); or

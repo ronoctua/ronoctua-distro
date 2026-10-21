@@ -447,7 +447,7 @@ pub(crate) fn system(
 /// record, releasing the last build's. Never fails the apply: a build that
 /// worked is not undone because its units could not be kept, and is said.
 pub(crate) fn keep(m: &Machine, kept: &[String]) {
-    hold(
+    let _ = hold(
         m,
         KEPT_DIR,
         KEPT_SET,
@@ -461,11 +461,12 @@ pub(crate) fn keep(m: &Machine, kept: &[String]) {
 /// distro and every input of either, as `nix flake archive --dry-run` names
 /// them off the lock, fetching nothing — that the store holds, under the
 /// machine's record, releasing the last build's: an update that finds them
-/// unchanged fetches none of them again. Never fails the apply, as [`keep`].
-pub(crate) fn keep_sources(m: &Machine, nix: &Path) {
+/// unchanged fetches none of them again. Whether they were kept: never a
+/// refusal, as [`keep`] is none — what could not be done is said.
+pub(crate) fn keep_sources(m: &Machine, nix: &Path) -> bool {
     const LOST: &str = "the next update may fetch them again";
     let Ok(ran) = run::capture(nix, &argv::sources(&m.places.dir)) else {
-        return;
+        return false;
     };
     if ran.code != Some(0) {
         say(
@@ -475,7 +476,7 @@ pub(crate) fn keep_sources(m: &Machine, nix: &Path) {
                 ran.stderr.trim()
             ),
         );
-        return;
+        return false;
     }
     let Some(sources) = sources_of(&ran.stdout) else {
         say(
@@ -484,16 +485,16 @@ pub(crate) fn keep_sources(m: &Machine, nix: &Path) {
                 "nix flake archive named its sources in words this program does not read: {LOST}"
             ),
         );
-        return;
+        return false;
     };
-    hold(m, SOURCES_DIR, SOURCES_SET, &sources, "the sources", LOST);
+    hold(m, SOURCES_DIR, SOURCES_SET, &sources, "the sources", LOST)
 }
 
 /// Roots the `paths` the store holds as the set `set` under the machine's
 /// record's `dir`, by `ronoctua-keep-units`, which then releases the set's
 /// older generation; `what` they are and what is `lost` without them are
-/// said when it could not.
-fn hold(m: &Machine, dir: &str, set: &str, paths: &[String], what: &str, lost: &str) {
+/// said when it could not. Whether they are held.
+fn hold(m: &Machine, dir: &str, set: &str, paths: &[String], what: &str, lost: &str) -> bool {
     let Some(program) = &m.system.keep_units else {
         say(
             4,
@@ -502,21 +503,29 @@ fn hold(m: &Machine, dir: &str, set: &str, paths: &[String], what: &str, lost: &
                 system::KEEP_UNITS
             ),
         );
-        return;
+        return false;
     };
+    // The update's folder under `/run`, made here too: `keep-sources` runs
+    // at boot, with no apply before it to make it.
     let file = m.places.run.join(format!("{dir}.txt"));
     let mut text = paths.join("\n");
     text.push('\n');
-    if let Err(e) = disk::write_atomically(&file, text.as_bytes(), 0o644) {
+    if let Err(e) = std::fs::create_dir_all(&m.places.run)
+        .and_then(|()| disk::write_atomically(&file, text.as_bytes(), 0o644))
+    {
         say(4, &format!("{}: {e}: {what} are not kept", file.display()));
-        return;
+        return false;
     }
     let roots = m.places.state.join(dir);
-    match run::status(program, &argv::keep_units(&roots, set, &file)) {
-        Ok(Some(0)) => {}
-        _ => say(4, &format!("{what} of this build were not kept: {lost}")),
+    let held = matches!(
+        run::status(program, &argv::keep_units(&roots, set, &file)),
+        Ok(Some(0))
+    );
+    if !held {
+        say(4, &format!("{what} of this build were not kept: {lost}"));
     }
     let _ = disk::remove(&file);
+    held
 }
 
 /// One flake as `nix flake archive --json` names it: its path in the store

@@ -203,7 +203,7 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
     }
     // AND THE SOURCES IT WAS EVALUATED FROM, kept as its units are: an update
     // that finds them unchanged fetches none of them again.
-    build::keep_sources(m, &nix);
+    let _ = build::keep_sources(m, &nix);
     drop(made);
     let Ok(built) = std::fs::canonicalize(&out) else {
         say(3, &format!("the build left no system at {}", out.display()));

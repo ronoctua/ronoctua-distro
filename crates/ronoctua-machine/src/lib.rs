@@ -219,6 +219,8 @@ pub enum Verb {
     },
     /// Stop holding.
     Unhold,
+    /// Root the sources the machine's flake was evaluated from.
+    KeepSources,
 }
 
 impl Verb {
@@ -233,6 +235,7 @@ impl Verb {
             Self::Disarm => vec!["disarm".to_owned()],
             Self::Hold { rev } => vec!["hold".to_owned(), rev.clone()],
             Self::Unhold => vec!["unhold".to_owned()],
+            Self::KeepSources => vec!["keep-sources".to_owned()],
         }
     }
 
@@ -251,6 +254,7 @@ impl Verb {
                 rev: (*rev).to_owned(),
             }),
             ["unhold"] => Some(Self::Unhold),
+            ["keep-sources"] => Some(Self::KeepSources),
             _ => None,
         }
     }
@@ -370,6 +374,13 @@ impl Machine {
             Verb::Disarm => self.disarm().map(|()| "disarmed".to_owned()),
             Verb::Hold { rev } => self.hold(rev).map(|()| format!("held at {rev}")),
             Verb::Unhold => self.unhold().map(|()| "not held".to_owned()),
+            Verb::KeepSources => self.keep_sources().map(|kept| {
+                if kept {
+                    "sources kept".to_owned()
+                } else {
+                    "sources not kept".to_owned()
+                }
+            }),
         }
     }
 
@@ -435,6 +446,36 @@ impl Machine {
     /// [`Why::NotRoot`], [`Why::Busy`], [`Why::Unreadable`], [`Why::Failed`].
     pub fn unhold(&self) -> Result<(), Refusal> {
         hold::unhold(self)
+    }
+
+    /// `keep-sources`: roots the sources the machine's flake was evaluated
+    /// from — the flake, the distro and every input — that the store holds,
+    /// as the apply does after every build ([`build::keep_sources`]). Run at
+    /// every boot, so a machine an installation made (which ran no apply) has
+    /// them held from its first boot. Whether they were kept: a list that
+    /// could not be made is said, and is no refusal.
+    ///
+    /// NOT WAITED FOR: whoever holds the machine now is an apply, which
+    /// roots its own sources after its build, or a verb that changes none.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::NotRoot`], [`Why::Failed`] (the lock unopenable, no `nix`).
+    pub fn keep_sources(&self) -> Result<bool, Refusal> {
+        must_be_root(self)?;
+        let _lock = match take_lock(self, 0) {
+            Ok(lock) => lock,
+            Err(refused) if refused.why == Why::Busy => {
+                say(
+                    6,
+                    "the machine is busy: an apply keeps the sources of its own build",
+                );
+                return Ok(false);
+            }
+            Err(refused) => return Err(refused),
+        };
+        let nix = system::needed(self.system.nix.as_ref(), system::NIX)?;
+        Ok(build::keep_sources(self, &nix))
     }
 
     /// The machine's record, as `state.json` holds it (the default record
@@ -544,6 +585,15 @@ pub fn unhold(places: &Places) -> Result<(), Refusal> {
     Machine::from_env(places.clone()).unhold()
 }
 
+/// `keep-sources`.
+///
+/// # Errors
+///
+/// See [`Machine::keep_sources`].
+pub fn keep_sources(places: &Places) -> Result<bool, Refusal> {
+    Machine::from_env(places.clone()).keep_sources()
+}
+
 /// The machine's record, as `state.json` holds it.
 ///
 /// # Errors
@@ -613,6 +663,7 @@ mod verbs {
                 rev: "613862c".to_owned(),
             },
             Verb::Unhold,
+            Verb::KeepSources,
         ] {
             assert_eq!(Verb::parse(&verb.arguments()), Some(verb));
         }
