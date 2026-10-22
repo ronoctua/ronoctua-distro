@@ -85,6 +85,8 @@ inst-keys-edit = { $enter } segue · { $esc } volta · { $quit } sai
 inst-keys-choose = { $arrows } escolhem · { $enter } segue · { $esc } volta
 inst-keys-review = { $enter } executa · { $esc } volta · { $quit } sai
 inst-keys-quit = { $quit } sai
+inst-keys-secret = { $enter } segue · { $tab } mostra · { $esc } volta · { $quit } sai
+inst-keys-secret-shown = { $enter } segue · { $tab } esconde · { $esc } volta · { $quit } sai
 
 ## Installer — the seventh question (network)
 
@@ -121,6 +123,10 @@ inst-belongings-key-intro = Adicione esta chave ao repositório, com permissão 
 inst-belongings-key-where = Onde: { $address }
 inst-belongings-key-where-unknown = Onde: nas configurações do repositório, como chave de implantação que pode escrever.
 inst-belongings-token-where = O token se faz aqui: { $address }
+inst-belongings-token-rights-github = O que ele precisa: um token fine-grained; em Repository access, Only select repositories, com este; em Repository permissions, Contents: Read and write. O GitHub acrescenta Metadata: Read-only sozinho. Nada mais.
+inst-belongings-token-rights-gitlab = O que ele precisa: o escopo write_repository, que lê e escreve pelo git. Nada mais.
+inst-belongings-token-rights-codeberg = O que ele precisa: em Repository and Organization Access, Specific repositories, com este; na permissão repository, Read and write (write:repository). Nada mais.
+inst-belongings-https-not-post-quantum = O HTTPS deste servidor não oferece troca de chaves pós-quântica, e os pertences exigem uma: nenhum token passaria. O campo agora tem o endereço SSH do mesmo repositório; seguir com ele faz uma chave de implantação para esta máquina.
 inst-access-waiting = O repositório ainda não responde a esta chave.
 inst-access-reads = A chave lê o repositório, mas ainda não escreve: dê a ela permissão de escrita.
 inst-access-ready = A chave lê e escreve no repositório.

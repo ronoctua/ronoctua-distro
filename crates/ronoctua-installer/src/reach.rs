@@ -385,7 +385,7 @@ impl Reach {
             return Ok(None);
         }
         if prefs.auth == Auth::Token {
-            return Ok(None);
+            return self.keys_post_quantum(address, &kept).map(|()| None);
         }
         let ran = self
             .child(&self.belongings, &[], &["keygen"])
@@ -397,6 +397,32 @@ impl Reach {
         std::fs::read_to_string(Path::new(&keys).join(format!("{DEPLOY_KEY}.pub")))
             .map(|k| Some(k.trim().to_owned()))
             .map_err(|_| Why::Failed)
+    }
+
+    /// Whether an HTTPS address's server agrees a post-quantum key, asked
+    /// BEFORE the token is: a host whose HTTPS is classical (GitHub's,
+    /// measured) refuses every token, and a token is typed by hand. Asked by
+    /// the probe itself, with an empty token in `kept` — the session is the
+    /// belongings' own, so the answer is the one the token would get; and
+    /// the askpass never answers an empty token, so no credential is sent.
+    /// The empty file goes with the answer.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::NotPostQuantum`] when the server offered no post-quantum key
+    /// exchange. Any other answer (a token refused, an unreachable host) is
+    /// the token's probe to say, once there is one.
+    fn keys_post_quantum(&self, address: &str, kept: &Path) -> Result<(), Why> {
+        let probed = self.probe(address, Some(""));
+        let _ = std::fs::remove_file(kept);
+        match probed {
+            Ok(Probed {
+                why: Some(Why::NotPostQuantum),
+                ..
+            })
+            | Err(Why::NotPostQuantum) => Err(Why::NotPostQuantum),
+            _ => Ok(()),
+        }
     }
 
     /// Probes the access: the deploy key, or `token` written where the CLI
@@ -695,6 +721,41 @@ mod tests {
             Err(Why::NeedsAccess)
         );
         assert_eq!(f.reach.prepare("/srv/b.git", None), Err(Why::NoRepository));
+    }
+
+    /// FAILS IF: an HTTPS address is taken without its server's transport
+    /// asked first, a server that cannot be keyed post-quantum is not said
+    /// before any token, another answer (the empty token refused) stops the
+    /// address, or the empty token is left where the CLI reads the real one.
+    #[test]
+    fn an_https_address_asks_the_transport_before_the_token() {
+        let https = "https://example.org/someone/belongings.git";
+        for (answer, want) in [
+            (
+                r#"echo '{"read":false,"write":false,"empty":false,"why":"not-post-quantum"}'; exit 1"#,
+                Err(Why::NotPostQuantum),
+            ),
+            (
+                r#"echo '{"refused":"not-post-quantum"}'; exit 1"#,
+                Err(Why::NotPostQuantum),
+            ),
+            (
+                r#"echo '{"read":false,"write":false,"empty":false,"why":"needs-access"}'; exit 1"#,
+                Ok(None),
+            ),
+        ] {
+            let f = Fake::new("transport", answer);
+            assert_eq!(f.reach.prepare(https, None), want, "{answer}");
+            assert!(
+                f.log().starts_with(&format!("probe --address {https} ")),
+                "{}",
+                f.log()
+            );
+            assert!(
+                !Path::new(&f.reach.scratch.keys()).join(TOKEN_FILE).exists(),
+                "the empty token stayed"
+            );
+        }
     }
 
     /// FAILS IF: the probe's answer is not read when the CLI exits 1 (a

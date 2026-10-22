@@ -13289,6 +13289,11 @@ por isso ele é construído à parte do workspace, só com `rustc` sobre as font
 (`nix/git-askpass.nix`, que não tem dependência nenhuma): procurá-lo ao lado do `current_exe()` só
 acharia no `bin/` do workspace, nunca ao lado de um daemon extraído. O teste
 `git_hands_the_token_through_the_helper` faz o caminho inteiro contra um servidor que pede senha.
+Sem nome de usuário configurado, o ajudante responde `x-access-token` (`askpass::ANY_USER`): o git
+pergunta o nome ANTES da senha e desiste quando ninguém responde, e aí o token nunca saía — todo
+token era recusado como "precisa de acesso" (medido no GitLab). GitHub e GitLab leem a pessoa pelo
+token e aceitam qualquer nome ao lado (o GitHub medido, o GitLab pela documentação dele); o nome
+configurado vence, para o servidor que quer o da pessoa (as app passwords do Bitbucket).
 
 **Com o acesso nosso, nenhuma configuração global nem do sistema.** Uma chamada que alcança um
 remoto com a chave de implantação ou o token dos pertences (`Credentials`) roda com
@@ -15520,6 +15525,14 @@ servidor, e um sem PQ continua sendo um que ela quer alcançar. As credenciais d
   `http.sslVersion` do repositório a baixaria. Medido no git pinado: um servidor só
   com X25519, só com as curvas NIST ou só com TLS 1.2 responde `alert handshake failure`; um com
   `X25519MLKEM768` ou `SecP384r1MLKEM1024` é alcançado.
+
+**O HTTPS do GitHub é clássico** (medido em 2026-10-22: `github.com`, `api.github.com` e
+`codeload.github.com` recusam os três híbridos; GitLab e Codeberg aceitam `X25519MLKEM768`), e o SSH
+dele negocia `mlkem768x25519-sha256`. Então um token do GitHub nunca passa, e quem pede o caminho é
+o SSH: o instalador pergunta o transporte logo depois do endereço, com a própria sonda e um token
+vazio (que o ajudante nunca responde), e num HTTPS clássico põe no campo o endereço SSH do mesmo
+repositório (`prefs::ssh_address_of`) em vez de pedir o token; a vista dos pertences oferece o
+mesmo endereço onde diz a recusa. A regra não se dobra ao host.
 
 **O OpenSSL ignora CALADO a configuração que não consegue usar** — arquivo ausente, caminho
 relativo, nome de grupo que a versão não conhece (os três medidos): o estreitamento some e todo

@@ -114,6 +114,8 @@ fn refuser(
 /// THE WHOLE WAY, with the real git: a remote over HTTP that wants a name
 /// and a password gets the user and the token through this helper, and the
 /// token was never in git's argv or environment — only the file's path.
+/// With no user set, the token still goes, beside [`ronoctua_git::askpass::ANY_USER`]:
+/// git asks the name first, and a name nobody answers is a token never sent.
 #[test]
 fn git_hands_the_token_through_the_helper() {
     let mut tools = ronoctua_git::Tools::from_env()
@@ -161,24 +163,31 @@ fn git_hands_the_token_through_the_helper() {
         .with_tools(tools);
     // NOT NARROWED: this remote is plain HTTP, where no TLS group is agreed
     // (`belongings-https-is-pq-only` runs a narrowed token against TLS).
-    let credentials = ronoctua_git::Credentials::Token {
-        file: token,
-        user: Some("someone".to_owned()),
+    let credentials = |user: Option<&str>| ronoctua_git::Credentials::Token {
+        file: token.clone(),
+        user: user.map(str::to_owned),
         pq_only: false,
     };
-    let refused = repo.fetch(Some(&credentials)).unwrap_err();
+    let refused = repo.fetch(Some(&credentials(Some("someone")))).unwrap_err();
+    let unnamed = repo.fetch(Some(&credentials(None))).unwrap_err();
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     let _ = std::net::TcpStream::connect(("127.0.0.1", port));
     server.join().unwrap();
     assert_eq!(
         *seen.lock().unwrap(),
-        ["Authorization: Basic c29tZW9uZTpnbHBhdC1leGFtcGxl"],
-        "base64 of `someone:glpat-example`: the first request brought none, the second these"
+        [
+            "Authorization: Basic c29tZW9uZTpnbHBhdC1leGFtcGxl",
+            "Authorization: Basic eC1hY2Nlc3MtdG9rZW46Z2xwYXQtZXhhbXBsZQ==",
+        ],
+        "base64 of `someone:glpat-example`, then of `x-access-token:glpat-example`: \
+         each first request brought none, each second these"
     );
-    assert_eq!(
-        refused.why,
-        ronoctua_git::Why::Refused,
-        "and the 401 after it is a refusal"
-    );
+    for refused in [refused, unnamed] {
+        assert_eq!(
+            refused.why,
+            ronoctua_git::Why::Refused,
+            "and the 401 after it is a refusal"
+        );
+    }
     let _ = std::fs::remove_dir_all(dir);
 }

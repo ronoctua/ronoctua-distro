@@ -70,46 +70,75 @@ pub fn host_and_path(address: &str) -> Option<(String, String)> {
     (!path.is_empty()).then(|| (host, path.to_owned()))
 }
 
-/// The hosts whose pages are known: where a deploy key is added, and where
-/// a token is made. Public pages of the three forges people keep a private
-/// repository in; any other host is told in words.
-const PAGES: [(&str, &str, &str); 3] = [
-    (
-        "github.com",
-        "https://github.com/{path}/settings/keys/new",
-        "https://github.com/settings/personal-access-tokens/new",
-    ),
-    (
-        "gitlab.com",
-        "https://gitlab.com/{path}/-/settings/repository",
-        "https://gitlab.com/-/user_settings/personal_access_tokens",
-    ),
-    (
-        "codeberg.org",
-        "https://codeberg.org/{path}/settings/keys",
-        "https://codeberg.org/user/settings/applications",
-    ),
+/// A forge whose pages are known.
+struct Forge {
+    /// Its host, as [`host_and_path`] names it.
+    host: &'static str,
+    /// Where a deploy key is added (`{path}`: the repository's).
+    key_page: &'static str,
+    /// Where a token is made.
+    token_page: &'static str,
+    /// The sentence naming exactly what a token there needs: read and write
+    /// on this repository, through git, and nothing else.
+    token_rights: &'static str,
+}
+
+/// The hosts whose pages are known: where a deploy key is added, where a
+/// token is made, and what it needs. Public pages of the three forges
+/// people keep a private repository in; any other host is told in words.
+const FORGES: [Forge; 3] = [
+    // A FINE-GRAINED token: "Contents" is git's read and write, and GitHub
+    // adds "Metadata" read-only by itself to any token that names a
+    // repository.
+    Forge {
+        host: "github.com",
+        key_page: "https://github.com/{path}/settings/keys/new",
+        token_page: "https://github.com/settings/personal-access-tokens/new",
+        token_rights: key::INST_BELONGINGS_TOKEN_RIGHTS_GITHUB,
+    },
+    // `write_repository` is git's pull AND push (GitLab's own words); a
+    // token with only `read_repository` would let the restore run and fail
+    // at the first sync.
+    Forge {
+        host: "gitlab.com",
+        key_page: "https://gitlab.com/{path}/-/settings/repository",
+        token_page: "https://gitlab.com/-/user_settings/personal_access_tokens",
+        token_rights: key::INST_BELONGINGS_TOKEN_RIGHTS_GITLAB,
+    },
+    // Forgejo (Codeberg runs 16): the access narrowed to "Specific
+    // repositories", and the `repository` scope read and write.
+    Forge {
+        host: "codeberg.org",
+        key_page: "https://codeberg.org/{path}/settings/keys",
+        token_page: "https://codeberg.org/user/settings/applications",
+        token_rights: key::INST_BELONGINGS_TOKEN_RIGHTS_CODEBERG,
+    },
 ];
+
+/// The known forge `address` is on.
+fn forge_of(address: &str) -> Option<(&'static Forge, String)> {
+    let (host, path) = host_and_path(address)?;
+    FORGES.iter().find(|f| f.host == host).map(|f| (f, path))
+}
 
 /// Where the person adds this machine's key, for a host whose page is
 /// known. Pure.
 #[must_use]
 pub fn add_key_page(address: &str) -> Option<String> {
-    let (host, path) = host_and_path(address)?;
-    PAGES
-        .iter()
-        .find(|(h, _, _)| *h == host)
-        .map(|(_, page, _)| page.replace("{path}", &path))
+    forge_of(address).map(|(f, path)| f.key_page.replace("{path}", &path))
 }
 
 /// Where the person makes a token, for a host whose page is known. Pure.
 #[must_use]
 pub fn token_page(address: &str) -> Option<String> {
-    let (host, _) = host_and_path(address)?;
-    PAGES
-        .iter()
-        .find(|(h, _, _)| *h == host)
-        .map(|(_, _, page)| (*page).to_owned())
+    forge_of(address).map(|(f, _)| f.token_page.to_owned())
+}
+
+/// The sentence saying what a token needs on the host `address` is on,
+/// for a host whose pages are known. Pure.
+#[must_use]
+pub fn token_rights(address: &str) -> Option<&'static str> {
+    forge_of(address).map(|(f, _)| f.token_rights)
 }
 
 /// What `ronoctua-belongings probe --json` prints, one line — the shape of
@@ -340,6 +369,20 @@ mod tests {
                 .is_some_and(|p| p.starts_with("https://github.com/"))
         );
         assert_eq!(token_page("https://git.example.org/me/b.git"), None);
+        // WHAT THE TOKEN NEEDS is said for each known forge, its own.
+        assert_eq!(
+            token_rights("https://github.com/me/b.git"),
+            Some(key::INST_BELONGINGS_TOKEN_RIGHTS_GITHUB)
+        );
+        assert_eq!(
+            token_rights("https://gitlab.com/me/b.git"),
+            Some(key::INST_BELONGINGS_TOKEN_RIGHTS_GITLAB)
+        );
+        assert_eq!(
+            token_rights("https://codeberg.org/me/b.git"),
+            Some(key::INST_BELONGINGS_TOKEN_RIGHTS_CODEBERG)
+        );
+        assert_eq!(token_rights("https://git.example.org/me/b.git"), None);
         assert_eq!(auth_of(" https://github.com/me/b.git"), Auth::Token);
         assert_eq!(auth_of("git@github.com:me/b.git"), Auth::Ssh);
     }

@@ -1387,6 +1387,10 @@ pub enum Target {
     Token,
     /// The HTTPS user: `RET` asks it.
     User,
+    /// The same repository's SSH address, offered where a sync over HTTPS
+    /// was refused for no post-quantum key exchange: `RET` takes it, and the
+    /// deploy key's row follows.
+    SshAddress(String),
     /// Change the passphrase.
     Passphrase,
     /// How often the brain reminds.
@@ -1537,6 +1541,7 @@ impl Target {
             Self::Compact => key::ABOUT_BELONGINGS_COMPACT,
             Self::Answer(false) => key::ABOUT_BELONGINGS_ANSWER_NO,
             Self::Answer(true) => key::ABOUT_BELONGINGS_ANSWER_YES,
+            Self::SshAddress(_) => key::ABOUT_BELONGINGS_USE_SSH,
             _ => return None,
         }))
     }
@@ -2479,6 +2484,12 @@ impl View {
             ),
             Target::Token => self.ask(Ask::Token, r),
             Target::User => self.ask(Ask::User, r),
+            // THE SAME HOST, so its consent stands; the access turns to the
+            // deploy key, which the access section then offers to make.
+            Target::SshAddress(ssh) => self.change(r, texts, |p| {
+                p.repository = ssh;
+                p.auth = Auth::Ssh;
+            }),
             Target::Passphrase => {
                 if !r.prefs.has_repository() {
                     return Errand::Say(texts.t(words::refusal_key(Why::NoRepository)));
@@ -3316,6 +3327,27 @@ fn status_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::when
                 tokens::color::STATE_WARNING,
             ));
             e.push(Entry::Note(said, tokens::color::STATE_WARNING));
+            // AN HTTPS SERVER THAT CANNOT BE KEYED POST-QUANTUM refuses
+            // every token (GitHub's, measured): the same repository's SSH
+            // address is offered where the refusal is said.
+            if let (
+                Outcome::Refused {
+                    why: Why::NotPostQuantum,
+                },
+                Auth::Token,
+                Some(ssh),
+            ) = (
+                &s.outcome,
+                r.prefs.auth,
+                prefs::ssh_address_of(&r.prefs.repository),
+            ) {
+                e.push(pair(
+                    t.t(key::BELONGINGS_USE_SSH),
+                    ssh.clone(),
+                    Target::SshAddress(ssh),
+                    true,
+                ));
+            }
         } else {
             e.push(pair(
                 t.t(key::BELONGINGS_LAST_RUN),
@@ -4800,13 +4832,16 @@ fn access_section(b: &mut Builder<'_>, r: &Readings) {
                 Target::Token,
                 true,
             ));
+            // NO NAME IS NOT "MISSING": the askpass answers one by itself
+            // (`ronoctua_git::askpass::ANY_USER`), and the server reads the
+            // person from the token. A name set here wins.
             e.push(pair(
                 t.t(key::BELONGINGS_USER),
                 r.prefs
                     .user
                     .clone()
                     .filter(|u| !u.is_empty())
-                    .unwrap_or_else(|| t.t(key::BELONGINGS_NONE_YET)),
+                    .unwrap_or_else(|| t.t(key::BELONGINGS_USER_ANY)),
                 Target::User,
                 true,
             ));
@@ -7163,6 +7198,67 @@ mod tests {
             !v.rows(&r, &zone(), 100, &t)
                 .iter()
                 .any(|row| row.target == Some(Target::Compact))
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a sync over HTTPS refused for no post-quantum key exchange
+    /// does not offer the same repository's SSH address where it is said,
+    /// the offer is made for another refusal or an SSH address, or taking it
+    /// does not turn the address and the access to SSH, with the deploy
+    /// key's row next.
+    #[test]
+    fn a_classical_https_server_offers_the_ssh_address() {
+        let places = scratch("ssh-offer");
+        ready(&places);
+        let mut prefs = Belongings::with_repository("https://example.org/someone/belongings");
+        prefs.auth = Auth::Token;
+        store_of(&places).write(&prefs).expect("prefs");
+        std::fs::remove_file(places.deploy_key()).expect("no key yet");
+        let t = texts("pt-BR");
+        let ssh = "git@example.org:someone/belongings.git";
+        let offer = Target::SshAddress(ssh.to_owned());
+        let offered = |r: &Readings| {
+            let v = View::fresh(r, &zone(), 100, &t);
+            v.rows(r, &zone(), 100, &t)
+                .iter()
+                .any(|row| row.target.as_ref() == Some(&offer))
+        };
+        status(
+            &places,
+            Outcome::Refused {
+                why: Why::Unreachable,
+            },
+        );
+        assert!(
+            !offered(&counted(&places, 1_700_000_500)),
+            "offered for another refusal"
+        );
+        status(
+            &places,
+            Outcome::Refused {
+                why: Why::NotPostQuantum,
+            },
+        );
+        let r = counted(&places, 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        let text = drawn(&v.rows(&r, &zone(), 100, &t));
+        assert!(
+            text.contains(&t.t(key::BELONGINGS_USE_SSH)) && text.contains(ssh),
+            "{text}"
+        );
+        stand_on(&mut v, &r, &offer, &t);
+        assert_eq!(v.press(Press::Enter, &r, &zone(), 100, &t), Errand::Nothing);
+        let taken = store_of(&places).read();
+        assert_eq!(taken.repository, ssh);
+        assert_eq!(taken.auth, Auth::Ssh);
+        let r = counted(&places, 1_700_000_500);
+        assert!(!offered(&r), "offered again for an SSH address");
+        let rows = View::fresh(&r, &zone(), 100, &t).rows(&r, &zone(), 100, &t);
+        assert!(
+            rows.iter().any(|row| row.target == Some(Target::Keygen)),
+            "the deploy key is not offered next: {}",
+            drawn(&rows)
         );
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }

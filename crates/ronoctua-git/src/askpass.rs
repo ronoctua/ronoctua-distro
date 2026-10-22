@@ -14,14 +14,21 @@ use std::path::Path;
 /// The largest token file read: a token, not a document.
 pub const TOKEN_MOST_BYTES: u64 = 16 * 1024;
 
+/// The user name answered when none is set. git asks for the name BEFORE
+/// the password, and gives up when nobody answers — the token is then never
+/// sent, and every token is refused as "needs access" (measured, on GitLab).
+/// GitHub and GitLab read the person from the token and take any name beside
+/// it (GitHub measured, with this one; GitLab by its own documentation); a
+/// host that wants the person's own name (Bitbucket's app passwords) gets it
+/// from the setting, which wins.
+pub const ANY_USER: &str = "x-access-token";
+
 /// Why the helper answers nothing (git then fails with "could not read",
 /// and [`crate::Why::NeedsCredentials`] says so on screen).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Silence {
     /// A question that is neither a user name nor a password.
     UnknownQuestion,
-    /// A user name was asked and none was given.
-    NoUser,
     /// A password was asked and no token file was given.
     NoToken,
     /// The token's file could not be read, was empty, or too large.
@@ -30,8 +37,9 @@ pub enum Silence {
     NotPrivate,
 }
 
-/// What to print for `prompt`: the user name for a user-name question, the
-/// token (first line of the file) for a password one.
+/// What to print for `prompt`: the user name for a user-name question
+/// ([`ANY_USER`] when none is set), the token (first line of the file) for
+/// a password one.
 ///
 /// # Errors
 ///
@@ -43,10 +51,10 @@ pub fn answer(
 ) -> Result<String, Silence> {
     let asked = prompt.trim_start().to_ascii_lowercase();
     if asked.starts_with("username") {
-        return user
+        return Ok(user
             .filter(|u| !u.is_empty())
-            .map(str::to_owned)
-            .ok_or(Silence::NoUser);
+            .unwrap_or(ANY_USER)
+            .to_owned());
     }
     if !asked.starts_with("password") {
         return Err(Silence::UnknownQuestion);
@@ -118,10 +126,13 @@ mod tests {
             ),
             Ok("ghp_example".to_owned())
         );
-        assert_eq!(
-            answer("Username for 'https://example.org': ", None, Some(&token)),
-            Err(Silence::NoUser)
-        );
+        // NO USER SET: a name anyway, or git never asks for the token.
+        for none in [None, Some("")] {
+            assert_eq!(
+                answer("Username for 'https://example.org': ", none, Some(&token)),
+                Ok(ANY_USER.to_owned())
+            );
+        }
         assert_eq!(
             answer("Enter passphrase for key '/x': ", None, Some(&token)),
             Err(Silence::UnknownQuestion)

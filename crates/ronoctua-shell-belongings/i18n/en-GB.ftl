@@ -132,6 +132,8 @@ belongings-keygen-note = This machine has no deploy key yet. Making one takes a 
 belongings-token = Token
 belongings-token-is-kept = kept, readable by you alone
 belongings-user = User name
+belongings-use-ssh = Use the SSH address
+belongings-user-any = any: the server knows you by the token
 belongings-token-note = The token is kept in a file only you can read, and reaches git through its path alone — never on a command line.
 belongings-passphrase = Passphrase
 belongings-change-passphrase = Change the passphrase
@@ -335,6 +337,7 @@ belongings-compact-question = Older versions leave the repository for good, for 
     }
 ask-belongings-compact = The passphrase, to compact the history
 about-belongings-compact = Compacts the history — asks first
+about-belongings-use-ssh = Swaps the address for the same repository's SSH one, which a deploy key reaches
 # Whether the session remembers the passphrase.
 belongings-unlock-on = yes
 belongings-unlock-off = no

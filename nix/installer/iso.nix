@@ -178,6 +178,11 @@ in
   # installer, so on this screen it does not exist yet. Showing both lines is the
   # only way for the person to find the command before being able to choose how
   # to talk to it. From there on everything goes through the `.ftl`.
+  #
+  # ONE BLOCK PER DECLARED LANGUAGE, in `languages.nix`'s order: the second
+  # block is pt-BR, not a copy of the first (a sweep into English once made
+  # it one, and the banner said the same thing twice). The value exists in
+  # every language, which is where invariant 18 lets pt-BR be.
   users.motd = ''
 
     ronoctua-distro
@@ -185,8 +190,8 @@ in
     To install:         ronoctua-install --execute
     To preview only:    ronoctua-install
 
-    To install:         ronoctua-install --execute
-    To preview only:    ronoctua-install
+    Para instalar:      ronoctua-install --execute
+    Só ver a prévia:    ronoctua-install
 
   '';
 

@@ -85,6 +85,8 @@ inst-keys-edit = { $enter } continues · { $esc } goes back · { $quit } quits
 inst-keys-choose = { $arrows } choose · { $enter } continues · { $esc } goes back
 inst-keys-review = { $enter } runs · { $esc } goes back · { $quit } quits
 inst-keys-quit = { $quit } quits
+inst-keys-secret = { $enter } continues · { $tab } shows it · { $esc } goes back · { $quit } quits
+inst-keys-secret-shown = { $enter } continues · { $tab } hides it · { $esc } goes back · { $quit } quits
 
 ## Installer — the seventh question (network)
 
@@ -121,6 +123,10 @@ inst-belongings-key-intro = Add this key to the repository, with write access:
 inst-belongings-key-where = Where: { $address }
 inst-belongings-key-where-unknown = Where: in the repository's settings, as a deploy key that may write.
 inst-belongings-token-where = A token is made here: { $address }
+inst-belongings-token-rights-github = What it needs: a fine-grained token; under Repository access, Only select repositories, with this one; under Repository permissions, Contents: Read and write. GitHub adds Metadata: Read-only by itself. Nothing else.
+inst-belongings-token-rights-gitlab = What it needs: the write_repository scope, which reads and writes through git. Nothing else.
+inst-belongings-token-rights-codeberg = What it needs: under Repository and Organization Access, Specific repositories, with this one; the repository permission, Read and write (write:repository). Nothing else.
+inst-belongings-https-not-post-quantum = This server's HTTPS offers no post-quantum key exchange, and the belongings ask for one: no token would get through. The field now holds the same repository's SSH address; going on with it makes a deploy key for this machine.
 inst-access-waiting = The repository does not answer to this key yet.
 inst-access-reads = The key reads the repository but cannot write to it yet: give it write access.
 inst-access-ready = The key reads and writes the repository.

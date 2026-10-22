@@ -2628,6 +2628,62 @@ let
         echo "OK: the installer and nix/keyboard-xkb.nix agree"
       '';
 
+  # THE ISO'S BANNER SAYS THE COMMANDS ONCE PER LANGUAGE.
+  #
+  # The banner after the ISO's login is written by hand, one block per
+  # declared language (`nix/installer/iso.nix`): the language is asked inside
+  # the installer, so on that screen it does not exist yet. A sweep into
+  # English once turned the pt-BR block into a second copy of the English one,
+  # and the banner said the same thing twice — nothing failed.
+  #
+  # Read from the EVALUATED banner, not from the file: what the person sees is
+  # `users.motd`. The blocks naming the installer are counted against
+  # `languages.nix` (a language declared without its block is the same gap)
+  # and must all differ. The rule is run first on two planted banners, the old
+  # duplicated one and one with a language missing, which it must refuse.
+  installer-banner-has-each-language-once =
+    mkCheck "installer-banner-has-each-language-once" [ pkgs.python3 ]
+      ''
+        python3 - <<'PY'
+        import sys
+
+        def wrong_of(motd, languages):
+            blocks = [b.strip() for b in motd.split("\n\n") if "ronoctua-install" in b]
+            said = []
+            if len(blocks) != len(languages):
+                said.append(f"{len(blocks)} blocks name the installer, and "
+                            f"{len(languages)} languages are declared ({', '.join(languages)})")
+            for i, b in enumerate(blocks):
+                if b in blocks[:i]:
+                    said.append("a block is a copy of an earlier one:\n" + b)
+            return said
+
+        languages = ${builtins.toJSON languages}
+        twice = "\n\nronoctua-distro\n\nTo install: ronoctua-install --execute\n\nTo install: ronoctua-install --execute\n"
+        once = "\n\nronoctua-distro\n\nTo install: ronoctua-install --execute\n"
+        if len(languages) < 2:
+            print("ERROR: fewer than two languages declared; the planted banners prove nothing.",
+                  file=sys.stderr)
+            raise SystemExit(1)
+        for planted in (twice, once):
+            if not wrong_of(planted, languages):
+                print("ERROR: the rule takes a planted banner it exists to refuse:\n" + planted,
+                      file=sys.stderr)
+                raise SystemExit(1)
+
+        wrong = wrong_of(${builtins.toJSON self.nixosConfigurations.installer.config.users.motd}, languages)
+        if wrong:
+            print("ERROR: the ISO's banner does not say the commands once per language.",
+                  file=sys.stderr)
+            for w in wrong:
+                print("       " + w, file=sys.stderr)
+            print("       nix/installer/iso.nix writes one block per language of", file=sys.stderr)
+            print("       assets/i18n/languages.nix, each in its own language.", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"OK: the ISO's banner names the installer once in each of {len(languages)} languages")
+        PY
+      '';
+
   # EVERY COMPOSITOR COMMAND HAS A TRANSLATION IN EVERY LANGUAGE.
   #
   # The list is DECLARED in `assets/compositor-deeds.nix` and the sentences are
@@ -53245,6 +53301,7 @@ let
       keyboard-options-do-what-they-say
       nested-survives-a-stray-modifier
       installer-defaults-match-the-keyboard
+      installer-banner-has-each-language-once
       locale-exists
       wifi-console-asks-once
       ;

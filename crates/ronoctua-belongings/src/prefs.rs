@@ -267,9 +267,56 @@ pub fn host_of(address: &str) -> Option<String> {
     fits.then_some(host)
 }
 
+/// The SSH address of the repository an HTTPS address names —
+/// `git@host:owner/name.git`, the user every forge serves git under —;
+/// `None` for an address that is not HTTPS or names no repository. What is
+/// offered when a host's HTTPS cannot be keyed post-quantum and its SSH may
+/// be: GitHub's, measured. Pure.
+#[must_use]
+pub fn ssh_address_of(address: &str) -> Option<String> {
+    let address = address.trim();
+    let rest = address.strip_prefix("https://")?;
+    let host = host_of(address)?;
+    let path = rest.split_once('/')?.1.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let ssh = format!("git@{host}:{path}.git");
+    (!path.is_empty() && repository_is_plain(&ssh).is_ok()).then_some(ssh)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: the SSH address offered for an HTTPS one names another
+    /// host or repository, is one the belongings would refuse, or one is
+    /// offered for an address already SSH or naming no repository.
+    #[test]
+    fn an_https_address_has_its_ssh_address() {
+        for address in [
+            "https://github.com/ronoctua/belongings",
+            "https://github.com/ronoctua/belongings.git",
+            " https://GitHub.com/ronoctua/belongings/ ",
+        ] {
+            assert_eq!(
+                ssh_address_of(address).as_deref(),
+                Some("git@github.com:ronoctua/belongings.git"),
+                "{address}"
+            );
+        }
+        assert_eq!(
+            ssh_address_of("https://gitlab.com/group/sub/b").as_deref(),
+            Some("git@gitlab.com:group/sub/b.git")
+        );
+        for none in [
+            "git@github.com:me/b.git",
+            "ssh://git@github.com/me/b.git",
+            "https://github.com/",
+            "https://github.com",
+            "https://[::1]/me/b.git",
+        ] {
+            assert_eq!(ssh_address_of(none), None, "{none}");
+        }
+    }
 
     #[test]
     fn only_a_plain_remote_is_a_repository() {

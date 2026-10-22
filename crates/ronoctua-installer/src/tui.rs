@@ -62,7 +62,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::symbols::half_block;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Widget, Wrap};
-use ronoctua_belongings::prefs::Auth;
+use ronoctua_belongings::prefs::{self, Auth};
 use ronoctua_i18n::{Arg, Texts};
 use ronoctua_tokens::{Color, color};
 use ronoctua_vt::{Console, Table};
@@ -549,6 +549,10 @@ pub struct State {
     pub answers: Answers,
     /// What is being typed in the current field.
     pub typing: String,
+    /// Whether the secret being typed is shown as typed ([`TAB`]). Back to
+    /// hidden on every screen that is shown, so a secret shown once is not
+    /// shown on the next secret's screen.
+    pub revealed: bool,
     /// The current field's refusal, as a text key, if any.
     pub error: Option<&'static str>,
     /// What the screen says while it waits, or what it found — a text key.
@@ -643,6 +647,7 @@ impl State {
             hosts: String::new(),
             answers: Answers::default(),
             typing: String::new(),
+            revealed: false,
             error: None,
             status: None,
             confirmation: String::new(),
@@ -1002,6 +1007,7 @@ impl State {
     fn follow(&mut self, n: usize) {
         self.stop_waiting();
         self.status = None;
+        self.revealed = false;
         self.first_passphrase = None;
         self.scroll = 0;
         self.aimed = None;
@@ -1070,6 +1076,7 @@ impl State {
                 continue;
             }
             self.screen = Screen::Asking(i);
+            self.revealed = false;
             // A SECRET IS NOT TYPED BACK: going back to it shows an empty
             // field, as a password field does — and the access of a deploy
             // key is shown, not typed.
@@ -1194,6 +1201,16 @@ impl State {
                 if !self.by_token() {
                     self.ask_probe(0);
                 }
+            }
+            // AN HTTPS SERVER THAT CANNOT BE KEYED POST-QUANTUM refuses
+            // every token, so none is asked: the field takes the same
+            // repository's SSH address, which a deploy key reaches, and the
+            // person goes on with it or edits it.
+            Done::Prepared(Err(ronoctua_belongings::Why::NotPostQuantum))
+                if prefs::ssh_address_of(&self.answers.belongings).is_some() =>
+            {
+                self.error = Some(key::INST_BELONGINGS_HTTPS_NOT_POST_QUANTUM);
+                self.typing = prefs::ssh_address_of(&self.answers.belongings).unwrap_or_default();
             }
             Done::Prepared(Err(why)) | Done::Verified(Err(why)) => {
                 self.error = Some(access::refusal_key(why));
@@ -1466,6 +1483,11 @@ impl State {
                         self.typing.push(c);
                         self.error = None;
                     }
+                    // A SECRET IS CHECKED BY SHOWING IT: a token of ninety
+                    // characters typed blind is a typo found only by the
+                    // probe. Shown on the person's gesture alone, and hidden
+                    // again by the same key.
+                    TAB if self.types() && q.secret_one() => self.revealed = !self.revealed,
                     // A PROGRAM'S ROW IS MARKED OR UNMARKED, by Enter as by
                     // the space bar: the answer itself changes, and the
                     // screen stays. Enter on "continue" takes the answer.
@@ -1732,16 +1754,32 @@ fn keys_of(e: &State, texts: &Texts, width: u16) -> String {
             }
         }
         Screen::Asking(_) | Screen::Stop(_) if e.is_list() => line(key::INST_KEYS_CHOOSE),
+        // A SECRET'S FIELD TEACHES THE KEY THAT SHOWS IT, and the one that
+        // hides it once shown — where the line fits with a cell to spare,
+        // as the checklist's does; narrower, the key still works.
+        Screen::Asking(_) if e.types() && e.question_of().is_some_and(Question::secret_one) => {
+            let secret = line(if e.revealed {
+                key::INST_KEYS_SECRET_SHOWN
+            } else {
+                key::INST_KEYS_SECRET
+            });
+            if spaced_fits(&secret, width) {
+                secret
+            } else {
+                line(key::INST_KEYS_EDIT)
+            }
+        }
         Screen::Asking(_) | Screen::Hopping(_) => line(key::INST_KEYS_EDIT),
         Screen::Reviewing => line(key::INST_KEYS_REVIEW),
         _ => line(key::INST_KEYS_QUIT),
     }
 }
 
-/// Whether the checklist's longer keys line, the one teaching the space
-/// bar, is drawn on a line `width` cells wide: when it fits with a cell to
-/// spare, so its last word never touches the edge. Measured as the language
-/// writes it, never a column count.
+/// Whether a longer keys line — the checklist's, teaching the space bar; a
+/// secret's, teaching the key that shows it — is drawn on a line `width`
+/// cells wide: when it fits with a cell to spare, so its last word never
+/// touches the edge. Measured as the language writes it, never a column
+/// count.
 fn spaced_fits(spaced: &str, width: u16) -> bool {
     cells(spaced) < width
 }
@@ -1771,6 +1809,9 @@ pub const SPACE: KeyCode = KeyCode::Char(' ');
 pub const ENTER: KeyCode = KeyCode::Enter;
 /// The key that goes back.
 pub const ESC: KeyCode = KeyCode::Esc;
+/// The key that shows a secret being typed, and hides it again. No secret
+/// holds a tab, so it never takes a character from one.
+pub const TAB: KeyCode = KeyCode::Tab;
 /// The letter that gives up while Control is held ([`gives_up`]).
 pub const QUIT: KeyCode = KeyCode::Char('c');
 
@@ -1782,6 +1823,8 @@ pub const KEY_SPACE: &str = "Space";
 pub const KEY_ENTER: &str = "Enter";
 /// The key that goes back, by name.
 pub const KEY_ESC: &str = "Esc";
+/// The key that shows or hides a secret, by name.
+pub const KEY_TAB: &str = "Tab";
 /// The chord that gives up, by name.
 pub const KEY_QUIT: &str = "Ctrl+C";
 
@@ -1817,7 +1860,7 @@ impl Taught {
 }
 
 /// Every key a sentence names.
-pub const KEYS: [Taught; 5] = [
+pub const KEYS: [Taught; 6] = [
     Taught {
         arg: "arrows",
         name: KEY_ARROWS,
@@ -1843,6 +1886,13 @@ pub const KEYS: [Taught; 5] = [
         arg: "esc",
         name: KEY_ESC,
         codes: &[ESC],
+        control: false,
+        clicks: true,
+    },
+    Taught {
+        arg: "tab",
+        name: KEY_TAB,
+        codes: &[TAB],
         control: false,
         clicks: true,
     },
@@ -2488,8 +2538,9 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
         Screen::Asking(_) => {
             let q = e.question_of();
             // A secret does not appear on screen — neither for whoever is looking over
-            // the shoulder, nor in a screenshot sent to ask for help.
-            let shown = if q.is_some_and(Question::secret_one) {
+            // the shoulder, nor in a screenshot sent to ask for help — unless
+            // the person asked to check it ([`TAB`]).
+            let shown = if q.is_some_and(Question::secret_one) && !e.revealed {
                 "*".repeat(e.typing.chars().count())
             } else {
                 e.typing.clone()
@@ -2507,6 +2558,14 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
                     texts.t_with(key::INST_BELONGINGS_TOKEN_WHERE, &[("address", &page)]),
                     Style::default().fg(color(color::TEXT_SECONDARY)),
                 )));
+                // AND WHAT IT NEEDS, on the forge's own words: read and write
+                // on this repository, and nothing else.
+                if let Some(rights) = access::token_rights(&e.answers.belongings) {
+                    lines.push(Line::from(Span::styled(
+                        texts.t(rights),
+                        Style::default().fg(color(color::TEXT_SECONDARY)),
+                    )));
+                }
             }
             if let Some(line) = status_line(e, texts) {
                 lines.push(Line::from(""));
@@ -4202,6 +4261,107 @@ mod tests {
         );
     }
 
+    /// FAILS IF: a secret is shown without the person's key, `Tab` does not
+    /// show it and hide it again, the key types a character into it, a
+    /// secret shown once is shown on the next secret's screen, or the keys
+    /// line does not teach the key — and a click on its hint does not do
+    /// what the key does.
+    #[test]
+    fn tab_shows_a_secret_and_hides_it_again() {
+        let mut e = with_disks();
+        walk_to(&mut e, Question::BelongingsAddress);
+        type_in(&mut e, "https://codeberg.org/me/belongings.git");
+        e.key(KeyCode::Enter);
+        settle(&mut e, &kind);
+        assert_eq!(e.question_of(), Some(Question::BelongingsAccess));
+        type_in(&mut e, "Zq7-token");
+        let t = texts();
+        let hidden = rendered(&e, &t, 100, 20);
+        assert!(!hidden.contains("Zq7-token"), "shown unasked:\n{hidden}");
+        assert!(
+            hidden.contains("write:repository"),
+            "what the token needs is not said:\n{hidden}"
+        );
+        assert!(
+            hidden.contains(&with_keys(&t, key::INST_KEYS_SECRET, &[])),
+            "the line does not teach the key:\n{hidden}"
+        );
+        e.key(TAB);
+        assert_eq!(e.typing, "Zq7-token", "Tab typed into the secret");
+        let shown = rendered(&e, &t, 100, 20);
+        assert!(shown.contains("Zq7-token_"), "not shown:\n{shown}");
+        assert!(
+            shown.contains(&with_keys(&t, key::INST_KEYS_SECRET_SHOWN, &[])),
+            "the line does not say how to hide it:\n{shown}"
+        );
+        // THE CLICK on the hint is the key.
+        let at = places(Rect::new(0, 0, 100, 20), &e, &t);
+        let tab = at
+            .hints
+            .iter()
+            .find(|h| h.act == Some(Act::Key(TAB)))
+            .expect("no hint presses Tab");
+        e.pointer(Pointer::Click, tab.x, at.keys.y, &at);
+        assert!(!e.revealed, "the click did not hide it");
+        assert!(!rendered(&e, &t, 100, 20).contains("Zq7-token"));
+        // SHOWN, and the screen goes on: the next secret opens hidden.
+        e.key(TAB);
+        e.key(KeyCode::Enter);
+        settle(&mut e, &kind);
+        assert_eq!(e.question_of(), Some(Question::BelongingsPassphrase));
+        type_in(&mut e, "Qw4-a-long-passphrase");
+        assert!(
+            !rendered(&e, &t, 100, 20).contains("Qw4-a-long-passphrase"),
+            "the passphrase opened shown"
+        );
+        // A FIELD THAT IS NOT A SECRET has nothing to show.
+        let mut e = with_disks();
+        walk_to(&mut e, Question::Hostname);
+        e.key(TAB);
+        assert!(!e.revealed);
+    }
+
+    /// FAILS IF: an HTTPS address whose server cannot be keyed
+    /// post-quantum asks for a token anyway, is refused without the same
+    /// repository's SSH address offered in the field, or the address offered
+    /// does not go on to a deploy key.
+    #[test]
+    fn a_classical_https_server_offers_the_ssh_address() {
+        let mut e = with_disks();
+        walk_to(&mut e, Question::BelongingsAddress);
+        type_in(&mut e, "https://github.com/ronoctua/belongings");
+        e.key(KeyCode::Enter);
+        let prepare = e.asked.take().expect("the address was not checked");
+        assert!(matches!(prepare.job, Job::Prepare { .. }));
+        e.arrived(prepare.serial, Done::Prepared(Err(Why::NotPostQuantum)));
+        assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
+        assert_eq!(e.error, Some(key::INST_BELONGINGS_HTTPS_NOT_POST_QUANTUM));
+        assert_eq!(e.typing, "git@github.com:ronoctua/belongings.git");
+        let shown = rendered(&e, &texts(), 100, 30);
+        assert!(
+            shown.contains("git@github.com:ronoctua/belongings.git"),
+            "{shown}"
+        );
+        e.key(KeyCode::Enter);
+        let again = e.asked.take().expect("the SSH address was not prepared");
+        assert!(
+            matches!(again.job, Job::Prepare { ref address } if address == "git@github.com:ronoctua/belongings.git")
+        );
+        e.arrived(again.serial, kind(&again.job));
+        assert_eq!(e.question_of(), Some(Question::BelongingsAccess));
+        assert!(!e.by_token(), "the SSH address asked for a token");
+        // ANY OTHER REFUSAL of an HTTPS address is said as it was, and the
+        // field is not rewritten.
+        let mut e = with_disks();
+        walk_to(&mut e, Question::BelongingsAddress);
+        type_in(&mut e, "https://github.com/ronoctua/belongings");
+        e.key(KeyCode::Enter);
+        let prepare = e.asked.take().unwrap();
+        e.arrived(prepare.serial, Done::Prepared(Err(Why::NoTools)));
+        assert_eq!(e.error, Some(access::refusal_key(Why::NoTools)));
+        assert!(e.typing.is_empty());
+    }
+
     /// FAILS IF: a passphrase that does not open the repository is taken,
     /// or one for an EMPTY repository is taken without being typed twice
     /// alike and as long as a disk's.
@@ -4605,6 +4765,14 @@ mod tests {
                 ),
                 (key::INST_KEYS_REVIEW, vec![KEY_ENTER, KEY_ESC, KEY_QUIT]),
                 (key::INST_KEYS_QUIT, vec![KEY_QUIT]),
+                (
+                    key::INST_KEYS_SECRET,
+                    vec![KEY_ENTER, KEY_ESC, KEY_TAB, KEY_QUIT],
+                ),
+                (
+                    key::INST_KEYS_SECRET_SHOWN,
+                    vec![KEY_ENTER, KEY_ESC, KEY_TAB, KEY_QUIT],
+                ),
             ] {
                 let line = with_keys(&t, k, &[]);
                 assert_eq!(named(&line), keys, "{language}: `{k}` says {line}");
@@ -4939,6 +5107,9 @@ mod tests {
                 key::INST_KEYS_CHOOSE,
                 key::INST_KEYS_REVIEW,
                 key::INST_KEYS_QUIT,
+                key::INST_KEYS_SECRET,
+                key::INST_KEYS_SECRET_SHOWN,
+                key::INST_BELONGINGS_HTTPS_NOT_POST_QUANTUM,
                 key::INST_CHECKING,
                 key::INST_GATE_CHECKING,
                 key::INST_RELEASE_LOOKING,
@@ -4950,6 +5121,9 @@ mod tests {
                 key::INST_BELONGINGS_KEY_WHERE,
                 key::INST_BELONGINGS_KEY_WHERE_UNKNOWN,
                 key::INST_BELONGINGS_TOKEN_WHERE,
+                key::INST_BELONGINGS_TOKEN_RIGHTS_GITHUB,
+                key::INST_BELONGINGS_TOKEN_RIGHTS_GITLAB,
+                key::INST_BELONGINGS_TOKEN_RIGHTS_CODEBERG,
                 key::INST_BELONGINGS_TOKEN_HELP,
                 key::INST_BELONGINGS_PASSPHRASE_NEW_HELP,
                 key::INST_BELONGINGS_PASSPHRASE_AGAIN,

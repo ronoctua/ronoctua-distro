@@ -133,6 +133,8 @@ belongings-keygen-note = Esta máquina ainda não tem chave de implantação. Ge
 belongings-token = Token
 belongings-token-is-kept = guardado, legível só por você
 belongings-user = Nome de usuário
+belongings-use-ssh = Usar o endereço SSH
+belongings-user-any = qualquer um: o servidor reconhece você pelo token
 belongings-token-note = O token fica num arquivo que só você lê, e chega ao git só pelo caminho — nunca numa linha de comando.
 belongings-passphrase = Senha
 belongings-change-passphrase = Trocar a senha
@@ -336,6 +338,7 @@ belongings-compact-question = As versões mais antigas saem do repositório de v
     }
 ask-belongings-compact = A senha, para compactar o histórico
 about-belongings-compact = Compacta o histórico — pergunta antes
+about-belongings-use-ssh = Troca o endereço pelo SSH do mesmo repositório, que uma chave de implantação alcança
 # Whether the session remembers the passphrase.
 belongings-unlock-on = sim
 belongings-unlock-off = não
