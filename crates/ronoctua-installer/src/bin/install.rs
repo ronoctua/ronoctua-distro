@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file>]
-//! ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out|compose|tpm|tpm-bios|bios>
+//! ronoctua-install --show <network|network-connected|access|token|passphrase|passphrase-new|hop|review|left-out|compose|tpm|tpm-bios|bios>
 //! ```
 //!
 //! # Two modes, and why there are two
@@ -84,7 +84,7 @@ use ronoctua_installer::tui;
 /// The usage, in English (invariant 18: a command line's help).
 const USAGE: &str =
     "usage: ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file|->]
-       ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out|compose|tpm|tpm-bios|bios>";
+       ronoctua-install --show <network|network-connected|access|token|passphrase|passphrase-new|hop|review|left-out|compose|tpm|tpm-bios|bios>";
 
 /// The size `--show` draws at when it does not print to a terminal: the
 /// review's plan fits it, and the tests read it.

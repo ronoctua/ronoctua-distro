@@ -91,6 +91,7 @@ inst-keys-quit = { $quit } sai
 inst-wifi = Rede Wi-Fi
 inst-wifi-help = A senha fica na máquina instalada, nunca no repositório.
 inst-wifi-none = sem Wi-Fi — vou usar cabo
+inst-wifi-connected = { $network } — conectada agora
 inst-wifi-scanning = Procurando redes…
 inst-wifi-empty = Nenhuma rede ao alcance
 inst-wifi-password = Senha da rede

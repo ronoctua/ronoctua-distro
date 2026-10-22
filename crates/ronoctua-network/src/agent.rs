@@ -11,11 +11,18 @@
 //!
 //! # One job only
 //!
-//! The agent does **not** receive the password from anyone. `AddAndActivateConnection`
-//! accepts the password in the call itself, and the `psk-flags` decide only what gets
-//! **persisted**. So the shell still hands the password to NM at connection
-//! time, and this daemon only comes in at the next boot, when there is
+//! The agent does **not** receive the password from anyone typing. A password
+//! typed joins in memory, kept by NetworkManager itself
+//! (`Manager::join_for_this_boot`), and only once that join is up is the
+//! password sealed and the profile written to disk with `psk-flags=1`
+//! (`Manager::remember`). So this daemon comes in when NetworkManager next
+//! needs the password — a link that drops, and every boot — when there is
 //! nobody left typing.
+//!
+//! It cannot be the other way round: NetworkManager does not take a password
+//! marked agent-owned from the call that adds the profile — it asks the
+//! agents, at activation (measured on NetworkManager 1.56) — and a password
+//! just typed has no blob yet.
 //!
 //! # Failing here is not failing
 //!
@@ -76,6 +83,17 @@ fn ssid_of(connection: &HashMap<String, HashMap<String, OwnedValue>>) -> Option<
     Vec::<u8>::try_from(v.clone())
         .ok()
         .map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// Whether the connection leaves its Wi-Fi password to an agent
+/// (`psk-flags` [`crate::KEPT_BY_THE_AGENT`]) — the only kind whose password
+/// is this agent's blob. Pure.
+fn left_to_this_agent(connection: &HashMap<String, HashMap<String, OwnedValue>>) -> bool {
+    connection
+        .get(SECURITY_SECTION)
+        .and_then(|s| s.get("psk-flags"))
+        .and_then(|v| u32::try_from(v).ok())
+        .is_some_and(|f| f & crate::KEPT_BY_THE_AGENT != 0)
 }
 
 #[zbus::interface(name = "org.freedesktop.NetworkManager.SecretAgent")]
@@ -146,16 +164,22 @@ impl Agent {
     ) {
     }
 
-    /// The connection was deleted: the blob goes with it.
+    /// The connection was deleted: the blob goes with it — when the blob was
+    /// ITS password ([`left_to_this_agent`]).
     ///
     /// Without this, "forget this network" would leave the sealed password behind — an
-    /// orphan secret nobody knows exists any more.
+    /// orphan secret nobody knows exists any more. And without the condition,
+    /// NetworkManager telling of ANY profile of that SSID — it tells every
+    /// deletion — would take the blob a remembered profile still asks for:
+    /// a join held in memory deleted because the network refused its key, or
+    /// typed again.
     fn delete_secrets(
         &self,
         connection: HashMap<String, HashMap<String, OwnedValue>>,
         _path: zbus::zvariant::OwnedObjectPath,
     ) {
-        if let Some(ssid) = ssid_of(&connection)
+        if left_to_this_agent(&connection)
+            && let Some(ssid) = ssid_of(&connection)
             && let Err(e) = secret::erase(&ssid)
         {
             tracing::warn!(error = %e, "could not erase the network's secret");
@@ -228,6 +252,31 @@ mod tests {
             ssid_of(&connection_with_ssid(b"home")).as_deref(),
             Some("home")
         );
+    }
+
+    /// FAILS IF: deleting a profile whose password NetworkManager kept
+    /// itself — a join held in memory, refused or typed again — erases the
+    /// blob a remembered profile of the same network still asks for; or
+    /// deleting the remembered one leaves its blob behind.
+    #[test]
+    fn only_a_profile_left_to_the_agent_takes_its_blob() {
+        let with_flags = |flags: Option<u32>| {
+            let mut c = connection_with_ssid(b"home");
+            if let Some(f) = flags {
+                c.insert(
+                    SECURITY_SECTION.to_owned(),
+                    HashMap::from([("psk-flags".to_owned(), OwnedValue::from(f))]),
+                );
+            }
+            c
+        };
+        assert!(left_to_this_agent(&with_flags(Some(
+            crate::KEPT_BY_THE_AGENT
+        ))));
+        assert!(!left_to_this_agent(&with_flags(Some(
+            crate::KEPT_BY_THE_DAEMON
+        ))));
+        assert!(!left_to_this_agent(&with_flags(None)), "an open network");
     }
 
     #[test]

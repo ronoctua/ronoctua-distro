@@ -91,6 +91,7 @@ inst-keys-quit = { $quit } quits
 inst-wifi = Wi-Fi network
 inst-wifi-help = The password stays on the installed machine, never in the repository.
 inst-wifi-none = no Wi-Fi — I will use a cable
+inst-wifi-connected = { $network } — connected now
 inst-wifi-scanning = Looking for networks…
 inst-wifi-empty = No networks in range
 inst-wifi-password = Network password

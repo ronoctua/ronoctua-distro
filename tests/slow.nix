@@ -68,6 +68,12 @@
   # in the store the script takes 98 s (105 s wall); what costs is building it.
   # The old note of "~2 h with no output" was the FIRST time, not the check.
   "secureboot-vm"
+  # Wi-Fi over a simulated air, with swtpm. MEASURED (the script, the
+  # systems built): `installer-joins-wifi-vm` 146 s — NetworkManager takes
+  # 25 s to give up on a wrong password, and the supplicant holds the network
+  # 10 s more —; `wifi-joins-vm` 188 s, a reboot among its steps.
+  "installer-joins-wifi-vm"
+  "wifi-joins-vm"
 
   # WHAT WAS MEASURED AND DID NOT GET IN.
   #

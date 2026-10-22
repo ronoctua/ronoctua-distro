@@ -66,11 +66,26 @@ pub struct Held<'a> {
     pub watch: &'a mut Watch,
     /// What the two tunnels say.
     pub tunnels: &'a ronoctua_tunnel::Scene,
-    /// The network just joined with a typed password, and the password —
-    /// held for the span of one question ("keep it?") and TAKEN on either
-    /// answer: a password left behind would be a password in memory with no
-    /// owner and no deadline.
-    pub remember: &'a mut Option<(String, Password)>,
+    /// The network being joined, followed until NetworkManager says how it
+    /// went ([`follow_join`]) — and, joined with a typed password, the
+    /// password, held for the span of one question ("keep it?") and TAKEN on
+    /// either answer: a password left behind would be a password in memory
+    /// with no owner and no deadline.
+    pub join: &'a mut Option<Join>,
+}
+
+/// A network being joined, as a door follows it.
+#[derive(Debug)]
+pub struct Join {
+    /// Its name.
+    pub ssid: String,
+    /// The password typed for it — `None` for a saved or open network, which
+    /// has nothing to keep.
+    pub password: Option<Password>,
+    /// What NetworkManager started, to ask how it went.
+    pub joining: ronoctua_network::Joining,
+    /// Whether it came up: the question "keep it?" stands from then on.
+    pub up: bool,
 }
 
 /// The way a thread of the view's brings its answer back to the door's loop.
@@ -154,7 +169,7 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
         Errand::Copy(text) => Some((crate::chrome::copied(&text, way.texts()), Echo::Brief)),
         // A PASSWORD WAITING FOR "KEEP IT?" goes with the view that asked it.
         Errand::Close => {
-            *held.remember = None;
+            *held.join = None;
             way.close();
             return;
         }
@@ -375,67 +390,68 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             },
             Echo::Normal,
         )),
-        // JOINING. It connects WITHOUT STORING (`psk-flags=2`) and asks
-        // afterwards: if the person says so, the answer's branch reconnects
-        // with `psk-flags=1` and seals. The opposite — storing and deleting
-        // on a refusal — would leave the password on disk in the meantime.
+        // JOINING, IN MEMORY, AND FOLLOWED. A typed password joins for this
+        // boot, kept by NetworkManager itself (`Manager::join_for_this_boot`):
+        // no agent has it yet, and NetworkManager does not take an
+        // agent-owned one from the call. What NetworkManager says of it comes
+        // with the next reading (`follow_join`), and only then does the door
+        // say "connected" — and ask "keep it?", the answer that seals it
+        // (`Manager::remember`). Storing first and deleting on a refusal
+        // would leave the password on disk in the meantime.
         Errand::Connect(target, password) => {
-            let result =
-                held.wire
-                    .connect(&target.ssid, password.as_ref().map(Password::as_str), false);
-            Some((
-                match result {
-                    Ok(()) => {
-                        if let Some(typed) = password.filter(|_| target.secured) {
-                            *held.remember = Some((target.ssid.clone(), typed));
-                            let facts = Facts {
-                                net: held.net,
-                                seen: held.wire.seen(),
-                                watch: held.watch,
-                                tunnels: held.tunnels,
-                            };
-                            held.view.ask_remember(
-                                target.ssid.clone(),
-                                &facts,
-                                way.columns(),
-                                way.texts(),
-                            );
-                        }
+            let typed = password.filter(|_| target.secured);
+            let result = held
+                .wire
+                .connect(&target.ssid, typed.as_ref().map(Password::as_str));
+            Some(match result {
+                Ok(joining) => {
+                    *held.join = Some(Join {
+                        ssid: target.ssid.clone(),
+                        password: typed,
+                        joining,
+                        up: false,
+                    });
+                    (
                         way.texts()
-                            .t_with(key::ECHO_NETWORK_CONNECTED, &[("network", &target.ssid)])
-                    }
-                    Err(e) => way.texts().t_with(
+                            .t_with(key::ECHO_NETWORK_JOINING, &[("network", &target.ssid)]),
+                        Echo::Normal,
+                    )
+                }
+                Err(e) => (
+                    way.texts().t_with(
                         key::ECHO_NETWORK_FAILED,
                         &[
                             ("network", &target.ssid),
                             ("reason", &crate::network_refusal::reason(&e, way.texts())),
                         ],
                     ),
-                },
-                Echo::Normal,
-            ))
+                    Echo::Normal,
+                ),
+            })
         }
-        // THE ANSWER TO "KEEP IT?". The `(ssid, password)` pair is TAKEN
-        // before anything can fail, on both answers: a password left behind
-        // after an error would be a password in memory with no owner and no
-        // deadline.
+        // THE ANSWER TO "KEEP IT?". The join is TAKEN before anything can
+        // fail, on both answers: a password left behind after an error would
+        // be a password in memory with no owner and no deadline. `yes` seals
+        // it and writes the profile to disk; the link that is up stays up.
         Errand::Remember(ssid, yes) => {
-            let kept = held.remember.take();
+            let kept = held.join.take();
             Some((
                 if yes {
-                    match kept.filter(|(named, _)| *named == ssid) {
-                        Some((_, password)) => {
-                            match held.wire.connect(&ssid, Some(password.as_str()), true) {
-                                Ok(()) => way
-                                    .texts()
-                                    .t_with(key::ECHO_NETWORK_STORED, &[("network", &ssid)]),
-                                Err(e) => way.texts().t_with(
-                                    key::ECHO_NETWORK_STORE_FAILED,
-                                    &[("reason", &crate::network_refusal::reason(&e, way.texts()))],
-                                ),
-                            }
-                        }
-                        None => t(way, key::ECHO_NETWORK_UNAVAILABLE),
+                    match kept.filter(|j| j.ssid == ssid && j.up) {
+                        Some(Join {
+                            password: Some(password),
+                            joining,
+                            ..
+                        }) => match held.wire.remember(&joining, &ssid, password.as_str()) {
+                            Ok(()) => way
+                                .texts()
+                                .t_with(key::ECHO_NETWORK_STORED, &[("network", &ssid)]),
+                            Err(e) => way.texts().t_with(
+                                key::ECHO_NETWORK_STORE_FAILED,
+                                &[("reason", &crate::network_refusal::reason(&e, way.texts()))],
+                            ),
+                        },
+                        _ => t(way, key::ECHO_NETWORK_UNAVAILABLE),
                     }
                 } else {
                     t(way, key::ECHO_NETWORK_NO_STORED)
@@ -535,6 +551,79 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
     // tunnel coming up brings a row, and a cursor past the end focuses
     // nothing. An ARRIVAL does not move the page; only the person's gesture
     // that asked this does, in its door.
+    let rows = held.view.rows(&facts_of(held), way.columns(), way.texts());
+    held.view.settle(&rows);
+    way.repaint();
+}
+
+/// Follows the network being joined, on a reading of the daemon — in
+/// whichever door holds it: NetworkManager's verdict is said when it comes,
+/// and not when the join was asked.
+///
+/// - UP: "connected", and, joined with a typed password, the question "keep
+///   it?" — never before: sealing a password the network refused stores
+///   rubbish the agent hands over at every boot.
+/// - FAILED: why, and the profile the join made goes, so the daemon does not
+///   try a refused key again on its own; a saved profile stays.
+/// - COMING: nothing yet.
+pub fn follow_join(held: &mut Held<'_>, way: &mut dyn Doorway) {
+    use crate::key;
+    use ronoctua_network::Joined;
+    let Some((ssid, typed, verdict)) = held.join.as_ref().filter(|j| !j.up).map(|j| {
+        (
+            j.ssid.clone(),
+            j.password.is_some(),
+            held.wire.joining(&j.joining),
+        )
+    }) else {
+        return;
+    };
+    match verdict {
+        Joined::Coming => return,
+        Joined::Up => {
+            way.say(
+                way.texts()
+                    .t_with(key::ECHO_NETWORK_CONNECTED, &[("network", &ssid)]),
+                Echo::Normal,
+            );
+            if typed {
+                if let Some(j) = held.join.as_mut() {
+                    j.up = true;
+                }
+                let facts = Facts {
+                    net: held.net,
+                    seen: held.wire.seen(),
+                    watch: held.watch,
+                    tunnels: held.tunnels,
+                };
+                held.view
+                    .ask_remember(ssid, &facts, way.columns(), way.texts());
+            } else {
+                *held.join = None;
+            }
+        }
+        Joined::Failed => {
+            let refusal = if typed {
+                ronoctua_network::refusal::Refusal::NoSecrets
+            } else {
+                ronoctua_network::refusal::Refusal::Failed
+            };
+            let why = anyhow::Error::from(ronoctua_network::refusal::Named(refusal));
+            way.say(
+                way.texts().t_with(
+                    key::ECHO_NETWORK_FAILED,
+                    &[
+                        ("network", &ssid),
+                        ("reason", &crate::network_refusal::reason(&why, way.texts())),
+                    ],
+                ),
+                Echo::Normal,
+            );
+            if let Some(j) = held.join.take() {
+                let _ = held.wire.abandon(&j.joining);
+            }
+        }
+    }
     let rows = held.view.rows(&facts_of(held), way.columns(), way.texts());
     held.view.settle(&rows);
     way.repaint();
@@ -791,14 +880,14 @@ fn scratch(press: Press, way: &mut dyn Doorway) {
             tunnels: None,
             scans: (!photographing).then_some(&follow as &dyn Fn()),
         };
-        let mut remember = None;
+        let mut join = None;
         let mut held = Held {
             view: &mut view,
             wire,
             net: &mut net,
             watch: &mut k.watch,
             tunnels: &tunnels,
-            remember: &mut remember,
+            join: &mut join,
         };
         carry_out(errand, &mut held, &lines, way);
     });
@@ -818,7 +907,7 @@ fn open(command: &str, _: Option<&str>, _: &mut dyn Doorway) -> Box<dyn crate::r
         net: Snapshot::default(),
         tunnels: ronoctua_tunnel::Scene::default(),
         hand: None,
-        remember: None,
+        join: None,
         opened: false,
     })
 }
@@ -833,8 +922,9 @@ pub struct NetworkRegion {
     tunnels: ronoctua_tunnel::Scene,
     /// The footer's line to the tunnels' thread.
     hand: Option<ronoctua_tunnel::Hand>,
-    /// A password waiting for its "keep it?" — see [`Held::remember`].
-    remember: Option<(String, Password)>,
+    /// The network being joined, and a password waiting for its "keep it?"
+    /// — see [`Held::join`].
+    join: Option<Join>,
     /// Whether the command that opened it has run.
     opened: bool,
 }
@@ -879,9 +969,29 @@ impl NetworkRegion {
             net: &mut self.net,
             watch: &mut k.watch,
             tunnels: &self.tunnels,
-            remember: &mut self.remember,
+            join: &mut self.join,
         };
         carry_out(errand, &mut held, &lines, way);
+    }
+
+    /// The network being joined, followed on a reading of the daemon
+    /// ([`follow_join`]).
+    fn follow_join(&mut self, way: &mut dyn Doorway) {
+        if self.join.is_none() {
+            return;
+        }
+        with_kept(|k| {
+            let wire = k.wire.get_or_insert_with(Wire::fresh);
+            let mut held = Held {
+                view: &mut self.view,
+                wire,
+                net: &mut self.net,
+                watch: &mut k.watch,
+                tunnels: &self.tunnels,
+                join: &mut self.join,
+            };
+            follow_join(&mut held, way);
+        });
     }
 
     /// One key of the view, wherever it came from — a key, a command by
@@ -987,7 +1097,7 @@ impl NetworkRegion {
             k.watch.restart();
             k.watch.sample();
         });
-        self.remember = None;
+        self.join = None;
         way.follow();
     }
 
@@ -1164,6 +1274,8 @@ impl crate::region::Region for NetworkRegion {
             self.net = net.clone();
             self.view
                 .show_sharing(crate::link_words::sharing::serving(&self.net));
+            // A READING IS WHEN A JOIN IS SETTLED: the device's state moved.
+            self.follow_join(way);
         } else if let Some(tunnels) = news.downcast_ref::<ronoctua_tunnel::Scene>() {
             self.tunnels = tunnels.clone();
         } else if let Some(ronoctua_tunnel::Event::Scene(tunnels)) =
@@ -1319,7 +1431,7 @@ mod tests {
         let mut net = machine();
         let mut watch = Watch::default();
         let tunnels = ronoctua_tunnel::Scene::default();
-        let mut remember = Some(("a café".to_owned(), Password::typed("s3nh4")));
+        let mut join = Some(a_join("a café", Some("s3nh4"), true));
         let lines = Lines {
             lan: None,
             tunnels: None,
@@ -1331,7 +1443,7 @@ mod tests {
             net: &mut net,
             watch: &mut watch,
             tunnels: &tunnels,
-            remember: &mut remember,
+            join: &mut join,
         };
         carry_out(Errand::Facts, &mut held, &lines, &mut w);
         assert_eq!(*held.net, after, "the order did not re-read");
@@ -1365,8 +1477,98 @@ mod tests {
         // A CLOSE LETS GO OF THE PASSWORD that waited for "keep it?".
         let mut w = way();
         carry_out(Errand::Close, &mut held, &lines, &mut w);
-        assert!(held.remember.is_none(), "a password outlived its view");
+        assert!(held.join.is_none(), "a password outlived its view");
         assert_eq!(w.owed, vec![Effect::Close]);
+    }
+
+    /// A join a door holds, with no daemon behind it.
+    fn a_join(ssid: &str, password: Option<&str>, up: bool) -> Join {
+        Join {
+            ssid: ssid.to_owned(),
+            password: password.map(Password::typed),
+            joining: ronoctua_network::Joining::at(
+                "/org/freedesktop/NetworkManager/Settings/9",
+                "/org/freedesktop/NetworkManager/ActiveConnection/9",
+                true,
+            )
+            .unwrap(),
+            up,
+        }
+    }
+
+    /// FAILS IF: a door says "connected", or asks "keep it?", before
+    /// NetworkManager says the network came up — the question would seal a
+    /// password the network may refuse — or a refusal keeps the password, or
+    /// is not said; or a saved network brought up asks to keep a password it
+    /// never had typed; or "yes" before the network is up seals anything.
+    #[test]
+    fn a_join_is_said_and_kept_only_once_it_is_up() {
+        use ronoctua_network::Joined;
+        let lines = Lines {
+            lan: None,
+            tunnels: None,
+            scans: None,
+        };
+        // What one reading does to a join, or what one errand does to it.
+        let run = |verdict: Joined, password: Option<&str>, errand: Option<Errand>| {
+            let mut w = way();
+            let mut view = View::fresh();
+            let mut wire = Wire::offline(Vec::new()).joining_as(verdict);
+            let mut net = machine();
+            let mut watch = Watch::default();
+            let tunnels = ronoctua_tunnel::Scene::default();
+            let mut join = Some(a_join("a café", password, false));
+            let mut held = Held {
+                view: &mut view,
+                wire: &mut wire,
+                net: &mut net,
+                watch: &mut watch,
+                tunnels: &tunnels,
+                join: &mut join,
+            };
+            match errand {
+                Some(e) => carry_out(e, &mut held, &lines, &mut w),
+                None => follow_join(&mut held, &mut w),
+            }
+            let said: Vec<String> = w
+                .owed
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::Say(s, _) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect();
+            (said, view.remembering(), join)
+        };
+        // ON ITS WAY: nothing said, nothing asked, the password still held.
+        let (said, asked, join) = run(Joined::Coming, Some("s3nh4"), None);
+        assert!(said.is_empty(), "{said:?}");
+        assert!(!asked);
+        assert!(join.is_some_and(|j| !j.up && j.password.is_some()));
+        // UP: "connected", then "keep it?", the password held for it.
+        let (said, asked, join) = run(Joined::Up, Some("s3nh4"), None);
+        assert!(
+            said.len() == 1 && said[0].contains("a café") && !said[0].contains("s3nh4"),
+            "{said:?}"
+        );
+        assert!(asked, "the question did not come once the network was up");
+        assert!(join.is_some_and(|j| j.up));
+        // REFUSED: said, and the password let go.
+        let (said, asked, join) = run(Joined::Failed, Some("s3nh4"), None);
+        assert!(said.len() == 1 && said[0].contains("a café"), "{said:?}");
+        assert!(!asked);
+        assert!(join.is_none(), "a refused password was kept");
+        // A SAVED NETWORK brought up has nothing to keep.
+        let (said, asked, join) = run(Joined::Up, None, None);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(!asked, "a saved network asked to keep a password");
+        assert!(join.is_none());
+        // AND "YES" BEFORE IT IS UP seals nothing: there is nothing to answer.
+        let yes = Errand::Remember("a café".into(), true);
+        let (said, _, join) = run(Joined::Coming, Some("s3nh4"), Some(yes));
+        let unavailable = way().texts().t(crate::key::ECHO_NETWORK_UNAVAILABLE);
+        assert_eq!(said, vec![unavailable]);
+        assert!(join.is_none(), "the password stayed after the answer");
     }
 
     /// FAILS IF: a press that reaches the view while the line asks one of its
@@ -1380,7 +1582,7 @@ mod tests {
             net: machine(),
             tunnels: ronoctua_tunnel::Scene::default(),
             hand: None,
-            remember: None,
+            join: None,
             opened: true,
         };
         with_kept(|k| k.wire = Some(Wire::planted(machine(), Vec::new())));
@@ -1406,13 +1608,13 @@ mod tests {
             net: Snapshot::default(),
             tunnels: ronoctua_tunnel::Scene::default(),
             hand: None,
-            remember: Some(("a café".to_owned(), Password::typed("s3nh4"))),
+            join: Some(a_join("a café", Some("s3nh4"), true)),
             opened: false,
         };
         assert_eq!(r.command("network-open", None, &mut w), Taken::Yes);
         assert_eq!(r.net, machine(), "the opening read nothing");
         assert!(
-            r.remember.is_none(),
+            r.join.is_none(),
             "a password outlived the view it was asked in"
         );
         assert!(
@@ -1439,7 +1641,7 @@ mod tests {
             net: machine(),
             tunnels: ronoctua_tunnel::Scene::default(),
             hand: None,
-            remember: None,
+            join: None,
             opened: true,
         };
         r.shelf_scrolled(SHELVES.len(), 3, &mut w);
@@ -1594,7 +1796,7 @@ mod tests {
                 net: machine(),
                 tunnels: ronoctua_tunnel::Scene::default(),
                 hand: None,
-                remember: None,
+                join: None,
                 opened: true,
             };
             (r, way())

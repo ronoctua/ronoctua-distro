@@ -27,7 +27,7 @@
 //! into or typed. The password never leaves this process except to
 //! NetworkManager: not to the footer, not to an `argv`, not to a log. The
 //! question afterwards, whether to keep it, is the view's own screen, and the
-//! password waits for its answer here ([`Network::remember`]).
+//! password waits for its answer here ([`Network::join`]).
 
 use crate::door::{Canvas, Content, Door, Hand, LEFT_BUTTON, Ui};
 use anyhow::{Context as _, Result};
@@ -167,7 +167,7 @@ pub fn host_it() -> Result<()> {
             lan_sender: Some(lan_sender),
             tunnels: ronoctua_tunnel::Scene::default(),
             hand,
-            remember: None,
+            join: None,
             hotspot_serving,
         })
     })
@@ -190,11 +190,9 @@ struct Network {
     tunnels: ronoctua_tunnel::Scene,
     /// The thread that reads them and carries out their orders.
     hand: Option<ronoctua_tunnel::Hand>,
-    /// The network just joined with a typed password, and the password —
-    /// held for the span of one question ("keep it?") and TAKEN on either
-    /// answer: a password left behind would be a password in memory with no
-    /// owner and no deadline.
-    remember: Option<(String, crate::network::Password)>,
+    /// The network being joined, and a password waiting for its "keep it?"
+    /// — see `network_region::Held::join`.
+    join: Option<crate::network_region::Join>,
     /// Was a hotspot up at the last reading? Its END takes the password's
     /// file away (`link_words::sharing::follow`); the view only reads it.
     hotspot_serving: bool,
@@ -225,6 +223,18 @@ impl Network {
             &mut self.hotspot_serving,
             &self.net,
         ));
+        // A READING IS WHEN A JOIN IS SETTLED: the device's state moved.
+        if self.join.is_some() {
+            let mut held = crate::network_region::Held {
+                view: &mut self.view,
+                wire: &mut self.wire,
+                net: &mut self.net,
+                watch: &mut self.watch,
+                tunnels: &self.tunnels,
+                join: &mut self.join,
+            };
+            crate::network_region::follow_join(&mut held, ui);
+        }
         self.settle(ui);
         ui.ask_paint();
     }
@@ -306,7 +316,7 @@ impl Network {
             net: &mut self.net,
             watch: &mut self.watch,
             tunnels: &self.tunnels,
-            remember: &mut self.remember,
+            join: &mut self.join,
         };
         crate::network_region::carry_out(errand, &mut held, &lines, ui);
     }
@@ -573,7 +583,7 @@ pub fn photographed(scene: &str) -> Result<(impl Content, Option<crate::line::Li
             lan_sender: None,
             tunnels: ronoctua_tunnel::Scene::default(),
             hand: None,
-            remember: None,
+            join: None,
             hotspot_serving: scene == "hotspot",
         },
         asking,
@@ -907,7 +917,7 @@ mod tests {
             lan_sender: None,
             tunnels: ronoctua_tunnel::Scene::default(),
             hand: None,
-            remember: None,
+            join: None,
             hotspot_serving: false,
         };
         (me, Ui::for_tests(texts))
@@ -971,8 +981,41 @@ mod tests {
         assert!(!said.contains("s3nh4"), "the password reached the screen");
         assert!(ui.orders().is_empty(), "the password went to the footer");
         // THE DAEMON REFUSED, so there is nothing to keep and no question.
-        assert!(w.remember.is_none());
+        assert!(w.join.is_none());
         assert!(!w.view.remembering());
+    }
+
+    /// FAILS IF: the window does not follow a join on a reading of the
+    /// daemon as the footer does — "keep it?" never comes once the network
+    /// is up, or a refused password stays in the window.
+    #[test]
+    fn the_window_follows_a_join_on_a_reading() {
+        let join = || crate::network_region::Join {
+            ssid: "a café".into(),
+            password: Some(Password::typed("s3nh4")),
+            joining: ronoctua_network::Joining::at(
+                "/org/freedesktop/NetworkManager/Settings/9",
+                "/org/freedesktop/NetworkManager/ActiveConnection/9",
+                true,
+            )
+            .unwrap(),
+            up: false,
+        };
+        let (mut w, mut ui) = a_window();
+        w.wire =
+            crate::network::Wire::offline(vec![café()]).joining_as(ronoctua_network::Joined::Up);
+        w.join = Some(join());
+        w.net_arrived(&mut ui, machine());
+        assert!(w.view.remembering(), "the window did not ask to keep it");
+        assert!(w.join.as_ref().is_some_and(|j| j.up));
+        let (mut w, mut ui) = a_window();
+        w.wire = crate::network::Wire::offline(vec![café()])
+            .joining_as(ronoctua_network::Joined::Failed);
+        w.join = Some(join());
+        w.net_arrived(&mut ui, machine());
+        assert!(!w.view.remembering());
+        assert!(w.join.is_none(), "a refused password stayed in the window");
+        assert!(ui.message.is_some_and(|m| m.contains("a café")));
     }
 
     /// FAILS IF: a click that reaches the view while the password is asked
@@ -1137,7 +1180,17 @@ mod tests {
             Some(ui.texts.t(crate::key::ECHO_NETWORK_NO_STORED).as_str())
         );
         let ask = |w: &mut Network, ui: &Ui| {
-            w.remember = Some(("a café".into(), Password::typed("s3nh4")));
+            w.join = Some(crate::network_region::Join {
+                ssid: "a café".into(),
+                password: Some(Password::typed("s3nh4")),
+                joining: ronoctua_network::Joining::at(
+                    "/org/freedesktop/NetworkManager/Settings/9",
+                    "/org/freedesktop/NetworkManager/ActiveConnection/9",
+                    true,
+                )
+                .unwrap(),
+                up: true,
+            });
             let mut view = std::mem::take(&mut w.view);
             view.ask_remember("a café".into(), &w.facts(), ui.columns, &ui.texts);
             w.view = view;
@@ -1146,7 +1199,7 @@ mod tests {
         let rows = w.view_rows(&ui);
         assert_eq!(rows[w.view.cursor()].target, Target::Remember(false));
         w.pressed(&mut ui, Press::Enter);
-        assert!(w.remember.is_none(), "the password stayed after `no`");
+        assert!(w.join.is_none(), "the password stayed after `no`");
         assert!(!w.view.remembering());
         assert_eq!(
             ui.message.as_deref(),
@@ -1163,7 +1216,7 @@ mod tests {
         assert!(w.view.remembering(), "the first click answered");
         w.clicked(&mut ui, yes);
         assert!(!w.view.remembering(), "the second click did not answer");
-        assert!(w.remember.is_none(), "the password stayed after `yes`");
+        assert!(w.join.is_none(), "the password stayed after `yes`");
         // NO DAEMON, so sealing it fails — and says why.
         let said = ui.message.clone().unwrap_or_default();
         assert!(!said.contains("s3nh4"), "{said}");

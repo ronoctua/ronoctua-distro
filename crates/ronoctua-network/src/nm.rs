@@ -94,6 +94,21 @@ pub trait Manager {
         specific_object: &ObjectPath<'_>,
     ) -> zbus::Result<(OwnedObjectPath, OwnedObjectPath)>;
 
+    /// The same, with `options` — `persist` says where the profile lives:
+    /// `disk`, `memory` (until the daemon's machine stops) or `volatile`.
+    /// Answers the profile, the activation and a dictionary of results.
+    fn add_and_activate_connection2(
+        &self,
+        connection: HashMap<&str, HashMap<&str, Value<'_>>>,
+        device: &ObjectPath<'_>,
+        specific_object: &ObjectPath<'_>,
+        options: HashMap<&str, Value<'_>>,
+    ) -> zbus::Result<(
+        OwnedObjectPath,
+        OwnedObjectPath,
+        HashMap<String, zbus::zvariant::OwnedValue>,
+    )>;
+
     /// Is the radio on?
     #[zbus(property)]
     fn wireless_enabled(&self) -> zbus::Result<bool>;
@@ -399,6 +414,33 @@ pub trait Profile {
     /// Replaces the profile, and writes it to disk.
     fn update(&self, properties: HashMap<&str, HashMap<&str, Value<'_>>>) -> zbus::Result<()>;
 
+    /// Replaces the profile under `flags` ([`UPDATE_TO_DISK`],
+    /// [`UPDATE_NO_REAPPLY`]) — what turns a profile held in memory into one
+    /// on disk. A profile handed with no secrets keeps the ones it had.
+    #[allow(clippy::type_complexity)]
+    fn update2(
+        &self,
+        settings: HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>,
+        flags: u32,
+        args: HashMap<&str, Value<'_>>,
+    ) -> zbus::Result<HashMap<String, zbus::zvariant::OwnedValue>>;
+
+    /// `NM_SETTINGS_CONNECTION_FLAGS`: [`PROFILE_UNSAVED`] is a profile with
+    /// no file on disk — one held in memory.
+    #[zbus(property)]
+    fn flags(&self) -> zbus::Result<u32>;
+
     /// Deletes the profile. It is "forget this network".
     fn delete(&self) -> zbus::Result<()>;
 }
+
+/// `NM_SETTINGS_CONNECTION_FLAG_UNSAVED` — the profile is in memory, with no
+/// file on disk (or with changes the file does not have).
+pub const PROFILE_UNSAVED: u32 = 0x1;
+
+/// `NM_SETTINGS_UPDATE2_FLAG_TO_DISK` — the profile is written to disk.
+pub const UPDATE_TO_DISK: u32 = 0x1;
+
+/// `NM_SETTINGS_UPDATE2_FLAG_NO_REAPPLY` — the link that is up stays as it
+/// is.
+pub const UPDATE_NO_REAPPLY: u32 = 0x40;

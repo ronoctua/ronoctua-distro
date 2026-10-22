@@ -174,25 +174,28 @@ fn disks() -> Vec<Disk> {
     disks_from(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// The Wi-Fi networks in range, through the ISO's NetworkManager.
+/// The Wi-Fi networks in range, through the ISO's NetworkManager, and the
+/// one the radio is connected to — joined before the installer started, by
+/// `nmtui` or by an earlier run.
 ///
 /// It returns empty when there is no radio, no NetworkManager or the bus
 /// does not answer — and empty is NOT an error: the list is left with only "no Wi-Fi", which is
 /// the right answer on a cabled machine. Failing the whole installation because
 /// there is no radio would be the opposite of what this question exists to solve.
-fn networks() -> Vec<String> {
+fn networks() -> (Vec<String>, Option<String>) {
     let Ok(g) = ronoctua_network::Manager::fresh() else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
     // It asks for the scan BEFORE reading: on a freshly booted ISO
     // NetworkManager may never have scanned, and the list would come back empty with the
     // radio working perfectly.
     let _ = g.scan();
-    g.networks()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| r.ssid)
-        .collect()
+    let in_range = g.networks().unwrap_or_default();
+    let connected = in_range
+        .iter()
+        .find(|n| n.active_one)
+        .map(|n| n.ssid.clone());
+    (in_range.into_iter().map(|r| r.ssid).collect(), connected)
 }
 
 /// Which screen the TUI is on.
@@ -560,6 +563,9 @@ pub struct State {
     /// answer, and scanning when the question arrives would make the screen open empty
     /// and fill up on its own afterwards — the person would already have chosen "no Wi-Fi".
     pub networks: Vec<String>,
+    /// The one of [`State::networks`] the radio was connected to when they
+    /// were scanned: its row says so, and the question opens on it.
+    pub connected: Option<String>,
     /// The hosts the network question names (its answer is the consent to
     /// reach them).
     pub hosts: String,
@@ -633,6 +639,7 @@ impl State {
         let mut e = Self {
             screen: Screen::Asking(0),
             networks,
+            connected: None,
             hosts: String::new(),
             answers: Answers::default(),
             typing: String::new(),
@@ -904,8 +911,15 @@ impl State {
                     .map(model::Choice::line)
                     .unwrap_or_default(),
             ),
+            // A WI-FI NETWORK ALREADY CONNECTED is the answer Enter takes;
+            // with none, "no Wi-Fi", first.
+            Some(Question::Wifi) => self
+                .connected
+                .as_ref()
+                .and_then(|c| self.networks.iter().position(|n| n == c))
+                .map_or(0, |i| i + 1),
             // The rest already have the right answer first: no variant, the
-            // British locale, London, no Wi-Fi, and the machine's own disk.
+            // British locale, the machine's own disk.
             _ => 0,
         }
     }
@@ -1075,7 +1089,15 @@ impl State {
                 self.options()
                     .iter()
                     .position(|o| {
-                        o.starts_with(self.answers.get(*q)) && !self.answers.get(*q).is_empty()
+                        let answered = self.answers.get(*q);
+                        // A NETWORK IS ITS WHOLE NAME: `home` must not land
+                        // on `home-guest`, listed above it.
+                        !answered.is_empty()
+                            && if *q == Question::Wifi {
+                                o == answered
+                            } else {
+                                o.starts_with(answered)
+                            }
                     })
                     .unwrap_or_else(|| self.default_choice())
             };
@@ -2416,6 +2438,8 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
                         ListItem::new(texts.t(&o))
                     } else if wifi && o.is_empty() {
                         ListItem::new(texts.t(key::INST_WIFI_NONE))
+                    } else if wifi && e.connected.as_ref() == Some(&o) {
+                        ListItem::new(texts.t_with(key::INST_WIFI_CONNECTED, &[("network", &o)]))
                     } else {
                         ListItem::new(o)
                     };
@@ -2905,10 +2929,17 @@ pub fn collect(
     // networks in range, and the hosts the network question names (`nix`
     // answers those).
     let resumed = resume.is_some();
+    let (in_range, connected) = networks();
     let mut e = match resume {
-        Some((answers, at)) => State::resumed(disks(), networks(), answers, at),
-        None => State::fresh(disks(), networks()),
+        Some((answers, at)) => State::resumed(disks(), in_range, answers, at),
+        None => State::fresh(disks(), in_range),
     };
+    e.connected = connected;
+    // A RESUME THAT LANDS ON THE NETWORK QUESTION opens on the network in
+    // use, as the question reached by walking does.
+    if e.question_of() == Some(Question::Wifi) {
+        e.choice = e.default_choice();
+    }
     e.hosts = reach.hosts().join(", ");
     // THE MACHINE, before the first screen: the stops after the language,
     // and the firmware the plan installs for — BIOS already chosen when the
@@ -3080,6 +3111,10 @@ fn shown(screen: &str) -> Option<State> {
         "network" => {
             at(&mut e, Question::Wifi);
             e.error = Some(Gate::NoLink.key());
+        }
+        "network-connected" => {
+            e.connected = Some("home-2g".into());
+            at(&mut e, Question::Wifi);
         }
         "access" => {
             e.answers.set(
@@ -4316,6 +4351,40 @@ mod tests {
             Question::BelongingsAddress,
         );
         assert_eq!(e.networks, ["home-5g", "other"]);
+    }
+
+    /// FAILS IF: a Wi-Fi network joined before the installer started (by
+    /// `nmtui`) is not said on its row, or the question does not open on it
+    /// — or going back to the question lands on another network whose name
+    /// starts with the chosen one's.
+    #[test]
+    fn the_network_already_connected_is_recognised() {
+        let mut e = with_disks();
+        e.networks = vec!["home-guest".into(), "home".into()];
+        e.connected = Some("home".into());
+        walk_to(&mut e, Question::Wifi);
+        assert_eq!(
+            e.options()[e.choice],
+            "home",
+            "it opens on the network in use"
+        );
+        let t = texts();
+        let shown = rendered(&e, &t, 80, 24);
+        let said = t.t_with(key::INST_WIFI_CONNECTED, &[("network", "home")]);
+        assert!(row_of(&shown, &said).is_some(), "{shown}");
+        assert!(row_of(&shown, "home-guest").is_some(), "{shown}");
+        // With none connected, "no Wi-Fi" stays the answer Enter takes.
+        let mut cabled = with_disks();
+        cabled.networks = vec!["home".into()];
+        walk_to(&mut cabled, Question::Wifi);
+        assert_eq!(cabled.choice, 0);
+        // Back to the question, on the network chosen, by its whole name.
+        e.key(KeyCode::Enter);
+        assert_eq!(e.answers.wifi_ssid, "home");
+        assert_eq!(e.question_of(), Some(Question::WifiPassword));
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Wifi));
+        assert_eq!(e.options()[e.choice], "home");
     }
 
     /// The row of `text` in a screen drawn as text, if it is there.

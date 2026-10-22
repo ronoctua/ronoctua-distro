@@ -3547,6 +3547,8 @@ pub struct Wire {
     /// What a wire with no daemon answers to `look` — the photograph's
     /// planted machine; nothing for a test's offline wire.
     planted: Option<Snapshot>,
+    /// What a wire with no daemon answers about a join — a test's.
+    verdict: Option<ronoctua_network::Joined>,
 }
 
 impl Wire {
@@ -3557,6 +3559,7 @@ impl Wire {
             manager: Manager::fresh().ok(),
             seen: Vec::new(),
             planted: None,
+            verdict: None,
         };
         w.reread();
         w
@@ -3572,7 +3575,17 @@ impl Wire {
             manager: None,
             seen,
             planted: None,
+            verdict: None,
         }
+    }
+
+    /// The same, saying `verdict` of every join — what a test of a door's
+    /// join hands it.
+    #[cfg(test)]
+    #[must_use]
+    pub fn joining_as(mut self, verdict: ronoctua_network::Joined) -> Self {
+        self.verdict = Some(verdict);
+        self
     }
 
     /// The same, answering `look` with a planted machine — the photograph's,
@@ -3583,6 +3596,7 @@ impl Wire {
             manager: None,
             seen,
             planted: Some(net),
+            verdict: None,
         }
     }
 
@@ -3615,23 +3629,62 @@ impl Wire {
         self.reread();
     }
 
-    /// Connects to a network.
-    ///
-    /// `remember` decides the `psk-flags`: with it, the password is sealed
-    /// into the TPM and the profile does not store it; without it, nothing is
-    /// persisted anywhere.
+    /// Brings a network up — a typed password joined for this boot, kept by
+    /// NetworkManager in memory (`Manager::connect`) — and answers the join
+    /// to follow ([`Wire::joining`]).
     ///
     /// # Errors
     ///
-    /// The network vanished, the password will not do, or the bus refused.
+    /// The network vanished, or the bus refused.
     pub fn connect(
         &mut self,
         ssid: &str,
         password: Option<&str>,
-        remember: bool,
+    ) -> anyhow::Result<ronoctua_network::Joining> {
+        let joining = self.wire()?.connect(ssid, password)?;
+        self.reread();
+        Ok(joining)
+    }
+
+    /// Where a join stands. A wire with no daemon answers what was planted
+    /// for it — a test's door — and a join it cannot ask about has failed.
+    #[must_use]
+    pub fn joining(&self, join: &ronoctua_network::Joining) -> ronoctua_network::Joined {
+        self.manager.as_ref().map_or(
+            self.verdict.unwrap_or(ronoctua_network::Joined::Failed),
+            |g| g.joining(join),
+        )
+    }
+
+    /// Keeps a joined network past this boot: the password sealed in the TPM
+    /// by the agent, and the profile written to disk (`Manager::remember`).
+    ///
+    /// # Errors
+    ///
+    /// The join is not up, the TPM refused, or the bus refused.
+    pub fn remember(
+        &mut self,
+        join: &ronoctua_network::Joining,
+        ssid: &str,
+        password: &str,
     ) -> anyhow::Result<()> {
-        let g = self.wire()?;
-        g.connect(ssid, password, remember)?;
+        self.wire()?.remember(
+            join,
+            ssid,
+            password,
+            ronoctua_network::Seal::ThroughTheAgent,
+        )?;
+        self.reread();
+        Ok(())
+    }
+
+    /// Deletes the profile a join made that did not come up.
+    ///
+    /// # Errors
+    ///
+    /// The bus refused.
+    pub fn abandon(&mut self, join: &ronoctua_network::Joining) -> anyhow::Result<()> {
+        self.wire()?.abandon(join)?;
         self.reread();
         Ok(())
     }

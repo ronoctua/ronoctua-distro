@@ -32,7 +32,7 @@ pub use stored::Stored;
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use zbus::zvariant::{OwnedObjectPath, Value};
+use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 /// Which band the radio is on.
 ///
@@ -481,18 +481,156 @@ pub enum Rate {
     Gigabits(f64),
 }
 
-/// NetworkManager's `psk-flags`, according to whether the person wants to remember.
+/// `psk-flags` 0, `NONE`: NetworkManager keeps the password itself, inside
+/// the profile. Only for a profile held in memory
+/// ([`Manager::join_for_this_boot`]), which has no file on disk: on disk it
+/// is the world's default, `psk=<password>` inside the file — what the TPM's
+/// agent exists to avoid.
+pub const KEPT_BY_THE_DAEMON: u32 = 0;
+
+/// `psk-flags` 1, `AGENT_OWNED`: the profile does not hold the password; the
+/// agent hands it over when NetworkManager asks, opening the TPM blob. What a
+/// remembered network is on disk ([`Manager::remember`]).
 ///
-/// - **1, `AGENT_OWNED`** — the profile does not store the password; what hands it over is the
-///   agent, opening the TPM blob.
-/// - **2, `NOT_SAVED`** — nothing is persisted anywhere. Next time
-///   NetworkManager asks again.
+/// # And `NOT_SAVED` (2) is not used
 ///
-/// What is NOT used is `0` (`NONE`), which is the world's default and the one that puts
-/// `psk=<password>` inside the file.
+/// NetworkManager does not take a password marked 1 or 2 from the call that
+/// adds the profile: it asks the agents for it when the activation needs it
+/// (measured on NetworkManager 1.56 — `no secrets: No agents were available
+/// for this request`, before the radio tried a key). A join with either one
+/// hangs on an agent that has the password at that moment, and none has it:
+/// the TPM's agent answers only with a blob, and a password just typed has
+/// none yet. So a password typed is joined with [`KEPT_BY_THE_DAEMON`], in
+/// memory, and the profile goes to disk as 1 only once it is up and the blob
+/// is sealed.
+pub const KEPT_BY_THE_AGENT: u32 = 1;
+
+/// How long, at most, a join is waited for. NetworkManager ends one on its
+/// own — a refused key at its association timeout (25 s), no address at its
+/// DHCP timeout (45 s) — and its verdict is the answer; this only bounds a
+/// daemon that never says. Under its timeouts, a right password that is slow
+/// would read as refused, and one typed after a wrong one is slow: the
+/// supplicant holds the network back 10 s after a failure.
+pub const JOIN_MOST_S: u64 = 90;
+
+/// The settings of a Wi-Fi profile for `ssid`, with `password` under
+/// `psk_flags`.
+fn wifi_settings<'a>(
+    ssid: &'a str,
+    password: Option<&'a str>,
+    sae: bool,
+    psk_flags: u32,
+) -> HashMap<&'static str, HashMap<&'static str, Value<'a>>> {
+    let mut connection: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
+    connection.insert(
+        "connection",
+        HashMap::from([
+            ("id", Value::from(ssid)),
+            ("type", Value::from("802-11-wireless")),
+        ]),
+    );
+    connection.insert(
+        "802-11-wireless",
+        HashMap::from([("ssid", Value::from(ssid.as_bytes()))]),
+    );
+    if let Some(s) = password {
+        connection.insert(
+            "802-11-wireless-security",
+            HashMap::from([
+                // WPA3-ONLY ASKS FOR `sae`; everything else takes `wpa-psk`.
+                //
+                // `wpa-psk` covers WPA2 and WPA3 in TRANSITION mode, which is
+                // what exists almost everywhere — and that is exactly why a
+                // WPA3-only access point went unnoticed: it is the rare case,
+                // and the failure comes back as NetworkManager's own message,
+                // which says nothing about the mode.
+                //
+                // The choice reads the access point's `RsnFlags` — see
+                // `wpa3_only`, whose rule is the ABSENCE of `PSK` and not the
+                // presence of `SAE`.
+                ("key-mgmt", Value::from(if sae { "sae" } else { "wpa-psk" })),
+                ("psk", Value::from(s)),
+                ("psk-flags", Value::from(psk_flags)),
+            ]),
+        );
+    }
+    connection
+}
+
+/// A profile as [`Manager::remember`] writes it to disk: the same, with the
+/// password left to the agent — `psk-flags` [`KEPT_BY_THE_AGENT`] and no
+/// `psk`. `None` for a profile with no key (an open network): there is no
+/// password to remember. Pure.
 #[must_use]
-pub const fn flags(remember: bool) -> u32 {
-    if remember { 1 } else { 2 }
+pub fn left_to_the_agent(mut cfg: Configuration) -> Option<Configuration> {
+    let security = cfg.get_mut("802-11-wireless-security")?;
+    security.remove("psk");
+    security.insert("psk-flags".to_owned(), OwnedValue::from(KEPT_BY_THE_AGENT));
+    Some(cfg)
+}
+
+/// What [`Manager::connect`] started: the profile it brought up and that
+/// profile's activation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Joining {
+    profile: OwnedObjectPath,
+    active: OwnedObjectPath,
+    /// Whether the join MADE the profile — the only kind
+    /// [`Manager::abandon`] deletes and [`Manager::remember`] keeps: a
+    /// saved profile brought up is the person's.
+    made: bool,
+}
+
+impl Joining {
+    /// A join at these paths — what a door's test holds, with no daemon.
+    ///
+    /// # Errors
+    ///
+    /// A path that is not an object path.
+    pub fn at(profile: &str, active: &str, made: bool) -> Result<Self> {
+        Ok(Self {
+            profile: OwnedObjectPath::try_from(profile)?,
+            active: OwnedObjectPath::try_from(active)?,
+            made,
+        })
+    }
+}
+
+/// Where a join stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Joined {
+    /// On its way: associating, checking the key, getting an address.
+    Coming,
+    /// Up, with an address.
+    Up,
+    /// Over without coming up: the network refused the key, or went away.
+    Failed,
+}
+
+/// `NM_ACTIVE_CONNECTION_STATE` -> where a join stands. `None`: the
+/// activation no longer answers, which is how NetworkManager ends one that
+/// failed — it removes the object. Pure.
+#[must_use]
+pub const fn joined_of(state: Option<u32>) -> Joined {
+    match state {
+        // UNKNOWN and ACTIVATING.
+        Some(0 | 1) => Joined::Coming,
+        Some(2) => Joined::Up,
+        // DEACTIVATING, DEACTIVATED, and an object gone.
+        _ => Joined::Failed,
+    }
+}
+
+/// Who seals a remembered password into the TPM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seal {
+    /// The agent, over the bus — for the person's session, which has no TPM
+    /// of its own; the bus policy lets the distro's user ask it, and nobody
+    /// else (`nix/modules/network.nix`).
+    ThroughTheAgent,
+    /// This process — root, with the TPM and the blobs' folder: the boot's
+    /// console. Root is no exception to the agent's bus policy.
+    Here,
 }
 
 /// Is a network secured?
@@ -528,9 +666,11 @@ fn ssid_name(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// The SSID stored in a saved NetworkManager profile.
-type Configuration = HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>;
+/// A NetworkManager profile's settings, section by section, as the bus
+/// hands them.
+pub type Configuration = HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>;
 
+/// The SSID stored in a saved NetworkManager profile.
 fn profile_ssid(cfg: &Configuration) -> Option<String> {
     let v = cfg.get("802-11-wireless")?.get("ssid")?;
     Vec::<u8>::try_from(v.clone()).ok().map(|b| ssid_name(&b))
@@ -749,7 +889,9 @@ impl Manager {
         Ok(output)
     }
 
-    /// The SSIDs that already have a saved profile.
+    /// The SSIDs that already have a saved profile — on disk: a join held in
+    /// memory is gone at the next boot, and saying "saved" of it would skip
+    /// the password the network then asks again.
     fn saved_ones(&self) -> Result<Vec<String>> {
         let profiles = nm::ProfilesProxyBlocking::new(&self.connection)?;
         let mut output = Vec::new();
@@ -758,7 +900,9 @@ impl Manager {
                 continue;
             };
             // The saved SSID is `ay`, as on the access point.
-            if let Some(name) = profile_ssid(&cfg) {
+            if let Some(name) = profile_ssid(&cfg)
+                && !self.in_memory(&path)
+            {
                 output.push(name);
             }
         }
@@ -1018,7 +1162,9 @@ impl Manager {
         (address, gateway, dns)
     }
 
-    /// Every profile the daemon has stored.
+    /// Every profile the daemon has stored — but a Wi-Fi join held in memory
+    /// ([`Manager::join_for_this_boot`]): it is gone at the next boot, and
+    /// listing it among the remembered would say otherwise.
     ///
     /// # Errors
     ///
@@ -1031,6 +1177,9 @@ impl Manager {
             let Ok(cfg) = self.profile(&path)?.get_settings() else {
                 continue;
             };
+            if profile_ssid(&cfg).is_some() && self.in_memory(&path) {
+                continue;
+            }
             let Some(section) = cfg.get("connection") else {
                 continue;
             };
@@ -1144,98 +1293,225 @@ impl Manager {
         )
     }
 
-    /// Connects to a network.
+    /// Brings `ssid` up, and answers the join to follow with
+    /// [`Manager::joining`]: NetworkManager says later how it went, not here.
     ///
-    /// When `password` is `None`, it tries through the saved profile. When there is a password,
-    /// it creates the profile and activates — and the password comes back in nothing.
+    /// - With a PASSWORD, a join for this boot
+    ///   ([`Manager::join_for_this_boot`]); keeping it past the boot is
+    ///   [`Manager::remember`], once it is up.
+    /// - With none, the saved profile, whose password is the agent's — or,
+    ///   for an open network, a new profile on disk: it holds no secret.
     ///
     /// # Errors
     ///
-    /// There is no radio, the network vanished between the list and the keypress, or
-    /// NetworkManager refused (a wrong password lands here).
-    pub fn connect(&self, ssid: &str, password: Option<&str>, remember: bool) -> Result<()> {
+    /// There is no radio, the network vanished between the list and the
+    /// keypress, or NetworkManager refused the profile.
+    pub fn connect(&self, ssid: &str, password: Option<&str>) -> Result<Joining> {
+        if password.is_some() {
+            return self.join_for_this_boot(ssid, password);
+        }
+        let (device, access_point, sae) = self.radio_toward(ssid)?;
+        let g = self.manager()?;
+        if let Some(profile) = self.profile_of(ssid)? {
+            let active =
+                g.activate_connection(&profile.as_ref(), &device.as_ref(), &access_point.as_ref())?;
+            return Ok(Joining {
+                profile,
+                active,
+                made: false,
+            });
+        }
+        let connection = wifi_settings(ssid, None, sae, KEPT_BY_THE_DAEMON);
+        let (profile, active) =
+            g.add_and_activate_connection(connection, &device.as_ref(), &access_point.as_ref())?;
+        Ok(Joining {
+            profile,
+            active,
+            made: true,
+        })
+    }
+
+    /// Joins `ssid` for THIS BOOT, with the password NetworkManager keeps
+    /// itself ([`KEPT_BY_THE_DAEMON`]) — the only join a password just typed
+    /// can make: no agent has it yet ([`KEPT_BY_THE_AGENT`] says why). Follow
+    /// it with [`Manager::joining`]; drop one that did not come up with
+    /// [`Manager::abandon`].
+    ///
+    /// # Why nothing stays
+    ///
+    /// The profile is `persist = memory`: NetworkManager keeps it, and its
+    /// password, under `/run/NetworkManager` — RAM, root's alone —, and the
+    /// machine stopping takes both. Not `volatile`, which deletes the profile
+    /// when the link goes down: a link that drops has to come back on its
+    /// own. The joins of this SSID made before it are deleted first, so a
+    /// password typed again does not leave a second profile beside the first.
+    ///
+    /// # Errors
+    ///
+    /// There is no radio, the network is out of range, or NetworkManager
+    /// refused the profile.
+    pub fn join_for_this_boot(&self, ssid: &str, password: Option<&str>) -> Result<Joining> {
+        let (device, access_point, sae) = self.radio_toward(ssid)?;
+        for earlier in self.held_in_memory(ssid)? {
+            let _ = self.profile(&earlier)?.delete();
+        }
+        let connection = wifi_settings(ssid, password, sae, KEPT_BY_THE_DAEMON);
+        let (profile, active, _) = self.manager()?.add_and_activate_connection2(
+            connection,
+            &device.as_ref(),
+            &access_point.as_ref(),
+            HashMap::from([("persist", Value::from("memory"))]),
+        )?;
+        Ok(Joining {
+            profile,
+            active,
+            made: true,
+        })
+    }
+
+    /// Where a join stands.
+    #[must_use]
+    pub fn joining(&self, join: &Joining) -> Joined {
+        let state = nm::ActiveProxyBlocking::builder(&self.connection)
+            .path(join.active.clone())
+            .ok()
+            .and_then(|b| b.build().ok())
+            .and_then(|a| a.state().ok());
+        joined_of(state)
+    }
+
+    /// Deletes the profile a join made — one that did not come up, so the
+    /// daemon does not try its password again on its own. A saved profile
+    /// brought up is the person's, and stays.
+    ///
+    /// # Errors
+    ///
+    /// The bus did not answer, or the profile is gone already.
+    pub fn abandon(&self, join: &Joining) -> Result<()> {
+        if join.made {
+            self.profile(&join.profile)?.delete()?;
+        }
+        Ok(())
+    }
+
+    /// Keeps a network joined with a typed password past this boot: the
+    /// password sealed in the TPM, and the join's profile written to disk
+    /// with the password left to the agent ([`left_to_the_agent`]). The link
+    /// that is up stays up.
+    ///
+    /// # Only what came up
+    ///
+    /// A join that is not up is refused ([`refusal::Refusal::Failed`]):
+    /// sealing a password the network has not accepted stores rubbish that,
+    /// at the next boot, the agent hands over and the radio refuses.
+    ///
+    /// # Sealed first
+    ///
+    /// The agent answers only with a blob that exists: a profile on disk that
+    /// asked it before the blob was written would be a link that drops and
+    /// does not come back. A profile the bus refuses to write takes back a
+    /// blob that was not there before, so no secret is left that nothing asks
+    /// for.
+    ///
+    /// # Errors
+    ///
+    /// The join is not up, the TPM refused, or NetworkManager refused the
+    /// profile.
+    pub fn remember(&self, join: &Joining, ssid: &str, password: &str, seal: Seal) -> Result<()> {
+        if !join.made || self.joining(join) != Joined::Up {
+            return Err(refusal::Named(refusal::Refusal::Failed).into());
+        }
+        let had = match seal {
+            Seal::ThroughTheAgent => self.has_stored_password(ssid),
+            Seal::Here => secret::ha(ssid),
+        };
+        match seal {
+            Seal::ThroughTheAgent => self.vault()?.store(ssid, password)?,
+            Seal::Here => secret::seal(ssid, password)?,
+        }
+        let profile = self.profile(&join.profile)?;
+        let written = profile
+            .get_settings()
+            .map_err(anyhow::Error::from)
+            .and_then(|cfg| {
+                left_to_the_agent(cfg)
+                    .ok_or_else(|| refusal::Named(refusal::Refusal::Invalid).into())
+            })
+            .and_then(|cfg| {
+                profile
+                    .update2(
+                        cfg,
+                        nm::UPDATE_TO_DISK | nm::UPDATE_NO_REAPPLY,
+                        HashMap::new(),
+                    )
+                    .map_err(anyhow::Error::from)
+            });
+        if let Err(e) = written {
+            if !had {
+                match seal {
+                    Seal::ThroughTheAgent => {
+                        if let Ok(v) = self.vault() {
+                            let _ = v.forget(ssid);
+                        }
+                    }
+                    Seal::Here => {
+                        let _ = secret::erase(ssid);
+                    }
+                }
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Whether a profile is held in memory, with no file on disk.
+    fn in_memory(&self, path: &OwnedObjectPath) -> bool {
+        self.profile(path)
+            .and_then(|p| Ok(p.flags()?))
+            .is_ok_and(|f| f & nm::PROFILE_UNSAVED != 0)
+    }
+
+    /// The Wi-Fi profiles of `ssid` held in memory — joins of this boot.
+    fn held_in_memory(&self, ssid: &str) -> Result<Vec<OwnedObjectPath>> {
+        let profiles = nm::ProfilesProxyBlocking::new(&self.connection)?;
+        let mut out = Vec::new();
+        for path in profiles.list_connections()? {
+            let Ok(cfg) = self.profile(&path)?.get_settings() else {
+                continue;
+            };
+            if profile_ssid(&cfg).as_deref() == Some(ssid) && self.in_memory(&path) {
+                out.push(path);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The radio that sees `ssid`, the access point of `ssid` on it, and
+    /// whether that access point asks for `sae`.
+    ///
+    /// THE RADIO THAT SEES IT, and not the first one listed: a machine with
+    /// a second radio (a USB one, or one serving as an access point) lists
+    /// it first as often as not, and that radio is out of range of
+    /// everything.
+    fn radio_toward(&self, ssid: &str) -> Result<(OwnedObjectPath, OwnedObjectPath, bool)> {
         // Which key management this SSID needs, from the scan we already have.
         // Unknown network -> `wpa-psk`, which is what worked before this existed.
-        let key_management_sae = self
+        let sae = self
             .networks()
             .unwrap_or_default()
             .iter()
             .find(|n| n.ssid == ssid)
             .is_some_and(|n| n.wpa3_only);
-        let g = self.manager()?;
-        let device = self
-            .devices_of_kind(nm::WIFI_KIND)?
-            .into_iter()
-            .next()
-            .ok_or(refusal::Named(refusal::Refusal::NoRadio))?;
-
-        let access_point = self
-            .access_point_at(&device, ssid)?
-            .ok_or(refusal::Named(refusal::Refusal::OutOfRange))?;
-
-        if password.is_none()
-            && let Some(profile) = self.profile_of(ssid)?
-        {
-            g.activate_connection(&profile.as_ref(), &device.as_ref(), &access_point.as_ref())?;
-            return Ok(());
+        let radios = self.devices_of_kind(nm::WIFI_KIND)?;
+        if radios.is_empty() {
+            return Err(refusal::Named(refusal::Refusal::NoRadio).into());
         }
-
-        let mut connection: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
-        connection.insert(
-            "connection",
-            HashMap::from([
-                ("id", Value::from(ssid)),
-                ("type", Value::from("802-11-wireless")),
-            ]),
-        );
-        connection.insert(
-            "802-11-wireless",
-            HashMap::from([("ssid", Value::from(ssid.as_bytes()))]),
-        );
-        if let Some(s) = password {
-            connection.insert(
-                "802-11-wireless-security",
-                HashMap::from([
-                    // WPA3-ONLY ASKS FOR `sae`; everything else takes `wpa-psk`.
-                    //
-                    // `wpa-psk` covers WPA2 and WPA3 in TRANSITION mode, which is
-                    // what exists almost everywhere — and that is exactly why a
-                    // WPA3-only access point went unnoticed: it is the rare case,
-                    // and the failure comes back as NetworkManager's own message,
-                    // which says nothing about the mode.
-                    //
-                    // The choice reads the access point's `RsnFlags` — see
-                    // `wpa3_only`, whose rule is the ABSENCE of `PSK` and not the
-                    // presence of `SAE`.
-                    (
-                        "key-mgmt",
-                        Value::from(if key_management_sae { "sae" } else { "wpa-psk" }),
-                    ),
-                    // THE PASSWORD GOES IN THE CALL ANYWAY — and this is what makes
-                    // the whole design fit.
-                    //
-                    // The flags below govern only what is PERSISTED. NetworkManager
-                    // uses what it receives here to connect
-                    // now, and at the next boot it asks the agent. Without that,
-                    // the agent would have to receive the password from the footer through some
-                    // channel — one more surface for it to pass through.
-                    ("psk", Value::from(s)),
-                    ("psk-flags", Value::from(flags(remember))),
-                ]),
-            );
+        for device in radios {
+            if let Some(access_point) = self.access_point_at(&device, ssid)? {
+                return Ok((device, access_point, sae));
+            }
         }
-
-        g.add_and_activate_connection(connection, &device.as_ref(), &access_point.as_ref())?;
-
-        // SEAL AFTER CONNECTING, and not before.
-        //
-        // Storing a password that does not work is storing rubbish that, at the next
-        // boot, the agent hands over and the radio refuses. Here the connection has already
-        // been accepted by NetworkManager.
-        if remember && let Some(s) = password {
-            self.vault()?.store(ssid, s)?;
-        }
-        Ok(())
+        Err(refusal::Named(refusal::Refusal::OutOfRange).into())
     }
 
     fn access_point_at(
@@ -1259,17 +1535,27 @@ impl Manager {
         Ok(None)
     }
 
+    /// The saved profile of `ssid` — on disk (see [`Manager::saved_ones`]).
     fn profile_of(&self, ssid: &str) -> Result<Option<OwnedObjectPath>> {
+        Ok(self
+            .profiles_of(ssid)?
+            .into_iter()
+            .find(|p| !self.in_memory(p)))
+    }
+
+    /// Every profile of `ssid`, on disk and in memory.
+    fn profiles_of(&self, ssid: &str) -> Result<Vec<OwnedObjectPath>> {
         let profiles = nm::ProfilesProxyBlocking::new(&self.connection)?;
+        let mut out = Vec::new();
         for path in profiles.list_connections()? {
             let Ok(cfg) = self.profile(&path)?.get_settings() else {
                 continue;
             };
             if profile_ssid(&cfg).as_deref() == Some(ssid) {
-                return Ok(Some(path));
+                out.push(path);
             }
         }
-        Ok(None)
+        Ok(out)
     }
 
     /// Turns the radio into an access point the other things in the room can
@@ -1285,8 +1571,9 @@ impl Manager {
     ///
     /// # The password IS stored, and that is not the Wi-Fi rule
     ///
-    /// Joining somebody's network keeps nothing on disk (`psk-flags=2`, the
-    /// TPM agent). This is the other direction: NetworkManager has to hand
+    /// Joining somebody's network keeps no password on disk (in memory until
+    /// the machine stops, or sealed for the TPM's agent). This is the other
+    /// direction: NetworkManager has to hand
     /// the key to `wpa_supplicant` on every activation, so it lives in the
     /// profile — root-owned, `0600`, in `/etc/NetworkManager`. A hotspot
     /// whose password nobody could give out is not one.
@@ -1547,16 +1834,20 @@ impl Manager {
         self.vault().is_ok_and(|c| c.has(ssid).unwrap_or(false))
     }
 
-    /// Deletes a network's saved profile.
+    /// Deletes a network's profiles — the saved ones and a join held in
+    /// memory: forgetting a network leaves none of it behind.
     ///
     /// # Errors
     ///
     /// There is no profile with that name, or polkit refused.
     pub fn forget(&self, ssid: &str) -> Result<()> {
-        let path = self
-            .profile_of(ssid)?
-            .ok_or(refusal::Named(refusal::Refusal::NoProfile))?;
-        self.profile(&path)?.delete()?;
+        let paths = self.profiles_of(ssid)?;
+        if paths.is_empty() {
+            return Err(refusal::Named(refusal::Refusal::NoProfile).into());
+        }
+        for path in paths {
+            self.profile(&path)?.delete()?;
+        }
         // THE BLOB GOES WITH IT. The agent deletes it too on `DeleteSecrets`, and having
         // both paths is on purpose: the agent's covers whoever deleted the
         // profile from outside (`nmcli`), and this one covers the case of the agent being
@@ -2130,20 +2421,79 @@ mod tests {
         assert_eq!(names, ["current", "a saved one", "a neighbour"]);
     }
 
+    /// FAILS IF: the profile a remembered network writes to disk keeps the
+    /// password (`psk=` in a file a backup of `/persist` carries), keeps the
+    /// flag that leaves it to the daemon, or loses a setting of its own — or
+    /// an open network is given a key to remember.
     #[test]
-    fn the_flags_never_give_back_zero() {
-        // ZERO is the world's default, and it is the one that puts `psk=<password>` inside the
-        // profile file — exactly what this work exists to
-        // eliminate. Neither of the two paths may fall into it.
-        assert_eq!(flags(true), 1, "remembering has to be AGENT_OWNED");
-        assert_eq!(flags(false), 2, "not remembering has to be NOT_SAVED");
-        for remember in [true, false] {
-            assert_ne!(
-                flags(remember),
-                0,
-                "it fell back to the default that writes to disk"
-            );
-        }
+    fn a_remembered_profile_leaves_the_password_to_the_agent() {
+        let value = |v: &str| OwnedValue::try_from(Value::from(v)).unwrap();
+        let cfg: Configuration = HashMap::from([
+            (
+                "connection".to_owned(),
+                HashMap::from([("id".to_owned(), value("home"))]),
+            ),
+            (
+                "802-11-wireless-security".to_owned(),
+                HashMap::from([
+                    ("key-mgmt".to_owned(), value("wpa-psk")),
+                    ("psk".to_owned(), value("Zq7-radio")),
+                    ("psk-flags".to_owned(), OwnedValue::from(KEPT_BY_THE_DAEMON)),
+                ]),
+            ),
+        ]);
+        let kept = left_to_the_agent(cfg).expect("a secured profile");
+        let security = &kept["802-11-wireless-security"];
+        assert!(!security.contains_key("psk"), "the password went to disk");
+        assert_eq!(security["psk-flags"], OwnedValue::from(KEPT_BY_THE_AGENT));
+        assert_eq!(security["key-mgmt"], value("wpa-psk"));
+        assert_eq!(kept["connection"]["id"], value("home"));
+        let open: Configuration = HashMap::from([(
+            "connection".to_owned(),
+            HashMap::from([("id".to_owned(), value("café"))]),
+        )]);
+        assert!(
+            left_to_the_agent(open).is_none(),
+            "an open network has no key"
+        );
+        // AND THE TWO FLAGS ARE NetworkManager's: 0 kept by the daemon (in
+        // memory), 1 the agent's.
+        assert_eq!((KEPT_BY_THE_DAEMON, KEPT_BY_THE_AGENT), (0, 1));
+    }
+
+    #[test]
+    fn a_join_is_up_only_when_activated() {
+        assert_eq!(joined_of(Some(0)), Joined::Coming);
+        assert_eq!(joined_of(Some(1)), Joined::Coming);
+        assert_eq!(joined_of(Some(2)), Joined::Up);
+        assert_eq!(joined_of(Some(3)), Joined::Failed);
+        assert_eq!(joined_of(Some(4)), Joined::Failed);
+        assert_eq!(joined_of(None), Joined::Failed);
+    }
+
+    /// FAILS IF: the profile a join hands NetworkManager loses the password,
+    /// its flags or the key management the access point asks for.
+    #[test]
+    fn the_settings_carry_the_key_and_its_flags() {
+        let s = wifi_settings("home", Some("Zq7-radio"), false, KEPT_BY_THE_DAEMON);
+        let security = &s["802-11-wireless-security"];
+        assert_eq!(security["psk"], Value::from("Zq7-radio"));
+        assert_eq!(security["psk-flags"], Value::from(0u32));
+        assert_eq!(security["key-mgmt"], Value::from("wpa-psk"));
+        let sae = wifi_settings("home", Some("Zq7-radio"), true, KEPT_BY_THE_AGENT);
+        assert_eq!(
+            sae["802-11-wireless-security"]["key-mgmt"],
+            Value::from("sae")
+        );
+        assert_eq!(
+            sae["802-11-wireless-security"]["psk-flags"],
+            Value::from(1u32)
+        );
+        assert!(
+            !wifi_settings("open", None, false, KEPT_BY_THE_DAEMON)
+                .contains_key("802-11-wireless-security"),
+            "an open network carries no key"
+        );
     }
 
     #[test]
@@ -2172,5 +2522,131 @@ mod tests {
         assert_eq!(Band::Ghz24.gigahertz(), Some(2.4));
         assert_eq!(Band::Ghz5.gigahertz(), Some(5.0));
         assert_eq!(Band::Other.gigahertz(), None);
+    }
+}
+
+/// What only a radio and an access point prove — run by `wifi-joins-vm`
+/// (`tests/wifi-joins-vm.nix`), in a VM whose second radio sees the network
+/// named in `RONOCTUA_TEST_WIFI_SSID`, its password in
+/// `RONOCTUA_TEST_WIFI_PASSWORD`. Ignored anywhere else: a machine's own
+/// radio is not a test's to join.
+#[cfg(test)]
+mod on_the_air {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// The daemon, the network — seen by the radio before a join names it —
+    /// and its password.
+    fn air() -> (Manager, String, String) {
+        let variable = |name: &str| {
+            std::env::var(name).unwrap_or_else(|_| panic!("{name} names the test's network"))
+        };
+        let manager = Manager::fresh().expect("no system bus");
+        let ssid = variable("RONOCTUA_TEST_WIFI_SSID");
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !manager
+            .networks()
+            .unwrap_or_default()
+            .iter()
+            .any(|n| n.ssid == ssid)
+        {
+            assert!(Instant::now() < deadline, "the radio never saw `{ssid}`");
+            let _ = manager.scan();
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        (manager, ssid, variable("RONOCTUA_TEST_WIFI_PASSWORD"))
+    }
+
+    /// NetworkManager's verdict, waited for as the doors and the console wait.
+    fn verdict(manager: &Manager, join: &Joining) -> Joined {
+        let deadline = Instant::now() + Duration::from_secs(JOIN_MOST_S);
+        loop {
+            let joined = manager.joining(join);
+            if joined != Joined::Coming || Instant::now() >= deadline {
+                return joined;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+
+    /// Whether `ssid` is among the remembered networks.
+    fn remembered(manager: &Manager, ssid: &str) -> bool {
+        manager
+            .saved_profiles()
+            .unwrap_or_default()
+            .iter()
+            .any(|s| s.ssid.as_deref() == Some(ssid))
+    }
+
+    /// FAILS IF: the footer's join — as the distro's user, with the TPM's
+    /// agent the only one registered — is not taken; is listed as
+    /// remembered before "yes"; or "yes" seals nothing, drops the link, or
+    /// leaves the network out of the remembered.
+    #[test]
+    #[ignore = "needs a radio and an access point: wifi-joins-vm"]
+    fn the_footer_joins_then_remembers() {
+        let (m, ssid, password) = air();
+        let join = m.connect(&ssid, Some(&password)).expect("the join");
+        assert_eq!(verdict(&m, &join), Joined::Up, "the network refused it");
+        assert!(!remembered(&m, &ssid), "a join for this boot is remembered");
+        m.remember(&join, &ssid, &password, Seal::ThroughTheAgent)
+            .expect("remembering it");
+        assert!(m.has_stored_password(&ssid), "the agent holds no blob");
+        assert_eq!(m.joining(&join), Joined::Up, "remembering dropped the link");
+        assert!(
+            remembered(&m, &ssid),
+            "the remembered network is not listed"
+        );
+    }
+
+    /// FAILS IF: a join nobody asks to keep does not come up, or is listed
+    /// as remembered, or has its password sealed.
+    #[test]
+    #[ignore = "needs a radio and an access point: wifi-joins-vm"]
+    fn a_join_is_kept_for_this_boot_only() {
+        let (m, ssid, password) = air();
+        let join = m.connect(&ssid, Some(&password)).expect("the join");
+        assert_eq!(verdict(&m, &join), Joined::Up, "the network refused it");
+        assert!(!remembered(&m, &ssid), "a join for this boot is remembered");
+        assert!(!m.has_stored_password(&ssid), "a blob was sealed for it");
+    }
+
+    /// FAILS IF: a wrong password is not refused, can be remembered, or
+    /// leaves its profile behind for the daemon to try again.
+    #[test]
+    #[ignore = "needs a radio and an access point: wifi-joins-vm"]
+    fn a_wrong_password_is_refused_and_kept_nowhere() {
+        let (m, ssid, password) = air();
+        let wrong = format!("{password}-not");
+        let join = m.connect(&ssid, Some(&wrong)).expect("the join");
+        assert_eq!(verdict(&m, &join), Joined::Failed, "a wrong key was taken");
+        assert!(
+            m.remember(&join, &ssid, &wrong, Seal::ThroughTheAgent)
+                .is_err(),
+            "a refused password was remembered"
+        );
+        m.abandon(&join).expect("abandoning it");
+        assert!(
+            m.held_in_memory(&ssid).expect("the profiles").is_empty(),
+            "the refused join's profile stayed"
+        );
+    }
+
+    /// FAILS IF: the boot's console — root, sealing itself, since the
+    /// agent's bus policy answers only the distro's user — cannot join and
+    /// remember.
+    #[test]
+    #[ignore = "needs a radio, an access point and root: wifi-joins-vm"]
+    fn the_console_joins_then_remembers_as_root() {
+        let (m, ssid, password) = air();
+        let join = m.connect(&ssid, Some(&password)).expect("the join");
+        assert_eq!(verdict(&m, &join), Joined::Up, "the network refused it");
+        m.remember(&join, &ssid, &password, Seal::Here)
+            .expect("remembering it");
+        assert!(secret::ha(&ssid), "no blob was sealed");
+        assert!(
+            remembered(&m, &ssid),
+            "the remembered network is not listed"
+        );
     }
 }

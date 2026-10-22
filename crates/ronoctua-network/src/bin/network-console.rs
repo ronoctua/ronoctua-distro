@@ -11,8 +11,8 @@
 //! whoever is watching a login screen wondering why it is asking about Wi-Fi.
 //!
 //! So this is not an agent. It is a service that behaves like a **person**: it
-//! notices the network did not come up, asks on the console, and hands the
-//! password to NM through the same call the footer uses.
+//! notices the network did not come up, asks on the console, and joins and
+//! remembers through the same calls the footer uses.
 //!
 //! # When it stays quiet, and why that is most of the time
 //!
@@ -35,7 +35,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use ronoctua_network::Manager;
+use ronoctua_network::{JOIN_MOST_S, Joined, Manager, Seal};
 
 /// How long to give NetworkManager before deciding the network is not coming.
 ///
@@ -89,13 +89,30 @@ fn main() -> Result<()> {
         return Ok(());
     };
 
-    // `remember = true`: whoever typed a password on a console at boot does not
-    // want to type it again at the next one. It goes down the same path the
-    // footer uses, so it is sealed in the TPM exactly like any other.
+    // REMEMBERED: whoever typed a password on a console at boot does not want
+    // to type it again at the next one. The footer's path — joined for this
+    // boot, followed until NetworkManager says, and sealed only once up — but
+    // sealed HERE: this is root, with the TPM and the blobs' folder, and the
+    // agent's bus policy lets only the distro's user ask it.
+    let join = manager
+        .connect(&ssid, Some(&password))
+        .with_context(|| format!("join `{ssid}`"))?;
+    let deadline = Instant::now() + Duration::from_secs(JOIN_MOST_S);
+    let joined = loop {
+        let joined = manager.joining(&join);
+        if joined != Joined::Coming || Instant::now() >= deadline {
+            break joined;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    };
+    if joined != Joined::Up {
+        let _ = manager.abandon(&join);
+        anyhow::bail!("`{ssid}` did not accept the password typed on the console");
+    }
     manager
-        .connect(&ssid, Some(&password), true)
-        .with_context(|| format!("connect to `{ssid}`"))?;
-    tracing::info!(%ssid, "connected from the console");
+        .remember(&join, &ssid, &password, Seal::Here)
+        .with_context(|| format!("remember `{ssid}`"))?;
+    tracing::info!(%ssid, "connected from the console, and remembered");
     Ok(())
 }
 
@@ -154,7 +171,9 @@ fn target(manager: &Manager) -> Option<String> {
         .networks()
         .ok()?
         .into_iter()
-        .filter(|n| manager.has_stored_password(&n.ssid))
+        // THE BLOB'S FOLDER, read here: this is root, and the agent's bus
+        // policy answers only the distro's user.
+        .filter(|n| ronoctua_network::secret::ha(&n.ssid))
         .collect();
     known.sort_by_key(|n| std::cmp::Reverse(n.signal));
     known.into_iter().next().map(|n| n.ssid)
@@ -176,7 +195,7 @@ fn ask(ssid: &str) -> Result<Option<String>> {
     let out = Command::new(tool)
         .arg(format!("--timeout={}", ASK_TIMEOUT.as_secs()))
         // No echo, and no keyring: the password's home is the TPM blob that
-        // `connect` seals, and a copy in the kernel keyring would be a second
+        // `remember` seals, and a copy in the kernel keyring would be a second
         // place holding it with a different lifetime.
         .arg("--echo=no")
         .arg("--no-tty")

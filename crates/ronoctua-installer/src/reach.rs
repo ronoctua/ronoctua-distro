@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 use ronoctua_belongings::Why;
 use ronoctua_belongings::places::{DEPLOY_KEY, PASSPHRASE_FILE, TOKEN_FILE};
 use ronoctua_belongings::prefs::{Auth, Belongings};
+use ronoctua_network::{JOIN_MOST_S, Joined, Joining};
 
 use crate::access::{Probed, auth_of, probed_of, verified_of};
 use crate::gate::{Gate, SETTLE_MOST_S, gate, unsettled};
@@ -209,39 +210,61 @@ impl Reach {
     }
 
     /// Joins `ssid` (none: a cable) and reads the way out — waiting while a
-    /// link comes up, at most [`SETTLE_MOST_S`], and while a joined link is
-    /// not measured yet, at most [`MEASURE_MOST_S`] more.
+    /// link comes up, at most [`SETTLE_MOST_S`] (a network joined, until
+    /// NetworkManager's verdict, at most [`JOIN_MOST_S`]), and while a
+    /// joined link is not measured yet, at most [`MEASURE_MOST_S`] more.
     fn network(&self, ssid: &str, password: &str) -> Gate {
         let Ok(manager) = ronoctua_network::Manager::fresh() else {
             return Gate::NoDaemon;
         };
-        if !ssid.is_empty() {
+        let join = if ssid.is_empty() {
+            None
+        } else {
             let password = (!password.is_empty()).then_some(password);
-            // `remember: false`: the ISO forgets it with the RAM, and the
-            // installed machine gets its own profile and its own sealing.
-            if manager.connect(ssid, password, false).is_err() {
-                return Gate::Unconnected;
+            // FOR THIS BOOT, the password kept by NetworkManager in RAM: the
+            // ISO runs no secret agent, and a password left to one is never
+            // used (`join_for_this_boot`). The installed machine gets its
+            // own profile and its own sealing.
+            match manager.join_for_this_boot(ssid, password) {
+                Ok(join) => Some(join),
+                Err(_) => return Gate::Unconnected,
             }
-        }
+        };
+        let refused = |join: &Joining| {
+            // Its profile goes with it, so the daemon does not try a refused
+            // key again on its own.
+            let _ = manager.abandon(join);
+            Gate::Unconnected
+        };
+        let most = Duration::from_secs(if join.is_some() {
+            JOIN_MOST_S
+        } else {
+            SETTLE_MOST_S
+        });
         let start = Instant::now();
         let mut linked_at: Option<Instant> = None;
         loop {
+            // THE JOIN'S OWN VERDICT, and not "a link is up": a cable plugged
+            // in would let a refused password through. NetworkManager ending
+            // the activation is the answer, the moment it does — there is
+            // nothing left to wait for.
+            let joined = join.as_ref().map(|j| manager.joining(j));
+            if let Some(j) = join.as_ref().filter(|_| joined == Some(Joined::Failed)) {
+                return refused(j);
+            }
             let look = manager.look();
-            if look.linked() {
+            let up = joined.map_or_else(|| look.linked(), |j| j == Joined::Up);
+            if up {
                 linked_at.get_or_insert_with(Instant::now);
             }
-            // A JOINED NETWORK is waited for even before its device says
-            // "connecting": NetworkManager takes a moment to begin.
-            let coming = unsettled(&look) || (!ssid.is_empty() && !look.linked());
-            let too_long = start.elapsed() >= Duration::from_secs(SETTLE_MOST_S)
+            let coming = unsettled(&look) || joined == Some(Joined::Coming);
+            let too_long = start.elapsed() >= most
                 || linked_at.is_some_and(|t| t.elapsed() >= Duration::from_secs(MEASURE_MOST_S));
             if !coming || too_long {
-                let said = gate(&look);
-                return if !ssid.is_empty() && said == Gate::NoLink {
-                    Gate::Unconnected
-                } else {
-                    said
-                };
+                if let Some(j) = join.as_ref().filter(|_| !up) {
+                    return refused(j);
+                }
+                return gate(&look);
             }
             std::thread::sleep(Duration::from_secs(1));
         }

@@ -1462,6 +1462,45 @@ pub fn luks_partition(disk: &str) -> String {
     }
 }
 
+/// The installed machine's Wi-Fi, written on THIS machine — run by
+/// `wifi-joins-vm` (`tests/wifi-joins-vm.nix`), as root, for the network in
+/// `RONOCTUA_TEST_WIFI_SSID` with the password in
+/// `RONOCTUA_TEST_WIFI_PASSWORD`: the profile [`wifi_profile`] writes and the
+/// blob the seal step makes, where the installed machine reads them — and
+/// NetworkManager then joins as at its first boot.
+#[cfg(test)]
+mod on_the_air {
+    use super::*;
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    #[test]
+    #[ignore = "writes this machine's NetworkManager profile and seals in its TPM: wifi-joins-vm"]
+    fn the_installed_wifi_is_written_here() {
+        let variable = |name: &str| {
+            std::env::var(name).unwrap_or_else(|_| panic!("{name} names the test's network"))
+        };
+        let r = Answers {
+            wifi_ssid: variable("RONOCTUA_TEST_WIFI_SSID"),
+            wifi_password: variable("RONOCTUA_TEST_WIFI_PASSWORD"),
+            ..Answers::default()
+        };
+        // The target's path without `/mnt/persist`: on the installed machine
+        // `persist.nix` puts it at `/etc`, where this one reads it.
+        let path = WIFI_PROFILE_PATH
+            .strip_prefix("/mnt/persist")
+            .expect("the profile's place on the target");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .and_then(|mut f| f.write_all(wifi_profile(&r).as_bytes()))
+            .expect("writing the profile");
+        ronoctua_network::secret::seal(&r.wifi_ssid, &r.wifi_password).expect("sealing");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -481,7 +481,8 @@ cada um é pequeno:
 
 - **Hotspot na TELA do dono.** Está implementado e provado por teste unitário (a linha oferece o
   outro estado, diz o que custa e recusa com o rádio desligado), mas nunca foi acionado: ligá-lo
-  derruba o Wi-Fi da máquina de quem está lendo isto. Falta uma VM com `mac80211_hwsim`.
+  derruba o Wi-Fi da máquina de quem está lendo isto. O ar simulado já existe (`tests/wifi-air.nix`,
+  com `mac80211_hwsim`); falta um check do hotspot sobre ele.
 - **Um emoji num rótulo come uma célula do ar.** `layout::width` conta CLUSTERES e o avanço de um
   emoji é 1,245 em contra os 0,600 da célula — quase duas. A coluna do valor é calculada com essa
   régua, então um SSID com um emoji desenha uma célula mais larga do que foi medido. As duas células

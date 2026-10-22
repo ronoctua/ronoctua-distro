@@ -25587,6 +25587,26 @@ let
     inherit (rust) networkConsole networkAgent;
   };
 
+  # AN INSTALLED MACHINE JOINS WI-FI, over a simulated air: the first boot
+  # with the installer's profile, the footer's join and "keep it", a wrong
+  # password, the boot's console, and a reboot that keeps only what was kept
+  # — the library's own calls, `#[ignore]`d tests run from their harness.
+  wifiJoinsVm = import ./wifi-joins-vm.nix {
+    inherit pkgs lib;
+    inherit (rust) networkConsole networkAgent;
+    networkTests = rust.test.testBins.ronoctua-network;
+    installerTests = rust.test.testBins.ronoctua-installer;
+  };
+
+  # THE INSTALLER JOINS WI-FI — the ISO's TUI on the console, with no secret
+  # agent: a wrong password refused, the right one joined in memory on a
+  # WPA2 network and a WPA3 one in transition, and a network joined before
+  # the installer said on its row.
+  installerJoinsWifiVm = import ./installer-wifi-vm.nix {
+    inherit pkgs lib;
+    installer = rust.installer;
+  };
+
   network-tuned = mkCheck "network-tuned" [ ] ''
     expected() {
       if [ "$2" != "$3" ]; then
@@ -53931,6 +53951,8 @@ let
       syncthing-tuned
       ;
     wifi-tpm-vm = wifiTpmVm;
+    wifi-joins-vm = wifiJoinsVm;
+    installer-joins-wifi-vm = installerJoinsWifiVm;
 
     persist-home-vm = persistHomeVm;
 

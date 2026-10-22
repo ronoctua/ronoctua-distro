@@ -29,6 +29,7 @@ network-saved = saved
 network-password = Password for { $network }
 network-password-help = Kept by NetworkManager, outside the repository.
 # ECHOES — what the minibuffer says after the action.
+echo-network-joining = Connecting to { $network }…
 echo-network-connected = Connected to { $network }
 echo-network-failed = Could not connect to { $network }: { $reason }
 echo-network-disconnected = Disconnected

@@ -7771,17 +7771,37 @@ O NetworkManager tem o mecanismo para isso e quase ninguém o usa fora do GNOME 
 mais um **agente de segredo** no D-Bus. O keyfile deixa de conter a senha; quem a entrega, quando o NM
 pede, é o `ronoctua-network-agent`, abrindo um blob selado no TPM2.
 
-**A simplificação que fez isto caber:** o agente não recebe a senha de ninguém. O
-`AddAndActivateConnection` aceita a senha na própria chamada, e as `psk-flags` decidem apenas o que é
-**persistido**. Então a porta em que a senha foi digitada — o rodapé ou a janela — a entrega ao NM na
-hora de conectar, e o daemon só entra no boot seguinte — quando não há mais ninguém digitando. Sem isso, a senha teria de atravessar
-mais um canal, e cada canal é uma superfície a mais.
+**A senha digitada entra em memória, e só vai para o disco depois de aceita.** O NetworkManager não
+usa a senha que vem na chamada que cria o perfil quando ela está marcada como do agente ou "não salva"
+(`psk-flags` 1 ou 2): ele a pede a um agente na hora de ativar (medido no 1.56, numa VM com
+`mac80211_hwsim`: `no secrets: No agents were available for this request`, antes de o rádio tentar a
+chave). E nenhum agente tem uma senha que acabou de ser digitada: o do TPM só responde com um blob.
+Então quem digitou entra na rede **só para este boot**, com a senha guardada pelo próprio
+NetworkManager (`Manager::join_for_this_boot`: perfil `persist = memory`, `psk-flags = 0`, num arquivo
+`0600` do root em `/run/NetworkManager`, que é RAM). A porta diz "conectado" quando o NetworkManager
+diz que a rede subiu (`network_region::follow_join`, a cada leitura do daemon, nas duas portas), e não
+quando a entrada foi pedida; uma recusa é dita ali, e o perfil que ela criou é apagado.
 
-**Escolha por rede, e não política global.** Depois de conectar, uma pergunta da vista, nas duas
-portas: `sim` grava `psk-flags=1` e sela; `não` — o primeiro, onde o cursor nasce, e o `Esc` — deixa
-`psk-flags=2`, e nada persiste em lugar nenhum. A
-conexão acontece **antes** da pergunta, com `psk-flags=2` — guardar primeiro e apagar se a pessoa
-recusar deixaria a senha em disco no intervalo.
+**Escolha por rede, e não política global.** Só depois de a rede subir vem a pergunta da vista, nas
+duas portas. `sim` (`Manager::remember`) sela a senha no TPM **primeiro** e só então grava o mesmo
+perfil em disco com `psk-flags=1` e sem a senha (`Update2` com `to-disk`): o link continua de pé, e o
+agente já tem o blob quando o NetworkManager perguntar — na próxima queda e em todo boot. `não` — o
+primeiro, onde o cursor nasce, e o `Esc` — deixa o perfil em memória, e ele some quando a máquina
+desliga. Uma senha que a rede não aceitou nunca é selada: `remember` recusa uma entrada que não está
+de pé.
+
+**O console do boot sela ele mesmo.** Ele roda como root, e a política D-Bus do agente só deixa o
+usuário da distro pedir `store` (o root não é exceção nela); por isso ele lê e sela os blobs direto
+(`Seal::Here`), com o TPM e a pasta que a unidade dele já tem.
+
+**O agente só apaga o blob de um perfil que era dele** (`psk-flags=1`). O NetworkManager avisa os
+agentes de TODA exclusão de perfil, e apagar por SSID levaria o blob de uma rede lembrada junto com
+uma entrada em memória da mesma rede — a recusada, ou a digitada de novo.
+
+O `wifi-joins-vm` prova o caminho inteiro numa máquina com o agente: o perfil e o blob que o instalador
+grava entram pelo agente, o rodapé entra e lembra como o usuário, uma senha errada é recusada sem
+levar o blob da lembrada, o console entra e lembra como root, e depois de um reboot só as lembradas
+voltam, pelo agente.
 
 **Sem política de PCR, deliberadamente.** Prender o blob ao PCR 11 — que mede a UKI — faria **toda
 atualização de kernel quebrar o Wi-Fi em silêncio**, e não compraria quase nada: o blob já vive dentro
@@ -19122,6 +19142,20 @@ seguinte: o endereço (só o endereço, como antes), o **acesso** e a **senha do
   release e os caches binários do `nix`): responder é o consentimento. O endereço digitado é o
   consentimento do servidor do repositório, gravado no `consent.json` da home de rascunho e, depois, no
   da pessoa.
+- **O instalador entra no Wi-Fi só para este boot, e a senha fica com o próprio NetworkManager**
+  (`Manager::join_for_this_boot`: perfil `persist = memory`, `psk-flags = 0`). O ISO não roda agente
+  de segredos, e o NetworkManager não usa a senha que vem na chamada quando ela é do agente ou "não
+  salva" (`psk-flags` 1 ou 2): pede a um agente na ativação e, sem nenhum, falha antes de o rádio
+  tentar a chave (`no secrets: No agents were available for this request`, medido no 1.56 numa VM
+  com `mac80211_hwsim`) — toda senha parecia errada. Em memória, a senha fica num arquivo `0600` do
+  root em `/run/NetworkManager`, que é RAM, e some quando a máquina desliga; `memory` e não
+  `volatile`, para um link que cai voltar sozinho no meio do download. O portão julga a ativação da
+  rede escolhida, e não "algum link de pé" (um cabo deixava passar uma senha recusada); espera o
+  veredito do NetworkManager até `JOIN_MOST_S` (90 s, acima dos 25 s que ele dá à chave e dos 45 s
+  do DHCP — e depois de uma senha errada o `wpa_supplicant` segura a rede 10 s), e apaga o perfil que
+  falhou. O rádio é o que vê a rede, não o primeiro da lista. A rede já conectada quando o instalador
+  abre (pelo `nmtui`) aparece marcada e a pergunta abre nela; a senha continua sendo pedida, porque é
+  ela que a máquina instalada guarda, e entrar de novo com ela prova que está certa.
 - **O modo sem terminal confere as mesmas quatro coisas** antes do primeiro passo, e sai com o código 3
   quando falta rede (`installer-requires-network`) e 4 quando o repositório recusa. O ensaio (sem
   `--execute`) não pergunta nada à rede.
