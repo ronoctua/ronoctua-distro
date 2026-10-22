@@ -2,6 +2,9 @@
 #
 #   p1   1 GiB   ESP (FAT32)          -> /boot
 #   p2   rest    LUKS2
+#   p3   1 MiB   BIOS boot (GRUB's core), only on a BIOS machine — in the gap
+#                before p1 (sectors 34–2047), so the other two keep their
+#                numbers and their places on either firmware
 #        └─ btrfs
 #           @root      -> /            compress=zstd, noatime
 #           @home      -> /home
@@ -36,6 +39,9 @@
   # installation: the passphrase exists only in the person's head — the TPM
   # holds nothing for the disk (see the LUKS settings below).
   passwordFile ? "/tmp/disko-luks.key",
+  # A BIOS machine (`ronoctua.firmware`): GRUB's core needs a partition of its
+  # own, which UEFI does not.
+  bios ? false,
   ...
 }:
 
@@ -201,7 +207,24 @@
               };
             };
           };
-        };
+        }
+        # GRUB'S CORE, on a BIOS machine: the BIOS boot partition GRUB embeds
+        # itself in, in the 1 MiB gap the ESP's start leaves (sectors 34 to
+        # 2047). Created last (`priority`), so the ESP is still p1 and the
+        # LUKS volume p2, wherever this one sits.
+        // (
+          if bios then
+            {
+              bios = {
+                priority = 9002;
+                start = "34";
+                end = "2047";
+                type = "EF02";
+              };
+            }
+          else
+            { }
+        );
       };
     };
   };

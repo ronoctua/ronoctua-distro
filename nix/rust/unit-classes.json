@@ -965,6 +965,7 @@
 "release/bins/ronoctua-browser":"light",
 "release/bins/ronoctua-cache-sweep":"light",
 "release/bins/ronoctua-cachix":"light",
+"release/bins/ronoctua-console-font":"light",
 "release/bins/ronoctua-contract":"light",
 "release/bins/ronoctua-disk-relief":"light",
 "release/bins/ronoctua-empty-trash":"light",

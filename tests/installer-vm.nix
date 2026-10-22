@@ -157,6 +157,10 @@ let
     virtualisation.diskImage = "./target.qcow2";
     virtualisation.diskSize = 40 * 1024;
     virtualisation.useEFIBoot = true;
+    # A TPM 2.0, which the installation requires (`crates/ronoctua-installer/
+    # src/platform.rs`): without one it stops before the first question about
+    # the disk. Each node has its own; nothing is sealed over a cable.
+    virtualisation.tpm.enable = true;
   };
 in
 pkgs.testers.runNixOSTest {

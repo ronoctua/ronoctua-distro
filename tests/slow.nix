@@ -191,6 +191,8 @@
   # with systemd-boot, EFI variables that persist, and three reboots — one of
   # them into a system that panics (criterion 2).
   "boot-trial-falls-back"
+  # And on a BIOS machine's GRUB: the same three reboots.
+  "boot-trial-falls-back-on-bios"
   # ── anchor: L10 ──
   # ── anchor: L12 ──
   # ── anchor: L13 ──

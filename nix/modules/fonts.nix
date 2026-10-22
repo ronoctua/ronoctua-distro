@@ -119,15 +119,12 @@ in
     # Section 6.2 says TTF-nerdfonts is the default "everywhere... TTY",
     # but the console wants PSF/PSFU of 256 or 512 glyphs (any other count is
     # refused, and the console keeps the kernel's font). We generate a PSF2 from
-    # the real file, which is what preserves the intent of the rule.
+    # the real file, which is what preserves the intent of the rule; which of
+    # its two sizes a console wears, and when, is `nix/modules/console.nix`'s.
     # -----------------------------------------------------------------
-    console = {
-      earlySetup = true;
-      font = f.consoleFont;
-      # From the OPTION, for the same reason as the compositor's: the console
-      # answering in a different layout from the session is worse than both
-      # being wrong, because only one of them gets noticed.
-      keyMap = lib.mkDefault config.ronoctua.keyboard.console;
-    };
+    # From the OPTION, for the same reason as the compositor's: the console
+    # answering in a different layout from the session is worse than both
+    # being wrong, because only one of them gets noticed.
+    console.keyMap = lib.mkDefault config.ronoctua.keyboard.console;
   };
 }

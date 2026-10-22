@@ -4,8 +4,19 @@
 
 ## O que você precisa antes
 
-Um computador **x86_64 com UEFI e TPM 2.0**, um **pendrive de 8 GB ou mais** (todo o conteúdo dele
-será apagado), e saber **qual disco** você quer usar.
+Um computador **x86_64 com TPM 2.0**, um **pendrive de 8 GB ou mais** (todo o conteúdo dele será
+apagado), e saber **qual disco** você quer usar.
+
+- **O TPM é obrigatório.** É nele que a máquina guarda os segredos que abre sozinha, a senha do Wi-Fi
+  primeiro: com ele, uma cópia do disco não leva esses segredos. Sem um TPM 2.0 o instalador para
+  depois do idioma e explica como ligá-lo no setup do firmware (costuma aparecer como TPM, "Security
+  Device", PTT ou fTPM); o modo ensaio ainda mostra o resto das telas.
+- **O UEFI é o recomendado, e a BIOS também instala.** Ligado pelo UEFI, o boot é o systemd-boot, o
+  padrão da distro. Ligado pela BIOS (quase sempre o modo Legacy/CSM ligado no setup de um computador
+  que tem UEFI), o instalador explica como passar ao UEFI e só segue se você escolher "Continuar com a
+  pior alternativa": a máquina instala com o GRUB e o mesmo ensaio de boot. Essa tela vem antes da do
+  TPM, porque no modo BIOS muitos computadores escondem o TPM. Sem terminal, a BIOS só segue com
+  `RONOCTUA_INST_FIRMWARE=bios`.
 
 ## Passo zero — se a distro vai substituir a máquina onde ela foi escrita
 
@@ -364,6 +375,7 @@ na lista de programas, `Space`) são clicáveis.
 | sintoma | causa | correção |
 |---|---|---|
 | o pendrive não aparece no boot | Secure Boot ainda ligado | desative no setup da UEFI |
-| a instalação para ao guardar a senha do Wi-Fi | TPM desativado no firmware | ligue-o (costuma aparecer como "PTT", "fTPM" ou "Security Device"), ou instale por cabo |
+| o instalador para depois do idioma, falando do TPM | TPM desativado no firmware | ligue-o (costuma aparecer como "PTT", "fTPM" ou "Security Device"); a tela diz os passos |
+| o instalador diz que o computador ligou no modo BIOS | o modo Legacy/CSM está ligado | escolha UEFI no setup (a tela diz os passos), ou "Continuar com a pior alternativa" |
 | a tela da rede não segue | sem cabo, a rede escolhida não conectou ou pede uma página de login | conecte o cabo ou escolha outra rede; a tela diz qual dos três |
 | a tela da chave do repositório não segue | a chave foi adicionada sem escrita | adicione-a de novo com permissão de escrita |

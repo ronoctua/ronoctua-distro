@@ -100,13 +100,11 @@ in
     serif = [ "NoctuaIosevka Nerd Font Mono" ];
   };
 
-  # The TTY is where the installer lives. PSF2 generated from the real file —
-  # the Linux console does not consume TTF. See nix/scripts/make-console-psf.py.
-  console = {
-    earlySetup = true;
-    font = ronoctua.fonts.consoleFont;
-    keyMap = lib.mkDefault (import ../keyboard-xkb.nix).console;
-  };
+  # The TTY is where the installer lives. Its font — PSF2 generated from the
+  # real file, the Linux console does not consume TTF — is
+  # `nix/modules/console.nix`'s, as on every machine; the layout is the
+  # distro's default until the installer asks.
+  console.keyMap = lib.mkDefault (import ../keyboard-xkb.nix).console;
 
   i18n = {
     defaultLocale = "pt_BR.UTF-8";

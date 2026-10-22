@@ -17,6 +17,8 @@
 //! when it leaves ([`Console::RESET`]) — the console then shows the palette's
 //! own colours, exactly.
 
+pub mod console;
+
 use ratatui::buffer::Buffer;
 use ratatui::style::Modifier;
 use ronoctua_tokens::Color;

@@ -176,6 +176,7 @@ if [ "$last" -gt 0 ] && [ "$(readlink -f "$dir/system-$last-link")" = "$(readlin
 n=$((last + 1))
 ln -s "$real" "$dir/system-$n-link"
 ln -sfn "system-$n-link" "$p"
+if [ -x "$root/bin/grub-menu" ]; then "$root/bin/grub-menu"; fi
 "#
             ),
         );
@@ -324,6 +325,87 @@ esac
         let profile = dir.join("system");
         let _ = std::fs::remove_file(&profile);
         std::os::unix::fs::symlink(format!("system-{n}-link"), profile).unwrap();
+        self.grub_menu();
+    }
+
+    /// THE SAME WORLD ON A BIOS MACHINE'S GRUB: `grub-editenv` in place of
+    /// `bootctl`, keeping the trial's two variables where the fake `bootctl`
+    /// keeps them (`efi-default`, `efi-oneshot`), and a `grub.cfg` written
+    /// as NixOS's `install-grub.pl` writes it — the newest first, every
+    /// generation in `All configurations` — whenever the profile moves.
+    fn grub(what: &str) -> Self {
+        let mut w = Self::new(what);
+        let root = w.s.path("").display().to_string();
+        script(
+            &w.s.path("bin/grub-editenv"),
+            &format!(
+                r#"#!/bin/sh
+root='{root}'
+echo "grub-editenv $*" >> "$root/calls"
+if [ -e "$root/no-efi" ]; then echo "error: cannot open $1" >&2; exit 1; fi
+case "$2" in
+  create) : > "$1" ;;
+  set)
+    k="${{3%%=*}}"; v="${{3#*=}}"
+    case "$k" in
+      ronoctua_default) printf '%s' "$v" > "$root/efi-default" ;;
+      next_entry) printf '%s' "$v" > "$root/efi-oneshot" ;;
+      *) exit 2 ;;
+    esac ;;
+  unset)
+    case "$3" in
+      ronoctua_default) printf '' > "$root/efi-default" ;;
+      next_entry) printf '' > "$root/efi-oneshot" ;;
+      *) exit 2 ;;
+    esac ;;
+  *) exit 2 ;;
+esac
+"#
+            ),
+        );
+        script(
+            &w.s.path("bin/grub-menu"),
+            &format!(
+                r#"#!/bin/sh
+root='{root}'
+dir="$root/nix/var/nix/profiles"
+cfg="$root/boot/grub/grub.cfg"
+mkdir -p "$root/boot/grub"
+top() {{ t="$(readlink -f "$1")"; printf '%s' "${{t#"$root"}}"; }}
+{{
+  printf 'menuentry "ronoctua" --class nixos {{\n  linux /k init=%s/init\n}}\n' "$(top "$dir/system")"
+  printf 'submenu "ronoctua - All configurations" --class submenu {{\n'
+  for l in "$dir"/system-*-link; do
+    n="${{l##*/system-}}"; n="${{n%-link}}"
+    printf 'menuentry "ronoctua - Configuration %s (2026-10-22 - 26.05)" --class nixos {{\n  linux /k init=%s/init quiet\n}}\n' "$n" "$(top "$l")"
+  done
+  printf '}}\n'
+}} > "$cfg"
+"#
+            ),
+        );
+        w.m.system.bootctl = None;
+        w.m.system.grub_editenv = Some(w.s.path("bin/grub-editenv"));
+        w.grub_menu();
+        w
+    }
+
+    /// GRUB's menu written again, when the world has one.
+    fn grub_menu(&self) {
+        let menu = self.s.path("bin/grub-menu");
+        if menu.exists() {
+            assert!(
+                std::process::Command::new(&menu)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
+
+    /// GRUB's id of generation `n`'s entry: its title's path.
+    fn grub_entry(n: u64) -> String {
+        format!("ronoctua - All configurations>ronoctua - Configuration {n} (2026-10-22 - 26.05)")
     }
 
     fn builds(&self, logical: &str) {
@@ -1630,4 +1712,68 @@ fn a_sizing_that_says_no_count_is_a_refusal() {
         assert!(builds(&w).is_empty(), "{says:?}");
         assert_eq!(w.lock(), LOCK_A, "{says:?}");
     }
+}
+
+/// FAILS IF: on a BIOS machine's GRUB, an apply does not arm the trial in
+/// GRUB's environment block — the default on the last good generation's
+/// entry, the boot of once on the new one, each named by its title's path as
+/// GRUB's `default` takes it — or the trial's verdict does not reach it: the
+/// default unset when the trial booted, and when it did not, the profile back
+/// and the default unset (the menu's first entry is the last good one again).
+#[test]
+fn the_trial_runs_on_grub_as_on_systemd_boot() {
+    let w = World::grub("grub-arms");
+    let a = w.m.system.resolve(system::BOOTED).unwrap();
+    let b = w.toplevel("b", "quiet panic=10");
+    w.builds(&b);
+    let applied = w.m.apply(false).unwrap();
+    assert_eq!(applied.result, ApplyResult::Switched);
+    assert_eq!(
+        applied.trial.map(|t| t.outcome),
+        Some(TrialOutcome::Pending)
+    );
+    assert_eq!(w.read("efi-default"), World::grub_entry(1));
+    assert_eq!(w.read("efi-oneshot"), World::grub_entry(2));
+    assert!(
+        w.read("calls").contains("grub-editenv"),
+        "{}",
+        w.read("calls")
+    );
+    assert!(!w.read("calls").contains("bootctl"), "{}", w.read("calls"));
+    let good = w.state().last_good.unwrap();
+    assert_eq!(
+        (good.toplevel.as_str(), good.entry),
+        (a.as_str(), World::grub_entry(1))
+    );
+    w.reboot(&b);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Good);
+    assert_eq!(w.read("efi-default"), "", "the menu's first entry decides");
+    assert_eq!(w.state().last_good.unwrap().entry, World::grub_entry(2));
+
+    let w = World::grub("grub-fails");
+    let a = w.m.system.resolve(system::BOOTED).unwrap();
+    let b = w.toplevel("b", "quiet panic=10");
+    w.builds(&b);
+    w.m.apply(false).unwrap();
+    w.reboot(&a);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Failed);
+    assert_eq!(
+        w.profile().as_deref(),
+        Some(a.as_str()),
+        "the profile is back"
+    );
+    assert_eq!(w.read("efi-default"), "");
+}
+
+/// FAILS IF: a GRUB whose environment block cannot be written arms a trial
+/// it cannot keep, instead of saying so (`no-efi-variables`, said of GRUB).
+#[test]
+fn a_grub_that_cannot_be_written_arms_no_trial() {
+    let w = World::grub("grub-unwritten");
+    std::fs::write(w.s.path("no-efi"), "").unwrap();
+    let b = w.toplevel("b", "quiet panic=10");
+    w.builds(&b);
+    let applied = w.m.apply(false).unwrap();
+    assert_eq!(applied.trial, None);
+    assert_eq!(w.state().no_trial, Some(NoTrial::NoEfiVariables));
 }

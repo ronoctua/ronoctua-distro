@@ -933,6 +933,29 @@ let
     }
   '';
 
+  # The kernel's console as the ISO and every machine have it, for the VM
+  # tests that look at one.
+  consoleModule = import ../nix/modules/console.nix { tool = rust.consoleFont; };
+
+  # A MACHINE FOR THE INSTALLER TO READ (`RONOCTUA_INSTALLER_SYSROOT`): the
+  # firmware's EFI folder and a TPM 2.0, each when asked for. The build's
+  # sandbox has neither, and what the installer read there would be the
+  # builder's — a `host.nix` for BIOS, an installation stopped on the TPM.
+  installerMachine =
+    { uefi, tpm2 }:
+    pkgs.runCommand
+      "installer-machine-${if uefi then "uefi" else "bios"}${lib.optionalString (!tpm2) "-no-tpm"}"
+      { }
+      (
+        "mkdir -p $out/sys\n"
+        + lib.optionalString uefi "mkdir -p $out/sys/firmware/efi\n"
+        + lib.optionalString tpm2 "mkdir -p $out/sys/class/tpm/tpm0 && echo 2 > $out/sys/class/tpm/tpm0/tpm_version_major\n"
+      );
+  uefiMachine = installerMachine {
+    uefi = true;
+    tpm2 = true;
+  };
+
   # A check that runs a script and passes if it exits 0.
   mkCheck =
     name: deps: script:
@@ -3141,8 +3164,9 @@ let
   # THE FACE'S LINE BOX: the height was taken for the em, and the letters came
   # out at 60% of their cell with their descenders cut — `█` filling its cell
   # and `▀` exactly its top half is what says the box and the cell are one.
-  # Measured on the file the machines load, at both sizes; that the kernel then
-  # loads it is `installer-console-vm`'s.
+  # And the font eight pixels wide — the VGA text console's — has 256 glyphs,
+  # where VGA keeps sixteen colours. Measured on the files the machines load,
+  # at both sizes; that the kernel then loads them is `installer-console-vm`'s.
   console-font-is-what-the-kernel-takes =
     mkCheck "console-font-is-what-the-kernel-takes" [ pkgs.python3 ]
       ''
@@ -3164,6 +3188,11 @@ let
                 continue
             if count not in (256, 512):
                 wrong.append(f"{f.name}: {count} glyphs, and the console takes 256 or 512")
+            # THE VGA TEXT CONSOLE'S FONT is the one eight pixels wide, and VGA
+            # pays for a glyph's ninth bit with the bright half of the text's
+            # colours: past 256, the terminal UIs' sixteen slots are eight.
+            if width == 8 and count != 256:
+                wrong.append(f"{f.name}: eight wide and {count} glyphs: VGA text would keep eight colours")
             if charsize != height * ((width + 7) // 8):
                 wrong.append(f"{f.name}: {charsize} bytes a glyph for {width}x{height}")
             glyph = lambda i: b[header + i * charsize : header + (i + 1) * charsize]
@@ -21506,9 +21535,9 @@ let
     inherit pkgs;
     ronoctua = {
       installer = rust.installer;
-      # The ISO's own setting, and not the path written a third time.
-      consoleFont = self.nixosConfigurations.installer.config.console.font;
-      inherit themed defaultTheme;
+      # The console module the ISO and every machine import.
+      consoleModule = consoleModule;
+      inherit fonts themed defaultTheme;
     };
   };
 
@@ -21531,6 +21560,8 @@ let
       shell = rust.shell;
       # The console itself, the program the unit runs.
       rescue = rust.rescue;
+      # And the kernel's console as a machine has it (`nix/modules/console.nix`).
+      inherit consoleModule;
       # `ronoctua-machine`, extracted: the rescue's rebuild and rollback run it.
       machine = rust.machine;
     };
@@ -41559,6 +41590,8 @@ let
       export RONOCTUA_INST_BELONGINGS=git@example.org:someone/belongings.git
       export RONOCTUA_INST_BELONGINGS_ACCESS=/run/keys/deploy
       export RONOCTUA_INST_BELONGINGS_PASSPHRASE=fixture-belongings-passphrase
+      # The reference machine starts from UEFI, with a TPM.
+      export RONOCTUA_INSTALLER_SYSROOT=${uefiMachine}
       ${rust.bins.ronoctua-install}/bin/ronoctua-install > said.txt
       python3 - said.txt ${./fixtures/machine/host.nix} ${facts} <<'END'
       import json, sys
@@ -44937,10 +44970,11 @@ let
   # ONE DRIVER OF THE BOOT LOADER.
   #
   # `bootctl`, the EFI variables it writes (`LoaderEntryDefault`,
-  # `LoaderEntryOneShot`), the system profile and `switch-to-configuration`
-  # are the boot trial's, and the boot trial is ONE crate's: a second writer
-  # of `LoaderEntryDefault` would shadow the trial's default, or the rescue's
-  # rollback, and nothing would say so. No other Rust source names any of
+  # `LoaderEntryOneShot`) — on a BIOS machine's GRUB, `grub-editenv` and the
+  # environment block's two (`ronoctua_default`, `next_entry`) —, the system
+  # profile and `switch-to-configuration` are the boot trial's, and the boot
+  # trial is ONE crate's: a second writer of the default would shadow the
+  # trial's default, or the rescue's rollback, and nothing would say so. No other Rust source names any of
   # them in code (strings kept: a program's name is a string), and no Nix
   # file but the machine's own module hands a unit `bootctl`. Reading the
   # Secure Boot variables, as the security view does, is not driving the
@@ -44954,7 +44988,13 @@ let
     # it; there is no function to narrow to. Comments are off, strings kept.
     crates = pathlib.Path("${../crates}")
     home = crates / "ronoctua-machine"
-    NEEDLE = re.compile(r"\bbootctl\b|LoaderEntry|switch-to-configuration|profiles/system\b|set-oneshot")
+    NEEDLE = re.compile(
+        r"\bbootctl\b|LoaderEntry|switch-to-configuration|profiles/system\b|set-oneshot"
+        # GRUB's variable as GRUB's (a string), never a Rust name of the same
+        # spelling: an iterator's `next_entry` drives no boot loader.
+        r'|grub-editenv|\bgrubenv\b|"next_entry"|next_entry=|\bronoctua_default\b'
+
+    )
     wrong, swept = [], 0
     for f in workspace_sources(crates):
         if home in f.parents:
@@ -44970,7 +45010,8 @@ let
     # four, so it would see anybody else's.
     at_home = "".join(uncommented(without_tests(f.read_text())) for f in rust_sources(home))
     floor(len(at_home), 5000, "characters of ronoctua-machine")
-    for needle in ("bootctl", "switch-to-configuration", "profiles/system", "set-oneshot"):
+    for needle in ("bootctl", "switch-to-configuration", "profiles/system", "set-oneshot",
+                   "grub-editenv", "grubenv", '"next_entry"', "ronoctua_default"):
         if needle not in at_home:
             wrong.append(f"the sweep does not see ronoctua-machine name `{needle}`: it would see nobody's")
 
@@ -44981,8 +45022,9 @@ let
         swept_nix += 1
         if f.relative_to(nix).as_posix() == "modules/machine.nix":
             continue
-        if re.search(r"bin/bootctl\b", hashless(f.read_text())):
-            wrong.append(f"nix/{f.relative_to(nix)} hands something `bootctl`")
+        found = re.search(r"bin/(bootctl|grub-editenv)\b", hashless(f.read_text()))
+        if found:
+            wrong.append(f"nix/{f.relative_to(nix)} hands something `{found.group(1)}`")
     floor(swept_nix, 100, "Nix files swept")
 
     if wrong:
@@ -45058,6 +45100,13 @@ let
   bootTrialVm = import ./boot-trial-vm.nix {
     inherit pkgs lib;
     machineTool = rust.machine;
+  };
+  # THE SAME TRIAL ON A BIOS MACHINE: GRUB, and the trial in its environment
+  # block (`crates/ronoctua-machine/src/loader.rs`).
+  bootTrialBiosVm = import ./boot-trial-vm.nix {
+    inherit pkgs lib;
+    machineTool = rust.machine;
+    firmware = "bios";
   };
   migrationVm = import ./migration-vm.nix {
     inherit pkgs lib;
@@ -51894,6 +51943,45 @@ let
         # NO SYSTEM BUS, said out loud: the sandbox has none, and a machine
         # running this by hand must not have its own NetworkManager answer.
         export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/system_bus_socket
+        # A MACHINE THAT INSTALLS: UEFI, a TPM 2.0 (the sandbox has neither).
+        export RONOCTUA_INSTALLER_SYSROOT=${uefiMachine}
+
+        # THE MACHINE IS SAID BEFORE THE NETWORK, and these are the exits:
+        # started from BIOS, 6 until BIOS is chosen by name, and then the
+        # network's gate (3) as on UEFI; the choice refused where it chooses
+        # nothing; and no TPM 2.0, 5, BIOS chosen or not.
+        exit_of() {
+          local status=0
+          env "$@" ${rust.bins.ronoctua-install}/bin/ronoctua-install --execute < /dev/null > stop.txt 2>&1 || status=$?
+          echo "$status"
+        }
+        bios=${
+          installerMachine {
+            uefi = false;
+            tpm2 = true;
+          }
+        }
+        none=${
+          installerMachine {
+            uefi = true;
+            tpm2 = false;
+          }
+        }
+        for case in \
+          "6 RONOCTUA_INSTALLER_SYSROOT=$bios" \
+          "3 RONOCTUA_INSTALLER_SYSROOT=$bios RONOCTUA_INST_FIRMWARE=bios" \
+          "1 RONOCTUA_INST_FIRMWARE=bios" \
+          "1 RONOCTUA_INSTALLER_SYSROOT=$bios RONOCTUA_INST_FIRMWARE=uefi" \
+          "5 RONOCTUA_INSTALLER_SYSROOT=$none"; do
+          want=''${case%% *}
+          # shellcheck disable=SC2086
+          got=$(exit_of ''${case#* })
+          [ "$got" = "$want" ] || {
+            cat stop.txt
+            echo "ERROR: ''${case#* }: --execute exited $got and not $want" >&2
+            exit 1
+          }
+        done
 
         status=0
         ${rust.bins.ronoctua-install}/bin/ronoctua-install --execute < /dev/null > said.txt 2>&1 || status=$?
@@ -51916,7 +52004,7 @@ let
           echo "ERROR: the dry run did not run without the network" >&2
           exit 1
         }
-        echo "OK: with no network the installer stops before its first step, and says so"
+        echo "OK: with no network the installer stops before its first step, and says so; BIOS goes on only chosen, and no TPM stops it"
       '';
 
   # A MACHINE THAT DOES NOT HIBERNATE ASKS FOR NO HIBERNATION.
@@ -53440,6 +53528,13 @@ let
       inherit pkgs lib;
       inherit (inputs) disko;
     };
+    # The same layout on a machine that starts from BIOS: GRUB's partition,
+    # and GRUB booting the installed system (`nix/modules/boot-loader.nix`).
+    disko-vm-bios = import ./disko-vm.nix {
+      inherit pkgs lib;
+      inherit (inputs) disko;
+      firmware = "bios";
+    };
 
     # ===================================================================
     # MILESTONE 2 — NixOS base + the whole font and icon layer.
@@ -53943,6 +54038,7 @@ let
       generations-keep-the-boot-trial
       ;
     boot-trial-falls-back = bootTrialVm;
+    boot-trial-falls-back-on-bios = bootTrialBiosVm;
     migration-keeps-the-machine = migrationVm;
     # ── anchor: L06 ──
     inherit

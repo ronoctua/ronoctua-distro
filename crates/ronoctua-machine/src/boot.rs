@@ -9,6 +9,13 @@
 //! The menu lists the newest `configurationLimit` generations (the store
 //! module caps it at the count the trim keeps), so a generation is in the
 //! menu exactly when it is among the newest that many.
+//!
+//! GRUB, on a BIOS machine, lists the same generations in its `grub.cfg`
+//! (NixOS's `install-grub.pl`): the newest as the menu's first entry, and
+//! every one in a submenu, `<distro> - Configuration <n> (<date> - <version>)`,
+//! each with its `linux` line's `init=`. Its id is its title's path — the
+//! submenus' titles and its own, joined by `>`, which is how GRUB names an
+//! entry in `default` and `next_entry` ([`grub_entries`]).
 
 use std::path::Path;
 
@@ -16,13 +23,17 @@ use serde::Deserialize;
 
 use crate::System;
 
-/// One boot entry, as `bootctl list` describes it.
+/// One boot entry, as `bootctl list` (or GRUB's menu) describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    /// Its id (the file name: `nixos-generation-41.conf`).
+    /// Its id (the file name: `nixos-generation-41.conf`; GRUB's title path).
     pub id: String,
     /// The toplevel its `init=` names, if it names one.
     pub toplevel: Option<String>,
+    /// The system profile's generation it boots, when its name says one.
+    pub generation: Option<u64>,
+    /// Whether it boots one of that generation's specialisations.
+    pub specialisation: bool,
 }
 
 /// `bootctl list --json=short`'s entry; `options` is one string in the
@@ -53,6 +64,8 @@ pub fn entries(json: &str) -> Option<Vec<Entry>> {
                     _ => String::new(),
                 };
                 Entry {
+                    generation: generation_of(&l.id),
+                    specialisation: l.id.contains("-specialisation-"),
                     id: l.id,
                     toplevel: init_of(&options),
                 }
@@ -91,19 +104,84 @@ pub fn generation_of(id: &str) -> Option<u64> {
 }
 
 /// The entry that boots `toplevel`: the newest generation's, and its own
-/// rather than a specialisation's.
+/// rather than a specialisation's — on GRUB, the numbered one rather than
+/// the menu's first, which names whatever the newest generation is.
 #[must_use]
 pub fn entry_of<'a>(entries: &'a [Entry], toplevel: &str) -> Option<&'a str> {
     entries
         .iter()
         .filter(|e| e.toplevel.as_deref() == Some(toplevel))
-        .max_by_key(|e| {
-            (
-                !e.id.contains("-specialisation-"),
-                generation_of(&e.id).unwrap_or(0),
-            )
-        })
+        .max_by_key(|e| (!e.specialisation, e.generation.unwrap_or(0)))
         .map(|e| e.id.as_str())
+}
+
+/// The entries of GRUB's menu (`grub.cfg`, as NixOS's `install-grub.pl`
+/// writes it): each `menuentry`, its id its title's path, its toplevel the
+/// `init=` of its `linux` line, and its generation the `Configuration <n>`
+/// its title or its submenu's says. `None` when the text holds no entry at
+/// all — a menu that lists nothing is no menu to arm a trial in.
+#[must_use]
+pub fn grub_entries(cfg: &str) -> Option<Vec<Entry>> {
+    // What a line opens: a submenu, or an entry, by its quoted title.
+    enum Open {
+        Submenu(String),
+        Entry(usize),
+    }
+    let title = |line: &str, word: &str| -> Option<String> {
+        let rest = line.strip_prefix(word)?.trim_start().strip_prefix('"')?;
+        Some(rest[..rest.find('"')?].to_owned())
+    };
+    let mut open: Vec<Open> = Vec::new();
+    let mut found: Vec<Entry> = Vec::new();
+    for line in cfg.lines().map(str::trim) {
+        if let Some(t) = title(line, "submenu") {
+            open.push(Open::Submenu(t));
+        } else if let Some(t) = title(line, "menuentry") {
+            let submenus: Vec<&str> = open
+                .iter()
+                .filter_map(|o| match o {
+                    Open::Submenu(t) => Some(t.as_str()),
+                    Open::Entry(_) => None,
+                })
+                .collect();
+            let generation = configuration_of(&t)
+                .or_else(|| submenus.iter().rev().find_map(|s| configuration_of(s)));
+            // A SPECIALISATION is an entry of a generation's own submenu
+            // that is not its `Default`.
+            let specialisation = submenus
+                .last()
+                .is_some_and(|s| configuration_of(s).is_some())
+                && !t.contains(" - Default");
+            let mut path = submenus.join(">");
+            if !path.is_empty() {
+                path.push('>');
+            }
+            path.push_str(&t);
+            found.push(Entry {
+                id: path,
+                toplevel: None,
+                generation,
+                specialisation,
+            });
+            open.push(Open::Entry(found.len() - 1));
+        } else if line.starts_with("linux ") {
+            if let Some(Open::Entry(at)) = open.last()
+                && let Some(e) = found.get_mut(*at)
+            {
+                e.toplevel = init_of(line);
+            }
+        } else if line == "}" {
+            open.pop();
+        }
+    }
+    (!found.is_empty()).then_some(found)
+}
+
+/// The generation a GRUB title names: `<distro> - Configuration <n> (…)`.
+fn configuration_of(title: &str) -> Option<u64> {
+    let rest = &title[title.find(" - Configuration ")? + " - Configuration ".len()..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// The id the builder gives generation `n`'s entry — what is recorded when
@@ -253,6 +331,75 @@ mod tests {
         assert_eq!(entry_of(&e, "/nix/store/zzzz"), None);
         assert_eq!(e[4].toplevel, None, "an entry with no init= names nothing");
         assert!(entries("not json").is_none());
+    }
+
+    /// A menu as NixOS's `install-grub.pl` writes it: the newest first, a
+    /// generation with a specialisation in a submenu of its own, and the
+    /// older ones in `All configurations`.
+    const GRUB_CFG: &str = r#"# Automatically generated.  DO NOT EDIT THIS FILE!
+if [ -s $prefix/grubenv ]; then
+  load_env
+fi
+if [ "${next_entry}" ]; then
+  set default="${next_entry}"
+fi
+menuentry "ronoctua" --class nixos --unrestricted {
+  search --set=drive1 --fs-uuid 1234-ABCD
+  linux ($drive1)//kernels/k-bzImage init=/nix/store/aaaa-nixos-system-7/init loglevel=4
+  initrd ($drive1)//kernels/k-initrd
+}
+
+submenu "ronoctua - All configurations" --class submenu {
+submenu "ronoctua - Configuration 7 (2026-10-22 - 26.05)" --class submenu {
+menuentry "ronoctua - Configuration 7 - Default (2026-10-22 - 26.05)" --class nixos {
+  linux ($drive1)//kernels/k-bzImage init=/nix/store/aaaa-nixos-system-7/init loglevel=4
+  initrd ($drive1)//kernels/k-initrd
+}
+menuentry "ronoctua - Configuration 7 - (x - 2026-10-22 - 26.05)" --class nixos {
+  linux ($drive1)//kernels/k-bzImage init=/nix/store/xxxx-spec/init loglevel=4
+  initrd ($drive1)//kernels/k-initrd
+}
+}
+menuentry "ronoctua - Configuration 6 (2026-10-21 - 26.05)" --class nixos {
+  linux ($drive1)//kernels/j-bzImage init=/nix/store/bbbb-nixos-system-6/init loglevel=4
+  initrd ($drive1)//kernels/j-initrd
+}
+}
+"#;
+
+    /// FAILS IF: a GRUB entry is not found by its `init=`, the id is not the
+    /// title's path GRUB's `default` takes, the menu's first entry is chosen
+    /// over the numbered one (it names whatever is newest), or a
+    /// specialisation is taken for its generation's own entry.
+    #[test]
+    fn a_grub_entry_is_found_by_its_init() {
+        let e = grub_entries(GRUB_CFG).unwrap();
+        assert_eq!(e.len(), 4, "{e:#?}");
+        assert_eq!(
+            entry_of(&e, "/nix/store/aaaa-nixos-system-7"),
+            Some(
+                "ronoctua - All configurations>ronoctua - Configuration 7 (2026-10-22 - 26.05)>\
+                 ronoctua - Configuration 7 - Default (2026-10-22 - 26.05)"
+            )
+        );
+        assert_eq!(
+            entry_of(&e, "/nix/store/bbbb-nixos-system-6"),
+            Some("ronoctua - All configurations>ronoctua - Configuration 6 (2026-10-21 - 26.05)")
+        );
+        assert_eq!(
+            entry_of(&e, "/nix/store/xxxx-spec"),
+            Some(
+                "ronoctua - All configurations>ronoctua - Configuration 7 (2026-10-22 - 26.05)>\
+                 ronoctua - Configuration 7 - (x - 2026-10-22 - 26.05)"
+            )
+        );
+        assert!(e[2].specialisation && !e[1].specialisation && !e[3].specialisation);
+        assert_eq!(
+            e[0].generation, None,
+            "the menu's first entry names no generation"
+        );
+        assert_eq!(e[3].generation, Some(6));
+        assert!(grub_entries("set timeout=5\n").is_none());
     }
 
     #[test]

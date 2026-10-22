@@ -60,6 +60,7 @@ mod disarm;
 mod disk;
 pub mod dry;
 mod hold;
+mod loader;
 mod migrate;
 mod run;
 mod system;

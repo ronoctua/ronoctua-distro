@@ -20,6 +20,7 @@
 
 use ronoctua_person::state::{Trial, TrialOutcome};
 
+use crate::loader::Loader;
 use crate::system;
 use crate::{Machine, Refusal, boot, boots, disk, guard, say, trial};
 
@@ -62,17 +63,18 @@ pub(crate) fn disarm(m: &Machine) -> Result<(), Refusal> {
     };
 
     // THE VARIABLES, whatever armed them.
-    match s.bootctl.as_deref() {
-        Some(bootctl) => {
-            if trial::entries(bootctl).is_some() {
-                trial::clear(bootctl);
+    match Loader::of(s) {
+        Some(loader) => {
+            if loader.entries().is_some() {
+                loader.clear();
             }
         }
         None => say(
             4,
             &format!(
-                "{} is not set: the EFI variables are left as they are",
-                system::BOOTCTL
+                "neither {} nor {} is set: the boot loader's variables are left as they are",
+                system::BOOTCTL,
+                system::GRUB_EDITENV
             ),
         ),
     }

@@ -34,6 +34,7 @@
 use ronoctua_person::state::{ApplyResult, LastApply, MachineState, TrialOutcome};
 
 use crate::argv::{self, Switch};
+use crate::loader::Loader;
 use crate::system::{self, needed};
 use crate::{
     APPLIED_LOCK, Applied, DISTRO_INPUT, Machine, Refusal, Why, bless, boot, boots, build, disk,
@@ -136,7 +137,14 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
     let attr = attr(m)?;
     let nix = needed(s.nix.as_ref(), system::NIX)?;
     let nix_env = needed(s.nix_env().as_ref(), system::NIX)?;
-    let bootctl = needed(s.bootctl.as_ref(), system::BOOTCTL)?;
+    let loader = needed(
+        Loader::of(s).as_ref(),
+        &format!(
+            "{} (or, on GRUB, {})",
+            system::BOOTCTL,
+            system::GRUB_EDITENV
+        ),
+    )?;
     needed(s.sizing.as_ref(), system::BUILD_SIZING)?;
     needed(s.build_units.as_ref(), system::BUILD_UNITS)?;
     needed(s.keep_units.as_ref(), system::KEEP_UNITS)?;
@@ -216,7 +224,7 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
         ));
     };
     let toplevel = s.logical(&built);
-    let outcome = switch_to(m, &nix_env, &bootctl, limit, &locks, &mut state, &toplevel);
+    let outcome = switch_to(m, &nix_env, &loader, limit, &locks, &mut state, &toplevel);
     let _ = disk::remove(&out);
     outcome
 }
@@ -226,7 +234,7 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
 fn switch_to(
     m: &Machine,
     nix_env: &std::path::Path,
-    bootctl: &std::path::Path,
+    loader: &Loader,
     limit: u64,
     locks: &Locks,
     state: &mut MachineState,
@@ -324,7 +332,7 @@ fn switch_to(
     // names the new system, and the next boot needs its way back most then.
     // Only a switch that returned 0 may bless at once a system that boots
     // like the last good one; any other is tried by a boot.
-    let armed = trial::arm(m, bootctl, state, toplevel, result == ApplyResult::Switched);
+    let armed = trial::arm(m, loader, state, toplevel, result == ApplyResult::Switched);
     match &armed {
         Ok(t) => {
             state.trial = Some(t.clone());

@@ -33,6 +33,7 @@
 use ronoctua_person::state::{MachineState, Trial, TrialOutcome};
 
 use crate::argv::{self, Switch};
+use crate::loader::Loader;
 use crate::system::{self, needed};
 use crate::{
     LAST_GOOD_LOCK, Machine, Refusal, Why, boot, boots, disk, must_be_root, run, say, take_lock,
@@ -63,7 +64,7 @@ pub(crate) fn bless(m: &Machine) -> Result<TrialOutcome, Refusal> {
         None => {
             // NO TRIAL WAITING: what booted and lasted is the last good one.
             if state.last_good.as_ref().map(|g| g.toplevel.as_str()) != Some(booted.as_str()) {
-                let listed = s.bootctl.as_deref().and_then(trial::entries);
+                let listed = Loader::of(s).as_ref().and_then(Loader::entries);
                 state.last_good = Some(trial::last_good_of(m, &booted, listed.as_deref()));
                 if trial::profile_names(m, &trial::generation_toplevel(m, &booted)) {
                     let running = trial::running_lock(m).ok().flatten();
@@ -153,8 +154,8 @@ pub(crate) fn settle(
             ),
         );
     }
-    let bootctl = s.bootctl.clone();
-    let listed = bootctl.as_deref().and_then(trial::entries);
+    let loader = Loader::of(s);
+    let listed = loader.as_ref().and_then(Loader::entries);
     let outcome = if boot::tops_of(s, &t.toplevel).contains(&tried.booted) {
         state.last_good = Some(trial::last_good_of(m, &t.toplevel, listed.as_deref()));
         state.trial = Some(Trial {
@@ -162,9 +163,9 @@ pub(crate) fn settle(
             ..t.clone()
         });
         if listed.is_some()
-            && let Some(b) = &bootctl
+            && let Some(l) = &loader
         {
-            trial::bootctl(b, &argv::set_default(""));
+            l.set_default("");
         }
         let running = trial::running_lock(m).ok().flatten();
         trial::keep_last_good_lock(m, &t.toplevel, running.as_deref());
@@ -189,9 +190,9 @@ pub(crate) fn settle(
         });
         go_back(m, &back_to)?;
         if listed.is_some()
-            && let Some(b) = &bootctl
+            && let Some(l) = &loader
         {
-            trial::bootctl(b, &argv::set_default(""));
+            l.set_default("");
         }
         if state.last_good.as_ref().map(|g| g.toplevel.as_str()) != Some(back_to.as_str()) {
             state.last_good = Some(trial::last_good_of(m, &back_to, listed.as_deref()));

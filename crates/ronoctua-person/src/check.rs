@@ -217,6 +217,18 @@ pub(crate) fn token(text: &str) -> bool {
             .all(|c| c.is_ascii_graphic() && c != b'"' && c != b'\\')
 }
 
+/// A boot entry's id, as the loader names it: systemd-boot's file name
+/// (`nixos-generation-41.conf`), or GRUB's title path, which has spaces
+/// (`ronoctua - All configurations>ronoctua - Configuration 41 (…)`).
+/// Printable ASCII and the space, no quote and no backslash, at most 512.
+pub(crate) fn entry(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 512
+        && text
+            .bytes()
+            .all(|c| (c.is_ascii_graphic() || c == b' ') && c != b'"' && c != b'\\')
+}
+
 /// A person brain module's id: `my-` and an English kebab word whose every
 /// segment begins with a letter, at most 64 bytes in all.
 ///
@@ -252,6 +264,20 @@ pub(crate) fn store_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: either loader's own name for an entry is refused — GRUB's
+    /// title path has spaces — or one that would break the JSON passes.
+    #[test]
+    fn a_boot_entry_is_either_loaders_name() {
+        assert!(entry("nixos-generation-41.conf"));
+        assert!(entry(
+            "ronoctua - All configurations>ronoctua - Configuration 41 (2026-10-22 - 26.05)"
+        ));
+        for not in ["", "a\"b", "a\\b", "tab\there", "ç"] {
+            assert!(!entry(not), "{not:?}");
+        }
+        assert!(!entry(&"x".repeat(513)));
+    }
 
     #[test]
     fn the_checks_take_what_they_must_and_nothing_else() {

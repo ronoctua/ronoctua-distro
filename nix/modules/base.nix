@@ -14,6 +14,10 @@ let
   cfg = config.ronoctua;
 in
 {
+  # The boot loader, by the firmware (`ronoctua.firmware`): its own module, so
+  # the VM tests of the boot trial boot exactly the machines' loaders.
+  imports = [ ./boot-loader.nix ];
+
   options.ronoctua = {
     # Section 2: a single user per device, always with this name.
     user = lib.mkOption {
@@ -405,16 +409,9 @@ in
     # collecting instead (Nix's own floor, and the update's weekly step).
 
     # -----------------------------------------------------------------
-    # Boot — section 7.2: systemd-boot, not GRUB.
+    # Boot — section 7.2: `nix/modules/boot-loader.nix` (systemd-boot on
+    # UEFI, GRUB on BIOS).
     # -----------------------------------------------------------------
-    boot.loader.systemd-boot = {
-      enable = lib.mkDefault true;
-      # The ESP is 1 GiB (section 7.2) because NixOS keeps kernel+initrd for
-      # several generations in there. The cap is `nix/modules/store.nix`'s: the
-      # menu lists no more generations than the system keeps.
-      editor = false; # an editable cmdline at boot destroys the PCR 12 measurement
-    };
-    boot.loader.efi.canTouchEfiVariables = lib.mkDefault true;
 
     # Section 3: the system does not look like a traditional desktop. That starts
     # at boot: no logo, no progress bar.

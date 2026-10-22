@@ -43,6 +43,10 @@ pkgs.testers.runNixOSTest {
         # The rebuild is the machine's apply, and the rollback disarms its
         # boot trial: the rescue's units run `ronoctua-machine`.
         ../nix/modules/machine.nix
+        # THE MACHINES' CONSOLE (`nix/modules/console.nix`): its fonts change
+        # how a cell's colours are kept, and the console has to be seen as a
+        # machine has it.
+        ronoctua.consoleModule
       ];
       _module.args.ronoctua = ronoctua;
       ronoctua.machine.tool = ronoctua.machine;
@@ -50,13 +54,6 @@ pkgs.testers.runNixOSTest {
       # `fgconsole` and `chvt` — the unit uses them by store path, and the test
       # asks the same questions from the shell.
       environment.systemPackages = [ pkgs.kbd ];
-      # THE MACHINES' CONSOLE FONT, which `nix/modules/fonts.nix` sets: past
-      # 256 glyphs it changes how a cell's colours are kept, and the console
-      # has to be seen as a machine has it.
-      console = {
-        earlySetup = true;
-        font = ronoctua.fonts.consoleFont;
-      };
       networking.hostName = lib.mkForce "noctua-rescue";
       # No /persist in this VM — the same reason as the keyboard's: `base.nix`
       # points the password hash there and the test never logs in.
@@ -147,9 +144,11 @@ pkgs.testers.runNixOSTest {
           assert at == "8", f"the rescue opened on vt8 and the screen stayed on {at}"
 
       with subtest("the cursor is a band and a colour on the console"):
-          glyphs, width, height = console_font(8)
+          glyphs, width, height = console_font(machine, 8)
+          ours, probes = holds_the_font(machine, 8, "${ronoctua.fonts.consoleFont}")
+          assert ours, f"VT 8 does not hold the console's font: {probes}"
           machine.screenshot("rescue")
-          grid = cells(8, glyphs)
+          grid = cells(machine, 8, glyphs)
           for line in grid[:4]:
               print([(c, f, b) for c, f, b in line[:3]], text_of(line))
           ground = grid[0][-1][2]
@@ -158,10 +157,14 @@ pkgs.testers.runNixOSTest {
           banded = [y for y in range(1, 8) if grid[y][0][2] != ground]
           assert banded == [1], f"the band is on the sidebar's rows {banded}, not on 1"
           assert grid[1][0][1] != grid[2][0][1], "the cursor's row has the others' tone"
-          shot = screen_dump()
+          shot = screen_dump(machine)
           band = pixel(shot, 2, height + height // 2)
           wanted = token(themes, theme, "surface.selection")
           assert band == wanted, f"the band is #{band}, and {theme}'s selection is #{wanted}"
+          # AND THE BOOT SAID NOTHING AGAINST THE CONSOLE: a BIOS machine, VGA
+          # text in the initrd and the frame buffer after the graphics driver.
+          complaints = console_complaints(machine)
+          assert not complaints, "\n".join(complaints)
 
       with subtest("the units it can ask for exist"):
           # A row whose unit does not exist fails in front of the person, and the

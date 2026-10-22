@@ -1333,7 +1333,7 @@ rec {
   #                and the compositor's binds point at
   #   loopShell    the same over the loop's programs, which `nix run .#dev`
   #                runs
-  #   installer, rescue, brain, …   the 30 programs a module, an app or the
+  #   installer, rescue, brain, …   the 31 programs a module, an app or the
   #                ISO runs, each its own unit (a painter under the palettes'
   #                wrapper): a derivation references what its bytes cite, and
   #                a unit's bytes are one program's — the "extract the binary"
@@ -1359,6 +1359,7 @@ rec {
     player
     formatDisk
     filesRoot
+    consoleFont
     transfers
     browser
     software

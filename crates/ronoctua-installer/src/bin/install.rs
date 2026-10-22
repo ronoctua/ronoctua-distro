@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file>]
-//! ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out|compose>
+//! ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out|compose|tpm|tpm-bios|bios>
 //! ```
 //!
 //! # Two modes, and why there are two
@@ -74,6 +74,7 @@ use ronoctua_installer::model::{ANSWER_PREFIX, Answers, Question, sentence, vali
 use ronoctua_installer::plan::{
     Origin, choice_file, host_nix, staged_declined, steps, target_mirror_declined,
 };
+use ronoctua_installer::platform::{self, Platform};
 use ronoctua_installer::reach::{Reach, Refused};
 use ronoctua_installer::release::{
     ANSWERS, DISTRO, FLAKE_DIR, FROM_RELEASE, Follow, Hop, hop_arguments, is_development,
@@ -83,7 +84,7 @@ use ronoctua_installer::tui;
 /// The usage, in English (invariant 18: a command line's help).
 const USAGE: &str =
     "usage: ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file|->]
-       ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out|compose>";
+       ronoctua-install --show <network|access|token|passphrase|passphrase-new|hop|review|left-out|compose|tpm|tpm-bios|bios>";
 
 /// The size `--show` draws at when it does not print to a terminal: the
 /// review's plan fits it, and the tests read it.
@@ -236,7 +237,7 @@ fn install(line: &Line) -> Result<ExitCode> {
             let (answers, at) = Answers::from_lines(&text);
             (answers, at.unwrap_or(Question::BelongingsAddress))
         });
-        match tui::collect(&texts, &reach, resume)? {
+        match tui::collect(&texts, &reach, resume, !line.execute)? {
             tui::Collected::GaveUp => return Ok(ExitCode::SUCCESS),
             tui::Collected::Hop(hop, answers) => return hop_to(&hop, line, &reach, &answers),
             tui::Collected::Answers(answers, stay) => (*answers, stay),
@@ -248,6 +249,41 @@ fn install(line: &Line) -> Result<ExitCode> {
         // THE MOMENT THE PROGRAMS ARE LEFT OUT, once: the plan prints the
         // declines with it, and the steps write the same bytes.
         answers.left_out_at = Some(stamp_now());
+        // THE MACHINE, as the TUI's stops read it: BIOS goes on only chosen
+        // by name — and the choice is refused where it chooses nothing — and
+        // no TPM 2.0 installs nothing (below, for both modes).
+        let platform = Platform::here();
+        answers.bios = !platform.uefi;
+        if line.execute {
+            let chosen = vars
+                .get(platform::FIRMWARE)
+                .cloned()
+                .or_else(|| std::env::var(platform::FIRMWARE).ok());
+            if let Some(other) = chosen.as_deref().filter(|v| *v != platform::CHOOSES_BIOS) {
+                bail!(
+                    "{} takes `{}` alone, not `{other}`",
+                    platform::FIRMWARE,
+                    platform::CHOOSES_BIOS
+                );
+            }
+            if chosen.is_some() && platform.uefi {
+                bail!(
+                    "{} chooses BIOS, and this machine started from UEFI: it installs for UEFI; \
+                     unset the variable",
+                    platform::FIRMWARE
+                );
+            }
+            if answers.bios && chosen.is_none() {
+                println!("{}", tui::stop_said(tui::Stop::Bios, &texts, true));
+                eprintln!(
+                    "ronoctua-install: this machine started from BIOS; to install on BIOS anyway, \
+                     set {}={}",
+                    platform::FIRMWARE,
+                    platform::CHOOSES_BIOS
+                );
+                return Ok(ExitCode::from(platform::EXIT_BIOS));
+            }
+        }
         if !line.execute {
             // THE DRY RUN ASKS NOTHING OF THE NETWORK: it prints what would
             // run, as a development build would run it when that is what
@@ -265,6 +301,13 @@ fn install(line: &Line) -> Result<ExitCode> {
         println!("\n{}", texts.t(key::INST_DRYRUN));
         println!("{}", texts.t(key::INST_TO_APPLY));
         return Ok(ExitCode::SUCCESS);
+    }
+    // NO TPM 2.0, NOTHING INSTALLED — in both modes: the TUI's stop lets
+    // only a rehearsal past, and this is what holds whatever reached here.
+    if !Platform::here().tpm2 {
+        println!("{}", tui::stop_said(tui::Stop::Tpm, &texts, answers.bios));
+        eprintln!("ronoctua-install: no TPM 2.0 on this machine: nothing is installed");
+        return Ok(ExitCode::from(platform::EXIT_TPM));
     }
 
     let stay = match stay {

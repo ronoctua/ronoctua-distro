@@ -12,12 +12,19 @@ use std::os::unix::net::UnixListener;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use ronoctua_installer::platform::{Platform, SYSROOT};
+
 /// The installer, built with these tests.
 const INSTALLER: &str = env!("CARGO_BIN_EXE_ronoctua-install");
 
-/// Every answer the terminal-less mode needs, none of them a real one.
+/// Every answer the terminal-less mode needs, none of them a real one — on
+/// a machine started from UEFI, with a TPM 2.0, whatever runs the tests.
 fn answered() -> Command {
     let mut c = Command::new(INSTALLER);
+    let sysroot =
+        std::env::temp_dir().join(format!("ronoctua-answers-sysroot-{}", std::process::id()));
+    Platform::default().plant(&sysroot).unwrap();
+    c.env(SYSROOT, &sysroot);
     for (name, value) in [
         ("RONOCTUA_INST_DISK", "/dev/nvme0n1"),
         ("RONOCTUA_INST_HOSTNAME", "noctua-answers"),

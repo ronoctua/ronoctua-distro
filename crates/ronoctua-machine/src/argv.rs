@@ -272,6 +272,24 @@ pub fn set_oneshot(entry: &str) -> Vec<String> {
     vec!["set-oneshot".to_owned(), entry.to_owned()]
 }
 
+/// `grub-editenv <block> create`: GRUB's environment block, made.
+#[must_use]
+pub fn grub_create(block: &std::path::Path) -> Vec<String> {
+    vec![block.display().to_string(), "create".to_owned()]
+}
+
+/// `grub-editenv <block> set <name>=<value>`, or `unset <name>` for an empty
+/// value — GRUB's `set-default` and `set-oneshot` (`crate::loader`).
+#[must_use]
+pub fn grub_set(block: &std::path::Path, name: &str, value: &str) -> Vec<String> {
+    let block = block.display().to_string();
+    if value.is_empty() {
+        vec![block, "unset".to_owned(), name.to_owned()]
+    } else {
+        vec![block, "set".to_owned(), format!("{name}={value}")]
+    }
+}
+
 /// How a toplevel is switched to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Switch {
@@ -421,6 +439,16 @@ mod tests {
             ["set-oneshot", "nixos-generation-7.conf"]
         );
         assert_eq!(list_entries(), ["--no-pager", "list", "--json=short"]);
+        let block = std::path::Path::new("/boot/grub/grubenv");
+        assert_eq!(grub_create(block), ["/boot/grub/grubenv", "create"]);
+        assert_eq!(
+            grub_set(block, "next_entry", "a>b c (1)"),
+            ["/boot/grub/grubenv", "set", "next_entry=a>b c (1)"]
+        );
+        assert_eq!(
+            grub_set(block, "ronoctua_default", ""),
+            ["/boot/grub/grubenv", "unset", "ronoctua_default"]
+        );
         assert_eq!(switch(Switch::Boot), ["boot"]);
         assert_eq!(
             set_profile(Path::new("/nix/var/nix/profiles/system"), "/nix/store/a-b"),

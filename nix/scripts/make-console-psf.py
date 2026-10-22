@@ -99,6 +99,23 @@ REPERTOIRE += [
     0x26A0,  # warning
 ]
 
+# THE VGA TEXT CONSOLE'S REPERTOIRE, for the font eight pixels wide (`--vga`).
+#
+# 256 glyphs and not 512, because VGA text mode pays for the ninth bit of a
+# glyph with the bright half of the text's colours: a font of 512 there leaves
+# the text eight colours, and the terminal UIs paint by sixteen
+# (`ronoctua-vt`). What the two of them draw beyond Latin-1 is a handful — the
+# dashes, the ellipsis, the arrows, the QR code's half blocks — and what fits
+# beside it is the rest of the extras, the block elements and the light box
+# rules. A letter of Latin Extended-A draws the kernel's replacement there.
+VGA_REPERTOIRE: list[int] = (
+    list(range(0x0020, 0x007F))
+    + list(range(0x00A0, 0x0100))
+    + [cp for cp in REPERTOIRE if cp > 0x017F and not 0x2500 <= cp <= 0x259F]
+    + list(range(0x2580, 0x25A0))
+    + [0x2500, 0x2502, 0x250C, 0x2510, 0x2514, 0x2518, 0x251C, 0x2524, 0x252C, 0x2534, 0x253C]
+)
+
 # Aliases: extra codepoints pointing at the same glyph. It is what keeps the
 # console from showing a square when the text uses a typographic variant. A
 # codepoint with a glyph of its own is never also an alias: mapped twice, which
@@ -219,17 +236,31 @@ def main() -> int:
     ap.add_argument("font", type=pathlib.Path)
     ap.add_argument("--height", type=int, required=True)
     ap.add_argument("--output", type=pathlib.Path, required=True)
+    ap.add_argument(
+        "--vga",
+        action="store_true",
+        help="the VGA text console's font: 256 glyphs, eight pixels wide",
+    )
     args = ap.parse_args()
 
     face = freetype.Face(str(args.font))
 
     width, baseline, lift = cell(face, args.height)
 
-    codepoints = list(dict.fromkeys(REPERTOIRE))  # dedup preserving order
-    if len(codepoints) > MOST_GLYPHS:
+    # dedup preserving order
+    codepoints = list(dict.fromkeys(VGA_REPERTOIRE if args.vga else REPERTOIRE))
+    most = COUNTS[0] if args.vga else MOST_GLYPHS
+    if len(codepoints) > most:
         print(
-            f"ERROR: the repertoire has {len(codepoints)} codepoints; the console's PSF2 "
-            f"takes at most 512. Cut the repertoire in REPERTOIRE.",
+            f"ERROR: the repertoire has {len(codepoints)} codepoints; this console takes "
+            f"at most {most}. Cut the repertoire in {'VGA_REPERTOIRE' if args.vga else 'REPERTOIRE'}.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.vga and width != 8:
+        print(
+            f"ERROR: the VGA text console takes a font eight pixels wide, and a cell "
+            f"{args.height} tall is {width}.",
             file=sys.stderr,
         )
         return 1
@@ -268,9 +299,9 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(header + b"".join(glyphs) + bytes(unicode_table))
 
-    empty = sum(
-        1 for cp, g in zip(positions, glyphs) if cp is not None and cp != 0x20 and not any(g)
-    )
+    # MISSING FROM THE FACE, asked of the face: a glyph drawn empty is not one
+    # (a space, the no-break space, is blank by what it is).
+    empty = sum(1 for cp in codepoints if face.get_char_index(cp) == 0)
     print(
         f"{args.output.name}: {len(glyphs)} glyphs ({len(codepoints)} drawn), "
         f"{width}x{args.height}, {charsize} bytes/glyph, "

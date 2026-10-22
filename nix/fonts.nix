@@ -282,12 +282,12 @@ let
     buildPhase = ''
       runHook preBuild
       mkdir -p $out/share/consolefonts
-      for size in 16 32; do
-        python3 ${./scripts/make-console-psf.py} \
-          "$src/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf" \
-          --height "$size" \
-          --output "$out/share/consolefonts/noctua-iosevka-$size.psf"
-      done
+      # The 15 × 32, and the 8 × 16 the VGA text console takes (`--vga`:
+      # 256 glyphs, so its text keeps sixteen colours).
+      font="$src/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf"
+      fonts="$out/share/consolefonts"
+      python3 ${./scripts/make-console-psf.py} "$font" --height 32 --output "$fonts/noctua-iosevka-32.psf"
+      python3 ${./scripts/make-console-psf.py} "$font" --height 16 --vga --output "$fonts/noctua-iosevka-16.psf"
       runHook postBuild
     '';
     dontInstall = true;
@@ -321,10 +321,13 @@ in
     noctua-console-psf
     ;
 
-  # THE CONSOLE'S FONT, the one file every console loads — the ISO's, every
-  # machine's (`nix/modules/fonts.nix`) and the VM tests that look at one —,
-  # named once.
+  # THE CONSOLE'S TWO FONTS, named once (`nix/modules/console.nix` loads them,
+  # and the VM tests look at them): the 15 × 32 the framebuffer console
+  # wears, and the 8 × 16 of the same face — the one the VGA text console of a
+  # BIOS boot takes (it takes nothing wider), and the one the setup loads
+  # first everywhere.
   consoleFont = "${noctua-console-psf}/share/consolefonts/noctua-iosevka-32.psf";
+  consoleFontVga = "${noctua-console-psf}/share/consolefonts/noctua-iosevka-16.psf";
 
   # Consumed by nix/fontconfig.nix and by the modules. No crate names the
   # font directly (section 6.2): always through a token.

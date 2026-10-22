@@ -87,7 +87,7 @@ impl NoTrial {
 pub struct LastGood {
     /// Its toplevel.
     pub toplevel: String,
-    /// Its boot entry (`bootctl list`'s id).
+    /// Its boot entry (`bootctl list`'s id, or GRUB's title path).
     pub entry: String,
     /// The distro revision it was built from.
     pub distro_rev: String,
@@ -173,7 +173,7 @@ impl Document for MachineState {
                     g.toplevel.as_str(),
                 ));
             }
-            if !check::token(&g.entry) {
+            if !check::entry(&g.entry) {
                 return Err(Refusal::new(
                     Why::Invalid,
                     "/last-good/entry",

@@ -5,7 +5,7 @@
 #
 #   bins.<bin>       every release program but an `apart` one, as built — what
 #                    a check runs where it used to run `${workspace}/bin/<bin>`
-#   <name>           the 30 named programs a module, an app or the ISO runs
+#   <name>           the 31 named programs a module, an app or the ISO runs
 #                    (`installer`, `rescue`, `brain`, …), the unit itself or,
 #                    for one that paints, the unit under a wrapper that carries
 #                    the palettes
@@ -122,6 +122,9 @@ let
     formatDisk = program "ronoctua-format-disk" plainly;
     # The file manager's privileged helper, run as root.
     filesRoot = program "ronoctua-files-root" plainly;
+    # The console's font, where the console can take it: the setup's condition
+    # and its step after, in the initrd and in the system.
+    consoleFont = program "ronoctua-console-font" plainly;
     # The queue's daemon, a unit that outlives the session. NOT how the shell
     # finds it: that one looks next door (`ronoctua_transfers::client`), in
     # the bundle below.

@@ -177,6 +177,9 @@ in
       (import ../disko/default.nix {
         device = cfg.disk;
         inherit (cfg) swapSize;
+        # A BIOS machine's GRUB needs a partition of its own for its core —
+        # and disko, seeing it, hands GRUB this disk (`boot.loader.grub.devices`).
+        bios = config.ronoctua.firmware == "bios";
       })
       disko
       ;

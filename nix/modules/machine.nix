@@ -176,14 +176,26 @@ in
         # By store path: a unit's `PATH` is minimal, and the machine's own
         # Nix is the one that filled this store.
         RONOCTUA_NIX = "${config.nix.package}/bin/nix";
-        RONOCTUA_BOOTCTL = "${config.systemd.package}/bin/bootctl";
         # HOW MANY BUILDS FIT HERE, what builds the units, each by its
         # class, and what roots a build's units.
         RONOCTUA_BUILD_SIZING = "${sizing.program}/bin/ronoctua-build-sizing";
         RONOCTUA_BUILD_UNITS = "${sizing.unitsProgram}/bin/ronoctua-build-units";
         RONOCTUA_KEEP_UNITS = "${keepUnits}/bin/ronoctua-keep-units";
-      };
-      defaultText = "the machine directory, its attribute, the state and run folders, the menu's limit, the template, nix, bootctl, the build sizing, what builds the units and what keeps them";
+      }
+      # THE BOOT LOADER'S OWN TOOL, for the boot trial: systemd-boot's
+      # `bootctl` (EFI variables), or, on a BIOS machine's GRUB
+      # (`ronoctua.firmware`), `grub-editenv` (GRUB's environment block) —
+      # by the loader the system has, so a machine that imports this module
+      # alone (a test) still names the right one.
+      // (
+        if config.boot.loader.grub.enable && !config.boot.loader.systemd-boot.enable then
+          # NixOS's GRUB is `grub2` (it has no `package` option), and the
+          # environment block is the same on every platform GRUB has.
+          { RONOCTUA_GRUB_EDITENV = "${pkgs.grub2}/bin/grub-editenv"; }
+        else
+          { RONOCTUA_BOOTCTL = "${config.systemd.package}/bin/bootctl"; }
+      );
+      defaultText = "the machine directory, its attribute, the state and run folders, the menu's limit, the template, nix, the boot loader's tool (bootctl, or grub-editenv), the build sizing, what builds the units and what keeps them";
       description = ''
         What `ronoctua-machine` is told, by every unit that runs it and by
         its wrapper: one table, so the rescue's rebuild, the update and the
@@ -323,22 +335,51 @@ in
       # bounded: the boot loader's default names the last good entry and it
       # booted another (`LoaderEntrySelected`, which systemd-boot writes at
       # every boot) — no other boot has a default set, since every judgement
-      # unsets it. Then: the default target, in time, or a restart, and the
-      # one-shot is spent, so the boot loader takes the last good system.
+      # unsets it. GRUB, on a BIOS machine, leaves Linux no such variable: its
+      # menu marks the boot of once of an armed trial on the kernel's command
+      # line instead (`nix/boot-trial-mark.nix`, `nix/modules/boot-loader.nix`).
+      # Then: the default target, in time, or a restart, and the one-shot is
+      # spent, so the boot loader takes the last good system.
+      grub = config.boot.loader.grub.enable && !config.boot.loader.systemd-boot.enable;
+      tries =
+        if grub then
+          ''
+            read -r cmdline < /proc/cmdline
+            case " $cmdline " in
+              *" ${import ../boot-trial-mark.nix} "*) ;;
+              *) exit 0 ;;
+            esac
+            if up; then
+              exit 0
+            fi
+            selected=$(${pkgs.coreutils}/bin/readlink -f /run/booted-system) default="the last good system"
+          ''
+        else
+          ''
+            vars=/sys/firmware/efi/efivars loader=4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+            # An entry id, from the boot loader's UTF-16 variable: the four bytes
+            # of attributes off, the zero half of every character off.
+            value() {
+              if [ -r "$vars/$1-$loader" ]; then
+                ${pkgs.coreutils}/bin/tail -c +5 "$vars/$1-$loader" | ${pkgs.coreutils}/bin/tr -d '\000'
+              fi
+            }
+            default=$(value LoaderEntryDefault) selected=$(value LoaderEntrySelected)
+            if [ -z "$default" ] || [ "$default" = "$selected" ] || up; then
+              exit 0
+            fi
+          '';
+      # UP is REACHED IN THIS BOOT, not active now: a `systemctl rescue` later
+      # in a boot that came up (which wants this unit again) is no stage 2
+      # that never did — and on GRUB the trial's mark stays on the command
+      # line for the whole boot. systemd keeps when the target last became
+      # active, across its own deactivation.
       deadline = pkgs.writeShellScript "ronoctua-boot-trial-deadline" ''
-        vars=/sys/firmware/efi/efivars loader=4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
-        # An entry id, from the boot loader's UTF-16 variable: the four bytes
-        # of attributes off, the zero half of every character off.
-        value() {
-          if [ -r "$vars/$1-$loader" ]; then
-            ${pkgs.coreutils}/bin/tail -c +5 "$vars/$1-$loader" | ${pkgs.coreutils}/bin/tr -d '\000'
-          fi
+        up() {
+          entered=$(${config.systemd.package}/bin/systemctl show --property=ActiveEnterTimestampMonotonic --value ${target})
+          [ "''${entered:-0}" -gt 0 ]
         }
-        up() { ${config.systemd.package}/bin/systemctl is-active --quiet ${target}; }
-        default=$(value LoaderEntryDefault) selected=$(value LoaderEntrySelected)
-        if [ -z "$default" ] || [ "$default" = "$selected" ] || up; then
-          exit 0
-        fi
+        ${tries}
         echo "<5>this boot tries $selected: ${target} within ${toString cfg.trialBootSeconds} s, or back to $default"
         ${pkgs.coreutils}/bin/sleep ${toString cfg.trialBootSeconds}
         if up; then

@@ -46,8 +46,12 @@ pub const SYSTEM_LOCK: &str = "RONOCTUA_MACHINE_SYSTEM_LOCK";
 pub const SYSROOT: &str = "RONOCTUA_MACHINE_SYSROOT";
 /// The machine's own `nix`; `nix-env` is the one beside it.
 pub const NIX: &str = "RONOCTUA_NIX";
-/// systemd's `bootctl`.
+/// systemd's `bootctl` — a UEFI machine's.
 pub const BOOTCTL: &str = "RONOCTUA_BOOTCTL";
+/// GRUB's `grub-editenv` — a BIOS machine's (`crate::loader`).
+pub const GRUB_EDITENV: &str = "RONOCTUA_GRUB_EDITENV";
+/// GRUB's folder, its menu and its environment block, inside the system root.
+pub const GRUB_DIR: &str = "/boot/grub";
 /// How many compilations fit at once on this machine
 /// (`ronoctua-build-sizing`, `nix/build-sizing.nix`).
 pub const BUILD_SIZING: &str = "RONOCTUA_BUILD_SIZING";
@@ -89,6 +93,7 @@ impl Env {
                 SYSROOT,
                 NIX,
                 BOOTCTL,
+                GRUB_EDITENV,
                 BUILD_SIZING,
                 BUILD_UNITS,
                 KEEP_UNITS,
@@ -140,6 +145,8 @@ pub struct System {
     pub nix: Option<PathBuf>,
     /// `bootctl`.
     pub bootctl: Option<PathBuf>,
+    /// `grub-editenv`.
+    pub grub_editenv: Option<PathBuf>,
     /// How many generations the boot menu lists, as the variable says it.
     pub menu_limit: Option<String>,
     /// The template of a machine flake.
@@ -169,6 +176,7 @@ impl System {
             attr: env.get(MACHINE_ATTR).map(str::to_owned),
             nix: env.path(NIX),
             bootctl: env.path(BOOTCTL),
+            grub_editenv: env.path(GRUB_EDITENV),
             menu_limit: env.get(MENU_LIMIT).map(str::to_owned),
             template: env.path(TEMPLATE),
             distro: env.get(DISTRO).map(str::to_owned),

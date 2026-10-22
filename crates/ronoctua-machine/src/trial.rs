@@ -1,54 +1,13 @@
 //! Arming the boot trial, what a generation is recorded as, and the locks
 //! the systems were built from.
 
-use std::path::Path;
-
 use ronoctua_person::reports::PersonApplied;
 use ronoctua_person::state::{LastGood, MachineState, NoTrial, Trial, TrialOutcome};
 
 use crate::boot::{self, Entry};
+use crate::loader::Loader;
 use crate::system::{self, PROFILE};
-use crate::{APPLIED_LOCK, LAST_GOOD_LOCK, Machine, Refusal, argv, boots, disk, run, say};
-
-/// What `bootctl list` lists; `None` when it cannot be asked (no EFI, no
-/// boot loader it knows), said.
-pub(crate) fn entries(bootctl: &Path) -> Option<Vec<Entry>> {
-    let ran = run::capture(bootctl, &argv::list_entries()).ok()?;
-    if !ran.ok() {
-        say(
-            4,
-            &format!("bootctl lists no entries: {}", ran.stderr.trim()),
-        );
-        return None;
-    }
-    let listed = boot::entries(&ran.stdout);
-    if listed.is_none() {
-        say(4, "bootctl's list is not the JSON it should be");
-    }
-    listed
-}
-
-/// One `bootctl` word; whether it worked, said when it did not.
-pub(crate) fn bootctl(bootctl: &Path, words: &[String]) -> bool {
-    match run::capture(bootctl, words) {
-        Ok(ran) if ran.ok() => true,
-        Ok(ran) => {
-            say(
-                4,
-                &format!("bootctl {}: {}", words.join(" "), ran.stderr.trim()),
-            );
-            false
-        }
-        Err(_) => false,
-    }
-}
-
-/// Unsets both EFI variables this crate writes, so `loader.conf` — the
-/// profile's newest generation — is the boot loader's choice again.
-pub(crate) fn clear(bootctl_path: &Path) {
-    bootctl(bootctl_path, &argv::set_oneshot(""));
-    bootctl(bootctl_path, &argv::set_default(""));
-}
+use crate::{APPLIED_LOCK, LAST_GOOD_LOCK, Machine, Refusal, boots, disk, say};
 
 /// The trial the record holds, when it is still waiting for its boot.
 pub(crate) fn pending(state: &MachineState) -> Option<Trial> {
@@ -167,7 +126,7 @@ pub(crate) fn put_back(m: &Machine, lock: &[u8]) {
 /// system runs well, and only a real trial does.
 pub(crate) fn arm(
     m: &Machine,
-    bootctl_path: &Path,
+    loader: &Loader,
     state: &mut MachineState,
     toplevel: &str,
     clean: bool,
@@ -180,9 +139,9 @@ pub(crate) fn arm(
         return Err(NoTrial::NoLastGood);
     };
     if clean && boot::same_boot(&m.system, toplevel, &last_good.toplevel) {
-        let listed = entries(bootctl_path);
+        let listed = loader.entries();
         if listed.is_some() {
-            clear(bootctl_path);
+            loader.clear();
         }
         state.last_good = Some(last_good_of(m, toplevel, listed.as_deref()));
         // The profile names it already: its kept lock is this one's.
@@ -198,10 +157,13 @@ pub(crate) fn arm(
             outcome: TrialOutcome::BootIdentical,
         });
     }
-    let Some(listed) = entries(bootctl_path) else {
+    let Some(listed) = loader.entries() else {
         say(
             4,
-            "no boot trial: the EFI variables cannot be read or written (no-efi-variables)",
+            &format!(
+                "no boot trial: {} cannot be read or written (no-efi-variables)",
+                loader.variables()
+            ),
         );
         return Err(NoTrial::NoEfiVariables);
     };
@@ -210,7 +172,7 @@ pub(crate) fn arm(
             4,
             "no boot trial: the boot menu has no entry for the new system (not-in-menu)",
         );
-        clear(bootctl_path);
+        loader.clear();
         return Err(NoTrial::NotInMenu);
     };
     let Some(old) = boot::entry_of(&listed, &last_good.toplevel) else {
@@ -218,23 +180,25 @@ pub(crate) fn arm(
             4,
             "no boot trial: the boot menu no longer lists the last good system (not-in-menu)",
         );
-        clear(bootctl_path);
+        loader.clear();
         return Err(NoTrial::NotInMenu);
     };
-    if !bootctl(bootctl_path, &argv::set_default(old)) {
+    let unwritten = || {
         say(
             4,
-            "no boot trial: the EFI variables cannot be written (no-efi-variables)",
+            &format!(
+                "no boot trial: {} cannot be written (no-efi-variables)",
+                loader.variables()
+            ),
         );
-        return Err(NoTrial::NoEfiVariables);
+        Err(NoTrial::NoEfiVariables)
+    };
+    if !loader.set_default(old) {
+        return unwritten();
     }
-    if !bootctl(bootctl_path, &argv::set_oneshot(new)) {
-        bootctl(bootctl_path, &argv::set_default(""));
-        say(
-            4,
-            "no boot trial: the EFI variables cannot be written (no-efi-variables)",
-        );
-        return Err(NoTrial::NoEfiVariables);
+    if !loader.set_oneshot(new) {
+        loader.set_default("");
+        return unwritten();
     }
     if let Some(g) = state.last_good.as_mut() {
         g.entry = old.to_owned();

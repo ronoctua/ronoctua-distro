@@ -17,24 +17,36 @@
 # already knows how to bring the installer VM up, run the script in the right
 # order and reboot to prove that the system boots from the partitioned disk.
 # Rewriting that would be reimplementing disko's logic (invariant 5, in spirit).
+#
+# ON BOTH FIRMWARES (`firmware`): UEFI, and BIOS (`disko-vm-bios`), where
+# the same layout carries GRUB's own partition and the machine boots GRUB
+# from the disk's first sectors — the loader `nix/modules/boot-loader.nix`
+# gives a machine whose `host.nix` says `bios`, which the installed system
+# here imports as a machine does.
 {
   pkgs,
   lib,
   disko,
+  # How the VM's firmware starts it: `uefi` or `bios`.
+  firmware ? "uefi",
 }:
 
+let
+  bios = firmware == "bios";
+in
 disko.lib.testLib.makeDiskoTest {
   inherit pkgs;
-  name = "ronoctua-layout-7-2";
+  name = "ronoctua-layout-7-2" + lib.optionalString bios "-bios";
 
   # The PRODUCTION layout, with a single difference: the swap's size, which in
   # production is >= RAM and here has to fit on the VM's disk. See the header of
   # disko-config-test.nix — the `makeDiskoTest` imports the file with the
-  # default arguments and accepts no parameters.
-  disko-config = ./disko-config-test.nix;
+  # default arguments and accepts no parameters; so BIOS is a file of its own.
+  disko-config = if bios then ./disko-config-bios-test.nix else ./disko-config-test.nix;
 
-  # UEFI, as section 2 requires of the target machines.
-  efi = true;
+  # UEFI, as section 2 recommends of the target machines — or BIOS, which
+  # they may still start from.
+  efi = !bios;
 
   # It boots after installing: proof that the layout not only mounts, but
   # sustains a system.
@@ -69,6 +81,11 @@ disko.lib.testLib.makeDiskoTest {
       pkgs.btrfs-progs
       pkgs.util-linux
     ];
+  }
+  # THE MACHINES' OWN LOADER on BIOS: GRUB, with the boot trial's lines.
+  // lib.optionalAttrs bios {
+    imports = [ ../nix/modules/boot-loader.nix ];
+    ronoctua.firmware = "bios";
   };
 
   # The variable is `machine`, not `booted_machine`: disko REBINDS `machine`
@@ -146,5 +163,31 @@ disko.lib.testLib.makeDiskoTest {
         print(out)
         assert "LUKS header information" in out
         assert "Version:       \t2" in out or "Version: 2" in out.replace("  ", " ")
+  ''
+  + lib.optionalString bios ''
+
+    with subtest("BIOS: GRUB from the disk's first sectors, its partition the third"):
+        # Started from BIOS, by GRUB: no EFI at all.
+        machine.fail("test -d /sys/firmware/efi")
+        # GRUB's own partition, numbered after the ESP and the LUKS volume —
+        # the installer names the volume `2` (`plan::luks_partition`) — and
+        # placed in the gap before the ESP.
+        kind = machine.succeed("lsblk -n -o PARTTYPE /dev/vda3").strip()
+        assert kind == "21686148-6449-6e6f-744e-656564454649", f"vda3 is {kind}"
+        start = int(machine.succeed("cat /sys/class/block/vda3/start").strip())
+        esp = int(machine.succeed("cat /sys/class/block/vda1/start").strip())
+        assert start < esp, f"GRUB's partition starts at {start}, after the ESP at {esp}"
+        # The boot code GRUB wrote into the disk's first sector.
+        machine.succeed("head -c 512 /dev/vda | grep -a -q GRUB")
+        # And the protective MBR's entry marked active (its status byte, at
+        # 446), which some BIOS firmware wants before it boots a disk.
+        active = machine.succeed("od -An -tx1 -j446 -N1 /dev/vda").strip()
+        assert active == "80", f"the protective MBR's entry is {active}, not active"
+        # The menu is the machines' own, and a boot that tries nothing is
+        # not marked as one.
+        menu = machine.succeed("cat /boot/grub/grub.cfg")
+        assert "ronoctua_default" in menu, "the menu has no boot trial"
+        cmdline = machine.succeed("cat /proc/cmdline").split()
+        assert "ronoctua.trying" not in cmdline, cmdline
   '';
 }

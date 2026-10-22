@@ -1131,6 +1131,10 @@ pub struct Answers {
     /// The swapfile, measured once the disk is known. Computed; `None`
     /// leaves the hardware report's default.
     pub swap: Option<crate::swap::Swap>,
+    /// The machine started from BIOS: detected (`crate::platform`), never
+    /// asked — the person only chose to go on with it — and it is GRUB the
+    /// machine boots (`ronoctua.firmware`, `host.nix`).
+    pub bios: bool,
     /// Whether the machine is built from — and keeps — the installer's own
     /// distro tree (`crate::plan::Origin::aimed`). Computed when the
     /// installation runs; the dry run leaves it out, as it leaves the swap.
@@ -1184,6 +1188,16 @@ impl Answers {
             out.push_str(v);
             out.push('\n');
         }
+        // BIOS, CHOSEN: by the time the answers are handed on, a machine
+        // started from BIOS got this far only by the person's choice — the
+        // TUI's worse way, or the variable itself —, and the release's
+        // installer without a terminal would stop again without it.
+        if self.bios {
+            out.push_str(crate::platform::FIRMWARE);
+            out.push('=');
+            out.push_str(crate::platform::CHOOSES_BIOS);
+            out.push('\n');
+        }
         out.push_str(RESUME);
         out.push('=');
         out.push_str(resume_at.label());
@@ -1205,6 +1219,11 @@ impl Answers {
             };
             if name == RESUME {
                 resume = Question::ALL_KEYS.into_iter().find(|q| q.label() == value);
+                continue;
+            }
+            // BIOS, CHOSEN before the hop: the TUI does not ask it again.
+            if name == crate::platform::FIRMWARE {
+                r.bios = value == crate::platform::CHOOSES_BIOS;
                 continue;
             }
             if let Some(q) = Question::ALL_KEYS
@@ -1404,7 +1423,8 @@ mod tests {
     }
 
     /// FAILS IF: the answers the release's installer reads back lose one,
-    /// gain a computed one, or resume anywhere but where they were left.
+    /// gain a computed one, resume anywhere but where they were left, or
+    /// lose the choice of BIOS.
     #[test]
     fn the_answers_cross_to_the_release_installer_whole() {
         let mut r = Answers::default();
@@ -1430,6 +1450,17 @@ mod tests {
         }
         assert_eq!(back.resume_offset, None);
         assert_eq!(back.left_out_ids(), ["blender", "libreoffice"]);
+        // BIOS, chosen, crosses as the variable that chooses it.
+        let choice = format!(
+            "{}={}\n",
+            crate::platform::FIRMWARE,
+            crate::platform::CHOOSES_BIOS
+        );
+        assert!(!text.contains(&choice), "a UEFI machine chose BIOS");
+        r.bios = true;
+        let text = r.lines(Question::BelongingsAddress);
+        assert!(text.contains(&choice));
+        assert!(Answers::from_lines(&text).0.bios, "the choice is read back");
         // A line from a newer installer, and nonsense, are skipped.
         let (_, none) = Answers::from_lines("RONOCTUA_INST_FROM_THE_FUTURE=x\nnonsense\n");
         assert_eq!(none, None);

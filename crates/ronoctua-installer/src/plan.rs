@@ -731,6 +731,12 @@ pub fn host_nix(r: &Answers) -> String {
     );
     let _ = writeln!(s, "  networking.hostName = \"{}\";", r.hostname);
     let _ = writeln!(s, "  ronoctua.disk = \"{}\";", r.disk);
+    // A MACHINE STARTED FROM BIOS boots GRUB, and its disk gets GRUB's own
+    // partition (`nix/modules/boot-loader.nix`, `nix/disko/default.nix`).
+    // Written only then: UEFI is the module's default.
+    if r.bios {
+        let _ = writeln!(s, "  ronoctua.firmware = \"bios\";");
+    }
     let _ = writeln!(s, "  ronoctua.language = \"{}\";", r.language);
     // WHICH OF THE TWO INSTALLATIONS, and it is written on both answers.
     //
@@ -1491,6 +1497,7 @@ mod tests {
             belongings_empty: Some(false),
             swap: None,
             aimed: false,
+            bios: false,
         }
     }
 
@@ -2122,6 +2129,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// FAILS IF: a machine started from BIOS is written without the line
+    /// that makes it boot GRUB — it would get systemd-boot, an EFI program
+    /// its firmware cannot run — or a UEFI machine gets the line.
+    #[test]
+    fn a_bios_machine_is_written_so() {
+        let mut r = answers();
+        assert!(!host_nix(&r).contains("ronoctua.firmware"));
+        r.bios = true;
+        assert!(host_nix(&r).contains("  ronoctua.firmware = \"bios\";\n"));
     }
 
     #[test]

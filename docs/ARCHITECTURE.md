@@ -25,7 +25,7 @@ um compromisso: nada aqui precisa se parecer com nenhum outro programa.
 | Compositor | Scroll upstream, sem fork nem patch, atrás de um contrato | fork com integração direta |
 | Chrome | rodapé de duas linhas, só | barra, dock, popup de canto |
 | Sistema de arquivos | btrfs | ZFS (out-of-tree), bcachefs (fora do mainline na 6.18) |
-| Boot | systemd-boot, UKI não assinada — ver *Secure Boot e TPM2* | GRUB; lanzaboote |
+| Boot | systemd-boot, UKI não assinada — ver *Secure Boot e TPM2*; GRUB só numa máquina que liga pela BIOS | GRUB no UEFI; lanzaboote |
 | Renderer | wgpu + cosmic-text + glyphon | vello (não há carga vetorial) |
 | Buffers nativos | WASM Component Model, display list retida | pixels, ou plugins nativos |
 | i18n | Fluent | gettext |
@@ -111,6 +111,24 @@ quebradas, e todo console (o do ISO e o de cada máquina) caía calado na fonte 
 
 O `console-font-is-what-the-kernel-takes` lê o arquivo; o `installer-console-vm` pergunta ao
 kernel que fonte o console tem.
+
+**Carregar a fonte só onde o console a aceita** (`nix/modules/console.nix`, o mesmo módulo na
+máquina e no ISO). Três consoles respondem de três jeitos, e cada recusa era um `ERROR` do
+`setfont` no journal, mesmo onde o systemd a chama de benigna:
+
+- o do framebuffer (fbcon) aceita qualquer fonte: a 15 × 32;
+- o de texto VGA (um boot pela BIOS antes do driver de vídeo) só aceita oito pixels de largura, e
+  com mais de 256 glifos perde as oito cores claras do texto: a 8 × 16 tem 256, o ASCII, o Latin-1,
+  os blocos e os traços leves;
+- o dummy não aceita nenhuma. Ele fica ligado enquanto o framebuffer do firmware passa ao driver e
+  enquanto o fbcon adia a tomada (`fbcon=nodefer` a faz na hora).
+
+O `systemd-vconsole-setup` só roda quando o console ligado aceita fonte (`ronoctua-console-font
+can-take`, no `ExecCondition`), carrega a 8 × 16 — que os dois aceitam — e, no framebuffer, o
+`ronoctua-console-font load` põe a 15 × 32 em cada VT alocado que está em modo texto. Uma regra udev
+o roda de novo quando um console se liga ou um VT nasce, no initrd também. O `installer-console-vm`
+prova os dois firmwares (UEFI e texto VGA) com o journal sem nenhuma queixa, e o `rescue-vm` o
+console de resgate.
 
 #### Duas cadeias de fallback, uma fonte
 
@@ -9306,6 +9324,29 @@ porta Ethernet; **a instalação** e **os programas que ela deixa de fora**, aba
 O que **não** se pergunta — vídeo, sistema de arquivos, tamanho de partição, gerenciador de boot,
 hibernação — ou o `nixos-facter` detecta, ou a distro já decidiu.
 
+**A máquina é dita antes de qualquer pergunta sobre ela**, logo depois do idioma, para ser dita
+nele (`platform.rs`, `Screen::Stop`). Não são perguntas: o enum continua com dezoito. Cada tela fala
+com quem nunca ouviu o nome — o que é, por que importa, e os passos no setup do firmware, numerados
+— e nasce com o cursor na saída, porque aparece sozinha:
+
+- **A BIOS instala, e o UEFI é recomendado.** Recusar a BIOS seria recusar uma máquina que o código
+  pode servir: ela instala com o GRUB e o mesmo ensaio de boot (seção da vida da máquina). Mas o UEFI
+  é melhor — o systemd-boot é o padrão da distro, e no modo BIOS muitos computadores escondem o TPM —,
+  então a tela explica e oferece primeiro sair para ligá-lo; seguir na BIOS é a segunda linha,
+  "Continuar com a pior alternativa", dita assim de propósito. Ela vem antes da do TPM: na prática a
+  BIOS é um computador UEFI com o modo Legacy/CSM ligado, e ligar o UEFI responde às duas.
+- **Sem TPM 2.0 a instalação não segue.** É nele que a máquina guarda o que abre sozinha (a senha do
+  Wi-Fi primeiro, `ronoctua_network::secret`): sem ele, esses segredos ficariam legíveis numa cópia
+  do disco. Na maioria das máquinas o TPM existe e está desligado no setup, e a tela diz como ligar —
+  numa máquina que ligou pela BIOS, que ele pode estar só escondido. A única outra linha é a do
+  ensaio (sem `--execute`), que mostra o resto sem instalar nada.
+
+Um instalador retomado depois de um hop começa além do idioma, e o que passou as respostas pode ser
+de um ISO sem estas telas: ele as mostra antes de seguir, e a escolha da BIOS feita antes do hop
+viaja junto e não é perguntada de novo. Sem terminal, as mesmas telas são impressas e o instalador
+sai: 6 na BIOS sem `RONOCTUA_INST_FIRMWARE=bios`, que é a mesma escolha dita por extenso, e 5 sem
+TPM — esta checagem vale também depois da TUI, antes do primeiro passo.
+
 - **O disco é a primeira pergunta.** Ela apaga dados; perguntar por último faria a pessoa investir
   cinco respostas antes de descobrir que escolheu errado.
 - **A passphrase conta CARACTERES, não bytes.** Doze com acento passam de doze bytes, e recusar
@@ -16065,6 +16106,26 @@ querem) e, num boot que TENTA um sistema, reinicia a máquina se o alvo padrão 
 posto, e todo julgamento o apaga —, então nenhum boot comum ganha prazo, e um estágio 2 quebrado num
 sistema já bom não vira um laço de reinícios. Três senhas erradas no disco são uma falha dessas, e
 reiniciam.
+
+**Numa máquina BIOS, o mesmo ensaio no GRUB.** O systemd-boot é um programa EFI; uma máquina que
+liga pela BIOS (`ronoctua.firmware = "bios"`, que o instalador escreve no `host.nix`) sobe o GRUB
+(`nix/modules/boot-loader.nix`), gravado nos primeiros setores do disco e numa partição própria
+(EF02) no vão de 1 MiB antes do ESP — numerada por último, para o ESP continuar `p1` e o volume LUKS
+`p2`. O default e o boot de uma vez ficam no bloco de ambiente do GRUB (`grubenv`, pelo
+`grub-editenv`): o `next_entry`, que o `grub.cfg` do NixOS lê e apaga sozinho, é o boot de uma vez,
+e o `ronoctua_default`, nosso, é o default, lido só quando o boot não é de uma vez. Não é o
+`default = "saved"` do NixOS: ele põe `savedefault` em toda entrada, e uma entrada escolhida à mão no
+menu viraria o default para sempre. A entrada de um sistema é achada pelo `init=` da linha `linux`
+do `grub.cfg`. O GRUB não deixa variável nenhuma para o Linux ler (não há `LoaderEntrySelected`):
+num boot de uma vez com ensaio armado, o menu põe `ronoctua.trying` na linha de comando do kernel —
+toda entrada leva `${ronoctua_trial}` nos parâmetros, que o GRUB expande no boot e que, vazio, não é
+nada; a variável é exportada, porque uma entrada dentro de um submenu (toda geração numerada) roda
+num ambiente que só copia as exportadas —, e o prazo lê o `/proc/cmdline`, antes de qualquer
+montagem. "Subiu" é o alvo ter sido alcançado neste boot (`ActiveEnterTimestampMonotonic`), não estar
+ativo agora: um `systemctl rescue` mais tarde não rearma o prazo. Depois de cada instalação do GRUB, a
+entrada do MBR protetor é marcada como ativa (o byte 446): há BIOS que só dá boot num disco com uma
+entrada ativa. O `boot-trial-falls-back-on-bios` roda o ensaio inteiro no GRUB, e o `disko-vm-bios`
+instala o layout e sobe por ele.
 
 **Um sistema que sobe igual ao último bom é bom na hora** (`boot-identical`): mesmo kernel, mesmo
 initrd e mesmos parâmetros; o `init=` difere, e essa metade o switch já rodou — mas só um switch que

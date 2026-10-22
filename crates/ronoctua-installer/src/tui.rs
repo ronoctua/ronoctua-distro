@@ -60,7 +60,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::symbols::half_block;
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Widget, Wrap};
 use ronoctua_belongings::prefs::Auth;
 use ronoctua_i18n::{Arg, Texts};
@@ -200,6 +200,9 @@ fn networks() -> Vec<String> {
 pub enum Screen {
     /// Answering question number `n` in [`Question::ALL_KEYS`].
     Asking(usize),
+    /// Saying something of the machine before any question is about it —
+    /// right after the language, so in the person's (`crate::platform`).
+    Stop(Stop),
     /// The release's installer was found: Enter starts it, with the answers.
     Hopping(Hop),
     /// Showing the plan, waiting for confirmation.
@@ -209,6 +212,140 @@ pub enum Screen {
     /// Finished. `Ok` when it worked.
     Finished(bool),
 }
+
+/// What stops the questions, about the machine itself
+/// (`crate::platform`). Each is a list whose first row — the cursor's — is
+/// the way out: it appears on its own, about something the person may not
+/// have chosen (AGENTS, "Perguntas").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// No TPM 2.0: what it is, why it is required, how to switch it on — and
+    /// no installation. A rehearsal may go on, to see the rest.
+    Tpm,
+    /// Started from BIOS: what UEFI is, why it is better, how to switch it
+    /// on — and BIOS only by a row that says it is the worse one.
+    Bios,
+}
+
+/// What a stop says, for somebody who never heard of it: what it is, why it
+/// matters, how to switch it on — step by step, in the firmware's setup —,
+/// and what is left when that cannot be done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Told {
+    /// What it is.
+    pub what: &'static str,
+    /// Why it matters.
+    pub why: &'static str,
+    /// The steps' heading.
+    pub how: &'static str,
+    /// The steps, numbered as drawn; handed the setup's keys.
+    pub steps: &'static [&'static str],
+    /// What is left when the steps cannot be followed.
+    pub after: &'static str,
+    /// What is left instead on a machine started from BIOS, when that is
+    /// something else.
+    pub after_in_bios: Option<&'static str>,
+}
+
+/// A stop's row, and what it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Way {
+    /// Leaves the installer.
+    Leave,
+    /// Goes on with the rehearsal: nothing is installed.
+    Rehearse,
+    /// Goes on, from BIOS.
+    Worse,
+}
+
+impl Way {
+    /// Its row's text **key**.
+    #[must_use]
+    pub const fn key(self, stop: Stop) -> &'static str {
+        match (stop, self) {
+            (Stop::Tpm, Self::Leave) => key::INST_TPM_LEAVE,
+            (Stop::Bios, Self::Leave) => key::INST_FIRMWARE_LEAVE,
+            (_, Self::Rehearse) => key::INST_TPM_PREVIEW,
+            (_, Self::Worse) => key::INST_FIRMWARE_WORSE,
+        }
+    }
+}
+
+impl Stop {
+    /// Its heading's text **key**.
+    #[must_use]
+    pub const fn heading(self) -> &'static str {
+        match self {
+            Self::Tpm => key::INST_TPM,
+            Self::Bios => key::INST_FIRMWARE,
+        }
+    }
+
+    /// What it says, top to bottom, by text **keys** (`stop_text`).
+    #[must_use]
+    pub const fn told(self) -> Told {
+        match self {
+            Self::Tpm => Told {
+                what: key::INST_TPM_WHAT,
+                why: key::INST_TPM_WHY,
+                how: key::INST_TPM_HOW,
+                steps: &[
+                    key::INST_SETUP_OPEN,
+                    key::INST_TPM_FIND,
+                    key::INST_SETUP_SAVE,
+                    key::INST_SETUP_BOOT_AGAIN,
+                ],
+                after: key::INST_TPM_NONE,
+                // IN BIOS MODE THE TPM MAY ONLY BE HIDDEN: UEFI first.
+                after_in_bios: Some(key::INST_TPM_CSM),
+            },
+            Self::Bios => Told {
+                what: key::INST_FIRMWARE_WHAT,
+                why: key::INST_FIRMWARE_WHY,
+                how: key::INST_FIRMWARE_HOW,
+                steps: &[
+                    key::INST_SETUP_OPEN,
+                    key::INST_FIRMWARE_FIND,
+                    key::INST_SETUP_SAVE,
+                    key::INST_FIRMWARE_BOOT_AGAIN,
+                ],
+                after: key::INST_FIRMWARE_STILL,
+                after_in_bios: None,
+            },
+        }
+    }
+
+    /// Its rows, the way out first: a machine with no TPM 2.0 installs
+    /// nothing, and goes on only to rehearse.
+    #[must_use]
+    pub fn ways(self, rehearsal: bool) -> Vec<Way> {
+        match self {
+            Self::Tpm if rehearsal => vec![Way::Leave, Way::Rehearse],
+            Self::Tpm => vec![Way::Leave],
+            Self::Bios => vec![Way::Leave, Way::Worse],
+        }
+    }
+}
+
+/// The keys a firmware's setup opens with, on most machines — not this
+/// system's keys, and so never a sentence's: the screens that send the
+/// person to the setup name them one by one, and the language joins them
+/// (`{ $f2 }, { $f10 }, { $f12 } or { $del }`).
+pub const SETUP_KEYS: [(&str, &str); 4] = [
+    ("f2", KEY_SETUP_F2),
+    ("f10", KEY_SETUP_F10),
+    ("f12", KEY_SETUP_F12),
+    ("del", KEY_SETUP_DEL),
+];
+
+/// The setup's keys, one by one ([`SETUP_KEYS`]).
+pub const KEY_SETUP_F2: &str = "F2";
+/// See [`SETUP_KEYS`].
+pub const KEY_SETUP_F10: &str = "F10";
+/// See [`SETUP_KEYS`].
+pub const KEY_SETUP_F12: &str = "F12";
+/// See [`SETUP_KEYS`].
+pub const KEY_SETUP_DEL: &str = "Del";
 
 /// What a key leads to, beyond the screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -460,6 +597,17 @@ pub struct State {
     /// The ids the hop's answer left out that this release no longer
     /// offers: said on the list, which shows them gone.
     pub dropped: Vec<String>,
+    /// The machine, read before the first screen (`crate::platform`).
+    pub platform: crate::platform::Platform,
+    /// A rehearsal (no `--execute`): nothing is installed, and a machine
+    /// with no TPM may still be looked through.
+    pub rehearsal: bool,
+    /// The person chose BIOS on its screen ([`Stop::Bios`]), or before a
+    /// hop handed the answers on.
+    pub bios_chosen: bool,
+    /// The screen the stops were shown in front of, when it is not the
+    /// first question after the language ([`State::stop_first`]).
+    pub after_stop: Option<Screen>,
 }
 
 impl State {
@@ -497,6 +645,10 @@ impl State {
             review_page: (0, 0),
             resume_to: None,
             dropped: Vec::new(),
+            platform: crate::platform::Platform::default(),
+            rehearsal: false,
+            bios_chosen: false,
+            after_stop: None,
         };
         e.choice = e.default_choice();
         e
@@ -594,6 +746,10 @@ impl State {
     /// Whether the current question is answered by choosing from a list.
     #[must_use]
     pub fn is_list(&self) -> bool {
+        // A STOP is a list of its ways.
+        if let Screen::Stop(stop) = self.screen {
+            return !stop.ways(self.rehearsal).is_empty();
+        }
         // A LIST WITH NO OPTIONS IS NOT A LIST, it is a screen with no way out.
         //
         // The lists come from files that can be absent — a `base.lst` the build
@@ -644,6 +800,14 @@ impl State {
     /// The current question's list options.
     #[must_use]
     pub fn options(&self) -> Vec<String> {
+        // A STOP'S WAYS, by their text keys: drawn in the person's language.
+        if let Screen::Stop(stop) = self.screen {
+            return stop
+                .ways(self.rehearsal)
+                .iter()
+                .map(|w| w.key(stop).to_owned())
+                .collect();
+        }
         match self.question_of() {
             Some(Question::Disk) => self.disks.iter().map(Disk::line).collect(),
             Some(Question::Language) => ronoctua_i18n::LANGUAGES
@@ -850,6 +1014,14 @@ impl State {
         self.dropped.clear();
         let current = match &self.screen {
             Screen::Asking(n) => *n,
+            // A STOP STANDS AFTER THE LANGUAGE: back to it.
+            Screen::Stop(_) => {
+                Question::ALL_KEYS
+                    .iter()
+                    .position(|q| *q == Question::Language)
+                    .unwrap_or_default()
+                    + 1
+            }
             // The hop's screen is the network's answer: back to it.
             Screen::Hopping(_) => Question::ALL_KEYS
                 .iter()
@@ -1126,11 +1298,100 @@ impl State {
                     key::INST_CHECKING,
                 );
             }
+            // THE MACHINE IS SAID BEFORE ANY QUESTION IS ABOUT IT, and in
+            // the language just chosen: a stop, when there is one.
+            Question::Language => {
+                self.answers.set(q, v);
+                match self.stop_due() {
+                    Some(stop) => self.stop_at(stop),
+                    None => self.follow(n),
+                }
+            }
             _ => {
                 self.answers.set(q, v);
                 self.follow(n);
             }
         }
+    }
+
+    /// The stop this machine is due, if any: a BIOS start not chosen yet
+    /// first — in BIOS mode many computers hide the TPM, and switching to
+    /// UEFI is then the answer to both —, then no TPM 2.0, which nothing
+    /// installs without.
+    fn stop_due(&self) -> Option<Stop> {
+        if !self.platform.uefi && !self.bios_chosen {
+            Some(Stop::Bios)
+        } else if !self.platform.tpm2 && !self.passed_tpm() {
+            Some(Stop::Tpm)
+        } else {
+            None
+        }
+    }
+
+    /// Shows the stop this machine is due before anything else, and then
+    /// the screen it stood on: a release's installer the answers were handed
+    /// to resumes past the language, where the stops stand — and the
+    /// installer that handed them on may have had none.
+    pub fn stop_first(&mut self) {
+        if let Some(stop) = self.stop_due() {
+            self.after_stop = Some(self.screen.clone());
+            self.stop_at(stop);
+        }
+    }
+
+    /// Whether the TPM's stop was passed, which only a rehearsal does.
+    fn passed_tpm(&self) -> bool {
+        self.rehearsal && self.screen == Screen::Stop(Stop::Tpm)
+    }
+
+    /// Shows `stop`, the cursor on its way out.
+    fn stop_at(&mut self, stop: Stop) {
+        self.stop_waiting();
+        self.screen = Screen::Stop(stop);
+        self.choice = 0;
+        self.scroll = 0;
+        self.aimed = None;
+        self.untouched = true;
+        self.typing.clear();
+        self.error = None;
+        self.status = None;
+    }
+
+    /// What a stop's row does: leave, or go on to what comes next — the
+    /// TPM's stop after the BIOS's, then the screen the stops stood before
+    /// (the first question after the language, or where a resumed
+    /// installation picks up).
+    fn take_way(&mut self, stop: Stop) -> Next {
+        let ways = stop.ways(self.rehearsal);
+        match ways.get(self.choice) {
+            Some(Way::Leave) => return Next::GiveUp,
+            Some(Way::Worse) => self.bios_chosen = true,
+            Some(Way::Rehearse) => {}
+            None => return Next::Stay,
+        }
+        match self.stop_due() {
+            Some(next) if next != stop => self.stop_at(next),
+            _ => self.past_the_stops(),
+        }
+        Next::Stay
+    }
+
+    /// The screen after the stops.
+    fn past_the_stops(&mut self) {
+        if let Some(screen) = self.after_stop.take() {
+            self.screen = screen;
+            self.scroll = 0;
+            self.aimed = None;
+            self.untouched = true;
+            self.error = None;
+            self.choice = self.default_choice();
+            return;
+        }
+        let language = Question::ALL_KEYS
+            .iter()
+            .position(|q| *q == Question::Language)
+            .unwrap_or_default();
+        self.follow(language);
     }
 
     /// Applies a key.
@@ -1188,6 +1449,23 @@ impl State {
                 }
                 Next::Stay
             }
+            Screen::Stop(stop) => match k {
+                ESC => {
+                    self.go_back();
+                    Next::Stay
+                }
+                UP => {
+                    self.choice = self.choice.saturating_sub(1);
+                    Next::Stay
+                }
+                DOWN => {
+                    let last = stop.ways(self.rehearsal).len().saturating_sub(1);
+                    self.choice = (self.choice + 1).min(last);
+                    Next::Stay
+                }
+                ENTER => self.take_way(stop),
+                _ => Next::Stay,
+            },
             Screen::Hopping(hop) => match k {
                 ENTER => Next::Hop(hop),
                 ESC => {
@@ -1350,6 +1628,7 @@ fn label_of(e: &State, texts: &Texts) -> String {
             texts.t(key::INST_BELONGINGS_PASSPHRASE_AGAIN)
         }
         (Screen::Asking(_), Some(q)) => texts.t(q.label()),
+        (Screen::Stop(stop), _) => texts.t(stop.heading()),
         _ => String::new(),
     }
 }
@@ -1414,7 +1693,7 @@ fn keys_of(e: &State, texts: &Texts, width: u16) -> String {
                 line(key::INST_KEYS_CHECK)
             }
         }
-        Screen::Asking(_) if e.is_list() => line(key::INST_KEYS_CHOOSE),
+        Screen::Asking(_) | Screen::Stop(_) if e.is_list() => line(key::INST_KEYS_CHOOSE),
         Screen::Asking(_) | Screen::Hopping(_) => line(key::INST_KEYS_EDIT),
         Screen::Reviewing => line(key::INST_KEYS_REVIEW),
         _ => line(key::INST_KEYS_QUIT),
@@ -1627,7 +1906,7 @@ fn kept_for_more(area: Rect, needs: usize) -> (Rect, Option<(Rect, Rect)>) {
 
 /// The list on a body of `area`, when the screen is one.
 fn list_rows(e: &State, area: Rect) -> Option<Rows> {
-    if !matches!(e.screen, Screen::Asking(_)) || !e.is_list() {
+    if !matches!(e.screen, Screen::Asking(_) | Screen::Stop(_)) || !e.is_list() {
         return None;
     }
     let count = e.options().len();
@@ -1773,6 +2052,80 @@ fn review_parts(area: Rect) -> std::rc::Rc<[Rect]> {
         .split(area)
 }
 
+/// A stop's explanation: what it is and why in the text's tone, the steps
+/// under their heading — each numbered, the first naming the setup's keys —,
+/// and what is left in the quieter tone (another thing on a machine started
+/// from BIOS, `bios`); `airy`, with a line of air between the parts.
+fn stop_text(stop: Stop, texts: &Texts, bios: bool, airy: bool) -> Text<'static> {
+    let told = stop.told();
+    let primary = Style::default().fg(color(color::TEXT_PRIMARY));
+    let secondary = Style::default().fg(color(color::TEXT_SECONDARY));
+    let air = || airy.then(|| Line::from(""));
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::styled(texts.t(told.what), primary));
+    lines.extend(air());
+    lines.push(Line::styled(texts.t(told.why), primary));
+    lines.extend(air());
+    lines.push(Line::styled(
+        texts.t(told.how),
+        Style::default().fg(color(color::TEXT_HEADING)),
+    ));
+    for (n, step) in told.steps.iter().enumerate() {
+        let number = (n + 1).to_string();
+        lines.push(Line::from(vec![
+            Span::styled(texts.t_with(key::INST_STEP, &[("n", &number)]), secondary),
+            Span::raw(" "),
+            Span::styled(texts.t_with(step, &SETUP_KEYS), primary),
+        ]));
+    }
+    lines.extend(air());
+    let after = told.after_in_bios.filter(|_| bios).unwrap_or(told.after);
+    lines.push(Line::styled(texts.t(after), secondary));
+    Text::from(lines)
+}
+
+/// A stop's explanation for a column `width` cells wide and at most `most`
+/// rows tall, and the rows it takes: with its lines of air when they fit,
+/// without them when they do not — the air goes before any word does. Read
+/// by [`places`], which sizes the column, and by the drawing, handed the
+/// column it sized: the same answer.
+fn stop_fitted(
+    stop: Stop,
+    texts: &Texts,
+    bios: bool,
+    width: u16,
+    most: u16,
+) -> (Text<'static>, u16) {
+    let rows = |text: &Text<'static>| {
+        let n = Paragraph::new(text.clone())
+            .wrap(Wrap { trim: true })
+            .line_count(width.max(1));
+        u16::try_from(n).unwrap_or(u16::MAX)
+    };
+    let airy = stop_text(stop, texts, bios, true);
+    let n = rows(&airy);
+    if n <= most {
+        return (airy, n);
+    }
+    let tight = stop_text(stop, texts, bios, false);
+    let n = rows(&tight);
+    (tight, n.min(most))
+}
+
+/// A stop's heading and explanation as plain lines, for the terminal-less
+/// installation, which says what the screen would.
+#[must_use]
+pub fn stop_said(stop: Stop, texts: &Texts, bios: bool) -> String {
+    let mut said = texts.t(stop.heading());
+    for line in stop_text(stop, texts, bios, true).lines {
+        said.push('\n');
+        for span in line.spans {
+            said.push_str(&span.content);
+        }
+    }
+    said
+}
+
 /// Where everything is on a screen of `area` — the one answer the drawing
 /// paints and the pointer hits.
 #[must_use]
@@ -1786,6 +2139,35 @@ pub fn places(area: Rect, e: &State, texts: &Texts) -> Places {
     let rows = Paragraph::new(said)
         .wrap(Wrap { trim: true })
         .line_count(area.width.max(1));
+    // A STOP IS READ TOP TO BOTTOM: what it is, why and how — the whole
+    // screen's point, never a third of it —, a line of air, then its ways.
+    if let Screen::Stop(stop) = e.screen {
+        let ways = u16::try_from(e.options().len()).unwrap_or(u16::MAX);
+        let most = area.height.saturating_sub(2 + 1 + 1 + ways).max(1);
+        let (_, help_rows) = stop_fitted(stop, texts, e.answers.bios, area.width, most);
+        let help_rows = help_rows.max(1);
+        let areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),         // title + heading
+                Constraint::Length(help_rows), // the explanation
+                Constraint::Length(1),         // air
+                Constraint::Min(1),            // the ways
+                Constraint::Length(1),         // keys
+            ])
+            .split(area);
+        let key_line = keys_of(e, texts, areas[4].width);
+        return Places {
+            head: areas[0],
+            body: areas[3],
+            help: areas[1],
+            keys: areas[4],
+            hints: hints_of(&key_line, areas[4].x),
+            key_line,
+            list: list_rows(e, areas[3]),
+            plan: None,
+        };
+    }
     let most = (area.height / 3).max(1);
     let help_rows = u16::try_from(rows).unwrap_or(u16::MAX).clamp(1, most);
     let areas = Layout::default()
@@ -1822,7 +2204,7 @@ fn draw(f: &mut ratatui::Frame, e: &State, texts: &Texts) {
     let at = places(f.area(), e, texts);
 
     let title = match e.screen {
-        Screen::Asking(_) | Screen::Hopping(_) => texts.t(key::INST_TITLE),
+        Screen::Asking(_) | Screen::Stop(_) | Screen::Hopping(_) => texts.t(key::INST_TITLE),
         Screen::Reviewing => texts.t(key::INST_REVIEW),
         Screen::Running => texts.t(key::INST_RUNNING),
         Screen::Finished(true) => texts.t(key::INST_DONE),
@@ -1852,17 +2234,22 @@ fn draw(f: &mut ratatui::Frame, e: &State, texts: &Texts) {
 
     let dim = Style::default().fg(color(color::TEXT_DIM));
     let (said, refused) = said_of(e, texts);
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
+    let help = match e.screen {
+        // A STOP'S EXPLANATION IS THE SCREEN, in the text's own tones.
+        Screen::Stop(stop) => {
+            stop_fitted(stop, texts, e.answers.bios, at.help.width, at.help.height).0
+        }
+        _ => Text::from(Line::from(Span::styled(
             said,
             if refused {
                 Style::default().fg(color(color::STATE_ERROR))
             } else {
                 dim
             },
-        )))
-        .style(base)
-        .wrap(Wrap { trim: true }),
+        ))),
+    };
+    f.render_widget(
+        Paragraph::new(help).style(base).wrap(Wrap { trim: true }),
         at.help,
     );
     // EVERY HINT IS A CLICK, drawn where `places` says it is; the one the
@@ -1913,7 +2300,7 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
         {
             access_body(f, e, texts, area, base);
         }
-        Screen::Asking(_) if e.is_list() => {
+        Screen::Asking(_) | Screen::Stop(_) if e.is_list() => {
             let Some(rows) = at.list else {
                 f.render_widget(
                     Paragraph::new(texts.t(key::INST_NO_DISK))
@@ -1947,6 +2334,9 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
                     }
                     let item = if let Some(line) = checklist.as_ref().and_then(|c| c.get(i)) {
                         ListItem::new(line.clone())
+                    } else if matches!(e.screen, Screen::Stop(_)) {
+                        // A STOP'S WAY, its key read in the person's language.
+                        ListItem::new(texts.t(&o))
                     } else if wifi && o.is_empty() {
                         ListItem::new(texts.t(key::INST_WIFI_NONE))
                     } else {
@@ -2078,6 +2468,8 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
                 parts[1],
             );
         }
+        // A stop is always a list of its ways (`Stop::ways`).
+        Screen::Stop(_) => {}
         Screen::Running | Screen::Finished(_) => {
             let mut lines: Vec<Line> = Vec::new();
             if let Some((i, total, label)) = e.step {
@@ -2401,7 +2793,9 @@ pub enum Collected {
 
 /// Runs the TUI. Returns the answers once the person confirms.
 ///
-/// `resume`: the answers a hop handed on, and where to pick up.
+/// `resume`: the answers a hop handed on, and where to pick up. `rehearsal`:
+/// no `--execute` — nothing is installed, so a machine with no TPM may still
+/// be looked through.
 ///
 /// # Errors
 ///
@@ -2410,15 +2804,27 @@ pub fn collect(
     initial: &Texts,
     reach: &Reach,
     resume: Option<(Answers, Question)>,
+    rehearsal: bool,
 ) -> Result<Collected> {
     // WHAT TAKES A MOMENT, before the screen is taken: the disks, the
     // networks in range, and the hosts the network question names (`nix`
     // answers those).
+    let resumed = resume.is_some();
     let mut e = match resume {
         Some((answers, at)) => State::resumed(disks(), networks(), answers, at),
         None => State::fresh(disks(), networks()),
     };
     e.hosts = reach.hosts().join(", ");
+    // THE MACHINE, before the first screen: the stops after the language,
+    // and the firmware the plan installs for — BIOS already chosen when the
+    // answers a hop handed on say so.
+    e.platform = crate::platform::Platform::here();
+    e.rehearsal = rehearsal;
+    e.bios_chosen = e.answers.bios;
+    e.answers.bios = !e.platform.uefi;
+    if resumed {
+        e.stop_first();
+    }
 
     enable_raw_mode().context("raw mode")?;
     let mut output = std::io::stdout();
@@ -2651,6 +3057,30 @@ fn shown(screen: &str) -> Option<State> {
         // THE COMPOSE QUESTION, whose help names the keys the default puts
         // to work.
         "compose" => at(&mut e, Question::ComposeKey),
+        // THE TWO STOPS: a machine with no TPM 2.0 (a rehearsal, so its two
+        // ways show), and one started from BIOS.
+        "tpm" => {
+            e.platform.tpm2 = false;
+            e.rehearsal = true;
+            e.screen = Screen::Stop(Stop::Tpm);
+        }
+        "bios" => {
+            e.platform.uefi = false;
+            e.answers.bios = true;
+            e.screen = Screen::Stop(Stop::Bios);
+        }
+        // AND THE TPM'S, on a machine started from BIOS, chosen: its note
+        // says the TPM may only be hidden.
+        "tpm-bios" => {
+            e.platform = crate::platform::Platform {
+                uefi: false,
+                tpm2: false,
+            };
+            e.answers.bios = true;
+            e.bios_chosen = true;
+            e.rehearsal = true;
+            e.screen = Screen::Stop(Stop::Tpm);
+        }
         // THE LIST OF PROGRAMS, with one more unmarked than the default (the
         // first marked one) and the cursor on the row below it, so a dim
         // row and the cursor's are both on screen.
@@ -4503,6 +4933,9 @@ mod tests {
             "review",
             "left-out",
             "compose",
+            "tpm",
+            "tpm-bios",
+            "bios",
         ] {
             visit(&shown(name).unwrap_or_else(|| panic!("no screen `{name}`")));
             seen += 1;
@@ -4587,5 +5020,197 @@ mod tests {
             "the question is in its options' tone"
         );
         assert_ne!(question.fg, here.fg, "the question is in the cursor's tone");
+    }
+
+    /// The state on the language's screen, on this machine.
+    fn on_a(platform: crate::platform::Platform, rehearsal: bool) -> State {
+        let mut e = with_disks();
+        e.platform = platform;
+        e.rehearsal = rehearsal;
+        e.answers.bios = !platform.uefi;
+        e
+    }
+
+    /// FAILS IF: a machine with no TPM 2.0 goes past the language to any
+    /// question — the installation would seal its secrets into nothing —, its
+    /// stop opens off its way out or offers an installation another way,
+    /// Enter there does not leave, Esc does not go back to the language, or a
+    /// rehearsal cannot look through the rest.
+    #[test]
+    fn a_machine_with_no_tpm_installs_nothing() {
+        use crate::platform::Platform;
+        let none = Platform {
+            uefi: true,
+            tpm2: false,
+        };
+        let mut e = on_a(none, false);
+        assert_eq!(e.question_of(), Some(Question::Language));
+        e.key(KeyCode::Enter);
+        assert_eq!(e.screen, Screen::Stop(Stop::Tpm));
+        assert_eq!(e.options().len(), 1, "an installation has one way: out");
+        e.key(KeyCode::Down);
+        assert_eq!(e.choice, 0);
+        assert_eq!(e.key(KeyCode::Enter), Next::GiveUp);
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Language));
+        // A REHEARSAL may look through the rest — after the stop.
+        let mut r = on_a(none, true);
+        r.key(KeyCode::Enter);
+        assert_eq!(r.screen, Screen::Stop(Stop::Tpm));
+        assert_eq!(r.choice, 0, "the cursor is born on the way out");
+        r.key(KeyCode::Down);
+        assert_eq!(r.key(KeyCode::Enter), Next::Stay);
+        assert_eq!(r.question_of(), Some(Question::Disk));
+    }
+
+    /// FAILS IF: a machine started from BIOS goes on without its stop, the
+    /// stop's cursor is born anywhere but on the way out, the worse way does
+    /// not go on (BIOS installs), or the choice is asked again on the way
+    /// back — and, with no TPM either, a rehearsal skips the BIOS's stop.
+    #[test]
+    fn bios_goes_on_only_by_the_worse_way() {
+        use crate::platform::Platform;
+        let bios = Platform {
+            uefi: false,
+            tpm2: true,
+        };
+        let mut e = on_a(bios, false);
+        e.key(KeyCode::Enter);
+        assert_eq!(e.screen, Screen::Stop(Stop::Bios));
+        assert_eq!(e.choice, 0, "the cursor is born on the way out");
+        assert_eq!(e.key(KeyCode::Enter), Next::GiveUp, "the first row leaves");
+        e.key(KeyCode::Down);
+        assert_eq!(e.key(KeyCode::Enter), Next::Stay);
+        assert!(e.bios_chosen && e.answers.bios);
+        assert_eq!(e.question_of(), Some(Question::Disk));
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Language));
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::Disk), "chosen once");
+        let mut both = on_a(
+            Platform {
+                uefi: false,
+                tpm2: false,
+            },
+            true,
+        );
+        // BIOS FIRST: in BIOS mode the TPM is often hidden, and UEFI is the
+        // answer to both; the TPM's stop comes after the worse way.
+        both.key(KeyCode::Enter);
+        assert_eq!(both.screen, Screen::Stop(Stop::Bios));
+        both.key(KeyCode::Down);
+        both.key(KeyCode::Enter);
+        assert_eq!(both.screen, Screen::Stop(Stop::Tpm));
+    }
+
+    /// FAILS IF: an installation a hop resumed — past the language, where
+    /// the stops stand — goes on without them on a machine with no TPM or
+    /// started from BIOS, does not come back to where it resumed once they
+    /// are passed, or asks the BIOS again of whoever chose it before the hop.
+    #[test]
+    fn a_resumed_installation_stops_too() {
+        use crate::platform::Platform;
+        let mut handed = Answers::default();
+        handed.set(Question::Language, "pt-BR".into());
+        let at = Question::BelongingsAddress;
+        let resumed = |platform: Platform, answers: &Answers, rehearsal: bool| {
+            let mut e = State::resumed(Vec::new(), Vec::new(), answers.clone(), at);
+            e.platform = platform;
+            e.rehearsal = rehearsal;
+            e.bios_chosen = e.answers.bios;
+            e.answers.bios = !platform.uefi;
+            e.stop_first();
+            e
+        };
+        let bios = Platform {
+            uefi: false,
+            tpm2: true,
+        };
+        let mut e = resumed(bios, &handed, false);
+        assert_eq!(e.screen, Screen::Stop(Stop::Bios));
+        e.key(KeyCode::Down);
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(at), "back where it resumed");
+        // CHOSEN BEFORE THE HOP: not asked again.
+        let mut chosen = handed.clone();
+        chosen.bios = true;
+        let e = resumed(bios, &chosen, false);
+        assert_eq!(e.question_of(), Some(at));
+        // NO TPM: stopped, and only a rehearsal goes on.
+        let none = Platform {
+            uefi: true,
+            tpm2: false,
+        };
+        let mut e = resumed(none, &handed, false);
+        assert_eq!(e.screen, Screen::Stop(Stop::Tpm));
+        assert_eq!(e.key(KeyCode::Enter), Next::GiveUp);
+        let mut r = resumed(none, &handed, true);
+        r.key(KeyCode::Down);
+        r.key(KeyCode::Enter);
+        assert_eq!(r.question_of(), Some(at));
+        // A machine with nothing to say resumes where it was handed.
+        let e = resumed(Platform::default(), &handed, false);
+        assert_eq!(e.question_of(), Some(at));
+    }
+
+    /// FAILS IF: a stop's screen cuts its explanation — what the TPM or UEFI
+    /// is, why it matters and how to switch it on, which is the screen's whole
+    /// point —, loses its heading or a way, on a console as narrow as 60 × 24
+    /// or as wide as 100 × 34, in any language; or a click takes a way it did
+    /// not first select.
+    #[test]
+    fn a_stop_is_drawn_whole_and_answers_the_pointer() {
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = Texts::fresh(language).unwrap();
+            for name in ["tpm", "tpm-bios", "bios"] {
+                let e = shown(name).unwrap();
+                let Screen::Stop(stop) = e.screen else {
+                    panic!("`{name}` is no stop");
+                };
+                let told = stop.told();
+                let after = told
+                    .after_in_bios
+                    .filter(|_| e.answers.bios)
+                    .unwrap_or(told.after);
+                let parts = [told.what, told.why, told.how, after]
+                    .iter()
+                    .chain(told.steps)
+                    .map(|k| t.t_with(k, &SETUP_KEYS))
+                    .collect::<Vec<_>>();
+                for (w, h) in [(60, 24), (100, 34)] {
+                    let text = rendered(&e, &t, w, h);
+                    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                    for part in &parts {
+                        let words: Vec<&str> = part.split_whitespace().collect();
+                        let end = words[words.len().saturating_sub(3)..].join(" ");
+                        assert!(
+                            flat.contains(&end),
+                            "{language} {name} {w}×{h}: lost `{end}`:\n{text}"
+                        );
+                    }
+                    assert!(
+                        text.contains(&t.t(stop.heading())),
+                        "{language} {name} {w}×{h}:\n{text}"
+                    );
+                    for way in stop.ways(e.rehearsal) {
+                        let row = t.t(way.key(stop));
+                        assert!(
+                            text.contains(&row),
+                            "{language} {name} {w}×{h}: no `{row}`:\n{text}"
+                        );
+                    }
+                }
+            }
+        }
+        let t = texts();
+        let mut e = shown("bios").unwrap();
+        let at = places(Rect::new(0, 0, 100, 34), &e, &t);
+        let rows = at.list.expect("a stop is a list");
+        let (x, y) = (rows.area.x + 1, rows.area.y + 1);
+        assert_eq!(e.pointer(Pointer::Click, x, y, &at), Next::Stay);
+        assert_eq!(e.choice, 1);
+        assert!(!e.bios_chosen, "the first click only selects");
+        e.pointer(Pointer::Click, x, y, &at);
+        assert!(e.bios_chosen, "the second takes it");
     }
 }

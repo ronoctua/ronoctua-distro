@@ -1201,6 +1201,9 @@
         ./nix/modules/player.nix
         ./nix/modules/browser-extension.nix
         ./nix/modules/fonts.nix
+        # The kernel's console: the keyboard map and the font on every console
+        # a machine boots on, with no line of error — the ISO's module too.
+        (import ./nix/modules/console.nix { tool = rust.consoleFont; })
         ./nix/modules/scroll.nix
         ./nix/modules/keyboard.nix
         # Independent keyboards: keyd's replacement when every keyboard is its
@@ -1719,6 +1722,9 @@
           specialArgs = { inherit inputs; };
           modules = [
             ./nix/installer/iso.nix
+            # The console every machine has (`nix/modules/console.nix`): the
+            # installer lives on it.
+            (import ./nix/modules/console.nix { tool = rust.consoleFont; })
             {
               _module.args.ronoctua = {
                 inherit

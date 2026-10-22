@@ -26,6 +26,7 @@ pub mod job;
 pub mod key;
 pub mod model;
 pub mod plan;
+pub mod platform;
 pub mod reach;
 pub mod release;
 pub mod swap;
