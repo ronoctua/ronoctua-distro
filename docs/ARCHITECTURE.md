@@ -19340,6 +19340,15 @@ cursor e pergunta continuem distintos depois da troca; no console de verdade, o
 `installer-console-vm` e o `rescue-vm` leem o `/dev/vcsa` e conferem que o pixel da faixa é o
 `surface.selection` do tema.
 
+**Enquanto uma TUI segura o console, o kernel fica calado nele.** O kernel escreve as mensagens no
+console à vista, por cima do que houver, e uma linha que chega à última fileira rola a tela; a TUI só
+repinta as células que acha que mudaram, então o que o kernel escreveu fica. Medido: depois de o
+rádio associar, a pergunta seguinte do instalador dizia `B longings repository`, e o
+`installer-joins-wifi-vm` não a achava. O ISO sobe com `loglevel=4`, então o aviso de um driver faz o
+mesmo numa máquina de verdade. As duas TUIs baixam o nível do console a 1 (`ronoctua_vt::Quiet`, o
+primeiro número de `/proc/sys/kernel/printk`) e o devolvem ao sair, no mesmo guarda que devolve a
+paleta; as mensagens continuam no anel do kernel e no journal.
+
 **O tema é o padrão, não o primeiro da lista.** Sem `RONOCTUA_THEME`, um processo começa no índice
 zero da ordem do seletor; o instalador e o resgate pintavam o `forest`, e o sistema que eles
 instalam e resgatam nasce no `default` (`cyber`). Os dois caem no `theme::default_one()`, e a

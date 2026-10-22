@@ -18,6 +18,9 @@
 //! own colours, exactly.
 
 pub mod console;
+mod quiet;
+
+pub use quiet::{PRINTK, QUIET_LEVEL, Quiet, level_of};
 
 use ratatui::buffer::Buffer;
 use ratatui::style::Modifier;

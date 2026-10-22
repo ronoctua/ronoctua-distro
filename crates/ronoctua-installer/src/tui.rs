@@ -2939,8 +2939,17 @@ impl Widget for QrBlock<'_> {
 /// thing that breaks the terminal of whoever tried to use it.
 ///
 /// And on the console, its own palette: the slots the TUI wrote are the
-/// installer's, not the shell's that comes after it.
-struct Guard(Terminal<CrosstermBackend<Stdout>>, Option<Console>);
+/// installer's, not the shell's that comes after it — and its level, which
+/// the TUI held quiet ([`ronoctua_vt::Quiet`]) and gives back when it drops.
+struct Guard(
+    Terminal<CrosstermBackend<Stdout>>,
+    Option<Console>,
+    #[expect(
+        dead_code,
+        reason = "held for its Drop, which gives the console its level back"
+    )]
+    Option<ronoctua_vt::Quiet>,
+);
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -3023,9 +3032,12 @@ pub fn collect(
     if let Some(c) = &console {
         crossterm::execute!(output, Print(c.palette())).context("the console's palette")?;
     }
+    // AND THE KERNEL QUIET ON IT: a message written over the screen stays
+    // where the TUI does not repaint (`ronoctua_vt::Quiet`).
     let mut g = Guard(
         Terminal::new(CrosstermBackend::new(output)).context("terminal")?,
         console,
+        ronoctua_vt::Quiet::of_term(),
     );
     // THE JOBS RUN ON THREADS, one at a time as the screens ask them, and
     // their answers come back through this channel: the loop below keeps

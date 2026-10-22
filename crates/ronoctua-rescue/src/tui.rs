@@ -123,8 +123,17 @@ fn banded(f: &mut ratatui::Frame, list: List, at: Rect, state: &mut ListState, b
 /// It is the same guard the installer has, and for the reason written there: a
 /// `panic!` in the middle of drawing must not leave a terminal in raw mode. Here
 /// it matters more — the terminal it would ruin may be the only one the person
-/// still has. And on the console, its own palette.
-struct Guard(Terminal<CrosstermBackend<Stdout>>, Option<Console>);
+/// still has. And on the console, its own palette, and its level
+/// ([`ronoctua_vt::Quiet`], given back when it drops).
+struct Guard(
+    Terminal<CrosstermBackend<Stdout>>,
+    Option<Console>,
+    #[expect(
+        dead_code,
+        reason = "held for its Drop, which gives the console its level back"
+    )]
+    Option<ronoctua_vt::Quiet>,
+);
 
 impl Guard {
     /// The console's slots in the palette's tones — at the start, and again
@@ -179,9 +188,12 @@ pub fn run() -> Result<()> {
     // The mouse is a bonus and never a requirement: on a VT nothing answers
     // this, and the console goes on being driven by the keyboard.
     let _ = crossterm::execute!(output, EnterAlternateScreen, EnableMouseCapture);
+    // AND THE KERNEL QUIET ON IT: a message written over the screen stays
+    // where the TUI does not repaint (`ronoctua_vt::Quiet`).
     let mut guard = Guard(
         Terminal::new(CrosstermBackend::new(output)).context("terminal")?,
         Console::of_term(SLOTS),
+        ronoctua_vt::Quiet::of_term(),
     );
     guard.take_the_palette();
 
