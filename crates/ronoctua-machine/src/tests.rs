@@ -80,6 +80,10 @@ impl Drop for Scratch {
 /// Where a toplevel carries its lock, as the machine module puts it.
 const SYSTEM_LOCK: &str = "etc/ronoctua/machine.lock";
 
+/// systemd-boot's `loader.conf`, as NixOS's builder writes it.
+const LOADER_CONF: &str =
+    "timeout 5\ndefault nixos-generation-1.conf\neditor 0\nconsole-mode keep\n";
+
 const LOCK_A: &str = r#"{"nodes":{"root":{"inputs":{"ronoctua":"ronoctua"}},"ronoctua":{"locked":{"rev":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}},"root":"root","version":7}
 "#;
 const LOCK_B: &str = r#"{"nodes":{"root":{"inputs":{"ronoctua":"ronoctua"}},"ronoctua":{"locked":{"rev":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}},"root":"root","version":7}
@@ -233,6 +237,8 @@ esac
         std::fs::write(s.path("nix/store/k1"), "kernel").unwrap();
         std::fs::write(s.path("nix/store/i1"), "initrd").unwrap();
         std::fs::create_dir_all(s.path("nix/var/nix/profiles")).unwrap();
+        std::fs::create_dir_all(s.path("boot/loader")).unwrap();
+        std::fs::write(s.path("boot/loader/loader.conf"), LOADER_CONF).unwrap();
         let w = Self {
             m: Machine {
                 places: Places {
@@ -1763,6 +1769,60 @@ fn the_trial_runs_on_grub_as_on_systemd_boot() {
         "the profile is back"
     );
     assert_eq!(w.read("efi-default"), "");
+}
+
+/// FAILS IF: systemd-boot is not told to restart on a start that fails
+/// while a trial is armed — a trial it cannot start would hand the machine
+/// to the firmware —, the line outlives the trial's verdict, good or failed
+/// (it would restart forever a newest generation that cannot start, with no
+/// trial at all), a line NixOS wrote is lost, or the line is written with
+/// no trial armed, into a `loader.conf` that is not there, or on GRUB.
+#[test]
+fn only_a_trial_restarts_a_start_that_fails() {
+    let posted = format!("{LOADER_CONF}{}\n", crate::loader::REBOOT_ON_ERROR);
+    let conf = "boot/loader/loader.conf";
+    let w = World::new("restarts");
+    let a = w.m.system.resolve(system::BOOTED).unwrap();
+    let b = w.toplevel("b", "quiet panic=10");
+    w.builds(&b);
+    w.m.apply(false).unwrap();
+    assert_eq!(w.read(conf), posted, "armed");
+    w.reboot(&b);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Good);
+    assert_eq!(w.read(conf), LOADER_CONF, "a trial that booted");
+    let c = w.toplevel("c", "quiet c");
+    w.builds(&c);
+    w.m.apply(false).unwrap();
+    assert_eq!(w.read(conf), posted, "armed again");
+    w.reboot(&b);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Failed);
+    assert_eq!(w.read(conf), LOADER_CONF, "a trial that did not boot");
+    assert_ne!(a, b);
+
+    let w = World::new("restarts-no-efi");
+    std::fs::write(w.s.path("no-efi"), "").unwrap();
+    let b = w.toplevel("b", "quiet b");
+    w.builds(&b);
+    w.m.apply(false).unwrap();
+    assert_eq!(w.read(conf), LOADER_CONF, "no trial, no line");
+
+    let w = World::new("restarts-no-conf");
+    std::fs::remove_file(w.s.path(conf)).unwrap();
+    let b = w.toplevel("b", "quiet b");
+    w.builds(&b);
+    let applied = w.m.apply(false).unwrap();
+    assert_eq!(
+        applied.trial.map(|t| t.outcome),
+        Some(TrialOutcome::Pending),
+        "the trial is armed all the same"
+    );
+    assert!(!w.s.path(conf).exists(), "a loader.conf made from nothing");
+
+    let w = World::grub("restarts-grub");
+    let b = w.toplevel("b", "quiet b");
+    w.builds(&b);
+    w.m.apply(false).unwrap();
+    assert_eq!(w.read(conf), LOADER_CONF, "GRUB has no loader.conf to post");
 }
 
 /// FAILS IF: a GRUB whose environment block cannot be written arms a trial

@@ -1354,6 +1354,14 @@ sem folga.
 descreveria o campo à esquerda do que está sob o dedo, a tela inteira. É a forma de defeito que este
 arquivo já pagou duas vezes — o desenho e o ponteiro calculando o mesmo número cada um do seu jeito.
 
+**A TUI do instalador também recua** (`space.content.inset`, lido pelo `tui.rs` do
+`ronoctua-installer`): o texto encostava nas duas bordas do console, e uma letra na última coluna
+parece cortada. Todo retângulo de texto sai do `places` dentro do recuo, e as linhas que tomam um
+clique (as opções e as que dizem quanto falta acima e abaixo) são esticadas de borda a borda. A faixa
+do cursor e a do ponteiro vão até a borda, e o clique toma a linha onde ela é desenhada. O console de
+resgate recua do mesmo jeito (`tui::inset` do `ronoctua-rescue`): cada coluna, a lateral e o conteúdo,
+guarda o recuo dos dois lados, e a faixa do cursor atravessa a coluna inteira; o editor também recua.
+
 #### O que o `recount` do terminal fazia, e ninguém via
 
 `paint::spans_of` soma o recuo a toda run, e o `recount()` do terminal contava colunas na janela
@@ -16107,6 +16115,21 @@ posto, e todo julgamento o apaga —, então nenhum boot comum ganha prazo, e um
 sistema já bom não vira um laço de reinícios. Três senhas erradas no disco são uma falha dessas, e
 reiniciam.
 
+**Um ensaio que o carregador não consegue iniciar também volta sozinho.** O prazo e o bless só veem um
+kernel que rodou; um kernel que o carregador não carrega (um arquivo que ele não lê, ou que nem é
+kernel) não roda nada, e sem mais nada a máquina pararia num menu esperando alguém. No UEFI, o
+systemd-boot reinicia quando a entrada que ele inicia falha, e o boot seguinte é o último bom, porque
+ele apaga o `LoaderEntryOneShot` assim que o lê. Só que isso exige `reboot-on-error yes` no
+`loader.conf`, e o padrão dele, `auto`, só reinicia entrada com contagem de boot, que as do NixOS
+nunca têm. Então a linha é do ensaio, como a contagem seria: o `ronoctua-machine` a escreve junto com
+o default (só um ensaio deixa o default posto, e o default é o último bom, que esse carregador já
+iniciou) e a tira sempre que o apaga, o que todo julgamento faz. Fixa no `loader.conf`, a linha
+reiniciaria para sempre uma geração mais nova que não inicia sem ensaio nenhum (o primeiro boot
+depois da instalação), onde o firmware teria tentado o pendrive. O NixOS reescreve o arquivo inteiro a
+cada instalação, sem a linha; a nossa escrita é a do builder (uma cópia sincronizada, renomeada por
+cima, e a pasta sincronizada), e um `loader.conf` que falta não é inventado: os padrões do
+systemd-boot religariam o editor. O `boot-trial-falls-back` prova os dois casos.
+
 **Numa máquina BIOS, o mesmo ensaio no GRUB.** O systemd-boot é um programa EFI; uma máquina que
 liga pela BIOS (`ronoctua.firmware = "bios"`, que o instalador escreve no `host.nix`) sobe o GRUB
 (`nix/modules/boot-loader.nix`), gravado nos primeiros setores do disco e numa partição própria
@@ -16124,8 +16147,19 @@ num ambiente que só copia as exportadas —, e o prazo lê o `/proc/cmdline`, a
 montagem. "Subiu" é o alvo ter sido alcançado neste boot (`ActiveEnterTimestampMonotonic`), não estar
 ativo agora: um `systemctl rescue` mais tarde não rearma o prazo. Depois de cada instalação do GRUB, a
 entrada do MBR protetor é marcada como ativa (o byte 446): há BIOS que só dá boot num disco com uma
-entrada ativa. O `boot-trial-falls-back-on-bios` roda o ensaio inteiro no GRUB, e o `disko-vm-bios`
-instala o layout e sobe por ele.
+entrada ativa. No GRUB, o ensaio que ele não inicia cai no `fallback`, no mesmo boot. O `fallback`
+só aceita o NÚMERO de uma entrada do menu para onde a falha volta (`grub-core/normal/menu.c`): o de
+cima, já que o ensaio fica dentro de um submenu, onde nenhuma entrada sobe o último bom e o `default`
+ainda nomeia o ensaio. Então, só num boot de uma vez com ensaio armado, a primeira entrada do menu é
+nossa, com o nome da geração do último bom, e lê o menu de novo como um boot que não tenta nada (o
+`next_entry` já foi gasto, então o `ronoctua_default` é o default, e a marca sai antes). Ela não é
+exportada: o `fallback` de um submenu nomearia uma entrada do submenu. A releitura se diz releitura
+(`ronoctua_fell`, exportada): se o bloco não pôde ser escrito e o `next_entry` não foi gasto, ela
+seria de novo um boot de uma vez e cairia em si mesma até acabar a memória do GRUB. Um INITRD que não
+carrega não para o GRUB: ele inicia o kernel sem o initrd, que entra em pânico, e quem traz a máquina
+de volta é o `panic=10` com o ensaio. O
+`boot-trial-falls-back-on-bios` roda o ensaio inteiro no GRUB, e o `disko-vm-bios` instala o layout
+e sobe por ele.
 
 **Um sistema que sobe igual ao último bom é bom na hora** (`boot-identical`): mesmo kernel, mesmo
 initrd e mesmos parâmetros; o `init=` difere, e essa metade o switch já rodou — mas só um switch que

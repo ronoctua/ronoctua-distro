@@ -222,7 +222,9 @@ fn draw(f: &mut ratatui::Frame, sheet: &Sheet, path: &Path, texts: &Texts) {
         .take(height)
         .map(|l| Line::from(l.clone()))
         .collect();
-    f.render_widget(Paragraph::new(shown), split[0]);
+    // THE TEXT KEEPS OFF THE EDGES, as the console's (`tui::inset`).
+    let sheet_at = crate::tui::inset(split[0]);
+    f.render_widget(Paragraph::new(shown), sheet_at);
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
@@ -234,12 +236,12 @@ fn draw(f: &mut ratatui::Frame, sheet: &Sheet, path: &Path, texts: &Texts) {
                 Style::default().fg(colour(color::TEXT_DIM)),
             )),
         ]),
-        split[1],
+        crate::tui::inset(split[1]),
     );
     #[expect(clippy::cast_possible_truncation, reason = "it fits on one screen")]
     f.set_cursor_position((
-        split[0].x + sheet.column as u16,
-        split[0].y + (sheet.line - top) as u16,
+        sheet_at.x + sheet.column as u16,
+        sheet_at.y + (sheet.line - top) as u16,
     ));
 }
 

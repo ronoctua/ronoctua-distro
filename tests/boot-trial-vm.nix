@@ -26,7 +26,12 @@
 #      emergency mode, as a mount that failed does, PID 1 alive and the
 #      watchdog petted — is restarted by its deadline
 #      (`ronoctua-boot-trial-deadline.service`), and comes back on the last
-#      good one; the next apply does not build the trial that failed again.
+#      good one; the next apply does not build the trial that failed again;
+#   6. a trial whose kernel the LOADER cannot start falls back with no
+#      person at the menu: systemd-boot restarts (the `reboot-on-error` the
+#      trial posts in `loader.conf`), GRUB boots its `fallback` in the same
+#      boot — and either way the last good system is the one boot that
+#      follows.
 #
 # The apply's BUILD is a stand-in (`RONOCTUA_NIX` names a `nix` that answers
 # a build with the broken system, built here): building a NixOS system inside
@@ -60,9 +65,16 @@ let
   # own: GRUB's builder writes `init=` resolved (`Cwd::abs_path`), and a link
   # would put another derivation's path in the menu — the entry would boot
   # the variant and name the file it points at. What a variant takes AWAY
-  # (`away`) is what stage 1 would have found beside it.
+  # (`away`) is what stage 1 would have found beside it, and a `kernel` of
+  # its own is the one both builders copy beside the menu.
   variant =
-    name: good: init: param: away:
+    name: good:
+    {
+      init,
+      param,
+      away ? [ ],
+      kernel ? null,
+    }:
     pkgs.runCommand "nixos-system-${name}" { nativeBuildInputs = [ pkgs.jq ]; } ''
       mkdir $out
       for f in ${good}/*; do
@@ -70,9 +82,12 @@ let
       done
       rm $out/init $out/kernel-params $out/boot.json ${lib.concatMapStringsSep " " (f: "$out/${f}") away}
       cp ${init} $out/init
+      ${lib.optionalString (kernel != null) "ln -sfn ${kernel} $out/kernel"}
       printf '%s ${param}' "$(cat ${good}/kernel-params)" > $out/kernel-params
       jq --arg out "$out" \
-        '."org.nixos.bootspec.v1" |= (.init = $out + "/init" | .toplevel = $out | .kernelParams += ["${param}"])' \
+        '."org.nixos.bootspec.v1" |= (.init = $out + "/init" | .toplevel = $out | .kernelParams += ["${param}"]${
+          lib.optionalString (kernel != null) ''| .kernel = "${kernel}"''
+        })' \
         ${good}/boot.json > $out/boot.json
     '';
 
@@ -82,16 +97,35 @@ let
   # panics the kernel.
   broken =
     good:
-    variant "trial-that-does-not-boot" good "${pkgs.coreutils}/bin/false" "ronoctua.trial=broken" [
-      "prepare-root"
-    ];
+    variant "trial-that-does-not-boot" good {
+      init = "${pkgs.coreutils}/bin/false";
+      param = "ronoctua.trial=broken";
+      away = [ "prepare-root" ];
+    };
 
   # STAGE 2 ENDS IN EMERGENCY MODE: the good system's own `init` (stage 1
   # activates the good system), asked for `emergency.target` — where a mount
   # that failed would leave it, the console's root account locked, PID 1
   # alive and petting the watchdog. Only the trial's deadline gets it out.
   stuck =
-    good: variant "trial-stuck-in-stage-2" good "${good}/init" "systemd.unit=emergency.target" [ ];
+    good:
+    variant "trial-stuck-in-stage-2" good {
+      init = "${good}/init";
+      param = "systemd.unit=emergency.target";
+    };
+
+  # THE LOADER CANNOT START IT: its kernel is no kernel — no Linux header
+  # for GRUB, no PE image for systemd-boot —, as a kernel the loader cannot
+  # read or an initrd too big for its memory would be. No kernel runs, so
+  # neither the deadline nor the bless can help: only the loader can.
+  unloadable =
+    good:
+    variant "trial-the-loader-cannot-start" good {
+      init = "${good}/init";
+      param = "ronoctua.trial=unloadable";
+      away = [ "kernel" ];
+      kernel = pkgs.writeText "not-a-kernel" "no boot loader starts this\n";
+    };
 
   # THE STAND-IN FOR THE BUILD: `nix build … --out-link OUT` links OUT to the
   # system the test names in `RONOCTUA_TEST_BUILDS` (the apply hands its
@@ -149,12 +183,19 @@ pkgs.testers.runNixOSTest {
           additionalPaths = [
             (broken config.system.build.toplevel)
             (stuck config.system.build.toplevel)
+            (unloadable config.system.build.toplevel)
             (fakeNix config.nix.package)
           ];
         };
         boot.loader.systemd-boot.configurationLimit = 5;
         boot.loader.grub.configurationLimit = 5;
         boot.initrd.systemd.enable = true;
+        # GRUB on the serial line too, which is the console the test reads:
+        # it says there when it falls back.
+        boot.loader.grub.extraConfig = lib.mkBefore ''
+          serial
+          terminal_output --append serial
+        '';
       };
     };
 
@@ -169,6 +210,7 @@ pkgs.testers.runNixOSTest {
 
       BROKEN = "${broken good}"
       STUCK = "${stuck good}"
+      UNLOADABLE = "${unloadable good}"
       VENDOR = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
       GRUB = "${firmware}" == "bios"
       # What GRUB puts on the command line of a boot that tries.
@@ -236,6 +278,18 @@ pkgs.testers.runNixOSTest {
           return next(e for e in entries if e["id"] == entry_id)["options"]
 
 
+      def restarts():
+          """Whether systemd-boot restarts on a start that fails: the line
+          the trial posts in `loader.conf`, and takes away with it."""
+          conf = machine.succeed("cat /boot/loader/loader.conf").splitlines()
+          return "reboot-on-error yes" in conf
+
+
+      def boots_so_far():
+          """How many boots ran a kernel, by the journal (it is on the disk)."""
+          return len(json.loads(machine.succeed("journalctl --list-boots -o json")))
+
+
       def apply(builds):
           return machine.execute(
               f"RONOCTUA_NIX=${fake}/bin/nix RONOCTUA_TEST_BUILDS={builds} ronoctua-machine apply 2>&1"
@@ -270,6 +324,8 @@ pkgs.testers.runNixOSTest {
           once, back = oneshot(), default()
           assert f"init={BROKEN}/init" in boots(once), once
           assert f"init={good}/init" in boots(back), back
+          if not GRUB:
+              assert restarts(), "a trial systemd-boot cannot start would go to the firmware"
 
       with subtest("a bless in the boot that armed the trial judges nothing"):
           machine.succeed("systemctl restart ronoctua-boot-bless.service")
@@ -293,6 +349,8 @@ pkgs.testers.runNixOSTest {
           assert machine.succeed("readlink -f /nix/var/nix/profiles/system").strip() == good
           assert oneshot() is None, "the one-shot was spent"
           assert default() is None, "the default is the menu's own again"
+          if not GRUB:
+              assert not restarts(), "a verdict takes the restart away with the default"
           newest = machine.succeed("readlink /nix/var/nix/profiles/system").strip()
           number = newest.removeprefix("system-").removesuffix("-link")
           if GRUB:
@@ -341,5 +399,34 @@ pkgs.testers.runNixOSTest {
           assert s["last-good"]["toplevel"] == good, s
           assert machine.succeed("readlink -f /nix/var/nix/profiles/system").strip() == good
           assert default() is None
+
+      with subtest("a trial the loader cannot start falls back with no one at the menu"):
+          status, out = apply(UNLOADABLE)
+          print(out)
+          assert status == 0, out
+          assert state()["trial"] == {"toplevel": UNLOADABLE, "outcome": "pending"}
+          before = boots_so_far()
+          machine.reboot()
+          # The loader says it could not start the trial: GRUB falls back to
+          # its first entry, systemd-boot restarts the machine.
+          # NO `timeout`: with one, the driver reads one line of the console
+          # a second, and a reboot prints thousands.
+          said = "Falling back to" if GRUB else "Failed to start boot entry. Rebooting"
+          machine.wait_for_console_text(said)
+          machine.wait_for_unit("multi-user.target")
+          assert machine.succeed("readlink -f /run/booted-system").strip() == good
+          # One boot reached the journal: the last good one, not as a boot
+          # that tries. (The proof the trial's kernel never ran is the
+          # loader's line above.)
+          assert boots_so_far() == before + 1, (before, boots_so_far())
+          assert MARK not in machine.succeed("cat /proc/cmdline").split()
+          machine.wait_for_unit("ronoctua-boot-bless.service")
+          s = state()
+          assert s["trial"] == {"toplevel": UNLOADABLE, "outcome": "failed"}, s
+          assert s["last-good"]["toplevel"] == good, s
+          assert machine.succeed("readlink -f /nix/var/nix/profiles/system").strip() == good
+          assert oneshot() is None and default() is None
+          if not GRUB:
+              assert not restarts()
     '';
 }

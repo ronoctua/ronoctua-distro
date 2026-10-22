@@ -78,6 +78,46 @@ pub(crate) const SLOTS: Table = Table::new(&[
 /// it do not get longer on a wider screen.
 const SIDEBAR: u16 = 18;
 
+/// The cells text keeps from the edges of its column: the shell's
+/// `chrome::INSET` (`space.content.inset`), as the installer's. The font's
+/// ink fills its whole advance, and a letter on the screen's edge — or on
+/// the sidebar's, against the content — looked cut.
+const INSET: u16 = ronoctua_tokens::space::CONTENT_INSET;
+
+/// `area` without the inset on either side, where text is drawn; the
+/// cursor's band still runs across the whole column ([`banded`]). A column
+/// too narrow for it keeps one cell of text.
+pub(crate) fn inset(area: Rect) -> Rect {
+    let side = INSET.min(area.width.saturating_sub(1) / 2);
+    Rect {
+        x: area.x + side,
+        width: area.width - 2 * side,
+        ..area
+    }
+}
+
+/// `list` inside the inset of `at`, and the cursor's band (`band`, a
+/// ground) across the whole of `at`, on the row the list drew it.
+fn banded(f: &mut ratatui::Frame, list: List, at: Rect, state: &mut ListState, band: Style) {
+    f.render_stateful_widget(list.highlight_style(band), inset(at), state);
+    let Some(row) = state
+        .selected()
+        .and_then(|i| i.checked_sub(state.offset()))
+        .and_then(|shown| u16::try_from(shown).ok())
+        .filter(|shown| *shown < at.height)
+    else {
+        return;
+    };
+    f.buffer_mut().set_style(
+        Rect {
+            y: at.y + row,
+            height: 1,
+            ..at
+        },
+        band,
+    );
+}
+
 /// Puts the terminal back however this ends.
 ///
 /// It is the same guard the installer has, and for the reason written there: a
@@ -277,11 +317,13 @@ fn sidebar(f: &mut ratatui::Frame, at: Rect, view: &View, texts: &Texts) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(at);
-    f.render_widget(Paragraph::new(title), chunks[0]);
-    f.render_stateful_widget(
-        List::new(rows).highlight_style(highlight(view.on_sidebar)),
+    f.render_widget(Paragraph::new(title), inset(chunks[0]));
+    banded(
+        f,
+        List::new(rows),
         chunks[1],
         &mut state,
+        highlight(view.on_sidebar),
     );
 }
 
@@ -320,13 +362,13 @@ fn content(f: &mut ratatui::Frame, at: Rect, view: &View, texts: &Texts, state_l
     let rows: Vec<ListItem> = match view.section {
         Section::State => {
             let lines: Vec<Line> = state_lines.iter().map(|l| Line::from(l.clone())).collect();
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), at);
+            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inset(at));
             return;
         }
         Section::Windows if view.panes.is_empty() => {
             f.render_widget(
                 Paragraph::new(texts.t(key::RESCUE_NO_WINDOWS)).wrap(Wrap { trim: false }),
-                at,
+                inset(at),
             );
             return;
         }
@@ -371,11 +413,12 @@ fn content(f: &mut ratatui::Frame, at: Rect, view: &View, texts: &Texts, state_l
             .map(|a| row_of(a, texts))
             .collect(),
     };
-    f.render_stateful_widget(
-        List::new(lit(rows, Some(view.row), !view.on_sidebar))
-            .highlight_style(highlight(!view.on_sidebar)),
+    banded(
+        f,
+        List::new(lit(rows, Some(view.row), !view.on_sidebar)),
         at,
         &mut state,
+        highlight(!view.on_sidebar),
     );
 }
 
@@ -409,7 +452,7 @@ fn footer(f: &mut ratatui::Frame, at: Rect, view: &View, texts: &Texts) {
             Style::default().fg(colour(color::TEXT_DIM)),
         )),
     ];
-    f.render_widget(Paragraph::new(lines), at);
+    f.render_widget(Paragraph::new(lines), inset(at));
 }
 
 /// Runs a row and turns the outcome into a sentence.
@@ -756,6 +799,63 @@ mod tests {
         assert!(off.is_empty(), "the editor: {off:#?}");
     }
 
+    /// FAILS IF: a screen of the console — or of its editor — draws a letter
+    /// in the inset of either column, on the screen's edges or on the
+    /// sidebar's against the content, or the cursor's band stops at the
+    /// inset instead of running across its column.
+    #[test]
+    fn the_text_keeps_off_the_edges_and_the_band_does_not() {
+        let t = texts();
+        let blank = |buf: &Buffer, xs: &[u16], what: &str| {
+            let area = buf.area;
+            for y in 0..area.height {
+                for &x in xs {
+                    let symbol = buf.cell((x, y)).unwrap().symbol();
+                    assert_eq!(symbol, " ", "{what}: `{symbol}` at ({x}, {y})");
+                }
+            }
+        };
+        for v in every_view() {
+            let buf = drawn(&v, &t);
+            let w = buf.area.width;
+            let edges: Vec<u16> = (0..INSET)
+                .chain(SIDEBAR - INSET..SIDEBAR + INSET)
+                .chain(w - INSET..w)
+                .collect();
+            blank(
+                &buf,
+                &edges,
+                &format!("{:?} (sidebar: {})", v.section, v.on_sidebar),
+            );
+            // The cursor's band, across its column: the sidebar's on the
+            // open section (one below the title), the content's on its first row.
+            let (y, from, to) = if v.on_sidebar {
+                let open = Section::all_of()
+                    .iter()
+                    .position(|s| *s == v.section)
+                    .unwrap();
+                (1 + u16::try_from(open).unwrap(), 0, SIDEBAR - 1)
+            } else {
+                (0, SIDEBAR, w - 1)
+            };
+            if v.on_sidebar || !matches!(v.section, Section::State) {
+                for x in [from, to] {
+                    assert_eq!(
+                        buf.cell((x, y)).unwrap().bg,
+                        highlight(true).bg.unwrap(),
+                        "{:?} (sidebar: {}): the band stops before ({x}, {y})",
+                        v.section,
+                        v.on_sidebar
+                    );
+                }
+            }
+        }
+        let editor = crate::edit::drawn_for_tests(&t);
+        let w = editor.area.width;
+        let edges: Vec<u16> = (0..INSET).chain(w - INSET..w).collect();
+        blank(&editor, &edges, "the editor");
+    }
+
     /// FAILS IF: the cursor's row has the ground of the rows around it on
     /// the kernel's console — the band the console drew in the ground's own
     /// black — or its text is the others' tone while the keyboard is on its
@@ -777,9 +877,19 @@ mod tests {
             } else {
                 (SIDEBAR, 0, 1)
             };
-            let at = |y: u16| buf.cell((x, y)).unwrap().clone();
-            assert_ne!(at(here).bg, at(other).bg, "sidebar {on_sidebar}: no band");
-            assert_ne!(at(here).fg, at(other).fg, "sidebar {on_sidebar}: no colour");
+            // The band on the column's edge, the tone on its text.
+            let at = |x: u16, y: u16| buf.cell((x, y)).unwrap().clone();
+            assert_ne!(
+                at(x, here).bg,
+                at(x, other).bg,
+                "sidebar {on_sidebar}: no band"
+            );
+            let x = x + INSET;
+            assert_ne!(
+                at(x, here).fg,
+                at(x, other).fg,
+                "sidebar {on_sidebar}: no colour"
+            );
         }
     }
 }

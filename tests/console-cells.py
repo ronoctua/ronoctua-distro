@@ -96,6 +96,12 @@ def text_of(line):
     return "".join(c for c, _, _ in line).rstrip()
 
 
+def ink(line):
+    """The row's first cell with a letter in it: the text keeps an inset
+    from the edge, and a cell of the inset wears no tone of its own."""
+    return next(cell for cell in line if cell[0].strip())
+
+
 def screen_dump(m):
     """The screen as QEMU shows it: (width, height, rgb bytes)."""
     path = os.path.join(tempfile.mkdtemp(), "screen.ppm")

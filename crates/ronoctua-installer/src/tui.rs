@@ -435,6 +435,22 @@ pub struct Rows {
     pub below: Option<Rect>,
 }
 
+impl Rows {
+    /// The row option `i` is drawn on, while it is shown.
+    #[must_use]
+    pub fn row(&self, i: usize) -> Option<Rect> {
+        let shown = i.checked_sub(self.offset)?;
+        if i >= self.count || shown >= usize::from(self.area.height) {
+            return None;
+        }
+        Some(Rect {
+            y: self.area.y + u16::try_from(shown).ok()?,
+            height: 1,
+            ..self.area
+        })
+    }
+}
+
 /// The review's plan, where it is drawn — the same shape as a list's: a plan
 /// that does not fit keeps its first and last rows for saying what it does
 /// not show, and SCROLLS (the keys, the wheel, a click on those rows).
@@ -2096,20 +2112,29 @@ fn stop_fitted(
     width: u16,
     most: u16,
 ) -> (Text<'static>, u16) {
-    let rows = |text: &Text<'static>| {
-        let n = Paragraph::new(text.clone())
-            .wrap(Wrap { trim: true })
-            .line_count(width.max(1));
-        u16::try_from(n).unwrap_or(u16::MAX)
-    };
     let airy = stop_text(stop, texts, bios, true);
-    let n = rows(&airy);
+    let n = text_rows(&airy, width);
     if n <= most {
         return (airy, n);
     }
     let tight = stop_text(stop, texts, bios, false);
-    let n = rows(&tight);
+    let n = text_rows(&tight, width);
     (tight, n.min(most))
+}
+
+/// The rows a stop's explanation takes at the least — with no air — in a
+/// column `width` cells wide.
+fn stop_rows(stop: Stop, texts: &Texts, bios: bool, width: u16) -> u16 {
+    text_rows(&stop_text(stop, texts, bios, false), width)
+}
+
+/// The rows `text` wraps to in a column `width` cells wide, by the wrapper
+/// that draws it.
+fn text_rows(text: &Text<'static>, width: u16) -> u16 {
+    let n = Paragraph::new(text.clone())
+        .wrap(Wrap { trim: true })
+        .line_count(width.max(1));
+    u16::try_from(n).unwrap_or(u16::MAX)
 }
 
 /// A stop's heading and explanation as plain lines, for the terminal-less
@@ -2126,10 +2151,53 @@ pub fn stop_said(stop: Stop, texts: &Texts, bios: bool) -> String {
     said
 }
 
+/// The cells text keeps from either edge of the screen: the shell's
+/// `chrome::INSET` (`space.content.inset`). The font's ink fills its whole
+/// advance, and a letter in the last column looked cut by the screen.
+const INSET: u16 = ronoctua_tokens::space::CONTENT_INSET;
+
+/// `area` without the inset on either side, where text is drawn. A screen
+/// too narrow for it keeps one column of text.
+fn inset(area: Rect) -> Rect {
+    let side = INSET.min(area.width.saturating_sub(1) / 2);
+    Rect {
+        x: area.x + side,
+        width: area.width - 2 * side,
+        ..area
+    }
+}
+
+/// `row` from edge to edge of `screen`: a row that takes a click is a band
+/// across the whole screen, as the shell's are — the cursor's, the
+/// pointer's —, and the click takes it wherever it is drawn. Its text keeps
+/// the inset ([`inset`]).
+fn edge_to_edge(row: Rect, screen: Rect) -> Rect {
+    Rect {
+        x: screen.x,
+        width: screen.width,
+        ..row
+    }
+}
+
+/// A list's rows, edge to edge of `screen`.
+fn rows_across(rows: Rows, screen: Rect) -> Rows {
+    let wide = |r: Rect| edge_to_edge(r, screen);
+    Rows {
+        area: wide(rows.area),
+        above: rows.above.map(wide),
+        below: rows.below.map(wide),
+        ..rows
+    }
+}
+
 /// Where everything is on a screen of `area` — the one answer the drawing
 /// paints and the pointer hits.
 #[must_use]
 pub fn places(area: Rect, e: &State, texts: &Texts) -> Places {
+    // THE TEXT KEEPS OFF THE EDGES; every rect below is inside the inset,
+    // but for the rows that take a click, widened at the end.
+    let screen = area;
+    let area = inset(screen);
     // THE HELP WRAPS, by words as it is drawn, up to a third of the
     // screen: cut at the edge, the sentence that explains a question lost
     // its end — and on an ISO's console the end is often where the reason
@@ -2143,7 +2211,12 @@ pub fn places(area: Rect, e: &State, texts: &Texts) -> Places {
     // screen's point, never a third of it —, a line of air, then its ways.
     if let Screen::Stop(stop) = e.screen {
         let ways = u16::try_from(e.options().len()).unwrap_or(u16::MAX);
-        let most = area.height.saturating_sub(2 + 1 + 1 + ways).max(1);
+        let room = area.height.saturating_sub(2 + ways + 1);
+        // THE ROW OF AIR BEFORE THE WAYS goes too, before any word does —
+        // on a console of 60 × 24, inside the inset, the last sentence of
+        // the TPM's stop on a BIOS machine needed it.
+        let air = u16::from(stop_rows(stop, texts, e.answers.bios, area.width) < room);
+        let most = room.saturating_sub(air).max(1);
         let (_, help_rows) = stop_fitted(stop, texts, e.answers.bios, area.width, most);
         let help_rows = help_rows.max(1);
         let areas = Layout::default()
@@ -2151,7 +2224,7 @@ pub fn places(area: Rect, e: &State, texts: &Texts) -> Places {
             .constraints([
                 Constraint::Length(2),         // title + heading
                 Constraint::Length(help_rows), // the explanation
-                Constraint::Length(1),         // air
+                Constraint::Length(air),       // air
                 Constraint::Min(1),            // the ways
                 Constraint::Length(1),         // keys
             ])
@@ -2164,7 +2237,7 @@ pub fn places(area: Rect, e: &State, texts: &Texts) -> Places {
             keys: areas[4],
             hints: hints_of(&key_line, areas[4].x),
             key_line,
-            list: list_rows(e, areas[3]),
+            list: list_rows(e, areas[3]).map(|r| rows_across(r, screen)),
             plan: None,
         };
     }
@@ -2190,8 +2263,12 @@ pub fn places(area: Rect, e: &State, texts: &Texts) -> Places {
         keys: footer[1],
         hints: hints_of(&key_line, footer[1].x),
         key_line,
-        list: list_rows(e, areas[1]),
-        plan: plan_rows(e, texts, areas[1]),
+        list: list_rows(e, areas[1]).map(|r| rows_across(r, screen)),
+        plan: plan_rows(e, texts, areas[1]).map(|p| Plan {
+            above: p.above.map(|r| edge_to_edge(r, screen)),
+            below: p.below.map(|r| edge_to_edge(r, screen)),
+            ..p
+        }),
     }
 }
 
@@ -2355,9 +2432,25 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
                 List::new(items)
                     .style(base)
                     .highlight_style(Style::default().bg(color(color::SURFACE_SELECTION))),
-                rows.area,
+                inset(rows.area),
                 &mut st,
             );
+            // THE BANDS RUN FROM EDGE TO EDGE, past the text's inset — the
+            // cursor's, and the pointer's on another row —, where the click
+            // takes the row (`places`).
+            let hovered = match e.hover {
+                Some(Hit::Row(i)) if i != e.choice => Some(i),
+                _ => None,
+            };
+            for (i, ground) in [
+                (Some(e.choice), color::SURFACE_SELECTION),
+                (hovered, color::SURFACE_HOVER),
+            ] {
+                if let Some(row) = i.and_then(|i| rows.row(i)) {
+                    f.buffer_mut()
+                        .set_style(row, Style::default().bg(color(ground)));
+                }
+            }
             // WHAT THE LIST DOES NOT SHOW, said where it is not shown.
             let below = rows
                 .count
@@ -2541,13 +2634,15 @@ fn lit_row(
     } else {
         base
     };
+    // The row's band from edge to edge, its words inside the inset.
+    f.render_widget(ratatui::widgets::Block::default().style(style), row);
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
             said,
             Style::default().fg(color(tone)),
         )))
         .style(style),
-        row,
+        inset(row),
     );
 }
 
@@ -3487,7 +3582,7 @@ mod tests {
                 .to_owned();
             for width in 60..=100 {
                 let shown = rendered(&e, &t, width, 34);
-                let keys = if spaced_fits(&spaced, width) {
+                let keys = if spaced_fits(&spaced, width - 2 * INSET) {
                     &spaced
                 } else {
                     &plain
@@ -3515,7 +3610,7 @@ mod tests {
                     "{language}, {width}"
                 );
                 assert!(
-                    shown.lines().any(|l| l.trim_end() == keys.as_str()),
+                    shown.lines().any(|l| l.trim() == keys.as_str()),
                     "{language}, {width}: the keys line is cut:\n{shown}"
                 );
                 assert!(
@@ -3533,7 +3628,7 @@ mod tests {
         let rows = at.list.unwrap();
         let tone = |i: usize, x: u16| {
             let y = rows.area.y + u16::try_from(i - rows.offset).unwrap();
-            buf.cell((rows.area.x + x, y)).unwrap().fg
+            buf.cell((inset(rows.area).x + x, y)).unwrap().fg
         };
         let widest = OFFERED.iter().map(|o| cells(o.name)).max().unwrap();
         let word_x = widest + ronoctua_tokens::space::INSTALLER_CHECKLISTGAP;
@@ -3564,7 +3659,7 @@ mod tests {
             let buf = drawn(&e, &t, 100, 34).unwrap();
             let rows = places(area, &e, &t).list.unwrap();
             let y = rows.area.y + u16::try_from(e.choice - rows.offset).unwrap();
-            let fg = |x: u16| buf.cell((rows.area.x + x, y)).unwrap().fg;
+            let fg = |x: u16| buf.cell((inset(rows.area).x + x, y)).unwrap().fg;
             assert_eq!(fg(0), color(color::STATE_ACCENT), "row {}", e.choice);
             assert_eq!(fg(word_x), color(color::TEXT_HERE_ACTS), "row {}", e.choice);
         }
@@ -3585,13 +3680,15 @@ mod tests {
         r.answers.disk = "/dev/nvme0n1".into();
         r.screen = Screen::Reviewing;
         let shown = rendered(&r, &t, 100, 60);
+        // Read as words: a step longer than the row inside the inset wraps.
+        let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
         let said = t.t_with(
             key::INST_LEFT_OUT_REVIEW,
             &[("names", "Blender, LibreOffice")],
         );
-        assert!(shown.contains(&said), "{shown}");
+        assert!(words(&shown).contains(&words(&said)), "{shown}");
         assert!(
-            shown.contains(&t.t(key::INST_STEP_PLAIN_DECLINING)),
+            words(&shown).contains(&words(&t.t(key::INST_STEP_PLAIN_DECLINING))),
             "{shown}"
         );
     }
@@ -3618,7 +3715,7 @@ mod tests {
             .lines()
             .nth(usize::from(y))
             .unwrap_or_default()
-            .trim_end()
+            .trim()
             .to_owned()
     }
 
@@ -4267,7 +4364,7 @@ mod tests {
                 );
                 // THE KEY AND THE PAGE, whole: a word longer than the row is
                 // broken across rows, so the rows are read joined.
-                let joined: String = shown.lines().map(str::trim_end).collect();
+                let joined: String = shown.lines().map(str::trim).collect();
                 for whole in [&"A".repeat(68), "ronoctua-belongings", page.as_str()] {
                     assert!(
                         joined.contains(whole),
@@ -4466,15 +4563,15 @@ mod tests {
     }
 
     /// FAILS IF: the checklist's keys line does not teach the space bar
-    /// where it fits with a cell to spare — from 61 columns in pt-BR and 67
-    /// in en-GB, at 100 in both —, teaches it where it would touch the edge,
+    /// where it fits with a cell to spare inside the inset — from 65 columns
+    /// in pt-BR and 71 in en-GB, at 100 in both —, teaches it where it would touch the edge,
     /// or a click on the space bar's hint does not mark the cursor's row as
     /// the key does. The widths are written out: the rule is checked against
     /// the screen, never against itself.
     #[test]
     fn the_space_bar_is_taught_where_it_fits() {
         use crate::model::{OFFERED, is_left_out};
-        for (language, plain_at, spaced_at) in [("pt-BR", 60, 61), ("en-GB", 66, 67)] {
+        for (language, plain_at, spaced_at) in [("pt-BR", 64, 65), ("en-GB", 70, 71)] {
             let t = Texts::fresh(language).unwrap();
             let spaced = with_keys(&t, key::INST_KEYS_CHECK_SPACE, &[]);
             let plain = with_keys(&t, key::INST_KEYS_CHECK, &[]);
@@ -4974,6 +5071,45 @@ mod tests {
         assert!(seen > 50, "the walk saw {seen} screens");
     }
 
+    /// FAILS IF: a screen draws a letter in the inset at either edge — every
+    /// screen's text ran to the console's last column —, or the cursor's band
+    /// stops at the inset instead of running from edge to edge, or a click in
+    /// the inset misses the row drawn there.
+    #[test]
+    fn the_text_keeps_off_the_edges_and_the_bands_do_not() {
+        let t = texts();
+        let seen = every_screen(&mut |e| {
+            for (w, h) in [(80, 25), (60, 24)] {
+                let buf = drawn(e, &t, w, h).unwrap();
+                for y in 0..h {
+                    for x in (0..INSET).chain(w - INSET..w) {
+                        let symbol = buf.cell((x, y)).unwrap().symbol();
+                        assert_eq!(
+                            symbol, " ",
+                            "{:?}, {w}×{h}: `{symbol}` at ({x}, {y})",
+                            e.screen
+                        );
+                    }
+                }
+                let at = places(Rect::new(0, 0, w, h), e, &t);
+                let Some(row) = at.list.and_then(|rows| rows.row(e.choice)) else {
+                    continue;
+                };
+                for x in [0, w - 1] {
+                    assert_eq!(
+                        buf.cell((x, row.y)).unwrap().bg,
+                        color(color::SURFACE_SELECTION),
+                        "{:?}, {w}×{h}: the band stops before ({x}, {})",
+                        e.screen,
+                        row.y
+                    );
+                    assert_eq!(at.hit(x, row.y), Some(Hit::Row(e.choice)));
+                }
+            }
+        });
+        assert!(seen > 50, "the walk saw {seen} screens");
+    }
+
     /// FAILS IF: on the kernel's console the cursor's row has the ground of
     /// the rows around it, its option the tone of the others, or the
     /// question the tone of its options — the three things the ISO's console
@@ -5006,7 +5142,7 @@ mod tests {
         }
         let cell = |i: usize| {
             let y = rows.area.y + u16::try_from(i - rows.offset).unwrap();
-            buf.cell((rows.area.x, y)).unwrap().clone()
+            buf.cell((inset(rows.area).x, y)).unwrap().clone()
         };
         let (here, other) = (cell(e.choice), cell(e.choice + 1));
         assert_ne!(here.bg, other.bg, "the cursor's row has no band");

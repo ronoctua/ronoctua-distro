@@ -513,7 +513,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | os Releases da distro no GitHub e a escrita crua num pendrive | `ronoctua-stick` (cobra `one-stick-boundary`) |
 | o Incus (a API REST pelo socket e o CLI) | `ronoctua-incus` (cobra `one-incus-boundary`) |
 | o estado do Claude Code e do Codex, e o endpoint de uso da Anthropic | `ronoctua-llm` (cobra `one-llm-boundary`) |
-| `bootctl`, as variáveis EFI, o `grub-editenv` e o `grubenv` (BIOS), e o diretório da máquina | `ronoctua-machine` (cobra `one-bootctl-driver`) |
+| `bootctl`, as variáveis EFI, o `reboot-on-error` do `loader.conf`, o `grub-editenv` e o `grubenv` (BIOS), e o diretório da máquina | `ronoctua-machine` (cobra `one-bootctl-driver`) |
 | os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/held.json`, `local/verified.json`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
 | o Cachix: o cache binário da pessoa, o token de envio, o netrc do root e o envio depois da atualização | `ronoctua-cachix` (cobra `binary-cache-token-never-prints`) |
 | o VS Code: o manifesto das extensões instaladas, a lista da pessoa que viaja nos pertences e o `code --install-extension` | `ronoctua-vscode` (cobra `one-vscode-boundary`) |
@@ -549,8 +549,8 @@ O sntrup761 fica nas listas enquanto o GitHub depender dele.
 
 Quem muda o sistema é o `ronoctua-machine apply` — o rebuild de resgate, a atualização e a central
 de programas —: constrói antes, troca depois e arma o ensaio de boot (no systemd-boot ou, numa
-máquina BIOS, no GRUB). Nenhum outro crate roda `bootctl` ou `grub-editenv`, escreve `LoaderEntry*`
-ou o `grubenv`, mexe no perfil do sistema ou chama `switch-to-configuration` (cobra
+máquina BIOS, no GRUB). Nenhum outro crate roda `bootctl` ou `grub-editenv`, escreve `LoaderEntry*`,
+o `loader.conf` ou o `grubenv`, mexe no perfil do sistema ou chama `switch-to-configuration` (cobra
 `one-bootctl-driver`). O que não fez um sistema novo devolve o lock do sistema em execução
 (cobra `apply-reverts-the-lock-on-build-failure`), o bless pende do alvo padrão, nunca do
 `graphical.target` (cobra `update-apply-rule-is-narrow`), e um ensaio é julgado pela identidade do

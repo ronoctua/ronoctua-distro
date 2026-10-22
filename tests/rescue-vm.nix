@@ -156,7 +156,8 @@ pkgs.testers.runNixOSTest {
           # the keyboard on the sidebar) row 1, under the cursor.
           banded = [y for y in range(1, 8) if grid[y][0][2] != ground]
           assert banded == [1], f"the band is on the sidebar's rows {banded}, not on 1"
-          assert grid[1][0][1] != grid[2][0][1], "the cursor's row has the others' tone"
+          # The band on the edge; the tone on the letters, past the inset.
+          assert ink(grid[1])[1] != ink(grid[2])[1], "the cursor's row has the others' tone"
           shot = screen_dump(machine)
           band = pixel(shot, 2, height + height // 2)
           wanted = token(themes, theme, "surface.selection")

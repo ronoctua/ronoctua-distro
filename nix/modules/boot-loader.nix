@@ -49,6 +49,12 @@ in
       editor = false; # an editable cmdline at boot destroys the PCR 12 measurement
     };
     boot.loader.efi.canTouchEfiVariables = lib.mkDefault (cfg.firmware == "uefi");
+    # A TRIAL SYSTEMD-BOOT CANNOT START restarts the machine into the last
+    # good system: `ronoctua-machine` posts `reboot-on-error yes` in
+    # `loader.conf` with the trial's default, and takes it away with it
+    # (`crates/ronoctua-machine/src/loader.rs`) — a trial's only, never a
+    # line of this module's, which would restart forever a newest generation
+    # that cannot start with no trial at all.
     # GRUB ON A BIOS MACHINE, into the disk's first sectors and its BIOS boot
     # partition (`nix/disko/default.nix`); the disk is the one disko lays out,
     # which hands it to GRUB. `/boot` is the same FAT partition the ESP is on
@@ -73,6 +79,27 @@ in
     # every numbered generation is — runs in a new environment that copies
     # only exported variables, and there the mark would expand to nothing.
     #
+    # AND A TRIAL GRUB CANNOT START FALLS BACK IN THE SAME BOOT. The deadline
+    # and the bless see only a kernel that ran; a kernel GRUB cannot load — a
+    # file it cannot read, or no kernel at all — returns to GRUB's menu, the
+    # boot of once spent, the menu's timeout gone, and the machine would wait
+    # there for a person. (An INITRD that does not load stops nothing: GRUB
+    # starts the kernel without it, which panics, and `panic=10` and the
+    # trial bring the machine back.) GRUB's
+    # `fallback` is what it boots instead, and it takes only the NUMBER of an
+    # entry of the menu the failure returns to (`grub-core/normal/menu.c`):
+    # the top one, while the trial is inside a submenu, where no entry boots
+    # the last good system — `default` still names the trial. So on a boot
+    # of once with a trial armed, and only then, the menu's first entry is
+    # ours, named as the last good generation is (its title is the last part
+    # of the path), and it reads the menu again as a boot that tries
+    # nothing: `next_entry` is already spent, so `ronoctua_default` is the
+    # default, and the mark is unset first. NOT exported: a submenu's own
+    # `fallback` would name an entry of the submenu. And the reading again
+    # says it is one (`ronoctua_fell`, exported into it): were `next_entry`
+    # not spent — the block could not be written —, it would be a boot of
+    # once again, and fall back into itself until GRUB ran out of memory.
+    #
     # NO SPLASH: NixOS's GRUB shows its artwork behind the menu, and section 3
     # wants no logo.
     #
@@ -88,6 +115,9 @@ in
       efiSupport = false;
       splashImage = null;
       extraConfig = ''
+        if [ -n "''${ronoctua_fell}" ]; then
+          set boot_once=
+        fi
         if [ -z "''${boot_once}" ]; then
           if [ -n "''${ronoctua_default}" ]; then
             set default="''${ronoctua_default}"
@@ -95,6 +125,16 @@ in
         elif [ -n "''${ronoctua_default}" ]; then
           set ronoctua_trial=${mark}
           export ronoctua_trial
+          set ronoctua_back="''${ronoctua_default}"
+          insmod regexp
+          regexp --set=1:ronoctua_back '([^>]*)$' "''${ronoctua_default}"
+          menuentry "''${ronoctua_back}" --class nixos --unrestricted {
+            unset ronoctua_trial
+            set ronoctua_fell=1
+            export ronoctua_fell
+            configfile "''${prefix}/grub.cfg"
+          }
+          set fallback=0
         fi
       '';
       extraInstallCommands = ''

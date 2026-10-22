@@ -157,6 +157,7 @@
 "loop/bins/ronoctua-browser":"light",
 "loop/bins/ronoctua-cache-sweep":"light",
 "loop/bins/ronoctua-cachix":"light",
+"loop/bins/ronoctua-console-font":"light",
 "loop/bins/ronoctua-contract":"light",
 "loop/bins/ronoctua-disk-relief":"light",
 "loop/bins/ronoctua-empty-trash":"light",

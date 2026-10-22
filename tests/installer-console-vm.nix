@@ -108,10 +108,11 @@ pkgs.testers.runNixOSTest {
         assert len(banded) == 1, f"the band is on rows {banded} of {options}"
         here = banded[0]
         other = next(y for y in options if y != here)
-        question = grid[1][0][1]
-        assert grid[here][0][1] != grid[other][0][1], "the cursor's option has the others' tone"
-        assert question != grid[other][0][1], "the question has its options' tone"
-        assert question != grid[here][0][1], "the question has the cursor's tone"
+        # The tones are read on the letters; the band, on the edge.
+        question = ink(grid[1])[1]
+        assert ink(grid[here])[1] != ink(grid[other])[1], "the cursor's option has the others' tone"
+        assert question != ink(grid[other])[1], "the question has its options' tone"
+        assert question != ink(grid[here])[1], "the question has the cursor's tone"
 
         # THE CURSOR FOLLOWS THE KEY: a band drawn once is not a cursor.
         uefi.send_key("down")
@@ -122,7 +123,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("the band is the default theme's selection, exactly"):
         shot = screen_dump(uefi)
-        # The last column of the text, inside the band, which runs edge to edge.
+        # The screen's last column, past the text's inset: the band runs edge to edge.
         edge = len(grid[0]) * width - 2
         band = pixel(shot, edge, (here + 1) * height + height // 2)
         wanted = token(themes, theme, "surface.selection")
