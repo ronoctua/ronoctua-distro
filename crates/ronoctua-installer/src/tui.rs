@@ -589,8 +589,9 @@ pub struct State {
     pub public_key: Option<String>,
     /// What the last probe of the access found.
     pub probed: Option<Probed>,
-    /// The passphrase typed once, for an empty repository: it is typed again.
-    first_passphrase: Option<String>,
+    /// A secret typed once, when its question is typed twice
+    /// ([`Question::typed_twice`]): the field asks for it again.
+    first_typed: Option<String>,
     /// Why the installer goes on with its own distro, when the release said
     /// to stay.
     pub stay: Option<Stay>,
@@ -663,7 +664,7 @@ impl State {
             serial: 0,
             public_key: None,
             probed: None,
-            first_passphrase: None,
+            first_typed: None,
             stay: None,
             hover: None,
             scroll: 0,
@@ -1008,7 +1009,7 @@ impl State {
         self.stop_waiting();
         self.status = None;
         self.revealed = false;
-        self.first_passphrase = None;
+        self.first_typed = None;
         self.scroll = 0;
         self.aimed = None;
         self.untouched = true;
@@ -1041,7 +1042,7 @@ impl State {
     fn go_back(&mut self) {
         self.stop_waiting();
         self.status = None;
-        self.first_passphrase = None;
+        self.first_typed = None;
         self.scroll = 0;
         self.aimed = None;
         self.untouched = true;
@@ -1259,6 +1260,22 @@ impl State {
             }
             return;
         }
+        // THE SECOND ENTRY of what is typed twice (`Question::typed_twice`):
+        // the same as the first goes on as if it had been typed once, and
+        // another starts over from the first.
+        let twice = q.typed_twice(&self.answers);
+        let first = if twice.is_some() {
+            self.first_typed.take()
+        } else {
+            None
+        };
+        if let (Some(twice), Some(first)) = (twice, &first)
+            && *first != v
+        {
+            self.error = Some(twice.differs);
+            self.typing.clear();
+            return;
+        }
         // A TOKEN TYPED is the access itself, not the file the terminal-less
         // mode names: only a blank one is refused here, and the probe judges
         // the rest.
@@ -1270,9 +1287,28 @@ impl State {
             }
         } else {
             validate_it(q, &v, languages, layouts)
-        };
+        }
+        // AN EMPTY REPOSITORY is MADE with this passphrase: as long as a
+        // disk's, asked at the first entry and not after two.
+        .and_then(|()| {
+            if q == Question::BelongingsPassphrase
+                && self.answers.belongings_empty == Some(true)
+                && v.chars().count() < model::MINIMUM_PASSPHRASE
+            {
+                Err(model::Invalid::PassphraseTooShort)
+            } else {
+                Ok(())
+            }
+        });
         if let Err(e) = checked {
             self.error = Some(e.key());
+            return;
+        }
+        // THE FIRST ENTRY is kept, and the field asks again: the label over
+        // it says it is the second time.
+        if twice.is_some() && first.is_none() {
+            self.first_typed = Some(v);
+            self.typing.clear();
             return;
         }
         match q {
@@ -1319,27 +1355,11 @@ impl State {
                 },
                 key::INST_CHECKING,
             ),
-            // AN EMPTY REPOSITORY is MADE with this passphrase: as long as a
-            // disk's, and typed twice, since nothing can prove it.
+            // AN EMPTY REPOSITORY is MADE with this passphrase, typed twice
+            // above: there is nothing yet for it to open.
             Question::BelongingsPassphrase if self.answers.belongings_empty == Some(true) => {
-                match self.first_passphrase.take() {
-                    None if v.chars().count() < model::MINIMUM_PASSPHRASE => {
-                        self.error = Some(key::INST_INVALID_PASSPHRASE_SHORT);
-                    }
-                    // The label above the field says it is the second time.
-                    None => {
-                        self.first_passphrase = Some(v);
-                        self.typing.clear();
-                    }
-                    Some(first) if first == v => {
-                        self.answers.set(q, v);
-                        self.follow(n);
-                    }
-                    Some(_) => {
-                        self.error = Some(key::INST_BELONGINGS_PASSPHRASE_DIFFERS);
-                        self.typing.clear();
-                    }
-                }
+                self.answers.set(q, v);
+                self.follow(n);
             }
             // ONE THAT HAS SOMETHING IN IT: the passphrase opens its
             // `key.age`, or the installer does not go on.
@@ -1466,6 +1486,13 @@ impl State {
                     return Next::Stay;
                 };
                 match k {
+                    // THE SECOND ENTRY of what is typed twice goes back to
+                    // the first, on the same screen.
+                    ESC if self.first_typed.is_some() => {
+                        self.first_typed = None;
+                        self.typing.clear();
+                        self.error = None;
+                    }
                     ESC => self.go_back(),
                     // WHILE A CHECK RUNS, only Esc counts: an Enter would ask
                     // twice, and typing would change what is being checked.
@@ -1682,12 +1709,10 @@ impl State {
 /// The label the current screen shows over its field.
 fn label_of(e: &State, texts: &Texts) -> String {
     match (&e.screen, e.question_of()) {
-        (Screen::Asking(_), Some(Question::BelongingsPassphrase))
-            if e.first_passphrase.is_some() =>
-        {
-            texts.t(key::INST_BELONGINGS_PASSPHRASE_AGAIN)
-        }
-        (Screen::Asking(_), Some(q)) => texts.t(q.label()),
+        (Screen::Asking(_), Some(q)) => match q.typed_twice(&e.answers) {
+            Some(twice) if e.first_typed.is_some() => texts.t(twice.again),
+            _ => texts.t(q.label()),
+        },
         (Screen::Stop(stop), _) => texts.t(stop.heading()),
         _ => String::new(),
     }
@@ -3225,10 +3250,16 @@ fn shown(screen: &str) -> Option<State> {
                 ronoctua_belongings::Why::WrongPassphrase,
             ));
         }
+        // THE USER'S PASSWORD, its second entry (`Question::typed_twice`).
+        "password-again" => {
+            at(&mut e, Question::Password);
+            e.first_typed = Some("Zq7-test-phrase".into());
+            e.typing = "Zq7-test".into();
+        }
         "passphrase-new" => {
             e.answers.belongings_empty = Some(true);
             at(&mut e, Question::BelongingsPassphrase);
-            e.first_passphrase = Some("Qw4-a-long-passphrase".into());
+            e.first_typed = Some("Qw4-a-long-passphrase".into());
             e.typing = "Qw4-a-long".into();
         }
         "hop" => {
@@ -3508,7 +3539,14 @@ mod tests {
                     type_in(e, "noctua-teste");
                     e.key(KeyCode::Enter);
                 }
-                Question::Password | Question::Passphrase | Question::WifiPassword => {
+                // TYPED TWICE, on one screen: the walk sees it once.
+                Question::Password | Question::Passphrase => {
+                    type_in(e, "Zq7-test-phrase");
+                    e.key(KeyCode::Enter);
+                    type_in(e, "Zq7-test-phrase");
+                    e.key(KeyCode::Enter);
+                }
+                Question::WifiPassword => {
                     type_in(e, "Zq7-test-phrase");
                     e.key(KeyCode::Enter);
                 }
@@ -4086,6 +4124,8 @@ mod tests {
                 Some(Question::Password | Question::Passphrase) => {
                     type_in(e, "Zq7-test-phrase");
                     e.key(KeyCode::Enter);
+                    type_in(e, "Zq7-test-phrase");
+                    e.key(KeyCode::Enter);
                 }
                 Some(Question::BelongingsAddress) => {
                     type_in(e, "git@example.org:me/b.git");
@@ -4377,6 +4417,79 @@ mod tests {
     /// FAILS IF: a passphrase that does not open the repository is taken,
     /// or one for an EMPTY repository is taken without being typed twice
     /// alike and as long as a disk's.
+    /// FAILS IF: the user's password or the disk's passphrase is taken from
+    /// one entry, two entries that differ are taken, or `Esc` on the second
+    /// entry leaves the question instead of going back to the first.
+    #[test]
+    fn the_password_and_the_passphrase_are_typed_twice() {
+        for (q, again, differs) in [
+            (
+                Question::Password,
+                key::INST_PASSWORD_AGAIN,
+                key::INST_PASSWORD_DIFFERS,
+            ),
+            (
+                Question::Passphrase,
+                key::INST_PASSPHRASE_AGAIN,
+                key::INST_PASSPHRASE_DIFFERS,
+            ),
+        ] {
+            let again = texts().t(again);
+            let mut e = with_disks();
+            walk_to(&mut e, q);
+            assert!(!rendered(&e, &texts(), 100, 20).contains(&again));
+            type_in(&mut e, "Zq7-first-phrase");
+            e.key(KeyCode::Enter);
+            assert_eq!(e.question_of(), Some(q), "{q:?} went on after one entry");
+            assert!(e.typing.is_empty(), "the first entry stayed in the field");
+            let shown = rendered(&e, &texts(), 100, 20);
+            assert!(
+                shown.contains(&again),
+                "{q:?} does not say it is the second time:\n{shown}"
+            );
+
+            // TWO THAT DIFFER start over from the first.
+            type_in(&mut e, "Zq7-other-phrase");
+            e.key(KeyCode::Enter);
+            assert_eq!(e.question_of(), Some(q));
+            assert_eq!(e.error, Some(differs));
+            assert!(!rendered(&e, &texts(), 100, 20).contains(&again));
+
+            // ESC ON THE SECOND ENTRY goes back to the first, on the same
+            // screen.
+            type_in(&mut e, "Zq7-first-phrase");
+            e.key(KeyCode::Enter);
+            e.key(KeyCode::Esc);
+            assert_eq!(e.question_of(), Some(q));
+            assert!(e.typing.is_empty());
+            assert!(!rendered(&e, &texts(), 100, 20).contains(&again));
+
+            // THE SAME, TWICE, goes on.
+            type_in(&mut e, "Zq7-first-phrase");
+            e.key(KeyCode::Enter);
+            type_in(&mut e, "Zq7-first-phrase");
+            e.key(KeyCode::Enter);
+            assert_ne!(e.question_of(), Some(q));
+            assert_eq!(e.answers.get(q), "Zq7-first-phrase");
+        }
+
+        // WHAT SOMETHING PROVES IS TYPED ONCE: the network joins, a token is
+        // probed, a passphrase opens a repository that has something in it.
+        let mut r = crate::model::Answers {
+            belongings_empty: Some(false),
+            ..Default::default()
+        };
+        for q in [
+            Question::WifiPassword,
+            Question::BelongingsAccess,
+            Question::BelongingsPassphrase,
+        ] {
+            assert!(q.typed_twice(&r).is_none(), "{q:?} is typed twice");
+        }
+        r.belongings_empty = Some(true);
+        assert!(Question::BelongingsPassphrase.typed_twice(&r).is_some());
+    }
+
     #[test]
     fn the_passphrase_opens_the_repository_or_is_typed_twice() {
         let mut e = with_disks();
@@ -5007,6 +5120,8 @@ mod tests {
         walk_to(&mut e, Question::Passphrase);
         type_in(&mut e, "Zq7-test-phrase");
         e.key(KeyCode::Enter);
+        type_in(&mut e, "Zq7-test-phrase");
+        e.key(KeyCode::Enter);
         e.key(KeyCode::Esc);
         assert_eq!(e.question_of(), Some(Question::Passphrase));
         assert!(e.typing.is_empty(), "a secret came back into the field");
@@ -5261,8 +5376,11 @@ mod tests {
             };
             walk_one(&mut e);
             settle(&mut e, &kind);
+            // THE SECOND ENTRY of a secret typed twice is a screen of its
+            // own, visited like the first; the next Enter leaves it.
+            let second = e.first_typed.is_some() && e.question_of() == Some(q);
             assert!(
-                seen < limit * 6 && e.question_of() != Some(q),
+                seen < limit * 6 && (second || e.question_of() != Some(q)),
                 "the screen {q:?} does not advance"
             );
         }
@@ -5281,6 +5399,7 @@ mod tests {
             "token",
             "passphrase",
             "passphrase-new",
+            "password-again",
             "hop",
             "review",
             "left-out",

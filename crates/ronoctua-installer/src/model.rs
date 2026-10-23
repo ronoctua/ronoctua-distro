@@ -170,6 +170,16 @@ pub enum Question {
     BelongingsPassphrase,
 }
 
+/// The words of a secret typed twice ([`Question::typed_twice`]), as text
+/// keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Twice {
+    /// The label over the second entry.
+    pub again: &'static str,
+    /// What is said when the two entries differ, and the field starts over.
+    pub differs: &'static str,
+}
+
 impl Question {
     /// All of them, in the order the TUI presents them.
     ///
@@ -309,6 +319,35 @@ impl Question {
                 | Self::BelongingsAccess
                 | Self::BelongingsPassphrase
         )
+    }
+
+    /// Whether the answer is typed twice, and the words of the second time.
+    ///
+    /// WHAT NOTHING CAN PROVE is typed twice: the user's password and the
+    /// disk's passphrase are typed blind, and a slip in either is found only
+    /// at the first login or the first boot — the passphrase's with no way
+    /// back. So is the belongings' passphrase when the repository is empty
+    /// and is made with it. What something proves is typed once: the Wi-Fi
+    /// password joins the network, a token is probed, and the passphrase of
+    /// a repository that has something in it opens its `key.age` — a slip
+    /// there is refused on the spot.
+    #[must_use]
+    pub fn typed_twice(self, r: &Answers) -> Option<Twice> {
+        match self {
+            Self::Password => Some(Twice {
+                again: key::INST_PASSWORD_AGAIN,
+                differs: key::INST_PASSWORD_DIFFERS,
+            }),
+            Self::Passphrase => Some(Twice {
+                again: key::INST_PASSPHRASE_AGAIN,
+                differs: key::INST_PASSPHRASE_DIFFERS,
+            }),
+            Self::BelongingsPassphrase if r.belongings_empty == Some(true) => Some(Twice {
+                again: key::INST_BELONGINGS_PASSPHRASE_AGAIN,
+                differs: key::INST_BELONGINGS_PASSPHRASE_DIFFERS,
+            }),
+            _ => None,
+        }
     }
 
     /// Whether the installer computes it instead of asking.
@@ -1065,7 +1104,7 @@ pub fn validate_it(
         }
         // Whatever the person chose: it opens the repository, or — an empty
         // one — it is the one the repository will be made with, and THAT is
-        // where its length is asked (`MINIMUM_PASSPHRASE`, the TUI's second
+        // where its length is asked (`MINIMUM_PASSPHRASE`, the TUI's first
         // typing and the terminal-less mode's preflight).
         Question::BelongingsPassphrase
         | Question::Password

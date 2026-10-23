@@ -9390,6 +9390,12 @@ TPM — esta checagem vale também depois da TUI, antes do primeiro passo.
 - **A passphrase conta CARACTERES, não bytes.** Doze com acento passam de doze bytes, e recusar
   puniria quem escreve no próprio idioma. O mínimo é 12 porque o disco **não tem limite de
   tentativas** — a única defesa é o custo do argon2 vezes o comprimento.
+- **O que nada prova é digitado duas vezes** (`Question::typed_twice`): a senha do usuário, a
+  frase-secreta do disco e a dos pertences quando o repositório está vazio e nasce com ela. São
+  digitadas às cegas, e um erro só aparece no primeiro login ou no primeiro boot — o do disco sem
+  volta. Duas que diferem recomeçam da primeira, e `Esc` na segunda volta à primeira. O que algo
+  prova na hora é digitado uma vez: a senha do Wi-Fi entra na rede, o token é sondado e a frase de
+  um repositório com conteúdo abre o `key.age`.
 - **`--execute` não é o padrão.** Um comando que apaga um disco por omissão é um comando perigoso.
 - **A confirmação pede o caminho do disco**, não "sim". Copiar o caminho obriga a lê-lo.
 
