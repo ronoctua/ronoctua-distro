@@ -146,6 +146,10 @@
   # THE HOME GIVEN BACK FROM /persist: two boots and a third, each a
   # machine coming up — the structural criterion of the reboots above.
   "persist-home-vm"
+  # A BIND THE INITRD MOUNTS FROM /persist, seeded there: three boots, by the
+  # same criterion. What it proves cheaply — the unit each fstab line requires
+  # exists in its stage — stays in the battery (`fstab-requires-what-its-stage-has`).
+  "persist-initrd-vm"
 
   # `security-vm` meets none of the four criteria: three small nodes built
   # from one module, no installation, no disk, no reboot (the boot's look at

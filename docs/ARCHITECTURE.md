@@ -9333,6 +9333,16 @@ Duas armadilhas: **`boot.initrd.postDeviceCommands` é ignorado com initrd do sy
 lanzaboote exige), e **`mv origem destino` com destino existindo move a origem para dentro dele** —
 dois wipes no mesmo segundo davam `@root` aninhado, sem erro.
 
+**O initrd lê as binds que monta do mesmo fstab.** O NixOS monta no estágio 1 o que
+`utils.fsNeededForBoot` aponta, e `/var/lib/nixos` (os ids de usuários e grupos que a ativação
+guarda) está em `directories`. A linha dele exigia o `ronoctua-persist-seed`, que só existia no
+estágio 2: o `initrd-parse-etc` ("Mountpoints Configured in the Real Root") tinha o start recusado
+inteiro, e o `boot.panic_on_fail` reiniciava logo depois da frase-secreta — o primeiro boot da
+primeira instalação de verdade (2026-10-23). Por isso o initrd tem uma semente de mesmo nome, que
+roda contra `/sysroot`; ele precisaria dela de qualquer jeito, porque o instalador deixa
+`/var/lib/nixos` no `@root` e nada em `/persist`. Nenhuma VM via isso: as de teste trocam
+`fileSystems` por `virtualisation.fileSystems`, e a `.#vm` também.
+
 ---
 
 ### Instalador: dezoito perguntas, e o "só" continua sendo o critério

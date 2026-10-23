@@ -32088,6 +32088,10 @@ let
 
   # THE HOME IS NOT BOUND FROM /persist (2026-09-30), and what was is given
   # back once — two boots in a VM, `persist-home-vm`, run with the slow ones.
+  # A BIND THE INITRD MOUNTS FROM /persist BOOTS, seeded there (2026-10-23):
+  # three boots, `persist-initrd-vm`, run with the slow ones.
+  persistInitrdVm = import ./persist-initrd-vm.nix { inherit pkgs lib; };
+
   persistHomeVm = import ./persist-home-vm.nix {
     inherit pkgs lib;
     ronoctua = {
@@ -36713,6 +36717,70 @@ let
           print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
           sys.exit(1)
       print("OK: the browser's key is kept in /persist, bound after it is seeded")
+      END
+    '';
+
+  # EVERY UNIT A MOUNT REQUIRES EXISTS WHERE THE MOUNT IS MADE.
+  #
+  # `x-systemd.requires=<unit>` on an fstab line is a `Requires=`, and a unit
+  # that is not there refuses the whole start the mount is part of. The initrd
+  # mounts what `utils.fsNeededForBoot` names, reading those lines from the
+  # fstab `initrd-parse-etc` is handed; stage 2 reads `/etc/fstab`. A unit only
+  # one of them has is a boot that stops — and one did: the first boot of the
+  # first real installation (2026-10-23) stopped right after the disk's
+  # passphrase, because the bind of `/var/lib/nixos` required the seed only
+  # stage 2 had. Evaluated on the reference machine; the boot itself is
+  # `persist-initrd-vm`.
+  fstab-requires-what-its-stage-has =
+    let
+      noctua = self.nixosConfigurations.noctua.config;
+      facts = pkgs.writeText "fstab-requires-facts.json" (
+        builtins.toJSON {
+          initrd = {
+            fstab = noctua.boot.initrd.systemd.services.initrd-parse-etc.environment.SYSTEMD_SYSROOT_FSTAB.text;
+            units = builtins.attrNames noctua.boot.initrd.systemd.units;
+            least = 1;
+          };
+          "stage 2" = {
+            fstab = noctua.environment.etc.fstab.text;
+            units = builtins.attrNames noctua.systemd.units;
+            least = 2;
+          };
+        }
+      );
+    in
+    mkCheck "fstab-requires-what-its-stage-has" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the evaluated configuration, as JSON — each stage's fstab as the
+      # machine gets it, and the units that stage has.
+      facts = json.load(open("${facts}"))
+      wrong = []
+      for stage, seen in facts.items():
+          units = set(seen["units"])
+          floor(len(units), 10, f"units in {stage}")
+          lines = [line.split() for line in seen["fstab"].splitlines()
+                   if line.strip() and not line.lstrip().startswith("#")]
+          floor(len(lines), 3, f"fstab lines in {stage}")
+          required = 0
+          for fields in lines:
+              if len(fields) < 4:
+                  continue
+              for option in fields[3].split(","):
+                  if not option.startswith("x-systemd.requires="):
+                      continue
+                  required += 1
+                  unit = option.split("=", 1)[1]
+                  if unit not in units:
+                      wrong.append(f"{stage}: {fields[1]} requires {unit}, which {stage} does not have: "
+                                   "the start that mounts it is refused whole, and the boot stops")
+          floor(required, seen["least"], f"units required by the fstab lines of {stage}")
+      if wrong:
+          print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
+          sys.exit(1)
+      print("OK: every unit an fstab line requires is there, in the initrd and in stage 2")
       END
     '';
 
@@ -53542,6 +53610,7 @@ let
       window-sizes-are-tokens
 
       browser-key-is-persisted
+      fstab-requires-what-its-stage-has
       errands-are-handled-alike
       one-resolve-boundary
       one-browser-boundary
@@ -54012,6 +54081,7 @@ let
     installer-joins-wifi-vm = installerJoinsWifiVm;
 
     persist-home-vm = persistHomeVm;
+    persist-initrd-vm = persistInitrdVm;
 
     containers-vm = containersVm;
 

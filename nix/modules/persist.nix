@@ -138,6 +138,10 @@ let
   # side empty — seeded again next time — and never half a key. The
   # directory's owner and mode go with it, which `tmpfiles`' `-` would not
   # give (`0755 root`).
+  #
+  # `<root> <directory>...`: the root the system is mounted at — `/` in stage
+  # 2, `/sysroot` in the initrd (`initrdDirectories` below) — and the
+  # directories to seed, as the running system names them.
   seed = pkgs.writeShellApplication {
     name = "ronoctua-persist-seed";
     runtimeInputs = with pkgs; [
@@ -145,27 +149,31 @@ let
       findutils
       util-linux
     ];
-    # AN ARRAY, NOT A WORD LIST: with one directory the loop runs once, and
-    # shellcheck (SC2043) refuses a literal `for` that can only run once.
     text = ''
-      directories=(${lib.escapeShellArgs cfg.persist.directories})
-      for d in "''${directories[@]}"; do
-        kept="/persist$d"
+      if [ $# -lt 1 ]; then
+        echo "ERROR: usage: ronoctua-persist-seed <root> [<directory>...]" >&2
+        exit 2
+      fi
+      root=''${1%/}
+      shift
+      for d in "$@"; do
+        here="$root$d"
+        kept="$root/persist$d"
         if [ -e "$kept" ] && [ -n "$(find "$kept" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
           continue
         fi
-        if [ ! -d "$d" ] || mountpoint -q "$d"; then
+        if [ ! -d "$here" ] || mountpoint -q "$here"; then
           mkdir -p "$kept"
           continue
         fi
-        if [ -z "$(find "$d" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+        if [ -z "$(find "$here" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
           mkdir -p "$kept"
           continue
         fi
         draft="$kept.seeding"
         rm -rf "$draft"
         mkdir -p "$(dirname "$kept")"
-        cp -a --reflink=auto "$d" "$draft"
+        cp -a --reflink=auto "$here" "$draft"
         if [ -e "$kept" ]; then
           rmdir "$kept"
         fi
@@ -175,12 +183,31 @@ let
     '';
   };
 
+  # THE BINDS THE INITRD MOUNTS, and why the initrd has a seed of its own.
+  #
+  # NixOS mounts some paths before it switches root (`utils.fsNeededForBoot`:
+  # `/var/lib/nixos`, where the activation keeps every user's and group's id,
+  # is one of `directories`), and the initrd reads their lines from the same
+  # fstab — `x-systemd.requires=ronoctua-persist-seed.service` included. With
+  # no unit of that name in the initrd, the start that `initrd-parse-etc`
+  # ("Mountpoints Configured in the Real Root") asks for is refused whole,
+  # stage 1 fails, and `boot.panic_on_fail` reboots: the first boot of an
+  # installed machine never got past the disk's passphrase. And a seed there
+  # is needed anyway: the installer leaves `/var/lib/nixos` on `@root` and
+  # nothing in `/persist`, and stage 2 comes after the bind.
+  #
+  # From `config.fileSystems`, so a test VM, whose `virtualisation.fileSystems`
+  # replace them, asks what it actually mounts.
+  initrdDirectories = lib.filter (
+    d: config.fileSystems ? ${d} && utils.fsNeededForBoot config.fileSystems.${d}
+  ) cfg.persist.directories;
+
   # EVERY BIND ASKS FOR THE SEED, wherever the mount is started from: the
-  # boot's `local-fs.target`, a switch's start phase, or a unit that restarts
-  # with `RequiresMountsFor=` on the path (the browser extension's) — the
-  # last one is a transaction of its own, and without this it mounts the
-  # empty copy the switch's `tmpfiles` made. `x-systemd.requires=` is a
-  # `Requires=` and an `After=`.
+  # initrd (`initrdDirectories`), the boot's `local-fs.target`, a switch's
+  # start phase, or a unit that restarts with `RequiresMountsFor=` on the
+  # path (the browser extension's) — the last one is a transaction of its
+  # own, and without this it mounts the empty copy the switch's `tmpfiles`
+  # made. `x-systemd.requires=` is a `Requires=` and an `After=`.
   binds = lib.listToAttrs (
     map (d: {
       name = d;
@@ -419,7 +446,7 @@ in
         # starts, and does nothing where the copy already holds something.
         serviceConfig = {
           Type = "oneshot";
-          ExecStart = "${seed}/bin/ronoctua-persist-seed";
+          ExecStart = "${seed}/bin/ronoctua-persist-seed / ${lib.escapeShellArgs cfg.persist.directories}";
         };
       };
     }
@@ -443,6 +470,30 @@ in
           RemainAfterExit = true;
           ExecStart = "${homeReturn}/bin/ronoctua-persist-home-return";
         };
+      };
+    };
+
+    # THE SEED OF THE BINDS THE INITRD MOUNTS, under the name their fstab line
+    # requires (`initrdDirectories` says why), run against `/sysroot` once
+    # `/sysroot/persist` is up and before each of those binds. The program goes
+    # in by `storePaths`, with the two commands it runs beside the initrd's own
+    # coreutils: the initrd holds no store path a unit merely names — the unit
+    # failed at EXEC, and `mountpoint` was "command not found".
+    boot.initrd.systemd.storePaths = lib.mkIf (initrdDirectories != [ ]) [
+      seed
+      "${lib.getBin pkgs.findutils}/bin/find"
+      "${lib.getBin pkgs.util-linux}/bin/mountpoint"
+    ];
+    boot.initrd.systemd.services.ronoctua-persist-seed = lib.mkIf (initrdDirectories != [ ]) {
+      description = "Gives every bind the initrd mounts from /persist its source";
+      before = map (d: "${utils.escapeSystemdPath "/sysroot${d}"}.mount") initrdDirectories;
+      unitConfig = {
+        DefaultDependencies = false;
+        RequiresMountsFor = [ "/sysroot/persist" ];
+      };
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${seed}/bin/ronoctua-persist-seed /sysroot ${lib.escapeShellArgs initrdDirectories}";
       };
     };
 
