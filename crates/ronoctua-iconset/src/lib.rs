@@ -2004,12 +2004,52 @@ mod on_the_tables {
         assert!(count(&set, Collection::Lucide, "atenção") > 0);
     }
 
+    /// A YARDSTICK: a fixed piece of work — 4 000 words looked up in a sorted
+    /// table of 20 000 — timed beside what a test measures, so a machine that
+    /// is slower, or busy, is slower at both and their ratio stays. A clock
+    /// alone measures the machine as well as the code: a gate building six
+    /// units beside the tests stretched a promise past itself (2026-10-23).
+    struct Yardstick {
+        table: Vec<String>,
+        probes: Vec<String>,
+    }
+
+    impl Yardstick {
+        fn new() -> Self {
+            let word = |n: u32| format!("w{:08x}", n.wrapping_mul(2_654_435_761));
+            let mut table: Vec<String> = (0..20_000).map(word).collect();
+            table.sort_unstable();
+            let probes = (0..4_000).map(|n| word(n * 7)).collect();
+            Self { table, probes }
+        }
+
+        /// One measure of it.
+        fn measure(&self) -> std::time::Duration {
+            let t = std::time::Instant::now();
+            let found = self
+                .probes
+                .iter()
+                .filter(|p| self.table.binary_search(p).is_ok())
+                .count();
+            std::hint::black_box(found);
+            t.elapsed()
+        }
+    }
+
+    /// The most yardsticks the three strips may take: the 2 ms the fast
+    /// access gives every in-process source together, over the 0.69 ms a
+    /// yardstick took where it was measured (2026-10-23). The heaviest query
+    /// read 1.23 yardsticks there (0.70 ms), and 1.64 with every processor
+    /// busy, where the clock said 1.84 ms; three searches in the place of
+    /// one, 3.16.
+    const STRIPS_MOST_YARDSTICKS: f64 = 2.9;
+
     /// Fast-access searches the three collections on every keystroke, on its
     /// event loop, inside 2 ms for every in-process source together
     /// (components-apps.md F2). Measured in an optimized build — `rust.tests`
-    /// runs the `loop` profile — as the FASTEST of several runs: the cost of
-    /// the search itself, which a machine busy with the other tests (they run
-    /// in parallel) only adds to. About 0.9 ms for the three when measured.
+    /// runs the `loop` profile — as the FASTEST of several runs, each beside
+    /// a run of the [`Yardstick`], and held to a number of yardsticks: the
+    /// cost of the search itself, the same on every machine, idle or busy.
     #[test]
     fn three_strips_fit_a_keystroke() {
         let set = set();
@@ -2020,21 +2060,22 @@ mod on_the_tables {
             assert!(!found(&set, Collection::Unicode, "arrow").is_empty());
             return;
         }
+        let yardstick = Yardstick::new();
         for typed in ["a", "arrow", "seta para", "home", "", "family:emoji mao"] {
             let q = Query::parse(typed, g);
-            let fastest = (0..15)
-                .map(|_| {
-                    let t = std::time::Instant::now();
-                    for c in Collection::ALL {
-                        std::hint::black_box(search(&set, c, &q, "pt", 24));
-                    }
-                    t.elapsed()
-                })
-                .min()
-                .unwrap_or_default();
+            let (mut fastest, mut stick) = (std::time::Duration::MAX, std::time::Duration::MAX);
+            for _ in 0..15 {
+                stick = stick.min(yardstick.measure());
+                let t = std::time::Instant::now();
+                for c in Collection::ALL {
+                    std::hint::black_box(search(&set, c, &q, "pt", 24));
+                }
+                fastest = fastest.min(t.elapsed());
+            }
+            let ratio = fastest.as_secs_f64() / stick.as_secs_f64();
             assert!(
-                fastest < std::time::Duration::from_millis(2),
-                "`{typed}` took {fastest:?} for the three strips"
+                ratio <= STRIPS_MOST_YARDSTICKS,
+                "`{typed}` took {ratio:.2} yardsticks ({fastest:?}, a yardstick {stick:?}) for the three strips"
             );
         }
     }

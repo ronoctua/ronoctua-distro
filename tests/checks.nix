@@ -22373,19 +22373,26 @@ let
     # centre and a dozen boundary crates — source, every file of it tracked);
     # 44 080 KiB with the 2026-10-05 wave (the machine's own flake, the
     # belongings' format 2, the post-quantum crates, /private, Incus, the LLM
-    # accounts — 33 176 KiB of it is `crates/`, and no build directory: `du`
-    # of the tracked files alone gives the same number). The ceiling keeps the
-    # same ~30% above the source as before. Measure again before moving it.
-    cap=57344
-    tree_size=$(du -s --exclude=.git ${self} | cut -f1)
-    echo "flake source: $tree_size KiB (ceiling $cap KiB)"
+    # accounts — 33 176 KiB of it is `crates/`, and no build directory).
+    #
+    # BY LENGTH, the files alone. Those numbers were `du`'s blocks, and a
+    # store's blocks are its filesystem's: ZFS compressed the same tree to
+    # 23 319 KiB, and ext4 rounds each of its 2 247 files up to 4 KiB — a
+    # ceiling held on one machine broken on the next with nothing changed.
+    # A directory's own size is the filesystem's too, so only the regular
+    # files are summed: 49 128 KiB on 2026-10-23, on every machine. The
+    # ceiling keeps ~30% above the source, as before. Measure again before
+    # moving it.
+    cap=65536
+    tree_size=$(find ${self} -name .git -prune -o -type f -printf '%s\n' | awk '{ s += $1 } END { printf "%d\n", s / 1024 }')
+    echo "flake source: $tree_size KiB of files (ceiling $cap KiB)"
     if [ "$tree_size" -gt "$cap" ]; then
       echo >&2
       echo "ERROR: the tree copied into the store is $tree_size KiB." >&2
       echo >&2
       echo "Every edit to ANY file mints a copy of this size." >&2
       echo "Look for a build directory inside the tree:" >&2
-      du -sh ${self}/* 2>/dev/null | sort -rh | head -5 >&2
+      du -sh --apparent-size ${self}/* 2>/dev/null | sort -rh | head -5 >&2
       echo >&2
       echo "Builds go to \$CARGO_TARGET_DIR, outside the tree." >&2
       exit 1
@@ -36783,6 +36790,289 @@ let
       print("OK: every unit an fstab line requires is there, in the initrd and in stage 2")
       END
     '';
+
+  # A NAME THAT IS NOT TEXT IS WRITTEN WHERE EVERY MACHINE TAKES ONE.
+  #
+  # On Linux a file's name is bytes, and two tests prove a name that is not
+  # UTF-8 crosses a wire and opens its own history. The build's directory is
+  # the host's filesystem, and ZFS with `utf8only` (a common pool default)
+  # refuses such a name with EILSEQ: both tests failed on that machine alone
+  # (2026-10-23), the code being right. A test that writes one makes its room
+  # with `a_room_for_any_name`, on `/dev/shm` — Linux's tmpfs, which takes any
+  # byte but `/` and NUL, in the build sandbox and on every host alike.
+  a-name-that-is-not-text-has-a-room-for-it =
+    mkCheck "a-name-that-is-not-text-has-a-room-for-it" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+        ROOTS = [("crates", pathlib.Path("${../crates}")), ("buffers", pathlib.Path("${../buffers}"))]
+
+        # PARSED: every Rust source of the workspace and of the buffers, its
+        # comments off and its strings KEPT (`uncommented`) — the byte string is
+        # the question. A name that is not text is a byte string with a byte
+        # past ASCII handed to `OsStr::from_bytes` or `OsString::from_vec`; it
+        # reaches the disk when the function holding it writes there.
+        NAME = re.compile(r'(?:OsStr::from_bytes|OsString::from_vec)\(\s*b"((?:[^"\\]|\\.)*)"')
+        HIGH = re.compile(r"\\x[89a-fA-F][0-9a-fA-F]")
+        DISK = re.compile(r"\bstd::fs::|\bfs::(?:write|create_dir|File)|\bFile::create\b|\bOpenOptions\b|\ba_repository_at\(")
+        ROOM = "a_room_for_any_name("
+
+        def enclosing(text, at):
+            """The function a hit at `at` is inside — its name and its body,
+            by braces from its `fn` — or `None` outside any."""
+            for m in reversed(list(re.finditer(r"\bfn\s+(\w+)", text[:at]))):
+                start = text.find("{", m.end())
+                if start < 0 or start > at:
+                    continue
+                depth = 0
+                for k in range(start, len(text)):
+                    if text[k] == "{":
+                        depth += 1
+                    elif text[k] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            if k >= at:
+                                return m.group(1), text[start : k + 1]
+                            break
+            return None, ""
+
+        wrong = []
+        swept = names = on_disk = rooms = 0
+        for label, root in ROOTS:
+            for f in sorted(root.rglob("*.rs")):
+                rel = f"{label}/{f.relative_to(root)}"
+                text = uncommented(f.read_text(errors="replace"))
+                swept += 1
+                for m in re.finditer(r"\bfn\s+a_room_for_any_name\b", text):
+                    rooms += 1
+                    body = must(body_of(text[m.start():], "a_room_for_any_name"), f"{rel}: a_room_for_any_name")
+                    if '"/dev/shm"' not in body:
+                        wrong.append(f"{rel}: a_room_for_any_name is not rooted in /dev/shm, the tmpfs every machine has")
+                for m in NAME.finditer(text):
+                    if not HIGH.search(m.group(1)):
+                        continue
+                    names += 1
+                    name, body = enclosing(text, m.start())
+                    if not DISK.search(body):
+                        continue
+                    on_disk += 1
+                    if ROOM not in body:
+                        wrong.append(f"{rel}: {name} writes a name that is not text ({m.group(1)!r}) outside "
+                                     "a_room_for_any_name — a build directory on ZFS with utf8only refuses it "
+                                     "(EILSEQ), and the test fails there alone")
+
+        floor(swept, 1000, "Rust sources swept")
+        floor(names, 4, "names that are not text")
+        floor(on_disk, 2, "of them written to a disk")
+        floor(rooms, 2, "rooms for any name")
+        if wrong:
+            print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
+            sys.exit(1)
+        print(f"OK: {names} names that are not text, the {on_disk} written to a disk in a room that takes "
+              f"any name ({rooms} rooms, each in /dev/shm)")
+        END
+      '';
+
+  # A SIZE IS A LENGTH, NEVER THE BLOCKS A FILESYSTEM GAVE IT.
+  #
+  # Blocks are the filesystem's answer, and every one answers differently:
+  # ZFS says 1 KiB for 2 MiB just written, until its transaction group closes
+  # seconds later, and no `fsync`, `syncfs` or `sync` hurries it — so git's
+  # `count-objects` weighed a fetch at a quarter of itself, and the
+  # belongings' compaction tests failed on that machine alone (2026-10-23);
+  # compressed, the same tree is half its size, and ext4 rounds each file up
+  # to 4 KiB. A ceiling held on one machine broke on the next with nothing
+  # changed. So nothing in Rust measures blocks but `ronoctua-private`, whose
+  # question is how much of a SPARSE image the disk holds; and every `du` of
+  # the flake's own scripts sums lengths. A VM test's script measures the
+  # VM's own disk, the same everywhere.
+  sizes-are-lengths = mkCheck "sizes-are-lengths" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+    tree = pathlib.Path("${self}")
+
+    # FILE-WIDE: a measure of blocks is the offence wherever it is written.
+    # Rust is read `uncommented` (git's `count-objects` is a string
+    # argument).
+    BLOCKS = re.compile(r"\.blocks\(\)|\bst_blocks\b|count-objects")
+    ASKS_BLOCKS = {"ronoctua-private"}
+    wrong = []
+    rust = 0
+    for root in (tree / "crates", tree / "buffers"):
+        for f in sorted(root.rglob("*.rs")):
+            rust += 1
+            crate = f.relative_to(root).parts[0]
+            for m in BLOCKS.finditer(uncommented(f.read_text(errors="replace"))):
+                if crate not in ASKS_BLOCKS:
+                    wrong.append(f"{f.relative_to(tree)}: `{m.group(0)}` measures blocks, which a filesystem "
+                                 "that allocates late (ZFS) answers seconds after the write — weigh by length")
+
+    # AND EVERY `du` of the Nix, shell and Python outside the VM tests passes
+    # `--apparent-size` or `--bytes` (`-b`). A comment is a `#` that begins a
+    # word: `hashless` cuts at any `#`, and the one of a shell expansion that
+    # strips a prefix took the `du` after it out of the sweep.
+    DU = re.compile(r"(?<![\w.-])du((?:\s+-[-\w=]+)+)")
+    def lengths(flags):
+        return any(f in ("--apparent-size", "--bytes") or (not f.startswith("--") and "b" in f[1:]) for f in flags)
+    sources = runs = 0
+    for f in sorted(tree.rglob("*")):
+        rel = f.relative_to(tree)
+        if not f.is_file() or f.suffix not in (".nix", ".sh", ".py") or rel.parts[0] not in ("nix", "tests", "flake.nix"):
+            continue
+        if f.name.endswith("-vm.nix"):
+            continue
+        sources += 1
+        text = "\n".join(re.sub(r"(^|\s)#.*$", r"\1", line) for line in f.read_text(errors="replace").splitlines())
+        for m in DU.finditer(text):
+            runs += 1
+            if not lengths(m.group(1).split()):
+                wrong.append(f"{rel}: `du{m.group(1)}` sums blocks — pass --apparent-size (or -b)")
+
+    floor(rust, 1000, "Rust sources swept for a measure of blocks")
+    floor(sources, 300, "Nix, shell and Python files swept for a du")
+    floor(runs, 2, "runs of du")
+    if wrong:
+        print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: no measure of blocks outside {sorted(ASKS_BLOCKS)}, and the {runs} runs of du sum lengths")
+    END
+  '';
+
+  # NO TEST HOLDS A TIME UNDER A SECOND.
+  #
+  # The gate builds six units beside the tests, and a busy machine stretches
+  # a run past any tight bound with nothing wrong in the code: a catalogue
+  # listing promised in 20 ms failed there at 15 ms idle, and the icon
+  # search's 2 ms read 1.84 ms with every processor busy (2026-10-23). A
+  # test that reads the clock holds work it COUNTS (SQLite's steps), a bound
+  # of a second or more — a regime, microseconds against seconds — or a
+  # ratio to a `Yardstick` timed beside it, which a busy or slower machine
+  # stretches alike: the same verdict on every machine.
+  no-test-holds-a-time-under-a-second =
+    mkCheck "no-test-holds-a-time-under-a-second" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+        ROOTS = [("crates", pathlib.Path("${../crates}")), ("buffers", pathlib.Path("${../buffers}"))]
+
+        # PARSED: every `#[test]` function of the workspace and of the buffers,
+        # by braces from its `fn` (`code_of`: comments and literals off, the
+        # numbers kept), that reads the clock (`Instant::now()`). Refused in
+        # one: a measured time held under a bound shorter than a second —
+        # `elapsed() < Duration::from_millis(N)`, `Duration::from_millis(N) >
+        # took`, `median.as_millis() >= N` and their kin — or a wait shorter
+        # than a second for something that must come (`recv_timeout(…)` and
+        # `unwrap`). A test measured against a `Yardstick` holds a ratio.
+        TEST = re.compile(r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*(?:pub\s+)?fn\s+(\w+)")
+        UNIT_MS = {"millis": 1, "micros": 1e-3, "nanos": 1e-6}
+        UNDER = [
+            re.compile(r"(?<![<>=-])<=?\s*(?:std::time::)?Duration::from_(millis|micros|nanos)\(\s*([\d_]+)\s*\)"),
+            re.compile(r"(?:std::time::)?Duration::from_(millis|micros|nanos)\(\s*([\d_]+)\s*\)\s*>=?(?![=>])"),
+            re.compile(r"\.as_(millis|micros|nanos)\(\)\s*(?:<|<=|>|>=)\s*([\d_]+)"),
+            re.compile(r"recv_timeout\(\s*(?:std::time::)?Duration::from_(millis|micros|nanos)\(\s*([\d_]+)\s*\)\s*\)\s*\.(?:unwrap|expect)\("),
+        ]
+
+        wrong = []
+        swept = timed = sticks = 0
+        for label, root in ROOTS:
+            for f in sorted(root.rglob("*.rs")):
+                swept += 1
+                text = code_of(f.read_text(errors="replace"))
+                for m in TEST.finditer(text):
+                    body = body_of(text[m.start():], m.group(1))
+                    if not body or "Instant::now()" not in body:
+                        continue
+                    timed += 1
+                    if "Yardstick::new()" in body:
+                        sticks += 1
+                        continue
+                    for pattern in UNDER:
+                        for hit in pattern.finditer(body):
+                            ms = int(hit.group(2).replace("_", "")) * UNIT_MS[hit.group(1)]
+                            if ms < 1000:
+                                wrong.append(f"{label}/{f.relative_to(root)}: {m.group(1)} holds a time to {ms:g} ms "
+                                             f"(`{' '.join(hit.group(0).split())}`), which a busy machine breaks with "
+                                             "nothing wrong — count the work, bound the regime by a second or more, "
+                                             "or measure against a Yardstick")
+
+        floor(swept, 1000, "Rust sources swept")
+        floor(timed, 20, "tests that read the clock")
+        floor(sticks, 2, "tests measured against a yardstick")
+        if wrong:
+            print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
+            sys.exit(1)
+        print(f"OK: {timed} tests read the clock, none holds a time under a second ({sticks} against a yardstick)")
+        END
+      '';
+
+  # AN AGE SCRYPT HAS ONE WORK ON EVERY MACHINE.
+  #
+  # `age` alone picks a passphrase's scrypt factor by timing the machine it
+  # runs on, about a second: 20 on a fast idle machine, a gibibyte, which the
+  # 1 GiB VM of `belongings-unlock-ends-with-the-session` could not allocate
+  # (2026-10-23), and a weaker factor on a busy one. It opens only up to its
+  # own measure plus four, so a `key.age` sealed on a fast desktop could be
+  # refused on a slow laptop. `ronoctua-pq` seals at `PASSPHRASE_WORK` and
+  # opens up to `PASSPHRASE_WORK_MOST`, and its tests prove the two; this
+  # holds every function that makes an `age` scrypt, there or anywhere.
+  scrypt-work-is-the-same-everywhere =
+    mkCheck "scrypt-work-is-the-same-everywhere" [ pkgs.python3 ]
+      ''
+        python3 - <<'END'
+        import pathlib, re, sys
+        exec(open("${pyPrelude}").read())
+        ROOTS = [("crates", pathlib.Path("${../crates}")), ("buffers", pathlib.Path("${../buffers}"))]
+
+        # PARSED: every function of the workspace and of the buffers, by
+        # braces from its `fn` (`code_of`: comments and literals off), that
+        # makes an `age` scrypt — `scrypt::Recipient::new(` or
+        # `scrypt::Identity::new(`. Each sets the factor in the same function,
+        # at the top of its body and never under a condition:
+        # `set_work_factor(` for a recipient, `set_max_work_factor(` for an
+        # identity. `if let Some(log_n) = work { … }` was the defect — the
+        # machine's measure whenever nobody handed a factor. A `use` that
+        # names the two by themselves is refused too, so every one is spelled
+        # where this looks.
+        FN = re.compile(r"\bfn\s+(\w+)")
+        SETS = {"Recipient": "set_work_factor(", "Identity": "set_max_work_factor("}
+        ALIAS = re.compile(r"\buse\s+age::scrypt::")
+        wrong = []
+        swept = made = 0
+        for label, root in ROOTS:
+            for f in sorted(root.rglob("*.rs")):
+                swept += 1
+                text = code_of(f.read_text(errors="replace"))
+                name = f"{label}/{f.relative_to(root)}"
+                for m in ALIAS.finditer(text):
+                    wrong.append(f"{name}: `{m.group(0)}…` names age's scrypt types by themselves — spell "
+                                 "`scrypt::Recipient::new`/`scrypt::Identity::new`, so this check sees each one")
+                for m in FN.finditer(text):
+                    body = body_of(text[m.start():], m.group(1))
+                    if not body:
+                        continue
+                    for kind, setter in SETS.items():
+                        if not re.search(r"\bscrypt::" + kind + r"::new\(", body):
+                            continue
+                        made += 1
+                        top = [k.start() for k in re.finditer(re.escape(setter), body)
+                               if body[:k.start()].count("{") == body[:k.start()].count("}")]
+                        if not top:
+                            wrong.append(f"{name}: {m.group(1)} makes a `scrypt::{kind}` without `{setter}…)` at "
+                                         "the top of its body — age then times this machine for the factor: a "
+                                         "gibibyte on a fast one, a refusal on a slow one "
+                                         "(ronoctua_pq::PASSPHRASE_WORK, PASSPHRASE_WORK_MOST)")
+
+        floor(swept, 1000, "Rust sources swept")
+        floor(made, 2, "functions that make an age scrypt")
+        if wrong:
+            print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
+            sys.exit(1)
+        print(f"OK: the {made} functions that make an age scrypt fix its work, none under a condition")
+        END
+      '';
 
   # EVERY VIEW'S ERRAND IS HANDLED ALIKE IN BOTH DOORS — PENDING 0.00004.
   #
@@ -53611,6 +53901,10 @@ let
 
       browser-key-is-persisted
       fstab-requires-what-its-stage-has
+      a-name-that-is-not-text-has-a-room-for-it
+      sizes-are-lengths
+      no-test-holds-a-time-under-a-second
+      scrypt-work-is-the-same-everywhere
       errands-are-handled-alike
       one-resolve-boundary
       one-browser-boundary

@@ -1030,8 +1030,12 @@ mod tests {
         let began = std::time::Instant::now();
         let refused = from_raster(&png, 512);
         assert_eq!(refused, Err(Refusal::TooBig(3_600_000_000)));
+        // A REGIME, not a speed: the header's refusal is microseconds, and a
+        // decode that fills a 14.4 GB buffer is many seconds — a bound far
+        // from both, so a busy machine never reads as the second. The value
+        // above is what proves the header refused.
         assert!(
-            began.elapsed() < std::time::Duration::from_millis(200),
+            began.elapsed() < std::time::Duration::from_secs(5),
             "the refusal has to come from the header, without allocating the pixels"
         );
         const { assert!(3_600_000_000 > PIXEL_CEILING) };

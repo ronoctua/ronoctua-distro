@@ -162,9 +162,16 @@ mod tests {
             "a minute away is not waited"
         );
         assert_eq!(pace.wait("slow.example", &|| true), Err(Waited::Stopped));
-        let t0 = Instant::now();
-        assert_eq!(pace.wait("fresh.example", &|| false), Ok(()));
-        assert!(t0.elapsed() < Duration::from_millis(50));
+        // A FRESH HOST IS TAKEN ON THE FIRST LOOK: the wait asks whether it
+        // was stopped once, and never sleeps for a turn — counted, not timed,
+        // so a busy machine reads the same.
+        let looks = std::cell::Cell::new(0);
+        let looked = || {
+            looks.set(looks.get() + 1);
+            false
+        };
+        assert_eq!(pace.wait("fresh.example", &looked), Ok(()));
+        assert_eq!(looks.get(), 1, "a fresh host waited a turn");
     }
 
     #[test]

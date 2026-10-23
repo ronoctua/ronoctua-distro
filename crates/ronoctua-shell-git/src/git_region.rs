@@ -925,6 +925,18 @@ mod tests {
         )
     }
 
+    /// A folder on Linux's `tmpfs` (`/dev/shm`), which takes any byte in a
+    /// name. The build's own directory may refuse a name that is not UTF-8 —
+    /// ZFS with `utf8only` answers EILSEQ — and a test of such a name runs the
+    /// same on every machine only where every machine takes it.
+    fn a_room_for_any_name(name: &str) -> std::path::PathBuf {
+        let room = std::path::Path::new("/dev/shm")
+            .join(format!("ronoctua-git-region-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&room);
+        std::fs::create_dir_all(&room).expect("a room in /dev/shm");
+        room
+    }
+
     /// The same repository, in the folder `work`.
     fn a_repository_at(work: std::path::PathBuf) -> std::path::PathBuf {
         let tools = ronoctua_git::Tools::from_env()
@@ -1017,8 +1029,7 @@ mod tests {
     #[test]
     fn a_folder_whose_name_is_not_text_opens_its_own_history() {
         use std::os::unix::ffi::OsStrExt as _;
-        let room =
-            std::env::temp_dir().join(format!("ronoctua-git-region-bytes-{}", std::process::id()));
+        let room = a_room_for_any_name("bytes");
         let work = a_repository_at(room.join(std::ffi::OsStr::from_bytes(b"caf\xe9")));
         assert!(work.to_str().is_none(), "the folder's name is text");
         let argument = crate::region::path_argument(&work);

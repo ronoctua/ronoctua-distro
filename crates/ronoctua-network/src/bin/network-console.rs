@@ -107,7 +107,10 @@ fn main() -> Result<()> {
     };
     if joined != Joined::Up {
         let _ = manager.abandon(&join);
-        anyhow::bail!("`{ssid}` did not accept the password typed on the console");
+        if joined == Joined::Refused {
+            anyhow::bail!("`{ssid}` did not accept the password typed on the console");
+        }
+        anyhow::bail!("`{ssid}` did not come up within {JOIN_MOST_S} s");
     }
     manager
         .remember(&join, &ssid, &password, Seal::Here)

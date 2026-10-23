@@ -379,8 +379,29 @@ pub fn seal(
     seal_with(encryptor, from, to, progress)
 }
 
-/// Seals to a passphrase (scrypt). `work` is scrypt's log₂ N: `None` lets age
-/// pick about a second on this machine; a test hands a small one.
+/// scrypt's log₂ N for every passphrase sealed here: 18, what the reference
+/// `age` (Go) writes — 256 MiB (`2^18 × 8 × 128` bytes), a second or so on a
+/// slow laptop.
+///
+/// # Never the machine's measure
+///
+/// `age` alone times scrypt where it runs and picks about a second: 20 on a
+/// fast idle machine, a gibibyte, which a 1 GiB VM could not hold (the
+/// belongings' `prepare` died there allocating it, 2026-10-23), and a weaker
+/// factor on a busy one. It also opens only up to its measure plus four, so a
+/// `key.age` sealed on a fast desktop could be refused on a slow laptop, or on
+/// the same desktop while it was busy. Sealed at a constant and opened under
+/// one, a file is the same and opens the same on every machine.
+pub const PASSPHRASE_WORK: u8 = 18;
+
+/// The most an opening pays: 22, the reference `age`'s ceiling (4 GiB) — over
+/// every factor `age` measured for a `key.age` sealed before
+/// [`PASSPHRASE_WORK`], and what a file from the Go `age` may carry. A file
+/// past it is refused before any scrypt runs ([`Why::Failed`]).
+pub const PASSPHRASE_WORK_MOST: u8 = 22;
+
+/// Seals to a passphrase (scrypt). `work` is scrypt's log₂ N: `None` is
+/// [`PASSPHRASE_WORK`]; a test hands a small one.
 ///
 /// # Errors
 ///
@@ -393,9 +414,7 @@ pub fn seal_passphrase(
     progress: &mut dyn FnMut(u64),
 ) -> Result<u64, Refusal> {
     let mut recipient = age::scrypt::Recipient::new(passphrase.clone());
-    if let Some(log_n) = work {
-        recipient.set_work_factor(log_n);
-    }
+    recipient.set_work_factor(work.unwrap_or(PASSPHRASE_WORK));
     let encryptor =
         age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
             .map_err(|e| encrypt_error(&e))?;
@@ -494,7 +513,8 @@ pub fn open(
     open_with(identities, from, to, progress, Why::WrongKey)
 }
 
-/// Opens what was sealed to a passphrase.
+/// Opens what was sealed to a passphrase, at a work up to
+/// [`PASSPHRASE_WORK_MOST`] — the same on every machine.
 ///
 /// # Errors
 ///
@@ -505,7 +525,8 @@ pub fn open_passphrase(
     to: &mut dyn Write,
     progress: &mut dyn FnMut(u64),
 ) -> Result<u64, Refusal> {
-    let scrypt = age::scrypt::Identity::new(passphrase.clone());
+    let mut scrypt = age::scrypt::Identity::new(passphrase.clone());
+    scrypt.set_max_work_factor(PASSPHRASE_WORK_MOST);
     open_with(
         &[&scrypt as &dyn age::Identity],
         from,
@@ -710,6 +731,53 @@ mod tests {
         let wrong = SecretString::from("incorrect".to_owned());
         let refused = open_passphrase(&wrong, &mut &sealed[..], &mut Vec::new(), &mut |_| {});
         assert_eq!(refused.unwrap_err().why, Why::WrongPassphrase);
+    }
+
+    /// The `-> scrypt <salt> <log₂ N>` line of a passphrase's header.
+    fn scrypt_line(sealed: &[u8]) -> String {
+        String::from_utf8_lossy(sealed)
+            .lines()
+            .find(|l| l.starts_with("-> scrypt "))
+            .unwrap()
+            .to_owned()
+    }
+
+    /// FAILS IF: a passphrase is sealed at a work this machine measured
+    /// instead of [`PASSPHRASE_WORK`] — a gibibyte on a fast idle machine,
+    /// which a small one cannot hold, and a weaker factor on a busy one.
+    #[test]
+    fn a_passphrase_is_sealed_at_one_work_on_every_machine() {
+        let right = SecretString::from("correct horse battery".to_owned());
+        let mut sealed = Vec::new();
+        seal_passphrase(&right, None, &mut &b"note"[..], &mut sealed, &mut |_| {}).unwrap();
+        let line = scrypt_line(&sealed);
+        assert_eq!(
+            line.rsplit_once(' ').map(|(_, work)| work),
+            Some(PASSPHRASE_WORK.to_string().as_str()),
+            "{line}"
+        );
+    }
+
+    /// FAILS IF: what an opening pays is bounded by this machine's measure
+    /// instead of [`PASSPHRASE_WORK_MOST`]: a fast machine would run a
+    /// file's scrypt past the ceiling (8 GiB at 23) and die allocating it,
+    /// and a slow one would refuse a `key.age` that a fast one sealed.
+    #[test]
+    fn an_opening_pays_at_most_the_ceiling_on_every_machine() {
+        let right = SecretString::from("correct horse battery".to_owned());
+        let mut sealed = Vec::new();
+        seal_passphrase(&right, WORK, &mut &b"note"[..], &mut sealed, &mut |_| {}).unwrap();
+        let line = scrypt_line(&sealed);
+        let at = sealed
+            .windows(line.len())
+            .position(|w| w == line.as_bytes())
+            .unwrap();
+        let (head, _) = line.rsplit_once(' ').unwrap();
+        let mut heavier = sealed[..at].to_vec();
+        heavier.extend_from_slice(format!("{head} {}", PASSPHRASE_WORK_MOST + 1).as_bytes());
+        heavier.extend_from_slice(&sealed[at + line.len()..]);
+        let refused = open_passphrase(&right, &mut &heavier[..], &mut Vec::new(), &mut |_| {});
+        assert_eq!(refused.unwrap_err().why, Why::Failed);
     }
 
     #[test]

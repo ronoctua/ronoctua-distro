@@ -48,8 +48,9 @@
 //! Every scope (every item, a source's, a category's, a theme's) has an index
 //! for every order ([`Sort`]), and a page is chosen on it before its rows are
 //! looked up: the last page of fifty thousand costs what the first does
-//! (measured in `a_listing_over_fifty_thousand_items_answers_in_under_20_ms`,
-//! which also refuses a plan that sorts a whole listing).
+//! (measured in `a_listing_over_fifty_thousand_items_is_walked_on_an_index`,
+//! in steps of SQLite's machine, which also refuses a plan that sorts a
+//! whole listing).
 //!
 //! # Bounded
 //!

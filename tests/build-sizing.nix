@@ -286,10 +286,17 @@ let
         return sorted({x for x, s2, e2 in flat if x != d for (s, e) in mine if s2 < e and s < e2})
 
     def heaviest_moment(flat, weight):
-        """The largest sum of `weight(drv)` alive at one instant."""
+        """The largest sum of `weight(drv)` alive at one instant with two
+        builds or more alive — the program's own rule: a unit with nothing
+        beside it starts whatever it weighs (`sized_units`: none running),
+        and only what runs TOGETHER is held to the budget. Counted alone, the
+        shell's program (4864 MiB) on a machine with less free than that
+        read as the budget broken, which it was not."""
         most = 0
         for _, s, _ in flat:
-            most = max(most, sum(weight(d) for d, s2, e2 in flat if s2 <= s < e2))
+            alive = [d for d, s2, e2 in flat if s2 <= s < e2]
+            if len(alive) > 1:
+                most = max(most, sum(weight(d) for d in alive))
         return most
 
     def cost_kb(cost, budget_kb, cpus, client_kb):
@@ -1746,9 +1753,10 @@ in
   # once a collection took its `metrics`), the shell's program among them,
   # no unit of the loop or the test graph. Then the EXTRACTED
   # `ronoctua-machine` (the one the units run as root) over that very JSON,
-  # with the machine's own sizing and units programs and a `nix` that writes
-  # down what it was asked, when each build ran, and says, for a dry run of
-  # the system, the plan planted. With the whole release graph planned it
+  # with the machine's own sizing and units programs — measuring a planted
+  # machine, never the host this runs on — and a `nix` that writes down what
+  # it was asked, when each build ran, and says, for a dry run of the system,
+  # the plan planted. With the whole release graph planned it
   # builds every unit once, its own build, never before what it is built
   # from, the heavy ones alone with the cores their lines leave, the costs
   # of what runs within the budget; then the system, sized as what is no
@@ -1831,7 +1839,22 @@ in
         PY = "${pkgs.python3}/bin/python3"
         def plan_of(drvs):
             return f"these {len(drvs)} derivations will be built:\n" + "".join(f"  {d}\n" for d in drvs)
-        def apply(name, phases, plan, needs=(), times=None, units_args=(), refs=None):
+        # THE MACHINE IS PLANTED, in every run and for both programs: what a
+        # host has free moves under a gate building beside this check, and a
+        # check that measures it judges the host — 2593 MiB free once, under
+        # the shell's program alone. `total_kb` of memory, a budget of
+        # `budget_mib` once the floor and the reserve are taken, `cpus`
+        # processors.
+        def planted(name, total_kb, budget_mib, cpus):
+            avail_kb = budget_mib * 1024 + total_kb * N["floorPercent"] // 100 + N["reserveMiB"] * 1024
+            mem = pathlib.Path(os.environ["TMPDIR"]) / f"meminfo-{name}"
+            mem.write_text(f"MemTotal: {total_kb} kB\nMemAvailable: {avail_kb} kB\n")
+            return ("--meminfo", str(mem), "--cpus", str(cpus), "--ceiling", "infinity")
+        # 16 GiB and sixteen processors, a budget of 8192 MiB: the shell's
+        # program with cores beside it, and slots that run together.
+        BUDGET_MIB = 8192
+        HERE = planted("here", 16 * 1024 * 1024, BUDGET_MIB, 16)
+        def apply(name, phases, plan, needs=(), times=None, machine=HERE, refs=None):
             root = pathlib.Path(os.environ["TMPDIR"]) / name
             store = root / "nix/store"
             store.mkdir(parents=True)
@@ -1907,7 +1930,7 @@ in
             # held to the numbers it was given.
             program(root / "bin/sizing", f"""
         import pathlib, subprocess, sys
-        said = subprocess.run(["{facts['sizing']}"], capture_output=True, text=True)
+        said = subprocess.run(["{facts['sizing']}", *{list(machine)!r}], capture_output=True, text=True)
         pathlib.Path("{root}/sized").write_text(said.stdout)
         sys.stdout.write(said.stdout)
         sys.exit(said.returncode)
@@ -1916,7 +1939,7 @@ in
         import pathlib, subprocess, sys
         with open("{root}/calls", "a") as f:
             f.write("build-units " + " ".join(sys.argv[1:]) + "\\n")
-        said = subprocess.run(["{facts['units']}", *{list(units_args)!r}, *sys.argv[1:]], capture_output=True, text=True)
+        said = subprocess.run(["{facts['units']}", *{list(machine)!r}, *sys.argv[1:]], capture_output=True, text=True)
         pathlib.Path("{root}/units-said").write_text(said.stdout + said.stderr)
         sys.stdout.write(said.stdout)
         sys.exit(said.returncode)
@@ -1981,6 +2004,8 @@ in
         m = re.search(r"the budget: (\d+) MiB", said)
         must(m and m.group(0), "the budget the units' program said")
         budget = int(m.group(1)) * 1024
+        if budget != BUDGET_MIB * 1024:
+            wrong.append(f"changed: the units' program said a budget of {budget // 1024} MiB, not the {BUDGET_MIB} planted")
         m = re.search(r"; (\d+) processors", said)
         cpus = int(must(m and m.group(1), "the processors the units' program said"))
         flat, most = together(runs)
@@ -2025,10 +2050,7 @@ in
         # and what the units are built from that is no unit. The units'
         # program measures a planted machine: 8 GiB, a budget of 1100 MiB,
         # twelve processors.
-        total_kb, budget_mib = 8 * 1024 * 1024, 1100
-        avail_kb = budget_mib * 1024 + total_kb * N["floorPercent"] // 100 + N["reserveMiB"] * 1024
-        mem = pathlib.Path(os.environ["TMPDIR"]) / "meminfo-newer"
-        mem.write_text(f"MemTotal: {total_kb} kB\nMemAvailable: {avail_kb} kB\n")
+        budget_mib = 1100
         feather = [f"/nix/store/{k:032d}-feather-{k}.drv" for k in range(6)]
         giant = "/nix/store/" + "g" * 32 + "-giant.drv"
         lib_ = "/nix/store/" + "l" * 32 + "-libsomething.drv"
@@ -2040,7 +2062,7 @@ in
         times = {d: 0.6 for d in feather} | {giant: 0.2, lib_: 0.3}
         ran, sized, runs, calls, said = apply("newer", newer, plan_of(feather + [giant, lib_, newer["system"]]),
                                               times=times, refs={giant: [lib_, feather[0]]},
-                                              units_args=("--meminfo", str(mem), "--cpus", "12", "--ceiling", "infinity"))
+                                              machine=planted("newer", 8 * 1024 * 1024, budget_mib, 12))
         again = [c for c in calls if c.startswith("nix build") and "--dry-run" in c.split() and newer["system"] + "^*" not in c.split()]
         if again:
             wrong.append(f"newer: Nix was asked again what the units are built from, after the system's dry run said it: {again[0][:200]}")

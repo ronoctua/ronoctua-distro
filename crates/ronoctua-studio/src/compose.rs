@@ -381,12 +381,49 @@ mod tests {
         assert_eq!(small.rgba, vec![0, 0, 0, 255, 255, 0, 0, 255]);
     }
 
+    /// A YARDSTICK: a fixed piece of work — 16 MiB copied from one buffer to
+    /// another, through memory as a frame goes — timed beside what a test
+    /// measures, so a machine that is slower, or busy, is slower at both and
+    /// their ratio stays. A clock alone measures the machine as well as the
+    /// code: a gate building six units beside the tests stretched a promise
+    /// past itself (2026-10-23).
+    struct Yardstick {
+        from: Vec<u8>,
+        into: Vec<u8>,
+    }
+
+    impl Yardstick {
+        fn new() -> Self {
+            let from: Vec<u8> = (0..16 << 20)
+                .map(|n: u32| (n.wrapping_mul(2_654_435_761) >> 24) as u8)
+                .collect();
+            let into = vec![0; from.len()];
+            Self { from, into }
+        }
+
+        /// One measure of it.
+        fn measure(&mut self) -> std::time::Duration {
+            let t = std::time::Instant::now();
+            self.into.copy_from_slice(std::hint::black_box(&self.from));
+            std::hint::black_box(&self.into);
+            t.elapsed()
+        }
+    }
+
+    /// The most yardsticks one frame of two layers may take: the thirtieth
+    /// of a second the CPU has, over the 1.05 ms a yardstick took where it
+    /// was measured (2026-10-23). The frame read 6.2–6.8 yardsticks there,
+    /// and 9.4–15.7 with every processor busy, where the clock said 21 ms.
+    const FRAME_MOST_YARDSTICKS: f64 = 31.0;
+
     #[test]
     fn two_layers_at_720p_fit_a_frame() {
         // THE MEASUREMENT behind "the CPU is enough": a full-frame camera and
         // a corner screen, 1280×720, must compose inside a thirtieth of a
         // second. Only in an optimised build — a debug build measures the
-        // compiler, not the arithmetic.
+        // compiler, not the arithmetic. The FASTEST of ten frames, each beside
+        // a run of the `Yardstick`, held to a number of yardsticks: the cost
+        // of the arithmetic, the same on every machine, idle or busy.
         if cfg!(debug_assertions) {
             return;
         }
@@ -406,14 +443,18 @@ mod tests {
                 Fit::Fit,
             ),
         ];
-        let began = std::time::Instant::now();
-        for _ in 0..10 {
+        let mut yardstick = Yardstick::new();
+        let (mut fastest, mut stick) = (std::time::Duration::MAX, std::time::Duration::MAX);
+        for _ in 0..20 {
+            stick = stick.min(yardstick.measure());
+            let began = std::time::Instant::now();
             compose(&mut canvas, 1280, 720, &layers);
+            fastest = fastest.min(began.elapsed());
         }
-        let each = began.elapsed() / 10;
+        let ratio = fastest.as_secs_f64() / stick.as_secs_f64();
         assert!(
-            each < std::time::Duration::from_millis(33),
-            "{each:?} a frame"
+            ratio <= FRAME_MOST_YARDSTICKS,
+            "a frame took {ratio:.2} yardsticks ({fastest:?}, a yardstick {stick:?})"
         );
     }
 }

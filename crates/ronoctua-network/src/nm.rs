@@ -45,6 +45,28 @@ pub const BLUETOOTH_KIND: u32 = 5;
 
 /// `NM_DEVICE_STATE_ACTIVATED` — the only state that counts as connected.
 pub const STATE_ACTIVATED: u32 = 100;
+/// `NM_DEVICE_STATE_DISCONNECTED`.
+pub const STATE_DISCONNECTED: u32 = 30;
+/// `NM_DEVICE_STATE_FAILED` — an activation ended without coming up; the
+/// `StateChanged` that enters it says why.
+pub const STATE_FAILED: u32 = 120;
+/// `NM_DEVICE_STATE_REASON_NO_SECRETS` — the key was asked for again and
+/// nobody gave one: how a REFUSED `wpa-psk` key ends, NetworkManager having
+/// asked for a new password after the four-way handshake turned the typed
+/// one down.
+pub const REASON_NO_SECRETS: u32 = 7;
+/// `NM_DEVICE_STATE_REASON_SSID_NOT_FOUND` — the association timeout (25 s)
+/// came before the radio ever ASSOCIATED. NetworkManager 1.56 says it of a
+/// network that is gone, of one the supplicant held back after a failure,
+/// and of an SAE (WPA3) key the network refused: SAE refuses at
+/// authentication, before association, and NetworkManager reads none of
+/// the supplicant's refusals (`AuthStatusCode`) — it never asks for a new
+/// password there. Only a second ending in a row tells them apart
+/// (`follow`).
+pub const REASON_SSID_NOT_FOUND: u32 = 53;
+/// The device interface, whose `StateChanged(new, old, reason)` a join
+/// follows.
+pub const DEVICE_INTERFACE: &str = "org.freedesktop.NetworkManager.Device";
 /// The range of transitional states: preparing, configuring, authenticating.
 pub const STATE_TRANSITION: std::ops::Range<u32> = 30..100;
 

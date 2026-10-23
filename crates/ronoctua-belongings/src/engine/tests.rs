@@ -1776,15 +1776,12 @@ fn a_host_not_let_is_never_asked() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// The clone's weight, in bytes (`git count-objects`).
+/// The clone's weight, in bytes — the engine's own measure.
 fn clone_weight(m: &Machine) -> u64 {
     let repo = Repo::discover(&m.places.repo())
         .unwrap()
         .with_tools(tools());
-    let out = repo
-        .output(None, "count-objects", &["-v"], 1 << 20)
-        .unwrap();
-    crate::size::history_bytes(&String::from_utf8_lossy(&out)).unwrap()
+    crate::size::history_bytes(&crate::size::objects_of(&repo).unwrap())
 }
 
 /// FAILS IF: a compaction changes a byte of what is kept, leaves the old

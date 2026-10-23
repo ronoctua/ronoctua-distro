@@ -203,8 +203,9 @@ pub struct Engine<'a> {
     pub credentials: Option<Credentials>,
     /// This machine's name, written only inside the index.
     pub machine: String,
-    /// scrypt's work factor for a new `key.age`; `None` is `age`'s choice
-    /// (about a second here). A test hands a small one.
+    /// scrypt's work factor for a new `key.age`; `None` is
+    /// [`ronoctua_pq::PASSPHRASE_WORK`], the same on every machine. A test
+    /// hands a small one.
     pub work: Option<u8>,
     /// Now, seconds since the epoch.
     pub now_s: i64,
@@ -1346,11 +1347,10 @@ impl<'a> Engine<'a> {
     }
 
     /// What the repository weighs now: the tree, the history this clone
-    /// holds (`git count-objects`), and whether a compaction of the table's
+    /// holds (its `objects` folder), and whether a compaction of the table's
     /// `keepDays` would fold any of it. `None` when git could not say.
     fn measure(&self, repo: &Repo) -> Option<crate::status::Budget> {
-        let said = self.git(repo, false, "count-objects", &["-v"]).ok()?;
-        let history = crate::size::history_bytes(&String::from_utf8_lossy(&said))?;
+        let history = crate::size::history_bytes(&crate::size::objects_of(repo)?);
         let folding = self
             .folding(
                 repo,

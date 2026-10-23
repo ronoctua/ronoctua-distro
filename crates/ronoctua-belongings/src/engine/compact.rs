@@ -365,13 +365,10 @@ impl Engine<'_> {
         Ok(String::from_utf8_lossy(&out).trim().to_owned())
     }
 
-    /// What the clone weighs (`git count-objects`), in bytes; `0` when git
-    /// could not say.
+    /// What the clone weighs (its `objects` folder), in bytes; `0` when git
+    /// could not say where that is.
     fn clone_bytes(&self, repo: &Repo) -> u64 {
-        self.git(repo, false, "count-objects", &["-v"])
-            .ok()
-            .and_then(|out| crate::size::history_bytes(&String::from_utf8_lossy(&out)))
-            .unwrap_or(0)
+        crate::size::objects_of(repo).map_or(0, |objects| crate::size::history_bytes(&objects))
     }
 
     /// `last.json` names the new tip: the content it remembers is the same.

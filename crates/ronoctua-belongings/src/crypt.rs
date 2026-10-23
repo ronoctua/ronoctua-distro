@@ -174,8 +174,9 @@ impl Keyring {
     }
 
     /// A new post-quantum identity and signing key, and their `key.age`
-    /// encrypted to `passphrase`. `work` is scrypt's log₂ N: `None` lets
-    /// `age` pick about a second on this machine; a test hands a small one.
+    /// encrypted to `passphrase`. `work` is scrypt's log₂ N: `None` is
+    /// [`ronoctua_pq::PASSPHRASE_WORK`], the same on every machine; a test
+    /// hands a small one.
     ///
     /// # Errors
     ///

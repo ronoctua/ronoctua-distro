@@ -7782,6 +7782,30 @@ NetworkManager (`Manager::join_for_this_boot`: perfil `persist = memory`, `psk-f
 diz que a rede subiu (`network_region::follow_join`, a cada leitura do daemon, nas duas portas), e não
 quando a entrada foi pedida; uma recusa é dita ali, e o perfil que ela criou é apagado.
 
+**Só a chave recusada é "senha errada"; o resto tenta de novo.** O fim de uma ativação não diz por
+quê, e uma senha certa digitada logo depois de uma errada demora: o `wpa_supplicant` segura a rede
+depois da falha, e a primeira ativação acabava no tempo de associação do NetworkManager (25 s) antes
+de a espera acabar — o instalador recusou a senha certa 30 s depois de ela ser digitada (o
+`installer-joins-wifi-vm`, sob a carga do gate, 2026-10-23). Por isso cada entrada tem um seguidor
+(`ronoctua_network::follow`), que ouve o `StateChanged` do rádio desde ANTES de a ativação ser
+pedida: a falha com o motivo `NO_SECRETS` — o NetworkManager pediu outra senha e ninguém tinha — é
+`Joined::Refused`, na hora; qualquer outra (o supplicant sem resposta, a rede longe) pede o mesmo
+perfil de novo enquanto `JOIN_MOST_S` não passou, e depois disso é `Joined::Failed`. Enquanto o
+seguidor não julgou uma ativação que acabou, a entrada está "a caminho" — nunca um veredito errado,
+no máximo um certo na leitura seguinte. Uma porta diz "senha errada" só do `Refused`
+(`Refusal::NoSecrets`); o `Failed` é a rede que não subiu.
+
+**No SAE (WPA3), a chave errada é a segunda ativação que não associa.** O SAE recusa a senha na
+autenticação, antes da associação, e o NetworkManager 1.56 não lê a recusa do supplicant
+(`AuthStatusCode`): ele nunca pede outra senha ali, e a ativação acaba no tempo de associação com
+`SSID_NOT_FOUND` — o mesmo motivo da rede longe e da rede que o supplicant segurou depois de uma
+falha (o `wifi-joins-vm`, numa rede em transição, 2026-10-23). O fim da primeira ativação limpa a
+espera do supplicant (a lista de BSSIDs ignorados), e a ativação pedida de novo é ouvida; por isso
+só a SEGUNDA que acaba sem associar é a resposta da rede (`ronoctua_network::unanswered`): recusa,
+se o ponto de acesso para o qual a entrada foi pedida ainda está à vista e aceita SAE; falha, se
+não. Uma senha errada numa rede WPA3 é dita em cerca de 50 s, e a certa depois dela sobe na
+segunda ativação.
+
 **Escolha por rede, e não política global.** Só depois de a rede subir vem a pergunta da vista, nas
 duas portas. `sim` (`Manager::remember`) sela a senha no TPM **primeiro** e só então grava o mesmo
 perfil em disco com `psk-flags=1` e sem a senha (`Update2` com `to-disk`): o link continua de pé, e o
@@ -7800,8 +7824,8 @@ uma entrada em memória da mesma rede — a recusada, ou a digitada de novo.
 
 O `wifi-joins-vm` prova o caminho inteiro numa máquina com o agente: o perfil e o blob que o instalador
 grava entram pelo agente, o rodapé entra e lembra como o usuário, uma senha errada é recusada sem
-levar o blob da lembrada, o console entra e lembra como root, e depois de um reboot só as lembradas
-voltam, pelo agente.
+levar o blob da lembrada, a certa logo depois de uma errada sobe, o console entra e lembra como root,
+e depois de um reboot só as lembradas voltam, pelo agente.
 
 **Sem política de PCR, deliberadamente.** Prender o blob ao PCR 11 — que mede a UKI — faria **toda
 atualização de kernel quebrar o Wi-Fi em silêncio**, e não compraria quase nada: o blob já vive dentro
@@ -14638,7 +14662,12 @@ duas portas) e o lembrete do cérebro (`modules/belongings-reminder`).
 "Pertences, formato 2"). O repositório tem `FORMAT` em claro, `key.age` (a identidade pós-quântica
 cifrada pela SENHA com scrypt), `index.age` (caminhos, modos, hashes, máquinas) e os pedaços, ambos
 cifrados para a identidade. Uma sincronização paga um KDF; trocar a senha recifra um arquivo pequeno e
-vale para todas as máquinas; e a recuperação sem a distro é o CLI do `age` ≥ 1.3 (`RECOVER.md`). Os
+vale para todas as máquinas; e a recuperação sem a distro é o CLI do `age` ≥ 1.3 (`RECOVER.md`). O
+fator do scrypt é um só em toda máquina (`ronoctua_pq::PASSPHRASE_WORK`: 18, 256 MiB, o que o `age` de
+referência escreve), e a abertura aceita até 22 (`PASSPHRASE_WORK_MOST`). Medido pela máquina, como o
+`age` faz sozinho, ele dava 1 GiB num computador rápido e ocioso, que uma VM de 1 GiB não segurava, e a
+abertura ia só até a medida dela mais quatro: um `key.age` selado num desktop rápido podia ser
+recusado num laptop lento, ou no mesmo desktop ocupado. Os
 nomes dos pedaços, hashes com chave, escondem nomes, caminhos e conteúdo; o que vaza (quantos
 pedaços, tamanhos, horas dos commits) a tela diz. Os commits são de `ronoctua-belongings <noreply@localhost>`, e o nome da máquina só existe dentro do
 índice cifrado. Um teste lê o repositório remoto inteiro atrás de qualquer byte de caminho, nome ou
@@ -16719,7 +16748,7 @@ chaves clássicas; com a chave PQ, depende do X-Wing do pacote pq-core. Inglês,
 um idioma só (inv. 18).
 
 **O orçamento e a compactação** (`size.rs`, `compact.rs`). Toda sincronização mede a árvore e o
-histórico do clone (`git count-objects`) em `Synced.budget`, e também se uma compactação de
+histórico do clone (a pasta `objects`) em `Synced.budget`, e também se uma compactação de
 `keepDays` dobraria algum commit (`foldable`) — a mesma leitura da história que a compactação faz
 (`Engine::folding`). O que isso
 pede à pessoa é uma conta só, `kept::weight`: aviso acima de `warnMB`; compactação recomendada acima
@@ -16727,6 +16756,10 @@ de `recommendMB`, ou acima de `warnMB` com o histórico pesando `historyOverTree
 só quando há o que dobrar. A razão sozinha recomendava compactar um repositório de configuração de
 300 KB sincronizado todo dia (cada sincronização reescreve o pedaço do índice), cujos commits estavam
 todos dentro de `keepDays`: a compactação não dobrava nada e a recomendação nunca saía da tela.
+Os dois pesos são o comprimento dos arquivos, nunca os blocos que ocupam: o `git count-objects` pesa
+um objeto solto pelos blocos (`st_blocks`), e o ZFS diz 1 KiB por 2 MiB recém-escritos até fechar a
+transação, segundos depois, sem `sync` que o apresse; o mesmo fetch pesava um quarto de si numa
+máquina e inteiro em outra.
 A compactação nunca é automática: sob a trava,
 busca o head H, faz da árvore do último commit até o corte (`keepDays`) uma raiz NOVA e reescreve os
 commits seguintes por cima com `commit-tree`, mantendo mensagem e datas — um commit reescrito igual
@@ -19180,8 +19213,10 @@ seguinte: o endereço (só o endereço, como antes), o **acesso** e a **senha do
   root em `/run/NetworkManager`, que é RAM, e some quando a máquina desliga; `memory` e não
   `volatile`, para um link que cai voltar sozinho no meio do download. O portão julga a ativação da
   rede escolhida, e não "algum link de pé" (um cabo deixava passar uma senha recusada); espera o
-  veredito do NetworkManager até `JOIN_MOST_S` (90 s, acima dos 25 s que ele dá à chave e dos 45 s
-  do DHCP — e depois de uma senha errada o `wpa_supplicant` segura a rede 10 s), e apaga o perfil que
+  veredito da entrada até `JOIN_MOST_S` (90 s, acima dos 25 s que o NetworkManager dá à chave e dos
+  45 s do DHCP): uma chave recusada é dita na hora, e uma ativação que acabou por outro motivo é
+  pedida de novo nesse prazo — depois de uma senha errada o `wpa_supplicant` segura a rede, e a
+  certa chegou a passar dos 25 s (veja "Só a chave recusada é senha errada"). Apaga o perfil que
   falhou. O rádio é o que vê a rede, não o primeiro da lista. A rede já conectada quando o instalador
   abre (pelo `nmtui`) aparece marcada e a pergunta abre nela; a senha continua sendo pedida, porque é
   ela que a máquina instalada guarda, e entrar de novo com ela prova que está certa.
@@ -19593,10 +19628,10 @@ a pasta do estado e a modeline relê. É a marca que a decisão de 2026-10-11 pe
   mostrar o progresso, parar, matar o grupo e limpar o pedaço; e um arquivo grande não trava porta
   nenhuma. Quem prova é o binário (`transfers-never-link-age`): o `age` é um crate compilado dentro
   dele, e o `nix why-depends` diria "não" sobre qualquer binário.
-- **Um selo por vez, na ordem da fila.** O age escolhe o fator do scrypt medindo a máquina (cerca de
-  um segundo), e isso custa de 256 MiB a 1 GiB por processo. Quarenta arquivos com senha eram
-  quarenta programas juntos — o OOM matava a fila ou a sessão — e cada um media o scrypt disputando
-  a CPU com os outros, escolhendo um fator mais fraco do que escolheria sozinho. A fila dá a vez a
+- **Um selo por vez, na ordem da fila.** O scrypt de uma senha custa 256 MiB por processo, o mesmo
+  fator em toda máquina (`ronoctua_pq::PASSPHRASE_WORK`; quando o age ainda o escolhia medindo a
+  máquina, eram até 1 GiB). Quarenta arquivos com senha eram quarenta programas juntos — o OOM
+  matava a fila ou a sessão. A fila dá a vez a
   um trabalho de selo por vez (`seal::Turn`, o menor id primeiro, abrir incluído); os outros esperam
   na linha deles, e parar alcança também quem espera.
 - **Só arquivo ou pasta.** O link é seguido (o gerenciador mostra o que ele aponta), mas o que ele

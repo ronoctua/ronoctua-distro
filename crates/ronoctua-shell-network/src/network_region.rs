@@ -563,7 +563,8 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
 /// - UP: "connected", and, joined with a typed password, the question "keep
 ///   it?" — never before: sealing a password the network refused stores
 ///   rubbish the agent hands over at every boot.
-/// - FAILED: why, and the profile the join made goes, so the daemon does not
+/// - REFUSED (the key) or FAILED (anything else, once the join's tries are
+///   over): why, and the profile the join made goes, so the daemon does not
 ///   try a refused key again on its own; a saved profile stays.
 /// - COMING: nothing yet.
 pub fn follow_join(held: &mut Held<'_>, way: &mut dyn Doorway) {
@@ -602,8 +603,13 @@ pub fn follow_join(held: &mut Held<'_>, way: &mut dyn Doorway) {
                 *held.join = None;
             }
         }
-        Joined::Failed => {
-            let refusal = if typed {
+        Joined::Refused | Joined::Failed => {
+            // THE KEY, or anything else: only the join's own verdict says the
+            // typed one was wrong (`Joined::Refused` — NetworkManager asking
+            // for a new password, or an SAE network not letting the radio in
+            // twice). A network that timed out or went away, after the join's
+            // tries, is not a wrong password.
+            let refusal = if verdict == Joined::Refused {
                 ronoctua_network::refusal::Refusal::NoSecrets
             } else {
                 ronoctua_network::refusal::Refusal::Failed
@@ -1553,11 +1559,30 @@ mod tests {
         );
         assert!(asked, "the question did not come once the network was up");
         assert!(join.is_some_and(|j| j.up));
-        // REFUSED: said, and the password let go.
-        let (said, asked, join) = run(Joined::Failed, Some("s3nh4"), None);
+        // REFUSED: said, as the key's, and the password let go.
+        let wrong_key = {
+            let why = anyhow::Error::from(ronoctua_network::refusal::Named(
+                ronoctua_network::refusal::Refusal::NoSecrets,
+            ));
+            crate::network_refusal::reason(&why, way().texts())
+        };
+        let (said, asked, join) = run(Joined::Refused, Some("s3nh4"), None);
         assert!(said.len() == 1 && said[0].contains("a café"), "{said:?}");
+        assert!(
+            said[0].contains(&wrong_key),
+            "a refused key not said as one: {said:?}"
+        );
         assert!(!asked);
         assert!(join.is_none(), "a refused password was kept");
+        // FAILED for another reason: said, never as a wrong password.
+        let (said, asked, join) = run(Joined::Failed, Some("s3nh4"), None);
+        assert!(said.len() == 1 && said[0].contains("a café"), "{said:?}");
+        assert!(
+            !said[0].contains(&wrong_key),
+            "a network that never came up said as a wrong key: {said:?}"
+        );
+        assert!(!asked);
+        assert!(join.is_none(), "a failed join's password was kept");
         // A SAVED NETWORK brought up has nothing to keep.
         let (said, asked, join) = run(Joined::Up, None, None);
         assert_eq!(said.len(), 1, "{said:?}");

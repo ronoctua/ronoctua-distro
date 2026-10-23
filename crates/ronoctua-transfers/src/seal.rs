@@ -30,16 +30,16 @@
 //!
 //! # One at a time
 //!
-//! A passphrase is stretched by scrypt, and age picks its work factor by
-//! timing the machine it runs on: about a second, which costs 256 MiB of
-//! memory at the least (`2^18 × 8 × 128` bytes) and a gibibyte on a fast
-//! machine. Forty files sealed at once were forty programs holding that
-//! together — the memory killer's, and each timing its scrypt against the
-//! other thirty-nine, so each picked a weaker factor than a lone seal would.
-//! So the queue runs ONE seal at a time ([`Turn`]), in the order they were
-//! queued; the rest wait on their rows (weighing, at nought) and a stop
-//! reaches one that is waiting too. Opening is held the same way: the factor
-//! of a file someone else sealed is whatever they chose.
+//! A passphrase is stretched by scrypt, at one work factor on every machine
+//! (`ronoctua_pq::PASSPHRASE_WORK`): 256 MiB of memory (`2^18 × 8 × 128`
+//! bytes). Forty files sealed at once were forty programs holding that
+//! together — the memory killer's (and while `age` still timed the machine
+//! to pick the factor, a gibibyte each on a fast one, and a weaker factor
+//! each, timed against the other thirty-nine). So the queue runs ONE seal at
+//! a time ([`Turn`]), in the order they were queued; the rest wait on their
+//! rows (weighing, at nought) and a stop reaches one that is waiting too.
+//! Opening is held the same way: the factor of a file someone else sealed is
+//! whatever they chose, up to `ronoctua_pq::PASSPHRASE_WORK_MOST` (4 GiB).
 //!
 //! # What it does not honour
 //!
@@ -559,7 +559,7 @@ mod tests {
     }
 
     /// FAILS IF: two sealing programs run at once — forty files sealed with a
-    /// passphrase were forty scrypts of up to a gibibyte each, together —
+    /// passphrase were forty scrypts of 256 MiB or more each, together —
     /// or the waiting ones start out of the order they were queued, or a
     /// stop does not reach a job that is still waiting (it would wait for
     /// the whole queue before it could be told).

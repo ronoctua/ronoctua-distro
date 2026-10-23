@@ -206,6 +206,18 @@ mod tests {
         dir
     }
 
+    /// A test directory on Linux's `tmpfs` (`/dev/shm`), which takes any byte
+    /// in a name. The build's own directory may refuse a name that is not
+    /// UTF-8 — ZFS with `utf8only` answers EILSEQ — and a test of such a name
+    /// runs the same on every machine only where every machine takes it.
+    fn a_room_for_any_name(name: &str) -> PathBuf {
+        let dir =
+            Path::new("/dev/shm").join(format!("ronoctua-serve-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the test directory in /dev/shm");
+        dir
+    }
+
     /// A daemon on a socket of its own, and the path to reach it.
     fn a_daemon(root: &Path) -> (Arc<Shared>, PathBuf) {
         let shared = Arc::new(Shared::fresh_one());
@@ -269,7 +281,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt as _;
         use std::os::unix::ffi::OsStringExt as _;
 
-        let root = scratch("bytes");
+        let root = a_room_for_any_name("bytes");
         let (_shared, socket) = a_daemon(&root);
 
         // `0xFF` is not valid UTF-8 anywhere, in any encoding.

@@ -30,6 +30,8 @@ pub mod vpn;
 pub use stored::Stored;
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
@@ -505,12 +507,17 @@ pub const KEPT_BY_THE_DAEMON: u32 = 0;
 /// is sealed.
 pub const KEPT_BY_THE_AGENT: u32 = 1;
 
-/// How long, at most, a join is waited for. NetworkManager ends one on its
-/// own — a refused key at its association timeout (25 s), no address at its
-/// DHCP timeout (45 s) — and its verdict is the answer; this only bounds a
-/// daemon that never says. Under its timeouts, a right password that is slow
-/// would read as refused, and one typed after a wrong one is slow: the
-/// supplicant holds the network back 10 s after a failure.
+/// How long a join is tried. NetworkManager ends an activation on its own —
+/// a refused key at its association timeout (25 s), no address at its DHCP
+/// timeout (45 s) — and a REFUSED key is the verdict at once; an activation
+/// that ended for any other reason is asked again until this passes
+/// ([`Manager::joining`]). A right password is slow after a wrong one: the
+/// supplicant holds the network back after a failure, and the first
+/// activation ended in the association timeout before the hold did — the
+/// right password read as refused, 30 s after it was typed (the installer's
+/// Wi-Fi test, 2026-10-23). That ending clears the hold, so the activation
+/// asked again is heard; a second one that never associated is the network
+/// not letting the radio in ([`follow`]).
 pub const JOIN_MOST_S: u64 = 90;
 
 /// The settings of a Wi-Fi profile for `ssid`, with `password` under
@@ -569,16 +576,32 @@ pub fn left_to_the_agent(mut cfg: Configuration) -> Option<Configuration> {
     Some(cfg)
 }
 
-/// What [`Manager::connect`] started: the profile it brought up and that
-/// profile's activation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What [`Manager::connect`] started: the profile it brought up and the
+/// activation under way — which a try again replaces ([`follow`]).
+#[derive(Debug, Clone)]
 pub struct Joining {
     profile: OwnedObjectPath,
-    active: OwnedObjectPath,
     /// Whether the join MADE the profile — the only kind
     /// [`Manager::abandon`] deletes and [`Manager::remember`] keeps: a
     /// saved profile brought up is the person's.
     made: bool,
+    /// The attempt, shared by every copy of the join: a door's copy follows
+    /// the activation a try again put in the place of the first.
+    attempt: Arc<Mutex<Attempt>>,
+}
+
+/// Where a join's attempt is.
+#[derive(Debug)]
+struct Attempt {
+    /// The activation under way.
+    active: OwnedObjectPath,
+    /// Whether a follower watches the radio ([`follow`]): it judges an
+    /// activation that ended. A join with none — a test's, or one whose
+    /// follower could not start — takes the ending as its verdict.
+    followed: bool,
+    /// The verdict, once settled: by the follower, or by
+    /// [`Manager::abandon`].
+    settled: Option<Joined>,
 }
 
 impl Joining {
@@ -588,23 +611,191 @@ impl Joining {
     ///
     /// A path that is not an object path.
     pub fn at(profile: &str, active: &str, made: bool) -> Result<Self> {
-        Ok(Self {
-            profile: OwnedObjectPath::try_from(profile)?,
-            active: OwnedObjectPath::try_from(active)?,
+        Ok(Self::of(
+            OwnedObjectPath::try_from(profile)?,
+            OwnedObjectPath::try_from(active)?,
             made,
-        })
+        ))
+    }
+
+    fn of(profile: OwnedObjectPath, active: OwnedObjectPath, made: bool) -> Self {
+        Self {
+            profile,
+            made,
+            attempt: Arc::new(Mutex::new(Attempt {
+                active,
+                followed: false,
+                settled: None,
+            })),
+        }
+    }
+
+    fn attempt(&self) -> MutexGuard<'_, Attempt> {
+        self.attempt.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Settles the join, once: a later verdict does not replace the first.
+    fn settle(&self, verdict: Joined) {
+        self.attempt().settled.get_or_insert(verdict);
     }
 }
 
 /// Where a join stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Joined {
-    /// On its way: associating, checking the key, getting an address.
+    /// On its way: associating, checking the key, getting an address — or
+    /// trying again ([`JOIN_MOST_S`]).
     Coming,
     /// Up, with an address.
     Up,
-    /// Over without coming up: the network refused the key, or went away.
+    /// Over: the network refused the key — NetworkManager asked for a new
+    /// password, and nobody had one ([`nm::REASON_NO_SECRETS`]); or, on a
+    /// network in view that takes SAE, two activations in a row never
+    /// associated ([`unanswered`]).
+    Refused,
+    /// Over without coming up for another reason: the network went away,
+    /// or nothing came up within [`JOIN_MOST_S`].
     Failed,
+}
+
+/// What a join's follower does with one `StateChanged(new, old, reason)` of
+/// its radio, `in_time` while [`JOIN_MOST_S`] has not passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Next {
+    /// Nothing yet: the radio is on its way.
+    Wait,
+    /// The radio is up: the activation says the rest.
+    Done,
+    /// Settled: the network refused the key.
+    Refused,
+    /// The same profile again: the activation ended for another reason, in
+    /// time.
+    Again,
+    /// Settled by the network: an activation never associated
+    /// ([`nm::REASON_SSID_NOT_FOUND`]) after one that did not either —
+    /// [`unanswered`] says what it was.
+    Unanswered,
+    /// Settled: nothing came up in time.
+    Failed,
+    /// Taken down without failing — another network, the radio off: over
+    /// if the activation is gone.
+    Gone,
+}
+
+/// Pure. `unheard` counts this join's activations that ended before
+/// associating.
+const fn next_of(new: u32, old: u32, reason: u32, in_time: bool, unheard: u32) -> Next {
+    match new {
+        nm::STATE_ACTIVATED => Next::Done,
+        nm::STATE_FAILED if reason == nm::REASON_NO_SECRETS => Next::Refused,
+        nm::STATE_FAILED if reason == nm::REASON_SSID_NOT_FOUND && unheard > 0 => Next::Unanswered,
+        nm::STATE_FAILED if in_time => Next::Again,
+        nm::STATE_FAILED => Next::Failed,
+        nm::STATE_DISCONNECTED if old != nm::STATE_FAILED => Next::Gone,
+        _ => Next::Wait,
+    }
+}
+
+/// A join whose activations never associated, twice: REFUSED when the
+/// access point it was asked toward is still in view (`rsn` read off it)
+/// and takes SAE — SAE turns a wrong key down at authentication, before
+/// association, and NetworkManager says nothing else of it
+/// ([`nm::REASON_SSID_NOT_FOUND`]). Not a hold: the first ending cleared
+/// the supplicant's. Out of view, or a `wpa-psk`-only network — whose wrong
+/// key ends in [`nm::REASON_NO_SECRETS`] —, it failed. Pure.
+#[must_use]
+pub const fn unanswered(rsn: Option<u32>) -> Joined {
+    match rsn {
+        Some(rsn) if rsn & nm::AP_SEC_KEY_MGMT_SAE != 0 => Joined::Refused,
+        _ => Joined::Failed,
+    }
+}
+
+/// Follows a join on its radio's `StateChanged`, heard from before the
+/// activation was asked: a refused key settles it at once; an activation
+/// that ended for any other reason is asked again, the same profile on the
+/// same radio, while [`JOIN_MOST_S`] has not passed — but a second one that
+/// never associated is the network's answer ([`unanswered`], read off
+/// `access_point`, the one the join was asked toward); nothing up by then
+/// settles it. Every way out but the radio coming up settles the join, so a
+/// door never waits on a follower that stopped.
+fn follow(
+    connection: &zbus::blocking::Connection,
+    signals: zbus::blocking::MessageIterator,
+    device: &OwnedObjectPath,
+    access_point: &OwnedObjectPath,
+    join: &Joining,
+    asked: Instant,
+) {
+    let mut unheard = 0;
+    for message in signals {
+        // ABANDONED: nobody waits for this join any more.
+        if join.attempt().settled.is_some() {
+            return;
+        }
+        let Ok(message) = message else {
+            continue;
+        };
+        let Ok((new, old, reason)) = message.body().deserialize::<(u32, u32, u32)>() else {
+            continue;
+        };
+        let in_time = asked.elapsed() < Duration::from_secs(JOIN_MOST_S);
+        let next = next_of(new, old, reason, in_time, unheard);
+        if new == nm::STATE_FAILED && reason == nm::REASON_SSID_NOT_FOUND {
+            unheard += 1;
+        }
+        match next {
+            Next::Wait => {}
+            Next::Done => return,
+            Next::Refused => return join.settle(Joined::Refused),
+            Next::Unanswered => {
+                // IN VIEW is an access point NetworkManager still lists: it
+                // removes the object of one no scan sees any more.
+                let rsn = nm::AccessPointProxyBlocking::builder(connection)
+                    .path(access_point.clone())
+                    .ok()
+                    .and_then(|b| b.build().ok())
+                    .and_then(|p| p.rsn_flags().ok());
+                return join.settle(unanswered(rsn));
+            }
+            Next::Failed => return join.settle(Joined::Failed),
+            Next::Gone => {
+                let active = join.attempt().active.clone();
+                if state_of(connection, &active).is_none() {
+                    return join.settle(Joined::Failed);
+                }
+            }
+            Next::Again => {
+                tracing::info!(reason, "the join ended without coming up; asking it again");
+                let again = nm::ManagerProxyBlocking::new(connection).and_then(|g| {
+                    g.activate_connection(
+                        &join.profile.as_ref(),
+                        &device.as_ref(),
+                        &zbus::zvariant::ObjectPath::from_static_str_unchecked("/"),
+                    )
+                });
+                match again {
+                    Ok(active) => join.attempt().active = active,
+                    Err(e) => {
+                        tracing::info!(error = %e, "the join could not be asked again");
+                        return join.settle(Joined::Failed);
+                    }
+                }
+            }
+        }
+    }
+    // THE STREAM ENDED: NetworkManager went away.
+    join.settle(Joined::Failed);
+}
+
+/// `NM_ACTIVE_CONNECTION_STATE` of the activation at `active`, or `None`
+/// once it no longer answers.
+fn state_of(connection: &zbus::blocking::Connection, active: &OwnedObjectPath) -> Option<u32> {
+    nm::ActiveProxyBlocking::builder(connection)
+        .path(active.clone())
+        .ok()
+        .and_then(|b| b.build().ok())
+        .and_then(|a| a.state().ok())
 }
 
 /// `NM_ACTIVE_CONNECTION_STATE` -> where a join stands. `None`: the
@@ -1312,23 +1503,67 @@ impl Manager {
         }
         let (device, access_point, sae) = self.radio_toward(ssid)?;
         let g = self.manager()?;
+        let signals = self.signals_of(&device);
         if let Some(profile) = self.profile_of(ssid)? {
             let active =
                 g.activate_connection(&profile.as_ref(), &device.as_ref(), &access_point.as_ref())?;
-            return Ok(Joining {
-                profile,
-                active,
-                made: false,
-            });
+            return Ok(self.followed(
+                Joining::of(profile, active, false),
+                device,
+                access_point,
+                signals,
+            ));
         }
         let connection = wifi_settings(ssid, None, sae, KEPT_BY_THE_DAEMON);
         let (profile, active) =
             g.add_and_activate_connection(connection, &device.as_ref(), &access_point.as_ref())?;
-        Ok(Joining {
-            profile,
-            active,
-            made: true,
-        })
+        Ok(self.followed(
+            Joining::of(profile, active, true),
+            device,
+            access_point,
+            signals,
+        ))
+    }
+
+    /// The radio's `StateChanged`, heard from now on — asked BEFORE the
+    /// activation, so the one that ends it is never missed. `None` when the
+    /// bus would not listen: the join then goes unfollowed.
+    fn signals_of(&self, device: &OwnedObjectPath) -> Option<zbus::blocking::MessageIterator> {
+        let rule = zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .sender(nm::SERVICE)
+            .ok()?
+            .path(device.clone())
+            .ok()?
+            .interface(nm::DEVICE_INTERFACE)
+            .ok()?
+            .member("StateChanged")
+            .ok()?
+            .build();
+        zbus::blocking::MessageIterator::for_match_rule(rule, &self.connection, None).ok()
+    }
+
+    /// `join`, with a follower on its radio ([`follow`]) when `signals` were
+    /// heard; `access_point` is the one it was asked toward.
+    fn followed(
+        &self,
+        join: Joining,
+        device: OwnedObjectPath,
+        access_point: OwnedObjectPath,
+        signals: Option<zbus::blocking::MessageIterator>,
+    ) -> Joining {
+        let Some(signals) = signals else {
+            return join;
+        };
+        join.attempt().followed = true;
+        let (mine, connection, asked) = (join.clone(), self.connection.clone(), Instant::now());
+        let started = std::thread::Builder::new()
+            .name("net-join".to_owned())
+            .spawn(move || follow(&connection, signals, &device, &access_point, &mine, asked));
+        if started.is_err() {
+            join.attempt().followed = false;
+        }
+        join
     }
 
     /// Joins `ssid` for THIS BOOT, with the password NetworkManager keeps
@@ -1356,38 +1591,53 @@ impl Manager {
             let _ = self.profile(&earlier)?.delete();
         }
         let connection = wifi_settings(ssid, password, sae, KEPT_BY_THE_DAEMON);
+        let signals = self.signals_of(&device);
         let (profile, active, _) = self.manager()?.add_and_activate_connection2(
             connection,
             &device.as_ref(),
             &access_point.as_ref(),
             HashMap::from([("persist", Value::from("memory"))]),
         )?;
-        Ok(Joining {
-            profile,
-            active,
-            made: true,
-        })
+        Ok(self.followed(
+            Joining::of(profile, active, true),
+            device,
+            access_point,
+            signals,
+        ))
     }
 
     /// Where a join stands.
+    ///
+    /// AN ACTIVATION THAT ENDED is its follower's to judge, on the radio's
+    /// own signal ([`follow`]): a refused key, or the same profile once
+    /// more. Until it has, the join is on its way — a verdict read off the
+    /// ending alone said "refused" of a right password the supplicant was
+    /// still holding back.
     #[must_use]
     pub fn joining(&self, join: &Joining) -> Joined {
-        let state = nm::ActiveProxyBlocking::builder(&self.connection)
-            .path(join.active.clone())
-            .ok()
-            .and_then(|b| b.build().ok())
-            .and_then(|a| a.state().ok());
-        joined_of(state)
+        let (active, followed, settled) = {
+            let attempt = join.attempt();
+            (attempt.active.clone(), attempt.followed, attempt.settled)
+        };
+        if let Some(verdict) = settled {
+            return verdict;
+        }
+        match joined_of(state_of(&self.connection, &active)) {
+            Joined::Failed if followed => Joined::Coming,
+            other => other,
+        }
     }
 
     /// Deletes the profile a join made — one that did not come up, so the
-    /// daemon does not try its password again on its own. A saved profile
-    /// brought up is the person's, and stays.
+    /// daemon does not try its password again on its own — and settles the
+    /// join, so its follower asks nothing again. A saved profile brought up
+    /// is the person's, and stays.
     ///
     /// # Errors
     ///
     /// The bus did not answer, or the profile is gone already.
     pub fn abandon(&self, join: &Joining) -> Result<()> {
+        join.settle(Joined::Failed);
         if join.made {
             self.profile(&join.profile)?.delete()?;
         }
@@ -2471,6 +2721,100 @@ mod tests {
         assert_eq!(joined_of(None), Joined::Failed);
     }
 
+    /// FAILS IF: a join's follower takes a refused key from anything but
+    /// NetworkManager's "no secrets" or a SECOND activation in a row that
+    /// never associated — the first one, a right password the supplicant
+    /// held back after a wrong one, read as "refused" — gives up on an
+    /// activation that ended in time, tries one again past the deadline, or
+    /// takes the radio leaving a FAILED state, or a step on its way, for the
+    /// join taken down.
+    #[test]
+    fn a_key_is_refused_by_no_secrets_or_twice_unheard_and_the_rest_is_tried_again() {
+        // `NM_DEVICE_STATE_REASON_SUPPLICANT_TIMEOUT`.
+        let timeout = 11;
+        let away = nm::REASON_SSID_NOT_FOUND;
+        assert_eq!(
+            next_of(120, 50, nm::REASON_NO_SECRETS, true, 0),
+            Next::Refused
+        );
+        assert_eq!(
+            next_of(120, 50, nm::REASON_NO_SECRETS, false, 0),
+            Next::Refused
+        );
+        assert_eq!(next_of(120, 50, timeout, true, 0), Next::Again);
+        assert_eq!(next_of(120, 50, timeout, true, 1), Next::Again);
+        assert_eq!(
+            next_of(120, 50, away, true, 0),
+            Next::Again,
+            "the first never-associated ending: maybe a hold"
+        );
+        assert_eq!(
+            next_of(120, 50, away, true, 1),
+            Next::Unanswered,
+            "the second: the hold was cleared"
+        );
+        assert_eq!(next_of(120, 50, away, false, 1), Next::Unanswered);
+        assert_eq!(next_of(120, 50, timeout, false, 0), Next::Failed);
+        assert_eq!(next_of(120, 50, away, false, 0), Next::Failed);
+        assert_eq!(next_of(100, 90, 0, true, 0), Next::Done);
+        assert_eq!(next_of(100, 90, 0, false, 1), Next::Done);
+        assert_eq!(
+            next_of(30, 120, 0, true, 0),
+            Next::Wait,
+            "a failure's own aftermath"
+        );
+        assert_eq!(next_of(30, 110, 39, true, 0), Next::Gone, "taken down");
+        for step in [40, 50, 60, 70, 80, 90] {
+            assert_eq!(next_of(step, step - 10, 0, true, 1), Next::Wait, "{step}");
+        }
+        assert_eq!(
+            (
+                nm::STATE_DISCONNECTED,
+                nm::STATE_ACTIVATED,
+                nm::STATE_FAILED,
+                nm::REASON_NO_SECRETS,
+                nm::REASON_SSID_NOT_FOUND,
+            ),
+            (30, 100, 120, 7, 53),
+            "NetworkManager's numbers"
+        );
+    }
+
+    /// FAILS IF: a join that never associated twice is called refused
+    /// anywhere but on a network in view that takes SAE (WPA3, alone or in
+    /// transition) — a `wpa-psk`-only network says a wrong key with "no
+    /// secrets", and one out of view refused nothing.
+    #[test]
+    fn twice_unheard_is_a_refused_key_only_where_sae_answers() {
+        let (psk, sae) = (nm::AP_SEC_KEY_MGMT_PSK, nm::AP_SEC_KEY_MGMT_SAE);
+        assert_eq!(unanswered(Some(sae)), Joined::Refused, "WPA3 only");
+        assert_eq!(unanswered(Some(psk | sae)), Joined::Refused, "transition");
+        assert_eq!(unanswered(Some(psk)), Joined::Failed, "WPA2");
+        assert_eq!(unanswered(Some(0)), Joined::Failed, "open");
+        assert_eq!(unanswered(None), Joined::Failed, "out of view");
+    }
+
+    /// FAILS IF: a join with no follower (a test's) waits for one, a settled
+    /// join is settled again, or a copy of a join does not see the verdict
+    /// the original was given.
+    #[test]
+    fn a_verdict_is_given_once_and_every_copy_sees_it() {
+        let join = Joining::at(
+            "/org/freedesktop/NetworkManager/Settings/9",
+            "/org/freedesktop/NetworkManager/ActiveConnection/9",
+            true,
+        )
+        .unwrap();
+        let copy = join.clone();
+        assert!(
+            !join.attempt().followed,
+            "a join with no daemon has a follower"
+        );
+        join.settle(Joined::Refused);
+        join.settle(Joined::Failed);
+        assert_eq!(copy.attempt().settled, Some(Joined::Refused));
+    }
+
     /// FAILS IF: the profile a join hands NetworkManager loses the password,
     /// its flags or the key management the access point asks for.
     #[test]
@@ -2619,7 +2963,7 @@ mod on_the_air {
         let (m, ssid, password) = air();
         let wrong = format!("{password}-not");
         let join = m.connect(&ssid, Some(&wrong)).expect("the join");
-        assert_eq!(verdict(&m, &join), Joined::Failed, "a wrong key was taken");
+        assert_eq!(verdict(&m, &join), Joined::Refused, "a wrong key was taken");
         assert!(
             m.remember(&join, &ssid, &wrong, Seal::ThroughTheAgent)
                 .is_err(),
@@ -2630,6 +2974,30 @@ mod on_the_air {
             m.held_in_memory(&ssid).expect("the profiles").is_empty(),
             "the refused join's profile stayed"
         );
+    }
+
+    /// FAILS IF: the right password typed right after a wrong one does not
+    /// come up — the supplicant holds the network back after the refusal,
+    /// and NetworkManager's association timeout ended the first activation
+    /// before the hold did: read as refused, it was the installer's first
+    /// screen refusing a right password.
+    #[test]
+    #[ignore = "needs a radio and an access point: wifi-joins-vm"]
+    fn a_right_password_after_a_wrong_one_comes_up() {
+        let (m, ssid, password) = air();
+        let wrong = format!("{password}-not");
+        let join = m.connect(&ssid, Some(&wrong)).expect("the wrong join");
+        assert_eq!(verdict(&m, &join), Joined::Refused, "a wrong key was taken");
+        m.abandon(&join).expect("abandoning it");
+        let began = Instant::now();
+        let join = m.connect(&ssid, Some(&password)).expect("the right join");
+        assert_eq!(
+            verdict(&m, &join),
+            Joined::Up,
+            "the right password, after {:?}",
+            began.elapsed()
+        );
+        println!("the right password came up in {:?}", began.elapsed());
     }
 
     /// FAILS IF: the boot's console — root, sealing itself, since the

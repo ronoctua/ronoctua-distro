@@ -8,6 +8,12 @@ use crate::catalog::{NewCategory, fold};
 
 const MIB: u64 = 1 << 20;
 
+/// The most steps of SQLite's machine one listing of [`fifty_thousand`]'s
+/// catalogue may take: the 20 ms the door was promised, at the ~27 steps a
+/// microsecond measured where the heaviest shape took 416 297 (a theme
+/// across sources, a word half the items have, its middle page; 2026-10-23).
+const STEPS_MOST: u64 = 550_000;
+
 fn scratch(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "ronoctua-broadcast-catalog-{}-{tag}",
@@ -679,6 +685,32 @@ fn explain(r: &Reader, sql: &str, args: Vec<Value>) -> Vec<String> {
 
 /// The steps SQLite chose to walk a listing's page, from its start or from
 /// its end.
+/// The steps SQLite's virtual machine takes for `q`'s listing: its count and
+/// its page, the statements [`Reader::list`] runs, read where it ran them —
+/// its statement cache. SQLite's own count of the work, the same on every
+/// machine, idle or busy, fast or slow.
+fn steps_of(r: &Reader, q: &ListQuery) -> u64 {
+    use rusqlite::StatementStatus::VmStep;
+    let shown = r.list(q).unwrap();
+    let (from_end, limit, _) = placed(shown.total, shown.page, q.per_page.clamp(1, PER_PAGE_MOST));
+    let mut statements = vec![count_query(q).0];
+    if limit > 0 {
+        statements.push(page_query(q, from_end).0);
+    }
+    let taken = || -> u64 {
+        statements
+            .iter()
+            .map(|sql| {
+                let st = r.conn.prepare_cached(sql).unwrap();
+                u64::try_from(st.reset_status(VmStep)).unwrap()
+            })
+            .sum()
+    };
+    taken();
+    r.list(q).unwrap();
+    taken()
+}
+
 fn plan(r: &Reader, q: &ListQuery, from_end: bool) -> Vec<String> {
     let (sql, mut args) = walk(q, from_end);
     args.push(Value::Integer(50));
@@ -858,24 +890,29 @@ fn fifty_thousand(w: &mut Writer) -> std::time::Duration {
     ingest
 }
 
-/// FAILS IF: a listing over a provider-sized catalogue stops answering in
-/// under 20 ms — the door queries on a worker and draws what comes, and a
-/// slow answer is a list that lags every key — or a listing is walked by
-/// sorting it whole (the 100–160 ms the last page cost before every order
-/// had its index).
+/// FAILS IF: a listing over a provider-sized catalogue takes more than
+/// [`STEPS_MOST`] steps of SQLite's machine — the door queries on a worker
+/// and draws what comes, and a slow answer is a list that lags every key —
+/// or a listing is walked by sorting it whole (the 100–160 ms the last page
+/// cost before every order had its index).
 ///
 /// The catalogue is [`fifty_thousand`]'s. Every scope a door asks (every
 /// item, a source, a big and a small category, a big and a small theme,
 /// across the sources and in one) in every order at its first, middle and
 /// last page, and with a letter, with words (rare ones, and one half the
-/// items have), with a country and a height, with a language. Each shape is
-/// timed five times, the first (cold) included, and the MEDIAN must be under
-/// 20 ms — the worst is reported too; a machine busy with other work
-/// stretches a run, not the plan. What cannot be stretched is asserted as
-/// well: every walk, from either end, reads a covering index and never
-/// sorts.
+/// items have), with a country and a height, with a language. Every walk,
+/// from either end, reads a covering index and never sorts.
+///
+/// # Steps, never milliseconds
+///
+/// The work is counted by SQLite itself (`steps_of`), and not timed. A
+/// median under 20 ms was the promise this held, and a gate building six
+/// units beside it stretched the heaviest shape past it — 15 ms idle, the
+/// same plan and the same rows. A clock measures the machine as well as the
+/// plan; the steps are the plan's alone, the same on every machine, idle or
+/// busy. The time is still said beside them, for a person reading the log.
 #[test]
-fn a_listing_over_fifty_thousand_items_answers_in_under_20_ms() {
+fn a_listing_over_fifty_thousand_items_is_walked_on_an_index() {
     let dir = scratch("fifty-thousand");
     let mut w = Writer::open(&dir, 512 * MIB, 1_000).unwrap();
     let ingest = fifty_thousand(&mut w);
@@ -1017,24 +1054,26 @@ fn a_listing_over_fifty_thousand_items_answers_in_under_20_ms() {
         }
     }
     let mut report = Vec::new();
-    let mut slow = Vec::new();
+    let mut heavy = Vec::new();
     for (name, q) in &shapes {
-        let mut runs = Vec::with_capacity(5);
-        let mut total = 0;
-        for _ in 0..5 {
-            let t = Instant::now();
-            let page = r.list(q).unwrap();
-            runs.push(t.elapsed());
-            total = page.total;
-            assert!(!page.rows.is_empty(), "{name} found nothing");
-        }
-        runs.sort();
-        let (median, worst) = (runs[2], runs[4]);
+        let t = Instant::now();
+        let page = r.list(q).unwrap();
+        let took = t.elapsed();
+        assert!(!page.rows.is_empty(), "{name} found nothing");
+        let steps = steps_of(&r, q);
+        // A STATEMENT THAT RAN READS ITS ROWS: a count of nothing is a
+        // listing this did not see, and a pass by default.
+        assert!(
+            steps >= page.rows.len() as u64,
+            "{name}: {steps} steps for {} rows — the listing's statements were not the ones read",
+            page.rows.len()
+        );
         report.push(format!(
-            "{name}: median {median:?}, worst {worst:?} ({total} items)"
+            "{name}: {steps} steps, {took:?} here ({} items)",
+            page.total
         ));
-        if median.as_millis() >= 20 {
-            slow.push(name.clone());
+        if steps > STEPS_MOST {
+            heavy.push(format!("{name}: {steps}"));
         }
     }
     println!(
@@ -1043,7 +1082,10 @@ fn a_listing_over_fifty_thousand_items_answers_in_under_20_ms() {
         shapes.len(),
         report.join("\n")
     );
-    assert!(slow.is_empty(), "slower than 20 ms: {slow:?}");
+    assert!(
+        heavy.is_empty(),
+        "past {STEPS_MOST} steps of SQLite's machine: {heavy:?}"
+    );
     let t = Instant::now();
     let letters = r
         .letters(&ListQuery {

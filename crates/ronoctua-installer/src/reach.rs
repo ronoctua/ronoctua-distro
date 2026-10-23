@@ -245,11 +245,15 @@ impl Reach {
         let mut linked_at: Option<Instant> = None;
         loop {
             // THE JOIN'S OWN VERDICT, and not "a link is up": a cable plugged
-            // in would let a refused password through. NetworkManager ending
-            // the activation is the answer, the moment it does — there is
+            // in would let a refused password through. The verdict is the
+            // answer the moment it comes — a refused key at once, any other
+            // ending after the join tried again (`JOIN_MOST_S`): there is
             // nothing left to wait for.
             let joined = join.as_ref().map(|j| manager.joining(j));
-            if let Some(j) = join.as_ref().filter(|_| joined == Some(Joined::Failed)) {
+            if let Some(j) = join
+                .as_ref()
+                .filter(|_| matches!(joined, Some(Joined::Refused | Joined::Failed)))
+            {
                 return refused(j);
             }
             let look = manager.look();

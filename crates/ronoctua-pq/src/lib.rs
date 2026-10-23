@@ -40,7 +40,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "crypt")]
 mod crypt;
 #[cfg(feature = "crypt")]
-pub use crypt::{Identity, Recipient, open, open_passphrase, seal, seal_passphrase};
+pub use crypt::{
+    Identity, PASSPHRASE_WORK, PASSPHRASE_WORK_MOST, Recipient, open, open_passphrase, seal,
+    seal_passphrase,
+};
 #[cfg(feature = "crypt")]
 #[doc(hidden)]
 pub mod vectors;

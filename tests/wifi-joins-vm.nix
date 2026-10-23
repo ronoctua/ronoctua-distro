@@ -136,6 +136,10 @@ pkgs.testers.runNixOSTest {
         # AND IT COMES BACK through the agent, with nobody typing.
         on(WPA2)
 
+    with subtest("the right password right after a wrong one comes up, however long the supplicant holds it"):
+        run("${networkTests}", "ronoctua_network", "on_the_air::a_right_password_after_a_wrong_one_comes_up", TRANSITION, "noctua")
+        on(TRANSITION)
+
     with subtest("the boot's console joins and remembers, as root, sealing itself"):
         run("${networkTests}", "ronoctua_network", "on_the_air::the_console_joins_then_remembers_as_root", TRANSITION)
         machine.succeed(f"test -e {blob(TRANSITION)}")

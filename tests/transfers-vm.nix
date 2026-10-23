@@ -140,6 +140,53 @@ pkgs.testers.runNixOSTest {
     start_compositor("compositor", "${scroll}")
     sock = socket_of("compositor")
 
+    # THE COPY'S PACE IS THE KERNEL'S, AND NOT THE HOST'S.
+    #
+    # A job held part-way has to be part-way when the hold lands, and the hold
+    # is a socket round trip from a Python started in the guest. Unpaced, four
+    # hundred megabytes from the page cache onto the disk took less than that
+    # on an idle host, and the job the test had just let go reached `done`
+    # before it was held again (2026-10-23) — the race the subtests below had
+    # already been rearranged twice to win. So the queue's unit READS the root
+    # disk at most `PACE` (`io.max`), and each held job starts from a source
+    # out of the page cache (`cold`): the whole file is then some twenty-five
+    # seconds on any host, idle or busy, against a round trip of well under
+    # one. A bite of the copy (eight mebibytes, `watch::CHUNK`, between which
+    # a hold lands) is half a second. In BYTES a second: systemd reads `16M`
+    # as sixteen million, and the kernel's `io.max` says what it was given.
+    PACE = 16 * 1024 * 1024
+
+
+    def cold():
+        """The source out of the page cache, so the queue reads it from the
+        disk, at the pace its unit is held to."""
+        machine.succeed("sync && echo 3 > /proc/sys/vm/drop_caches")
+        machine.succeed(
+            "[ $(${pkgs.util-linux}/bin/fincore --bytes --noheadings --output RES "
+            "/root/source/large.bin) = 0 ]"
+        )
+
+
+    def row(job):
+        return next(j for j in ask('{"ask":"list"}')["jobs"] if j["id"] == job)
+
+
+    def held_still(job):
+        """The row once the queue says the job is paused AND its count has
+        stopped: two reads a second apart that agree. The bite in flight when
+        the hold landed ends first, however long a busy host makes it; a copy
+        the hold did not reach moves between every two reads, and fails
+        here."""
+        before = None
+        for _ in range(60):
+            now = row(job)
+            if before is not None and now["stage"] == "paused" and now["done"] == before["done"]:
+                return now
+            before = now
+            machine.sleep(1)
+        raise AssertionError(f"the hold never held: {before}")
+
+
     with subtest("the queue comes up as a unit, and not inside the footer"):
         # `--user` and `/run/user/0` because this VM runs as root; on the real
         # machine it is `graphical-session.target` that pulls it in. What is
@@ -147,6 +194,7 @@ pkgs.testers.runNixOSTest {
         # systemd's own ordering.
         machine.succeed(
             "systemd-run --unit=queue "
+            f"-p 'IOReadBandwidthMax=/root {PACE}' "
             "--setenv=XDG_RUNTIME_DIR=/run/user/0 "
             "--setenv=RUST_LOG=ronoctua_transfers=info "
             "${ronoctua-transfers}/bin/ronoctua-transfers"
@@ -154,6 +202,18 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u queue --no-pager | grep 'transfer queue opened' > /dev/null",
             timeout=60,
+        )
+        # The pace is in the kernel, or the subtests below race again in
+        # silence: systemd skips a setting the cgroup cannot take.
+        paced = machine.execute("cat /sys/fs/cgroup/system.slice/queue.service/io.max")[1]
+        assert f"rbps={PACE}" in paced, (
+            f"the queue's reads are not paced (io.max: {paced!r}):\n"
+            + machine.execute(
+                "systemctl show queue -p IOReadBandwidthMax -p ControlGroup; "
+                "cat /sys/fs/cgroup/system.slice/cgroup.subtree_control; "
+                "stat -c 'dev=%d' /root; ls -l /dev/vda; "
+                "journalctl -b --no-pager | grep -i -E 'bandwidth|io[.]max|block device' | tail"
+            )[1]
         )
 
     with subtest("the footer comes up and FINDS the queue"):
@@ -211,14 +271,23 @@ pkgs.testers.runNixOSTest {
         # It used to reuse the job above, and that made the test a race it kept
         # winning by luck: between the two subtests sits a
         # `wait_until_succeeds` on the journal, which takes seconds, and four
-        # hundred megabytes onto a memory-backed root does not. The job reached
+        # hundred megabytes from the page cache do not. The job reached
         # `done` and the assertion read `stage == "paused"` against a copy that
         # had finished — the failure said "the queue is wrong" about a queue
         # that was right.
         #
-        # There is no ask for "add it held", so what is left is to shrink the
-        # window to the two socket round-trips: add, then pause, with nothing
-        # between them.
+        # There is no ask for "add it held": add, then pause, with nothing
+        # between them, from a cold source at the queue's pace (`cold`).
+        #
+        # THE FIRST JOB ENDS FIRST. Its source was warm, so it copies from
+        # memory; once dropped, its reads would share the pace with this one.
+        for _ in range(180):
+            if row(job)["stage"] == "done":
+                break
+            machine.sleep(1)
+        else:
+            raise AssertionError(f"the first job never ended: {row(job)}")
+        cold()
         machine.succeed("mkdir -p /root/destination-pause")
         second = ask(
             '{"ask":"add","work":{"work":"paste",'
@@ -228,14 +297,11 @@ pkgs.testers.runNixOSTest {
         assert second["say"] == "took", second
         holding = second["id"]
         tell('{"ask":"pause","id":%d}' % holding)
-        machine.sleep(1)
-        first = ask('{"ask":"list"}')["jobs"]
-        held = next(j for j in first if j["id"] == holding)
-        assert held["stage"] == "paused", held
-        machine.sleep(1)
-        again = next(j for j in ask('{"ask":"list"}')["jobs"] if j["id"] == holding)
-        assert again["done"] == held["done"], (
-            f"the pause did not hold: {held['done']} -> {again['done']}"
+        held = held_still(holding)
+        machine.sleep(2)
+        again = row(holding)
+        assert again["done"] == held["done"] and again["stage"] == "paused", (
+            f"the pause did not hold: {held} -> {again}"
         )
 
     with subtest("giving up DELETES the piece and leaves the original"):
@@ -305,6 +371,7 @@ pkgs.testers.runNixOSTest {
         # process mid-file and the piece stayed. LAST, because the queue is
         # gone after it.
         machine.succeed("mkdir -p /root/destination-stop")
+        cold()
         third = ask(
             '{"ask":"add","work":{"work":"paste",'
             '"paths":["/root/source/large.bin"],'
@@ -327,9 +394,7 @@ pkgs.testers.runNixOSTest {
             "until [ -s /root/destination-stop/large.bin ]; do sleep 0.01; done && "
             f"""{py} '{{"ask":"pause","id":{stopping}}}'"""
         )
-        machine.sleep(1)
-        piece = next(j for j in ask('{"ask":"list"}')["jobs"] if j["id"] == stopping)
-        assert piece["stage"] == "paused", piece
+        held_still(stopping)
         machine.succeed("test -s /root/destination-stop/large.bin")
         machine.succeed(
             "[ $(stat -c %s /root/destination-stop/large.bin) -lt "

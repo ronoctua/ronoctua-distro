@@ -128,7 +128,8 @@ pub enum Offer {
 pub struct Budget {
     /// The tree, in bytes.
     pub tree_bytes: u64,
-    /// The history (`git count-objects` size-pack after a fetch), in bytes.
+    /// The history (the clone's `objects` folder after a fetch, by its files'
+    /// lengths), in bytes.
     pub history_bytes: u64,
     /// What the table recommends, in bytes.
     pub recommend_bytes: u64,

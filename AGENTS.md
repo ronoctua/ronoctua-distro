@@ -1047,6 +1047,19 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
   (tudo). O `tests/slow.nix` diz o que sai do `most` (cobra `test-tiers-are-total`).
 - Um check prova o comportamento pedido. Check que confere o código como ele está escrito, ou a
   mensagem que ele imprimiria, passa num marco vazio.
+- **Um teste dá o mesmo veredito em toda máquina**, ociosa ou ocupada pelo gate, em qualquer sistema
+  de arquivos. Tempo: nenhum teste segura um tempo abaixo de um segundo — conte o trabalho (os passos
+  do SQLite), limite o regime (≥ 1 s) ou meça contra uma `Yardstick` cronometrada ao lado (cobra
+  `no-test-holds-a-time-under-a-second`). Tamanho é comprimento, nunca blocos: o ZFS diz 1 KiB por
+  2 MiB recém-escritos, e nenhum `sync` o apressa (cobra `sizes-are-lengths`). Um nome que não é
+  UTF-8 só vai ao disco em `a_room_for_any_name` (`/dev/shm`): o ZFS com `utf8only` o recusa (cobra
+  `a-name-that-is-not-text-has-a-room-for-it`). Um check de dimensionamento planta a máquina
+  (`--meminfo`, `--cpus`, `--ceiling`), nunca lê a memória livre de quem constrói. Um teste de VM
+  que segura um trabalho no meio limita o ritmo dele no kernel (o `io.max` da unidade, a origem fora
+  do cache) e confere que o limite pegou, em vez de correr contra ele (`transfers-vm`). E o produto
+  também não mede a máquina para escolher um parâmetro: o `age` sozinho escolhe o fator do scrypt
+  pelo relógio (1 GiB numa máquina rápida, e uma abertura que a lenta recusa), e ele é constante
+  (cobra `scrypt-work-is-the-same-everywhere`).
 - `cargo test` precisa dos programas externos: sem as variáveis `RONOCTUA_*`, os testes de ffmpeg
   saem calados e não testam nada. O caminho vai na tabela `testEnv` do `nix/rust.nix` (nunca em
   `generated`, que chega aos programas), e o crate que o lê o declara (`run-env`, `test-env`).

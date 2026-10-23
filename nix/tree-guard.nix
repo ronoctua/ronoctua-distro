@@ -33,7 +33,7 @@ writeShellApplication {
     if [ -n "$built" ]; then
       echo "ERROR: a build is inside the tree, and a battery will not start over it:" >&2
       while IFS= read -r dir; do
-        echo "       ''${dir#"$root"/} ($(du -sh -- "$dir" 2>/dev/null | cut -f1))" >&2
+        echo "       ''${dir#"$root"/} ($(du -sh --apparent-size -- "$dir" 2>/dev/null | cut -f1))" >&2
       done <<< "$built"
       echo "       Builds go under the cache (nix/cargo-dirs.nix); remove these, or move" >&2
       echo "       them there, and run it again." >&2
