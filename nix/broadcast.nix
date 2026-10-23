@@ -40,9 +40,21 @@ let
   # bytes behind it are the archive's choice, not this file's. Refreshing it is
   # choosing a newer capture (`curl -sI` on a rounded stamp names it in
   # `location:`) and its hash.
+  #
+  # AND THE BYTES ARE UNWRAPPED. Since 2026-10 the capture answers the body
+  # GitHub sent it — gzip — with no `content-encoding` to say so, where it used
+  # to answer it decoded: the same JSON in another wrapping, and a hash
+  # mismatch. Undone here when the body starts with gzip's magic, so the hash
+  # is the JSON's whichever way the archive answers.
   categories = fetchurl {
     url = "https://web.archive.org/web/20260523230739id_/https://iptv-org.github.io/api/categories.json";
     hash = "sha256-KvRdQ7HatUPMAESUrL/QnJD0y7GiJOEh1FWssAGGcbg=";
+    postFetch = ''
+      if [ "$(head -c 2 "$out" | od -An -tx1 | tr -d ' \n')" = 1f8b ]; then
+        gzip -dc < "$out" > "$out.json"
+        mv "$out.json" "$out"
+      fi
+    '';
   };
 in
 stdenvNoCC.mkDerivation {
