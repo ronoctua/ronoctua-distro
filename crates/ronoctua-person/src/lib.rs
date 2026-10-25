@@ -58,6 +58,7 @@ pub mod choice;
 pub mod declared;
 pub mod declined;
 pub mod distro_pins;
+pub mod frontier;
 pub mod local;
 pub mod merge;
 pub mod options;

@@ -80,6 +80,31 @@ pub(crate) fn capture(program: &Path, args: &[String]) -> Result<Ran, Refusal> {
     })
 }
 
+/// Runs `program` to its end with the file `input` as its standard input —
+/// a file of this program's, never this process's own standard input — and
+/// keeps what it printed.
+pub(crate) fn capture_reading(
+    program: &Path,
+    args: &[String],
+    input: &Path,
+) -> Result<Ran, Refusal> {
+    say(
+        6,
+        &format!("running {} < {}", line(program, args), input.display()),
+    );
+    let file = std::fs::File::open(input).map_err(|e| spawn_failed(program, &e))?;
+    let out = Command::new(program)
+        .args(args)
+        .stdin(Stdio::from(file))
+        .output()
+        .map_err(|e| spawn_failed(program, &e))?;
+    Ok(Ran {
+        code: out.status.code(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

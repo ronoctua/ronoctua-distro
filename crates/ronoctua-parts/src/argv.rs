@@ -56,29 +56,6 @@ pub fn start_realizer(systemctl: &str, id: &str) -> Vec<String> {
     ]
 }
 
-/// `nix store prefetch-file` of one download from `url` — a file the person
-/// handed in (`file://`) or a mirror — under its own name and the hash the
-/// flake pins: Nix refuses other bytes, so the path that comes out can only
-/// be the download's. `--unpack` for a tree's hash.
-#[must_use]
-pub fn prefetch(nix: &str, name: &str, hash: &str, unpack: bool, url: &str) -> Vec<String> {
-    let mut argv = vec![
-        nix.to_owned(),
-        "store".to_owned(),
-        "prefetch-file".to_owned(),
-        "--json".to_owned(),
-        "--name".to_owned(),
-        name.to_owned(),
-        "--expected-hash".to_owned(),
-        hash.to_owned(),
-    ];
-    if unpack {
-        argv.push("--unpack".to_owned());
-    }
-    argv.push(url.to_owned());
-    argv
-}
-
 /// What the person's page runs to start one of the parts' units — never
 /// asking (there is no polkit agent in the session: the rule in
 /// `nix/modules/parts.nix` lets this user `start` exactly these units), and
@@ -102,34 +79,6 @@ pub fn start_as_the_person(systemctl: &str, unit: &str, wait: bool) -> Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// FAILS IF: a download is added without the pinned hash — Nix would
-    /// take any bytes under the download's name — or a flat file is unpacked.
-    #[test]
-    fn a_download_is_added_only_by_its_pinned_hash() {
-        let flat = prefetch(
-            "/n/nix",
-            "x.tar.gz",
-            "sha256-AAAA",
-            false,
-            "https://m.org/x.tar.gz",
-        );
-        let at = flat
-            .iter()
-            .position(|a| a == "--expected-hash")
-            .expect("the hash");
-        assert_eq!(flat[at + 1], "sha256-AAAA");
-        assert!(!flat.iter().any(|a| a == "--unpack"));
-        assert_eq!(
-            flat.last().map(String::as_str),
-            Some("https://m.org/x.tar.gz")
-        );
-        assert!(
-            prefetch("/n/nix", "t", "sha256-B", true, "file:///x")
-                .iter()
-                .any(|a| a == "--unpack")
-        );
-    }
 
     /// FAILS IF: the page's start could stop to ask a password nobody sees,
     /// or waits for a realizer — which may take an hour — on a door's thread.

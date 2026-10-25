@@ -1,11 +1,13 @@
 //! The downloads carried by a stick between two machines.
 //!
 //! `export` (root, `ronoctua-parts-export.service`, started from the parts'
-//! page) writes the downloads this machine keeps for its parts into
+//! page) writes the downloads this machine keeps — for its parts, and those
+//! its system was built from (`ronoctua-machine`'s kept downloads) — into
 //! `<folder>/ronoctua-parts`, a binary cache Nix reads by `file://`, and gives
 //! what it wrote to the folder's owner. `import` (root,
 //! `ronoctua-parts-import.service`) copies in, from such a folder, the
-//! downloads a part is missing — and ONLY downloads: a download's path is its
+//! downloads a part is missing, and those the machine's last apply could not
+//! fetch — and ONLY downloads: a download's path is its
 //! content, so Nix takes it with no signature, and anything built is refused
 //! by Nix itself, since nothing here passes `--no-check-sigs`. A built program
 //! from another machine would be that machine's code running here; the
@@ -22,6 +24,7 @@ use std::path::{Path, PathBuf};
 use ronoctua_parts::exit;
 use ronoctua_parts::names;
 use ronoctua_parts::stick::{Outcome, Refusal, Said, Verb};
+use ronoctua_person::frontier::Download;
 
 use crate::disk;
 use crate::{Usage, program, say};
@@ -88,15 +91,18 @@ fn give_to_the_owner(of: &Path, tree: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Every download kept for a part that is here: the targets of the links
-/// under [`names::KEPT`].
+/// Every download this machine keeps: for a part that is here (the targets
+/// of the links under [`names::KEPT`]), and the system's (under the
+/// machine's record, one folder per generation of the set).
 fn kept_paths() -> Vec<String> {
-    let Ok(parts) = fs::read_dir(names::KEPT) else {
-        return Vec::new();
-    };
-    parts
+    let system =
+        Path::new(ronoctua_machine::STATE_DIR).join(ronoctua_machine::build::DOWNLOADS_DIR);
+    [Path::new(names::KEPT), system.as_path()]
+        .into_iter()
+        .filter_map(|folder| fs::read_dir(folder).ok())
+        .flatten()
         .filter_map(Result::ok)
-        .filter_map(|part| fs::read_dir(part.path()).ok())
+        .filter_map(|kept| fs::read_dir(kept.path()).ok())
         .flatten()
         .filter_map(Result::ok)
         .filter_map(|link| fs::read_link(link.path()).ok())
@@ -122,42 +128,58 @@ pub fn import(args: &[String]) -> Result<u8, Usage> {
     }
     let cache = format!("file://{}", from.join(names::STICK_FOLDER).display());
     let nix = program("RONOCTUA_NIX");
+    // One download brought in, when the stick has it: whether it came.
+    let bring = |owner: &str, download: &Download| -> bool {
+        let there = disk::run_quiet(&[
+            nix.clone(),
+            "path-info".to_owned(),
+            "--store".to_owned(),
+            cache.clone(),
+            download.out.clone(),
+        ]);
+        if !there {
+            return false;
+        }
+        // NO `--no-check-sigs`: a download is content-addressed and needs
+        // none; anything else on the stick is refused by Nix.
+        let ok = disk::run_quiet(&[
+            nix.clone(),
+            "copy".to_owned(),
+            "--from".to_owned(),
+            cache.clone(),
+            download.out.clone(),
+        ]);
+        if !ok {
+            say(
+                4,
+                &format!(
+                    "{owner}: {} was on the stick and was refused",
+                    download.name
+                ),
+            );
+        }
+        ok
+    };
     let mut copied: u32 = 0;
     let mut touched = Vec::new();
     for record in disk::read_records() {
         for download in &record.missing {
-            let there = disk::run_quiet(&[
-                nix.clone(),
-                "path-info".to_owned(),
-                "--store".to_owned(),
-                cache.clone(),
-                download.out.clone(),
-            ]);
-            if !there {
-                continue;
-            }
-            // NO `--no-check-sigs`: a download is content-addressed and needs
-            // none; anything else on the stick is refused by Nix.
-            let ok = disk::run_quiet(&[
-                nix.clone(),
-                "copy".to_owned(),
-                "--from".to_owned(),
-                cache.clone(),
-                download.out.clone(),
-            ]);
-            if ok {
+            if bring(&record.id, download) {
                 copied += 1;
                 touched.push(record.id.clone());
-            } else {
-                say(
-                    4,
-                    &format!(
-                        "{}: {} was on the stick and was refused",
-                        record.id, download.name
-                    ),
-                );
             }
         }
+    }
+    // THE SYSTEM'S, which wait in the store for the next update.
+    match disk::system_missing() {
+        Ok(missing) => {
+            for download in &missing {
+                if bring(names::SYSTEM, download) {
+                    copied += 1;
+                }
+            }
+        }
+        Err(e) => say(6, &format!("the system's downloads were not asked: {e}")),
     }
     touched.sort();
     touched.dedup();

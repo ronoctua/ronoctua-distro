@@ -80,6 +80,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use ronoctua_person::frontier::Download;
 use serde::Deserialize;
 
 use crate::argv::{self, Sized};
@@ -97,6 +98,13 @@ pub const SOURCES_DIR: &str = "kept-sources";
 
 /// The name of their set there.
 pub const SOURCES_SET: &str = "flake";
+
+/// Where, under the machine's record, the downloads of the last build are
+/// held.
+pub const DOWNLOADS_DIR: &str = "kept-downloads";
+
+/// The name of their set there.
+pub const DOWNLOADS_SET: &str = "system";
 
 /// The format of [`Phases`] this program reads.
 pub const PHASES_FORMAT: u32 = 3;
@@ -257,6 +265,9 @@ impl Drop for Held {
 pub(crate) struct Built {
     /// The units to keep: `None` when the distro described no phases.
     pub(crate) kept: Option<Vec<String>>,
+    /// The system's `.drv`, whose downloads are kept: `None` when the distro
+    /// described no phases.
+    pub(crate) drv: Option<String>,
     /// What holds them meanwhile.
     _held: Held,
 }
@@ -281,6 +292,25 @@ fn sizing(program: &Path) -> Result<Sizing, Refusal> {
     })
 }
 
+/// A system that did not build: why, and the downloads it was missing.
+pub(crate) struct Unbuilt {
+    /// Why.
+    pub(crate) refusal: Refusal,
+    /// The downloads Nix would still fetch from their origins to build it
+    /// ([`dry::missing`]): empty when nothing is missing, or when the
+    /// system's `.drv` is not known (a distro that describes no phases).
+    pub(crate) missing: Vec<Download>,
+}
+
+impl From<Refusal> for Unbuilt {
+    fn from(refusal: Refusal) -> Self {
+        Self {
+            refusal,
+            missing: Vec::new(),
+        }
+    }
+}
+
 /// The refusal of a system that did not build, said.
 fn not_built() -> Refusal {
     say(
@@ -288,6 +318,31 @@ fn not_built() -> Refusal {
         "the new system did not build; nothing changed (build-failed)",
     );
     Refusal::of(Why::BuildFailed)
+}
+
+/// The system of `drv` did not build: said, and what it is missing asked of
+/// Nix's plan, each download named in the journal with where it comes from
+/// — the update's page of parts offers the ways in.
+fn unbuilt(nix: &Path, drv: &str) -> Unbuilt {
+    let refusal = not_built();
+    let missing = dry::missing(nix, drv);
+    for d in &missing {
+        let hosts = d.hosts();
+        let from = if hosts.is_empty() {
+            String::new()
+        } else {
+            format!(" from {}", hosts.join(", "))
+        };
+        say(
+            4,
+            &format!(
+                "{} was not fetched{from}: it can be handed in or brought on a stick from the \
+                 update's page of parts",
+                d.name
+            ),
+        );
+    }
+    Unbuilt { refusal, missing }
 }
 
 /// `text`'s lines into `path`, each ended.
@@ -302,15 +357,16 @@ fn lines_into(path: &Path, lines: &[&str]) -> Result<(), Refusal> {
 ///
 /// # Errors
 ///
-/// [`Why::BuildFailed`]; [`Why::Failed`] when the sizing does not answer or a
-/// program does not start.
+/// [`Why::BuildFailed`], with the downloads the system is missing when its
+/// plan says them ([`Unbuilt`]); [`Why::Failed`] when the sizing does not
+/// answer or a program does not start.
 pub(crate) fn system(
     m: &Machine,
     nix: &Path,
     dir: &Path,
     attr: &str,
     out: &Path,
-) -> Result<Built, Refusal> {
+) -> Result<Built, Unbuilt> {
     let sizing = sizing(&needed(m.system.sizing.as_ref(), system::BUILD_SIZING)?)?;
     let held = Held(m.places.run.join("units"));
     disk::remove(&held.0).map_err(|e| disk::failed(&held.0, &e))?;
@@ -332,7 +388,7 @@ pub(crate) fn system(
                      program reads, and {why}: nothing is built (build-failed)"
                 ),
             );
-            return Err(Refusal::of(Why::BuildFailed));
+            return Err(Refusal::of(Why::BuildFailed).into());
         }
         Err(other) => {
             // WHY: another format, in its number; or none, in Nix's own
@@ -357,10 +413,11 @@ pub(crate) fn system(
                 ),
             );
             if run::status(nix, &argv::build(dir, attr, out, sizing.rest))? != Some(0) {
-                return Err(not_built());
+                return Err(not_built().into());
             }
             return Ok(Built {
                 kept: None,
+                drv: None,
                 _held: held,
             });
         }
@@ -427,7 +484,7 @@ pub(crate) fn system(
             will.is_none(),
         );
         if run::status(&program, &args)? != Some(0) {
-            return Err(not_built());
+            return Err(unbuilt(nix, &phases.system));
         }
     }
     if run::status(
@@ -435,10 +492,11 @@ pub(crate) fn system(
         &argv::build_drvs(std::slice::from_ref(&phases.system), sizing.rest, out),
     )? != Some(0)
     {
-        return Err(not_built());
+        return Err(unbuilt(nix, &phases.system));
     }
     Ok(Built {
         kept: Some(phases.kept),
+        drv: Some(phases.system),
         _held: held,
     })
 }
@@ -488,6 +546,114 @@ pub(crate) fn keep_sources(m: &Machine, nix: &Path) -> bool {
         return false;
     };
     hold(m, SOURCES_DIR, SOURCES_SET, &sources, "the sources", LOST)
+}
+
+/// Roots the downloads the system of `drv` was built from — every path of
+/// its build closure the store holds whose content a hash pins: what was
+/// fetched (a crate, a release asset, a model) and the sources added by
+/// path — under the machine's record, releasing the last build's: an update
+/// that finds one unchanged fetches it not again, and a stick carries them
+/// to another machine (`ronoctua-parts export`). Whether they were kept:
+/// never a refusal, as [`keep`] is none.
+pub(crate) fn keep_downloads(m: &Machine, nix: &Path, drv: &str) -> bool {
+    const LOST: &str = "the next update may fetch them again";
+    let Ok(ran) = run::capture(&nix.with_file_name("nix-store"), &argv::requisites(drv)) else {
+        return false;
+    };
+    if !ran.ok() {
+        say(
+            4,
+            &format!(
+                "what the system was built from was not listed ({}): {LOST}",
+                ran.stderr.trim()
+            ),
+        );
+        return false;
+    }
+    let mut asked = ran
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|p| is_store(p) && !p.ends_with(".drv"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    asked.push('\n');
+    let list = m.places.run.join("downloads-asked.txt");
+    if let Err(e) = disk::write_atomically(&list, asked.as_bytes(), 0o644) {
+        say(4, &format!("{}: {e}: {LOST}", list.display()));
+        return false;
+    }
+    let info = run::capture_reading(nix, &argv::path_info_of_input(), &list);
+    let _ = disk::remove(&list);
+    let Ok(info) = info else {
+        return false;
+    };
+    let fixed = info.ok().then(|| fixed_of(&info.stdout)).flatten();
+    let Some(fixed) = fixed else {
+        say(
+            4,
+            &format!(
+                "nix path-info did not say which paths are downloads ({}): {LOST}",
+                info.stderr
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .map_or("", str::trim)
+            ),
+        );
+        return false;
+    };
+    hold(
+        m,
+        DOWNLOADS_DIR,
+        DOWNLOADS_SET,
+        &fixed,
+        "the downloads",
+        LOST,
+    )
+}
+
+/// The paths `json` — `nix path-info --json`, in format 2 or 1 — says are
+/// fixed: content pinned by a hash, of a file or a tree; never a text (a
+/// `.drv`, a file Nix wrote) and never a path its derivation names. `None`
+/// for an answer in another shape, or one that names a path that is not
+/// one path of the store.
+fn fixed_of(json: &str) -> Option<Vec<String>> {
+    use serde_json::Value;
+    let said: Value = serde_json::from_str(json).ok()?;
+    // FORMAT 2: `{"info": {"<hash>-<name>": {"ca": {"method": …} | null, …}
+    // | null}, "storeDir": "/nix/store"}`; FORMAT 1: the same keyed by the
+    // whole path, `ca` a string (`fixed:r:sha256:…`, `text:sha256:…`).
+    let (table, dir) = match said.get("info") {
+        Some(info) => (info.as_object()?, said.get("storeDir")?.as_str()?),
+        None => (said.as_object()?, ""),
+    };
+    let mut fixed = Vec::new();
+    for (key, info) in table {
+        let path = if dir.is_empty() {
+            key.clone()
+        } else {
+            format!("{dir}/{key}")
+        };
+        if !is_store(&path) {
+            return None;
+        }
+        // A PATH THE STORE DOES NOT HOLD is `null`: nothing to keep.
+        let is_fixed = match info.get("ca") {
+            None | Some(Value::Null) => false,
+            Some(Value::String(ca)) => ca.starts_with("fixed:"),
+            Some(Value::Object(ca)) => ca
+                .get("method")
+                .and_then(Value::as_str)
+                .is_some_and(|method| method != "text"),
+            Some(_) => return None,
+        };
+        if is_fixed {
+            fixed.push(path);
+        }
+    }
+    fixed.sort();
+    Some(fixed)
 }
 
 /// Roots the `paths` the store holds as the set `set` under the machine's
@@ -557,6 +723,45 @@ fn sources_of(json: &str) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: a download the system was built from is not kept — a file
+    /// or a tree, in either format Nix writes —, or what is no download is:
+    /// a `.drv` or a file Nix wrote, a path its derivation names, a path the
+    /// store does not hold; or an answer that names something outside the
+    /// store is read as a list at all.
+    #[test]
+    fn the_downloads_kept_are_the_fixed_paths() {
+        let two = r#"{"info":{
+            "aaaa-crate-x-0.1.0.tar.gz":{"ca":{"method":"flat","hash":"sha256-A"}},
+            "bbbb-source":{"ca":{"method":"nar","hash":"sha256-B"}},
+            "cccc-builder.sh":{"ca":{"method":"text","hash":"sha256-C"}},
+            "dddd-ronoctua-shell-0.1.0":{"ca":null},
+            "eeee-gone":null},
+          "storeDir":"/nix/store","version":2}"#;
+        assert_eq!(
+            fixed_of(two).unwrap(),
+            [
+                "/nix/store/aaaa-crate-x-0.1.0.tar.gz",
+                "/nix/store/bbbb-source"
+            ]
+        );
+        let one = r#"{"/nix/store/aaaa-x.tar.gz":{"ca":"fixed:sha256:0a"},
+            "/nix/store/bbbb-source":{"ca":"fixed:r:sha256:0b"},
+            "/nix/store/cccc-x.drv":{"ca":"text:sha256:0c"},
+            "/nix/store/dddd-x":{"ca":null}}"#;
+        assert_eq!(
+            fixed_of(one).unwrap(),
+            ["/nix/store/aaaa-x.tar.gz", "/nix/store/bbbb-source"]
+        );
+        for unread in [
+            r#"{"info":{"aaaa-x/../../etc":{"ca":{"method":"flat"}}},"storeDir":"/nix/store"}"#,
+            r#"{"/etc/passwd":{"ca":"fixed:sha256:0a"}}"#,
+            r#"{"info":{"aaaa-x":{"ca":3}},"storeDir":"/nix/store"}"#,
+            r#"["/nix/store/aaaa-x"]"#,
+        ] {
+            assert_eq!(fixed_of(unread), None, "{unread}");
+        }
+    }
 
     /// FAILS IF: a source `nix flake archive` names is left out — an input's
     /// input, or one an input shares through `follows` named twice and kept

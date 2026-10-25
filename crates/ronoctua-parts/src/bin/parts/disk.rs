@@ -51,6 +51,21 @@ pub fn read_record(id: &str) -> Result<Record, String> {
 }
 
 /// Every record there is; one that does not read is said and skipped.
+/// The downloads the machine's last apply could not fetch, as its record
+/// says them (`ronoctua-machine`'s `state.json`); none when it fetched
+/// everything.
+///
+/// # Errors
+///
+/// What there is no record of, or a record that does not read.
+pub fn system_missing() -> Result<Vec<ronoctua_person::frontier::Download>, String> {
+    let path = Path::new(ronoctua_machine::STATE_DIR).join(ronoctua_person::names::STATE);
+    let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let state = ronoctua_person::parse::<ronoctua_person::state::MachineState>(&bytes)
+        .map_err(|r| format!("{}: {r}", path.display()))?;
+    Ok(state.last_apply.map(|a| a.missing).unwrap_or_default())
+}
+
 pub fn read_records() -> Vec<Record> {
     let Ok(entries) = fs::read_dir(names::RECORDS) else {
         return Vec::new();

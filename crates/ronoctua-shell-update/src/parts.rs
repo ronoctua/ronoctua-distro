@@ -12,8 +12,17 @@
 //! (`LEADER s u u`, or straight here with `LEADER s u d`) and in the window
 //! (`LEADER s u w`), with the same rows and the same keys.
 //!
+//! THE SYSTEM ITSELF is the first row when its last update could not fetch
+//! something (`ronoctua-machine apply`, `last-apply.missing` in the
+//! machine's record): the update that failed for want of a download, or the
+//! hardware that waits for a network, built without again. Its downloads
+//! come in the same ways as a part's, and a download already in the store
+//! says so: the next update builds with it.
+//!
 //! # What the person does here
 //!
+//! - `RET` on the system updates again — the update's own start, as `u`
+//!   does on the steps; `h` hands in a file for it, as for a part.
 //! - `RET` on a part tries it NOW: its realizer, started through the one
 //!   narrow polkit rule (`start`, these units, this user), never waited for.
 //!   On a metered link a part waits, and this is the person's yes to that
@@ -89,6 +98,9 @@ pub struct Places {
     /// The person's config root, whose `consent.json` lets the mirrors'
     /// hosts.
     pub config: Option<PathBuf>,
+    /// The machine's record (`state.json`), whose last apply names what the
+    /// system could not fetch.
+    pub state: PathBuf,
 }
 
 impl Places {
@@ -109,6 +121,9 @@ impl Places {
                     .join(ronoctua_person::names::OPTIONS)
             }),
             config: ronoctua_xdg::config_dir(),
+            state: crate::update_window::record_places()
+                .machine_state
+                .join(ronoctua_person::names::STATE),
         }
     }
 
@@ -131,7 +146,7 @@ impl Places {
     }
 }
 
-/// A download a part is missing, as the page says it.
+/// A download a part — or the system — is missing, as the page says it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Missing {
     /// Its name — the name a file handed in must have.
@@ -140,6 +155,58 @@ pub struct Missing {
     pub hosts: Vec<String>,
     /// Whether it is one file the person can hand in.
     pub by_hand: bool,
+    /// Whether the store holds it now — brought in since the record was
+    /// written, which only the next build reads.
+    pub here: bool,
+}
+
+impl Missing {
+    /// `d` as the page says it, `here` or not.
+    fn of(d: &ronoctua_person::frontier::Download, here: bool) -> Self {
+        Self {
+            name: d.name.clone(),
+            hosts: d.hosts(),
+            by_hand: d
+                .means()
+                .contains(&ronoctua_person::frontier::Means::HandIn),
+            here,
+        }
+    }
+}
+
+/// What the machine's last update could not fetch, as the page draws it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct System {
+    /// Whether its build failed for it; otherwise the machine was built
+    /// without the hardware that waits for a network.
+    pub failed: bool,
+    /// The downloads.
+    pub missing: Vec<Missing>,
+}
+
+impl System {
+    /// What the machine's `last` apply says, each download `here` or not;
+    /// `None` when it was missing nothing. Pure, but for `here`.
+    #[must_use]
+    pub fn of(
+        last: Option<&ronoctua_person::state::LastApply>,
+        here: impl Fn(&str) -> bool,
+    ) -> Option<Self> {
+        let last = last.filter(|a| !a.missing.is_empty())?;
+        Some(Self {
+            failed: last.result == ronoctua_person::state::ApplyResult::BuildFailed,
+            missing: last
+                .missing
+                .iter()
+                .map(|d| Missing::of(d, here(&d.out)))
+                .collect(),
+        })
+    }
+
+    /// The downloads still to come.
+    fn to_come(&self) -> impl Iterator<Item = &Missing> {
+        self.missing.iter().filter(|m| !m.here)
+    }
 }
 
 /// A part, as the page draws it.
@@ -200,6 +267,8 @@ impl Mirrors {
 /// Everything the page draws.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Readings {
+    /// What the system's last update could not fetch, when something.
+    pub system: Option<System>,
     /// Every part the system wants, in id order.
     pub parts: Vec<Part>,
     /// What the last stick gesture did.
@@ -224,6 +293,12 @@ impl Readings {
             .options
             .as_deref()
             .map_or_else(Mirrors::default, Mirrors::read);
+        let state = std::fs::read(&places.state)
+            .ok()
+            .and_then(|b| ronoctua_person::parse::<ronoctua_person::state::MachineState>(&b).ok());
+        r.system = System::of(state.as_ref().and_then(|s| s.last_apply.as_ref()), |out| {
+            Path::new(out).exists()
+        });
         r
     }
 
@@ -242,19 +317,12 @@ impl Readings {
                 tries: r.attempts,
                 due: r.due_at(),
                 failure: r.last_failure.as_ref().map(|f| (f.why, f.detail.clone())),
-                missing: r
-                    .missing
-                    .iter()
-                    .map(|d| Missing {
-                        name: d.name.clone(),
-                        hosts: d.hosts(),
-                        by_hand: d.means().contains(&ronoctua_parts::frontier::Means::HandIn),
-                    })
-                    .collect(),
+                missing: r.missing.iter().map(|d| Missing::of(d, false)).collect(),
                 id: r.id,
             })
             .collect();
         Self {
+            system: None,
             parts,
             stick,
             mirrors: Mirrors::default(),
@@ -269,6 +337,8 @@ impl Readings {
 /// One row of the page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
+    /// What the system's last update could not fetch.
+    System,
     /// A part, by its index.
     Part(usize),
     /// Bring downloads in from a stick.
@@ -279,12 +349,15 @@ pub enum Row {
     Mirrors,
 }
 
-/// The rows `r` has: one per part, then the stick's two and the mirrors'.
-/// Pure.
+/// The rows `r` has: the system's when it is missing something, one per
+/// part, then the stick's two and the mirrors'. Pure.
 #[must_use]
 pub fn rows_of(r: &Readings) -> Vec<Row> {
-    (0..r.parts.len())
-        .map(Row::Part)
+    r.system
+        .as_ref()
+        .map(|_| Row::System)
+        .into_iter()
+        .chain((0..r.parts.len()).map(Row::Part))
         .chain([Row::Import, Row::Export, Row::Mirrors])
         .collect()
 }
@@ -298,7 +371,7 @@ pub enum Press {
     Down,
     /// Does what the row says.
     Enter,
-    /// Hands in a file for the part under the cursor.
+    /// Hands in a file for the part, or the system, under the cursor.
     HandIn,
     /// Back to the steps.
     Escape,
@@ -317,7 +390,7 @@ pub enum Act {
     },
     /// Hand in the file at `from` as the part's download `download`.
     HandIn {
-        /// The part's id.
+        /// The part's id ([`names::SYSTEM`] for the system's).
         id: String,
         /// The download's name.
         download: String,
@@ -368,6 +441,9 @@ impl Act {
     pub fn word(&self) -> String {
         match self {
             Self::Retry { id, .. } => format!("try the part {id} now"),
+            Self::HandIn { id, download, .. } if id == names::SYSTEM => {
+                format!("hand in {download} for the system")
+            }
             Self::HandIn { id, download, .. } => format!("hand in {download} for the part {id}"),
             Self::Import(from) => format!("bring downloads in from {}", from.display()),
             Self::Export(to) => format!("write the downloads on {}", to.display()),
@@ -401,6 +477,9 @@ pub enum Errand {
     Run(Act),
     /// The person's mirrors to be these ([`name_mirrors`]).
     Mirrors(Vec<String>),
+    /// The whole update again — the update's own start, as `u` on its
+    /// steps, which the page gives way to.
+    Update,
 }
 
 /// What the file picker is up for.
@@ -408,7 +487,7 @@ pub enum Errand {
 pub enum Picking {
     /// The file the person downloaded elsewhere, for a part's download.
     HandIn {
-        /// The part's id.
+        /// The part's id ([`names::SYSTEM`] for the system's).
         id: String,
         /// The download's name — what the file is checked as.
         download: String,
@@ -558,10 +637,11 @@ impl Page {
         }
     }
 
-    /// `RET` on the row under the cursor: a part is tried now; a stick's row
-    /// asks for the stick's folder.
+    /// `RET` on the row under the cursor: the system is updated again; a
+    /// part is tried now; a stick's row asks for the stick's folder.
     fn enter(&mut self, r: &Readings) -> Errand {
         match rows_of(r).get(self.cursor) {
+            Some(Row::System) => Errand::Update,
             Some(Row::Part(i)) => match r.parts.get(*i) {
                 Some(p) if p.phase == Phase::Here => {
                     Errand::Say(key::DISTRO_PARTS_SAID_ALREADY_HERE)
@@ -587,22 +667,29 @@ impl Page {
         }
     }
 
-    /// The part under the cursor and the first download it is missing that
-    /// is one file — or the sentence that says why there is none to hand in.
+    /// The part (or the system) under the cursor and the first download it
+    /// is missing that is one file — or the sentence that says why there is
+    /// none to hand in.
     fn to_hand_in(&self, r: &Readings) -> Result<(String, String), &'static str> {
-        let Some(Row::Part(i)) = rows_of(r).get(self.cursor).copied() else {
-            return Err(key::DISTRO_PARTS_SAID_NOT_A_PART);
+        let (id, missing): (&str, Vec<&Missing>) = match rows_of(r).get(self.cursor).copied() {
+            Some(Row::System) => {
+                let system = r.system.as_ref().ok_or(key::DISTRO_PARTS_SAID_NOT_A_PART)?;
+                (names::SYSTEM, system.to_come().collect())
+            }
+            Some(Row::Part(i)) => {
+                let part = r.parts.get(i).ok_or(key::DISTRO_PARTS_SAID_NOT_A_PART)?;
+                (part.id.as_str(), part.missing.iter().collect())
+            }
+            _ => return Err(key::DISTRO_PARTS_SAID_NOT_A_PART),
         };
-        let part = r.parts.get(i).ok_or(key::DISTRO_PARTS_SAID_NOT_A_PART)?;
-        if part.missing.is_empty() {
+        if missing.is_empty() {
             return Err(key::DISTRO_PARTS_SAID_NOTHING_MISSING);
         }
-        let download = part
-            .missing
+        let download = missing
             .iter()
             .find(|m| m.by_hand)
             .ok_or(key::DISTRO_PARTS_SAID_NOT_ONE_FILE)?;
-        Ok((part.id.clone(), download.name.clone()))
+        Ok((id.to_owned(), download.name.clone()))
     }
 
     /// `h` on the row under the cursor: the picker, for the file — or why
@@ -701,6 +788,24 @@ impl Page {
         let mut said: Vec<(String, tokens::Color)> = Vec::new();
         let secondary = tokens::color::TEXT_SECONDARY;
         match row {
+            Row::System => {
+                // THE UPDATE THAT FAILED left the machine as it was; the
+                // hardware that waits did not hold the update back.
+                let about = match &r.system {
+                    Some(system) if !system.failed => key::DISTRO_PARTS_ABOUT_SYSTEM_WAITS,
+                    _ => key::DISTRO_PARTS_ABOUT_SYSTEM,
+                };
+                said.push((texts.t(about), secondary));
+                if let Some(system) = &r.system {
+                    if system.to_come().next().is_none() {
+                        said.push((
+                            texts.t(key::DISTRO_PARTS_ABOUT_SYSTEM_ALL_HERE),
+                            tokens::color::TEXT_PRIMARY,
+                        ));
+                    }
+                    said.extend(missing_said(&system.missing, texts));
+                }
+            }
             Row::Part(i) => {
                 said.push((texts.t(key::DISTRO_PARTS_ABOUT_PART), secondary));
                 if let Some(p) = r.parts.get(i) {
@@ -716,28 +821,7 @@ impl Page {
                     {
                         said.push((why_said(*why, detail, texts), tokens::color::STATE_WARNING));
                     }
-                    for m in &p.missing {
-                        let hosts = m.hosts.join(", ");
-                        // ONE FILE, with an address, is handed in; what has
-                        // none (an npm cache, assembled from hundreds) comes
-                        // on a stick.
-                        let k = if m.by_hand {
-                            key::DISTRO_PARTS_ABOUT_MISSING_BY_HAND
-                        } else {
-                            key::DISTRO_PARTS_ABOUT_MISSING_STICK
-                        };
-                        said.push((
-                            texts.t_with(
-                                k,
-                                &[
-                                    ("name", m.name.as_str()),
-                                    ("hosts", hosts.as_str()),
-                                    ("keys", HAND_KEY),
-                                ],
-                            ),
-                            tokens::color::TEXT_PRIMARY,
-                        ));
-                    }
+                    said.extend(missing_said(&p.missing, texts));
                 }
             }
             Row::Import => said.push((texts.t(key::DISTRO_PARTS_ABOUT_IMPORT), secondary)),
@@ -839,6 +923,37 @@ impl Page {
 /// The key that hands in a file, as the page teaches it.
 pub const HAND_KEY: &str = "h";
 
+/// Each download of `missing`, in the page's words, with the ways it can
+/// come in — or that it is here now.
+fn missing_said(missing: &[Missing], texts: &ronoctua_i18n::Texts) -> Vec<(String, tokens::Color)> {
+    missing
+        .iter()
+        .map(|m| {
+            let hosts = m.hosts.join(", ");
+            // ONE FILE, with an address, is handed in; what has none (an npm
+            // cache, assembled from hundreds) comes on a stick.
+            let k = if m.here {
+                key::DISTRO_PARTS_ABOUT_MISSING_HERE
+            } else if m.by_hand {
+                key::DISTRO_PARTS_ABOUT_MISSING_BY_HAND
+            } else {
+                key::DISTRO_PARTS_ABOUT_MISSING_STICK
+            };
+            (
+                texts.t_with(
+                    k,
+                    &[
+                        ("name", m.name.as_str()),
+                        ("hosts", hosts.as_str()),
+                        ("keys", HAND_KEY),
+                    ],
+                ),
+                tokens::color::TEXT_PRIMARY,
+            )
+        })
+        .collect()
+}
+
 /// A row's label and value, and the colour of a state it says (a part that
 /// needs the person), when it says one.
 fn label_and_value(
@@ -848,6 +963,26 @@ fn label_and_value(
     texts: &ronoctua_i18n::Texts,
 ) -> (String, String, Option<tokens::Color>) {
     match row {
+        Row::System => {
+            let Some(system) = &r.system else {
+                return (String::new(), String::new(), None);
+            };
+            let count = system.to_come().count();
+            let n = ronoctua_i18n::Arg::Number(i64::try_from(count).unwrap_or(i64::MAX));
+            let warning = Some(tokens::color::STATE_WARNING);
+            let (value, tint) = match (count, system.failed) {
+                (0, _) => (texts.t(key::DISTRO_PARTS_SYSTEM_ALL_HERE), None),
+                (_, true) => (
+                    texts.t_args(key::DISTRO_PARTS_SYSTEM_FAILED, &[("count", n)]),
+                    warning,
+                ),
+                (_, false) => (
+                    texts.t_args(key::DISTRO_PARTS_SYSTEM_WAITS, &[("count", n)]),
+                    None,
+                ),
+            };
+            (texts.t(key::DISTRO_PARTS_ROW_SYSTEM), value, tint)
+        }
         Row::Part(i) => {
             let Some(p) = r.parts.get(i) else {
                 return (String::new(), String::new(), None);
@@ -1091,6 +1226,9 @@ pub enum Came {
     NotCopied,
     /// The download handed in was taken.
     Taken(String),
+    /// The system's download handed in was taken: the next update builds
+    /// with it.
+    TakenForTheSystem(String),
     /// The download handed in was refused: other bytes.
     Refused(String),
     /// What root said of a stick gesture.
@@ -1169,12 +1307,28 @@ fn hand_in(id: &str, download: &str, from: &Path, places: &Places) -> Came {
         let _ = std::fs::remove_file(&target);
         return Came::NotStarted;
     }
-    let still_missing = std::fs::read(places.records.join(format!("{id}.json")))
-        .ok()
-        .and_then(|b| ronoctua_person::parse::<Record>(&b).ok())
-        .is_some_and(|r| r.missing.iter().any(|d| d.name == download));
+    // THE SYSTEM'S RECORD is the machine's, rewritten only by the next
+    // update: what root took is in the store.
+    let still_missing = if id == names::SYSTEM {
+        std::fs::read(&places.state)
+            .ok()
+            .and_then(|b| ronoctua_person::parse::<ronoctua_person::state::MachineState>(&b).ok())
+            .and_then(|s| s.last_apply)
+            .is_none_or(|a| {
+                a.missing
+                    .iter()
+                    .any(|d| d.name == download && !Path::new(&d.out).exists())
+            })
+    } else {
+        std::fs::read(places.records.join(format!("{id}.json")))
+            .ok()
+            .and_then(|b| ronoctua_person::parse::<Record>(&b).ok())
+            .is_some_and(|r| r.missing.iter().any(|d| d.name == download))
+    };
     if still_missing {
         Came::Refused(download.to_owned())
+    } else if id == names::SYSTEM {
+        Came::TakenForTheSystem(download.to_owned())
     } else {
         Came::Taken(download.to_owned())
     }
@@ -1213,6 +1367,10 @@ pub fn said_of(came: &Came, texts: &ronoctua_i18n::Texts) -> String {
         Came::NoFile => texts.t(key::DISTRO_PARTS_SAID_NO_FILE),
         Came::NotCopied => texts.t(key::DISTRO_PARTS_SAID_NOT_COPIED),
         Came::Taken(name) => texts.t_with(key::DISTRO_PARTS_SAID_TAKEN, &[("name", name.as_str())]),
+        Came::TakenForTheSystem(name) => texts.t_with(
+            key::DISTRO_PARTS_SAID_TAKEN_FOR_THE_SYSTEM,
+            &[("name", name.as_str())],
+        ),
         Came::Refused(name) => {
             texts.t_with(key::DISTRO_PARTS_SAID_REFUSED, &[("name", name.as_str())])
         }
@@ -1234,9 +1392,9 @@ pub fn said_of(came: &Came, texts: &ronoctua_i18n::Texts) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_parts::frontier::{Download, Mode};
     use ronoctua_parts::record::{Failure, Target};
     use ronoctua_person::Stamp;
+    use ronoctua_person::frontier::{Download, Mode};
 
     const OUT: &str = "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-x-1";
 
@@ -1296,6 +1454,79 @@ mod tests {
             &names,
             None,
         )
+    }
+
+    /// The readings with the system missing two downloads — one file, and
+    /// a tree no address gives — after a build that failed.
+    fn with_the_system(here: &[&str]) -> Readings {
+        let mut r = readings();
+        let last = ronoctua_person::state::LastApply {
+            at: Stamp::from_unix_s(2_000),
+            result: ronoctua_person::state::ApplyResult::BuildFailed,
+            missing: vec![
+                download(
+                    "crate-x.tar.gz",
+                    &["https://static.crates.io/x"],
+                    Mode::Flat,
+                ),
+                download("pot-npm-deps", &[], Mode::Recursive),
+            ],
+        };
+        r.system = System::of(Some(&last), |out| here.contains(&out));
+        r
+    }
+
+    /// FAILS IF: the system's row is not the first when its last update
+    /// missed a download, is there when it missed none, or a download the
+    /// store holds now is still counted as one to bring.
+    #[test]
+    fn the_system_comes_first_while_it_misses_a_download() {
+        let r = with_the_system(&[]);
+        assert_eq!(rows_of(&r)[0], Row::System);
+        assert_eq!(rows_of(&r)[1], Row::Part(0));
+        let system = r.system.as_ref().unwrap();
+        assert!(system.failed);
+        assert_eq!(system.to_come().count(), 2);
+        let crate_out = format!("{OUT}-crate-x.tar.gz");
+        let some_here = with_the_system(&[crate_out.as_str()]);
+        assert_eq!(some_here.system.as_ref().unwrap().to_come().count(), 1);
+        let nothing = ronoctua_person::state::LastApply {
+            at: Stamp::from_unix_s(2_000),
+            result: ronoctua_person::state::ApplyResult::Switched,
+            missing: Vec::new(),
+        };
+        assert_eq!(System::of(Some(&nothing), |_| false), None);
+        assert_eq!(System::of(None, |_| false), None);
+    }
+
+    /// FAILS IF: `RET` on the system does not update again, or `h` on it
+    /// asks a file for a download that is no file, one already here — or
+    /// for none, when everything came.
+    #[test]
+    fn the_system_updates_again_and_takes_a_file_for_what_it_misses() {
+        let r = with_the_system(&[]);
+        let mut p = Page::default();
+        assert_eq!(p.press(Press::Enter, &r), Errand::Update);
+        assert_eq!(
+            p.press(Press::HandIn, &r),
+            Errand::Pick(Picking::HandIn {
+                id: names::SYSTEM.into(),
+                download: "crate-x.tar.gz".into()
+            })
+        );
+        let crate_out = format!("{OUT}-crate-x.tar.gz");
+        let file_here = with_the_system(&[crate_out.as_str()]);
+        assert_eq!(
+            p.press(Press::HandIn, &file_here),
+            Errand::Say(key::DISTRO_PARTS_SAID_NOT_ONE_FILE)
+        );
+        let npm_out = format!("{OUT}-pot-npm-deps");
+        let all_here = with_the_system(&[crate_out.as_str(), npm_out.as_str()]);
+        assert_eq!(
+            p.press(Press::HandIn, &all_here),
+            Errand::Say(key::DISTRO_PARTS_SAID_NOTHING_MISSING)
+        );
+        assert_eq!(p.press(Press::Enter, &all_here), Errand::Update);
     }
 
     /// FAILS IF: a part the system no longer wants is a row, a part loses

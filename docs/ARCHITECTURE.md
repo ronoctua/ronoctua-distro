@@ -12479,6 +12479,34 @@ anterior, que o arquivo errado é recusado e o certo entra, que o pendrive traz 
 uma pasta fora de mídia removível e grava os desta máquina, e que uma interface nova é alcançada pelo
 caminho novo.
 
+**A base se recupera do mesmo jeito.** O sistema não é uma parte: ele é um derivado só, construído
+inteiro ou não, e uma atualização cujo build falha deixa a máquina como estava. O que mudou é que
+essa falha agora diz o que faltou e tem as mesmas saídas. O `ronoctua-machine apply`:
+
+1. quando o build do sistema falha, pergunta ao plano do Nix o que ainda falta (`dry::missing`, o
+   mesmo leitor do realizador das partes — o dry run do `.drv` do sistema, que o `build::system` já
+   tinha, e o `nix derivation show` só do que ele construiria) e grava cada download no registro da
+   máquina (`state.json`, `last-apply.missing`, o tipo `Download` que agora mora em
+   `ronoctua_person::frontier`, porque os dois registros o carregam) e no journal;
+2. antes de desistir, pede esses downloads aos espelhos da pessoa (`ronoctua_machine::mirror`, o
+   mesmo código que o realizador chama) e constrói de novo uma vez se algum chegou;
+3. quando é o hardware que espera a primeira rede que não chega, a máquina é construída sem ele de
+   novo, troca de sistema, e o registro guarda o que esse hardware ainda pede;
+4. depois de um build que deu certo, enraíza os downloads de que o sistema foi construído
+   (`kept-downloads`, ao lado das unidades e das fontes): todo caminho do fecho de build que o store
+   tem e cujo conteúdo um hash fixa (`nix path-info`, formato 2). Uma atualização que muda um crate
+   não baixa de novo os outros seiscentos, e o pendrive os leva.
+
+A página das partes mostra o sistema como a primeira linha enquanto o registro nomeia algum
+download: o que falta, os meios de cada um, e o que já chegou ao store desde então (a próxima
+atualização constrói com ele). `RET` ali é a atualização inteira de novo, como o `u` dos passos; `h`
+entrega um arquivo pela pasta `handin/system/` (nenhuma parte pode se chamar `system`), que o
+`accept` aceita conferindo o registro da máquina, sem iniciar nada; o `import` traz também os
+downloads que faltam ao sistema, e o `export` grava também os que ele guarda. O registro só é
+reescrito pela atualização seguinte, então a página pergunta ao store, e não ao registro, se um
+download já chegou. O `apply-names-what-failed` prova as quatro coisas acima contra o `apply` de
+verdade, com o Nix de mentira.
+
 ## 8. Desempenho, grafo e riscos
 
 ### Grafo de crates

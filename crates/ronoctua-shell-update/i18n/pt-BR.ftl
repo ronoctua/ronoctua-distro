@@ -21,7 +21,7 @@ group-update = atualização
 machine-refused-not-root = Só root muda a máquina: nada foi feito.
 machine-refused-busy = Outra mudança nesta máquina está em andamento: tente de novo quando ela acabar.
 machine-refused-nothing-to-migrate = Esta máquina já tem o próprio flake: não há o que migrar.
-machine-refused-build-failed = O sistema novo não foi construído. Nada mudou: a máquina roda o que rodava, e a pasta dela volta a dizer isso.
+machine-refused-build-failed = O sistema novo não foi construído. Nada mudou: a máquina roda o que rodava, e a pasta dela volta a dizer isso. Um download que ele não conseguiu baixar aparece na página das partes, com os jeitos de trazê-lo.
 machine-refused-switch-failed = A troca para o sistema novo falhou. A próxima partida o tenta uma vez, e volta ao último sistema bom se ele não subir.
 machine-refused-did-not-boot = Este é o sistema que não subiu quando foi tentado, ou que foi desfeito. A máquina fica no que roda até chegar uma revisão mais nova da distro.
 machine-refused-last-good-would-fall-out = Mais um sistema tiraria o último bom do menu de boot. Reinicie antes, para o sistema em teste ser confirmado.
@@ -187,13 +187,23 @@ distro-follow-steps = os passos
 about-distro-follow-steps = De volta aos passos da atualização.
 distro-parts-open = partes
 cmd-distro-parts-open = As partes da máquina: o que chega depois da instalação, cada uma por conta própria, e os outros jeitos de trazer um download que continua falhando
-cmd-distro-parts-hand-in = Entrega um arquivo que você baixou em outro lugar, para a parte sob o cursor: ele só é aceito se for exatamente aquele download
-cmd-distro-parts-import = Traz de um pendrive os downloads que faltam às partes
-cmd-distro-parts-export = Grava num pendrive os downloads que esta máquina guarda para as partes
+cmd-distro-parts-hand-in = Entrega um arquivo que você baixou em outro lugar, para a parte ou o sistema sob o cursor: ele só é aceito se for exatamente aquele download
+cmd-distro-parts-import = Traz de um pendrive os downloads que faltam às partes e ao sistema
+cmd-distro-parts-export = Grava num pendrive os downloads que esta máquina guarda para as partes e para o sistema
 distro-parts-heading = O que chega depois da instalação
 distro-parts-none = Esta máquina não quer nenhuma parte: tudo o que ela roda veio com a instalação.
 distro-parts-row-import = trazer de um pendrive
 distro-parts-row-export = gravar num pendrive
+distro-parts-row-system = o sistema
+distro-parts-system-failed = { $count ->
+        [one] a última atualização não construiu: falta um download
+       *[other] a última atualização não construiu: faltam { $count } downloads
+    }
+distro-parts-system-waits = { $count ->
+        [one] ao hardware que espera uma rede falta um download
+       *[other] ao hardware que espera uma rede faltam { $count } downloads
+    }
+distro-parts-system-all-here = tudo o que faltava está aqui: atualize de novo
 distro-parts-phase-here = aqui
 distro-parts-phase-arriving = a caminho
 distro-parts-phase-retrying = { $tries ->
@@ -207,12 +217,16 @@ distro-parts-phase-needs-you = precisa de você: { $tries } tentativas falharam;
 distro-parts-about-part = Uma parte chega depois da instalação, por conta própria: uma que não chega não segura nenhuma outra, e a máquina funciona sem ela. Ela é tentada de novo sozinha, cada vez mais espaçado, e escolhê-la a tenta agora.
 distro-parts-about-missing-by-hand = Falta { $name }, de { $hosts }: baixe em outro lugar e entregue com { $keys }, traga num pendrive de uma máquina que o tenha, ou indique um espelho que o guarde.
 distro-parts-about-missing-stick = Falta { $name }, que não é um arquivo só: ele vem num pendrive de uma máquina que o tenha.
+distro-parts-about-missing-here = { $name } já está aqui.
+distro-parts-about-system = O que a última atualização do sistema não conseguiu baixar. A máquina roda como antes, e toda atualização tenta de novo; escolher atualiza agora.
+distro-parts-about-system-waits = O que ainda falta ao hardware que espera uma rede: a máquina foi atualizada sem ele, e toda atualização tenta de novo; escolher atualiza agora.
+distro-parts-about-system-all-here = Tudo o que faltava está aqui: a próxima atualização constrói com isso.
 distro-parts-about-why-build-failed = A última tentativa falhou: { $detail }
 distro-parts-about-why-output-differs = A última tentativa construiu algo diferente do que este sistema quer; a próxima atualização traz o certo.
 distro-parts-about-why-profile-failed = A última tentativa a construiu, e ela não pôde ser posta no lugar.
 distro-parts-about-why-hand-in-refused = O arquivo entregue foi recusado: { $detail }
-distro-parts-about-import = Traz, de um pendrive que outra máquina sua preencheu, os downloads que faltam às partes. Só downloads entram, cada um conferido pelo conteúdo — nunca um programa construído em outro lugar. Escolher pergunta a pasta do pendrive.
-distro-parts-about-export = Grava num pendrive os downloads que esta máquina guarda para as partes, para outra máquina trazer. Escolher pergunta a pasta do pendrive.
+distro-parts-about-import = Traz, de um pendrive que outra máquina sua preencheu, os downloads que faltam às partes e ao sistema. Só downloads entram, cada um conferido pelo conteúdo — nunca um programa construído em outro lugar. Escolher pergunta a pasta do pendrive.
+distro-parts-about-export = Grava num pendrive os downloads que esta máquina guarda para as partes e para o sistema, para outra máquina trazer. Escolher pergunta a pasta do pendrive.
 distro-parts-stick-last-import = { $count ->
         [one] Da última vez, um download foi trazido, { $when }.
        *[other] Da última vez, { $count } downloads foram trazidos, { $when }.
@@ -231,12 +245,13 @@ distro-parts-refused-unwritable = os downloads não puderam ser gravados ali.
 distro-parts-said-retrying = { $name } está sendo tentado agora.
 distro-parts-said-not-started = A máquina não o iniciou.
 distro-parts-said-already-here = Já está aqui.
-distro-parts-said-not-a-part = Ponha o cursor numa parte para entregar um arquivo para ela.
+distro-parts-said-not-a-part = Ponha o cursor numa parte, ou no sistema, para entregar um arquivo para ela.
 distro-parts-said-nothing-missing = Não falta nenhum download agora: escolha-a para tentar de novo.
 distro-parts-said-not-one-file = O que falta não é um arquivo só: traga num pendrive.
 distro-parts-said-no-file = Não há arquivo ali.
 distro-parts-said-not-copied = O arquivo não pôde ser entregue.
 distro-parts-said-taken = { $name } foi aceito, e a parte está sendo construída.
+distro-parts-said-taken-for-the-system = { $name } foi aceito: a próxima atualização constrói com ele.
 distro-parts-said-refused = { $name } foi recusado: não é aquele download.
 distro-parts-said-not-named = A pasta do pendrive não pôde ser indicada à máquina.
 distro-parts-said-imported = { $count ->

@@ -849,6 +849,7 @@ mod tests {
             last_apply: Some(LastApply {
                 at: Stamp::parse("2026-10-05T12:00:00Z").unwrap(),
                 result,
+                missing: Vec::new(),
             }),
             ..MachineState::default()
         };

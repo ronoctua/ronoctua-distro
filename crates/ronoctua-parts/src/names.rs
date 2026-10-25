@@ -38,6 +38,12 @@ pub const RUN: &str = "/run/ronoctua-parts";
 /// swapped for a link.
 pub const HANDIN: &str = "/run/ronoctua-parts/handin";
 
+/// The folder under [`HANDIN`] of the SYSTEM's downloads, beside one per
+/// part: what the machine's last apply could not fetch, as its record says
+/// (`ronoctua-machine`'s `state.json`, `last-apply.missing`). No part is
+/// named so ([`crate::id::is_id`]).
+pub const SYSTEM: &str = "system";
+
 /// Where root copies a handed file before Nix reads it: root's, `0700`.
 pub const ACCEPTING: &str = "/run/ronoctua-parts/accepting";
 

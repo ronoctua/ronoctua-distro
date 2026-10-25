@@ -1,23 +1,30 @@
-//! The downloads a part still needs, and the ways in for each.
+//! The downloads a build still needs — a part's or the system's — and the
+//! ways in for each.
 //!
-//! After a try fails, the realizer asks Nix's own plan (`nix build
-//! --dry-run`, read by `ronoctua_machine::dry`) what building the part would
-//! still build, and keeps the FIXED-OUTPUT derivations of that list: the
-//! downloads from their origins. Nothing here reads a log — a log says what
-//! one tool printed, and the plan says what is missing.
+//! After a build fails, its owner (root's realizer of a part,
+//! `ronoctua-machine apply` of the system) asks Nix's own plan (`nix build
+//! --dry-run`, read by `ronoctua_machine::dry`) what building it would still
+//! build, and keeps the FIXED-OUTPUT derivations of that list: the downloads
+//! from their origins. Nothing here reads a log — a log says what one tool
+//! printed, and the plan says what is missing.
 //!
 //! A download is pinned by its hash, so it can come in any way that gives
 //! the same bytes ([`Means`]): the person's binary cache or the public one
-//! (Nix's own substitution, tried first by every build), a mirror (a flat
-//! file only: `NIX_HASHED_MIRRORS`), a file the person hands in (anything
+//! (Nix's own substitution, tried first by every build), a mirror the
+//! person named (a flat file only, asked by its hash: `ronoctua_machine::
+//! mirror`), a file the person hands in (anything
 //! with an address, which is a file or an archive), or a stick from another
 //! machine (any download: its path is its content).
+//!
+//! It lives here, beside the machine's record, because both records carry
+//! it: a part's (`ronoctua_parts::record`) and the machine's last apply
+//! ([`crate::state::LastApply`]).
 
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-/// One download a part still needs.
+/// One download a build still needs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Download {
@@ -151,11 +158,7 @@ pub fn downloads(
     };
     let mut found = Vec::new();
     for (key, drv) in table {
-        let path = if key.starts_with("/nix/store/") {
-            key.clone()
-        } else {
-            format!("/nix/store/{key}")
-        };
+        let path = store_path(key);
         if !will.contains(&path) {
             continue;
         }
@@ -191,6 +194,31 @@ pub fn downloads(
     }
     found.sort_by(|a, b| a.name.cmp(&b.name));
     found
+}
+
+/// The derivations of `shown` (as [`downloads`] reads it) whose output is
+/// fixed — the downloads among them —, as store paths.
+#[must_use]
+pub fn fixed(shown: &serde_json::Value) -> Vec<String> {
+    let table = shown.get("derivations").unwrap_or(shown);
+    let Some(table) = table.as_object() else {
+        return Vec::new();
+    };
+    table
+        .iter()
+        .filter(|(_, drv)| drv.pointer("/outputs/out").and_then(fixed_hash).is_some())
+        .map(|(key, _)| store_path(key))
+        .collect()
+}
+
+/// `key` of `nix derivation show` as a store path: the newer shape names a
+/// derivation by its base name.
+fn store_path(key: &str) -> String {
+    if key.starts_with("/nix/store/") {
+        key.to_owned()
+    } else {
+        format!("/nix/store/{key}")
+    }
 }
 
 /// The pinned hash of a fixed output, in SRI form, and what it is of.
@@ -373,6 +401,13 @@ mod tests {
             .find(|d| d.name == "pot-npm-deps")
             .expect("the npm cache");
         assert_eq!(npm.means(), [Means::Import]);
+        let mut fixed = fixed(&shown);
+        fixed.sort();
+        assert_eq!(
+            fixed,
+            [NPM, FOD],
+            "only the downloads are asked their output"
+        );
     }
 
     /// FAILS IF: the older shape — a hex hash and `r:` for a tree — is read

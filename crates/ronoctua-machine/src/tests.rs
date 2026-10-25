@@ -152,6 +152,16 @@ case "$1" in
   eval)
     if [ -e "$root/phases.json" ]; then cat "$root/phases.json"; exit 0; fi
     echo "error: attribute 'phases' missing" >&2; exit 1 ;;
+  derivation)
+    if [ -e "$root/shown.json" ]; then cat "$root/shown.json"; exit 0; fi
+    echo "error: no such derivation" >&2; exit 1 ;;
+  store)
+    if [ -e "$root/mirror-has" ]; then rm -f "$root/units-fail"; cat "$root/mirror-has"; exit 0; fi
+    echo "error: unable to download" >&2; exit 1 ;;
+  path-info)
+    cat > "$root/path-info-asked"
+    if [ -e "$root/path-info.json" ]; then cat "$root/path-info.json"; exit 0; fi
+    echo "error: no path info" >&2; exit 1 ;;
   flake)
     last=""; for a in "$@"; do last="$a"; done
     d="${{last#path:}}"
@@ -162,6 +172,22 @@ case "$1" in
         if [ -e "$root/sources.json" ]; then cat "$root/sources.json"; exit 0; fi
         echo "error: cannot read the lock" >&2; exit 1 ;;
     esac ;;
+esac
+"#
+            ),
+        );
+        // `nix-store --query --outputs DRV`: the output `outputs/<name>`
+        // names, the name being the derivation's file name.
+        script(
+            &s.path("bin/nix-store"),
+            &format!(
+                r#"#!/bin/sh
+root='{root}'
+echo "nix-store $*" >> "$root/calls"
+for a in "$@"; do last="$a"; done
+case "$2" in
+  --requisites) cat "$root/requisites" 2>/dev/null || exit 1 ;;
+  *) cat "$root/outputs/${{last##*/}}" 2>/dev/null || exit 1 ;;
 esac
 "#
             ),
@@ -570,6 +596,201 @@ fn a_failed_build_puts_the_running_lock_back() {
     assert_eq!(
         w.state().last_apply.unwrap().result,
         ApplyResult::BuildFailed
+    );
+}
+
+/// What Nix would build for a system whose build needs a crate no cache
+/// has: the download, the unit built from it and the system.
+const PLANNED_WITH_A_DOWNLOAD: &str = "these 3 derivations will be built:\n  /nix/store/aaaa-rust-lib-x-0.1.0.drv\n  /nix/store/dddddddddddddddddddddddddddddddd-crate-x-0.1.0.tar.gz.drv\n  /nix/store/tttt-nixos-system-noctua.drv\n";
+
+/// `nix derivation show` of that plan: the download pinned by its hash, and
+/// two derivations that are none.
+const SHOWN_WITH_A_DOWNLOAD: &str = r#"{"version":4,"derivations":{
+"dddddddddddddddddddddddddddddddd-crate-x-0.1.0.tar.gz.drv":{"name":"crate-x-0.1.0.tar.gz",
+  "outputs":{"out":{"hash":"sha256-AAECAw==","method":"flat"}},
+  "env":{"urls":"https://static.crates.io/crates/x/x-0.1.0.crate"}},
+"aaaa-rust-lib-x-0.1.0.drv":{"name":"rust-lib-x-0.1.0","outputs":{"out":{}},"env":{}},
+"tttt-nixos-system-noctua.drv":{"name":"nixos-system-noctua","outputs":{"out":{}},"env":{}}}}"#;
+
+/// The store path the crate becomes.
+const CRATE_OUT: &str = "/nix/store/00000000000000000000000000000000-crate-x-0.1.0.tar.gz";
+
+/// `w` planned to need the crate: its phases, the plan, what Nix shows of
+/// it and the crate's output.
+fn needs_a_download(w: &World) {
+    std::fs::write(w.s.path("phases.json"), PHASES).unwrap();
+    std::fs::write(w.s.path("dry-says"), PLANNED_WITH_A_DOWNLOAD).unwrap();
+    std::fs::write(w.s.path("shown.json"), SHOWN_WITH_A_DOWNLOAD).unwrap();
+    std::fs::create_dir_all(w.s.path("outputs")).unwrap();
+    std::fs::write(
+        w.s.path("outputs/dddddddddddddddddddddddddddddddd-crate-x-0.1.0.tar.gz.drv"),
+        format!("{CRATE_OUT}\n"),
+    )
+    .unwrap();
+}
+
+/// FAILS IF: a build that failed for want of a download does not record,
+/// in the machine's `state.json`, which one it was — its name, the hash the
+/// flake pins, where it comes from and the store path only those bytes
+/// reach —, or asks Nix the output of what is no download, or keeps the
+/// list once a build worked (`apply-names-what-failed`).
+#[test]
+fn a_failed_build_names_the_downloads_it_could_not_fetch() {
+    let w = World::new("names-what-failed");
+    needs_a_download(&w);
+    std::fs::write(w.s.path("units-fail"), "").unwrap();
+    assert_eq!(w.m.apply(false).unwrap_err().why, Why::BuildFailed);
+    let last = w.state().last_apply.unwrap();
+    assert_eq!(last.result, ApplyResult::BuildFailed);
+    assert_eq!(
+        last.missing,
+        [ronoctua_person::frontier::Download {
+            drv: "/nix/store/dddddddddddddddddddddddddddddddd-crate-x-0.1.0.tar.gz.drv".to_owned(),
+            out: CRATE_OUT.to_owned(),
+            name: "crate-x-0.1.0.tar.gz".to_owned(),
+            hash: "sha256-AAECAw==".to_owned(),
+            mode: ronoctua_person::frontier::Mode::Flat,
+            urls: vec!["https://static.crates.io/crates/x/x-0.1.0.crate".to_owned()],
+        }]
+    );
+    let asked: Vec<String> = w
+        .read("calls")
+        .lines()
+        .filter(|l| l.starts_with("nix-store "))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            "nix-store --query --outputs /nix/store/dddddddddddddddddddddddddddddddd-crate-x-0.1.0.tar.gz.drv"
+        ],
+        "only the download is asked its output"
+    );
+    // THE NEXT BUILD WORKS: nothing is missing any more, and the file says
+    // nothing of it.
+    std::fs::remove_file(w.s.path("units-fail")).unwrap();
+    let b = w.toplevel("b", "quiet");
+    w.builds(&b);
+    assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
+    assert!(w.state().last_apply.unwrap().missing.is_empty());
+    assert!(
+        !std::fs::read_to_string(w.m.places.state.join(ronoctua_person::names::STATE))
+            .unwrap()
+            .contains("missing"),
+        "an empty list is written as no key"
+    );
+}
+
+/// FAILS IF: a build that failed for want of a download the person's
+/// mirror holds is not built again with it — asked by the hash the flake
+/// pins, at the mirror the person named —, or the record still names it.
+#[test]
+fn a_mirror_brings_what_the_system_could_not_fetch() {
+    let w = World::new("mirror-brings");
+    needs_a_download(&w);
+    std::fs::write(w.s.path("units-fail"), "").unwrap();
+    std::fs::write(
+        w.s.path("mirror-has"),
+        format!(r#"{{"storePath":"{CRATE_OUT}"}}"#),
+    )
+    .unwrap();
+    let person = w.m.places.dir.join(ronoctua_person::names::MACHINE_PERSON);
+    std::fs::create_dir_all(&person).unwrap();
+    let options = ronoctua_person::options::Options {
+        download_mirrors: vec!["https://mirror.example.org".to_owned()],
+        ..ronoctua_person::options::Options::default()
+    };
+    std::fs::write(
+        person.join(ronoctua_person::names::OPTIONS),
+        ronoctua_person::to_json(&options),
+    )
+    .unwrap();
+    let b = w.toplevel("b", "quiet");
+    w.builds(&b);
+    assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
+    let asked: Vec<String> = w
+        .read("calls")
+        .lines()
+        .filter(|l| l.starts_with("nix store prefetch-file"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(
+        asked[0].contains("--expected-hash sha256-AAECAw==")
+            && asked[0].ends_with("https://mirror.example.org/sha256/00010203"),
+        "{}",
+        asked[0]
+    );
+    assert!(w.state().last_apply.unwrap().missing.is_empty());
+}
+
+/// FAILS IF: a build that worked does not keep the downloads its system
+/// was built from — and only those the store holds that a hash pins —, or
+/// asks Nix about what the system is built from through anything but the
+/// system's own `.drv`.
+#[test]
+fn a_build_that_worked_keeps_its_downloads() {
+    let w = World::new("keeps-downloads");
+    needs_a_download(&w);
+    std::fs::write(
+        w.s.path("requisites"),
+        format!(
+            "/nix/store/tttt-nixos-system-noctua.drv\n{CRATE_OUT}\n/nix/store/bbbb-source\n/nix/store/qqqq-ronoctua-shell-0.1.0\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        w.s.path("path-info.json"),
+        r#"{"info":{"00000000000000000000000000000000-crate-x-0.1.0.tar.gz":{"ca":{"method":"flat","hash":"sha256-AAECAw=="}},
+"bbbb-source":{"ca":{"method":"nar","hash":"sha256-B"}},"qqqq-ronoctua-shell-0.1.0":{"ca":null}},"storeDir":"/nix/store","version":2}"#,
+    )
+    .unwrap();
+    let b = w.toplevel("b", "quiet");
+    w.builds(&b);
+    assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
+    assert!(
+        w.read("calls").contains(
+            "nix-store --query --requisites --include-outputs /nix/store/tttt-nixos-system-noctua.drv"
+        ),
+        "{}",
+        w.read("calls")
+    );
+    assert_eq!(
+        w.read("path-info-asked"),
+        format!("{CRATE_OUT}\n/nix/store/bbbb-source\n/nix/store/qqqq-ronoctua-shell-0.1.0\n"),
+        "a .drv is never asked"
+    );
+    assert_eq!(
+        w.read(&format!("kept-{}", crate::build::DOWNLOADS_SET)),
+        format!("{CRATE_OUT}\n/nix/store/bbbb-source\n")
+    );
+}
+
+/// FAILS IF: the hardware that waits for a network, built without again,
+/// leaves no word of what it was missing: the machine switches, and its
+/// record names the downloads the hardware still needs.
+#[test]
+fn the_hardware_that_still_waits_says_what_it_needs() {
+    let w = World::new("hardware-names");
+    needs_a_download(&w);
+    let marker =
+        w.m.places
+            .dir
+            .join(ronoctua_person::names::DEFERRED_HARDWARE);
+    std::fs::write(&marker, "{\n  \"format\": 1\n}\n").unwrap();
+    std::fs::write(w.s.path("fails-without-marker"), "").unwrap();
+    let b = w.toplevel("b", "quiet");
+    w.builds(&b);
+    assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
+    assert!(marker.exists(), "the marker is back");
+    let last = w.state().last_apply.unwrap();
+    assert_eq!(last.result, ApplyResult::Switched);
+    assert_eq!(
+        last.missing
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect::<Vec<_>>(),
+        ["crate-x-0.1.0.tar.gz"]
     );
 }
 

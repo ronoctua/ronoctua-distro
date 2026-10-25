@@ -42,14 +42,16 @@
 //! system that is not the last one, nor build again the system that did not
 //! boot. That one is refused (`did-not-boot`) until the distro moves.
 
+use ronoctua_person::frontier::Download;
 use ronoctua_person::state::{ApplyResult, LastApply, MachineState, TrialOutcome};
 
 use crate::argv::{self, Switch};
+use crate::build::{Built, Unbuilt};
 use crate::loader::Loader;
 use crate::system::{self, needed};
 use crate::{
     APPLIED_LOCK, Applied, DISTRO_INPUT, Machine, Refusal, Why, bless, boot, boots, build, disk,
-    dry, guard, run, say, trial,
+    dry, guard, mirror, run, say, trial,
 };
 
 /// The attribute the machine flake builds, or a refusal.
@@ -119,11 +121,17 @@ impl Locks {
     }
 }
 
-/// Records how the apply ended.
-fn record(m: &Machine, state: &mut MachineState, result: ApplyResult) -> Result<(), Refusal> {
+/// Records how the apply ended, and what its build could not fetch.
+fn record(
+    m: &Machine,
+    state: &mut MachineState,
+    result: ApplyResult,
+    missing: Vec<Download>,
+) -> Result<(), Refusal> {
     state.last_apply = Some(LastApply {
         at: disk::now(),
         result,
+        missing,
     });
     disk::write_state(&m.places, state)
 }
@@ -137,8 +145,17 @@ fn refuse(
     why: Why,
 ) -> Refusal {
     locks.put_back();
-    let _ = record(m, state, result);
+    let _ = record(m, state, result, Vec::new());
     Refusal::of(why)
+}
+
+/// Ends an apply whose build failed: the lock put back, and the refusal
+/// recorded with the downloads it was missing — what the update's page
+/// offers to hand in or bring on a stick.
+fn unbuilt(m: &Machine, locks: &Locks, state: &mut MachineState, failed: Unbuilt) -> Refusal {
+    locks.put_back();
+    let _ = record(m, state, ApplyResult::BuildFailed, failed.missing);
+    failed.refusal
 }
 
 /// `apply`.
@@ -208,14 +225,17 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
     if deferred.is_some() {
         disk::remove(&marker).map_err(|e| disk::failed(&marker, &e))?;
     }
-    let made = match build::system(m, &nix, &p.dir, &attr, &out) {
+    // WHAT DID NOT COME is recorded with the result: the system's downloads
+    // when its build failed, or the hardware's when the machine was built
+    // without it again.
+    let (made, missing) = match built(m, &nix, &attr, &out) {
         Ok(made) => {
             if deferred.is_some() {
                 say(6, "the hardware that waited for a network arrived");
             }
-            made
+            (made, Vec::new())
         }
-        Err(_) if deferred.is_some() => {
+        Err(waits) if deferred.is_some() => {
             let bytes = deferred.unwrap_or_default();
             disk::write_atomically(&marker, &bytes, 0o644)
                 .map_err(|e| disk::failed(&marker, &e))?;
@@ -225,28 +245,12 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
                  redistribute is downloaded from its maker): built without it again",
             );
             disk::remove(&out).map_err(|e| disk::failed(&out, &e))?;
-            match build::system(m, &nix, &p.dir, &attr, &out) {
-                Ok(made) => made,
-                Err(refused) => {
-                    return Err(refuse(
-                        m,
-                        &locks,
-                        &mut state,
-                        ApplyResult::BuildFailed,
-                        refused.why,
-                    ));
-                }
+            match built(m, &nix, &attr, &out) {
+                Ok(made) => (made, waits.missing),
+                Err(failed) => return Err(unbuilt(m, &locks, &mut state, failed)),
             }
         }
-        Err(refused) => {
-            return Err(refuse(
-                m,
-                &locks,
-                &mut state,
-                ApplyResult::BuildFailed,
-                refused.why,
-            ));
-        }
+        Err(failed) => return Err(unbuilt(m, &locks, &mut state, failed)),
     };
     // AND ITS UNITS, KEPT for the next build (the last build's released). A
     // build that worked is kept whatever happens to its switch: it is what
@@ -255,8 +259,12 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
         build::keep(m, kept);
     }
     // AND THE SOURCES IT WAS EVALUATED FROM, kept as its units are: an update
-    // that finds them unchanged fetches none of them again.
+    // that finds them unchanged fetches none of them again — and so are the
+    // downloads it was built from.
     let _ = build::keep_sources(m, &nix);
+    if let Some(drv) = &made.drv {
+        let _ = build::keep_downloads(m, &nix, drv);
+    }
     drop(made);
     let Ok(built) = std::fs::canonicalize(&out) else {
         say(3, &format!("the build left no system at {}", out.display()));
@@ -269,13 +277,49 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
         ));
     };
     let toplevel = s.logical(&built);
-    let outcome = switch_to(m, &nix_env, &loader, limit, &locks, &mut state, &toplevel);
+    let made = Made {
+        toplevel: &toplevel,
+        missing,
+    };
+    let outcome = switch_to(m, &nix_env, &loader, limit, &locks, &mut state, made);
     let _ = disk::remove(&out);
     outcome
 }
 
+/// What a good build made: the system, and what it left missing — the
+/// hardware that waits for a network, when it was built without it again.
+struct Made<'a> {
+    toplevel: &'a str,
+    missing: Vec<Download>,
+}
+
+/// The machine's system built into `out` — and, when the build failed for
+/// want of downloads the person's mirrors hold, built once more with what
+/// they brought ([`mirror`]).
+fn built(
+    m: &Machine,
+    nix: &std::path::Path,
+    attr: &str,
+    out: &std::path::Path,
+) -> Result<Built, Unbuilt> {
+    let failed = match build::system(m, nix, &m.places.dir, attr, out) {
+        Err(failed) if !failed.missing.is_empty() => failed,
+        other => return other,
+    };
+    let mirrors = mirror::named(&m.places.dir);
+    if mirrors.is_empty() || mirror::fetched(nix, &failed.missing, &mirrors) == 0 {
+        return Err(failed);
+    }
+    say(
+        6,
+        "the person's mirrors brought what the build was missing: it is built again",
+    );
+    disk::remove(out).map_err(|e| disk::failed(out, &e))?;
+    build::system(m, nix, &m.places.dir, attr, out)
+}
+
 /// Everything after a good build: the menu's room, the profile, the switch
-/// and the trial.
+/// and the trial — and, recorded with them, what the build left missing.
 fn switch_to(
     m: &Machine,
     nix_env: &std::path::Path,
@@ -283,8 +327,9 @@ fn switch_to(
     limit: u64,
     locks: &Locks,
     state: &mut MachineState,
-    toplevel: &str,
+    made: Made,
 ) -> Result<Applied, Refusal> {
+    let Made { toplevel, missing } = made;
     let s = &m.system;
     let profile = s.resolve(system::PROFILE);
     let running = s.resolve(system::CURRENT);
@@ -313,7 +358,7 @@ fn switch_to(
     // NOTHING TO SWITCH: the profile and the running system already are it.
     if profile.as_deref() == Some(toplevel) && running.as_deref() == Some(toplevel) {
         locks.adopt(m);
-        record(m, state, ApplyResult::Switched)?;
+        record(m, state, ApplyResult::Switched, missing)?;
         say(6, "the built system is the one running: nothing to switch");
         return Ok(Applied {
             result: ApplyResult::Switched,
@@ -389,7 +434,7 @@ fn switch_to(
             boots::forget(m);
         }
     }
-    record(m, state, result)?;
+    record(m, state, result, missing)?;
     if result == ApplyResult::SwitchFailed {
         say(
             3,

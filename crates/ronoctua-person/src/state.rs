@@ -10,6 +10,9 @@
 //!  "last-apply": {"at": "2026-10-05T12:00:00Z", "result": "switched"}}
 //! ```
 //!
+//! A last apply whose build could not fetch something lists it under
+//! `"missing"` ([`crate::frontier::Download`]); the key is absent otherwise.
+//!
 //! `"no-trial": "no-efi-variables"` joins them only while the system the last
 //! switch made has no boot trial ([`NoTrial`]); the key is absent otherwise.
 
@@ -157,6 +160,13 @@ pub struct LastApply {
     pub at: Stamp,
     /// How.
     pub result: ApplyResult,
+    /// The downloads its build could not fetch ([`crate::frontier`]): the
+    /// system's, when the build failed, or the hardware's that waits for a
+    /// network, when the machine was built without it again. Each is what
+    /// the update's page offers to hand in or bring on a stick. Empty (and
+    /// absent from the file) when nothing was missing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<crate::frontier::Download>,
 }
 
 impl Document for MachineState {
@@ -194,6 +204,19 @@ impl Document for MachineState {
             && !check::token(&h.rev)
         {
             return Err(Refusal::new(Why::Invalid, "/hold/rev", h.rev.as_str()));
+        }
+        // A DOWNLOAD NAMES TWO STORE PATHS that root hands to Nix (`accept`,
+        // `import`): nothing else may stand where they are.
+        for d in self.last_apply.iter().flat_map(|a| &a.missing) {
+            for (at, path) in [("drv", &d.drv), ("out", &d.out)] {
+                if !check::store_path(path) {
+                    return Err(Refusal::new(
+                        Why::Invalid,
+                        format!("/last-apply/missing/{at}"),
+                        path.as_str(),
+                    ));
+                }
+            }
         }
         Ok(())
     }

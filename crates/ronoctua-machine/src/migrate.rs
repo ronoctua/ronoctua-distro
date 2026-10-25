@@ -209,7 +209,7 @@ fn make_next(
     let _ = disk::remove(&out);
     if let Err(refused) = built {
         say(3, "the new machine flake does not build (build-failed)");
-        return Err(Refusal::of(match refused.why {
+        return Err(Refusal::of(match refused.refusal.why {
             Why::Failed => Why::Failed,
             _ => Why::BuildFailed,
         }));

@@ -42,7 +42,6 @@
 
 pub mod argv;
 pub mod exit;
-pub mod frontier;
 pub mod id;
 pub mod names;
 pub mod plan;

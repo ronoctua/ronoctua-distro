@@ -500,7 +500,8 @@ fn parts_errand(e: crate::parts::Errand, open: &mut Open, way: &mut dyn Doorway)
             }
             Reach::Kept(asked) => asked.push(format!("would have named the mirrors {named:?}")),
         },
-        Page::Nothing | Page::Moved | Page::Close => {}
+        // `Update` IS THE VIEW'S: it became the update's own start there.
+        Page::Nothing | Page::Moved | Page::Close | Page::Update => {}
     }
 }
 

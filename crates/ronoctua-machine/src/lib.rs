@@ -63,6 +63,7 @@ pub mod dry;
 mod hold;
 mod loader;
 mod migrate;
+pub mod mirror;
 mod run;
 mod system;
 #[cfg(test)]

@@ -1654,9 +1654,9 @@ por marcos, cada um verde:
 - **O que ficou do M6.** A instalação sem rede está provada (`installer-offline-vm`), o ISO tem
   6,4 GiB e cabe num pendrive de 8 GB, e o ISO completo existe (`.#iso-complete`, nunca publicado).
   Ficou para depois:
-  - **o hardware que espera a primeira rede não aparece em tela nenhuma**: a câmera IPU6 e o Parallels
-    de uma máquina instalada sem rede chegam na primeira `apply` que os constrói, e o que não chegou
-    está só no aviso de build e no journal da atualização, não na vista da atualização;
+  - **o hardware que espera a primeira rede só aparece pelo que lhe falta**: a página das partes diz
+    os downloads que a câmera IPU6 ou o Parallels ainda pedem, mas não nomeia o hardware (o registro
+    guarda os downloads, não o ramo que os quis);
   - **o primeiro boot na página das partes**: a restauração dos pertences aparece só no journal e na
     vista dos pertences, e não como uma etapa em `s u d`;
   - **um hardware que nenhuma sonda cobre** (um convidado VirtualBox ou Hyper-V, um módulo de kernel
@@ -1668,8 +1668,16 @@ por marcos, cada um verde:
     teste convivem o velho e o novo (6,4 GiB cada) até a varredura do fim;
   - **o `iso-builds-only-glue`**, um ensaio contra um store só com o conteúdo do ISO, ficou coberto
     pelo teste de VM, que é lento.
-- **M7 — a base se recupera igual.** O `apply` diz o que falhou e oferece entregar e importar os
-  downloads da base.
+- **O que ficou do M7.** A base se recupera como uma parte (o porquê no `docs/ARCHITECTURE.md`, "A
+  base se recupera do mesmo jeito"). Ficou para depois:
+  - **a página do rodapé com a linha do sistema não foi fotografada**: só a janela (as duas portas
+    desenham as mesmas linhas, `Page::lines`), porque a câmera do rodapé pede o `machine-state/`
+    plantado;
+  - **os downloads enraizados incluem as fontes locais** (os patches do nixpkgs, as fontes filtradas
+    da árvore): o `nix path-info` não distingue um `fetchurl` de um `builtins.path`, e o `export` os
+    leva também — pequenos, e inúteis para outra máquina;
+  - **a `apply` de uma distro sem fases** (anterior a elas) não sabe o `.drv` do sistema: ela não diz
+    o que faltou nem enraíza os downloads.
 - **M8 — as entradas da pessoa viram partes**, e o `verify`/`held.json` delas sai.
 - **M9 — documentação, tamanho e release.**
 

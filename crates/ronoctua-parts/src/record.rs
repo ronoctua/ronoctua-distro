@@ -33,9 +33,9 @@ pub struct Record {
     /// Why the last try did not bring it, when it did not.
     pub last_failure: Option<Failure>,
     /// The downloads the part still needs, from their origins: what the
-    /// last failed try would have fetched ([`crate::frontier`]). Each is a
+    /// last failed try would have fetched ([`ronoctua_person::frontier`]). Each is a
     /// way in for the person — a file handed in, a stick, a mirror.
-    pub missing: Vec<crate::frontier::Download>,
+    pub missing: Vec<ronoctua_person::frontier::Download>,
 }
 
 /// What the plan wants of a part.
@@ -334,7 +334,7 @@ impl Record {
     /// The record with the downloads the part still needs: what the last
     /// try would have fetched, said after it failed.
     #[must_use]
-    pub fn missing(mut self, downloads: Vec<crate::frontier::Download>) -> Self {
+    pub fn missing(mut self, downloads: Vec<ronoctua_person::frontier::Download>) -> Self {
         self.missing = downloads;
         self
     }

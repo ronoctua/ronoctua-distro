@@ -109,7 +109,13 @@ let
 
   # A PART'S ID becomes a file name, a path segment and a unit instance a
   # polkit rule compares as text: `ronoctua_parts::id::is_id`, the same shape.
-  isId = id: builtins.match "[a-z]([a-z0-9]|-[a-z0-9])*" id != null && builtins.stringLength id <= 48;
+  # `system` is no part's: its folder of hand-ins holds what the machine's
+  # own build could not fetch (`ronoctua_parts::names::SYSTEM`).
+  isId =
+    id:
+    builtins.match "[a-z]([a-z0-9]|-[a-z0-9])*" id != null
+    && builtins.stringLength id <= 48
+    && id != "system";
   badIds = lib.filter (id: !isId id) (lib.attrNames cfg);
 
   plain = builtins.unsafeDiscardStringContext;
@@ -231,7 +237,7 @@ in
     assertions = [
       {
         assertion = badIds == [ ];
-        message = "ronoctua.parts: not a part id (lower-case kebab, at most 48): ${lib.concatStringsSep ", " badIds}";
+        message = "ronoctua.parts: not a part id (lower-case kebab, at most 48, never system): ${lib.concatStringsSep ", " badIds}";
       }
     ];
 

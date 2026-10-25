@@ -132,6 +132,80 @@ pub fn dry_run_drvs(drvs: &[String]) -> Vec<String> {
     words
 }
 
+/// `nix derivation show` of derivations already evaluated: what each is —
+/// its name, its environment and, for a download, the hash its output is
+/// pinned to ([`ronoctua_person::frontier::downloads`]).
+#[must_use]
+pub fn show(drvs: &[String]) -> Vec<String> {
+    let mut words = vec![
+        "derivation".to_owned(),
+        "show".to_owned(),
+        "--extra-experimental-features".to_owned(),
+        FEATURES.to_owned(),
+    ];
+    words.extend(drvs.iter().cloned());
+    words
+}
+
+/// `nix-store --query --requisites --include-outputs` of a derivation:
+/// everything it is built from, and every output of those the store holds.
+#[must_use]
+pub fn requisites(drv: &str) -> Vec<String> {
+    vec![
+        "--query".to_owned(),
+        "--requisites".to_owned(),
+        "--include-outputs".to_owned(),
+        drv.to_owned(),
+    ]
+}
+
+/// `nix path-info --json` of the paths on standard input, in the format
+/// [`crate::build`] reads (`--json-format 2`): what each is, its content
+/// address among it.
+#[must_use]
+pub fn path_info_of_input() -> Vec<String> {
+    vec![
+        "path-info".to_owned(),
+        "--extra-experimental-features".to_owned(),
+        FEATURES.to_owned(),
+        "--json".to_owned(),
+        "--json-format".to_owned(),
+        "2".to_owned(),
+        "--stdin".to_owned(),
+    ]
+}
+
+/// `nix store prefetch-file` of one download from `url` — a file the person
+/// handed in (`file://`) or a mirror — under its own name and the hash the
+/// flake pins: Nix refuses other bytes, so the path that comes out can only
+/// be the download's. `--unpack` for a tree's hash.
+#[must_use]
+pub fn prefetch(name: &str, hash: &str, unpack: bool, url: &str) -> Vec<String> {
+    let mut words = vec![
+        "store".to_owned(),
+        "prefetch-file".to_owned(),
+        "--extra-experimental-features".to_owned(),
+        FEATURES.to_owned(),
+        "--json".to_owned(),
+        "--name".to_owned(),
+        name.to_owned(),
+        "--expected-hash".to_owned(),
+        hash.to_owned(),
+    ];
+    if unpack {
+        words.push("--unpack".to_owned());
+    }
+    words.push(url.to_owned());
+    words
+}
+
+/// `nix-store --query --outputs` of one derivation: the store path its
+/// output becomes.
+#[must_use]
+pub fn outputs(drv: &str) -> Vec<String> {
+    vec!["--query".to_owned(), "--outputs".to_owned(), drv.to_owned()]
+}
+
 /// `ronoctua-build-units` building, of the plan in `plan`, the units `will`
 /// lists (one `.drv` a line), each its own `nix build` by `nix` — taking the
 /// features every call here takes —, their outputs held under `held`.
@@ -314,6 +388,28 @@ pub fn switch(how: Switch) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: a download is added without the pinned hash — Nix would
+    /// take any bytes under the download's name — or a flat file is unpacked.
+    #[test]
+    fn a_download_is_added_only_by_its_pinned_hash() {
+        let flat = prefetch("x.tar.gz", "sha256-AAAA", false, "https://m.org/x.tar.gz");
+        let at = flat
+            .iter()
+            .position(|a| a == "--expected-hash")
+            .expect("the hash");
+        assert_eq!(flat[at + 1], "sha256-AAAA");
+        assert!(!flat.iter().any(|a| a == "--unpack"));
+        assert_eq!(
+            flat.last().map(String::as_str),
+            Some("https://m.org/x.tar.gz")
+        );
+        assert!(
+            prefetch("t", "sha256-B", true, "file:///x")
+                .iter()
+                .any(|a| a == "--unpack")
+        );
+    }
     use std::path::PathBuf;
 
     const SIZED: Sized = Sized { jobs: 3, cores: 2 };

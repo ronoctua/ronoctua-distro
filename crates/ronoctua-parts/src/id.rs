@@ -4,7 +4,8 @@
 //! polkit rule compares as text, so it is held to the narrowest shape that
 //! is still readable: lower-case kebab, starting with a letter, at most
 //! [`MOST`] characters. A `/`, a `.`, a `@` or an escape that systemd would
-//! rewrite can never reach any of the three.
+//! rewrite can never reach any of the three. And never
+//! [`crate::names::SYSTEM`], whose folder of hand-ins is the machine's.
 
 /// The longest id.
 pub const MOST: usize = 48;
@@ -21,6 +22,7 @@ pub fn is_id(id: &str) -> bool {
         && bytes
             .iter()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+        && id != crate::names::SYSTEM
 }
 
 #[cfg(test)]
@@ -52,6 +54,7 @@ mod tests {
             "a--b",
             "-a",
             "a\\x2db",
+            crate::names::SYSTEM,
             &"a".repeat(MOST + 1),
         ] {
             assert!(!is_id(bad), "{bad}");

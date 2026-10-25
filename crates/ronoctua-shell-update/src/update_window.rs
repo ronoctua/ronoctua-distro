@@ -606,7 +606,7 @@ fn report_stamp() -> Vec<Option<std::time::SystemTime>> {
 /// the room's XDG directories). Absolute places of the machine are what a
 /// room of XDG directories alone could not plant, and the footer's door of
 /// this view drew only the conflicts in a photograph.
-fn record_places() -> module::RecordPlaces {
+pub(crate) fn record_places() -> module::RecordPlaces {
     let mut at = module::RecordPlaces::here();
     if let Some(room) = crate::photo::room() {
         at.machine_dir = room.join(crate::photo::MACHINE_DIR);
@@ -1935,6 +1935,17 @@ impl View {
                 self.parts = None;
                 Errand::Moved
             }
+            // THE SYSTEM UPDATED AGAIN: the page gives way to the steps,
+            // which follow the run — started as `u` starts it, asking first
+            // below the battery floor.
+            Page::Update => {
+                self.parts = None;
+                if self.ask_on_battery() {
+                    Errand::Moved
+                } else {
+                    Errand::Start
+                }
+            }
             Page::Pick(asked) => {
                 let wake = self.wake.0.clone();
                 let Some(p) = self.parts.as_mut() else {
@@ -3191,7 +3202,9 @@ usage: ronoctua-shell photograph --door update-scene --scene <file> [options] [s
                            \"parts\": {\"records\": [{…a part's record…}],
                              \"names\": {\"<id>\": \"<name>\"},
                              \"stick\": {…stick.json…},
-                             \"mirrors\": [\"https://…\"]}}
+                             \"mirrors\": [\"https://…\"],
+                             \"last-apply\": {…state.json's last apply…},
+                             \"here\": [\"<a missing download's output>\"]}}
                         `metered`: the brain holds the run a `u` asks for,
                         for a metered way out; `cache`: the view opens on the
                         binary cache's page, over these readings; `follow`:
@@ -3228,7 +3241,8 @@ Steps — walked in the order they appear:
 
     /// The parts' page, as the scene says it: the records root would have
     /// written, the plan's names, the last stick gesture and the media
-    /// mounted.
+    /// mounted — and the machine's last apply, with the downloads of it the
+    /// store holds now (`here`, their outputs).
     #[derive(Debug, Default, serde::Deserialize)]
     #[serde(default, deny_unknown_fields)]
     struct PartsScene {
@@ -3236,6 +3250,9 @@ Steps — walked in the order they appear:
         names: std::collections::BTreeMap<String, String>,
         stick: Option<ronoctua_parts::stick::Said>,
         mirrors: Vec<String>,
+        #[serde(rename = "last-apply")]
+        last_apply: Option<ronoctua_person::state::LastApply>,
+        here: Vec<String>,
     }
 
     /// The page of the apps that follow their releases, as the scene says
@@ -3475,6 +3492,9 @@ Steps — walked in the order they appear:
         let parts = scene.parts.take().map(|p| {
             let mut r = crate::parts::Readings::of(p.records, &p.names, p.stick);
             r.mirrors = crate::parts::Mirrors::Named(p.mirrors);
+            r.system = crate::parts::System::of(p.last_apply.as_ref(), |out| {
+                p.here.iter().any(|h| h == out)
+            });
             r
         });
         let mut w = window_of_records(scene);

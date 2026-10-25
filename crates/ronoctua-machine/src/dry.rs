@@ -12,9 +12,12 @@
 //! build these paths:", lists what nothing can make). A heading that is
 //! absent is nothing to do: no build, no download.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
-use crate::Rehearsal;
+use ronoctua_person::frontier::{self, Download};
+
+use crate::{Rehearsal, argv, run};
 
 /// The derivations the dry run says will be built: the `.drv`s listed under
 /// its "will be built:" heading. That is Nix's own plan — a derivation whose
@@ -70,6 +73,44 @@ pub fn to_build(text: &str) -> Option<BTreeSet<String>> {
         };
     }
     complete(&under).then_some(built)
+}
+
+/// The downloads building `drv` still needs: the fixed-output derivations
+/// among what a dry run of it says it would build, each with the hash its
+/// output is pinned to and where it comes from ([`frontier::downloads`]).
+/// Asked of Nix's own plan after a build failed — a part's
+/// (`ronoctua-parts realize`) or the system's ([`crate::build`]) —, never of
+/// its log; an answer this cannot read is no list, and so is a program that
+/// does not start. `nix-store` is the one beside `nix`.
+#[must_use]
+pub fn missing(nix: &Path, drv: &str) -> Vec<Download> {
+    let Ok(dry) = run::capture(nix, &argv::dry_run_drvs(&[drv.to_owned()])) else {
+        return Vec::new();
+    };
+    let Some(will) = to_build(&dry.stderr).filter(|w| !w.is_empty()) else {
+        return Vec::new();
+    };
+    let will_list: Vec<String> = will.iter().cloned().collect();
+    let shown = run::capture(nix, &argv::show(&will_list))
+        .ok()
+        .filter(run::Ran::ok)
+        .and_then(|ran| serde_json::from_str::<serde_json::Value>(&ran.stdout).ok());
+    let Some(shown) = shown else {
+        return Vec::new();
+    };
+    // THE OUTPUT OF EACH DOWNLOAD ONLY: one question per derivation, and a
+    // system's plan lists hundreds that are no download.
+    let nix_store = nix.with_file_name("nix-store");
+    let outputs: BTreeMap<String, String> = frontier::fixed(&shown)
+        .into_iter()
+        .filter(|d| will.contains(d))
+        .filter_map(|d| {
+            let ran = run::capture(&nix_store, &argv::outputs(&d)).ok()?;
+            let out = ran.stdout.lines().next()?.trim().to_owned();
+            (ran.ok() && !out.is_empty()).then_some((d, out))
+        })
+        .collect();
+    frontier::downloads(&shown, &will, &outputs)
 }
 
 /// The rehearsal `text` describes.

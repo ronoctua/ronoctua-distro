@@ -5,12 +5,18 @@
 //! other realizers must still write theirs meanwhile. Two realizers of ONE
 //! part never run at once — systemd starts one instance per name.
 
+use std::path::Path;
+
 use ronoctua_parts::exit;
 use ronoctua_parts::names;
 use ronoctua_parts::record::{Record, Target, Waiting, Why};
 
 use crate::disk::{self, LOCK_WAIT, Lock};
 use crate::{Usage, plan_path, program, say};
+
+/// The machine directory, baked by the build (`nix/machine.nix`'s one name):
+/// where the person's mirrors are named.
+const MACHINE_DIR: Option<&str> = option_env!("RONOCTUA_MACHINE_DIR");
 
 pub fn run(args: &[String]) -> Result<u8, Usage> {
     let Some((id, flags)) = args.split_first() else {
@@ -78,15 +84,17 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
     // once, in this same try.
     let mut missing = Vec::new();
     if matches!(result, Err((Why::BuildFailed, _))) {
-        missing = missing_downloads(&nix, &target.drv);
-        let mirrors = crate::mirror::named();
+        missing = ronoctua_machine::dry::missing(Path::new(&nix), &target.drv);
+        let mirrors = MACHINE_DIR.map_or_else(Vec::new, |dir| {
+            ronoctua_machine::mirror::named(Path::new(dir))
+        });
         if !missing.is_empty()
             && !mirrors.is_empty()
-            && crate::mirror::fetched(&nix, &missing, &mirrors) > 0
+            && ronoctua_machine::mirror::fetched(Path::new(&nix), &missing, &mirrors) > 0
         {
             result = attempt(id, &target, &nix);
             missing = if matches!(result, Err((Why::BuildFailed, _))) {
-                missing_downloads(&nix, &target.drv)
+                ronoctua_machine::dry::missing(Path::new(&nix), &target.drv)
             } else {
                 Vec::new()
             };
@@ -203,45 +211,6 @@ fn set_the_profile(id: &str, target: &Target) -> Result<(), (Why, String)> {
         &profile_text,
     ));
     Ok(())
-}
-
-/// The downloads the part still needs: the fixed-output derivations of what
-/// a dry run of it says it would build (`ronoctua_parts::frontier`). Asked of
-/// Nix's plan and never of the log; an answer it cannot read is no list.
-fn missing_downloads(nix: &str, drv: &str) -> Vec<ronoctua_parts::frontier::Download> {
-    let dry = disk::run(&[
-        nix.to_owned(),
-        "build".to_owned(),
-        "--dry-run".to_owned(),
-        format!("{drv}^out"),
-    ]);
-    let Some(will) = ronoctua_machine::dry::to_build(&dry.err) else {
-        return Vec::new();
-    };
-    if will.is_empty() {
-        return Vec::new();
-    }
-    let mut show = vec![nix.to_owned(), "derivation".to_owned(), "show".to_owned()];
-    show.extend(will.iter().cloned());
-    let shown = disk::run(&show);
-    let Ok(shown) = serde_json::from_str::<serde_json::Value>(&shown.out) else {
-        return Vec::new();
-    };
-    let nix_store = crate::beside_nix("nix-store");
-    let outputs = will
-        .iter()
-        .filter_map(|d| {
-            let said = disk::run(&[
-                nix_store.clone(),
-                "--query".to_owned(),
-                "--outputs".to_owned(),
-                d.clone(),
-            ]);
-            let out = said.out.lines().next()?.trim().to_owned();
-            Some((d.clone(), out))
-        })
-        .collect();
-    ronoctua_parts::frontier::downloads(&shown, &will, &outputs)
 }
 
 /// Whether the person said yes to this part's try on a metered link: a plain

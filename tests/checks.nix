@@ -45147,6 +45147,30 @@ let
   # (`RONOCTUA_MACHINE_SYSTEM_LOCK`): evaluated here on the VM with a machine
   # flake's source of its own (`tests/fixtures/machine-lock`), and planted
   # there in the running system for the program.
+  # ── anchor: L25 ──
+  # A BUILD THAT FAILED NAMES WHAT IT COULD NOT FETCH. The update recovers
+  # like a part: `ronoctua-machine apply` asks Nix's own plan which
+  # downloads the system still needs and records each in the machine's
+  # record (`state.json`, `last-apply.missing`), where the update's page
+  # offers to hand it in or bring it on a stick. The four tests drive the
+  # real apply against stand-ins of Nix: the failed build names the
+  # download (name, pinned hash, address, output) and asks Nix the output
+  # of nothing that is no download; the hardware that waits for a network,
+  # built without again, names what it still needs; the person's mirror is
+  # asked by the pinned hash and the build tried again with what it brought;
+  # and a build that worked keeps the downloads it was built from.
+  apply-names-what-failed = rust.testsOf {
+    name = "ronoctua-apply-names-what-failed";
+    crate = "ronoctua-machine";
+    exact = [
+      "tests::a_failed_build_names_the_downloads_it_could_not_fetch"
+      "tests::the_hardware_that_still_waits_says_what_it_needs"
+      "tests::a_mirror_brings_what_the_system_could_not_fetch"
+      "tests::a_build_that_worked_keeps_its_downloads"
+    ];
+    expect = "test result: ok. 4 passed";
+  };
+
   apply-reverts-the-lock-on-build-failure =
     let
       vm = self.nixosConfigurations.vm;
@@ -55531,6 +55555,7 @@ let
     # ── anchor: L05 ──
     inherit
       apply-reverts-the-lock-on-build-failure
+      apply-names-what-failed
       update-apply-rule-is-narrow
       one-bootctl-driver
       generations-keep-the-boot-trial

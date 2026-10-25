@@ -45,7 +45,6 @@
 mod disk;
 mod handin;
 mod keep;
-mod mirror;
 mod plan;
 mod realize;
 mod retry;

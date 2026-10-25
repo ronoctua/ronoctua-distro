@@ -21,7 +21,7 @@ group-update = update
 machine-refused-not-root = Only root changes the machine: nothing was done.
 machine-refused-busy = Another change to this machine is running: try again when it ends.
 machine-refused-nothing-to-migrate = This machine already has its own flake: there is nothing to migrate.
-machine-refused-build-failed = The new system did not build. Nothing changed: the machine runs what it ran, and its folder says so again.
+machine-refused-build-failed = The new system did not build. Nothing changed: the machine runs what it ran, and its folder says so again. A download it could not fetch is named on the parts' page, with the ways to bring it in.
 machine-refused-switch-failed = The switch to the new system failed. The next start tries it once, and comes back to the last good system if it does not start.
 machine-refused-did-not-boot = This is the system that did not start when it was tried, or that was rolled back. The machine stays on the one it runs until a newer revision of the distro arrives.
 machine-refused-last-good-would-fall-out = One more system would push the last good one out of the boot menu. Restart first, so the system on trial can be confirmed.
@@ -187,13 +187,23 @@ distro-follow-steps = the steps
 about-distro-follow-steps = Back to the update's steps.
 distro-parts-open = parts
 cmd-distro-parts-open = The machine's parts: what arrives after the installation, each on its own, and the other ways to bring in a download that keeps failing
-cmd-distro-parts-hand-in = Hands in a file you downloaded elsewhere, for the part under the cursor: it is taken only if it is that very download
-cmd-distro-parts-import = Brings in, from a stick, the downloads the parts are missing
-cmd-distro-parts-export = Writes the downloads this machine keeps for its parts on a stick
+cmd-distro-parts-hand-in = Hands in a file you downloaded elsewhere, for the part or the system under the cursor: it is taken only if it is that very download
+cmd-distro-parts-import = Brings in, from a stick, the downloads the parts and the system are missing
+cmd-distro-parts-export = Writes the downloads this machine keeps for its parts and its system on a stick
 distro-parts-heading = What arrives after the installation
 distro-parts-none = This machine wants no part: everything it runs came with the installation.
 distro-parts-row-import = bring in from a stick
 distro-parts-row-export = write on a stick
+distro-parts-row-system = the system
+distro-parts-system-failed = { $count ->
+        [one] the last update did not build: one download is missing
+       *[other] the last update did not build: { $count } downloads are missing
+    }
+distro-parts-system-waits = { $count ->
+        [one] the hardware that waits for a network is missing one download
+       *[other] the hardware that waits for a network is missing { $count } downloads
+    }
+distro-parts-system-all-here = everything it was missing is here: update again
 distro-parts-phase-here = here
 distro-parts-phase-arriving = on its way
 distro-parts-phase-retrying = { $tries ->
@@ -207,12 +217,16 @@ distro-parts-phase-needs-you = needs you: { $tries } tries failed; the next at {
 distro-parts-about-part = A part arrives after the installation, on its own: one that does not arrive holds back no other, and the machine works without it. It is tried again by itself, less often each time, and choosing it tries it now.
 distro-parts-about-missing-by-hand = It is missing { $name }, from { $hosts }: download it elsewhere and hand it in with { $keys }, bring it on a stick from a machine that has it, or name a mirror that holds it.
 distro-parts-about-missing-stick = It is missing { $name }, which is not one file: it comes on a stick from a machine that has it.
+distro-parts-about-missing-here = { $name } is here now.
+distro-parts-about-system = What the system's last update could not fetch. The machine runs as it did before, and every update tries it again; choosing it updates now.
+distro-parts-about-system-waits = What the hardware that waits for a network still needs: the machine was updated without it, and every update tries it again; choosing it updates now.
+distro-parts-about-system-all-here = Everything it was missing is here: the next update builds with it.
 distro-parts-about-why-build-failed = The last try failed: { $detail }
 distro-parts-about-why-output-differs = The last try built something other than what this system wants; the next update brings the right one.
 distro-parts-about-why-profile-failed = The last try built it, and it could not be put in place.
 distro-parts-about-why-hand-in-refused = The file handed in was refused: { $detail }
-distro-parts-about-import = Brings in, from a stick another machine of yours filled, the downloads the parts are missing. Only downloads are taken, each checked by its content — never a program built elsewhere. Choosing it asks for the stick's folder.
-distro-parts-about-export = Writes the downloads this machine keeps for its parts on a stick, for another machine to bring in. Choosing it asks for the stick's folder.
+distro-parts-about-import = Brings in, from a stick another machine of yours filled, the downloads the parts and the system are missing. Only downloads are taken, each checked by its content — never a program built elsewhere. Choosing it asks for the stick's folder.
+distro-parts-about-export = Writes the downloads this machine keeps for its parts and its system on a stick, for another machine to bring in. Choosing it asks for the stick's folder.
 distro-parts-stick-last-import = { $count ->
         [one] Last time, one download was brought in, { $when }.
        *[other] Last time, { $count } downloads were brought in, { $when }.
@@ -231,12 +245,13 @@ distro-parts-refused-unwritable = the downloads could not be written there.
 distro-parts-said-retrying = { $name } is being tried now.
 distro-parts-said-not-started = The machine did not start it.
 distro-parts-said-already-here = It is here already.
-distro-parts-said-not-a-part = Put the cursor on a part to hand in a file for it.
+distro-parts-said-not-a-part = Put the cursor on a part, or on the system, to hand in a file for it.
 distro-parts-said-nothing-missing = It is missing no download now: choose it to try it again.
 distro-parts-said-not-one-file = What it is missing is not one file: bring it on a stick.
 distro-parts-said-no-file = There is no file there.
 distro-parts-said-not-copied = The file could not be handed over.
 distro-parts-said-taken = { $name } was taken, and the part is being built.
+distro-parts-said-taken-for-the-system = { $name } was taken: the next update builds with it.
 distro-parts-said-refused = { $name } was refused: it is not that download.
 distro-parts-said-not-named = The stick's folder could not be named for the machine.
 distro-parts-said-imported = { $count ->
