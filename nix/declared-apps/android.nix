@@ -3,14 +3,16 @@
 # The builder's contract is `nix/declared-apps/nix.nix`'s. Nix cannot install
 # anything inside Android: the image is a Waydroid container that exists only
 # while the person's session runs, and `adb install` is not a build step. So
-# the system FETCHES the apk by its pin — into the store, where the next
-# collection cannot take it while the generation names it — and lists it in
-# `/etc/ronoctua/declared-android.json`; the software centre's reconciler
-# installs from there, as the person, while the session runs (and says
-# "pending" otherwise).
+# the apk is a DATA PART of the person's (`nix/modules/person.nix`): its
+# realizer fetches it by its pin after the system, on its own — an apk that
+# does not download fails that part alone, never the system — and the system
+# lists it in `/etc/ronoctua/declared-android.json` by its part and its file,
+# never by a store path. The software centre's reconciler installs it from
+# the part's path, as the person, while the session runs and once it arrived
+# (and says "pending" otherwise).
 #
-# `declarer` is who declared it (`person` here; the distro's registry passes
-# `distro`), which the reconciler shows and the person's half may not remove.
+# `inPart` and `record` are the ONE shape of an apk's part and of its line in
+# the list, the distro's registry's too (`nix/modules/distro-apps.nix`).
 # `lib` is the contract's argument; nothing here needs more than builtins.
 { pkgs, ... }:
 
@@ -41,14 +43,49 @@ let
     && builtins.stringLength url <= 2048
     && builtins.match "https://[^/?#@[:space:][:cntrl:]]+([/?#][^[:space:][:cntrl:]]*)?" url != null;
 
-  apk =
-    entry:
-    pkgs.fetchurl {
-      inherit (entry.pin) url hash;
-      name = "${entry.package}_${toString entry.pin."version-code"}.apk";
-    };
+  # THE APK'S FILE in its part: F-Droid's own name, `<package>_<version
+  # code>.apk`. The version is in the name, so a part still at its previous
+  # generation — the new pin not arrived yet — is never read as the new
+  # version (`ronoctua_person::reports::DeclaredApk`).
+  fileOf = package: versionCode: "${package}_${toString versionCode}.apk";
 in
-{
+rec {
+  # AN APK'S PART: the folder its profile holds, the apk under its file name.
+  inPart =
+    {
+      package,
+      versionCode,
+      src,
+    }:
+    pkgs.linkFarm "android-${package}" [
+      {
+        name = fileOf package versionCode;
+        path = src;
+      }
+    ];
+
+  # ITS LINE in `declared-android.json`: the part it arrives in and its file
+  # there — text, with no store path, so the system never holds the apk.
+  record =
+    {
+      package,
+      image,
+      versionCode,
+      part,
+      from,
+    }:
+    {
+      id = "android:${package}";
+      inherit
+        package
+        image
+        part
+        from
+        ;
+      apk = fileOf package versionCode;
+      version-code = versionCode;
+    };
+
   shape =
     entry:
     if !isPackage (entry.package or null) then
@@ -71,21 +108,29 @@ in
     else
       null;
 
+  # THE PART'S TARGET, which its realizer evaluates alone.
   build =
-    {
-      entry,
-      declarer ? "person",
-      ...
-    }:
+    { entry, ... }:
     done {
-      apks = [
-        {
-          id = "android:${entry.package}";
-          inherit (entry) package image;
-          apk = "${apk entry}";
-          version-code = entry.pin."version-code";
-          from = declarer;
-        }
+      packages = [
+        (inPart {
+          inherit (entry) package;
+          versionCode = entry.pin."version-code";
+          src = pkgs.fetchurl {
+            inherit (entry.pin) url hash;
+            name = fileOf entry.package entry.pin."version-code";
+          };
+        })
       ];
+    };
+
+  # THE PERSON'S LINE, for the part `part`.
+  listed =
+    { entry, part }:
+    record {
+      inherit (entry) package image;
+      inherit part;
+      versionCode = entry.pin."version-code";
+      from = "person";
     };
 }

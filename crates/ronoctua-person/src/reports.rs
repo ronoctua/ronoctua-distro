@@ -8,7 +8,8 @@
 //! - `distro-apps.json`: the distro's registry on this machine — and, for
 //!   each AppImage of its table, which pin built it: the distro's, or the
 //!   one the person follows past it (`crate::distro_pins`).
-//! - `declared-android.json`: the Android apps to reconcile, as store apks.
+//! - `declared-android.json`: the Android apps to reconcile, each an apk in
+//!   a part of its own (`ronoctua_parts`), named by the part and its file.
 
 use std::collections::BTreeMap;
 
@@ -438,6 +439,12 @@ pub enum Declarer {
 }
 
 /// One apk to reconcile.
+///
+/// The apk is a PART (`nix/modules/person.nix`, `nix/modules/distro-apps.nix`):
+/// fetched after the system, on its own, and never in the system's closure —
+/// one that does not download fails its part alone. So the line names the
+/// part and the apk's file in it, never a store path, and the reconciler asks
+/// whether it arrived before it installs it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct DeclaredApk {
@@ -445,7 +452,11 @@ pub struct DeclaredApk {
     pub id: String,
     /// The package name.
     pub package: String,
-    /// The apk in the store.
+    /// The part the apk arrives in (`ronoctua_parts::id`).
+    pub part: String,
+    /// The apk's file in its part: `<package>_<version code>.apk`. The
+    /// version is in the name, so a part still at its previous generation is
+    /// never read as the new version.
     pub apk: String,
     /// Android's version code.
     pub version_code: u64,
@@ -471,7 +482,14 @@ impl Document for DeclaredAndroid {
                     a.id.as_str(),
                 ));
             }
-            if !check::store_path(&a.apk) {
+            if !check::slug(&a.part) {
+                return Err(Refusal::new(
+                    Why::Invalid,
+                    format!("{at}/part"),
+                    a.part.as_str(),
+                ));
+            }
+            if a.apk != format!("{}_{}.apk", a.package, a.version_code) {
                 return Err(Refusal::new(
                     Why::Invalid,
                     format!("{at}/apk"),
@@ -572,6 +590,42 @@ mod tests {
         // inside a name and letters past ASCII are a name.
         for good in ["Libre\u{a0}Office", "Café ☕", "Ünïcödé"] {
             assert!(is_name(good), "{good}");
+        }
+    }
+
+    /// FAILS IF: a line of `declared-android.json` that names a store path is
+    /// read — the apk back in the system's closure, where one that does not
+    /// download stops the whole rebuild — or one whose file is another
+    /// version's (a part still at its previous generation would go in as the
+    /// new version), or whose part is no part's name.
+    #[test]
+    fn an_apk_is_named_by_its_part_and_its_own_file() {
+        let good = include_str!("../fixtures/good/declared-android.json");
+        assert!(crate::parse::<DeclaredAndroid>(good.as_bytes()).is_ok());
+        for (from, to, at) in [
+            (
+                "\"org.fdroid.fdroid_1021050.apk\"",
+                "\"/nix/store/abcdefghijklmnopqrstuvwxyz012345-org.fdroid.fdroid_1021050.apk\"",
+                "/apps/0/apk",
+            ),
+            (
+                "\"org.fdroid.fdroid_1021050.apk\"",
+                "\"org.fdroid.fdroid_1021049.apk\"",
+                "/apps/0/apk",
+            ),
+            (
+                "\"person-1a2b3c4d-org-fdroid-fdroid\"",
+                "\"../system\"",
+                "/apps/0/part",
+            ),
+        ] {
+            let refused =
+                crate::parse::<DeclaredAndroid>(good.replace(from, to).as_bytes()).expect_err(to);
+            assert_eq!(
+                (refused.why, refused.at.as_str()),
+                (Why::Invalid, at),
+                "{to}"
+            );
         }
     }
 }

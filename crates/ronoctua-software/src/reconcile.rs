@@ -9,10 +9,14 @@
 //! them, as the person, after a system was applied:
 //!
 //! * **Android's apps.** Android is a container that exists only while the
-//!   person's session runs it; Nix fetches each declared apk into the store by
-//!   its pin and lists it in `/etc/ronoctua/declared-android.json`, and here it
-//!   goes in — `waydroid app install <the store's apk>` — while Android runs.
-//!   When it does not run, nothing happens and the screen says the app WAITS
+//!   person's session runs it. Each declared apk is a PART (`ronoctua_parts`),
+//!   fetched by its pin after the system and on its own — one that does not
+//!   download fails its part alone, never the rebuild —, and
+//!   `/etc/ronoctua/declared-android.json` names its part and its file there.
+//!   Here it goes in — `waydroid app install <the part's apk>` — once it
+//!   arrived and while Android runs. One still arriving waits, and is never
+//!   taken for gone; when Android does not run, nothing happens and the
+//!   screen says the app WAITS
 //!   ([`crate::declaration::Declarations::android_pending`]); the next
 //!   reconcile (the update's, or the session's start) puts it in.
 //! * **The copy a declared program replaces.** A program installed by hand
@@ -42,7 +46,7 @@
 //! reads, decides and does, each source in its own lane.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ronoctua_person::reports::DeclaredApk;
 use serde::{Deserialize, Serialize};
@@ -66,8 +70,9 @@ pub struct Kept {
     pub package: String,
     /// The version code the declaration had when it went in.
     pub version_code: u64,
-    /// The store apk it went in from (`/nix/store/…`), or empty for one found
-    /// already there and taken charge of.
+    /// The apk it went in from — its part's file (a store apk, before the
+    /// apks were parts) —, or empty for one found already there and taken
+    /// charge of.
     #[serde(default)]
     pub apk: String,
 }
@@ -177,8 +182,8 @@ pub struct ByHand {
 /// What a reconcile is to do.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Plan {
-    /// Declared apks to put in Android.
-    pub install: Vec<DeclaredApk>,
+    /// Declared apks to put in Android, each from its part's file.
+    pub install: Vec<(DeclaredApk, PathBuf)>,
     /// Declared apks already in Android at their version or a later one:
     /// into the ledger, with nothing installed.
     pub adopt: Vec<DeclaredApk>,
@@ -196,6 +201,9 @@ pub struct Plan {
 /// What a reconcile is to do — pure.
 ///
 /// * `declared`: the apks this machine's Android is to have.
+/// * `arrived`: the apks whose part is here, by package, with the file to
+///   install from. One declared and not arrived waits for its part: nothing
+///   goes in, and what it replaces stays.
 /// * `android`: what is inside Android now, by package, with the version
 ///   code our record knows (0: not known) — `None` when Android does not run
 ///   (or this machine has none), and then nothing of Android moves.
@@ -205,6 +213,7 @@ pub struct Plan {
 #[must_use]
 pub fn plan(
     declared: &[DeclaredApk],
+    arrived: &BTreeMap<String, PathBuf>,
     ledger: &Ledger,
     android: Option<&BTreeMap<String, u64>>,
     applied: &[String],
@@ -216,9 +225,9 @@ pub fn plan(
     if wants(Source::Android) {
         match android {
             None => {
-                p.waiting = declared
-                    .iter()
-                    .any(|d| !ledger.has(&d.package, d.version_code))
+                p.waiting = declared.iter().any(|d| {
+                    !ledger.has(&d.package, d.version_code) && arrived.contains_key(&d.package)
+                })
             }
             Some(inside) => {
                 for d in declared {
@@ -233,7 +242,13 @@ pub fn plan(
                         Some(&have) if have == 0 || have >= d.version_code => {
                             p.adopt.push(d.clone());
                         }
-                        _ => p.install.push(d.clone()),
+                        // ITS PART IS HERE: in from the part's file. Not
+                        // here yet, it waits, and the version inside stays.
+                        _ => {
+                            if let Some(file) = arrived.get(&d.package) {
+                                p.install.push((d.clone(), file.clone()));
+                            }
+                        }
                     }
                 }
                 for k in &ledger.android {
@@ -414,6 +429,7 @@ pub fn run(ctx: &Context, only: Option<Source>, report: &mut dyn Report) -> Done
     let declared = crate::declaration::declared_android(&ctx.roots)
         .map(|d| d.apps)
         .unwrap_or_default();
+    let arrived = arrived(ctx, &declared);
     let applied = in_the_system(ctx);
     let mut ledger = ledger(&ctx.roots);
     let dir = ctx.roots.ours_state();
@@ -424,7 +440,7 @@ pub fn run(ctx: &Context, only: Option<Source>, report: &mut dyn Report) -> Done
     // that source's own removal — so a rehearsal prints it, and the screen's
     // history says it.
     let hands = by_hand(ctx, only);
-    let shadows = plan(&[], &ledger, None, &applied, &hands, only).shadows;
+    let shadows = plan(&[], &BTreeMap::new(), &ledger, None, &applied, &hands, only).shadows;
     for shadow in shadows {
         let _lane = lane(ctx, shadow.source(), report)?;
         let order = Order::Remove {
@@ -446,6 +462,7 @@ pub fn run(ctx: &Context, only: Option<Source>, report: &mut dyn Report) -> Done
         let inside = inside_android(ctx);
         let p = plan(
             &declared,
+            &arrived,
             &ledger,
             inside.as_ref(),
             &[],
@@ -454,11 +471,11 @@ pub fn run(ctx: &Context, only: Option<Source>, report: &mut dyn Report) -> Done
         );
         let total = (p.install.len() + p.remove.len()) as u64;
         let mut step = 0;
-        for d in &p.install {
+        for (d, file) in &p.install {
             step += 1;
             report.step(Phase::Installing, step, total, &d.package);
-            crate::android::install_apk(ctx, Path::new(&d.apk))?;
-            take(&mut ledger, d, &d.apk);
+            crate::android::install_apk(ctx, file)?;
+            take(&mut ledger, d, &file.to_string_lossy());
             changed += 1;
             if !ctx.rehearse {
                 keep(&dir, &ledger)?;
@@ -492,6 +509,20 @@ pub fn run(ctx: &Context, only: Option<Source>, report: &mut dyn Report) -> Done
     })
 }
 
+/// The declared apks whose part is here, by package, with the file to install
+/// from — asked on every reconcile, since a part arrives while the session
+/// runs.
+fn arrived(ctx: &Context, declared: &[DeclaredApk]) -> BTreeMap<String, PathBuf> {
+    declared
+        .iter()
+        .filter_map(|d| {
+            crate::parts::file(&ctx.roots, &d.part, &d.apk)
+                .ok()
+                .map(|file| (d.package.clone(), file))
+        })
+        .collect()
+}
+
 /// The ledger answers for `d` now.
 fn take(ledger: &mut Ledger, d: &DeclaredApk, apk: &str) {
     ledger.android.retain(|k| k.package != d.package);
@@ -514,11 +545,25 @@ mod tests {
         DeclaredApk {
             id: format!("android:{package}"),
             package: package.into(),
-            apk: format!("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{package}.apk"),
+            part: format!("person-0a1b2c3d-{}", package.replace('.', "-")),
+            apk: format!("{package}_{version_code}.apk"),
             version_code,
             from: Declarer::Person,
             image: AndroidImage::Gapps,
         }
+    }
+
+    /// Every one of `declared` arrived, each at a file of its own.
+    fn all_here(declared: &[DeclaredApk]) -> BTreeMap<String, PathBuf> {
+        declared
+            .iter()
+            .map(|d| {
+                (
+                    d.package.clone(),
+                    PathBuf::from(format!("/parts/{}", d.apk)),
+                )
+            })
+            .collect()
     }
 
     fn kept(package: &str, version_code: u64) -> Kept {
@@ -582,7 +627,8 @@ mod tests {
 
     /// FAILS IF: a declared app goes in twice, one already there at its
     /// version is reinstalled (or downgraded), one the ledger did not put in
-    /// is removed, or Android down moves anything.
+    /// is removed, Android down moves anything — or one whose part has not
+    /// arrived goes in, is taken out, or is said to wait for Android.
     #[test]
     fn android_moves_only_by_the_ledger() {
         let declared = [
@@ -607,8 +653,10 @@ mod tests {
         .into_iter()
         .map(|(p, v)| (p.to_owned(), v))
         .collect();
+        let here = all_here(&declared);
         let p = plan(
             &declared,
+            &here,
             &ledger,
             Some(&inside),
             &[],
@@ -616,7 +664,22 @@ mod tests {
             None,
         );
         let names = |l: &[DeclaredApk]| l.iter().map(|d| d.package.clone()).collect::<Vec<_>>();
-        assert_eq!(names(&p.install), ["org.declared.new", "org.declared.old"]);
+        assert_eq!(
+            p.install
+                .iter()
+                .map(|(d, file)| (d.package.as_str(), file.display().to_string()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "org.declared.new",
+                    "/parts/org.declared.new_3.apk".to_owned()
+                ),
+                (
+                    "org.declared.old",
+                    "/parts/org.declared.old_9.apk".to_owned()
+                )
+            ]
+        );
         assert_eq!(names(&p.adopt), ["org.declared.there"]);
         assert_eq!(
             p.remove
@@ -634,9 +697,52 @@ mod tests {
         );
         assert!(!p.waiting);
         // DOWN: nothing moves, and what is not in yet waits.
-        let down = plan(&declared, &ledger, None, &[], &ByHand::default(), None);
+        let down = plan(
+            &declared,
+            &here,
+            &ledger,
+            None,
+            &[],
+            &ByHand::default(),
+            None,
+        );
         assert!(down.install.is_empty() && down.remove.is_empty() && down.adopt.is_empty());
         assert!(down.waiting);
+
+        // NOT ARRIVED: `old`'s new version and `new` are on their way. Neither
+        // goes in, the old version inside stays, nothing is removed — and
+        // with Android down, nothing waits for Android but what arrived.
+        let only_there = all_here(&declared[1..2]);
+        let arriving = plan(
+            &declared,
+            &only_there,
+            &ledger,
+            Some(&inside),
+            &[],
+            &ByHand::default(),
+            None,
+        );
+        assert!(arriving.install.is_empty(), "{:?}", arriving.install);
+        assert_eq!(names(&arriving.adopt), ["org.declared.there"]);
+        assert!(
+            !arriving
+                .remove
+                .iter()
+                .any(|k| k.package.starts_with("org.declared")),
+            "{:?}",
+            arriving.remove
+        );
+        let none_here = BTreeMap::new();
+        let down = plan(
+            &declared,
+            &none_here,
+            &ledger,
+            None,
+            &[],
+            &ByHand::default(),
+            None,
+        );
+        assert!(!down.waiting);
     }
 
     /// FAILS IF: a hand-made copy goes while its declared one is not applied,
@@ -658,7 +764,15 @@ mod tests {
             "flatpak:org.x.Y",
         ]
         .map(str::to_owned);
-        let p = plan(&[], &Ledger::default(), None, &applied, &hands, None);
+        let p = plan(
+            &[],
+            &BTreeMap::new(),
+            &Ledger::default(),
+            None,
+            &applied,
+            &hands,
+            None,
+        );
         assert_eq!(
             p.shadows,
             [
@@ -669,6 +783,7 @@ mod tests {
         );
         let only_nix = plan(
             &[],
+            &BTreeMap::new(),
             &Ledger::default(),
             None,
             &applied,
@@ -713,8 +828,10 @@ mod tests {
     /// RECONCILE TOUCHES ONLY THE LEDGER, with fake programs that write down
     /// how they were called:
     ///
-    /// * a declared apk not yet inside goes in, from the store, and into the
-    ///   ledger;
+    /// * a declared apk not yet inside goes in, from its part's file, and into
+    ///   the ledger;
+    /// * one whose part has not arrived — a new version on its way — neither
+    ///   goes in nor out: the version inside stays;
     /// * an app the ledger put in and nobody declares goes out;
     /// * an app installed by hand — inside Android, not in the ledger — is
     ///   never removed;
@@ -775,28 +892,64 @@ mod tests {
                "brain":{"included":[],"awaiting-approval":[]}}"#,
         )
         .unwrap();
+        let new = apk("org.declared.new", 3);
+        let late = apk("org.declared.late", 2);
         let declared = ronoctua_person::reports::DeclaredAndroid {
             format: 1,
-            apps: vec![apk("org.declared.new", 3)],
+            apps: vec![new.clone(), late.clone()],
         };
         std::fs::write(
             reports.join(ronoctua_person::names::DECLARED_ANDROID),
             ronoctua_person::to_json(&declared),
         )
         .unwrap();
-        // THE LEDGER put `org.gone` in earlier; `org.mine` is the person's.
+        // THE PARTS: the plan wants both apks; `new`'s arrived, `late`'s is
+        // on its way.
+        let entry = |d: &DeclaredApk| {
+            format!(
+                r#""{}":{{"entry":{{"id":"{}","fingerprint":"{}"}},"kind":"data","interface":1,"heavy":false,"unfree":false,"name":"{}"}}"#,
+                d.part,
+                d.id,
+                "0".repeat(64),
+                d.package
+            )
+        };
+        let plan_file = &roots.system.parts_plan;
+        std::fs::create_dir_all(plan_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            plan_file,
+            format!(
+                r#"{{"format":1,"parts":{{{},{}}}}}"#,
+                entry(&new),
+                entry(&late)
+            ),
+        )
+        .unwrap();
+        let arrived = roots.system.part_profiles.join(&new.part).join("v1");
+        std::fs::create_dir_all(&arrived).unwrap();
+        std::fs::write(arrived.join(&new.apk), b"apk").unwrap();
+        let from = arrived.join(&new.apk).display().to_string();
+        // THE LEDGER put `org.gone` and `late`'s older version in earlier;
+        // `org.mine` is the person's.
         let state = roots.ours_state();
         keep(
             &state,
             &Ledger {
                 format: FORMAT,
-                android: vec![kept("org.gone", 1)],
+                android: vec![kept("org.gone", 1), kept("org.declared.late", 1)],
             },
         )
         .unwrap();
         std::fs::write(
             &listing,
-            "Name: Gone\npackageName: org.gone\nName: Mine\npackageName: org.mine\n",
+            "Name: Gone\npackageName: org.gone\nName: Mine\npackageName: org.mine\n\
+             Name: Late\npackageName: org.declared.late\n",
+        )
+        .unwrap();
+        // `late`'s version inside is known: 1, older than the declared one.
+        std::fs::write(
+            state.join(crate::android::RECORD),
+            r#"{"org.declared.late":{"name":"Late","version-code":1,"source":"file"}}"#,
         )
         .unwrap();
         // SOMETHING OF THE PERSON'S beside it, which must not move.
@@ -840,10 +993,14 @@ mod tests {
         run(&ctx, Some(Source::Android), &mut Vec::new()).unwrap();
         let calls = std::fs::read_to_string(&log).unwrap();
         assert!(
-            calls.contains("waydroid app install /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-org.declared.new.apk"),
+            calls.contains(&format!("waydroid app install {from}")),
             "{calls}"
         );
         assert!(calls.contains("waydroid app remove org.gone"), "{calls}");
+        assert!(
+            !calls.contains("org.declared.late"),
+            "an apk whose part has not arrived moved: {calls}"
+        );
         assert!(
             !calls.contains("org.mine"),
             "the person's own app was touched: {calls}"
@@ -855,12 +1012,15 @@ mod tests {
         let after = ledger(&roots);
         assert_eq!(
             after.android,
-            [Kept {
-                id: "android:org.declared.new".into(),
-                package: "org.declared.new".into(),
-                version_code: 3,
-                apk: "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-org.declared.new.apk".into(),
-            }]
+            [
+                kept("org.declared.late", 1),
+                Kept {
+                    id: "android:org.declared.new".into(),
+                    package: "org.declared.new".into(),
+                    version_code: 3,
+                    apk: from,
+                }
+            ]
         );
         assert_eq!(files(&roots.home, &[&ledger_path, &lanes]), before);
         let _ = std::fs::remove_dir_all(&root);

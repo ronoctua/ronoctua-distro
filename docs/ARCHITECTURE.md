@@ -15921,15 +15921,30 @@ entrada fora do sistema, a retenção não tem mais o que proteger. O
 aborta — e exige que o sistema avalie e que cada parte diga a própria resposta; o
 `parts-are-isolated` mostra, numa VM, a boa chegar e as quebradas falharem só elas.
 
+**O app Android declarado também é uma parte, de dados.** O apk era baixado pelo pin no build do
+próprio sistema, porque o caminho dele no store ia no `declared-android.json`; um apk que não
+baixasse (o F-Droid fora do ar, um endereço que mudou) derrubava o rebuild inteiro, o defeito que as
+partes tiraram de todo o resto. Agora o apk é a parte da entrada (`kind = "data"`: nada dele vai à
+vista), avaliada e baixada pelo realizador como as outras, e a linha do `declared-android.json`
+nomeia a parte e o arquivo dentro dela — texto, sem caminho do store, e o
+`person-packages-are-per-user` confere que a lista não tem contexto. O arquivo leva a versão no
+nome (`<pacote>_<version-code>.apk`, que o leitor confere contra a versão da linha): uma parte que
+ainda está na geração anterior, com o pin novo a caminho, nunca é lida como a versão nova. O
+reconciliador pergunta ao plano e à parte, a cada vez, se o apk chegou (`ronoctua_parts::file_of_in`)
+e só então o instala; o que ainda está chegando não entra, não sai e não é "esperando o Android",
+e a linha da central diz que ele está chegando, como a de um pacote. Os apps Android da tabela da
+distro seguem o mesmo molde, com a parte nomeada pelo id da tabela.
+
 **Tudo vai para a pessoa, nunca para o `systemPackages`** (`person-packages-are-per-user`): o pacote
 e o AppImage embrulhado vão para o `home.packages` dela, o web app é uma entrada do
 `xdg.desktopEntries`, o Flatpak entra na lista do nix-flatpak da instalação `--user` (só de um
 remote que a máquina declara — de outro, a instalação falharia a cada ativação; e só com a chave
 `ronoctua.software.flatpak` ligada, que é o que importa o módulo Home Manager do nix-flatpak: uma
 máquina que ligou o Flatpak do sistema à mão não tem essa lista, e defini-la lá impediria a máquina
-de avaliar), e o Android é um apk baixado pelo pin para o store e listado em
-`/etc/ronoctua/declared-android.json`, de onde o reconciliador da central o instala como a pessoa,
-enquanto a sessão roda: o Nix não instala nada dentro de um contêiner que só existe na sessão. Os
+de avaliar), e o Android é um apk numa parte da pessoa, listado em
+`/etc/ronoctua/declared-android.json` pela parte, de onde o reconciliador da central o instala como a
+pessoa, depois que ele chega e enquanto a sessão roda: o Nix não instala nada dentro de um contêiner
+que só existe na sessão. Os
 programas estão na máquina porque a pessoa os declarou, e não porque a distro os traz.
 
 **O consentimento do não livre é perguntado no consumidor**, e não só ao predicado: um pacote que a
@@ -16164,8 +16179,9 @@ dentro da imagem, que nenhum caminho de fora alcança). O ícone é o `.DirIcon`
 fica dentro da imagem e só quando É um PNG ou um SVG. O id é `ronoctua-appimage-<chave>.desktop`, o
 mesmo que o da pessoa teria. O web app é um lançador no formato que a central escreve, sem
 `StartupWMClass`: aquela conta é do Chromium e mora uma vez, em `web::app_id`. O app Android é um
-apk do store, entregue ao reconciliador por `ronoctua.distroApps.android`, que o módulo das
-declarações da pessoa lista no `declared-android.json` com `from` = `distro`.
+apk numa parte de dados com o id da tabela, entregue ao reconciliador por
+`ronoctua.distroApps.android`, que o módulo das declarações da pessoa lista no
+`declared-android.json` com `from` = `distro`.
 
 **Toda recusa é uma frase numa lista.** Uma entrada, uma linha da tabela ou um pin malformado nunca
 vira um "attribute missing" de dentro de um builder: o `ronoctua.distroApps.problems` diz cada um
@@ -19227,10 +19243,11 @@ da distro desinstalado pergunta do mesmo jeito, dizendo que esta máquina é rec
 
 **O reconciliador mexe só no que o razão dele diz.** O Nix põe no sistema quase tudo o que a
 pessoa declara; duas coisas ele não faz, e o `reconcile` faz, como a pessoa. Os apps Android: o
-Android é um container que só existe enquanto a sessão dele roda, então o Nix baixa cada apk
-declarado pelo pin e o lista em `/etc/ronoctua/declared-android.json`, e o reconciliador o instala
-do store — só com o Android rodando; senão a tela diz que ele espera, e entra quando a sessão
-Android começa pela central ou no passo de reconciliação da atualização. E as cópias à mão que uma
+Android é um container que só existe enquanto a sessão dele roda, então cada apk declarado é uma
+parte, listada em `/etc/ronoctua/declared-android.json` pela parte e pelo arquivo, e o
+reconciliador o instala da parte — só depois que ela chega e com o Android rodando; senão a tela
+diz que ele está chegando ou que espera, e entra quando a sessão Android começa pela central ou no
+passo de reconciliação da atualização. E as cópias à mão que uma
 declarada substitui (o pacote no perfil Nix, a AppImage em `~/Applications`, o `.desktop` de web app
 da pessoa que esconderia o do sistema), tiradas só quando o `person-applied.json` diz que a
 declarada está no sistema — uma declaração pulada (atributo sumido, entrada segurada) deixa a cópia

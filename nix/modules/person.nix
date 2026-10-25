@@ -9,7 +9,8 @@
 #   appimage  a part of the person's, wrapped       (`declared-apps/appimage.nix`)
 #   flatpak   nix-flatpak's list for `--user`      (`declared-apps/flatpak.nix`)
 #   web       a launcher entry (`xdg.desktopEntries`) (`declared-apps/web.nix`)
-#   android   a fetched apk, listed for the reconciler (`declared-apps/android.nix`)
+#   android   a part of the person's, of data: the apk the reconciler reads
+#             (`declared-apps/android.nix`)
 #
 # NOTHING GOES TO `systemPackages` (`person-packages-are-per-user`): these are
 # the person's programs, carried from machine to machine by their
@@ -21,13 +22,13 @@
 # One `abort` deep in a declared package, or an evaluation error no
 # `tryEval` catches, used to stop the whole system's evaluation, and the
 # update evaluated each entry alone first to hold the broken one back. Now
-# the system never evaluates a declared package at all: a `nix` or
-# `appimage` entry is a PART (`nix/modules/parts.nix`), which the plan names
-# by the entry and its fingerprint, and the part's realizer evaluates that
-# one entry in a process of its own (`ronoctua.person.parts`, the machine
-# flake's `personParts`). A part that does not evaluate or build is that
-# part's failure alone, tried again ever later, and says why on the parts'
-# page; the one it had before stays.
+# the system never evaluates a declared package at all: a `nix`, `appimage`
+# or `android` entry is a PART (`nix/modules/parts.nix`), which the plan
+# names by the entry and its fingerprint, and the part's realizer evaluates
+# that one entry in a process of its own (`ronoctua.person.parts`, the
+# machine flake's `personParts`). A part that does not evaluate, build or
+# download is that part's failure alone, tried again ever later, and says
+# why on the parts' page; the one it had before stays.
 #
 # # It degrades, and says so
 #
@@ -166,18 +167,20 @@ let
       }
     );
 
-  # WHICH SOURCES ARE PARTS: a program Nix builds — a nixpkgs package, an
-  # AppImage wrapped — realized after the system on its own
-  # (`nix/modules/parts.nix`), never in the system's closure: the system
-  # never evaluates what the person declared, so an entry that aborts stops
-  # nothing but its own part. A Flatpak and a web app are lists and
-  # launchers, and an Android app is the reconciler's.
-  isPart =
-    e:
-    builtins.elem e.source [
-      "nix"
-      "appimage"
-    ];
+  # WHICH SOURCES ARE PARTS, and of which kind: what Nix builds or fetches —
+  # a nixpkgs package, an AppImage wrapped, an Android app's apk — realized
+  # after the system on its own (`nix/modules/parts.nix`), never in the
+  # system's closure: the system never evaluates what the person declared,
+  # so an entry that aborts, or an apk that does not download, stops nothing
+  # but its own part. A program reaches the session through the parts' view;
+  # an apk is data, which the reconciler reads at its part's path. A Flatpak
+  # and a web app are lists and launchers.
+  partKind = {
+    nix = "program";
+    appimage = "program";
+    android = "data";
+  };
+  isPart = e: partKind ? ${e.source};
 
   # A PART'S ID: `person-`, eight hex digits of the entry's id (no two
   # entries share it) and as much of the entry's own name as fits the shape
@@ -215,6 +218,8 @@ let
     else if !sourceOn.${e.source} then
       skip e.id "source-off" "this machine has no ${e.source} support"
     # A PART IS APPLIED AS A PART: what it builds is its realizer's question.
+    # An apk's is listed for the reconciler, by its part and never by a
+    # store path.
     else if isPart e then
       {
         ok = true;
@@ -223,7 +228,12 @@ let
         packages = [ ];
         flatpaks = [ ];
         desktopEntries = { };
-        apks = [ ];
+        apks = lib.optional (e.source == "android") (
+          builders.android.listed {
+            entry = e;
+            part = partIdOf e;
+          }
+        );
       }
     else
       let
@@ -637,15 +647,16 @@ in
   };
 
   # ── anchor: L03 ──
-  # THE APKS EVERY DECLARATION FETCHED, the distro's registry and the
-  # person's alike: `/etc/ronoctua/declared-android.json` is one list, and the
-  # reconciler reads only that file.
+  # THE APKS EVERY DECLARATION NAMES, the distro's registry and the person's
+  # alike: `/etc/ronoctua/declared-android.json` is one list, and the
+  # reconciler reads only that file. Each apk is a part, named by its id and
+  # its file in it — never a store path, so the system never holds an apk.
   options.ronoctua.declaredAndroid = lib.mkOption {
     type = lib.types.listOf (lib.types.attrsOf lib.types.unspecified);
     default = [ ];
     internal = true;
     description = ''
-      The declared apks (`{ id; package; apk; version-code; from; image; }`,
+      The declared apks (`{ id; package; part; apk; version-code; from; image; }`,
       the shape of `declared-android.json`), from `nix/declared-apps/android.nix`.
     '';
   };
@@ -661,6 +672,7 @@ in
           e:
           lib.nameValuePair (partIdOf e) {
             wanted = true;
+            kind = partKind.${e.source};
             entry = {
               inherit (e) id;
               fingerprint = fingerprintOf e;

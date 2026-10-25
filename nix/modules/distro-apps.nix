@@ -54,10 +54,11 @@
 # `assets/distro-apps.nix` (the Crafting Apps' AppImages, today), pinned in
 # `assets/distro-pins.json` (`nix run .#distro-pins`). A Flatpak goes to the
 # person's `--user` installation through nix-flatpak (`flatpak.nix`), an
-# AppImage is wrapped (`appimageTools.wrapType2`) and a web app is a launcher
-# entry, both in `systemPackages`; an Android app is a store apk handed to
-# the reconciler through `declared-android.json`, which the person's
-# declarations' module writes (`ronoctua.distroApps.android`).
+# AppImage is wrapped (`appimageTools.wrapType2`) in a part of its own, a web
+# app is a launcher entry in `systemPackages`, and an Android app's apk is a
+# part of data, handed to the reconciler through `declared-android.json` by
+# its part and its file (`ronoctua.distroApps.android`), which the person's
+# declarations' module writes.
 #
 # # The AppImages the person follows past the distro's pins
 #
@@ -100,6 +101,9 @@ let
   # `nix run .#distro-pins` downloads them under, so its download is the
   # build's source.
   downloads = import ../distro-downloads.nix { inherit (pkgs) fetchurl; };
+  # THE ONE SHAPE of an apk's part and of its line for the reconciler, the
+  # person's declared apps' too.
+  androidApps = import ../declared-apps/android.nix { inherit pkgs; };
   # THE ONE JUDGE of a followed pin, shared with the check that holds it and
   # the Rust one to one table (`distro-apps-follow-when-on-and-newer`).
   follow = import ../distro-pins.nix;
@@ -289,10 +293,10 @@ let
         };
         part = lib.mkOption {
           type = lib.types.bool;
-          # EVERY DISTRO APPIMAGE IS A PART: its download is the release's own
-          # (GitHub), which no public cache holds.
-          default = config.appimage != null;
-          defaultText = lib.literalMD "`true` for an AppImage, `false` otherwise";
+          # EVERY DISTRO APPIMAGE AND APK IS A PART: its download is the
+          # release's own (GitHub, F-Droid), which no public cache holds.
+          default = config.appimage != null || config.android != null;
+          defaultText = lib.literalMD "`true` for an AppImage and an Android app, `false` otherwise";
           description = ''
             A PART (`nix/modules/parts.nix`): the program and its companions
             are realized after the installation and kept out of the system's
@@ -300,9 +304,10 @@ let
             `config.ronoctua.partsPkgs`), or needs a download no public cache
             holds. The session finds it in the parts' view once it arrived;
             whoever runs it names its stable path
-            (`config.ronoctua.parts.<id>.path`). A nixpkgs package or an
-            AppImage (its wrapper); never a web app, a Flatpak or an Android
-            app, which have ways of their own.
+            (`config.ronoctua.parts.<id>.path`). A nixpkgs package, an
+            AppImage (its wrapper) or an Android app (its apk, data the
+            reconciler reads at the part's path); never a web app or a
+            Flatpak, which have ways of their own.
           '';
         };
         heavy = lib.mkOption {
@@ -465,24 +470,46 @@ let
     {
       wanted = installed.${id};
       inherit (e) heavy;
-      kind = "program";
-      unfree = lib.any (l: !(l.free or true)) (lib.toList (main.meta.license or [ ]));
       name = if e.name != null then e.name else id;
-      # ONE PATH per part: the program alone, or with what comes and goes
-      # with it, joined.
-      package =
-        if builtins.length paths == 1 then
-          main
-        else
-          pkgs.buildEnv {
-            name = "ronoctua-part-${id}";
-            inherit paths;
-            # AS `system.path` JOINS THEM, where these went before: the
-            # first wins — the program over a companion that brings the
-            # same file (Flutter's own Dart over `dart`).
-            ignoreCollisions = true;
+    }
+    // (
+      # AN APK IS DATA, which the reconciler reads at the part's path
+      # (`apkOf`): nothing of it is in the view.
+      if e.android != null then
+        {
+          kind = "data";
+          package = androidApps.inPart {
+            inherit (e.android) package versionCode;
+            src = downloads.apk {
+              inherit (e.android)
+                package
+                versionCode
+                url
+                hash
+                ;
+            };
           };
-    };
+        }
+      else
+        {
+          kind = "program";
+          unfree = lib.any (l: !(l.free or true)) (lib.toList (main.meta.license or [ ]));
+          # ONE PATH per part: the program alone, or with what comes and goes
+          # with it, joined.
+          package =
+            if builtins.length paths == 1 then
+              main
+            else
+              pkgs.buildEnv {
+                name = "ronoctua-part-${id}";
+                inherit paths;
+                # AS `system.path` JOINS THEM, where these went before: the
+                # first wins — the program over a companion that brings the
+                # same file (Flutter's own Dart over `dart`).
+                ignoreCollisions = true;
+              };
+        }
+    );
 
   # ---------------------------------------------------------------------
   # The builders of the distro's other sources
@@ -642,21 +669,17 @@ let
       X-Ronoctua-Web-Profile=${w.profile}
     '';
 
-  # AN ANDROID APP is a store apk; the reconciler installs it into Waydroid.
-  apkOf = a: {
-    id = "android:${a.package}";
-    inherit (a) package image;
-    apk = "${downloads.apk {
-      inherit (a)
-        package
-        versionCode
-        url
-        hash
-        ;
-    }}";
-    version-code = lib.toInt a.versionCode;
-    from = "distro";
-  };
+  # AN ANDROID APP is an apk in its part (`partOf`); the reconciler installs
+  # it into Waydroid from there, once it arrived. Its line names the part,
+  # never a store path.
+  apkOf =
+    id:
+    androidApps.record {
+      inherit (apps.${id}.android) package image;
+      versionCode = lib.toInt apps.${id}.android.versionCode;
+      part = id;
+      from = "distro";
+    };
 
   # What an installed entry puts on a machine: in `systemPackages`, or in
   # its part. An AppImage that is a part runs from the parts' view, and is
@@ -1233,7 +1256,7 @@ in
         on a fixture: `appimage { key; name; version; src; fallback ? true; }`
         gives `{ fhs; wrapper; entry; package; }` (`wrapper` is the guarded
         program, `fhs` the environment it runs), `web` a launcher entry,
-        `apk` a `declared-android.json` record.
+        `apk <id>` the `declared-android.json` record of a table's Android app.
       '';
     };
     honoured = lib.mkOption {
@@ -1293,7 +1316,7 @@ in
       readOnly = true;
       default =
         assert checked;
-        map (id: apkOf apps.${id}.android) (builtins.filter (id: apps.${id}.android != null) installedIds);
+        map apkOf (builtins.filter (id: apps.${id}.android != null) installedIds);
       defaultText = lib.literalMD "the distro's Android apps on this machine";
       description = ''
         The distro's Android apps this machine installs, as the records of

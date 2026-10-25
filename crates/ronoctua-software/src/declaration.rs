@@ -654,8 +654,9 @@ pub struct Declarations {
     /// machine whose system predates the declaration says nothing, and every
     /// entry waits.
     pub reported: bool,
-    /// The declared Android apps this machine is to have and does not yet:
-    /// they go in while Android runs ([`crate::reconcile`]).
+    /// The declared Android apps this machine is to have and does not yet,
+    /// whose part arrived: they go in while Android runs
+    /// ([`crate::reconcile`]).
     pub android_pending: Vec<String>,
     /// What the system this machine runs applied and the declaration no
     /// longer names, in the report's order: removed for good — here while
@@ -909,11 +910,14 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
         })
         .collect();
     let kept = crate::reconcile::ledger(roots);
+    // WAITING FOR ANDROID: not in yet, and here to go in — one whose part is
+    // still arriving waits for its part, and its row says so.
     let android_pending = declared_android(roots)
         .map(|d| d.apps)
         .unwrap_or_default()
         .into_iter()
         .filter(|a| !kept.has(&a.package, a.version_code))
+        .filter(|a| crate::parts::file(roots, &a.part, &a.apk).is_ok())
         .map(|a| a.id)
         .collect();
     Declarations {
@@ -947,6 +951,16 @@ pub fn watched(roots: &Roots) -> Vec<PathBuf> {
         roots.system.current.clone(),
         roots.ours_state().join(crate::reconcile::LEDGER),
     ]
+}
+
+/// The folders whose change changes what [`read`] answers, watched whole:
+/// the parts' records ([`crate::parts`]) — a declared program's part that
+/// arrives turns its row from arriving to applied, and an apk's from
+/// arriving to waiting for Android. Root writes a record when a part's
+/// phase changes, never at each step of a download.
+#[must_use]
+pub fn watched_folders(roots: &Roots) -> Vec<PathBuf> {
+    vec![roots.system.parts.clone()]
 }
 
 /// Who put each listed program there, and the declared copies no list of a
@@ -1491,7 +1505,8 @@ mod tests {
 
     /// FAILS IF: a file the declaration's reading depends on is not watched
     /// — the switch's link included, since a machine's reports never move
-    /// their own links.
+    /// their own links — or the parts' records, where a declared program
+    /// arrives.
     #[test]
     fn what_the_reading_depends_on_is_watched() {
         let roots = Roots::under(Path::new("/room"));
@@ -1513,6 +1528,10 @@ mod tests {
             watched
                 .iter()
                 .any(|w| w.ends_with(crate::reconcile::LEDGER))
+        );
+        assert_eq!(
+            watched_folders(&roots),
+            [Path::new("/room/sys/var/lib/ronoctua-parts/parts")]
         );
     }
 

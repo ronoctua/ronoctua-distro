@@ -73,11 +73,13 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    (`lib.machine`, `templates/machine`), e ele usa exatamente os pins que a distro testou
    (`machine-uses-the-distro-pins`); o nome da pasta está escrito só em `nix/machine.nix`
    (`machine-dir-has-one-name`). O que a pessoa declara (`person/software/*.json`) é dado, nunca
-   código Nix: em `nix/modules/person.nix` um pacote ou AppImage declarado é uma PARTE dela, que o
-   sistema nunca avalia e que o realizador avalia sozinha (`personParts`; emenda de 2026-10-25, aprovada no plano das partes), e os
-   lançadores web, os Flatpaks (nix-flatpak `--user`) e o apk listado para o reconciliador vão para
-   ela — nunca para o `systemPackages`. A entrada que não se aplica é pulada e dita em
-   `/etc/ronoctua/person-applied.json`, e a que não avalia ou não constrói falha só a própria parte.
+   código Nix: em `nix/modules/person.nix` um pacote, AppImage ou app Android declarado é uma PARTE
+   dela (o apk, uma parte de dados que o reconciliador lê pelo caminho estável), que o sistema nunca
+   avalia e que o realizador avalia sozinha (`personParts`; emenda de 2026-10-25, aprovada no plano
+   das partes), e os lançadores web e os Flatpaks (nix-flatpak `--user`) vão para ela — nunca para
+   o `systemPackages`. A entrada que não se aplica é pulada e dita em
+   `/etc/ronoctua/person-applied.json`, e a que não avalia, não constrói ou não baixa falha só a
+   própria parte.
    Um módulo do brain da pessoa com metade NixOS só é importado aprovado pelo hash atual
    (`nix/person-hash.nix`).
 

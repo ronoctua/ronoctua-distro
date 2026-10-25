@@ -42173,12 +42173,12 @@ let
   # without consent, an entry for another machine, one with a field missing and
   # a Flatpak from a remote this machine does not have.
   #
-  # A declared package or AppImage is a PART of the person's: the system
-  # never evaluates it, and the report says it was applied as one, with the
-  # part it became (`parts`). Whether it builds is that part's own question —
-  # `ronoctua.person.parts.<id>`, which its realizer evaluates alone: here
-  # each answers its derivation, or why its build refuses it (attr-missing,
-  # not-a-package, refused-by-meta). What the system itself skips is what it
+  # A declared package, AppImage or Android app is a PART of the person's:
+  # the system never evaluates it, and the report says it was applied as
+  # one, with the part it became (`parts`). Whether it builds is that part's
+  # own question — `ronoctua.person.parts.<id>`, which its realizer
+  # evaluates alone: here each answers its derivation, or why its build
+  # refuses it (attr-missing, not-a-package, refused-by-meta). What the system itself skips is what it
   # can tell from the data alone: another machine, a malformed entry, a
   # source it lacks. Two variations: the file says a format from the future,
   # and the registry knows two of the declines.
@@ -42279,6 +42279,7 @@ let
             "nix:discord"
             "nix:sl"
             "appimage:fixture-tool"
+            "android:org.example.fixture"
           ] (targetOf config);
           plan = personPartsOf config;
           minimal = {
@@ -42339,7 +42340,7 @@ let
           return {s["id"]: (s["reason"], s["detail"]) for s in report["skipped"]}
 
       PARTS = ["nix:cowsay", "nix:obsidian", "nix:gone-from-nixpkgs-fixture", "nix:autoReconfHook",
-               "nix:lib", "nix:discord", "nix:sl", "appimage:fixture-tool"]
+               "nix:lib", "nix:discord", "nix:sl", "appimage:fixture-tool", "android:org.example.fixture"]
       r = f["report"]
       expected_applied = ["nix:cowsay", "nix:obsidian", "nix:gone-from-nixpkgs-fixture",
                           "nix:autoReconfHook", "nix:lib", "nix:discord", "nix:sl",
@@ -42376,6 +42377,7 @@ let
           "nix:discord": "refused-by-meta",
           "nix:sl": "drv",
           "appimage:fixture-tool": "drv",
+          "android:org.example.fixture": "drv",
       }
       if f["targets"] != want_targets:
           wrong.append(f"what each part's realizer would read: {f['targets']}")
@@ -42434,12 +42436,14 @@ let
   # THE PERSON'S PROGRAMS GO TO THE PERSON.
   #
   # Every declared program is the person's: a package or an AppImage is a
-  # PART of theirs (realized after the system, never in its closure), a web
-  # app's launcher entry is in their Home Manager profile, a Flatpak on their
-  # own installation's list, an Android app on the list the reconciler
-  # installs from — and NOT in `environment.systemPackages` nor the system's
-  # Flatpak installation. And it is there BECAUSE of the declaration: the
-  # reference machine, which declares nothing, has none of them.
+  # PART of theirs (realized after the system, never in its closure), an
+  # Android app's apk too — a part of data, on the list the reconciler
+  # installs from by its part and its file, with no store path, so the
+  # system never fetches it —, a web app's launcher entry is in their Home
+  # Manager profile, a Flatpak on their own installation's list — and NOT in
+  # `environment.systemPackages` nor the system's Flatpak installation. And
+  # it is there BECAUSE of the declaration: the reference machine, which
+  # declares nothing, has none of them.
   person-packages-are-per-user =
     let
       person = (machineLib.machine { dir = ./fixtures/machine-person; }).config;
@@ -42460,13 +42464,16 @@ let
           home = names person.home-manager.users.${user}.home.packages;
           system = names person.environment.systemPackages;
           parts = entryParts person;
+          kinds = lib.mapAttrs (_: p: p.kind) person.ronoctua.parts;
           referenceParts = entryParts reference;
           referenceHome = names reference.home-manager.users.${user}.home.packages;
           referenceSystem = names reference.environment.systemPackages;
           flatpakPerson = map (p: p.appId) person.home-manager.users.${user}.services.flatpak.packages;
           flatpakSystem = map (p: p.appId or p) person.services.flatpak.packages;
           desktop = builtins.attrNames person.home-manager.users.${user}.xdg.desktopEntries;
-          android = map (a: "${a.id} ${a.from}") person.ronoctua.declaredAndroid;
+          android = map (a: "${a.id} ${a.from} ${a.part} ${a.apk}") person.ronoctua.declaredAndroid;
+          # A STORE PATH IN THE LIST is the apk in the system's closure.
+          androidHolds = builtins.hasContext (builtins.toJSON person.ronoctua.declaredAndroid);
         }
       );
     in
@@ -42497,15 +42504,20 @@ let
           wrong.append("the declared Flatpak is on the system installation's list")
       if "ronoctua-web-fixture-web" not in f["desktop"]:
           wrong.append("the web app is not one of the person's launcher entries")
-      if f["android"] != ["android:org.example.fixture person"]:
+      apk = [part for part, entry in f["parts"].items() if entry == "android:org.example.fixture"]
+      if len(apk) != 1 or f["kinds"][apk[0]] != "data":
+          wrong.append(f"the declared apk is not one part of the person's, of data: {apk}")
+      elif f["android"] != [f"android:org.example.fixture person {apk[0]} org.example.fixture_7.apk"]:
           wrong.append(f"the apks for the reconciler: {f['android']}")
+      if f["androidHolds"]:
+          wrong.append("the list of apks for the reconciler holds a store path: the system fetches the apk")
       if wrong:
           print("ERROR: the person's declared programs are not the person's.", file=sys.stderr)
           for w in wrong:
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
-      print(f"OK: {len(parts)} packages and AppImages are parts of the person's; the web app, the "
-            "Flatpak and the apk go to them, and only by declaring")
+      print(f"OK: {len(parts)} packages, AppImages and apks are parts of the person's; the web app "
+            "and the Flatpak go to them, and only by declaring")
       END
     '';
 
@@ -44147,7 +44159,6 @@ let
       '';
   distroAppsSources =
     let
-      discard = builtins.unsafeDiscardStringContext;
       base = self.nixosConfigurations.noctua;
       host = base.config.networking.hostName;
       user = base.config.ronoctua.user;
@@ -44243,7 +44254,15 @@ let
           );
           flatpaks = c.ronoctua.distroApps.flatpaks;
           personFlatpaks = map (p: p.appId or "") c.home-manager.users.${user}.services.flatpak.packages;
-          android = map (a: a // { apk = discard a.apk; }) c.ronoctua.distroApps.android;
+          android = c.ronoctua.distroApps.android;
+          # A STORE PATH IN THE LIST is the apk in the system's closure: it is
+          # a part, named by its id and its file.
+          androidHolds = builtins.hasContext (builtins.toJSON c.ronoctua.distroApps.android);
+          androidPart =
+            let
+              p = c.ronoctua.parts.planted-android or null;
+            in
+            if p == null then null else { inherit (p) wanted kind; };
           warnings = builtins.filter (lib.hasInfix "declined programs") c.warnings;
           report = c.ronoctua.distroApps.declinedReport;
           vlc = c.ronoctua.distroApps.installed.vlc;
@@ -44538,11 +44557,15 @@ let
            declined["flatpaks"] == [] and "org.example.Planted" not in declined["personFlatpaks"])
     apk = good["android"]
     expect(f"the distro's Android records are {apk}",
-           len(apk) == 1
-           and {k: v for k, v in apk[0].items() if k != "apk"}
-               == {"id": "android:org.example.planted", "package": "org.example.planted",
-                   "image": "vanilla", "version-code": 7, "from": "distro"}
-           and apk[0]["apk"].startswith("/nix/store/") and apk[0]["apk"].endswith("-org.example.planted_7.apk"))
+           apk == [{"id": "android:org.example.planted", "package": "org.example.planted",
+                    "image": "vanilla", "version-code": 7, "from": "distro",
+                    "part": "planted-android", "apk": "org.example.planted_7.apk"}])
+    expect("the distro's list of apks holds a store path: the system fetches the apk",
+           not good["androidHolds"])
+    expect(f"the planted apk is not a wanted part of data: {good['androidPart']}",
+           good["androidPart"] == {"wanted": True, "kind": "data"})
+    expect(f"a declined apk is still a wanted part: {declined['androidPart']}",
+           declined["androidPart"] == {"wanted": False, "kind": "data"})
     expect("a declined Android app is still handed to the reconciler", declined["android"] == [])
     expect(f"the declines of the four are reported {declined['report']}",
            sorted(declined["report"]["honoured"]) == sorted(shape))

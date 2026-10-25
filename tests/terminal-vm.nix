@@ -142,6 +142,8 @@ pkgs.testers.runNixOSTest {
             assert bad not in journal, f"the terminal reported: {bad}"
 
     with subtest("what is typed reaches the program and comes back to the screen"):
+        import time
+
         # With no window manager nobody calls `XSetInputFocus`: the injected key
         # would be lost with no error, no log, nowhere.
         focus_compositor()
@@ -153,34 +155,44 @@ pkgs.testers.runNixOSTest {
         # accepted by the driver and the `cat` would never repeat it.
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Return")
 
-        # The redraw comes from the pty's `ping`, not from the key. Waiting for the
-        # LOG is the right signal — sleeping a fixed time would be a race.
-        machine.wait_until_succeeds(
-            "journalctl -u term --no-pager | "
-            "grep -c 'terminal drawn on the xdg_toplevel' | awk '$1 > 1'",
-            timeout=60,
-        )
+        def read_the_screen():
+            # THE WINDOW'S OWN RECTANGLE, asked of the compositor.
+            #
+            # Cropping the whole OUTPUT was the old way of not assuming where a
+            # window goes (invariant 4 forbids assuming), and it stops working the
+            # moment a layout puts the window in a column of its own: the rest of
+            # the crop is empty desk, and `tesseract --psm 6` — which expects one
+            # uniform block of text — reads nothing from it. `window_box` reads the
+            # rectangle instead, which is asking rather than assuming.
+            w, h, x, y = window_box(sock, "br.ronoctua.terminal")
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
+                "-colorspace gray -negate -resize 200% /tmp/term.png"
+            )
+            return machine.succeed(
+                "${pkgs.tesseract}/bin/tesseract /tmp/term.png stdout --psm 6 2>/dev/null"
+            ).strip()
 
-        # THE WINDOW'S OWN RECTANGLE, asked of the compositor.
+        # THE SCREEN ITSELF, asked until it says so — for a minute or more.
         #
-        # Cropping the whole OUTPUT was the old way of not assuming where a
-        # window goes (invariant 4 forbids assuming), and it stops working the
-        # moment a layout puts the window in a column of its own: the rest of
-        # the crop is empty desk, and `tesseract --psm 6` — which expects one
-        # uniform block of text — reads nothing from it. `window_box` reads the
-        # rectangle instead, which is asking rather than assuming.
-        w, h, x, y = window_box(sock, "br.ronoctua.terminal")
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
-            "-colorspace gray -negate -resize 200% /tmp/term.png"
-        )
-        read_back = machine.succeed(
-            "${pkgs.tesseract}/bin/tesseract /tmp/term.png stdout --psm 6 2>/dev/null"
-        ).strip()
-        print(f"OCR: {read_back!r}")
+        # A count of the terminal's draws was the signal, and it says nothing of
+        # the text: a loaded machine draws the window twice before a key is
+        # typed (at its first size, and again at the size the compositor
+        # configures), so "more than one draw" held at once and the screen was
+        # read before the echo came; and a draw that carries the echo is not yet
+        # a frame the compositor showed. What is asserted is what `xwd` reads,
+        # so that is what is waited for.
+        #
         # `working` on its own: it is the longer and less ambiguous word of the
         # pair, and requiring both would turn an OCR error into a terminal error.
+        read_back = ""
+        for _ in range(15):
+            read_back = read_the_screen()
+            print(f"OCR: {read_back!r}")
+            if "working" in read_back.lower():
+                break
+            time.sleep(1)
         assert "working" in read_back.lower(), (
             f"what was typed did not reach the screen; OCR read {read_back!r}"
         )

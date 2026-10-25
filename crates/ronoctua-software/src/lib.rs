@@ -332,6 +332,12 @@ pub struct System {
     /// `/var/lib/ronoctua-parts/parts` — each part's record, a declared
     /// program's included ([`crate::parts`]).
     pub parts: PathBuf,
+    /// `/etc/ronoctua/parts-plan.json` — the parts the running system wants,
+    /// each at its interface.
+    pub parts_plan: PathBuf,
+    /// `/nix/var/nix/profiles/ronoctua/parts` — the parts' profiles, where
+    /// a declared apk is read from once it arrived ([`crate::parts::file`]).
+    pub part_profiles: PathBuf,
 }
 
 impl System {
@@ -352,6 +358,8 @@ impl System {
             machine: at(ronoctua_machine::STATE_DIR),
             current: at(CURRENT_SYSTEM),
             parts: at(ronoctua_parts::names::RECORDS),
+            parts_plan: at(ronoctua_parts::names::PLAN),
+            part_profiles: at(ronoctua_parts::names::PARTS_ROOT),
         }
     }
 

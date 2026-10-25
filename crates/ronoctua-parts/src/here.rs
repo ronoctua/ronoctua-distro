@@ -52,22 +52,35 @@ pub fn here(path: &Path) -> Result<PathBuf, Absent> {
 ///
 /// [`Absent`] when the plan does not want the part, or it is not here yet.
 pub fn file_of(id: &str, relative: &str) -> Result<PathBuf, Absent> {
-    file_of_in(Path::new(crate::names::PLAN), id, relative)
+    file_of_in(
+        Path::new(crate::names::PLAN),
+        Path::new(crate::names::PARTS_ROOT),
+        id,
+        relative,
+    )
 }
 
-/// [`file_of`], over the plan at `plan` — a test's.
+/// [`file_of`], over the plan at `plan` and the parts' profiles under `root`
+/// — a test's, or a photograph's room.
 ///
 /// # Errors
 ///
 /// [`Absent`].
-pub fn file_of_in(plan: &Path, id: &str, relative: &str) -> Result<PathBuf, Absent> {
+pub fn file_of_in(plan: &Path, root: &Path, id: &str, relative: &str) -> Result<PathBuf, Absent> {
+    let at = |interface: u32| root.join(id).join(format!("v{interface}")).join(relative);
+    let absent = |path| Absent {
+        part: Some(id.to_owned()),
+        path,
+    };
     let interface = crate::plan::read(plan)
         .and_then(|p| p.parts.get(id).map(|w| w.interface))
-        .ok_or_else(|| Absent {
-            part: Some(id.to_owned()),
-            path: crate::names::profile(id, 1).join(relative),
-        })?;
-    here(&crate::names::profile(id, interface).join(relative))
+        .ok_or_else(|| absent(at(1)))?;
+    let path = at(interface);
+    if path.exists() {
+        Ok(path)
+    } else {
+        Err(absent(path))
+    }
 }
 
 #[cfg(test)]
@@ -92,14 +105,27 @@ mod tests {
             ),
         )
         .unwrap();
-        let absent = file_of_in(&plan, "unrar", "bin/unrar").expect_err("not here in a test");
+        let root = Path::new(crate::names::PARTS_ROOT);
+        let absent = file_of_in(&plan, root, "unrar", "bin/unrar").expect_err("not here in a test");
         assert_eq!(absent.part.as_deref(), Some("unrar"));
         assert_eq!(
             absent.path,
             crate::names::profile("unrar", 3).join("bin/unrar")
         );
-        let unwanted = file_of_in(&plan, "uade", "bin/uade").expect_err("not in the plan");
+        let unwanted = file_of_in(&plan, root, "uade", "bin/uade").expect_err("not in the plan");
         assert_eq!(unwanted.part.as_deref(), Some("uade"));
+        // HERE, under another root: found at the plan's interface, and only
+        // there.
+        let profiles = dir.join("parts");
+        std::fs::create_dir_all(profiles.join("unrar/v1/bin")).unwrap();
+        std::fs::write(profiles.join("unrar/v1/bin/unrar"), b"").unwrap();
+        assert!(file_of_in(&plan, &profiles, "unrar", "bin/unrar").is_err());
+        std::fs::create_dir_all(profiles.join("unrar/v3/bin")).unwrap();
+        std::fs::write(profiles.join("unrar/v3/bin/unrar"), b"").unwrap();
+        assert_eq!(
+            file_of_in(&plan, &profiles, "unrar", "bin/unrar"),
+            Ok(profiles.join("unrar/v3/bin/unrar"))
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

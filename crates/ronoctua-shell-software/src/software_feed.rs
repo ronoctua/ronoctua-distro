@@ -535,8 +535,10 @@ impl Reader {
 
 /// The watches on what the declaration's reading depends on
 /// (`declaration::watched`): the mirror (an order, a belongings sync), the
-/// system's reports and the link a switch replaces (the update's apply), and
-/// the reconciler's ledger. A file that moves reads the machine again — in
+/// system's reports and the link a switch replaces (the update's apply), the
+/// reconciler's ledger, and the parts' records, whole
+/// (`declaration::watched_folders`: a declared program arriving). A file
+/// that moves reads the machine again — in
 /// the window and in the footer alike, because both hold a feed while the
 /// view is open, and only then: an event, never a clock (the file is the
 /// broadcast).
@@ -559,6 +561,10 @@ fn watch_the_declaration(
             Some((_, names)) => names.push(name),
             None => by_folder.push((folder.to_path_buf(), vec![name])),
         }
+    }
+    // A FOLDER WATCHED WHOLE names no file.
+    for folder in ronoctua_software::declaration::watched_folders(roots) {
+        by_folder.push((folder, Vec::new()));
     }
     let mirror = ronoctua_software::declaration::mirror(roots);
     let mut out = Vec::new();

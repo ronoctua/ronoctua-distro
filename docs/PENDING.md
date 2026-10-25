@@ -1678,11 +1678,9 @@ por marcos, cada um verde:
     leva também — pequenos, e inúteis para outra máquina;
   - **a `apply` de uma distro sem fases** (anterior a elas) não sabe o `.drv` do sistema: ela não diz
     o que faltou nem enraíza os downloads.
-- **O que ficou do M8.** Os pacotes e AppImages que a pessoa declara são partes dela, e os AppImages
-  seguidos são o pin da parte do próprio app (o porquê no `docs/ARCHITECTURE.md`). Ficou para depois:
-  - **os apps do Android que a pessoa declara continuam no sistema**: o apk de cada um é baixado no
-    build e listado em `/etc/ronoctua/declared-android.json`, então um apk que não baixa derruba o
-    rebuild. Uma parte de dados por apk, lida pelo reconciliador pelo caminho estável, resolve;
+- **O que ficou do M8.** Os pacotes, AppImages e apps Android que a pessoa declara são partes dela, e
+  os AppImages seguidos são o pin da parte do próprio app (o porquê no `docs/ARCHITECTURE.md`). Ficou
+  para depois:
   - **a página das partes não distingue as partes da pessoa** das da distro: são todas linhas iguais,
     nomeadas pelo nome que a pessoa declarou;
   - **o `wide` do `nix/modules/person.nix`** (um nixpkgs com `allowUnfree`) sobrou da época do

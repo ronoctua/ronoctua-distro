@@ -17,7 +17,7 @@
 //! $XDG_STATE_HOME/ronoctua/person-signed/  the manifest the person signed of the mirror, and its signature
 //! /etc/ronoctua/person-applied.json  what Nix applied and skipped, and why
 //! /etc/ronoctua/distro-apps.json     the distro's program registry on this machine
-//! /etc/ronoctua/declared-android.json the Android apps to reconcile, as store apks
+//! /etc/ronoctua/declared-android.json the Android apps to reconcile, each by its part and file
 //! /var/lib/ronoctua-machine/state.json the boot trial, the hold, the last apply
 //! ```
 //!

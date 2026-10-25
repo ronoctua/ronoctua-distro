@@ -4,7 +4,8 @@
     {
       "id": "android:org.fdroid.fdroid",
       "package": "org.fdroid.fdroid",
-      "apk": "/nix/store/abcdefghijklmnopqrstuvwxyz012345-org.fdroid.fdroid_1021050.apk",
+      "part": "person-1a2b3c4d-org-fdroid-fdroid",
+      "apk": "org.fdroid.fdroid_1021050.apk",
       "version-code": 1021050,
       "from": "person",
       "image": "vanilla"
