@@ -16163,8 +16163,10 @@ mão e o que a ferramenta escreve moram em arquivos separados, como `flake.nix` 
 `nix run .#distro-pins` move só o que segue uma fonte (a release mais nova de um repositório do
 GitHub, a versão que o F-Droid sugere), mantém o pin escrito à mão do que não segue nada, recusa uma
 release com tag sem número (`continuous` serve bytes novos sob o mesmo nome — o defeito que o
-`downloads-are-pinned` recusa) e nunca faz commit: o pin é o que o gate testou, e só o dono o move
-(a pessoa pode seguir os AppImages além dele, no perfil dela — veja os Crafting Apps, abaixo).
+`downloads-are-pinned` recusa) e não faz commit: quem commita é o `.#release`, que a roda antes do
+gate de cada versão (abaixo, "Os pins andam antes de cada versão"), ou o dono, à mão — o pin é o que
+o gate testou (a pessoa pode seguir os AppImages além dele, no perfil dela — veja os Crafting Apps,
+abaixo).
 O Flatpak da distro vai para a instalação `--user` pela lista do nix-flatpak, a mesma do
 `declaredFlatpaks` (sair dela é o que desinstala). O AppImage é embrulhado no build
 (`appimageTools.wrapType2`) como `ronoctua-appimage-<chave>`, o nome que o AppImage declarado da
@@ -18820,23 +18822,36 @@ descobrir uma hora depois que faltava o login é o tipo de erro que um comando d
 `--dry-run` para aí e diz o que faria. Como o gate demora, a árvore é conferida de novo depois
 dele, e os sistemas são construídos do commit (`git+file://…?rev=`), não da pasta.
 
-**Os pins que ficaram para trás são ditos, nunca movidos.** Depois das recusas e antes do gate — no
-`--dry-run` também —, o `.#release` pergunta a release mais nova do que cada pin de
-`assets/distro-pins.json` segue (`distro-pins.py --stale`: a lógica do `nix run .#distro-pins`, só com
-perguntas de leitura, sem download) e diz cada pin MAIS VELHO que ela, com o nome do app e as duas
-versões, e como movê-los; um pin mais novo que a release mais nova (uma release retirada) é dito como
-tal. A ordem é a do `builtins.compareVersions`, a do build. Nunca recusa e nunca move: o pin é o que o
-gate testou, e movê-lo é um commit do dono (`nix run .#distro-pins`, o diff, o commit, o push e o
-`.#release` de novo). O GitHub responde 60 perguntas por hora sem token, e um release é ensaiado de
-novo e de novo: o token do `gh` logado vai no ambiente daquela chamada só (nunca num argumento, nunca
-impresso), e a comparação inteira tem um limite de tempo (`timeout`). Uma pergunta que a rede não
-respondeu é dita, e a versão segue; um defeito da ferramenta não passa por silêncio da rede (só os
-erros de rede e de JSON viram "não perguntado"). O `distro-pins-move-only-what-follows` (a lógica e a
-ordem das versões, contra o próprio Nix), o `distro-pins-stale-is-read-only` (a ferramenta sem rede,
-no sandbox: termina bem, diz cada app como não perguntado e não toca no arquivo) e o
-`release-refuses-dirty-tree` (a ordem, o token, o limite, e que nada para) provam isso sem rede.
+**Os pins andam antes de cada versão.** (Decisão do dono, 2026-10-25.) Depois das recusas e antes
+do gate, o `.#release` roda o `nix run .#distro-pins` no checkout (`movePins`): cada app que segue
+uma fonte vai para a release mais nova dela, baixada uma vez para o hash. O que mudou vira UM commit,
+só de `assets/distro-pins.json`, com o que andou na mensagem (as linhas da própria ferramenta) e
+assinado como o checkout assina — a chave do dono —, e sobe para a `main` antes de qualquer build. O
+gate testa esse commit, e é ele que se publica: o pin continua sendo o que o gate testou, e a versão
+continua sendo o que a `origin` tem (a `main` não é o que as máquinas seguem; a `release` é). Nada
+mudou, nenhum commit. Antes, a versão só dizia os pins atrasados, e cada versão saía com os apps
+velhos até o dono lembrar de movê-los à mão.
 
-**A ordem é a da segurança de quem segue.** (1) O gate. (2) Os dois sistemas de referência e o ISO,
+Uma movimentação que falha (a rede, uma release com dois assets que casam o padrão, uma tag sem
+número), que não termina no prazo (`moveLimitS`, 30 min: um AppImage tem centenas de MiB) ou que
+escreve fora do arquivo dos pins para a versão antes de qualquer outro custo, sem commit nem push, e
+diz a saída: rodar de novo, ou `--keep-pins`, que publica com os pins como estão. Um commit que não
+se faz (a chave não foi tocada, o hook recusou) deixa o arquivo mudado no checkout e diz isso; um push
+recusado deixa o commit no checkout, à frente da `origin/main`, e diz isso. O `--dry-run` e o
+`--keep-pins` não movem nada: perguntam a release mais nova do que cada pin segue
+(`distro-pins.py --stale`, só perguntas de leitura, sem download) e dizem cada pin MAIS VELHO que ela,
+com o nome do app e as duas versões; um pin mais novo que a release mais nova (uma release retirada) é
+dito como tal. A ordem é a do `builtins.compareVersions`, a do build. Ali uma pergunta que a rede não
+respondeu é dita e a versão segue; um defeito da ferramenta não passa por silêncio da rede (só os
+erros de rede e de JSON viram "não perguntado"). O GitHub responde 60 perguntas por hora sem token, e
+um release é ensaiado de novo e de novo: o token do `gh` logado vai no ambiente daquela chamada só
+(nunca num argumento, nunca impresso), e cada chamada tem um limite de tempo (`timeout`). O
+`distro-pins-move-only-what-follows` (a lógica e a ordem das versões, contra o próprio Nix), o
+`distro-pins-stale-is-read-only` (a ferramenta sem rede, no sandbox: termina bem, diz cada app como
+não perguntado e não toca no arquivo) e o `release-refuses-dirty-tree` (o commit dos pins, o que o
+gate testa, as recusas, o token, os limites) provam isso sem rede.
+
+**A ordem é a da segurança de quem segue.** Os pins andam antes de tudo (acima); depois, (1) o gate. (2) Os dois sistemas de referência e o ISO,
 que leva a semente. (3) O Release do GitHub como rascunho, com todos os assets: o pendrive
 (`ronoctua-stick`) e o `.#fetch-iso` leem só versão publicada, então um upload pela metade fica
 invisível; rascunho não cria tag. (4) A branch. (5) Com `--sign`, a tag assinada sobe para a
@@ -18847,7 +18862,7 @@ não anda, o rascunho fica sem publicar, a tag assinada fica só no checkout —
 nada mais mudou; rodar de novo retoma (o upload sobrescreve o rascunho, a branch igual é nada). A
 tag é `v<AAAA.MM.DD>-<rev7>`, a data do commit em UTC: dois Releases no mesmo dia não colidem.
 
-**Nunca um commit.** As checksums são um asset (`SHA256SUMS`) e, com `--sign`, também a mensagem de
+**O único commit é o dos pins.** As checksums são um asset (`SHA256SUMS`) e, com `--sign`, também a mensagem de
 uma tag assinada (`git tag -s`, que pede a chave do dono) — o `SHA256SUMS` deixa de depender só do
 TLS do GitHub para quem quer conferir. Um commit das checksums seria uma árvore que o ISO não
 carrega: o ISO teria de ser feito depois do próprio commit que o descreve. A tag é feita antes do

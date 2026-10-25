@@ -70,17 +70,30 @@ let
       "nix/release.nix: the update's lock is no longer ${lock} (nix/modules/machine.nix, applyCommand)";
     lock;
 
-  # THE DISTRO'S PINS THAT FELL BEHIND, said before a release publishes
-  # (`distro-pins.py --stale`): read-only questions to GitHub (and F-Droid)
-  # about what each pin follows — nothing is downloaded or written, and no
-  # pin moves: a pin is what the gate tested, and moving one is the owner's
-  # commit (`nix run .#distro-pins`). Its one argument is the checkout.
+  # THE DISTRO'S PINS THAT FELL BEHIND, said by a release that does not move
+  # them (`--dry-run`, `--keep-pins`; `distro-pins.py --stale`): read-only
+  # questions to GitHub (and F-Droid) about what each pin follows — nothing
+  # is downloaded or written. Its one argument is the checkout.
   stalePins = writeShellApplication {
     name = "ronoctua-stale-pins";
     runtimeInputs = [ nix ];
     text = ''
       export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
       exec ${python3}/bin/python3 ${./scripts/distro-pins.py} --stale --root "$1"
+    '';
+  };
+
+  # THE DISTRO'S PINS, MOVED: `nix run .#distro-pins` on the checkout, which
+  # writes each followed app's newest release into `assets/distro-pins.json`
+  # (downloading only what is new, to hash it). Every release runs it before
+  # its gate (the owner's decision, 2026-10-25). Its one argument is the
+  # checkout.
+  movePins = writeShellApplication {
+    name = "ronoctua-move-pins";
+    runtimeInputs = [ nix ];
+    text = ''
+      export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
+      exec ${python3}/bin/python3 ${./scripts/distro-pins.py} --root "$1"
     '';
   };
 
@@ -94,9 +107,13 @@ let
       nix,
       gate,
       pins,
+      move,
       # How long the pins may take to be compared, all of them: a network
       # that does not answer must not hold the release.
       pinsLimitS ? 120,
+      # How long the pins may take to move, all of them: each new release
+      # is downloaded once to be hashed, and an AppImage is hundreds of MiB.
+      moveLimitS ? 1800,
     }:
     writeShellApplication {
       name = "ronoctua-release";
@@ -113,20 +130,25 @@ let
         nix=${nix}
         gate=${gate}
         pins=${pins}
+        move=${move}
 
         usage() {
           cat <<'EOF'
         usage: nix run .#release [-- OPTIONS]
 
         Publishes the distro from this checkout, which must be `main`, clean and
-        equal to `origin/main`: runs the gate, builds the two reference systems and
-        the ISO (which carries its seed), moves `release` forward (only forward), and
-        publishes the ISO as a GitHub release with SHA256SUMS. It never makes a commit.
-        First it says which of the distro's pins are behind their latest release
-        (`nix run .#distro-pins` moves them); it never moves one, and goes on.
+        equal to `origin/main`. First it moves the distro's pins to their latest
+        releases (`nix run .#distro-pins`) and, when one moved, commits
+        assets/distro-pins.json alone — signed as this checkout signs — and pushes
+        main: that commit is what it releases, and the only one it ever makes. Then
+        it runs the gate, builds the two reference systems and the ISO (which carries
+        its seed), moves `release` forward (only forward), and publishes the ISO as a
+        GitHub release with SHA256SUMS.
 
-          --dry-run          check everything that costs nothing, say what would happen,
-                             build and publish nothing
+          --dry-run          check everything that costs nothing, say which pins are
+                             behind and what would happen; move, build and publish nothing
+          --keep-pins        release with the pins as they are: say which are behind,
+                             and move none
           --sign             also put the checksums in a signed tag (git tag -s: the
                              signing key is asked for)
           --rollback-to REV  move `release` back to REV, the commit of an earlier
@@ -150,10 +172,11 @@ let
           echo "== $* =="
         }
 
-        dry=0 sign=0 rollback=""
+        dry=0 keep=0 sign=0 rollback=""
         while [ $# -gt 0 ]; do
           case "$1" in
             --dry-run) dry=1 ;;
+            --keep-pins) keep=1 ;;
             --sign) sign=1 ;;
             --rollback-to)
               [ $# -ge 2 ] || refuse "--rollback-to needs a revision"
@@ -281,13 +304,124 @@ let
             "nix run .#release -- --rollback-to <rev> is the one way back"
         fi
 
+        # GITHUB, asked before anything costs time.
+        "$gh" auth status --hostname github.com >/dev/null 2>&1 ||
+          refuse "gh is not logged in to github.com" "gh auth login"
+        if [ "$sign" = 1 ]; then
+          git config --get user.signingkey >/dev/null ||
+            refuse "--sign needs a signing key (git config user.signingkey)"
+        fi
+
+        # THE LOGGED-IN `gh`'s TOKEN goes in the environment of the one call
+        # that asks about the pins — never an argument, never printed —:
+        # GitHub answers sixty questions an hour without one, and a release is
+        # asked again and again.
+        with_the_token() {
+          local token
+          token=$("$gh" auth token 2>/dev/null || true)
+          if [ -n "$token" ]; then
+            GH_TOKEN="$token" "$@"
+          else
+            "$@"
+          fi
+        }
+        indented() {
+          local line
+          while IFS= read -r line; do
+            echo "  $line"
+          done <<<"$1"
+        }
+
+        # THE DISTRO'S PINS, MOVED FIRST (the owner's decision, 2026-10-25):
+        # every release passes through the pins' update, so what it publishes
+        # follows each app's newest release — and the gate tests exactly that.
+        # What moved becomes ONE commit of `assets/distro-pins.json`, signed as
+        # this checkout signs (the owner's key), pushed to main before anything
+        # is built: the release is what origin has. A move that fails, or does
+        # not end in its time, stops the release before anything costs more,
+        # and says the way past it (`--keep-pins`). `--dry-run` and
+        # `--keep-pins` only say which pins fell behind, and there a question
+        # the network did not answer is said and the release goes on.
+        echo
+        if [ "$dry" = 1 ] || [ "$keep" = 1 ]; then
+          echo "the distro's pins, against their latest releases:"
+          limit=${toString pinsLimitS}
+          status=0
+          said=$(with_the_token timeout "$limit" "$pins" "$top" 2>&1) || status=$?
+          indented "$said"
+          case "$status" in
+            0) ;;
+            124) echo "  (no answer within $limit s: they were not compared)" ;;
+            *) echo "  (they could not be compared: see above)" ;;
+          esac
+          if [ "$keep" = 1 ]; then
+            echo "  this release goes on with the pins it has (--keep-pins)"
+          else
+            echo "  a release moves them first: one commit of assets/distro-pins.json, pushed to main"
+          fi
+        else
+          echo "the distro's pins, moved to their latest releases:"
+          limit=${toString moveLimitS}
+          status=0
+          said=$(with_the_token timeout "$limit" "$move" "$top" 2>&1) || status=$?
+          indented "$said"
+          moved=$(git status --porcelain=v1 --untracked-files=all)
+          if [ "$status" != 0 ]; then
+            why="the distro's pins could not be moved (see above)"
+            if [ "$status" = 124 ]; then
+              why="the distro's pins did not move within $limit s"
+            fi
+            left=()
+            if [ -n "$moved" ]; then
+              left=("the checkout is not as it was: git status says what changed")
+            fi
+            refuse "$why" "nothing was committed, built or published" "''${left[@]}" \
+              "run it again, or release with the pins as they are: nix run .#release -- --keep-pins"
+          fi
+          if [ -z "$moved" ]; then
+            echo "  nothing moved"
+          else
+            [ "$moved" = " M assets/distro-pins.json" ] ||
+              refuse "moving the pins changed more than assets/distro-pins.json" \
+                "$(printf '%s\n' "$moved" | head -5)" "nothing was committed, built or published"
+            # THE MESSAGE: what moved, in the tool's own lines.
+            lines=$(grep -e ' -> ' -e ': pinned ' -e ': dropped ' <<<"$said" || true)
+            count=$(grep -c . <<<"$lines" || true)
+            case "$count" in
+              0) subject="distro-pins: the pins are written again in the tool's shape" ;;
+              1) subject="distro-pins: ''${lines%%:*} moves to its latest release" ;;
+              *) subject="distro-pins: $count of the distro's apps move to their latest releases" ;;
+            esac
+            message=$(mktemp)
+            {
+              echo "$subject"
+              echo
+              echo "Moved by nix run .#release before its gate (nix run .#distro-pins)."
+              if [ "$count" != 0 ]; then
+                echo
+                printf '%s\n' "$lines"
+              fi
+            } >"$message"
+            if ! git commit --quiet --file "$message" -- assets/distro-pins.json; then
+              rm -f "$message"
+              refuse "the pins moved, and their commit was not made" \
+                "assets/distro-pins.json holds them, uncommitted: commit and push it, and run the release again" \
+                "nothing was built or published"
+            fi
+            rm -f "$message"
+            git push --quiet origin "HEAD:refs/heads/main" ||
+              refuse "the pins' commit $(git rev-parse --short=7 HEAD) did not reach origin" \
+                "it is in this checkout, ahead of origin/main: push main, and run the release again" \
+                "nothing was built or published"
+            rev=$(git rev-parse HEAD)
+            echo "  committed and pushed to main: $rev"
+          fi
+        fi
+
         short=$(git rev-parse --short=7 "$rev")
         day=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%m.%d "$rev")
         tag="v$day-$short"
 
-        # GITHUB, asked before anything costs time.
-        "$gh" auth status --hostname github.com >/dev/null 2>&1 ||
-          refuse "gh is not logged in to github.com" "gh auth login"
         draft=""
         if state=$("$gh" release view "$tag" --repo "$repository" --json isDraft --jq .isDraft 2>/dev/null); then
           if [ "$state" != true ]; then
@@ -300,8 +434,6 @@ let
           draft=yes
         fi
         if [ "$sign" = 1 ]; then
-          git config --get user.signingkey >/dev/null ||
-            refuse "--sign needs a signing key (git config user.signingkey)"
           if there=$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}"); then
             [ "$there" = "$rev" ] || refuse "the tag $tag already names another commit ($there)"
           fi
@@ -317,36 +449,6 @@ let
         if [ "$sign" = 1 ]; then
           echo "  tag      signed, carrying the checksums"
         fi
-
-        # THE PINS THAT FELL BEHIND, said before anything costs time: the
-        # owner may stop here, move them (`nix run .#distro-pins`, a commit
-        # and a push) and release again. Never a refusal and never a move —
-        # a pin is what the gate tests —, and a question the network did not
-        # answer is said and the release goes on.
-        #
-        # THE LOGGED-IN `gh`'s TOKEN goes in the environment of that one call —
-        # never an argument, never printed —: GitHub answers sixty questions
-        # an hour without one, and a release is asked again and again.
-        echo
-        echo "the distro's pins, against their latest releases:"
-        token=$("$gh" auth token 2>/dev/null || true)
-        limit=${toString pinsLimitS}
-        status=0
-        if [ -n "$token" ]; then
-          said=$(GH_TOKEN="$token" timeout "$limit" "$pins" "$top" 2>&1) || status=$?
-        else
-          said=$(timeout "$limit" "$pins" "$top" 2>&1) || status=$?
-        fi
-        unset token
-        while IFS= read -r line; do
-          echo "  $line"
-        done <<<"$said"
-        case "$status" in
-          0) ;;
-          124) echo "  (no answer within $limit s: they were not compared)" ;;
-          *) echo "  (they could not be compared: see above)" ;;
-        esac
-        echo "  this release goes on with the pins it has"
         if [ "$dry" = 1 ]; then
           echo
           echo "dry run: nothing was built, pushed or published"
@@ -454,13 +556,14 @@ let
     };
 in
 rec {
-  inherit releaseWith stalePins;
+  inherit releaseWith stalePins movePins;
 
   release = releaseWith {
     gh = lib.getExe gh;
     nix = lib.getExe' nix "nix";
     inherit gate;
     pins = lib.getExe stalePins;
+    move = lib.getExe movePins;
   };
 
   # ANYBODY'S, not only the owner's: no account, nothing to install but Nix.

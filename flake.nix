@@ -2858,8 +2858,10 @@
         # THE DISTRO'S OWN PINS MOVE HERE, and only here: the AppImages and
         # Android apps of `assets/distro-apps.nix` that follow a source (a
         # GitHub repository, F-Droid) get the newest release's address and
-        # hash in `assets/distro-pins.json`. The owner runs it, reads the
-        # diff and commits by hand — a pin is what the gate tested. A person
+        # hash in `assets/distro-pins.json`. Every release runs it first and
+        # commits what moved, so the gate tests the moved pins (the owner's
+        # decision, 2026-10-25); run by hand, the owner reads the diff and
+        # commits — a pin is what the gate tested. A person
         # may follow the AppImages further on THEIR machines (the owner's
         # decision, 2026-10-20): their own signed pins, newer ones only
         # (`ronoctua_person::distro_pins`). `--check` writes nothing.
@@ -2873,16 +2875,19 @@
         # ── anchor: L16 ──
         # THE RELEASE — the owner's, and the only thing that moves the
         # `release` branch every machine follows. It refuses unless this is
-        # `main`, clean and equal to `origin/main`; then the gate, the two
-        # reference systems and the ISO (which carries its seed), the branch
-        # (forward only) and the GitHub release. It never commits. The distro
-        # has no binary cache: a person's own is theirs (`nix/modules/binary-cache.nix`).
-        # `--dry-run` checks and says, `--rollback-to <rev>` is the one way back.
+        # `main`, clean and equal to `origin/main`; then the distro's pins,
+        # moved (one commit of `assets/distro-pins.json` when one moved, pushed
+        # to main: the only commit it makes), the gate, the two reference
+        # systems and the ISO (which carries its seed), the branch (forward
+        # only) and the GitHub release. The distro has no binary cache: a
+        # person's own is theirs (`nix/modules/binary-cache.nix`). `--dry-run`
+        # checks and says, `--keep-pins` releases with the pins as they are,
+        # `--rollback-to <rev>` is the one way back.
         release = {
           type = "app";
           program = lib.getExe releaseApps.release;
           meta = {
-            description = "publishes the distro: gate, the release branch and the ISO";
+            description = "publishes the distro: the pins moved, gate, the release branch and the ISO";
             platforms = [ system ];
           };
         };

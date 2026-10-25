@@ -258,7 +258,7 @@ nix run .#texts -- missing <idioma>   o que falta traduzir, por fragmento (-- wh
 <!-- anchor: L04 -->
 
 ```
-nix run .#distro-pins        move os pins dos AppImages e apps Android da distro; o commit é à mão
+nix run .#distro-pins        move os pins dos AppImages e apps Android da distro; o .#release o roda antes
 ```
 
 Todo programa que a distro instala para a pessoa escolher usar — com lançador ou de terminal — é uma
@@ -272,7 +272,7 @@ livro-razão de `assets/distro-apps.nix` e só sai dele por `formerly` ou `retir
 <!-- anchor: L16 -->
 
 ```
-nix run .#release            publica: gate, branch release (só para frente), ISO; nunca commita
+nix run .#release            publica: pins movidos (seu único commit), gate, release (só para frente), ISO
 nix run .#fetch-iso          baixa o ISO da versão, confere cada parte e o inteiro, junta
 nix run .#iso-sweep          apaga os ISOs que nada enraíza, menos o mais novo de cada nome
 nix run .#adopt-machine      máquina do layout antigo → flake próprio (migrate + apply, com sudo)

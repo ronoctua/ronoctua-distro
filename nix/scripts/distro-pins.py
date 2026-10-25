@@ -20,8 +20,10 @@ Run from the root of a checkout. What moves:
 
 What does not move: an entry that follows nothing (`follows = null`, `from =
 "direct"`) keeps the pin written by hand, and one without a pin is refused
-with its id. A pin whose entry left the table is dropped. Nothing is
-committed: review `git diff assets/distro-pins.json` and commit it by hand.
+with its id. A pin whose entry left the table is dropped. This tool commits
+nothing: `nix run .#release` runs it before its gate and commits what moved
+(`nix/release.nix`); run by hand, review `git diff assets/distro-pins.json`
+and commit it.
 
 The network questions go through one object (`Ask`), so the planning is a
 pure function a check runs offline (`distro-pins-move-only-what-follows`).
@@ -488,7 +490,7 @@ def main(argv):
         f.write(after)
     os.chmod(draft, 0o644)
     os.replace(draft, pins_path)
-    print(f"Wrote {PINS}. Review it with `git diff {PINS}`, then commit it by hand.")
+    print(f"Wrote {PINS}: `git diff {PINS}` shows what moved.")
     return 0
 
 

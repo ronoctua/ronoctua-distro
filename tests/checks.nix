@@ -51633,6 +51633,7 @@ let
       '';
       gate = pkgs.writeShellScript "stand-in-gate" ''
         echo "gate" >>"$CALLS"
+        echo "gate on $(${git} rev-parse HEAD) with main at $(${git} --git-dir="$ORIGIN" rev-parse refs/heads/main)" >>"$CALLS"
         exit "''${FAKE_GATE_EXIT:-0}"
       '';
       # The distro's pins against their releases: one behind, or no answer.
@@ -51644,10 +51645,39 @@ let
         sleep "''${FAKE_PINS_SLEEP:-0}"
         exit "''${FAKE_PINS_EXIT:-0}"
       '';
+      # The distro's pins moved in the checkout it is handed: nothing moves,
+      # one pin moves, the move fails, it does not end, or it writes beside
+      # the pins. It says whether the token reached it, never the token.
+      move = pkgs.writeShellScript "stand-in-move-pins" ''
+        echo "move $* ''${GH_TOKEN:+with-the-token}" >>"$CALLS"
+        case "''${FAKE_MOVE:-}" in
+          one)
+            echo "demo: 1.0 -> 1.1"
+            echo "other: unchanged (2.0)"
+            echo '{ "demo": "1.1" }' >"$1/assets/distro-pins.json"
+            echo "Wrote assets/distro-pins.json: \`git diff assets/distro-pins.json\` shows what moved."
+            ;;
+          fail)
+            echo "distro-pins: demo: the latest release has 2 assets matching \`*.AppImage\`"
+            exit 1
+            ;;
+          hang)
+            sleep 30
+            ;;
+          beside)
+            echo '{ "demo": "1.1" }' >"$1/assets/distro-pins.json"
+            echo x >>"$1/flake.nix"
+            ;;
+          *)
+            echo "demo: unchanged (1.0)"
+            echo "Nothing moved."
+            ;;
+        esac
+      '';
     };
 
   # A RELEASE IS `main`, CLEAN, EQUAL TO `origin/main`, AND ONLY EVER MOVES
-  # `release` FORWARD — and it never makes a commit.
+  # `release` FORWARD — and the one commit it makes is the distro's pins'.
   #
   # The release itself, built around stand-ins for `gh`, `nix` and the gate
   # (`releaseStandIns`), in a repository whose `origin` is a bare one
@@ -51668,10 +51698,16 @@ let
   # `--sign`: the
   # signed tag stays in the checkout until `release` has moved (a push of the
   # branch that is refused leaves it there, and says so), then reaches the
-  # origin before the release is published against it. And the distro's pins
-  # that fell behind their releases are said (the program that asks is
-  # handed the checkout) before the gate, in the dry run too, and an answer
-  # that did not come is said and stops nothing.
+  # origin before the release is published against it. And the distro's
+  # pins MOVE before the gate (the owner's decision, 2026-10-25; the program
+  # that moves them is handed the checkout and gh's token): what moved is one
+  # commit of `assets/distro-pins.json` on top of main, on origin before the
+  # gate runs, and that commit is what the gate tests and what is released;
+  # nothing moved is no commit; a move that fails, does not end in its time
+  # or writes beside the pins is refused before anything is built, committed
+  # or pushed, and says `--keep-pins`. The dry run moves nothing and says the
+  # pins behind, as `--keep-pins` does — and there an answer that did not
+  # come is said and stops nothing.
   release-refuses-dirty-tree =
     let
       release = releaseApps.releaseWith {
@@ -51680,8 +51716,10 @@ let
           nix
           gate
           pins
+          move
           ;
         pinsLimitS = 2;
+        moveLimitS = 2;
       };
     in
     mkCheck "release-refuses-dirty-tree"
@@ -51715,7 +51753,9 @@ let
         git clone --quiet git@github.com:ronoctua/ronoctua-distro.git other 2>/dev/null
         cd work
         echo '{ }' >flake.nix
-        git add flake.nix
+        mkdir assets
+        echo '{ "demo": "1.0" }' >assets/distro-pins.json
+        git add flake.nix assets/distro-pins.json
         git commit --quiet -m one
         git push --quiet origin main
         release=${release}/bin/ronoctua-release
@@ -51729,12 +51769,15 @@ let
           git --git-dir="$ORIGIN" rev-parse --verify --quiet refs/heads/release || echo none
         }
 
-        # A refusal: not zero, the sentence said, and nothing started.
+        # A refusal: not zero, the sentence said, and nothing started — no
+        # commit made, and nothing pushed.
         refused() {
-          local what=$1 sentence=$2 stood
+          local what=$1 sentence=$2 stood head main
           shift 2
           : >"$CALLS"
           stood=$(at_release)
+          head=$(git rev-parse HEAD)
+          main=$(git --git-dir="$ORIGIN" rev-parse refs/heads/main)
           if "$release" "$@" >"$said" 2>&1; then
             echo "ERROR: $what: the release went ahead" >&2
             cat "$said" >&2
@@ -51753,6 +51796,10 @@ let
           fi
           if [ "$(at_release)" != "$stood" ]; then
             echo "ERROR: $what: origin's release branch moved" >&2
+            failed=1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$head" ] || [ "$(git --git-dir="$ORIGIN" rev-parse refs/heads/main)" != "$main" ]; then
+            echo "ERROR: $what: refused after a commit was made or pushed" >&2
             failed=1
           fi
         }
@@ -51798,6 +51845,23 @@ let
         refused "a release rolled back from" "was rolled back from it" --dry-run
         git push --quiet origin :release
         rm "$GH_STATE/$(tag_of HEAD)"
+        # A MOVE OF THE PINS THAT FAILS, does not end in its time, or writes
+        # beside the pins: refused before anything is built, committed or
+        # pushed, with the way past it said.
+        FAKE_MOVE=fail refused "a move of the pins that failed" "the distro's pins could not be moved"
+        grep -q -e 'nix run .#release -- --keep-pins' "$said" ||
+          { echo "ERROR: a move that failed did not say --keep-pins" >&2; cat "$said" >&2; failed=1; }
+        grep -qx "move $(git rev-parse --show-toplevel) with-the-token" "$CALLS" ||
+          { echo "ERROR: the pins were not moved in this checkout, or without gh's token" >&2; cat "$CALLS" >&2; failed=1; }
+        if grep -q -x gate "$CALLS"; then
+          echo "ERROR: the gate ran after the pins could not be moved" >&2
+          failed=1
+        fi
+        started=$SECONDS
+        FAKE_MOVE=hang refused "a move of the pins that did not end" "did not move within 2 s"
+        [ $((SECONDS - started)) -lt 20 ] || { echo "ERROR: a move that did not end held the release" >&2; failed=1; }
+        FAKE_MOVE=beside refused "a move that wrote beside the pins" "changed more than assets/distro-pins.json"
+        git checkout --quiet -- flake.nix assets/distro-pins.json
 
         # THE DRY RUN: everything that costs nothing, and nothing else.
         : >"$CALLS"
@@ -51819,8 +51883,23 @@ let
           echo "ERROR: the token was printed" >&2
           failed=1
         fi
-        grep -qx "    Demo (demo): 1.0 pinned, 1.1 released" "$said" && grep -qx "  this release goes on with the pins it has" "$said" ||
-          { echo "ERROR: the dry run did not say the pins behind, and that it goes on" >&2; cat "$said" >&2; failed=1; }
+        grep -qx "    Demo (demo): 1.0 pinned, 1.1 released" "$said" &&
+          grep -qx "  a release moves them first: one commit of assets/distro-pins.json, pushed to main" "$said" ||
+          { echo "ERROR: the dry run did not say the pins behind, and that a release moves them" >&2; cat "$said" >&2; failed=1; }
+        # `--keep-pins` SAYS THEM, and moves none.
+        : >"$CALLS"
+        if ! "$release" --dry-run --keep-pins >"$said" 2>&1; then
+          echo "ERROR: the dry run with --keep-pins refused:" >&2
+          cat "$said" >&2
+          failed=1
+        fi
+        grep -qx "    Demo (demo): 1.0 pinned, 1.1 released" "$said" &&
+          grep -qx "  this release goes on with the pins it has (--keep-pins)" "$said" ||
+          { echo "ERROR: --keep-pins did not say the pins behind, and that it goes on with them" >&2; cat "$said" >&2; failed=1; }
+        if grep -q '^move ' "$CALLS"; then
+          echo "ERROR: --keep-pins moved the pins" >&2
+          failed=1
+        fi
         if ! FAKE_PINS_EXIT=1 "$release" --dry-run >"$said" 2>&1; then
           echo "ERROR: pins that could not be compared stopped the release" >&2
           cat "$said" >&2
@@ -51838,7 +51917,7 @@ let
         [ $((SECONDS - started)) -lt 20 ] || { echo "ERROR: pins that did not answer held the release" >&2; failed=1; }
         grep -q "no answer within 2 s" "$said" || { echo "ERROR: the pins that did not answer were not said" >&2; cat "$said" >&2; failed=1; }
 
-        # THE RELEASE, whole.
+        # THE RELEASE, whole — and no pin moves, so it makes no commit.
         rev=$(git rev-parse HEAD)
         first=$(tag_of HEAD)
         before=$(git --git-dir="$ORIGIN" rev-list --all | sort)
@@ -51850,7 +51929,8 @@ let
         fi
         [ "$(at_release)" = "$rev" ] || { echo "ERROR: origin's release is not the commit released" >&2; failed=1; }
         [ "$(git --git-dir="$ORIGIN" rev-list --all | sort)" = "$before" ] ||
-          { echo "ERROR: the origin holds a commit it did not hold: the release committed" >&2; failed=1; }
+          { echo "ERROR: the origin holds a commit it did not hold: the release committed with no pin moved" >&2; failed=1; }
+        grep -qx "  nothing moved" "$said" || { echo "ERROR: the release did not say that no pin moved" >&2; cat "$said" >&2; failed=1; }
         [ "$(git rev-parse HEAD)" = "$rev" ] && [ -z "$(git status --porcelain)" ] ||
           { echo "ERROR: the checkout changed" >&2; failed=1; }
         grep -q "^gh release create $first --repo ronoctua/ronoctua-distro --draft --target $rev .*SHA256SUMS" "$CALLS" ||
@@ -51861,10 +51941,10 @@ let
           { echo "ERROR: the release was not published after release moved" >&2; failed=1; }
         grep -q -e '--draft=false --latest' "$CALLS" || { echo "ERROR: not published as the latest" >&2; failed=1; }
         grep -qx gate "$CALLS" || { echo "ERROR: released without the gate" >&2; failed=1; }
-        pins_at=$(grep -n '^pins ' "$CALLS" | head -1 | cut -d: -f1)
+        move_at=$(grep -n "^move $(git rev-parse --show-toplevel) with-the-token\$" "$CALLS" | head -1 | cut -d: -f1)
         gate_at=$(grep -nx gate "$CALLS" | head -1 | cut -d: -f1)
-        [ -n "$pins_at" ] && [ -n "$gate_at" ] && [ "$pins_at" -lt "$gate_at" ] ||
-          { echo "ERROR: the pins behind were not said before the gate" >&2; cat "$CALLS" >&2; failed=1; }
+        [ -n "$move_at" ] && [ -n "$gate_at" ] && [ "$move_at" -lt "$gate_at" ] ||
+          { echo "ERROR: the pins were not moved before the gate, in this checkout, with gh's token" >&2; cat "$CALLS" >&2; failed=1; }
 
         # A RUN ONTO A DRAFT THAT IS THERE: the assets go to it again, and no
         # other draft is made. `mid` is released by nobody.
@@ -51895,8 +51975,8 @@ let
         [ "$(at_release)" = "$rev" ] || { echo "ERROR: the rollback did not move release back" >&2; failed=1; }
         grep -qx "gh release edit $first --repo ronoctua/ronoctua-distro --latest" "$CALLS" ||
           { echo "ERROR: the release rolled back to is not the latest again" >&2; cat "$CALLS" >&2; failed=1; }
-        if grep -q -e '^nix' -e '^gh release \(create\|upload\)' -e '--draft=false' -e '^pins ' "$CALLS"; then
-          echo "ERROR: a rollback built, published or asked about pins:" >&2
+        if grep -q -e '^nix' -e '^gh release \(create\|upload\)' -e '--draft=false' -e '^pins ' -e '^move ' "$CALLS"; then
+          echo "ERROR: a rollback built, published, or asked about or moved pins:" >&2
           cat "$CALLS" >&2
           failed=1
         fi
@@ -51952,8 +52032,35 @@ let
           grep -qx "published $signed with release at $fourth" "$CALLS" ||
           { echo "ERROR: the signed release was not published against its tag" >&2; cat "$CALLS" >&2; failed=1; }
 
+        # THE PINS THAT MOVED: one commit of assets/distro-pins.json on top of
+        # main, signed as this checkout signs, on origin before the gate runs
+        # — and that commit is what the gate tests and what is released.
+        git config commit.gpgsign true
+        git commit --quiet --allow-empty -m five
+        git push --quiet origin main
+        fifth=$(git rev-parse HEAD)
+        : >"$CALLS"
+        FAKE_MOVE=one "$release" >"$said" 2>&1 || { echo "ERROR: the release whose pins moved failed:" >&2; cat "$said" >&2; failed=1; }
+        moved=$(git rev-parse HEAD)
+        [ "$(git rev-parse "$moved^")" = "$fifth" ] ||
+          { echo "ERROR: the pins that moved are not one commit on top of main" >&2; git log --oneline -3 >&2; failed=1; }
+        [ "$(git diff --name-only "$fifth" "$moved")" = assets/distro-pins.json ] ||
+          { echo "ERROR: the pins' commit holds more than assets/distro-pins.json" >&2; failed=1; }
+        git cat-file commit "$moved" | grep -q '^gpgsig ' ||
+          { echo "ERROR: the pins' commit was not signed as this checkout signs" >&2; failed=1; }
+        [ "$(git log -1 --format=%s "$moved")" = "distro-pins: demo moves to its latest release" ] &&
+          git log -1 --format=%b "$moved" | grep -qx "demo: 1.0 -> 1.1" &&
+          ! git log -1 --format=%b "$moved" | grep -q -e unchanged -e Wrote ||
+          { echo "ERROR: the pins' commit does not say what moved, and only that" >&2; git log -1 "$moved" >&2; failed=1; }
+        grep -qx "gate on $moved with main at $moved" "$CALLS" ||
+          { echo "ERROR: the gate did not test the pins' commit, with origin's main at it" >&2; cat "$CALLS" >&2; failed=1; }
+        [ "$(at_release)" = "$moved" ] || { echo "ERROR: what was released is not the pins' commit" >&2; failed=1; }
+        grep -q "^gh release create $(tag_of "$moved") --repo ronoctua/ronoctua-distro --draft --target $moved " "$CALLS" ||
+          { echo "ERROR: the draft is not the pins' commit's" >&2; cat "$CALLS" >&2; failed=1; }
+        [ -z "$(git status --porcelain)" ] || { echo "ERROR: the checkout is not clean after the pins' commit" >&2; failed=1; }
+
         [ "$failed" = 0 ] || exit 1
-        echo "OK: seventeen refusals before anything was built or pushed; the pins behind said before the gate, and stopping nothing; a release drafts, moves release forward, publishes, commits nothing and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
+        echo "OK: twenty refusals before anything was built, committed or pushed, three of them a move of the pins that failed, did not end or wrote beside them; the dry run and --keep-pins say the pins behind, move none and stop for nothing; a release moves the pins before the gate — nothing moved is no commit, and what moved is one signed commit of the pins on main, which the gate tests and the release publishes; a release drafts, moves release forward, publishes and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
       '';
 
   # OLD ISOs LEAVE THE STORE, AND NOTHING ELSE DOES (`nix/iso-sweep.nix`).
