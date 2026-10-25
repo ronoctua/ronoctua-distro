@@ -150,18 +150,6 @@
 let
   machineDir = (import ../../../../nix/machine.nix).machineDir;
 
-  # THE DISTRO'S INPUT IN A MACHINE FLAKE, by the one place it is written:
-  # the template every machine's `flake.nix` comes from. One input there, or
-  # this refuses — the step that moves "the distro" must know which it is.
-  distroInput =
-    let
-      inputs = builtins.attrNames (import ../../../../templates/machine/flake.nix).inputs;
-    in
-    if builtins.length inputs == 1 then
-      builtins.head inputs
-    else
-      throw "templates/machine/flake.nix has ${toString (builtins.length inputs)} inputs; the update moves the one that is the distro";
-
   # THE BATTERY FLOOR, in per cent: on battery below it, the steps that
   # compile — the migration, the verification, the rebuild — and the one
   # that moves the lock the rebuild builds from are skipped,
@@ -403,15 +391,13 @@ in
       id = "flake-update";
       does = "move-inputs";
       root = true;
-      package = "nix";
-      program = "nix";
-      run = [
-        "flake"
-        "update"
-        distroInput
-        "--flake"
-        machineDir
-      ];
+      # `nix flake update <distro>` through the machine's program, which
+      # first puts a machine the installer AIMED at its own tree back on the
+      # release (`ronoctua_machine::aim`): a `path:` input updated stays the
+      # same path.
+      package = "machine";
+      program = "ronoctua-machine";
+      run = [ "update-distro" ];
       needs = [
         { writable-file = "${machineDir}/flake.lock"; }
         { not-held = true; }

@@ -3,14 +3,18 @@
 //! Two parts, separated on purpose:
 //!
 //! - [`model`], [`plan`], [`gate`], [`release`], [`swap`] and [`access`] are
-//!   **pure**: the questions, the validation, the command sequence, and what
-//!   the network, the release and the person's repository answered.
+//!   **pure**: the questions, the validation, the command sequence, the
+//!   distro's template, and what the network and the person's repository
+//!   answered.
 //!   Testable without a TUI, without a disk, without the network and without
 //!   root, and it is where the milestone's criteria live.
 //! - [`tui`] reads and draws, [`reach`] asks the world what the questions
 //!   check ([`job`]), and [`executor`] runs. None of them decides anything:
 //!   the TUI's state is testable without a terminal, the jobs without a
 //!   network, and the executor's pure functions without a disk.
+//!
+//! [`first_boot`] is what the machine finishes once it is up: the person's
+//! belongings, which need the network an installation never uses.
 //!
 //! No Nix logic is reimplemented here (invariant 5): the installer writes
 //! the machine's flake from the distro's template, a `host.nix`, and calls
@@ -21,6 +25,7 @@
 
 pub mod access;
 pub mod executor;
+pub mod first_boot;
 pub mod gate;
 pub mod job;
 pub mod key;

@@ -11,82 +11,50 @@
 //!
 //! # The sequence, and why in this order
 //!
+//! NOTHING HERE ASKS THE NETWORK. Every `nix` runs `--offline` with no
+//! substituter and no registry ([`OFFLINE_NIX_CONFIG`]): the ISO carries what
+//! the machine builds (`nix/installer/offline.nix`), so a network that is up
+//! changes nothing and one that is down stops nothing.
+//!
 //! 1. The disk's passphrase for `disko`, and the machine's flake made in a
-//!    working directory: the TEMPLATE (`templates/machine`), `host.nix`, the
-//!    hardware report, the lock, and the name of the system it builds — asked
-//!    of the flake itself, never spelled here.
-//! 2. The person's declarations, BEFORE the disk is touched: the plain part
-//!    of their repository copied out (`ronoctua-belongings plain`, with the
-//!    passphrase: it opens `key.age`, holds the copy to the person's signing
-//!    key and leaves that key for the next step), the key PINNED in the
-//!    working flake's `local/` (`ronoctua-person pin` — the key the
-//!    passphrase opened, never the repository's copy), the copy applied into
-//!    its `person/` by the same root applier the machine runs
-//!    (`ronoctua-person apply`, which takes only what that key signed), and
-//!    each entry tried (`ronoctua-person verify`, which holds what does not
-//!    build). A declaration that cannot be fetched is found here, with the
-//!    disk intact.
-//! 3. `disko`, the flake to the target, the password, the Wi-Fi, and
-//!    `nixos-install` — the machine is built WITH the person's programs.
-//! 4. The person's home: the access to the repository (the deploy key or the
-//!    token), the consent for its host, `belongings.json`, and the restore
-//!    (or, the repository being empty, its making), run AS the person. The
-//!    repository made here has a new signing key, and the machine pins it
-//!    from what `init` left (`ronoctua-person pin --owner`).
+//!    working directory: the TEMPLATE (`templates/machine`), aimed at the
+//!    ISO's own tree, `host.nix`, the hardware report, the lock, and the name
+//!    of the system it builds — asked of the flake itself, never spelled
+//!    here.
+//! 2. The programs left out, as root's staged declines applied to the
+//!    working flake (below).
+//! 3. The system BUILT, before the disk is touched: what the machine needs
+//!    and the ISO does not carry fails with the disk intact.
+//! 4. `disko`, the flake to the target, the password, the Wi-Fi, and
+//!    `nixos-install`, which copies what step 3 built; then the parts the ISO
+//!    carries, seeded into the machine's store (`ronoctua-parts seed`).
+//! 5. The person's home: the access to the repository (the deploy key or the
+//!    token), the consent for its host and `belongings.json` — and what the
+//!    first boot finishes (`crate::first_boot`): the record, and the
+//!    passphrase sealed in the TPM. Copying the plain part out, pinning the
+//!    person's key, applying their declarations and restoring their home ask
+//!    the repository's server, so the machine does them once it is up.
 //!
 //! # The programs left out
 //!
 //! A `full` installation's unmarked programs ([`Answers::left_out_ids`]) are
 //! the person's DECLINES, for this hostname alone (`software/declined.json`,
-//! [`left_out_declined`]) — and a decline is only honoured, by this
-//! installation and every update after it, where it reaches the machine as
-//! the person's data:
+//! [`left_out_declined`]). A machine with no key pinned takes the
+//! declarations as staged: the declines are staged root's (in a folder of
+//! their own, which nothing else fills) and applied before the disk, so
+//! `nixos-install` leaves the programs out. A step right after the apply
+//! READS the working flake's `declined.json` and stops before the disk unless
+//! it says the choice ([`LEFT_OUT_APPLIED`]).
 //!
-//! - **A repository with something in it** has the machine's key pinned
-//!   before anything of the person's is applied, so an unsigned decline would
-//!   be held back. The copy of the plain part SIGNS THE MACHINE'S CHOICE in
-//!   first (`ronoctua-belongings plain --decline <choice>`, a
-//!   `ronoctua_person::choice::Choice`: each program left out declined on
-//!   this machine, each one ticked brought back on it — a reinstall or a
-//!   retry under the same name undoes what an earlier attempt left out —
-//!   signed with the key the passphrase opened, pushed), so the pinned apply
-//!   takes it, `nixos-install` leaves the programs out, and the restore lands
-//!   the declines in the person's mirror. A `full` installation from such a
-//!   repository ALWAYS hands its choice over, a tick bringing back being as
-//!   much an answer as an untick. Written into the repository BEFORE the
-//!   disk is touched: a push that fails stops the installation with the disk
-//!   intact. A decline the person made for EVERY machine stays: the
-//!   installer's tick is about this one ([`ronoctua_person::choice`]).
-//! - **An empty repository** has no key yet, and a machine with none pinned
-//!   takes the declarations as staged: the declines are staged root's (in a
-//!   folder of their own, which nothing else fills) and applied before the
-//!   disk, and the same document goes into the person's mirror before
-//!   `init`, whose first sync signs it with the new key and pushes it.
-//!
-//! In both, a step right after the apply READS the working flake's
-//! `declined.json` and stops before the disk unless it says the choice
-//! ([`LEFT_OUT_APPLIED`]): every program left out declined there for this
-//! machine, and no program ticked declined for it but by a decline of every
-//! machine. A signature that did not cover the joined file would have the
-//! applier keep what the machine had — nothing — and say so only as a
-//! warning.
+//! The repository hears the choice on the first boot: a repository with
+//! something in it has the copy of its plain part sign it in (`plain
+//! --decline`, a `ronoctua_person::choice::Choice`: each program left out
+//! declined on this machine, each one ticked brought back on it), and an
+//! empty one has the declines in the person's mirror before `init`, whose
+//! first sync signs them with the new key.
 //!
 //! A run starts from nothing an earlier one left ([`leftovers`]): a retry
-//! would otherwise apply that attempt's copy, or honour its declines.
-//!
-//! # The person's binary cache
-//!
-//! When the person's options name a binary cache (their own Cachix cache,
-//! `ronoctua_person::options::BinaryCache`, read from the working flake's
-//! `person/` AFTER the root applier validated it), `nixos-install` already
-//! downloads from it: the cache and its key on its command line
-//! ([`BINARY_CACHE_OPTIONS`], filled in by the executor), and for a PRIVATE
-//! cache the token too — read out of the sealed part with the passphrase
-//! before the disk is touched ([`BINARY_CACHE_TOKEN`]), in a netrc of the
-//! installer's own that `nixos-install` is pointed at, and copied to the
-//! machine's root netrc after it ([`BINARY_CACHE_NETRC`]). The token is never
-//! an argument: the belongings' CLI writes it to a file, and the netrc is a
-//! file.
+//! would otherwise apply that attempt's declines.
 
 use std::fmt::Write as _;
 
@@ -238,80 +206,11 @@ impl Scratch {
         format!("{}/run", self.root)
     }
 
-    /// Where the plain part of the repository is copied out: the staged
-    /// tree `ronoctua-person apply` reads (`person/`, `brain-modules/`).
-    #[must_use]
-    pub fn plain(&self) -> String {
-        format!("{}/plain", self.root)
-    }
-
     /// Root's lock for the person's applier and verifier while they work
     /// on the working flake.
     #[must_use]
     pub fn lock(&self) -> String {
         format!("{}/person.lock", self.root)
-    }
-
-    /// The restore's runtime folder, the PERSON'S (`0700`): the
-    /// passphrase's file it reads and deletes, its session.
-    #[must_use]
-    pub fn person_runtime(&self) -> String {
-        format!("{}/person-run", self.root)
-    }
-
-    /// The passphrase's file the copy of the plain part reads (and deletes),
-    /// in the runtime folder of the belongings' children run as root.
-    #[must_use]
-    pub fn plain_passphrase(&self) -> String {
-        format!("{}/plain-passphrase", self.runtime())
-    }
-
-    /// Where the copy of the plain part leaves the signing key the
-    /// passphrase opened, for the pin — beside the copy, never in it.
-    #[must_use]
-    pub fn signer(&self) -> String {
-        format!("{}/{}", self.root, ronoctua_belongings::plain::SIGNER_FILE)
-    }
-
-    /// The answers a hop hands the release's installer (`0600`, deleted by
-    /// the one that reads it).
-    #[must_use]
-    pub fn answers(&self) -> String {
-        format!("{}/answers", self.root)
-    }
-
-    /// The person's binary cache's folder (`0700`): the passphrase the token
-    /// is taken with, the token for the moment it is read, and the netrc
-    /// `nixos-install` reads a private cache through.
-    #[must_use]
-    pub fn binary_cache(&self) -> String {
-        format!("{}/binary-cache", self.root)
-    }
-
-    /// The runtime folder `take` reads the passphrase from.
-    #[must_use]
-    pub fn binary_cache_runtime(&self) -> String {
-        format!("{}/run", self.binary_cache())
-    }
-
-    /// Where `take` writes the token, deleted as soon as the netrc is made.
-    #[must_use]
-    pub fn binary_cache_token(&self) -> String {
-        format!("{}/token", self.binary_cache())
-    }
-
-    /// The installer's netrc for a private cache.
-    #[must_use]
-    pub fn binary_cache_netrc(&self) -> String {
-        format!("{}/netrc", self.binary_cache())
-    }
-
-    /// The machine's choice of the offered programs, which the copy of the
-    /// plain part signs into the repository (`plain --decline`): root's,
-    /// public — ids and a hostname, nothing secret.
-    #[must_use]
-    pub fn choice(&self) -> String {
-        format!("{}/choice.json", self.root)
     }
 
     /// The staged tree of an EMPTY repository's declines, in the plain
@@ -323,26 +222,46 @@ impl Scratch {
     }
 }
 
-/// An internal command: the push token of the person's PRIVATE binary cache,
-/// read out of the sealed part (`ronoctua-belongings take`, the passphrase
-/// in a file) into the installer's netrc ([`Scratch::binary_cache_netrc`]).
-/// It does nothing for a public cache, or with none.
-pub const BINARY_CACHE_TOKEN: &str = "binary-cache-token";
+/// What every `nix` of the installation runs with (`NIX_CONFIG`): no
+/// substituter and no flake registry. The ISO carries what the machine
+/// builds (`nix/installer/offline.nix`), and a network that happens to be up
+/// is never asked — an installation gives the same result with one and
+/// without.
+pub const OFFLINE_NIX_CONFIG: &str = "substituters =\nflake-registry =\n";
 
-/// The mark in `nixos-install`'s command where the person's binary cache
-/// goes — `--option extra-substituters …` and its key, and the installer's
-/// netrc for a private one — filled in by the executor from the working
-/// flake's validated `person/options.json`; nothing when there is no cache.
-pub const BINARY_CACHE_OPTIONS: &str = "{binary-cache}";
+/// [`OFFLINE_NIX_CONFIG`], as a step's variables.
+fn offline_env() -> Vec<(String, String)> {
+    vec![("NIX_CONFIG".to_owned(), OFFLINE_NIX_CONFIG.to_owned())]
+}
 
-/// An internal command: the installer's netrc to the machine's root netrc
-/// ([`target_netrc`]), `0600`, root's; nothing when there is none.
-pub const BINARY_CACHE_NETRC: &str = "binary-cache-netrc";
+/// The parts' program, by name: the ISO's `PATH` holds it.
+pub const PARTS: &str = "ronoctua-parts";
 
-/// The machine's root netrc, on the target (`ronoctua_cachix::NETRC`).
+/// An internal command: the belongings' passphrase sealed in the TPM, into
+/// the first boot's folder on the target ([`crate::first_boot`]). Like
+/// [`SEAL`], the secret reaches `systemd-creds` through stdin.
+pub const SEAL_PASSPHRASE: &str = "seal-passphrase";
+
+/// The installation's marker in the working flake: what nobody may
+/// redistribute waits for the first network.
 #[must_use]
-pub fn target_netrc() -> String {
-    format!("/mnt{}", ronoctua_cachix::NETRC)
+pub fn deferred_marker() -> String {
+    format!(
+        "{WORK_DIRECTORY}/{}",
+        ronoctua_person::names::DEFERRED_HARDWARE
+    )
+}
+
+/// The first boot's folder, on the target.
+#[must_use]
+pub fn first_boot_directory() -> String {
+    format!("/mnt{}", crate::first_boot::DIRECTORY)
+}
+
+/// The first boot's record, on the target.
+#[must_use]
+pub fn first_boot_record() -> String {
+    format!("{}/{}", first_boot_directory(), crate::first_boot::RECORD)
 }
 
 /// [`Scratch::home`] of the installer's.
@@ -357,40 +276,10 @@ pub fn scratch_keys() -> String {
     Scratch::installer().keys()
 }
 
-/// [`Scratch::plain`] of the installer's.
-#[must_use]
-pub fn plain_dir() -> String {
-    Scratch::installer().plain()
-}
-
 /// [`Scratch::lock`] of the installer's.
 #[must_use]
 pub fn person_lock() -> String {
     Scratch::installer().lock()
-}
-
-/// [`Scratch::person_runtime`] of the installer's.
-#[must_use]
-pub fn person_runtime() -> String {
-    Scratch::installer().person_runtime()
-}
-
-/// [`Scratch::plain_passphrase`] of the installer's.
-#[must_use]
-pub fn plain_passphrase() -> String {
-    Scratch::installer().plain_passphrase()
-}
-
-/// [`Scratch::signer`] of the installer's.
-#[must_use]
-pub fn scratch_signer() -> String {
-    Scratch::installer().signer()
-}
-
-/// [`Scratch::choice`] of the installer's.
-#[must_use]
-pub fn choice_file() -> String {
-    Scratch::installer().choice()
 }
 
 /// [`Scratch::staged`] of the installer's.
@@ -411,18 +300,6 @@ pub fn staged_declined() -> String {
     )
 }
 
-/// The same declines in the person's mirror on the target
-/// (`~/.local/state/ronoctua/person/software/declined.json`), where the
-/// software centre reads them and `init`'s first sync signs them — spelled
-/// by the person's data (`ronoctua_person::mirror_declined`).
-#[must_use]
-pub fn target_mirror_declined() -> String {
-    let ours = format!("{}/.local/state/{}", target_home(), ronoctua_xdg::NAME);
-    ronoctua_person::mirror_declined(std::path::Path::new(&ours))
-        .to_string_lossy()
-        .into_owned()
-}
-
 /// The declines the working flake's `person/` holds once root's applier
 /// took the person's tree — what [`LEFT_OUT_APPLIED`] reads.
 #[must_use]
@@ -441,13 +318,13 @@ pub fn applied_declined() -> String {
 /// own, which stays and is said.
 pub const LEFT_OUT_APPLIED: &str = "left-out-applied";
 
-/// What a run clears before its first step: the working flake, the copy of
-/// the plain part and the staged declines an earlier attempt left — the
-/// template is copied over the working flake, and a copy or a decline of
-/// that attempt would be applied as this one's.
+/// What a run clears before its first step: the working flake and the
+/// staged declines an earlier attempt left — the template is copied over
+/// the working flake, and a decline of that attempt would be applied as
+/// this one's.
 #[must_use]
-pub fn leftovers() -> [String; 3] {
-    [WORK_DIRECTORY.to_owned(), plain_dir(), staged_dir()]
+pub fn leftovers() -> [String; 2] {
+    [WORK_DIRECTORY.to_owned(), staged_dir()]
 }
 
 /// The machine's choice of the offered programs, made `at` here: the ones
@@ -492,31 +369,6 @@ pub fn left_out_declined(
     })
 }
 
-/// Where the person's `init` leaves the signing key it made, in their
-/// runtime folder (theirs, `0600`).
-#[must_use]
-pub fn person_signer() -> String {
-    format!(
-        "{}/{}",
-        person_runtime(),
-        ronoctua_belongings::plain::SIGNER_FILE
-    )
-}
-
-/// The mark in a command where the person's uid goes — read from the
-/// target's `/etc/passwd` by the executor once `nixos-install` made them.
-pub const PERSON_UID: &str = "{person-uid}";
-
-/// The passphrase's file the restore reads.
-#[must_use]
-pub fn person_passphrase() -> String {
-    format!(
-        "{}/{}",
-        person_runtime(),
-        ronoctua_belongings::places::PASSPHRASE_FILE
-    )
-}
-
 /// The working flake's `flake.nix` — written only when aimed, and only
 /// before the lock.
 #[must_use]
@@ -531,6 +383,10 @@ pub const LOCK_FILE: &str = "flake.lock";
 /// — asked of the flake ([`Capture::Attribute`]) and filled in by the
 /// executor. The plan never spells the person's name as a system's.
 pub const ATTRIBUTE: &str = "{attribute}";
+
+/// The mark in `nixos-install`'s command where the system built for the
+/// disk goes ([`Capture::Toplevel`]): it is copied, never evaluated again.
+pub const TOPLEVEL: &str = "{toplevel}";
 
 /// Where the machine's chosen zone is seeded, on the target.
 ///
@@ -865,6 +721,8 @@ pub enum Capture {
     /// The system the machine's flake builds: its one
     /// `nixosConfigurations` name, which fills [`ATTRIBUTE`].
     Attribute,
+    /// The system built, by its store path, which fills [`TOPLEVEL`].
+    Toplevel,
 }
 
 /// One installation step.
@@ -956,11 +814,12 @@ pub const PERSON: &str = "ronoctua-person";
 #[must_use]
 pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
     let work_flake = format!("path:{WORK_DIRECTORY}");
-    let empty = r.belongings_empty == Some(true);
-    // WHETHER THIS MACHINE LEAVES PROGRAMS OUT, and whether it was asked
-    // the list at all — see the module's header.
+    // WHETHER THIS MACHINE LEAVES PROGRAMS OUT — see the module's header.
     let leaving = !r.left_out_ids().is_empty();
-    let choosing = r.profile == crate::model::FULL_PROFILE && !crate::model::OFFERED.is_empty();
+    let offline = |label, command: Vec<String>, destructive| Step {
+        env: offline_env(),
+        ..Step::root(label, command, destructive)
+    };
     let mut sequence = vec![Step::root(
         // BEFORE partitioning, and not alongside: `disko` reads the file in the
         // first second, and a step that fails for a missing file is
@@ -1010,6 +869,15 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
         vec![WRITE.into(), HOST_NIX_WORK_PATH.into()],
         false,
     ));
+    // WHAT NOBODY MAY REDISTRIBUTE WAITS FOR THE FIRST NETWORK: the ISO
+    // carries none of it, so the machine is installed with those hardware
+    // branches off (`ronoctua.hardware.deferUndistributable`), and its first
+    // apply with a network brings them (`ronoctua-machine`).
+    sequence.push(Step::root(
+        key::INST_STEP_DEFER,
+        vec![WRITE.into(), deferred_marker()],
+        false,
+    ));
     sequence.push(Step::root(
         // THE HARDWARE REPORT COMES BEFORE `disko`, and it has to: the
         // generated `host.nix` says `facterReport = ./facter.json`, and every
@@ -1025,14 +893,16 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
         // it does is destructive.
         false,
     ));
-    // THE LOCK: the distro's revision the machine is built from, and every
-    // input of the distro's exactly as its release pinned them.
-    sequence.push(Step::root(
+    // THE LOCK: the ISO's tree the machine is built from, and every input of
+    // the distro's exactly as its lock pinned them — every one in the ISO's
+    // store (`nix/installer/offline.nix`), so nothing is fetched.
+    sequence.push(offline(
         key::INST_STEP_LOCK,
         vec![
             "nix".into(),
             "flake".into(),
             "lock".into(),
+            "--offline".into(),
             work_flake.clone(),
         ],
         false,
@@ -1042,11 +912,12 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
     // would be the person's name written a second time.
     sequence.push(Step {
         captures: Some(Capture::Attribute),
-        ..Step::root(
+        ..offline(
             key::INST_STEP_ATTRIBUTE,
             vec![
                 "nix".into(),
                 "eval".into(),
+                "--offline".into(),
                 "--json".into(),
                 format!("{work_flake}#nixosConfigurations"),
                 "--apply".into(),
@@ -1055,144 +926,11 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
             false,
         )
     });
-    if !empty {
-        // THE PERSON'S DECLARATIONS, before the disk is touched — see the
-        // module's header. An empty repository has none.
-        //
-        // THE PASSPHRASE FOR THE COPY, in a `0600` file of root's that the
-        // copy deletes: it opens `key.age`, and the key it holds is the one
-        // the machine pins.
-        sequence.push(Step::root(
-            key::INST_STEP_PLAIN_PASSPHRASE,
-            vec![WRITE.into(), plain_passphrase()],
-            false,
-        ));
-        // THE MACHINE'S CHOICE, for the copy to sign in — whenever the list
-        // was asked: a tick brings back what an earlier attempt left out.
-        if choosing {
-            sequence.push(Step::root(
-                key::INST_STEP_CHOICE,
-                vec![WRITE.into(), choice_file()],
-                false,
-            ));
-        }
-        let mut plain = vec![
-            BELONGINGS.into(),
-            "plain".into(),
-            "--repository".into(),
-            r.belongings.clone(),
-            "--keys".into(),
-            scratch_keys(),
-            "--out".into(),
-            plain_dir(),
-            "--passphrase".into(),
-            plain_passphrase(),
-            "--signer".into(),
-            scratch_signer(),
-        ];
-        // SIGNED INTO THE REPOSITORY AND PUSHED before anything is copied
-        // out — so the label says the repository is written, before the
-        // disk, and a refused push stops the installation here.
-        if choosing {
-            plain.extend(["--decline".into(), choice_file()]);
-        }
-        plain.push("--json".into());
-        // THE ADDRESS is on this command line because that is how the CLI
-        // takes it, and it is no secret; the access and the passphrase are
-        // FILES (`--keys`, `--passphrase`).
-        sequence.push(Step {
-            env: home_env(&scratch_home()),
-            ..Step::root(
-                if choosing {
-                    key::INST_STEP_PLAIN_DECLINING
-                } else {
-                    key::INST_STEP_PLAIN
-                },
-                plain,
-                false,
-            )
-        });
-        // THE KEY THE PASSPHRASE OPENED, pinned in the working flake's
-        // `local/` before anything of the person's is applied there — so
-        // the applier takes only what that key signed.
-        sequence.push(Step {
-            only_if: Some(scratch_signer()),
-            ..Step::root(
-                key::INST_STEP_PIN,
-                vec![
-                    PERSON.into(),
-                    "pin".into(),
-                    "--pin".into(),
-                    scratch_signer(),
-                    "--machine".into(),
-                    WORK_DIRECTORY.into(),
-                    "--lock".into(),
-                    person_lock(),
-                ],
-                false,
-            )
-        });
-        sequence.push(Step {
-            only_if: Some(format!("{}/{}", plain_dir(), ronoctua_person::tree::PERSON)),
-            ..Step::root(
-                key::INST_STEP_PERSON,
-                vec![
-                    PERSON.into(),
-                    "apply".into(),
-                    "--staged".into(),
-                    plain_dir(),
-                    "--machine".into(),
-                    WORK_DIRECTORY.into(),
-                    "--owner".into(),
-                    "root".into(),
-                    "--lock".into(),
-                    person_lock(),
-                ],
-                false,
-            )
-        });
-        if choosing {
-            sequence.push(applied_check());
-        }
-        sequence.push(Step {
-            env: vec![("RONOCTUA_NIX".to_owned(), origin.nix.clone())],
-            only_if: Some(format!(
-                "{WORK_DIRECTORY}/{}",
-                ronoctua_person::names::MACHINE_PERSON
-            )),
-            ..Step::root(
-                key::INST_STEP_VERIFY,
-                vec![
-                    PERSON.into(),
-                    "verify".into(),
-                    "--machine".into(),
-                    WORK_DIRECTORY.into(),
-                    "--lock".into(),
-                    person_lock(),
-                ],
-                false,
-            )
-        });
-        // THE PRIVATE CACHE'S TOKEN, before the disk is touched — from the
-        // options root's applier just validated (and so after the plain
-        // part's verification), for `nixos-install` to read the cache with.
-        sequence.push(Step {
-            only_if: Some(format!(
-                "{WORK_DIRECTORY}/{}/{}",
-                ronoctua_person::names::MACHINE_PERSON,
-                ronoctua_person::names::OPTIONS
-            )),
-            ..Step::root(
-                key::INST_STEP_CACHE_TOKEN,
-                vec![BINARY_CACHE_TOKEN.into()],
-                false,
-            )
-        });
-    } else if leaving {
-        // AN EMPTY REPOSITORY'S DECLINES, staged root's in the plain part's
-        // shape and applied to the working flake by root's applier — which,
-        // with no key pinned yet, takes them as staged — so `nixos-install`
-        // already leaves the programs out.
+    if leaving {
+        // THE DECLINES, staged root's in the plain part's shape and applied
+        // to the working flake by root's applier — which, with no key pinned,
+        // takes them as staged — so `nixos-install` already leaves the
+        // programs out. The repository hears the choice on the first boot.
         sequence.push(Step::root(
             key::INST_STEP_LEFT_OUT,
             vec![WRITE.into(), staged_declined()],
@@ -1223,7 +961,22 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
         });
         sequence.push(applied_check());
     }
-    sequence.push(Step::root(
+    // THE SYSTEM BUILT BEFORE THE DISK IS TOUCHED: what this machine needs
+    // and the ISO does not carry — hardware no probe of
+    // `nix/installer/offline.nix` covers — fails HERE, with the disk intact,
+    // and `nixos-install` below only copies what this built.
+    sequence.push(offline(
+        key::INST_STEP_BUILD_FIRST,
+        vec![
+            "nix".into(),
+            "build".into(),
+            "--offline".into(),
+            "--no-link".into(),
+            format!("{work_flake}#nixosConfigurations.{ATTRIBUTE}.config.system.build.toplevel"),
+        ],
+        false,
+    ));
+    sequence.push(offline(
         key::INST_STEP_PARTITION,
         // `disko` does everything: it partitions, creates the LUKS, formats,
         // mounts. It evaluates the WORKING directory: `/mnt` only comes into
@@ -1262,8 +1015,8 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
     ));
     sequence.push(Step::root(
         // The whole flake to the target: `host.nix`, the report, the lock,
-        // the person's `person/` and root's `local/` — and its `flake.nix`
-        // with the lock made for it, aimed or not: the pair agrees.
+        // root's staged declines in `person/` — and its `flake.nix` with the
+        // lock made for it, aimed: the pair agrees.
         key::INST_STEP_FLAKE,
         vec![
             "cp".into(),
@@ -1303,30 +1056,57 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
             true,
         ));
     }
-    sequence.push(Step::root(
+    // THE SYSTEM THE DISK GETS, built from the target's flake — the same
+    // as the one built before the disk, but for the `resume_offset` the
+    // swapfile only now has: the few derivations the kernel's command line
+    // reaches, from inputs already here. Built in the ISO's store, where
+    // the flake's sources are: `nixos-install --flake` evaluates against
+    // the TARGET's store, which has none of them, and would fetch them.
+    sequence.push(Step {
+        captures: Some(Capture::Toplevel),
+        ..offline(
+            key::INST_STEP_BUILD,
+            vec![
+                "nix".into(),
+                "build".into(),
+                "--offline".into(),
+                "--no-link".into(),
+                "--print-out-paths".into(),
+                format!(
+                    "path:{TARGET_DIRECTORY}#nixosConfigurations.{ATTRIBUTE}.config.system.build.toplevel"
+                ),
+            ],
+            true,
+        )
+    });
+    sequence.push(offline(
         key::INST_STEP_INSTALL,
         vec![
             "nixos-install".into(),
-            "--flake".into(),
-            format!("{TARGET_DIRECTORY}#{ATTRIBUTE}"),
+            // THE SYSTEM JUST BUILT, copied and activated: nothing is
+            // evaluated or built against the target's store.
+            "--system".into(),
+            TOPLEVEL.into(),
             "--no-root-password".into(),
-            // THE PERSON'S BINARY CACHE, when their options name one.
-            BINARY_CACHE_OPTIONS.into(),
+            // No channel: the machine is a flake, and copying the ISO's
+            // channel would be the one thing here with a download in it.
+            "--no-channel-copy".into(),
         ],
         true,
     ));
-    if !empty {
-        // THE PRIVATE CACHE'S NETRC, to the machine's root: after
-        // `nixos-install`, which made the target's `/var`.
-        sequence.push(Step {
-            only_if: Some(Scratch::installer().binary_cache_netrc()),
-            ..Step::root(
-                key::INST_STEP_CACHE_NETRC,
-                vec![BINARY_CACHE_NETRC.into()],
-                true,
-            )
-        });
-    }
+    // THE PARTS THE ISO CARRIES, into the machine's store: a part the plan
+    // wants and this medium holds arrives on the first boot with no
+    // network (`ronoctua-parts seed`). It never fails the installation —
+    // a part that is not here downloads later, like any other.
+    sequence.push(Step {
+        // The `nix` it copies with, by path: the installer's own.
+        env: vec![("RONOCTUA_NIX".to_owned(), origin.nix.clone())],
+        ..Step::root(
+            key::INST_STEP_SEED_PARTS,
+            vec![PARTS.into(), "seed".into(), "--root".into(), "/mnt".into()],
+            true,
+        )
+    });
     sequence.push(Step::root(
         // THE ZONE THAT WAS ASKED FOR, seeded as the file timedated owns —
         // AFTER `nixos-install`, because that is what creates `/mnt/etc`; a
@@ -1341,10 +1121,11 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
         ],
         true,
     ));
-    // NO STEP POINTS THE FLAKE BACK at the release: an aimed machine keeps
-    // the pair it was built from — see `Origin`.
+    // NO STEP POINTS THE FLAKE BACK at the release: the machine's first
+    // update does (`flake-update`, which un-aims it) — see `Origin`.
     // THE PERSON'S HOME, after `nixos-install` made them (and so the uid
-    // and gid every file is given, read from the target's `/etc/passwd`).
+    // and gid every file is given, read from the target's `/etc/passwd`):
+    // what the belongings need that no network gives.
     sequence.push(Step::root(
         key::INST_STEP_ACCESS,
         vec![INSTALL_ACCESS.into(), scratch_keys(), target_keys()],
@@ -1356,85 +1137,31 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
         true,
     ));
     sequence.push(Step::root(
-        // THE SETTINGS BEFORE THE RESTORE, which reads the repository and
-        // its access from them — so the restore's command line names
-        // neither. The address alone and how it is reached; no key, no
+        // THE SETTINGS: the address alone and how it is reached; no key, no
         // token, no passphrase.
         key::INST_STEP_BELONGINGS,
         vec![WRITE.into(), belongings_path()],
         true,
     ));
+    // AND WHAT THE FIRST BOOT FINISHES (`crate::first_boot`): the record —
+    // the address, the machine, its choice of programs — and the passphrase
+    // sealed in the TPM beside it, never on the disk in the clear.
     sequence.push(Step::root(
-        key::INST_STEP_PASSPHRASE,
-        vec![WRITE.into(), person_passphrase()],
+        key::INST_STEP_FIRST_BOOT,
+        vec![WRITE.into(), first_boot_record()],
         true,
     ));
-    // AN EMPTY REPOSITORY'S DECLINES, in the person's mirror before `init`:
-    // its first sync signs them with the key it makes and pushes them, so
-    // the repository holds what this machine was installed without.
-    if empty && leaving {
-        sequence.push(Step::root(
-            key::INST_STEP_LEFT_OUT_HOME,
-            vec![WRITE.into(), target_mirror_declined()],
-            true,
-        ));
-    }
-    let verb = if empty { "init" } else { "restore" };
-    sequence.push(Step {
-        runs_as: Runner::Person,
-        env: home_env(&target_home()),
-        ..Step::root(
-            if empty {
-                key::INST_STEP_INIT
-            } else {
-                key::INST_STEP_RESTORE
-            },
-            vec![
-                BELONGINGS.into(),
-                verb.into(),
-                "--home".into(),
-                target_home(),
-                "--runtime".into(),
-                person_runtime(),
-                // The NEW machine's name, which the index and `fleet.json`
-                // remember — not the installer's.
-                "--machine".into(),
-                r.hostname.clone(),
-                "--progress".into(),
-            ],
-            true,
-        )
-    });
-    if empty {
-        // THE REPOSITORY JUST MADE has a new signing key: the machine pins
-        // the one `init` made with the passphrase, from the file it left in
-        // the person's runtime folder (theirs: `--owner`, their uid on the
-        // target).
-        sequence.push(Step {
-            only_if: Some(person_signer()),
-            ..Step::root(
-                key::INST_STEP_PIN,
-                vec![
-                    PERSON.into(),
-                    "pin".into(),
-                    "--pin".into(),
-                    person_signer(),
-                    "--owner".into(),
-                    PERSON_UID.into(),
-                    "--machine".into(),
-                    TARGET_DIRECTORY.into(),
-                    "--lock".into(),
-                    person_lock(),
-                ],
-                true,
-            )
-        });
-    }
-    // THERE IS NO TPM STEP, and its absence is the decision rather than an
-    // omission: `systemd-cryptenroll --tpm2-pcrs=7+11+12+15` could not deliver
-    // what it named without a measured UKI. `nix/disko/default.nix` carries
-    // the whole argument. The Wi-Fi key IS still sealed in the TPM — see
-    // `SEAL`, a different mechanism and a different question.
+    sequence.push(Step::root(
+        key::INST_STEP_SEAL_PASSPHRASE,
+        vec![SEAL_PASSPHRASE.into(), first_boot_directory()],
+        true,
+    ));
+    // THERE IS NO TPM STEP FOR THE DISK, and its absence is the decision
+    // rather than an omission: `systemd-cryptenroll --tpm2-pcrs=7+11+12+15`
+    // could not deliver what it named without a measured UKI.
+    // `nix/disko/default.nix` carries the whole argument. The Wi-Fi key and
+    // the belongings' passphrase ARE sealed in the TPM — see `SEAL`, a
+    // different mechanism and a different question.
     sequence
 }
 
@@ -1534,6 +1261,8 @@ mod tests {
             belongings_access: format!("{}/deploy", scratch_keys()),
             belongings_passphrase: "Qw4-belongings-passphrase".into(),
             belongings_empty: Some(false),
+            online: None,
+            belongings_checked: false,
             swap: None,
             aimed: false,
             bios: false,
@@ -1579,63 +1308,66 @@ mod tests {
             .cloned()
     }
 
-    /// FAILS IF: the programs left out of a repository with something in it
-    /// are not handed to the copy of the plain part to sign in — or reach it
-    /// after the disk is touched, or after the key is pinned and applied, or
-    /// without the passphrase that signs them; or the review does not say
-    /// the repository is written; or they are written into the mirror by the
-    /// installer (the restore lands them, signed).
+    /// FAILS IF: the programs left out are not staged for root's applier
+    /// (unpinned: taken as staged) and applied to the working flake before
+    /// the system is built and the disk touched — whatever the repository
+    /// holds — or what the applier made of them is not read; or the choice
+    /// and the declines the first boot hands over are not both halves of the
+    /// answer, for this hostname alone.
     #[test]
-    fn left_out_declines_are_signed_before_the_disk() {
-        let p = steps(&leaving(false), &origin());
-        let order = [
-            key::INST_STEP_PLAIN_PASSPHRASE,
-            key::INST_STEP_CHOICE,
-            key::INST_STEP_PLAIN_DECLINING,
-            key::INST_STEP_PIN,
-            key::INST_STEP_PERSON,
-            key::INST_STEP_LEFT_OUT_APPLIED,
-            key::INST_STEP_VERIFY,
-            key::INST_STEP_PARTITION,
-            key::INST_STEP_INSTALL,
-            key::INST_STEP_RESTORE,
-        ];
-        let places: Vec<usize> = order.iter().map(|l| at(&p, l)).collect();
-        assert!(
-            places.windows(2).all(|w| w[0] < w[1]),
-            "out of order: {places:?}"
-        );
-        let written = &p[at(&p, key::INST_STEP_CHOICE)];
-        assert_eq!(written.command, [WRITE.to_owned(), choice_file()]);
-        assert!(!written.destructive);
-        assert!(!p.iter().any(|s| s.label == key::INST_STEP_LEFT_OUT));
-        let plain = &p[at(&p, key::INST_STEP_PLAIN_DECLINING)];
-        assert_eq!(plain.command[..2], [BELONGINGS, "plain"]);
-        assert_eq!(flag(plain, "--decline"), Some(choice_file()));
-        assert_eq!(flag(plain, "--passphrase"), Some(plain_passphrase()));
-        assert_eq!(plain.command.last().map(String::as_str), Some("--json"));
-        assert!(!p.iter().any(|s| s.label == key::INST_STEP_PLAIN));
-        assert!(!p.iter().any(|s| s.label == key::INST_STEP_LEFT_OUT_HOME));
-        // WHAT THE APPLIER MADE OF THEM IS READ, and waits on nothing: no
-        // file is a refusal, never a skip.
-        let read = &p[at(&p, key::INST_STEP_LEFT_OUT_APPLIED)];
+    fn left_out_programs_are_applied_before_the_disk() {
+        for empty in [Some(false), Some(true), None] {
+            let r = Answers {
+                belongings_empty: empty,
+                ..leaving(false)
+            };
+            let p = steps(&r, &origin());
+            let order = [
+                key::INST_STEP_ATTRIBUTE,
+                key::INST_STEP_LEFT_OUT,
+                key::INST_STEP_PERSON,
+                key::INST_STEP_LEFT_OUT_APPLIED,
+                key::INST_STEP_BUILD_FIRST,
+                key::INST_STEP_PARTITION,
+                key::INST_STEP_INSTALL,
+                key::INST_STEP_FIRST_BOOT,
+            ];
+            let places: Vec<usize> = order.iter().map(|l| at(&p, l)).collect();
+            assert!(
+                places.windows(2).all(|w| w[0] < w[1]),
+                "out of order: {places:?}"
+            );
+            assert_eq!(p[places[1]].command, [WRITE.to_owned(), staged_declined()]);
+            let applier = &p[places[2]];
+            assert_eq!(applier.command[..2], [PERSON, "apply"]);
+            assert_eq!(flag(applier, "--staged"), Some(staged_dir()));
+            assert_eq!(flag(applier, "--machine").as_deref(), Some(WORK_DIRECTORY));
+            assert_eq!(flag(applier, "--owner").as_deref(), Some("root"));
+            assert_eq!(
+                applier.only_if,
+                Some(format!(
+                    "{}/{}",
+                    staged_dir(),
+                    ronoctua_person::tree::PERSON
+                ))
+            );
+            // WHAT THE APPLIER MADE OF THEM IS READ, and waits on nothing: no
+            // file is a refusal, never a skip.
+            let read = &p[places[3]];
+            assert_eq!(
+                read.command,
+                [LEFT_OUT_APPLIED.to_owned(), applied_declined()]
+            );
+            assert_eq!(read.only_if, None);
+            assert!(!read.destructive);
+        }
         assert_eq!(
-            read.command,
-            [LEFT_OUT_APPLIED.to_owned(), applied_declined()]
+            staged_declined(),
+            format!("{}/person/software/declined.json", staged_dir())
         );
-        assert_eq!(read.only_if, None);
-        assert!(!read.destructive);
         assert_eq!(
             applied_declined(),
             format!("{WORK_DIRECTORY}/person/software/declined.json")
-        );
-        assert!(
-            !p.iter()
-                .any(|s| s.command.get(1) == Some(&staged_declined()))
-        );
-        assert!(
-            !choice_file().starts_with(&plain_dir()),
-            "the choice would be applied unsigned"
         );
         // THE CHOICE: both halves of the answer, for this machine alone.
         let r = leaving(false);
@@ -1647,7 +1379,7 @@ mod tests {
             !choice.kept.is_empty() && !choice.kept.iter().any(|k| choice.declined.contains(k))
         );
         assert_eq!(choice.kept.len() + 2, crate::model::OFFERED.len());
-        // AND THE DECLINES an empty repository stages: each on this hostname.
+        // AND THE DECLINES: each on this hostname.
         let declined = left_out_declined(&r, r.left_out_at.as_ref().unwrap()).unwrap();
         let ids: Vec<&str> = declined.apps.iter().map(|d| d.id.as_str()).collect();
         assert_eq!(ids, ["blender", "libreoffice"]);
@@ -1661,124 +1393,43 @@ mod tests {
         }
     }
 
-    /// FAILS IF: an empty repository's declines are not staged for root's
-    /// applier (unpinned: taken as staged) and applied to the working flake
-    /// before the disk, or not put in the person's mirror before `init` —
-    /// whose first sync is what signs them — or the key is pinned before
-    /// `init` made it.
-    #[test]
-    fn an_empty_repository_stages_its_declines_unpinned_and_init_signs_them() {
-        let p = steps(&leaving(true), &origin());
-        let staged = at(&p, key::INST_STEP_LEFT_OUT);
-        let apply = at(&p, key::INST_STEP_PERSON);
-        let read = at(&p, key::INST_STEP_LEFT_OUT_APPLIED);
-        let partition = at(&p, key::INST_STEP_PARTITION);
-        assert!(
-            at(&p, key::INST_STEP_ATTRIBUTE) < staged
-                && staged < apply
-                && apply < read
-                && read < partition
-        );
-        assert_eq!(p[staged].command, [WRITE.to_owned(), staged_declined()]);
-        // A FOLDER OF THEIR OWN: never the copy of the plain part, which an
-        // earlier attempt may have left whole.
-        assert_eq!(
-            staged_declined(),
-            format!("{}/person/software/declined.json", staged_dir())
-        );
-        assert!(!staged_dir().starts_with(&plain_dir()) && !plain_dir().starts_with(&staged_dir()));
-        let applier = &p[apply];
-        assert_eq!(applier.command[..2], [PERSON, "apply"]);
-        assert_eq!(flag(applier, "--staged"), Some(staged_dir()));
-        assert_eq!(flag(applier, "--machine").as_deref(), Some(WORK_DIRECTORY));
-        assert_eq!(flag(applier, "--owner").as_deref(), Some("root"));
-        assert_eq!(
-            applier.only_if,
-            Some(format!(
-                "{}/{}",
-                staged_dir(),
-                ronoctua_person::tree::PERSON
-            ))
-        );
-        assert_eq!(
-            p[read].command,
-            [LEFT_OUT_APPLIED.to_owned(), applied_declined()]
-        );
-        // NOTHING IS PINNED before `init` makes the key: pinned, the
-        // applier would hold the unsigned declines back.
-        assert!(at(&p, key::INST_STEP_PIN) > at(&p, key::INST_STEP_INIT));
-        for gone in [
-            key::INST_STEP_PLAIN,
-            key::INST_STEP_PLAIN_DECLINING,
-            key::INST_STEP_VERIFY,
-        ] {
-            assert!(!p.iter().any(|s| s.label == gone), "{gone}");
-        }
-        // AND THE MIRROR, the person's, before `init` signs it.
-        let home = at(&p, key::INST_STEP_LEFT_OUT_HOME);
-        assert_eq!(
-            p[home].command,
-            [WRITE.to_owned(), target_mirror_declined()]
-        );
-        assert_eq!(
-            target_mirror_declined(),
-            "/mnt/home/noctua/.local/state/ronoctua/person/software/declined.json"
-        );
-        assert!(at(&p, key::INST_STEP_INSTALL) < home);
-        assert!(at(&p, key::INST_STEP_PASSPHRASE) < home);
-        assert!(home < at(&p, key::INST_STEP_INIT));
-    }
-
-    /// FAILS IF: a `full` installation that leaves nothing out from a
-    /// repository with something in it does not hand its choice over —
-    /// every program ticked, so an earlier attempt's declines of this
-    /// machine come back — or the check of it is not made.
+    /// FAILS IF: a `full` installation that leaves nothing out does not hand
+    /// its choice to the first boot — every program ticked, so an earlier
+    /// attempt's declines of this machine come back — or a `minimal` one
+    /// hands one over.
     #[test]
     fn a_full_choice_is_handed_over_even_when_nothing_is_left_out() {
         let r = Answers {
             left_out: crate::model::LEFT_OUT_NONE.into(),
             ..leaving(false)
         };
-        let p = steps(&r, &origin());
-        assert!(at(&p, key::INST_STEP_CHOICE) < at(&p, key::INST_STEP_PLAIN_DECLINING));
-        assert_eq!(
-            flag(&p[at(&p, key::INST_STEP_PLAIN_DECLINING)], "--decline"),
-            Some(choice_file())
-        );
-        assert!(at(&p, key::INST_STEP_LEFT_OUT_APPLIED) < at(&p, key::INST_STEP_PARTITION));
-        let choice = machine_choice(&r, r.left_out_at.as_ref().unwrap()).unwrap();
+        let record = crate::first_boot::Record::of(&r, r.left_out_at.as_ref().unwrap());
+        let choice = record
+            .choice
+            .expect("a full installation hands its choice over");
         assert!(choice.declined.is_empty());
         assert_eq!(choice.kept.len(), crate::model::OFFERED.len());
+        assert!(record.declined.is_none());
         // A `minimal` one was never asked: no choice.
         assert!(machine_choice(&answers(), answers().left_out_at.as_ref().unwrap()).is_none());
     }
 
-    /// FAILS IF: a `minimal` installation, or a `full` one from an empty
-    /// repository that leaves nothing out, writes declines or hands the copy
-    /// a `--decline`.
+    /// FAILS IF: a `minimal` installation, or a `full` one that leaves
+    /// nothing out, stages declines or applies anything.
     #[test]
     fn nothing_is_declined_when_nothing_is_left_out() {
-        let none = |empty: bool| Answers {
+        let none = Answers {
             left_out: crate::model::LEFT_OUT_NONE.into(),
-            ..leaving(empty)
+            ..leaving(true)
         };
-        for r in [
-            answers(),
-            none(true),
-            Answers {
-                belongings_empty: Some(true),
-                ..answers()
-            },
-        ] {
+        for r in [answers(), none] {
             let p = steps(&r, &origin());
             for s in &p {
                 assert!(
                     ![
                         key::INST_STEP_LEFT_OUT,
-                        key::INST_STEP_LEFT_OUT_HOME,
+                        key::INST_STEP_PERSON,
                         key::INST_STEP_LEFT_OUT_APPLIED,
-                        key::INST_STEP_CHOICE,
-                        key::INST_STEP_PLAIN_DECLINING
                     ]
                     .contains(&s.label),
                     "{} for {:?}/{:?}",
@@ -1786,17 +1437,9 @@ mod tests {
                     r.profile,
                     r.left_out
                 );
-                assert!(
-                    !s.command.iter().any(|a| a == "--decline"),
-                    "{:?}",
-                    s.command
-                );
             }
             assert!(left_out_declined(&r, r.left_out_at.as_ref().unwrap()).is_none());
         }
-        // An empty repository with nothing left out applies nothing.
-        let empty = steps(&none(true), &origin());
-        assert!(!empty.iter().any(|s| s.label == key::INST_STEP_PERSON));
     }
 
     /// FAILS IF: a run does not start from nothing an earlier attempt left —
@@ -1805,10 +1448,7 @@ mod tests {
     #[test]
     fn a_run_clears_what_an_earlier_attempt_left() {
         let cleared = leftovers();
-        assert_eq!(
-            cleared,
-            [WORK_DIRECTORY.to_owned(), plain_dir(), staged_dir()]
-        );
+        assert_eq!(cleared, [WORK_DIRECTORY.to_owned(), staged_dir()]);
         for path in [
             staged_declined(),
             applied_declined(),
@@ -1820,7 +1460,7 @@ mod tests {
                 "{path}"
             );
         }
-        for kept in [scratch_keys(), scratch_home(), person_lock(), choice_file()] {
+        for kept in [scratch_keys(), scratch_home(), person_lock()] {
             assert!(
                 !cleared.iter().any(|c| kept.starts_with(c.as_str())),
                 "{kept} would be cleared"
@@ -1828,49 +1468,47 @@ mod tests {
         }
     }
 
-    /// FAILS IF: the private cache's token is read after the disk is
-    /// touched or before root's applier validated the options, an empty
-    /// repository reads one, `nixos-install` has no place for the cache, or
-    /// the root netrc is written before `nixos-install` made the target —
-    /// or a step names the token itself.
+    /// FAILS IF: anything of the installation can reach the network: a
+    /// `nix` step without the offline configuration (no substituter, no
+    /// registry), a `nix` command without `--offline`, or a step that asks
+    /// the person's repository (`plain`, `restore`, `init`, `probe`,
+    /// `verify`) — those are the first boot's.
     #[test]
-    fn the_persons_cache_reaches_nixos_install_and_its_netrc_the_target() {
-        let plan = steps(&answers(), &origin());
-        let token = at(&plan, key::INST_STEP_CACHE_TOKEN);
-        assert!(
-            at(&plan, key::INST_STEP_PERSON) < token && at(&plan, key::INST_STEP_VERIFY) < token
-        );
-        assert!(token < at(&plan, key::INST_STEP_PARTITION));
-        assert_eq!(plan[token].command, [BINARY_CACHE_TOKEN]);
-        assert!(!plan[token].destructive);
-        let install = at(&plan, key::INST_STEP_INSTALL);
-        assert!(
-            plan[install]
-                .command
-                .iter()
-                .any(|a| a == BINARY_CACHE_OPTIONS)
-        );
-        let netrc = at(&plan, key::INST_STEP_CACHE_NETRC);
-        assert!(install < netrc);
-        assert_eq!(
-            plan[netrc].only_if.as_deref(),
-            Some(Scratch::installer().binary_cache_netrc().as_str())
-        );
-        assert_eq!(target_netrc(), "/mnt/var/lib/ronoctua-binary-cache/netrc");
-        let empty = Answers {
-            belongings_empty: Some(true),
-            ..answers()
-        };
-        let made = steps(&empty, &origin());
-        assert!(!made.iter().any(|s| s.label == key::INST_STEP_CACHE_TOKEN));
-        assert!(!made.iter().any(|s| s.label == key::INST_STEP_CACHE_NETRC));
-        for step in &plan {
-            assert!(
-                !step.command.iter().any(|a| a.contains("eyJ")),
-                "{:?}",
-                step.command
-            );
+    fn nothing_reaches_the_network() {
+        for p in every_plan() {
+            for s in &p {
+                let program = s.command.first().map(String::as_str).unwrap_or_default();
+                if ["nix", "disko", "nixos-install"].contains(&program) {
+                    assert!(
+                        s.env
+                            .iter()
+                            .any(|(n, v)| n == "NIX_CONFIG" && v == OFFLINE_NIX_CONFIG),
+                        "`{}` runs with the substituters and the registry",
+                        s.label
+                    );
+                }
+                if program == "nix" {
+                    assert!(
+                        s.command.iter().any(|a| a == "--offline"),
+                        "`{}` is not offline",
+                        s.label
+                    );
+                }
+                assert_ne!(
+                    program, BELONGINGS,
+                    "`{}` asks the repository while installing",
+                    s.label
+                );
+                assert!(
+                    !s.command
+                        .iter()
+                        .any(|a| a.contains("substituters") || a.contains("netrc")),
+                    "{:?}",
+                    s.command
+                );
+            }
         }
+        assert_eq!(OFFLINE_NIX_CONFIG, "substituters =\nflake-registry =\n");
     }
 
     fn at(p: &[Step], label: &str) -> usize {
@@ -1880,9 +1518,9 @@ mod tests {
     }
 
     /// FAILS IF: the belongings' address reaches `host.nix`, the settings
-    /// are written anywhere but the person's home or before
-    /// `nixos-install` made them, or the restore runs before the access, the
-    /// consent, the settings and the passphrase it reads are in place.
+    /// are written anywhere but the person's home or before `nixos-install`
+    /// made them, or the first boot's record and the sealed passphrase come
+    /// before the access, the consent and the settings it reads are in place.
     #[test]
     fn the_belongings_go_into_the_home_after_the_install_and_never_host_nix() {
         let r = answers();
@@ -1896,37 +1534,41 @@ mod tests {
         let installed = at(&plan, key::INST_STEP_INSTALL);
         assert!(written > installed, "written before the user exists");
         assert_eq!(plan[written].label, key::INST_STEP_BELONGINGS);
-        let restore = at(&plan, key::INST_STEP_RESTORE);
+        let record = at(&plan, key::INST_STEP_FIRST_BOOT);
         for before in [
             key::INST_STEP_ACCESS,
             key::INST_STEP_CONSENT,
             key::INST_STEP_BELONGINGS,
-            key::INST_STEP_PASSPHRASE,
         ] {
             let b = at(&plan, before);
-            assert!(installed < b && b < restore, "`{before}` out of order");
+            assert!(installed < b && b < record, "`{before}` out of order");
         }
+        assert_eq!(
+            plan[record].command,
+            [WRITE.to_owned(), first_boot_record()]
+        );
+        let sealed = at(&plan, key::INST_STEP_SEAL_PASSPHRASE);
+        assert!(record < sealed);
+        assert_eq!(
+            plan[sealed].command,
+            [SEAL_PASSPHRASE.to_owned(), first_boot_directory()]
+        );
+        assert_eq!(
+            first_boot_record(),
+            "/mnt/persist/etc/ronoctua/first-boot/record.json"
+        );
         assert!(
             !host_nix(&r).contains("example.org"),
             "the address reached host.nix"
         );
-        // THE RESTORE NAMES NEITHER THE REPOSITORY NOR ITS ACCESS: it reads
-        // both from the settings and the folder the steps before wrote.
-        assert!(
-            !plan[restore]
-                .command
-                .iter()
-                .any(|a| a.contains("example.org")),
-            "{:?}",
-            plan[restore].command
-        );
     }
 
-    /// FAILS IF: the person's declarations are fetched, applied or tried
-    /// after the disk is touched, out of their order, against anything but
-    /// the working flake, or with the access's content on a command line.
+    /// FAILS IF: the system is not built before the disk is touched — out of
+    /// its order, from anything but the working flake's system, or not
+    /// offline — or anything destructive comes first; or the parts the ISO
+    /// carries are not seeded after `nixos-install`, with its `nix` by path.
     #[test]
-    fn the_declarations_are_applied_to_the_flake_before_the_disk_is_touched() {
+    fn the_system_is_built_before_the_disk_is_touched() {
         let p = steps(&answers(), &origin());
         let order = [
             key::INST_STEP_TEMPLATE,
@@ -1934,128 +1576,65 @@ mod tests {
             key::INST_STEP_FACTER,
             key::INST_STEP_LOCK,
             key::INST_STEP_ATTRIBUTE,
-            key::INST_STEP_PLAIN_PASSPHRASE,
-            key::INST_STEP_PLAIN,
-            key::INST_STEP_PIN,
-            key::INST_STEP_PERSON,
-            key::INST_STEP_VERIFY,
+            key::INST_STEP_BUILD_FIRST,
             key::INST_STEP_PARTITION,
+            key::INST_STEP_INSTALL,
+            key::INST_STEP_SEED_PARTS,
         ];
         let places: Vec<usize> = order.iter().map(|l| at(&p, l)).collect();
         assert!(
             places.windows(2).all(|w| w[0] < w[1]),
             "out of order: {places:?}"
         );
-        assert!(!p[..places[10]].iter().any(|s| s.destructive));
-        let apply = &p[at(&p, key::INST_STEP_PERSON)];
-        assert!(apply.command.contains(&WORK_DIRECTORY.to_owned()));
-        assert!(apply.command.contains(&plain_dir()));
+        assert!(!p[..places[6]].iter().any(|s| s.destructive));
+        // THE MARKER, before anything evaluates the flake.
+        let defer = at(&p, key::INST_STEP_DEFER);
+        assert!(defer < places[3], "the marker comes after the lock");
+        assert_eq!(p[defer].command, [WRITE.to_owned(), deferred_marker()]);
         assert_eq!(
-            apply.only_if.as_deref(),
-            Some(format!("{}/person", plain_dir()).as_str()),
-            "a repository with no declarations has nothing to apply"
+            deferred_marker(),
+            "/tmp/ronoctua-flake/hardware-deferred.json"
         );
-        let verify = &p[at(&p, key::INST_STEP_VERIFY)];
+        let built = &p[places[5]];
+        assert_eq!(
+            built.command[..4],
+            ["nix", "build", "--offline", "--no-link"]
+        );
+        assert_eq!(
+            built.command[4],
+            format!(
+                "path:{WORK_DIRECTORY}#nixosConfigurations.{ATTRIBUTE}.config.system.build.toplevel"
+            )
+        );
+        let seeded = &p[places[8]];
+        assert_eq!(seeded.command, [PARTS, "seed", "--root", "/mnt"]);
         assert!(
-            verify
+            seeded
                 .env
                 .iter()
                 .any(|(n, v)| n == "RONOCTUA_NIX" && v.starts_with('/')),
-            "verify refuses a nix that is not a path"
+            "the seed's nix is not a path"
         );
-        let plain = &p[at(&p, key::INST_STEP_PLAIN)];
-        assert!(plain.command.contains(&scratch_keys()));
-        // THE PASSPHRASE IS A FILE, and the key it opens goes where the pin
-        // reads it — beside the copy, never inside what the applier reads.
-        let flag = |s: &Step, f: &str| {
-            s.command
-                .iter()
-                .position(|a| a == f)
-                .and_then(|i| s.command.get(i + 1))
-                .cloned()
-        };
-        assert_eq!(flag(plain, "--passphrase"), Some(plain_passphrase()));
-        assert_eq!(flag(plain, "--signer"), Some(scratch_signer()));
+        // THE DISK'S SYSTEM, built from the target's flake after the swap
+        // was measured, and installed by its path: nothing is evaluated
+        // against the target's store.
+        let build = at(&p, key::INST_STEP_BUILD);
+        let install = &p[places[7]];
+        assert!(at(&p, key::INST_STEP_FLAKE) < build && build < places[7]);
+        assert_eq!(p[build].captures, Some(Capture::Toplevel));
+        assert!(p[build].command.iter().any(|a| a == "--print-out-paths"));
         assert!(
-            !plain
+            p[build]
                 .command
                 .iter()
-                .any(|a| a.contains("Qw4-belongings-passphrase")),
-            "the passphrase reached a command line"
+                .any(|a| a.starts_with(&format!("path:{TARGET_DIRECTORY}#")))
         );
-        assert!(!scratch_signer().starts_with(&plain_dir()));
-        let pin = &p[at(&p, key::INST_STEP_PIN)];
-        assert_eq!(pin.command[..2], [PERSON, "pin"]);
-        assert_eq!(flag(pin, "--pin"), Some(scratch_signer()));
-        assert_eq!(flag(pin, "--machine").as_deref(), Some(WORK_DIRECTORY));
-        assert_eq!(flag(pin, "--owner"), None, "the copy is root's");
-        assert_eq!(pin.only_if, Some(scratch_signer()));
-        assert!(
-            plain
-                .env
-                .iter()
-                .any(|(n, v)| n == "XDG_CONFIG_HOME" && v.starts_with(SCRATCH)),
-            "the copy would ask the consent of a home that is not the scratch one"
+        assert_eq!(
+            install.command[..3],
+            ["nixos-install", "--system", TOPLEVEL]
         );
-    }
-
-    /// FAILS IF: an empty repository is restored from (there is nothing),
-    /// its declarations fetched, or it is not MADE by the person after the
-    /// install.
-    #[test]
-    fn an_empty_repository_is_made_instead_of_restored() {
-        let mut r = answers();
-        r.belongings_empty = Some(true);
-        let p = steps(&r, &origin());
-        for gone in [
-            key::INST_STEP_PLAIN,
-            key::INST_STEP_PERSON,
-            key::INST_STEP_VERIFY,
-            key::INST_STEP_RESTORE,
-        ] {
-            assert!(!p.iter().any(|s| s.label == gone), "{gone}");
-        }
-        let init = &p[at(&p, key::INST_STEP_INIT)];
-        assert_eq!(init.runs_as, Runner::Person);
-        assert_eq!(init.command.get(1).map(String::as_str), Some("init"));
-        assert!(at(&p, key::INST_STEP_INIT) > at(&p, key::INST_STEP_INSTALL));
-        // THE NEW KEY, pinned on the target from what `init` left, after it.
-        let pin = at(&p, key::INST_STEP_PIN);
-        assert!(pin > at(&p, key::INST_STEP_INIT));
-        let pin = &p[pin];
-        assert_eq!(pin.runs_as, Runner::Root);
-        assert!(pin.command.contains(&TARGET_DIRECTORY.to_owned()));
-        assert!(pin.command.contains(&person_signer()));
-        assert!(pin.command.contains(&PERSON_UID.to_owned()));
-        assert_eq!(pin.only_if, Some(person_signer()));
-        assert!(!p.iter().any(|s| s.label == key::INST_STEP_PLAIN_PASSPHRASE));
-    }
-
-    /// FAILS IF: the restore runs as root (what it writes would be root's in
-    /// the person's home), into a home that is not the target's, under the
-    /// installer's name instead of the new machine's, or with roots that
-    /// are not that home's.
-    #[test]
-    fn the_restore_runs_as_the_person_in_their_home() {
-        let p = steps(&answers(), &origin());
-        let restore = &p[at(&p, key::INST_STEP_RESTORE)];
-        assert_eq!(restore.runs_as, Runner::Person);
-        assert_eq!(restore.command[..2], [BELONGINGS, "restore"]);
-        let flag = |f: &str| {
-            restore
-                .command
-                .iter()
-                .position(|a| a == f)
-                .and_then(|i| restore.command.get(i + 1))
-                .cloned()
-        };
-        assert_eq!(flag("--home"), Some(target_home()));
-        assert_eq!(flag("--runtime"), Some(person_runtime()));
-        assert_eq!(flag("--machine").as_deref(), Some("noctua-portatil"));
-        for (n, v) in &restore.env {
-            assert!(v.starts_with(&target_home()), "{n}={v}");
-        }
-        assert!(restore.shown().starts_with("[noctua] "));
+        assert!(install.command.iter().any(|a| a == "--no-channel-copy"));
+        assert!(!install.command.iter().any(|a| a == "--flake"));
     }
 
     /// FAILS IF: the target's `flake.nix` and `flake.lock` can disagree —
@@ -2082,7 +1661,13 @@ mod tests {
             let lock = at(&p, key::INST_STEP_LOCK);
             assert_eq!(
                 p[lock].command,
-                ["nix", "flake", "lock", &format!("path:{WORK_DIRECTORY}")]
+                [
+                    "nix",
+                    "flake",
+                    "lock",
+                    "--offline",
+                    &format!("path:{WORK_DIRECTORY}")
+                ]
             );
             // AIMED BEFORE THE LOCK, and only then.
             match p.iter().position(|s| s.label == key::INST_STEP_AIM) {
@@ -2141,8 +1726,8 @@ mod tests {
     }
 
     /// FAILS IF: the plan spells the system's name instead of asking the
-    /// machine's flake for it, or uses the mark anywhere but where `disko`
-    /// and `nixos-install` take the flake.
+    /// machine's flake for it, or uses the mark anywhere but where the two
+    /// builds and `disko` take the flake.
     #[test]
     fn the_system_is_asked_of_the_machines_flake() {
         let p = steps(&answers(), &origin());
@@ -2158,7 +1743,14 @@ mod tests {
             .filter(|s| s.command.iter().any(|a| a.contains(ATTRIBUTE)))
             .map(|s| s.label)
             .collect();
-        assert_eq!(marked, [key::INST_STEP_PARTITION, key::INST_STEP_INSTALL]);
+        assert_eq!(
+            marked,
+            [
+                key::INST_STEP_BUILD_FIRST,
+                key::INST_STEP_PARTITION,
+                key::INST_STEP_BUILD
+            ]
+        );
         assert!(at(&p, key::INST_STEP_ATTRIBUTE) < at(&p, key::INST_STEP_PARTITION));
         for s in &p {
             for a in &s.command {

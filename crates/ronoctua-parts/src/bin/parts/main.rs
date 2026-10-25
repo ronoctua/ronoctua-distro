@@ -32,6 +32,8 @@
 //! - `trim`: a part's profile kept to its current generation and the one
 //!   before it.
 //! - `status`: every record, as JSON lines.
+//! - `seed --root DIR` (the installer): the parts the installation medium
+//!   carries, into the store of the machine it installed under `DIR`.
 //!
 //! The last line on standard output is the verdict; what went wrong in
 //! detail goes to standard error, with the journal's priority prefix.
@@ -47,6 +49,7 @@ mod mirror;
 mod plan;
 mod realize;
 mod retry;
+mod seed;
 mod stick;
 mod view;
 
@@ -66,6 +69,7 @@ fn main() -> ExitCode {
         Some("import") => stick::import(&args[1..]),
         Some("export") => stick::export(&args[1..]),
         Some("trim") => trim(&args[1..]),
+        Some("seed") => seed::run(&args[1..]),
         Some("status") => status(),
         _ => Err(Usage),
     };
@@ -80,6 +84,7 @@ fn main() -> ExitCode {
                  \x20      ronoctua-parts import\n\
                  \x20      ronoctua-parts export\n\
                  \x20      ronoctua-parts trim ID\n\
+                 \x20      ronoctua-parts seed --root DIR\n\
                  \x20      ronoctua-parts status"
             );
             ExitCode::from(exit::USAGE)
@@ -87,7 +92,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// A command line that is not one of the eight.
+/// A command line that is not one of the nine.
 pub struct Usage;
 
 /// A program named by its store path in the unit's environment.

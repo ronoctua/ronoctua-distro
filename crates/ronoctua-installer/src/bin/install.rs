@@ -1,8 +1,8 @@
 //! `nix run .#install` — section 7.1, milestone 8.
 //!
 //! ```text
-//! ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file>]
-//! ronoctua-install --show <network|network-connected|access|token|passphrase|passphrase-new|password-again|hop|review|left-out|compose|tpm|tpm-bios|bios>
+//! ronoctua-install [--execute] [--answers <file>]
+//! ronoctua-install --show <network|network-refused|network-connected|access|access-offline|token|passphrase|passphrase-new|passphrase-offline|password-again|review|review-offline|left-out|compose|tpm|tpm-bios|bios>
 //! ```
 //!
 //! # Two modes, and why there are two
@@ -22,21 +22,22 @@
 //! erases a whole disk cannot be the default behaviour.
 //!
 //! In the TUI, `--execute` enables the confirmation screen; without it the TUI collects
-//! the answers, shows the plan and stops there. The TUI checks the network, the release,
-//! the access and the passphrase as it asks; the terminal-less mode checks the same four
-//! before its first step, and stops with exit code 3 when there is no way out (4 when the
-//! repository refuses the access or the passphrase).
+//! the answers, shows the plan and stops there. The TUI reads the network, and checks the
+//! access and the passphrase when there is one, as it asks; the terminal-less mode does the
+//! same before its first step, and stops with exit code 4 when the repository refuses the
+//! access or the passphrase. NO NETWORK STOPS NEITHER: the installation never uses it, the
+//! machine is installed from this ISO's own distro and keeps it, and with no way out the
+//! repository's answers are taken as given and checked on the machine's first boot.
 //!
-//! # Following the release
+//! # `--answers`
 //!
-//! When the release is NEWER than this installer's revision, the release's installer is
-//! started in its place (`nix run <release>#install -- --from-release <rev> --distro
-//! <tree>`), with the answers given so far in a `0600` file (`--answers`) the new one reads
-//! and deletes — from the TUI and from the environment alike. `--from-release` makes it stay.
+//! Answers handed on in a file — one `NAME=value` a line, the variables of the terminal-less
+//! mode, and the question to resume at — read and deleted at once: with a terminal the TUI
+//! picks up there; without one they answer as the environment would.
 //!
 //! # `--show`
 //!
-//! Prints one of the screens that check the network or the repository (or the list of
+//! Prints one of the screens that read the network or check the repository (or the list of
 //! programs a `full` installation leaves out, or the Compose question), drawn as the TUI
 //! draws it, from a fixture and with no network: what a person (or a reviewer) looks at
 //! without a disk to install on. To a terminal, at its size and in its colours, so a narrow
@@ -71,20 +72,19 @@ use ronoctua_i18n::Texts;
 use ronoctua_installer::executor::{Event, run_command, stamp_now, write_of};
 use ronoctua_installer::key;
 use ronoctua_installer::model::{ANSWER_PREFIX, Answers, Question, sentence, validate_it};
-use ronoctua_installer::plan::{
-    Origin, choice_file, host_nix, staged_declined, steps, target_mirror_declined,
-};
+use ronoctua_installer::plan::{Origin, first_boot_record, host_nix, staged_declined, steps};
 use ronoctua_installer::platform::{self, Platform};
 use ronoctua_installer::reach::{Reach, Refused};
-use ronoctua_installer::release::{
-    ANSWERS, DISTRO, FLAKE_DIR, FROM_RELEASE, Follow, Hop, hop_arguments, is_development,
-};
+use ronoctua_installer::release::FLAKE_DIR;
 use ronoctua_installer::tui;
 
 /// The usage, in English (invariant 18: a command line's help).
-const USAGE: &str =
-    "usage: ronoctua-install [--execute] [--from-release <rev> --distro <tree>] [--answers <file|->]
-       ronoctua-install --show <network|network-connected|access|token|passphrase|passphrase-new|password-again|hop|review|left-out|compose|tpm|tpm-bios|bios>";
+const USAGE: &str = "usage: ronoctua-install [--execute] [--answers <file|->]
+       ronoctua-install --show <network|network-refused|network-connected|access|access-offline|token|passphrase|passphrase-new|passphrase-offline|password-again|review|review-offline|left-out|compose|tpm|tpm-bios|bios>";
+
+/// The flag naming the answers handed on: a `0600` file this installer
+/// reads and deletes, or [`ON_STDIN`].
+const ANSWERS: &str = "--answers";
 
 /// The size `--show` draws at when it does not print to a terminal: the
 /// review's plan fits it, and the tests read it.
@@ -103,8 +103,6 @@ const ANSWERS_MOST_BYTES: usize = 32 * 1024;
 #[derive(Debug, Default)]
 struct Line {
     execute: bool,
-    from_release: Option<String>,
-    distro: Option<String>,
     answers: Option<String>,
     show: Option<String>,
 }
@@ -120,8 +118,6 @@ impl Line {
                     line.execute = true;
                     continue;
                 }
-                FROM_RELEASE => &mut line.from_release,
-                DISTRO => &mut line.distro,
                 ANSWERS => &mut line.answers,
                 "--show" => &mut line.show,
                 _ => return None,
@@ -131,8 +127,7 @@ impl Line {
                 return None;
             }
         }
-        // The release's tree comes with its revision, or not at all.
-        (line.from_release.is_some() == line.distro.is_some()).then_some(line)
+        Some(line)
     }
 }
 
@@ -207,10 +202,10 @@ fn install(line: &Line) -> Result<ExitCode> {
         print!("{drawn}");
         return Ok(ExitCode::SUCCESS);
     }
-    let reach = Reach::from_env(line.distro.clone(), line.from_release.clone());
-    // THE ANSWERS HANDED ON — by a hop, in a file, or by this installer to
-    // itself, on its standard input: read, and the file gone at once — it
-    // holds the passwords.
+    let reach = Reach::from_env();
+    // THE ANSWERS HANDED ON — in a file, or by this installer to itself, on
+    // its standard input: read, and the file gone at once — it holds the
+    // passwords.
     let given = match line.answers.as_deref() {
         Some(ON_STDIN) => {
             let mut text = String::new();
@@ -232,15 +227,14 @@ fn install(line: &Line) -> Result<ExitCode> {
     // keys, and with no stdout the drawing goes into a file as escape rubbish.
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
 
-    let (mut answers, stay) = if interactive {
+    let mut answers = if interactive {
         let resume = given.map(|text| {
             let (answers, at) = Answers::from_lines(&text);
             (answers, at.unwrap_or(Question::BelongingsAddress))
         });
         match tui::collect(&texts, &reach, resume, !line.execute)? {
             tui::Collected::GaveUp => return Ok(ExitCode::SUCCESS),
-            tui::Collected::Hop(hop, answers) => return hop_to(&hop, line, &reach, &answers),
-            tui::Collected::Answers(answers, stay) => (*answers, stay),
+            tui::Collected::Answers(answers) => *answers,
         }
     } else {
         let vars = given.as_deref().map(vars_of).unwrap_or_default();
@@ -286,15 +280,13 @@ fn install(line: &Line) -> Result<ExitCode> {
         }
         if !line.execute {
             // THE DRY RUN ASKS NOTHING OF THE NETWORK: it prints what would
-            // run, as a development build would run it when that is what
-            // this one is.
-            let development = reach.own.as_ref().is_none_or(|o| is_development(&o.rev));
-            print_plan(&answers, &origin_of(&reach, development), &texts);
+            // run.
+            print_plan(&answers, &origin_of(&reach), &texts);
             println!("\n{}", texts.t(key::INST_DRYRUN));
             println!("{}", texts.t(key::INST_TO_APPLY));
             return Ok(ExitCode::SUCCESS);
         }
-        (answers, None)
+        answers
     };
 
     if !line.execute {
@@ -310,25 +302,28 @@ fn install(line: &Line) -> Result<ExitCode> {
         return Ok(ExitCode::from(platform::EXIT_TPM));
     }
 
-    let stay = match stay {
-        Some(stay) => stay,
-        // THE TERMINAL-LESS MODE CHECKS NOW what the TUI checked screen by
-        // screen — before anything is touched.
-        None => match reach.preflight(&mut answers) {
-            Ok(Follow::Hop(hop)) => return hop_to(&hop, line, &reach, &answers),
-            Ok(Follow::Stay(stay)) => stay,
-            Err(refused) => return Ok(refuse(&refused, &texts)),
-        },
-    };
-    if let Some(said) = stay.key() {
-        println!("{}", texts.t(said));
+    // THE TERMINAL-LESS MODE CHECKS NOW what the TUI checked screen by
+    // screen — before anything is touched. With no network it goes on, and
+    // says what was not asked.
+    if !interactive {
+        // THE NETWORK SAID FIRST: with none, the installation goes on, and
+        // what follows checks only what needs no network.
+        let way = reach.network(&answers.wifi_ssid, &answers.wifi_password);
+        if !way.open() {
+            println!("{}", texts.t(key::INST_OFFLINE));
+            eprintln!(
+                "ronoctua-install: no network ({}): the repository is not asked; the \
+                 machine's first boot checks it",
+                way.id()
+            );
+        }
+        if let Err(refused) = reach.checks(&mut answers, way) {
+            return Ok(refuse(&refused, &texts));
+        }
     }
-    let origin = origin_of(&reach, stay.aims_at_own());
+    let origin = origin_of(&reach);
     if reach.distro.is_none() {
-        bail!(
-            "this installer does not know where its distro is: {FLAKE_DIR} is not set, and \
-             no --distro was given"
-        );
+        bail!("this installer does not know where its distro is: {FLAKE_DIR} is not set");
     }
     if !interactive {
         print_plan(&answers, &origin, &texts);
@@ -347,7 +342,6 @@ fn install(line: &Line) -> Result<ExitCode> {
         Event::Line(l) => println!("  {l}"),
         Event::Skipped { .. } => println!("  {}", texts.t(key::INST_STEP_SKIPPED)),
         Event::Refused { key } => println!("  {}", texts.t(key)),
-        Event::Said { key, names } => println!("  {}", texts.t_with(key, &[("names", &names)])),
         Event::Finished { .. } => {}
     });
 
@@ -363,14 +357,15 @@ fn install(line: &Line) -> Result<ExitCode> {
     }
 }
 
-/// Where the installation takes its distro from.
-fn origin_of(reach: &Reach, aimed: bool) -> Origin {
+/// Where the installation takes its distro from: always this ISO's own
+/// tree, the machine's flake aimed at it (`ronoctua_installer::release`).
+fn origin_of(reach: &Reach) -> Origin {
     Origin {
         distro: reach
             .distro
             .clone()
             .unwrap_or_else(|| format!("${FLAKE_DIR}")),
-        aimed,
+        aimed: true,
         nix: reach.nix.to_string_lossy().into_owned(),
     }
 }
@@ -383,33 +378,6 @@ fn refuse(refused: &Refused, texts: &Texts) -> ExitCode {
         refused.id()
     );
     ExitCode::from(refused.exit_code())
-}
-
-/// Starts the release's installer in this one's place. The answers travel
-/// in a `0600` file of the scratch folder, in both modes: the environment
-/// no longer holds them (see the module's header).
-fn hop_to(hop: &Hop, line: &Line, reach: &Reach, answers: &Answers) -> Result<ExitCode> {
-    let file = reach.scratch.answers();
-    ronoctua_installer::reach::keep_private(
-        &reach.scratch.root,
-        &file,
-        answers.lines(Question::BelongingsAddress).as_bytes(),
-    )
-    .with_context(|| format!("write {file}"))?;
-    let kept: Vec<String> = if line.execute {
-        vec!["--execute".to_owned()]
-    } else {
-        Vec::new()
-    };
-    eprintln!(
-        "ronoctua-install: the release is at {}; starting its installer",
-        hop.short()
-    );
-    let err = ronoctua_installer::executor::command(&reach.nix)
-        .args(hop_arguments(hop, &kept, Some(&file)))
-        .exec();
-    let _ = std::fs::remove_file(&file);
-    bail!("the release's installer did not start: {err}")
 }
 
 /// The answers this process's environment holds, by name and value.
@@ -455,7 +423,7 @@ fn again(
             text.push('\n');
         }
     }
-    c.args(["--answers", ON_STDIN]);
+    c.args([ANSWERS, ON_STDIN]);
     (c, Some(text))
 }
 
@@ -500,7 +468,7 @@ fn vars_of(text: &str) -> HashMap<String, String> {
 }
 
 /// Reads the answers from their variables — the ones this installer handed
-/// itself (`--answers -`), a hop's file, or the environment.
+/// itself (`--answers -`), a file handed on, or the environment.
 ///
 /// One per question, with the name derived from the label — see
 /// [`Question::variable`]. There is no second table to fall out of sync.
@@ -526,9 +494,9 @@ fn from_vars(get: &dyn Fn(&str) -> Option<String>) -> Result<Answers> {
             .or_else(|| q.default_answer().map(ToOwned::to_owned))
             .unwrap_or_default();
         if let Err(e) = validate_it(q, &v, &languages, &layouts) {
-            // A PROGRAM THIS INSTALLER DOES NOT OFFER is named: a hop's
-            // answer may carry one an older release listed, and nobody is
-            // here to choose again — so nothing is touched.
+            // A PROGRAM THIS INSTALLER DOES NOT OFFER is named: answers
+            // written for another installer may carry one it listed, and
+            // nobody is here to choose again — so nothing is touched.
             let named = ronoctua_installer::model::not_offered(&v);
             let named = if q == Question::LeftOut && !named.is_empty() {
                 format!(" (not offered here: {})", named.join(", "))
@@ -550,9 +518,9 @@ fn from_vars(get: &dyn Fn(&str) -> Option<String>) -> Result<Answers> {
 }
 
 /// Shows the `host.nix` and the sequence, without running anything — and,
-/// AFTER them, the machine's choice of programs and the declines, each under
-/// the path a step writes it to (whoever reads the `host.nix` off the top
-/// keeps reading it so).
+/// AFTER them, the declines and the first boot's record, each under the path
+/// a step writes it to (whoever reads the `host.nix` off the top keeps
+/// reading it so).
 fn print_plan(r: &Answers, origin: &Origin, texts: &Texts) {
     println!("--- host.nix ---\n{}", host_nix(r));
     println!("--- {} ---", texts.t(key::INST_REVIEW));
@@ -563,7 +531,7 @@ fn print_plan(r: &Answers, origin: &Origin, texts: &Texts) {
     }
     println!("\n{}: {}", texts.t(key::INST_DESTRUCTIVE), r.disk);
     // WHAT IS WRITTEN WHERE: the very content the step writes.
-    let shown = [choice_file(), staged_declined(), target_mirror_declined()];
+    let shown = [staged_declined(), first_boot_record()];
     for p in &plan {
         if let Ok(Some(w)) = write_of(p, r)
             && shown.contains(&w.path)
@@ -576,29 +544,28 @@ fn print_plan(r: &Answers, origin: &Origin, texts: &Texts) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_installer::release::Stay;
 
     fn read(args: &[&str]) -> Option<Line> {
         let args: Vec<String> = args.iter().map(|&a| a.to_owned()).collect();
         Line::read(&args)
     }
 
+    /// FAILS IF: a flag of the release's hop is still taken — nothing hops
+    /// any more —, a flag is taken twice or without its value, or the ones
+    /// this program takes are not read.
     #[test]
     fn the_command_line_is_read_whole_or_refused() {
-        let l = read(&[
-            "--execute",
-            "--from-release",
-            "abc",
-            "--distro",
-            "/nix/store/x",
-        ])
-        .unwrap();
+        let l = read(&["--execute", "--answers", "/run/x/answers"]).unwrap();
         assert!(l.execute);
-        assert_eq!(l.from_release.as_deref(), Some("abc"));
-        assert_eq!(l.distro.as_deref(), Some("/nix/store/x"));
+        assert_eq!(l.answers.as_deref(), Some("/run/x/answers"));
+        assert_eq!(
+            read(&["--show", "review"]).unwrap().show.as_deref(),
+            Some("review")
+        );
         for bad in [
             &["--from-release", "abc"][..],
             &["--distro", "/x"],
+            &["--from-release", "abc", "--distro", "/nix/store/x"],
             &["--answers"],
             &["--answers", "a", "--answers", "b"],
             &["--force"],
@@ -679,11 +646,5 @@ mod tests {
         );
         assert!(text.is_none());
         assert_eq!(c.get_args().count(), 2);
-    }
-
-    #[test]
-    fn a_stay_the_person_should_hear_is_said() {
-        assert!(Stay::Unreachable.key().is_some());
-        assert!(Stay::Current.key().is_none());
     }
 }

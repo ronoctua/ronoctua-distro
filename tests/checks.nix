@@ -21473,40 +21473,45 @@ let
       echo "ERROR: the rehearsal wrote the LUKS key" >&2; exit 1; }
 
     # THE PROGRAMS A `full` INSTALLATION LEAVES OUT, and the ones it keeps:
-    # the machine's CHOICE, signed into the repository by the copy of the
-    # plain part (`--decline`, the file the step before writes) before the
-    # disk — every `full` run hands one over, since a tick brings back what
-    # an earlier attempt left out of this machine — and the dry run prints
-    # it after the plan, under the path it is written to. The `minimal` run
-    # above was asked nothing, and hands nothing over.
-    choice=/run/ronoctua-install/choice.json
+    # the machine's CHOICE, which the first boot signs into the repository
+    # (`plain --decline`) — every `full` run hands one over, since a tick
+    # brings back what an earlier attempt left out of this machine. It
+    # travels in the first boot's record, which the dry run prints after
+    # the plan, under the path it is written to. The `minimal` run above was
+    # asked nothing, and hands nothing over.
+    record=/mnt/persist/etc/ronoctua/first-boot/record.json
     offered='${builtins.toJSON (map (r: r.id) (import ../assets/distro-apps.nix).offered)}'
-    if echo "$out_text" | grep -q -e '--decline' -e "--- $choice ---"; then
-      echo "ERROR: a minimal installation hands a choice of programs over" >&2; exit 1
-    fi
-    # The choice printed under its path, as the steps write it: `$1` the
-    # dry run, `$2` the ids it must leave out.
+    # The record printed under its path, as the steps write it: `$1` the
+    # dry run, `$2` the ids it must leave out, `$3` `none` for no choice.
     chosen() {
-      echo "$1" | grep -qF -- "--decline $choice" || {
-        echo "ERROR: the copy of the plain part is not handed the machine's choice ($choice)" >&2
-        echo "$1" | grep -F 'plain' >&2 || true
-        exit 1; }
-      echo "$1" | OFFERED="$offered" LEFT="$2" CHOICE="$choice" python3 -c '
+      if echo "$1" | grep -q -- '--decline'; then
+        echo "ERROR: a step of the installation hands the choice to the repository; that is the first boot's" >&2
+        exit 1
+      fi
+      echo "$1" | OFFERED="$offered" LEFT="$2" RECORD="$record" NONE="''${3:-}" python3 -c '
     import json, os, sys
     text = sys.stdin.read()
-    head = "--- " + os.environ["CHOICE"] + " ---\n"
+    head = "--- " + os.environ["RECORD"] + " ---\n"
     if head not in text:
-        sys.exit("ERROR: the dry run of a full installation prints no choice under " + os.environ["CHOICE"])
+        sys.exit("ERROR: the dry run prints no first boot record under " + os.environ["RECORD"])
     if text.index(head) < text.index("--- host.nix ---"):
-        sys.exit("ERROR: the choice is printed before the host.nix whoever reads the plan reads first")
+        sys.exit("ERROR: the record is printed before the host.nix whoever reads the plan reads first")
     doc, _ = json.JSONDecoder().raw_decode(text.split(head, 1)[1])
+    if doc.get("address") != "git@example.org:someone/belongings.git" or doc.get("machine") != "noctua-teste":
+        sys.exit(f"ERROR: the record does not name the repository and the machine: {doc}")
+    if os.environ["NONE"]:
+        if doc.get("choice") is not None:
+            sys.exit(f"ERROR: a minimal installation hands a choice over: {doc}")
+        sys.exit(0)
+    choice = doc.get("choice") or {}
     left = [i for i in os.environ["LEFT"].split(",") if i]
     kept = [i for i in json.loads(os.environ["OFFERED"]) if i not in left]
     want = {"format": 1, "machine": "noctua-teste", "declined": left, "kept": kept}
-    if {k: doc.get(k) for k in want} != want or set(doc) != set(want) | {"at"}:
-        sys.exit(f"ERROR: the choice is {doc}, not {left} left out and every other offered program kept, on noctua-teste")
+    if {k: choice.get(k) for k in want} != want or set(choice) != set(want) | {"at"}:
+        sys.exit(f"ERROR: the choice is {choice}, not {left} left out and every other offered program kept, on noctua-teste")
     '
     }
+    chosen "$out_text" "" none
     full_text=$(RONOCTUA_INST_PROFILE=full RONOCTUA_INST_LEFT_OUT=blender,libreoffice \
       ${rust.bins.ronoctua-install}/bin/ronoctua-install)
     chosen "$full_text" blender,libreoffice
@@ -21553,8 +21558,8 @@ let
         echo "ERROR: the plan is not the same in every language ($steps )" >&2; exit 1; }
     done
 
-    echo "OK: $howmany steps in every language, four PCRs, a rehearsal by default,"
-    echo "    and a full installation's choice of programs signed in for it alone"
+    echo "OK: $howmany steps in every language, no TPM enrolled, a rehearsal by default,"
+    echo "    and a full installation's choice of programs handed to its first boot"
   '';
 
   # The whole chain: signed UKI, Secure Boot and the proof of PCR 15 (milestone 8).
@@ -25698,6 +25703,14 @@ let
   # its initrd checks the store and the installer is reached; with the
   # store's tail lost, the initrd says the stick does not hold the ISO whole
   # and stops before mounting it.
+  # ── anchor: L25 ──
+  # The ISO, with no network card, installs a machine no fixture describes,
+  # and it boots (`tests/installer-offline-vm.nix`).
+  installerOfflineVm = import ./installer-offline-vm.nix {
+    inherit pkgs lib;
+    installer = self.nixosConfigurations.installer;
+  };
+
   isoChecksItsStickVm = import ./iso-stick-vm.nix {
     inherit pkgs lib;
     installer = self.nixosConfigurations.installer;
@@ -35920,12 +35933,12 @@ let
   # mandatory (2026-10-05): with no address the installer refuses before
   # anything runs. Its settings are written into `~/.config/ronoctua/
   # belongings.json` AFTER `nixos-install` made the user (the file is given
-  # to them) and before the restore that reads them — never into `host.nix`,
-  # which goes to backup and describes the machine. The address reaches one
-  # command line, the copy of the plain part (`--repository`, the CLI's
-  # contract: an address is no secret); the restore reads it from the
-  # settings, and an address carrying a password is refused before anything
-  # runs. The dry run shows the plan; `installer-vm` writes it.
+  # to them) and before the first boot's record that hands the restore over
+  # — never into `host.nix`, which goes to backup and describes the machine.
+  # The address reaches no command line of the installation (nothing of it
+  # asks the repository: that is the first boot's), only the record, and an
+  # address carrying a password is refused before anything runs. The dry run
+  # shows the plan; `installer-offline-vm` writes it.
   installer-writes-belongings-into-the-home =
     mkCheck "installer-writes-belongings-into-the-home"
       [
@@ -35967,20 +35980,24 @@ let
           echo "ERROR: the belongings' address reached host.nix" >&2
           exit 1
         fi
-        steps=$(echo "$said" | sed '/^--- host.nix ---$/,/^--- /d')
-        named=$(echo "$steps" | grep -cF "$address" || true)
-        [ "$named" = 1 ] && echo "$steps" | grep -F "$address" | grep -q 'ronoctua-belongings plain ' || {
-          echo "ERROR: the address is on $named command lines, and only the plain part's copy takes it" >&2
+        steps=$(echo "$said" | grep '^[! ] [0-9]')
+        if echo "$steps" | grep -qF "$address"; then
+          echo "ERROR: a step of the installation names the repository; asking it is the first boot's" >&2
+          exit 1
+        fi
+        record=/mnt/persist/etc/ronoctua/first-boot/record.json
+        echo "$said" | sed -n "\|^--- $record ---\$|,\$p" | grep -qF "\"address\": \"$address\"" || {
+          echo "ERROR: the first boot's record does not name the repository" >&2
           exit 1
         }
         written=$(echo "$said" | grep -n "write $target" | cut -d: -f1 | head -1)
         installed=$(echo "$said" | grep -n ' nixos-install ' | cut -d: -f1 | head -1)
-        restored=$(echo "$said" | grep -n 'ronoctua-belongings restore ' | cut -d: -f1 | head -1)
+        handed=$(echo "$said" | grep -n "write $record" | cut -d: -f1 | head -1)
         [ -n "$written" ] || { echo "ERROR: no step writes $target" >&2; exit 1; }
         [ -n "$installed" ] || { echo "ERROR: no step runs nixos-install" >&2; exit 1; }
-        [ -n "$restored" ] || { echo "ERROR: no step restores the belongings" >&2; exit 1; }
-        [ "$written" -gt "$installed" ] && [ "$written" -lt "$restored" ] || {
-          echo "ERROR: the settings are written before nixos-install made the user, or after the restore that reads them" >&2
+        [ -n "$handed" ] || { echo "ERROR: no step writes the first boot's record" >&2; exit 1; }
+        [ "$written" -gt "$installed" ] && [ "$written" -lt "$handed" ] || {
+          echo "ERROR: the settings are written before nixos-install made the user, or after the record that hands the restore over" >&2
           exit 1
         }
 
@@ -35994,11 +36011,8 @@ let
         echo "OK: the repository is mandatory, and written into the person's home after the install"
       '';
 
-  # `ronoctua-install --execute` against a real disk is `tests/installer-vm.nix`,
-  # and it is NOT a check: offline, `nixos-install` inside the VM has to build
-  # the target system from source (the answers make it differ from any system
-  # the store carries), and a red check everybody learns to ignore is worse than
-  # an admitted gap (owner, 2026-10-05; docs/PENDING.md, "O `--execute`").
+  # `ronoctua-install --execute` against a real disk, with no network card,
+  # is `installer-offline-vm` (`tests/installer-offline-vm.nix`, slow tier).
 
   # A MODEL OPENS IN ORCASLICER — a `.stl`, a `.3mf`, and a `.step`, which the
   # database makes a `text/plain` and which went to the editor.
@@ -42168,18 +42182,18 @@ let
   # are). The person's half never touches the system profile
   # (`person-packages-are-per-user`).
   #
-  # And the MINIMAL machine, where `allowUnfree` is off and the one predicate
-  # is what lets a consented package in (on `full` the Android SDK turns
-  # `allowUnfree` on, and the predicate is never asked). Its host turned the
-  # system's Flatpak on by hand while the distro's switch is off, so
-  # nix-flatpak's per-person list does not exist. It declares, from fixture
-  # packages an overlay plants: obsidian with consent (applied — by the
-  # predicate, its name in `unfreeNames`), discord without (refused), a
-  # consented package whose reading `abort`s — which `tryEval` cannot catch —
-  # held by its current fingerprint, a consented unfree package that needs
-  # another unfree one (applied: the consent covers what it needs), a free one
-  # that needs an unfree one (refused, said as that), and a Flatpak (no
-  # source here). The machine must evaluate with the aborting entry held, and
+  # And the MINIMAL machine. The system admits unfree (the owner,
+  # 2026-10-24), so what keeps an unfree declaration out is the person's own
+  # yes, asked by the person's module of the package declared — never the
+  # system's licence policy. Its host turned the system's Flatpak on by hand
+  # while the distro's switch is off, so nix-flatpak's per-person list does
+  # not exist. It declares, from fixture packages an overlay plants: obsidian
+  # with consent (applied, its name in `unfreeNames`), discord without
+  # (refused: the person did not say yes), a consented package whose reading
+  # `abort`s — which `tryEval` cannot catch — held by its current
+  # fingerprint, a consented unfree package that needs another unfree one
+  # (applied), a free one that needs an unfree one (applied: nothing unfree
+  # refuses), and a Flatpak (no source here). The machine must evaluate with the aborting entry held, and
   # the update's verification (`personEntries`, one entry at a time) must
   # evaluate the two consented entries even while the aborting one is NOT
   # held yet.
@@ -42373,20 +42387,20 @@ let
           wrong.append("the machine's /etc or the person's generation did not instantiate")
 
       m = f["minimal"]
-      if m["allowUnfree"] is not False or m["flatpakSwitch"] is not False or m["systemFlatpak"] is not True:
-          wrong.append("the minimal variant is not a machine where the predicate decides and Flatpak "
-                       f"is on by hand only (allowUnfree {m['allowUnfree']}, ronoctua.software.flatpak "
+      if m["allowUnfree"] is not True or m["flatpakSwitch"] is not False or m["systemFlatpak"] is not True:
+          wrong.append("the minimal variant is not a machine that admits unfree with Flatpak on by hand "
+                       f"only (allowUnfree {m['allowUnfree']}, ronoctua.software.flatpak "
                        f"{m['flatpakSwitch']}, services.flatpak.enable {m['systemFlatpak']}): "
                        "it proves nothing")
       mr = m["report"]
-      if mr["applied"] != ["nix:obsidian", "nix:fixtureUnfreeOuter"]:
-          wrong.append(f"minimal, applied: {mr['applied']} (a consented unfree package must go in "
-                       "through the predicate, and one that needs another unfree one by its consent)")
+      if mr["applied"] != ["nix:obsidian", "nix:fixtureUnfreeOuter", "nix:fixtureFreeOuter"]:
+          wrong.append(f"minimal, applied: {mr['applied']} (a consented unfree package goes in, one "
+                       "that needs another unfree one by its consent, and a free one that needs an "
+                       "unfree one — nothing unfree refuses)")
       mw = why(mr)
       want = {
           "nix:discord": ("refused-by-meta", "consent"),
           "nix:fixtureAborts": ("held", "build-failed"),
-          "nix:fixtureFreeOuter": ("refused-by-meta", "needs unfree packages"),
           "flatpak:org.example.Fixture": ("source-off", "flatpak"),
       }
       if set(mw) != set(want) or any(mw[k][0] != r or s not in mw[k][1] for k, (r, s) in want.items()):
@@ -42409,9 +42423,9 @@ let
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
       print(f"OK: {len(r['applied'])} applied, {len(r['skipped'])} skipped with their reasons; "
-            "held, future format and declines said; the machine evaluates; on minimal the "
-            "predicate takes the consent, a held entry that aborts is never read, and each "
-            "consented entry verifies alone")
+            "held, future format and declines said; the machine evaluates; on minimal an unfree "
+            "declaration waits only for the person's yes, a held entry that aborts is never read, "
+            "and each consented entry verifies alone")
       END
     '';
 
@@ -45811,11 +45825,13 @@ let
   '';
 
   # THE SEEDED DECLINE CHAIN, END TO END, WITH THE REAL PROGRAMS: the
-  # installer's own plan (its dry run's steps and choice, replayed with its
-  # places moved here) — the choice signed into the person's repository
-  # (`plain --decline`), the key pinned, root's apply held to it and the
-  # installer's reading of it (restated: only `--execute` runs it) — the
-  # restore's mirror; the updates' person half, its steps as the update
+  # installer's own plan (its dry run's steps and the first boot's record,
+  # replayed with its places moved here) — the declines staged and applied
+  # unsigned, and the installer's reading of them (restated: only
+  # `--execute` runs it) — then the first boot's own sequence for that record
+  # (`ronoctua-first-boot --plan`): the choice signed into the person's
+  # repository (`plain --decline`), the key pinned, root's apply held to it,
+  # the restore's mirror; the updates' person half, its steps as the update
   # declares them (read here, so a changed argument is followed), with root's
   # applier started by the stage as its unit is: the first update keeping
   # the choice, a decline another machine signed arriving with no identity
@@ -45826,7 +45842,7 @@ let
   # configuration rewrites their address to decoys nothing may touch. The
   # script runs only inside a Nix build — the kernel keyring it opens and
   # forgets in is the build's own — and refuses anywhere else. It does not
-  # install a disk: that is `installer-vm`'s (`docs/PENDING.md`).
+  # install a disk: that is `installer-offline-vm`'s.
   person-decline-chain =
     let
       # THE UPDATE'S PERSON HALF THAT GATHERS, as its steps declare it — their
@@ -45854,11 +45870,13 @@ let
       # the unwrapped one, as `installer-dryrun` runs it.
       export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
       export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+      export RONOCTUA_MACHINE_DIR=${(import ../nix/machine.nix).machineDir}
       python3 ${./person-decline-chain.py} ${personHalf} \
         ${rust.belongings}/bin/ronoctua-belongings \
         ${rust.person}/bin/ronoctua-person \
         ${rust.software}/bin/ronoctua-software \
-        ${rust.bins.ronoctua-install}/bin/ronoctua-install
+        ${rust.bins.ronoctua-install}/bin/ronoctua-install \
+        ${rust.firstBoot}/bin/ronoctua-first-boot
     '';
 
   # ── anchor: L25 ──
@@ -45872,75 +45890,140 @@ let
     partsTool = rust.parts;
   };
 
-  # THE BASE ADMITS NOTHING UNFREE (the L25 amendment).
+  # UNFREE NEVER REFUSES AN EVALUATION (the owner, 2026-10-24).
   #
-  # Every unfree program is a part, built from the parts' one door
-  # (`nix/parts-pkgs.nix`) and kept out of the system's closure — never on
-  # the published ISO, never in a public cache, and a download that fails
-  # holds back nothing. Asked of the three evaluated reference machines:
-  #
-  #   - `allowUnfree` is false: the SDK, which forced it once, has an
-  #     instance of its own in the parts' door;
-  #   - the system's predicate refuses every program the door admits, by the
-  #     name nixpkgs asks it (`lib.getName`) — the references consent to
-  #     nothing of the person's, so it refuses everything;
-  #   - the whole system EVALUATES: forcing the toplevel's derivation runs
-  #     nixpkgs' own licence test on every package of the closure, and an
-  #     unfree one that came in by any other way stops it, by name.
-  the-base-admits-no-unfree =
+  # Unfree is approved, so nothing may fall for it: the three reference
+  # machines admit it (`allowUnfree`) and evaluate whole; and a machine whose
+  # hardware report brings an unfree branch — the IPU6 camera of the Intel
+  # probe (`tests/fixtures/machine-elsewhere`), `ipu6-camera-bins` — evaluates
+  # with the camera ON once its installation's marker is gone, and with it
+  # off, said in a warning, while the marker is there.
+  unfree-never-refuses =
     let
-      door = import ../nix/parts-pkgs.nix { inherit pkgs; };
       factsOf =
-        name:
+        system:
         let
-          c = self.nixosConfigurations.${name}.config;
-          predicate = c.nixpkgs.config.allowUnfreePredicate or (_: false);
+          c = system.config;
         in
         {
           allowUnfree = c.nixpkgs.config.allowUnfree or false;
-          admitted = builtins.filter (
-            n:
-            predicate {
-              name = "${n}-1";
-              pname = n;
-            }
-          ) door.names;
           toplevel = builtins.unsafeDiscardStringContext c.system.build.toplevel.drvPath;
+          ipu6 = c.hardware.ipu6.enable or false;
+          waits = builtins.any (lib.hasInfix "IPU6 camera waits") c.warnings;
         };
-      facts = pkgs.writeText "the-base-admits-no-unfree.json" (
+      probe = ./fixtures/machine-elsewhere;
+      facts = pkgs.writeText "unfree-never-refuses.json" (
         builtins.toJSON {
-          names = door.names;
           machines = lib.genAttrs [
             "noctua"
             "minimal"
             "vm"
-          ] factsOf;
+          ] (name: factsOf self.nixosConfigurations.${name});
+          deferred = factsOf (self.lib.machine { dir = probe; });
+          arrived = factsOf (
+            self.lib.machine {
+              dir = probe;
+              extraModules = [ { ronoctua.hardware.deferUndistributable = lib.mkForce false; } ];
+            }
+          );
         }
       );
     in
-    mkCheck "the-base-admits-no-unfree" [ pkgs.python3 ] ''
+    mkCheck "unfree-never-refuses" [ pkgs.python3 ] ''
       python3 - <<'END'
       import json, sys
       exec(open("${pyPrelude}").read())
-      # PARSED: the evaluated reference machines' policy and toplevels, and
-      # the parts' door's names, as JSON.
+      # PARSED: the evaluated machines' policy, toplevels and camera, as JSON.
       facts = json.load(open("${facts}"))
       wrong = []
-      floor(len(facts["names"]), 6, "programs the parts' door admits")
       for name, m in facts["machines"].items():
-          if m["allowUnfree"]:
-              wrong.append(f"{name}: allowUnfree is on — every unfree package of the closure would be let in")
-          if m["admitted"]:
-              wrong.append(f"{name}: the system's predicate admits {m['admitted']}, which are parts")
+          if not m["allowUnfree"]:
+              wrong.append(f"{name}: allowUnfree is off — an unfree package would refuse the evaluation")
+      for name, m in [*facts["machines"].items(), ("the Intel probe, waiting", facts["deferred"]),
+                      ("the Intel probe, arrived", facts["arrived"])]:
           if not m["toplevel"].startswith("/nix/store/") or not m["toplevel"].endswith(".drv"):
               wrong.append(f"{name}: the toplevel did not evaluate ({m['toplevel']!r})")
+      if not facts["arrived"]["ipu6"]:
+          wrong.append("the Intel probe without its marker has no IPU6 camera: the probe no longer reaches the unfree branch")
+      if facts["deferred"]["ipu6"] or not facts["deferred"]["waits"]:
+          wrong.append(f"the Intel probe with its marker: camera {facts['deferred']['ipu6']}, said {facts['deferred']['waits']}")
       if wrong:
-          print("ERROR: the base admits what is not free:", file=sys.stderr)
+          print("ERROR: an unfree package can refuse an evaluation:", file=sys.stderr)
           for w in wrong:
               print("  " + w, file=sys.stderr)
           sys.exit(1)
-      print(f"OK: {len(facts['machines'])} machines evaluate with nothing unfree admitted; "
-            f"{len(facts['names'])} programs reach a machine only as parts")
+      print("OK: unfree is admitted, every machine evaluates, and the IPU6 camera waits only for its marker")
+      END
+    '';
+
+  # THE PUBLISHED ISO CARRIES NOTHING NOBODY MAY REDISTRIBUTE (the owner,
+  # 2026-10-24). Every system the ISO is computed from
+  # (`nix/installer/offline.nix`: the references and the probes, each as
+  # installed, with its marker) is asked: no IPU6 camera and no Parallels
+  # tools, and no package of its system or kernel modules whose licence
+  # nixpkgs marks not redistributable. And the marker's name agrees
+  # where it is spelled: `nix/machine.nix` and `ronoctua_person::names`.
+  iso-carries-nothing-undistributable =
+    let
+      offline = self.nixosConfigurations.installer._module.args.ronoctua.offline;
+      undistributable =
+        p: builtins.any (l: !(l.redistributable or true)) (lib.toList (p.meta.license or [ ]));
+      factsOf =
+        system:
+        let
+          c = system.config;
+          # The firmware is one merged derivation once its option applies:
+          # what brings unfree firmware is a branch, asked by its option.
+          packages = c.environment.systemPackages ++ c.boot.extraModulePackages;
+        in
+        {
+          name = c.networking.hostName;
+          ipu6 = c.hardware.ipu6.enable or false;
+          parallels = c.hardware.parallels.enable or false;
+          refused = map (p: p.name or "?") (builtins.filter undistributable packages);
+        };
+      facts = pkgs.writeText "iso-carries-nothing-undistributable.json" (
+        builtins.toJSON {
+          systems = map factsOf (
+            [
+              self.nixosConfigurations.noctua
+              self.nixosConfigurations.minimal
+            ]
+            ++ map (name: self.lib.machine { dir = ./fixtures + "/${name}"; }) [
+              "machine-elsewhere"
+              "machine-bios"
+              "machine-guest"
+            ]
+          );
+          inherit (offline.summary) seeded;
+          marker = (import ../nix/machine.nix).parts.deferred;
+        }
+      );
+    in
+    mkCheck "iso-carries-nothing-undistributable" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, re, sys
+      exec(open("${pyPrelude}").read())
+      # PARSED: the ISO's systems as JSON. FILE-WIDE: the Rust constant of
+      # the marker's name, by its declaration.
+      facts = json.load(open("${facts}"))
+      floor(len(facts["systems"]), 5, "systems the ISO is computed from")
+      wrong = []
+      for s in facts["systems"]:
+          if s["ipu6"] or s["parallels"]:
+              wrong.append(f"{s['name']}: the IPU6 camera or Parallels' tools are on, and the ISO would carry what nobody may redistribute")
+          if s["refused"]:
+              wrong.append(f"{s['name']}: {s['refused']} may not be redistributed")
+      names = uncommented(open("${../crates/ronoctua-person/src/lib.rs}").read())
+      said = re.search(r'pub const DEFERRED_HARDWARE: &str = "([^"]+)";', names)
+      if not said or said.group(1) != facts["marker"]:
+          wrong.append(f"the marker is {facts['marker']} in nix/machine.nix and {said and said.group(1)} in ronoctua_person::names")
+      if wrong:
+          print("ERROR: the published ISO could carry what nobody may redistribute:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: {len(facts['systems'])} systems, nothing that may not be redistributed, one name for the marker")
       END
     '';
 
@@ -51395,14 +51478,17 @@ let
     if private["public-roots"] or private["unfree"]:
         wrong.append("a private cache's file carries a public cache's lists")
 
-    # THE ISO: no cache of its own, and its seed whole, always.
+    # THE ISO: no cache of its own, and its seed whole, always — beside
+    # what an installation with no network needs (`nix/installer/offline.nix`:
+    # the systems, the glue, every source of the lock).
     inst = facts["installer"]
     if inst["declares"] or inst["substituters"] != [upstream] or [k for k in inst["keys"] if not k.startswith("cache.nixos.org-1:")]:
         wrong.append(f"the ISO declares a cache: {inst}")
-    carried = sorted(p for p in facts["isoSeed"] if p is not None and p != facts["installerTop"])
-    if carried != roots:
-        wrong.append(f"the ISO does not carry its whole seed: {carried}")
-    if facts["isoSeed"].count(None) != facts["wholeSeed"].count(None):
+    carried = set(p for p in facts["isoSeed"] if p is not None)
+    missing = sorted(set(roots) - carried)
+    if missing:
+        wrong.append(f"the ISO does not carry its whole seed: {missing}")
+    if facts["isoSeed"].count(None) < facts["wholeSeed"].count(None):
         wrong.append("the ISO lost the flake inputs' sources, which evaluating a machine needs")
 
     # PARSED: the two paths the Rust spells.
@@ -51941,6 +52027,118 @@ let
   # just finished, and `-complete` (the developer's whole ISO) apart from the
   # published one. Everything else goes. Planted, so the answer does not
   # depend on what this machine's store holds.
+  # ── anchor: L25 ──
+  # THE COMPLETE ISO IS NEVER PUBLISHED. `installer-complete` carries every
+  # part, unfree ones included, for its builder's own machines: it has a
+  # marker at the medium's root and `-complete` in its file's name, and the
+  # standard ISO has neither; `.#release` builds `.#iso` and nothing else;
+  # and `release.py pack` refuses a medium with the marker however it is
+  # named, and one with the complete name — planted here, both.
+  the-complete-iso-is-never-released =
+    let
+      facts = pkgs.writeText "complete-iso.json" (
+        builtins.toJSON {
+          complete = map (c: c.target) self.nixosConfigurations.installer-complete.config.isoImage.contents;
+          standard = map (c: c.target) self.nixosConfigurations.installer.config.isoImage.contents;
+          completeName = self.packages.${system}.iso-complete.name;
+          standardName = self.packages.${system}.iso.name;
+        }
+      );
+    in
+    mkCheck "the-complete-iso-is-never-released" [ pkgs.python3 ] ''
+      python3 - <<'PY'
+      import json, os, random, subprocess, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the two media's root files and names arrive as JSON.
+      # FILE-WIDE: the release's script, for the flake attribute it builds;
+      # the needle is the attribute's literal — read raw, for `hashless`
+      # would cut it at its `#`.
+      facts = json.load(open("${facts}"))
+      wrong = []
+      if "/ronoctua-complete" not in facts["complete"]:
+          wrong.append("the complete ISO carries no marker at its root")
+      if "/ronoctua-complete" in facts["standard"]:
+          wrong.append("the published ISO carries the complete ISO's marker")
+      if "-complete" not in facts["completeName"]:
+          wrong.append(f"the complete ISO is named {facts['completeName']}, with no `-complete`")
+      if "-complete" in facts["standardName"]:
+          wrong.append(f"the published ISO is named {facts['standardName']}")
+      release = open("${../nix/release.nix}").read()
+      floor(len(release), 2000, "characters of nix/release.nix")
+      if '"$flake#iso"' not in release:
+          wrong.append("nix/release.nix no longer builds `#iso` by that literal")
+      if "iso-complete" in release:
+          wrong.append("nix/release.nix names the complete ISO")
+
+      def packed(name, marked):
+          os.makedirs("planted", exist_ok=True)
+          iso = os.path.join("planted", name)
+          data = bytearray(random.Random(25).randbytes(300000))
+          if marked:
+              data[40000:40017] = b"ronoctua-complete"
+          open(iso, "wb").write(data)
+          out = f"out-{len(os.listdir('.'))}"
+          ran = subprocess.run([sys.executable, "${../nix/scripts/release.py}", "pack", iso, out],
+                               capture_output=True, text=True)
+          return ran.returncode == 0, ran.stderr
+
+      took, said = packed("ronoctua-distro-26.05.check-x86_64.iso", marked=True)
+      if took or "complete ISO" not in said:
+          wrong.append(f"a medium with the marker, under the published name, was packed: {said!r}")
+      took, said = packed("ronoctua-distro-26.05.check-x86_64-complete.iso", marked=False)
+      if took:
+          wrong.append("a medium named as the complete ISO was packed")
+      took, said = packed("ronoctua-distro-26.05.check-x86_64.iso", marked=False)
+      if not took:
+          wrong.append(f"a plain medium was refused: {said!r}")
+      if wrong:
+          print("ERROR: the complete ISO could be published.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print("OK: the complete ISO is marked and named apart, and the release packs neither")
+      PY
+    '';
+
+  # AND IT CARRIES EVERY PART: each part either reference wants, unfree ones
+  # included, is among its store contents — read from the evaluation, with
+  # nothing built (the ISO itself is ~25 GB; its build is by hand).
+  iso-complete-carries-every-part =
+    let
+      plain = builtins.unsafeDiscardStringContext;
+      carried = map (
+        p: plain "${p}"
+      ) self.nixosConfigurations.installer-complete.config.isoImage.storeContents;
+      wanted =
+        lib.concatMap
+          (
+            s:
+            lib.mapAttrsToList (id: p: {
+              inherit id;
+              out = plain p.package.outPath;
+            }) (lib.filterAttrs (_: p: p.wanted) s.config.ronoctua.parts)
+          )
+          [
+            self.nixosConfigurations.noctua
+            self.nixosConfigurations.minimal
+          ];
+      missing = map (p: p.id) (builtins.filter (p: !(builtins.elem p.out carried)) wanted);
+      unfree = builtins.filter (p: p.unfree) (
+        lib.attrValues self.nixosConfigurations.noctua.config.ronoctua.parts
+      );
+    in
+    mkCheck "iso-complete-carries-every-part" [ ] ''
+      ${
+        if missing != [ ] then
+          "echo 'ERROR: the complete ISO does not carry: ${lib.concatStringsSep " " missing}' >&2; exit 1"
+        else if unfree == [ ] then
+          "echo 'ERROR: no reference has an unfree part, so the census proves nothing' >&2; exit 1"
+        else
+          "echo 'OK: the complete ISO carries all ${toString (builtins.length wanted)} parts of both references'"
+      }
+    '';
+
   iso-sweep-keeps-what-it-must = mkCheck "iso-sweep-keeps-what-it-must" [ pkgs.python3 ] ''
     cat > planted.json <<'EOF'
     [
@@ -52423,14 +52621,14 @@ let
       uade, unrar = facts["uade"], facts["unrar"]
       if not uade.startswith("uade-") or not unrar.startswith("unrar-"):
           wrong.append(f"the player's and the archives' programs are {uade!r} and {unrar!r}")
-      # WHAT THE LICENCE QUESTION STILL CATCHES BY NAME — every unfree
-      # program is a part now (`nix/parts-pkgs.nix`), out of every system's
-      # closure and of the seed, and the system's predicate admits none of
-      # them. The three only that predicate caught (Android Studio's suffixed
-      # name, VS Code's FHS environment `code`, the SDK's pieces) can no
-      # longer be asked by name; they are proved out of every closure by
-      # `profile-minimal-closes` and `parts-stay-out-of-the-base`.
-      want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.0.30", "vscode-1.119.0", "androidsdk"}
+      # WHAT THE LICENCE QUESTION CATCHES BY NAME — every unfree program is
+      # a part (`nix/parts-pkgs.nix`), out of every system's closure and of
+      # the seed. The system admits unfree (the owner, 2026-10-24), so each
+      # package's licence answers, Android Studio's included; VS Code's FHS
+      # environment `code` and the SDK's other pieces are proved out of every
+      # closure by `profile-minimal-closes` and `parts-stay-out-of-the-base`.
+      want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.0.30", "vscode-1.119.0", "androidsdk",
+              "android-studio-stable-2025.1.4.8"}
       if set(unfree) != want:
           wrong.append(f"the release calls unfree {sorted(unfree)}, not {sorted(want)}")
       floor(facts["baked"], 20, "derivations the workspace bakes in")
@@ -53166,44 +53364,40 @@ let
   '';
   # ── anchor: L19 ──
   # ── anchor: L20 ──
-  # THE INSTALLER FOLLOWS THE RELEASE.
-  #
-  # A machine follows the `release` branch, so the installer asks the release
-  # which revision it is at, right after the network question: a NEWER one
-  # starts the release's installer in its place (with the answers given),
-  # the same one goes on, one this ISO is ahead of keeps this installer (a
-  # new installer being tried), and one that does not answer goes on with
-  # the ISO's own distro and SAYS so — a development build never follows,
-  # and a hop never hops again. The decision is a pure function; this runs
-  # its test by name out of the harness the test units built (`--exact`), so a
-  # renamed test is a red check and never a filter that matched nothing.
-  installer-follows-release = rust.testsOf {
-    name = "ronoctua-installer-follows-release";
+  # ── anchor: L25 ──
+  # THE INSTALLER REACHES NO NETWORK. Every `nix` of the plan runs offline
+  # with no substituter and no registry, and no step asks the person's
+  # repository — those are the first boot's (`plan::tests`); the network
+  # question is not a gate, and with none the repository is never asked and
+  # the passphrase is typed twice (`tui::tests`); offline, an address is
+  # taken as typed (`reach::tests`). Run by name out of the harness the test
+  # units built (`--exact`), so a renamed test is a red check.
+  installer-reaches-no-network = rust.testsOf {
+    name = "ronoctua-installer-reaches-no-network";
     crate = "ronoctua-installer";
     exact = [
-      "release::tests::installer_follows_release"
-      "release::tests::the_hop_starts_the_release_installer_with_what_this_one_was_given"
+      "plan::tests::nothing_reaches_the_network"
+      "plan::tests::the_system_is_built_before_the_disk_is_touched"
+      "tui::tests::the_network_is_not_a_gate"
+      "tui::tests::with_no_network_the_repository_is_never_asked"
+      "tui::tests::with_no_network_the_passphrase_is_typed_twice_and_long"
+      "reach::tests::with_no_network_the_address_is_taken_as_typed"
     ];
-    expect = "test result: ok. 2 passed";
+    expect = "test result: ok. 6 passed";
   };
 
-  # THE INSTALLER REQUIRES THE NETWORK.
-  #
-  # The person's repository is mandatory and is checked for real, the release
-  # is asked, and `nixos-install` downloads: with no way out, `--execute`
-  # stops BEFORE ITS FIRST STEP with the sentence and exit code 3. This runs
-  # the real binary, every answer given, where there is no network at all
-  # (the build sandbox: no NetworkManager, no system bus). The dry run still
-  # runs there: a rehearsal asks nothing of the network.
-  #
-  # What "before its first step" rests on is the exit code and the missing
-  # `[1/` line, and nothing else: the scratch home is made only AFTER the
-  # gate (`Reach::prepare`), and in this sandbox it cannot be made at all
-  # (`/run` does not exist) — a gate that let the installer through would end
-  # it with 4, not 3. Looking for the files themselves would prove nothing
-  # here: `/run` is not there to hold them, and `/tmp` is not the machine's.
-  installer-requires-network =
-    mkCheck "installer-requires-network"
+  # THE INSTALLER INSTALLS WITHOUT THE NETWORK. The real binary, every
+  # answer given, where there is no network at all (the build sandbox: no
+  # NetworkManager, no system bus): `--execute` says it has none and goes
+  # on — past where the network used to stop it (exit 3, "refused before
+  # any step: network"), to the copy of the access into its scratch home,
+  # which fails HERE only because this sandbox has no `/run` (exit 4); the
+  # whole installation with no network card is `installer-offline-vm`'s.
+  # The machine is still said first: started from BIOS, 6 until BIOS is
+  # chosen by name; the choice refused where it chooses nothing; no TPM 2.0,
+  # 5. The dry run runs too.
+  installer-installs-without-network =
+    mkCheck "installer-installs-without-network"
       [
         pkgs.gnugrep
         pkgs.coreutils
@@ -53213,12 +53407,14 @@ let
         # one, and the colours and the words are data it reads at run time.
         export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
         export RONOCTUA_TEXTS=${rust.keyed.RONOCTUA_TEXTS}
+        mkdir keys
+        echo deploy-key > keys/deploy
         export RONOCTUA_INST_DISK=/dev/nvme0n1
         export RONOCTUA_INST_HOSTNAME=noctua-teste
         export RONOCTUA_INST_PASSWORD=test-password
         export RONOCTUA_INST_PASSPHRASE=test-passphrase
         export RONOCTUA_INST_BELONGINGS=git@example.org:someone/belongings.git
-        export RONOCTUA_INST_BELONGINGS_ACCESS=/run/keys/deploy
+        export RONOCTUA_INST_BELONGINGS_ACCESS=$PWD/keys/deploy
         export RONOCTUA_INST_BELONGINGS_PASSPHRASE=belongings-passphrase
         # NO SYSTEM BUS, said out loud: the sandbox has none, and a machine
         # running this by hand must not have its own NetworkManager answer.
@@ -53226,10 +53422,6 @@ let
         # A MACHINE THAT INSTALLS: UEFI, a TPM 2.0 (the sandbox has neither).
         export RONOCTUA_INSTALLER_SYSROOT=${uefiMachine}
 
-        # THE MACHINE IS SAID BEFORE THE NETWORK, and these are the exits:
-        # started from BIOS, 6 until BIOS is chosen by name, and then the
-        # network's gate (3) as on UEFI; the choice refused where it chooses
-        # nothing; and no TPM 2.0, 5, BIOS chosen or not.
         exit_of() {
           local status=0
           env "$@" ${rust.bins.ronoctua-install}/bin/ronoctua-install --execute < /dev/null > stop.txt 2>&1 || status=$?
@@ -53249,7 +53441,6 @@ let
         }
         for case in \
           "6 RONOCTUA_INSTALLER_SYSROOT=$bios" \
-          "3 RONOCTUA_INSTALLER_SYSROOT=$bios RONOCTUA_INST_FIRMWARE=bios" \
           "1 RONOCTUA_INST_FIRMWARE=bios" \
           "1 RONOCTUA_INSTALLER_SYSROOT=$bios RONOCTUA_INST_FIRMWARE=uefi" \
           "5 RONOCTUA_INSTALLER_SYSROOT=$none"; do
@@ -53263,28 +53454,34 @@ let
           }
         done
 
-        status=0
-        ${rust.bins.ronoctua-install}/bin/ronoctua-install --execute < /dev/null > said.txt 2>&1 || status=$?
-        cat said.txt
-        [ "$status" = 3 ] || {
-          echo "ERROR: with no network, --execute exited $status and not 3 (the gate's)" >&2
+        fail() {
+          cat said.txt
+          echo "ERROR: $*" >&2
           exit 1
         }
-        grep -q 'refused before any step: network' said.txt || {
-          echo "ERROR: the installer did not say the network stopped it" >&2
-          exit 1
-        }
-        if grep -q '^\[1/' said.txt; then
-          echo "ERROR: a step started with no network" >&2
-          exit 1
-        fi
-        # THE REHEARSAL asks nothing of the network, and runs.
+        for firmware in uefi bios; do
+          status=0
+          if [ "$firmware" = bios ]; then
+            RONOCTUA_INSTALLER_SYSROOT=$bios RONOCTUA_INST_FIRMWARE=bios \
+              ${rust.bins.ronoctua-install}/bin/ronoctua-install --execute < /dev/null > said.txt 2>&1 || status=$?
+          else
+            ${rust.bins.ronoctua-install}/bin/ronoctua-install --execute < /dev/null > said.txt 2>&1 || status=$?
+          fi
+          grep -q 'no network' said.txt || fail "$firmware: the installer did not say it has no network"
+          if grep -q 'refused before any step: network' said.txt; then
+            fail "$firmware: the network stopped the installation"
+          fi
+          grep -q 'refused before any step: access failed' said.txt ||
+            fail "$firmware: the installer did not go on to the access (the sandbox has no /run to keep it in)"
+          [ "$status" = 4 ] || fail "$firmware: --execute exited $status, and the access refused here ends with 4"
+        done
+        # THE REHEARSAL runs.
         ${rust.bins.ronoctua-install}/bin/ronoctua-install < /dev/null > dry.txt
         grep -q -- '--execute' dry.txt || {
-          echo "ERROR: the dry run did not run without the network" >&2
+          echo "ERROR: the dry run did not run" >&2
           exit 1
         }
-        echo "OK: with no network the installer stops before its first step, and says so; BIOS goes on only chosen, and no TPM stops it"
+        echo "OK: with no network the installer says so and goes on past the gate; BIOS goes on only chosen, and no TPM stops it"
       '';
 
   # A MACHINE THAT DOES NOT HIBERNATE ASKS FOR NO HIBERNATION.
@@ -55230,6 +55427,7 @@ let
     wifi-joins-vm = wifiJoinsVm;
     installer-joins-wifi-vm = installerJoinsWifiVm;
     iso-checks-its-stick-vm = isoChecksItsStickVm;
+    installer-offline-vm = installerOfflineVm;
 
     persist-home-vm = persistHomeVm;
     persist-initrd-vm = persistInitrdVm;
@@ -55355,7 +55553,12 @@ let
       one-parts-boundary
       part-paths-are-read-as-arriving
       parts-stay-out-of-the-base
-      the-base-admits-no-unfree
+      unfree-never-refuses
+      iso-carries-nothing-undistributable
+      the-complete-iso-is-never-released
+      iso-complete-carries-every-part
+      installer-reaches-no-network
+      installer-installs-without-network
       ;
     parts-are-isolated = partsVm;
     # ── anchor: L07 ──
@@ -55565,8 +55768,6 @@ let
     # ── anchor: L19 ──
     # ── anchor: L20 ──
     inherit
-      installer-follows-release
-      installer-requires-network
       hibernation-follows-the-swap
       ;
     # ── anchor: L21 ──

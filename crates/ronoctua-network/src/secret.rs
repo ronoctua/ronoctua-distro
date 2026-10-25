@@ -164,7 +164,17 @@ pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
 ///
 /// There is no blob, the TPM is not the same one, or `systemd-creds` refused.
 pub fn open(ssid: &str) -> Result<String> {
-    let origin = path(ssid);
+    open_at(DIRECTORY, ssid)
+}
+
+/// Opens a blob of a given directory (see [`seal_at`]): the first boot's
+/// sealed passphrase lives beside its record, not with the networks.
+///
+/// # Errors
+///
+/// There is no blob, the TPM is not the same one, or `systemd-creds` refused.
+pub fn open_at(directory: &str, ssid: &str) -> Result<String> {
+    let origin = path_at(directory, ssid);
     let blob = std::fs::read(&origin).with_context(|| format!("read {}", origin.display()))?;
 
     let mut child = Command::new(SYSTEMD_CREDS_PATH)

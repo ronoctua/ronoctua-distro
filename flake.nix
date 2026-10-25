@@ -671,6 +671,45 @@
       # of the distro with the machine's file beside it — and it is REFUSED,
       # not ignored: built as before, that machine would be this reference one,
       # its disk included.
+      # ── anchor: L25 ──
+      # THE MACHINES AN INSTALLATION IS COMPARED WITH (`nix/installer/
+      # offline.nix`): the two references, and three probes that answer and
+      # look unlike them — an Intel laptop in Portuguese, an AMD desktop
+      # that boots by BIOS with the minimal profile, a QEMU guest that left
+      # programs out.
+      probeMachines = map (name: machineLib.machine { dir = ./tests/fixtures + "/${name}"; }) [
+        "machine-elsewhere"
+        "machine-bios"
+        "machine-guest"
+      ];
+      # EVERY SOURCE THE LOCK NAMES, all the way down: evaluating a
+      # machine's flake fetches each node, and the ISO has no network to
+      # fetch it with. By the inputs' own `inputs`, keyed by the path.
+      lockSources = map (i: i.input.outPath) (
+        builtins.genericClosure {
+          startSet = map (input: {
+            key = builtins.unsafeDiscardStringContext input.outPath;
+            inherit input;
+          }) (builtins.attrValues (removeAttrs inputs [ "self" ]));
+          operator =
+            item:
+            map (input: {
+              key = builtins.unsafeDiscardStringContext input.outPath;
+              inherit input;
+            }) (builtins.attrValues (item.input.inputs or { }));
+        }
+      );
+      offlineContents =
+        seeded:
+        import ./nix/installer/offline.nix {
+          inherit lib lockSources seeded;
+          inherit (pkgs) runCommand python3;
+          references = [
+            self.nixosConfigurations.noctua
+            self.nixosConfigurations.minimal
+          ];
+          probes = probeMachines;
+        };
       referenceMachine =
         {
           extraModules ? [ ],
@@ -1372,6 +1411,9 @@
         # on its own by root, in a profile of its own, never in the system's
         # closure. Its program comes EXTRACTED, as the person's does.
         (import ./nix/modules/parts.nix { tool = rust.parts; })
+        # The person's belongings, finished on the first boot: what the
+        # installation, which reaches no network, leaves for the machine.
+        (import ./nix/modules/first-boot.nix { tool = rust.firstBoot; })
         # ── anchor: L10 ──
         # Security keys: smart cards, GnuPG's agent, and pam_u2f for sudo —
         # always `sufficient` — trusting root's list of the person's keys.
@@ -1713,6 +1755,8 @@
       // {
 
         iso = self.nixosConfigurations.installer.config.system.build.isoImage;
+        # The developer's complete ISO (`installer-complete`), never published.
+        iso-complete = self.nixosConfigurations.installer-complete.config.system.build.isoImage;
       };
 
       # =================================================================
@@ -1767,6 +1811,9 @@
                 # declarations, extracted.
                 belongingsCli = rust.belongings;
                 personCli = rust.person;
+                # `ronoctua-parts seed`, which the installer runs after
+                # `nixos-install`.
+                partsCli = rust.parts;
 
                 # THE SEED — WHAT NO PUBLIC CACHE HAS, and nothing else.
                 #
@@ -1859,8 +1906,44 @@
                 # The distro's tree, which the ISO carries for the installer to
                 # make a machine's flake from — see the comment over there.
                 flake = self;
+                # ── anchor: L25 ──
+                # WHAT AN INSTALLATION WITH NO NETWORK NEEDS: the references'
+                # closures, the probes', the glue a different machine builds
+                # with, every node of the lock, and the parts it seeds. See
+                # `nix/installer/offline.nix`.
+                offline = offlineContents "free-minimal";
               };
             }
+          ];
+        };
+
+        # ── anchor: L25 ──
+        # THE COMPLETE ISO, the developer's and NEVER PUBLISHED: the same
+        # installer, with every part of both references aboard — the unfree
+        # ones too — so a machine installed from it downloads nothing after
+        # the first boot either (`ronoctua-parts seed` seeds what it carries;
+        # the parts page is born empty). Visibly another: `-complete` in the
+        # file's name and a marker at the medium's root, which `.#release`
+        # refuses (`the-complete-iso-is-never-released`).
+        installer-complete = self.nixosConfigurations.installer.extendModules {
+          modules = [
+            (
+              { lib, pkgs, ... }:
+              {
+                isoImage.storeContents = (offlineContents "every-part").contents;
+                isoImage.contents = [
+                  {
+                    source = pkgs.writeText "ronoctua-complete" ''
+                      A complete ISO: every part aboard, unfree ones included.
+                      Built by a developer for their own machines; never published.
+                    '';
+                    target = "/ronoctua-complete";
+                  }
+                ];
+                # Over the ISO module's own `mkForce`.
+                image.baseName = lib.mkOverride 40 "ronoctua-distro-${self.nixosConfigurations.installer.config.system.nixos.label}-x86_64-complete";
+              }
+            )
           ];
         };
 
@@ -2633,6 +2716,19 @@
           ${isoSweep}/bin/ronoctua-iso-sweep sweep
         '';
 
+        # THE COMPLETE ISO, for the developer's own machines: every part
+        # aboard, unfree ones included, so nothing is downloaded after the
+        # installation. NEVER PUBLISHED — `.#release` builds `.#iso` alone and
+        # refuses a medium with the marker this one carries.
+        iso-complete =
+          mkScriptApp "ronoctua-iso-complete" "builds the developer's complete ISO, never published"
+            ''
+              out=$(nix build --no-link --print-out-paths .#iso-complete)
+              echo "the complete ISO came out at (for your own machines; never publish it):"
+              find "$out/iso" -name '*.iso' -printf '  %p  (%s bytes)\n'
+              ${isoSweep}/bin/ronoctua-iso-sweep sweep
+            '';
+
         # OLD ISOs OUT OF THE STORE, by hand; every app that builds one runs
         # it on its way out. `-- --rehearse` says what it would delete.
         iso-sweep = {
@@ -2656,6 +2752,7 @@
             lib.makeBinPath [
               rust.belongings
               rust.person
+              rust.parts
             ]
           }:$PATH
           exec ${rust.installer}/bin/ronoctua-install "$@"

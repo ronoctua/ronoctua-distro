@@ -1352,6 +1352,7 @@ rec {
     roles
     painters
     installer
+    firstBoot
     rescue
     player
     formatDisk

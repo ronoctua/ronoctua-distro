@@ -2,9 +2,11 @@
 //!
 //! "The TUI collects **only** what only the person knows" — and, since the
 //! person's repository became mandatory, checks three of those answers
-//! against the network before the next screen: the way out, the access, the
-//! passphrase. The checks are jobs ([`crate::job`]) the state asks for and a
-//! thread runs; the state never waits on the network itself.
+//! against the network, when there is one, before the next screen: the way
+//! out, the access, the passphrase. With no network it goes on all the same
+//! and asks only what is local; the machine's first boot checks the rest.
+//! The checks are jobs ([`crate::job`]) the state asks for and a thread
+//! runs; the state never waits on the network itself.
 //!
 //! # It decides nothing
 //!
@@ -74,7 +76,6 @@ use crate::model;
 use crate::model::{Answers, Question, sentence, validate_it};
 use crate::plan::{Origin, Step, steps};
 use crate::reach::Reach;
-use crate::release::{Follow, Hop, Stay};
 
 /// Converts a colour token into what ratatui understands.
 ///
@@ -206,8 +207,6 @@ pub enum Screen {
     /// Saying something of the machine before any question is about it —
     /// right after the language, so in the person's (`crate::platform`).
     Stop(Stop),
-    /// The release's installer was found: Enter starts it, with the answers.
-    Hopping(Hop),
     /// Showing the plan, waiting for confirmation.
     Reviewing,
     /// Running.
@@ -357,8 +356,6 @@ pub enum Next {
     Stay,
     /// The person confirmed: the installation runs.
     Run,
-    /// The person starts the release's installer.
-    Hop(Hop),
     /// The person gave up (`Ctrl+C`, or its key clicked); nothing was
     /// touched.
     GiveUp,
@@ -570,9 +567,6 @@ pub struct State {
     /// The one of [`State::networks`] the radio was connected to when they
     /// were scanned: its row says so, and the question opens on it.
     pub connected: Option<String>,
-    /// The hosts the network question names (its answer is the consent to
-    /// reach them).
-    pub hosts: String,
     /// Which list item is selected.
     pub choice: usize,
     /// The lines the execution printed.
@@ -592,9 +586,6 @@ pub struct State {
     /// A secret typed once, when its question is typed twice
     /// ([`Question::typed_twice`]): the field asks for it again.
     first_typed: Option<String>,
-    /// Why the installer goes on with its own distro, when the release said
-    /// to stay.
-    pub stay: Option<Stay>,
     /// What the pointer rests on: lit, and never the cursor.
     pub hover: Option<Hit>,
     /// The option the list's first row showed when the screen was last
@@ -619,18 +610,19 @@ pub struct State {
     /// first line it may start at: a page, and how far it scrolls.
     pub review_page: (usize, usize),
     /// Where a resumed installation goes on once the list of programs it
-    /// had to show first is answered (the question the hop handed on).
+    /// had to show first is answered (the question the answers handed on
+    /// named).
     pub resume_to: Option<usize>,
-    /// The ids the hop's answer left out that this release no longer
-    /// offers: said on the list, which shows them gone.
+    /// The ids the answers handed on left out that this installer does not
+    /// offer: said on the list, which shows them gone.
     pub dropped: Vec<String>,
     /// The machine, read before the first screen (`crate::platform`).
     pub platform: crate::platform::Platform,
     /// A rehearsal (no `--execute`): nothing is installed, and a machine
     /// with no TPM may still be looked through.
     pub rehearsal: bool,
-    /// The person chose BIOS on its screen ([`Stop::Bios`]), or before a
-    /// hop handed the answers on.
+    /// The person chose BIOS on its screen ([`Stop::Bios`]), or in the
+    /// answers handed on.
     pub bios_chosen: bool,
     /// The screen the stops were shown in front of, when it is not the
     /// first question after the language ([`State::stop_first`]).
@@ -645,7 +637,6 @@ impl State {
             screen: Screen::Asking(0),
             networks,
             connected: None,
-            hosts: String::new(),
             answers: Answers::default(),
             typing: String::new(),
             revealed: false,
@@ -665,7 +656,6 @@ impl State {
             public_key: None,
             probed: None,
             first_typed: None,
-            stay: None,
             hover: None,
             scroll: 0,
             aimed: None,
@@ -683,26 +673,28 @@ impl State {
         e
     }
 
-    /// The release's installer, picking up where the hop left: the answers
-    /// given, and the question it was about to ask.
+    /// An installation picking up where answers handed on (`--answers`)
+    /// left: the answers given, and the question named to ask next.
     ///
-    /// The networks in range are scanned here too, and the one chosen
-    /// before the hop is always among them: going back to the network
-    /// question must land on it, and a list without it would turn the
-    /// carried answer into "no Wi-Fi".
+    /// The networks in range are scanned here too, and the one the answers
+    /// chose is always among them: going back to the network question must
+    /// land on it, and a list without it would turn the carried answer into
+    /// "no Wi-Fi". What the network and the repository said is never carried
+    /// ([`Answers::lines`]): a question about the repository resumed at
+    /// asks with no network until the network question is answered here.
     ///
-    /// # The list of programs comes FIRST when the hop did not answer it
+    /// # The list of programs comes FIRST when the answers did not answer it
     ///
-    /// Every hop is from an OLDER installer, and one older than the list
-    /// never asked it: resuming at the repository would leave out the
-    /// list's default — LibreOffice, declined and pushed — with nobody
-    /// having seen it. So a `full` installation whose answers carry no list
-    /// opens on the list, and "continue" goes on to where the hop left.
-    /// And an answer that names a program this release no longer offers
-    /// opens it too, saying so ([`State::dropped`]): the person is there to
-    /// decide again, and a refusal with nothing to fix would be a dead end
-    /// (without a terminal it IS a refusal — `validate_it` — because
-    /// nobody is there to decide).
+    /// Answers written for an older installer never answered the list:
+    /// resuming at the repository would leave out the list's default —
+    /// LibreOffice, declined and pushed — with nobody having seen it. So a
+    /// `full` installation whose answers carry no list opens on the list,
+    /// and "continue" goes on to where they left. And an answer that names
+    /// a program this installer does not offer opens it too, saying so
+    /// ([`State::dropped`]): the person is there to decide again, and a
+    /// refusal with nothing to fix would be a dead end (without a terminal
+    /// it IS a refusal — `validate_it` — because nobody is there to
+    /// decide).
     #[must_use]
     pub fn resumed(
         disks: Vec<Disk>,
@@ -715,7 +707,6 @@ impl State {
         }
         let mut e = Self::fresh(disks, networks);
         e.answers = answers;
-        e.stay = Some(Stay::FromRelease);
         let at_of = |q: Question| {
             Question::ALL_KEYS
                 .iter()
@@ -759,6 +750,22 @@ impl State {
     #[must_use]
     pub fn by_token(&self) -> bool {
         access::auth_of(&self.answers.belongings) == Auth::Token
+    }
+
+    /// Whether the current screen is a question about the repository that
+    /// nothing asks now — there is no network: its status line says so, and
+    /// the first boot checks the answer.
+    #[must_use]
+    pub fn unasked(&self) -> bool {
+        !self.answers.reaches_out()
+            && matches!(
+                self.question_of(),
+                Some(
+                    Question::BelongingsAddress
+                        | Question::BelongingsAccess
+                        | Question::BelongingsPassphrase
+                )
+            )
     }
 
     /// Whether the current screen takes typed characters: not a list, not
@@ -970,7 +977,7 @@ impl State {
                 .map(|p| (*p).to_owned())
                 .unwrap_or_default(),
             // THE ANSWER IS THE STATE: the marks are kept in it as they are
-            // made, so `Esc`, the hop and a resume carry them for free.
+            // made, so `Esc` and a resume carry them for free.
             Some(Question::LeftOut) => self.answers.left_out.clone(),
             // Index 0 is "no Wi-Fi", and returns an empty string — which is
             // what makes the password screen be skipped.
@@ -1015,8 +1022,8 @@ impl State {
         self.untouched = true;
         self.review_scroll = 0;
         self.dropped.clear();
-        // A RESUMED INSTALLATION goes on where the hop left, once the list
-        // it had to show first is answered.
+        // A RESUMED INSTALLATION goes on where its answers left, once the
+        // list it had to show first is answered.
         let mut i = match self.resume_to.take() {
             Some(target) if target > n => target,
             _ => n + 1,
@@ -1059,11 +1066,6 @@ impl State {
                     .unwrap_or_default()
                     + 1
             }
-            // The hop's screen is the network's answer: back to it.
-            Screen::Hopping(_) => Question::ALL_KEYS
-                .iter()
-                .position(|q| *q == Question::BelongingsAddress)
-                .unwrap_or_default(),
             Screen::Reviewing => Question::ALL_KEYS.len(),
             _ => return,
         };
@@ -1109,8 +1111,9 @@ impl State {
                     })
                     .unwrap_or_else(|| self.default_choice())
             };
-            // THE ACCESS IS ASKED AGAIN when its screen is shown again.
-            if *q == Question::BelongingsAccess && !self.by_token() {
+            // THE ACCESS IS ASKED AGAIN when its screen is shown again — when
+            // there is a network to ask it over.
+            if *q == Question::BelongingsAccess && !self.by_token() && self.answers.reaches_out() {
                 self.ask_probe(0);
             }
             return;
@@ -1187,19 +1190,26 @@ impl State {
         };
         match done {
             Done::Network(gate) if gate.open() => {
-                self.ask(Job::Release, key::INST_RELEASE_LOOKING);
-            }
-            Done::Network(gate) => self.error = Some(gate.key()),
-            Done::Release(Follow::Hop(hop)) => self.screen = Screen::Hopping(hop),
-            Done::Release(Follow::Stay(stay)) => {
-                self.stay = Some(stay);
+                self.answers.online = Some(true);
                 self.follow(n);
             }
+            // THE CABLE'S ROW GOES ON WITHOUT A WAY OUT: the installation
+            // needs no network, and the questions about the repository take
+            // their answers as typed — saying so on their screens
+            // (`status_line`) — for the first boot to check.
+            Done::Network(_) if self.answers.wifi_ssid.is_empty() => {
+                self.answers.online = Some(false);
+                self.follow(n);
+            }
+            // A NETWORK CHOSEN that does not take the connection is said,
+            // where its password is typed again — or the person goes back
+            // and chooses no network.
+            Done::Network(gate) => self.error = Some(gate.key()),
             Done::Prepared(Ok(public_key)) => {
                 self.public_key = public_key;
                 self.probed = None;
                 self.follow(n);
-                if !self.by_token() {
+                if !self.by_token() && self.answers.reaches_out() {
                     self.ask_probe(0);
                 }
             }
@@ -1213,12 +1223,16 @@ impl State {
                 self.error = Some(key::INST_BELONGINGS_HTTPS_NOT_POST_QUANTUM);
                 self.typing = prefs::ssh_address_of(&self.answers.belongings).unwrap_or_default();
             }
-            Done::Prepared(Err(why)) | Done::Verified(Err(why)) => {
+            Done::Prepared(Err(why)) | Done::Verified(Err(why)) | Done::Kept(Err(why)) => {
                 self.error = Some(access::refusal_key(why));
                 self.typing.clear();
             }
             Done::Probed(Ok(probed)) => {
                 self.probed = Some(probed);
+                // AN EMPTY REPOSITORY IS CHECKED once the access reads and
+                // writes it; one with something in it, once its passphrase
+                // opens it.
+                self.answers.belongings_checked = probed.ready() && probed.empty;
                 if probed.ready() {
                     self.answers.belongings_access = self.access_file();
                     self.answers.belongings_empty = Some(probed.empty);
@@ -1235,6 +1249,7 @@ impl State {
                 }
             }
             Done::Probed(Err(why)) => {
+                self.answers.belongings_checked = false;
                 self.error = Some(access::refusal_key(why));
                 if self.by_token() {
                     self.typing.clear();
@@ -1244,16 +1259,28 @@ impl State {
                     self.error = Some(access::refusal_key(why));
                 }
             }
-            Done::Verified(Ok(())) => self.follow(n),
+            Done::Kept(Ok(())) => {
+                self.answers.belongings_access = self.access_file();
+                self.follow(n);
+            }
+            Done::Verified(Ok(())) => {
+                self.answers.belongings_checked = true;
+                self.follow(n);
+            }
         }
     }
 
     /// `Enter` on question `q` (number `n`), with `v` the value given.
     fn answer(&mut self, n: usize, q: Question, v: String, languages: &[&str], layouts: &[&str]) {
         // THE ACCESS OF A DEPLOY KEY is not typed: Enter goes on when it
-        // reads and writes, and asks again now when it does not.
+        // reads and writes, and asks again now when it does not — and with
+        // no network goes on at once: the key is shown for the person to
+        // add, and the first boot uses it.
         if q == Question::BelongingsAccess && !self.by_token() {
-            if self.probed.is_some_and(|p| p.ready()) {
+            if !self.answers.reaches_out() {
+                self.answers.belongings_access = self.access_file();
+                self.follow(n);
+            } else if self.probed.is_some_and(|p| p.ready()) {
                 self.follow(n);
             } else {
                 self.ask_probe(0);
@@ -1277,8 +1304,8 @@ impl State {
             return;
         }
         // A TOKEN TYPED is the access itself, not the file the terminal-less
-        // mode names: only a blank one is refused here, and the probe judges
-        // the rest.
+        // mode names: only a blank one is refused here, and the probe — or,
+        // with no network, the first boot — judges the rest.
         let checked = if q == Question::BelongingsAccess {
             if v.trim().is_empty() {
                 Err(model::Invalid::Blank)
@@ -1288,11 +1315,12 @@ impl State {
         } else {
             validate_it(q, &v, languages, layouts)
         }
-        // AN EMPTY REPOSITORY is MADE with this passphrase: as long as a
-        // disk's, asked at the first entry and not after two.
+        // A PASSPHRASE NOTHING PROVES may be the one the repository is MADE
+        // with — it is empty, or nobody asked it: as long as a disk's, asked
+        // at the first entry and not after two.
         .and_then(|()| {
             if q == Question::BelongingsPassphrase
-                && self.answers.belongings_empty == Some(true)
+                && !self.answers.passphrase_proved()
                 && v.chars().count() < model::MINIMUM_PASSPHRASE
             {
                 Err(model::Invalid::PassphraseTooShort)
@@ -1312,8 +1340,8 @@ impl State {
             return;
         }
         match q {
-            // THE NETWORK IS A GATE: a cable is checked here, a Wi-Fi network
-            // after its password.
+            // THE NETWORK IS READ — a cable here, a Wi-Fi network after its
+            // password —, and only a network chosen that refuses stops.
             Question::Wifi if v.is_empty() => {
                 self.answers.set(q, v);
                 self.answers.wifi_password.clear();
@@ -1335,19 +1363,23 @@ impl State {
                     key::INST_GATE_CHECKING,
                 );
             }
+            // THE ADDRESS MAKES THE SCRATCH HOME — and the deploy key — with
+            // or without a network; only online is its server asked.
             Question::BelongingsAddress => {
                 self.answers.set(q, v.trim().to_owned());
                 self.answers.belongings_access.clear();
                 self.answers.belongings_empty = None;
+                self.answers.belongings_checked = false;
                 self.ask(
                     Job::Prepare {
                         address: self.answers.belongings.clone(),
+                        online: self.answers.reaches_out(),
                     },
                     key::INST_CHECKING,
                 );
             }
             // A TOKEN, probed before it is taken.
-            Question::BelongingsAccess => self.ask(
+            Question::BelongingsAccess if self.answers.reaches_out() => self.ask(
                 Job::Probe {
                     address: self.answers.belongings.clone(),
                     token: Some(v),
@@ -1355,9 +1387,19 @@ impl State {
                 },
                 key::INST_CHECKING,
             ),
-            // AN EMPTY REPOSITORY is MADE with this passphrase, typed twice
-            // above: there is nothing yet for it to open.
-            Question::BelongingsPassphrase if self.answers.belongings_empty == Some(true) => {
+            // WITH NO NETWORK, kept where the access is read: the first
+            // boot tries it.
+            Question::BelongingsAccess => self.ask(
+                Job::Keep {
+                    address: self.answers.belongings.clone(),
+                    token: v,
+                },
+                key::INST_CHECKING,
+            ),
+            // A PASSPHRASE NOTHING PROVES — the repository empty, or not
+            // asked — was typed twice above: there is nothing here for it to
+            // open, and the first boot opens or makes the repository with it.
+            Question::BelongingsPassphrase if !self.answers.passphrase_proved() => {
                 self.answers.set(q, v);
                 self.follow(n);
             }
@@ -1404,9 +1446,8 @@ impl State {
     }
 
     /// Shows the stop this machine is due before anything else, and then
-    /// the screen it stood on: a release's installer the answers were handed
-    /// to resumes past the language, where the stops stand — and the
-    /// installer that handed them on may have had none.
+    /// the screen it stood on: answers handed on resume past the language,
+    /// where the stops stand — and whoever wrote them may have had none.
     pub fn stop_first(&mut self) {
         if let Some(stop) = self.stop_due() {
             self.after_stop = Some(self.screen.clone());
@@ -1553,14 +1594,6 @@ impl State {
                 ENTER => self.take_way(stop),
                 _ => Next::Stay,
             },
-            Screen::Hopping(hop) => match k {
-                ENTER => Next::Hop(hop),
-                ESC => {
-                    self.go_back();
-                    Next::Stay
-                }
-                _ => Next::Stay,
-            },
             Screen::Reviewing => match k {
                 ESC => {
                     self.go_back();
@@ -1690,11 +1723,13 @@ impl State {
         }
     }
 
-    /// Where the installation takes its distro from, as the plan shows it.
+    /// Where the installation takes its distro from, as the plan shows it:
+    /// always the ISO's own tree, the machine's flake aimed at it
+    /// (`crate::release`).
     #[must_use]
     pub fn origin(&self, base: &Origin) -> Origin {
         Origin {
-            aimed: self.stay.is_some_and(Stay::aims_at_own),
+            aimed: true,
             ..base.clone()
         }
     }
@@ -1720,14 +1755,17 @@ fn label_of(e: &State, texts: &Texts) -> String {
 
 /// The help line of the current question.
 fn help_of(e: &State, q: Question, texts: &Texts) -> String {
+    let online = e.answers.reaches_out();
     match q {
-        // THE NETWORK NAMES THE HOSTS IT WILL REACH: answering is the
-        // consent to reach them.
-        Question::Wifi if e.hosts.is_empty() => texts.t(key::INST_NETWORK_HELP_UNNAMED),
-        Question::Wifi => texts.t_with(q.help(), &[("hosts", &e.hosts)]),
         // THE KEYS THE DEFAULT PUTS TO WORK, by the options the system sets.
         Question::ComposeKey => texts.t_with(q.help(), &model::COMPOSE_HELP_KEYS),
         Question::BelongingsAccess if e.by_token() => texts.t(key::INST_BELONGINGS_TOKEN_HELP),
+        // WITH NO NETWORK, what is not asked is not said to be: the key is
+        // not probed, and the passphrase is not checked.
+        Question::BelongingsAccess if !online => texts.t(key::INST_BELONGINGS_ACCESS_OFFLINE_HELP),
+        Question::BelongingsPassphrase if !online => {
+            texts.t(key::INST_BELONGINGS_PASSPHRASE_OFFLINE_HELP)
+        }
         Question::BelongingsPassphrase if e.answers.belongings_empty == Some(true) => {
             texts.t(key::INST_BELONGINGS_PASSPHRASE_NEW_HELP)
         }
@@ -1740,8 +1778,8 @@ fn said_of(e: &State, texts: &Texts) -> (String, bool) {
     if let Some(k) = e.error {
         return (sentence(texts, k), true);
     }
-    // WHAT THE HOP CARRIED AND THIS RELEASE NO LONGER OFFERS, said where
-    // the person marks again.
+    // WHAT THE ANSWERS HANDED ON CARRIED AND THIS INSTALLER DOES NOT OFFER,
+    // said where the person marks again.
     if e.question_of() == Some(Question::LeftOut) && !e.dropped.is_empty() {
         return (
             texts.t_with(
@@ -1794,7 +1832,7 @@ fn keys_of(e: &State, texts: &Texts, width: u16) -> String {
                 line(key::INST_KEYS_EDIT)
             }
         }
-        Screen::Asking(_) | Screen::Hopping(_) => line(key::INST_KEYS_EDIT),
+        Screen::Asking(_) => line(key::INST_KEYS_EDIT),
         Screen::Reviewing => line(key::INST_KEYS_REVIEW),
         _ => line(key::INST_KEYS_QUIT),
     }
@@ -2050,24 +2088,42 @@ struct Said {
     step: Option<bool>,
 }
 
-/// The review's lines, as they are drawn: why the installer stays with its
-/// own distro, what this machine leaves out, then the steps — each marked
-/// when it erases the disk.
+/// What the first boot does with the belongings, as the review says it: a
+/// sentence key, and whether it warns — they were not checked, with no
+/// network.
+fn first_boot_of(r: &Answers) -> (&'static str, bool) {
+    match (r.belongings_checked, r.belongings_empty) {
+        (true, Some(true)) => (key::INST_FIRST_BOOT_START, false),
+        (true, _) => (key::INST_FIRST_BOOT_RESTORE, false),
+        (false, _) => (key::INST_FIRST_BOOT_UNCHECKED, true),
+    }
+}
+
+/// The review's lines, as they are drawn: what the first boot does, what
+/// this machine leaves out, then the steps — each marked when it erases the
+/// disk.
 fn review_lines(e: &State, texts: &Texts) -> Vec<Said> {
     let said = |line: Line<'static>| Said { line, step: None };
+    let secondary = Style::default().fg(color(color::TEXT_SECONDARY));
     let mut lines = Vec::new();
-    if let Some(k) = e.stay.and_then(Stay::key) {
-        lines.push(said(Line::from(Span::styled(
-            texts.t(k),
-            Style::default().fg(color(color::STATE_WARNING)),
-        ))));
-        lines.push(said(Line::from("")));
-    }
+    // WHAT THE FIRST BOOT DOES, which the installation does not: the
+    // belongings restored (or started) once there is a network — warned
+    // when nothing checked them —, and the programs and the parts after it.
+    let (k, warns) = first_boot_of(&e.answers);
+    let tone = if warns {
+        Style::default().fg(color(color::STATE_WARNING))
+    } else {
+        secondary
+    };
+    lines.push(said(Line::from(Span::styled(texts.t(k), tone))));
+    lines.push(said(Line::from(Span::styled(
+        texts.t(key::INST_FIRST_BOOT_LATER),
+        secondary,
+    ))));
+    lines.push(said(Line::from("")));
     // WHAT THIS MACHINE LEAVES OUT, by the programs' names — and, from a
     // repository with something in it, that what it already declines stays
-    // declined: the plan below says the repository is written before the
-    // disk.
-    let secondary = Style::default().fg(color(color::TEXT_SECONDARY));
+    // declined.
     let mut told = false;
     if let Some(left) = left_out_review(&e.answers, texts) {
         lines.push(said(Line::from(Span::styled(left, secondary))));
@@ -2378,7 +2434,7 @@ fn draw(f: &mut ratatui::Frame, e: &State, texts: &Texts) {
     let at = places(f.area(), e, texts);
 
     let title = match e.screen {
-        Screen::Asking(_) | Screen::Stop(_) | Screen::Hopping(_) => texts.t(key::INST_TITLE),
+        Screen::Asking(_) | Screen::Stop(_) => texts.t(key::INST_TITLE),
         Screen::Reviewing => texts.t(key::INST_REVIEW),
         Screen::Running => texts.t(key::INST_RUNNING),
         Screen::Finished(true) => texts.t(key::INST_DONE),
@@ -2450,13 +2506,17 @@ fn draw(f: &mut ratatui::Frame, e: &State, texts: &Texts) {
     f.render_widget(Paragraph::new(Line::from(spans)).style(base), at.keys);
 }
 
-/// The line that says what a check is doing, or what it found.
+/// The line that says what a check is doing, or what it found — or, on a
+/// question about the repository with no network, that nothing asks it now
+/// and the first boot will ([`State::unasked`]).
 fn status_line(e: &State, texts: &Texts) -> Option<Line<'static>> {
-    let k = e.status?;
-    let tone = if k == key::INST_ACCESS_READY {
-        color::STATE_SUCCESS
-    } else {
-        color::TEXT_SECONDARY
+    let k = e
+        .status
+        .or_else(|| e.unasked().then_some(key::INST_OFFLINE))?;
+    let tone = match k {
+        key::INST_ACCESS_READY => color::STATE_SUCCESS,
+        key::INST_OFFLINE => color::STATE_WARNING,
+        _ => color::TEXT_SECONDARY,
     };
     Some(Line::from(Span::styled(
         texts.t(k),
@@ -2598,14 +2658,6 @@ fn body(f: &mut ratatui::Frame, e: &State, texts: &Texts, base: Style, at: &Plac
             }
             f.render_widget(
                 Paragraph::new(lines).style(base).wrap(Wrap { trim: false }),
-                area,
-            );
-        }
-        Screen::Hopping(hop) => {
-            f.render_widget(
-                Paragraph::new(with_keys(texts, hop.key(), &[("rev", hop.short())]))
-                    .style(base)
-                    .wrap(Wrap { trim: true }),
                 area,
             );
         }
@@ -2820,11 +2872,11 @@ fn left_out_review(r: &Answers, texts: &Texts) -> Option<String> {
 }
 
 /// The review's origin: only whether the flake is aimed matters to the
-/// labels, and that comes from the state.
+/// labels, and it always is ([`State::origin`]).
 fn review_origin() -> Origin {
     Origin {
         distro: String::new(),
-        aimed: false,
+        aimed: true,
         nix: String::new(),
     }
 }
@@ -2996,16 +3048,13 @@ impl Drop for Guard {
 pub enum Collected {
     /// The person gave up; nothing was touched.
     GaveUp,
-    /// The answers, confirmed — and why the installer stays with its own
-    /// distro, when the release said so.
-    Answers(Box<Answers>, Option<Stay>),
-    /// The person starts the release's installer, with these answers.
-    Hop(Hop, Box<Answers>),
+    /// The answers, confirmed.
+    Answers(Box<Answers>),
 }
 
 /// Runs the TUI. Returns the answers once the person confirms.
 ///
-/// `resume`: the answers a hop handed on, and where to pick up. `rehearsal`:
+/// `resume`: the answers handed on (`--answers`), and where to pick up. `rehearsal`:
 /// no `--execute` — nothing is installed, so a machine with no TPM may still
 /// be looked through.
 ///
@@ -3018,9 +3067,8 @@ pub fn collect(
     resume: Option<(Answers, Question)>,
     rehearsal: bool,
 ) -> Result<Collected> {
-    // WHAT TAKES A MOMENT, before the screen is taken: the disks, the
-    // networks in range, and the hosts the network question names (`nix`
-    // answers those).
+    // WHAT TAKES A MOMENT, before the screen is taken: the disks and the
+    // networks in range.
     let resumed = resume.is_some();
     let (in_range, connected) = networks();
     let mut e = match resume {
@@ -3033,10 +3081,9 @@ pub fn collect(
     if e.question_of() == Some(Question::Wifi) {
         e.choice = e.default_choice();
     }
-    e.hosts = reach.hosts().join(", ");
     // THE MACHINE, before the first screen: the stops after the language,
     // and the firmware the plan installs for — BIOS already chosen when the
-    // answers a hop handed on say so.
+    // answers handed on say so.
     e.platform = crate::platform::Platform::here();
     e.rehearsal = rehearsal;
     e.bios_chosen = e.answers.bios;
@@ -3136,8 +3183,7 @@ pub fn collect(
         };
         match next {
             Next::Stay => {}
-            Next::Run => return Ok(Collected::Answers(Box::new(e.answers), e.stay)),
-            Next::Hop(hop) => return Ok(Collected::Hop(hop, Box::new(e.answers))),
+            Next::Run => return Ok(Collected::Answers(Box::new(e.answers))),
             Next::GiveUp => return Ok(Collected::GaveUp),
         }
     }
@@ -3169,10 +3215,10 @@ pub enum Shown {
     Console,
 }
 
-/// One of the screens that check the network or the repository (or the list
-/// of programs, or the Compose question), drawn from a fixture as the TUI draws it, `width × height`
-/// cells — `ronoctua-install --show <screen>`; `None` for a name that is not
-/// one.
+/// One of the screens that read the network or check the repository (or
+/// the list of programs, or the Compose question), drawn from a fixture as
+/// the TUI draws it, `width × height` cells — `ronoctua-install --show
+/// <screen>`; `None` for a name that is not one.
 #[must_use]
 pub fn show(
     screen: &str,
@@ -3191,7 +3237,9 @@ pub fn show(
 /// The fixture of the screen [`show`] draws.
 fn shown(screen: &str) -> Option<State> {
     let mut e = State::fresh(Vec::new(), vec!["home-5g".into(), "home-2g".into()]);
-    e.hosts = "github.com, cache.nixos.org".into();
+    // ONLINE, as the walk to these screens would be over a network — but
+    // for the screens that show what is asked with none.
+    e.answers.online = Some(true);
     let at = |e: &mut State, q: Question| {
         e.screen = Screen::Asking(
             Question::ALL_KEYS
@@ -3204,9 +3252,13 @@ fn shown(screen: &str) -> Option<State> {
     e.answers.set(Question::Disk, "/dev/nvme0n1".into());
     e.answers.set(Question::Hostname, "noctua-laptop".into());
     match screen {
-        "network" => {
-            at(&mut e, Question::Wifi);
-            e.error = Some(Gate::NoLink.key());
+        // THE NETWORK'S QUESTION, its first row the way on with none.
+        "network" => at(&mut e, Question::Wifi),
+        // A NETWORK CHOSEN THAT REFUSED its password.
+        "network-refused" => {
+            e.answers.set(Question::Wifi, "home-5g".into());
+            at(&mut e, Question::WifiPassword);
+            e.error = Some(Gate::Unconnected.key());
         }
         "network-connected" => {
             e.connected = Some("home-2g".into());
@@ -3229,6 +3281,20 @@ fn shown(screen: &str) -> Option<State> {
                 why: None,
             });
             e.status = Some(key::INST_ACCESS_READS);
+        }
+        // THE SAME KEY WITH NO NETWORK: shown, not asked, and the screen
+        // says so.
+        "access-offline" => {
+            e.answers.online = Some(false);
+            e.answers.set(
+                Question::BelongingsAddress,
+                "git@github.com:someone/belongings.git".into(),
+            );
+            e.public_key = Some(
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7mX2pDqfQ1n0Ue9Wc4Vt3yRg8LhJzS5oP6bN2aYf0e ronoctua-belongings"
+                    .into(),
+            );
+            at(&mut e, Question::BelongingsAccess);
         }
         "token" => {
             e.answers.set(
@@ -3262,28 +3328,29 @@ fn shown(screen: &str) -> Option<State> {
             e.first_typed = Some("Qw4-a-long-passphrase".into());
             e.typing = "Qw4-a-long".into();
         }
-        "hop" => {
-            e.screen = Screen::Hopping(Hop {
-                release: crate::release::Release {
-                    revision: crate::release::Revision {
-                        rev: "4f1c2a9b7e3d5f60a1b2c3d4e5f60718293a4b5c".into(),
-                        last_modified_s: 0,
-                    },
-                    url: String::new(),
-                    path: String::new(),
-                },
-            });
+        // THE PASSPHRASE WITH NO NETWORK, its second entry.
+        "passphrase-offline" => {
+            e.answers.online = Some(false);
+            at(&mut e, Question::BelongingsPassphrase);
+            e.first_typed = Some("Qw4-a-long-passphrase".into());
+            e.typing = "Qw4-a-long".into();
         }
-        "review" => {
+        // THE REVIEW of a repository checked online, and of one nothing
+        // checked.
+        "review" | "review-offline" => {
             e.answers.set(
                 Question::BelongingsAddress,
                 "git@github.com:someone/belongings.git".into(),
             );
-            e.answers.belongings_empty = Some(false);
+            if screen == "review" {
+                e.answers.belongings_empty = Some(false);
+                e.answers.belongings_checked = true;
+            } else {
+                e.answers.online = Some(false);
+            }
             e.answers.set(Question::Profile, model::FULL_PROFILE.into());
             e.answers
                 .set(Question::LeftOut, model::DEFAULT_LEFT_OUT.into());
-            e.stay = Some(Stay::Unreachable);
             e.screen = Screen::Reviewing;
         }
         // THE COMPOSE QUESTION, whose help names the keys the default puts
@@ -3418,7 +3485,6 @@ pub fn rendered(e: &State, texts: &Texts, width: u16, height: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::release::{Release, Revision};
     use ronoctua_belongings::Why;
 
     fn texts() -> Texts {
@@ -3443,24 +3509,35 @@ mod tests {
         )
     }
 
-    /// A world that answers every job at once: the way out is open, the
-    /// release says stay, a key is made, the access reads and writes, the
+    /// A world that answers every job at once: the way out is open, a key
+    /// is made, the access reads and writes, a token is kept, the
     /// passphrase opens.
     fn kind(job: &Job) -> Done {
         match job {
             Job::Network { .. } => Done::Network(Gate::Open),
-            Job::Release => Done::Release(Follow::Stay(Stay::Current)),
-            Job::Prepare { address } => Done::Prepared(Ok((access::auth_of(address) == Auth::Ssh)
-                .then(|| {
+            Job::Prepare { address, .. } => {
+                Done::Prepared(Ok((access::auth_of(address) == Auth::Ssh).then(|| {
                     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey ronoctua-belongings".to_owned()
-                }))),
+                })))
+            }
             Job::Probe { .. } => Done::Probed(Ok(Probed {
                 read: true,
                 write: true,
                 empty: false,
                 why: None,
             })),
+            Job::Keep { .. } => Done::Kept(Ok(())),
             Job::Verify { .. } => Done::Verified(Ok(())),
+        }
+    }
+
+    /// The same world with no way out: the network's reading finds none,
+    /// and any job that would reach the repository fails the test.
+    fn offline(job: &Job) -> Done {
+        match job {
+            Job::Network { .. } => Done::Network(Gate::NoLink),
+            Job::Prepare { online: false, .. } | Job::Keep { .. } => kind(job),
+            other => panic!("with no network the screen asked {other:?}"),
         }
     }
 
@@ -3609,7 +3686,9 @@ mod tests {
         );
         assert_eq!(e.answers.belongings_empty, Some(false));
         assert_eq!(e.answers.belongings_passphrase, "Qw4-belongings-phrase");
-        assert_eq!(e.stay, Some(Stay::Current));
+        // ONLINE, AND PROVED: the access probed, the passphrase opened.
+        assert_eq!(e.answers.online, Some(true));
+        assert!(e.answers.belongings_checked);
     }
 
     #[test]
@@ -3832,23 +3911,21 @@ mod tests {
         );
         assert!(words(&shown).contains(&words(&said)), "{shown}");
         assert!(
-            words(&shown).contains(&words(&t.t(key::INST_STEP_PLAIN_DECLINING))),
+            words(&shown).contains(&words(&t.t(key::INST_STEP_LEFT_OUT))),
             "{shown}"
         );
     }
 
-    /// A review of a `full` installation leaving programs out of a
-    /// repository with something in it, the release unreachable: the
-    /// longest the plan gets.
+    /// A review of a `full` installation leaving programs out, its
+    /// repository not checked (no network): the longest the review gets.
     fn reviewing() -> State {
         let mut e = with_disks();
         e.answers.disk = "/dev/nvme0n1".into();
         e.answers.hostname = "noctua-teste".into();
         e.answers.belongings = "git@github.com:someone/belongings.git".into();
-        e.answers.belongings_empty = Some(false);
+        e.answers.online = Some(false);
         e.answers.profile = crate::model::FULL_PROFILE.into();
         e.answers.left_out = "blender,libreoffice".into();
-        e.stay = Some(Stay::Unreachable);
         e.screen = Screen::Reviewing;
         e
     }
@@ -4141,71 +4218,228 @@ mod tests {
         assert_eq!(e.question_of(), Some(wanted), "I did not reach {wanted:?}");
     }
 
-    /// FAILS IF: the network question lets the person on with no way out,
-    /// or does not say why on the screen they can fix it from.
+    /// FAILS IF: the cable's row — no network at all — does not go on when
+    /// the reading finds no way out, or goes on without recording that the
+    /// installation is offline and saying so where the repository is asked;
+    /// a Wi-Fi network chosen whose password is refused lets the person on,
+    /// or without saying why; or the person cannot go back from it and on
+    /// with no network.
     #[test]
-    fn the_network_is_a_gate() {
+    fn the_network_is_not_a_gate() {
+        let t = texts();
+        let mut e = with_disks();
+        walk_to(&mut e, Question::Wifi);
+        // THE ROW SAYS IT: the way on with no network is the first one.
+        let shown = rendered(&e, &t, 100, 34);
+        assert!(
+            row_of(&shown, &t.t(key::INST_WIFI_NONE)).is_some(),
+            "{shown}"
+        );
+        e.key(KeyCode::Enter);
+        let asked = e.asked.take().expect("the network was not read");
+        assert!(matches!(asked.job, Job::Network { ref ssid, .. } if ssid.is_empty()));
+        // While the reading runs, nothing but Esc counts.
+        e.key(KeyCode::Enter);
+        assert!(e.asked.is_none(), "an Enter asked twice");
+        e.arrived(asked.serial, Done::Network(Gate::NoLink));
+        assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
+        assert_eq!((e.error, e.answers.online), (None, Some(false)));
+        let shown = rendered(&e, &t, 100, 34);
+        assert!(
+            says(&shown, &t.t(key::INST_OFFLINE)),
+            "no network, and the screen does not say so:\n{shown}"
+        );
+        assert!(e.origin(&review_origin()).aimed, "the ISO's own tree");
+
+        // A NETWORK CHOSEN THAT REFUSES its password is said, and stays.
+        let mut e = with_disks();
+        walk_to(&mut e, Question::Wifi);
+        e.key(KeyCode::Down);
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::WifiPassword));
+        type_in(&mut e, "Zq7-not-the-password");
+        e.key(KeyCode::Enter);
+        let asked = e.asked.take().expect("the network was not joined");
+        assert!(matches!(asked.job, Job::Network { ref ssid, .. } if ssid == "home-5g"));
+        e.arrived(asked.serial, Done::Network(Gate::Unconnected));
+        assert_eq!(e.question_of(), Some(Question::WifiPassword));
+        assert_eq!(e.error, Some(key::INST_GATE_UNCONNECTED));
+        assert_eq!(e.answers.online, None);
+        // BACK, and on with no network.
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Wifi));
+        e.key(KeyCode::Up);
+        e.key(KeyCode::Enter);
+        settle(&mut e, &offline);
+        assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
+        assert_eq!(e.answers.online, Some(false));
+        assert!(e.answers.wifi_ssid.is_empty() && e.answers.wifi_password.is_empty());
+        // AND A WAY OUT, read: online.
         let mut e = with_disks();
         walk_to(&mut e, Question::Wifi);
         e.key(KeyCode::Enter);
-        let asked = e.asked.take().expect("the gate was not asked");
-        assert!(matches!(asked.job, Job::Network { ref ssid, .. } if ssid.is_empty()));
-        e.arrived(asked.serial, Done::Network(Gate::NoLink));
-        assert_eq!(
-            e.question_of(),
-            Some(Question::Wifi),
-            "it went on with no network"
-        );
-        assert_eq!(e.error, Some(key::INST_GATE_NO_LINK));
-        // While a check runs, nothing but Esc counts.
-        e.key(KeyCode::Enter);
-        let again = e.asked.take().unwrap();
-        e.key(KeyCode::Enter);
-        assert!(e.asked.is_none(), "an Enter asked twice");
-        e.arrived(again.serial, Done::Network(Gate::Open));
-        let release = e.asked.take().expect("the release was not asked");
-        assert_eq!(release.job, Job::Release);
-        e.arrived(
-            release.serial,
-            Done::Release(Follow::Stay(Stay::Unreachable)),
-        );
+        settle(&mut e, &kind);
         assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
-        assert_eq!(e.stay, Some(Stay::Unreachable));
+        assert_eq!(e.answers.online, Some(true));
+        assert!(!e.unasked());
+    }
+
+    /// Walks to the network question, and on with no network.
+    fn offline_at_the_repository() -> State {
+        let mut e = with_disks();
+        walk_to(&mut e, Question::Wifi);
+        e.key(KeyCode::Enter);
+        settle(&mut e, &offline);
+        assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
+        e
+    }
+
+    /// FAILS IF: with no network a question about the repository asks a
+    /// job that reaches it — the address's server, a probe, a verification
+    /// (`offline` refuses them) —, the deploy key is not made and shown, the
+    /// token is not kept where the access is read, a screen does not say
+    /// nothing asks it now, or the answers are recorded checked.
+    #[test]
+    fn with_no_network_the_repository_is_never_asked() {
+        let t = texts();
+        // A DEPLOY KEY: made, shown, not probed; Enter goes on.
+        let mut e = offline_at_the_repository();
+        type_in(&mut e, "git@github.com:me/belongings.git");
+        e.key(KeyCode::Enter);
+        let prepare = e.asked.take().expect("the scratch home was not made");
         assert!(
-            e.origin(&review_origin()).aimed,
-            "an unreachable release aims at the ISO"
+            matches!(prepare.job, Job::Prepare { online: false, .. }),
+            "{:?}",
+            prepare.job
+        );
+        e.arrived(prepare.serial, offline(&prepare.job));
+        assert_eq!(e.question_of(), Some(Question::BelongingsAccess));
+        assert!(e.asked.is_none(), "the key was probed with no network");
+        // THE KEY AS A QR CODE TOO, at `--show`'s size: a phone adds it over
+        // its own network while this one has none.
+        let shown = rendered(&e, &t, 100, 34);
+        assert!(shown.contains("ssh-ed25519"), "{shown}");
+        assert!(shown.contains(half_block::UPPER), "no QR code:\n{shown}");
+        for said in [
+            t.t(key::INST_OFFLINE),
+            t.t(key::INST_BELONGINGS_ACCESS_OFFLINE_HELP),
+        ] {
+            assert!(says(&shown, &said), "{said}:\n{shown}");
+        }
+        e.key(KeyCode::Enter);
+        settle(&mut e, &offline);
+        assert_eq!(e.question_of(), Some(Question::BelongingsPassphrase));
+        assert!(
+            e.answers
+                .belongings_access
+                .ends_with("/belongings-keys/deploy")
+        );
+        // A TOKEN: kept, not probed.
+        let mut e = offline_at_the_repository();
+        type_in(&mut e, "https://github.com/me/belongings.git");
+        e.key(KeyCode::Enter);
+        settle(&mut e, &offline);
+        assert_eq!(e.question_of(), Some(Question::BelongingsAccess));
+        assert!(e.by_token() && e.types());
+        e.key(KeyCode::Enter);
+        assert_eq!(
+            e.error,
+            Some(key::INST_INVALID_BLANK),
+            "a blank token went on"
+        );
+        type_in(&mut e, "Zq7-token");
+        e.key(KeyCode::Enter);
+        let keep = e.asked.take().expect("the token was not kept");
+        assert!(
+            matches!(keep.job, Job::Keep { ref token, .. } if token == "Zq7-token"),
+            "{:?}",
+            keep.job
+        );
+        e.arrived(keep.serial, Done::Kept(Ok(())));
+        assert_eq!(e.question_of(), Some(Question::BelongingsPassphrase));
+        assert!(
+            e.answers
+                .belongings_access
+                .ends_with("/belongings-keys/token")
+        );
+        assert!(says(&rendered(&e, &t, 100, 30), &t.t(key::INST_OFFLINE)));
+        // A TOKEN NOT KEPT is said, and asked again.
+        let mut e = offline_at_the_repository();
+        type_in(&mut e, "https://github.com/me/belongings.git");
+        e.key(KeyCode::Enter);
+        settle(&mut e, &offline);
+        type_in(&mut e, "Zq7-token");
+        e.key(KeyCode::Enter);
+        let keep = e.asked.take().unwrap();
+        e.arrived(keep.serial, Done::Kept(Err(Why::Failed)));
+        assert_eq!(e.question_of(), Some(Question::BelongingsAccess));
+        assert_eq!(e.error, Some(access::refusal_key(Why::Failed)));
+        assert!(e.typing.is_empty());
+        // THE WHOLE WALK, with no network: nothing reached, nothing checked.
+        let mut e = with_disks();
+        let views = walk(&mut e, &offline, false);
+        assert_eq!(e.screen, Screen::Reviewing, "{views:?}");
+        assert_eq!(
+            (
+                e.answers.online,
+                e.answers.belongings_empty,
+                e.answers.belongings_checked
+            ),
+            (Some(false), None, false)
         );
     }
 
-    /// FAILS IF: a newer release is not offered as a hop, or the hop leaves
-    /// without the answers.
+    /// FAILS IF: with no network the belongings' passphrase is taken from
+    /// one entry, shorter than a disk's, from two that differ, or sent to be
+    /// verified — nothing can open the repository now, and it may be the
+    /// one the first boot makes the repository with.
     #[test]
-    fn a_newer_release_takes_over_with_the_answers() {
-        let mut e = with_disks();
-        walk_to(&mut e, Question::Wifi);
+    fn with_no_network_the_passphrase_is_typed_twice_and_long() {
+        let t = texts();
+        let mut e = offline_at_the_repository();
+        type_in(&mut e, "git@github.com:me/belongings.git");
         e.key(KeyCode::Enter);
-        settle(&mut e, &|job| match job {
-            Job::Release => Done::Release(Follow::Hop(Hop {
-                release: Release {
-                    revision: Revision {
-                        rev: "2".repeat(40),
-                        last_modified_s: 2,
-                    },
-                    url: "github:o/r/x".into(),
-                    path: "/nix/store/x-source".into(),
-                },
-            })),
-            other => kind(other),
-        });
-        let Screen::Hopping(hop) = e.screen.clone() else {
-            panic!("no hop: {:?}", e.screen);
-        };
-        let shown = rendered(&e, &texts(), 100, 20);
-        assert!(shown.contains(&"2".repeat(12)), "{shown}");
-        assert_eq!(e.key(KeyCode::Enter), Next::Hop(hop));
-        // Esc from the hop goes back to the network.
-        e.key(KeyCode::Esc);
-        assert_eq!(e.question_of(), Some(Question::Wifi));
+        settle(&mut e, &offline);
+        e.key(KeyCode::Enter);
+        settle(&mut e, &offline);
+        assert_eq!(e.question_of(), Some(Question::BelongingsPassphrase));
+        assert!(says(
+            &rendered(&e, &t, 100, 20),
+            &t.t(key::INST_BELONGINGS_PASSPHRASE_OFFLINE_HELP)
+        ));
+        type_in(&mut e, "short");
+        e.key(KeyCode::Enter);
+        assert_eq!(e.error, Some(key::INST_INVALID_PASSPHRASE_SHORT));
+        assert!(e.asked.is_none());
+        e.typing.clear();
+        type_in(&mut e, "Qw4-a-long-passphrase");
+        e.key(KeyCode::Enter);
+        assert!(
+            e.asked.is_none(),
+            "a passphrase was sent to be verified offline"
+        );
+        assert_eq!(e.question_of(), Some(Question::BelongingsPassphrase));
+        let again = t.t(key::INST_BELONGINGS_PASSPHRASE_AGAIN);
+        assert!(rendered(&e, &t, 100, 20).contains(&again));
+        type_in(&mut e, "Qw4-another-passphrase");
+        e.key(KeyCode::Enter);
+        assert_eq!(e.error, Some(key::INST_BELONGINGS_PASSPHRASE_DIFFERS));
+        type_in(&mut e, "Qw4-a-long-passphrase");
+        e.key(KeyCode::Enter);
+        type_in(&mut e, "Qw4-a-long-passphrase");
+        e.key(KeyCode::Enter);
+        assert!(
+            e.asked.is_none(),
+            "a passphrase was sent to be verified offline"
+        );
+        assert_eq!(e.screen, Screen::Reviewing);
+        assert_eq!(e.answers.belongings_passphrase, "Qw4-a-long-passphrase");
+        assert!(!e.answers.belongings_checked);
+        // AND THE REVIEW SAYS what the first boot does, warned.
+        let shown = rendered(&e, &t, 100, 60);
+        for k in [key::INST_FIRST_BOOT_UNCHECKED, key::INST_FIRST_BOOT_LATER] {
+            assert!(says(&shown, &t.t(k)), "{k}:\n{shown}");
+        }
     }
 
     /// FAILS IF: the access screen goes on before the key both reads and
@@ -4397,7 +4631,7 @@ mod tests {
         e.key(KeyCode::Enter);
         let again = e.asked.take().expect("the SSH address was not prepared");
         assert!(
-            matches!(again.job, Job::Prepare { ref address } if address == "git@github.com:ronoctua/belongings.git")
+            matches!(again.job, Job::Prepare { ref address, online: true } if address == "git@github.com:ronoctua/belongings.git")
         );
         e.arrived(again.serial, kind(&again.job));
         assert_eq!(e.question_of(), Some(Question::BelongingsAccess));
@@ -4476,6 +4710,7 @@ mod tests {
         // WHAT SOMETHING PROVES IS TYPED ONCE: the network joins, a token is
         // probed, a passphrase opens a repository that has something in it.
         let mut r = crate::model::Answers {
+            online: Some(true),
             belongings_empty: Some(false),
             ..Default::default()
         };
@@ -4527,10 +4762,11 @@ mod tests {
         assert_eq!(e.answers.belongings_passphrase, "Qw4-a-long-passphrase");
     }
 
-    /// FAILS IF: the release's installer does not pick up where the hop
-    /// left, or asks the network again.
+    /// FAILS IF: answers handed on do not pick up where they say, or a
+    /// question about the repository resumed at asks it as if the network
+    /// had been read — what the network said is never carried.
     #[test]
-    fn the_release_installer_resumes_at_the_repository() {
+    fn answers_handed_on_resume_where_they_say() {
         let mut answers = Answers::default();
         answers.set(Question::Language, "en-GB".into());
         answers.set(Question::Disk, "/dev/sda".into());
@@ -4538,19 +4774,19 @@ mod tests {
         let e = State::resumed(Vec::new(), Vec::new(), answers, Question::BelongingsAddress);
         assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
         assert_eq!(e.answers.disk, "/dev/sda");
-        assert_eq!(e.stay, Some(Stay::FromRelease));
         assert!(e.answers.left_out.is_empty() && e.resume_to.is_none());
+        assert!(e.unasked(), "the network was never read here");
     }
 
-    /// FAILS IF: a `full` installation hopping from an installer that never
-    /// asked the list of programs (every hop is from an older one) resumes
-    /// past it — the default would be declined and pushed with nobody
-    /// having seen it — or the list, once answered, does not go on to where
-    /// the hop left; or an id the hop carried that this release no longer
-    /// offers vanishes without a word; or one that carried a list it can
-    /// read is asked it again.
+    /// FAILS IF: a `full` installation resumed from answers that never
+    /// answered the list of programs (written for an older installer)
+    /// resumes past it — the default would be declined and pushed with
+    /// nobody having seen it — or the list, once answered, does not go on to
+    /// where the answers left; or an id they carried that this installer
+    /// does not offer vanishes without a word; or answers that carried a
+    /// list it can read are asked it again.
     #[test]
-    fn a_hop_without_the_list_shows_it_before_resuming() {
+    fn answers_without_the_list_show_it_before_resuming() {
         let full = |left_out: &str| {
             let mut answers = Answers::default();
             answers.set(Question::Language, "en-GB".into());
@@ -4574,13 +4810,13 @@ mod tests {
         assert_eq!(
             e.question_of(),
             Some(Question::BelongingsAddress),
-            "it did not go on to where the hop left"
+            "it did not go on to where the answers left"
         );
         assert_eq!(e.answers.left_out, marked);
         // AN ANSWER IT CAN READ: no list again.
         let e = full(crate::model::LEFT_OUT_NONE);
         assert_eq!(e.question_of(), Some(Question::BelongingsAddress));
-        // AN ID THIS RELEASE NO LONGER OFFERS: the list, saying so.
+        // AN ID THIS INSTALLER DOES NOT OFFER: the list, saying so.
         let mut e = full("no-such-program,blender");
         assert_eq!(e.question_of(), Some(Question::LeftOut));
         assert_eq!(e.dropped, ["no-such-program"]);
@@ -4606,11 +4842,11 @@ mod tests {
         assert_eq!(e.question_of(), Some(Question::Keyboard));
     }
 
-    /// FAILS IF: going back to the network question in the release's
-    /// installer loses the network chosen before the hop — a list without
-    /// it lands on "no Wi-Fi", and Enter installs a machine with no Wi-Fi.
+    /// FAILS IF: going back to the network question of a resumed
+    /// installation loses the network its answers chose — a list without it
+    /// lands on "no Wi-Fi", and Enter installs a machine with no Wi-Fi.
     #[test]
-    fn the_network_chosen_before_the_hop_is_still_offered() {
+    fn the_network_handed_on_is_still_offered() {
         let mut answers = Answers::default();
         answers.set(Question::Language, "en-GB".into());
         answers.set(Question::Wifi, "home-5g".into());
@@ -4675,6 +4911,13 @@ mod tests {
     /// The row of `text` in a screen drawn as text, if it is there.
     fn row_of(shown: &str, text: &str) -> Option<usize> {
         shown.lines().position(|l| l.contains(text))
+    }
+
+    /// Whether a screen drawn as text says `said`, read as words: a
+    /// sentence longer than its row wraps.
+    fn says(shown: &str, said: &str) -> bool {
+        let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        words(shown).contains(&words(said))
     }
 
     /// FAILS IF: on a terminal 60 to 82 columns wide the access screen cuts
@@ -4918,9 +5161,6 @@ mod tests {
                     assert_eq!(h.act, act, "{language}: `{}` clicks another key", h.text);
                 }
             }
-            // AND THE HOP'S SENTENCE names the key that starts the newer one.
-            let hop = with_keys(&t, key::INST_RELEASE_NEWER, &[("rev", "4f1c2a9")]);
-            assert_eq!(named(&hop), vec![KEY_ENTER], "{language}: {hop}");
         }
     }
 
@@ -5022,8 +5262,8 @@ mod tests {
 
     /// FAILS IF: a key a line teaches does not do what the line says, by the
     /// code the line's table names — the arrows move the cursor, Enter
-    /// continues (and starts the newer installer, and runs the review),
-    /// Space marks a program, Esc goes back, Ctrl+C gives up. A binding that
+    /// continues (and runs the review), Space marks a program, Esc goes
+    /// back, Ctrl+C gives up. A binding that
     /// moves away from the taught key leaves the key doing nothing here.
     #[test]
     fn every_taught_key_does_what_its_line_says() {
@@ -5054,24 +5294,6 @@ mod tests {
             is_left_out(&e.answers.left_out, OFFERED[0].id),
             before,
             "Space did not mark the row"
-        );
-        // THE HOP: Enter starts the newer installer, Esc goes back.
-        let hop = Hop {
-            release: Release {
-                revision: Revision {
-                    rev: "4f1c2a9b7e3d5f60a1b2c3d4e5f60718293a4b5c".into(),
-                    last_modified_s: 0,
-                },
-                url: String::new(),
-                path: String::new(),
-            },
-        };
-        e.screen = Screen::Hopping(hop.clone());
-        assert_eq!(e.key(enter), Next::Hop(hop), "Enter did not hop");
-        e.key(esc);
-        assert!(
-            matches!(e.screen, Screen::Asking(_)),
-            "Esc did not go back from the hop"
         );
         // THE REVIEW: Enter runs the confirmed disk, Esc goes back.
         let mut e = with_disks();
@@ -5207,15 +5429,6 @@ mod tests {
             ] {
                 keys.push(g.key());
             }
-            for s in [
-                Stay::Current,
-                Stay::FromRelease,
-                Stay::Ahead,
-                Stay::Development,
-                Stay::Unreachable,
-            ] {
-                keys.extend(s.key());
-            }
             for why in Why::ALL {
                 keys.push(access::refusal_key(why));
             }
@@ -5239,8 +5452,13 @@ mod tests {
                 key::INST_BELONGINGS_HTTPS_NOT_POST_QUANTUM,
                 key::INST_CHECKING,
                 key::INST_GATE_CHECKING,
-                key::INST_RELEASE_LOOKING,
-                key::INST_RELEASE_NEWER,
+                key::INST_OFFLINE,
+                key::INST_FIRST_BOOT_RESTORE,
+                key::INST_FIRST_BOOT_START,
+                key::INST_FIRST_BOOT_UNCHECKED,
+                key::INST_FIRST_BOOT_LATER,
+                key::INST_BELONGINGS_ACCESS_OFFLINE_HELP,
+                key::INST_BELONGINGS_PASSPHRASE_OFFLINE_HELP,
                 key::INST_ACCESS_WAITING,
                 key::INST_ACCESS_READS,
                 key::INST_ACCESS_READY,
@@ -5255,7 +5473,6 @@ mod tests {
                 key::INST_BELONGINGS_PASSPHRASE_NEW_HELP,
                 key::INST_BELONGINGS_PASSPHRASE_AGAIN,
                 key::INST_BELONGINGS_PASSPHRASE_DIFFERS,
-                key::INST_NETWORK_HELP_UNNAMED,
                 key::INST_STEP_SKIPPED,
                 key::INST_KEYS_CHECK,
                 key::INST_KEYS_CHECK_SPACE,
@@ -5264,7 +5481,6 @@ mod tests {
                 key::INST_LEFT_OUT_OUT,
                 key::INST_LEFT_OUT_REVIEW,
                 key::INST_INVALID_LEFT_OUT,
-                key::INST_KEPT_EVERYWHERE,
                 key::INST_LEFT_OUT_REVIEW_KEPT,
                 key::INST_LEFT_OUT_DROPPED,
                 key::INST_LEFT_OUT_NOT_APPLIED,
@@ -5395,13 +5611,17 @@ mod tests {
         }
         for name in [
             "network",
+            "network-refused",
+            "network-connected",
             "access",
+            "access-offline",
             "token",
             "passphrase",
             "passphrase-new",
+            "passphrase-offline",
             "password-again",
-            "hop",
             "review",
+            "review-offline",
             "left-out",
             "compose",
             "tpm",
@@ -5613,10 +5833,11 @@ mod tests {
         assert_eq!(both.screen, Screen::Stop(Stop::Tpm));
     }
 
-    /// FAILS IF: an installation a hop resumed — past the language, where
-    /// the stops stand — goes on without them on a machine with no TPM or
-    /// started from BIOS, does not come back to where it resumed once they
-    /// are passed, or asks the BIOS again of whoever chose it before the hop.
+    /// FAILS IF: an installation resumed from answers handed on — past the
+    /// language, where the stops stand — goes on without them on a machine
+    /// with no TPM or started from BIOS, does not come back to where it
+    /// resumed once they are passed, or asks the BIOS again of whoever chose
+    /// it in the answers.
     #[test]
     fn a_resumed_installation_stops_too() {
         use crate::platform::Platform;
@@ -5641,7 +5862,7 @@ mod tests {
         e.key(KeyCode::Down);
         e.key(KeyCode::Enter);
         assert_eq!(e.question_of(), Some(at), "back where it resumed");
-        // CHOSEN BEFORE THE HOP: not asked again.
+        // CHOSEN IN THE ANSWERS: not asked again.
         let mut chosen = handed.clone();
         chosen.bios = true;
         let e = resumed(bios, &chosen, false);

@@ -30,13 +30,11 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::model::Answers;
 use crate::plan::{
-    ATTRIBUTE, BELONGINGS, BINARY_CACHE_NETRC, BINARY_CACHE_OPTIONS, BINARY_CACHE_TOKEN, Capture,
-    HOST_NIX_PATH, HOST_NIX_WORK_PATH, INSTALL_ACCESS, LEFT_OUT_APPLIED, LET_HOST, LUKS_KEY_PATH,
-    Origin, PASSWORD_HASH_PATH, PERSON_UID, Runner, SCRATCH, SEAL, SWAPFILE_PATH, Scratch, Step,
-    TARGET_PASSWD, WIFI_PROFILE_PATH, WORK_DIRECTORY, WRITE, aimed_flake, belongings_path,
-    choice_file, host_nix, left_out_declined, leftovers, machine_choice, person_passphrase,
-    plain_passphrase, staged_declined, steps, target_mirror_declined, target_netrc, target_user,
-    wifi_profile,
+    ATTRIBUTE, Capture, HOST_NIX_PATH, HOST_NIX_WORK_PATH, INSTALL_ACCESS, LEFT_OUT_APPLIED,
+    LET_HOST, LUKS_KEY_PATH, Origin, PASSWORD_HASH_PATH, Runner, SCRATCH, SEAL, SEAL_PASSPHRASE,
+    SWAPFILE_PATH, Step, TARGET_PASSWD, TOPLEVEL, WIFI_PROFILE_PATH, WRITE, aimed_flake,
+    belongings_path, deferred_marker, first_boot_record, host_nix, left_out_declined, leftovers,
+    staged_declined, steps, target_user, wifi_profile,
 };
 
 /// What happens during execution.
@@ -73,14 +71,6 @@ pub enum Event {
     Refused {
         /// The refusal's text key (invariant 8).
         key: &'static str,
-    },
-    /// A step's answer the person should hear, which names programs: the
-    /// sentence's text key, and the programs' names joined (`$names`).
-    Said {
-        /// The sentence's text key (invariant 8).
-        key: &'static str,
-        /// The programs it names, by their own names.
-        names: String,
     },
 }
 
@@ -190,45 +180,26 @@ pub fn write_of(step: &Step, r: &Answers) -> Result<Option<Write>> {
                 private: false,
             }
         }
-        // THE PASSPHRASE THE RESTORE READS, in the person's runtime folder:
-        // theirs (the restore runs as them), `0600` in a `0700` folder, and
-        // deleted by the restore however it ends — and by the installer's
-        // last step anyway. No line break: the belongings read the file
-        // whole, as `cryptsetup` does.
-        passphrase if passphrase == person_passphrase() => Write {
+        // THE INSTALLATION'S MARKER: nothing in it but its format — that it
+        // is there is what it says (`plan::deferred_marker`).
+        marker if marker == deferred_marker() => {
+            root_public(path, "{\n  \"format\": 1\n}\n".to_owned())
+        }
+        // WHAT THE FIRST BOOT FINISHES (`crate::first_boot`): root's alone,
+        // in a folder of root's — an address, the machine and its choice of
+        // programs, no secret, and nobody else's business.
+        record if record == first_boot_record() => Write {
             path,
-            content: r.belongings_passphrase.clone(),
-            secrecy: Secrecy::Secret,
-            owner: Some(target_user().to_owned()),
-            private: true,
-        },
-        // THE PASSPHRASE THE COPY OF THE PLAIN PART READS, root's (the copy
-        // runs as root, before the person exists), `0600` in a `0700`
-        // folder, deleted by the copy however it ends — and by the
-        // installer's end anyway.
-        passphrase if passphrase == plain_passphrase() => Write {
-            path,
-            content: r.belongings_passphrase.clone(),
+            content: crate::first_boot::Record::of(r, moment_of(r)?).to_file(),
             secrecy: Secrecy::Secret,
             owner: None,
             private: true,
         },
-        // THE MACHINE'S CHOICE, for the copy to sign into the repository:
-        // root's, public — ids, a hostname and a moment.
-        choice if choice == choice_file() => root_public(path, choice_document(r)?),
-        // THE PROGRAMS LEFT OUT, as the person's declines, where an EMPTY
-        // repository's go: staged for root's applier — root's and readable
-        // (`0644` in `0755` folders: the applier refuses a tree somebody
-        // else may write) — and in the person's mirror, theirs, for `init`
-        // to sign. Public: ids, a hostname and a moment.
+        // THE PROGRAMS LEFT OUT, as the person's declines, staged for root's
+        // applier — root's and readable (`0644` in `0755` folders: the
+        // applier refuses a tree somebody else may write). Public: ids, a
+        // hostname and a moment.
         declines if declines == staged_declined() => root_public(path, left_out_document(r)?),
-        mirror if mirror == target_mirror_declined() => Write {
-            path,
-            content: left_out_document(r)?,
-            secrecy: Secrecy::Public,
-            owner: Some(target_user().to_owned()),
-            private: false,
-        },
         otherwise => bail!(
             "a write step for `{otherwise}`, which this module does not know.\n\
              \n\
@@ -250,18 +221,6 @@ fn left_out_document(r: &Answers) -> Result<String> {
     let declined = left_out_declined(r, moment_of(r)?)
         .context("a step writes the programs left out, and the answers leave none out")?;
     Ok(ronoctua_person::to_json(&declined))
-}
-
-/// The machine's choice as its canonical document — the same moment as the
-/// declines'.
-///
-/// # Errors
-///
-/// No stamp, or an installation that was not asked the list.
-fn choice_document(r: &Answers) -> Result<String> {
-    let choice = machine_choice(r, moment_of(r)?)
-        .context("a step writes the machine's choice, and the installation was not asked it")?;
-    Ok(ronoctua_person::to_json(&choice))
 }
 
 /// The run's one moment for the programs left out — never a default.
@@ -304,28 +263,6 @@ pub fn not_as_chosen(r: &Answers, declined: Option<&[u8]>) -> Vec<&'static str> 
     out.chain(kept).collect()
 }
 
-/// The programs a belongings' copy kept that the person declined on every
-/// machine, by their names — from its last line (`--json`:
-/// `"kept-everywhere": [<id>…]`). Empty when it names none. Pure.
-#[must_use]
-pub fn kept_everywhere_in(line: &str) -> Vec<String> {
-    let said: serde_json::Value = serde_json::from_str(line.trim()).unwrap_or_default();
-    said.get("kept-everywhere")
-        .and_then(serde_json::Value::as_array)
-        .map(|ids| {
-            ids.iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(|id| {
-                    crate::model::OFFERED
-                        .iter()
-                        .find(|o| o.id == id)
-                        .map_or_else(|| id.to_owned(), |o| o.name.to_owned())
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// Clears what an earlier attempt left at `paths` (`plan::leftovers`): each
 /// folder, whole; one that is not there is nothing to clear.
 fn clear_leftovers(paths: &[String]) -> Result<()> {
@@ -337,15 +274,6 @@ fn clear_leftovers(paths: &[String]) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// The refusal a belongings' step said on its last line (`--json`:
-/// `{"refused": "<why>"}`), as its sentence's text key. Pure.
-#[must_use]
-pub fn refusal_in(line: &str) -> Option<&'static str> {
-    let said: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
-    let why = ronoctua_belongings::Why::of_id(said.get("refused")?.as_str()?)?;
-    Some(crate::access::refusal_key(why))
 }
 
 /// Reads the swap's offset from `btrfs inspect-internal map-swapfile`'s output.
@@ -408,7 +336,7 @@ fn write_out_with(e: &Write, passwd: &Path) -> Result<()> {
 }
 
 /// The uid and gid `user` has in the `/etc/passwd` at `passwd`.
-fn ids_in(passwd: &Path, user: &str) -> Result<(u32, u32)> {
+pub fn ids_in(passwd: &Path, user: &str) -> Result<(u32, u32)> {
     let text =
         std::fs::read_to_string(passwd).with_context(|| format!("read {}", passwd.display()))?;
     ids_of(&text, user).with_context(|| format!("the user `{user}` is not in {}", passwd.display()))
@@ -416,7 +344,7 @@ fn ids_in(passwd: &Path, user: &str) -> Result<(u32, u32)> {
 
 /// Makes the folders of `dir` that are missing, each with `mode` and given
 /// to `ids` when there are some.
-fn make_folders(dir: &Path, ids: Option<(u32, u32)>, mode: u32) -> Result<()> {
+pub(crate) fn make_folders(dir: &Path, ids: Option<(u32, u32)>, mode: u32) -> Result<()> {
     let mut missing: Vec<&Path> = dir.ancestors().take_while(|a| !a.exists()).collect();
     missing.reverse();
     for d in missing {
@@ -438,7 +366,12 @@ fn make_folders(dir: &Path, ids: Option<(u32, u32)>, mode: u32) -> Result<()> {
 
 /// Writes `bytes` to `p` whole, born `mode` and given to `ids`, through a
 /// draft beside it renamed over.
-fn write_whole(p: &Path, bytes: &[u8], mode: u32, ids: Option<(u32, u32)>) -> Result<()> {
+pub(crate) fn write_whole(
+    p: &Path,
+    bytes: &[u8],
+    mode: u32,
+    ids: Option<(u32, u32)>,
+) -> Result<()> {
     let name = p
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -579,12 +512,12 @@ pub fn attribute_of(answer: &str) -> Result<String> {
     }
 }
 
-/// The command with the system's name and the person's uid where the plan
-/// marked them; `person` is asked only when a mark needs it.
+/// The command with the system's name and the system built where the plan
+/// marked them.
 fn filled(
     command: &[String],
     attribute: Option<&str>,
-    person: &dyn Fn() -> Result<(u32, u32)>,
+    toplevel: Option<&str>,
 ) -> Result<Vec<String>> {
     command
         .iter()
@@ -592,8 +525,10 @@ fn filled(
             if a.contains(ATTRIBUTE) {
                 let name = attribute.context("the system's name was needed before it was asked")?;
                 Ok(a.replace(ATTRIBUTE, name))
-            } else if a == PERSON_UID {
-                Ok(person()?.0.to_string())
+            } else if a == TOPLEVEL {
+                Ok(toplevel
+                    .context("the system was needed before it was built")?
+                    .to_owned())
             } else {
                 Ok(a.clone())
             }
@@ -601,174 +536,24 @@ fn filled(
         .collect()
 }
 
-/// The person's binary cache, as the working flake's validated
-/// `person/options.json` names it — `None` with no file, no cache, or a file
-/// this installer cannot read (nothing is guessed).
-fn cache_in(work: &Path) -> Option<ronoctua_person::options::BinaryCache> {
-    let at = work
-        .join(ronoctua_person::names::MACHINE_PERSON)
-        .join(ronoctua_person::names::OPTIONS);
-    let bytes = std::fs::read(at).ok()?;
-    ronoctua_person::parse::<ronoctua_person::options::Options>(&bytes)
-        .ok()?
-        .binary_cache
-}
-
-/// What `nixos-install` is told of the person's binary cache: the cache as
-/// an extra substituter (BEFORE nothing it replaces: `extra-`), its key as
-/// an extra trusted one, and — for a private cache whose token was read —
-/// the installer's netrc. Nothing with no cache. Pure.
-#[must_use]
-pub fn cache_options(
-    cache: Option<&ronoctua_person::options::BinaryCache>,
-    netrc: Option<&str>,
-) -> Vec<String> {
-    let Some(cache) = cache else {
-        return Vec::new();
-    };
-    let mut out = vec![
-        "--option".to_owned(),
-        "extra-substituters".to_owned(),
-        cache.substituter(),
-        "--option".to_owned(),
-        "extra-trusted-public-keys".to_owned(),
-        cache.public_key.clone(),
-    ];
-    if let Some(netrc) = netrc.filter(|_| cache.is_private()) {
-        out.extend([
-            "--option".to_owned(),
-            "netrc-file".to_owned(),
-            netrc.to_owned(),
-        ]);
+/// The system `nix build --print-out-paths` answered: one store path.
+///
+/// # Errors
+///
+/// The answer is not exactly one path in the store.
+pub fn toplevel_of(answer: &str) -> Result<String> {
+    let paths: Vec<&str> = answer
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    match paths.as_slice() {
+        [one] if one.starts_with("/nix/store/") => Ok((*one).to_owned()),
+        _ => bail!(
+            "the build answered `{}`, and not the one system it built",
+            answer.trim()
+        ),
     }
-    out
-}
-
-/// The command with the person's binary cache where the plan marked it
-/// ([`BINARY_CACHE_OPTIONS`]): read from the working flake, and the
-/// installer's netrc when the token step made one.
-fn with_cache(args: Vec<String>) -> Vec<String> {
-    with_cache_in(
-        args,
-        Path::new(WORK_DIRECTORY),
-        &Scratch::installer().binary_cache_netrc(),
-    )
-}
-
-/// [`with_cache`], over the working flake `work` and the netrc at `netrc`
-/// (when it is a file) — a test's.
-fn with_cache_in(args: Vec<String>, work: &Path, netrc: &str) -> Vec<String> {
-    if !args.iter().any(|a| a == BINARY_CACHE_OPTIONS) {
-        return args;
-    }
-    let cache = cache_in(work);
-    let netrc = Path::new(netrc).is_file().then_some(netrc);
-    let options = cache_options(cache.as_ref(), netrc);
-    args.into_iter()
-        .flat_map(|a| {
-            if a == BINARY_CACHE_OPTIONS {
-                options.clone()
-            } else {
-                vec![a]
-            }
-        })
-        .collect()
-}
-
-/// `binary-cache-token`: for a PRIVATE cache, the push token read out of the
-/// sealed part with the passphrase (`ronoctua-belongings take`, as root in
-/// the scratch home, the passphrase in a `0600` file of a folder of its
-/// own) and made into the installer's netrc, `0600`; the token's file and
-/// the passphrase's go at once. A token the repository does not keep, or a
-/// `take` that refused, is said and is no failure: the installation goes on
-/// without the cache, as the ISO's seed lets it.
-fn binary_cache_token(
-    scratch: &Scratch,
-    cache: &ronoctua_person::options::BinaryCache,
-    passphrase: &str,
-    belongings: &str,
-    ver: &mut dyn FnMut(Event),
-) -> Result<()> {
-    let folder = scratch.binary_cache();
-    let runtime = scratch.binary_cache_runtime();
-    make_folders(Path::new(&folder), None, 0o700)?;
-    make_folders(Path::new(&runtime), None, 0o700)?;
-    let token_at = scratch.binary_cache_token();
-    let _ = std::fs::remove_file(&token_at);
-    write_whole(
-        &Path::new(&runtime).join(ronoctua_belongings::places::PASSPHRASE_FILE),
-        passphrase.as_bytes(),
-        0o600,
-        None,
-    )?;
-    let home = scratch.home();
-    let mut take = command(belongings);
-    take.args([
-        "take",
-        "--home",
-        &home,
-        "--runtime",
-        &runtime,
-        "--path",
-        &ronoctua_cachix::token::logical(),
-        "--out",
-        &token_at,
-        "--json",
-    ]);
-    for (name, value) in crate::plan::home_env_of(&home) {
-        take.env(name, value);
-    }
-    let out = take
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("could not run `{belongings}`"));
-    let _ = std::fs::remove_dir_all(&runtime);
-    let out = out?;
-    for line in String::from_utf8_lossy(&out.stderr).lines() {
-        ver(Event::Line(line.to_owned()));
-    }
-    let said: serde_json::Value =
-        serde_json::from_slice(out.stdout.trim_ascii()).unwrap_or(serde_json::Value::Null);
-    if said.get("taken").and_then(serde_json::Value::as_bool) != Some(true) {
-        let _ = std::fs::remove_file(&token_at);
-        let why = said
-            .get("refused")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("not-kept");
-        ver(Event::Line(format!(
-            "{}: {why}",
-            ronoctua_cachix::token::logical()
-        )));
-        return Ok(());
-    }
-    let read = std::fs::read_to_string(&token_at);
-    let _ = std::fs::remove_file(&token_at);
-    let token = ronoctua_consent::keys::Secret::new(read.context("read the token")?.trim());
-    let line = ronoctua_cachix::netrc::text(&cache.name, &token)
-        .map_err(|why| anyhow::anyhow!("the netrc of {}: {why}", cache.host()))?;
-    write_whole(
-        Path::new(&scratch.binary_cache_netrc()),
-        line.as_bytes(),
-        0o600,
-        None,
-    )?;
-    ver(Event::Line(scratch.binary_cache_netrc()));
-    Ok(())
-}
-
-/// `binary-cache-netrc`: the installer's netrc to the machine's root netrc
-/// at `to` — its folder `0755`, the file `0600`, root's — and the
-/// installer's copy gone.
-fn install_netrc(from: &Path, to: &Path) -> Result<()> {
-    let bytes = zeroize::Zeroizing::new(
-        std::fs::read(from).with_context(|| format!("read {}", from.display()))?,
-    );
-    if let Some(parent) = to.parent() {
-        make_folders(parent, None, 0o755)?;
-    }
-    write_whole(to, &bytes, 0o600, None)?;
-    let _ = std::fs::remove_file(from);
-    Ok(())
 }
 
 /// The password's hash, through `mkpasswd`.
@@ -897,15 +682,10 @@ pub fn run_command(r: &Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> 
         r.swap = crate::swap::measure(&r.disk);
     }
     let done = run_steps(&mut r, origin, ver);
-    // THE TWO SECRETS ON DISK go, however it ended: the disk's passphrase
-    // exists only in the person's head, and the belongings' passphrase in
-    // their head and their repository's key, nowhere else. And the private
-    // cache's token, in the installer's netrc: the machine's root copy is
-    // the one that stays.
+    // THE SECRET ON DISK goes, however it ended: the disk's passphrase
+    // exists only in the person's head. (The belongings' passphrase never
+    // touched one: it went to the TPM, `SEAL_PASSPHRASE`.)
     let _ = std::fs::remove_file(LUKS_KEY_PATH);
-    let _ = std::fs::remove_file(person_passphrase());
-    let _ = std::fs::remove_file(plain_passphrase());
-    let _ = std::fs::remove_dir_all(Scratch::installer().binary_cache());
     if done.is_ok() {
         let _ = std::fs::remove_dir_all(SCRATCH);
     }
@@ -917,6 +697,7 @@ fn run_steps(r: &mut Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> Re
     let list = steps(r, origin);
     let total = list.len();
     let mut attribute: Option<String> = None;
+    let mut toplevel: Option<String> = None;
     let person = || ids_in(Path::new(TARGET_PASSWD), target_user());
 
     for (index, step) in list.iter().enumerate() {
@@ -943,6 +724,17 @@ fn run_steps(r: &mut Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> Re
                 ronoctua_network::secret::seal_at(directory, ssid, &r.wifi_password)
                     .with_context(context)?;
             }
+            // THE BELONGINGS' PASSPHRASE, for the first boot: the same TPM,
+            // under a name of its own, beside the record.
+            Some(SEAL_PASSPHRASE) => {
+                let directory = step.command.get(1).context("sealing with no directory")?;
+                ronoctua_network::secret::seal_at(
+                    directory,
+                    crate::first_boot::PASSPHRASE_NAME,
+                    &r.belongings_passphrase,
+                )
+                .with_context(context)?;
+            }
             Some(INSTALL_ACCESS) => {
                 let (from, to) = (
                     step.command.get(1).context("an access with no source")?,
@@ -959,23 +751,6 @@ fn run_steps(r: &mut Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> Re
                 let config = step.command.get(1).context("a consent with no place")?;
                 let ids = person().with_context(context)?;
                 let_host(config, &r.belongings, ids).with_context(context)?;
-            }
-            // THE PERSON'S BINARY CACHE: its address said, and for a private
-            // one the token made into the installer's netrc.
-            Some(BINARY_CACHE_TOKEN) => {
-                if let Some(cache) = cache_in(Path::new(WORK_DIRECTORY)) {
-                    ver(Event::Line(cache.substituter()));
-                    if cache.is_private() {
-                        binary_cache_token(
-                            &Scratch::installer(),
-                            &cache,
-                            &r.belongings_passphrase,
-                            crate::plan::BELONGINGS,
-                            ver,
-                        )
-                        .with_context(context)?;
-                    }
-                }
             }
             // WHAT ROOT'S APPLIER MADE OF THE DECLINES, read before the disk:
             // a signature that did not cover them leaves the machine none,
@@ -1002,12 +777,6 @@ fn run_steps(r: &mut Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> Re
                 }
                 ver(Event::Line(at.clone()));
             }
-            Some(BINARY_CACHE_NETRC) => {
-                let from = Scratch::installer().binary_cache_netrc();
-                install_netrc(Path::new(&from), Path::new(&target_netrc()))
-                    .with_context(context)?;
-                ver(Event::Line(target_netrc()));
-            }
             Some(WRITE) => {
                 let mut e = write_of(step, r)?.context("a write step that writes nothing")?;
                 // The hash can only be computed now: it is the only content
@@ -1026,9 +795,8 @@ fn run_steps(r: &mut Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> Re
                 write_out(&e).with_context(context)?;
             }
             _ => {
-                let args = with_cache(
-                    filled(&step.command, attribute.as_deref(), &person).with_context(context)?,
-                );
+                let args = filled(&step.command, attribute.as_deref(), toplevel.as_deref())
+                    .with_context(context)?;
                 let ids = match step.runs_as {
                     Runner::Person => Some(person().with_context(context)?),
                     Runner::Root => None,
@@ -1041,37 +809,13 @@ fn run_steps(r: &mut Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> Re
                         ver(Event::Line(name.clone()));
                         attribute = Some(name);
                     }
-                    None => {
-                        // THE REPOSITORY'S REFUSAL IS SAID IN ITS SENTENCE:
-                        // the belongings answer on their last line, and a
-                        // push that did not go (the programs left out) stops
-                        // the installation here, before the disk.
-                        let mut last = String::new();
-                        let done = run(command, &mut |e| {
-                            if let Event::Line(l) = &e {
-                                last.clone_from(l);
-                            }
-                            ver(e);
-                        });
-                        if done.is_err()
-                            && step.command.first().map(String::as_str) == Some(BELONGINGS)
-                            && let Some(key) = refusal_in(&last)
-                        {
-                            ver(Event::Refused { key });
-                        }
-                        done.with_context(context)?;
-                        // WHAT THE CHOICE COULD NOT BRING BACK: ticked, and
-                        // declined on every machine by the person.
-                        if step.command.first().map(String::as_str) == Some(BELONGINGS) {
-                            let names = kept_everywhere_in(&last);
-                            if !names.is_empty() {
-                                ver(Event::Said {
-                                    key: crate::key::INST_KEPT_EVERYWHERE,
-                                    names: names.join(", "),
-                                });
-                            }
-                        }
+                    Some(Capture::Toplevel) => {
+                        let said = answer(command, ver).with_context(context)?;
+                        let built = toplevel_of(&said).with_context(context)?;
+                        ver(Event::Line(built.clone()));
+                        toplevel = Some(built);
                     }
+                    None => run(command, ver).with_context(context)?,
                 }
             }
         }
@@ -1112,159 +856,6 @@ mod tests {
             only_if: None,
             captures: None,
         }
-    }
-
-    const CACHE_KEY: &str = "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=";
-    const CACHE_TOKEN: &str = "eyJhbGciOiJIUzI1NiJ9.eyJqdGkiOiJpbnN0YWxsIn0.c2ln";
-
-    fn scratch_dir(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "ronoctua-installer-cache-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
-    fn cache(private: bool) -> ronoctua_person::options::BinaryCache {
-        ronoctua_person::options::BinaryCache {
-            name: "someone".to_owned(),
-            public_key: CACHE_KEY.to_owned(),
-            visibility: if private {
-                ronoctua_person::options::Visibility::Private
-            } else {
-                ronoctua_person::options::Visibility::Public
-            },
-        }
-    }
-
-    /// FAILS IF: `nixos-install` is told of a cache nobody named, is not
-    /// told of the one the options name (its address and its key), reads a
-    /// public cache through a netrc, or a private one without the netrc
-    /// the token step made — or the mark is left in the command.
-    #[test]
-    fn nixos_install_is_told_of_the_persons_cache_and_nothing_else() {
-        assert!(cache_options(None, Some("/n")).is_empty());
-        assert_eq!(
-            cache_options(Some(&cache(false)), Some("/n")),
-            [
-                "--option",
-                "extra-substituters",
-                "https://someone.cachix.org",
-                "--option",
-                "extra-trusted-public-keys",
-                CACHE_KEY
-            ]
-        );
-        let private = cache_options(Some(&cache(true)), Some("/n"));
-        assert_eq!(&private[6..], ["--option", "netrc-file", "/n"]);
-        assert_eq!(cache_options(Some(&cache(true)), None).len(), 6);
-
-        let root = scratch_dir("mark");
-        let work = root.join("work");
-        let person = work.join("person");
-        std::fs::create_dir_all(&person).unwrap();
-        let args = || vec!["nixos-install".to_owned(), BINARY_CACHE_OPTIONS.to_owned()];
-        let netrc = root.join("netrc");
-        let netrc_text = netrc.to_string_lossy().into_owned();
-        assert_eq!(with_cache_in(args(), &work, &netrc_text), ["nixos-install"]);
-        std::fs::write(
-            person.join("options.json"),
-            format!(
-                r#"{{"format": 1, "ssh-signing": null,
-                   "binary-cache": {{"name": "someone", "public-key": "{CACHE_KEY}", "visibility": "private"}}}}"#
-            ),
-        )
-        .unwrap();
-        std::fs::write(&netrc, "x").unwrap();
-        let told = with_cache_in(args(), &work, &netrc_text);
-        assert_eq!(told.len(), 10);
-        assert!(!told.iter().any(|a| a == BINARY_CACHE_OPTIONS));
-        assert_eq!(told.last(), Some(&netrc_text));
-        // A FILE THAT DOES NOT READ names no cache: nothing is guessed.
-        std::fs::write(person.join("options.json"), "{\"format\": 9}").unwrap();
-        assert_eq!(with_cache_in(args(), &work, &netrc_text), ["nixos-install"]);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// FAILS IF: the private cache's token is asked of the belongings by
-    /// anything but a file — the passphrase in a `0600` file, the token
-    /// written to one — or outlives the netrc it became, the netrc is born
-    /// readable, or a token the repository does not keep stops the
-    /// installation.
-    #[test]
-    fn the_private_caches_token_becomes_the_installers_netrc_and_nothing_else() {
-        let root = scratch_dir("token");
-        let scratch = Scratch {
-            root: root.join("run").to_string_lossy().into_owned(),
-        };
-        let stand_in = root.join("belongings");
-        let log = root.join("argv");
-        std::fs::write(
-            &stand_in,
-            format!(
-                "#!/bin/sh\necho \"$@\" >{log}\nout=\"\"; run=\"\"\nwhile [ $# -gt 0 ]; do case \"$1\" in --out) out=$2; shift ;; --runtime) run=$2; shift ;; esac; shift; done\n[ \"$(cat \"$run/passphrase\")\" = pass-phrase ] || {{ echo '{{\"refused\":\"no-passphrase\"}}'; exit 1; }}\n[ -n \"$KEEP\" ] || {{ echo '{{\"taken\":false}}'; exit 0; }}\nprintf %s {CACHE_TOKEN} >\"$out\"\necho '{{\"taken\":true}}'\n",
-                log = log.display()
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let program = stand_in.to_string_lossy().into_owned();
-        let mut lines = Vec::new();
-        // NOT KEPT: said, and no netrc.
-        binary_cache_token(&scratch, &cache(true), "pass-phrase", &program, &mut |e| {
-            if let Event::Line(l) = e {
-                lines.push(l);
-            }
-        })
-        .unwrap();
-        assert!(!Path::new(&scratch.binary_cache_netrc()).exists());
-        assert!(lines.iter().any(|l| l.ends_with("not-kept")), "{lines:?}");
-        // KEPT: the netrc, private, and nothing else left.
-        let wrapped = root.join("keeping");
-        std::fs::write(
-            &wrapped,
-            format!("#!/bin/sh\nKEEP=1 exec {program} \"$@\"\n"),
-        )
-        .unwrap();
-        std::fs::set_permissions(&wrapped, std::fs::Permissions::from_mode(0o755)).unwrap();
-        binary_cache_token(
-            &scratch,
-            &cache(true),
-            "pass-phrase",
-            &wrapped.to_string_lossy(),
-            &mut |_| {},
-        )
-        .unwrap();
-        let netrc = scratch.binary_cache_netrc();
-        assert_eq!(
-            std::fs::read_to_string(&netrc).unwrap(),
-            format!("machine someone.cachix.org password {CACHE_TOKEN}\n")
-        );
-        assert_eq!(std::fs::metadata(&netrc).unwrap().mode() & 0o777, 0o600);
-        assert_eq!(
-            std::fs::metadata(scratch.binary_cache()).unwrap().mode() & 0o777,
-            0o700
-        );
-        assert!(!Path::new(&scratch.binary_cache_token()).exists());
-        assert!(!Path::new(&scratch.binary_cache_runtime()).exists());
-        let argv = std::fs::read_to_string(&log).unwrap();
-        assert!(argv.contains("take --home"), "{argv}");
-        assert!(
-            !argv.contains("pass-phrase") && !argv.contains(CACHE_TOKEN),
-            "{argv}"
-        );
-        // AND TO THE TARGET: root's, `0600`, the installer's copy gone.
-        let target = root.join("mnt/var/lib/ronoctua-binary-cache/netrc");
-        install_netrc(Path::new(&netrc), &target).unwrap();
-        assert_eq!(std::fs::metadata(&target).unwrap().mode() & 0o777, 0o600);
-        assert_eq!(
-            std::fs::metadata(target.parent().unwrap()).unwrap().mode() & 0o777,
-            0o755
-        );
-        assert!(!Path::new(&netrc).exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// FAILS IF (by hanging): stderr is read only after stdout closes, so a
@@ -1353,62 +944,61 @@ mod tests {
         r
     }
 
-    /// FAILS IF: the choice a repository with something in it signs is not
-    /// both halves of the answer for this hostname alone, or the declines an
-    /// empty one stages and seeds in the mirror are not the programs left out
-    /// on this hostname alone — readable by root's applier (`0644`, root's)
-    /// where it reads them, theirs in their mirror — or the copies differ,
-    /// or a write goes on without the run's moment.
+    /// FAILS IF: the declines are not staged where root's applier reads
+    /// them — the programs left out on this hostname alone, root's and
+    /// readable (`0644`) — or the first boot's record is not root's alone,
+    /// does not hand over the machine's choice (both halves, the run's
+    /// moment) and the address, carries the belongings' passphrase, or a
+    /// write goes on without the run's moment.
     #[test]
-    fn the_choice_and_the_declines_are_written_where_each_goes() {
-        use ronoctua_person::choice::Choice;
+    fn the_declines_and_the_record_are_written_where_each_goes() {
         use ronoctua_person::declined::Declined;
         let mut r = answers();
-        let mut written = Vec::new();
-        for empty in [false, true] {
-            r.belongings_empty = Some(empty);
-            for step in steps(&r, &origin(false)) {
-                let Some(w) = write_of(&step, &r).unwrap() else {
-                    continue;
-                };
-                if [choice_file(), staged_declined(), target_mirror_declined()].contains(&w.path) {
-                    written.push(w);
-                }
-            }
-        }
-        let paths: Vec<&str> = written.iter().map(|w| w.path.as_str()).collect();
+        let writes: Vec<Write> = steps(&r, &origin(true))
+            .iter()
+            .filter_map(|step| write_of(step, &r).unwrap())
+            .filter(|w| [staged_declined(), first_boot_record()].contains(&w.path))
+            .collect();
+        let paths: Vec<&str> = writes.iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(paths, [staged_declined(), first_boot_record()]);
+        // THE DECLINES, staged: this hostname alone, root's, readable.
+        let declines = &writes[0];
         assert_eq!(
-            paths,
-            [choice_file(), staged_declined(), target_mirror_declined()],
-            "the choice for the repository, the declines staged and in the mirror"
+            (
+                declines.secrecy,
+                declines.owner.as_deref(),
+                declines.private
+            ),
+            (Secrecy::Public, None, false)
         );
-        // THE CHOICE: both halves, this machine, the run's moment.
-        let choice: Choice = ronoctua_person::parse(written[0].content.as_bytes()).unwrap();
-        assert_eq!(choice.machine, "noctua-teste");
+        let declined: Declined = ronoctua_person::parse(declines.content.as_bytes()).unwrap();
+        let ids: Vec<&str> = declined.apps.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["blender", "libreoffice"]);
+        for d in &declined.apps {
+            assert_eq!(d.machines, Some(vec!["noctua-teste".to_owned()]));
+            assert_eq!(Some(&d.edited_at), r.left_out_at.as_ref());
+        }
+        // THE RECORD: root's alone, the address and both halves of the
+        // choice, and no secret.
+        let record = &writes[1];
+        assert_eq!(
+            (record.secrecy, record.owner.as_deref(), record.private),
+            (Secrecy::Secret, None, true)
+        );
+        let read = crate::first_boot::Record::from_file(&record.content).unwrap();
+        assert_eq!(read.address, r.belongings);
+        assert_eq!(read.machine, "noctua-teste");
+        let choice = read
+            .choice
+            .expect("a full installation hands its choice over");
         assert_eq!(choice.declined, ["blender", "libreoffice"]);
         assert_eq!(choice.kept, r.kept_ids());
-        assert_eq!(Some(&choice.at), r.left_out_at.as_ref());
-        for w in &written {
-            assert_eq!(w.secrecy, Secrecy::Public, "{}", w.path);
-            assert!(!w.private, "{}", w.path);
-            let owner = if w.path == target_mirror_declined() {
-                Some(target_user())
-            } else {
-                None
-            };
-            assert_eq!(w.owner.as_deref(), owner, "{}", w.path);
-        }
-        for w in &written[1..] {
-            let declined: Declined = ronoctua_person::parse(w.content.as_bytes())
-                .unwrap_or_else(|e| panic!("{}: {e}", w.path));
-            let ids: Vec<&str> = declined.apps.iter().map(|d| d.id.as_str()).collect();
-            assert_eq!(ids, ["blender", "libreoffice"]);
-            for d in &declined.apps {
-                assert_eq!(d.machines, Some(vec!["noctua-teste".to_owned()]));
-                assert_eq!(d.edited_on, "noctua-teste");
-                assert_eq!(d.edited_at, choice.at);
-            }
-            assert_eq!(w.content, written[1].content, "the copies differ");
+        assert_eq!(read.declined.as_ref(), Some(&declined));
+        for secret in [&r.belongings_passphrase, &r.password, &r.passphrase] {
+            assert!(
+                !record.content.contains(secret.as_str()),
+                "the record carries a secret"
+            );
         }
         // BORN AS THE APPLIER WANTS THEM: the file `0644`, its folders
         // `0755` — the walker refuses what somebody else may write.
@@ -1418,7 +1008,7 @@ mod tests {
                 .join("plain/person/software/declined.json")
                 .to_string_lossy()
                 .into_owned(),
-            ..written[1].clone()
+            ..declines.clone()
         };
         write_out(&at).unwrap();
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
@@ -1427,16 +1017,16 @@ mod tests {
             assert_eq!(mode(&dir.join(folder)), 0o755, "{folder}");
         }
         let _ = std::fs::remove_dir_all(dir);
-        // NO MOMENT, NO DECLINE AND NO CHOICE: never a default.
+        // NO MOMENT, NO DECLINE AND NO RECORD: never a default.
         r.left_out_at = None;
-        for path in [staged_declined(), choice_file()] {
-            r.belongings_empty = Some(path == staged_declined());
-            let step = steps(&r, &origin(false))
+        for path in [staged_declined(), first_boot_record()] {
+            let step = steps(&r, &origin(true))
                 .into_iter()
                 .find(|s| s.command.get(1) == Some(&path))
                 .unwrap();
             assert!(write_of(&step, &r).is_err(), "{path}");
         }
+        assert!(stamp_now().unix_s() > 0);
     }
 
     /// FAILS IF: the check after root's applier passes declines that do not
@@ -1505,27 +1095,6 @@ mod tests {
         );
     }
 
-    /// FAILS IF: the programs the copy kept and the person declined on every
-    /// machine are not read off its last line by their names, or anything
-    /// else is.
-    #[test]
-    fn what_the_choice_could_not_bring_back_is_named() {
-        assert_eq!(
-            kept_everywhere_in(
-                r#"{"changed":[],"choice":"pushed","kept-everywhere":["vlc","no-such"]}"#
-            ),
-            ["VLC", "no-such"]
-        );
-        for none in [
-            r#"{"choice":"pushed","kept-everywhere":[]}"#,
-            r#"{"changed":[]}"#,
-            "",
-            "x",
-        ] {
-            assert!(kept_everywhere_in(none).is_empty(), "{none}");
-        }
-    }
-
     /// FAILS IF: a run's clearing leaves an earlier attempt's folder, fails
     /// on one that is not there, or reaches past the folders it is given.
     #[test]
@@ -1543,29 +1112,6 @@ mod tests {
         assert!(!dir.join("plain").exists());
         assert!(dir.join("kept").exists());
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// FAILS IF: the repository's refusal on a belongings' last line is not
-    /// read as its sentence, or anything else is.
-    #[test]
-    fn a_refusal_of_the_repository_is_said_in_its_sentence() {
-        assert_eq!(
-            refusal_in("{\"refused\": \"refused\"}\n"),
-            Some(crate::key::BELONGINGS_REFUSED_REFUSED)
-        );
-        assert_eq!(
-            refusal_in("{\"refused\":\"unreachable\"}"),
-            Some(crate::key::BELONGINGS_REFUSED_UNREACHABLE)
-        );
-        for not in [
-            "",
-            "{\"refused\": \"no-such\"}",
-            "{\"copied\": true}",
-            "refused",
-        ] {
-            assert_eq!(refusal_in(not), None, "{not}");
-        }
-        assert!(stamp_now().unix_s() > 0);
     }
 
     fn origin(aimed: bool) -> Origin {
@@ -1590,45 +1136,40 @@ mod tests {
     }
 
     #[test]
-    fn the_passphrases_go_with_no_line_break() {
-        // `cryptsetup` uses the whole file as the key, and the belongings
-        // read theirs whole too. A trailing `\n` becomes part of the
-        // passphrase — no error, no warning: it just does not open.
+    fn the_disks_passphrase_goes_with_no_line_break() {
+        // `cryptsetup` uses the whole file as the key. A trailing `\n`
+        // becomes part of the passphrase — no error, no warning: it just
+        // does not open. (The belongings' passphrase is written by no step:
+        // it goes to the TPM.)
         let r = answers();
-        let p = steps(&r, &origin(false));
-        for (path, want) in [
-            (LUKS_KEY_PATH.to_owned(), &r.passphrase),
-            (person_passphrase(), &r.belongings_passphrase),
-            (plain_passphrase(), &r.belongings_passphrase),
-        ] {
-            let step = p
-                .iter()
-                .find(|s| s.command.get(1) == Some(&path))
-                .unwrap_or_else(|| panic!("the plan has to write {path}"));
-            let e = write_of(step, &r).unwrap().unwrap();
-            assert_eq!(&e.content, want);
-            assert!(
-                !e.content.ends_with('\n'),
-                "{path} came out with a line break"
-            );
-        }
+        let step = steps(&r, &origin(false))
+            .into_iter()
+            .find(|s| s.command.get(1).map(String::as_str) == Some(LUKS_KEY_PATH))
+            .expect("the plan has to write the disk's key");
+        let e = write_of(&step, &r).unwrap().unwrap();
+        assert_eq!(e.content, r.passphrase);
+        assert!(
+            !e.content.ends_with('\n'),
+            "the key came out with a line break"
+        );
     }
 
     /// FAILS IF: a secret is written readable, a public file secret, or
-    /// the belongings' passphrase not the person's, in a private folder.
+    /// any write carries the belongings' passphrase — it goes to the TPM,
+    /// never to a file (`SEAL_PASSPHRASE`).
     #[test]
     fn every_secret_is_marked_as_secret() {
         let r = answers();
-        for p in steps(&r, &origin(true)) {
-            let Some(e) = write_of(&p, &r).unwrap() else {
+        let plan = steps(&r, &origin(true));
+        for p in &plan {
+            let Some(e) = write_of(p, &r).unwrap() else {
                 continue;
             };
             let secret = [
                 LUKS_KEY_PATH.to_owned(),
                 PASSWORD_HASH_PATH.to_owned(),
                 WIFI_PROFILE_PATH.to_owned(),
-                person_passphrase(),
-                plain_passphrase(),
+                first_boot_record(),
             ]
             .contains(&e.path);
             assert_eq!(
@@ -1641,23 +1182,22 @@ mod tests {
                 "{}",
                 e.path
             );
+            assert!(
+                !e.content.contains(&r.belongings_passphrase),
+                "{} carries the belongings' passphrase",
+                e.path
+            );
         }
-        let step = steps(&r, &origin(false))
-            .into_iter()
-            .find(|s| s.command.get(1) == Some(&person_passphrase()))
-            .unwrap();
-        let e = write_of(&step, &r).unwrap().unwrap();
-        assert_eq!(e.owner.as_deref(), Some(target_user()));
-        assert!(e.private, "the passphrase's folder would be readable");
-        // THE COPY'S PASSPHRASE is root's (the person does not exist yet),
-        // private all the same.
-        let step = steps(&r, &origin(false))
-            .into_iter()
-            .find(|s| s.command.get(1) == Some(&plain_passphrase()))
-            .unwrap();
-        let e = write_of(&step, &r).unwrap().unwrap();
-        assert_eq!(e.owner, None);
-        assert!(e.private);
+        let seal = plan
+            .iter()
+            .find(|s| s.command.first().map(String::as_str) == Some(SEAL_PASSPHRASE))
+            .expect("the passphrase is sealed");
+        assert!(
+            !seal
+                .command
+                .iter()
+                .any(|a| a.contains(&r.belongings_passphrase))
+        );
     }
 
     #[test]
@@ -1691,35 +1231,26 @@ mod tests {
             .iter()
             .map(|&s| s.to_owned())
             .collect();
-        let nobody = || -> Result<(u32, u32)> { anyhow::bail!("no person yet") };
-        assert_eq!(
-            filled(&cmd, Some("noctua"), &nobody).unwrap()[1],
-            "/w#noctua"
-        );
-        assert!(filled(&cmd, None, &nobody).is_err());
-        assert_eq!(filled(&cmd[..1], None, &nobody).unwrap(), ["disko"]);
-    }
-
-    /// FAILS IF: the person's uid is not put where the plan marked it, is
-    /// asked of the target before a command needs it, or a command that
-    /// needs it goes on without it.
-    #[test]
-    fn the_persons_uid_is_filled_only_where_marked() {
-        let cmd: Vec<String> = ["ronoctua-person", "pin", "--owner", PERSON_UID]
+        assert_eq!(filled(&cmd, Some("noctua"), None).unwrap()[1], "/w#noctua");
+        assert!(filled(&cmd, None, None).is_err());
+        assert_eq!(filled(&cmd[..1], None, None).unwrap(), ["disko"]);
+        // THE SYSTEM BUILT, by its one path, and nothing else.
+        let install: Vec<String> = ["nixos-install", "--system", TOPLEVEL]
             .iter()
             .map(|&s| s.to_owned())
             .collect();
-        let asked = std::cell::Cell::new(0);
-        let person = || -> Result<(u32, u32)> {
-            asked.set(asked.get() + 1);
-            Ok((1000, 100))
-        };
-        assert_eq!(filled(&cmd, None, &person).unwrap()[3], "1000");
-        assert_eq!(asked.get(), 1);
-        assert_eq!(filled(&cmd[..2], None, &person).unwrap().len(), 2);
-        assert_eq!(asked.get(), 1, "asked of the target with no mark");
-        let nobody = || -> Result<(u32, u32)> { anyhow::bail!("no person yet") };
-        assert!(filled(&cmd, None, &nobody).is_err());
+        assert_eq!(
+            filled(&install, None, Some("/nix/store/x-system")).unwrap()[2],
+            "/nix/store/x-system"
+        );
+        assert!(filled(&install, None, None).is_err());
+        assert_eq!(
+            toplevel_of("/nix/store/x-system\n").unwrap(),
+            "/nix/store/x-system"
+        );
+        assert!(toplevel_of("").is_err());
+        assert!(toplevel_of("/nix/store/a\n/nix/store/b\n").is_err());
+        assert!(toplevel_of("error: …").is_err());
     }
 
     #[test]

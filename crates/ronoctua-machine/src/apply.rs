@@ -23,6 +23,17 @@
 //! units it was built from are rooted for the next one ([`build::keep`]),
 //! and so are the sources it was evaluated from ([`build::keep_sources`]).
 //!
+//! # What nobody may redistribute arrives with the first network
+//!
+//! A machine installed with no network carries the installer's marker
+//! (`ronoctua_person::names::DEFERRED_HARDWARE`), and the hardware branches
+//! whose packages nobody may redistribute stay off while it is there
+//! (`nix/modules/host.nix`). Every apply that finds it builds WITHOUT it
+//! first: when that works the marker stays gone and the hardware arrived;
+//! when it does not (no network, a download that failed) the marker is put
+//! back and the machine is built as it was — whole, those branches off —
+//! and the journal says so.
+//!
 //! # A trial is judged before anything is built
 //!
 //! An apply that runs before this boot's bless (an update the boot's timer
@@ -191,8 +202,42 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
     std::fs::create_dir_all(&p.run).map_err(|e| disk::failed(&p.run, &e))?;
     let out = p.run.join("next");
     disk::remove(&out).map_err(|e| disk::failed(&out, &e))?;
+    // WHAT WAITED FOR A NETWORK, tried first (the module's header).
+    let marker = p.dir.join(ronoctua_person::names::DEFERRED_HARDWARE);
+    let deferred = disk::read_if_there(&marker)?;
+    if deferred.is_some() {
+        disk::remove(&marker).map_err(|e| disk::failed(&marker, &e))?;
+    }
     let made = match build::system(m, &nix, &p.dir, &attr, &out) {
-        Ok(made) => made,
+        Ok(made) => {
+            if deferred.is_some() {
+                say(6, "the hardware that waited for a network arrived");
+            }
+            made
+        }
+        Err(_) if deferred.is_some() => {
+            let bytes = deferred.unwrap_or_default();
+            disk::write_atomically(&marker, &bytes, 0o644)
+                .map_err(|e| disk::failed(&marker, &e))?;
+            say(
+                4,
+                "the hardware that waits for a network did not arrive (what nobody may \
+                 redistribute is downloaded from its maker): built without it again",
+            );
+            disk::remove(&out).map_err(|e| disk::failed(&out, &e))?;
+            match build::system(m, &nix, &p.dir, &attr, &out) {
+                Ok(made) => made,
+                Err(refused) => {
+                    return Err(refuse(
+                        m,
+                        &locks,
+                        &mut state,
+                        ApplyResult::BuildFailed,
+                        refused.why,
+                    ));
+                }
+            }
+        }
         Err(refused) => {
             return Err(refuse(
                 m,

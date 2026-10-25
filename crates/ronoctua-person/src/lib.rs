@@ -116,6 +116,11 @@ pub mod names {
     /// machine trusts, and what the last apply made of the signature
     /// ([`crate::local::Signer`]).
     pub const SIGNER: &str = "local/signer.json";
+    /// Under the machine directory: the installation's marker that what
+    /// nobody may redistribute waits for the first network — written by the
+    /// installer, taken away by `ronoctua-machine apply` once the machine
+    /// builds without it.
+    pub const DEFERRED_HARDWARE: &str = "hardware-deferred.json";
     /// The person's signed manifest of their mirror and its signature, under
     /// `$XDG_STATE_HOME/ronoctua/` — beside the mirror and never inside it,
     /// so it is not itself plain data: [`crate::tree::MANIFEST`] and

@@ -2,14 +2,18 @@
 //!
 //! # Why the questions do not ask it themselves
 //!
-//! Four answers are checked against the network for real — the way out, the
-//! release, the access, the passphrase — and each takes seconds. The TUI's
+//! Three answers are checked against the network when there is one — the
+//! way out, the access, the passphrase — and each takes seconds. The TUI's
 //! [`State`](crate::tui::State) only says WHAT it wants checked (a [`Job`]),
 //! and takes what came back ([`Done`]) when it arrives; a thread runs the job
 //! (`crate::reach`). So the state stays a pure function of keys and answers,
 //! the screen keeps drawing while the radio and the remote take their time,
 //! and the tests answer the jobs themselves, with no network at all. The
 //! terminal-less mode runs the same jobs, one after the other.
+//!
+//! With no network the same questions ask only what is local: the scratch
+//! home and the deploy key ([`Job::Prepare`] with `online` off), and the
+//! token kept where the access is read ([`Job::Keep`]). Nothing else.
 //!
 //! A job carries the secret it needs (the Wi-Fi password, a token, the
 //! passphrase) in memory only; [`Job`]'s `Debug` never prints one.
@@ -18,25 +22,27 @@ use ronoctua_belongings::Why;
 
 use crate::access::Probed;
 use crate::gate::Gate;
-use crate::release::Follow;
 
 /// What a question wants checked.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Job {
-    /// Join the chosen network (none: a cable) and read the way out.
+    /// Join the chosen network (none: a cable, or no network at all) and
+    /// read the way out.
     Network {
-        /// The network chosen; empty for a cable.
+        /// The network chosen; empty for a cable, or none.
         ssid: String,
         /// Its password.
         password: String,
     },
-    /// Ask the release which revision to install.
-    Release,
     /// Make the scratch home the repository is asked from — its settings,
     /// the consent for its host — and, for an SSH address, the deploy key.
     Prepare {
         /// The address.
         address: String,
+        /// Whether the repository's server may be asked: an HTTPS address's
+        /// transport is probed only online, and with no network the
+        /// address is taken as typed.
+        online: bool,
     },
     /// Probe the access: the deploy key, or this token (HTTPS).
     Probe {
@@ -47,6 +53,14 @@ pub enum Job {
         /// Seconds to wait first: a key that was not added yet is asked
         /// again after a while, never in a loop that spins.
         wait_s: u64,
+    },
+    /// Keep the token typed where the access is read, without asking the
+    /// repository: with no network, the first boot tries it.
+    Keep {
+        /// The address.
+        address: String,
+        /// The token typed.
+        token: String,
     },
     /// Open the repository's `key.age` with this passphrase.
     Verify {
@@ -62,8 +76,9 @@ impl std::fmt::Debug for Job {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Network { ssid, .. } => write!(f, "Network({ssid:?})"),
-            Self::Release => f.write_str("Release"),
-            Self::Prepare { address } => write!(f, "Prepare({address:?})"),
+            Self::Prepare { address, online } => {
+                write!(f, "Prepare({address:?}, online: {online})")
+            }
             Self::Probe {
                 address,
                 token,
@@ -73,6 +88,7 @@ impl std::fmt::Debug for Job {
                 "Probe({address:?}, token: {}, after {wait_s} s)",
                 token.is_some()
             ),
+            Self::Keep { address, .. } => write!(f, "Keep({address:?})"),
             Self::Verify { address, .. } => write!(f, "Verify({address:?})"),
         }
     }
@@ -83,13 +99,13 @@ impl std::fmt::Debug for Job {
 pub enum Done {
     /// The way out.
     Network(Gate),
-    /// What to do about the release.
-    Release(Follow),
     /// The scratch home is made; the deploy key's public half when one was
     /// made.
     Prepared(Result<Option<String>, Why>),
     /// What the access reached.
     Probed(Result<Probed, Why>),
+    /// Whether the token was kept.
+    Kept(Result<(), Why>),
     /// Whether the passphrase opened the repository.
     Verified(Result<(), Why>),
 }
@@ -119,6 +135,10 @@ mod tests {
                 address: "https://example.org/b.git".into(),
                 token: Some("Zq7-token-secret".into()),
                 wait_s: 0,
+            },
+            Job::Keep {
+                address: "https://example.org/b.git".into(),
+                token: "Zq7-token-secret".into(),
             },
             Job::Verify {
                 address: "git@example.org:b.git".into(),

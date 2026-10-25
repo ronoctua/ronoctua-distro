@@ -1,0 +1,88 @@
+{
+  "version": 2,
+  "system": "x86_64-linux",
+  "virtualisation": "kvm",
+  "uefi": {
+    "supported": true
+  },
+  "hardware": {
+    "cpu": [
+      {
+        "vendor_name": "GenuineIntel",
+        "family": 6,
+        "model": 85,
+        "features": [
+          "fpu",
+          "hypervisor",
+          "vmx"
+        ]
+      }
+    ],
+    "graphics_card": [
+      {
+        "driver_modules": [
+          "virtio_gpu",
+          "bochs"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "monitor": [
+      {
+        "model": "probe virtual"
+      }
+    ],
+    "network_controller": [
+      {
+        "driver_modules": [
+          "virtio_net"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "network_interface": [
+      {
+        "sub_class": {
+          "name": "Ethernet"
+        },
+        "unix_device_names": [
+          "ens3"
+        ]
+      }
+    ],
+    "storage_controller": [
+      {
+        "driver_modules": [
+          "virtio_blk",
+          "virtio_scsi"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "disk": [
+      {
+        "driver_modules": [
+          "virtio_blk",
+          "virtio_pci"
+        ]
+      }
+    ],
+    "usb_controller": [
+      {
+        "driver_modules": [
+          "xhci_pci",
+          "uhci_hcd"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ]
+  }
+}

@@ -123,6 +123,14 @@ fn no_answer_is_left_in_the_installers_environment() {
         .filter(|n| n.starts_with("RONOCTUA_INST_"))
         .collect();
     assert!(left.is_empty(), "answers left in the environment: {left:?}");
-    // And the bus that went away is no network: the gate's exit code.
-    assert_eq!(status.code(), Some(3), "{status}");
+    // AND THE BUS THAT WENT AWAY IS NO NETWORK, which stops nothing: the
+    // installer goes on to what it checks here — the access named, which no
+    // machine running this holds (nor, as anybody but root, the scratch
+    // folder under `/run`) — and that is what refuses, with the
+    // repository's code.
+    assert_eq!(
+        status.code(),
+        Some(i32::from(ronoctua_installer::reach::EXIT_REPOSITORY)),
+        "{status}"
+    );
 }

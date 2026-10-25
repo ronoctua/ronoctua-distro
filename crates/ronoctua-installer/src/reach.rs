@@ -1,14 +1,22 @@
-//! What the questions are checked against: NetworkManager, the release and
-//! the person's repository — the jobs of [`crate::job`], run.
+//! What the questions are checked against: NetworkManager and the person's
+//! repository — the jobs of [`crate::job`], run.
 //!
 //! # Nothing here decides
 //!
-//! The gate is [`crate::gate::gate`]'s, the release's answer
-//! [`crate::release::follow`]'s, the repository's lines
+//! The network's reading is [`crate::gate::gate`]'s, the repository's lines
 //! [`crate::access`]'s. This runs the programs those decide about —
-//! `ronoctua-network` (the one boundary with NetworkManager), `nix`, and the
-//! belongings' own CLI (the one that speaks git and age) — in the
-//! installer's scratch home, so nothing the person typed lands on a disk.
+//! `ronoctua-network` (the one boundary with NetworkManager), `nix` (which
+//! names the template's distro input), and the belongings' own CLI (the one
+//! that speaks git and age) — in the installer's scratch home, so nothing
+//! the person typed lands on a disk.
+//!
+//! # With no network, only what is local
+//!
+//! The installation never uses the network, and the network question goes
+//! on without one. Then the repository is not asked at all: the scratch
+//! home is made and a deploy key generated (both local), a token is kept
+//! where the access is read, and the first boot checks them
+//! ([`Reach::checks`]).
 //!
 //! # The scratch home
 //!
@@ -35,7 +43,6 @@ use crate::gate::{Gate, SETTLE_MOST_S, gate, unsettled};
 use crate::job::{Done, Job};
 use crate::model::{Answers, MINIMUM_PASSPHRASE};
 use crate::plan::{BELONGINGS, Scratch};
-use crate::release::{Follow, Revision, Stay, follow, host_of_flake, is_development, release_of};
 
 /// How long, at most, a joined link waits for NetworkManager to measure the
 /// way out before the gate takes "not measured" for an answer.
@@ -52,10 +59,6 @@ pub struct Reach {
     pub scratch: Scratch,
     /// The distro's tree; `None`: the ISO said nothing.
     pub distro: Option<String>,
-    /// This installer's revision; `None`: the ISO said nothing.
-    pub own: Option<Revision>,
-    /// Whether this installer was started from the release.
-    pub from_release: bool,
 }
 
 /// A program on `PATH`, by its path — what a child is started with, so the
@@ -99,12 +102,12 @@ pub fn release_url(nix: &Path, template_flake: &str) -> Result<String, String> {
     Ok(url)
 }
 
-/// Why the terminal-less mode refuses to start.
+/// Why the terminal-less mode refuses to start. No network is not a reason:
+/// the installation needs none, and the first boot checks the repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refused {
-    /// There is no way out ([`EXIT_NETWORK`]).
-    Gate(Gate),
-    /// The access does not both read and write the repository.
+    /// The access does not both read and write the repository — or, with no
+    /// network, the file named cannot be kept where it is read.
     Access(Result<Probed, Why>),
     /// The passphrase does not open the repository.
     Passphrase(Why),
@@ -113,9 +116,6 @@ pub enum Refused {
     Answer(crate::model::Invalid),
 }
 
-/// The exit code of an installer stopped by the network gate — what
-/// `installer-requires-network` reads.
-pub const EXIT_NETWORK: u8 = 3;
 /// The exit code of an installer stopped by the repository: the access or
 /// the passphrase.
 pub const EXIT_REPOSITORY: u8 = 4;
@@ -125,7 +125,6 @@ impl Refused {
     #[must_use]
     pub const fn exit_code(&self) -> u8 {
         match self {
-            Self::Gate(_) => EXIT_NETWORK,
             Self::Access(_) | Self::Passphrase(_) | Self::Answer(_) => EXIT_REPOSITORY,
         }
     }
@@ -134,7 +133,6 @@ impl Refused {
     #[must_use]
     pub const fn key(&self) -> &'static str {
         match self {
-            Self::Gate(g) => g.key(),
             Self::Access(Ok(p)) => p.status_key(),
             Self::Access(Err(why)) | Self::Passphrase(why) => crate::access::refusal_key(*why),
             Self::Answer(i) => i.key(),
@@ -145,7 +143,6 @@ impl Refused {
     #[must_use]
     pub fn id(&self) -> String {
         match self {
-            Self::Gate(g) => format!("network {}", g.id()),
             Self::Access(Ok(p)) => format!("access read={} write={}", p.read, p.write),
             Self::Access(Err(why)) => format!("access {}", why.id()),
             Self::Passphrase(why) => format!("passphrase {}", why.id()),
@@ -156,31 +153,20 @@ impl Refused {
 
 impl Reach {
     /// The world of this installer: the programs on `PATH`, the scratch
-    /// folder at its place, and what the ISO (or the hop) said of the
-    /// distro. A program that is not on `PATH` keeps its bare name, and the
-    /// job that needs it says so ([`Why::NoTools`]) — the network gate needs
-    /// none, and it is asked first.
+    /// folder at its place, and what the ISO said of the distro. A program
+    /// that is not on `PATH` keeps its bare name, and the job that needs it
+    /// says so ([`Why::NoTools`]) — the network's reading needs none, and it
+    /// is asked first.
     #[must_use]
-    pub fn from_env(distro: Option<String>, from_release: Option<String>) -> Self {
+    pub fn from_env() -> Self {
         let find = |name: &str| on_path(name).unwrap_or_else(|| PathBuf::from(name));
-        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
-        let own = match &from_release {
-            Some(rev) => Some(Revision {
-                rev: rev.clone(),
-                last_modified_s: 0,
-            }),
-            None => crate::release::own_from(
-                var(crate::release::FLAKE_REV),
-                var(crate::release::FLAKE_LAST_MODIFIED),
-            ),
-        };
         Self {
             belongings: find(BELONGINGS),
             nix: find("nix"),
             scratch: Scratch::installer(),
-            distro: distro.or_else(|| var(crate::release::FLAKE_DIR)),
-            own,
-            from_release: from_release.is_some(),
+            distro: std::env::var(crate::release::FLAKE_DIR)
+                .ok()
+                .filter(|v| !v.is_empty()),
         }
     }
 
@@ -190,8 +176,9 @@ impl Reach {
     pub fn run(&self, job: &Job) -> Done {
         match job {
             Job::Network { ssid, password } => Done::Network(self.network(ssid, password)),
-            Job::Release => Done::Release(self.release()),
-            Job::Prepare { address } => Done::Prepared(self.prepare(address, None)),
+            Job::Prepare { address, online } => {
+                Done::Prepared(self.prepare(address, None, *online))
+            }
             Job::Probe {
                 address,
                 token,
@@ -202,6 +189,7 @@ impl Reach {
                 }
                 Done::Probed(self.probe(address, token.as_deref()))
             }
+            Job::Keep { address, token } => Done::Kept(self.keep(address, token)),
             Job::Verify {
                 address,
                 passphrase,
@@ -209,11 +197,12 @@ impl Reach {
         }
     }
 
-    /// Joins `ssid` (none: a cable) and reads the way out — waiting while a
-    /// link comes up, at most [`SETTLE_MOST_S`] (a network joined, until
-    /// NetworkManager's verdict, at most [`JOIN_MOST_S`]), and while a
-    /// joined link is not measured yet, at most [`MEASURE_MOST_S`] more.
-    fn network(&self, ssid: &str, password: &str) -> Gate {
+    /// Joins `ssid` (none: a cable, or no network at all) and reads the way
+    /// out — waiting while a link comes up, at most [`SETTLE_MOST_S`] (a
+    /// network joined, until NetworkManager's verdict, at most
+    /// [`JOIN_MOST_S`]), and while a joined link is not measured yet, at
+    /// most [`MEASURE_MOST_S`] more.
+    pub fn network(&self, ssid: &str, password: &str) -> Gate {
         let Ok(manager) = ronoctua_network::Manager::fresh() else {
             return Gate::NoDaemon;
         };
@@ -274,67 +263,6 @@ impl Reach {
         }
     }
 
-    /// What to do about the release — asking it only when this installer is
-    /// a release's and was not started from one.
-    fn release(&self) -> Follow {
-        if self.from_release {
-            return follow(self.own.as_ref(), true, None);
-        }
-        let development = self.own.as_ref().is_none_or(|o| is_development(&o.rev));
-        let Some(distro) = self.distro.as_deref().filter(|_| !development) else {
-            return Follow::Stay(Stay::Development);
-        };
-        let template = format!(
-            "{distro}/{}/{}",
-            crate::release::TEMPLATE,
-            crate::release::TEMPLATE_FLAKE
-        );
-        let release = release_url(&self.nix, &template).ok().and_then(|url| {
-            // `--refresh`: the branch's head, not what a cache of an hour ago
-            // said it was.
-            let out = bare(&self.nix)
-                .args(["flake", "metadata", "--json", "--refresh", &url])
-                .output()
-                .ok()?;
-            out.status
-                .success()
-                .then(|| release_of(&out.stdout))
-                .flatten()
-        });
-        follow(self.own.as_ref(), false, release)
-    }
-
-    /// The hosts the network question names: the release's, and every
-    /// binary cache `nix` is set to ask. Empty when `nix` cannot say.
-    #[must_use]
-    pub fn hosts(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        if let Some(distro) = &self.distro {
-            let template = format!(
-                "{distro}/{}/{}",
-                crate::release::TEMPLATE,
-                crate::release::TEMPLATE_FLAKE
-            );
-            if let Some(host) = release_url(&self.nix, &template)
-                .ok()
-                .and_then(|u| host_of_flake(&u))
-            {
-                out.push(host);
-            }
-        }
-        if let Ok(said) = bare(&self.nix)
-            .args(["config", "show", "substituters"])
-            .output()
-        {
-            for url in String::from_utf8_lossy(&said.stdout).split_whitespace() {
-                if let Some(host) = host_of_flake(url).filter(|h| !out.contains(h)) {
-                    out.push(host);
-                }
-            }
-        }
-        out
-    }
-
     /// A child with the scratch home's roots and none of the answers'
     /// variables.
     fn child(&self, program: &Path, flags: &[&str], args: &[&str]) -> Command {
@@ -353,14 +281,22 @@ impl Reach {
     /// everything under it root's alone), its settings, the consent for its
     /// host — and the access: the file the terminal-less mode named
     /// (`credential`), or, for an SSH address, a deploy key made here. The
-    /// public half of a key made here, to show.
+    /// public half of a key made here, to show. All of it local but an
+    /// HTTPS address's transport, asked of its server only `online`.
     ///
     /// # Errors
     ///
     /// [`Why::NoRepository`] for an address with no host, [`Why::NeedsAccess`]
     /// for a credential that cannot be read, [`Why::NoTools`] when the CLI
-    /// cannot be run, [`Why::Failed`] when the scratch home cannot be made.
-    pub fn prepare(&self, address: &str, credential: Option<&Path>) -> Result<Option<String>, Why> {
+    /// cannot be run, [`Why::Failed`] when the scratch home cannot be made,
+    /// [`Why::NotPostQuantum`] for an HTTPS server that cannot be keyed
+    /// post-quantum (online only).
+    pub fn prepare(
+        &self,
+        address: &str,
+        credential: Option<&Path>,
+        online: bool,
+    ) -> Result<Option<String>, Why> {
         let host = ronoctua_belongings::prefs::host_of(address).ok_or(Why::NoRepository)?;
         let failed = |_| Why::Failed;
         made(&self.scratch.root, 0o711).map_err(failed)?;
@@ -388,7 +324,12 @@ impl Reach {
             write_private(&kept, &bytes).map_err(failed)?;
             return Ok(None);
         }
+        // WITH NO NETWORK THE ADDRESS IS TAKEN AS TYPED: its server is not
+        // asked, and the first boot finds out what it agrees.
         if prefs.auth == Auth::Token {
+            if !online {
+                return Ok(None);
+            }
             return self.keys_post_quantum(address, &kept).map(|()| None);
         }
         let ran = self
@@ -436,11 +377,7 @@ impl Reach {
     ///
     /// The refusal the CLI printed.
     pub fn probe(&self, address: &str, token: Option<&str>) -> Result<Probed, Why> {
-        let keys = PathBuf::from(self.scratch.keys());
-        let credential = keys.join(match auth_of(address) {
-            Auth::Ssh => DEPLOY_KEY,
-            Auth::Token => TOKEN_FILE,
-        });
+        let credential = self.credential(address);
         if let Some(token) = token {
             write_private(&credential, token.trim().as_bytes()).map_err(|_| Why::Failed)?;
         }
@@ -462,6 +399,31 @@ impl Reach {
         // THE ANSWER IS THE LINE, whatever the status: a probe that does
         // not both read and write exits 1 and still says what it found.
         probed_of(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    /// Where the CLI reads the access to `address`: the deploy key, or the
+    /// token's file (HTTPS), in the scratch home.
+    #[must_use]
+    pub fn credential(&self, address: &str) -> PathBuf {
+        Path::new(&self.scratch.keys()).join(match auth_of(address) {
+            Auth::Ssh => DEPLOY_KEY,
+            Auth::Token => TOKEN_FILE,
+        })
+    }
+
+    /// Keeps `token` where the access to `address` is read, `0600`, without
+    /// asking the repository: with no network, the first boot tries it.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::NeedsAccess`] for a blank token, [`Why::Failed`] when it
+    /// cannot be written (the scratch home is not made).
+    pub fn keep(&self, address: &str, token: &str) -> Result<(), Why> {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(Why::NeedsAccess);
+        }
+        write_private(&self.credential(address), token.as_bytes()).map_err(|_| Why::Failed)
     }
 
     /// Whether `passphrase` opens the repository: the CLI reads it from a
@@ -508,49 +470,47 @@ impl Reach {
         verified_of(&String::from_utf8_lossy(&said?.stdout))
     }
 
-    /// The terminal-less mode's checks, before the first step: the gate,
-    /// the release, the access (the file named), and the passphrase — what
-    /// the TUI asks one screen at a time. Fills in what the probe found.
+    /// What the terminal-less mode checks of the repository, given the
+    /// network's reading `way`: the access named kept where the CLI reads
+    /// it, and — with a way out — probed reading and writing, and the
+    /// passphrase opening the repository (or, an empty one, as long as a
+    /// disk's). With no way out nothing is asked: the passphrase is held to
+    /// a disk's length, the answers are recorded unchecked, and the first
+    /// boot checks them. Fills in what was found.
     ///
     /// # Errors
     ///
     /// What stops the installation, before anything is touched.
-    pub fn preflight(&self, r: &mut Answers) -> Result<Follow, Refused> {
-        let way = self.network(&r.wifi_ssid, &r.wifi_password);
-        if !way.open() {
-            return Err(Refused::Gate(way));
-        }
-        let follow = self.release();
-        if matches!(follow, Follow::Hop(_)) {
-            return Ok(follow);
-        }
-        self.prepare(&r.belongings, Some(Path::new(&r.belongings_access)))
+    pub fn checks(&self, r: &mut Answers, way: Gate) -> Result<(), Refused> {
+        let online = way.open();
+        r.online = Some(online);
+        r.belongings_empty = None;
+        r.belongings_checked = false;
+        self.prepare(&r.belongings, Some(Path::new(&r.belongings_access)), online)
             .map_err(|why| Refused::Access(Err(why)))?;
-        let probed = self
-            .probe(&r.belongings, None)
-            .map_err(|why| Refused::Access(Err(why)))?;
-        if !probed.ready() {
-            return Err(Refused::Access(Ok(probed)));
-        }
-        r.belongings_empty = Some(probed.empty);
-        if probed.empty {
-            // An empty repository is MADE with this passphrase: as long as
-            // a disk's, for the reason a disk's is.
-            if r.belongings_passphrase.chars().count() < MINIMUM_PASSPHRASE {
-                return Err(Refused::Answer(crate::model::Invalid::PassphraseTooShort));
+        if online {
+            let probed = self
+                .probe(&r.belongings, None)
+                .map_err(|why| Refused::Access(Err(why)))?;
+            if !probed.ready() {
+                return Err(Refused::Access(Ok(probed)));
             }
-        } else {
+            r.belongings_empty = Some(probed.empty);
+        }
+        if r.passphrase_proved() {
             self.verify(&r.belongings, &r.belongings_passphrase)
                 .map_err(Refused::Passphrase)?;
+        } else if r.belongings_passphrase.chars().count() < MINIMUM_PASSPHRASE {
+            // An empty repository is MADE with this passphrase, and one not
+            // asked may be: as long as a disk's, for the reason a disk's is.
+            return Err(Refused::Answer(crate::model::Invalid::PassphraseTooShort));
         }
-        r.belongings_access = Path::new(&self.scratch.keys())
-            .join(match auth_of(&r.belongings) {
-                Auth::Ssh => DEPLOY_KEY,
-                Auth::Token => TOKEN_FILE,
-            })
+        r.belongings_checked = online;
+        r.belongings_access = self
+            .credential(&r.belongings)
             .to_string_lossy()
             .into_owned();
-        Ok(follow)
+        Ok(())
     }
 }
 
@@ -565,18 +525,6 @@ fn bare(program: &Path) -> Command {
 /// The number of the passphrase's checks this process ran: each one's
 /// runtime folder is its own ([`Reach::verify`]).
 static CHECKS: AtomicU64 = AtomicU64::new(0);
-
-/// Writes `bytes` to `path`, `0600` from its first byte, inside the scratch
-/// folder `root` (made `0711` when it is not there) — the answers a hop
-/// hands on.
-///
-/// # Errors
-///
-/// The folder or the file could not be made.
-pub fn keep_private(root: &str, path: &str, bytes: &[u8]) -> std::io::Result<()> {
-    made(root, 0o711)?;
-    write_private(Path::new(path), bytes)
-}
 
 /// A folder made with `mode`, or given it when it was there.
 fn made(dir: &str, mode: u32) -> std::io::Result<()> {
@@ -647,8 +595,6 @@ mod tests {
                     root: dir.join("scratch").to_string_lossy().into_owned(),
                 },
                 distro: None,
-                own: None,
-                from_release: false,
             };
             Self { dir, reach }
         }
@@ -680,7 +626,7 @@ mod tests {
             ),
         );
         let address = "git@example.org:someone/belongings.git";
-        let public = f.reach.prepare(address, None).unwrap();
+        let public = f.reach.prepare(address, None, true).unwrap();
         assert_eq!(
             public.as_deref(),
             Some("ssh-ed25519 AAAA ronoctua-belongings")
@@ -716,15 +662,18 @@ mod tests {
         let token = f.dir.join("token-file");
         std::fs::write(&token, "tok").unwrap();
         let https = "https://example.org/someone/belongings.git";
-        assert_eq!(f.reach.prepare(https, Some(&token)), Ok(None));
+        assert_eq!(f.reach.prepare(https, Some(&token), true), Ok(None));
         let kept = Path::new(&f.reach.scratch.keys()).join(TOKEN_FILE);
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "tok");
         assert_eq!(mode(&kept.to_string_lossy()), 0o600);
         assert_eq!(
-            f.reach.prepare(https, Some(&f.dir.join("missing"))),
+            f.reach.prepare(https, Some(&f.dir.join("missing")), true),
             Err(Why::NeedsAccess)
         );
-        assert_eq!(f.reach.prepare("/srv/b.git", None), Err(Why::NoRepository));
+        assert_eq!(
+            f.reach.prepare("/srv/b.git", None, true),
+            Err(Why::NoRepository)
+        );
     }
 
     /// FAILS IF: an HTTPS address is taken without its server's transport
@@ -749,7 +698,7 @@ mod tests {
             ),
         ] {
             let f = Fake::new("transport", answer);
-            assert_eq!(f.reach.prepare(https, None), want, "{answer}");
+            assert_eq!(f.reach.prepare(https, None, true), want, "{answer}");
             assert!(
                 f.log().starts_with(&format!("probe --address {https} ")),
                 "{}",
@@ -779,6 +728,7 @@ mod tests {
                     std::fs::write(&t, "old").unwrap();
                     t
                 }),
+                true,
             )
             .unwrap();
         let p = f
@@ -818,6 +768,7 @@ mod tests {
                     std::fs::write(&k, "key").unwrap();
                     k
                 }),
+                true,
             )
             .unwrap();
         assert_eq!(
@@ -865,6 +816,7 @@ mod tests {
                     std::fs::write(&k, "key").unwrap();
                     k
                 }),
+                true,
             )
             .unwrap();
         let slow = {
@@ -881,23 +833,126 @@ mod tests {
         );
     }
 
-    /// FAILS IF: a development build, or one started from the release,
-    /// asks the release at all.
+    /// FAILS IF: with no network an HTTPS address's server is asked — the
+    /// transport's probe is the CLI's, and it must not run —, the scratch
+    /// home is not made all the same, or an SSH address gets no deploy key
+    /// (made here: nothing about it needs the network).
     #[test]
-    fn only_a_release_build_asks_the_release() {
-        let mut f = Fake::new("release", "exit 0");
-        assert_eq!(f.reach.release(), Follow::Stay(Stay::Development));
-        f.reach.from_release = true;
-        assert_eq!(f.reach.release(), Follow::Stay(Stay::FromRelease));
-        // A release build whose `nix` cannot be run: the release did not
-        // answer — and the install goes on.
-        f.reach.from_release = false;
-        f.reach.own = Some(Revision {
-            rev: "1".repeat(40),
-            last_modified_s: 1,
-        });
-        f.reach.distro = Some(f.dir.to_string_lossy().into_owned());
-        assert_eq!(f.reach.release(), Follow::Stay(Stay::Unreachable));
+    fn with_no_network_the_address_is_taken_as_typed() {
+        let f = Fake::new(
+            "offline-address",
+            &format!(
+                "mkdir -p \"$XDG_CONFIG_HOME/{name}/belongings-keys\"; \
+                 echo PRIVATE > \"$XDG_CONFIG_HOME/{name}/belongings-keys/deploy\"; \
+                 echo 'ssh-ed25519 AAAA ronoctua-belongings' > \"$XDG_CONFIG_HOME/{name}/belongings-keys/deploy.pub\"",
+                name = ronoctua_xdg::NAME
+            ),
+        );
+        let https = "https://github.com/someone/belongings.git";
+        assert_eq!(f.reach.prepare(https, None, false), Ok(None));
+        assert_eq!(f.log(), "", "the CLI ran with no network");
+        let settings = std::fs::read_to_string(
+            Path::new(&f.reach.scratch.config()).join(ronoctua_belongings::prefs::FILE),
+        )
+        .unwrap();
+        assert_eq!(Belongings::from_file(&settings).unwrap().repository, https);
+        let ssh = "git@github.com:someone/belongings.git";
+        assert_eq!(
+            f.reach.prepare(ssh, None, false).unwrap().as_deref(),
+            Some("ssh-ed25519 AAAA ronoctua-belongings")
+        );
+        assert!(f.log().starts_with("keygen"), "{}", f.log());
+        assert!(!f.log().contains("probe"), "{}", f.log());
+    }
+
+    /// FAILS IF: a token kept with no network is not where the CLI reads it,
+    /// `0600` and trimmed, the repository is asked to keep it, or a blank
+    /// one is kept.
+    #[test]
+    fn a_token_is_kept_without_asking_the_repository() {
+        let f = Fake::new("keep", "exit 1");
+        let https = "https://example.org/someone/belongings.git";
+        f.reach.prepare(https, None, false).unwrap();
+        assert_eq!(f.reach.keep(https, "Zq7-token\n"), Ok(()));
+        let kept = Path::new(&f.reach.scratch.keys()).join(TOKEN_FILE);
+        assert_eq!(kept, f.reach.credential(https));
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "Zq7-token");
+        let mode = std::fs::metadata(&kept).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(f.log(), "", "the CLI ran to keep a token");
+        assert_eq!(f.reach.keep(https, "  \n"), Err(Why::NeedsAccess));
+    }
+
+    /// A fake CLI that answers a probe with `probed` and a passphrase's
+    /// check with `verified`.
+    fn answering(probed: &str, verified: &str) -> String {
+        format!(
+            "case \"$1\" in probe) echo '{probed}';; verify-passphrase) echo '{verified}';; esac"
+        )
+    }
+
+    /// The terminal-less mode's answers, the access named by a file of the
+    /// test's own.
+    fn named(f: &Fake, passphrase: &str) -> Answers {
+        let access = f.dir.join("deploy");
+        std::fs::write(&access, "key").unwrap();
+        Answers {
+            belongings: "git@example.org:someone/belongings.git".into(),
+            belongings_access: access.to_string_lossy().into_owned(),
+            belongings_passphrase: passphrase.into(),
+            ..Answers::default()
+        }
+    }
+
+    /// FAILS IF: without a terminal and with no network the repository is
+    /// asked, the run is refused for having no network, the answers are not
+    /// recorded unchecked (no network, nothing found, the access kept where
+    /// the first boot reads it), or a passphrase shorter than a disk's is
+    /// taken where nothing proves it; or, with a way out, a repository that
+    /// reads and writes is not recorded checked — empty, or opened by the
+    /// passphrase.
+    #[test]
+    fn the_terminal_less_checks_ask_the_repository_only_online() {
+        let ready = r#"{"read":true,"write":true,"empty":false,"why":null}"#;
+        let empty = r#"{"read":true,"write":true,"empty":true,"why":null}"#;
+        let opened = r#"{"format":2}"#;
+        let f = Fake::new("checks-offline", &answering(ready, opened));
+        let mut r = named(&f, "Qw4-a-long-passphrase");
+        assert_eq!(f.reach.checks(&mut r, Gate::NoLink), Ok(()));
+        assert_eq!(f.log(), "", "the repository was asked with no network");
+        assert_eq!(
+            (r.online, r.belongings_empty, r.belongings_checked),
+            (Some(false), None, false)
+        );
+        assert_eq!(
+            r.belongings_access,
+            f.reach.credential(&r.belongings).to_string_lossy()
+        );
+        let mut short = named(&f, "short");
+        assert_eq!(
+            f.reach.checks(&mut short, Gate::Unconnected),
+            Err(Refused::Answer(crate::model::Invalid::PassphraseTooShort))
+        );
+        assert_eq!(f.log(), "");
+        // ONLINE: probed, and opened by the passphrase — which a repository
+        // that opens with it does not hold to a disk's length.
+        let mut r = named(&f, "short");
+        assert_eq!(f.reach.checks(&mut r, Gate::Open), Ok(()));
+        assert!(f.log().contains("probe --address"), "{}", f.log());
+        assert!(f.log().contains("verify-passphrase"), "{}", f.log());
+        assert_eq!(
+            (r.online, r.belongings_empty, r.belongings_checked),
+            (Some(true), Some(false), true)
+        );
+        // ONLINE AND EMPTY: nothing to open, as long as a disk's.
+        let f = Fake::new("checks-empty", &answering(empty, opened));
+        let mut r = named(&f, "Qw4-a-long-passphrase");
+        assert_eq!(f.reach.checks(&mut r, Gate::Open), Ok(()));
+        assert!(!f.log().contains("verify-passphrase"), "{}", f.log());
+        assert_eq!(
+            (r.online, r.belongings_empty, r.belongings_checked),
+            (Some(true), Some(true), true)
+        );
     }
 
     #[test]

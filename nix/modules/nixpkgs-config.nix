@@ -36,23 +36,17 @@
   # See the note in nix/modules/dev.nix.
   nixpkgs.config = {
     # ── anchor: L25 ──
-    # THE SYSTEM ADMITS NOTHING UNFREE OF THE DISTRO'S: every such program —
-    # Chrome, VS Code, Claude Code, Android Studio and the SDK, unrar, uade —
-    # is a PART (`nix/modules/parts.nix`), built from the parts' one door
-    # (`nix/parts-pkgs.nix`) and kept out of the system's closure: never on
-    # the published ISO, never in a public cache, and a download that fails
-    # holds back nothing. No `allowUnfree` either: the SDK, which forced it,
-    # has an instance of its own there.
-    allowUnfree = false;
-
-    allowUnfreePredicate =
-      pkg:
-      # ── anchor: L03 ──
-      # ONLY WHAT THE PERSON SAID YES TO when declaring it — by the same name
-      # this predicate compares (`lib.getName`), from the consumer of their
-      # declarations (`nix/modules/person.nix`). An unfree package declared
-      # without that consent is skipped there and never reaches this line.
-      builtins.elem (lib.getName pkg) config.ronoctua.person.unfreeNames;
+    # UNFREE IS APPROVED (the owner, 2026-10-24): an unfree package never
+    # refuses an evaluation — a hardware report's branch (the IPU6 camera)
+    # or anything else. The distro's unfree PROGRAMS stay parts
+    # (`nix/modules/parts.nix`, built from `nix/parts-pkgs.nix`) because they
+    # are downloads, which hold back nothing there; and what nobody may
+    # redistribute waits for the first network on a machine installed with
+    # none (`ronoctua.hardware.deferUndistributable`, `nix/modules/host.nix`).
+    # The person's own declarations still ask their yes
+    # (`nix/modules/person.nix`): that is the software centre's question, not
+    # this policy.
+    allowUnfree = true;
   };
 
 }

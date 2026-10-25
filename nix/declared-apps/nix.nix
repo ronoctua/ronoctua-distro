@@ -173,9 +173,10 @@ in
       skip "not-a-package" "`${entry.attr}` is not a package"
     else if !unfree.success then
       skip "refused-by-meta" "the meta of `${entry.attr}` cannot be read"
-    # UNFREE IS ASKED HERE, and not only of the predicate: a machine with
-    # Android's SDK turns `allowUnfree` on for everything, and a package the
-    # person never said yes to must not ride in on that.
+    # UNFREE IS ASKED HERE, of the person: the system admits every unfree
+    # package (the owner, 2026-10-24), and one the person declared without
+    # saying yes to its licence must not ride in on that. (What it NEEDS
+    # rides in: nothing unfree refuses a machine.)
     else if unfree.value && !entry.unfree then
       skip "refused-by-meta" "`${entry.attr}` is unfree, and its declaration carries no consent"
     else if realised.success then

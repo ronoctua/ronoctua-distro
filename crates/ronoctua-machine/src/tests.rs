@@ -145,6 +145,9 @@ case "$1" in
     fi
     echo "$last" >> "$root/built"
     if [ -e "$root/build-fails" ]; then echo "error: builder failed" >&2; exit 1; fi
+    if [ -e "$root/fails-without-marker" ] && [ ! -e "$root/machine/hardware-deferred.json" ]; then
+      echo "error: cannot download ipu6-camera-bins" >&2; exit 1
+    fi
     ln -sfn "$(cat "$root/build-result")" "$out" ;;
   eval)
     if [ -e "$root/phases.json" ]; then cat "$root/phases.json"; exit 0; fi
@@ -510,6 +513,43 @@ fn an_apply_switches_and_arms_the_trial() {
         armed.contains("boot-1") && armed.contains(&b),
         "the boot that armed it is written down: {armed}"
     );
+}
+
+/// FAILS IF: a machine installed with no network keeps its marker once it
+/// builds without it — the hardware that waited never arrives — or loses
+/// it when that build fails: then the marker is back, the machine is built
+/// as it was, and the apply still switches.
+#[test]
+fn what_waited_for_a_network_arrives_with_the_first_apply_that_builds_it() {
+    let marker = |w: &World| {
+        w.m.places
+            .dir
+            .join(ronoctua_person::names::DEFERRED_HARDWARE)
+    };
+    // IT BUILDS: the marker goes, for good.
+    let w = World::new("deferred-arrives");
+    std::fs::write(marker(&w), "{\n  \"format\": 1\n}\n").unwrap();
+    let b = w.toplevel("b", "quiet");
+    w.builds(&b);
+    assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
+    assert!(
+        !marker(&w).exists(),
+        "the marker outlived a build without it"
+    );
+    // IT DOES NOT: the marker is back, the machine built as it was.
+    let w = World::new("deferred-waits");
+    std::fs::write(marker(&w), "{\n  \"format\": 1\n}\n").unwrap();
+    std::fs::write(w.s.path("fails-without-marker"), "").unwrap();
+    let b = w.toplevel("b", "quiet");
+    w.builds(&b);
+    assert_eq!(w.m.apply(false).unwrap().result, ApplyResult::Switched);
+    assert_eq!(
+        std::fs::read_to_string(marker(&w)).unwrap(),
+        "{\n  \"format\": 1\n}\n",
+        "the marker did not come back whole"
+    );
+    assert_eq!(w.read("built").lines().count(), 2, "{}", w.read("built"));
+    assert_eq!(w.read("switched"), "b switch\n");
 }
 
 /// FAILS IF: a build that fails leaves the moved lock in the machine

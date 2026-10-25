@@ -50,6 +50,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aim;
 mod apply;
 pub mod argv;
 mod bless;
@@ -222,6 +223,9 @@ pub enum Verb {
     Unhold,
     /// Root the sources the machine's flake was evaluated from.
     KeepSources,
+    /// The distro input moved forward — an aimed machine put back on the
+    /// release first (`aim`).
+    UpdateDistro,
 }
 
 impl Verb {
@@ -237,6 +241,7 @@ impl Verb {
             Self::Hold { rev } => vec!["hold".to_owned(), rev.clone()],
             Self::Unhold => vec!["unhold".to_owned()],
             Self::KeepSources => vec!["keep-sources".to_owned()],
+            Self::UpdateDistro => vec!["update-distro".to_owned()],
         }
     }
 
@@ -256,6 +261,7 @@ impl Verb {
             }),
             ["unhold"] => Some(Self::Unhold),
             ["keep-sources"] => Some(Self::KeepSources),
+            ["update-distro"] => Some(Self::UpdateDistro),
             _ => None,
         }
     }
@@ -375,6 +381,7 @@ impl Machine {
             Verb::Disarm => self.disarm().map(|()| "disarmed".to_owned()),
             Verb::Hold { rev } => self.hold(rev).map(|()| format!("held at {rev}")),
             Verb::Unhold => self.unhold().map(|()| "not held".to_owned()),
+            Verb::UpdateDistro => aim::update_distro(self),
             Verb::KeepSources => self.keep_sources().map(|kept| {
                 if kept {
                     "sources kept".to_owned()
@@ -665,6 +672,7 @@ mod verbs {
             },
             Verb::Unhold,
             Verb::KeepSources,
+            Verb::UpdateDistro,
         ] {
             assert_eq!(Verb::parse(&verb.arguments()), Some(verb));
         }

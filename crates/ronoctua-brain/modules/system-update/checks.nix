@@ -115,6 +115,14 @@ let
         args="$*"
         printf 'moved\n' >> "''${args##* --flake }/flake.lock"
         ;;
+      # AND AS THE MACHINE'S PROGRAM MOVES IT (`update-distro`): in the
+      # machine directory, which the real one reads from its environment
+      # and a check plants (`FIXTURE_MACHINE`).
+      "ronoctua-machine update-distro")
+        if [ -n "''${FIXTURE_MACHINE:-}" ]; then
+          printf 'moved\n' >> "$FIXTURE_MACHINE/flake.lock"
+        fi
+        ;;
       # A REHEARSAL GOES THROUGH EVERY REFUSAL THE RUN DOES.
       "ronoctua-machine apply" | "ronoctua-machine apply --rehearse")
         if [ -n "''${FIXTURE_DID_NOT_BOOT:-}" ]; then
@@ -354,10 +362,11 @@ in
             user = builtins.attrNames vm.systemd.user.services;
             rule = vm.security.polkit.extraConfig;
             machineState = vm.ronoctua.machine.stateDir;
-            # WHAT THE STEP THAT MOVES THE INPUTS RUNS, which names the
-            # distro's input it moves (`steps.nix` reads it from the
-            # machine template).
+            # WHAT THE STEP THAT MOVES THE INPUTS RUNS (`ronoctua-machine
+            # update-distro`, which moves `DISTRO_INPUT`), and the distro's
+            # input as the machine template names it.
             moves = (stepThat "moves the inputs" (s: s.does == "move-inputs")).run;
+            templateInputs = builtins.attrNames (import ../../../../templates/machine/flake.nix).inputs;
           }
         );
       in
@@ -445,18 +454,19 @@ in
         if 'machine-state = "''${config.ronoctua.machine.stateDir}/state.json";' not in nix:
             wrong.append("the root half's hold test does not read the record from ronoctua.machine.stateDir")
 
-        # AND THE DISTRO'S INPUT: the one the update moves (the template's,
-        # read by `steps.nix`) is the one `ronoctua-machine` judges a hold by
-        # and moves in its rehearsal (`DISTRO_INPUT`). Renamed on one side,
-        # a held machine would refuse every apply, or a rehearsal measure an
-        # input the run never moves.
+        # AND THE DISTRO'S INPUT: the update moves it through
+        # `ronoctua-machine update-distro`, which moves `DISTRO_INPUT` — the
+        # input it also judges a hold by and moves in its rehearsal — and it
+        # is the template's one input. Renamed on one side, the update would
+        # move an input no machine flake has.
         moves = facts["moves"]
-        moved = moves[moves.index("update") + 1] if "update" in moves[:-1] else None
         distro = re.search(r'pub const DISTRO_INPUT: &str = "([^"]+)";', crate)
-        if not distro or not moved:
-            wrong.append("`DISTRO_INPUT` went away from ronoctua-machine, or the step that moves the inputs names none")
-        elif distro.group(1) != moved:
-            wrong.append(f"the update moves the input `{moved}`, and ronoctua-machine judges holds and rehearses by `{distro.group(1)}`")
+        if moves != ["update-distro"]:
+            wrong.append(f"the step that moves the inputs runs {moves}, not ronoctua-machine's `update-distro`")
+        if not distro:
+            wrong.append("`DISTRO_INPUT` went away from ronoctua-machine")
+        elif facts["templateInputs"] != [distro.group(1)]:
+            wrong.append(f"the machine template's inputs are {facts['templateInputs']}, and ronoctua-machine moves `{distro.group(1)}`")
 
         if wrong:
             print("ERROR: a name of the update does not agree with itself.", file=sys.stderr)
@@ -1477,7 +1487,7 @@ in
     #
     #   1. on a battery below the floor, and on a disk still short after the
     #      store's garbage was collected, BOTH are skipped and the machine's
-    #      `flake.lock` is byte for byte what it was — no `nix flake update`
+    #      `flake.lock` is byte for byte what it was — no `update-distro`
     #      ran; and when the collection frees the room both run, the lock
     #      moved (which is what proves the stand-in would have said so);
     #   2. a disk short of room is collected FIRST, then measured again, then
@@ -1565,7 +1575,8 @@ in
               log, report = work / "calls.log", work / "report.tsv"
               log.write_text("")
               report.write_text("")
-              env = dict(os.environ, FIXTURE_LOG=str(log), FIXTURE_ONLINE="1", **fixture)
+              env = dict(os.environ, FIXTURE_LOG=str(log), FIXTURE_ONLINE="1",
+                         FIXTURE_MACHINE=str(machine), **fixture)
               r = subprocess.run(
                   ["bash", "-c", f'execute={execute}; report="{report}"; . ./lifted.sh; {move_fn} || true; {apply_fn}'],
                   cwd=work, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
@@ -1583,10 +1594,10 @@ in
                       return line.split("\t")[1]
               return None
 
-          # THE LOCK'S BYTES, and the call: the stand-in moves the lock it is
-          # pointed at, as `nix flake update` would.
+          # THE LOCK'S BYTES, and the call: the stand-in moves the lock of the
+          # machine directory, as `ronoctua-machine update-distro` would.
           def moved(out):
-              return out["lock"] != ORIGINAL or "nix flake update" in out["calls"]
+              return out["lock"] != ORIGINAL or "ronoctua-machine update-distro" in out["calls"]
 
           def bytes_moved(out):
               return out["lock"] != ORIGINAL

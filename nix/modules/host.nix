@@ -25,6 +25,7 @@
   config,
   lib,
   inputs,
+  options,
   ...
 }:
 
@@ -130,6 +131,19 @@ in
         below the RAM by the disk's size, or with no resume offset measured.
       '';
     };
+    # ── anchor: L25 ──
+    hardware.deferUndistributable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Whether the hardware branches whose packages nobody may redistribute
+        (the IPU6 camera, Parallels' guest tools) wait: true while the
+        installer's marker (`hardware-deferred.json`) is in the machine
+        directory, which `lib.machine` reads. `ronoctua-machine apply` takes
+        the marker away once the machine builds without it.
+      '';
+    };
+
     swapSize = lib.mkOption {
       type = lib.types.strMatching "[1-9][0-9]*[MGT]";
       # THE MACHINE'S RAM, in bytes: the physical memory the hardware report
@@ -210,12 +224,8 @@ in
       }
     ];
 
+    # Generated with every other: `base.nix` asks glibc for all of them.
     i18n.defaultLocale = cfg.locale;
-    i18n.supportedLocales = lib.mkDefault [
-      "${cfg.locale}/UTF-8"
-      "en_GB.UTF-8/UTF-8"
-      "C.UTF-8/UTF-8"
-    ];
 
     # THE SYSTEMD INITRD: it asks the disk's passphrase (the only key — the
     # TPM holds nothing for the disk, `nix/disko/default.nix` says why), and
@@ -254,5 +264,26 @@ in
 
     # The report drives the hardware side when it exists.
     facter.reportPath = lib.mkIf (cfg.facterReport != null) cfg.facterReport;
+
+    # ── anchor: L25 ──
+    # WHAT NOBODY MAY REDISTRIBUTE WAITS FOR THE FIRST NETWORK (the owner,
+    # 2026-10-24). Two of the report's branches bring packages nixpkgs marks
+    # unfree AND not redistributable — the IPU6 camera (`ipu6-camera-bins`,
+    # `ivsc-firmware`, ISSL) and Parallels' guest tools (`prl-tools`) — which
+    # no public cache holds and no published ISO may carry, so an
+    # installation with no network cannot build them. A machine installed so
+    # carries the installer's marker (`hardware-deferred.json`), and the
+    # branches stay off at the detection while it is there; the machine's
+    # first apply with a network builds without it, takes the marker away
+    # when that works, and puts it back — the machine whole, the camera off,
+    # said — when it does not (`ronoctua-machine`). The build says what waits.
+    facter.detected.camera.ipu6.enable = lib.mkIf cfg.hardware.deferUndistributable (lib.mkForce false);
+    facter.detected.virtualisation.parallels.enable = lib.mkIf cfg.hardware.deferUndistributable (
+      lib.mkForce false
+    );
+    warnings = lib.optionals cfg.hardware.deferUndistributable (
+      lib.optional options.facter.detected.camera.ipu6.enable.default "This machine's IPU6 camera waits for the first network: its driver needs ipu6-camera-bins, which nobody may redistribute."
+      ++ lib.optional options.facter.detected.virtualisation.parallels.enable.default "This machine's Parallels guest tools wait for the first network: prl-tools may not be redistributed."
+    );
   };
 }

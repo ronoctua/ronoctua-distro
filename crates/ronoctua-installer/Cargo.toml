@@ -11,6 +11,10 @@ publish.workspace = true
 name = "ronoctua-install"
 path = "src/bin/install.rs"
 
+[[bin]]
+name = "ronoctua-first-boot"
+path = "src/bin/first_boot.rs"
+
 # The core — questions, validation and plan — does not depend on the TUI, and it is where
 # milestone 8's criteria live. The TUI's `State` does not either: it applies a
 # key and does not draw, so `nix flake check` exercises the questions with no

@@ -1,0 +1,144 @@
+{
+  "version": 2,
+  "system": "x86_64-linux",
+  "virtualisation": "none",
+  "uefi": {
+    "supported": true
+  },
+  "hardware": {
+    "cpu": [
+      {
+        "vendor_name": "GenuineIntel",
+        "family": 6,
+        "model": 154,
+        "features": [
+          "fpu",
+          "vmx",
+          "aes",
+          "avx2"
+        ]
+      }
+    ],
+    "graphics_card": [
+      {
+        "driver_modules": [
+          "i915",
+          "xe"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "monitor": [
+      {
+        "model": "probe panel"
+      }
+    ],
+    "network_controller": [
+      {
+        "driver_modules": [
+          "iwlwifi"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        },
+        "vendor": {
+          "value": 32902
+        },
+        "device": {
+          "value": 20976
+        }
+      }
+    ],
+    "network_interface": [
+      {
+        "sub_class": {
+          "name": "WLAN"
+        },
+        "unix_device_names": [
+          "wlp0s20f3"
+        ]
+      }
+    ],
+    "storage_controller": [
+      {
+        "driver_modules": [
+          "nvme"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "disk": [
+      {
+        "driver_modules": [
+          "nvme"
+        ]
+      }
+    ],
+    "usb_controller": [
+      {
+        "driver_modules": [
+          "xhci_pci",
+          "thunderbolt"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "bluetooth": [
+      {
+        "driver_modules": [
+          "btusb"
+        ],
+        "bus_type": {
+          "name": "USB"
+        }
+      }
+    ],
+    "usb": [
+      {
+        "bus_type": {
+          "name": "USB"
+        },
+        "vendor": {
+          "value": 1118
+        },
+        "device": {
+          "value": 187
+        }
+      }
+    ],
+    "unknown": [
+      {
+        "bus_type": {
+          "name": "PCI"
+        },
+        "vendor": {
+          "value": 32902
+        },
+        "device": {
+          "value": 39449
+        },
+        "sub_vendor": {
+          "value": 6058
+        },
+        "sub_device": {
+          "value": 20619
+        },
+        "base_class": {
+          "value": 4
+        },
+        "sub_class": {
+          "value": 128
+        },
+        "revision": {
+          "value": 1
+        }
+      }
+    ]
+  }
+}

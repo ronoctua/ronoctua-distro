@@ -3,11 +3,10 @@
 //!
 //! # Why the repository is mandatory now
 //!
-//! It is what makes the new machine the person's: their declarations
-//! (`plain/person/`) are applied to the machine's flake BEFORE it is built,
-//! so the programs they declared are in the first boot, and their belongings
-//! are restored into the new home before anybody logs in. A machine installed
-//! without it would be somebody else's until the person found the view.
+//! It is what makes the new machine the person's: their belongings are
+//! restored into the new home on its first boot, and the programs they
+//! declared arrive after it. A machine installed without it would be
+//! somebody else's until the person found the view.
 //!
 //! # The access is made here, and proved here
 //!
@@ -26,9 +25,17 @@
 //! On a repository with something in it, the passphrase must open its
 //! `key.age` (`verify-passphrase --json`) before the installer goes on — a
 //! typo found after the disk was erased is a restore that fails with the
-//! machine half made. On an EMPTY repository nothing can be opened, so the
-//! passphrase is typed twice instead, and the installation makes the
-//! repository (`init`) where it would have restored it.
+//! machine made. On an EMPTY repository nothing can be opened, so the
+//! passphrase is typed twice instead, and the first boot makes the
+//! repository where it would have restored it.
+//!
+//! # With no network, nothing is proved
+//!
+//! The installation never uses the network, and goes on without one. Then
+//! the key is made and shown all the same, a token is kept as typed, and the
+//! passphrase — which may open the repository or make it — is typed twice
+//! and as long as a disk's: the first boot proves them
+//! (`crate::model::Answers::belongings_checked`).
 //!
 //! Everything here is pure: what the CLI's lines mean, which sentence says
 //! a refusal, where a host's page is, the QR's modules. Who runs the CLI is

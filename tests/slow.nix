@@ -61,6 +61,10 @@
   # and with its store's tail lost (`tests/iso-stick-vm.nix`). It builds the
   # image, and each boot reads the whole store.
   "iso-checks-its-stick-vm"
+  # The ISO installs with no network card a machine no fixture describes,
+  # and it boots (`tests/installer-offline-vm.nix`): the image, the whole
+  # full profile copied from it, two boots.
+  "installer-offline-vm"
   # These two read the `toplevel` of the VM's system — cheap to evaluate,
   # expensive to build the first time.
   "browser-has-no-keyring"

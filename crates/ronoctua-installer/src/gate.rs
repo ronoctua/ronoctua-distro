@@ -1,37 +1,42 @@
-//! The network gate: the installation does not start without a way out.
+//! The network's reading: whether the installer has a way out right now.
 //!
-//! # Why the network stopped being optional
+//! # Why the network stopped being a gate
 //!
-//! The person's repository is mandatory now (their declarations are
-//! installed WITH the machine, their belongings restored into its home), the
-//! installer asks the release which revision to install, and `nixos-install`
-//! downloads what no cache on the ISO holds. None of that happens offline, so
-//! the network question is a gate: leaving it requires a link — a cable, or
-//! the Wi-Fi network chosen and joined — with no login page in front of it.
-//! It answers with a sentence when there is none ([`Gate::key`]), on the
-//! screen the person can fix it from.
+//! It was one while the installation downloaded the system and asked the
+//! release which installer to use. An installation never uses the network
+//! now (the owner's plan): the ISO carries every path it needs, and the
+//! person's belongings are restored on the machine's FIRST boot. So the
+//! network question goes on with no network at all — the cable's row, or
+//! no network — and what it reads is only whether the person's repository
+//! can be asked NOW (`crate::model::Answers::online`): with a way out it is
+//! proved before the disk is touched, as before; with none, its answers are
+//! taken as typed and the first boot checks them.
+//!
+//! A Wi-Fi network the person CHOSE is still joined and judged: its
+//! password is the one the installed machine keeps, and a wrong one is said
+//! ([`Gate::key`]) on the screen it is typed on.
 //!
 //! # NetworkManager's verdict on the internet is not the gate's
 //!
-//! What the gate does NOT judge is whether the link reaches the internet.
-//! NetworkManager's answer to that is a plain-HTTP fetch of one page of one
-//! host (`nix/modules/network.nix`): a network that blocks port 80, or that
-//! host being down, reads as "limited" while GitHub, the binary cache and the
-//! person's repository all answer. The hosts that matter are asked right
-//! after this — the release, the access, the passphrase — and those answers
-//! say for real whether the installation can go on, each on its own screen.
+//! What the reading does NOT judge is whether the link reaches the
+//! internet. NetworkManager's answer to that is a plain-HTTP fetch of one
+//! page of one host (`nix/modules/network.nix`): a network that blocks port
+//! 80, or that host being down, reads as "limited" while the person's
+//! repository answers. The repository is asked right after this — the
+//! access, the passphrase — and those answers say for real whether it can
+//! be reached, each on its own screen.
 //!
 //! [`gate`] is pure over `ronoctua-network`'s [`Snapshot`] (the one crate
 //! that talks to NetworkManager); `crate::reach` connects and reads it.
 
 use crate::key;
-use ronoctua_network::{Snapshot, Way};
+use ronoctua_network::{Snapshot, State, Way};
 
-/// What the gate says.
+/// What the reading says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gate {
-    /// A link is up, with no login page in front of it: the hosts the
-    /// installation needs are asked next.
+    /// A link is up, with no login page in front of it: the person's
+    /// repository is asked next.
     Open,
     /// NetworkManager does not answer — no system bus, no daemon.
     NoDaemon,
@@ -46,7 +51,7 @@ pub enum Gate {
 }
 
 impl Gate {
-    /// Whether the installation may go on.
+    /// Whether there is a way out: the repository is asked now.
     #[must_use]
     pub const fn open(self) -> bool {
         matches!(self, Self::Open)
@@ -98,17 +103,23 @@ pub fn gate(look: &Snapshot) -> Gate {
         // Everything else with a link is NOT judged here — `Unknown` (not
         // measured yet, or the check off), and `Limited` or `None`, which
         // only say that one page of one host did not answer over plain
-        // HTTP. The release and the access are asked for real right after.
+        // HTTP. The access and the passphrase are asked for real right
+        // after.
         Way::Full | Way::Unknown | Way::Limited | Way::None => Gate::Open,
     }
 }
 
-/// Whether a reading is worth waiting past: a link coming up, or a way out
-/// not measured yet. A reading that is not is the one the gate judges.
-/// Pure.
+/// Whether a reading is worth waiting past: a link coming up, or one up
+/// whose way out is not measured yet. A reading that is not is the one the
+/// gate judges. Pure.
+///
+/// NO LINK AT ALL is not waited for: with no cable and no network chosen,
+/// that is the answer, and the person who chose to go on without a network
+/// would otherwise watch the screen for [`SETTLE_MOST_S`] before it did.
 #[must_use]
 pub fn unsettled(look: &Snapshot) -> bool {
-    look.daemon && look.networking && (!look.linked() || look.way == Way::Unknown)
+    let coming = look.links.iter().any(|l| l.state == State::Connecting);
+    look.daemon && look.networking && (coming || (look.linked() && look.way == Way::Unknown))
 }
 
 /// How long the gate waits, at most, for a link that is coming up — a
@@ -118,9 +129,13 @@ pub const SETTLE_MOST_S: u64 = 30;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_network::{Band, Link, Medium, State};
+    use ronoctua_network::{Band, Link, Medium};
 
     fn linked(way: Way) -> Snapshot {
+        with_link(way, State::Connected)
+    }
+
+    fn with_link(way: Way, state: State) -> Snapshot {
         Snapshot {
             daemon: true,
             networking: true,
@@ -129,7 +144,7 @@ mod tests {
                 medium: Medium::Wired,
                 interface: "enp1s0".to_owned(),
                 network: None,
-                state: State::Connected,
+                state,
                 rate_kbps: 1_000_000,
                 signal: 0,
                 band: Band::Other,
@@ -142,11 +157,12 @@ mod tests {
         }
     }
 
-    /// FAILS IF: the installation goes on with no daemon, with networking
-    /// off, with no link or behind a login page — or stops a link because
-    /// NetworkManager's own check (one page over plain HTTP) did not answer:
-    /// "limited", "none" or not measured yet are for the release and the
-    /// access to judge.
+    /// FAILS IF: the reading says there is a way out with no daemon, with
+    /// networking off, with no link or behind a login page — or says there
+    /// is none because NetworkManager's own check (one page over plain
+    /// HTTP) did not answer: "limited", "none" or not measured yet are for
+    /// the access to judge; or it waits for a link when there is none
+    /// coming.
     #[test]
     fn the_gate_opens_only_on_a_way_out() {
         assert_eq!(gate(&Snapshot::default()), Gate::NoDaemon);
@@ -178,8 +194,12 @@ mod tests {
             assert_ne!(g.key(), Gate::Open.key(), "{g:?} says it is open");
         }
         assert!(Gate::Open.open());
-        // What is worth waiting for: a link coming up, a way not measured.
-        assert!(unsettled(&nothing));
+        // What is worth waiting for: a link coming up, a way not measured —
+        // and not a machine with no link coming at all, nor a cable that
+        // is not plugged in.
+        assert!(!unsettled(&nothing));
+        assert!(!unsettled(&with_link(Way::None, State::Disconnected)));
+        assert!(unsettled(&with_link(Way::None, State::Connecting)));
         assert!(unsettled(&linked(Way::Unknown)));
         assert!(!unsettled(&linked(Way::Full)));
         assert!(!unsettled(&off));

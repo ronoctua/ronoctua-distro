@@ -784,38 +784,15 @@ antes de chegar ao lixo de verdade.
 - acabou quando: o alívio mede o espaço livre depois de cada coleta e repete até a meta ou até a
   coleta não liberar mais nada, com um teste que planta um caminho cuja conta engana
 
-### 4. O `--execute` do `installer-vm` não chega ao fim · médio
-
-`tests/installer-vm.nix` instala de verdade num disco virtual e **não é check** (decisão do dono,
-2026-10-05): check vermelho que todo mundo aprende a ignorar é pior do que lacuna assumida. A leva de
-2026-09-30 o levou do passo 5 ao 10 (de 12, na sequência de então; a de 2026-10-05 acrescentou os
-passos do repositório da pessoa) e consertou três defeitos que o modo ensaio não via: o `disko`
-pedia confirmação de novo num stdin que ninguém responde (agora `--yes-wipe-all-disks`), a cópia do
-flake falhava porque o `disko` não cria `/mnt/etc` (um passo `inst-step-target` antes dela), e o
-`executor::run` lia o stdout até o fim antes do stderr — o `nixos-install` enchia o cano do stderr e
-a instalação ficava parada até o prazo global (agora um cano só, lido em bytes).
-
-O que falta é do TESTE, não do instalador: sem rede, o `nixos-install` dentro da VM quer construir
-o sistema-alvo do zero (4684 derivações, do `hex0-seed` ao workspace), porque as respostas do teste
-(tema, língua, teclado, o `facter.json` gerado lá dentro) o fazem diferente do alvo que o nó traz no
-store. O caminho é construir o `target` com as MESMAS respostas e um `facter.json` fixo, e pôr as
-ferramentas de build no `extraDependencies`; custa ~1 h por tentativa e um fecho bem maior.
-
-- acabou quando: `--execute` roda até o fim contra um disco virtual, o sistema que ele instala
-  boota, e o teste volta para o `tests/checks.nix` (no `slow`)
-
 ### A lista de programas do instalador — o que a pista não provou · pequeno cada
 
-- **A recusa semeada nunca chegou a um disco.** O `person-decline-chain` roda os programas de
-  verdade da escolha às atualizações seguintes: os passos do PLANO do instalador (o ensaio dele, com
-  os lugares mudados: o `plain --decline`, a chave fixada, o `apply`, a restauração), os passos da
-  pessoa na atualização, outra máquina assinando uma recusa, e o repositório vazio com `init`. Não
-  roda o `nixos-install`: que a máquina nasça SEM o programa deixado de fora só uma instalação
-  mostra. E duas coisas ali são reescritas, não do instalador: a leitura `left-out-applied` (só o
-  `--execute` a roda; a regra é a do `executor::not_as_chosen`) e o caminho do repositório vazio (o
-  ensaio não sonda o repositório, e nunca o alcança). O `installer-vm` instala a `minimal`, offline,
-  e a `full` tem ~37 GiB. Acabou quando: uma instalação de verdade (ou a VM, com um perfil de teste
-  que carregue um programa oferecido) deixa um de fora e a máquina nasce sem ele.
+- **A recusa chegou a um disco, mas não a um repositório.** O `installer-offline-vm` instala o
+  full com programas deixados de fora, e o plano das partes da máquina não os tem. O
+  `person-decline-chain` refaz o resto com os programas de verdade: o plano do instalador, o do
+  primeiro boot (`plain --decline`, a chave fixada, o `apply`, a restauração) e as atualizações da
+  pessoa. Nenhum teste leva o primeiro boot até um repositório de verdade, porque o teste de VM não
+  tem rede. Acabou quando: uma instalação com rede no primeiro boot assina a escolha no repositório
+  e a máquina continua sem o programa.
 
 ### Os painéis fora do gerenciador — o que a B1 deixou para depois · pequeno cada
 
@@ -1451,11 +1428,10 @@ Cachix nem uma instalação.
   `cachix push` tem de bater com a contagem que o envio diz, e a consulta ao `cache.nixos.org`
   (milhares de caminhos de um sistema, para um cache privado) tem de caber no tempo de um passo.
   - acabou quando: os dois casos estão medidos aqui, com o tamanho e o tempo do primeiro envio.
-- **A instalação com cache nunca rodou.** O `nixos-install --option extra-substituters …` e o netrc do
-  instalador para um cache privado são provados pelo plano e pelo executor, não por uma instalação;
-  o `installer-vm` roda sem substituters, e não há VM que sirva um cache.
-  - acabou quando: uma instalação com um cache privado baixa dele (o log do `nixos-install` diz de
-    onde) e a máquina instalada tem o netrc do root `0600`.
+- **O cache da pessoa nunca chegou a uma máquina pelo primeiro boot.** A instalação não usa cache
+  nenhum (L25): o cache e o netrc de um cache privado chegam com os pertences, depois do primeiro boot.
+  - acabou quando: uma máquina instalada sem rede, cujos pertences nomeiam um cache privado, baixa
+    dele na primeira atualização depois que o token entra pela porta do sudo.
 - **O veredito do netrc no rodapé não foi fotografado**: ele chega de uma thread depois do quadro que a
   câmera tira. O caminho até o minibuffer é o de toda porta.
 - **A chave pública é conferida pela forma**, não contra o cachix.org: a tela não pergunta à rede.
@@ -1531,40 +1507,18 @@ Cachix nem uma instalação.
 
 ### O instalador com o repositório da pessoa (L20) — o que a pista não provou · médio
 
-- **O `installer-vm` foi estendido e não rodou** (a leva não roda teste de VM nas pistas): um nó
-  `server` com um repositório git por SSH, um semeador que faz `init` de um repositório com um programa
-  declarado, e a instalação sem terminal com o endereço, o arquivo da chave e a senha. Ele continua
-  fora do `tests/checks.nix` (decisão do dono de 2026-10-05, item 4 acima), e o portão de rede no nó
-  depende de o NetworkManager tratar o link de teste como conectado, o que ninguém viu.
-  - acabou quando: o teste roda até o fim, o `person-applied.json` instalado nomeia o programa e a
-    máquina boota com o par `flake.nix`/`flake.lock` que a construiu, aceito por um `nix flake
-    metadata --no-update-lock-file --offline`.
-- **Uma máquina apontada fica na árvore em que foi instalada.** Instalada por uma versão de
-  desenvolvimento, por um pendrive à frente do release ou com o release sem responder, ela guarda o par
-  `flake.nix`/`flake.lock` que construiu o sistema (os dois concordam, e o `host.nix` segura a árvore
-  no store). A atualização faz `nix flake update`, que trava de novo o mesmo `path:` — e a máquina
-  nunca passa ao release sozinha. Falta à atualização (o `flake-update` do `system-update`, pacote L19)
-  pôr o `flake.nix` do template de volta antes de travar, quando o da máquina não é o do template.
-  - acabou quando: uma máquina apontada, numa atualização com o release no ar, termina com o
-    `flake.nix` do template, uma trava do release, e o `apply` da máquina a constrói.
-- **O caminho "apontado" nunca rodou numa instalação de verdade**: o flake de trabalho apontado para a
-  árvore do ISO por `path:`, travado, instalado sem rede para o GitHub e mantido assim no alvo. Os
-  testes provam a troca da string, a ordem dos passos e que nada escreve o `flake.nix` nem o
-  `flake.lock` depois da trava; quem prova o `nix flake lock`, o `disko` e o `nixos-install` sobre ele
-  é o `installer-vm`.
-- **Seguir um release que voltou** (`.#release --rollback-to`) é decisão do dono: o instalador só segue
-  um release mais novo que o pendrive, e uma volta pediria ser reconhecida como volta.
-- **O salto para o instalador do release** (`nix run <release>#install`) compila no ISO as unidades
-  do release para rodar o instalador novo (a semente leva os programas, nunca as unidades): a distro
-  não tem cache binário (decisão do dono, 2026-10-11). Ninguém saltou de verdade ainda.
-- **O portão de rede numa máquina real**: o tempo de espera do link (30 s) e da medição (5 s) foram
-  escolhidos, não medidos, e a frase da pergunta nomeia os servidores que o `nix config show
-  substituters` responde no ISO.
-- **Os três checks antigos do instalador** (`installer-dryrun`,
-  `installer-writes-belongings-into-the-home`, `host-nix-golden-evaluates`) e o novo
-  `installer-requires-network` rodam os programas de release do Nix (`rust.bins.<programa>`), que
-  uma pista não constrói: foram provados com o binário do `cargo`, com sabotagem síncrona no novo.
-  Acabou quando: o `.#most` os constrói.
+- **A restauração no primeiro boot nunca alcançou um repositório de verdade.** O
+  `installer-offline-vm` prova a instalação sem rede e o primeiro boot esperando a rede; o
+  `person-decline-chain` prova a sequência do primeiro boot com repositórios locais.
+  - acabou quando: um teste com rede no primeiro boot (um nó `server` com um repositório git por
+    SSH) termina com a home restaurada, o `person-applied.json` nomeando um programa declarado e o
+    registro do primeiro boot apagado.
+- **A primeira atualização de uma máquina instalada pelo ISO nunca rodou contra o release de
+  verdade**: o `ronoctua-machine update-distro` desmira e move o input, com os testes da troca da
+  string e do passo. Acabou quando: uma máquina instalada sem rede, numa atualização com o release no
+  ar, termina com o `flake.nix` do template e uma trava do release, e o `apply` a constrói.
+- **A espera do link numa máquina real**: o tempo para a rede escolhida conectar e para a medição foi
+  escolhido, não medido.
 - **As telas novas foram vistas como texto (`--show`) e como imagem** (o QR lido de volta pelo
   `zbarimg`). O ponteiro foi provado pelo estado da TUI (os testes clicam onde `places` diz que cada
   coisa está desenhada); ninguém clicou num terminal de verdade por SSH.
@@ -1697,11 +1651,23 @@ por marcos, cada um verde:
   `parts-do-not-collide`, `parts-build`, o lado Rust do `part-paths-are-read-as-arriving` e o
   `parts-absent-vm`. Por fim, a espera pela bateria abaixo do piso e os números do `profile.nix`
   medidos de novo.
-- **M6 — instalação offline e primeiro boot.** O ISO calculado (as bases livres dos dois perfis, as
-  partes livres do minimal, as entradas de build da cola do host, todo nó do lock), o instalador
-  sem rede (sem o pulo, mirando sempre o ISO, `build-first`, os pertences depois do boot com a senha
-  selada no TPM), o `installer-offline-vm` no gate, e o ISO completo do desenvolvedor
-  (`.#iso-complete`, nunca publicado).
+- **O que ficou do M6.** A instalação sem rede está provada (`installer-offline-vm`), o ISO tem
+  6,4 GiB e cabe num pendrive de 8 GB, e o ISO completo existe (`.#iso-complete`, nunca publicado).
+  Ficou para depois:
+  - **o hardware que espera a primeira rede não aparece em tela nenhuma**: a câmera IPU6 e o Parallels
+    de uma máquina instalada sem rede chegam na primeira `apply` que os constrói, e o que não chegou
+    está só no aviso de build e no journal da atualização, não na vista da atualização;
+  - **o primeiro boot na página das partes**: a restauração dos pertences aparece só no journal e na
+    vista dos pertences, e não como uma etapa em `s u d`;
+  - **um hardware que nenhuma sonda cobre** (um convidado VirtualBox ou Hyper-V, um módulo de kernel
+    fora da árvore): falha no `build-first`, com o disco intacto e o que faltou dito; uma sonda a mais
+    por ramo resolve, ao custo do tamanho do ISO;
+  - **o ISO completo nunca foi construído nem instalado** (~25 GB, à mão), e a revisão do instalador
+    não diz que o ISO é completo;
+  - **cada edição da árvore gera um ISO novo**, porque ele leva a árvore da distro: numa rodada de
+    teste convivem o velho e o novo (6,4 GiB cada) até a varredura do fim;
+  - **o `iso-builds-only-glue`**, um ensaio contra um store só com o conteúdo do ISO, ficou coberto
+    pelo teste de VM, que é lento.
 - **M7 — a base se recupera igual.** O `apply` diz o que falhou e oferece entregar e importar os
   downloads da base.
 - **M8 — as entradas da pessoa viram partes**, e o `verify`/`held.json` delas sai.

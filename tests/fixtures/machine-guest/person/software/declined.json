@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "apps": [
+    {
+      "id": "libreoffice",
+      "machines": null,
+      "edited-at": "2026-10-24T12:00:00Z",
+      "edited-on": "noctua-guest"
+    },
+    {
+      "id": "vlc",
+      "machines": null,
+      "edited-at": "2026-10-24T12:00:00Z",
+      "edited-on": "noctua-guest"
+    },
+    {
+      "id": "blender",
+      "machines": null,
+      "edited-at": "2026-10-24T12:00:00Z",
+      "edited-on": "noctua-guest"
+    },
+    {
+      "id": "photocraft",
+      "machines": null,
+      "edited-at": "2026-10-24T12:00:00Z",
+      "edited-on": "noctua-guest"
+    }
+  ]
+}

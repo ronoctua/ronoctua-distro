@@ -9403,9 +9403,9 @@ com quem nunca ouviu o nome — o que é, por que importa, e os passos no setup 
   numa máquina que ligou pela BIOS, que ele pode estar só escondido. A única outra linha é a do
   ensaio (sem `--execute`), que mostra o resto sem instalar nada.
 
-Um instalador retomado depois de um hop começa além do idioma, e o que passou as respostas pode ser
-de um ISO sem estas telas: ele as mostra antes de seguir, e a escolha da BIOS feita antes do hop
-viaja junto e não é perguntada de novo. Sem terminal, as mesmas telas são impressas e o instalador
+Um instalador retomado (`--answers`) começa além do idioma, e quem escreveu as respostas pode não ter
+passado por estas telas: ele as mostra antes de seguir, e a escolha da BIOS feita antes viaja junto e
+não é perguntada de novo. Sem terminal, as mesmas telas são impressas e o instalador
 sai: 6 na BIOS sem `RONOCTUA_INST_FIRMWARE=bios`, que é a mesma escolha dita por extenso, e 5 sem
 TPM — esta checagem vale também depois da TUI, antes do primeiro passo.
 
@@ -9501,17 +9501,16 @@ instalação: diz para que a máquina serve, e nada no hardware diz isso.
   que acontece com ele (`instalar` / `deixar de fora`); o tom diz o mesmo — o mantido no tom do
   texto com a palavra de resposta, o deixado de fora todo apagado.
 - **A resposta é o estado.** Ela é a lista dos ids desmarcados separados por vírgula, ou `none` —
-  nunca vazia, para cruzar o arquivo de salto do release como qualquer outra. `Enter` ou espaço numa
+  nunca vazia, para cruzar o arquivo de respostas (`--answers`) como qualquer outra. `Enter` ou espaço numa
   linha de programa a marca ou desmarca; `Enter` na primeira linha segue. A linha de teclas ensina o
   espaço onde a linha que o nomeia cabe com uma célula de folga, medida na língua (a 100 colunas nas
-  duas; a 60, nenhuma), e senão fica com o `Enter`, que também marca. `Esc`, o salto e a
-  retomada carregam as marcas de graça. Sem terminal, `RONOCTUA_INST_LEFT_OUT` recusa um id que a
+  duas; a 60, nenhuma), e senão fica com o `Enter`, que também marca. `Esc` e a retomada carregam as marcas de graça. Sem terminal, `RONOCTUA_INST_LEFT_OUT` recusa um id que a
   lista não oferece (`Invalid::NotOffered`, nomeando-o): um erro de digitação ali instalaria o que a
   pessoa quis deixar de fora.
-- **Um salto não pula a lista.** Todo salto vem de um instalador MAIS VELHO, e um mais velho que a
-  lista não a perguntou: retomar no repositório recusaria o padrão (o LibreOffice) sem ninguém ter
-  visto. Numa `full` cujo arquivo de salto não traz a resposta, o instalador do release abre a lista
-  primeiro, e "Seguir com estes" vai para onde o salto parou (`State::resume_to`); `Esc` dali volta
+- **Uma retomada não pula a lista.** Um arquivo de respostas escrito sem a lista não a perguntou:
+  retomar no repositório recusaria o padrão (o LibreOffice) sem ninguém ter visto. Numa `full` cujo
+  arquivo não traz a resposta, o instalador abre a lista primeiro, e "Seguir com estes" vai para onde
+  a retomada apontava (`State::resume_to`); `Esc` dali volta
   às perguntas, sem pulo. Uma resposta que nomeia um programa que este release não oferece mais
   também abre a lista, e a frase da tela o nomeia (`State::dropped`): a pessoa está ali para decidir
   de novo, e uma recusa sem o que consertar seria um beco. Sem terminal é recusa antes do primeiro
@@ -12383,13 +12382,14 @@ pedido — sem ele, o download segue sem PO token, como numa máquina com `none`
 `part-paths-are-read-as-arriving` recusa uma unidade que volte a nomear o caminho do store de uma
 parte, e o `parts-stay-out-of-the-base` lê o fecho dos dois sistemas construídos.
 
-**Nada não livre na base.** Todo programa não livre da distro é uma parte: o Chrome, o VS Code, o
-Claude Code, o Android Studio e o SDK, o unrar e o uade. Eles vêm de uma porta só
+**Os programas não livres da distro são partes.** O Chrome, o VS Code, o Claude Code, o Android
+Studio e o SDK, o unrar e o uade são downloads, e chegam como partes, de uma porta só
 (`nix/parts-pkgs.nix`): uma instância do nixpkgs que admite exatamente esses nomes, e outra para o
-SDK, que ignora predicado. Ela substitui as três instâncias separadas que havia. O sistema não tem
-`allowUnfree`, e o predicado dele só tem o que a pessoa consentiu. O `the-base-admits-no-unfree`
-avalia os três sistemas de referência inteiros assim, e um não livre que voltasse por qualquer
-caminho derrubaria a avaliação com o nome dele. Uma entrada do registro vira parte com
+SDK. Ela substitui as três instâncias separadas que havia. **Não livre é aprovado** (decisão do dono,
+2026-10-24): o `pkgs` do sistema tem `allowUnfree`, e nenhum não livre recusa uma avaliação. O
+`unfree-never-refuses` avalia as três referências e a sonda Intel, cuja câmera IPU6 puxa
+`ipu6-camera-bins`. O que não pode ser redistribuído espera a primeira rede numa máquina instalada sem
+ela (seção "Instalação sem rede"). Uma entrada do registro vira parte com
 `part = true` (`heavy` para a que demora), e o registro a declara em vez de pô-la no
 `systemPackages`. Quem roda o programa nomeia o caminho estável, nunca o do store:
 - a unidade do rodapé recebe o do Claude Code e o do VS Code;
@@ -15401,15 +15401,11 @@ do `run` existe ali.
   e o switch nunca a reinicia (`restartIfChanged = false`): reiniciar uma unidade exigida reinicia
   quem a exige — todo bind. O `extension-vm` prova o boot e a troca (passos 6 e 7). O contador de versão da extensão virou um programa
   (`nix/extension-counter.nix`), testável sem VM (`extension-version-moves`).
-- **O id do OrcaSlicer é lido do pacote na avaliação** (`workshop.nix`, `builtins.readDir`), com
-  exatamente uma entrada `.desktop` exigida: escrito à mão sem nada que o conferisse, era um segundo
-  lugar decidindo o nome, certo até o dia em que o upstream renomeia o arquivo. O preço é
-  import-from-derivation: avaliar um sistema com a oficina ligada — o do gate inclusive — espera o
-  fechamento do OrcaSlicer (~2 GiB) estar no store. Decisão do dono (2026-10-04): o id PODE ser
-  escrito à mão, desde que um check o compare com o pacote — e o `models-open-in-orca` já lê a
-  entrada do pacote por conta própria e exige que ela seja o padrão dos três tipos, então trocar a
-  leitura por uma constante não tira a guarda. A troca não é obrigatória; o que não pode é um nome à
-  mão sem esse check.
+- **O id do OrcaSlicer é uma constante** (`workshop.nix`), que o `models-open-in-orca` compara com a
+  entrada do pacote, exigindo que ela seja o padrão dos três tipos de modelo. Ele era lido do pacote na
+  avaliação (`builtins.readDir`), e isso era import-from-derivation: avaliar um sistema com a oficina
+  ligada esperava o fechamento do OrcaSlicer (~2 GiB) estar no store, o que uma instalação sem rede
+  não pode pagar (L25). A decisão do dono (2026-10-04) já permitia o nome à mão com esse check.
 - **A página de data e hora tem foto**: `photograph --door locale --scene watch-on|watch-asking|
   watch-system` desenha a vigia do brain nos três estados, e a câmera de cada porta (no crate dela,
   sobre o `photo::planted`) fotografa a rede (`lan`, `hotspot`, `vpn`), o Bluetooth (`phone`), a
@@ -19377,36 +19373,32 @@ nada mudou" sem que o roteiro leia log nenhum.
 
 ### O instalador: o repositório da pessoa, a rede e o release (L20)
 
-O instalador passou a fazer a máquina **da pessoa**, e não uma máquina que ela depois adota. Três
-decisões do dono (2026-10-05) mudaram o que ele pergunta e em que ordem: o repositório privado é
-obrigatório, a rede é exigida, e a máquina segue a branch `release`.
+O instalador passou a fazer a máquina **da pessoa**, e não uma máquina que ela depois adota. O
+repositório privado é obrigatório (decisão do dono, 2026-10-05). A rede deixou de ser exigida, e os
+pertences terminam no primeiro boot (L25, seção "Instalação sem rede").
 
-**As perguntas são dezoito.** As três do repositório vêm depois da rede, cada uma provada antes da
-seguinte: o endereço (só o endereço, como antes), o **acesso** e a **senha dos pertences**.
+**As perguntas são dezoito.** As três do repositório vêm depois da rede. Com rede, cada uma é provada
+antes da seguinte; sem rede, nenhuma é provada, e o primeiro boot confere tudo.
 
 - **O acesso de um endereço SSH não é digitado.** O instalador faz uma chave de implantação para esta
   máquina numa home de rascunho em RAM (`/run/ronoctua-install`, `ronoctua-belongings keygen`) e a
   mostra em texto, em QR e com a página "adicionar chave" do servidor quando ele é um dos três
-  conhecidos (GitHub, GitLab, Codeberg). Depois pergunta ao repositório, a cada poucos segundos e só
-  enquanto a tela está à mostra, se a chave **lê e escreve** (`probe --json`). Uma chave só de
-  leitura deixaria a restauração rodar e falharia na primeira sincronização da máquina — longe da
-  causa. Um endereço HTTPS pede um token, digitado escondido e testado do mesmo jeito.
-- **A senha abre o `key.age` antes de qualquer coisa ser tocada** (`verify-passphrase --json`): um erro
-  de digitação achado depois do disco apagado é uma restauração que falha com a máquina pela metade.
-  Num repositório **vazio** não há o que abrir, então a senha é digitada duas vezes (com o mínimo de
-  12 caracteres de uma frase de disco), e a instalação **cria** o repositório (`init`) onde teria
-  restaurado.
-- **A rede é um portão.** Sair da pergunta da rede exige um link — o cabo, ou a rede Wi-Fi escolhida e
-  conectada — sem página de login na frente (`gate.rs`, puro sobre o `Snapshot` do `ronoctua-network`);
-  sem ele a tela diz por quê, onde a pessoa pode consertar. **O portão não julga se o link chega à
-  internet:** o veredito do NetworkManager sobre isso é buscar uma página de um servidor por HTTP
-  simples (`nix/modules/network.nix`), e uma rede que bloqueia a porta 80, ou esse servidor fora do ar,
-  sai "limitada" com o GitHub, o cache e o repositório da pessoa respondendo — e a instalação ficava
-  impossível ali. Quem decide são as perguntas de verdade que vêm logo depois (o release, o acesso, a
-  senha), cada uma na sua tela. A frase da pergunta nomeia os servidores que serão alcançados (o do
-  release e os caches binários do `nix`): responder é o consentimento. O endereço digitado é o
-  consentimento do servidor do repositório, gravado no `consent.json` da home de rascunho e, depois, no
-  da pessoa.
+  conhecidos (GitHub, GitLab, Codeberg). Com rede, pergunta ao repositório, a cada poucos segundos e
+  só enquanto a tela está à mostra, se a chave **lê e escreve** (`probe --json`): uma chave só de
+  leitura deixaria a restauração rodar e falharia na primeira sincronização da máquina, longe da
+  causa. Sem rede, `Enter` segue com a chave mostrada. Um endereço HTTPS pede um token, digitado
+  escondido, testado com rede e só guardado (`0600`) sem ela.
+- **Com rede, a senha abre o `key.age` antes de qualquer coisa ser tocada** (`verify-passphrase
+  --json`). Num repositório **vazio** não há o que abrir, então a senha é digitada duas vezes, com o
+  mínimo de 12 caracteres de uma frase de disco. **Sem rede**, não dá para saber se o repositório está
+  vazio: a senha é sempre digitada duas vezes, com o mínimo, e nunca conferida.
+  `Answers::belongings_checked` diz o que foi provado, e o registro do primeiro boot leva isso.
+- **A rede é opcional.** A linha do cabo diz que sem rede a instalação segue offline. Com o cabo
+  escolhido e nenhum link, a instalação segue (`Answers::online = Some(false)`), e as três telas do
+  repositório dizem, no tom de aviso, que o primeiro boot o confere. Uma rede Wi-Fi escolhida cuja
+  senha é recusada continua sendo dita como erro: a pessoa digita de novo ou volta e escolhe sem rede.
+  O `gate::unsettled` não espera um link que não está subindo. Nada da instalação usa a rede quando
+  ela existe: ela serve às conferências das perguntas e à máquina instalada, que guarda o perfil.
 - **O instalador entra no Wi-Fi só para este boot, e a senha fica com o próprio NetworkManager**
   (`Manager::join_for_this_boot`: perfil `persist = memory`, `psk-flags = 0`). O ISO não roda agente
   de segredos, e o NetworkManager não usa a senha que vem na chamada quando ela é do agente ou "não
@@ -19414,36 +19406,34 @@ seguinte: o endereço (só o endereço, como antes), o **acesso** e a **senha do
   tentar a chave (`no secrets: No agents were available for this request`, medido no 1.56 numa VM
   com `mac80211_hwsim`) — toda senha parecia errada. Em memória, a senha fica num arquivo `0600` do
   root em `/run/NetworkManager`, que é RAM, e some quando a máquina desliga; `memory` e não
-  `volatile`, para um link que cai voltar sozinho no meio do download. O portão julga a ativação da
-  rede escolhida, e não "algum link de pé" (um cabo deixava passar uma senha recusada); espera o
-  veredito da entrada até `JOIN_MOST_S` (90 s, acima dos 25 s que o NetworkManager dá à chave e dos
-  45 s do DHCP): uma chave recusada é dita na hora, e uma ativação que acabou por outro motivo é
-  pedida de novo nesse prazo — depois de uma senha errada o `wpa_supplicant` segura a rede, e a
-  certa chegou a passar dos 25 s (veja "Só a chave recusada é senha errada"). Apaga o perfil que
-  falhou. O rádio é o que vê a rede, não o primeiro da lista. A rede já conectada quando o instalador
-  abre (pelo `nmtui`) aparece marcada e a pergunta abre nela; a senha continua sendo pedida, porque é
-  ela que a máquina instalada guarda, e entrar de novo com ela prova que está certa.
-- **O modo sem terminal confere as mesmas quatro coisas** antes do primeiro passo, e sai com o código 3
-  quando falta rede (`installer-requires-network`) e 4 quando o repositório recusa. O ensaio (sem
-  `--execute`) não pergunta nada à rede.
+  `volatile`, para um link que cai voltar sozinho. O instalador julga a ativação da rede escolhida, e
+  não "algum link de pé" (um cabo deixava passar uma senha recusada); espera o veredito da entrada
+  até `JOIN_MOST_S` (90 s, acima dos 25 s que o NetworkManager dá à chave e dos 45 s do DHCP): uma
+  chave recusada é dita na hora, e uma ativação que acabou por outro motivo é pedida de novo nesse
+  prazo — depois de uma senha errada o `wpa_supplicant` segura a rede, e a certa chegou a passar dos
+  25 s (veja "Só a chave recusada é senha errada"). Apaga o perfil que falhou. O rádio é o que vê a
+  rede, não o primeiro da lista. A rede já conectada quando o instalador abre (pelo `nmtui`) aparece
+  marcada e a pergunta abre nela; a senha continua sendo pedida, porque é ela que a máquina instalada
+  guarda.
+- **O modo sem terminal confere o que dá para conferir** antes do primeiro passo (`Reach::checks`): com
+  rede, o acesso e a senha, saindo com 4 quando o repositório recusa; sem rede, copia o arquivo de
+  acesso nomeado, confere o mínimo da senha, diz que está offline e segue
+  (`installer-installs-without-network`). O ensaio (sem `--execute`) não pergunta nada à rede.
 
 **As verificações são jobs, e a tela não espera por elas.** O `State` da TUI só diz o que quer
 conferido (`job.rs`); uma thread roda (`reach.rs`), e a resposta volta numerada — a de uma tela que a
 pessoa já deixou é descartada. Assim o estado continua uma função pura de teclas e respostas, os
 testes respondem os jobs sem rede, e o modo sem terminal roda os mesmos jobs em fila.
 
-**O plano faz o flake da máquina a partir do template,** e as declarações da pessoa entram **antes** do
-disco: `templates/machine` → `host.nix` → `facter.json` → `nix flake lock` → o atributo, perguntado ao
-próprio flake (`nixosConfigurations`; o instalador não escreve mais `#noctua`) → a parte em claro do
-repositório copiada para fora (`ronoctua-belongings plain`) → aplicada no `person/` do flake pelo
-mesmo aplicador root da máquina (`ronoctua-person apply --owner root`) → cada entrada experimentada
-(`ronoctua-person verify`, que retém o que não constrói). Uma declaração que não baixa aparece aqui,
-com o disco intacto. Só então `disko`, a cópia, a senha, o Wi-Fi e o `nixos-install` — a máquina já
-nasce com os programas da pessoa. Depois, na home dela: o acesso (`0700`/`0600`, dela), o servidor no
-`consent.json`, o `belongings.json` (antes da restauração, que lê o repositório dele — assim a linha
-de comando da restauração não nomeia nem o repositório nem o acesso) e a restauração, rodada **como a
-pessoa** (`setpriv` com o uid e o gid do `/etc/passwd` do alvo). A restauração escreve o espelho em
-`~/.local/state/ronoctua/person/`, e o `last.json` dela é a base da primeira sincronização.
+**O plano faz o flake da máquina a partir do template e constrói o sistema antes do disco:**
+`templates/machine`, mirado na árvore do ISO → `host.nix` → `facter.json` → `nix flake lock
+--offline` → o atributo, perguntado ao próprio flake (`nixosConfigurations`) → as recusas encenadas do
+root aplicadas (abaixo) → **o sistema construído** (`build-first`). Só então `disko`, a cópia, a senha,
+o Wi-Fi e o `nixos-install`, que copia o que o `build-first` construiu, e as partes que o ISO leva
+semeadas no store da máquina (`ronoctua-parts seed`). Depois, na home da pessoa: o acesso
+(`0700`/`0600`, dela), o servidor no `consent.json`, o `belongings.json`, o registro do primeiro boot
+e a senha selada no TPM. A cópia da parte em claro, a chave fixada, as declarações aplicadas e a
+restauração são do primeiro boot (seção "Instalação sem rede").
 
 **O programa que a pessoa desmarca (a décima oitava pergunta) é uma RECUSA dela, não uma linha do
 `host.nix`.** É a decisão da pessoa sobre um programa, e não um fato da máquina: vai para o
@@ -19452,45 +19442,32 @@ desmarcar aqui não tira o programa das outras máquinas), e é o mesmo dado que
 e que a central desfaz ("Trazer de volta"). Uma linha no `host.nix` seria um segundo mecanismo, que
 a central não alcança. Escrever o arquivo não basta, porque a próxima aplicação troca o `person/` da
 máquina inteiro pelo espelho da pessoa, e uma máquina com chave fixada retém documento que o
-manifesto assinado não cobre. Por isso a recusa precisa estar, assinada, no repositório, no espelho e
-na cópia da máquina antes do `nixos-install` (`plan.rs`, `executor.rs`):
+manifesto assinado não cobre. Por isso a recusa entra em dois tempos (`plan.rs`, `executor.rs`,
+`first_boot.rs`):
 
-- **Repositório com algo dentro: a ESCOLHA da máquina, assinada e enviada antes do disco.** O
-  instalador escreve em `/run/ronoctua-install/choice.json` as duas metades da resposta para este
-  hostname (`ronoctua_person::choice::Choice`: os desmarcados e os marcados), e a cópia da parte em
-  claro a aplica ao `declined.json` do repositório — cada desmarcado recusado nesta máquina, cada
-  marcado trazido de volta nela —, assina com a chave que a senha abriu (o contador sobe) e envia
-  (`ronoctua-belongings plain --decline`, só com `--passphrase`) antes de copiar para fora. Uma `full`
-  entrega a escolha SEMPRE, mesmo sem nada desmarcado: uma reinstalação, ou uma nova tentativa, com o
-  mesmo nome traz de volta o que a anterior deixou de fora. O rótulo do passo diz que o repositório é
-  escrito antes do disco, e a revisão, que o marcado volta. O `apply` com a chave fixada aceita a
-  recusa assinada, o `nixos-install` já não instala o programa e a restauração a leva ao espelho. Um
-  envio que falha para a instalação ali, com o disco intacto e a frase da recusa (`Event::Refused`, a
-  última linha `--json` do programa). Uma escolha enviada fica no repositório mesmo que a instalação
-  falhe depois: vale só para aquele hostname, e repetir não envia nada de novo.
-- **Repositório vazio: aplicada sem assinatura antes do `pin`, e o `init` a assina.** Não há chave para
-  assinar, e uma máquina sem chave fixada aceita as declarações como vieram (a regra do `tree.rs`, que
-  só tira programas). O documento vai para o staging de root no formato da parte em claro, numa pasta
-  própria (`staged-declines/person/software/declined.json`, `0644` em pastas `0755`, como o walker
-  exige) e o `apply` o leva ao `person/` do flake antes do disco; depois do `nixos-install`, o mesmo
-  documento vai para o espelho da pessoa, dela, antes do `init`, cuja primeira sincronização o assina
-  com a chave nova e o envia. Só então vem o `pin`.
-- **Nos dois casos, o que o aplicador fez é LIDO antes do disco** (`left-out-applied`): se o
-  `declined.json` do flake de trabalho não recusa cada desmarcado para este hostname, ou recusa um
-  marcado com uma recusa DESTA máquina, a instalação para ali, com a frase. Uma assinatura que não
-  cobrisse o arquivo juntado faria o aplicador guardar o que a máquina tinha (nada) com um aviso só, e
-  o `nixos-install` instalaria o que a pessoa deixou de fora. Ler é permitido fora do
-  `ronoctua-person`; escrever, não.
-- **Uma execução começa do zero**: o flake de trabalho, a cópia da parte em claro e as recusas
-  preparadas de uma tentativa anterior são apagados antes do primeiro passo (`plan::leftovers`) — o
-  template é copiado por cima do flake de trabalho, e a cópia ou as recusas daquela tentativa seriam
-  aplicadas como desta. As recusas de um repositório vazio têm pasta própria, que nada mais enche.
+- **Na instalação: encenada pelo root, aplicada antes do disco.** A máquina ainda não tem chave
+  fixada, e uma máquina assim aceita as declarações como vieram (a regra do `tree.rs`, que só tira
+  programas). O documento vai para o staging de root no formato da parte em claro, numa pasta própria
+  (`staged-declines/person/software/declined.json`, `0644` em pastas `0755`, como o walker exige), e o
+  `apply` o leva ao `person/` do flake antes do `build-first`. O que o aplicador fez é LIDO antes do
+  disco (`left-out-applied`): se o `declined.json` do flake de trabalho não recusa cada desmarcado para
+  este hostname, ou recusa um marcado com uma recusa DESTA máquina, a instalação para ali, com a frase.
+- **No primeiro boot: a ESCOLHA chega ao repositório.** O registro leva as duas metades da resposta
+  para este hostname (`ronoctua_person::choice::Choice`: os desmarcados e os marcados) e as recusas.
+  Num repositório com algo dentro, a cópia da parte em claro aplica a escolha ao `declined.json` dele
+  (cada desmarcado recusado nesta máquina, cada marcado trazido de volta nela), assina com a chave que
+  a senha abriu e envia (`ronoctua-belongings plain --decline`). Depois a chave é fixada e a cópia
+  aplicada. Uma `full` entrega a escolha SEMPRE, mesmo sem nada desmarcado: uma reinstalação com o mesmo
+  nome traz de volta o que a anterior deixou de fora. Num repositório vazio, as recusas vão para o
+  espelho da pessoa antes do `init`, cuja primeira sincronização as assina com a chave nova.
+- **Uma execução começa do zero**: o flake de trabalho e as recusas encenadas de uma tentativa anterior
+  são apagados antes do primeiro passo (`plan::leftovers`). O template é copiado por cima do flake de
+  trabalho, e as recusas daquela tentativa seriam aplicadas como desta.
 - **Uma recusa de TODAS as máquinas continua**, mesmo de um programa marcado: é a decisão da pessoa,
-  gravada pela central em outro dia, e a marca do instalador é sobre esta máquina só. A cópia a nomeia
-  (`kept-everywhere` no `--json`), e o instalador a diz depois do passo (`Event::Said`); a ajuda da
-  lista e a revisão já diziam.
-- **Um carimbo por execução** (`Answers::left_out_at`): as cópias saem byte a byte iguais. Sem
-  carimbo o passo falha, nunca inventa um.
+  gravada pela central em outro dia, e a marca do instalador é sobre esta máquina só. A ajuda da lista
+  e a revisão já dizem.
+- **Um carimbo por execução** (`Answers::left_out_at`): as cópias saem byte a byte iguais. Sem carimbo o
+  passo falha, nunca inventa um.
 
 **Nenhum filho herda uma resposta.** No modo sem terminal as senhas chegam pelo ambiente, e todo
 programa que o instalador inicia as herdaria — `mkpasswd`, `lsblk`, `btrfs`, o `systemd-creds` que o
@@ -19501,42 +19478,25 @@ instalador **se reinicia** antes de qualquer outra coisa: o mesmo pid, o ambient
 consumidas antes do primeiro passo. É a primeira parede; a segunda é que todo filho que o instalador
 monta passa por um construtor só (`executor::command`), que as remove de novo. Um teste de integração
 lê o `/proc/<pid>/environ` do instalador de verdade no instante em que ele bate num barramento de
-sistema que o teste controla. Como o ambiente não leva mais as respostas, o salto para o release as
-entrega no mesmo arquivo `0600` dos dois modos.
+sistema que o teste controla.
 
-**A máquina segue o release, e o instalador também** (`release.rs`). Logo depois do portão, o
-instalador pergunta ao `nix` em que revisão a `release` está (`nix flake metadata --refresh`, com a
-referência que o template nomeia — o instalador não soletra o repositório da distro). Um release **mais
-novo** que o ISO (feito depois da revisão dele) inicia o instalador **dele** (`nix run <release
-travado>#install -- --from-release <rev> --distro <árvore>`), com as respostas dadas, num arquivo `0600`
-em RAM que o novo lê e apaga (`--answers`). O `--from-release` impede um segundo salto. **Só o mais novo
-é seguido:** um ISO feito de um commit à frente do release — o jeito de experimentar um instalador novo
-antes do `.#release` — trocaria o próprio instalador pelo mais velho a cada vez, e o novo nunca rodaria.
-Um release que **voltou** (`.#release --rollback-to`) por isso não é seguido: segui-lo é decisão do
-dono, e pediria reconhecer a volta em vez de tratar toda revisão mais velha como uma.
-
-Fica com a própria distro um instalador cuja revisão é a do release, um **à frente** dele, um de
-**desenvolvimento** (árvore suja ou sem revisão: o que ele traz é o que está sendo testado) e um que não
-teve resposta do release — os três últimos dizem isso na revisão. Ficando com a própria árvore, o flake
-de trabalho é **apontado** para ela antes de ser travado (a única string que é a referência do release,
-trocada; um template que não a tem exatamente uma vez é recusado antes do disco), e **o alvo fica com o
-par apontado**: o `flake.nix` e o `flake.lock` que construíram o sistema, copiados juntos depois da
-trava e nunca mais escritos. Pôr de volta o `flake.nix` do template depois do `nixos-install` deixava-o
-discordando de uma trava feita para o apontado, e toda avaliação que não pode mexer na trava (o `verify`
-do `ronoctua-person`, o `apply` da máquina, os dois com `--no-update-lock-file`) recusava a máquina até
-uma atualização travar de novo. Travar o template contra o release no lugar faria a pasta descrever um
-sistema que não roda — justamente o que o `apply` da máquina põe de volta numa falha. A árvore que o
-flake apontado nomeia é um caminho do store que nada mais segura: o `host.nix` de uma máquina apontada
-a guarda em todo sistema construído dela (`system.extraDependencies = [ inputs.self.outPath ]`), senão
-a primeira coleta deixava o `/etc/nixos` nomeando nada. Uma máquina apontada fica na árvore em que foi
-instalada; passar ao release pede que a atualização ponha o `flake.nix` do template de volta antes de
-travar (`docs/PENDING.md`).
+**A máquina é instalada da árvore do ISO, e segue o release depois** (L25). O instalador não pergunta
+ao release em que revisão ele está, e não salta para o instalador de um release mais novo: isso pedia
+rede e compilava as unidades do release no ISO. O flake de trabalho é sempre **apontado** para a
+árvore do ISO antes de ser travado: a única string que é a referência do release é trocada, e um
+template que não a tem exatamente uma vez é recusado antes do disco. O alvo fica com o par apontado:
+o `flake.nix` e o `flake.lock` que construíram o sistema, copiados juntos depois da trava. Pôr de volta
+o `flake.nix` do template depois do `nixos-install` deixava-o discordando de uma trava feita para o
+apontado, e toda avaliação que não pode mexer na trava recusava a máquina. A árvore que o flake
+apontado nomeia é um caminho do store que nada mais segura: o `host.nix` de uma máquina apontada a
+guarda em todo sistema construído dela (`system.extraDependencies = [ inputs.self.outPath ]`). A
+primeira atualização desmira a máquina (`ronoctua-machine update-distro`, seção "Instalação sem
+rede").
 
 **A árvore da distro no ISO não é mais a pasta da máquina.** Ela fica em `/etc/ronoctua/distro`
-(`RONOCTUA_FLAKE_DIR`, com `RONOCTUA_FLAKE_REV` e `RONOCTUA_FLAKE_LAST_MODIFIED`), e o `/etc/nixos`
-do ISO é de ninguém: o que vira máquina é o template. O ISO e o app `.#install` levam no `PATH` os dois
-programas da pessoa construídos com o instalador (`rust.belongings`, `rust.person`) — o instalador de
-um release iniciado por `nix run` roda os do release, não os do ISO.
+(`RONOCTUA_FLAKE_DIR`), e o `/etc/nixos` do ISO é de ninguém: o que vira máquina é o template. O ISO e o
+app `.#install` levam no `PATH` os programas construídos com o instalador que ele roda pelo nome
+(`rust.belongings`, `rust.person`, `rust.parts`).
 
 **O swap é a RAM, até o disco não poder.** O padrão do `ronoctua.swapSize` já sai do relatório de
 hardware; o que o relatório não sabe é o disco. O instalador mede a RAM pelo `ronoctua-memory` (a
@@ -19627,6 +19587,119 @@ cortado: um código pela metade não é lido por câmera nenhuma.
 
 
 <!-- anchor: L21 -->
+
+### Instalação sem rede (L25)
+
+**A instalação não usa rede nenhuma, de propósito.** O `nixos-install` é tudo ou nada: um download que
+falhava (o cache npm do provedor de PO token, em 2026-10-23) derrubava a instalação inteira, e tentar
+de novo recomeçava das perguntas. Agora o ISO leva tudo o que a instalação constrói, todo `nix` do
+instalador roda `--offline` sem substituter e sem registro (`NIX_CONFIG`, `plan::OFFLINE_NIX_CONFIG`),
+e uma rede que por acaso esteja de pé não muda o resultado. O que precisa de download chega depois, como
+parte (seção "Partes").
+
+**O conteúdo do ISO é calculado, nunca listado** (`nix/installer/offline.nix`):
+
+- o fecho de execução das duas referências (`noctua`, o full, e `minimal`) e de três sondas
+  (`tests/fixtures/machine-{elsewhere,bios,guest}`): um notebook Intel em português, um desktop AMD que
+  dá boot por BIOS no perfil minimal e um convidado QEMU que deixou programas de fora. Os relatórios
+  de hardware delas são escritos à mão, só com os campos que os módulos do facter leem, para que cada
+  ramo traga o pacote dele (microcode, GRUB, módulos de convidado);
+- **a cola**: as saídas que cada derivação que uma sonda constrói diferente das referências toma de
+  derivações que não diferem. Uma instalação constrói umas cem derivações que dependem das respostas e
+  do hardware (`etc`, o initrd, as unidades que nomeiam o host, o script do `disko`), e as entradas
+  delas (`make-initrd-ng`, `cpio`, o stdenv, o ambiente do perl) não estão em fecho de execução
+  nenhum. Sem elas, um `nixos-install` offline pedia 4684 derivações, a partir da semente do
+  bootstrap. Uma derivação que toma um download (uma FOD) é pacote construído da fonte: o alvo nunca a
+  constrói, porque precisaria da rede, então ela vem pronta no fecho de uma sonda e não gera cola;
+- a fonte de todo nó do `flake.lock` (`lockSources`), que avaliar o flake da máquina busca;
+- as partes que ele semeia: as livres que o minimal quer, no ISO publicado (hoje nenhuma); todas as
+  das duas referências, não livres inclusive, no ISO completo.
+
+**A cola é lida em tempo de build, e lida de volta** (import-from-derivation). Uma avaliação pura não
+lê um `.drv` (o Nix 2.34 recusa o `readFile`), então a caminhada é uma derivação
+(`nix/scripts/offline-glue.py`). Ela recebe os `.drv` de topo com `unsafeDiscardOutputDependency`,
+que leva ao sandbox os arquivos do grafo e não constrói nada. O `drvPath` puro, contexto profundo, faria
+de toda saída do grafo uma entrada, e construir a caminhada seria construir tudo. É a única IFD da
+árvore, só no conteúdo do ISO, e roda em menos de um segundo, sem rede.
+
+**Um hardware que nenhuma sonda cobre falha antes do disco.** O passo `build-first` constrói o sistema
+(`nix build --offline … .toplevel`) antes do `disko`: o que faltar aparece com o disco intacto.
+
+**O sistema é construído no store do ISO, e o `nixos-install` só o copia.** O `host.nix` é reescrito
+depois do `disko`, com o `resume_offset` do swapfile que ele acaba de criar. Por isso um segundo build
+(`inst-step-build`, do flake já copiado para o alvo) refaz as poucas derivações que a linha de comando
+do kernel alcança e captura o caminho do sistema (`--print-out-paths`, `Capture::Toplevel`). O
+`nixos-install --system <caminho>` copia e ativa esse sistema. O `nixos-install --flake` avaliaria o
+flake contra o store do ALVO, que não tem as fontes dos inputs, e tentaria baixá-las; foi assim que a
+primeira rodada do `installer-offline-vm` parou.
+
+**Todos os locales prontos.** O sistema gera todo locale da glibc (`supportedLocales = [ "all" ]`), e
+o arquivo é então o `glibcLocales` do nixpkgs, o mesmo do cache público e o que o shell já cita. Uma
+lista era uma derivação própria, que cada máquina compilava da fonte da glibc, e o locale da máquina,
+que o `host.nix` juntava à lista, perdia para a da base por prioridade: quem escolhia `de_DE.UTF-8`
+recebia o `LANG` sem o locale gerado.
+
+**O que ninguém pode redistribuir espera a primeira rede** (decisão do dono, 2026-10-24). Dois ramos
+do relatório de hardware puxam pacotes que o nixpkgs marca não livres e não redistribuíveis: a câmera
+IPU6 (`ipu6-camera-bins`, `ivsc-firmware`, ISSL) e as ferramentas do Parallels (`prl-tools`). Nenhum
+cache público os tem, e o ISO publicado não pode levá-los, então uma instalação sem rede não os
+constrói. O instalador deixa no diretório da máquina um marcador (`hardware-deferred.json`,
+`ronoctua_person::names::DEFERRED_HARDWARE`), e enquanto ele está lá esses ramos ficam desligados na
+detecção (`ronoctua.hardware.deferUndistributable`, `nix/modules/host.nix`), com um aviso de build.
+Todo `ronoctua-machine apply` que acha o marcador constrói primeiro sem ele. Se funciona, o marcador
+some e o hardware chegou. Se não funciona (sem rede, um download que falhou), o marcador volta, a
+máquina é construída como estava, inteira e com esses ramos desligados, e o journal diz por quê. As
+sondas carregam o marcador, como toda máquina instalada sem rede, e o
+`iso-carries-nothing-undistributable` confere que nenhum sistema de onde o ISO sai leva um pacote
+não redistribuível.
+
+**A máquina é sempre mirada na árvore do ISO, e a primeira atualização a desmira.** O instalador não
+salta mais para o release (o `--from-release` saiu). O flake da máquina aponta para a árvore do ISO
+(`path:/nix/store/…`), e a máquina guarda o par `flake.nix`/`flake.lock` com que foi construída. Um
+`nix flake update` de um input `path:` trava o mesmo caminho, então o passo `flake-update` roda
+`ronoctua-machine update-distro`. Ele escreve de volta o endereço do template, lido do
+`templates/machine/flake.nix` dessa mesma árvore, e move o input. Se o movimento não acontece (sem
+rede), o `flake.nix` volta como estava, porque um `flake.nix` que discorda da trava é recusado por toda
+avaliação que não pode mexer nela.
+
+**Os pertences terminam no primeiro boot.** Copiar a parte em claro, fixar a chave, aplicar as
+declarações e restaurar a home perguntam ao servidor do repositório. O instalador faz o que faz sozinho:
+- o acesso na home da pessoa, o consentimento do host e o `belongings.json`;
+- os programas deixados de fora, aplicados como recusas encenadas do root, para o `nixos-install` já
+  deixá-los de fora;
+- **o registro** (`/persist/etc/ronoctua/first-boot/record.json`: o endereço, a máquina, se o
+  repositório estava vazio quando deu para perguntar e a escolha de programas);
+- **a senha dos pertences selada no TPM** ao lado do registro, pelo mesmo `systemd-creds` da senha do
+  Wi-Fi, sob um nome próprio. Ela nunca vai ao disco em claro.
+
+No primeiro boot, `ronoctua-first-boot` (`nix/modules/first-boot.nix`) roda a sequência que o
+instalador rodava, contra a máquina em vez de `/mnt`. A sequência é dado (`first_boot::sequence`): o
+programa a mostra (`--plan`), e o `person-decline-chain` a refaz com os programas de verdade. A cópia
+e a restauração rodam como a pessoa, com o acesso e o consentimento dela e uma pasta de execução dela
+como `XDG_RUNTIME_DIR` (a sonda guarda ali o repositório de rascunho), e o `pin` e o `apply` rodam como
+root.
+
+Ele sonda primeiro. "Inalcançável" (código 10) é espera, não falha, como o "precisa de você" do TPM
+(12). Um passo que falhou (1) é tentado cada vez mais tarde pelo systemd. Como uma parte, ele nunca
+segura nem derruba o boot: um timer o inicia depois do boot e uma hora depois de cada tentativa, e a
+rede subindo o inicia na hora. Concluído, o registro e a senha selada somem. Se o TPM não devolve a
+senha, ele para sem falhar, e a pessoa restaura pela vista dos pertences.
+
+**O ISO completo é do desenvolvedor e nunca é publicado.** `nix run .#iso-complete` constrói o mesmo
+instalador com todas as partes das duas referências a bordo, não livres inclusive
+(`installer-complete`, um `extendModules` do `installer`). O `ronoctua-parts seed` semeia o que ele
+leva, e a página das partes nasce vazia. Ele é visivelmente outro: `-complete` no nome e um marcador
+`/ronoctua-complete` na raiz. O `.#release` constrói só o `.#iso`, e o `release.py pack` recusa uma
+mídia com o marcador, qualquer que seja o nome (`the-complete-iso-is-never-released`).
+
+**O que prova.** O `installer-offline-vm` (tier lento):
+- boota o ISO real como pendrive, sem placa de rede (`/sys/class/net` só com `lo`), com swtpm;
+- instala o full, com programas de fora, respostas que nenhuma fixture dá e o relatório de hardware
+  da própria VM;
+- confere que nenhuma parte entrou no store instalado e que o registro e a senha selada estão em
+  `/persist`;
+- no segundo boot, digita a frase do LUKS pelo serial e chega à sessão da pessoa, sem unidade falha e
+  com o primeiro boot esperando a rede.
 
 ### Pertences: a lista do que vai para o repositório (L21)
 

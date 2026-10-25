@@ -85,8 +85,9 @@ sistema instalado bootam sem ele.
 
 A primeira é o **idioma**, e todas as telas seguintes aparecem nele. As listas já vêm com uma opção
 escolhida; o que só você sabe — disco, nome, senhas, o repositório — é digitado. Antes de começar,
-leia [O repositório dos pertences e a rede](#o-repositório-dos-pertences-e-a-rede): a instalação exige
-os dois, e a chave do repositório é adicionada no meio dela.
+leia [O repositório dos pertences e a rede](#o-repositório-dos-pertences-e-a-rede): o repositório é
+obrigatório, a rede não, e a chave do repositório é adicionada no meio da instalação ou antes do
+primeiro boot.
 
 | pergunta | observação |
 |---|---|
@@ -102,10 +103,10 @@ os dois, e a chave do repositório é adicionada no meio dela.
 | nome da máquina | começa com `noctua-`. Ex.: `noctua-thinkpad` |
 | sua senha | do usuário `noctua` |
 | frase-secreta do disco | criptografa o disco. **Guarde**, veja abaixo |
-| rede sem fio | escolha uma, ou "sem Wi-Fi" para instalar por cabo. A instalação exige rede |
+| rede sem fio | escolha uma, ou "sem Wi-Fi" para um cabo ou nenhuma rede. A instalação não usa rede; com ela, as perguntas do repositório são conferidas na hora |
 | repositório dos pertences | o endereço do seu repositório privado (SSH ou `https://`), sem senha dentro. Obrigatório |
-| acesso ao repositório | num endereço SSH, uma chave desta máquina que você adiciona ao repositório com escrita (a tela a mostra e espera); num `https://`, um token |
-| senha dos pertences | conferida no repositório antes de o disco ser tocado; num repositório vazio, escolhida e digitada duas vezes |
+| acesso ao repositório | num endereço SSH, uma chave desta máquina que você adiciona ao repositório com escrita (a tela a mostra; com rede, espera a chave funcionar); num `https://`, um token |
+| senha dos pertences | com rede, conferida no repositório; num repositório vazio, ou sem rede, digitada duas vezes, com pelo menos 12 caracteres |
 
 Todo o resto — placa de vídeo, touchpad, bateria, TPM, hibernação — é detectado automaticamente. O
 teclado não: o `nixos-facter` lê hardware, e layout é o que os seus dedos esperam.
@@ -162,12 +163,16 @@ Trocar `ronoctua.profile = "minimal"` por `"full"` liga todos de uma vez. Não �
 **5. Esperar e reiniciar.** Ao terminar, tire o pendrive.
 
 **6. Primeiro boot.** O disco pede a frase-secreta; depois dela a sessão entra sozinha, sem outra
-senha. Os pertences já estão na home: a instalação os restaurou antes do primeiro login.
+senha. Assim que a máquina alcança a rede, ela restaura os seus pertences na home (ou os começa num
+repositório vazio), com a senha que a instalação selou no TPM, e os programas que precisam de download
+chegam como partes (`LEADER s u d` mostra cada um). Sem rede, tudo espera e é tentado de novo sozinho;
+a máquina funciona inteira enquanto isso.
 
 ## Guardar a frase-secreta
 
 O disco é criptografado, e a frase-secreta é a única chave dele: é digitada a cada boot, e o TPM não
-guarda nada do disco (ele guarda só a senha do Wi-Fi). O porquê está em `nix/disko/default.nix`.
+guarda nada do disco (ele guarda só a senha do Wi-Fi e, até o primeiro boot restaurar os pertences, a
+senha deles). O porquê está em `nix/disko/default.nix`.
 
 Anote e guarde fora do computador. Sem ela, os dados são irrecuperáveis.
 
@@ -327,11 +332,10 @@ fica abaixo dos programas que mudaram.
 ### O seu cache binário
 
 Se os seus pertences nomeiam um cache binário seu (o seu Cachix, na página do cache da vista da
-atualização: `LEADER s u c`), a instalação já baixa dele, antes do `cache.nixos.org`. Para um cache
-privado, o instalador lê o token da parte cifrada com a senha dos pertences, antes de tocar no disco,
-e deixa na máquina o netrc do root com que o Nix dela o lê. Depois, cada atualização que troca a
-máquina envia para ele o que ela construiu: num cache público, só as saídas da própria distro; num
-privado, o sistema.
+atualização: `LEADER s u c`), a máquina o usa depois que os pertences chegam, no primeiro boot: a
+instalação não baixa nada. Para um cache privado, o token entra pela página do cache (um gesto pela
+porta do sudo). Depois, cada atualização que troca a máquina envia para ele o que ela construiu: num
+cache público, só as saídas da própria distro; num privado, o sistema.
 
 ### Uma máquina instalada antes do flake próprio
 
@@ -350,40 +354,39 @@ coisa, diga de onde vem a distro: `nix run .#adopt-machine -- --distro <flake>`.
 
 ## O repositório dos pertences e a rede
 
-A instalação **exige rede e o seu repositório privado.** É com ele que a máquina nasce sua: as
-declarações (os programas que você declarou) entram no sistema antes de ele ser construído, e os seus
-pertences são restaurados na home antes do primeiro login.
+A instalação **exige o seu repositório privado, e não usa rede.** O pendrive leva tudo o que a
+instalação constrói; o repositório é com o que a máquina nasce sua, no primeiro boot: os seus
+pertences são restaurados na home, e as declarações (os programas que você declarou) chegam à máquina.
 
 Tenha à mão, antes de começar:
 
 1. **O endereço do repositório** — `git@github.com:voce/pertences.git`, `ssh://…` ou `https://…`, sem
-   senha dentro. Um repositório vazio também serve: a instalação o cria.
+   senha dentro. Um repositório vazio também serve: o primeiro boot o começa.
 2. **Onde adicionar uma chave a ele.** Num endereço SSH o instalador faz uma chave só desta máquina e a
    mostra em texto e em QR (dá para ler com o celular), com o link da página "adicionar chave" no
-   GitHub, no GitLab e no Codeberg. Adicione-a **com permissão de escrita**: a tela só segue quando a
-   chave lê e escreve. Num endereço `https://`, tenha um token que leia e escreva.
-3. **A senha dos pertences.** Ela é conferida no repositório antes de o disco ser tocado. Num
-   repositório vazio, você a escolhe ali (pelo menos 12 caracteres) e a digita duas vezes.
+   GitHub, no GitLab e no Codeberg. Adicione-a **com permissão de escrita**. Com rede, a tela só segue
+   quando a chave lê e escreve; sem rede, segue, e o primeiro boot espera a chave funcionar. Num
+   endereço `https://`, tenha um token que leia e escreva.
+3. **A senha dos pertences.** Com rede, ela é conferida no repositório. Num repositório vazio, ou sem
+   rede, você a digita duas vezes (pelo menos 12 caracteres). Ela vai selada no TPM até o primeiro boot
+   restaurar os pertences, e nunca fica no disco em claro.
 
-A pergunta da rede diz quais servidores a instalação vai alcançar; escolher uma rede, ou o cabo, é
-deixar. Sem cabo, sem a rede escolhida conectada ou atrás de uma página de login, a tela diz por quê e
-não segue; o resto — se o GitHub, o cache e o seu repositório respondem — é conferido nas telas
-seguintes, cada uma dizendo o que não respondeu.
+A rede é opcional: "sem Wi-Fi" serve para um cabo e para nenhuma rede. Uma rede escolhida fica
+guardada na máquina instalada. Sem rede, as telas do repositório dizem que o primeiro boot o confere.
 
-**O instalador segue o release.** Se a branch `release` estiver numa versão **mais nova** que a do
-pendrive, ele avisa e inicia o instalador dessa versão, levando as respostas já dadas. Se o release não
-responder, se o pendrive estiver à frente dele ou for uma versão de desenvolvimento, a instalação segue
-com a versão do pendrive — e a máquina **fica nela**: o `flake.nix` e o `flake.lock` de `/etc/nixos`
-são os que construíram o sistema, e a atualização ainda não a passa ao release (veja
-`docs/PENDING.md`).
+**A máquina nasce da versão do pendrive** e passa a seguir a branch `release` na primeira
+atualização com rede.
 
 Sem terminal (`ronoctua-install` lendo o ambiente), o acesso é o **arquivo** da chave ou do token
-(`RONOCTUA_INST_BELONGINGS_ACCESS`) e a senha vem em `RONOCTUA_INST_BELONGINGS_PASSPHRASE`; as mesmas
-conferências rodam antes do primeiro passo. Os programas que a `full` deixa de fora vêm em
+(`RONOCTUA_INST_BELONGINGS_ACCESS`) e a senha vem em `RONOCTUA_INST_BELONGINGS_PASSPHRASE`; com rede,
+as mesmas conferências rodam antes do primeiro passo, e sem rede o instalador diz que está offline e
+segue. Os programas que a `full` deixa de fora vêm em
 `RONOCTUA_INST_LEFT_OUT`: os ids separados por vírgula (`blender,libreoffice`) ou `none`; sem ela,
-fica de fora o que a tela traz desmarcado, e o ensaio imprime, depois do plano, a escolha que seria
-assinada (os desmarcados e os marcados), sob o caminho em que é escrita. Para ver as telas novas sem instalar nada: `ronoctua-install --show access` (ou
-`network`, `token`, `passphrase`, `passphrase-new`, `hop`, `review`, `left-out`, `compose`) — num terminal, no
+fica de fora o que a tela traz desmarcado, e o ensaio imprime, depois do plano, as recusas e o registro
+que o primeiro boot lê (com a escolha que ele assina: os desmarcados e os marcados), sob o caminho em
+que cada um é escrito. Para ver as telas novas sem instalar nada: `ronoctua-install --show access` (ou
+`network`, `network-refused`, `token`, `passphrase`, `passphrase-new`, `access-offline`,
+`passphrase-offline`, `review`, `review-offline`, `left-out`, `compose`) — num terminal, no
 tamanho e nas cores dele.
 
 A instalação responde ao mouse num terminal que o mande (por SSH, por exemplo): um clique escolhe a
@@ -399,5 +402,7 @@ na lista de programas, `Space`) são clicáveis.
 | o boot para dizendo `The stick does not hold this ISO whole` (ou, num ISO anterior a essa conferência, num shell de emergência depois de `Failed to mount /sysroot/nix/.ro-store`) | o pendrive não guarda o ISO inteiro: a cópia não chegou toda a ele (tirado antes de ejetar) ou ele perdeu escritas | grave de novo com `fetch-iso -- --into` a pasta do pendrive, ou confira a cópia com `fetch-iso -- --check`, e ejete antes de tirar |
 | o instalador para depois do idioma, falando do TPM | TPM desativado no firmware | ligue-o (costuma aparecer como "PTT", "fTPM" ou "Security Device"); a tela diz os passos |
 | o instalador diz que o computador ligou no modo BIOS | o modo Legacy/CSM está ligado | escolha UEFI no setup (a tela diz os passos), ou "Continuar com a pior alternativa" |
-| a tela da rede não segue | sem cabo, a rede escolhida não conectou ou pede uma página de login | conecte o cabo ou escolha outra rede; a tela diz qual dos três |
-| a tela da chave do repositório não segue | a chave foi adicionada sem escrita | adicione-a de novo com permissão de escrita |
+| a senha da rede Wi-Fi é recusada | a senha está errada, ou a rede pede uma página de login | digite de novo, ou volte e escolha "sem Wi-Fi": a instalação segue sem rede |
+| a tela da chave do repositório não segue (com rede) | a chave foi adicionada sem escrita | adicione-a de novo com permissão de escrita |
+| o instalador para em "Construir o sistema antes de tocar no disco" | este hardware pede algo que o pendrive não leva | o disco não foi tocado; a mensagem nomeia o que faltou — reporte, ou instale numa máquina com hardware comum |
+| depois do primeiro boot, os pertences não chegam | sem rede, ou a chave ainda não foi adicionada ao repositório | conecte a rede ou adicione a chave: o primeiro boot tenta de novo sozinho; `journalctl -u ronoctua-first-boot` diz o porquê |

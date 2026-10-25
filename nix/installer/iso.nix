@@ -71,7 +71,7 @@ in
   # as files that happen to be on the medium.
   #
   # ALWAYS, whole (see the note after the SSH settings below).
-  isoImage.storeContents = ronoctua.seed;
+  isoImage.storeContents = ronoctua.seed ++ ronoctua.offline.contents;
 
   # -------------------------------------------------------------------
   # ISO identity
@@ -277,6 +277,9 @@ in
     ronoctua.belongingsCli
     ronoctua.personCli
     openssh
+    # The parts it carries, seeded into the machine's store
+    # (`ronoctua-parts seed`).
+    ronoctua.partsCli
   ];
 
   # TPM2 available on the ISO already: the installer needs to detect presence and
@@ -355,32 +358,24 @@ in
   # flake inputs' sources that evaluating a machine's flake needs travel on
   # the medium, and the target compiles none of it.
   #
-  # THE PERSON'S CACHE IS NOT THE ISO'S: this ISO knows no person. When the
-  # person's options name one, the installer hands it to `nixos-install` on
-  # its command line — the cache and its key, and the netrc of a private one
-  # (`ronoctua-installer`'s plan) — and the installed machine declares it
-  # itself (`nix/modules/binary-cache.nix`). So nothing here declares a
-  # substituter or a key (`binary-cache-declared-once`).
+  # THE PERSON'S CACHE IS NOT THE ISO'S: this ISO knows no person, and an
+  # installation asks no cache at all — every `nix` it runs is offline, with
+  # no substituter (`ronoctua-installer`'s plan, `nix/installer/offline.nix`).
+  # The installed machine declares the person's cache itself
+  # (`nix/modules/binary-cache.nix`). So nothing here declares a substituter
+  # or a key (`binary-cache-declared-once`).
   # ── anchor: L20 ──
-  # THE DISTRO'S TREE, and what the installer is told about it.
+  # THE DISTRO'S TREE, and where the installer is told it is.
   #
   # The installer makes the machine's OWN flake from the tree's template
-  # (`templates/machine`) and installs the distro as an input of it; it reads
-  # where the tree is, and which revision it is, from these three variables
-  # — the login shell's, where the installer is run. The revision is what it
-  # compares with the `release` branch: a release at another revision starts
-  # the release's installer instead (`crates/ronoctua-installer/src/release.rs`).
-  # A tree with changes says `-dirty`, and a development installer never
-  # follows the release.
+  # (`templates/machine`), aimed at this very tree, and installs the distro
+  # as an input of it; it reads where the tree is from this variable — the
+  # login shell's, where the installer is run.
   #
   # NOT the machine directory's name: the ISO's own `/etc/nixos` is nobody's
   # machine, and the template is what becomes one.
   environment.etc.${lib.removePrefix "/etc/" distroDir}.source = ronoctua.flake;
-  environment.variables = {
-    RONOCTUA_FLAKE_DIR = distroDir;
-    RONOCTUA_FLAKE_REV = ronoctua.flake.rev or ronoctua.flake.dirtyRev or "unknown";
-    RONOCTUA_FLAKE_LAST_MODIFIED = toString (ronoctua.flake.lastModified or 0);
-  };
+  environment.variables.RONOCTUA_FLAKE_DIR = distroDir;
   # (The person's two programs and `ssh` are in `environment.systemPackages`
   # above: one list, defined once.)
 

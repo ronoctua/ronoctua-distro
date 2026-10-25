@@ -1,11 +1,12 @@
 # THE ONE DOOR FOR A PACKAGE THAT IS NOT FREE (`docs/ARCHITECTURE.md`,
 # "Partes"; AGENTS.md, the L25 amendment).
 #
-# The system's `pkgs` admits nothing unfree of the distro's
-# (`nix/modules/nixpkgs-config.nix`): such a program is a PART, built from
-# this instance and kept out of the system's closure — never on the
-# published ISO, never in a public cache, and a download that fails holds
-# back nothing. One instance per evaluation (`ronoctua.partsPkgs`, in
+# The distro's unfree programs are PARTS, built from this instance and kept
+# out of the system's closure: they are downloads — never on the published
+# ISO, never in a public cache — and one that fails holds back nothing.
+# (The system's own `pkgs` admits unfree since the owner's decision of
+# 2026-10-24, `nix/modules/nixpkgs-config.nix`; the programs stay parts for
+# what they are, not for a licence.) One instance per evaluation (`ronoctua.partsPkgs`, in
 # `nix/modules/parts.nix`; the flake's own tables call this file once), so a
 # predicate is written once and nixpkgs is evaluated once more, not once per
 # program.

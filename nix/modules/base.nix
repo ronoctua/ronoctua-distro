@@ -322,24 +322,19 @@ in
     # three.
     i18n = {
       defaultLocale = lib.mkDefault "en_GB.UTF-8";
-      # EVERY UI LANGUAGE GETS ITS glibc LOCALE, derived from the one list.
+      # EVERY LOCALE glibc HAS, generated once: the archive is then nixpkgs'
+      # own `glibcLocales`, the very derivation the public cache holds and the
+      # shell already names (`RONOCTUA_LOCALE_SUPPORTED`).
       #
-      # These are two different axes and the module's own assertion says so —
-      # but they meet here: `Texts::from_env` reads `LANG`, and a UI language
-      # whose locale was never generated means `LANG` never carries its name,
-      # so the interface falls back to English without a word. Deriving the
-      # list is what keeps "declared" and "reachable" the same set.
-      #
-      # `en_US` is not a UI language and stays by hand: it is here for whoever
-      # wants American formats, and `C.UTF-8` for the rescue console.
-      supportedLocales =
-        (map (l: "${lib.replaceStrings [ "-" ] [ "_" ] l}.UTF-8/UTF-8") (
-          import ../../assets/i18n/languages.nix
-        ))
-        ++ [
-          "en_US.UTF-8/UTF-8"
-          "C.UTF-8/UTF-8"
-        ];
+      # It used to be a list — every UI language's locale (`Texts::from_env`
+      # reads `LANG`, and a UI language whose locale was never generated falls
+      # back to English without a word), `en_US` and `C.UTF-8` — and the
+      # machine's own locale was meant to join it from `host.nix`, at a
+      # priority this definition beat. A person who chose `de_DE.UTF-8` in
+      # the installer got it as `LANG` and never generated. And a list is a
+      # derivation of its own, which every machine compiled from glibc's
+      # source: an installation that cannot reach the network cannot.
+      supportedLocales = [ "all" ];
       extraLocaleSettings = {
         LC_MESSAGES = lib.mkDefault "en_GB.UTF-8";
         LC_TIME = lib.mkDefault "en_GB.UTF-8";

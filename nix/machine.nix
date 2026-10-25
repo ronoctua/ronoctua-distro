@@ -62,6 +62,10 @@ let
     # The person's signing key root trusts, and what the last apply made of
     # the signature (`ronoctua_person::names::SIGNER`).
     signer = "local/signer.json";
+    # ── anchor: L25 ──
+    # The installer's marker: what nobody may redistribute waits for the
+    # first network (`ronoctua_person::names::DEFERRED_HARDWARE`).
+    deferred = "hardware-deferred.json";
   };
 in
 {
@@ -280,6 +284,7 @@ in
                     source = dir;
                     inherit distroRev;
                   };
+                  ronoctua.hardware.deferUndistributable = builtins.pathExists (at parts.deferred);
                   ronoctua.person = {
                     data = present parts.declared;
                     declined = present parts.declined;

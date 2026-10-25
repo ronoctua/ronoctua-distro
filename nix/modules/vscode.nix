@@ -122,8 +122,8 @@ in
       internal = true;
       description = ''
         The VS Code the registry makes a part: `vscode` in its FHS
-        environment (`nix/vscode.nix`), from the parts' one door — the
-        system's `pkgs` admits nothing unfree.
+        environment (`nix/vscode.nix`), from the parts' one door — a
+        download, which holds back nothing as a part.
       '';
     };
   };

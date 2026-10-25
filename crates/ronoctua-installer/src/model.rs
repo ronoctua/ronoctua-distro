@@ -20,10 +20,11 @@
 //! 1. **There is nothing to detect.** `nixos-facter` finds the network card, but
 //!    the Wi-Fi password is neither a property of the hardware nor a decision of the project:
 //!    it is a per-person secret only whoever is installing knows.
-//! 2. **Without it the installation does not run.** The `inst-step-install` step downloads
-//!    the whole system over the network. On a machine with no Ethernet port — and this
-//!    project's laptop is one of them — not asking means not
-//!    installing.
+//! 2. **Without it the machine reaches nothing.** The installation itself needs no
+//!    network (the ISO carries it), but the first boot restores the person's
+//!    belongings over it. On a machine with no Ethernet port — and this
+//!    project's laptop is one of them — not asking means a first boot with no
+//!    way out.
 //!
 //! The criterion still holds with the same force: one asks what only the
 //! person knows, and nothing beyond. The network came to fit that.
@@ -40,13 +41,15 @@
 //! programs it lists are none of them on a `minimal` machine, so there is
 //! nothing to leave out of one. A `full` installation answers one screen more.
 //!
-//! # And the network is a GATE now
+//! # And the network is NOT a gate
 //!
-//! The person's repository became mandatory (2026-10-05): the installation
-//! applies their declarations and restores their belongings, and asks the
-//! release which installer to use. So leaving the network question requires a
-//! way out (`crate::gate`), and the three questions about the repository come
-//! after it — each checked against the network before the next one appears.
+//! The person's repository is mandatory (2026-10-05), and its three questions
+//! come after the network's. With a way out (`crate::gate`) each is checked
+//! against the repository before the next one appears. With none — the
+//! installation never uses the network — the network question goes on all
+//! the same, and the three are taken as typed: the address as written, the
+//! access shown or kept, the passphrase typed twice and as long as a disk's
+//! ([`Answers::passphrase_proved`]); the machine's first boot checks them.
 
 use crate::key;
 
@@ -138,7 +141,8 @@ pub enum Question {
     SystemLocale,
     /// The swap file's offset, for hibernation.
     ResumeOffset,
-    /// Which Wi-Fi network to use. Empty means "I am going by cable".
+    /// Which Wi-Fi network to use. Empty means a cable, or no network at all:
+    /// the installation needs none.
     Wifi,
     /// Its password. It only appears when a network has been chosen.
     WifiPassword,
@@ -147,9 +151,9 @@ pub enum Question {
     /// # Why it is asked here, and why it is not optional any more
     ///
     /// Because only the person knows it, and it is what turns a new machine
-    /// into THEIR machine: their declarations (`plain/person/`) are applied
-    /// to the machine's flake before it is built, and their belongings are
-    /// restored into the home before anybody logs in (`crate::access`).
+    /// into THEIR machine: their belongings are restored into the home on
+    /// its first boot, and the programs they declared arrive after it
+    /// (`crate::access`).
     ///
     /// The address alone, never a credential (`user:pass@` is refused, and so
     /// are `http://` and a local path). It is written into the PERSON'S home
@@ -161,12 +165,15 @@ pub enum Question {
     /// For an SSH address it is not typed: the installer makes a deploy key
     /// in RAM, shows it (text, QR, the host's page) and probes the repository
     /// until the key reads and writes. For an HTTPS address it is a token,
-    /// typed and probed the same way. The terminal-less mode names a FILE
-    /// holding the one or the other — never its content.
+    /// typed and probed the same way. With no network nothing is probed: the
+    /// key is shown, the token kept, and the first boot tries them. The
+    /// terminal-less mode names a FILE holding the one or the other — never
+    /// its content.
     BelongingsAccess,
     /// The passphrase that opens the belongings: proved by opening the
-    /// repository's `key.age`, or — the repository being empty — typed twice,
-    /// and the installation makes the repository with it.
+    /// repository's `key.age` — or, the repository being empty or not asked
+    /// (no network), typed twice, and the first boot opens or makes the
+    /// repository with it.
     BelongingsPassphrase,
 }
 
@@ -220,8 +227,8 @@ impl Question {
         Self::Password,
         Self::Passphrase,
         // THE NETWORK comes after the language so the network list already
-        // appears in the chosen language — and it is a GATE: what follows is
-        // checked against the network.
+        // appears in the chosen language — and what follows is checked
+        // against it when there is one.
         Self::Wifi,
         Self::WifiPassword,
         // THE BELONGINGS LAST OF WHAT IS TYPED: the answers about the person
@@ -284,8 +291,7 @@ impl Question {
             Self::Profile => key::INST_PROFILE_HELP,
             Self::LeftOut => key::INST_LEFT_OUT_HELP,
             Self::ResumeOffset => key::INST_RESUME_OFFSET_HELP,
-            // THE NETWORK'S HELP NAMES THE HOSTS IT WILL REACH — answering
-            // the question is the consent to reach them (`$hosts`).
+            // THE NETWORK'S HELP SAYS IT IS OPTIONAL, and what it is for.
             Self::Wifi => key::INST_NETWORK_HELP,
             // The password's own line: that it does not enter the
             // repository matters more here.
@@ -326,11 +332,12 @@ impl Question {
     /// WHAT NOTHING CAN PROVE is typed twice: the user's password and the
     /// disk's passphrase are typed blind, and a slip in either is found only
     /// at the first login or the first boot — the passphrase's with no way
-    /// back. So is the belongings' passphrase when the repository is empty
-    /// and is made with it. What something proves is typed once: the Wi-Fi
-    /// password joins the network, a token is probed, and the passphrase of
-    /// a repository that has something in it opens its `key.age` — a slip
-    /// there is refused on the spot.
+    /// back. So is the belongings' passphrase when nothing proves it
+    /// ([`Answers::passphrase_proved`]): the repository is empty and is made
+    /// with it, or there is no network to ask it. What something proves is
+    /// typed once: the Wi-Fi password joins the network, a token is probed,
+    /// and the passphrase of a repository that has something in it opens its
+    /// `key.age` — a slip there is refused on the spot.
     #[must_use]
     pub fn typed_twice(self, r: &Answers) -> Option<Twice> {
         match self {
@@ -342,7 +349,7 @@ impl Question {
                 again: key::INST_PASSPHRASE_AGAIN,
                 differs: key::INST_PASSPHRASE_DIFFERS,
             }),
-            Self::BelongingsPassphrase if r.belongings_empty == Some(true) => Some(Twice {
+            Self::BelongingsPassphrase if !r.passphrase_proved() => Some(Twice {
                 again: key::INST_BELONGINGS_PASSPHRASE_AGAIN,
                 differs: key::INST_BELONGINGS_PASSPHRASE_DIFFERS,
             }),
@@ -390,8 +397,8 @@ impl Question {
 
     /// Whether leaving it blank is a valid answer.
     ///
-    /// Only the network: blank there means "I am going by cable", which is a choice
-    /// and not an omission. In the others, empty is an error — a blank hostname
+    /// Only the network: blank there means a cable, or no network at all, which is a
+    /// choice and not an omission. In the others, empty is an error — a blank hostname
     /// means nothing.
     #[must_use]
     pub const fn optional(self) -> bool {
@@ -1103,9 +1110,9 @@ pub fn validate_it(
             }
         }
         // Whatever the person chose: it opens the repository, or — an empty
-        // one — it is the one the repository will be made with, and THAT is
-        // where its length is asked (`MINIMUM_PASSPHRASE`, the TUI's first
-        // typing and the terminal-less mode's preflight).
+        // one, or one not asked — it is the one the repository will be made
+        // with, and THAT is where its length is asked (`MINIMUM_PASSPHRASE`,
+        // the TUI's first typing and the terminal-less mode's preflight).
         Question::BelongingsPassphrase
         | Question::Password
         | Question::ResumeOffset
@@ -1163,10 +1170,21 @@ pub struct Answers {
     /// The belongings' passphrase. Never written anywhere but the `0600`
     /// file a restore reads and deletes.
     pub belongings_passphrase: String,
-    /// What the probe found: the repository has nothing yet, so the
-    /// installation MAKES it (`init`) instead of restoring from it.
-    /// Computed, like the offset.
+    /// What the probe found: the repository has nothing yet, so the first
+    /// boot MAKES it instead of restoring from it. Computed, like the
+    /// offset; `None` while nobody asked it (no network).
     pub belongings_empty: Option<bool>,
+    /// Whether the network reached out when it was read — the network
+    /// question's, or the terminal-less mode's check before its first step.
+    /// Computed, never asked; `None`: not read (a dry run, answers handed on
+    /// past the network question). Anything but `Some(true)` is no network
+    /// ([`Answers::reaches_out`]): the repository is not asked, and the first
+    /// boot checks it.
+    pub online: Option<bool>,
+    /// Whether the repository was proved before the disk is touched: the
+    /// access probed reading and writing it, and the passphrase opening it —
+    /// or the repository found empty. Online alone; computed, never asked.
+    pub belongings_checked: bool,
     /// The swapfile, measured once the disk is known. Computed; `None`
     /// leaves the hardware report's default.
     pub swap: Option<crate::swap::Swap>,
@@ -1181,7 +1199,7 @@ pub struct Answers {
 }
 
 /// The variable of the answers' file that names where to resume — the label
-/// of the first question the release's installer asks.
+/// of the first question the installer they are handed to asks.
 pub const RESUME: &str = "RONOCTUA_INST_RESUME";
 
 /// What every answer's variable starts with ([`Question::variable`],
@@ -1209,11 +1227,12 @@ pub fn answer_variables() -> Vec<String> {
 }
 
 impl Answers {
-    /// The answers as the release's installer reads them back
-    /// (`--answers`): one `NAME=value` per answered question, named by
-    /// [`Question::variable`], and the question to resume at. It carries
-    /// SECRETS: whoever writes it writes it `0600`, and whoever reads it
-    /// deletes it.
+    /// The answers as an installer reads them back (`--answers`): one
+    /// `NAME=value` per answered question, named by [`Question::variable`],
+    /// and the question to resume at. What is computed never crosses — the
+    /// offset, the network's reading, what the repository said: the
+    /// installer they are handed to reads them again. It carries SECRETS:
+    /// whoever writes it writes it `0600`, and whoever reads it deletes it.
     #[must_use]
     pub fn lines(&self, resume_at: Question) -> String {
         let mut out = String::new();
@@ -1229,8 +1248,8 @@ impl Answers {
         }
         // BIOS, CHOSEN: by the time the answers are handed on, a machine
         // started from BIOS got this far only by the person's choice — the
-        // TUI's worse way, or the variable itself —, and the release's
-        // installer without a terminal would stop again without it.
+        // TUI's worse way, or the variable itself —, and an installer
+        // without a terminal would stop again without it.
         if self.bios {
             out.push_str(crate::platform::FIRMWARE);
             out.push('=');
@@ -1260,7 +1279,8 @@ impl Answers {
                 resume = Question::ALL_KEYS.into_iter().find(|q| q.label() == value);
                 continue;
             }
-            // BIOS, CHOSEN before the hop: the TUI does not ask it again.
+            // BIOS, CHOSEN before the answers were handed on: the TUI does
+            // not ask it again.
             if name == crate::platform::FIRMWARE {
                 r.bios = value == crate::platform::CHOOSES_BIOS;
                 continue;
@@ -1298,6 +1318,22 @@ impl Answers {
             Question::BelongingsPassphrase => &self.belongings_passphrase,
             Question::ResumeOffset => "",
         }
+    }
+
+    /// Whether the repository is asked now: the network's reading found a
+    /// way out. Not read (`None`) is no network.
+    #[must_use]
+    pub fn reaches_out(&self) -> bool {
+        self.online == Some(true)
+    }
+
+    /// Whether the belongings' passphrase is proved before the disk is
+    /// touched: online, against a repository that has something in it —
+    /// its `key.age` opens, or the installer does not go on. Any other
+    /// (empty, or not asked) is typed twice and as long as a disk's.
+    #[must_use]
+    pub fn passphrase_proved(&self) -> bool {
+        self.reaches_out() && self.belongings_empty == Some(false)
     }
 
     /// The ids this machine leaves out, in the list's order: none unless the
@@ -1385,8 +1421,8 @@ mod tests {
         // There were six; the network added two, and the keyboard a ninth.
         //
         // The network's two: `nixos-facter` has nothing to detect there — a
-        // Wi-Fi password is a per-person secret — and NOT asking prevents
-        // installing on a machine with no Ethernet port.
+        // Wi-Fi password is a per-person secret — and NOT asking leaves a
+        // machine with no Ethernet port with no way out at its first boot.
         //
         // THE KEYBOARD is the same shape of argument, and it is worth stating
         // because "the keyboard has ONE place" was true and stopped being
@@ -1461,11 +1497,12 @@ mod tests {
         );
     }
 
-    /// FAILS IF: the answers the release's installer reads back lose one,
-    /// gain a computed one, resume anywhere but where they were left, or
-    /// lose the choice of BIOS.
+    /// FAILS IF: the answers an installer reads back lose one, gain a
+    /// computed one — the offset, the network's reading, what the repository
+    /// said —, resume anywhere but where they were left, or lose the choice
+    /// of BIOS.
     #[test]
-    fn the_answers_cross_to_the_release_installer_whole() {
+    fn the_answers_handed_on_cross_whole() {
         let mut r = Answers::default();
         r.set(Question::Language, "pt-BR".into());
         r.set(Question::Disk, "/dev/nvme0n1".into());
@@ -1473,10 +1510,13 @@ mod tests {
         r.set(Question::Wifi, "home-5g".into());
         r.set(Question::WifiPassword, "Zq7-radio".into());
         r.set(Question::Profile, FULL_PROFILE.into());
-        // THE PROGRAMS LEFT OUT cross too, commas and all: a hop that lost
+        // THE PROGRAMS LEFT OUT cross too, commas and all: answers that lost
         // them would install what the person unmarked.
         r.set(Question::LeftOut, "blender,libreoffice".into());
         r.resume_offset = Some(1);
+        r.online = Some(true);
+        r.belongings_empty = Some(false);
+        r.belongings_checked = true;
         let text = r.lines(Question::BelongingsAddress);
         assert!(
             !text.contains("RESUME_OFFSET"),
@@ -1488,6 +1528,12 @@ mod tests {
             assert_eq!(back.get(q), r.get(q), "{q:?}");
         }
         assert_eq!(back.resume_offset, None);
+        // WHAT THE NETWORK AND THE REPOSITORY SAID is read again where the
+        // answers land, never carried: another moment, maybe another network.
+        assert_eq!(
+            (back.online, back.belongings_empty, back.belongings_checked),
+            (None, None, false)
+        );
         assert_eq!(back.left_out_ids(), ["blender", "libreoffice"]);
         // BIOS, chosen, crosses as the variable that chooses it.
         let choice = format!(
@@ -1691,10 +1737,35 @@ mod tests {
         }
     }
 
+    /// FAILS IF: the belongings' passphrase is taken once where nothing
+    /// proves it — no network, or an empty repository — or typed twice where
+    /// the repository opens with it.
+    #[test]
+    fn the_passphrase_is_typed_twice_unless_the_repository_proves_it() {
+        let mut r = Answers::default();
+        for (online, empty, proved) in [
+            (None, None, false),
+            (Some(false), None, false),
+            (Some(true), Some(true), false),
+            (Some(true), None, false),
+            (Some(true), Some(false), true),
+        ] {
+            r.online = online;
+            r.belongings_empty = empty;
+            assert_eq!(r.passphrase_proved(), proved, "{online:?} {empty:?}");
+            assert_eq!(
+                Question::BelongingsPassphrase.typed_twice(&r).is_none(),
+                proved,
+                "{online:?} {empty:?}"
+            );
+        }
+        assert!(!Answers::default().reaches_out(), "not read is no network");
+    }
+
     #[test]
     fn a_blank_network_is_an_answer_and_not_an_omission() {
-        // Blank there means "I am going by cable". Refusing it as empty
-        // would force whoever uses a cable to invent a network name.
+        // Blank there means a cable, or no network at all. Refusing it as
+        // empty would force whoever has neither to invent a network name.
         assert!(Question::Wifi.optional());
         assert!(validate_it(Question::Wifi, "", LANGUAGES, LAYOUTS).is_ok());
     }

@@ -12,17 +12,21 @@ offline:
    first machine, with a decline of one program for the host about to be
    installed (an earlier attempt's) and one of every machine (the person's
    own). That machine's key is pinned there, as its installer pinned it.
-2. THE INSTALLER, repository not empty — ITS OWN PLAN: the installer's dry
-   run (`ronoctua-install`, terminal-less) prints the steps and the choice
-   they write, and this replays the steps the chain is made of, with the
-   installer's paths moved into this folder: the choice (two programs left
+2. THE INSTALLER AND ITS FIRST BOOT, repository not empty — THEIR OWN
+   PLANS: the installer's dry run (`ronoctua-install`, terminal-less) prints
+   its steps and the first boot's record, and the first boot prints its own
+   sequence for that record (`ronoctua-first-boot --plan`); this replays the
+   steps the chain is made of, with their paths moved into this folder. The
+   installer: the programs left out staged for root's applier and applied
+   unsigned (no key pinned yet), and its reading of what was applied
+   (`left-out-applied`, which only `--execute` runs: restated below, its
+   rule the installer's). The first boot: the choice (two programs left
    out, every other one kept — the earlier attempt's included) signed into
    the repository by `plain --decline`, the same choice again pushing
    nothing, the key pinned, the copy applied by root's applier with that
-   pin, and the installer's reading of what was applied (`left-out-applied`,
-   which only `--execute` runs: restated below, its rule the installer's).
-3. THE RESTORE into the new home, the plan's step: the person's mirror says
-   the same.
+   pin.
+3. THE RESTORE into the new home, the first boot's step: the person's
+   mirror says the same.
 4. THE UPDATES' PERSON HALF THAT GATHERS, its steps as the update declares
    them (pull, pins, sign, stage — each skipped where the runner would skip
    it), with root's applier started by the stage as its unit is:
@@ -34,12 +38,12 @@ offline:
      counter grows;
    - a decline the person makes on this machine, signed at the gesture:
      root takes it, and the counter grows again.
-5. AN EMPTY REPOSITORY (which the dry run never reaches: it does not probe,
-   so these commands are written here as `plan::steps` writes them): the
-   declines staged for root's applier, taken unsigned (no key pinned yet);
-   the mirror gets the same document; `init` signs it into the new
-   repository; the key it made is pinned; and the first update's staging,
-   now held to the pin, keeps the declines.
+5. AN EMPTY REPOSITORY: the declines staged for root's applier, taken
+   unsigned (no key pinned yet); then the first boot's sequence for an
+   empty repository (`--plan … --empty yes`): the mirror gets the same
+   document, `init` signs it into the new repository, the key it made is
+   pinned; and the first update's staging, now held to the pin, keeps the
+   declines.
 
 OFFLINE, AND THE ADDRESS AS THE PERSON GAVE IT: every repository is reached
 over the belongings' own SSH path, through a stand-in `ssh` (`RONOCTUA_SSH`,
@@ -53,11 +57,11 @@ IT RUNS ONLY INSIDE A NIX BUILD. It opens and forgets identities in the
 kernel's per-user keyring (`@u`), and a Nix build has its own; anywhere else
 that keyring is the person's session's. It refuses to start otherwise.
 
-usage: person-decline-chain.py <steps.json> <belongings> <person> <software> <install>
+usage: person-decline-chain.py <steps.json> <belongings> <person> <software> <install> <first-boot>
   steps.json: the update's person half that gathers, in its order —
   [{"id", "program", "run", "enable", "declines", "needs"}, …]
   the installer reads its texts and palettes from `RONOCTUA_TEXTS` and
-  `RONOCTUA_THEMES`.
+  `RONOCTUA_THEMES`; `RONOCTUA_MACHINE_DIR` names the machine directory.
 """
 
 import json
@@ -70,7 +74,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-STEPS, BELONGINGS, PERSON, SOFTWARE, INSTALL = sys.argv[1:6]
+STEPS, BELONGINGS, PERSON, SOFTWARE, INSTALL, FIRST_BOOT = sys.argv[1:7]
 PROGRAMS = {
     "ronoctua-belongings": BELONGINGS,
     "ronoctua-person": PERSON,
@@ -101,6 +105,15 @@ AT = "2026-10-20T10:00:00Z"
 SCRATCH = "/run/ronoctua-install"
 WORK_FLAKE = "/tmp/ronoctua-flake"
 TARGET_HOME = "/mnt/home/noctua"
+RECORD = "/mnt/persist/etc/ronoctua/first-boot/record.json"
+# THE FIRST BOOT'S PLACES (`first_boot.rs`).
+FIRST_BOOT_RUN = "/run/ronoctua-first-boot"
+MACHINE_HOME = "/home/noctua"
+MACHINE_LOCK = "/run/ronoctua-person/machine.lock"
+OWNER_MARK = "{person-uid}"
+# The machine directory, by its one name (`nix/machine.nix`), which the check
+# hands over.
+MACHINE_DIR = os.environ["RONOCTUA_MACHINE_DIR"]
 
 DECLINED_REL = "plain/person/software/declined.json"
 APPLY_START = "start --no-ask-password ronoctua-person-apply.service"
@@ -523,7 +536,7 @@ def first_machine(world):
 
 def installer_plan(world):
     """The installer's dry run for the new machine: its steps (the command
-    each shows, `Step::shown`) and the choice it writes."""
+    each shows, `Step::shown`) and the first boot's record it writes."""
     answers = {
         "RONOCTUA_INST_DISK": "/dev/vda",
         "RONOCTUA_INST_HOSTNAME": NEW,
@@ -544,80 +557,131 @@ def installer_plan(world):
         m = re.match(r"^[! ] (\d+)\. .+? — (.*)$", line)
         if m:
             plan.append(m.group(2))
-    must(len(plan) >= 20, f"the dry run printed {len(plan)} steps:\n{said.stdout}")
-    head = f"--- {SCRATCH}/choice.json ---\n"
-    must(head in said.stdout, "the dry run prints no choice")
-    printed = said.stdout.split(head, 1)[1]
-    choice, end = json.JSONDecoder().raw_decode(printed)
-    return plan, choice, printed[:end] + "\n"
+    must(len(plan) >= 18, f"the dry run printed {len(plan)} steps:\n{said.stdout}")
+    head = f"--- {RECORD} ---\n"
+    must(head in said.stdout, "the dry run prints no first boot record")
+    record, _ = json.JSONDecoder().raw_decode(said.stdout.split(head, 1)[1])
+    return plan, record
 
 
-def installed(world, machine, home, scratch, plan, choice, written):
-    """The plan's steps the chain is made of, in the plan's order, with the
-    installer's places moved here; what an installation alone does (the
-    disk, Nix, the hardware) is not this check's. Each step is said, and a
-    step the chain needs that the plan no longer has fails the check."""
-    places = {SCRATCH: str(scratch), WORK_FLAKE: str(machine.dir), TARGET_HOME: str(home.home)}
+def shown_words(shown, places):
+    """A shown command (`Step::shown`, `Act::shown`) with the places moved:
+    its condition, whether the person runs it, its variables, its words."""
+    for theirs, ours in places.items():
+        shown = shown.replace(theirs, ours)
+    only_if = None
+    m = re.search(r" \[if (.+)\]$", shown)
+    if m:
+        only_if, shown = m.group(1), shown[: m.start()]
+    as_person = shown.startswith("[")
+    if as_person:
+        shown = shown.split("] ", 1)[1]
+    words = shlex.split(shown)
+    env = {}
+    while words and re.match(r"^[A-Z_]+=", words[0]):
+        k, v = words.pop(0).split("=", 1)
+        env[k] = v
+    return only_if, as_person, env, words
 
-    def moved(text):
-        for theirs, ours in places.items():
-            text = text.replace(theirs, ours)
-        return text
 
+def first_boot(world, machine, home, record, empty, run_dir):
+    """The first boot's own sequence for `record` (`ronoctua-first-boot
+    --plan`), replayed with its places moved here: the person's acts with
+    their home's environment, root's with root's applier as this user."""
+    record_file = run_dir.parent / f"{run_dir.name}-record.json"
+    record_file.write_text(json.dumps(record))
+    said = run([FIRST_BOOT, "--plan", record_file, "--empty", "yes" if empty else "no"])
+    plan = [line for line in said.stdout.splitlines() if line.strip()]
+    must(len(plan) >= 3, f"the first boot's plan printed {len(plan)} acts:\n{said.stdout}")
+    private_dir(run_dir)
+    places = {
+        FIRST_BOOT_RUN: str(run_dir),
+        MACHINE_DIR: str(machine.dir),
+        MACHINE_HOME: str(home.home),
+        MACHINE_LOCK: str(run_dir.parent / f"{run_dir.name}.lock"),
+        OWNER_MARK: str(os.getuid()),
+    }
     ran = {}
     report = None
     for shown in plan:
-        shown = moved(shown)
-        only_if = None
-        m = re.search(r" \[if (.+)\]$", shown)
-        if m:
-            only_if, shown = m.group(1), shown[: m.start()]
-        if shown.startswith("["):
-            shown = shown.split("] ", 1)[1]
-        words = shlex.split(shown)
-        env = {}
-        while words and re.match(r"^[A-Z_]+=", words[0]):
-            k, v = words.pop(0).split("=", 1)
-            env[k] = v
+        only_if, as_person, _, words = shown_words(shown, places)
         program, args = words[0], words[1:]
         verb = args[0] if args else ""
         if only_if and not Path(only_if).exists():
             continue
-        if program == "write" and args[0].endswith("/run/plain-passphrase"):
-            private_dir(Path(args[0]).parent)
+        if program == "write" and args[0].endswith("passphrase"):
             private_file(Path(args[0]), PASSPHRASE)
         elif program == "write" and args[0].endswith("/choice.json"):
-            Path(args[0]).write_text(written)
-        elif program == "write" and args[0].endswith("/person-run/passphrase"):
-            private_dir(Path(args[0]).parent)
-            private_file(Path(args[0]), PASSPHRASE)
+            Path(args[0]).write_text(json.dumps(record["choice"]) + "\n")
+        elif program == "write" and args[0].endswith("/declined.json"):
+            Path(args[0]).parent.mkdir(parents=True, exist_ok=True)
+            Path(args[0]).write_text(canonical("declined", record["declined"], Path(args[0])))
+        elif program == "ronoctua-belongings" and verb in ("plain", "restore", "init"):
+            must(as_person, f"the first boot runs `{verb}` as root")
+            said = run([BELONGINGS, *args], env=home.env(), ok=False)
+            must(said.returncode == 0,
+                 f"the first boot's `ronoctua-belongings {verb}` failed: {said.stdout}{said.stderr}")
+            ran[verb] = args
+            if verb == "plain":
+                report = json.loads(last_line(said.stdout))
+            else:
+                finished(said, f"the first boot's {verb}")
+        elif program == "ronoctua-person" and verb in ("pin", "apply"):
+            must(not as_person, f"the first boot runs `{verb}` as the person")
+            args = [ME if a == "root" else a for a in args]
+            said = run([PERSON, *args], ok=False)
+            must(said.returncode == 0,
+                 f"the first boot's `ronoctua-person {verb}` failed: {said.stdout}{said.stderr}")
+            ran[verb] = last_line(said.stdout)
+        else:
+            raise Failed(f"the first boot's plan has an act this chain does not know: {shown}")
+    return ran, report
+
+
+def installed(world, machine, home, scratch, plan, record):
+    """The installer's steps the chain is made of, in the plan's order, with
+    its places moved here; what an installation alone does (the disk, Nix,
+    the hardware) is not this check's. Then its first boot, replayed. A step
+    the chain needs that the plans no longer have fails the check."""
+    places = {SCRATCH: str(scratch), WORK_FLAKE: str(machine.dir), TARGET_HOME: str(home.home)}
+    ran = {}
+    for shown in plan:
+        only_if, _, env, words = shown_words(shown, places)
+        program, args = words[0], words[1:]
+        verb = args[0] if args else ""
+        if only_if and not Path(only_if).exists():
+            continue
+        if program == "write" and args[0].endswith("/staged-declines/person/software/declined.json"):
+            staged = Path(args[0])
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_text(canonical("declined", record["declined"], staged))
+            for d in [staged.parent.parent.parent, staged.parent.parent, staged.parent]:
+                d.chmod(0o755)
+            ran["staged"] = staged
         elif program == "write" and args[0].endswith("/belongings.json"):
+            Path(args[0]).parent.mkdir(parents=True, exist_ok=True)
             Path(args[0]).write_text(json.dumps({"repository": ADDRESS}) + "\n")
         elif program == "install-access":
             keys(Path(args[1]))
         elif program == "let-host":
             let_host(Path(args[0]))
-        elif program == "ronoctua-belongings" and verb in ("plain", "restore"):
-            said = run([BELONGINGS, *args], env=world.env(**env), ok=False)
-            must(said.returncode == 0,
-                 f"the plan's `ronoctua-belongings {verb}` failed: {said.stdout}{said.stderr}")
-            ran[verb] = (args, env)
-            if verb == "plain":
-                report = json.loads(last_line(said.stdout))
-            else:
-                finished(said, "the restore")
-        elif program == "ronoctua-person" and verb in ("pin", "apply"):
+        elif program == "ronoctua-person" and verb == "apply":
             args = [ME if a == "root" else a for a in args]
             said = run([PERSON, *args], ok=False)
             must(said.returncode == 0,
-                 f"the plan's `ronoctua-person {verb}` failed: {said.stdout}{said.stderr}")
-            ran[verb] = last_line(said.stdout)
+                 f"the installer's `ronoctua-person apply` failed: {said.stdout}{said.stderr}")
+            ran["staged-apply"] = last_line(said.stdout)
         elif program == "left-out-applied":
             doc = read("declined", Path(args[0]))
-            as_chosen(doc, NEW, choice["declined"], choice["kept"], "left-out-applied")
+            choice = record["choice"]
+            as_chosen(doc, NEW, choice["declined"], [], "left-out-applied")
             ran["left-out-applied"] = doc
-    for needed in ("plain", "pin", "apply", "left-out-applied", "restore"):
+    for needed in ("staged", "staged-apply", "left-out-applied"):
         must(needed in ran, f"the installer's plan no longer runs `{needed}` where this chain needs it")
+    booted, report = first_boot(world, machine, home, record, False, scratch / "first-boot-run")
+    for needed in ("plain", "pin", "apply", "restore"):
+        must(needed in booted, f"the first boot's plan no longer runs `{needed}` where this chain needs it")
+    ran.update(booted)
     return ran, report
 
 
@@ -632,11 +696,14 @@ def installer_with_repository(world, steps):
     let_host(scratch / "home" / ".config" / "ronoctua")
     keys(scratch / "home" / ".config" / "ronoctua" / "belongings-keys")
     private_dir(scratch / "person-run")
-    plan, choice, written = installer_plan(world)
+    plan, record = installer_plan(world)
+    choice = record["choice"]
+    must(record["address"] == ADDRESS and record["machine"] == NEW,
+         f"the first boot's record does not name the repository and the machine: {record}")
     must(choice["machine"] == NEW and choice["declined"] == LEFT_OUT
          and EARLIER in choice["kept"] and EVERYWHERE in choice["kept"],
          f"the installer's choice is not the one asked: {choice}")
-    ran, report = installed(world, machine, home, scratch, plan, choice, written)
+    ran, report = installed(world, machine, home, scratch, plan, record)
     # 2. THE CHOICE, in the repository and on the machine.
     there = json.loads(repository_file(world.remote, DECLINED_REL))
     as_chosen(there, NEW, choice["declined"], choice["kept"], "the repository after plain --decline")
@@ -645,7 +712,7 @@ def installer_with_repository(world, steps):
          f"the copy did not push the choice, or held something back: {report}")
     must(report.get("kept-everywhere") == [EVERYWHERE],
          f"the copy did not say the person's own decline stays: {report}")
-    must(ran["apply"] == "applied", f"root's apply of the installer's copy said {ran['apply']!r}")
+    must(ran["apply"] == "applied", f"root's apply of the first boot's copy said {ran['apply']!r}")
     doc = read("declined", machine.declined())
     must(doc == there, "the machine's declines are not the repository's")
     declined_everywhere(doc, [EVERYWHERE], "left-out-applied")
@@ -654,23 +721,23 @@ def installer_with_repository(world, steps):
     # AN INSTALLATION TRIED AGAIN with the same answer pushes nothing: the
     # plan's own copy, again, after the leftovers are cleared.
     head = head_of(world.remote)
-    shutil.rmtree(scratch / "plain")
-    private_file(scratch / "run" / "plain-passphrase", PASSPHRASE)
-    (scratch / "signer.pub").unlink(missing_ok=True)
-    args, env = ran["plain"]
-    again = run([BELONGINGS, *args], env=world.env(**env))
+    run_dir = scratch / "first-boot-run"
+    shutil.rmtree(run_dir / "plain")
+    private_file(run_dir / "plain-passphrase", PASSPHRASE)
+    (run_dir / "signer.pub").unlink(missing_ok=True)
+    again = run([BELONGINGS, *ran["plain"]], env=home.env())
     must(json.loads(last_line(again.stdout)).get("choice") == "already-there",
          f"the same choice again was not found there: {again.stdout}")
     must(head_of(world.remote) == head, "the same choice again moved the repository")
-    print(f"ok 2: the installer's plan signed {', '.join(LEFT_OUT)} out and {EARLIER} back on "
-          f"{NEW}; the pinned apply took it (counter {counter}), and its reading says the choice")
+    print(f"ok 2: the first boot's plan signed {', '.join(LEFT_OUT)} out and {EARLIER} back on "
+          f"{NEW}; the pinned apply took it (counter {counter}), and the installer's reading said its part")
     # 3. THE RESTORE'S MIRROR.
     mirror = home.mirror()
     must(mirror.is_file(), "the restore brought no declines into the mirror")
     must(mirror.read_bytes() == machine.declined().read_bytes(),
          "the mirror's declines are not, byte for byte, the machine's")
     home.forget()
-    print("ok 3: the plan's restore landed the same declines in the person's mirror")
+    print("ok 3: the first boot's restore landed the same declines in the person's mirror")
     return machine, home, choice, counter
 
 
@@ -759,20 +826,15 @@ def installer_with_empty_repository(world, steps):
     as_chosen(read("declined", machine.declined()), OTHER_NEW, LEFT_OUT, [],
               "left-out-applied, unsigned")
     home = Home(world, OTHER_NEW, EMPTY_ADDRESS)
-    mirror = home.mirror()
-    mirror.parent.mkdir(parents=True, exist_ok=True)
-    mirror.write_text(text)
-    runtime = private_dir(WORK / OTHER_NEW / "installer-run")
-    private_file(runtime / "passphrase", PASSPHRASE)
-    said = run([BELONGINGS, "init", "--home", home.home, "--runtime", runtime,
-                "--machine", OTHER_NEW, "--progress"], env=home.env())
-    finished(said, "the empty repository's init")
+    record = {"format": 1, "address": EMPTY_ADDRESS, "machine": OTHER_NEW, "empty": True,
+              "checked": False, "choice": None, "declined": declines}
+    booted, _ = first_boot(world, machine, home, record, True, WORK / OTHER_NEW / "first-boot-run")
+    for needed in ("init", "pin"):
+        must(needed in booted, f"the first boot's plan for an empty repository no longer runs `{needed}`")
+    must(home.mirror().read_text() == text, "the first boot did not put the declines in the mirror")
     there = repository_file(world.empty, DECLINED_REL)
     must(there is not None and json.loads(there) == json.loads(text),
          f"init did not sign the mirror's declines into the new repository: {there}")
-    # BY THE PERSON'S UID, as the installer fills `{person-uid}` in: the live
-    # system's passwd does not know the person yet.
-    machine.pin(runtime / "signer.pub", owner=str(os.getuid()))
     home.forget()
     person_half(steps, home, machine, "unchanged", ["no-passphrase"],
                 "the empty repository's first update")

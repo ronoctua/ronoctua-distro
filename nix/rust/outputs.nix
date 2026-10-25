@@ -5,7 +5,7 @@
 #
 #   bins.<bin>       every release program but an `apart` one, as built — what
 #                    a check runs where it used to run `${workspace}/bin/<bin>`
-#   <name>           the 31 named programs a module, an app or the ISO runs
+#   <name>           the 32 named programs a module, an app or the ISO runs
 #                    (`installer`, `rescue`, `brain`, …), the unit itself or,
 #                    for one that paints, the unit under a wrapper that carries
 #                    the palettes
@@ -114,6 +114,8 @@ let
   named = {
     # The ISO's console installer.
     installer = wrapped "ronoctua-installer" "ronoctua-install";
+    # What the installation leaves for the first boot: the belongings.
+    firstBoot = program "ronoctua-first-boot" plainly;
     # The rescue console, on its VT and from `Ctrl+Alt+Del`.
     rescue = wrapped "ronoctua-rescue" "ronoctua-rescue";
     # The player's daemon: libmpv and ffmpeg-full, never the renderer.

@@ -153,7 +153,20 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    (`/var/lib/ronoctua-parts/view`: `bin/` e um conjunto fechado de `share/`, nunca `lib/`). O que a
    pessoa entrega à mão, importa de um pendrive ou traz de um espelho entra no store só quando o
    Nix confere o hash que o flake já declara; uma saída construída chega só pelos substituters
-   declarados. O `pkgs` do sistema não admite pacote não livre: eles existem só nas partes.
+   declarados. **Não livre é aprovado** (decisão do dono, 2026-10-24): o `pkgs` do sistema o admite,
+   e nenhum não livre derruba uma avaliação (cobra `unfree-never-refuses`); os programas não livres
+   da distro continuam partes, porque são downloads. O que ninguém pode redistribuir nunca vai no ISO
+   publicado (cobra `iso-carries-nothing-undistributable`): numa máquina instalada sem rede, os ramos
+   de hardware que o pedem esperam o marcador `hardware-deferred.json` sair, na primeira
+   `ronoctua-machine apply` que os constrói.
+   **A instalação nunca usa rede** (no mesmo plano): o ISO leva o fecho livre das duas bases, a cola
+   que um host diferente constrói (calculada dos grafos de `.drv`) e todo nó do lock
+   (`nix/installer/offline.nix`); todo `nix` do instalador roda `--offline`, sem substituter nem
+   registro, e o sistema é construído antes do disco. Os pertences terminam no primeiro boot
+   (`ronoctua-first-boot`, com a senha selada no TPM), e a primeira atualização desmira a máquina da
+   árvore do ISO (`ronoctua-machine update-distro`). O ISO completo (`.#iso-complete`), com toda parte
+   a bordo, não livres inclusive, é do desenvolvedor e **nunca é publicado** (cobra
+   `the-complete-iso-is-never-released`).
 
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta. Só o
    `nix run .#gate` roda tudo. Emenda aprovada pelo dono (2026-10-21): o gate faz as perguntas do
@@ -223,7 +236,8 @@ nix run .#quick              os checks escolhidos (tests/quick.nix), ~1 min
 nix run .#most               tudo menos o que constrói uma instalação, ~16 min
 nix run .#gate               tudo; dimensiona pela RAM (e as VMs pelo que declaram); fecha o inv. 7
 nix run .#vm                 VM completa (-- --pointers --keyboards passa mouses e teclados)
-nix run .#iso                imagem do instalador
+nix run .#iso                imagem do instalador (instala sem rede)
+nix run .#iso-complete       o ISO completo do desenvolvedor, com as partes não livres; nunca publicado
 nix run .#install            instala no disco (sem --execute, só ensaia)
 nix run .#bench              falha se um quadro estourar o orçamento
 nix run .#diagnostics        só lê; rode quando "nenhum atalho funciona"
@@ -882,6 +896,9 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
   também é referência, e quem compila a paga: ícones e buffers vêm do ambiente. E bitcode esconde
   referências: o caminho que uma lib de release assa só aparece no programa ligado, que recebe os
   valores dos crates dentro dele (`cited`; cobra `programs-hold-what-they-cite`).
+- Um programa nomeado (`rust.<programa>`) carrega `passthru.bin`, o nome dele: no `path` de uma
+  unidade, o `makeBinPath` o toma pela saída `bin` e escreve `<programa>/bin`, relativo, e nada roda
+  (`setpriv: failed to execute`). Passe `"${pkg}"`, o caminho, como o `nix/modules/first-boot.nix`.
 - Um programa que acha outro ao lado de `current_exe()` só acha CÓPIAS no mesmo `bin/`, e uma cópia
   não cita a unidade de que saiu (cobra `no-loop-build-reaches-a-machine`). O `--shrink-rpath` do
   fixup tira o RUNPATH de um `dlopen`: ele vai no `postFixup`. O que um build vai construir é o dry
@@ -939,8 +956,11 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
 - nixpkgs 26.05: `noto-fonts-emoji` → `noto-fonts-color-emoji`, `nixfmt-rfc-style` → `nixfmt`,
   `xorg.libX11` → `libx11`, `pkgs.system` → `pkgs.stdenv.hostPlatform.system`. Atributo dinâmico
   definido em duas sentenças é erro de avaliação: use um attrset só.
-- As fontes (4,1 GB) e as gravações dos sons ambientes são asset de Release, nunca git, e o input é
-  `file+https://` — senão o Nix infere tarball e descompacta. `/etc/nixos` e `/etc/fonts/conf.d` são somente leitura (use
+- As fontes (4,1 GB) e as gravações dos sons ambientes são asset de Release, nunca git. A face do
+  sistema e os sons são input `file+https://` — senão o Nix infere tarball e descompacta —, e as três
+  variantes da família, que só o full leva (a parte `fonts-full`), são downloads fixados com o mesmo
+  hash NAR (`fontAssets`, `recursiveHash`): um input é buscado por toda avaliação, e teria de estar no
+  ISO. `/etc/nixos` e `/etc/fonts/conf.d` são somente leitura (use
   `localConf`). O nome do ISO é `image.baseName`.
 - `fs::copy` de um arquivo do store herda o modo somente leitura: apague o destino antes de copiar,
   senão a segunda geração falha com "Permission denied" dentro de um `build.rs`.

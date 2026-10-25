@@ -142,6 +142,22 @@ def sums_text(lines):
     return "".join(f"{sha}  {name}\n" for sha, name in lines)
 
 
+# THE COMPLETE ISO'S MARKER (`installer-complete` in `flake.nix`), a file at
+# the medium's root. Its directory records sit at the head of the image —
+# the Rock Ridge name as it is, the ISO 9660 one upper-cased — and the store
+# comes after them.
+COMPLETE_MARKS = (b"ronoctua-complete", b"RONOCTUA_COMPLETE")
+COMPLETE_HEAD_BYTES = 64 * 1024 * 1024
+
+
+def is_complete(iso):
+    """Whether `iso` is the developer's complete ISO: its marker is among the
+    directory records at its head, whatever the file is called."""
+    with open(iso, "rb") as f:
+        head = f.read(COMPLETE_HEAD_BYTES)
+    return any(mark in head for mark in COMPLETE_MARKS)
+
+
 def pack(iso, into, most_bytes=MOST_BYTES, part_bytes=PART_BYTES):
     """The ISO in `into`, whole or in parts, and `SHA256SUMS` beside it.
 
@@ -155,6 +171,11 @@ def pack(iso, into, most_bytes=MOST_BYTES, part_bytes=PART_BYTES):
         refuse(f"{name} is not ronoctua-distro-<label>-x86_64.iso", "the stick and fetch-iso read that name")
     if not iso.is_file():
         refuse(f"{iso} is not a file")
+    if is_complete(iso):
+        refuse(
+            f"{iso} is a complete ISO: it carries every part, unfree ones included",
+            "a complete ISO is for its builder's own machines and is never published",
+        )
     if not 0 < part_bytes < most_bytes:
         refuse(f"a part of {part_bytes} bytes is not smaller than an asset of {most_bytes}")
     into = Path(into)
