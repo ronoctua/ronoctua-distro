@@ -10,8 +10,10 @@
 # docs/ARCHITECTURE.md.
 {
   config,
+  options,
   lib,
   pkgs,
+  utils,
   modulesPath,
   inputs,
   ronoctua,
@@ -22,6 +24,18 @@ let
   # WHERE THE DISTRO'S TREE IS on the ISO — named once, here; the installer
   # reads it from `RONOCTUA_FLAKE_DIR`.
   distroDir = "/etc/ronoctua/distro";
+
+  # THE IMAGE AS NIXPKGS BUILDS IT, from `iso-image.nix`'s own definition:
+  # the one below is it with one file more, and naming it through
+  # `config.system.build.isoImage` would be the definition reading itself.
+  nixpkgsIsoImage =
+    (lib.findFirst (d: lib.hasSuffix "/installer/cd-dvd/iso-image.nix" d.file && d.value ? isoImage)
+      (throw "iso-image.nix no longer defines system.build.isoImage; the medium check needs it")
+      options.system.build.definitionsWithLocations
+    ).value.isoImage;
+
+  # The mount of the store on the medium, as systemd names it in the initrd.
+  roStore = "${utils.escapeSystemdPath "/sysroot/nix/.ro-store"}.mount";
 in
 {
   imports = [
@@ -81,6 +95,112 @@ in
     makeUsbBootable = true;
     # No splash: section 3 holds from the very first pixel.
     squashfsCompression = "zstd -Xcompression-level 12";
+  };
+
+  # -------------------------------------------------------------------
+  # The medium checks itself before anything uses it
+  # -------------------------------------------------------------------
+  # A STICK CAN HOLD THE ISO'S NAME AND LENGTH AND NOT ITS BYTES. A copy onto
+  # a Ventoy stick, pulled before the kernel wrote it back, kept everything
+  # past 2.13 GiB from the ISO that was there before: the kernel and the
+  # initrd sit near the start, so it booted, and the store did not mount —
+  # `Failed to mount /sysroot/nix/.ro-store` and an emergency shell that says
+  # nothing of why. A copy broken in the middle of the store would mount, and
+  # fail later, inside an installation that has already erased a disk.
+  #
+  # So the image carries the store's sha256 beside it
+  # (`/nix-store.squashfs.sha256`, `sha256sum`'s line, which a person can
+  # check by hand), and the initrd hashes the store against it before the
+  # store is mounted, and stops with a sentence when they differ. The hash
+  # is computed where the store is made, inside the image's build: the
+  # initrd cannot carry it, since the initrd is inside the store.
+  #
+  # It reads the whole store once per boot: ~40 s from a USB 3 stick (one
+  # read 5 GB in 40 s), ~15 s in QEMU from the host's cache, and only the
+  # hashing after `copytoram` (which runs first, so what is checked is what
+  # will be mounted).
+  system.build.isoImage = lib.mkForce (
+    nixpkgsIsoImage.overrideAttrs (old: {
+      squashfsCommand = old.squashfsCommand + ''
+
+        sha256sum nix-store.squashfs > nix-store.squashfs.sha256
+        addPath nix-store.squashfs.sha256 nix-store.squashfs.sha256
+      '';
+    })
+  );
+
+  # The unit lives in the systemd initrd, and a scripted one would drop it
+  # without a word.
+  assertions = [
+    {
+      assertion = config.boot.initrd.systemd.enable;
+      message = "the installer ISO's medium check is an initrd systemd unit: boot.initrd.systemd.enable must stay on";
+    }
+  ];
+
+  boot.initrd.systemd.services.medium-check = {
+    description = "Check that the stick holds this ISO whole";
+    requiredBy = [ roStore ];
+    before = [ roStore ];
+    after = [ "copytoram.service" ];
+    unitConfig.RequiresMountsFor = "/sysroot/iso";
+    # THE PROGRESS GOES THROUGH JOURNALD (standard output, kept as fd 3:
+    # inside the pipe below, standard output is the hash), which also keeps
+    # systemd's start-job spinner off the console. THE REFUSAL IS WRITTEN TO
+    # THE CONSOLE DIRECTLY, and to the journal through standard error:
+    # forwarded, it reached the console after systemd's `[DEPEND]` lines and
+    # was scattered among them.
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      StandardOutput = "journal+console";
+      StandardError = "journal";
+    };
+    path = [ pkgs.coreutils ];
+    script = ''
+      set -o pipefail
+      store=/sysroot/iso/nix-store.squashfs
+      said=/sysroot/iso/nix-store.squashfs.sha256
+      exec 3>&1
+      say() {
+        printf '%s\n' "$*" >&3
+      }
+      refuse() {
+        printf '%s\n' "$*" >/dev/console
+        printf '%s\n' "$*" >&2
+      }
+      broken() {
+        refuse "The stick does not hold this ISO whole: $1."
+        refuse "A copy that never finished reaching the stick does this (one removed before it was"
+        refuse "written back). Write the ISO again; this writes it and reads it back from the stick:"
+        refuse "  nix run github:ronoctua/ronoctua-distro/release#fetch-iso -- --into <the stick's folder>"
+        refuse "and this checks a copy made any other way:"
+        refuse "  nix run github:ronoctua/ronoctua-distro/release#fetch-iso -- --check <the ISO on the stick>"
+        exit 1
+      }
+      [ -r "$said" ] || broken "nix-store.squashfs.sha256 is missing"
+      [ -r "$store" ] || broken "nix-store.squashfs is missing"
+      want=
+      read -r want _ <"$said" || true
+      [ -n "$want" ] || broken "nix-store.squashfs.sha256 is empty"
+      size=$(stat -L -c %s "$store")
+      say "Checking that the stick holds this ISO whole ($(( size / 1048576 )) MiB)..."
+      # A TENTH AT A TIME, so the console shows it moving: one `dd` per
+      # tenth into a single `sha256sum`.
+      blocks=$(( (size + 4194303) / 4194304 ))
+      tenth=$(( (blocks + 9) / 10 ))
+      if ! got=$(
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          dd if="$store" bs=4M iflag=fullblock skip=$(( (i - 1) * tenth )) count="$tenth" status=none || exit 1
+          say "  $(( i * 10 ))%"
+        done | sha256sum
+      ); then
+        broken "reading nix-store.squashfs failed (journalctl -b says where)"
+      fi
+      got=''${got%% *}
+      [ "$got" = "$want" ] || broken "nix-store.squashfs is not the one this ISO was built with (sha256 $got, not $want)"
+      say "The stick holds this ISO whole (sha256 $want)."
+    '';
   };
 
   # We do not use ZFS (section 7.2: btrfs, and ZFS pins the kernel). The module

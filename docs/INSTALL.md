@@ -57,6 +57,27 @@ sudo dd if=result/iso/ronoctua-distro-*.iso of=/dev/sdX bs=4M status=progress co
 
 É `/dev/sdX`, o disco inteiro — não `/dev/sdX1`.
 
+**Num pendrive com Ventoy**, o ISO é um arquivo na partição dele. Baixe-o direto para lá: o
+`fetch-iso` só dá nome ao ISO depois de lê-lo de volta do próprio pendrive, igual ao da versão.
+
+```
+nix run github:ronoctua/ronoctua-distro/release#fetch-iso -- --into /run/media/$USER/Ventoy
+```
+
+As partes esperam no cache deste computador (`~/.cache/ronoctua/fetch-iso`) e só o ISO juntado vai
+para o pendrive: ele precisa do tamanho do ISO livre, e o computador, do mesmo tanto enquanto junta.
+Uma cópia feita de outro jeito (pelo gerenciador de arquivos, por exemplo) se confere onde está:
+
+```
+nix run github:ronoctua/ronoctua-distro/release#fetch-iso -- --check /run/media/$USER/Ventoy/ronoctua-distro-….iso
+```
+
+O `--check` também lê um pendrive gravado com `dd` (`--check /dev/sdX`, como root). Seja qual for o
+jeito, **ejete o pendrive antes de tirá-lo**: a cópia termina na memória antes de chegar ao
+pendrive, e um pendrive tirado cedo demais guarda o nome e o tamanho do ISO com bytes velhos dentro.
+O ISO confere o próprio pendrive no boot, antes de usá-lo, e para dizendo isso (cerca de 40 s num
+pendrive USB 3).
+
 **3. Bootar pelo pendrive.** Entre no setup da UEFI e **desative o Secure Boot**: o pendrive e o
 sistema instalado bootam sem ele.
 
@@ -375,6 +396,7 @@ na lista de programas, `Space`) são clicáveis.
 | sintoma | causa | correção |
 |---|---|---|
 | o pendrive não aparece no boot | Secure Boot ainda ligado | desative no setup da UEFI |
+| o boot para dizendo `The stick does not hold this ISO whole` (ou, num ISO anterior a essa conferência, num shell de emergência depois de `Failed to mount /sysroot/nix/.ro-store`) | o pendrive não guarda o ISO inteiro: a cópia não chegou toda a ele (tirado antes de ejetar) ou ele perdeu escritas | grave de novo com `fetch-iso -- --into` a pasta do pendrive, ou confira a cópia com `fetch-iso -- --check`, e ejete antes de tirar |
 | o instalador para depois do idioma, falando do TPM | TPM desativado no firmware | ligue-o (costuma aparecer como "PTT", "fTPM" ou "Security Device"); a tela diz os passos |
 | o instalador diz que o computador ligou no modo BIOS | o modo Legacy/CSM está ligado | escolha UEFI no setup (a tela diz os passos), ou "Continuar com a pior alternativa" |
 | a tela da rede não segue | sem cabo, a rede escolhida não conectou ou pede uma página de login | conecte o cabo ou escolha outra rede; a tela diz qual dos três |

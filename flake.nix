@@ -279,6 +279,8 @@
       # its measured class: one arithmetic for the batteries, `.#sized-build`,
       # `.#quick` and a machine's own apply. See nix/build-sizing.nix.
       buildSizing = pkgs.callPackage ./nix/build-sizing.nix { };
+      # OLD ISOs OUT OF THE STORE (`nix/iso-sweep.nix`).
+      isoSweep = pkgs.callPackage ./nix/iso-sweep.nix { };
       # `nix build`, sized: every unit it reaches its own build, by its
       # class, the heavy ones alone, the test runs after every compilation.
       sizedBuild = buildSizing.sizedBuild (buildSizing.unitPlan { units = rust.unitIndex; });
@@ -2601,12 +2603,25 @@
               echo "  nix flake lock --update-input ambience-v1"
             '';
 
-        # Builds the ISO and says where it is.
+        # Builds the ISO and says where it is — and the ISOs before it leave
+        # the store (`nix/iso-sweep.nix`): the new one is the newest.
         iso = mkScriptApp "ronoctua-iso" "builds the installer's ISO" ''
           out=$(nix build --no-link --print-out-paths .#iso)
           echo "the ISO came out at:"
           find "$out/iso" -name '*.iso' -printf '  %p  (%s bytes)\n'
+          ${isoSweep}/bin/ronoctua-iso-sweep sweep
         '';
+
+        # OLD ISOs OUT OF THE STORE, by hand; every app that builds one runs
+        # it on its way out. `-- --rehearse` says what it would delete.
+        iso-sweep = {
+          type = "app";
+          program = "${isoSweep}/bin/ronoctua-iso-sweep";
+          meta = {
+            description = "deletes the ISOs nothing roots, keeping the newest of each name";
+            platforms = [ system ];
+          };
+        };
 
         # The real installer. Without `--execute` it does a DRY RUN: it shows the
         # `host.nix` it would generate and the steps it would run, and exits. That is the default

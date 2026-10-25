@@ -55,6 +55,10 @@
   "iso-is-measured"
   "iso-has-no-toolchain"
   "iso-carries-the-seed"
+  # The ISO booted as it ships, from an emulated USB stick, twice: whole,
+  # and with its store's tail lost (`tests/iso-stick-vm.nix`). It builds the
+  # image, and each boot reads the whole store.
+  "iso-checks-its-stick-vm"
   # These two read the `toplevel` of the VM's system — cheap to evaluate,
   # expensive to build the first time.
   "browser-has-no-keyring"

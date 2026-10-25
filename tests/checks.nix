@@ -25670,6 +25670,15 @@ let
     installer = rust.installer;
   };
 
+  # THE INSTALLER ISO, BOOTED AS IT SHIPS from an emulated USB stick: whole,
+  # its initrd checks the store and the installer is reached; with the
+  # store's tail lost, the initrd says the stick does not hold the ISO whole
+  # and stops before mounting it.
+  isoChecksItsStickVm = import ./iso-stick-vm.nix {
+    inherit pkgs lib;
+    installer = self.nixosConfigurations.installer;
+  };
+
   network-tuned = mkCheck "network-tuned" [ ] ''
     expected() {
       if [ "$2" != "$3" ]; then
@@ -51308,6 +51317,50 @@ let
         echo "OK: seventeen refusals before anything was built or pushed; the pins behind said before the gate, and stopping nothing; a release drafts, moves release forward, publishes, commits nothing and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
       '';
 
+  # OLD ISOs LEAVE THE STORE, AND NOTHING ELSE DOES (`nix/iso-sweep.nix`).
+  #
+  # Every build and VM-test iteration of the installer leaves a ~5 GiB ISO
+  # that nothing roots; on 2026-10-23 eight of them, 38 GiB, filled the pool
+  # to 93%. The apps that build ISOs sweep on their way out, and what they
+  # keep is this choice: an ISO a root holds (`--out-link`, a profile), one a
+  # rooted path refers to, and the newest of each store name — the build that
+  # just finished, and `-complete` (the developer's whole ISO) apart from the
+  # published one. Everything else goes. Planted, so the answer does not
+  # depend on what this machine's store holds.
+  iso-sweep-keeps-what-it-must = mkCheck "iso-sweep-keeps-what-it-must" [ pkgs.python3 ] ''
+    cat > planted.json <<'EOF'
+    [
+      {"path": "/nix/store/00000000000000000000000000000001-ronoctua-distro-26.05-x86_64.iso", "registered": 10, "rooted": false, "referred_by_rooted": false},
+      {"path": "/nix/store/00000000000000000000000000000002-ronoctua-distro-26.05-x86_64.iso", "registered": 30, "rooted": false, "referred_by_rooted": false},
+      {"path": "/nix/store/00000000000000000000000000000003-ronoctua-distro-26.05-x86_64.iso", "registered": 20, "rooted": false, "referred_by_rooted": false},
+      {"path": "/nix/store/00000000000000000000000000000004-ronoctua-distro-26.05-x86_64.iso", "registered": 5, "rooted": true, "referred_by_rooted": false},
+      {"path": "/nix/store/00000000000000000000000000000005-ronoctua-distro-26.05-x86_64.iso", "registered": 6, "rooted": false, "referred_by_rooted": true},
+      {"path": "/nix/store/00000000000000000000000000000006-ronoctua-distro-26.05-complete-x86_64.iso", "registered": 1, "rooted": false, "referred_by_rooted": false}
+    ]
+    EOF
+    python3 -I ${../nix/scripts/iso-sweep.py} choose < planted.json > said
+    cat said
+    verdict() {
+      grep -F -- "$1" said | cut -d' ' -f1
+    }
+    fail() {
+      echo "ERROR: $*" >&2
+      exit 1
+    }
+    [ "$(verdict 0001-)" = delete ] || fail "an older ISO nothing roots was kept"
+    [ "$(verdict 0003-)" = delete ] || fail "an older ISO nothing roots was kept"
+    [ "$(verdict 0002-)" = keep ] || fail "the newest ISO of its name would go"
+    [ "$(verdict 0004-)" = keep ] || fail "a rooted ISO would go"
+    [ "$(verdict 0005-)" = keep ] || fail "an ISO a rooted path refers to would go"
+    [ "$(verdict 0006-)" = keep ] || fail "the newest complete ISO would go for being older than the published one"
+    [ "$(wc -l < said)" = 6 ] || fail "not one verdict per ISO"
+    # TWO KEPT PER NAME when asked.
+    python3 -I ${../nix/scripts/iso-sweep.py} choose --keep 2 < planted.json > said
+    [ "$(verdict 0003-)" = keep ] || fail "--keep 2 did not keep the two newest"
+    [ "$(verdict 0001-)" = delete ] || fail "--keep 2 kept a third"
+    echo "OK: older unrooted ISOs go; the rooted, the referred-to and the newest of each name stay"
+  '';
+
   # THE ISO COMES BACK WHOLE FROM ITS PARTS, AND FROM NOTHING ELSE.
   #
   # GitHub refuses an asset of 2 GiB or more, so the release cuts a bigger
@@ -51322,6 +51375,10 @@ let
   # machine the way GitHub serves one (the API's answer, a redirect to the
   # asset host, byte ranges): whole in one run, resumed from a part cut
   # short, and fetched anew over a part that is at its full length and wrong.
+  # And a COPY MADE ANOTHER WAY, checked where it is (`--check`): the ISO
+  # passes; one of the ISO's length whose tail is other bytes — what a stick
+  # pulled before the kernel wrote the copy back holds — and one cut short
+  # are refused; from a release, only SHA256SUMS is downloaded.
   iso-parts-reassemble =
     let
       serve = pkgs.writeText "release-serve.py" ''
@@ -51330,6 +51387,9 @@ let
         import http.server, json, os, sys
         folder, port_file = sys.argv[1], sys.argv[2]
         names = sorted(os.listdir(folder))
+        # What was handed out, one name a line: `--check` asks for SHA256SUMS
+        # alone.
+        served = port_file + ".served"
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -51344,7 +51404,8 @@ let
             def do_GET(self):
                 base = f"http://127.0.0.1:{self.server.server_port}"
                 if self.path == "/repos/ronoctua/ronoctua-distro/releases/latest":
-                    assets = [{"name": n, "state": "uploaded", "browser_download_url": f"{base}/download/{n}"} for n in names]
+                    assets = [{"name": n, "state": "uploaded", "size": os.path.getsize(os.path.join(folder, n)),
+                               "browser_download_url": f"{base}/download/{n}"} for n in names]
                     return self.send(200, json.dumps({"tag_name": "v-check", "draft": False, "prerelease": False, "assets": assets}).encode())
                 if self.path.startswith("/download/"):
                     return self.send(302, headers=[("Location", base + "/asset/" + self.path[len("/download/"):])])
@@ -51353,6 +51414,8 @@ let
                     if name not in names:
                         return self.send(404)
                     data = open(os.path.join(folder, name), "rb").read()
+                    with open(served, "a") as f:
+                        f.write(name + "\n")
                     r = self.headers.get("Range")
                     if r and r.startswith("bytes=") and r.endswith("-"):
                         start = int(r[len("bytes="):-1])
@@ -51427,14 +51490,23 @@ let
         done
         [ -s port ] || fail "the release server did not start"
         export RONOCTUA_FETCH_ISO_API=http://127.0.0.1:$(cat port)
+        # THE PARTS WAIT IN THIS MACHINE'S CACHE, never beside the ISO: `--into`
+        # a stick's folder must ask the stick for the ISO's room alone.
+        export RONOCTUA_FETCH_ISO_CACHE=$PWD/cache
         "$fetch" --into fetched >/dev/null || fail "the release did not download"
         cmp -s "$iso" "fetched/$iso" || fail "the downloaded ISO is not the ISO"
         [ "$(ls -A fetched)" = "$iso" ] || fail "the download left something beside the ISO: $(ls -A fetched)"
-        mkdir -p "resumed/$iso.download"
-        head -c 300000 "parts/$iso.part-01" >"resumed/$iso.download/$iso.part-01"
-        head -c 999999 /dev/zero >"resumed/$iso.download/$iso.part-00"
+        [ ! -e "cache/$iso.download" ] || fail "the parts outlived the ISO in the cache"
+        mkdir -p "cache/$iso.download"
+        head -c 300000 "parts/$iso.part-01" >"cache/$iso.download/$iso.part-01"
+        head -c 999999 /dev/zero >"cache/$iso.download/$iso.part-00"
         "$fetch" --into resumed >/dev/null || fail "a part cut short and a part that is wrong stopped the download"
         cmp -s "$iso" "resumed/$iso" || fail "the ISO from a resumed download is not the ISO"
+        [ "$(ls -A resumed)" = "$iso" ] || fail "the resumed download left something beside the ISO: $(ls -A resumed)"
+        rm -f port.served
+        "$fetch" --check "$iso" | grep -q "read back from the medium, it is $iso of v-check" ||
+          fail "--check did not take the ISO against the release's SHA256SUMS"
+        [ "$(cat port.served)" = SHA256SUMS ] || fail "--check downloaded more than SHA256SUMS: $(cat port.served)"
         kill "$server"
         unset RONOCTUA_FETCH_ISO_API
 
@@ -51448,6 +51520,28 @@ let
           fi
           [ ! -e "out-$from/$iso" ] || fail "$what: an ISO was left behind"
         }
+        # A COPY MADE ANOTHER WAY (`--check`), against a folder's SHA256SUMS.
+        "$fetch" --from parts --check "$iso" | grep -q "read back from the medium, it is $iso" ||
+          fail "--check did not take the ISO itself"
+        checked() {
+          local what=$1 copy=$2 sentence=$3
+          if "$fetch" --from parts --check "$copy" >out 2>&1; then
+            fail "$what: --check took it"
+          elif ! grep -q -e "$sentence" out; then
+            fail "$what: refused without saying '$sentence': $(cat out)"
+          fi
+        }
+        cp "$iso" stale.iso
+        chmod u+w stale.iso
+        python3 -c 'import random, sys; f = open(sys.argv[1], "r+b"); f.seek(2000000); f.write(random.Random(5).randbytes(500000))' stale.iso
+        [ "$(stat -c %s stale.iso)" = "$(stat -c %s "$iso")" ] || fail "the stale copy is not the ISO's length"
+        checked "a copy whose tail is other bytes" stale.iso "differs from SHA256SUMS"
+        head -c 1000000 "$iso" >short.iso
+        checked "a copy cut short" short.iso "bytes long"
+        if "$fetch" --from parts --check "$iso" --into elsewhere >/dev/null 2>&1; then
+          fail "--check and --into were taken together"
+        fi
+
         cp -r parts corrupt
         chmod u+w corrupt/*
         printf X | dd of="corrupt/$iso.part-01" bs=1 seek=10 conv=notrunc 2>/dev/null
@@ -51482,8 +51576,139 @@ let
         END
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: parts and whole come back byte for byte, from a folder and downloaded (resumed, a wrong part fetched anew); corrupt, missing and swapped parts are refused"
+        echo "OK: parts and whole come back byte for byte, from a folder and downloaded (resumed, a wrong part fetched anew); corrupt, missing and swapped parts are refused; --check takes the ISO and refuses a copy with another tail or cut short, downloading only SHA256SUMS"
       '';
+
+  # WHAT FETCH-ISO CALLS CHECKED IS WHAT THE MEDIUM GIVES BACK.
+  #
+  # A copy of the ISO onto a Ventoy stick kept its name and its length and
+  # lost its last 2.6 GiB: the stick was pulled before the kernel wrote the
+  # copy back, and every read on the machine that wrote it answered from the
+  # page cache, with the new bytes. The stick booted into an emergency shell.
+  # So `release.py` hashes a written ISO only through `settled` — written
+  # through (`fsync`), its cached pages dropped (`POSIX_FADV_DONTNEED`), read
+  # again — and this holds that shape: `settled` in that order; every rename
+  # that NAMES the ISO behind a `settled` of the very file it renames; the
+  # "already here" answer, and `--check`'s, from `settled` and never from
+  # `sha256_of`. What the kernel does with the advice is the kernel's; that
+  # the advice is given, before the only reading that may say "checked", is
+  # this.
+  fetch-iso-reads-back-the-medium = mkCheck "fetch-iso-reads-back-the-medium" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import ast, pathlib, sys
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: `release.py` is read by Python's own parser; comments are not
+    # nodes, so none can answer for the code, and every order below is the
+    # order of the calls' positions in the parsed functions.
+    # FILE-WIDE: the parse is of the whole file, and each question is then
+    # narrowed to ONE function by its node — what `body_of`, which is
+    # brace-shaped, cannot do for Python.
+    text = pathlib.Path("${../nix/scripts/release.py}").read_text()
+    floor(len(text), 10000, "characters of release.py")
+    tree = ast.parse(text)
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    floor(len(functions), 15, "functions in release.py")
+    wrong = []
+
+    def named(name):
+        if name not in functions:
+            print(f"ERROR: release.py has no `{name}` any more.", file=sys.stderr)
+            raise SystemExit(1)
+        return functions[name]
+
+    def callee(call):
+        f = call.func
+        if isinstance(f, ast.Name):
+            return f.id
+        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+            return f.value.id + "." + f.attr
+        return None
+
+    def calls(node):
+        found = [c for c in ast.walk(node) if isinstance(c, ast.Call)]
+        return sorted(found, key=lambda c: (c.lineno, c.col_offset))
+
+    def first(node, name):
+        for c in calls(node):
+            if callee(c) == name:
+                return c
+        return None
+
+    def at(c):
+        return (c.lineno, c.col_offset)
+
+    def arg_name(c, i=0):
+        if len(c.args) > i and isinstance(c.args[i], ast.Name):
+            return c.args[i].id
+        return None
+
+    # 1. `settled`: written through, its pages dropped, THEN read.
+    settled = named("settled")
+    sync, drop, read = first(settled, "os.fsync"), first(settled, "os.posix_fadvise"), first(settled, "os.read")
+    if sync is None or drop is None or read is None:
+        wrong.append("`settled` no longer calls os.fsync, os.posix_fadvise and os.read")
+    else:
+        if not at(sync) < at(drop) < at(read):
+            wrong.append("`settled` does not fsync, then drop the cached pages, then read")
+        if not any(isinstance(a, ast.Attribute) and a.attr == "POSIX_FADV_DONTNEED" for a in drop.args):
+            wrong.append("`settled`'s advice is not POSIX_FADV_DONTNEED: the pages stay, and the read is the cache's")
+    if first(settled, "open") is not None:
+        wrong.append("`settled` opens the file a second way: the read must be of the fd it advised")
+
+    # 2. `fetch`: every rename NAMES the ISO only behind a `settled` of the
+    # same file, in the same function, before it.
+    fetch = named("fetch")
+    inner = [n for n in ast.walk(fetch) if isinstance(n, ast.FunctionDef)]
+    renames = 0
+    for function in inner:
+        own = [c for c in calls(function)
+               if not any(c in ast.walk(g) for g in function.body if isinstance(g, ast.FunctionDef))]
+        for c in own:
+            if callee(c) != "os.replace":
+                continue
+            renames += 1
+            moved = arg_name(c)
+            behind = [s for s in own if callee(s) == "settled" and at(s) < at(c) and arg_name(s) == moved]
+            if moved is None or not behind:
+                wrong.append(f"`{function.name}` renames into the ISO's name (line {c.lineno}) without "
+                             "reading the same file back through `settled` first")
+    floor(renames, 1, "renames in `fetch`")
+
+    # 3. ...and the "already here" answer is the medium's too.
+    for c in calls(fetch):
+        if callee(c) == "sha256_of" and arg_name(c) == "target":
+            wrong.append(f"`fetch` hashes the ISO with `sha256_of` (line {c.lineno}): that is the page cache's answer")
+    if not any(callee(c) == "settled" and arg_name(c) == "target" for c in calls(fetch)):
+        wrong.append("`fetch` no longer reads an ISO already there back through `settled`")
+
+    # 4. `--check`: `check_copy` answers from `settled` alone, and `main`
+    # sends `--check` to it.
+    check = named("check_copy")
+    checked = first(check, "settled")
+    if checked is None:
+        wrong.append("`check_copy` does not read the copy back through `settled`")
+    if first(check, "sha256_of") is not None:
+        wrong.append("`check_copy` hashes with `sha256_of`: the page cache's answer")
+    if checked is not None:
+        said = [c for c in calls(check) if callee(c) == "print"]
+        if not said or any(at(p) < at(checked) for p in said):
+            wrong.append("`check_copy` says something before it has read the copy back")
+    if first(named("main"), "check_copy") is None:
+        wrong.append("`main` no longer sends --check to `check_copy`")
+
+    if wrong:
+        print("ERROR: fetch-iso can call an ISO checked from the page cache:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       A stick pulled before the kernel wrote a copy back keeps the old bytes", file=sys.stderr)
+        print("       under the new name and length; only a read from the medium sees it.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK: `settled` writes through, drops the pages and reads; {renames} rename(s) name the ISO behind it; "
+          "the ISO already there and --check's copy are read back from the medium")
+    END
+  '';
 
   # A PERSON'S PUBLIC CACHE HOLDS ONLY FREE BUILDS.
   #
@@ -54373,6 +54598,7 @@ let
     wifi-tpm-vm = wifiTpmVm;
     wifi-joins-vm = wifiJoinsVm;
     installer-joins-wifi-vm = installerJoinsWifiVm;
+    iso-checks-its-stick-vm = isoChecksItsStickVm;
 
     persist-home-vm = persistHomeVm;
     persist-initrd-vm = persistInitrdVm;
@@ -54587,6 +54813,8 @@ let
       binary-cache-token-never-prints
       release-refuses-dirty-tree
       iso-parts-reassemble
+      fetch-iso-reads-back-the-medium
+      iso-sweep-keeps-what-it-must
       release-cache-holds-only-free-builds
       machine-apps-stop-before-the-switch
       ;

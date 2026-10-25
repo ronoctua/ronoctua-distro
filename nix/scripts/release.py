@@ -21,17 +21,21 @@ Subcommands:
   pack ISO DIR [--most-bytes N] [--part-bytes N]
   notes --repository OWNER/NAME --tag T --rev R --date D --assets DIR [--signed]
   fetch --repository OWNER/NAME [--tag T] [--from DIR] [--into DIR]
+  fetch --repository OWNER/NAME [--tag T] [--from DIR] --check PATH
   menu-room --profile PROFILE --toplevel T --last-good L --limit N
 """
 
 import argparse
+import errno
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # GITHUB REFUSES AN ASSET OF 2 GiB OR MORE. The decimal reading of "2 GB" is
@@ -73,6 +77,51 @@ def sha256_of(path):
             if not block:
                 return digest.hexdigest()
             digest.update(block)
+
+
+def settled(path, length=None):
+    """The sha256 of `path` AS THE MEDIUM HOLDS IT — the only reading that may
+    call an ISO checked.
+
+    A write ends in the page cache, not on the medium, and every read until
+    the kernel writes it back answers from memory. A stick pulled before that
+    keeps its old bytes under a file of the full length: a copy onto a Ventoy
+    stick lost its last 2.6 GiB so, read as whole on the machine that wrote
+    it, and booted into an emergency shell. So the file is written through
+    (`fsync`), its cached pages are dropped (`POSIX_FADV_DONTNEED` drops only
+    clean pages, hence the `fsync` first) and it is read again, from the
+    medium. `length` stops there: a device is longer than the ISO on it."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        digest = hashlib.sha256()
+        left = length
+        while left is None or left > 0:
+            block = os.read(fd, CHUNK if left is None else min(CHUNK, left))
+            if not block:
+                break
+            digest.update(block)
+            if left is not None:
+                left -= len(block)
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+
+def settle_folder(folder):
+    """The folder's entries written through, so the name a rename gave is on
+    the medium too. A file system that cannot `fsync` a folder (EINVAL) is
+    written through whole."""
+    fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    except OSError as e:
+        if e.errno != errno.EINVAL:
+            raise
+        os.sync()
+    finally:
+        os.close(fd)
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +336,8 @@ def curl(*words):
 
 
 def release_of(repository, tag):
-    """GitHub's answer for the release (the latest, or `tag`)."""
+    """GitHub's answer for the release (the latest, or `tag`): each asset's
+    address and length, by name."""
     which = f"tags/{tag}" if tag else "latest"
     url = f"{API}/repos/{repository}/releases/{which}"
     answer = subprocess.run(
@@ -302,17 +352,31 @@ def release_of(repository, tag):
     if data.get("draft") or data.get("prerelease"):
         refuse(f"{data.get('tag_name')} is a draft or a pre-release")
     return {
-        a["name"]: a["browser_download_url"]
+        a["name"]: {"url": a["browser_download_url"], "size": a.get("size")}
         for a in data.get("assets", [])
         if a.get("state", "uploaded") == "uploaded"
     }, data.get("tag_name", tag or "latest")
 
 
+def download_cache():
+    """Where a download's parts wait to be joined: this machine's cache
+    (`$XDG_CACHE_HOME/ronoctua/fetch-iso`), or `RONOCTUA_FETCH_ISO_CACHE` for
+    the check that plants a download cut short (`iso-parts-reassemble`)."""
+    planted = os.environ.get("RONOCTUA_FETCH_ISO_CACHE")
+    if planted:
+        return Path(planted)
+    home = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return Path(home) / "ronoctua" / "fetch-iso"
+
+
 def fetch(repository, tag=None, source=None, into="."):
     """Downloads (or reads from `source`), checks every part, joins, checks
-    the whole, and only then names the ISO. A part that fails its line is
-    removed so the next run fetches it again; a download that stopped is
-    resumed; the folder of the download goes when the ISO is whole."""
+    the whole, and only then names the ISO — and the whole that is named is
+    the one the medium gives back (`settled`), never the bytes that went into
+    the write: `--into` a stick's folder is how the ISO reaches a Ventoy
+    stick. A part that fails its line is removed so the next run fetches it
+    again; a download that stopped is resumed; the folder of the download
+    goes when the ISO is whole."""
     into = Path(into)
     into.mkdir(parents=True, exist_ok=True)
     if source is not None:
@@ -322,10 +386,13 @@ def fetch(repository, tag=None, source=None, into="."):
         located = {p.name: p for p in source.iterdir()}
         label = str(source)
     else:
-        urls, label = release_of(repository, tag)
-        located = dict(urls)
+        assets, label = release_of(repository, tag)
+        located = {name: asset["url"] for name, asset in assets.items()}
     kind, iso, wanted = choose(list(located))
-    scratch = into / f"{iso}.download"
+    # THE PARTS LAND ON THIS MACHINE'S DISK, never beside the ISO: `--into` a
+    # stick's folder is how the ISO reaches a Ventoy stick, and parts there
+    # too would ask the stick for twice the ISO's room while they are joined.
+    scratch = download_cache() / f"{iso}.download"
 
     def local(name, expect=None):
         """The asset on this disk: as it is in `source`, or downloaded — a
@@ -333,7 +400,7 @@ def fetch(repository, tag=None, source=None, into="."):
         one that stopped half way is resumed."""
         if source is not None:
             return located[name]
-        scratch.mkdir(exist_ok=True)
+        scratch.mkdir(parents=True, exist_ok=True)
         at = scratch / name
         if expect is None:
             at.unlink(missing_ok=True)
@@ -359,10 +426,22 @@ def fetch(repository, tag=None, source=None, into="."):
         refuse(f"{SUMS} has no line for {iso}", "a part is checked on its own and the whole again")
     target = into / iso
     if target.exists():
-        if sha256_of(target) == sums[iso]:
-            print(f"{target} is already here, and it is the release's ({sums[iso]})")
+        if settled(target) == sums[iso]:
+            print(f"{target} is already here, and read back from the medium it is the release's ({sums[iso]})")
             return target
         refuse(f"{target} exists and is not the release's ISO", "move it away first: this never writes over a file")
+
+    def name_it(written):
+        """`written` becomes the ISO only once the medium gives it back as
+        the release's; otherwise it goes, and the run is refused."""
+        if settled(written) != sums[iso]:
+            written.unlink()
+            refuse(f"what reached {into} is not {iso}: read back from the medium, its sha256 differs from {SUMS}",
+                   "the medium kept other bytes than were written (a stick that drops writes, or one",
+                   "pulled while they were on their way); it was removed: run it again, and eject",
+                   "the stick before removing it")
+        os.replace(written, target)
+        settle_folder(into)
 
     pieces = []
     for name in wanted:
@@ -378,11 +457,12 @@ def fetch(repository, tag=None, source=None, into="."):
         pieces.append(at)
         print(f"checked {name}")
 
-    # WHOLE AND DOWNLOADED, it is already the ISO: moved, not copied.
-    if kind == "whole" and source is None:
-        os.replace(pieces[0], target)
+    # WHOLE, DOWNLOADED AND ON THE SAME FILE SYSTEM, it is already the ISO:
+    # moved, not copied. Anywhere else it is copied like the parts are joined.
+    if kind == "whole" and source is None and pieces[0].stat().st_dev == into.stat().st_dev:
+        name_it(pieces[0])
         shutil.rmtree(scratch)
-        print(f"{target}: checked against the {SUMS} of {label} ({sums[iso]})")
+        print(f"{target}: read back from the medium and checked against the {SUMS} of {label} ({sums[iso]})")
         return target
 
     partial = into / f".{iso}.partial"
@@ -401,11 +481,71 @@ def fetch(repository, tag=None, source=None, into="."):
         partial.unlink()
         refuse(f"the parts joined are not {iso}: the whole's sha256 differs from {SUMS}",
                "every part matched its own line, so the parts or their order were swapped")
-    os.replace(partial, target)
+    name_it(partial)
     if scratch.exists():
         shutil.rmtree(scratch)
-    print(f"{target}: whole and checked against the {SUMS} of {label} ({sums[iso]})")
+    print(f"{target}: whole, read back from the medium and checked against the {SUMS} of {label} ({sums[iso]})")
     return target
+
+
+def check_copy(repository, tag, source, path):
+    """An ISO put in place by other means — a file manager's copy onto a
+    Ventoy stick, `dd` onto a device — against the release's `SHA256SUMS`,
+    read back from the medium (`settled`). Only `SHA256SUMS` is downloaded;
+    a device is read as far as the ISO goes, which the assets' lengths say."""
+    path = Path(path)
+    if source is not None:
+        source = Path(source)
+        if not source.is_dir():
+            refuse(f"{source} is not a folder")
+        lengths = {p.name: p.stat().st_size for p in source.iterdir()}
+        if SUMS not in lengths:
+            refuse(f"there is no {SUMS} in {source}")
+        text = (source / SUMS).read_text()
+        label = str(source)
+    else:
+        assets, label = release_of(repository, tag)
+        lengths = {name: asset["size"] for name, asset in assets.items()}
+        if SUMS not in assets:
+            refuse(f"there is no {SUMS} in {label}")
+        with tempfile.TemporaryDirectory() as folder:
+            at = Path(folder) / SUMS
+            if curl("--output", str(at), assets[SUMS]["url"]) != 0:
+                refuse(f"the {SUMS} of {label} did not download")
+            text = at.read_text()
+    kind, iso, wanted = choose(list(lengths))
+    sums = parse_sums(text)
+    if sums.get(iso) is None:
+        refuse(f"{SUMS} has no line for {iso}")
+    length = None
+    if all(isinstance(lengths.get(n), int) for n in wanted):
+        length = sum(lengths[n] for n in wanted)
+    try:
+        st = os.stat(path)
+    except OSError as e:
+        refuse(f"{path} cannot be read: {e.strerror}")
+    if stat.S_ISBLK(st.st_mode):
+        if length is None:
+            refuse(f"{label} does not say how long {iso} is", "a device is read only as far as the ISO goes")
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            have = os.lseek(fd, 0, os.SEEK_END)
+        finally:
+            os.close(fd)
+        if have < length:
+            refuse(f"{path} holds {have} bytes, fewer than the {length} of {iso}")
+    elif stat.S_ISREG(st.st_mode):
+        if length is not None and st.st_size != length:
+            refuse(f"{path} is {st.st_size} bytes long and {iso} is {length}: it is not the release's ISO",
+                   "a copy that stopped part of the way is shorter; write it again")
+        length = None
+    else:
+        refuse(f"{path} is neither a file nor a device")
+    if settled(path, length) != sums[iso]:
+        refuse(f"{path} is not {iso} of {label}: read back from the medium, its sha256 differs from {SUMS}",
+               "write it again — `--into` the stick's folder writes it and reads it back — and eject",
+               "the stick before removing it")
+    print(f"{path}: read back from the medium, it is {iso} of {label} ({sums[iso]})")
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +608,8 @@ def main(argv):
     a = sub.add_parser("fetch")
     a.add_argument("--tag")
     a.add_argument("--from", dest="source")
-    a.add_argument("--into", default=".")
+    a.add_argument("--into")
+    a.add_argument("--check")
     a.add_argument("--repository", required=True)
     a = sub.add_parser("menu-room")
     a.add_argument("--profile", required=True)
@@ -485,7 +626,12 @@ def main(argv):
     elif args.command == "fetch":
         if args.tag and args.source:
             refuse("--tag and --from name two different places")
-        fetch(args.repository, args.tag, args.source, args.into)
+        if args.check is not None:
+            if args.into is not None:
+                refuse("--check reads an ISO where it is, and --into names where to write one")
+            check_copy(args.repository, args.tag, args.source, args.check)
+        else:
+            fetch(args.repository, args.tag, args.source, args.into or ".")
     elif args.command == "menu-room":
         if not menu_room(args.profile, args.toplevel, args.last_good, args.limit):
             print(f"the last good system would leave a boot menu of {args.limit}", file=sys.stderr)

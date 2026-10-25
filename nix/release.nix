@@ -17,6 +17,7 @@
 # docs/ARCHITECTURE.md, section "A versão, o cache binário da pessoa e as máquinas que seguem a `release`"
 {
   lib,
+  callPackage,
   writeShellApplication,
   python3,
   git,
@@ -445,6 +446,10 @@ let
         step "8. published"
         "$gh" release edit "$tag" --repo "$repository" --draft=false "''${published_with[@]}"
         echo "released $tag: $branch is at $rev"
+
+        # 9. THE ISOs BEFORE THIS ONE leave the store (`nix/iso-sweep.nix`):
+        # this one is the newest, and GitHub holds every one published.
+        ${callPackage ./iso-sweep.nix { }}/bin/ronoctua-iso-sweep sweep || true
       '';
     };
 in
@@ -467,11 +472,19 @@ rec {
         -h | --help)
           cat <<'EOF'
       usage: nix run .#fetch-iso [-- [--tag TAG] [--from FOLDER] [--into FOLDER]]
+             nix run .#fetch-iso -- [--tag TAG] [--from FOLDER] --check PATH
 
       Downloads the ISO of the latest release (or of TAG), checks every part and the
-      whole against the release's SHA256SUMS, and joins it. A download that stopped
-      is resumed by running it again. --from reads the assets from a folder instead
-      (what `.#release` packs, before it is published).
+      whole against the release's SHA256SUMS, and joins it. The ISO is named only once
+      it is read back from the medium as the release's, so --into a stick's folder
+      (a Ventoy stick's, say) writes it there whole. The parts wait in this
+      machine's cache (~/.cache/ronoctua/fetch-iso), so the stick needs the ISO's
+      room alone. A download that stopped is resumed by running it again. --from
+      reads the assets from a folder instead (what `.#release` packs, before it is
+      published).
+
+      --check reads back an ISO put in place any other way (a copy onto a stick, or
+      a device written with dd, as root) and says whether it is the release's.
       EOF
           exit 0
           ;;

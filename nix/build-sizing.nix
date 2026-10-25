@@ -143,6 +143,7 @@
 # daemon's when the builds run elsewhere, the budget would be someone else's.
 {
   lib,
+  callPackage,
   writeText,
   writeShellApplication,
   coreutils,
@@ -1360,7 +1361,11 @@ let
         # Not `held`: `sized_units` has a local of that name, and a signal
         # inside it would have the `EXIT` trap read that one instead.
         sized_dir=$(mktemp -d)
-        trap 'rm -rf "$sized_dir"' EXIT
+        # AND THE OLD ISOs LEAVE (`nix/iso-sweep.nix`): a VM test of the
+        # installer built here leaves one each time, and nothing roots it.
+        trap 'rm -rf "$sized_dir"; ${
+          callPackage ./iso-sweep.nix { }
+        }/bin/ronoctua-iso-sweep sweep || true' EXIT
 
         # WHAT IT IS GIVEN, evaluated once: every later build names `.drv`s,
         # which needs no evaluator.

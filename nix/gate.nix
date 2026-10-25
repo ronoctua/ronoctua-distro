@@ -515,7 +515,9 @@ writeShellApplication {
       printf '%s ]' "$s"
     }
     work=$(mktemp -d)
-    trap 'rm -rf "$work"' EXIT
+    # AND THE OLD ISOs LEAVE (`nix/iso-sweep.nix`) once the out-links that
+    # held this run's builds are gone: the newest of each name stays.
+    trap 'rm -rf "$work"; ${callPackage ./iso-sweep.nix { }}/bin/ronoctua-iso-sweep sweep || true' EXIT
 
     # ── 0 ──────────────────────────────────────────────────────────────────
     echo "== 0. what there is to build, evaluated before anything builds =="

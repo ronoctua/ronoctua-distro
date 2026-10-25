@@ -9567,6 +9567,43 @@ O mesmo defeito estava no desktop, por outra porta: `libghostty-vt.a`, a bibliot
 o único arquivo daquela saída que citava um caminho do Zig, e nós linkamos a dinâmica. Apagá-la tirou
 1,70 GiB de **toda máquina instalada**. O check `iso-has-no-toolchain` é o que impede a volta calada.
 
+#### O pendrive confere a si mesmo
+
+Um ISO copiado para um pendrive com Ventoy guardou o nome e o tamanho certos e perdeu tudo depois de
+2,13 GiB: o pendrive saiu antes de o kernel escrever a cópia de volta, e no lugar ficaram os bytes
+do ISO que estava ali antes. Na máquina que copiou, toda leitura respondia da memória, com os bytes
+novos. O kernel e o initrd ficam no começo do ISO, então ele deu boot, e a store não montou:
+`Failed to mount /sysroot/nix/.ro-store` e um shell de emergência que não diz por quê. O ISO
+publicado estava certo (deu boot numa VM como pendrive USB); o `fetch-iso` também (cada parte e o
+inteiro conferidos). Nada conferia o que chegou ao pendrive. E uma cópia quebrada no MEIO da store
+teria montado, e falhado depois, dentro de uma instalação que já apagou um disco.
+
+Duas pontas, porque o caminho entre elas é da pessoa:
+
+- **Quem escreve lê de volta da mídia.** O `fetch-iso` dá nome ao ISO só depois de escrevê-lo até o
+  fim (`fsync`), soltar as páginas dele da memória (`POSIX_FADV_DONTNEED`, que só solta página limpa
+  — por isso o `fsync` antes) e lê-lo de novo, agora do pendrive (`settled` no `release.py`; cobra
+  `fetch-iso-reads-back-the-medium`). Com `--into` a pasta de um pendrive, isso é gravar no Ventoy.
+  O `--check` faz a mesma leitura de uma cópia feita de qualquer outro jeito, baixando só o
+  `SHA256SUMS` (`iso-parts-reassemble`).
+- **O ISO confere a própria mídia antes de usá-la.** A imagem leva o sha256 da store ao lado dela
+  (`/nix-store.squashfs.sha256`, a linha do `sha256sum`, que também se confere à mão), calculado
+  onde a store é feita, dentro do build da imagem: o initrd não pode levá-lo, porque o initrd está
+  DENTRO da store. Uma unidade do initrd (`medium-check`) lê a store inteira contra ele antes da
+  montagem, que a requer, e para dizendo que o pendrive não guarda o ISO inteiro e como gravar de
+  novo. Custa uma leitura da store (4745 MiB) por boot do instalador: ~40 s num pendrive USB 3 (o
+  que leu 5 GB em 40 s), 16 s numa VM lendo do cache do host, e só o hash com `copytoram`, que roda
+  antes e já leu tudo — o que se confere é a cópia que vai ser montada. O progresso vai pelo
+  journald; a recusa vai direto ao console, senão chegava depois das linhas `[DEPEND]` do systemd e
+  se espalhava entre elas. O `iso-checks-its-stick-vm` dá boot na imagem como ela é publicada, de um
+  pendrive USB emulado: inteira chega ao login do instalador; com a cauda da store sobrescrita (um
+  qcow2 sobre a imagem), para no initrd com a frase. Até ele, nenhum teste dava boot no ISO de
+  verdade.
+
+A `system.build.isoImage` é a do `iso-image.nix` com um arquivo a mais: ela é lida da própria
+definição do nixpkgs (`options.system.build.definitionsWithLocations`), porque nomeá-la pela
+`config` seria a definição lendo a si mesma.
+
 #### O sistema que o instalador instala nunca era construído
 
 O gate construía `nixosConfigurations.vm` e o ISO. Nenhum dos dois é o `noctua` — os `drvPath` são
@@ -18733,7 +18770,9 @@ o ISO vai inteiro só abaixo de 2 000 000 000 bytes; acima, em partes de 1900 Mi
 pendrive não recomeçar à toa. O `SHA256SUMS` tem uma linha por parte **e uma do inteiro**: uma
 parte certa sozinha mas juntada no lugar errado só a linha do inteiro pega. O `.#fetch-iso` lê o
 mesmo contrato que o `ronoctua-stick` (`release.rs`): baixa (retomando), confere cada parte,
-junta, confere o inteiro, e só então dá nome ao ISO; uma parte que falha é apagada para vir de novo.
+junta, confere o inteiro, e só então dá nome ao ISO — e o inteiro que ganha o nome é o que a mídia
+devolve, lido de volta (veja "O pendrive confere a si mesmo"); uma parte que falha é apagada para vir
+de novo.
 Retomar não basta para o pedaço que já estava no disco com o tamanho todo e errado (uma rodada que
 morreu entre o download e a conferência): esse vem de novo inteiro, uma vez, na mesma rodada
 (`iso-parts-reassemble`, contra uma versão servida nesta máquina como o GitHub serve).

@@ -236,6 +236,7 @@ livro-razão de `assets/distro-apps.nix` e só sai dele por `formerly` ou `retir
 ```
 nix run .#release            publica: gate, branch release (só para frente), ISO; nunca commita
 nix run .#fetch-iso          baixa o ISO da versão, confere cada parte e o inteiro, junta
+nix run .#iso-sweep          apaga os ISOs que nada enraíza, menos o mais novo de cada nome
 nix run .#adopt-machine      máquina do layout antigo → flake próprio (migrate + apply, com sudo)
 nix run .#apply-here         a máquina com o checkout no lugar do input; o lock fica como estava
 ```
@@ -875,6 +876,14 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
   atual, a em execução, a do boot — especialização inclusive —, a de onde a última troca saiu e toda
   que o menu de boot lista ficam; nenhum outro perfil), e o menu de boot lista no máximo N (cobra
   `nix-gc-keeps-generations`). O resto é lixo: o piso do Nix (`min-free`) e a coleta da atualização.
+- **ISO velho não fica no disco.** Cada build e cada iteração de teste de VM do instalador deixa um
+  ISO de ~5 GiB que nada enraíza (em 2026-10-23 eram oito, 38 GiB, com o pool em 93%). Todo app que
+  constrói ISO (`.#iso`, `.#release`, `.#gate`, `.#most`, `.#sized-build`) sai pelo
+  `nix/iso-sweep.nix`, que apaga os ISOs sem raiz, com os drivers de teste que os seguram, e guarda o
+  mais novo de cada nome; um ISO que se quer guardar leva raiz (`--out-link`). ISO se constrói por
+  esses apps, nunca por um `nix build` solto; à mão, `nix run .#iso-sweep` (cobra
+  `iso-sweep-keeps-what-it-must`). Nunca um `nix-collect-garbage` geral para abrir espaço: ele leva
+  junto o que as baterias reaproveitam.
 - **O Nix pula sem aviso um `!include` que não consegue ler**: um piso em arquivo `0600` é uma
   máquina sem piso, e um arquivo ausente também não é erro (cobra `store-has-a-floor`).
 - **Interruptor que não interrompe**: um `mkIf` desligado não garante que o pacote saiu, porque ele
