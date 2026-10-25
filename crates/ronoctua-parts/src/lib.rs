@@ -31,8 +31,10 @@
 //!
 //! # Pure
 //!
-//! Serde and the file contract of `ronoctua-person`. [`here`] is the one
-//! function that asks the disk anything, and only whether a path exists.
+//! Serde and the file contract of `ronoctua-person`. A few functions ask the
+//! disk anything: [`here`], whether a path exists, and the readers the page
+//! and the brain call — [`record::read_all`], [`plan::read`] and
+//! [`stick::read`].
 //! Root's realizer (`ronoctua-parts`, feature `realize`) opens, runs `nix` and
 //! writes; what it decides is here, tested.
 
@@ -40,10 +42,12 @@
 
 pub mod argv;
 pub mod exit;
+pub mod frontier;
 pub mod id;
 pub mod names;
 pub mod plan;
 pub mod record;
+pub mod stick;
 pub mod view;
 
 mod here;

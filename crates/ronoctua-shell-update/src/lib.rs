@@ -10,14 +10,16 @@
 //! footer draws while a run is under way, and the door a click on it opens,
 //! are the leaf under both (`ronoctua-shell-update-words`). And the page of
 //! the distro's apps that follow their releases ([`follow`]): the person's
-//! option to let the routine update move them past the distro's pins.
+//! option to let the routine update move them past the distro's pins. And
+//! the machine's parts ([`parts`]): what arrives after the installation, and
+//! the ways the person brings in a download that keeps failing.
 
 #![deny(unsafe_code)]
 
 // THE KIT, THE DOOR AND THE BELONGINGS, by the names these modules already
 // use (`crate::chrome::…`, `crate::belongings::…`).
 use ronoctua_shell_belongings::belongings;
-use ronoctua_shell_door::{brainlink, door, photo, region, sudo};
+use ronoctua_shell_door::{brainlink, door, file_picker, photo, region, sudo};
 use ronoctua_shell_kit::{bindings, chrome, echo, fields, line, security_words, wake, wheel, when};
 // THE MARK THE FOOTER DRAWS while a run is under way: a leaf under both.
 use ronoctua_shell_update_words::update_mark;
@@ -25,6 +27,7 @@ use ronoctua_shell_update_words::update_mark;
 pub mod binary_cache;
 pub mod follow;
 pub mod key;
+pub mod parts;
 pub mod update_region;
 pub mod update_window;
 

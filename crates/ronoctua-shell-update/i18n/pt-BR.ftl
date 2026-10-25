@@ -185,3 +185,100 @@ distro-follow-enter = mudar
 about-distro-follow-enter = Liga ou desliga o seguir, na linha dele.
 distro-follow-steps = os passos
 about-distro-follow-steps = De volta aos passos da atualização.
+distro-parts-open = partes
+cmd-distro-parts-open = As partes da máquina: o que chega depois da instalação, cada uma por conta própria, e os outros jeitos de trazer um download que continua falhando
+cmd-distro-parts-hand-in = Entrega um arquivo que você baixou em outro lugar, para a parte sob o cursor: ele só é aceito se for exatamente aquele download
+cmd-distro-parts-import = Traz de um pendrive os downloads que faltam às partes
+cmd-distro-parts-export = Grava num pendrive os downloads que esta máquina guarda para as partes
+distro-parts-heading = O que chega depois da instalação
+distro-parts-none = Esta máquina não quer nenhuma parte: tudo o que ela roda veio com a instalação.
+distro-parts-row-import = trazer de um pendrive
+distro-parts-row-export = gravar num pendrive
+distro-parts-phase-here = aqui
+distro-parts-phase-arriving = a caminho
+distro-parts-phase-retrying = { $tries ->
+        [one] uma tentativa falhou; a próxima em { $when }
+       *[other] { $tries } tentativas falharam; a próxima em { $when }
+    }
+distro-parts-phase-waiting = esperando uma rede
+distro-parts-phase-metered = esperando uma rede não tarifada
+distro-parts-about-metered = Numa rede tarifada nada é baixado sozinho: ela espera outra. Escolher usa esta, só nesta tentativa.
+distro-parts-phase-needs-you = precisa de você: { $tries } tentativas falharam; a próxima em { $when }
+distro-parts-about-part = Uma parte chega depois da instalação, por conta própria: uma que não chega não segura nenhuma outra, e a máquina funciona sem ela. Ela é tentada de novo sozinha, cada vez mais espaçado, e escolhê-la a tenta agora.
+distro-parts-about-missing-by-hand = Falta { $name }, de { $hosts }: baixe em outro lugar e entregue com { $keys }, traga num pendrive de uma máquina que o tenha, ou indique um espelho que o guarde.
+distro-parts-about-missing-stick = Falta { $name }, que não é um arquivo só: ele vem num pendrive de uma máquina que o tenha.
+distro-parts-about-why-build-failed = A última tentativa falhou: { $detail }
+distro-parts-about-why-output-differs = A última tentativa construiu algo diferente do que este sistema quer; a próxima atualização traz o certo.
+distro-parts-about-why-profile-failed = A última tentativa a construiu, e ela não pôde ser posta no lugar.
+distro-parts-about-why-hand-in-refused = O arquivo entregue foi recusado: { $detail }
+distro-parts-about-import = Traz, de um pendrive que outra máquina sua preencheu, os downloads que faltam às partes. Só downloads entram, cada um conferido pelo conteúdo — nunca um programa construído em outro lugar. Escolher pergunta a pasta do pendrive.
+distro-parts-about-export = Grava num pendrive os downloads que esta máquina guarda para as partes, para outra máquina trazer. Escolher pergunta a pasta do pendrive.
+distro-parts-stick-last-import = { $count ->
+        [one] Da última vez, um download foi trazido, { $when }.
+       *[other] Da última vez, { $count } downloads foram trazidos, { $when }.
+    }
+distro-parts-stick-last-export = { $count ->
+        [one] Da última vez, um download foi gravado, { $when }.
+       *[other] Da última vez, { $count } downloads foram gravados, { $when }.
+    }
+distro-parts-stick-refused = Da última vez, { $when }, nada foi movido:
+distro-parts-refused-no-folder-named = nenhuma pasta foi indicada.
+distro-parts-refused-folder-missing = a pasta não existe.
+distro-parts-refused-folder-through-a-link = o caminho até a pasta passa por um link.
+distro-parts-refused-not-a-removable-medium = a pasta não está num pendrive nem em outra mídia removível.
+distro-parts-refused-no-downloads-there = o pendrive não tem downloads gravados por uma máquina desta distro.
+distro-parts-refused-unwritable = os downloads não puderam ser gravados ali.
+distro-parts-said-retrying = { $name } está sendo tentado agora.
+distro-parts-said-not-started = A máquina não o iniciou.
+distro-parts-said-already-here = Já está aqui.
+distro-parts-said-not-a-part = Ponha o cursor numa parte para entregar um arquivo para ela.
+distro-parts-said-nothing-missing = Não falta nenhum download agora: escolha-a para tentar de novo.
+distro-parts-said-not-one-file = O que falta não é um arquivo só: traga num pendrive.
+distro-parts-said-no-file = Não há arquivo ali.
+distro-parts-said-not-copied = O arquivo não pôde ser entregue.
+distro-parts-said-taken = { $name } foi aceito, e a parte está sendo construída.
+distro-parts-said-refused = { $name } foi recusado: não é aquele download.
+distro-parts-said-not-named = A pasta do pendrive não pôde ser indicada à máquina.
+distro-parts-said-imported = { $count ->
+        [one] Um download foi trazido.
+       *[other] { $count } downloads foram trazidos.
+    }
+distro-parts-said-exported = { $count ->
+        [one] Um download foi gravado no pendrive.
+       *[other] { $count } downloads foram gravados no pendrive.
+    }
+cmd-distro-parts-mirrors = Indica os espelhos que a máquina consulta para o download de uma parte quando a origem falha
+ask-distro-parts-mirrors = Os endereços dos seus espelhos, separados por espaço (nada indica nenhum)
+distro-parts-row-mirrors = espelhos
+distro-parts-mirrors-none = nenhum
+distro-parts-mirrors-unreadable = seu arquivo de opções não pode ser lido
+distro-parts-mirrors-newer = seu arquivo de opções é de um formato mais novo
+distro-parts-about-mirrors = Servidores seus que guardam downloads pelo hash ou pelo nome — uma pasta numa máquina da sua rede, uma cópia do tarballs.nixos.org. Quando o download de uma parte falha na origem, a máquina pergunta a eles, e só aceita um arquivo se for exatamente o que a distro fixou. Eles viajam com as suas opções e chegam a uma máquina na próxima atualização dela. Escolher pergunta os endereços.
+distro-parts-why-unreadable = Seu arquivo de opções não pode ser lido, então não é reescrito.
+distro-parts-why-newer = Seu arquivo de opções é de um formato mais novo do que esta máquina lê: atualize esta máquina primeiro.
+distro-parts-why-unwritable = O arquivo não pôde ser gravado.
+distro-parts-said-not-a-mirror = Um espelho é um endereço http ou https, sem nome de usuário, consulta nem fragmento.
+distro-parts-said-too-many-mirrors = São mais espelhos do que as suas opções podem indicar.
+distro-parts-said-no-mirror = Nenhum espelho agora: a próxima atualização os tira desta máquina.
+distro-parts-said-mirrors = Os espelhos chegam a esta máquina na próxima atualização.
+distro-parts-said-mirrors-not-let = Os espelhos chegam a esta máquina na próxima atualização; permitir os hosts deles no seu consentimento falhou.
+distro-parts-pick-hand-in = O arquivo que você baixou em outro lugar
+distro-parts-pick-import = O pendrive de onde trazer os downloads
+distro-parts-pick-export = O pendrive onde gravar os downloads
+distro-parts-about-pick-hand-in = Escolha { $name }, como você o salvou depois de baixar em outro lugar: ele só é aceito se for exatamente aquele download.
+distro-parts-stick-never = ainda não
+distro-parts-stick-moved = { $count ->
+        [one] um download, { $when }
+       *[other] { $count } downloads, { $when }
+    }
+distro-parts-stick-refused-short = recusado, { $when }
+distro-parts-down = próxima linha
+about-distro-parts-down = Põe o cursor na próxima linha da página das partes.
+distro-parts-up = linha anterior
+about-distro-parts-up = Põe o cursor na linha anterior da página das partes.
+distro-parts-enter = tentar agora
+about-distro-parts-enter = Tenta agora a parte sob o cursor; na linha de um pendrive, pergunta a pasta dele.
+distro-parts-hand = entregar arquivo
+about-distro-parts-hand = Entrega um arquivo que você baixou em outro lugar para a parte sob o cursor.
+distro-parts-steps = os passos
+about-distro-parts-steps = De volta aos passos da atualização.

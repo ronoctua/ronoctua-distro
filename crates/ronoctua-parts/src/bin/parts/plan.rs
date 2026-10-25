@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use ronoctua_parts::exit;
 use ronoctua_parts::names;
-use ronoctua_parts::record::{Phase, Record, Target};
+use ronoctua_parts::record::{Record, Target};
 
 use crate::disk::{self, LOCK_WAIT, Lock};
 use crate::{Usage, plan_path, program, say};
@@ -96,19 +96,22 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
             }
         }
         root_derivations(&plan);
+        // WHAT IS TRIED NOW: what was never tried, what waits for a network
+        // (the planner runs when one comes), and what is due — never a part
+        // whose wait is not over, or every run would be a retry storm.
+        let now = disk::now().unix_s();
         plan.order()
             .into_iter()
-            .filter(|(id, _)| {
-                disk::read_record(id).is_ok_and(|r| {
-                    matches!(r.phase, Phase::Arriving | Phase::NeedsYou | Phase::Waiting)
-                })
-            })
+            .filter(|(id, _)| disk::read_record(id).is_ok_and(|r| r.try_now(now)))
             .map(|(id, _)| id.to_owned())
             .collect::<Vec<String>>()
     };
     crate::view::rebuild();
 
     if !start || to_realize.is_empty() {
+        if start {
+            crate::retry::arm();
+        }
         println!(
             "planned {} parts, {} to realize",
             plan.parts.len(),
@@ -119,8 +122,8 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
 
     // THE WORKERS: each takes the next part and waits for its realizer to
     // end (`systemctl start` of a oneshot returns when it is over), so at
-    // most `workers` parts build at once. A realizer that fails is the
-    // unit's to retry, later each time; the planner does not wait for that.
+    // most `workers` parts build at once. A part that did not arrive is
+    // tried again at the time its record gives, by the timer armed below.
     let systemctl = program("RONOCTUA_SYSTEMCTL");
     let queue = Mutex::new(to_realize.into_iter());
     let next = || queue.lock().ok().and_then(|mut q| q.next());
@@ -136,6 +139,8 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
             });
         }
     });
+    // THE NEXT TRY of whatever failed now, on the clock its record gives.
+    crate::retry::arm();
     println!("planned {} parts", plan.parts.len());
     Ok(exit::DONE)
 }

@@ -25,6 +25,51 @@ pub const LOCK: &str = "/var/lib/ronoctua-parts/records.lock";
 /// switch and a part's realization never takes what is still to be built.
 pub const PLAN_ROOTS: &str = "/nix/var/nix/gcroots/ronoctua-parts/plan";
 
+/// The downloads of each part that is here, rooted so a wrapper's change
+/// never fetches them again and a stick can carry them (`export`):
+/// `<KEPT>/<id>/<name>`.
+pub const KEPT: &str = "/nix/var/nix/gcroots/ronoctua-parts/kept";
+
+/// Root's folder of what the person hands over: `0755`, root's.
+pub const RUN: &str = "/run/ronoctua-parts";
+
+/// Where the person hands a file in: `<HANDIN>/<part>/<download's name>`.
+/// The person's, `0700`, inside root's [`RUN`], so it can be filled but never
+/// swapped for a link.
+pub const HANDIN: &str = "/run/ronoctua-parts/handin";
+
+/// Where root copies a handed file before Nix reads it: root's, `0700`.
+pub const ACCEPTING: &str = "/run/ronoctua-parts/accepting";
+
+/// The file the person writes the stick's folder into, for an import.
+pub const IMPORT_FROM: &str = "/run/ronoctua-parts/import/from";
+
+/// The folder on a stick that holds the downloads (`export`, `import`): a
+/// binary cache Nix reads by `file://`.
+pub const STICK_FOLDER: &str = "ronoctua-parts";
+
+/// Where the person says yes to ONE try of a part on a metered link: an empty
+/// `yes/<id>`, which the realizer takes away as the try begins. A folder only
+/// they and root reach (`0700`, theirs).
+pub const YES: &str = "/run/ronoctua-parts/yes";
+
+/// Where the person names the folder `export` writes to — one line, the
+/// folder's path —, in a folder only they and root reach (`0700`, theirs).
+pub const EXPORT_TO: &str = "/run/ronoctua-parts/export/to";
+
+/// What the last import or export did ([`crate::stick::Said`]), root's,
+/// `0644`: what the page says after the person's gesture.
+pub const STICK_SAID: &str = "/var/lib/ronoctua-parts/stick.json";
+
+/// The unit that takes what was handed in.
+pub const ACCEPT_UNIT: &str = "ronoctua-parts-accept.service";
+
+/// The unit that imports from a stick.
+pub const IMPORT_UNIT: &str = "ronoctua-parts-import.service";
+
+/// The unit that writes this machine's kept downloads on a stick.
+pub const EXPORT_UNIT: &str = "ronoctua-parts-export.service";
+
 /// The plan of the running system, written by Nix (`nix/modules/parts.nix`).
 pub const PLAN: &str = "/etc/ronoctua/parts-plan.json";
 

@@ -45750,12 +45750,15 @@ let
   # (the parts' page, a retry), so the rule answers YES — and what buys that
   # width back is measured on the MERGED rules and units of the real system:
   #
-  #   - three units and no fourth: the trigger, the planner, the realizer's
-  #     template; their command lines take no word from anybody (the
-  #     realizer's one word is its instance, which the rule lists by name);
-  #   - one rule: YES, `manage-units`, the verb `start`, the planner and one
-  #     `ronoctua-part@<id>.service` per wanted part — never a pattern —, the
-  #     one user, its alternatives bracketed;
+  #   - six units and no seventh: the trigger, the planner, the realizer's
+  #     template, the hand-in's and the stick's two (import, export); their
+  #     command lines take no word from anybody (the realizer's one word is
+  #     its instance, which the rule lists by name);
+  #   - one rule: YES, `manage-units`, the verb `start`, the planner, the
+  #     three gestures' units and one `ronoctua-part@<id>.service` per wanted
+  #     part — never a pattern —, the one user, its alternatives bracketed;
+  #   - the four folders the person hands over in are theirs and `0700`,
+  #     inside a folder of root's, so none can be swapped for a link;
   #   - the names agree in the three places that spell them: the module, the
   #     crate's `names` and its `exit` codes — the unit never restarts on the
   #     statuses the crate says are not retried, and always on a failure;
@@ -45773,8 +45776,18 @@ let
           planner = plain services.ronoctua-parts.serviceConfig.ExecStart;
           realizer = plain services."ronoctua-part@".serviceConfig.ExecStart;
           trigger = plain services.ronoctua-parts-trigger.serviceConfig.ExecStart;
-          restart = services."ronoctua-part@".serviceConfig.Restart;
-          prevent = services."ronoctua-part@".serviceConfig.RestartPreventExitStatus;
+          accept = plain services.ronoctua-parts-accept.serviceConfig.ExecStart;
+          import = plain services.ronoctua-parts-import.serviceConfig.ExecStart;
+          export = plain services.ronoctua-parts-export.serviceConfig.ExecStart;
+          restart = services."ronoctua-part@".serviceConfig.Restart or "no";
+          settledRealizer = services."ronoctua-part@".serviceConfig.SuccessExitStatus;
+          settledPlanner = services.ronoctua-parts.serviceConfig.SuccessExitStatus;
+          settledAccept = services.ronoctua-parts-accept.serviceConfig.SuccessExitStatus or "";
+          settledImport = services.ronoctua-parts-import.serviceConfig.SuccessExitStatus or "";
+          settledExport = services.ronoctua-parts-export.serviceConfig.SuccessExitStatus or "";
+          runtimeDirs = map (n: services.${n}.serviceConfig.RuntimeDirectory or "") (
+            builtins.filter (n: lib.hasPrefix "ronoctua-part" n) (builtins.attrNames services)
+          );
           plannerLimit = toString (services.ronoctua-parts.startLimitIntervalSec or "unset");
           realizerLimit = toString (services."ronoctua-part@".startLimitIntervalSec or "unset");
           tmpfiles = builtins.filter (
@@ -45816,13 +45829,20 @@ let
           wrong.append("the crate no longer spells a realizer as ronoctua-part@<id>.service")
       user = got["user"]
 
-      # 1. THREE UNITS AND NO FOURTH, each running a fixed line.
-      if sorted(got["services"]) != ["ronoctua-part@", "ronoctua-parts", "ronoctua-parts-trigger"]:
+      # 1. SIX UNITS AND NO SEVENTH, each running a fixed line.
+      if sorted(got["services"]) != [
+          "ronoctua-part@", "ronoctua-parts", "ronoctua-parts-accept", "ronoctua-parts-export",
+          "ronoctua-parts-import", "ronoctua-parts-trigger",
+      ]:
           wrong.append(f"the system declares {sorted(got['services'])} for the parts")
+      accept, import_, export = const(names, "ACCEPT_UNIT"), const(names, "IMPORT_UNIT"), const(names, "EXPORT_UNIT")
       lines = {
           "planner": "/bin/ronoctua-parts plan --start",
           "realizer": "/bin/ronoctua-parts realize %i",
           "trigger": f"/bin/systemctl start --no-block {planner}",
+          "accept": "/bin/ronoctua-parts accept",
+          "import": "/bin/ronoctua-parts import",
+          "export": "/bin/ronoctua-parts export",
       }
       for unit, line in lines.items():
           if not got[unit].endswith(line) or "/nix/store/" not in got[unit]:
@@ -45830,27 +45850,53 @@ let
       if not got["trigger"].startswith("-"):
           wrong.append("the trigger's command can fail a switch: it must carry the leading `-`")
 
-      # 2. THE RESTARTS, as the crate's exit codes say.
+      # 2. A PART THAT DOES NOT ARRIVE IS NEVER A FAILED UNIT: the endings the
+      # crate says are settled are successes to systemd, on the realizer and
+      # the planner, and nothing restarts them on a clock of systemd's — a
+      # unit in `auto-restart` is failed to a switch, which then exits 4.
       value = dict(re.findall(r"pub const (\w+): u8 = (\d+);", codes))
       floor(len(value), 5, "exit codes in ronoctua_parts::exit")
-      found = re.search(r"NOT_RETRIED: \[u8; \d+\] = \[([^\]]*)\]", codes)
-      listed = must(found and found.group(1), "ronoctua_parts::exit::NOT_RETRIED")
-      not_retried = sorted(int(value[n.strip()]) for n in listed.split(",") if n.strip())
-      prevented = sorted(int(n) for n in str(got["prevent"]).split())
-      if prevented != not_retried:
-          wrong.append(f"the realizer is never restarted on {prevented}; the crate says {not_retried}")
-      if int(value["FAILED"]) in prevented:
-          wrong.append("a failed try is never retried: the backoff would never run")
-      if got["restart"] != "on-failure":
-          wrong.append(f"the realizer restarts {got['restart']!r}; a failure must be tried again")
+      found = re.search(r"SETTLED: \[u8; \d+\] = \[([^\]]*)\]", codes)
+      listed = must(found and found.group(1), "ronoctua_parts::exit::SETTLED")
+      settled = sorted(int(value[n.strip()]) for n in listed.split(",") if n.strip())
+      # AND A GESTURE REFUSED is said for the page (`stick.json`, the record),
+      # so the three gestures' units end it as a success too: a failed unit
+      # fails the person's `systemctl start` before the page can say why.
+      for unit in ("settledRealizer", "settledPlanner", "settledAccept", "settledImport", "settledExport"):
+          said = sorted(int(n) for n in str(got[unit]).split())
+          if said != settled:
+              wrong.append(f"{unit}: SuccessExitStatus is {said}; the crate's settled endings are {settled}")
+      if int(value["FAILED"]) not in settled or int(value["USAGE"]) in settled:
+          wrong.append("a failed try must end as a success to systemd, and a command line that is no one must not")
+      if got["restart"] != "no":
+          wrong.append(f"the realizer restarts {got['restart']!r}: a unit waiting to restart is a failed unit to a switch")
       for unit in ("plannerLimit", "realizerLimit"):
           if got[unit] != "0":
               wrong.append(f"{unit} is {got[unit]!r}: a start limit refuses the sixth event as start-limit-hit")
 
-      # 3. THE FOLDERS AND THE PLAN, where the crate looks.
-      for folder in (state_dir, parts_root, str(pathlib.PurePath(plan_roots).parent)):
+      # 3. THE FOLDERS AND THE PLAN, where the crate looks: root's, and the
+      # person's four inside root's, private.
+      run = const(names, "RUN")
+      for folder in (state_dir, parts_root, str(pathlib.PurePath(plan_roots).parent), run):
           if not any(re.fullmatch(rf"d {re.escape(folder)} 0755 root root -", r) for r in got["tmpfiles"]):
               wrong.append(f"no tmpfiles line makes {folder} root's 0755 (lines: {got['tmpfiles']})")
+      # NO UNIT'S RUNTIME FOLDER IS THE ONE THE PERSON HANDS OVER IN: systemd
+      # removes a unit's runtime folder when the unit stops, and the planner's
+      # once took the person's folders with it (measured in
+      # `parts-are-isolated`).
+      for d in got["runtimeDirs"]:
+          if d and "/run/" + d.split("/")[0] == run:
+              wrong.append(f"a parts unit's RuntimeDirectory is {d}, inside {run}: stopping it would remove the person's folders")
+      for folder in (
+          const(names, "HANDIN"),
+          str(pathlib.PurePath(const(names, "IMPORT_FROM")).parent),
+          str(pathlib.PurePath(const(names, "EXPORT_TO")).parent),
+          const(names, "YES"),
+      ):
+          if str(pathlib.PurePath(folder).parent) != run:
+              wrong.append(f"{folder} is not in root's {run}")
+          if not any(re.fullmatch(rf"d {re.escape(folder)} 0700 {re.escape(user)} \S+ -", r) for r in got["tmpfiles"]):
+              wrong.append(f"{folder} is not the person's alone (0700) (lines: {got['tmpfiles']})")
       if [f"/etc/{e}" for e in got["etc"]] != [plan]:
           wrong.append(f"the system writes {got['etc']} under /etc; the crate reads {plan}")
 
@@ -45867,7 +45913,7 @@ let
           if set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule)) != {"org.freedesktop.systemd1.manage-units"}:
               wrong.append("the rule is about another action than manage-units")
           units = set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule))
-          want = {planner} | {f"ronoctua-part@{p}.service" for p in got["wanted"]}
+          want = {planner, accept, import_, export} | {f"ronoctua-part@{p}.service" for p in got["wanted"]}
           if units != want:
               wrong.append(f"the rule names {sorted(units)}; it may name {sorted(want)}")
           if set(re.findall(r'lookup\("verb"\)\s*==\s*"([^"]+)"', rule)) != {"start"}:
@@ -45896,7 +45942,7 @@ let
           for w in wrong:
               print("  " + w, file=sys.stderr)
           sys.exit(1)
-      print(f"OK: three units, one rule ({len(want)} unit(s), start, {user}), the crate's names and exit codes")
+      print(f"OK: six units, one rule ({len(want)} unit(s), start, {user}), the crate's names and exit codes")
       END
     '';
 

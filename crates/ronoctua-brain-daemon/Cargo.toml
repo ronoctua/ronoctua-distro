@@ -77,6 +77,9 @@ ronoctua-security = { path = "../ronoctua-security" }
 # WHERE crun KEEPS ITS FOLDERS, for the `containers` module: the one crate
 # that knows podman says it (`runtime_dir`), and nothing here runs podman.
 ronoctua-containers = { path = "../ronoctua-containers" }
+# THE PARTS' RECORDS AND PLAN, for the module that watches the parts: the
+# library alone — serde and the file contract —, never root's realizer.
+ronoctua-parts = { path = "../ronoctua-parts", default-features = false }
 # THE BELONGINGS' FILES, as their own crate reads them (`prefs`: serde and
 # the XDG roots, never `age`): the reminder module reads what the person chose
 # and how the last sync ended.

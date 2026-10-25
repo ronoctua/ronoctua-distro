@@ -40,6 +40,8 @@ pub enum Back {
     Line(String),
     /// What came of root's netrc, asked through the door's sudo gate.
     Netrc(binary_cache::Came),
+    /// What came of a gesture of the parts' page (`crate::parts::carry`).
+    Parts(crate::parts::Came),
 }
 
 /// Where a key or a click of a door reaches past it.
@@ -78,6 +80,8 @@ pub struct Open {
     inbox: Option<Inbox<Back>>,
     /// Root's netrc was asked for, and its verdict has not come.
     netrc_waiting: bool,
+    /// Gestures of the parts' page carried out, whose verdict has not come.
+    parts_waiting: usize,
 }
 
 impl std::fmt::Debug for Open {
@@ -102,7 +106,12 @@ impl Open {
     /// The update over `view`, its keys reaching `reach`; with a `wake`, its
     /// threads (the journals, the netrc's) hand back through it.
     #[must_use]
-    pub fn new(view: View, reach: Reach, wake: Option<crate::wake::Wake>) -> Self {
+    pub fn new(mut view: View, reach: Reach, wake: Option<crate::wake::Wake>) -> Self {
+        // THE FILE PICKER the parts' page brings up is watched through the
+        // same wake: its folder, and the devices that are its places.
+        if let Some(w) = &wake {
+            view.watch_with(w.clone());
+        }
         Self {
             view,
             mind: None,
@@ -112,6 +121,7 @@ impl Open {
             children: Vec::new(),
             inbox: wake.map(Inbox::new),
             netrc_waiting: false,
+            parts_waiting: 0,
         }
     }
 
@@ -143,10 +153,10 @@ impl Open {
     }
 
     /// Whether it still follows something with its page closed: a run it
-    /// asked of the brain, or root's netrc.
+    /// asked of the brain, root's netrc, or a gesture of the parts' page.
     #[must_use]
     pub const fn lingers(&self) -> bool {
-        self.followed.is_some() || self.netrc_waiting
+        self.followed.is_some() || self.netrc_waiting || self.parts_waiting > 0
     }
 
     /// What the paging keys and arrows asked are what a photograph kept.
@@ -162,6 +172,10 @@ impl Open {
     /// output (whether any came), root's netrc said in this door and the
     /// page read again.
     pub fn woken(&mut self, way: &mut dyn Doorway) -> bool {
+        // THE FILE PICKER'S FOLDER OR DEVICES moved: drawn again.
+        if self.view.look() {
+            way.repaint();
+        }
         let came = self.inbox.as_ref().map(Inbox::take).unwrap_or_default();
         let mut lines = false;
         for back in came {
@@ -177,6 +191,13 @@ impl Open {
                     let said = binary_cache::came_said(came, way.texts());
                     way.say(said, crate::echo::Echo::Long);
                     self.view.cache_reread();
+                    way.repaint();
+                }
+                Back::Parts(came) => {
+                    self.parts_waiting = self.parts_waiting.saturating_sub(1);
+                    let said = crate::parts::said_of(&came, way.texts());
+                    way.say(said, crate::echo::Echo::Long);
+                    self.view.parts_reread();
                     way.repaint();
                 }
             }
@@ -245,6 +266,34 @@ impl Open {
         binary_cache::door(places, gesture, move |came| {
             let _ = post.send(Back::Netrc(came));
         });
+    }
+
+    /// A gesture of the parts' page carried out on a NAMED thread — a
+    /// hand-in and a stick wait for root's oneshot —, whose verdict comes
+    /// back to this door. A photograph's door does nothing.
+    pub fn carry_parts(&mut self, act: crate::parts::Act, way: &mut dyn Doorway) {
+        let Some(post) = self.post() else {
+            return;
+        };
+        let places = self
+            .view
+            .parts_places()
+            .cloned()
+            .unwrap_or_else(crate::parts::Places::here);
+        let born = std::thread::Builder::new()
+            .name("parts".to_owned())
+            .spawn(move || {
+                let came = crate::parts::carry(&act, &places);
+                let _ = post.send(Back::Parts(came));
+            });
+        match born {
+            Ok(_) => self.parts_waiting += 1,
+            Err(e) => {
+                tracing::error!(error = %e, "could not start the parts' thread");
+                let said = way.texts().t(crate::key::DISTRO_PARTS_SAID_NOT_STARTED);
+                way.say(said, crate::echo::Echo::Long);
+            }
+        }
     }
 }
 
@@ -330,6 +379,7 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
         },
         Errand::Cache(e) => cache_errand(e, open, way),
         Errand::Follow(e) => follow_errand(e, open, way),
+        Errand::Parts(e) => parts_errand(e, open, way),
         Errand::Close => way.close(),
     }
     way.repaint();
@@ -405,6 +455,50 @@ fn follow_errand(e: crate::follow::Errand, open: &mut Open, way: &mut dyn Doorwa
                 "would have turned following the distro's releases {}",
                 if on { "on" } else { "off" }
             )),
+        },
+        Page::Nothing | Page::Moved | Page::Close => {}
+    }
+}
+
+/// What the parts' page asked of the door: the question on its line, a
+/// sentence, or a gesture carried out on a thread whose verdict the door
+/// says when it comes.
+fn parts_errand(e: crate::parts::Errand, open: &mut Open, way: &mut dyn Doorway) {
+    use crate::parts::Errand as Page;
+    match e {
+        Page::Ask(line) => way.ask(line),
+        Page::Say(k) => {
+            let said = way.texts().t(k);
+            way.say(said, crate::echo::Echo::Long);
+        }
+        Page::Explain(e) => {
+            let said = way.texts().t_with(e.key, &e.borrowed());
+            way.say(said, crate::echo::Echo::Long);
+        }
+        // `C-v` IN THE PICKER: the door reads the clipboard and hands it to
+        // the view (`View::picker_pasted`).
+        Page::Paste => way.paste(),
+        Page::Pick(_) => {}
+        Page::Run(act) => match &mut open.reach {
+            Reach::Machine => open.carry_parts(act, way),
+            Reach::Kept(asked) => {
+                asked.push(format!("would have asked the machine to {}", act.word()))
+            }
+        },
+        // THE PERSON'S MIRRORS: their copy of their options, and their
+        // consent for the hosts — a file of theirs, written here.
+        Page::Mirrors(named) => match &mut open.reach {
+            Reach::Machine => {
+                let places = open
+                    .view
+                    .parts_places()
+                    .cloned()
+                    .unwrap_or_else(crate::parts::Places::here);
+                let said = crate::parts::name_mirrors(&named, &places, way.texts());
+                open.view.parts_reread();
+                way.say(said, crate::echo::Echo::Long);
+            }
+            Reach::Kept(asked) => asked.push(format!("would have named the mirrors {named:?}")),
         },
         Page::Nothing | Page::Moved | Page::Close => {}
     }
@@ -517,7 +611,7 @@ impl Region for UpdateRegion {
 
     /// The table its window's header teaches too.
     fn hint(&self, seen: &Seen<'_>) -> Vec<crate::chrome::Piece> {
-        crate::chrome::hint_of(self.open.view.taught(), seen.texts)
+        self.open.view.hint(seen.texts)
     }
 
     fn cursor(&self) -> Option<usize> {
@@ -535,6 +629,13 @@ impl Region for UpdateRegion {
     /// The step cursor, the output, and the three things one does here —
     /// through the reader its window calls too.
     fn key(&mut self, key: ronoctua_keymap::Key, way: &mut dyn Doorway) -> Taken {
+        // THE FILE PICKER, while it is up over the parts' page, reads its
+        // keys before the view does.
+        if self.open.view.picker_takes(key) {
+            let errand = self.open.view.pick_key(key);
+            self.errand(errand, way);
+            return Taken::Yes;
+        }
         match crate::update_window::press_of_key(key) {
             Some(press) => {
                 self.press(press, way);
@@ -566,6 +667,20 @@ impl Region for UpdateRegion {
                 self.open.view.open_follow();
                 self.shown_on_the_step(way);
             }
+            Order::Parts(crate::parts::OPEN) => {
+                self.open.view.open_parts();
+                self.shown_on_the_step(way);
+            }
+            // A QUESTION OF THE PARTS' PAGE: its answer, or — run by its name
+            // with nothing typed — the question asked.
+            Order::Parts(question) => {
+                way.show();
+                let errand = match argument {
+                    Some(typed) => self.open.view.parts_typed(question, typed),
+                    None => self.open.view.parts_ask_for(question),
+                };
+                self.errand(errand, way);
+            }
             // ROOT'S NETRC, by its name: a root gesture, asked in the sudo
             // bar above the footer.
             Order::Cache(binary_cache::NETRC) => {
@@ -596,15 +711,22 @@ impl Region for UpdateRegion {
         }
     }
 
-    /// THE BINARY CACHE'S QUESTIONS, typed on the minibuffer — the window's
-    /// line answers into the same `View::cache_answered`.
+    /// THE PAGES' QUESTIONS — the binary cache's, the parts' — typed on the
+    /// minibuffer: the window's line answers into the same
+    /// `View::page_answered`.
     fn answered(&mut self, id: &'static str, text: &str, way: &mut dyn Doorway) {
-        let errand = self.open.view.cache_answered(id, text);
+        let errand = self.open.view.page_answered(id, text);
         self.errand(errand, way);
     }
 
     fn unanswered(&mut self, _: &'static str, way: &mut dyn Doorway) {
-        self.open.view.cache_unanswered();
+        self.open.view.page_unanswered();
+        way.repaint();
+    }
+
+    /// What was copied, for the file picker.
+    fn pasted(&mut self, text: &str, way: &mut dyn Doorway) {
+        self.open.view.picker_pasted(text);
         way.repaint();
     }
 
@@ -680,7 +802,7 @@ fn closed(command: &str, _: Option<&str>, way: &mut dyn Doorway) -> Closed {
             Closed::Taken
         }
         Some(Order::Start | Order::Cache(binary_cache::NETRC)) => Closed::Behind,
-        Some(Order::Open | Order::Cache(_) | Order::Follow) => Closed::Opens,
+        Some(Order::Open | Order::Cache(_) | Order::Follow | Order::Parts(_)) => Closed::Opens,
     }
 }
 

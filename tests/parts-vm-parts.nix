@@ -40,10 +40,13 @@ let
       name = "test-part-${name}-${version}-download";
       inherit system;
       builder = sh;
-      # `&& exit 0`: the script ends in bash itself (see below).
+      # THE ADDRESS AS `fetchurl` SAYS IT (`urls`), which is what the
+      # realizer reads to offer a file to be handed in. `&& exit 0`: the
+      # script ends in bash itself (see below).
+      urls = "http://server/${file name version}";
       args = [
         "-c"
-        "${get} -fsS -o $out http://server/${file name version} && exit 0"
+        "${get} -fsS -o $out $urls && exit 0"
       ];
       outputHashMode = "flat";
       outputHashAlgo = "sha256";
@@ -81,4 +84,10 @@ in
   a2 = partOf "a" "2";
   b1 = partOf "b" "1";
   c1 = partOf "c" "1";
+  # Handed in by the person, and carried by a stick.
+  d1 = partOf "d" "1";
+  e1 = partOf "e" "1";
+  # Never at its origin: only on the person's mirror.
+  f1 = partOf "f" "1";
+  downloadOf = download;
 }

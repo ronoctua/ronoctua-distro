@@ -1009,6 +1009,9 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // THE DISTRO'S APPS THAT FOLLOW THEIR RELEASES, another page
     // (`crate::follow`): `f` turns the view to it and back.
     ("f", crate::follow::OPEN),
+    // THE MACHINE'S PARTS, a third (`crate::parts`): `d`, for the downloads
+    // they wait for, turns the view to it and back.
+    ("d", crate::parts::OPEN),
 ];
 
 /// The keys the binary cache's page teaches, in both doors — every one a
@@ -1031,6 +1034,21 @@ pub const OF_THE_FOLLOW: &[(&str, &str)] = &[
     ("RET", "distro-follow-enter"),
     ("f", "distro-follow-steps"),
 ];
+
+/// The keys the parts' page teaches, in both doors — every one a click,
+/// pressed by its notation through [`press_of_key`]: the rows, a try now, a
+/// file handed in, and `d` back to the steps (the way back, `Esc`, too).
+pub const OF_THE_PARTS: &[(&str, &str)] = &[
+    ("<down>", "distro-parts-down"),
+    ("<up>", "distro-parts-up"),
+    ("RET", "distro-parts-enter"),
+    (crate::parts::HAND_KEY, HAND),
+    ("d", "distro-parts-steps"),
+];
+
+/// The parts' page's own key that hands in a file — the one key of a page
+/// the steps do not teach.
+const HAND: &str = "distro-parts-hand";
 
 /// The command that starts the whole sequence now — the module's own id, and
 /// the word its key teaches (`update now`).
@@ -1105,6 +1123,29 @@ pub const COMMANDS: &[ronoctua_cmd::Command] = &[
         id: crate::follow::OPEN,
         label: key::CMD_DISTRO_FOLLOW_OPEN,
     },
+    // THE MACHINE'S PARTS, the view's third page (`crate::parts`): its door
+    // (`LEADER s u d`) and the four questions it asks — a file handed in,
+    // a stick's folder each way, and the person's mirrors.
+    ronoctua_cmd::Command {
+        id: crate::parts::OPEN,
+        label: key::CMD_DISTRO_PARTS_OPEN,
+    },
+    ronoctua_cmd::Command {
+        id: crate::parts::HAND_IN,
+        label: key::CMD_DISTRO_PARTS_HAND_IN,
+    },
+    ronoctua_cmd::Command {
+        id: crate::parts::IMPORT,
+        label: key::CMD_DISTRO_PARTS_IMPORT,
+    },
+    ronoctua_cmd::Command {
+        id: crate::parts::EXPORT,
+        label: key::CMD_DISTRO_PARTS_EXPORT,
+    },
+    ronoctua_cmd::Command {
+        id: crate::parts::MIRRORS,
+        label: key::CMD_DISTRO_PARTS_MIRRORS,
+    },
 ];
 
 /// `LEADER s u` — THE UPDATE, a group under SYSTEM, beside the memory panel
@@ -1120,6 +1161,8 @@ pub const BINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("s u c", crate::binary_cache::OPEN, None),
     // THE DISTRO'S APPS THAT FOLLOW THEIR RELEASES, straight to theirs.
     ("s u f", crate::follow::OPEN, None),
+    // THE MACHINE'S PARTS, straight to theirs.
+    ("s u d", crate::parts::OPEN, None),
 ];
 
 /// What this crate adds to the leader's keymap ([`crate::bindings::Contribution`]):
@@ -1143,6 +1186,12 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
         crate::binary_cache::KEY,
         crate::binary_cache::TOKEN,
         crate::binary_cache::NETRC,
+        // THE PARTS' PAGE (`crate::parts`): its four questions, each asked
+        // by a key or a row of the page and answered by name.
+        crate::parts::HAND_IN,
+        crate::parts::IMPORT,
+        crate::parts::EXPORT,
+        crate::parts::MIRRORS,
     ],
     ..crate::bindings::Contribution::NONE
 };
@@ -1161,6 +1210,8 @@ pub enum Order {
     /// The page of the distro's apps that follow their releases
     /// (`crate::follow`).
     Follow,
+    /// One of the parts' page's commands (`crate::parts`), by its id.
+    Parts(&'static str),
 }
 
 /// Which of the update's commands an id is — the one question the footer asks
@@ -1177,6 +1228,11 @@ pub fn order_of(id: &str) -> Option<Order> {
         crate::binary_cache::TOKEN => Some(Order::Cache(crate::binary_cache::TOKEN)),
         crate::binary_cache::NETRC => Some(Order::Cache(crate::binary_cache::NETRC)),
         crate::follow::OPEN => Some(Order::Follow),
+        crate::parts::OPEN => Some(Order::Parts(crate::parts::OPEN)),
+        crate::parts::HAND_IN => Some(Order::Parts(crate::parts::HAND_IN)),
+        crate::parts::IMPORT => Some(Order::Parts(crate::parts::IMPORT)),
+        crate::parts::EXPORT => Some(Order::Parts(crate::parts::EXPORT)),
+        crate::parts::MIRRORS => Some(Order::Parts(crate::parts::MIRRORS)),
         _ => None,
     }
 }
@@ -1210,6 +1266,10 @@ pub enum Press {
     /// The distro's apps that follow their releases: the page, or back to
     /// the steps.
     Follow,
+    /// The machine's parts: the page, or back to the steps.
+    Parts,
+    /// On the parts' page, a file handed in for the part under the cursor.
+    HandIn,
 }
 
 /// A key, as the view's press — the one reader both doors call.
@@ -1234,8 +1294,11 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
         _ => {}
     }
     let notation = key.notation();
+    // THE VIEW'S KEYS FIRST: a page's key that shares the view's notation
+    // (`d` back to the steps) is the view's key; the parts' page adds one.
     let id = OF_THE_VIEW
         .iter()
+        .chain(OF_THE_PARTS)
         .find(|(taught, _)| *taught == notation)
         .map(|(_, id)| *id)?;
     Some(match id {
@@ -1249,6 +1312,8 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
         PROCEED => Press::Proceed,
         crate::binary_cache::OPEN => Press::Cache,
         crate::follow::OPEN => Press::Follow,
+        crate::parts::OPEN => Press::Parts,
+        HAND => Press::HandIn,
         _ => return None,
     })
 }
@@ -1299,6 +1364,9 @@ pub enum Errand {
     /// What the page of the apps that follow their releases asks of the
     /// door: a sentence, a turn of the switch (`crate::follow::apply`).
     Follow(crate::follow::Errand),
+    /// What the parts' page asks of the door: a question on its line, a
+    /// sentence, a gesture for the machine (`crate::parts::carry`).
+    Parts(crate::parts::Errand),
     /// The view closes.
     Close,
 }
@@ -1388,8 +1456,57 @@ pub struct View {
     /// The person's binary cache's page, while the view is turned to it.
     cache: Option<CachePage>,
     /// The page of the distro's apps that follow their releases, while the
-    /// view is turned to it — never both pages at once.
+    /// view is turned to it — never two pages at once.
     follow: Option<FollowPage>,
+    /// The parts' page, while the view is turned to it.
+    parts: Option<PartsPage>,
+    /// The door's wake, for the file picker the parts' page brings up.
+    wake: Waking,
+}
+
+/// The parts' page as the view holds it: the page, what it read, where it
+/// reads again (none for a test's or a photograph's page, which reads
+/// nothing of the machine) and the zone its times are drawn in.
+#[derive(Debug, Clone)]
+pub struct PartsPage {
+    /// The page's cursor and question.
+    pub page: crate::parts::Page,
+    /// What it draws.
+    pub readings: crate::parts::Readings,
+    /// Where it reads, and when each thing last moved.
+    places: Option<(crate::parts::Places, Vec<Option<std::time::SystemTime>>)>,
+    /// The zone its times are drawn in.
+    zone: ronoctua_files::when::Zone,
+    /// The file picker, while it is up over the page (`crate::file_picker`):
+    /// the file handed in, or a stick's folder.
+    picking: Option<crate::file_picker::Hosted<crate::parts::Picking>>,
+    /// What the picker's rows take, as they were last drawn — the one answer
+    /// the painting writes and the pointer reads (a row of the picker is
+    /// `Target::Page` of its index).
+    drawn: std::cell::RefCell<Drawn>,
+}
+
+/// The picker's rows as they were drawn: what each takes, and which one the
+/// cursor is on.
+#[derive(Debug, Clone, Default)]
+pub struct Drawn {
+    targets: Vec<crate::file_picker::Target>,
+    focused: Option<usize>,
+}
+
+/// The door's wake, for the file picker's folder and devices — kept by the
+/// view so every picker it opens is watched through it.
+#[derive(Clone, Default)]
+pub struct Waking(Option<crate::wake::Wake>);
+
+impl std::fmt::Debug for Waking {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "Waking(door)"
+        } else {
+            "Waking(none)"
+        })
+    }
 }
 
 /// The page of the apps that follow their releases as the view holds it:
@@ -1459,6 +1576,8 @@ impl View {
             }),
             cache: None,
             follow: None,
+            parts: None,
+            wake: Waking::default(),
         }
     }
 
@@ -1504,6 +1623,7 @@ impl View {
             return;
         }
         self.follow = None;
+        self.parts = None;
         let places = crate::binary_cache::Places::here();
         let readings = crate::binary_cache::Readings::read(&places);
         let stamp = places.stamp();
@@ -1520,6 +1640,7 @@ impl View {
     #[must_use]
     pub fn with_cache(mut self, readings: crate::binary_cache::Readings) -> Self {
         self.follow = None;
+        self.parts = None;
         self.cache = Some(CachePage {
             page: crate::binary_cache::Page::default(),
             readings,
@@ -1545,14 +1666,26 @@ impl View {
             .is_some_and(|c| c.page.takes(n, &c.readings))
     }
 
+    /// The hint both doors draw: the file picker's own while it is up, or
+    /// the keys this view teaches now.
+    #[must_use]
+    pub fn hint(&self, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
+        if let Some(h) = self.parts.as_ref().and_then(|p| p.picking.as_ref()) {
+            return h.picker.hint(texts);
+        }
+        crate::chrome::hint_of(self.taught(), texts)
+    }
+
     /// The keys this view teaches now: the steps', or the page's it is
-    /// turned to — what both doors' hints draw.
+    /// turned to.
     #[must_use]
     pub const fn taught(&self) -> &'static [(&'static str, &'static str)] {
         if self.cache.is_some() {
             OF_THE_PAGE
         } else if self.follow.is_some() {
             OF_THE_FOLLOW
+        } else if self.parts.is_some() {
+            OF_THE_PARTS
         } else {
             OF_THE_VIEW
         }
@@ -1579,6 +1712,7 @@ impl View {
             return;
         }
         self.cache = None;
+        self.parts = None;
         let places = crate::follow::Places::here();
         let readings = crate::follow::Readings::read(&places);
         let stamp = places.stamp();
@@ -1594,6 +1728,7 @@ impl View {
     #[must_use]
     pub fn with_follow(mut self, readings: crate::follow::Readings) -> Self {
         self.cache = None;
+        self.parts = None;
         self.follow = Some(FollowPage {
             page: crate::follow::Page::default(),
             readings,
@@ -1643,33 +1778,277 @@ impl View {
     }
 
     // -----------------------------------------------------------------------
+    // THE PARTS' PAGE (`crate::parts`)
+    // -----------------------------------------------------------------------
+
+    /// Turns the view to the parts' page, reading what this machine says —
+    /// or, when it is open, back to the steps.
+    pub fn toggle_parts(&mut self) -> Errand {
+        if self.parts.take().is_none() {
+            self.open_parts();
+        }
+        Errand::Moved
+    }
+
+    /// Opens the page over what this machine says (kept open when it is).
+    pub fn open_parts(&mut self) {
+        if self.parts.is_some() {
+            return;
+        }
+        self.cache = None;
+        self.follow = None;
+        let places = crate::parts::Places::here();
+        let readings = crate::parts::Readings::read(&places);
+        let stamp = places.stamp();
+        self.parts = Some(PartsPage {
+            page: crate::parts::Page::default(),
+            readings,
+            places: Some((places, stamp)),
+            zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
+            picking: None,
+            drawn: std::cell::RefCell::default(),
+        });
+    }
+
+    /// The same view on the page, over these readings — a test's, a
+    /// photograph's: nothing of the machine is read, and its times are UTC.
+    #[must_use]
+    pub fn with_parts(mut self, readings: crate::parts::Readings) -> Self {
+        self.cache = None;
+        self.follow = None;
+        self.parts = Some(PartsPage {
+            page: crate::parts::Page::default(),
+            readings,
+            places: None,
+            zone: ronoctua_files::when::Zone::utc(),
+            picking: None,
+            drawn: std::cell::RefCell::default(),
+        });
+        self
+    }
+
+    /// The door's wake: every file picker the parts' page brings up after
+    /// this is watched through it — its folder, and the devices that are
+    /// its places (`file_picker::FilePicker::watch_with`).
+    pub fn watch_with(&mut self, wake: crate::wake::Wake) {
+        self.wake = Waking(Some(wake));
+    }
+
+    /// What the wake brought the file picker, taken — `true` when its rows
+    /// changed and the door draws again.
+    pub fn look(&mut self) -> bool {
+        self.parts
+            .as_mut()
+            .and_then(|p| p.picking.as_mut())
+            .is_some_and(crate::file_picker::Hosted::look)
+    }
+
+    /// Whether the file picker is up and takes `key` — the door hands it to
+    /// [`Self::pick_key`] before anything else reads it.
+    #[must_use]
+    pub fn picker_takes(&self, key: ronoctua_keymap::Key) -> bool {
+        self.parts
+            .as_ref()
+            .and_then(|p| p.picking.as_ref())
+            .is_some_and(|h| h.picker.claims(key))
+    }
+
+    /// Whether the file picker is up.
+    #[must_use]
+    pub fn picking(&self) -> bool {
+        self.parts.as_ref().is_some_and(|p| p.picking.is_some())
+    }
+
+    /// What was copied, for the file picker.
+    pub fn picker_pasted(&mut self, text: &str) {
+        if let Some(h) = self.parts.as_mut().and_then(|p| p.picking.as_mut()) {
+            let _ = h.pasted(text);
+        }
+    }
+
+    /// A key for the file picker: its answer goes to the page
+    /// (`crate::parts::picked`), and going back brings the page's rows back.
+    pub fn pick_key(&mut self, key: ronoctua_keymap::Key) -> Errand {
+        use crate::file_picker::{Hosting, Picked};
+        let Some(h) = self.parts.as_mut().and_then(|p| p.picking.as_mut()) else {
+            return Errand::Nothing;
+        };
+        let e = match h.key(key) {
+            Hosting::Nothing => crate::parts::Errand::Moved,
+            Hosting::Back => {
+                self.close_the_picker();
+                crate::parts::Errand::Moved
+            }
+            Hosting::Say(e) => crate::parts::Errand::Explain(e),
+            Hosting::Paste => crate::parts::Errand::Paste,
+            Hosting::Picked(asked, Picked::Paths { paths, .. }) => {
+                self.close_the_picker();
+                crate::parts::picked(asked, &paths)
+            }
+            Hosting::Picked(..) => crate::parts::Errand::Nothing,
+        };
+        self.parts_errand(e)
+    }
+
+    /// The picker put down: the page's own rows come back.
+    fn close_the_picker(&mut self) {
+        if let Some(p) = self.parts.as_mut() {
+            p.picking = None;
+            *p.drawn.borrow_mut() = Drawn::default();
+        }
+    }
+
+    /// The page, while the view is turned to it.
+    #[must_use]
+    pub const fn parts_page(&self) -> Option<&PartsPage> {
+        self.parts.as_ref()
+    }
+
+    /// Where the page reads — `None` for a test's or a photograph's.
+    #[must_use]
+    pub fn parts_places(&self) -> Option<&crate::parts::Places> {
+        self.parts
+            .as_ref()
+            .and_then(|p| p.places.as_ref())
+            .map(|(places, _)| places)
+    }
+
+    /// Reads the page again, now — after a gesture this door carried out.
+    pub fn parts_reread(&mut self) {
+        if let Some(p) = self.parts.as_mut()
+            && let Some((places, stamp)) = p.places.as_mut()
+        {
+            p.readings = crate::parts::Readings::read(places);
+            *stamp = places.stamp();
+            p.page.settle(&p.readings);
+        }
+    }
+
+    /// What the page asks of the door, as the view's errand — the file
+    /// picker brought up over the page here, watched through the door's wake.
+    fn parts_errand(&mut self, e: crate::parts::Errand) -> Errand {
+        use crate::parts::Errand as Page;
+        match e {
+            Page::Nothing => Errand::Nothing,
+            Page::Moved => Errand::Moved,
+            Page::Close => {
+                self.parts = None;
+                Errand::Moved
+            }
+            Page::Pick(asked) => {
+                let wake = self.wake.0.clone();
+                let Some(p) = self.parts.as_mut() else {
+                    return Errand::Nothing;
+                };
+                let media = p
+                    .places
+                    .as_ref()
+                    .and_then(|(places, _)| places.media.clone());
+                p.picking = Some(crate::file_picker::Hosted::open(
+                    crate::parts::request_of(&asked, media.as_deref()),
+                    asked.clone(),
+                    crate::parts::title_of(&asked),
+                    wake.as_ref(),
+                ));
+                Errand::Moved
+            }
+            other => Errand::Parts(other),
+        }
+    }
+
+    /// The question `id` of the parts' page, asked as its key or row would —
+    /// a command run by its name with nothing typed.
+    pub fn parts_ask_for(&mut self, id: &str) -> Errand {
+        self.open_parts();
+        let Some(p) = self.parts.as_mut() else {
+            return Errand::Nothing;
+        };
+        let e = p.page.ask_for(id, &p.readings);
+        self.parts_errand(e)
+    }
+
+    /// What was typed on a line, answering the open page's question `id` —
+    /// the parts' mirrors, or the binary cache's.
+    pub fn page_answered(&mut self, id: &str, text: &str) -> Errand {
+        if id == crate::parts::MIRRORS {
+            let Some(p) = self.parts.as_mut() else {
+                return Errand::Nothing;
+            };
+            let e = p.page.answered(id, text);
+            return self.parts_errand(e);
+        }
+        self.cache_answered(id, text)
+    }
+
+    /// A path typed after one of the parts' picker commands, run by its name
+    /// — the picker's answer without the picker, which goes down.
+    pub fn parts_typed(&mut self, id: &str, text: &str) -> Errand {
+        self.open_parts();
+        self.close_the_picker();
+        let Some(p) = self.parts.as_mut() else {
+            return Errand::Nothing;
+        };
+        let e = p.page.typed(id, text, &p.readings);
+        self.parts_errand(e)
+    }
+
+    /// The line was let go: the open page's question goes with it.
+    pub fn page_unanswered(&mut self) {
+        self.cache_unanswered();
+        if let Some(p) = self.parts.as_mut() {
+            p.page.unanswered();
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // EITHER PAGE — what both doors draw and click by
     // -----------------------------------------------------------------------
 
     /// Whether the view is turned to a page.
     #[must_use]
     pub const fn page_open(&self) -> bool {
-        self.cache.is_some() || self.follow.is_some()
+        self.cache.is_some() || self.follow.is_some() || self.parts.is_some()
     }
 
     /// The row under the open page's cursor.
     #[must_use]
     pub fn page_cursor(&self) -> Option<usize> {
+        // THE PICKER'S CURSOR, as its rows were last drawn — and its first
+        // row before they ever were: a door paints a page only while it has
+        // a cursor, and the rows are written down by that painting.
+        if let Some(p) = self.parts.as_ref().filter(|p| p.picking.is_some()) {
+            return Some(p.drawn.borrow().focused.unwrap_or(0));
+        }
         self.cache
             .as_ref()
             .map(|c| c.page.cursor())
             .or_else(|| self.follow.as_ref().map(|f| f.page.cursor()))
+            .or_else(|| self.parts.as_ref().map(|p| p.page.cursor()))
     }
 
     /// Whether a click takes row `n` of the open page — the page's one
     /// answer, which both doors light and click by.
     #[must_use]
     pub fn page_takes(&self, n: usize) -> bool {
+        // THE PICKER'S ROWS take what they were drawn taking: a title and a
+        // sentence take nothing.
+        if let Some(p) = self.parts.as_ref().filter(|p| p.picking.is_some()) {
+            return p
+                .drawn
+                .borrow()
+                .targets
+                .get(n)
+                .is_some_and(|t| *t != crate::file_picker::Target::Nothing);
+        }
         self.cache_takes(n)
             || self
                 .follow
                 .as_ref()
                 .is_some_and(|f| f.page.takes(n, &f.readings))
+            || self
+                .parts
+                .as_ref()
+                .is_some_and(|p| p.page.takes(n, &p.readings))
     }
 
     /// The open page's lines under the head, placed from `left` in `room`.
@@ -1682,6 +2061,39 @@ impl View {
     ) -> Vec<crate::binary_cache::PageLine> {
         if self.cache.is_some() {
             return self.cache_lines(left, room, texts);
+        }
+        if let Some(p) = &self.parts {
+            // THE PICKER'S ROWS, while it is up, as the page's own — each
+            // `Target::Page` of its index, and what it takes written down for
+            // the pointer.
+            if let Some(h) = &p.picking {
+                let cols =
+                    left + room + crate::chrome::FIELDS_LEAD + tokens::space::FILES_EDGERIGHT;
+                let rows = h.rows(cols, texts, |r| r);
+                let mut drawn = Drawn::default();
+                let lines = rows
+                    .into_iter()
+                    .enumerate()
+                    .map(|(n, r)| {
+                        if r.focused {
+                            drawn.focused = Some(n);
+                        }
+                        let takes = !r.heading && r.target != crate::file_picker::Target::Nothing;
+                        drawn.targets.push(if takes {
+                            r.target
+                        } else {
+                            crate::file_picker::Target::Nothing
+                        });
+                        crate::binary_cache::PageLine {
+                            fields: r.fields,
+                            row: takes.then_some(n),
+                        }
+                    })
+                    .collect();
+                *p.drawn.borrow_mut() = drawn;
+                return lines;
+            }
+            return p.page.lines(&p.readings, left, room, &p.zone, texts);
         }
         self.follow
             .as_ref()
@@ -1869,6 +2281,17 @@ impl View {
         // when one moved — and so does the page of the apps that follow
         // their releases.
         let mut moved = false;
+        if let Some(p) = self.parts.as_mut()
+            && let Some((places, stamp)) = p.places.as_mut()
+        {
+            let now = places.stamp();
+            if now != *stamp {
+                *stamp = now;
+                p.readings = crate::parts::Readings::read(places);
+                p.page.settle(&p.readings);
+                moved = true;
+            }
+        }
         if let Some(f) = self.follow.as_mut()
             && let Some((places, stamp)) = f.places.as_mut()
         {
@@ -1917,10 +2340,46 @@ impl View {
         // the update's.
         if press == Press::Cache {
             self.follow = None;
+            self.parts = None;
             return self.toggle_cache();
         }
         if press == Press::Follow {
+            self.parts = None;
             return self.toggle_follow();
+        }
+        // THE FILE PICKER takes the view's keys that walk, answer and go
+        // back while it is up — a second click's `RET`, the pointer's way
+        // back —, and `d` leaves it with the page.
+        if self.picking() {
+            use ronoctua_keymap::{Key, Sym};
+            let key = match press {
+                Press::Up => Key::simple(Sym::Up),
+                Press::Down => Key::simple(Sym::Down),
+                Press::Enter => Key::simple(Sym::Enter),
+                Press::Escape => Key::simple(Sym::Esc),
+                _ => return Errand::Nothing,
+            };
+            return self.pick_key(key);
+        }
+        if press == Press::Parts {
+            return self.toggle_parts();
+        }
+        // THE PARTS' PAGE takes the arrows, `RET`, `h` and `Esc` while the
+        // view is turned to it, and `d` turns it back.
+        if let Some(p) = self.parts.as_mut() {
+            use crate::parts::Press as Page;
+            let page = match press {
+                Press::Up => Some(Page::Up),
+                Press::Down => Some(Page::Down),
+                Press::Enter => Some(Page::Enter),
+                Press::HandIn => Some(Page::HandIn),
+                Press::Escape => Some(Page::Escape),
+                _ => None,
+            };
+            if let Some(k) = page {
+                let e = p.page.press(k, &p.readings);
+                return self.parts_errand(e);
+            }
         }
         // THE PAGE OF THE APPS THAT FOLLOW THEIR RELEASES takes the arrows,
         // `RET` and `Esc` while the view is turned to it, and `f` turns it
@@ -1996,6 +2455,9 @@ impl View {
             Press::Escape => Errand::Close,
             Press::Cache => self.toggle_cache(),
             Press::Follow => self.toggle_follow(),
+            Press::Parts => self.toggle_parts(),
+            // A FILE IS HANDED IN only on the parts' page.
+            Press::HandIn => Errand::Nothing,
         }
     }
 
@@ -2018,6 +2480,22 @@ impl View {
                 .top_lines(&c.readings, room, texts)
                 .into_iter()
                 .map(|h| line(h.text, h.color, h.answer.map(Target::PageAnswer)))
+                .collect();
+        }
+        // THE PARTS' PAGE: what the row under its cursor is, why it failed,
+        // what it is missing.
+        if let Some(p) = &self.parts {
+            if let Some(h) = &p.picking {
+                return crate::parts::picking_lines(&h.asked, room, texts)
+                    .into_iter()
+                    .map(|h| line(h.text, h.color, None))
+                    .collect();
+            }
+            return p
+                .page
+                .top_lines(&p.readings, room, &p.zone, texts)
+                .into_iter()
+                .map(|h| line(h.text, h.color, None))
                 .collect();
         }
         // THE PAGE OF THE APPS THAT FOLLOW THEIR RELEASES: what the row
@@ -2301,7 +2779,29 @@ impl View {
                     let e = f.page.clicked(n, &f.readings);
                     self.follow_errand(e)
                 }
-                (None, None) => Errand::Nothing,
+                (None, None) => match self.parts.as_mut() {
+                    // A ROW OF THE PICKER is chosen there: its cursor, and
+                    // the second click its `RET`.
+                    Some(p) if p.picking.is_some() => {
+                        let target = p.drawn.borrow().targets.get(n).cloned();
+                        let again = match (p.picking.as_mut(), target) {
+                            (Some(h), Some(t)) if t != crate::file_picker::Target::Nothing => {
+                                h.clicked(t)
+                            }
+                            _ => return Errand::Nothing,
+                        };
+                        if again {
+                            self.pick_key(ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Enter))
+                        } else {
+                            Errand::Moved
+                        }
+                    }
+                    Some(p) => {
+                        let e = p.page.clicked(n, &p.readings);
+                        self.parts_errand(e)
+                    }
+                    None => Errand::Nothing,
+                },
             },
             Target::PageAnswer(yes) => match self.cache.as_mut() {
                 Some(c) => {
@@ -2687,11 +3187,16 @@ usage: ronoctua-shell photograph --door update-scene --scene <file> [options] [s
                                \"outcome\": \"pushed\", \"paths\": 3, \"bytes\": 9}}}
                            \"follow\": {\"copy\": \"on\" | \"off\" | \"unreadable\" | \"newer\",
                              \"let\": true, \"registry\": {…distro-apps.json…},
-                             \"applied\": {…person-applied.json…}}}
+                             \"applied\": {…person-applied.json…}},
+                           \"parts\": {\"records\": [{…a part's record…}],
+                             \"names\": {\"<id>\": \"<name>\"},
+                             \"stick\": {…stick.json…},
+                             \"mirrors\": [\"https://…\"]}}
                         `metered`: the brain holds the run a `u` asks for,
                         for a metered way out; `cache`: the view opens on the
                         binary cache's page, over these readings; `follow`:
-                        on the page of the apps that follow their releases
+                        on the page of the apps that follow their releases;
+                        `parts`: on the parts' page
   --out <file>          where to write                 (default: update.png)
   --columns <n>         the window's width, in cells   (default: 90)
   --lines <n>           the height, in lines           (default: 30)
@@ -2718,6 +3223,19 @@ Steps — walked in the order they appear:
         keys: String,
         cache: Option<CacheScene>,
         follow: Option<FollowScene>,
+        parts: Option<PartsScene>,
+    }
+
+    /// The parts' page, as the scene says it: the records root would have
+    /// written, the plan's names, the last stick gesture and the media
+    /// mounted.
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct PartsScene {
+        records: Vec<ronoctua_parts::record::Record>,
+        names: std::collections::BTreeMap<String, String>,
+        stick: Option<ronoctua_parts::stick::Said>,
+        mirrors: Vec<String>,
     }
 
     /// The page of the apps that follow their releases, as the scene says
@@ -2954,12 +3472,20 @@ Steps — walked in the order they appear:
     fn window_of(mut scene: Scene) -> Result<UpdateWindow> {
         let cache = scene.cache.take().map(CacheScene::readings).transpose()?;
         let follow = scene.follow.take().map(FollowScene::readings).transpose()?;
+        let parts = scene.parts.take().map(|p| {
+            let mut r = crate::parts::Readings::of(p.records, &p.names, p.stick);
+            r.mirrors = crate::parts::Mirrors::Named(p.mirrors);
+            r
+        });
         let mut w = window_of_records(scene);
         if let Some(readings) = cache {
             w.open.view = w.open.view.clone().with_cache(readings);
         }
         if let Some(readings) = follow {
             w.open.view = w.open.view.clone().with_follow(readings);
+        }
+        if let Some(readings) = parts {
+            w.open.view = w.open.view.clone().with_parts(readings);
         }
         Ok(w)
     }
@@ -3404,9 +3930,28 @@ impl Content for UpdateWindow {
     /// table, which is what a list wants — read by the reader the footer
     /// calls too.
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
-        if let Some(press) = crate::door::keys::key_of(event, mods).and_then(press_of_key) {
+        let Some(key) = crate::door::keys::key_of(event, mods) else {
+            return;
+        };
+        // THE FILE PICKER, while it is up over the parts' page, reads its
+        // keys before the view does.
+        if self.open.view.picker_takes(key) {
+            ui.message = None;
+            let errand = self.open.view.pick_key(key);
+            self.measure(ui);
+            self.apply(ui, errand);
+            return;
+        }
+        if let Some(press) = press_of_key(key) {
             self.pressed(ui, press);
         }
+    }
+
+    /// What was copied, for the file picker.
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        self.open.view.picker_pasted(text);
+        self.measure(ui);
+        ui.ask_paint();
     }
 
     /// Where content begins, in cells from the window's edge.
@@ -3414,24 +3959,25 @@ impl Content for UpdateWindow {
         CONTENT_MARGIN
     }
 
-    /// THE BINARY CACHE'S QUESTIONS, typed on this window's line — the
-    /// footer's minibuffer answers into the same `View::cache_answered`.
+    /// THE PAGES' QUESTIONS — the binary cache's, the parts' — typed on
+    /// this window's line: the footer's minibuffer answers into the same
+    /// `View::page_answered`.
     fn answered(&mut self, ui: &mut Ui, id: &'static str, text: &str) {
-        let errand = self.open.view.cache_answered(id, text);
+        let errand = self.open.view.page_answered(id, text);
         self.measure(ui);
         self.apply(ui, errand);
     }
 
     /// The line was let go: the page's question goes with it.
     fn unanswered(&mut self, ui: &mut Ui, _: &'static str) {
-        self.open.view.cache_unanswered();
+        self.open.view.page_unanswered();
         ui.ask_paint();
     }
 
     /// THE KEYS THE FOOTER TEACHES, on this window's header — every one a
     /// click, `u`, `a` and `p` included.
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
-        crate::chrome::hint_of(self.open.view.taught(), &ui.texts)
+        self.open.view.hint(&ui.texts)
     }
 
     fn resized(&mut self, ui: &mut Ui) {
@@ -4193,9 +4739,14 @@ mod tests {
         }
         // THE UPDATE'S THREE, the binary cache's five (its page's door, its
         // questions and root's netrc — whose password the sudo bar asks),
-        // and the door of the page of the apps that follow their releases.
-        assert_eq!(COMMANDS.len(), 9);
+        // the door of the page of the apps that follow their releases, and
+        // the parts' five (its door and its four questions).
+        assert_eq!(COMMANDS.len(), 14);
         assert_eq!(order_of(crate::follow::OPEN), Some(Order::Follow));
+        assert_eq!(
+            order_of(crate::parts::OPEN),
+            Some(Order::Parts(crate::parts::OPEN))
+        );
         for c in COMMANDS {
             assert!(order_of(c.id).is_some(), "`{}` is not dispatched", c.id);
         }
@@ -5198,6 +5749,142 @@ mod tests {
         assert!(
             !w.open.view.page_open(),
             "the page's own `f` goes back to the steps"
+        );
+    }
+
+    /// The parts' page over two parts: one here, one that needs the person
+    /// for a download that is one file, and no stick mounted.
+    fn on_the_parts_page() -> crate::parts::Readings {
+        let record = |id: &str, phase: &str, attempts: u32, missing: &str| {
+            let json = format!(
+                r#"{{"format":1,"id":"{id}","wanted":{{"drv":"/nix/store/0123456789abcdfghijklmnpqrsvwxyz-{id}.drv","out":"/nix/store/0123456789abcdfghijklmnpqrsvwxyz-{id}","interface":1}},"current":null,"previous":null,"phase":"{phase}","waiting-for":null,"attempts":{attempts},"last-failure":{failure},"missing":[{missing}]}}"#,
+                failure = if attempts > 0 {
+                    r#"{"why":"build-failed","at":"2026-10-24T01:04:32Z","detail":"curl: (22) 404"}"#
+                } else {
+                    "null"
+                },
+            );
+            ronoctua_person::parse::<ronoctua_parts::record::Record>(json.as_bytes())
+                .expect("a record")
+        };
+        let missing = r#"{"drv":"/nix/store/0123456789abcdfghijklmnpqrsvwxyz-yt-dl.drv","out":"/nix/store/0123456789abcdfghijklmnpqrsvwxyz-yt-dl","name":"yt-dlp.tar.gz","hash":"sha256-AAAA","mode":"flat","urls":["https://github.com/yt-dlp/yt-dlp.tar.gz"]}"#;
+        crate::parts::Readings::of(
+            vec![
+                record("pot", "here", 0, ""),
+                record("yt", "needs-you", 5, missing),
+            ],
+            &std::collections::BTreeMap::from([("yt".to_owned(), "yt-dlp".to_owned())]),
+            None,
+        )
+    }
+
+    /// FAILS IF: `d` does not turn the view to the parts' page and back, the
+    /// page does not teach its own keys, its rows are not lit and clicked
+    /// where they are drawn — in the footer's list and in the window alike —
+    /// the second click on a part does not try it, or `h` on it does not ask
+    /// for the file by the download's name.
+    #[test]
+    fn the_parts_page_is_turned_to_and_clicked_where_it_is_drawn() {
+        let texts = texts();
+        let mut view = a_view();
+        assert_eq!(view.key(Press::Parts), Errand::Moved);
+        assert!(view.parts_page().is_some() && view.page_open());
+        assert_eq!(view.taught(), OF_THE_PARTS);
+        assert_eq!(view.key(Press::Parts), Errand::Moved);
+        assert!(!view.page_open(), "`d` turns it back");
+        assert_eq!(
+            view.key(Press::HandIn),
+            Errand::Nothing,
+            "`h` is the page's"
+        );
+        let mut view = a_view().with_parts(on_the_parts_page());
+        // THE FOOTER'S LIST: the head, the heading and a row a line, each
+        // row taking the click.
+        let rows = view.region_rows(0, 100, 100, &texts);
+        let taking: Vec<Target> = rows.iter().filter_map(|r| r.target).collect();
+        assert_eq!(
+            taking,
+            (0..5).map(Target::Page).collect::<Vec<_>>(),
+            "two parts, the stick's two rows and the mirrors'"
+        );
+        let words: String = rows
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        assert!(
+            words.contains("yt-dlp") && words.contains("needs you"),
+            "{words}"
+        );
+        assert_eq!(view.clicked(Target::Page(1)), Errand::Moved);
+        assert_eq!(
+            view.clicked(Target::Page(1)),
+            Errand::Parts(crate::parts::Errand::Run(crate::parts::Act::Retry {
+                id: "yt".into(),
+                name: "yt-dlp".into(),
+            }))
+        );
+        let top: String = view
+            .top_lines(100, &texts)
+            .into_iter()
+            .map(|l| l.text)
+            .collect();
+        assert!(
+            top.contains("yt-dlp.tar.gz") && top.contains("github.com"),
+            "{top}"
+        );
+        // `h` BRINGS UP THE FILE PICKER over the page: its rows are drawn
+        // in place of the page's, it teaches its own keys, the top says what
+        // to choose, and `Esc` puts it down and brings the page back.
+        assert_eq!(view.key(Press::HandIn), Errand::Moved);
+        assert!(view.picking());
+        assert!(
+            view.page_cursor().is_some(),
+            "a door paints the picker before it drew it once"
+        );
+        let top: String = view
+            .top_lines(100, &texts)
+            .into_iter()
+            .map(|l| l.text)
+            .collect();
+        assert!(top.contains("yt-dlp.tar.gz"), "{top}");
+        let picker = view.region_rows(0, 100, 100, &texts);
+        let words: String = picker
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        assert!(
+            words.contains(&texts.t(crate::key::DISTRO_PARTS_PICK_HAND_IN)),
+            "{words}"
+        );
+        assert!(
+            picker
+                .iter()
+                .any(|r| matches!(r.target, Some(Target::Page(_)))),
+            "the picker's rows take the click"
+        );
+        assert_ne!(
+            view.hint(&texts),
+            crate::chrome::hint_of(OF_THE_PARTS, &texts)
+        );
+        assert_eq!(view.key(Press::Escape), Errand::Moved);
+        assert!(
+            !view.picking() && view.parts_page().is_some(),
+            "`Esc` puts the picker down"
+        );
+        // THE WINDOW: a row is taken where it is drawn.
+        let (mut w, mut ui) = a_window();
+        ui.lines = 40;
+        w.open.view = w.open.view.clone().with_parts(on_the_parts_page());
+        w.measure(&ui);
+        let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let taken: Vec<Target> = (0..ui.lines)
+            .filter_map(|line| w.target_at(&ui, 40.0, (f64::from(line) + 0.5) * line_px))
+            .collect();
+        assert_eq!(taken, (0..5).map(Target::Page).collect::<Vec<_>>());
+        typed(&mut w, &mut ui, "d");
+        assert!(
+            !w.open.view.page_open(),
+            "the page's own `d` goes back to the steps"
         );
     }
 }

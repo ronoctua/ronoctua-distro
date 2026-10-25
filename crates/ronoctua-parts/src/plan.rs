@@ -42,6 +42,9 @@ pub struct Wanted {
     pub heavy: bool,
     /// Not free: never on the published ISO, never in a public cache.
     pub unfree: bool,
+    /// What the page calls it: a program's own name, the same in every
+    /// language (invariant 8's exception for a proper name).
+    pub name: String,
 }
 
 /// What the session sees of a part.
@@ -112,6 +115,13 @@ impl Document for Plan {
     }
 }
 
+/// The plan at `path` ([`crate::names::PLAN`] on a machine), when it is
+/// there and reads; what the page and the brain's watch name the parts by.
+#[must_use]
+pub fn read(path: &std::path::Path) -> Option<Plan> {
+    ronoctua_person::parse(&std::fs::read(path).ok()?).ok()
+}
+
 /// An empty plan of the current format: a system that wants no part.
 #[must_use]
 pub fn empty() -> Plan {
@@ -130,7 +140,7 @@ mod tests {
 
     fn plan_with(id: &str, drv: &str, out: &str, heavy: bool) -> String {
         format!(
-            r#"{{"format":1,"parts":{{"{id}":{{"drv":"{drv}","out":"{out}","kind":"program","interface":1,"heavy":{heavy},"unfree":false}}}}}}"#
+            r#"{{"format":1,"parts":{{"{id}":{{"drv":"{drv}","out":"{out}","kind":"program","interface":1,"heavy":{heavy},"unfree":false,"name":"X"}}}}}}"#
         )
     }
 
@@ -184,6 +194,7 @@ mod tests {
                     interface: 1,
                     heavy,
                     unfree: false,
+                    name: id.to_owned(),
                 },
             );
         }

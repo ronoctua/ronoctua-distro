@@ -36,6 +36,10 @@ ronoctua-person = { path = "../ronoctua-person", default-features = false }
 # `0600`), the record of the last push and what root's netrc should be —
 # through the one crate that knows Cachix.
 ronoctua-cachix = { path = "../ronoctua-cachix" }
+# THE MACHINE'S PARTS: their records, the plan's names, the stick's verdict
+# and the units the person starts — the library alone, never root's
+# realizer.
+ronoctua-parts = { path = "../ronoctua-parts", default-features = false }
 
 smithay-client-toolkit.workspace = true
 anyhow.workspace = true
@@ -53,4 +57,4 @@ workspace = true
 
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
-env = ["RONOCTUA_JOURNALCTL", "RONOCTUA_KEYS_DIR"]
+env = ["RONOCTUA_JOURNALCTL", "RONOCTUA_KEYS_DIR", "RONOCTUA_SYSTEMCTL"]

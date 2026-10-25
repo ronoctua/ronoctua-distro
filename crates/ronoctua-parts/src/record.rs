@@ -32,6 +32,10 @@ pub struct Record {
     pub attempts: u32,
     /// Why the last try did not bring it, when it did not.
     pub last_failure: Option<Failure>,
+    /// The downloads the part still needs, from their origins: what the
+    /// last failed try would have fetched ([`crate::frontier`]). Each is a
+    /// way in for the person — a file handed in, a stick, a mirror.
+    pub missing: Vec<crate::frontier::Download>,
 }
 
 /// What the plan wants of a part.
@@ -105,19 +109,32 @@ impl Phase {
 pub enum Waiting {
     /// No link at all: a network coming up tries it again.
     Network,
+    /// A metered link: nothing is downloaded on it by itself. Another
+    /// network tries it again, and so does the person's "try now" — the yes
+    /// for that one try ([`crate::names::YES`]).
+    Metered,
 }
 
 impl Waiting {
     /// Every one.
-    pub const ALL: [Self; 1] = [Self::Network];
+    pub const ALL: [Self; 2] = [Self::Network, Self::Metered];
 
     /// Its kebab-case name.
     #[must_use]
     pub const fn id(self) -> &'static str {
         match self {
             Self::Network => "network",
+            Self::Metered => "metered",
         }
     }
+}
+
+/// Whether a try waits for another network: on a metered link, unless the
+/// person said yes to this one try. A link that does not say counts as not
+/// metered — NetworkManager's "unknown". Pure.
+#[must_use]
+pub fn waits_for_the_meter(metered: Option<bool>, yes: bool) -> bool {
+    metered == Some(true) && !yes
 }
 
 /// Why a try did not bring the part.
@@ -143,11 +160,18 @@ pub enum Why {
     OutputDiffers,
     /// The profile could not be switched to the built output.
     ProfileFailed,
+    /// A file handed in is not the download its name says: other bytes.
+    HandInRefused,
 }
 
 impl Why {
     /// Every one.
-    pub const ALL: [Self; 3] = [Self::BuildFailed, Self::OutputDiffers, Self::ProfileFailed];
+    pub const ALL: [Self; 4] = [
+        Self::BuildFailed,
+        Self::OutputDiffers,
+        Self::ProfileFailed,
+        Self::HandInRefused,
+    ];
 
     /// Its kebab-case name.
     #[must_use]
@@ -156,12 +180,30 @@ impl Why {
             Self::BuildFailed => "build-failed",
             Self::OutputDiffers => "output-differs",
             Self::ProfileFailed => "profile-failed",
+            Self::HandInRefused => "hand-in-refused",
         }
     }
 }
 
 /// How many failed tries with a network before the person is asked.
 pub const NEEDS_YOU_AFTER: u32 = 5;
+
+/// The first wait after a failed try, in seconds; each try after it waits
+/// twice as long, up to [`LONGEST_WAIT_S`].
+pub const FIRST_WAIT_S: i64 = 60;
+
+/// The longest wait between two tries: a part that keeps failing is still
+/// tried twice a day, and the person can always try it now.
+pub const LONGEST_WAIT_S: i64 = 12 * 3600;
+
+/// How long to wait after the `attempts`-th failed try.
+#[must_use]
+pub fn wait_s(attempts: u32) -> i64 {
+    let doublings = attempts.saturating_sub(1).min(20);
+    FIRST_WAIT_S
+        .saturating_mul(1_i64 << doublings)
+        .min(LONGEST_WAIT_S)
+}
 
 /// How long a failure's detail may be in the record: the last lines of what
 /// `nix` said, never a whole log.
@@ -181,6 +223,7 @@ impl Record {
             waiting_for: None,
             attempts: 0,
             last_failure: None,
+            missing: Vec::new(),
         }
     }
 
@@ -193,6 +236,7 @@ impl Record {
         if self.wanted != wanted {
             self.attempts = 0;
             self.last_failure = None;
+            self.missing.clear();
         }
         self.wanted = wanted;
         self.waiting_for = None;
@@ -202,6 +246,39 @@ impl Record {
             Some(_) if self.attempts >= NEEDS_YOU_AFTER => Phase::NeedsYou,
             Some(_) => Phase::Arriving,
         };
+        self
+    }
+
+    /// When the next try is due, in seconds since the epoch: after a failed
+    /// try with a network, its wait ([`wait_s`]). `None` when nothing is due
+    /// on a clock — the part is here, unwanted, never tried, or waits for a
+    /// network, which an event brings.
+    #[must_use]
+    pub fn due_at(&self) -> Option<i64> {
+        if !matches!(self.phase, Phase::Arriving | Phase::NeedsYou) || self.attempts == 0 {
+            return None;
+        }
+        let failed = self.last_failure.as_ref()?;
+        Some(failed.at.unix_s().saturating_add(wait_s(self.attempts)))
+    }
+
+    /// Whether the planner should try it now (`now`, seconds since the
+    /// epoch): never tried, waiting for a network (the planner runs when one
+    /// comes), or due.
+    #[must_use]
+    pub fn try_now(&self, now: i64) -> bool {
+        match self.phase {
+            Phase::Waiting => true,
+            Phase::Arriving | Phase::NeedsYou => self.due_at().is_none_or(|due| due <= now),
+            Phase::Here | Phase::Unwanted => false,
+        }
+    }
+
+    /// The part waits for `what`, not tried: no attempt counted.
+    #[must_use]
+    pub fn waits(mut self, what: Waiting) -> Self {
+        self.phase = Phase::Waiting;
+        self.waiting_for = Some(what);
         self
     }
 
@@ -238,6 +315,27 @@ impl Record {
         self.waiting_for = None;
         self.attempts = 0;
         self.last_failure = None;
+        self.missing.clear();
+        self
+    }
+
+    /// The record after a file handed in was refused: said, and not counted
+    /// as a try of the part.
+    #[must_use]
+    pub fn refused_hand_in(mut self, detail: &str, now: Stamp) -> Self {
+        self.last_failure = Some(Failure {
+            why: Why::HandInRefused,
+            at: now,
+            detail: tail(detail, DETAIL_MOST),
+        });
+        self
+    }
+
+    /// The record with the downloads the part still needs: what the last
+    /// try would have fetched, said after it failed.
+    #[must_use]
+    pub fn missing(mut self, downloads: Vec<crate::frontier::Download>) -> Self {
+        self.missing = downloads;
         self
     }
 
@@ -265,6 +363,31 @@ impl Record {
         });
         self
     }
+}
+
+/// Every record in `dir` ([`crate::names::RECORDS`] on a machine), in id
+/// order; one that does not read is left out. What the parts' page and the
+/// brain's watch read — the realizer reads the same files.
+#[must_use]
+pub fn read_all(dir: &std::path::Path) -> Vec<Record> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()?
+                .strip_suffix(".json")
+                .map(str::to_owned)
+        })
+        .filter(|id| crate::id::is_id(id))
+        .collect();
+    ids.sort();
+    ids.iter()
+        .filter_map(|id| std::fs::read(dir.join(format!("{id}.json"))).ok())
+        .filter_map(|bytes| ronoctua_person::parse::<Record>(&bytes).ok())
+        .collect()
 }
 
 /// The last `most` bytes of `text`, cut at a character boundary.
@@ -313,6 +436,23 @@ impl Document for Record {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: a part downloads by itself on a metered link, the person's
+    /// yes does not let one try through, or a link that does not say holds
+    /// every part back.
+    #[test]
+    fn a_metered_link_holds_back_all_but_the_persons_try() {
+        assert!(waits_for_the_meter(Some(true), false));
+        assert!(!waits_for_the_meter(Some(true), true));
+        assert!(!waits_for_the_meter(Some(false), false));
+        assert!(!waits_for_the_meter(None, false));
+        let r = Record::new("x").waits(Waiting::Metered);
+        assert_eq!(
+            (r.phase, r.waiting_for, r.attempts),
+            (Phase::Waiting, Some(Waiting::Metered), 0)
+        );
+        assert!(r.try_now(0), "another network tries it again");
+    }
 
     const OUT_1: &str = "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-yt-dlp-1";
     const OUT_2: &str = "/nix/store/zyxwvsrqpnmlkjihgfdcba9876543210-yt-dlp-2";
@@ -390,6 +530,35 @@ mod tests {
         // A new target starts over.
         let new = record.planned(Some(want(OUT_2)));
         assert_eq!((new.attempts, new.phase), (0, Phase::Arriving));
+    }
+
+    /// FAILS IF: the waits do not grow, grow past twelve hours, or a part
+    /// that failed is tried again before its wait — a retry storm on every
+    /// planner run — or one that waits for a network is not tried when the
+    /// planner runs because a network came.
+    #[test]
+    fn a_failed_part_waits_longer_each_time() {
+        assert_eq!((wait_s(1), wait_s(2), wait_s(3)), (60, 120, 240));
+        assert_eq!(wait_s(99), LONGEST_WAIT_S);
+        let failed = Record::new("x").planned(Some(want(OUT_1))).trying().failed(
+            Why::BuildFailed,
+            "404",
+            at(1_000),
+            true,
+        );
+        assert_eq!(failed.due_at(), Some(1_060));
+        assert!(!failed.try_now(1_059));
+        assert!(failed.try_now(1_060));
+        let offline = Record::new("y").planned(Some(want(OUT_1))).failed(
+            Why::BuildFailed,
+            "no link",
+            at(1_000),
+            false,
+        );
+        assert_eq!(offline.due_at(), None);
+        assert!(offline.try_now(1_000));
+        let fresh = Record::new("z").planned(Some(want(OUT_1)));
+        assert!(fresh.try_now(0));
     }
 
     /// FAILS IF: a record goes out in a shape its own reader refuses, or a

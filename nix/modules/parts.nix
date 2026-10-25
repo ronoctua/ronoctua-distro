@@ -24,9 +24,9 @@
 #   derivation, which is why the realizer finds them in the store after a
 #   switch without evaluating anything.
 # - Each part is realized by its own unit instance, `ronoctua-part@<id>`: a
-#   failure is that part's alone, retried by systemd ever later
-#   (`RestartSteps=`, up to `RestartMaxDelaySec=`), and a part that fails
-#   keeps its previous generation working.
+#   failure is that part's alone and never a failed unit; the next try is
+#   due ever later (a timer the planner arms only while a part waits), and a
+#   part that fails keeps its previous generation working.
 # - The session sees the parts that are here through ONE folder, the view
 #   (`/var/lib/ronoctua-parts/view`): `bin/` and a closed set of `share/`
 #   folders, never `lib/` — a profile among `environment.profiles` would bring
@@ -63,16 +63,30 @@ let
   gcroots = "/nix/var/nix/gcroots/ronoctua-parts";
   plannerUnit = "ronoctua-parts.service";
   realizerUnit = id: "ronoctua-part@${id}.service";
+  acceptUnit = "ronoctua-parts-accept.service";
+  importUnit = "ronoctua-parts-import.service";
+  exportUnit = "ronoctua-parts-export.service";
+  run = "/run/ronoctua-parts";
+  group = config.users.users.${user}.group or "users";
 
-  # THE STATUSES A REALIZER ENDS WITH THAT ARE NOT RETRIED ON A CLOCK, as
-  # `ronoctua_parts::exit::NOT_RETRIED` lists them: a command line that is
-  # not one, a part not wanted, no link (the network coming up starts it
-  # again), the records' lock not taken.
-  notRetried = [
-    2
+  # THE STATUSES THAT END A UNIT AS A SUCCESS, as
+  # `ronoctua_parts::exit::SETTLED` lists them: a failed try, a part not
+  # wanted, no link, the records' lock not taken — the record says each. A
+  # part that does not arrive is NEVER a failed unit: `switch-to-configuration`
+  # counts every unit that failed while it ran, one in `auto-restart`
+  # included, and exits 4, and every update after one missing download would
+  # have said it failed (measured in `parts-are-isolated`). The next try is
+  # the planner's, by a timer armed only while a part waits for it. And a
+  # person's gesture refused — a stick folder off a removable medium — is
+  # said in a file the page reads (`stick.json`), so it ends as a success
+  # too: a failed unit would fail the person's `systemctl start` before the
+  # page could say why.
+  settled = [
+    1
     10
     11
     12
+    13
   ];
 
   program = "${tool}/bin/ronoctua-parts";
@@ -84,6 +98,7 @@ let
   unitEnvironment = home: {
     RONOCTUA_NIX = "${config.nix.package}/bin/nix";
     RONOCTUA_SYSTEMCTL = "${config.systemd.package}/bin/systemctl";
+    RONOCTUA_SYSTEMD_RUN = "${config.systemd.package}/bin/systemd-run";
     NIX_REMOTE = "daemon";
     HOME = "/run/${home}";
   };
@@ -106,6 +121,7 @@ let
         interface
         heavy
         unfree
+        name
         ;
     }) wanted;
   };
@@ -136,6 +152,14 @@ let
         package = lib.mkOption {
           type = lib.types.package;
           description = "What the part's profile holds: one store path.";
+        };
+        name = lib.mkOption {
+          type = lib.types.str;
+          default = name;
+          description = ''
+            What the parts' page calls it: the program's own name, the same in
+            every language (invariant 8's exception for a proper name).
+          '';
         };
         interface = lib.mkOption {
           type = lib.types.ints.positive;
@@ -207,6 +231,16 @@ in
       "d /nix/var/nix/profiles/ronoctua 0755 root root -"
       "d ${partsRoot} 0755 root root -"
       "d ${gcroots} 0755 root root -"
+      # WHAT THE PERSON HANDS OVER: root's folder, and inside it four of the
+      # person's, `0700` — filled by the person, never swapped for a link —
+      # where a file is handed in (`handin/<part>/<name>`), a stick's folder
+      # is named (`import/from`, `export/to`) and a try on a metered link is
+      # said yes to (`yes/<part>`).
+      "d ${run} 0755 root root -"
+      "d ${run}/handin 0700 ${user} ${group} -"
+      "d ${run}/import 0700 ${user} ${group} -"
+      "d ${run}/export 0700 ${user} ${group} -"
+      "d ${run}/yes 0700 ${user} ${group} -"
     ];
 
     # EVERY BOOT AND EVERY SWITCH: a oneshot with no `RemainAfterExit` that
@@ -226,11 +260,14 @@ in
     # the parts that are not here handed to their realizers two at a time.
     systemd.services.ronoctua-parts = {
       description = "Plans the machine's parts and starts what is missing";
-      environment = unitEnvironment "ronoctua-parts";
+      # NOT `ronoctua-parts`: that is the folder the person hands over in, and
+      # systemd removes a unit's runtime folder when the unit stops.
+      environment = unitEnvironment "ronoctua-parts-planner";
       serviceConfig = {
         Type = "oneshot";
-        RuntimeDirectory = "ronoctua-parts";
+        RuntimeDirectory = "ronoctua-parts-planner";
         ExecStart = "${program} plan --start";
+        SuccessExitStatus = lib.concatMapStringsSep " " toString settled;
         # Its workers wait for each realizer to end.
         TimeoutStartSec = "infinity";
         Nice = 10;
@@ -242,9 +279,11 @@ in
       restartIfChanged = false;
     };
 
-    # ONE PART, ONE PROCESS. A failure is retried ever later — one minute, then
-    # longer, at most twelve hours — and a status that must not be retried on
-    # a clock (no link, not wanted) ends it until an event starts it again.
+    # ONE PART, ONE PROCESS. A try that fails is said in the part's record and
+    # ends the unit as a success (see `settled`); the next try is due one
+    # minute later, then twice as long each time, at most twelve hours
+    # (`ronoctua_parts::record::wait_s`), and a part waiting for a network
+    # waits for the network.
     systemd.services."ronoctua-part@" = {
       description = "Realizes the machine's part %i";
       environment = unitEnvironment "ronoctua-part-%i";
@@ -253,16 +292,55 @@ in
         RuntimeDirectory = "ronoctua-part-%i";
         ExecStart = "${program} realize %i";
         TimeoutStartSec = "infinity";
-        Restart = "on-failure";
-        RestartSec = "1min";
-        RestartSteps = 8;
-        RestartMaxDelaySec = "12h";
-        RestartPreventExitStatus = lib.concatMapStringsSep " " toString notRetried;
+        SuccessExitStatus = lib.concatMapStringsSep " " toString settled;
         Nice = 10;
         IOSchedulingClass = "idle";
       };
       startLimitIntervalSec = 0;
       # A switch never restarts a download in the middle.
+      restartIfChanged = false;
+    };
+
+    # A FILE HANDED IN, and A STICK: each taken only when Nix finds the hash
+    # the flake already pins (`ronoctua-parts accept`, `import`) — and the
+    # downloads this machine keeps, written on a stick for another
+    # (`export`). No argument: each reads its one folder of the person's.
+    systemd.services.ronoctua-parts-accept = {
+      description = "Takes the files handed in for the machine's parts, by their hash";
+      environment = unitEnvironment "ronoctua-parts-accept";
+      serviceConfig = {
+        Type = "oneshot";
+        RuntimeDirectory = "ronoctua-parts-accept";
+        ExecStart = "${program} accept";
+        SuccessExitStatus = lib.concatMapStringsSep " " toString settled;
+      };
+      startLimitIntervalSec = 0;
+      restartIfChanged = false;
+    };
+    systemd.services.ronoctua-parts-import = {
+      description = "Imports the downloads the machine's parts miss from a stick";
+      environment = unitEnvironment "ronoctua-parts-import";
+      serviceConfig = {
+        Type = "oneshot";
+        RuntimeDirectory = "ronoctua-parts-import";
+        ExecStart = "${program} import";
+        SuccessExitStatus = lib.concatMapStringsSep " " toString settled;
+        TimeoutStartSec = "infinity";
+      };
+      startLimitIntervalSec = 0;
+      restartIfChanged = false;
+    };
+    systemd.services.ronoctua-parts-export = {
+      description = "Writes the downloads the machine keeps for its parts on a stick";
+      environment = unitEnvironment "ronoctua-parts-export";
+      serviceConfig = {
+        Type = "oneshot";
+        RuntimeDirectory = "ronoctua-parts-export";
+        ExecStart = "${program} export";
+        SuccessExitStatus = lib.concatMapStringsSep " " toString settled;
+        TimeoutStartSec = "infinity";
+      };
+      startLimitIntervalSec = 0;
       restartIfChanged = false;
     };
 
@@ -281,7 +359,7 @@ in
       }
     ];
 
-    # WHO MAY START THE PLANNER AND EACH REALIZER: the person, verb `start`,
+    # WHO MAY START THE PLANNER, THE THREE GESTURES AND EACH REALIZER: the person, verb `start`,
     # each unit by its whole name. The alternatives are BRACKETED: `&&` binds
     # tighter than `||` (`polkit-rules-are-the-ones-we-know`).
     security.polkit.extraConfig = ''
@@ -290,7 +368,13 @@ in
             action.lookup("verb") == "start" &&
             (${
               lib.concatMapStringsSep " ||\n       " (u: ''action.lookup("unit") == "${u}"'') (
-                [ plannerUnit ] ++ map realizerUnit (lib.attrNames wanted)
+                [
+                  plannerUnit
+                  acceptUnit
+                  importUnit
+                  exportUnit
+                ]
+                ++ map realizerUnit (lib.attrNames wanted)
               )
             }) &&
             subject.user == "${user}") {

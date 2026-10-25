@@ -3872,6 +3872,7 @@ dependencies = [
  "ronoctua-machine",
  "ronoctua-memory",
  "ronoctua-network",
+ "ronoctua-parts",
  "ronoctua-power",
  "ronoctua-protocol",
  "ronoctua-security",
@@ -4366,6 +4367,7 @@ dependencies = [
 name = "ronoctua-parts"
 version = "0.1.0"
 dependencies = [
+ "ronoctua-machine",
  "ronoctua-network",
  "ronoctua-person",
  "rustix 1.1.4",
@@ -5776,6 +5778,7 @@ dependencies = [
  "ronoctua-files",
  "ronoctua-i18n",
  "ronoctua-keymap",
+ "ronoctua-parts",
  "ronoctua-person",
  "ronoctua-render",
  "ronoctua-security",

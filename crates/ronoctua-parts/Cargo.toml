@@ -16,11 +16,12 @@ publish.workspace = true
 # `realize` IS ROOT'S HALF, the binary beside it, and a DEFAULT feature so the
 # workspace build compiles it (a member's `[[bin]]` is built only when
 # something enables its required features). It adds `rustix` (the records and
-# the session view are written with `openat`, `O_NOFOLLOW` and a rename) and
-# `ronoctua-network` (whether a failed download met a machine with no link).
+# the session view are written with `openat`, `O_NOFOLLOW` and a rename),
+# `ronoctua-network` (whether a failed download met a machine with no link)
+# and `ronoctua-machine` (its reader of a dry run).
 [features]
 default = [ "realize" ]
-realize = [ "dep:rustix", "dep:ronoctua-network" ]
+realize = [ "dep:rustix", "dep:ronoctua-network", "dep:ronoctua-machine" ]
 
 [dependencies]
 serde.workspace = true
@@ -32,6 +33,9 @@ ronoctua-person = { path = "../ronoctua-person", default-features = false }
 rustix = { workspace = true, features = [ "fs", "process" ], optional = true }
 # NetworkManager's one door: whether there is a link at all.
 ronoctua-network = { path = "../ronoctua-network", optional = true }
+# THE DRY RUN, as the machine's rebuild reads it (`ronoctua_machine::dry`):
+# one reader of Nix's "will be built" for the system and for every part.
+ronoctua-machine = { path = "../ronoctua-machine", optional = true }
 
 # ROOT'S HALF, as its own binary, so `nix/rust.nix` extracts JUST this
 # (`parts`): the units that run it as root must not carry the renderer.
@@ -45,4 +49,5 @@ workspace = true
 
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
-run-env = ["RONOCTUA_NIX", "RONOCTUA_SYSTEMCTL"]
+env = ["RONOCTUA_MACHINE_DIR"]
+run-env = ["RONOCTUA_NIX", "RONOCTUA_SYSTEMCTL", "RONOCTUA_SYSTEMD_RUN"]

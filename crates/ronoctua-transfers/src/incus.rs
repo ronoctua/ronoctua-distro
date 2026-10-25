@@ -535,28 +535,40 @@ mod tests {
                 Duration::from_millis(200),
             ));
         });
+        // THE GRANDCHILD'S PID, once it is WRITTEN: the shell makes the file
+        // before `echo` fills it, and an empty read is no pid.
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !pids.exists() {
+        let grandchild: u32 = loop {
+            if let Some(pid) = std::fs::read_to_string(&pids)
+                .ok()
+                .and_then(|t| t.trim().parse().ok())
+            {
+                break pid;
+            }
             assert!(Instant::now() < deadline, "the stand-in never started");
             std::thread::sleep(Duration::from_millis(20));
-        }
+        };
         switch.set(Flow::Stop);
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(10)).unwrap(),
             Ending::Cancelled
         );
         thread.join().unwrap();
-        let grandchild: u32 = std::fs::read_to_string(&pids)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        // GONE — or a zombie — WITHIN A REGIME, never at an instant: the
+        // group's `SIGKILL` is delivered when the kernel gets to it, and a
+        // machine busy with a battery read `/proc` before it did (measured in
+        // the `most` of 2026-10-24). A cancel that did not take the group
+        // down leaves `sleep 30` alive past the whole wait.
         let proc = PathBuf::from(format!("/proc/{grandchild}"));
-        assert!(
+        let gone = || {
             !proc.exists()
-                || std::fs::read_to_string(proc.join("stat")).is_ok_and(|s| s.contains(") Z ")),
-            "what the job started outlived the cancel"
-        );
+                || std::fs::read_to_string(proc.join("stat")).is_ok_and(|s| s.contains(") Z "))
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !gone() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(gone(), "what the job started outlived the cancel");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

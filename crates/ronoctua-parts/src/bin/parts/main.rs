@@ -4,6 +4,9 @@
 //! ronoctua-parts plan [--start | --rehearse] [--workers N] [--plan FILE]
 //! ronoctua-parts realize ID [--plan FILE]
 //! ronoctua-parts view
+//! ronoctua-parts accept
+//! ronoctua-parts import
+//! ronoctua-parts export
 //! ronoctua-parts trim ID
 //! ronoctua-parts status
 //! ```
@@ -19,20 +22,32 @@
 //!   [`exit::OFFLINE`] with no link, so the unit is not retried on a clock
 //!   and the network coming up starts it again.
 //! - `view`: the session's view rebuilt from the parts that are here.
+//! - `accept` (`ronoctua-parts-accept.service`): the files the person handed
+//!   in, each taken only when Nix finds the hash the flake pins.
+//! - `import` (`ronoctua-parts-import.service`): the downloads a part is
+//!   missing, from the stick folder the person named — downloads only.
+//! - `export` (`ronoctua-parts-export.service`): the downloads this machine
+//!   keeps, into `<folder>/ronoctua-parts` on the stick the person named,
+//!   for another machine's `import`.
 //! - `trim`: a part's profile kept to its current generation and the one
 //!   before it.
 //! - `status`: every record, as JSON lines.
 //!
 //! The last line on standard output is the verdict; what went wrong in
 //! detail goes to standard error, with the journal's priority prefix.
-//! `RONOCTUA_NIX` and `RONOCTUA_SYSTEMCTL` name the programs by store path
+//! `RONOCTUA_NIX`, `RONOCTUA_SYSTEMCTL` and `RONOCTUA_SYSTEMD_RUN` name the programs by store path
 //! (a unit's `PATH` is minimal); `nix-env` is the one beside that `nix`.
 
 #![forbid(unsafe_code)]
 
 mod disk;
+mod handin;
+mod keep;
+mod mirror;
 mod plan;
 mod realize;
+mod retry;
+mod stick;
 mod view;
 
 use std::path::PathBuf;
@@ -47,6 +62,9 @@ fn main() -> ExitCode {
         Some("plan") => plan::run(&args[1..]),
         Some("realize") => realize::run(&args[1..]),
         Some("view") => view::run(),
+        Some("accept") => handin::run(&args[1..]),
+        Some("import") => stick::import(&args[1..]),
+        Some("export") => stick::export(&args[1..]),
         Some("trim") => trim(&args[1..]),
         Some("status") => status(),
         _ => Err(Usage),
@@ -58,6 +76,9 @@ fn main() -> ExitCode {
                 "usage: ronoctua-parts plan [--start | --rehearse] [--workers N] [--plan FILE]\n\
                  \x20      ronoctua-parts realize ID [--plan FILE]\n\
                  \x20      ronoctua-parts view\n\
+                 \x20      ronoctua-parts accept\n\
+                 \x20      ronoctua-parts import\n\
+                 \x20      ronoctua-parts export\n\
                  \x20      ronoctua-parts trim ID\n\
                  \x20      ronoctua-parts status"
             );
@@ -66,7 +87,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// A command line that is not one of the five.
+/// A command line that is not one of the eight.
 pub struct Usage;
 
 /// A program named by its store path in the unit's environment.
@@ -80,13 +101,19 @@ pub fn program(variable: &str) -> String {
     })
 }
 
-/// `nix-env`, beside the `nix` the unit names: the same Nix, never a second
-/// variable that could name another.
-pub fn nix_env() -> String {
+/// A program of Nix's beside the `nix` the unit names (`nix-env`,
+/// `nix-store`): the same Nix, never a second variable that could name
+/// another.
+pub fn beside_nix(name: &str) -> String {
     std::path::Path::new(&program("RONOCTUA_NIX"))
-        .with_file_name("nix-env")
+        .with_file_name(name)
         .to_string_lossy()
         .into_owned()
+}
+
+/// `nix-env`, beside the unit's `nix`.
+pub fn nix_env() -> String {
+    beside_nix("nix-env")
 }
 
 /// A line for the journal, with its priority (`<3>` error, `<4>` warning,

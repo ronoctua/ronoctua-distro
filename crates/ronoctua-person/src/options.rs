@@ -4,7 +4,8 @@
 //! {"format": 1, "ssh-signing": null,
 //!  "binary-cache": {"name": "someone", "public-key": "someone.cachix.org-1:…=",
 //!                   "visibility": "public"},
-//!  "distro-apps-follow-releases": true}
+//!  "distro-apps-follow-releases": true,
+//!  "download-mirrors": ["https://tarballs.example.org"]}
 //! ```
 //!
 //! The belongings' targets offer them after a restore ("no" first); the Nix
@@ -41,6 +42,19 @@
 //! pins at once. Written only while ON: an older machine, whose reader
 //! refuses a field it does not know, meets it only once the person turns it
 //! on.
+//!
+//! # Mirrors for the machine's downloads
+//!
+//! `download-mirrors` (the parts, 2026-10-24): servers the person names that
+//! hold files by their hash (`<mirror>/<algo>/<hex>`, the layout of
+//! `tarballs.nixos.org`) or by their name (`<mirror>/<name>`, a folder on a
+//! machine of the LAN). When a part's own download fails, root's realizer
+//! asks them — a source the person named is their consent — and a file is
+//! taken only when Nix finds the hash the flake already pins, so a mirror can
+//! only bring the very bytes the distro declared. `http://` is allowed for
+//! that reason; a user name, a query or a fragment is not (a secret has no
+//! place in a file that travels in the plain). Written only while some are
+//! named, for the older machine's reason above.
 
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +77,50 @@ pub struct Options {
     /// file written before it existed, and never written while off.
     #[serde(default, skip_serializing_if = "is_off")]
     pub distro_apps_follow_releases: bool,
+    /// The mirrors the person named for the machine's downloads, in the
+    /// order they are asked. Absent — none — in a file written before it
+    /// existed, and never written while empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub download_mirrors: Vec<String>,
+}
+
+/// How many mirrors a file may name.
+pub const MIRRORS_MOST: usize = 8;
+
+/// How long a mirror's address may be.
+const MIRROR_LONGEST: usize = 512;
+
+/// Whether `url` may be a mirror: `https://` or `http://`, a host, printable
+/// ASCII with no space, and no user name, query or fragment. Pure.
+#[must_use]
+pub fn is_mirror(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    url.len() <= MIRROR_LONGEST
+        && url.chars().all(|c| c.is_ascii_graphic())
+        && !url.contains(['@', '?', '#', '\\'])
+        && rest.split('/').next().is_some_and(|host| !host.is_empty())
+}
+
+/// The host a mirror's address names — what the person's consent records.
+#[must_use]
+pub fn mirror_host(url: &str) -> Option<&str> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let host = rest.split('/').next()?;
+    let host = host.rsplit_once(':').map_or(host, |(h, port)| {
+        if port.chars().all(|c| c.is_ascii_digit()) {
+            h
+        } else {
+            host
+        }
+    });
+    (!host.is_empty()).then_some(host)
 }
 
 /// Whether a switch is off — what is never written.
@@ -78,6 +136,7 @@ impl Default for Options {
             ssh_signing: None,
             binary_cache: None,
             distro_apps_follow_releases: false,
+            download_mirrors: Vec::new(),
         }
     }
 }
@@ -222,6 +281,32 @@ impl Document for Options {
             };
             return Err(Refusal::new(Why::Invalid, at, found));
         }
+        if self.download_mirrors.len() > MIRRORS_MOST {
+            return Err(Refusal::new(
+                Why::Invalid,
+                "/download-mirrors",
+                format!(
+                    "{} mirrors, at most {MIRRORS_MOST}",
+                    self.download_mirrors.len()
+                ),
+            ));
+        }
+        for (n, url) in self.download_mirrors.iter().enumerate() {
+            if !is_mirror(url) {
+                return Err(Refusal::new(
+                    Why::Invalid,
+                    format!("/download-mirrors/{n}"),
+                    url.as_str(),
+                ));
+            }
+            if self.download_mirrors[..n].contains(url) {
+                return Err(Refusal::new(
+                    Why::Duplicate,
+                    format!("/download-mirrors/{n}"),
+                    url.as_str(),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -252,6 +337,55 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(refused.why, Why::Shape);
+    }
+
+    /// FAILS IF: the mirrors are written while there are none — an older
+    /// machine would refuse the file —, an address that could carry a secret
+    /// or is not the web is taken, a duplicate or a ninth is taken, or a
+    /// mirror's host is not what the consent records.
+    #[test]
+    fn mirrors_are_web_addresses_written_only_when_named() {
+        assert!(!crate::to_json(&Options::default()).contains("download-mirrors"));
+        let named = Options {
+            download_mirrors: vec![
+                "https://tarballs.example.org".to_owned(),
+                "http://192.168.1.4:8080/files".to_owned(),
+            ],
+            ..Options::default()
+        };
+        let text = crate::to_json(&named);
+        assert_eq!(crate::parse::<Options>(text.as_bytes()).unwrap(), named);
+        for bad in [
+            "ftp://x.org",
+            "https://",
+            "https://user:pw@localhost/files",
+            "https://x.org/?token=1",
+            "https://x.org/#a",
+            "https://x .org",
+            "file:///etc",
+        ] {
+            assert!(!is_mirror(bad), "{bad}");
+        }
+        let twice = Options {
+            download_mirrors: vec!["https://a.org".to_owned(), "https://a.org".to_owned()],
+            ..Options::default()
+        };
+        assert_eq!(twice.validate().unwrap_err().why, Why::Duplicate);
+        let many = Options {
+            download_mirrors: (0..=MIRRORS_MOST)
+                .map(|n| format!("https://m{n}.org"))
+                .collect(),
+            ..Options::default()
+        };
+        assert!(many.validate().is_err());
+        assert_eq!(
+            mirror_host("http://192.168.1.4:8080/files"),
+            Some("192.168.1.4")
+        );
+        assert_eq!(
+            mirror_host("https://tarballs.example.org"),
+            Some("tarballs.example.org")
+        );
     }
 
     /// One case of the table both validators are held to.

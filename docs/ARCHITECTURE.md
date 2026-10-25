@@ -12345,15 +12345,27 @@ pode pagar isso). O planejador enraíza os `.drv` em `/nix/var/nix/gcroots/ronoc
 uma coleta entre o switch e a realização não levá-los. O plano é o do sistema em execução, então as
 partes nunca andam à frente da base.
 
-**Um processo por parte, e o systemd tenta de novo.** `ronoctua-part@<id>` realiza uma parte só: a
-falha é dela, e as outras seguem. Uma falha volta cada vez mais tarde (`RestartSec=1min`,
-`RestartSteps=8`, até `RestartMaxDelaySec=12h`); o que não deve ser tentado no relógio — sem link
-nenhum, parte não querida, o lock dos registros ocupado — sai com um código próprio
-(`ronoctua_parts::exit::NOT_RETRIED`, o `RestartPreventExitStatus` da unidade), e o dispatcher do
-NetworkManager reinicia o planejador quando uma rede sobe. Só conta tentativa que podia ter dado
-certo: um notebook offline por uma semana não volta pedindo ajuda por cada parte. Depois de cinco
-tentativas com rede a parte vira `needs-you`, e continua sendo tentada. O planejador entrega as partes
-a dois workers por vez, as leves antes das pesadas.
+**Um processo por parte, e uma parte que não chega nunca é uma unidade falha.**
+`ronoctua-part@<id>` realiza uma parte só: a falha é dela, e as outras seguem. O
+`switch-to-configuration` conta toda unidade que falhou enquanto ele rodava — uma em `auto-restart`
+inclusive — e sai com 4: com o `Restart=` do systemd, um download que faltava fazia toda atualização
+seguinte dizer que falhou (medido no `parts-are-isolated`). Então todo fim que o registro já diz — a
+tentativa que falhou, a parte não querida, sem link, o lock ocupado, a rede tarifada — é sucesso para
+o systemd (`SuccessExitStatus` = `ronoctua_parts::exit::SETTLED`), e nenhuma unidade das partes tem
+`Restart=`. A próxima tentativa é do planejador, na hora que o registro dá (`Record::due_at`: um
+minuto, dobrando, até 12 h), por um timer transitório (`ronoctua-parts-retry`, via `systemd-run`)
+armado só enquanto alguma parte espera uma hora; sem link, quem a tenta de novo é o dispatcher do
+NetworkManager, quando uma rede sobe. Só conta tentativa que podia ter dado certo: um notebook offline
+por uma semana não volta pedindo ajuda por cada parte. Depois de cinco tentativas com rede a parte
+vira `needs-you`, e continua sendo tentada. O planejador entrega as partes a dois workers por vez, as
+leves antes das pesadas.
+
+**Numa rede tarifada nada desce sozinho.** O realizador pergunta ao NetworkManager antes de
+construir; numa rede tarifada a parte espera (`Waiting::Metered`, sem contar tentativa), e outra
+rede, ou o "tentar agora" da pessoa, a tenta de novo. O gesto da pessoa é o "sim, desta vez": a
+página grava `yes/<id>` numa pasta só dela (`/run/ronoctua-parts/yes`, `0700`), e o realizador o
+consome no começo da tentativa, então ele vale para uma tentativa só, como o "sim" da atualização. A
+espera pela bateria abaixo do piso ainda não existe (`docs/PENDING.md`).
 
 **A sessão vê uma vista, não os perfis.** `environment.profiles` traria `QT_PLUGIN_PATH`,
 `GIO_EXTRA_MODULES` e afins, e o plugin de uma parte carregaria dentro dos programas da base. A
@@ -12377,11 +12389,46 @@ cada switch e inicia o planejador sem esperar. O gerador da sequência recusa um
 `realize-parts`, um que seja da pessoa, um antes de aplicar, um `stop` e uma coleta antes dele.
 
 **Os registros são o broadcast.** `/var/lib/ronoctua-parts/parts/<id>.json` (`0644`, escrito inteiro)
-diz a geração em uso, a anterior, o que o plano quer e, quando difere, por quê. A pessoa inicia o
-planejador e o realizador de cada parte querida por uma regra polkit estreita (verbo `start`, cada
-unidade pelo nome, a pessoa), medida pelo `parts-rule-is-narrow`; o `parts-are-isolated` prova, numa
-VM com um servidor, que uma parte com 404 não segura as outras, que a pessoa a repete e que uma
-atualização cuja parte não chega mantém a anterior.
+diz a geração em uso, a anterior, o que o plano quer e, quando difere, por quê — e os downloads que
+faltam (`missing`), lidos do plano do Nix (o dry run e o `nix derivation show`), nunca do log: nome,
+hash, modo, endereços e os meios que valem para cada um. A pessoa inicia o planejador, o realizador
+de cada parte querida e os três gestos (entregar, importar, exportar) por uma regra polkit estreita
+(verbo `start`, cada unidade pelo nome, a pessoa), medida pelo `parts-rule-is-narrow`.
+
+**O que a pessoa vê e faz.** O módulo `parts-watch` do brain lê os registros (inotify, nada roda em
+repouso): uma marca enquanto alguma parte está a caminho ou precisa dela, e uma palavra quando uma
+chega ou passa a precisar (o porquê no `why.md` dele). A marca abre a página das partes, a terceira da
+vista da atualização (`LEADER s u d`, `d` dentro da vista, `ronoctua-shell-update/src/parts.rs`), nas
+duas portas: uma linha por parte com a próxima tentativa, e em cima por que a última falhou e o que
+falta. Um download teimoso tem quatro saídas, e em todas o store só aceita os bytes que o flake fixou:
+
+- **entregar o arquivo** (`h`): o seletor de arquivos sobe sobre a página (`file_picker`, o único
+  jeito de pedir um arquivo), e a página copia o escolhido para a pasta de entrega da pessoa
+  (`handin/<parte>/<nome>`, `0700`) e o `ronoctua-parts-accept` o copia para uma pasta do root antes
+  de o Nix ler (`nix store prefetch-file --expected-hash`), recusando link e arquivo especial; só
+  serve para o download que é um arquivo — um cache npm, montado de centenas de endereços, não é;
+- **um pendrive**, nos dois sentidos: o `export` grava os downloads que esta máquina guarda
+  (`kept/<parte>`, enraizados quando a parte chega) num cache `file://` no pendrive, entregue ao dono
+  da pasta; o `import` traz de lá só downloads — sem `--no-check-sigs`, o próprio Nix recusa uma saída
+  construída, que seria código de outra máquina rodando aqui. A pasta vem do seletor, que abre onde
+  os pendrives da pessoa são montados e os tem entre os lugares; os dois só vão a uma pasta sob
+  `/run/media/<pessoa>/…` alcançada sem link, e dizem como acabaram num arquivo (`stick.json`) que a
+  página lê;
+- **espelhos** (`download-mirrors` no `options.json`, a parte em claro dos pertences): quando a
+  origem falha, o realizador pede cada download de arquivo a cada espelho, pelo hash
+  (`<espelho>/sha256/<hex>`, o arranjo do `tarballs.nixos.org`) e pelo nome, e constrói de novo na
+  mesma tentativa. Não é o `NIX_HASHED_MIRRORS` do daemon: aquele é ambiente do `nix-daemon`, uma
+  troca de sistema, e o espelho tem de valer sem rebuild; chega à máquina na atualização, assinado,
+  como toda opção da pessoa, e indicá-lo é o consentimento para os hosts dele;
+- **o cache binário da pessoa**, que já é um substituter declarado.
+
+Uma recusa é dita, nunca uma unidade falha: o gesto recusado sai com um dos códigos de `SETTLED`,
+senão o `systemctl start` da pessoa falharia antes de a página ler o porquê. O `parts-are-isolated`
+prova, numa VM com um servidor, que uma parte com 404 não segura as outras, que uma parte que só o
+espelho tem chega pelo hash, que a pessoa a repete, que uma atualização cuja parte não chega mantém a
+anterior, que o arquivo errado é recusado e o certo entra, que o pendrive traz um download, recusa
+uma pasta fora de mídia removível e grava os desta máquina, e que uma interface nova é alcançada pelo
+caminho novo.
 
 ## 8. Desempenho, grafo e riscos
 

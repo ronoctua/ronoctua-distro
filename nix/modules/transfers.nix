@@ -195,6 +195,7 @@ in
       ronoctua.parts.pot-provider = {
         wanted = cfg.enable && cfg.poToken == "on-demand";
         kind = "data";
+        name = "bgutil-ytdlp-pot-provider";
       }
       // lib.optionalAttrs (ronoctua ? potProvider) { package = ronoctua.potProvider; };
     })

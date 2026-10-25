@@ -5,14 +5,17 @@
 #
 #   1. three parts are wanted and one's download is missing (404): the other
 #      two arrive, the session runs them, and the missing one is recorded as
-#      failed and waits to be tried again — systemd's restart, not a give-up;
+#      failed and waits to be tried again — a timer armed for its due time,
+#      and never a failed unit, which a switch would count as its own failure;
 #   2. the person tries it again (one polkit rule, the parts' units and
 #      nothing else) once the file is there, and it arrives;
 #   3. an update whose new version of a part does not arrive keeps the one
 #      before, working; when it does arrive the one before is kept as the
 #      way back, and the profile holds two generations, never more;
 #   4. a part whose interface changes is reached at its new path only once it
-#      is there, and the old path stays for a rollback.
+#      is there, and the old path stays for a rollback;
+#   5. a download its origin does not have comes from a mirror the person
+#      named, by its hash, and only those bytes.
 #
 # THE PARTS ARE SMALL ON PURPOSE: a download (a fixed-output derivation that
 # runs curl against the server) and a script around it, built in the VM with
@@ -45,7 +48,11 @@ let
     a2
     b1
     c1
+    d1
+    e1
+    f1
     ;
+  eDownload = parts.downloadOf "e" "1";
 
   # What the server has from the start, and what the test hands it later.
   served = pkgs.runCommand "test-parts-served" { } ''
@@ -54,6 +61,13 @@ let
     printf '%s' ${lib.escapeShellArg (content "c" "1")} > $out/now/${file "c" "1"}
     printf '%s' ${lib.escapeShellArg (content "b" "1")} > $out/later/${file "b" "1"}
     printf '%s' ${lib.escapeShellArg (content "a" "2")} > $out/later/${file "a" "2"}
+    printf '%s' ${lib.escapeShellArg (content "d" "1")} > $out/later/${file "d" "1"}
+    printf '%s' ${lib.escapeShellArg (content "e" "1")} > $out/later/${file "e" "1"}
+    # THE PERSON'S MIRROR holds `f` by its hash, as tarballs.nixos.org lays
+    # files out; the origin never has it.
+    mkdir -p $out/now/mirror/sha256
+    printf '%s' ${lib.escapeShellArg (content "f" "1")} \
+      > $out/now/mirror/sha256/${builtins.hashString "sha256" (content "f" "1")}
   '';
 in
 pkgs.testers.runNixOSTest {
@@ -70,7 +84,7 @@ pkgs.testers.runNixOSTest {
       wantedBy = [ "multi-user.target" ];
       before = [ "nginx.service" ];
       serviceConfig.Type = "oneshot";
-      script = "cp ${served}/now/* /srv/";
+      script = "cp -r ${served}/now/* /srv/";
     };
   };
 
@@ -106,6 +120,26 @@ pkgs.testers.runNixOSTest {
           package = c1;
           heavy = true;
         };
+        d = {
+          wanted = true;
+          package = d1;
+        };
+        e = {
+          wanted = true;
+          package = e1;
+        };
+        f = {
+          wanted = true;
+          package = f1;
+        };
+      };
+
+      # THE PERSON'S OPTIONS as root's applier leaves them in the machine
+      # directory (`/etc/nixos/person/`), naming one mirror.
+      environment.etc."nixos/person/options.json".text = builtins.toJSON {
+        format = 1;
+        ssh-signing = null;
+        download-mirrors = [ "http://server/mirror" ];
       };
 
       # THE UPDATE: a new version of `a` whose download is not there yet, and
@@ -157,7 +191,7 @@ pkgs.testers.runNixOSTest {
     def instantiate():
         # The parts' derivations, evaluated here from the same file the host
         # evaluated: the same `.drv` paths the plan names.
-        for part in ("a1", "a2", "b1", "c1"):
+        for part in ("a1", "a2", "b1", "c1", "d1", "e1", "f1"):
             machine.succeed(
                 "nix-instantiate --expr 'import /etc/ronoctua-test/parts.nix "
                 "(builtins.fromJSON (builtins.unsafeDiscardStringContext "
@@ -185,14 +219,20 @@ pkgs.testers.runNixOSTest {
         assert run_as_person("a") == "a 1"
         assert run_as_person("c") == "c 1"
         machine.fail("su - noctua -c 'command -v b'")
+        # THE MIRROR BROUGHT `f`, which its origin never had — by its hash.
+        wait_phase("f", "here")
+        assert run_as_person("f") == "f 1"
+        server.fail("test -e /srv/${file "f" "1"}")
+        machine.succeed(
+            "journalctl -u ronoctua-part@f.service | grep -F 'brought from http://server/mirror/sha256/'"
+        )
         # The session sees the view, and the view only the closed set.
         machine.succeed("test -L /var/lib/ronoctua-parts/view/bin/a")
         machine.fail("test -e /var/lib/ronoctua-parts/view/lib")
-        # The failed part waits to be tried again: a restart, not a give-up.
-        machine.wait_until_succeeds(
-            "systemctl show ronoctua-part@b.service -p SubState --value | grep -qx auto-restart",
-            timeout=120,
-        )
+        # The failed part waits to be tried again — a timer armed for its
+        # due time, never a unit left failed (a switch would count it).
+        machine.wait_until_succeeds("systemctl is-active ronoctua-parts-retry.timer", timeout=120)
+        machine.fail("systemctl is-failed ronoctua-part@b.service")
 
     with subtest("the person tries a part again, and only the parts' units"):
         server.succeed("cp ${served}/later/${file "b" "1"} /srv/")
@@ -224,6 +264,89 @@ pkgs.testers.runNixOSTest {
             "nix-env --list-generations -p /nix/var/nix/profiles/ronoctua/parts/a/v1"
         ).strip().splitlines()
         assert len(generations) == 2, generations
+
+    with subtest("a file handed in is taken by its hash, and another one is refused"):
+        wait_phase("d", "arriving")
+        machine.wait_until_succeeds(
+            "jq -e '.missing | map(.name) | index(\"test-part-d-1-download\") != null' "
+            "/var/lib/ronoctua-parts/parts/d.json",
+            timeout=300,
+        )
+        missing = record("d")["missing"]
+        assert missing[0]["urls"] == ["http://server/${file "d" "1"}"], missing
+        # THE WRONG BYTES under the right name: refused, said, and the store
+        # left as it was.
+        machine.succeed(
+            "su noctua -c 'mkdir -p /run/ronoctua-parts/handin/d && "
+            "printf wrong > /run/ronoctua-parts/handin/d/test-part-d-1-download'"
+        )
+        machine.succeed("su noctua -c 'systemctl start ronoctua-parts-accept.service'")
+        assert record("d")["last-failure"]["why"] == "hand-in-refused", record("d")
+        machine.fail(f"test -e {missing[0]['out']}")
+        machine.fail("test -e /run/ronoctua-parts/handin/d/test-part-d-1-download")
+        # THE RIGHT ONE, downloaded "elsewhere" (the server's copy, fetched by
+        # the person): taken, and the part arrives.
+        machine.succeed(
+            "su noctua -c 'cp ${served}/later/${file "d" "1"} /run/ronoctua-parts/handin/d/test-part-d-1-download'"
+        )
+        machine.succeed("su noctua -c 'systemctl start ronoctua-parts-accept.service'")
+        machine.succeed(f"test -e {missing[0]['out']}")
+        wait_phase("d", "here", timeout=300)
+        assert run_as_person("d") == "d 1"
+
+    with subtest("a stick carries a download, and nothing built"):
+        wait_phase("e", "arriving")
+        machine.wait_until_succeeds(
+            "jq -e '.missing | length == 1' /var/lib/ronoctua-parts/parts/e.json", timeout=300
+        )
+        out = record("e")["missing"][0]["out"]
+        # ANOTHER MACHINE'S STICK, made here: the download fetched once while
+        # the server had it, exported to a folder under /run/media, and gone
+        # from this store again. The part's own retries are stopped first, so
+        # none of them takes the file from the server meanwhile.
+        machine.succeed("systemctl stop ronoctua-part@e.service")
+        server.succeed("cp ${served}/later/${file "e" "1"} /srv/")
+        machine.succeed("nix build --no-link ${plain eDownload.drvPath}^out")
+        machine.succeed(
+            "mkdir -p /run/media/noctua/stick && "
+            f"nix copy --to file:///run/media/noctua/stick/ronoctua-parts {out}"
+        )
+        machine.succeed(f"nix-store --delete {out}")
+        server.succeed("rm /srv/${file "e" "1"}")
+        machine.succeed(
+            "su noctua -c 'printf /run/media/noctua/stick > /run/ronoctua-parts/import/from'"
+        )
+        machine.succeed("su noctua -c 'systemctl start ronoctua-parts-import.service'")
+        machine.succeed(f"test -e {out}")
+        said = json.loads(machine.succeed("cat /var/lib/ronoctua-parts/stick.json"))
+        assert said["verb"] == "import" and said["outcome"] == {"kind": "done", "count": 1}, said
+        wait_phase("e", "here", timeout=300)
+        assert run_as_person("e") == "e 1"
+        # A FOLDER OFF A REMOVABLE MEDIUM is refused, and the refusal said for
+        # the page — root goes nowhere else the person names.
+        machine.succeed("su noctua -c 'printf /home/noctua > /run/ronoctua-parts/import/from'")
+        machine.succeed("su noctua -c 'systemctl start ronoctua-parts-import.service'")
+        said = json.loads(machine.succeed("cat /var/lib/ronoctua-parts/stick.json"))
+        assert said["outcome"] == {"kind": "refused", "why": "not-a-removable-medium"}, said
+
+    with subtest("the downloads this machine keeps go on a stick for another"):
+        # Every part that is here keeps its download rooted.
+        for part in ("a", "b", "c", "d", "e", "f"):
+            machine.succeed(f"test -n \"$(ls /nix/var/nix/gcroots/ronoctua-parts/kept/{part})\"")
+        # THE PERSON'S GESTURE, through the unit the rule lets: the folder
+        # named, the unit started, and what root wrote given to the folder's
+        # owner.
+        machine.succeed("mkdir -p /run/media/noctua/other && chown noctua /run/media/noctua/other")
+        machine.succeed(
+            "su noctua -c 'printf /run/media/noctua/other > /run/ronoctua-parts/export/to'"
+        )
+        machine.succeed("su noctua -c 'systemctl start ronoctua-parts-export.service'")
+        machine.succeed("test -f /run/media/noctua/other/ronoctua-parts/nix-cache-info")
+        assert int(machine.succeed("ls /run/media/noctua/other/ronoctua-parts/*.narinfo | wc -l")) >= 5
+        owners = machine.succeed("find /run/media/noctua/other/ronoctua-parts -printf '%u\\n' | sort -u").split()
+        assert owners == ["noctua"], owners
+        said = json.loads(machine.succeed("cat /var/lib/ronoctua-parts/stick.json"))
+        assert said["verb"] == "export" and said["outcome"]["kind"] == "done", said
 
     with subtest("a part at a new interface is reached at its new path"):
         wait_phase("c", "here", timeout=300)

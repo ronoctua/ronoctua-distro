@@ -685,14 +685,33 @@ pkgs.testers.runNixOSTest {
         print(f"the virtual camera says {fmt}")
         size = fmt.split(":")[1].split("@")[0]
         fw, fh = (int(n) for n in size.split("x"))
-        machine.succeed(f"tail -c {fw * fh * 2} /tmp/raw > /tmp/last.raw")
-        machine.succeed(
-            "${pkgs.ffmpeg-full}/bin/ffmpeg -nostdin -loglevel error -y -f rawvideo "
-            f"-pix_fmt yuyv422 -video_size {size} -i /tmp/last.raw -frames:v 1 /tmp/other.png"
-        )
-        mean = float(machine.succeed(
-            "${pkgs.imagemagick}/bin/magick /tmp/other.png -format '%[fx:mean]' info:"
-        ))
+
+        def last_frame_mean():
+            machine.succeed(f"tail -c {fw * fh * 2} /tmp/raw > /tmp/last.raw")
+            machine.succeed(
+                "${pkgs.ffmpeg-full}/bin/ffmpeg -nostdin -loglevel error -y -f rawvideo "
+                f"-pix_fmt yuyv422 -video_size {size} -i /tmp/last.raw -frames:v 1 /tmp/other.png"
+            )
+            return float(machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/other.png -format '%[fx:mean]' info:"
+            ))
+
+        # THE PICTURE WITHIN A REGIME, never within a second: until the
+        # reopened camera's first frame arrives the program is black, and a
+        # machine busy with a battery took longer than the second of frames
+        # (measured in the `most` of 2026-10-24). Read again, and judge the
+        # last frame again, for up to a minute; a virtual camera that never
+        # shows the picture is black through all of it.
+        mean = last_frame_mean()
+        for _ in range(12):
+            if mean > 0.1:
+                break
+            machine.sleep(5)
+            machine.succeed(
+                "timeout 10 v4l2-ctl -d /dev/video42 --stream-mmap --stream-count=30 "
+                "--stream-to=/tmp/raw && test -s /tmp/raw"
+            )
+            mean = last_frame_mean()
         assert mean > 0.1, f"the other program read a black camera: {mean}"
         studio({"ask": "virtual", "on": False})
 

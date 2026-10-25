@@ -185,3 +185,100 @@ distro-follow-enter = change
 about-distro-follow-enter = Turns following on or off, on its row.
 distro-follow-steps = the steps
 about-distro-follow-steps = Back to the update's steps.
+distro-parts-open = parts
+cmd-distro-parts-open = The machine's parts: what arrives after the installation, each on its own, and the other ways to bring in a download that keeps failing
+cmd-distro-parts-hand-in = Hands in a file you downloaded elsewhere, for the part under the cursor: it is taken only if it is that very download
+cmd-distro-parts-import = Brings in, from a stick, the downloads the parts are missing
+cmd-distro-parts-export = Writes the downloads this machine keeps for its parts on a stick
+distro-parts-heading = What arrives after the installation
+distro-parts-none = This machine wants no part: everything it runs came with the installation.
+distro-parts-row-import = bring in from a stick
+distro-parts-row-export = write on a stick
+distro-parts-phase-here = here
+distro-parts-phase-arriving = on its way
+distro-parts-phase-retrying = { $tries ->
+        [one] one try failed; the next at { $when }
+       *[other] { $tries } tries failed; the next at { $when }
+    }
+distro-parts-phase-waiting = waiting for a network
+distro-parts-phase-metered = waiting for an unmetered network
+distro-parts-about-metered = On a metered network nothing is downloaded by itself: it waits for another one. Choosing it uses this one, for this try only.
+distro-parts-phase-needs-you = needs you: { $tries } tries failed; the next at { $when }
+distro-parts-about-part = A part arrives after the installation, on its own: one that does not arrive holds back no other, and the machine works without it. It is tried again by itself, less often each time, and choosing it tries it now.
+distro-parts-about-missing-by-hand = It is missing { $name }, from { $hosts }: download it elsewhere and hand it in with { $keys }, bring it on a stick from a machine that has it, or name a mirror that holds it.
+distro-parts-about-missing-stick = It is missing { $name }, which is not one file: it comes on a stick from a machine that has it.
+distro-parts-about-why-build-failed = The last try failed: { $detail }
+distro-parts-about-why-output-differs = The last try built something other than what this system wants; the next update brings the right one.
+distro-parts-about-why-profile-failed = The last try built it, and it could not be put in place.
+distro-parts-about-why-hand-in-refused = The file handed in was refused: { $detail }
+distro-parts-about-import = Brings in, from a stick another machine of yours filled, the downloads the parts are missing. Only downloads are taken, each checked by its content — never a program built elsewhere. Choosing it asks for the stick's folder.
+distro-parts-about-export = Writes the downloads this machine keeps for its parts on a stick, for another machine to bring in. Choosing it asks for the stick's folder.
+distro-parts-stick-last-import = { $count ->
+        [one] Last time, one download was brought in, { $when }.
+       *[other] Last time, { $count } downloads were brought in, { $when }.
+    }
+distro-parts-stick-last-export = { $count ->
+        [one] Last time, one download was written, { $when }.
+       *[other] Last time, { $count } downloads were written, { $when }.
+    }
+distro-parts-stick-refused = Last time, { $when }, nothing was moved:
+distro-parts-refused-no-folder-named = no folder was named.
+distro-parts-refused-folder-missing = the folder is not there.
+distro-parts-refused-folder-through-a-link = the way to the folder goes through a link.
+distro-parts-refused-not-a-removable-medium = the folder is not on a stick or another removable medium.
+distro-parts-refused-no-downloads-there = the stick holds no downloads written by a machine of this distro.
+distro-parts-refused-unwritable = the downloads could not be written there.
+distro-parts-said-retrying = { $name } is being tried now.
+distro-parts-said-not-started = The machine did not start it.
+distro-parts-said-already-here = It is here already.
+distro-parts-said-not-a-part = Put the cursor on a part to hand in a file for it.
+distro-parts-said-nothing-missing = It is missing no download now: choose it to try it again.
+distro-parts-said-not-one-file = What it is missing is not one file: bring it on a stick.
+distro-parts-said-no-file = There is no file there.
+distro-parts-said-not-copied = The file could not be handed over.
+distro-parts-said-taken = { $name } was taken, and the part is being built.
+distro-parts-said-refused = { $name } was refused: it is not that download.
+distro-parts-said-not-named = The stick's folder could not be named for the machine.
+distro-parts-said-imported = { $count ->
+        [one] One download was brought in.
+       *[other] { $count } downloads were brought in.
+    }
+distro-parts-said-exported = { $count ->
+        [one] One download was written on the stick.
+       *[other] { $count } downloads were written on the stick.
+    }
+cmd-distro-parts-mirrors = Names the mirrors the machine asks for a part's download when its origin fails
+ask-distro-parts-mirrors = Your mirrors' addresses, separated by spaces (nothing names none)
+distro-parts-row-mirrors = mirrors
+distro-parts-mirrors-none = none
+distro-parts-mirrors-unreadable = your options file cannot be read
+distro-parts-mirrors-newer = your options file is of a newer format
+distro-parts-about-mirrors = Servers of yours that hold downloads by their hash or by their name — a folder on a machine of your network, a copy of tarballs.nixos.org. When a part's download fails at its origin, the machine asks them, and takes a file only if it is the very one the distro pinned. They travel with your options and reach a machine at its next update. Choosing it asks for their addresses.
+distro-parts-why-unreadable = Your options file does not read, so it is not rewritten.
+distro-parts-why-newer = Your options file is of a newer format than this machine reads: update this machine first.
+distro-parts-why-unwritable = The file could not be written.
+distro-parts-said-not-a-mirror = A mirror is an http or https address, with no user name, query or fragment.
+distro-parts-said-too-many-mirrors = That is more mirrors than your options may name.
+distro-parts-said-no-mirror = No mirror now: the next update takes them away from this machine.
+distro-parts-said-mirrors = The mirrors reach this machine at its next update.
+distro-parts-said-mirrors-not-let = The mirrors reach this machine at its next update; allowing their hosts in your consent failed.
+distro-parts-pick-hand-in = The file you downloaded elsewhere
+distro-parts-pick-import = The stick to bring the downloads in from
+distro-parts-pick-export = The stick to write the downloads on
+distro-parts-about-pick-hand-in = Choose { $name }, as you saved it after downloading it elsewhere: it is taken only if it is that very download.
+distro-parts-stick-never = not yet
+distro-parts-stick-moved = { $count ->
+        [one] one download, { $when }
+       *[other] { $count } downloads, { $when }
+    }
+distro-parts-stick-refused-short = refused, { $when }
+distro-parts-down = next row
+about-distro-parts-down = Puts the cursor on the next row of the parts' page.
+distro-parts-up = previous row
+about-distro-parts-up = Puts the cursor on the previous row of the parts' page.
+distro-parts-enter = try now
+about-distro-parts-enter = Tries the part under the cursor now; on a stick's row, asks for the stick's folder.
+distro-parts-hand = hand in a file
+about-distro-parts-hand = Hands in a file you downloaded elsewhere for the part under the cursor.
+distro-parts-steps = the steps
+about-distro-parts-steps = Back to the update's steps.
