@@ -317,7 +317,9 @@ def stale_lines(behind, ahead, unasked):
     if behind:
         lines.append(counted(behind, "behind"))
         lines += [f"  {name} ({id_}): {pinned} pinned, {latest} released" for id_, name, pinned, latest in behind]
-        lines.append(f"to move them: nix run .#distro-pins, review git diff {PINS}, and commit")
+        lines.append(
+            f"nix run .#release moves them first; by hand: nix run .#distro-pins, review git diff {PINS}, and commit"
+        )
     if ahead:
         lines.append(counted(ahead, "newer than"))
         lines += [f"  {name} ({id_}): {pinned} pinned, {latest} the latest" for id_, name, pinned, latest in ahead]
