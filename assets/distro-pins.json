@@ -2,82 +2,82 @@
   "format": 1,
   "appimage": {
     "cadcraft": {
-      "url": "https://github.com/storytold/cadcraft/releases/download/v0.12.0/cadcraft-0.12.0-linux-x86_64.AppImage",
-      "hash": "sha256-6FFLtojQPPpg32VK3FcGpEJbBGA26HPGheDdL6R+m3M=",
-      "version": "0.12.0",
-      "pinned-at": "2026-10-23T06:02:08Z"
+      "url": "https://github.com/storytold/cadcraft/releases/download/v0.13.0/cadcraft-0.13.0-linux-x86_64.AppImage",
+      "hash": "sha256-Q17VUYSbsNvSSg3oa1u4LppOlOBtWJC1ejE6el/o0HM=",
+      "version": "0.13.0",
+      "pinned-at": "2026-10-25T17:11:19Z"
     },
     "deckcraft": {
-      "url": "https://github.com/storytold/deckcraft/releases/download/v0.10.0/deckcraft-0.10.0-linux-x86_64.AppImage",
-      "hash": "sha256-Ds31nBP3ZSDnvH9jgb6lyKytfXWvfzkLh0imb9XObGk=",
-      "version": "0.10.0",
-      "pinned-at": "2026-10-23T06:02:24Z"
+      "url": "https://github.com/storytold/deckcraft/releases/download/v0.11.1/deckcraft-0.11.1-linux-x86_64.AppImage",
+      "hash": "sha256-FWy57wkkvsUIUk86UrpjBVqKdPhgv0WIQprv2sbV+wE=",
+      "version": "0.11.1",
+      "pinned-at": "2026-10-25T17:11:24Z"
     },
     "designcraft": {
-      "url": "https://github.com/storytold/designcraft/releases/download/v0.12.0/designcraft-0.12.0-linux-x86_64.AppImage",
-      "hash": "sha256-fXbEP5ABfh6DmCFVvQV4ZEh/TGisfMZXMTNNkO9R7Zo=",
-      "version": "0.12.0",
-      "pinned-at": "2026-10-23T06:02:42Z"
+      "url": "https://github.com/storytold/designcraft/releases/download/v0.13.0/designcraft-0.13.0-linux-x86_64.AppImage",
+      "hash": "sha256-jXZhuY9kNNXGXlzSx2mdSvaojRBFmMSNywm/rgX2xi8=",
+      "version": "0.13.0",
+      "pinned-at": "2026-10-25T17:11:32Z"
     },
     "effectcraft": {
-      "url": "https://github.com/storytold/effectcraft/releases/download/v0.16.0/effectcraft-0.16.0-linux-x86_64.AppImage",
-      "hash": "sha256-k6bJjkp1VSxOXxHgxoNNO2+KZxjBZwqDSfY35u7OoLw=",
-      "version": "0.16.0",
-      "pinned-at": "2026-10-23T06:02:59Z"
+      "url": "https://github.com/storytold/effectcraft/releases/download/v0.17.0/effectcraft-0.17.0-linux-x86_64.AppImage",
+      "hash": "sha256-/hBRW8aX7bifSRhDAYyRmapQ5Jz4TnpimiNIF84sQPw=",
+      "version": "0.17.0",
+      "pinned-at": "2026-10-25T17:11:39Z"
     },
     "figcraft": {
-      "url": "https://github.com/storytold/figcraft/releases/download/v0.10.0/figcraft-0.10.0-linux-x86_64.AppImage",
-      "hash": "sha256-KPjv4Yd5SY4obOk+lEIFjw2xe0Vw4suSv1JsPnI0hOk=",
-      "version": "0.10.0",
-      "pinned-at": "2026-10-23T06:03:15Z"
+      "url": "https://github.com/storytold/figcraft/releases/download/v0.11.2/figcraft-0.11.2-linux-x86_64.AppImage",
+      "hash": "sha256-3ZLajZs+wln4HOozCLGzlhoFebQ37X9V6KClhGaoqYY=",
+      "version": "0.11.2",
+      "pinned-at": "2026-10-25T17:11:45Z"
     },
     "filmcraft": {
-      "url": "https://github.com/storytold/filmcraft/releases/download/v0.12.0/filmcraft-0.12.0-linux-x86_64.AppImage",
-      "hash": "sha256-EJM/kXaDWAVFm7YNy4ECOSsGVGfsoRDbfuFbVaEcnpY=",
-      "version": "0.12.0",
-      "pinned-at": "2026-10-23T06:03:34Z"
+      "url": "https://github.com/storytold/filmcraft/releases/download/v0.13.0/filmcraft-0.13.0-linux-x86_64.AppImage",
+      "hash": "sha256-0uYE+qBUaGRIV0FwOih5xrosVcx/XMS6fX2sFEOhpu4=",
+      "version": "0.13.0",
+      "pinned-at": "2026-10-25T17:11:53Z"
     },
     "gridcraft": {
-      "url": "https://github.com/storytold/gridcraft/releases/download/v0.11.1/gridcraft-0.11.1-linux-x86_64.AppImage",
-      "hash": "sha256-XrNEOP3fJCcdYwnR9LhtB7uNSSYUM9kLiP0k5CMwxiU=",
-      "version": "0.11.1",
-      "pinned-at": "2026-10-23T06:03:49Z"
+      "url": "https://github.com/storytold/gridcraft/releases/download/v0.12.1/gridcraft-0.12.1-linux-x86_64.AppImage",
+      "hash": "sha256-6y3gQB4Qidb3bAe4hLgtccROdFXvriAUzDR6igyfEnc=",
+      "version": "0.12.1",
+      "pinned-at": "2026-10-25T17:11:57Z"
     },
     "lightcraft": {
-      "url": "https://github.com/storytold/lightcraft/releases/download/v0.13.0/lightcraft-0.13.0-linux-x86_64.AppImage",
-      "hash": "sha256-B+8MY5vSEcHLolLmgDlTwdmUYvVbVh0wv5vXrEpOfXs=",
-      "version": "0.13.0",
-      "pinned-at": "2026-10-23T06:04:12Z"
+      "url": "https://github.com/storytold/lightcraft/releases/download/v0.14.0/lightcraft-0.14.0-linux-x86_64.AppImage",
+      "hash": "sha256-1uAswtp6+xFgL27AjwrIpg1zBwpUlgaA6XuSoKF9PXc=",
+      "version": "0.14.0",
+      "pinned-at": "2026-10-25T17:12:04Z"
     },
     "pdfcraft": {
-      "url": "https://github.com/storytold/pdfcraft/releases/download/v0.13.0/pdfcraft-0.13.0-linux-x86_64.AppImage",
-      "hash": "sha256-P8ZO1lHbJiuZT82cw9XXuy5NR5mktKGzh5Ldtf4QbGA=",
-      "version": "0.13.0",
-      "pinned-at": "2026-10-23T06:04:27Z"
+      "url": "https://github.com/storytold/pdfcraft/releases/download/v0.14.0/pdfcraft-0.14.0-linux-x86_64.AppImage",
+      "hash": "sha256-oRUTLrmqXu1RCk6FqleFyB5mkHaSA0FVBqGkst0BEZA=",
+      "version": "0.14.0",
+      "pinned-at": "2026-10-25T17:12:10Z"
     },
     "photocraft": {
-      "url": "https://github.com/storytold/photocraft/releases/download/v0.14.0/photocraft-0.14.0-linux-x86_64.AppImage",
-      "hash": "sha256-YtMZWSFZ+OaQniUhURltI9m3okP8n5CV5a347LrJ8Dw=",
-      "version": "0.14.0",
-      "pinned-at": "2026-10-23T06:04:42Z"
+      "url": "https://github.com/storytold/photocraft/releases/download/v0.16.0/photocraft-0.16.0-linux-x86_64.AppImage",
+      "hash": "sha256-/GcBOQkeZh6Uim3h/yIZpt0EIy5qyGFjSe4jinpJ1U4=",
+      "version": "0.16.0",
+      "pinned-at": "2026-10-25T17:12:17Z"
     },
     "soundcraft": {
-      "url": "https://github.com/storytold/soundcraft/releases/download/v0.12.1/soundcraft-0.12.1-linux-x86_64.AppImage",
-      "hash": "sha256-phpWaR+tXCKUS0QyKlt9ttcX5b9Hrfjcu8iD9UmFk+s=",
-      "version": "0.12.1",
-      "pinned-at": "2026-10-23T06:04:54Z"
+      "url": "https://github.com/storytold/soundcraft/releases/download/v0.13.1/soundcraft-0.13.1-linux-x86_64.AppImage",
+      "hash": "sha256-YH9KE/kptfI33mHpBAvkv8hqBmRL8qEDxz97nITTvxk=",
+      "version": "0.13.1",
+      "pinned-at": "2026-10-25T17:12:19Z"
     },
     "vectorcraft": {
-      "url": "https://github.com/storytold/vectorcraft/releases/download/v0.16.0/vectorcraft-0.16.0-linux-x86_64.AppImage",
-      "hash": "sha256-ih8iRY0rAJQO/RpWneziWEj60Yx1pad9XoxLcZKpIxk=",
-      "version": "0.16.0",
-      "pinned-at": "2026-10-23T06:05:12Z"
+      "url": "https://github.com/storytold/vectorcraft/releases/download/v0.17.0/vectorcraft-0.17.0-linux-x86_64.AppImage",
+      "hash": "sha256-5JhIh725gBlt6iQehoMeVGE8z9Q05Ot0t0mK2iu1SeM=",
+      "version": "0.17.0",
+      "pinned-at": "2026-10-25T17:12:28Z"
     },
     "wordcraft": {
-      "url": "https://github.com/storytold/wordcraft/releases/download/v0.10.0/wordcraft-0.10.0-linux-x86_64.AppImage",
-      "hash": "sha256-Lrjqr2vpiaRvWhJShqmfXC9u+lyLsjulCkQju+oQeiA=",
-      "version": "0.10.0",
-      "pinned-at": "2026-10-23T06:05:27Z"
+      "url": "https://github.com/storytold/wordcraft/releases/download/v0.11.0/wordcraft-0.11.0-linux-x86_64.AppImage",
+      "hash": "sha256-2S1dN3UrlfCJBMyDKPOnPCl5NhM3/yYNI1GPQCTNXGQ=",
+      "version": "0.11.0",
+      "pinned-at": "2026-10-25T17:12:35Z"
     }
   },
   "android": {}
