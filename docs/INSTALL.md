@@ -45,14 +45,15 @@ backup, deixa de existir.
 
 ## Passos
 
-**1. Gerar o ISO** com `nix build .#iso`. O arquivo sai em `result/iso/`. Ou baixe o da versão
-publicada, já conferido: veja [O ISO de uma versão](#o-iso-de-uma-versão).
+**1. Gerar o ISO** com `nix run .#iso`: ele diz onde o arquivo saiu, no store, e apaga os ISOs velhos
+que nada guarda (cada um tem uns 6,4 GiB). Ou baixe o da versão publicada, já conferido: veja
+[O ISO de uma versão](#o-iso-de-uma-versão).
 
 **2. Gravar no pendrive.** Descubra o dispositivo com `lsblk` e confira duas vezes — o comando abaixo
 apaga o que estiver ali:
 
 ```
-sudo dd if=result/iso/ronoctua-distro-*.iso of=/dev/sdX bs=4M status=progress conv=fsync
+sudo dd if=<o ISO que o passo 1 disse> of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 É `/dev/sdX`, o disco inteiro — não `/dev/sdX1`.

@@ -324,7 +324,8 @@ namespace morre com o shell, eles não.
 ```
 nix run .#diagnostics  instantâneo de quando os atalhos travam (só leitura)
 nix run .#bench        mede os alvos de desempenho; sai != 0 se algum estourar
-nix build .#iso        o ISO instalável
+nix run .#iso          o ISO instalável (instala sem rede) e a varredura dos ISOs velhos
+nix run .#iso-complete o ISO completo, só do desenvolvedor: toda parte a bordo; nunca publicado
 nix run .#fetch-iso    baixa o ISO da versão publicada, confere e junta as partes
 nix run .#install      instala (ensaia sem --execute)
 nix run .#apply-here   a máquina instalada com este checkout no lugar do input
@@ -531,6 +532,15 @@ nix run .#release -- --rollback-to <rev>    a release volta a uma versão public
 A distro não tem cache binário: nada é enviado a cache nenhum. O trabalho fica em
 `~/.cache/ronoctua-distro/release/<tag>`; rodar de novo depois de uma falha retoma: o rascunho do
 GitHub recebe os assets de novo. Ele nunca faz commit.
+
+**O ISO completo nunca é publicado.** O `nix run .#iso-complete` constrói o mesmo instalador com
+TODA parte das duas máquinas de referência a bordo — os programas do perfil completo, os não livres
+(Chrome, VS Code, Claude Code, o Android Studio), as fontes e os AppImages —, e uma máquina instalada
+dele não baixa nada depois: a página das partes nasce vazia. O nome do arquivo leva `-complete` e a
+raiz do ISO, o marcador `/ronoctua-complete`; o `release.py pack` recusa os dois
+(`the-complete-iso-is-never-released`), porque um não livre e o que ninguém pode redistribuir não vão
+num ISO público. Ele tem perto de 25 GB (estimativa: ainda não foi construído inteiro) e pede essa
+folga no `/nix`; é para instalar as máquinas da própria pessoa sem rede, nunca para entregar.
 
 Para ver o checkout na própria máquina sem publicar, `nix run .#apply-here` (`-- --dry-run` só mede):
 constrói o flake da máquina com o checkout no lugar do input e troca para ele, sem tocar o lock; a

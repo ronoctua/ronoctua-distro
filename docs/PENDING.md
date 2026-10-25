@@ -1687,7 +1687,12 @@ por marcos, cada um verde:
     nomeadas pelo nome que a pessoa declarou;
   - **o `wide` do `nix/modules/person.nix`** (um nixpkgs com `allowUnfree`) sobrou da época do
     predicado: com o sistema admitindo não livre, o caminho que o usa não acontece mais.
-- **M9 — documentação, tamanho e release.**
+- **O que ficou do M9.** A documentação acompanha o que mudou (`docs/INSTALL.md`,
+  `docs/DEVELOPMENT.md`, `docs/ARCHITECTURE.md`). Ficou para depois:
+  - **os números do `nix/modules/profile.nix`** (~37 e ~12,5 GiB) são de antes das partes: medir os
+    dois fechos de novo pede construir os dois sistemas de referência, e o `/nix` tinha 23 GB livres;
+  - **o `.#gate` e o `.#release`**, que são do dono, e o commit de cada marco (as árvores verdes
+    estão guardadas, uma por marco).
 
 - acabou quando: o Z16 instala do ISO novo sem cabo e sem Wi-Fi até a sessão, e depois, com rede,
   as partes chegam uma a uma em `s u d`, uma que falha não segura as outras, e entregar o arquivo
