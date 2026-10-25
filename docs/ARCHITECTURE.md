@@ -18985,6 +18985,15 @@ de novo.
 Retomar não basta para o pedaço que já estava no disco com o tamanho todo e errado (uma rodada que
 morreu entre o download e a conferência): esse vem de novo inteiro, uma vez, na mesma rodada
 (`iso-parts-reassemble`, contra uma versão servida nesta máquina como o GitHub serve).
+O espaço é perguntado antes de qualquer escrita: o que falta baixar vai para o cache desta máquina e
+as partes juntadas são uma segunda cópia do ISO em `--into` — no mesmo sistema de arquivos, as duas
+de uma vez —, com 256 MiB de folga. Em 2026-10-25 o pool encheu no meio: o ISO juntado e conferido
+ficou num `.partial`, até o `rename` que lhe dá nome recusou (`ENOSPC`, que o ZFS diz na borda), e a
+pessoa viu um traceback. Agora pouco espaço é uma frase sem nada escrito nem baixado, e uma escrita
+que falha mesmo assim é uma frase que apaga a metade (as partes conferidas ficam no cache, e rodar
+de novo só junta). E o `.#release` apaga, ao terminar, publicado ou recusado, a pasta onde corta o
+ISO em assets (uma cópia do tamanho do ISO), e no começo a que uma rodada morta deixou: duas delas,
+11 GiB, eram o que enchia o pool (`release-refuses-dirty-tree`).
 
 **`.#adopt-machine`: a migração vinda de fora.** Uma máquina do layout antigo (uma cópia da distro
 inteira no diretório da máquina) roda uma atualização que não sabe migrar. O app roda, com sudo, o

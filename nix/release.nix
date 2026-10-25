@@ -455,9 +455,16 @@ let
           exit 0
         fi
 
-        work="''${XDG_CACHE_HOME:-$HOME/.cache}/ronoctua-distro/release/$tag"
-        rm -rf "$work"
+        # THE RELEASE'S OWN FOLDER: the ISO cut into its assets — a copy as big
+        # as the ISO — and the notes. It goes when the release ends, published
+        # or refused: GitHub holds what was published, and a run again packs
+        # anew. What a run killed before its end left goes before this one
+        # starts (two such folders, 11 GiB, filled the disk on 2026-10-25).
+        releases="''${XDG_CACHE_HOME:-$HOME/.cache}/ronoctua-distro/release"
+        work="$releases/$tag"
+        rm -rf "$releases"
         mkdir -p "$work"
+        trap 'rm -rf "$work"' EXIT
         flake="git+file://$top?rev=$rev"
 
         # 1. THE GATE. A release is what passed it, on this tree.
@@ -582,9 +589,10 @@ rec {
       it is read back from the medium as the release's, so --into a stick's folder
       (a Ventoy stick's, say) writes it there whole. The parts wait in this
       machine's cache (~/.cache/ronoctua/fetch-iso), so the stick needs the ISO's
-      room alone. A download that stopped is resumed by running it again. --from
-      reads the assets from a folder instead (what `.#release` packs, before it is
-      published).
+      room alone — on the same disk, the ISO's room twice, and the room is asked
+      before anything is written. A download that stopped is resumed by running it
+      again. --from reads the assets from a folder instead (a copy of a release's
+      assets, or what `.#release` packs while it runs).
 
       --check reads back an ISO put in place any other way (a copy onto a stick, or
       a device written with dd, as root) and says whether it is the release's.

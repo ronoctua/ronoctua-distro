@@ -926,8 +926,9 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
   `nix/iso-sweep.nix`, que apaga os ISOs sem raiz, com os drivers de teste que os seguram, e guarda o
   mais novo de cada nome; um ISO que se quer guardar leva raiz (`--out-link`). ISO se constrói por
   esses apps, nunca por um `nix build` solto; à mão, `nix run .#iso-sweep` (cobra
-  `iso-sweep-keeps-what-it-must`). Nunca um `nix-collect-garbage` geral para abrir espaço: ele leva
-  junto o que as baterias reaproveitam.
+  `iso-sweep-keeps-what-it-must`). O `.#release` apaga, ao terminar, a pasta em que corta o ISO em
+  assets, e o `.#fetch-iso` pergunta o espaço antes de escrever. Nunca um `nix-collect-garbage` geral
+  para abrir espaço: ele leva junto o que as baterias reaproveitam.
 - **O Nix pula sem aviso um `!include` que não consegue ler**: um piso em arquivo `0600` é uma
   máquina sem piso, e um arquivo ausente também não é erro (cobra `store-has-a-floor`).
 - **Interruptor que não interrompe**: um `mkIf` desligado não garante que o pacote saiu, porque ele

@@ -51917,7 +51917,10 @@ let
         [ $((SECONDS - started)) -lt 20 ] || { echo "ERROR: pins that did not answer held the release" >&2; failed=1; }
         grep -q "no answer within 2 s" "$said" || { echo "ERROR: the pins that did not answer were not said" >&2; cat "$said" >&2; failed=1; }
 
-        # THE RELEASE, whole — and no pin moves, so it makes no commit.
+        # THE RELEASE, whole — and no pin moves, so it makes no commit. A
+        # folder an earlier run left in the cache goes, and so does its own.
+        mkdir -p "$XDG_CACHE_HOME/ronoctua-distro/release/v-left/assets"
+        echo left >"$XDG_CACHE_HOME/ronoctua-distro/release/v-left/assets/old.part"
         rev=$(git rev-parse HEAD)
         first=$(tag_of HEAD)
         before=$(git --git-dir="$ORIGIN" rev-list --all | sort)
@@ -51931,6 +51934,8 @@ let
         [ "$(git --git-dir="$ORIGIN" rev-list --all | sort)" = "$before" ] ||
           { echo "ERROR: the origin holds a commit it did not hold: the release committed with no pin moved" >&2; failed=1; }
         grep -qx "  nothing moved" "$said" || { echo "ERROR: the release did not say that no pin moved" >&2; cat "$said" >&2; failed=1; }
+        [ -z "$(ls -A "$XDG_CACHE_HOME/ronoctua-distro/release" 2>/dev/null)" ] ||
+          { echo "ERROR: the release left its assets, or an earlier run's, in the cache: $(ls -A "$XDG_CACHE_HOME/ronoctua-distro/release")" >&2; failed=1; }
         [ "$(git rev-parse HEAD)" = "$rev" ] && [ -z "$(git status --porcelain)" ] ||
           { echo "ERROR: the checkout changed" >&2; failed=1; }
         grep -q "^gh release create $first --repo ronoctua/ronoctua-distro --draft --target $rev .*SHA256SUMS" "$CALLS" ||
@@ -52022,6 +52027,8 @@ let
           { echo "ERROR: the signed tag was not made" >&2; failed=1; }
         grep -qx "draft $signed made with release at $third, the tag on origin: no" "$CALLS" ||
           { echo "ERROR: the signed tag reached the origin before the draft" >&2; cat "$CALLS" >&2; failed=1; }
+        [ -z "$(ls -A "$XDG_CACHE_HOME/ronoctua-distro/release" 2>/dev/null)" ] ||
+          { echo "ERROR: a release refused after it packed left its assets in the cache" >&2; failed=1; }
         rm "$ORIGIN/reject-release"
         : >"$CALLS"
         "$release" --sign >"$said" 2>&1 || { echo "ERROR: the signed release failed when run again" >&2; cat "$said" >&2; failed=1; }
@@ -52060,7 +52067,7 @@ let
         [ -z "$(git status --porcelain)" ] || { echo "ERROR: the checkout is not clean after the pins' commit" >&2; failed=1; }
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: twenty refusals before anything was built, committed or pushed, three of them a move of the pins that failed, did not end or wrote beside them; the dry run and --keep-pins say the pins behind, move none and stop for nothing; a release moves the pins before the gate — nothing moved is no commit, and what moved is one signed commit of the pins on main, which the gate tests and the release publishes; a release drafts, moves release forward, publishes and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
+        echo "OK: twenty refusals before anything was built, committed or pushed, three of them a move of the pins that failed, did not end or wrote beside them; the dry run and --keep-pins say the pins behind, move none and stop for nothing; a release moves the pins before the gate — nothing moved is no commit, and what moved is one signed commit of the pins on main, which the gate tests and the release publishes; a release, published or refused, leaves no assets in the cache, nor an earlier run's; a release drafts, moves release forward, publishes and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
       '';
 
   # OLD ISOs LEAVE THE STORE, AND NOTHING ELSE DOES (`nix/iso-sweep.nix`).
@@ -52236,7 +52243,12 @@ let
   # And a COPY MADE ANOTHER WAY, checked where it is (`--check`): the ISO
   # passes; one of the ISO's length whose tail is other bytes — what a stick
   # pulled before the kernel wrote the copy back holds — and one cut short
-  # are refused; from a release, only SHA256SUMS is downloaded.
+  # are refused; from a release, only SHA256SUMS is downloaded. And THE
+  # ROOM, asked before anything is written (a full disk once refused even the
+  # rename that names the ISO, with a traceback): too little to join, or to
+  # download and join on one file system, is a sentence with nothing written
+  # and no part downloaded; a folder that takes no write is a sentence too,
+  # and no half ISO is left in it.
   iso-parts-reassemble =
     let
       serve = pkgs.writeText "release-serve.py" ''
@@ -52307,6 +52319,9 @@ let
           echo "ERROR: $*" >&2
           failed=1
         }
+        # THE ROOM IS PLANTED: a check gives one verdict on every machine, so
+        # the file system has a terabyte free unless a case says otherwise.
+        export RONOCTUA_FETCH_ISO_FREE=$((1 << 40))
         # The stick's grammar (`ronoctua-stick`'s `release.rs`).
         named='^ronoctua-distro-[A-Za-z0-9._+-]\{1,64\}-x86_64\.iso\.part-[0-9]\{2,3\}$'
 
@@ -52325,6 +52340,24 @@ let
         cmp -s "$iso" "joined/$iso" || fail "the joined ISO is not the ISO"
         [ "$(ls -A joined)" = "$iso" ] || fail "the join left something beside the ISO: $(ls -A joined)"
         "$fetch" --from parts --into joined | grep -q "already here" || fail "a second fetch did not find it whole"
+        # TOO LITTLE ROOM TO JOIN: said, and nothing written.
+        if RONOCTUA_FETCH_ISO_FREE=1000 "$fetch" --from parts --into tight >out 2>&1; then
+          fail "parts joined into a folder with no room"
+        elif ! grep -q "free, and the ISO needs" out; then
+          fail "too little room was refused without saying so: $(cat out)"
+        fi
+        [ -z "$(ls -A tight)" ] || fail "a refusal for room wrote in the folder: $(ls -A tight)"
+        # A FOLDER THAT TAKES NO WRITE: a sentence, never a traceback, and no
+        # half ISO.
+        mkdir locked
+        chmod 555 locked
+        if "$fetch" --from parts --into locked >out 2>&1; then
+          fail "parts joined into a folder that takes no write"
+        elif ! grep -q "the ISO could not be written in" out || grep -q Traceback out; then
+          fail "a write that failed was not a sentence: $(cat out)"
+        fi
+        [ -z "$(ls -A locked)" ] || fail "a write that failed left something: $(ls -A locked)"
+        chmod 755 locked
 
         # WHOLE, under the limit: one asset, a line for it.
         python3 "$release_py" pack "$iso" whole >/dev/null
@@ -52361,6 +52394,18 @@ let
         "$fetch" --into resumed >/dev/null || fail "a part cut short and a part that is wrong stopped the download"
         cmp -s "$iso" "resumed/$iso" || fail "the ISO from a resumed download is not the ISO"
         [ "$(ls -A resumed)" = "$iso" ] || fail "the resumed download left something beside the ISO: $(ls -A resumed)"
+        # TOO LITTLE ROOM TO DOWNLOAD AND JOIN on one file system: said
+        # before a part is asked for.
+        rm -f port.served
+        if RONOCTUA_FETCH_ISO_FREE=1000 "$fetch" --into full >out 2>&1; then
+          fail "a release downloaded onto a disk with no room"
+        elif ! grep -q "what is still to download and the ISO needs" out; then
+          fail "too little room to download was refused without saying so: $(cat out)"
+        fi
+        [ "$(cat port.served 2>/dev/null)" = SHA256SUMS ] ||
+          fail "a refusal for room downloaded more than SHA256SUMS: $(cat port.served 2>/dev/null)"
+        [ -z "$(ls -A full)" ] || fail "a refusal for room wrote in the folder: $(ls -A full)"
+        rm -rf "cache/$iso.download"
         rm -f port.served
         "$fetch" --check "$iso" | grep -q "read back from the medium, it is $iso of v-check" ||
           fail "--check did not take the ISO against the release's SHA256SUMS"
@@ -52434,7 +52479,7 @@ let
         END
 
         [ "$failed" = 0 ] || exit 1
-        echo "OK: parts and whole come back byte for byte, from a folder and downloaded (resumed, a wrong part fetched anew); corrupt, missing and swapped parts are refused; --check takes the ISO and refuses a copy with another tail or cut short, downloading only SHA256SUMS"
+        echo "OK: parts and whole come back byte for byte, from a folder and downloaded (resumed, a wrong part fetched anew); corrupt, missing and swapped parts are refused; too little room to join, or to download and join, is said before anything is written or downloaded, and a folder that takes no write is a sentence with no half ISO; --check takes the ISO and refuses a copy with another tail or cut short, downloading only SHA256SUMS"
       '';
 
   # WHAT FETCH-ISO CALLS CHECKED IS WHAT THE MEDIUM GIVES BACK.

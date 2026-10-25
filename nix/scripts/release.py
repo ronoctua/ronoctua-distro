@@ -47,6 +47,10 @@ PART_BYTES = 1900 * 1024 * 1024
 
 SUMS = "SHA256SUMS"
 CHUNK = 4 * 1024 * 1024
+# WHAT A FILE SYSTEM NEEDS BESIDE THE BYTES: on a ZFS pool at its edge even
+# the rename that names the ISO fails (ENOSPC, 2026-10-25), so `fetch` asks
+# for this much more than it writes.
+ROOM_MARGIN = 256 * 1024 * 1024
 
 # WHERE `fetch` ASKS FOR A RELEASE. Another address only for the check that
 # serves a release from this machine (`iso-parts-reassemble`), so the
@@ -390,6 +394,16 @@ def download_cache():
     return Path(home) / "ronoctua" / "fetch-iso"
 
 
+def free_bytes(folder):
+    """What `folder`'s file system can still take: its own answer, or
+    `RONOCTUA_FETCH_ISO_FREE` for the check that plants a disk too full
+    (`iso-parts-reassemble`)."""
+    planted = os.environ.get("RONOCTUA_FETCH_ISO_FREE")
+    if planted:
+        return int(planted)
+    return shutil.disk_usage(folder).free
+
+
 def fetch(repository, tag=None, source=None, into="."):
     """Downloads (or reads from `source`), checks every part, joins, checks
     the whole, and only then names the ISO — and the whole that is named is
@@ -397,7 +411,9 @@ def fetch(repository, tag=None, source=None, into="."):
     the write: `--into` a stick's folder is how the ISO reaches a Ventoy
     stick. A part that fails its line is removed so the next run fetches it
     again; a download that stopped is resumed; the folder of the download
-    goes when the ISO is whole."""
+    goes when the ISO is whole. The room is asked before anything is
+    written, and a write that fails anyway is a refusal that leaves no half
+    ISO behind."""
     into = Path(into)
     into.mkdir(parents=True, exist_ok=True)
     if source is not None:
@@ -405,10 +421,12 @@ def fetch(repository, tag=None, source=None, into="."):
         if not source.is_dir():
             refuse(f"{source} is not a folder")
         located = {p.name: p for p in source.iterdir()}
+        sizes = {p.name: p.stat().st_size for p in source.iterdir() if p.is_file()}
         label = str(source)
     else:
         assets, label = release_of(repository, tag)
         located = {name: asset["url"] for name, asset in assets.items()}
+        sizes = {name: asset.get("size") for name, asset in assets.items()}
     kind, iso, wanted = choose(list(located))
     # THE PARTS LAND ON THIS MACHINE'S DISK, never beside the ISO: `--into` a
     # stick's folder is how the ISO reaches a Ventoy stick, and parts there
@@ -451,6 +469,36 @@ def fetch(repository, tag=None, source=None, into="."):
             print(f"{target} is already here, and read back from the medium it is the release's ({sums[iso]})")
             return target
         refuse(f"{target} exists and is not the release's ISO", "move it away first: this never writes over a file")
+    # A JOIN THAT DID NOT END is nothing a run again reads: it goes before
+    # the room is counted.
+    partial = into / f".{iso}.partial"
+    partial.unlink(missing_ok=True)
+
+    # THE ROOM, ASKED BEFORE ANYTHING IS WRITTEN: what is still to download
+    # lands in this machine's cache, and the parts joined are a second copy
+    # of the ISO in `into` — both at once when they share a file system. A
+    # disk that fills half way is a run that dies with the ISO in neither
+    # place (2026-10-25: a full pool refused even the rename that names it).
+    arriving = 0
+    if source is None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        for name in wanted:
+            have = (scratch / name).stat().st_size if (scratch / name).is_file() else 0
+            arriving += max((sizes.get(name) or 0) - have, 0)
+    moved = kind == "whole" and source is None and scratch.stat().st_dev == into.stat().st_dev
+    joining = 0 if moved else sum(sizes.get(name) or 0 for name in wanted)
+    if source is None and scratch.stat().st_dev == into.stat().st_dev:
+        asked = [(into, arriving + joining, "what is still to download and the ISO")]
+    else:
+        asked = [(scratch, arriving, "what is still to download"), (into, joining, "the ISO")]
+    for folder, needed, what in asked:
+        if needed == 0:
+            continue
+        free = free_bytes(folder)
+        if free < needed + ROOM_MARGIN:
+            refuse(f"{folder} has {mib(free)} free, and {what} needs {mib(needed + ROOM_MARGIN)}",
+                   "nothing was written; free the room and run it again"
+                   + (f" (what already arrived stays in {scratch})" if source is None else ""))
 
     def name_it(written):
         """`written` becomes the ISO only once the medium gives it back as
@@ -478,31 +526,44 @@ def fetch(repository, tag=None, source=None, into="."):
         pieces.append(at)
         print(f"checked {name}")
 
+    # A WRITE THAT FAILS ANYWAY (the disk filled under another program, a
+    # stick that went read-only) is said as a refusal, and the half ISO goes:
+    # the checked parts stay where they are, so a run again only joins.
+    def write_failed(why):
+        partial.unlink(missing_ok=True)
+        refuse(f"the ISO could not be written in {into}: {why.strerror or why}",
+               "nothing was named; the checked parts stay"
+               + (f" in {scratch}, and a run again joins them without downloading" if source is None else f" in {source}"))
+
     # WHOLE, DOWNLOADED AND ON THE SAME FILE SYSTEM, it is already the ISO:
     # moved, not copied. Anywhere else it is copied like the parts are joined.
-    if kind == "whole" and source is None and pieces[0].stat().st_dev == into.stat().st_dev:
-        name_it(pieces[0])
+    if moved:
+        try:
+            name_it(pieces[0])
+        except OSError as why:
+            write_failed(why)
         shutil.rmtree(scratch)
         print(f"{target}: read back from the medium and checked against the {SUMS} of {label} ({sums[iso]})")
         return target
 
-    partial = into / f".{iso}.partial"
-    partial.unlink(missing_ok=True)
     whole = hashlib.sha256()
-    with open(partial, "xb") as out:
-        for at in pieces:
-            with open(at, "rb") as f:
-                while True:
-                    block = f.read(CHUNK)
-                    if not block:
-                        break
-                    out.write(block)
-                    whole.update(block)
-    if whole.hexdigest() != sums[iso]:
-        partial.unlink()
-        refuse(f"the parts joined are not {iso}: the whole's sha256 differs from {SUMS}",
-               "every part matched its own line, so the parts or their order were swapped")
-    name_it(partial)
+    try:
+        with open(partial, "xb") as out:
+            for at in pieces:
+                with open(at, "rb") as f:
+                    while True:
+                        block = f.read(CHUNK)
+                        if not block:
+                            break
+                        out.write(block)
+                        whole.update(block)
+        if whole.hexdigest() != sums[iso]:
+            partial.unlink()
+            refuse(f"the parts joined are not {iso}: the whole's sha256 differs from {SUMS}",
+                   "every part matched its own line, so the parts or their order were swapped")
+        name_it(partial)
+    except OSError as why:
+        write_failed(why)
     if scratch.exists():
         shutil.rmtree(scratch)
     print(f"{target}: whole, read back from the medium and checked against the {SUMS} of {label} ({sums[iso]})")
