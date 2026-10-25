@@ -181,7 +181,7 @@ pkgs.mkShell {
     echo "  nix run .#vm       the whole system in a VM"
     echo "  nix run .#bench    measures the frame's CPU work"
     echo "  nix run .#install  installs (rehearses without --execute)"
-    echo "  nix build .#iso    builds the ISO"
+    echo "  nix run .#iso      builds the ISO (and sweeps the old ones)"
     echo
   '';
 }

@@ -12317,6 +12317,58 @@ sessão), e o Chromium recusa rodar como root sem `--no-sandbox` e procura um X 
 `--ozone-platform=wayland`. E o disco da VM foi para o cache: o driver o põe no
 `XDG_RUNTIME_DIR`, que é tmpfs, e cada byte de runtime seria RAM.
 
+<!-- anchor: L25 -->
+### Partes: o que chega depois da instalação
+
+**O sistema é uma derivação só, e por isso não pode carregar um download.** Em 2026-10-23 a instalação
+no Z16 parou porque um download falhou: o cache npm do gerador de PO token. O `nixos-install` é
+tudo ou nada, a instalação caiu inteira, e cada atualização depois dela cairia do mesmo jeito. Medido
+no sistema completo: 42 downloads direto da origem (npm, GitHub, rust-lang, Google, Microsoft…) e uns
+600 builds na própria máquina. Então o que precisa de um download que nenhum cache público tem, o que
+não é livre e o que só o perfil full leva é uma **parte**: declarada no flake
+(`ronoctua.parts.<id>`, `nix/modules/parts.nix`), nunca no fecho do sistema, realizada sozinha pelo
+root e guardada num perfil Nix próprio.
+
+**Um perfil por parte, alcançado por um caminho estável.** O sistema nomeia a parte só por
+`/nix/var/nix/profiles/ronoctua/parts/<id>/v<interface>`, que pode ainda não existir; quem lê pergunta
+`ronoctua_parts::here` a cada uso — nunca uma vez na partida, porque a parte chega com a sessão
+aberta. A interface vai no caminho: um sistema nunca encontra uma parte num formato que não fala, e
+um rollback acha a antiga. Os perfis estão sob `/nix/var/nix/profiles`, que a coleta do Nix já trata
+como raiz, e o `ronoctua-system-generations` não toca neles; cada parte guarda a geração atual e a
+anterior, por contagem.
+
+**O plano vem com o sistema, como texto.** `/etc/ronoctua/parts-plan.json` traz a derivação e a
+saída de cada parte querida com o contexto descartado: construir o sistema não constrói parte
+nenhuma, e avaliar o sistema instancia as derivações delas — por isso, depois de um switch, o
+realizador as acha no store sem avaliar nada (avaliar a máquina custa GiBs, e o primeiro boot não
+pode pagar isso). O planejador enraíza os `.drv` em `/nix/var/nix/gcroots/ronoctua-parts/plan`, para
+uma coleta entre o switch e a realização não levá-los. O plano é o do sistema em execução, então as
+partes nunca andam à frente da base.
+
+**Um processo por parte, e o systemd tenta de novo.** `ronoctua-part@<id>` realiza uma parte só: a
+falha é dela, e as outras seguem. Uma falha volta cada vez mais tarde (`RestartSec=1min`,
+`RestartSteps=8`, até `RestartMaxDelaySec=12h`); o que não deve ser tentado no relógio — sem link
+nenhum, parte não querida, o lock dos registros ocupado — sai com um código próprio
+(`ronoctua_parts::exit::NOT_RETRIED`, o `RestartPreventExitStatus` da unidade), e o dispatcher do
+NetworkManager reinicia o planejador quando uma rede sobe. Só conta tentativa que podia ter dado
+certo: um notebook offline por uma semana não volta pedindo ajuda por cada parte. Depois de cinco
+tentativas com rede a parte vira `needs-you`, e continua sendo tentada. O planejador entrega as partes
+a dois workers por vez, as leves antes das pesadas.
+
+**A sessão vê uma vista, não os perfis.** `environment.profiles` traria `QT_PLUGIN_PATH`,
+`GIO_EXTRA_MODULES` e afins, e o plugin de uma parte carregaria dentro dos programas da base. A
+vista (`/var/lib/ronoctua-parts/view`) tem só `bin/` e um conjunto fechado de `share/`
+(`ronoctua_parts::view::LINKED`), arquivo a arquivo, cada um um link para o caminho estável da parte,
+e vem depois do sistema no `PATH`: uma parte nunca esconde um programa da base. É refeita inteira e
+trocada com um `renameat2(RENAME_EXCHANGE)`.
+
+**Os registros são o broadcast.** `/var/lib/ronoctua-parts/parts/<id>.json` (`0644`, escrito inteiro)
+diz a geração em uso, a anterior, o que o plano quer e, quando difere, por quê. A pessoa inicia o
+planejador e o realizador de cada parte querida por uma regra polkit estreita (verbo `start`, cada
+unidade pelo nome, a pessoa), medida pelo `parts-rule-is-narrow`; o `parts-are-isolated` prova, numa
+VM com um servidor, que uma parte com 404 não segura as outras, que a pessoa a repete e que uma
+atualização cuja parte não chega mantém a anterior.
+
 ## 8. Desempenho, grafo e riscos
 
 ### Grafo de crates

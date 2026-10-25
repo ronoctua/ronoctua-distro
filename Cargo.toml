@@ -104,6 +104,9 @@ members = [
   "crates/ronoctua-person",
   "crates/ronoctua-pq",
   "crates/ronoctua-machine",
+  # THE PARTS (2026-10-23): what reaches a machine after it is installed,
+  # each realized on its own and kept in a profile of its own.
+  "crates/ronoctua-parts",
   "crates/ronoctua-incus",
   "crates/ronoctua-private",
   "crates/ronoctua-stick",

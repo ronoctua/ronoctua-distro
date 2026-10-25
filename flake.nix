@@ -1351,6 +1351,11 @@
         # unit that runs as root must not carry the desktop.
         ./nix/modules/person-apply.nix
         { ronoctua.person.tool = rust.person; }
+        # ── anchor: L25 ──
+        # What reaches the machine after it is installed: each part realized
+        # on its own by root, in a profile of its own, never in the system's
+        # closure. Its program comes EXTRACTED, as the person's does.
+        (import ./nix/modules/parts.nix { tool = rust.parts; })
         # ── anchor: L10 ──
         # Security keys: smart cards, GnuPG's agent, and pam_u2f for sudo —
         # always `sufficient` — trusting root's list of the person's keys.

@@ -1670,6 +1670,41 @@ no terminal e a sessão do Codex encontrando o `CODEX_HOME` criado pela vista.
   falta a cena de VM (F2) com elas vindas do brain de verdade, pelo socket.
 
 
+<!-- anchor: L25 -->
+
+### A instalação sem download e as partes — o que falta da refatoração · grande
+
+O mecanismo das partes existe (`ronoctua-parts`, `nix/modules/parts.nix`; o porquê no
+`docs/ARCHITECTURE.md`, "Partes: o que chega depois da instalação") e está provado numa VM, mas
+nenhuma parte real usa ele ainda. O plano aprovado em 2026-10-23 segue por marcos, cada um verde:
+
+- **M2 — piloto e atualização.** O yt-dlp (o overlay sai do `pkgs` do sistema) e o pot-provider
+  viram partes; os consumidores (fila, player, video-metrics, acesso rápido) leem por
+  `ronoctua_parts::here` a cada uso; o passo `parts-realize` na atualização, `carry-on`, com as leis
+  no `gen-updates.py`. Checks: `the-base-never-reads-a-part`, `parts-stay-out-of-the-base`,
+  `every-download-has-an-owner`, `part-paths-are-read-as-arriving`.
+- **M3 — o que a pessoa vê e faz.** O módulo `parts` do brain (marca e eventos), a página `s u p` da
+  vista da atualização nas duas portas, entregar um arquivo (conferido pelo hash), importar e
+  exportar por pendrive, espelhos no `options.json`, o "sim, desta vez" numa rede tarifada.
+- **M4 — não livre fora da base.** Chrome, VS Code, Claude Code, uade, unrar, Android Studio e SDK
+  viram partes; o `pkgs` do sistema não admite não livre.
+- **M5 — downloads livres e programas do full.** Rust e devshell, Common Lisp, adplay, AppImages,
+  apks, `fonts-full` (como downloads, com o `pinGuard` estrutural), superpack, WordNet, escritório,
+  oficina, mídia, Emacs, toolchains; o `flake-registry.json` vira asset; todos os locales prontos.
+- **M6 — instalação offline e primeiro boot.** O ISO calculado (as bases livres dos dois perfis, as
+  partes livres do minimal, as entradas de build da cola do host, todo nó do lock), o instalador
+  sem rede (sem o pulo, mirando sempre o ISO, `build-first`, os pertences depois do boot com a senha
+  selada no TPM), o `installer-offline-vm` no gate, e o ISO completo do desenvolvedor
+  (`.#iso-complete`, nunca publicado).
+- **M7 — a base se recupera igual.** O `apply` diz o que falhou e oferece entregar e importar os
+  downloads da base.
+- **M8 — as entradas da pessoa viram partes**, e o `verify`/`held.json` delas sai.
+- **M9 — documentação, tamanho e release.**
+
+- acabou quando: o Z16 instala do ISO novo sem cabo e sem Wi-Fi até a sessão, e depois, com rede,
+  as partes chegam uma a uma em `s u p`, uma que falha não segura as outras, e entregar o arquivo
+  de um AppImage baixado no navegador a traz.
+
 ### As fotos da leva (F2) — o que ficou · pequeno cada
 
 Cada vista nova da leva foi fotografada nas duas portas e nos dois idiomas (lista no relatório da

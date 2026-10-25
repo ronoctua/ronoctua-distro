@@ -155,6 +155,8 @@ let
     # The machine's life and the person's root half.
     machine = program "ronoctua-machine" "its [[bin]] is in crates/ronoctua-machine, and the build did not reach it";
     person = program "ronoctua-person" "its [[bin]] requires the feature apply, and no member of the build enabled it";
+    # The parts' root realizer (`nix/modules/parts.nix`).
+    parts = program "ronoctua-parts" "its [[bin]] requires the feature realize, and no member of the build enabled it";
     # The /private vault's root side and the Incus job.
     privateRoot = program "ronoctua-private-root" plainly;
     incusJob = program "ronoctua-incus-job" "its [[bin]] requires the feature cli, and no member of the build enabled it";

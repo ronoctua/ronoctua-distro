@@ -4363,6 +4363,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ronoctua-parts"
+version = "0.1.0"
+dependencies = [
+ "ronoctua-network",
+ "ronoctua-person",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ronoctua-person"
 version = "0.1.0"
 dependencies = [

@@ -137,6 +137,22 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    instala fica no home dela (`~/.vscode/extensions`, `~/quicklisp`), a partir de uma lista que é
    dado dela ou de arquivos pinados; nada disso entra no flake, em `/etc` nem no repositório.
 
+   <!-- anchor: L25 -->
+   Emenda aprovada pelo dono (2026-10-23, no plano da instalação sem download): **o que precisa de
+   download chega como parte, fora do sistema**. Uma parte é declarada no flake
+   (`ronoctua.parts.<id>`, no módulo dono e fora de qualquer `mkIf`) e realizada só a partir do
+   plano do sistema em execução, só pelo `ronoctua-parts` (root), num perfil Nix do root
+   (`/nix/var/nix/profiles/ronoctua/parts/<id>/v<interface>`). O fecho do sistema nunca contém uma
+   parte: o plano (`/etc/ronoctua/parts-plan.json`) a nomeia como texto, e o sistema a alcança só
+   por esse caminho estável, que pode ainda não existir — quem a lê pergunta
+   `ronoctua_parts::here`, e a tela diz que ela está chegando. Cada parte é um processo
+   (`ronoctua-part@<id>`): uma que não chega nunca impede o sistema nem as outras, é tentada de novo
+   cada vez mais tarde, e a que falha fica na geração anterior. A sessão a vê por uma vista só
+   (`/var/lib/ronoctua-parts/view`: `bin/` e um conjunto fechado de `share/`, nunca `lib/`). O que a
+   pessoa entrega à mão, importa de um pendrive ou traz de um espelho entra no store só quando o
+   Nix confere o hash que o flake já declara; uma saída construída chega só pelos substituters
+   declarados. O `pkgs` do sistema não admite pacote não livre: eles existem só nas partes.
+
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta. Só o
    `nix run .#gate` roda tudo. Emenda aprovada pelo dono (2026-10-21): o gate faz as perguntas do
    `nix flake check` em avaliadores que cabem na RAM — os checks nas fases 0 a 4, e o resto (o lock,
@@ -518,6 +534,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/held.json`, `local/verified.json`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
 | o Cachix: o cache binário da pessoa, o token de envio, o netrc do root e o envio depois da atualização | `ronoctua-cachix` (cobra `binary-cache-token-never-prints`) |
 | o VS Code: o manifesto das extensões instaladas, a lista da pessoa que viaja nos pertences e o `code --install-extension` | `ronoctua-vscode` (cobra `one-vscode-boundary`) |
+| as partes: os perfis delas (`/nix/var/nix/profiles/ronoctua/parts`), os registros, a vista da sessão (`/var/lib/ronoctua-parts`) e as raízes do plano | `ronoctua-parts` (cobram `one-parts-boundary` e `parts-rule-is-narrow`) |
 
 <!-- anchor: L01 -->
 
@@ -876,6 +893,8 @@ renovado, e o pedido que o leva é montado, como todo pedido TLS, em memória me
   atual, a em execução, a do boot — especialização inclusive —, a de onde a última troca saiu e toda
   que o menu de boot lista ficam; nenhum outro perfil), e o menu de boot lista no máximo N (cobra
   `nix-gc-keeps-generations`). O resto é lixo: o piso do Nix (`min-free`) e a coleta da atualização.
+  Cada parte guarda a geração atual e a anterior, por contagem (`--delete-generations +2`), e só o
+  `ronoctua-parts` apara o perfil dela.
 - **ISO velho não fica no disco.** Cada build e cada iteração de teste de VM do instalador deixa um
   ISO de ~5 GiB que nada enraíza (em 2026-10-23 eram oito, 38 GiB, com o pool em 93%). Todo app que
   constrói ISO (`.#iso`, `.#release`, `.#gate`, `.#most`, `.#sized-build`) sai pelo

@@ -298,6 +298,11 @@ in
         # `/var/lib/ronoctua-security` would say it is open until the boot's
         # look (`ronoctua-sudo-window`) closes it.
         "/var/lib/ronoctua-sudo"
+        # THE PARTS' RECORDS AND THE SESSION'S VIEW of them
+        # (`nix/modules/parts.nix`). The parts themselves are profiles under
+        # `/nix`, which is never wiped; lost, the records are made again from
+        # the plan, but each part's count of tries and the view start over.
+        "/var/lib/ronoctua-parts"
         # The enrolled fingerprints (fprintd's). Lost, every finger has to be
         # enrolled again, through the password.
         "/var/lib/fprint"

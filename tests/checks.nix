@@ -15384,7 +15384,7 @@ let
           # polkit agent, so its unit is started through the sudo door
           # (`files-root-is-narrow`).
           "org.freedesktop.systemd1.manage-units":
-              "ours: rescue, keyboard, keys, memory, update, tor, syncthing, android, security, person, machine",
+              "ours: rescue, keyboard, keys, memory, update, tor, syncthing, android, security, person, machine, parts",
           # nix/modules/base.nix — the machine's own clock. THREE actions and
           # not four: `set-local-rtc` decides whether the hardware clock runs
           # in local time, nothing in this tree asks for it, and a fourth
@@ -15426,6 +15426,12 @@ let
           # start it with nothing to ask (`person-apply-rule-is-narrow`). The
           # approval's unit has NO rule: only the sudo door starts it.
           # ── anchor: L13 ──
+          # ── anchor: L25 ──
+          # `parts` (`nix/modules/parts.nix`) signs `manage-units` above for the
+          # planner, `ronoctua-parts.service`, and one `ronoctua-part@<id>`
+          # per wanted part, each by its whole name, verb `start`, the one
+          # user, `YES` — the parts' page and a retry start them with nothing
+          # to ask (`parts-rule-is-narrow`).
       }
 
       found = set(re.findall(r'action\.id\s*==\s*"([^"]+)"', text))
@@ -16587,8 +16593,10 @@ let
   #   3. no runner the machine starts by itself — the memory sweeper, the
   #      shell's `ngc` — carries a flag that deletes generations, and nothing
   #      in `nix/`, `assets/` or `crates/` does either, except the trim itself
-  #      (bound to the system profile) and the person's own Tidy in the
-  #      software CLI;
+  #      (bound to the system profile), the person's own Tidy in the
+  #      software CLI, and the parts' realizer (`ronoctua-parts`), which trims
+  #      each part's own profile BY COUNT — the current generation and the
+  #      one before it (`+2`), never by age, never another profile;
   #   4. and the trim DOES what it says, on a planted profile tree: it keeps the
   #      newest N, the current, the running and the booted generation — a
   #      specialisation of one included — the one the last switch left, and
@@ -16738,9 +16746,20 @@ let
           wrong.append("the activation no longer writes what the switch went away from")
 
       ALLOWED = {
-          "--delete-generations": ("nix/modules/store.nix",),
+          "--delete-generations": ("nix/modules/store.nix", "crates/ronoctua-parts/"),
           "wipe-history": ("crates/ronoctua-software/",),
       }
+      # THE PARTS TRIM BY COUNT, and only their own profiles: the one call
+      # that carries the flag keeps two, and nothing else in the crate
+      # names a profile outside the parts' root.
+      parts_argv = uncommented(outside_tests((pathlib.Path("${self}") / "crates/ronoctua-parts/src/argv.rs").read_text()))
+      trim = must(re.search(r"fn trim_profile.*?\n\}", parts_argv, re.S) and
+                  re.search(r"fn trim_profile.*?\n\}", parts_argv, re.S).group(0),
+                  "ronoctua_parts::argv::trim_profile")
+      if not re.search(r'"--delete-generations"\.to_owned\(\),\s*"\+2"\.to_owned\(\)', trim):
+          wrong.append("the parts' trim does not keep exactly two generations by count (`--delete-generations +2`)")
+      if parts_argv.count('"--delete-generations"') != 1:
+          wrong.append("the parts' crate deletes generations somewhere besides its one trim")
       root = pathlib.Path("${self}")
       swept = 0
       for f in sorted(root.rglob("*")):
@@ -45714,6 +45733,228 @@ let
         ${rust.bins.ronoctua-install}/bin/ronoctua-install
     '';
 
+  # ── anchor: L25 ──
+  # A PART THAT DOES NOT ARRIVE HOLDS BACK NOTHING (`tests/parts-vm.nix`):
+  # three parts, one whose download is missing; the others arrive and run,
+  # the missing one waits to be tried again, the person tries it, an update
+  # whose part does not arrive keeps the one before, a new interface is a new
+  # path.
+  partsVm = import ./parts-vm.nix {
+    inherit pkgs lib;
+    partsTool = rust.parts;
+  };
+
+  # THE PARTS' UNITS AND THEIR ONE POLKIT RULE, AND HOW WIDE IT IS.
+  #
+  # The person starts the planner and a part's realizer with no password
+  # (the parts' page, a retry), so the rule answers YES — and what buys that
+  # width back is measured on the MERGED rules and units of the real system:
+  #
+  #   - three units and no fourth: the trigger, the planner, the realizer's
+  #     template; their command lines take no word from anybody (the
+  #     realizer's one word is its instance, which the rule lists by name);
+  #   - one rule: YES, `manage-units`, the verb `start`, the planner and one
+  #     `ronoctua-part@<id>.service` per wanted part — never a pattern —, the
+  #     one user, its alternatives bracketed;
+  #   - the names agree in the three places that spell them: the module, the
+  #     crate's `names` and its `exit` codes — the unit never restarts on the
+  #     statuses the crate says are not retried, and always on a failure;
+  #   - the planner and the realizer have NO START LIMIT: each start is an
+  #     event or a gesture, and systemd's default refuses the sixth.
+  parts-rule-is-narrow =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      services = vm.systemd.services;
+      plain = builtins.unsafeDiscardStringContext;
+      facts = pkgs.writeText "parts-facts.json" (
+        builtins.toJSON {
+          rules = plain vm.security.polkit.extraConfig;
+          services = builtins.filter (n: lib.hasPrefix "ronoctua-part" n) (builtins.attrNames services);
+          planner = plain services.ronoctua-parts.serviceConfig.ExecStart;
+          realizer = plain services."ronoctua-part@".serviceConfig.ExecStart;
+          trigger = plain services.ronoctua-parts-trigger.serviceConfig.ExecStart;
+          restart = services."ronoctua-part@".serviceConfig.Restart;
+          prevent = services."ronoctua-part@".serviceConfig.RestartPreventExitStatus;
+          plannerLimit = toString (services.ronoctua-parts.startLimitIntervalSec or "unset");
+          realizerLimit = toString (services."ronoctua-part@".startLimitIntervalSec or "unset");
+          tmpfiles = builtins.filter (
+            r: lib.hasInfix "ronoctua" r && lib.hasInfix "parts" r
+          ) vm.systemd.tmpfiles.rules;
+          etc = builtins.filter (n: lib.hasInfix "parts" n) (builtins.attrNames vm.environment.etc);
+          wanted = builtins.attrNames (lib.filterAttrs (_: p: p.wanted) vm.ronoctua.parts);
+          user = vm.ronoctua.user;
+        }
+      );
+    in
+    mkCheck "parts-rule-is-narrow" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the evaluated system arrives as JSON — the merged polkit
+      # rules, the parts' units, their command lines, restart settings,
+      # tmpfiles lines and `/etc` names.
+      # FILE-WIDE: the crate's `names` and `exit` are files of constants,
+      # read whole (`uncommented`, strings KEPT — the names are the subject).
+      got = json.load(open("${facts}"))
+      names = uncommented(pathlib.Path("${../crates/ronoctua-parts/src/names.rs}").read_text())
+      codes = uncommented(pathlib.Path("${../crates/ronoctua-parts/src/exit.rs}").read_text())
+      wrong = []
+
+      def const(text, name):
+          m = re.search(r"const " + name + r': &str = "([^"]+)";', text)
+          if not m:
+              sys.exit(f"ERROR: ronoctua_parts::names no longer names `{name}`")
+          return m.group(1)
+
+      parts_root = const(names, "PARTS_ROOT")
+      state_dir = const(names, "STATE_DIR")
+      plan = const(names, "PLAN")
+      plan_roots = const(names, "PLAN_ROOTS")
+      planner = const(names, "PLANNER_UNIT")
+      if 'format!("ronoctua-part@{id}.service")' not in names:
+          wrong.append("the crate no longer spells a realizer as ronoctua-part@<id>.service")
+      user = got["user"]
+
+      # 1. THREE UNITS AND NO FOURTH, each running a fixed line.
+      if sorted(got["services"]) != ["ronoctua-part@", "ronoctua-parts", "ronoctua-parts-trigger"]:
+          wrong.append(f"the system declares {sorted(got['services'])} for the parts")
+      lines = {
+          "planner": "/bin/ronoctua-parts plan --start",
+          "realizer": "/bin/ronoctua-parts realize %i",
+          "trigger": f"/bin/systemctl start --no-block {planner}",
+      }
+      for unit, line in lines.items():
+          if not got[unit].endswith(line) or "/nix/store/" not in got[unit]:
+              wrong.append(f"the {unit} runs {got[unit]!r}; it may run <store>{line}")
+      if not got["trigger"].startswith("-"):
+          wrong.append("the trigger's command can fail a switch: it must carry the leading `-`")
+
+      # 2. THE RESTARTS, as the crate's exit codes say.
+      value = dict(re.findall(r"pub const (\w+): u8 = (\d+);", codes))
+      floor(len(value), 5, "exit codes in ronoctua_parts::exit")
+      found = re.search(r"NOT_RETRIED: \[u8; \d+\] = \[([^\]]*)\]", codes)
+      listed = must(found and found.group(1), "ronoctua_parts::exit::NOT_RETRIED")
+      not_retried = sorted(int(value[n.strip()]) for n in listed.split(",") if n.strip())
+      prevented = sorted(int(n) for n in str(got["prevent"]).split())
+      if prevented != not_retried:
+          wrong.append(f"the realizer is never restarted on {prevented}; the crate says {not_retried}")
+      if int(value["FAILED"]) in prevented:
+          wrong.append("a failed try is never retried: the backoff would never run")
+      if got["restart"] != "on-failure":
+          wrong.append(f"the realizer restarts {got['restart']!r}; a failure must be tried again")
+      for unit in ("plannerLimit", "realizerLimit"):
+          if got[unit] != "0":
+              wrong.append(f"{unit} is {got[unit]!r}: a start limit refuses the sixth event as start-limit-hit")
+
+      # 3. THE FOLDERS AND THE PLAN, where the crate looks.
+      for folder in (state_dir, parts_root, str(pathlib.PurePath(plan_roots).parent)):
+          if not any(re.fullmatch(rf"d {re.escape(folder)} 0755 root root -", r) for r in got["tmpfiles"]):
+              wrong.append(f"no tmpfiles line makes {folder} root's 0755 (lines: {got['tmpfiles']})")
+      if [f"/etc/{e}" for e in got["etc"]] != [plan]:
+          wrong.append(f"the system writes {got['etc']} under /etc; the crate reads {plan}")
+
+      # 4. THE ONE RULE.
+      text = got["rules"]
+      every = re.split(r"polkit\.addRule", text)[1:]
+      floor(len(every), 3, "rules in the merged polkit config")
+      ours = [r for r in every if planner in r]
+      if len(ours) != 1:
+          wrong.append(f"{len(ours)} rules mention {planner}; there may be one")
+      for rule in ours:
+          if set(re.findall(r"polkit\.Result\.(\w+)", rule)) != {"YES"}:
+              wrong.append("the rule answers something other than YES")
+          if set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule)) != {"org.freedesktop.systemd1.manage-units"}:
+              wrong.append("the rule is about another action than manage-units")
+          units = set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule))
+          want = {planner} | {f"ronoctua-part@{p}.service" for p in got["wanted"]}
+          if units != want:
+              wrong.append(f"the rule names {sorted(units)}; it may name {sorted(want)}")
+          if set(re.findall(r'lookup\("verb"\)\s*==\s*"([^"]+)"', rule)) != {"start"}:
+              wrong.append("the rule allows another verb than start")
+          if set(re.findall(r'subject\.user\s*==\s*"([^"]+)"', rule)) != {user}:
+              wrong.append(f"the rule is for someone other than {user}")
+          cond = re.search(r"if\s*\((.*?)\)\s*\{", rule, re.S)
+          body = must(cond and cond.group(1), "the rule's condition")
+          bracketed = re.search(r"&&\s*\(((?:\s*action\.lookup\(\"unit\"\)\s*==\s*\"[^\"]+\"\s*(?:\|\|)?)+)\)\s*&&", body)
+          left = body.replace(must(bracketed and bracketed.group(0), "the rule's bracketed units"), "&&")
+          for known in (
+              r'action\.id\s*==\s*"[^"]+"',
+              r'action\.lookup\("verb"\)\s*==\s*"[^"]+"',
+              r'subject\.user\s*==\s*"[^"]+"',
+          ):
+              left = re.sub(known, "", left)
+          leftover = re.sub(r"[\s()&]", "", left)
+          if leftover:
+              wrong.append(f"the condition tests something else, or an alternative outside the brackets: {leftover!r}")
+      for rule in every:
+          if rule not in ours and "ronoctua-part" in rule:
+              wrong.append("another rule names a unit of the parts")
+
+      if wrong:
+          print("ERROR: the parts' units or their rule are wider than they may be:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: three units, one rule ({len(want)} unit(s), start, {user}), the crate's names and exit codes")
+      END
+    '';
+
+  # THE PARTS HAVE ONE OWNER: `ronoctua-parts` writes their profiles, their
+  # records and the session's view, and `nix/modules/parts.nix` declares
+  # them. Anybody else reaches a part by `config.ronoctua.parts.<id>.path`
+  # (Nix) and `ronoctua_parts::here` (Rust), never by spelling the parts'
+  # root, the state folder or the collector's roots: a second spelling is a
+  # second writer waiting to happen, and a reader that skips `here`.
+  #
+  # Swept: every Rust source under `crates/` but the parts' own crate (tests
+  # cut off), and every Nix, shell and Python file under `nix/` but the
+  # parts' module — and `persist.nix`, which names the state folder to keep
+  # it across the wipe. AND THE DETECTOR IS PROVED on the owner: the same
+  # needles must be found in the crate and the module.
+  one-parts-boundary = mkCheck "one-parts-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: each source read whole, comments off and STRINGS KEPT —
+    # the paths are strings, and a path in a comment is no writer.
+    crates = pathlib.Path("${../crates}")
+    nix = pathlib.Path("${../nix}")
+    NEEDLE = re.compile(r"/nix/var/nix/profiles/ronoctua/parts|/var/lib/ronoctua-parts|/nix/var/nix/gcroots/ronoctua-parts")
+    owners = {crates / "ronoctua-parts", nix / "modules" / "parts.nix"}
+    keeps = {nix / "modules" / "persist.nix"}
+
+    def text_of(path):
+        raw = path.read_text(errors="replace")
+        if path.suffix == ".rs":
+            return uncommented(outside_tests(raw))
+        return hashless(raw)
+
+    offences, seen, proved = [], 0, 0
+    for path in sorted(list(crates.rglob("*.rs")) + [p for ext in ("nix", "sh", "py") for p in nix.rglob("*." + ext)]):
+        seen += 1
+        hits = NEEDLE.findall(text_of(path))
+        if any(path == o or o in path.parents for o in owners):
+            proved += len(hits)
+            continue
+        if path in keeps:
+            if [h for h in hits if h != "/var/lib/ronoctua-parts"]:
+                offences.append(f"{path.relative_to(path.parents[2])}: names more of the parts than the folder it keeps")
+            continue
+        if hits:
+            offences.append(f"{path}: spells {sorted(set(hits))}")
+    floor(seen, 500, "sources swept")
+    floor(proved, 6, "spellings of the parts' paths in their owners (the detector's proof)")
+    if offences:
+        print("ERROR: the parts' paths are spelled outside their owners:", file=sys.stderr)
+        for o in offences:
+            print("  " + o, file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {seen} sources swept; the parts' paths are spelled by their owners alone ({proved} times)")
+    END
+  '';
+
   # THE APPLIER'S ONE POLKIT RULE, AND HOW WIDE IT IS.
   #
   # The person starts `ronoctua-person-apply.service` with no password: the
@@ -54718,6 +54959,12 @@ let
       one-person-boundary
       ;
     person-verify-holds-only-the-broken-entry = personVm;
+    # ── anchor: L25 ──
+    inherit
+      parts-rule-is-narrow
+      one-parts-boundary
+      ;
+    parts-are-isolated = partsVm;
     # ── anchor: L07 ──
     inherit
       a-store-keeps-the-rest-of-a-broken-file
