@@ -541,7 +541,7 @@ de boot espera ser julgado e quando a geração nova tiraria do menu de boot a �
 
 | sintoma | causa | correção |
 |---|---|---|
-| `hash mismatch` num input de fonte | o asset foi reenviado com outro conteúdo | `nix flake update fonts-ttf` (e os outros três), e confira por que ele mudou |
+| `hash mismatch` numa fonte | o asset foi reenviado com outro conteúdo | `nix flake update fonts-ttf-nerdfonts` para a do sistema, ou o hash das três variantes em `fontAssets` (`flake.nix`), e confira por que ele mudou |
 | `404` num input de fonte | o Release não está publicado, ou o repositório está privado | asset de Release herda a visibilidade do repositório; não há token que contorne |
 | `nix run .#dev` diz que não há sessão gráfica | você está num TTY | use `nix run .#vm` |
 | o rodapé não aparece, mas o compositor sobe | ele recusou a layer surface | `RUST_LOG=ronoctua_shell=debug nix run .#dev` mostra o motivo |

@@ -290,7 +290,10 @@ let
         };
         part = lib.mkOption {
           type = lib.types.bool;
-          default = false;
+          # EVERY DISTRO APPIMAGE IS A PART: its download is the release's own
+          # (GitHub), which no public cache holds.
+          default = config.appimage != null;
+          defaultText = lib.literalMD "`true` for an AppImage, `false` otherwise";
           description = ''
             A PART (`nix/modules/parts.nix`): the program and its companions
             are realized after the installation and kept out of the system's
@@ -298,8 +301,9 @@ let
             `config.ronoctua.partsPkgs`), or needs a download no public cache
             holds. The session finds it in the parts' view once it arrived;
             whoever runs it names its stable path
-            (`config.ronoctua.parts.<id>.path`). Only a nixpkgs package
-            (`source` nix).
+            (`config.ronoctua.parts.<id>.path`). A nixpkgs package or an
+            AppImage (its wrapper); never a web app, a Flatpak or an Android
+            app, which have ways of their own.
           '';
         };
         heavy = lib.mkOption {
@@ -455,23 +459,31 @@ let
     id:
     let
       e = apps.${id};
-      paths = [ e.package ] ++ e.extraPackages;
+      # What the entry puts on a machine, of whichever source it is.
+      paths = packagesOf id e;
+      main = builtins.head paths;
     in
     {
-      wanted = installed.${id};
+      # A DISTRO APPIMAGE THE PERSON FOLLOWS past its pin is theirs, in
+      # their profile (`personPackages`): never both.
+      wanted = installed.${id} && !(followedHere id);
       inherit (e) heavy;
       kind = "program";
-      unfree = lib.any (l: !(l.free or true)) (lib.toList (e.package.meta.license or [ ]));
+      unfree = lib.any (l: !(l.free or true)) (lib.toList (main.meta.license or [ ]));
       name = if e.name != null then e.name else id;
       # ONE PATH per part: the program alone, or with what comes and goes
       # with it, joined.
       package =
-        if e.extraPackages == [ ] then
-          e.package
+        if builtins.length paths == 1 then
+          main
         else
           pkgs.buildEnv {
             name = "ronoctua-part-${id}";
             inherit paths;
+            # AS `system.path` JOINS THEM, where these went before: the
+            # first wins — the program over a companion that brings the
+            # same file (Flutter's own Dart over `dart`).
+            ignoreCollisions = true;
           };
     };
 

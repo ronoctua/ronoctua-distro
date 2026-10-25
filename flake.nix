@@ -75,9 +75,13 @@
     # build output, and they go out as assets of a RELEASE of this repository,
     # under a tag of their own (`fonts-v1`) so as not to be confused with the ISO.
     #
-    # FOUR inputs and not one, because a Release asset is capped at 2 GB and
+    # FOUR tarballs and not one, because a Release asset is capped at 2 GB and
     # `nix run .#fonts-release` therefore packs one tarball per folder. The four
     # are reassembled into a single `noctua-iosevka/` tree in `nix/fonts.nix`.
+    # ONE OF THEM IS AN INPUT (`fonts-ttf-nerdfonts`, the system font, in both
+    # profiles); the other three are DOWNLOADS (`fontAssets`, below): the full
+    # family is a part (`nix/modules/fonts.nix`), and an input is fetched by
+    # every evaluation and has to be on an ISO that installs with no network.
     #
     # `file+https://` and not plain `https://`: the bare form is inferred as
     # `type = "tarball"`, and Nix would unpack each asset into the store — 4.1 GB
@@ -88,20 +92,8 @@
     # WHAT PINS THEM is `flake.lock`, through the `narHash` of each asset — not a
     # tag and not a rev. `fonts-v1` is a mutable pointer like any other git tag;
     # the hash is what makes a re-download either identical or a hard error.
-    fonts-ttf = {
-      url = "file+https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-TTF.tar.zst";
-      flake = false;
-    };
     fonts-ttf-nerdfonts = {
       url = "file+https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-TTF-nerdfonts.tar.zst";
-      flake = false;
-    };
-    fonts-woff2 = {
-      url = "file+https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-WOFF2.tar.zst";
-      flake = false;
-    };
-    fonts-woff2-nerdfonts = {
-      url = "file+https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-WOFF2-nerdfonts.tar.zst";
       flake = false;
     };
 
@@ -152,16 +144,31 @@
       # ---------------------------------------------------------------
       # Font layer (section 6 of the document, section 1 of the plan)
       # ---------------------------------------------------------------
+      # THE THREE VARIANTS ARE DOWNLOADS, fetched by a build and never by an
+      # evaluation, under the very hash their inputs were locked with (the
+      # NAR hash of the file: `recursiveHash`).
+      fontAssets =
+        let
+          asset =
+            name: hash:
+            pkgs.fetchurl {
+              url = "https://github.com/ronoctua/ronoctua-distro/releases/download/fonts-v1/noctua-iosevka-${name}.tar.zst";
+              inherit hash;
+              recursiveHash = true;
+            };
+        in
+        {
+          "TTF" = asset "TTF" "sha256-aTKeZZ/+HvJnXxkqn39EFih51Kny6Sr7IxUBgRrPCvc=";
+          "TTF-nerdfonts" = inputs.fonts-ttf-nerdfonts;
+          "WOFF2" = asset "WOFF2" "sha256-BnDkZwBZTmsP2C0XnK74nhGJgDFJdlv6zgAjkxmezO8=";
+          "WOFF2-nerdfonts" = asset "WOFF2-nerdfonts" "sha256-uL6TFOIIoJkY2X++2HSZfuSAEQRcBKyaOa3eKXw5hoI=";
+        };
+
       fonts = pkgs.callPackage ./nix/fonts.nix {
         # Folder name → the Release asset that carries it. The names are the
         # ones `fix-font-names.py` and `mkFontPkg` already use; keeping them as
         # the KEY means the mapping cannot silently go out of step.
-        fontAssets = {
-          "TTF" = inputs.fonts-ttf;
-          "TTF-nerdfonts" = inputs.fonts-ttf-nerdfonts;
-          "WOFF2" = inputs.fonts-woff2;
-          "WOFF2-nerdfonts" = inputs.fonts-woff2-nerdfonts;
-        };
+        inherit fontAssets;
       };
 
       fontconfigConf = pkgs.callPackage ./nix/fontconfig.nix {
@@ -244,6 +251,11 @@
             ++ (import ./nix/common-lisp { inherit pkgs; }).sources
             ++ [
               pkgs.bibata-cursors.src
+              # THE FULL FONT FAMILY'S THREE VARIANTS, a part's downloads:
+              # Release assets on one server.
+              fontAssets."TTF"
+              fontAssets."WOFF2"
+              fontAssets."WOFF2-nerdfonts"
               # yt-dlp's tag, pinned by nix/yt-dlp.nix: an old tag is never
               # taken down, but this keeps a rebuild from needing GitHub.
               pkgs.yt-dlp.src

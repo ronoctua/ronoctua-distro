@@ -10,6 +10,7 @@
 {
   config,
   lib,
+  options,
   pkgs,
   ronoctua,
   ...
@@ -17,6 +18,7 @@
 
 let
   cfg = config.ronoctua;
+  parts = options.ronoctua ? parts;
 in
 {
   options.ronoctua.icons.superpack = lib.mkOption {
@@ -38,42 +40,33 @@ in
     '';
   };
 
-  config = lib.mkIf cfg.icons.superpack (
-    let
-      iconsRoot = "${ronoctua.iconSuperpack}/share/icons/noctua";
-    in
-    {
-      environment.systemPackages = [
-        ronoctua.iconSuperpack
-        # The mandatory terminal of the inheritance chain per the freedesktop spec.
-        # The merged theme declares `Inherits=hicolor`, so it has to exist.
-        pkgs.hicolor-icon-theme
-      ];
-
-      # WHERE THE FOOTER FINDS THE SUPERPACK, at run time.
-      #
-      # It used to be compiled into the binary with `option_env!`, which made this
-      # very option a switch that turned nothing off: the store path was a
-      # reference the closure carried whether it was on or not, all 0,61 GiB of it.
-      #
-      # Through the session's environment instead, and inside this `mkIf`: a
-      # machine that asked for no superpack leaves the variable unset, the shell
-      # skips the pixmap step, and the application list keeps its glyphs — which
-      # is invariant 10's arrangement anyway, since no component of the design
-      # system consults this package.
-      # BOTH PLACES, because they answer different questions. `sessionVariables`
-      # reaches a login shell; the footer is a systemd USER UNIT, and a unit
-      # inherits the manager's environment rather than the shell's. Setting only
-      # the first is how this would look configured and reach nothing.
-      environment.sessionVariables.RONOCTUA_ICONS = iconsRoot;
-      systemd.user.services.ronoctua-footer.environment.RONOCTUA_ICONS = iconsRoot;
-
-      # The system's default theme for foreign apps. It does not touch our UI.
-      environment.sessionVariables.XDG_ICON_THEME = "noctua";
-
-      # GTK looks the icon theme up by name in `settings.ini`; that file is
-      # written ONCE, by `nix/modules/foreign.nix`, which reads this switch —
-      # two modules writing one INI would be two `[Settings]` headers.
-    }
-  );
+  config = lib.mkMerge [
+    # ── anchor: L25 ──
+    # THE SUPERPACK IS A PART (`nix/modules/parts.nix`), of data: 0,63 GiB
+    # the full profile carries, realized after the installation and out of
+    # the system's closure. The session sees its theme through the parts'
+    # view (`share/icons`), and the launcher reads it by the part's stable
+    # path on every look-up — until it arrived, the chain starts at
+    # `hicolor`, the degradation `ronoctua_shell_door::launch::superpack`
+    # describes. Declared outside the switch, which is its `wanted`.
+    (lib.optionalAttrs parts {
+      ronoctua.parts.icon-superpack = {
+        wanted = cfg.icons.superpack;
+        kind = "data";
+        name = "noctua-icon-theme";
+        package = ronoctua.iconSuperpack;
+      };
+    })
+    (lib.mkIf (cfg.icons.superpack && parts) (
+      let
+        iconsRoot = "${config.ronoctua.parts.icon-superpack.path}/share/icons/noctua";
+      in
+      {
+        environment.systemPackages = [ pkgs.hicolor-icon-theme ];
+        environment.sessionVariables.RONOCTUA_ICONS = iconsRoot;
+        systemd.user.services.ronoctua-footer.environment.RONOCTUA_ICONS = iconsRoot;
+        environment.sessionVariables.XDG_ICON_THEME = "noctua";
+      }
+    ))
+  ];
 }

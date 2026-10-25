@@ -12402,6 +12402,30 @@ O unrar saiu do embrulho do shell, que por ele estava no ISO publicado; o crate 
 depender do das partes (há um ciclo), então quem o chama entrega o caminho
 (`Tools::with_unrar(ronoctua_parts::file_of(…))`).
 
+**Os programas grandes do full também são partes.** O fecho do full caiu de ~37 GiB para ~19 GiB
+com o M4 e esta leva, para o ISO caber com a base livre dos dois perfis:
+- as 13 Crafting Apps: toda AppImage da distro é parte por padrão (`part` vale `true` para a fonte
+  AppImage), porque o download é do GitHub e nenhum cache público o tem;
+- LibreOffice, ONLYOFFICE, Blender, OrcaSlicer, VLC e Flutter;
+- as cinco toolchains do full (Go, Python, JavaScript, as ferramentas de Nix e as de build);
+- o pacote de ícones, parte de dados que a vista mostra em `share/icons` e cuja variável aponta o
+  caminho estável;
+- as variantes da família de fontes (`fonts-full`).
+
+As variantes de fonte deixaram de ser inputs: um input é baixado por toda avaliação e precisaria
+estar no ISO. Agora são downloads fixados com o mesmo hash NAR do lock (`fontAssets`, `recursiveHash`).
+A face do sistema continua input e base. As faces de uma parte chegam pela vista (`share/fonts`),
+cuja pasta o fontconfig do sistema nomeia e ignora enquanto não existe. Duas leituras que
+obrigavam a construir um programa para avaliar ou montar o sistema saíram, porque uma instalação sem
+rede não pode pagá-las:
+- o lançador da OrcaSlicer era lido do pacote na avaliação; agora é uma constante, que o
+  `models-open-in-orca` vigia contra o pacote;
+- os `system.checks` do escritório e da oficina viraram um `system.build.officeEntries` que o
+  check constrói.
+
+Os pacotes de uma parte com companheiros se juntam como o `system.path` os juntava
+(`ignoreCollisions`: o programa vence).
+
 **Uma saída que já está no store é semeada, nunca construída.** O realizador confere a validade da
 saída do plano antes de construir. A que o ISO ou uma máquina de teste carrega chega sem derivação e
 sem rede, e uma rede tarifada não a segura. É assim que os testes de VM do quiosque, do VS Code e da

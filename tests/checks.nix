@@ -27797,11 +27797,13 @@ let
     # in the right branch by luck, and would have gone on saying "local path"
     # after the inputs became a Release. A silent fallback needs a check; this
     # one WAS the silent fallback.
+    # ONE INPUT since 2026-10-24: the system font's. The full family's three
+    # variants are downloads of the same Release (`fontAssets` in `flake.nix`,
+    # pinned by hash like any download), fetched only to build the part that
+    # carries them — an input is fetched by every evaluation, and has to be on
+    # an ISO that installs with no network.
     expected = {
-        "fonts-ttf",
         "fonts-ttf-nerdfonts",
-        "fonts-woff2",
-        "fonts-woff2-nerdfonts",
     }
 
     nodes = json.load(open("${self}/flake.lock"))["nodes"]
@@ -28354,7 +28356,9 @@ let
       # THE PARTS EACH PROFILE WANTS (`nix/modules/parts.nix`): what the full
       # one carries as programs it arrives with, and the reduced one only
       # what is everybody's — the archives' unrar and the coding agent.
-      for id in chrome vscode android-studio android-sdk claude-code unrar uade; do
+      for id in chrome vscode android-studio android-sdk claude-code unrar uade \
+                vlc flutter blender orca-slicer onlyoffice libreoffice cadcraft wordcraft \
+                icon-superpack go python javascript nix-tools build-tools fonts-full; do
         grep -q -e "\"$id\"" ${fullPlan} || {
           echo "ERROR: the full profile does not want the part $id" >&2
           failed=1
@@ -28366,7 +28370,8 @@ let
           failed=1
         }
       done
-      for id in chrome vscode android-studio android-sdk; do
+      for id in chrome vscode android-studio android-sdk vlc flutter blender orca-slicer onlyoffice libreoffice cadcraft \
+                icon-superpack go python javascript fonts-full; do
         if grep -q -e "\"$id\"" ${minimalPlan}; then
           echo "ERROR: the minimal profile wants the part $id" >&2
           failed=1
@@ -28395,14 +28400,13 @@ let
       #
       # THE OFFICE AND THE CRAFTING APPS (2026-10-20, `office.enable` and
       # `crafts.enable`): ONLYOFFICE, LibreOffice and the distro's wrapped
-      # AppImages, whose names all start `ronoctua-appimage-`. (Chrome,
-      # VS Code and Android Studio left this list on 2026-10-24: not free,
-      # they are parts, in neither closure — below.)
-      for app in -emacs-pgtk-30 -vlc- \
-                 -flutter- -dart- -go-1 -noctua-iosevka-ttf-3 \
-                 -noctua-icon-theme- -waydroid- -appimage-run \
-                 -blender-5 -orca-slicer- \
-                 -onlyoffice-desktopeditors- -libreoffice- -ronoctua-appimage-; do
+      # AppImages, whose names all start `ronoctua-appimage-`. (On
+      # 2026-10-24 Chrome, VS Code and Android Studio left this list — not
+      # free —, and so did VLC, Flutter, the workshop, the office and the
+      # Crafting Apps — gigabytes the ISO need not hold: all PARTS, in
+      # neither closure, below.)
+      for app in -emacs-pgtk-30 \
+                 -waydroid- -appimage-run; do
         grep -q -e "$app" ${full}/store-paths || {
           echo "ERROR: $app is not in the full profile — did the name change?" >&2
           failed=1
@@ -28466,7 +28470,10 @@ let
       # realized after the installation and kept out of every system's
       # closure — a store path of one in a unit would bring it back, and this
       # is what would say so.
-      for part in -claude-code- -unrar- -uade- -google-chrome- -vscode-1 -android-studio- -androidsdk; do
+      for part in -claude-code- -unrar- -uade- -google-chrome- -vscode-1 -android-studio- -androidsdk \
+                  -vlc- -flutter- -blender-5 -orca-slicer- -onlyoffice-desktopeditors- -libreoffice- \
+                  -ronoctua-appimage- -noctua-icon-theme- -gotools- -pyright -go-1 \
+                  -noctua-iosevka-ttf-3 -noctua-iosevka-woff2-; do
         for profile in ${full} ${minimal}; do
           if grep -q -e "$part" $profile/store-paths; then
             echo "ERROR: $part is a part and is in a system's closure ($profile)" >&2
@@ -36021,7 +36028,11 @@ let
       );
       orcaId = lib.removeSuffix ".desktop" orcaEntry;
       mimeapps = full.config.environment.etc."xdg/mimeapps.list".source;
-      installed = builtins.elem orca full.config.environment.systemPackages;
+      # A PART (`nix/modules/workshop.nix`): wanted in the full plan, with
+      # this package.
+      installed =
+        full.config.ronoctua.parts.orca-slicer.wanted
+        && full.config.ronoctua.parts.orca-slicer.package.outPath == orca.outPath;
       minimalNames = lib.attrNames minimal.config.xdg.mime.defaultApplications;
       modelsInMinimal = lib.filter (lib.hasPrefix "model/") minimalNames;
       # EACH TYPE NAMED, by itself: OrcaSlicer's own entry declares `model/stl`
@@ -36195,6 +36206,11 @@ let
         builtins.toJSON (
           lib.mapAttrs (name: m: {
             path = "${m.config.system.path}";
+            # THE SUITES ARE PARTS (`nix/modules/office.nix`): their entries
+            # reach the session through the parts' view, after the system's.
+            parts = map (p: "${p.package}") (
+              builtins.filter (p: p.wanted) (builtins.attrValues m.config.ronoctua.parts)
+            );
             list = "${m.config.environment.etc."xdg/mimeapps.list".source}";
             entries = "${m.config.system.build.officeEntries}";
             want = expected.${name};
@@ -36234,7 +36250,7 @@ let
               "XDG_CONFIG_HOME": str(here / "home/.config"),
               "XDG_DATA_HOME": str(here / "home/.local/share"),
               "XDG_CONFIG_DIRS": str(xdg),
-              "XDG_DATA_DIRS": m["path"] + "/share",
+              "XDG_DATA_DIRS": ":".join([m["path"] + "/share"] + [p + "/share" for p in m["parts"]]),
               # The palettes, the texts and the brain's catalogue
               # (`rust.keyed`): this binary is the unwrapped one.
               "RONOCTUA_THEMES": "${rust.keyed.RONOCTUA_THEMES}",
@@ -42695,7 +42711,9 @@ let
           installed =
             map (p: discard (p.outPath or "")) c.environment.systemPackages
             ++ lib.mapAttrsToList (_: e: discard e.package.outPath) (
-              lib.filterAttrs (id: e: e.part && (c.ronoctua.parts.${id}.wanted or false)) c.ronoctua.apps
+              lib.filterAttrs (
+                id: e: e.part && e.package != null && (c.ronoctua.parts.${id}.wanted or false)
+              ) c.ronoctua.apps
             );
           programs = lib.mapAttrs (_: e: discard e.package.outPath) (
             lib.filterAttrs (_: e: e.package != null) c.ronoctua.apps
@@ -42855,11 +42873,15 @@ let
         if names.get(app, "absent") != name:
             wrong.append(f"distro-apps.json names `{app}` {names.get(app, 'absent')!r}, not {name!r}")
 
-    # AND A DECLINED ORCASLICER NAMES NO LAUNCHER ENTRY: reading the name is
-    # import-from-derivation, which a machine without it must never pay.
+    # AND ORCASLICER'S LAUNCHER ENTRY IS NAMED, NEVER READ: one name on every
+    # machine, declined or not — reading it out of the package was
+    # import-from-derivation, which made evaluating a machine wait for
+    # OrcaSlicer, a part (`nix/modules/workshop.nix`; `models-open-in-orca`
+    # watches the name against the package).
     orca = lambda r: next(a["desktop-ids"] for a in r["apps"] if a["id"] == "orca-slicer")
-    if len(orca(before["registry"])) != 1 or orca(after["registry"]) != []:
-        wrong.append(f"OrcaSlicer's launcher entry is read where it is not installed: {orca(after['registry'])}")
+    if orca(before["registry"]) != ["OrcaSlicer.desktop"] or orca(after["registry"]) != orca(before["registry"]):
+        wrong.append(f"OrcaSlicer's launcher entry is not the one name: {orca(before['registry'])} before, "
+                     f"{orca(after['registry'])} after a decline")
 
     if wrong:
         print("ERROR: a decline does not do what the registry promises:", file=sys.stderr)
@@ -43102,9 +43124,13 @@ let
           paths =
             map (p: discard (p.outPath or "")) c.environment.systemPackages
             ++ lib.concatLists (
-              lib.mapAttrsToList (_: e: map (p: discard p.outPath) ([ e.package ] ++ e.extraPackages)) wantedParts
+              lib.mapAttrsToList (
+                _: e: map (p: discard p.outPath) (builtins.filter (p: p != null) ([ e.package ] ++ e.extraPackages))
+              ) wantedParts
             );
-          names = map (p: p.name or "") c.environment.systemPackages;
+          names =
+            map (p: p.name or "") c.environment.systemPackages
+            ++ lib.mapAttrsToList (id: _: c.ronoctua.parts.${id}.package.name or "") wantedParts;
           carried = lib.mapAttrsToList (_: v: discard (toString v)) c.environment.sessionVariables;
         };
       factsOf =
@@ -43453,6 +43479,12 @@ let
             {
               name = n;
               path = "${c.system.path}";
+              # THE PARTS THE PROFILE WANTS (`nix/modules/parts.nix`), built:
+              # their launcher entries reach the session through the parts'
+              # view, and are the machine's as much as `system.path`'s.
+              parts = map (p: "${p.package}") (
+                builtins.filter (p: p.wanted) (builtins.attrValues c.ronoctua.parts)
+              );
               registry = builtins.fromJSON c.environment.etc."ronoctua/distro-apps.json".text;
             }
           )
@@ -43594,6 +43626,8 @@ let
     wrong, seen, used = [], 0, set()
     for profile in facts["profiles"]:
         found = scan(profile["path"])
+        for part in profile["parts"]:
+            found.update(scan(part))
         shown = sorted(i for i, v in found.items() if v)
         seen += len(shown)
         used |= set(shown) & set(infrastructure)
@@ -44171,7 +44205,12 @@ let
           registry =
             builtins.filter (a: builtins.elem a.id planted)
               (builtins.fromJSON c.environment.etc."ronoctua/distro-apps.json".text).apps;
-          packages = map (p: p.name or "") c.environment.systemPackages;
+          # IN `systemPackages`, or a wanted part's package
+          # (`nix/modules/parts.nix`): a distro AppImage is a part.
+          packages = map (p: p.name or "") (
+            c.environment.systemPackages
+            ++ map (p: p.package) (lib.filter (p: p.wanted) (lib.attrValues c.ronoctua.parts))
+          );
           flatpaks = c.ronoctua.distroApps.flatpaks;
           personFlatpaks = map (p: p.appId or "") c.home-manager.users.${user}.services.flatpak.packages;
           android = map (a: a // { apk = discard a.apk; }) c.ronoctua.distroApps.android;
@@ -44856,7 +44895,14 @@ let
           apps = builtins.listToAttrs (
             map (a: lib.nameValuePair a.id a.appimage) (builtins.filter (a: mine a.id) report.apps)
           );
-          system = ours (names c.environment.systemPackages);
+          # THE SYSTEM'S: in `systemPackages`, or a wanted part's package
+          # (`nix/modules/parts.nix`) — a distro AppImage is a part.
+          system = ours (
+            names (
+              c.environment.systemPackages
+              ++ map (p: p.package) (lib.filter (p: p.wanted) (lib.attrValues c.ronoctua.parts))
+            )
+          );
           profile = ours (names c.home-manager.users.${user}.home.packages);
           # WHAT THE PERSON'S LAUNCHER ENTRY RUNS, and whether it keeps the
           # opener's key: the entry derivation's own inputs.

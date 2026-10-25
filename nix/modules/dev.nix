@@ -27,7 +27,13 @@ let
   # Where a part's program is, by its stable path — `null` where the parts'
   # module is not imported (a test), and then nothing names it.
   partFile =
-    id: file: if config.ronoctua ? parts then "${config.ronoctua.parts.${id}.path}/${file}" else null;
+    id: file:
+    if !(config.ronoctua ? parts) then
+      null
+    else if file == "" then
+      config.ronoctua.parts.${id}.path
+    else
+      "${config.ronoctua.parts.${id}.path}/${file}";
 
   # COMMON LISP (2026-10-20): SBCL with its libraries, CCL, ECL, qlot,
   # alive-lsp and the Quicklisp installer — `nix/common-lisp/`, the one file
@@ -98,9 +104,11 @@ in
         # (Studio's as much as the SDK's).
         ANDROID_USER_HOME = "$XDG_DATA_HOME/android";
       })
-      (lib.mkIf config.ronoctua.distroApps.installed.flutter {
+      (lib.mkIf (config.ronoctua.distroApps.installed.flutter && partFile "flutter" "" != null) {
         # Flutter writes its own state; without this it lands in `~/.flutter`.
-        FLUTTER_ROOT = "${pkgs.flutter}";
+        # The part's stable path (Flutter is a part): a store path here would
+        # pull it back into the system's closure.
+        FLUTTER_ROOT = partFile "flutter" "";
       })
     ];
 
@@ -175,7 +183,12 @@ in
       };
 
       # ---- go ----
+      # THE TOOLCHAINS ARE PARTS (`nix/modules/parts.nix`), the five of the
+      # full profile: realized after the installation and out of the
+      # system's closure — the session finds them in the parts' view. (Rust
+      # and Common Lisp, in both profiles, are below the L15 anchor.)
       go = {
+        part = true;
         package = pkgs.go;
         extraPackages = with pkgs; [
           gopls
@@ -186,6 +199,7 @@ in
 
       # ---- python ----
       python = {
+        part = true;
         package = pkgs.python3.withPackages (
           ps: with ps; [
             pip
@@ -204,6 +218,7 @@ in
 
       # ---- javascript ----
       javascript = {
+        part = true;
         package = pkgs.nodejs_22;
         extraPackages = with pkgs; [
           pnpm
@@ -216,6 +231,7 @@ in
 
       # ---- nix itself ----
       nix-tools = {
+        part = true;
         package = pkgs.nix-tree; # what is actually in this closure
         extraPackages = with pkgs; [
           nixfmt
@@ -227,6 +243,7 @@ in
 
       # ---- general ----
       build-tools = {
+        part = true;
         package = pkgs.gcc;
         extraPackages = with pkgs; [
           gnumake
@@ -260,8 +277,12 @@ in
         ];
         group = "dev-android";
       };
+      # A PART (`nix/modules/parts.nix`), out of the system's closure, with
+      # the SDK it builds for.
       flutter = {
         package = pkgs.flutter;
+        part = true;
+        heavy = true;
         name = "Flutter";
         extraPackages = [ pkgs.dart ];
         group = "dev-android";

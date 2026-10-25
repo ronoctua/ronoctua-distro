@@ -1681,18 +1681,22 @@ vigia do brain, a página `s u d` e as quatro saídas de um download teimoso, e 
 por marcos, cada um verde:
 
 - **O que ficou do M4.** Uma recusa que diga "a caminho" em vez de "sem navegador"
-  (`Refusal::NoBrowser` da central, quando o Chrome é querido e ainda não chegou), e os números do
-  `profile.nix` medidos de novo sem os não livres (com o M5).
-- **M5 — downloads livres e programas do full.** Rust e devshell, Common Lisp, adplay, AppImages,
-  apks, `fonts-full` (como downloads, com o `pinGuard` estrutural), superpack, WordNet, escritório,
-  oficina, mídia, Emacs, toolchains; o `flake-registry.json` vira asset; todos os locales prontos.
-  E o yt-dlp, que saiu do piloto: ele é uma entrada do registro (`media`) e o overlay dele refaz o
-  mpv, então vira parte junto com a passagem do registro para as partes (`part = true`). Com as
-  partes numerosas, o `every-download-has-an-owner` (todo download é de uma parte ou da lista
-  fechada de fontes da base) e o lado Rust do `part-paths-are-read-as-arriving` (todo leitor de um
-  caminho de parte passa pelo `here`). E, com as partes pesadas (Android Studio, o empacotamento do
-  Chrome), a espera pela bateria abaixo do piso, como a da rede tarifada: hoje uma parte só espera
-  por uma rede tarifada.
+  (`Refusal::NoBrowser` da central, quando o Chrome é querido e ainda não chegou).
+- **O que ficou do M5.** Já são partes as Crafting Apps, o escritório, a oficina, o VLC, o Flutter,
+  as toolchains do full, o pacote de ícones e as variantes de fonte (o full mediu 19,2 GiB antes das
+  três últimas). Falta virar parte o que tem ligações mais fundas:
+  - o Rust e o toolchain do devshell, que o `system.extraDependencies` guarda nos dois perfis para
+    o `nix develop` offline (reescrevendo o `devshell-is-in-the-store`);
+  - o Common Lisp, cuja ativação semeia arquivos pelo caminho do store;
+  - o Emacs, com uma unidade própria e um `.path` no lugar do `services.emacs`, que põe o pacote no
+    `systemPackages`;
+  - o yt-dlp, cujo overlay refaz o mpv.
+
+  Faltam também separar a `corrected` das fontes por variante (hoje a face do sistema é construída
+  da árvore inteira) e os checks de cobertura: `every-download-has-an-owner`, `parts-hold-no-plugin`,
+  `parts-do-not-collide`, `parts-build`, o lado Rust do `part-paths-are-read-as-arriving` e o
+  `parts-absent-vm`. Por fim, a espera pela bateria abaixo do piso e os números do `profile.nix`
+  medidos de novo.
 - **M6 — instalação offline e primeiro boot.** O ISO calculado (as bases livres dos dois perfis, as
   partes livres do minimal, as entradas de build da cola do host, todo nó do lock), o instalador
   sem rede (sem o pulo, mirando sempre o ISO, `build-first`, os pertences depois do boot com a senha

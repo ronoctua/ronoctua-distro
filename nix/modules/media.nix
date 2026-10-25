@@ -213,8 +213,12 @@ in
             ];
           };
           # The one that opens what mpv refuses.
+          # A PART (`nix/modules/parts.nix`), out of the system's closure:
+          # the full profile's player of last resort, realized after the
+          # installation.
           vlc = {
             package = pkgs.vlc;
+            part = true;
             name = "VLC";
             desktopIds = [ "vlc.desktop" ];
           };

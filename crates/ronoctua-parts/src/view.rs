@@ -17,12 +17,15 @@ use std::collections::BTreeMap;
 
 /// The folders of a part the view links, relative to its profile. Nothing
 /// else of a part reaches the session.
-pub const LINKED: [&str; 5] = [
+pub const LINKED: [&str; 6] = [
     "bin",
     "share/applications",
     "share/icons",
     "share/pixmaps",
     "share/man",
+    // Faces a part brings (the full family, `fonts-full`): the system's
+    // fontconfig names this folder of the view (`nix/fontconfig.nix`).
+    "share/fonts",
 ];
 
 /// The program `name` in the view's `bin/` — there only once its part

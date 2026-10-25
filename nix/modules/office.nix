@@ -29,18 +29,20 @@
 # default is set from `ronoctua.distroApps.installed`, which reads the
 # declines — the shape `workshop.nix` gives OrcaSlicer's model types.
 #
-# WHY THE ENTRIES' NAMES ARE WRITTEN, AND CHECKED AT BUILD
-# --------------------------------------------------------
+# WHY THE ENTRIES' NAMES ARE WRITTEN, AND CHECKED
+# -----------------------------------------------
 # Upstream names them (`onlyoffice-desktopeditors.desktop`, LibreOffice's
 # `writer.desktop`, `calc.desktop`…), and reading them out of the packages at
 # evaluation would make every evaluation of a machine with the suites wait
 # for two gigabytes to be fetched (import-from-derivation). So they are
-# written here, and `system.checks` reads each named entry at BUILD: it must
-# exist in the package the machine installs, be an application, and claim the
-# type it is named for — a rename upstream stops the build, never sends a
-# document to nothing. `distro-apps-are-registered` proves the registry's
-# entries are there, and `documents-open-in-their-suite` the whole way from a
-# file to the entry.
+# written here, and `system.build.officeEntries` reads each named entry: it
+# must exist in the package, be an application, and claim the type it is
+# named for. NOT a `system.checks`: both suites are PARTS
+# (`nix/modules/parts.nix`), realized after the installation, and building a
+# system — offline, from the ISO — must not wait for them;
+# `documents-open-in-their-suite` builds the reading for each machine it
+# asks about, and proves the whole way from a file to the entry, and
+# `distro-apps-are-registered` that the registry's entries are there.
 {
   config,
   lib,
@@ -177,8 +179,14 @@ in
       # own `.deb` (`binaryNativeCode`) and not unfree: the unfree predicate
       # does not name it. Its bundled Qt draws through XWayland
       # (`QT_QPA_PLATFORM=xcb`, the package's own wrapper).
+      #
+      # BOTH ARE PARTS (`nix/modules/parts.nix`): gigabytes the full profile
+      # carries, realized after the installation and out of the system's
+      # closure. Heavy: the small parts arrive first.
       ronoctua.apps.onlyoffice = {
         package = onlyoffice;
+        part = true;
+        heavy = true;
         name = "ONLYOFFICE";
         group = "office";
         desktopIds = [ onlyofficeEntry ];
@@ -189,6 +197,8 @@ in
       # package's own: owned, so no file of the suite is left unaccounted.
       ronoctua.apps.libreoffice = {
         package = libreoffice;
+        part = true;
+        heavy = true;
         name = "LibreOffice";
         group = "office";
         desktopIds = [
@@ -207,9 +217,9 @@ in
     (lib.mkIf (hasOnlyoffice || hasLibreoffice) {
       xdg.mime.enable = true;
       xdg.mime.defaultApplications = lib.mapAttrs (_: d: d.entry) defaults;
-      system.checks = [ entriesAreThere ];
-      # The same reading, by name, for `documents-open-in-their-suite`, which
-      # builds it for each machine it asks about.
+      # The reading, by name, for `documents-open-in-their-suite`, which
+      # builds it for each machine it asks about (see above: never a
+      # `system.checks`).
       system.build.officeEntries = entriesAreThere;
     })
   ];

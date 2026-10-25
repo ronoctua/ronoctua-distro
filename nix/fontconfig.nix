@@ -359,6 +359,12 @@ let
     -->
     <fontconfig>
 
+      <!-- THE PARTS' FACES (`nix/modules/parts.nix`): what a part brings —
+           the full family's variants, `fonts-full` — reaches the session
+           through the parts' view, here. A folder that is not there yet is
+           skipped, and fontconfig sees the faces once they arrived. -->
+      <dir>${(import ./parts-names.nix).view}/share/fonts</dir>
+
       <!-- Generics. noctua-iosevka first in all three, by design.
 
            NO `binding="same"` on the aliases, on purpose. That attribute promotes
