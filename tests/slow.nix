@@ -57,6 +57,8 @@
   "parts-stay-out-of-the-base"
   "iso-has-no-toolchain"
   "iso-carries-the-seed"
+  # The ISO's whole store, to install two machines against.
+  "iso-builds-only-glue"
   # The ISO booted as it ships, from an emulated USB stick, twice: whole,
   # and with its store's tail lost (`tests/iso-stick-vm.nix`). It builds the
   # image, and each boot reads the whole store.

@@ -1,0 +1,114 @@
+{
+  "version": 2,
+  "system": "x86_64-linux",
+  "virtualisation": "none",
+  "uefi": {
+    "supported": true
+  },
+  "hardware": {
+    "cpu": [
+      {
+        "vendor_name": "AuthenticAMD",
+        "family": 25,
+        "model": 68,
+        "features": [
+          "fpu",
+          "svm",
+          "aes",
+          "avx2"
+        ]
+      }
+    ],
+    "graphics_card": [
+      {
+        "driver_modules": [
+          "amdgpu"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "monitor": [
+      {
+        "model": "probe panel"
+      }
+    ],
+    "network_controller": [
+      {
+        "driver_modules": [
+          "mt7921e"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        },
+        "vendor": {
+          "value": 5315
+        },
+        "device": {
+          "value": 1558
+        }
+      }
+    ],
+    "network_interface": [
+      {
+        "sub_class": {
+          "name": "WLAN"
+        },
+        "unix_device_names": [
+          "wlp1s0"
+        ]
+      }
+    ],
+    "storage_controller": [
+      {
+        "driver_modules": [
+          "nvme"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "disk": [
+      {
+        "driver_modules": [
+          "nvme"
+        ]
+      }
+    ],
+    "usb_controller": [
+      {
+        "driver_modules": [
+          "xhci_pci"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "bluetooth": [
+      {
+        "driver_modules": [
+          "btusb"
+        ],
+        "bus_type": {
+          "name": "USB"
+        }
+      }
+    ],
+    "usb": [
+      {
+        "bus_type": {
+          "name": "USB"
+        },
+        "vendor": {
+          "value": 1739
+        },
+        "device": {
+          "value": 252
+        }
+      }
+    ]
+  }
+}

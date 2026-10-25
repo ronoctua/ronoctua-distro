@@ -28269,6 +28269,49 @@ let
   # build under the same name would answer for a path the target does not
   # have. Which `ship` program is an entry or inside one is
   # `seed-holds-every-shipped-bin`'s question.
+  # AN INSTALLATION FROM THE ISO BUILDS ONLY GLUE, on a machine unlike every
+  # probe (`nix/installer/offline.nix`). Two machines no probe is
+  # (`tests/fixtures/machine-unseen`, an AMD laptop on UEFI, and
+  # `machine-unseen-bios`, an Intel desktop on BIOS) are installed against
+  # the ISO's store as Nix makes it with no network: an output the ISO
+  # carries is found, any other is built, and a download it would fetch, or
+  # a package it would build from one, is the installation stopping — named.
+  # Each has to build something, or it shows nothing a probe did not.
+  #
+  # The probes cannot ask it: the ISO carries their systems whole. A walk
+  # that kept only what the systems REFERENCE left out what their builds
+  # only read — the microcode an initrd is prepended with, the linux-firmware
+  # the AMD one is cut from — and every machine with a CPU stopped before
+  # its disk, with only the guest installed (2026-10-25, a ThinkPad Z16).
+  iso-builds-only-glue =
+    let
+      carried = pkgs.closureInfo {
+        rootPaths = self.nixosConfigurations.installer.config.isoImage.storeContents;
+      };
+      # What an installation builds of a system, as the walk reads it.
+      tops =
+        lib.concatMap
+          (
+            name:
+            let
+              s = self.lib.machine { dir = ./fixtures + "/${name}"; };
+            in
+            map (d: builtins.unsafeDiscardOutputDependency d.drvPath) [
+              s.config.system.build.toplevel
+              s.config.system.build.destroyFormatMount
+            ]
+          )
+          [
+            "machine-unseen"
+            "machine-unseen-bios"
+          ];
+    in
+    mkCheck "iso-builds-only-glue" [ pkgs.python3 ] ''
+      python3 ${../nix/scripts/offline-glue.py} --carried ${carried}/store-paths \
+        --installs ${lib.escapeShellArgs tops}
+      echo "OK: two machines unlike every probe install from what the ISO carries, with no network"
+    '';
+
   iso-carries-the-seed =
     let
       seed = pkgs.closureInfo {
@@ -55647,6 +55690,7 @@ let
       parts-stay-out-of-the-base
       unfree-never-refuses
       iso-carries-nothing-undistributable
+      iso-builds-only-glue
       the-complete-iso-is-never-released
       iso-complete-carries-every-part
       installer-reaches-no-network

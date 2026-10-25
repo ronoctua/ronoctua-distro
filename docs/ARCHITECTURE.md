@@ -19687,13 +19687,13 @@ parte (seção "Partes").
   dá boot por BIOS no perfil minimal e um convidado QEMU que deixou programas de fora. Os relatórios
   de hardware delas são escritos à mão, só com os campos que os módulos do facter leem, para que cada
   ramo traga o pacote dele (microcode, GRUB, módulos de convidado);
-- **a cola**: as saídas que cada derivação que uma sonda constrói diferente das referências toma de
-  derivações que não diferem. Uma instalação constrói umas cem derivações que dependem das respostas e
-  do hardware (`etc`, o initrd, as unidades que nomeiam o host, o script do `disko`), e as entradas
-  delas (`make-initrd-ng`, `cpio`, o stdenv, o ambiente do perl) não estão em fecho de execução
-  nenhum. Sem elas, um `nixos-install` offline pedia 4684 derivações, a partir da semente do
-  bootstrap. Uma derivação que toma um download (uma FOD) é pacote construído da fonte: o alvo nunca a
-  constrói, porque precisaria da rede, então ela vem pronta no fecho de uma sonda e não gera cola;
+- **a cola**: as saídas que cada derivação que o alvo constrói toma de uma que ele não constrói. Uma
+  instalação constrói umas cem derivações que dependem das respostas e do hardware (`etc`, o initrd,
+  as unidades que nomeiam o host, o script do `disko`), e as entradas delas (`make-initrd-ng`, `cpio`,
+  o stdenv, o ambiente do perl) não estão em fecho de execução nenhum. Sem elas, um `nixos-install`
+  offline pedia 4684 derivações, a partir da semente do bootstrap. O alvo nunca constrói um download
+  (uma FOD) nem um pacote feito de um, porque precisaria da rede; o que ele toma desses é cola tanto
+  quanto o que toma das referências;
 - a fonte de todo nó do `flake.lock` (`lockSources`), que avaliar o flake da máquina busca;
 - as partes que ele semeia: as livres que o minimal quer, no ISO publicado (hoje nenhuma); todas as
   das duas referências, não livres inclusive, no ISO completo.
@@ -19704,6 +19704,21 @@ lê um `.drv` (o Nix 2.34 recusa o `readFile`), então a caminhada é uma deriva
 que leva ao sandbox os arquivos do grafo e não constrói nada. O `drvPath` puro, contexto profundo, faria
 de toda saída do grafo uma entrada, e construir a caminhada seria construir tudo. É a única IFD da
 árvore, só no conteúdo do ISO, e roda em menos de um segundo, sem rede.
+
+**O fecho de uma sonda não é tudo o que a instalação dela lê.** A cola já supôs que um pacote feito
+de um download viria pronto no fecho de uma sonda, e isso só vale para o que o sistema REFERENCIA. O
+microcode é colado na frente do initrd, e o initrd é construído no alvo; o `amd-ucode` sai do
+`linux-firmware` bruto, que só o constrói; os firmwares brutos só existem para virar a versão
+comprimida. Nenhum deles fica no fecho, e toda máquina com uma CPU parou no `build-first` pedindo à
+rede o fonte do `linux-firmware`. Só o convidado instalava, e o `installer-offline-vm` é um convidado
+(2026-10-25, num ThinkPad Z16).
+
+**Duas máquinas que nenhuma sonda é provam o ISO** (`iso-builds-only-glue`): um notebook AMD com UEFI
+(`tests/fixtures/machine-unseen`) e um desktop Intel com BIOS (`machine-unseen-bios`), cada uma o
+cruzamento de duas sondas. O check as instala contra o store do ISO como o Nix faz sem rede: uma saída
+que o ISO leva é achada, e as outras são construídas, com as entradas perguntadas do mesmo jeito. Um
+download que buscaria, ou um pacote que construiria de um download, é a instalação parando, com o
+nome. As sondas não servem para isso: o ISO leva o sistema delas inteiro.
 
 **Um hardware que nenhuma sonda cobre falha antes do disco.** O passo `build-first` constrói o sistema
 (`nix build --offline … .toplevel`) antes do `disko`: o que faltar aparece com o disco intacto.

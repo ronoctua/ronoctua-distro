@@ -1,0 +1,87 @@
+{
+  "version": 2,
+  "system": "x86_64-linux",
+  "virtualisation": "none",
+  "uefi": {
+    "supported": false
+  },
+  "hardware": {
+    "cpu": [
+      {
+        "vendor_name": "GenuineIntel",
+        "family": 6,
+        "model": 151,
+        "features": [
+          "fpu",
+          "vmx",
+          "aes",
+          "avx2"
+        ]
+      }
+    ],
+    "graphics_card": [
+      {
+        "driver_modules": [
+          "i915"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "monitor": [
+      {
+        "model": "probe monitor"
+      }
+    ],
+    "network_controller": [
+      {
+        "driver_modules": [
+          "e1000e"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "network_interface": [
+      {
+        "sub_class": {
+          "name": "Ethernet"
+        },
+        "unix_device_names": [
+          "eno1"
+        ]
+      }
+    ],
+    "storage_controller": [
+      {
+        "driver_modules": [
+          "ahci"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ],
+    "disk": [
+      {
+        "driver_modules": [
+          "ahci",
+          "sd_mod"
+        ]
+      }
+    ],
+    "usb_controller": [
+      {
+        "driver_modules": [
+          "xhci_pci",
+          "ehci_pci"
+        ],
+        "bus_type": {
+          "name": "PCI"
+        }
+      }
+    ]
+  }
+}

@@ -12,12 +12,16 @@
 # So the ISO carries, for every system below:
 #
 #   1. its runtime closure — the references, and the probes, whose hardware
-#      brings packages no reference has (microcode, the GRUB of a BIOS
-#      machine, a guest's modules);
-#   2. THE GLUE: the outputs every derivation a probe builds differently
-#      from the references takes from derivations that do NOT differ. Found
-#      by walking the `.drv` graphs (`nix/scripts/offline-glue.py`): the
-#      references' whole, a probe's only below what differs;
+#      brings packages no reference has (the GRUB of a BIOS machine, a
+#      guest's modules);
+#   2. THE GLUE: the outputs every derivation the target builds takes from
+#      one it does not build — the references', and a download or a package
+#      made from one, which the target never builds. Found by walking the
+#      `.drv` graphs (`nix/scripts/offline-glue.py`): the references' whole,
+#      a probe's only below what differs. What a system only READS while it
+#      builds is in no closure: the microcode an initrd is prepended with,
+#      the linux-firmware the AMD one is cut from (`iso-builds-only-glue`
+#      installs two machines unlike every probe against the ISO);
 #   3. every node of the lock (`lockSources`), which evaluating the machine's
 #      flake fetches;
 #   4. the parts it seeds (`seeded`): their packages, so a part the plan
