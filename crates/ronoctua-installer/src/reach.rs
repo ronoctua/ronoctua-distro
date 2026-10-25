@@ -214,16 +214,19 @@ impl Reach {
             // ISO runs no secret agent, and a password left to one is never
             // used (`join_for_this_boot`). The installed machine gets its
             // own profile and its own sealing.
+            //
+            // A JOIN NOT EVEN STARTED is no refused key: NetworkManager turned
+            // the request down, or the network went out of range.
             match manager.join_for_this_boot(ssid, password) {
                 Ok(join) => Some(join),
-                Err(_) => return Gate::Unconnected,
+                Err(_) => return Gate::Unjoined,
             }
         };
-        let refused = |join: &Joining| {
+        let over = |join: &Joining, said: Gate| {
             // Its profile goes with it, so the daemon does not try a refused
             // key again on its own.
             let _ = manager.abandon(join);
-            Gate::Unconnected
+            said
         };
         let most = Duration::from_secs(if join.is_some() {
             JOIN_MOST_S
@@ -238,12 +241,15 @@ impl Reach {
             // answer the moment it comes — a refused key at once, any other
             // ending after the join tried again (`JOIN_MOST_S`): there is
             // nothing left to wait for.
+            //
+            // AND ONLY A REFUSED KEY SAYS "check its password": every other
+            // ending says the network was not joined, and nothing of the
+            // password (a right one read "check it", 2026-10-25).
             let joined = join.as_ref().map(|j| manager.joining(j));
-            if let Some(j) = join
-                .as_ref()
-                .filter(|_| matches!(joined, Some(Joined::Refused | Joined::Failed)))
-            {
-                return refused(j);
+            match (join.as_ref(), joined) {
+                (Some(j), Some(Joined::Refused)) => return over(j, Gate::Unconnected),
+                (Some(j), Some(Joined::Failed)) => return over(j, Gate::Unjoined),
+                _ => {}
             }
             let look = manager.look();
             let up = joined.map_or_else(|| look.linked(), |j| j == Joined::Up);
@@ -255,7 +261,7 @@ impl Reach {
                 || linked_at.is_some_and(|t| t.elapsed() >= Duration::from_secs(MEASURE_MOST_S));
             if !coming || too_long {
                 if let Some(j) = join.as_ref().filter(|_| !up) {
-                    return refused(j);
+                    return over(j, Gate::Unjoined);
                 }
                 return gate(&look);
             }

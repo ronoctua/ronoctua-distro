@@ -211,6 +211,28 @@ pacote; a linha de um Flatpak ou de um app Android da distro não leva nome, e u
 antes de ser instalado apareceria na central pelo id. A tabela não tem nenhum hoje. Acabou quando:
 as duas formas aceitam `name` e o `distro-app-sources-are-checked` o planta.
 
+### 0.0000032. O console: o teclado escolhido não chega a ele, e o boot do ISO pisca · pequeno cada
+
+- **O instalador pergunta o teclado e não o aplica ao console.** O `console.keyMap` do ISO é o `uk`
+  de `nix/keyboard-xkb.nix`, e nada roda `loadkeys` com a resposta: a senha do Wi-Fi, a do usuário
+  e a frase do disco são digitadas no `uk`. E o `host.nix` escreve `layout`, `variant` e `compose`,
+  mas não `ronoctua.keyboard.console`: o console do sistema instalado — e o prompt do LUKS no initrd
+  — fica no `uk` em toda máquina, enquanto a sessão gráfica usa o layout escolhido. Uma senha com
+  `@ # " \ | ~` digitada num teclado americano fica gravada com outros caracteres do que a sessão
+  digita. Visto num Z16 de teclado americano (2026-10-25): `|` saía `~` até um `loadkeys us`. O
+  caminho: o mapa do console derivado do mesmo xkb da resposta (como o `console.useXkbConfig`, os
+  mapas de cada resposta oferecida gerados no build), carregado pelo instalador assim que a resposta
+  é dada, e levado pelo `host.nix`.
+  - acabou quando: numa VM com o layout `us` escolhido, o que se digita no instalador sai com os
+    símbolos do `us`, e o `host.nix` gerado leva o mapa do console da resposta
+- **O boot do ISO pisca e reimprime o prompt.** Num Z16 (amdgpu) com o ISO de 2026-10-25, o prompt
+  do root aparece, a tela pisca e volta com um segundo prompt e um espaço vazio entre os dois — o
+  que a versão anterior não fazia. A suspeita é o `systemd-vconsole-setup` rodando de novo depois do
+  prompt (o 8 × 16 e depois o 15 × 32: o console muda de tamanho duas vezes, e o bash redesenha o
+  prompt), mas falta o log da máquina: `journalctl -b -o short-monotonic -u systemd-vconsole-setup`
+  e as linhas do kernel sobre `fbcon` e `amdgpu`.
+  - acabou quando: o boot do ISO nessa máquina mostra o prompt uma vez só
+
 ### 0.0000035. O que a câmera ainda não faz · pequeno a médio cada
 
 - **Câmera MIPI atrás do libcamera** (muitos laptops novos com sensor Intel IPU): ela não é um nó

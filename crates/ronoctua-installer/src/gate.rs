@@ -44,8 +44,13 @@ pub enum Gate {
     Off,
     /// No link is connected: no cable, and no Wi-Fi chosen or joined.
     NoLink,
-    /// The chosen Wi-Fi network refused the connection, or vanished.
+    /// The chosen Wi-Fi network refused its password.
     Unconnected,
+    /// The chosen Wi-Fi network was not joined, and its password was not
+    /// refused: NetworkManager turned the join down, the network went out
+    /// of range, or nothing came up in time. Never said as a password to
+    /// check — a right one was (2026-10-25).
+    Unjoined,
     /// A login page stands between the link and the internet.
     Portal,
 }
@@ -66,6 +71,7 @@ impl Gate {
             Self::Off => key::INST_GATE_OFF,
             Self::NoLink => key::INST_GATE_NO_LINK,
             Self::Unconnected => key::INST_GATE_UNCONNECTED,
+            Self::Unjoined => key::INST_GATE_UNJOINED,
             Self::Portal => key::INST_GATE_PORTAL,
         }
     }
@@ -79,6 +85,7 @@ impl Gate {
             Self::Off => "off",
             Self::NoLink => "no-link",
             Self::Unconnected => "unconnected",
+            Self::Unjoined => "unjoined",
             Self::Portal => "portal",
         }
     }
@@ -188,6 +195,7 @@ mod tests {
             Gate::Off,
             Gate::NoLink,
             Gate::Unconnected,
+            Gate::Unjoined,
             Gate::Portal,
         ] {
             assert!(!g.open(), "{g:?}");

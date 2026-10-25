@@ -520,6 +520,11 @@ pub const KEPT_BY_THE_AGENT: u32 = 1;
 /// not letting the radio in ([`follow`]).
 pub const JOIN_MOST_S: u64 = 90;
 
+/// No access point: NetworkManager chooses one the profile fits
+/// ([`Manager::radio_toward`] says why a join never names one).
+const ANY_ACCESS_POINT: zbus::zvariant::ObjectPath<'static> =
+    zbus::zvariant::ObjectPath::from_static_str_unchecked("/");
+
 /// The settings of a Wi-Fi profile for `ssid`, with `password` under
 /// `psk_flags`.
 fn wifi_settings<'a>(
@@ -697,8 +702,10 @@ const fn next_of(new: u32, old: u32, reason: u32, in_time: bool, unheard: u32) -
 }
 
 /// A join whose activations never associated, twice: REFUSED when the
-/// access point it was asked toward is still in view (`rsn` read off it)
-/// and takes SAE — SAE turns a wrong key down at authentication, before
+/// network is still in view (`rsn`: every access point of its name on the
+/// radio, together — [`in_view`]) and takes SAE — which a `wpa-psk` profile
+/// tries too, where the radio can — SAE turns a wrong key down at
+/// authentication, before
 /// association, and NetworkManager says nothing else of it
 /// ([`nm::REASON_SSID_NOT_FOUND`]). Not a hold: the first ending cleared
 /// the supplicant's. Out of view, or a `wpa-psk`-only network — whose wrong
@@ -715,15 +722,15 @@ pub const fn unanswered(rsn: Option<u32>) -> Joined {
 /// activation was asked: a refused key settles it at once; an activation
 /// that ended for any other reason is asked again, the same profile on the
 /// same radio, while [`JOIN_MOST_S`] has not passed — but a second one that
-/// never associated is the network's answer ([`unanswered`], read off
-/// `access_point`, the one the join was asked toward); nothing up by then
+/// never associated is the network's answer ([`unanswered`], read off the
+/// access points of `ssid` the radio still lists); nothing up by then
 /// settles it. Every way out but the radio coming up settles the join, so a
 /// door never waits on a follower that stopped.
 fn follow(
     connection: &zbus::blocking::Connection,
     signals: zbus::blocking::MessageIterator,
     device: &OwnedObjectPath,
-    access_point: &OwnedObjectPath,
+    ssid: &str,
     join: &Joining,
     asked: Instant,
 ) {
@@ -749,14 +756,7 @@ fn follow(
             Next::Done => return,
             Next::Refused => return join.settle(Joined::Refused),
             Next::Unanswered => {
-                // IN VIEW is an access point NetworkManager still lists: it
-                // removes the object of one no scan sees any more.
-                let rsn = nm::AccessPointProxyBlocking::builder(connection)
-                    .path(access_point.clone())
-                    .ok()
-                    .and_then(|b| b.build().ok())
-                    .and_then(|p| p.rsn_flags().ok());
-                return join.settle(unanswered(rsn));
+                return join.settle(unanswered(in_view(connection, device, ssid)));
             }
             Next::Failed => return join.settle(Joined::Failed),
             Next::Gone => {
@@ -771,7 +771,7 @@ fn follow(
                     g.activate_connection(
                         &join.profile.as_ref(),
                         &device.as_ref(),
-                        &zbus::zvariant::ObjectPath::from_static_str_unchecked("/"),
+                        &ANY_ACCESS_POINT,
                     )
                 });
                 match again {
@@ -845,6 +845,79 @@ pub const fn secured(flags: u32, wpa: u32, rsn: u32) -> bool {
 #[must_use]
 pub const fn wpa3_only(rsn: u32) -> bool {
     rsn & nm::AP_SEC_KEY_MGMT_SAE != 0 && rsn & nm::AP_SEC_KEY_MGMT_PSK == 0
+}
+
+/// One access point of a network, by its key flags, as a join hears it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Heard {
+    /// `WpaFlags`.
+    pub wpa: u32,
+    /// `RsnFlags`.
+    pub rsn: u32,
+}
+
+/// Whether a join's profile for a network is `sae`, from EVERY access point
+/// of its name: only when none takes PSK and one is WPA3-only. Pure.
+///
+/// A network is more than one access point. A router on three bands is WPA2
+/// and WPA3 in transition on 2.4 and 5 GHz, and WPA3 alone on 6 GHz, as the
+/// standard requires there — and the `wpa-psk` such a network gets reaches
+/// its 6 GHz band too: for `wpa-psk`, NetworkManager hands the supplicant
+/// SAE as well when the radio can (SAE, PMF and BIP; `nm-supplicant-config.c`).
+/// Read off one access point, a 6 GHz one would have put the whole network
+/// on `sae`, which a radio without SAE cannot join on any band.
+#[must_use]
+pub fn sae_profile(heard: &[Heard]) -> bool {
+    let takes_psk = heard
+        .iter()
+        .any(|h| (h.wpa | h.rsn) & nm::AP_SEC_KEY_MGMT_PSK != 0);
+    !takes_psk && heard.iter().any(|h| wpa3_only(h.rsn))
+}
+
+/// Every access point of `ssid` the radio at `device` lists.
+fn heard_of(
+    connection: &zbus::blocking::Connection,
+    device: &OwnedObjectPath,
+    ssid: &str,
+) -> Vec<Heard> {
+    let Some(radio) = nm::RadioProxyBlocking::builder(connection)
+        .path(device.clone())
+        .ok()
+        .and_then(|b| b.build().ok())
+    else {
+        return Vec::new();
+    };
+    radio
+        .get_all_access_points()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|path| {
+            let p = nm::AccessPointProxyBlocking::builder(connection)
+                .path(path)
+                .ok()?
+                .build()
+                .ok()?;
+            p.ssid()
+                .is_ok_and(|b| ssid_name(&b) == ssid)
+                .then(|| Heard {
+                    wpa: p.wpa_flags().unwrap_or(0),
+                    rsn: p.rsn_flags().unwrap_or(0),
+                })
+        })
+        .collect()
+}
+
+/// The `RsnFlags` of every access point of `ssid` the radio at `device`
+/// lists, together; `None` when it lists none. IN VIEW is an access point
+/// NetworkManager still lists: it removes the object of one no scan sees
+/// any more.
+fn in_view(
+    connection: &zbus::blocking::Connection,
+    device: &OwnedObjectPath,
+    ssid: &str,
+) -> Option<u32> {
+    let heard = heard_of(connection, device, ssid);
+    (!heard.is_empty()).then(|| heard.iter().fold(0, |all, h| all | h.rsn))
 }
 
 /// `ay` from the bus -> a name.
@@ -1501,28 +1574,18 @@ impl Manager {
         if password.is_some() {
             return self.join_for_this_boot(ssid, password);
         }
-        let (device, access_point, sae) = self.radio_toward(ssid)?;
+        let (device, sae) = self.radio_toward(ssid)?;
         let g = self.manager()?;
         let signals = self.signals_of(&device);
         if let Some(profile) = self.profile_of(ssid)? {
             let active =
-                g.activate_connection(&profile.as_ref(), &device.as_ref(), &access_point.as_ref())?;
-            return Ok(self.followed(
-                Joining::of(profile, active, false),
-                device,
-                access_point,
-                signals,
-            ));
+                g.activate_connection(&profile.as_ref(), &device.as_ref(), &ANY_ACCESS_POINT)?;
+            return Ok(self.followed(Joining::of(profile, active, false), device, ssid, signals));
         }
         let connection = wifi_settings(ssid, None, sae, KEPT_BY_THE_DAEMON);
         let (profile, active) =
-            g.add_and_activate_connection(connection, &device.as_ref(), &access_point.as_ref())?;
-        Ok(self.followed(
-            Joining::of(profile, active, true),
-            device,
-            access_point,
-            signals,
-        ))
+            g.add_and_activate_connection(connection, &device.as_ref(), &ANY_ACCESS_POINT)?;
+        Ok(self.followed(Joining::of(profile, active, true), device, ssid, signals))
     }
 
     /// The radio's `StateChanged`, heard from now on — asked BEFORE the
@@ -1544,12 +1607,12 @@ impl Manager {
     }
 
     /// `join`, with a follower on its radio ([`follow`]) when `signals` were
-    /// heard; `access_point` is the one it was asked toward.
+    /// heard; `ssid` is the network it was asked toward.
     fn followed(
         &self,
         join: Joining,
         device: OwnedObjectPath,
-        access_point: OwnedObjectPath,
+        ssid: &str,
         signals: Option<zbus::blocking::MessageIterator>,
     ) -> Joining {
         let Some(signals) = signals else {
@@ -1557,9 +1620,10 @@ impl Manager {
         };
         join.attempt().followed = true;
         let (mine, connection, asked) = (join.clone(), self.connection.clone(), Instant::now());
+        let ssid = ssid.to_owned();
         let started = std::thread::Builder::new()
             .name("net-join".to_owned())
-            .spawn(move || follow(&connection, signals, &device, &access_point, &mine, asked));
+            .spawn(move || follow(&connection, signals, &device, &ssid, &mine, asked));
         if started.is_err() {
             join.attempt().followed = false;
         }
@@ -1586,7 +1650,7 @@ impl Manager {
     /// There is no radio, the network is out of range, or NetworkManager
     /// refused the profile.
     pub fn join_for_this_boot(&self, ssid: &str, password: Option<&str>) -> Result<Joining> {
-        let (device, access_point, sae) = self.radio_toward(ssid)?;
+        let (device, sae) = self.radio_toward(ssid)?;
         for earlier in self.held_in_memory(ssid)? {
             let _ = self.profile(&earlier)?.delete();
         }
@@ -1595,15 +1659,10 @@ impl Manager {
         let (profile, active, _) = self.manager()?.add_and_activate_connection2(
             connection,
             &device.as_ref(),
-            &access_point.as_ref(),
+            &ANY_ACCESS_POINT,
             HashMap::from([("persist", Value::from("memory"))]),
         )?;
-        Ok(self.followed(
-            Joining::of(profile, active, true),
-            device,
-            access_point,
-            signals,
-        ))
+        Ok(self.followed(Joining::of(profile, active, true), device, ssid, signals))
     }
 
     /// Where a join stands.
@@ -1736,53 +1795,40 @@ impl Manager {
         Ok(out)
     }
 
-    /// The radio that sees `ssid`, the access point of `ssid` on it, and
-    /// whether that access point asks for `sae`.
+    /// The radio that sees `ssid`, and whether its profile is `sae`
+    /// ([`sae_profile`], over every access point of the name on that radio).
     ///
     /// THE RADIO THAT SEES IT, and not the first one listed: a machine with
     /// a second radio (a USB one, or one serving as an access point) lists
     /// it first as often as not, and that radio is out of range of
     /// everything.
-    fn radio_toward(&self, ssid: &str) -> Result<(OwnedObjectPath, OwnedObjectPath, bool)> {
-        // Which key management this SSID needs, from the scan we already have.
-        // Unknown network -> `wpa-psk`, which is what worked before this existed.
-        let sae = self
-            .networks()
-            .unwrap_or_default()
-            .iter()
-            .find(|n| n.ssid == ssid)
-            .is_some_and(|n| n.wpa3_only);
+    ///
+    /// # The radio, and never an access point
+    ///
+    /// A join names the radio and leaves the access point to NetworkManager
+    /// ([`ANY_ACCESS_POINT`]), as `nmcli connection up` and its own
+    /// autoconnect do: completing a new profile with none named, it takes the
+    /// first access point its compatibility test lets through
+    /// (`nm_wifi_aps_find_first_compatible`, which wants PSK for `wpa-psk`).
+    /// A join used to name the first access point of the name in the radio's
+    /// list, and a network is more than one: on a router on three bands, the
+    /// supplicant had listed the 6 GHz one first, which takes WPA3 alone.
+    /// NetworkManager refused that pair itself, before the radio tried a key
+    /// ("Access point does not support PSK but setting requires it", its
+    /// audit at `INFO`), and the installer said "check its password" of a
+    /// right one (an MT7922, 2026-10-25).
+    fn radio_toward(&self, ssid: &str) -> Result<(OwnedObjectPath, bool)> {
         let radios = self.devices_of_kind(nm::WIFI_KIND)?;
         if radios.is_empty() {
             return Err(refusal::Named(refusal::Refusal::NoRadio).into());
         }
         for device in radios {
-            if let Some(access_point) = self.access_point_at(&device, ssid)? {
-                return Ok((device, access_point, sae));
+            let heard = heard_of(&self.connection, &device, ssid);
+            if !heard.is_empty() {
+                return Ok((device, sae_profile(&heard)));
             }
         }
         Err(refusal::Named(refusal::Refusal::OutOfRange).into())
-    }
-
-    fn access_point_at(
-        &self,
-        device: &OwnedObjectPath,
-        ssid: &str,
-    ) -> Result<Option<OwnedObjectPath>> {
-        for access_point in self
-            .radio(device)?
-            .get_all_access_points()
-            .unwrap_or_default()
-        {
-            if self
-                .access_point_of(&access_point)?
-                .ssid()
-                .is_ok_and(|b| ssid_name(&b) == ssid)
-            {
-                return Ok(Some(access_point));
-            }
-        }
-        Ok(None)
     }
 
     /// The saved profile of `ssid` — on disk (see [`Manager::saved_ones`]).
@@ -2455,6 +2501,29 @@ mod tests {
         assert!(!wpa3_only(nm::AP_SEC_KEY_MGMT_PSK));
         // An open network has no RSN flags.
         assert!(!wpa3_only(0));
+    }
+
+    #[test]
+    fn a_network_is_sae_only_when_every_access_point_is() {
+        let (psk, sae) = (nm::AP_SEC_KEY_MGMT_PSK, nm::AP_SEC_KEY_MGMT_SAE);
+        let rsn = |rsn| Heard { wpa: 0, rsn };
+        // THE ROUTER ON THREE BANDS that the installer could not join, as its
+        // radio listed it: the 6 GHz access point (WPA3 alone) first, then
+        // 2.4 and 5 GHz in transition. `wpa-psk`, which reaches 6 GHz too.
+        assert!(
+            !sae_profile(&[rsn(sae), rsn(psk | sae), rsn(psk | sae)]),
+            "a network that takes PSK on two bands went on `sae`"
+        );
+        // Listed in any order, the same answer.
+        assert!(!sae_profile(&[rsn(psk | sae), rsn(sae)]));
+        // ONLY WPA3, on every access point (a network on 6 GHz alone).
+        assert!(sae_profile(&[rsn(sae), rsn(sae)]));
+        assert!(sae_profile(&[rsn(sae)]));
+        // WPA2, WPA1 (its flags in `WpaFlags`), open, and nothing heard.
+        assert!(!sae_profile(&[rsn(psk)]));
+        assert!(!sae_profile(&[Heard { wpa: psk, rsn: 0 }, rsn(sae)]));
+        assert!(!sae_profile(&[rsn(0)]));
+        assert!(!sae_profile(&[]));
     }
     use super::*;
 

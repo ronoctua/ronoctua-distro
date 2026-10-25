@@ -7807,9 +7807,29 @@ autenticação, antes da associação, e o NetworkManager 1.56 não lê a recusa
 falha (o `wifi-joins-vm`, numa rede em transição, 2026-10-23). O fim da primeira ativação limpa a
 espera do supplicant (a lista de BSSIDs ignorados), e a ativação pedida de novo é ouvida; por isso
 só a SEGUNDA que acaba sem associar é a resposta da rede (`ronoctua_network::unanswered`): recusa,
-se o ponto de acesso para o qual a entrada foi pedida ainda está à vista e aceita SAE; falha, se
-não. Uma senha errada numa rede WPA3 é dita em cerca de 50 s, e a certa depois dela sobe na
-segunda ativação.
+se a rede ainda está à vista (algum ponto de acesso do nome no rádio) e algum deles aceita SAE —
+que um perfil `wpa-psk` também tenta, onde o rádio sabe —; falha, se não. Uma senha errada numa
+rede WPA3 é dita em cerca de 50 s, e a certa depois dela sobe na segunda ativação.
+
+**Uma rede é mais de um ponto de acesso, e a entrada não escolhe um.** Um roteador de três bandas
+é WPA2 e WPA3 em transição em 2,4 e 5 GHz e só WPA3 em 6 GHz, como a norma exige ali. A entrada
+pedia o perfil (`wpa-psk`, porque a rede aceita PSK) apontado para o PRIMEIRO ponto de acesso do
+nome na lista do rádio, e o `wpa_supplicant` lista primeiro o de maior vazão estimada — em 6 GHz
+ele ordena pela vazão mesmo com sinal menor. O NetworkManager recusou o par ele mesmo, antes de o
+rádio tentar a chave (`Access point does not support PSK but setting requires it`, a conferência
+de quem cria e ativa, em `nm-wifi-utils.c`; dita no `audit` dele em `INFO`), e o instalador disse
+"confira a senha" de uma certa, num MT7922 (2026-10-25). Depois de o `nmcli` conectar algumas
+vezes a lista mudou de ordem, e a mesma entrada passou: o defeito dependia de qual ponto de acesso
+o scan pôs primeiro. Agora a entrada pede só o rádio (`ANY_ACCESS_POINT`), como o
+`nmcli connection up` e a reconexão automática: sem ponto de acesso, o NetworkManager completa o
+perfil contra o primeiro que a conferência estrita dele aceita (`nm_wifi_aps_find_first_compatible`,
+que quer PSK para `wpa-psk`). E o perfil sai de TODOS os pontos de acesso do nome
+(`ronoctua_network::sae_profile`): `sae` só quando nenhum aceita PSK — uma rede só em 6 GHz —,
+`wpa-psk` em todo o resto. O 6 GHz continua alcançável: para `wpa-psk` o NetworkManager entrega ao
+supplicant também `SAE` quando o rádio tem SAE, PMF e BIP (`nm-supplicant-config.c`), e o
+supplicant vai ao ponto de acesso só WPA3 com o mesmo perfil. O `installer-joins-wifi-vm` tem a rede
+de transição com um gêmeo só WPA3 em 5 GHz, listado antes dela (`tests/wifi-air.nix`): com a
+entrada apontando para o primeiro do nome, ela falha em 1 s; com o rádio só, ela sobe.
 
 **Escolha por rede, e não política global.** Só depois de a rede subir vem a pergunta da vista, nas
 duas portas. `sim` (`Manager::remember`) sela a senha no TPM **primeiro** e só então grava o mesmo
@@ -19471,7 +19491,11 @@ antes da seguinte; sem rede, nenhuma é provada, e o primeiro boot confere tudo.
   chave recusada é dita na hora, e uma ativação que acabou por outro motivo é pedida de novo nesse
   prazo — depois de uma senha errada o `wpa_supplicant` segura a rede, e a certa chegou a passar dos
   25 s (veja "Só a chave recusada é senha errada"). Apaga o perfil que falhou. O rádio é o que vê a
-  rede, não o primeiro da lista. A rede já conectada quando o instalador abre (pelo `nmtui`) aparece
+  rede, não o primeiro da lista, e o ponto de acesso é o NetworkManager quem escolhe (veja "Uma rede
+  é mais de um ponto de acesso"). Só a chave recusada diz "senha" (`Gate::Unconnected`); um pedido
+  que o NetworkManager recusou, uma ativação que não subiu e o prazo que passou dizem que não deu
+  para entrar, e nada da senha (`Gate::Unjoined`): todos diziam "confira a senha", e uma certa
+  ficou escondida atrás dessa frase. A rede já conectada quando o instalador abre (pelo `nmtui`) aparece
   marcada e a pergunta abre nela; a senha continua sendo pedida, porque é ela que a máquina instalada
   guarda.
 - **O modo sem terminal confere o que dá para conferir** antes do primeiro passo (`Reach::checks`): com

@@ -5425,6 +5425,7 @@ mod tests {
                 Gate::Off,
                 Gate::NoLink,
                 Gate::Unconnected,
+                Gate::Unjoined,
                 Gate::Portal,
             ] {
                 keys.push(g.key());

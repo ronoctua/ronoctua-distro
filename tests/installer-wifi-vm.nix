@@ -16,7 +16,13 @@
 #      NetworkManager's memory (`/run`), never on disk;
 #   3. a network joined before the installer started (with `nmcli`, as a
 #      person does with `nmtui`) is said on its row, and the question opens
-#      on it.
+#      on it;
+#   4. the transition network has a twin on another band that takes WPA3
+#      alone, listed first (`tests/wifi-air.nix`) — a router's 6 GHz radio —
+#      and the right password still joins it: the join names no access
+#      point, and NetworkManager takes one the profile fits. Naming the
+#      first one of the name, the installer said "check its password" of a
+#      right one on a router on three bands (2026-10-25).
 #
 # The screens are read off the console in English: the VM's console font has
 # no accents. Each sentence is the `.ftl`'s, read by its key — a change of
@@ -85,15 +91,19 @@ pkgs.testers.runNixOSTest {
     NONE = said("inst-wifi-none")
     PASSWORD = said("inst-wifi-password")
     REFUSED = said("inst-gate-unconnected")[:30]
+    UNJOINED = said("inst-gate-unjoined")[:30]
     NEXT = said("inst-belongings")
     CONNECTED = said("inst-wifi-connected")
-    WPA2, TRANSITION, KEY = "${air.wpa2}", "${air.transition}", "${air.password}"
+    WPA2, TRANSITION, KEY, TWIN = "${air.wpa2}", "${air.transition}", "${air.password}", "${air.twin}"
 
     machine.start()
     machine.wait_for_unit("air-dhcp.service")
     machine.wait_for_unit("NetworkManager.service")
     for ssid in (WPA2, TRANSITION):
         machine.wait_until_succeeds(f"nmcli -t -f SSID dev wifi list --rescan yes | grep -qx {ssid}", timeout=90)
+    # THE TWIN IN VIEW before any join: the case the laptop met.
+    machine.wait_until_succeeds(f"nmcli -f BSSID dev wifi list --rescan yes | grep -qi {TWIN}", timeout=90)
+    print(machine.succeed("nmcli -f BSSID,FREQ,SECURITY,SSID dev wifi list"))
     machine.wait_until_tty_matches("1", "root@")
 
     def start():
@@ -120,13 +130,13 @@ pkgs.testers.runNixOSTest {
 
     def answer(password):
         """The password typed, and what the gate said: on to the next
-        question, or refused."""
+        question, refused (the password), or unjoined (not the password)."""
         for _ in range(40):
             machine.send_key("backspace")
         machine.send_chars(password + "\n")
         began = time.monotonic()
         # The last refusal leaves the screen when the join is asked.
-        while REFUSED in machine.get_tty_text("1") and time.monotonic() - began < 5:
+        while (REFUSED in machine.get_tty_text("1") or UNJOINED in machine.get_tty_text("1")) and time.monotonic() - began < 5:
             time.sleep(0.2)
         while time.monotonic() - began < 150:
             text = machine.get_tty_text("1")
@@ -134,6 +144,8 @@ pkgs.testers.runNixOSTest {
                 return "on", time.monotonic() - began
             if REFUSED in text:
                 return "refused", time.monotonic() - began
+            if UNJOINED in text:
+                return "unjoined", time.monotonic() - began
             time.sleep(1)
         return "nothing", time.monotonic() - began
 
@@ -157,11 +169,12 @@ pkgs.testers.runNixOSTest {
         machine.fail("grep -rqs 'psk=' /etc/NetworkManager/system-connections/")
         leave()
 
-    with subtest("and a WPA3 network in transition"):
+    with subtest("and a WPA3 network in transition, with its WPA3-only twin listed first"):
         start()
         choose(TRANSITION)
         verdict, took = answer(KEY)
         print(f"{TRANSITION}: {verdict} in {took:.0f} s")
+        print(machine.succeed("nmcli -f ACTIVE,BSSID,FREQ,SSID dev wifi list | grep -i yes || true"))
         assert verdict == "on", verdict
         leave()
 
