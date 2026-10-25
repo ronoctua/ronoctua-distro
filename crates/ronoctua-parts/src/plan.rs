@@ -10,6 +10,12 @@
 //!
 //! The plan is the running system's, so the parts can never run ahead of the
 //! base: a switch brings the next plan, and nothing else does.
+//!
+//! A PART OF THE PERSON'S — a program they declared (`nix/modules/person.nix`)
+//! — has no derivation in the plan: the system never evaluates what a person
+//! declared, since one entry that aborts would stop the system's evaluation.
+//! It names the entry instead ([`Entry`]), and its realizer evaluates that
+//! entry alone, in its own process, from the machine's flake.
 
 use std::collections::BTreeMap;
 
@@ -30,10 +36,18 @@ pub struct Plan {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Wanted {
-    /// Its derivation, a store path ending in `.drv`.
-    pub drv: String,
-    /// The output that becomes the profile's next generation.
-    pub out: String,
+    /// Its derivation, a store path ending in `.drv`; `None` for a part of
+    /// the person's, whose realizer evaluates its [`Wanted::entry`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drv: Option<String>,
+    /// The output that becomes the profile's next generation; `None` with
+    /// the derivation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out: Option<String>,
+    /// The person's declared entry the part is made of; `None` for the
+    /// distro's parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<Entry>,
     /// What the session sees of it.
     pub kind: Kind,
     /// The shape the base speaks to it in; part of its path.
@@ -45,6 +59,30 @@ pub struct Wanted {
     /// What the page calls it: a program's own name, the same in every
     /// language (invariant 8's exception for a proper name).
     pub name: String,
+}
+
+/// The person's declared entry a part is made of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Entry {
+    /// Its id in the person's declaration (`<source>:<source-id>`), which
+    /// the machine flake's `personParts` names it by.
+    pub id: String,
+    /// What its declaration is, hashed: another one is another target.
+    pub fingerprint: String,
+}
+
+impl Wanted {
+    /// What a part of the distro's wants: its derivation and its output.
+    /// `None` for a part of the person's, whose target its realizer finds.
+    #[must_use]
+    pub fn target(&self) -> Option<crate::record::Target> {
+        Some(crate::record::Target {
+            drv: self.drv.clone()?,
+            out: self.out.clone()?,
+            interface: self.interface,
+        })
+    }
 }
 
 /// What the session sees of a part.
@@ -101,11 +139,36 @@ impl Document for Plan {
                     "not a part id",
                 ));
             }
-            if !is_store_path(&wanted.drv) || !wanted.drv.ends_with(".drv") {
-                return Err(Refusal::new(Why::Invalid, at("drv"), wanted.drv.clone()));
-            }
-            if !is_store_path(&wanted.out) || wanted.out.ends_with(".drv") {
-                return Err(Refusal::new(Why::Invalid, at("out"), wanted.out.clone()));
+            // A DISTRO'S PART names its derivation and output; a person's,
+            // its entry — never both, never neither.
+            match (&wanted.drv, &wanted.out, &wanted.entry) {
+                (Some(drv), Some(out), None) => {
+                    if !is_store_path(drv) || !drv.ends_with(".drv") {
+                        return Err(Refusal::new(Why::Invalid, at("drv"), drv.clone()));
+                    }
+                    if !is_store_path(out) || out.ends_with(".drv") {
+                        return Err(Refusal::new(Why::Invalid, at("out"), out.clone()));
+                    }
+                }
+                (None, None, Some(entry)) => {
+                    if !is_entry_id(&entry.id) {
+                        return Err(Refusal::new(Why::Invalid, at("entry/id"), entry.id.clone()));
+                    }
+                    if !is_fingerprint(&entry.fingerprint) {
+                        return Err(Refusal::new(
+                            Why::Invalid,
+                            at("entry/fingerprint"),
+                            entry.fingerprint.clone(),
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(Refusal::new(
+                        Why::Invalid,
+                        format!("/parts/{id}"),
+                        "neither a derivation and its output nor an entry",
+                    ));
+                }
             }
             if wanted.interface == 0 {
                 return Err(Refusal::new(Why::Invalid, at("interface"), "0"));
@@ -113,6 +176,34 @@ impl Document for Plan {
         }
         Ok(())
     }
+}
+
+/// Whether `id` may name a person's entry in the machine flake's
+/// `personParts`: `<source>:<source-id>`, a source of lower-case letters and
+/// an id of the characters the person's declarations take — never a quote,
+/// a space or anything a shell or Nix's attribute path would read apart.
+#[must_use]
+pub fn is_entry_id(id: &str) -> bool {
+    let Some((source, rest)) = id.split_once(':') else {
+        return false;
+    };
+    !source.is_empty()
+        && source.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+        && !rest.is_empty()
+        && rest.len() <= 200
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+}
+
+/// Whether `text` is a fingerprint as `nix/modules/person.nix` writes one:
+/// a sha256 in hex.
+#[must_use]
+pub fn is_fingerprint(text: &str) -> bool {
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 /// The plan at `path` ([`crate::names::PLAN`] on a machine), when it is
@@ -168,6 +259,35 @@ mod tests {
             );
         }
 
+        // A PART OF THE PERSON'S names its entry, and only that.
+        let fp = "0".repeat(64);
+        let person = format!(
+            r#"{{"format":1,"parts":{{"person-hello":{{"entry":{{"id":"nix:hello","fingerprint":"{fp}"}},"kind":"program","interface":1,"heavy":false,"unfree":false,"name":"hello"}}}}}}"#
+        );
+        let taken: Plan = ronoctua_person::parse(person.as_bytes()).expect("a person's part");
+        assert_eq!(taken.parts["person-hello"].target(), None);
+        for bad in [
+            person.replace("nix:hello", "nix:hel lo"),
+            person.replace("nix:hello", "hello"),
+            person.replace(&fp, "abc"),
+            person.replace(
+                r#""kind""#,
+                &format!(r#""drv":"{DRV}","out":"{OUT}","kind""#),
+            ),
+            person.replace(
+                r#"{"id":"nix:hello","fingerprint":"0000"#,
+                r#"{"id":"nix:x\"y","fingerprint":"0000"#,
+            ),
+        ] {
+            assert_eq!(
+                ronoctua_person::parse::<Plan>(bad.as_bytes())
+                    .map(|_| ())
+                    .map_err(|r| r.why),
+                Err(Why::Invalid),
+                "{bad}"
+            );
+        }
+
         let newer = r#"{"format":2,"parts":{}}"#;
         assert_eq!(
             ronoctua_person::parse::<Plan>(newer.as_bytes()).map_err(|r| r.why),
@@ -188,8 +308,9 @@ mod tests {
             plan.parts.insert(
                 id.to_owned(),
                 Wanted {
-                    drv: DRV.to_owned(),
-                    out: OUT.to_owned(),
+                    drv: Some(DRV.to_owned()),
+                    out: Some(OUT.to_owned()),
+                    entry: None,
                     kind: Kind::Program,
                     interface: 1,
                     heavy,

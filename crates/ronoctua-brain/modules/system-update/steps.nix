@@ -72,7 +72,7 @@
 #               its `i18n/` carries both in every language), the line in
 #               `/etc/ronoctua/updates.conf` is `<id> on|off`, and the report
 #               the view reads is keyed by it.
-#   does        gather | migrate | move-inputs | verify | apply-configuration |
+#   does        gather | migrate | move-inputs | apply-configuration |
 #               realize-parts | upgrade-software | refresh-cache |
 #               reclaim-space | reconcile-declared | publish
 #               What class of thing this step is, and it is load-bearing: there
@@ -84,8 +84,7 @@
 #               installed to a newer version and never adds one.
 #               And the 2026-10-05 laws: `gather` is the person's and comes
 #               before the root half, and nothing else of the person's does;
-#               `migrate` is root's and comes before `move-inputs`; `verify` is
-#               root's, between `move-inputs` and `apply-configuration`;
+#               `migrate` is root's and comes before `move-inputs`;
 #               `reconcile-declared` is the person's, after
 #               `apply-configuration`; `publish` is the person's and last.
 #               And the 2026-10-23 law: exactly one `realize-parts`, root's,
@@ -112,7 +111,7 @@
 #               run through here is finite and readable in this file.
 #   rehearse    with a program only, and optional: the arguments a REHEARSAL
 #               runs the same program with — the form of it that changes
-#               nothing (`apply --rehearse`, `verify --rehearse`). Every
+#               nothing (`apply --rehearse`). Every
 #               argument goes through the refusals `run`'s do. Without it a
 #               rehearsal prints the command and runs nothing, which is all it
 #               can honestly do for a program that has no such form.
@@ -151,7 +150,7 @@ let
   machineDir = (import ../../../../nix/machine.nix).machineDir;
 
   # THE BATTERY FLOOR, in per cent: on battery below it, the steps that
-  # compile — the migration, the verification, the rebuild — and the one
+  # compile — the migration, the rebuild — and the one
   # that moves the lock the rebuild builds from are skipped,
   # unless the person said yes to THIS run (the doors ask with the no first;
   # `ronoctua-update --execute --on-battery` from a terminal). A rebuild of
@@ -173,9 +172,6 @@ let
     cap-gib = cache.diskWarnCapGiB;
   };
 
-  # WHERE THE MACHINE KEEPS THE PERSON'S DECLARATIONS (root's copy): the
-  # verification has nothing to try without it.
-  personDir = "${machineDir}/person";
 in
 {
   steps = [
@@ -281,7 +277,7 @@ in
     # G3. THE DECLARATIONS, HANDED TO ROOT: the person's copy put where root's
     # narrow applier (`ronoctua-person-apply.service`) takes it, the unit
     # started as the software centre starts it, and its verdict read — so the
-    # root half verifies and builds what the person's signature covers now
+    # root half builds what the person's signature covers now
     # (what G1 brought signed, and what G2b signed here), and not the copy
     # the machine had. Validated and swapped into the machine directory
     # whole — data, never Nix code. `busy` is news: another of root's
@@ -315,9 +311,9 @@ in
     #
     # It runs under `ronoctua-person hold` (`module.nix`): root's lock of the
     # person's data, held from the migration to the end of the half and
-    # handed to every step as its standard input — so the declarations the
-    # verification tried are the ones the rebuild builds, and an apply the
-    # person starts meanwhile waits instead of slipping between the two.
+    # handed to every step as its standard input — so an apply the person
+    # starts meanwhile waits instead of slipping its declarations under the
+    # rebuild.
 
     # 0. A MACHINE STILL IN THE OLD LAYOUT BECOMES ITS OWN FLAKE.
     #
@@ -409,39 +405,6 @@ in
       enable = true;
     }
 
-    # 1b. EVERY DECLARED PROGRAM, TRIED ON ITS OWN, before the rebuild.
-    #
-    # A declaration is the person's, made on any of their machines, and one
-    # entry that does not build — a package renamed upstream, an AppImage
-    # whose address now answers another file — must not take the whole
-    # rebuild down. `ronoctua-person verify` evaluates and builds each entry
-    # in a `nix` of its own, against the inputs the step above just moved,
-    # and writes what failed into the machine's `local/held.json`; the
-    # rebuild leaves those out and says why. Its rehearsal tries and writes
-    # nothing.
-    #
-    # It needs power for the reason the rebuild does: building an entry can
-    # compile. `carry-on`: a verification that could not run holds nothing,
-    # and the rebuild still builds the entries that were fine before.
-    {
-      id = "person-verify";
-      does = "verify";
-      root = true;
-      package = "person";
-      program = "ronoctua-person";
-      run = [ "verify" ];
-      rehearse = [
-        "verify"
-        "--rehearse"
-      ];
-      needs = [
-        { directory = personDir; }
-        { power = batteryFloor; }
-      ];
-      on-failure = "carry-on";
-      enable = true;
-    }
-
     # 2. AND IT IS THE MACHINE'S OWN APPLY.
     #
     # `ronoctua-machine apply` is the one build-then-switch of this
@@ -454,9 +417,10 @@ in
     # does not start (`ronoctua-boot-bless.service`).
     #
     # A CHILD OF THIS HALF, and not a unit started from it: root's lock of
-    # the person's data reaches it on its standard input, held since the
-    # verification, so the declarations it builds are the ones that were
-    # tried. Its rehearsal measures on a copy what the update would download
+    # the person's data reaches it on its standard input, so no apply of the
+    # person's declarations swaps them while it builds. (A declared package
+    # is a part: the system never builds one, and its realizer evaluates it
+    # alone after the switch.) Its rehearsal measures on a copy what the update would download
     # and build, and changes nothing.
     #
     # `did-not-boot` IS NEWS AND NOT A FAILURE: after a trial that did not

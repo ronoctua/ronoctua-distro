@@ -67,18 +67,17 @@
 # (`distro-apps-follow-releases` in `options.json`) and their followed pins
 # (`software/distro-pins.json`) are the person's signed data, root's
 # validated copy (`ronoctua.person.options`, `ronoctua.person.distroPins`).
-# A followed pin is built ONLY while the option is on, it is newer than the
-# distro's (`builtins.compareVersions`) — when the owner moves the distro's
-# pins past it, the distro's wins again — and root's verification BUILT it
-# at its fingerprint (`local/verified.json`, `ronoctua.person.verifiedBy`,
-# `distro-appimage:<id>`): an allow-list, so the software centre's apply and
-# the rescue's rebuild never meet an untried release; until then the last
-# verified pin, or the distro's, is built. AND IT IS THE PERSON'S PROGRAM:
-# its bytes are their own download, so it goes to THEIR profile
-# (`personPackages`, which `nix/modules/person.nix` hands to Home Manager)
-# and the distro's build of that id leaves `systemPackages` — never both.
-# A pin the judge refuses (`nix/distro-pins.nix`) is dropped and said in
-# `distro-apps.json`, never a reason to stop.
+# A followed pin is built ONLY while the option is on and it is newer than
+# the distro's (`builtins.compareVersions`) — when the owner moves the
+# distro's pins past it, the distro's wins again. IT IS THE APPIMAGE'S PART
+# that takes it (every distro AppImage is a part, and one that follows must
+# be): its bytes are the person's own download, and a part is never in the
+# system's closure, so never in a public cache either. A download that fails
+# is a part that does not arrive: it keeps its previous generation — the
+# last pin that arrived, or the distro's — and says what it is missing on
+# the parts' page, as any part does. A pin the judge refuses
+# (`nix/distro-pins.nix`) is dropped and said in `distro-apps.json`, never a
+# reason to stop.
 #
 # # Every refusal is a sentence in one list
 #
@@ -464,9 +463,7 @@ let
       main = builtins.head paths;
     in
     {
-      # A DISTRO APPIMAGE THE PERSON FOLLOWS past its pin is theirs, in
-      # their profile (`personPackages`): never both.
-      wanted = installed.${id} && !(followedHere id);
+      wanted = installed.${id};
       inherit (e) heavy;
       kind = "program";
       unfree = lib.any (l: !(l.free or true)) (lib.toList (main.meta.license or [ ]));
@@ -533,9 +530,9 @@ let
       version,
       src,
       fallback ? true,
-      # WHERE ITS LAUNCHER RUNS IT: the system's profile, or — for a pin the
-      # person follows, which is their program — their own
-      # (`/etc/profiles/per-user/<user>`, Home Manager's `useUserPackages`).
+      # WHERE ITS LAUNCHER RUNS IT: the system's profile, or — for an
+      # AppImage that is a part — the parts' view, the one place the session
+      # finds a part's programs.
       program ? "/run/current-system/sw/bin/ronoctua-appimage-${key}",
     }:
     let
@@ -619,6 +616,8 @@ let
           wrapper
           entry
         ];
+        # The launcher entry, for a check to read what it runs.
+        passthru = { inherit entry; };
       };
     };
 
@@ -659,24 +658,32 @@ let
     from = "distro";
   };
 
-  # What an installed entry puts in `systemPackages`.
+  # What an installed entry puts on a machine: in `systemPackages`, or in
+  # its part. An AppImage that is a part runs from the parts' view, and is
+  # built at the pin the person follows when they follow one newer
+  # (`followState`).
   packagesOf =
     id: e:
+    let
+      pin = if e.part && followedHere id then followState.${id}.use else e.appimage;
+    in
     {
       nix = [ e.package ] ++ e.extraPackages;
       appimage = [
-        (appimageOf {
-          inherit (e.appimage) key name version;
-          fallback = e.appimage.fallback or true;
-          src = downloads.appimage {
-            inherit (e.appimage)
-              key
-              version
-              url
-              hash
-              ;
-          };
-        }).package
+        (appimageOf (
+          {
+            inherit (e.appimage) key name;
+            inherit (pin) version;
+            fallback = e.appimage.fallback or true;
+            src = downloads.appimage {
+              inherit (e.appimage) key;
+              inherit (pin) version url hash;
+            };
+          }
+          // lib.optionalAttrs e.part {
+            program = (import ../parts-names.nix).viewBin "ronoctua-appimage-${e.appimage.key}";
+          }
+        )).package
       ];
       web = [ (webOf e.web) ];
       flatpak = [ ];
@@ -890,98 +897,26 @@ let
     doc = followedDoc;
     table = wellFormed;
   };
-  heldBy = config.ronoctua.person.heldBy or { };
-  # THE ALLOW-LIST: what root's verify BUILT (`local/verified.json`), by
-  # `distro-appimage:<id>`, at the fingerprint it built it at, with its pin.
-  verifiedBy = config.ronoctua.person.verifiedBy or { };
-  # WHICH NIXPKGS builds it, for the fingerprint: a new one gives a held pin
-  # another try, as it does a held declaration — and asks a verified one to
-  # be verified again. The source's path, never anything built.
-  nixpkgsOf = builtins.unsafeDiscardStringContext (toString pkgs.path);
-  fingerprintOf =
-    id: t: p:
-    builtins.hashString "sha256" (
-      builtins.toJSON {
-        inherit id;
-        inherit (t) key;
-        inherit (p) url hash version;
-        nixpkgs = nixpkgsOf;
-      }
-    );
   newerThan = distro: p: builtins.compareVersions p.version distro.version > 0;
 
   # EVERY APPIMAGE OF THE TABLE and what the person's pins do to it: the
-  # distro's pin; the followed one (the candidate) and whether it is newer;
-  # the fingerprint the verification holds or lets it in by; why it is held;
-  # and the pin the registry builds for the person — the candidate once root's
-  # verify built it, else the LAST one verify built while it is still newer
-  # than the distro's (no step back across a 0.x version), else none and the
-  # distro's.
+  # distro's pin, the followed one and whether it is newer — and the pin its
+  # part is built at, the followed one when it is newer, else the distro's.
   followState = lib.mapAttrs (
     id: t:
     let
       distro = pinOf "appimage" id;
       f = followed.by.${id} or null;
       newer = f != null && newerThan distro f;
-      fingerprint = if f == null then null else fingerprintOf id t f;
-      entry = "${follow.entry}:${id}";
-      h = heldBy.${entry} or null;
-      held =
-        if
-          builtins.isAttrs h && (h.fingerprint or null) == fingerprint && builtins.isString (h.reason or null)
-        then
-          h.reason
-        else
-          null;
-      v = verifiedBy.${entry} or null;
-      # The record's pin, judged again by the one rule against the table as
-      # it is now: a record of a release the table no longer follows is not
-      # one.
-      record =
-        if
-          followOn
-          && builtins.isAttrs v
-          && builtins.all (k: builtins.isString (v.${k} or null)) [
-            "fingerprint"
-            "url"
-            "hash"
-            "version"
-          ]
-          &&
-            follow.judge wellFormed {
-              inherit id;
-              inherit (v) url hash version;
-            } == null
-        then
-          {
-            inherit (v) url hash version;
-            fingerprint = v.fingerprint;
-          }
-        else
-          null;
-      verified = newer && record != null && record.fingerprint == fingerprint;
-      last =
-        if record != null && record.fingerprint == fingerprintOf id t record && newerThan distro record then
-          record
-        else
-          null;
     in
     {
-      inherit
-        distro
-        f
-        newer
-        fingerprint
-        held
-        ;
+      inherit distro f newer;
       follows = (t.follows or { }).github or null;
-      # The pin built for the person, or `null`: the distro's, in the system.
-      use = if verified then f else last;
-      waiting = newer && !verified && held == null;
+      # The followed pin its part is built at, or `null`: the distro's.
+      use = if newer then f else null;
     }
   ) (lib.filterAttrs (_: t: t.source == "appimage") wellFormed);
-  # WHETHER THE PERSON'S BUILD TAKES THE PLACE of the system's for `id`:
-  # never both, so one launcher entry and one program of each name.
+  # WHETHER THE PART OF `id` IS BUILT AT THE PERSON'S PIN.
   followedHere = id: (followState.${id} or { use = null; }).use != null;
   fromTable =
     id: t:
@@ -991,9 +926,8 @@ let
           inherit (t) appId;
           origin = t.origin or "flathub";
         };
-        # THE DISTRO'S PIN, always: what the system carries. A followed pin
-        # is the person's program, built for their profile apart
-        # (`personPackages`).
+        # THE DISTRO'S PIN, always: the registry's. A followed pin is taken
+        # where the part is built (`packagesOf`).
         appimage =
           let
             p = pinOf "appimage" id;
@@ -1145,7 +1079,20 @@ let
     )
     ++ map (
       id: "assets/distro-pins.json: `${id}` is pinned and the table has no Android app by that id"
-    ) (stalePins "android");
+    ) (stalePins "android")
+    # A PIN THE PERSON FOLLOWS is their own download: it rides in the
+    # AppImage's part, never in the system.
+    ++
+      map
+        (
+          id:
+          "ronoctua.apps.${id} follows its releases and is no part: a followed pin never goes in the system"
+        )
+        (
+          builtins.filter (id: followState.${id}.follows != null && !(apps.${id}.part or false)) (
+            builtins.attrNames followState
+          )
+        );
   checked =
     problems == [ ]
     || throw ("The distro's program registry refuses:\n  " + lib.concatStringsSep "\n  " problems);
@@ -1191,8 +1138,6 @@ let
         distro-version = if s == null then a.version else s.distro.version;
         distro-url = if s == null then a.url else s.distro.url;
         followed-version = if s == null || s.f == null then null else s.f.version;
-        held = if s == null then null else s.held;
-        waiting = s != null && s.waiting;
       };
   report = {
     format = 1;
@@ -1212,34 +1157,6 @@ let
       inherit (followed) refused;
     };
   };
-
-  # WHAT THE VERIFICATION TRIES of the followed pins: each candidate newer
-  # than the distro's, on this machine — verified, held or neither (a held
-  # one is tried again each update) — as `distro-appimage:<id>`, built
-  # exactly as the person's profile would carry it.
-  tried = lib.filterAttrs (id: s: s.newer && installed.${id} or false) followState;
-
-  # A FOLLOWED PIN IS THE PERSON'S PROGRAM: built from bytes the person
-  # downloaded, it goes to THEIR profile (`ronoctua.person` puts it in their
-  # Home Manager `home.packages`), never to `systemPackages`, with its
-  # launcher entry — `X-Ronoctua-Fallback=false` included — and its program
-  # in `/etc/profiles/per-user/<user>`.
-  user = config.ronoctua.user;
-  personBuildOf =
-    id: p:
-    appimageOf {
-      inherit (wellFormed.${id}) key name;
-      inherit (p) version;
-      fallback = wellFormed.${id}.fallback or true;
-      program = "/etc/profiles/per-user/${user}/bin/ronoctua-appimage-${wellFormed.${id}.key}";
-      src = downloads.appimage {
-        inherit (wellFormed.${id}) key;
-        inherit (p) version url hash;
-      };
-    };
-  personBuilds = lib.genAttrs (builtins.filter followedHere installedIds) (
-    id: personBuildOf id followState.${id}.use
-  );
 
   # STILL PRESENT: declined, honoured, and the program is in `systemPackages`
   # through another way in — the list `system.path` is built from.
@@ -1299,62 +1216,6 @@ in
         Every malformed entry, table line and pin, one sentence each. The
         system's packages and `distro-apps.json` refuse to evaluate while
         this is not empty.
-      '';
-    };
-    personBuilds = lib.mkOption {
-      type = lib.types.raw;
-      readOnly = true;
-      internal = true;
-      default = personBuilds;
-      defaultText = lib.literalMD "the followed AppImages' builds, by id";
-      description = ''
-        The builder's whole answer (`{ fhs; wrapper; entry; package; }`) of
-        each followed AppImage built for the person, by id — for a check to
-        read what its launcher entry runs.
-      '';
-    };
-    personPackages = lib.mkOption {
-      type = lib.types.listOf lib.types.package;
-      readOnly = true;
-      internal = true;
-      default = map (b: b.package) (builtins.attrValues personBuilds);
-      defaultText = lib.literalMD "the followed AppImages, built for the person's profile";
-      description = ''
-        The distro's AppImages the person follows past its pins, each at the
-        pin root's verify built: the person's programs, which
-        `nix/modules/person.nix` puts in their profile — never in
-        `systemPackages`, where the distro's pin of the same id then is not.
-      '';
-    };
-    followedEntries = lib.mkOption {
-      # LAZY, as the person's entries are: a value here may be exactly the
-      # one that does not evaluate, and the names must read without it.
-      type = lib.types.lazyAttrsOf lib.types.unspecified;
-      readOnly = true;
-      internal = true;
-      default = lib.mapAttrs' (
-        id: s: lib.nameValuePair "${follow.entry}:${id}" (personBuildOf id s.f).package
-      ) tried;
-      defaultText = lib.literalMD "one derivation per followed AppImage this machine would build";
-      description = ''
-        The followed AppImages the update's verification builds one at a
-        time before the rebuild (`ronoctua.person.entries` takes them in,
-        and `lib.machineFlake`'s `personEntries` hands them out): one that
-        builds is let in (`local/verified.json`); one that does not is held
-        in `local/held.json`, and the last verified pin, or the distro's,
-        is built in its place.
-      '';
-    };
-    followedFingerprints = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      readOnly = true;
-      internal = true;
-      default = lib.mapAttrs' (id: s: lib.nameValuePair "${follow.entry}:${id}" s.fingerprint) tried;
-      defaultText = lib.literalMD "one fingerprint per followed AppImage this machine would build";
-      description = ''
-        What `local/held.json` names a followed AppImage by: its id, its
-        pin and the nixpkgs that builds it — a new pin or a new nixpkgs
-        gives a held one another try.
       '';
     };
     builders = lib.mkOption {
@@ -1453,13 +1314,10 @@ in
       # The table's well-formed lines join the modules' own entries.
       ronoctua.apps = lib.mapAttrs fromTable wellFormed;
 
-      # THE DISTRO'S PINS, but where the person's followed build takes the
-      # place (`personPackages`): never both.
+      # WHAT IS NO PART, at the distro's pins.
       environment.systemPackages =
         assert checked;
-        lib.concatMap (id: packagesOf id apps.${id}) (
-          builtins.filter (id: !(followedHere id) && !apps.${id}.part) installedIds
-        );
+        lib.concatMap (id: packagesOf id apps.${id}) (builtins.filter (id: !apps.${id}.part) installedIds);
 
       environment.etc."ronoctua/distro-apps.json".text =
         assert checked;

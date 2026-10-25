@@ -25,12 +25,9 @@
 //!   GitHub's digest when there is one, and only once the person let the
 //!   asset's host (a `Pass`, as every download of this crate).
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use ronoctua_person::declared::{ApkFrom, ApkPin};
-use ronoctua_person::local::HeldWhy;
-use ronoctua_person::reports::{PersonApplied, SkipWhy};
 
 use crate::{Failure, Refusal, Roots};
 
@@ -358,21 +355,21 @@ pub enum Look {
     Nothing,
     /// A newer release, at another address.
     Newer,
-    /// The same address, fetched AGAIN for its hash: the system held the
-    /// entry because the download changed under that address
-    /// (`upstream-changed`) or could not be fetched (`fetch-failed`), and
-    /// no newer release is there to move to — a pin that stayed would be
-    /// held on every machine for ever.
+    /// The same address, fetched AGAIN for its hash: the entry's part could
+    /// not fetch its download there — changed under that address, or gone
+    /// — and no newer release is there to move to: a pin that stayed would
+    /// fail on every machine for ever.
     Again,
 }
 
 /// What to do about an AppImage pinned at `pinned`, whose newest release is
-/// at `latest`, held by the system for `held` (or not held). Pure.
+/// at `latest`, when its part could not fetch the pinned download
+/// (`missed`, [`crate::parts::misses`]). Pure.
 #[must_use]
-pub fn look(pinned: &str, latest: &str, held: Option<HeldWhy>) -> Look {
+pub fn look(pinned: &str, latest: &str, missed: bool) -> Look {
     if latest != pinned {
         Look::Newer
-    } else if matches!(held, Some(HeldWhy::UpstreamChanged | HeldWhy::FetchFailed)) {
+    } else if missed {
         Look::Again
     } else {
         Look::Nothing
@@ -386,26 +383,6 @@ pub fn look(pinned: &str, latest: &str, held: Option<HeldWhy>) -> Look {
 pub fn apk_moves(pinned: &ApkPin, offered: &ApkPin) -> bool {
     offered.version_code > pinned.version_code
         || (offered.version_code == pinned.version_code && offered.hash != pinned.hash)
-}
-
-/// The entries the system held back, and why — `person-applied.json`'s
-/// `held` skips, whose detail is the hold's reason. Pure.
-#[must_use]
-pub fn held_of(applied: Option<&PersonApplied>) -> BTreeMap<String, HeldWhy> {
-    applied
-        .map(|r| {
-            r.skipped
-                .iter()
-                .filter(|s| s.reason == SkipWhy::Held)
-                .filter_map(|s| {
-                    HeldWhy::ALL
-                        .into_iter()
-                        .find(|h| h.id() == s.detail.trim())
-                        .map(|h| (s.id.clone(), h))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Look for newer pins of every declared download, and answer the entries
@@ -468,7 +445,7 @@ pub fn newer_with(
         refusal: Some(Refusal::DeclarationUnreadable),
         trouble: format!("{}: {}", ronoctua_person::names::DECLARED, why.id()),
     })?;
-    let held = held_of(crate::declaration::person_applied(&ctx.roots).as_ref());
+    let applied = crate::declaration::person_applied(&ctx.roots);
     let android_here = declared
         .apps
         .iter()
@@ -497,7 +474,9 @@ pub fn newer_with(
                         continue;
                     }
                 };
-                if look(&a.pin.url, &asset.url, held.get(&a.id).copied()) == Look::Nothing {
+                let missed = crate::parts::of_entry(applied.as_ref(), &a.id)
+                    .is_some_and(|part| crate::parts::misses(&ctx.roots, part, &a.pin.url));
+                if look(&a.pin.url, &asset.url, missed) == Look::Nothing {
                     continue;
                 }
                 let pin = match pin_of(a, &asset, stamp.clone(), report) {
@@ -703,13 +682,10 @@ mod tests {
     fn a_held_download_is_fetched_again_at_its_address() {
         let a = "https://x.example/A-1.AppImage";
         let b = "https://x.example/A-2.AppImage";
-        assert_eq!(look(a, b, None), Look::Newer);
-        assert_eq!(look(a, b, Some(HeldWhy::UpstreamChanged)), Look::Newer);
-        assert_eq!(look(a, a, None), Look::Nothing);
-        assert_eq!(look(a, a, Some(HeldWhy::UpstreamChanged)), Look::Again);
-        assert_eq!(look(a, a, Some(HeldWhy::FetchFailed)), Look::Again);
-        assert_eq!(look(a, a, Some(HeldWhy::BuildFailed)), Look::Nothing);
-        assert_eq!(look(a, a, Some(HeldWhy::EvalFailed)), Look::Nothing);
+        assert_eq!(look(a, b, false), Look::Newer);
+        assert_eq!(look(a, b, true), Look::Newer);
+        assert_eq!(look(a, a, false), Look::Nothing);
+        assert_eq!(look(a, a, true), Look::Again);
     }
 
     /// The canned GitHub feed: audacity's latest release, whose x86_64
@@ -741,7 +717,7 @@ mod tests {
     fn newer_pins_follow_the_feed_and_mend_a_held_one() {
         use ronoctua_person::Stamp;
         use ronoctua_person::declared::{AppImageApp, Entry, Pin};
-        use ronoctua_person::reports::Skipped;
+        use ronoctua_person::reports::PersonApplied;
         let root = std::env::temp_dir().join(format!(
             "ronoctua-software-pins-newer-{}",
             std::process::id()
@@ -784,20 +760,51 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let mut report = PersonApplied {
+        let report = PersonApplied {
             format: 1,
             machine: "noctua".into(),
             distro_rev: "abc1234".into(),
-            applied: vec!["appimage:kept".into(), "appimage:older".into()],
-            skipped: vec![Skipped {
-                id: "appimage:held".into(),
-                reason: SkipWhy::Held,
-                detail: "upstream-changed".into(),
-            }],
+            applied: vec![
+                "appimage:held".into(),
+                "appimage:kept".into(),
+                "appimage:older".into(),
+            ],
+            parts: [
+                ("appimage:held", "person-0000000a-held"),
+                ("appimage:kept", "person-0000000b-kept"),
+            ]
+            .into_iter()
+            .map(|(e, p)| (e.to_owned(), p.to_owned()))
+            .collect(),
+            skipped: Vec::new(),
             declined: Default::default(),
             brain: Default::default(),
             signature: Default::default(),
         };
+        // THE PART OF `held` COULD NOT FETCH its pinned download: the
+        // address serves other bytes now.
+        let stuck = ronoctua_parts::record::Record::new("person-0000000a-held")
+            .planned_entry(&"a".repeat(64))
+            .failed(
+                ronoctua_parts::record::Why::BuildFailed,
+                "hash mismatch",
+                at.clone(),
+                true,
+            )
+            .missing(vec![ronoctua_person::frontier::Download {
+                drv: "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-held.AppImage.drv".into(),
+                out: "/nix/store/zyxwvsrqpnmlkjihgfdcba9876543210-held.AppImage".into(),
+                name: "held-4.0.0.AppImage".into(),
+                hash: old_hash.into(),
+                mode: ronoctua_person::frontier::Mode::Flat,
+                urls: vec![AUDACITY.into()],
+            }]);
+        std::fs::create_dir_all(&roots.system.parts).unwrap();
+        std::fs::write(
+            roots.system.parts.join("person-0000000a-held.json"),
+            ronoctua_person::to_json(&stuck),
+        )
+        .unwrap();
         std::fs::create_dir_all(&roots.system.reports).unwrap();
         let write_report = |r: &PersonApplied| {
             std::fs::write(
@@ -836,7 +843,7 @@ mod tests {
         assert_eq!(
             asked,
             ["held", "older"],
-            "the one neither held nor old is not fetched"
+            "the one neither stuck nor old is not fetched"
         );
         let by = |key: &str| {
             moved.iter().find_map(|e| match e {
@@ -852,8 +859,6 @@ mod tests {
         assert_eq!(by("older").expect("moved").pin.url, AUDACITY);
         assert!(by("kept").is_none());
         // THE SAME BYTES AGAIN (a fetch that failed for a moment): no move.
-        report.skipped[0].detail = "fetch-failed".into();
-        write_report(&report);
         let mut same = |a: &AppImageApp,
                         asset: &crate::github::Asset,
                         stamp: Stamp,

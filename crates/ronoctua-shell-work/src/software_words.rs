@@ -363,13 +363,16 @@ pub const fn origin_key(origin: Origin) -> &'static str {
 
 // ─── the declaration's words ─────────────────────────────────────────────────
 
-/// How this machine stands to a declared entry, as a phrase: applied,
-/// waiting, elsewhere, or the reason it was left out.
+/// How this machine stands to a declared entry, as a phrase: applied, on
+/// its way (or not arrived), waiting, elsewhere, or the reason it was left
+/// out.
 #[must_use]
 pub const fn standing_key(standing: &Standing) -> &'static str {
     use crate::key;
     match standing {
         Standing::Applied => key::SOFTWARE_DECLARED_STANDING_APPLIED,
+        Standing::Arriving { failure: None } => key::SOFTWARE_DECLARED_STANDING_ARRIVING,
+        Standing::Arriving { failure: Some(_) } => key::SOFTWARE_DECLARED_STANDING_NOT_ARRIVED,
         Standing::Waiting => key::SOFTWARE_DECLARED_STANDING_WAITING,
         Standing::Elsewhere => key::SOFTWARE_DECLARED_STANDING_ELSEWHERE,
         Standing::Skipped { reason, .. } => skip_key(*reason),

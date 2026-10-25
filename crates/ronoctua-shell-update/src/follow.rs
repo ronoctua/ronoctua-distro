@@ -21,15 +21,15 @@
 //! that trusts no key of the person's, or has not got their signature yet,
 //! says so, from `person-applied.json`), and each AppImage that follows its
 //! releases with the version this machine runs, whose pin it is and — on
-//! the row itself, so both doors say it beside the cursor — why a newer one
-//! is not in use: it waits for the update's check, it was held, or it was
-//! refused (`/etc/ronoctua/distro-apps.json`, the registry's report).
+//! the row itself, so both doors say it beside the cursor — where a followed
+//! one stands: on its way, its download not fetched, its build failed (its
+//! part's record, `ronoctua_parts`), or refused by a rule
+//! (`/etc/ronoctua/distro-apps.json`, the registry's report).
 
 use std::path::{Path, PathBuf};
 
 use crate::key;
 use ronoctua_person::distro_pins::{Fault, HOSTS};
-use ronoctua_person::local::HeldWhy;
 use ronoctua_person::options::Options;
 use ronoctua_person::reports::{DistroApps, PersonApplied, PinFrom};
 use ronoctua_person::tree::TreeWhy;
@@ -65,6 +65,8 @@ pub struct Places {
     pub registry: PathBuf,
     /// The person's report: what root made of their signature.
     pub applied: PathBuf,
+    /// The parts' records, where a followed version's arrival is said.
+    pub records: PathBuf,
 }
 
 impl Places {
@@ -83,6 +85,7 @@ impl Places {
             config: ronoctua_xdg::config_dir(),
             registry: machine(REGISTRY),
             applied: machine(APPLIED),
+            records: machine(ronoctua_parts::names::RECORDS),
         }
     }
 
@@ -96,6 +99,7 @@ impl Places {
             self.config.as_ref().map(|c| c.join(ronoctua_consent::FILE)),
             Some(self.registry.clone()),
             Some(self.applied.clone()),
+            Some(self.records.clone()),
         ]
         .iter()
         .map(|p| p.as_deref().and_then(mtime))
@@ -138,6 +142,8 @@ impl Choice {
 /// was built with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct App {
+    /// Its registry id — its part's id too.
+    pub id: String,
     /// Its name (data, never translated), or its id.
     pub name: String,
     /// Whether this machine carries it.
@@ -148,12 +154,43 @@ pub struct App {
     pub version: String,
     /// The followed version the registry took, when there is one.
     pub followed: Option<String>,
-    /// Why the update's verification held the followed version back.
-    pub held: Option<HeldWhy>,
-    /// The followed version waits for the update's verification.
-    pub waiting: bool,
+    /// Where its part stands with the followed version.
+    pub arrival: Arrival,
     /// The rule the registry refused a followed pin of it by.
     pub refused: Option<Fault>,
+}
+
+/// Where an AppImage's part stands with the followed version — its record
+/// (`ronoctua_parts::record`): the system builds the followed pin as the
+/// part, and until it arrives the part keeps the version it had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Arrival {
+    /// What the system wants is the part's — or it follows nothing.
+    #[default]
+    Here,
+    /// On its way: not tried yet, or being tried.
+    OnItsWay,
+    /// Its last try could not fetch the followed download.
+    Missing,
+    /// Its last try failed otherwise.
+    Failed,
+}
+
+impl Arrival {
+    /// What the part's record at `path` says.
+    #[must_use]
+    pub fn of_record(path: &Path) -> Self {
+        let record = std::fs::read(path)
+            .ok()
+            .and_then(|b| ronoctua_person::parse::<ronoctua_parts::record::Record>(&b).ok());
+        match record {
+            None => Self::OnItsWay,
+            Some(r) if r.phase == ronoctua_parts::record::Phase::Here => Self::Here,
+            Some(r) if !r.missing.is_empty() => Self::Missing,
+            Some(r) if r.last_failure.is_some() => Self::Failed,
+            Some(_) => Self::OnItsWay,
+        }
+    }
 }
 
 /// Whether this machine takes the person's signed-only data — their options
@@ -230,7 +267,13 @@ impl Readings {
         let registry: Option<DistroApps> = std::fs::read(&places.registry)
             .ok()
             .and_then(|b| ronoctua_person::parse(&b).ok());
-        let (machine, apps) = registry.map_or((None, Vec::new()), |r| of_registry(&r));
+        let (machine, mut apps) = registry.map_or((None, Vec::new()), |r| of_registry(&r));
+        // A FOLLOWED VERSION IS ITS PART'S to bring.
+        for a in &mut apps {
+            if a.pin == PinFrom::Followed {
+                a.arrival = Arrival::of_record(&places.records.join(format!("{}.json", a.id)));
+            }
+        }
         let taken = std::fs::read(&places.applied)
             .ok()
             .and_then(|b| ronoctua_person::parse::<PersonApplied>(&b).ok())
@@ -267,13 +310,13 @@ pub fn of_registry(r: &DistroApps) -> (Option<bool>, Vec<App>) {
             known = true;
             image.follows.as_ref()?;
             Some(App {
+                id: a.id.clone(),
                 name: a.name.clone().unwrap_or_else(|| a.id.clone()),
                 here: a.on_this_machine && !a.declined_here,
                 pin: image.pin,
                 version: image.version.clone(),
                 followed: image.followed_version.clone(),
-                held: image.held,
-                waiting: image.waiting,
+                arrival: Arrival::Here,
                 refused: r
                     .followed
                     .refused
@@ -584,15 +627,14 @@ fn label_and_value(
                 );
             }
             let followed = a.followed.as_deref().unwrap_or_default();
-            // WHY A NEWER ONE IS NOT IN USE, on the row itself.
-            let (note, tint) = match (a.held, a.waiting, a.refused) {
-                (Some(held), _, _) => (Some(note_held(held, followed, texts)), warning),
-                (None, true, _) => (
-                    Some(texts.t_with(key::DISTRO_FOLLOW_NOTE_WAITING, &[("followed", followed)])),
-                    None,
-                ),
-                (None, false, Some(fault)) => (Some(texts.t(note_refused(fault))), warning),
-                (None, false, None) => (None, None),
+            // WHERE A FOLLOWED ONE STANDS, on the row itself.
+            let arriving = |k| Some(texts.t_with(k, &[("followed", followed)]));
+            let (note, tint) = match (a.arrival, a.refused) {
+                (Arrival::OnItsWay, _) => (arriving(key::DISTRO_FOLLOW_NOTE_ARRIVING), None),
+                (Arrival::Missing, _) => (arriving(key::DISTRO_FOLLOW_NOTE_MISSING), warning),
+                (Arrival::Failed, _) => (arriving(key::DISTRO_FOLLOW_NOTE_FAILED), warning),
+                (Arrival::Here, Some(fault)) => (Some(texts.t(note_refused(fault))), warning),
+                (Arrival::Here, None) => (None, None),
             };
             let version = a.version.as_str();
             let value = match (a.pin, note) {
@@ -614,19 +656,6 @@ fn label_and_value(
             (a.name.clone(), value, tint)
         }
     }
-}
-
-/// Why the update's verification held a followed version back, in the
-/// page's own words — about a VERSION, which the update's words about a
-/// program are not.
-fn note_held(why: HeldWhy, followed: &str, texts: &ronoctua_i18n::Texts) -> String {
-    let k = match why {
-        HeldWhy::EvalFailed => key::DISTRO_FOLLOW_NOTE_EVAL_FAILED,
-        HeldWhy::FetchFailed => key::DISTRO_FOLLOW_NOTE_FETCH_FAILED,
-        HeldWhy::UpstreamChanged => key::DISTRO_FOLLOW_NOTE_UPSTREAM_CHANGED,
-        HeldWhy::BuildFailed => key::DISTRO_FOLLOW_NOTE_BUILD_FAILED,
-    };
-    texts.t_with(k, &[("followed", followed)])
 }
 
 /// The rule the registry refused a followed pin by, one sentence each.
@@ -731,7 +760,7 @@ mod tests {
         d
     }
 
-    fn image(id: &str, pin: PinFrom, held: Option<HeldWhy>) -> DistroApp {
+    fn image(id: &str, pin: PinFrom) -> DistroApp {
         DistroApp {
             id: id.to_owned(),
             name: Some(id.to_uppercase()),
@@ -752,8 +781,6 @@ mod tests {
                 distro_version: "0.8.0".to_owned(),
                 distro_url: format!("https://github.com/storytold/{id}/releases/download/v0.8.0/x"),
                 followed_version: Some("0.9.0".to_owned()),
-                held,
-                waiting: false,
             }),
         }
     }
@@ -764,18 +791,18 @@ mod tests {
     /// build before the option says the machine follows anything.
     #[test]
     fn the_page_lists_what_follows_and_whose_pin_built_it() {
-        let mut by_hand = image("byhand", PinFrom::Distro, None);
+        let mut by_hand = image("byhand", PinFrom::Distro);
         if let Some(i) = by_hand.appimage.as_mut() {
             i.follows = None;
         }
-        let mut package = image("gimp", PinFrom::Distro, None);
+        let mut package = image("gimp", PinFrom::Distro);
         package.appimage = None;
         let report = DistroApps {
             format: 1,
             apps: vec![
-                image("cadcraft", PinFrom::Followed, None),
-                image("figcraft", PinFrom::Distro, Some(HeldWhy::BuildFailed)),
-                image("photocraft", PinFrom::Distro, None),
+                image("cadcraft", PinFrom::Followed),
+                image("figcraft", PinFrom::Distro),
+                image("photocraft", PinFrom::Distro),
                 by_hand,
                 package,
             ],
@@ -792,7 +819,11 @@ mod tests {
         assert_eq!(machine, Some(true));
         let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, ["CADCRAFT", "FIGCRAFT", "PHOTOCRAFT"]);
-        assert_eq!(apps[1].held, Some(HeldWhy::BuildFailed));
+        assert_eq!(
+            apps[1].arrival,
+            Arrival::Here,
+            "the registry alone says no arrival"
+        );
         assert_eq!(
             (apps[2].refused, apps[0].refused),
             (Some(ronoctua_person::distro_pins::Fault::Asset), None)
@@ -805,21 +836,22 @@ mod tests {
     }
 
     /// FAILS IF: an app's row does not say, beside its version and whose it
-    /// is, why a newer one is not in use — held (in words about a version),
-    /// waiting for the update's check, refused by a rule — or the machine's
+    /// is, where a followed one stands — on its way, its download missing,
+    /// its build failed — or why a newer one is not in use — refused by a
+    /// rule —, or the machine's
     /// row does not say a choice it does not take: no key pinned, not
     /// signed yet, followed pins that do not read.
     #[test]
     fn a_row_says_why_and_the_machine_says_what_it_takes() {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
-        let app = |pin, held, waiting, refused| App {
+        let app = |pin, arrival, refused| App {
+            id: "figcraft".to_owned(),
             name: "FigCraft".to_owned(),
             here: true,
             pin,
             version: "0.7.0".to_owned(),
             followed: Some("0.7.2".to_owned()),
-            held,
-            waiting,
+            arrival,
             refused,
         };
         let mut r = Readings {
@@ -827,10 +859,10 @@ mod tests {
             let_in: true,
             machine: Some(true),
             apps: vec![
-                app(PinFrom::Distro, Some(HeldWhy::BuildFailed), false, None),
-                app(PinFrom::Followed, None, true, None),
-                app(PinFrom::Distro, None, false, Some(Fault::Asset)),
-                app(PinFrom::Followed, None, false, None),
+                app(PinFrom::Followed, Arrival::Missing, None),
+                app(PinFrom::Followed, Arrival::OnItsWay, None),
+                app(PinFrom::Distro, Arrival::Here, Some(Fault::Asset)),
+                app(PinFrom::Followed, Arrival::Here, None),
             ],
             taken: Taken::Yes,
         };
@@ -838,22 +870,19 @@ mod tests {
         assert_eq!(
             value(&r, Row::App(0)),
             texts.t_with(
-                key::DISTRO_FOLLOW_APP_DISTRO_BUT,
+                key::DISTRO_FOLLOW_APP_FOLLOWED_BUT,
                 &[
                     ("version", "0.7.0"),
                     (
                         "note",
-                        &texts.t_with(
-                            key::DISTRO_FOLLOW_NOTE_BUILD_FAILED,
-                            &[("followed", "0.7.2")]
-                        )
+                        &texts.t_with(key::DISTRO_FOLLOW_NOTE_MISSING, &[("followed", "0.7.2")])
                     ),
                 ]
             )
         );
         assert!(
             value(&r, Row::App(1)).contains("0.7.2"),
-            "the waiting one is named"
+            "the one on its way is named"
         );
         assert_eq!(
             value(&r, Row::App(2)),
@@ -937,6 +966,7 @@ mod tests {
             config: Some(root.join("config")),
             registry: root.join("etc/distro-apps.json"),
             applied: root.join("etc/person-applied.json"),
+            records: root.join("parts"),
         };
         let mirror = places.mirror.clone().unwrap();
         std::fs::create_dir_all(mirror.parent().unwrap()).unwrap();

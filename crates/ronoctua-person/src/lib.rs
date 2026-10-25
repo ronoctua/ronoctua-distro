@@ -12,9 +12,7 @@
 //!   options.json                         opt-ins (signing commits by SSH, their binary cache)
 //!
 //! <machine dir>/person/              the root copy the root applier swaps in (data, never Nix)
-//! <machine dir>/local/held.json      entries the update held back (root only, never synced)
 //! <machine dir>/local/approved.json  person brain modules approved through the sudo door
-//! <machine dir>/local/verified.json  the followed distro AppImages root's verify built
 //! <machine dir>/local/signer.json    the person's signing key root trusts, and the last verdict on it
 //! $XDG_STATE_HOME/ronoctua/person-signed/  the manifest the person signed of the mirror, and its signature
 //! /etc/ronoctua/person-applied.json  what Nix applied and skipped, and why
@@ -45,8 +43,7 @@
 //!
 //! The `ronoctua-person` binary (feature `apply`) is the one program that
 //! writes the machine's copy: `apply` validates a staged tree and swaps it
-//! into the machine directory ([`tree`]), `verify` tries every declared entry
-//! in a `nix` of its own and writes `local/held.json` ([`verify`]), and
+//! into the machine directory ([`tree`]), and
 //! `approve` records a brain module's approval at the hash root computed
 //! ([`approve`]). What each decides is here, pure and tested; the binary
 //! only opens, runs and writes. Its units and folders are named in [`root`].
@@ -66,7 +63,6 @@ pub mod reports;
 pub mod root;
 pub mod state;
 pub mod tree;
-pub mod verify;
 
 mod check;
 #[cfg(test)]
@@ -99,12 +95,12 @@ pub mod names {
     /// The root copy, under the machine directory.
     pub const MACHINE_PERSON: &str = "person";
     /// Under the machine directory, root only.
-    pub const HELD: &str = "local/held.json";
-    /// Under the machine directory, root only.
     pub const APPROVED: &str = "local/approved.json";
-    /// Under the machine directory, root only: the followed distro AppImages
-    /// root's verify built ([`crate::local::Verified`]).
-    pub const VERIFIED: &str = "local/verified.json";
+    /// Under the machine directory: what the update's verification of the
+    /// person's entries wrote — the entries it held back, the followed
+    /// AppImages it let in —, gone with it (an entry is a part, which fails
+    /// alone). Every apply removes them.
+    pub const RETIRED: [&str; 2] = ["local/held.json", "local/verified.json"];
     /// Under `/etc/ronoctua/`, written by Nix.
     pub const PERSON_APPLIED: &str = "person-applied.json";
     /// Under `/etc/ronoctua/`, written by Nix.

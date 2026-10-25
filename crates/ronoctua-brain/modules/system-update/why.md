@@ -76,7 +76,7 @@ perfil que não é o do sistema) faz o ensaio falhar do mesmo jeito.
 
 O mesmo vale para um PROGRAMA que tem uma forma que não muda nada: o passo declara `rehearse`, e o
 ensaio roda o mesmo programa com esses argumentos (`apply --rehearse` mede numa cópia o que baixaria
-e construiria; `verify --rehearse` tenta e não escreve; `person stage --check`; `record
+e construiria; `person stage --check`; `record
 --rehearse`). Os argumentos passam por todas as recusas do `run`, e o gerador recusa um `rehearse`
 igual ao `run` (o ensaio rodaria o passo de verdade) ou vazio. Sem `rehearse`, o ensaio imprime o
 comando e não roda nada, que é tudo o que ele pode dizer com honestidade.
@@ -120,12 +120,13 @@ A sequência agora tem três tempos, e o gerador recusa qualquer outra ordem
    flake da máquina; e `stop`, porque tudo depois fala o layout novo), move SÓ o input da distro
    (`nix flake update ronoctua`: os outros inputs são os da distro, copiados do lock dela, e mover a
    distro move tudo o que a release testou e nada além; pulado e dito enquanto a máquina está retida
-   — `not-held`), tenta cada entrada declarada sozinha (`verify`, entre mover e aplicar: contra os
-   inputs que o rebuild vai usar, e o que não constrói fica em `local/held.json` em vez de derrubar
-   o rebuild) e aplica com o `ronoctua-machine apply` — construir primeiro, trocar só o que
-   construiu, e armar o ensaio de boot. A metade inteira roda sob `ronoctua-person hold`: o lock de
-   root dos dados da pessoa passa pela entrada padrão a cada filho, então o que o `verify` tentou é o
-   que o `apply` constrói. Por isso o rebuild é um FILHO desta metade e não mais a unidade do
+   — `not-held`) e aplica com o `ronoctua-machine apply` — construir primeiro, trocar só o que
+   construiu, e armar o ensaio de boot. Um programa que a pessoa declarou não entra no rebuild: é uma
+   parte dela, que o realizador avalia sozinha depois da troca, e a que não avalia ou não constrói
+   falha sozinha (antes, um passo `verify` tentava cada entrada antes do rebuild e retinha a quebrada
+   em `local/held.json`). A metade inteira roda sob `ronoctua-person hold`: o lock de root dos dados
+   da pessoa passa pela entrada padrão a cada filho, então uma aplicação das declarações que a pessoa
+   comece no meio espera, em vez de trocá-las sob o rebuild. Por isso o rebuild é um FILHO desta metade e não mais a unidade do
    resgate: uma unidade iniciada por `systemctl start` não herdaria o lock e esperaria pelo próprio
    pai até `busy`. E o `hold` espera com PACIÊNCIA (`--patient`, bloqueado no `flock` do kernel, sem
    relógio): uma aplicação da central de programas que já constrói quando a atualização começa

@@ -121,18 +121,36 @@ let
   plain = builtins.unsafeDiscardStringContext;
   plan = {
     format = 1;
-    parts = lib.mapAttrs (_: p: {
-      drv = plain p.package.drvPath;
-      out = plain p.package.outPath;
-      inherit (p)
-        kind
-        interface
-        heavy
-        unfree
-        name
-        ;
-    }) wanted;
+    parts = lib.mapAttrs (
+      _: p:
+      (
+        if p.entry != null then
+          { entry = { inherit (p.entry) id fingerprint; }; }
+        else
+          {
+            drv = plain p.package.drvPath;
+            out = plain p.package.outPath;
+          }
+      )
+      // {
+        inherit (p)
+          kind
+          interface
+          heavy
+          unfree
+          name
+          ;
+      }
+    ) wanted;
   };
+  # A PART HOLDS A PACKAGE OR IS MADE OF AN ENTRY: never both, and a wanted
+  # one never neither (a part a machine does not want may name no package:
+  # its plan never reads one).
+  neitherOrBoth = lib.attrNames (
+    lib.filterAttrs (
+      _: p: (p.package != null && p.entry != null) || (p.wanted && p.package == null && p.entry == null)
+    ) cfg
+  );
 
   part =
     { name, config, ... }:
@@ -158,8 +176,37 @@ let
           '';
         };
         package = lib.mkOption {
-          type = lib.types.package;
-          description = "What the part's profile holds: one store path.";
+          type = lib.types.nullOr lib.types.package;
+          default = null;
+          description = ''
+            What the part's profile holds: one store path. `null` for a part
+            of the person's, made of their declared `entry`.
+          '';
+        };
+        # ── anchor: L25 ──
+        entry = lib.mkOption {
+          type = lib.types.nullOr (
+            lib.types.submodule {
+              options = {
+                id = lib.mkOption {
+                  type = lib.types.str;
+                  description = "The entry's id in the person's declaration (`<source>:<source-id>`).";
+                };
+                fingerprint = lib.mkOption {
+                  type = lib.types.str;
+                  description = "What the declaration is, hashed (`nix/modules/person.nix`).";
+                };
+              };
+            }
+          );
+          default = null;
+          description = ''
+            A PART OF THE PERSON'S: the program they declared
+            (`nix/modules/person.nix`). The plan names the entry and never a
+            derivation — the system never evaluates what the person declared
+            — and the part's realizer evaluates it alone, from the machine
+            flake's `personParts`.
+          '';
         };
         name = lib.mkOption {
           type = lib.types.str;
@@ -238,6 +285,10 @@ in
       {
         assertion = badIds == [ ];
         message = "ronoctua.parts: not a part id (lower-case kebab, at most 48, never system): ${lib.concatStringsSep ", " badIds}";
+      }
+      {
+        assertion = neitherOrBoth == [ ];
+        message = "ronoctua.parts: a part holds a package or is made of an entry, never both, and a wanted one never neither: ${lib.concatStringsSep ", " neitherOrBoth}";
       }
     ];
 

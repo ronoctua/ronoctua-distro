@@ -84,9 +84,8 @@ let
 
   updates = pkgs.callPackage ./sequence.nix { };
 
-  # THE PERSON'S DATA TOOL, told the machine's places (`ronoctua-person
-  # verify` reads the machine directory with this machine's `nix`, and
-  # `record` reads the machine's record) — the same table every unit that
+  # THE PERSON'S DATA TOOL, told the machine's places (`record` reads the
+  # machine's record) — the same table every unit that
   # runs `ronoctua-machine` gives it (`ronoctua.machine.environment`), by
   # `--set-default`, so nothing can disagree about which flake or which `nix`.
   personTool =
@@ -126,7 +125,7 @@ let
       software = config.ronoctua.software.package;
       # THE 2026-10-05 WAVE: the machine's life (`ronoctua-machine`, wrapped
       # with the machine's places: migrate, apply), the person's declarations
-      # (`ronoctua-person`: verify, record) and the belongings' plain part
+      # (`ronoctua-person`: record) and the belongings' plain part
       # (`ronoctua-belongings plain pull|push`) — each the EXTRACTED binary,
       # so a unit that runs as root carries none of the desktop.
       machine = config.ronoctua.machine.package;

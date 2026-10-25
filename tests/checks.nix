@@ -41824,7 +41824,7 @@ let
           wrong.append(f"the template follows {f['url']!r}, not the release branch")
       if f["names"] != [f["user"]]:
           wrong.append(f"nixosConfigurations is {f['names']}, not [{f['user']!r}]")
-      for name in ("nixosConfigurations", "personEntries", "personFingerprints"):
+      for name in ("nixosConfigurations", "personParts"):
           if name not in f["outputs"]:
               wrong.append(f"the machine flake has no `{name}`")
       if f["host"] != "noctua-reference":
@@ -42171,51 +42171,31 @@ let
   # alias that throws when read (`autoReconfHook`, kept by nixpkgs as a typo
   # trap), an attribute that is not a package, an unfree package declared
   # without consent, an entry for another machine, one with a field missing and
-  # a Flatpak from a remote this machine does not have. Then three variations
-  # of the same machine: the update held one entry back (by the fingerprint it
-  # has NOW — and by an older one, which holds nothing), the file says a format
-  # from the future, and the registry knows two of the declines.
+  # a Flatpak from a remote this machine does not have.
   #
-  # Each must evaluate, and the report must say exactly why each entry is
-  # where it is. "Evaluate" is everything the entries reach: `/etc` (where the
-  # report is) and the person's Home Manager generation (where the programs
-  # are). The person's half never touches the system profile
-  # (`person-packages-are-per-user`).
+  # A declared package or AppImage is a PART of the person's: the system
+  # never evaluates it, and the report says it was applied as one, with the
+  # part it became (`parts`). Whether it builds is that part's own question —
+  # `ronoctua.person.parts.<id>`, which its realizer evaluates alone: here
+  # each answers its derivation, or why its build refuses it (attr-missing,
+  # not-a-package, refused-by-meta). What the system itself skips is what it
+  # can tell from the data alone: another machine, a malformed entry, a
+  # source it lacks. Two variations: the file says a format from the future,
+  # and the registry knows two of the declines.
   #
-  # And the MINIMAL machine. The system admits unfree (the owner,
-  # 2026-10-24), so what keeps an unfree declaration out is the person's own
-  # yes, asked by the person's module of the package declared — never the
-  # system's licence policy. Its host turned the system's Flatpak on by hand
-  # while the distro's switch is off, so nix-flatpak's per-person list does
-  # not exist. It declares, from fixture packages an overlay plants: obsidian
-  # with consent (applied, its name in `unfreeNames`), discord without
-  # (refused: the person did not say yes), a consented package whose reading
-  # `abort`s — which `tryEval` cannot catch — held by its current
-  # fingerprint, a consented unfree package that needs another unfree one
-  # (applied), a free one that needs an unfree one (applied: nothing unfree
-  # refuses), and a Flatpak (no source here). The machine must evaluate with the aborting entry held, and
-  # the update's verification (`personEntries`, one entry at a time) must
-  # evaluate the two consented entries even while the aborting one is NOT
-  # held yet.
+  # And the MINIMAL machine, which declares, from fixture packages an overlay
+  # plants: obsidian with consent, discord without, a consented package whose
+  # reading `abort`s — which no `tryEval` catches —, a consented unfree
+  # package that needs another unfree one and a free one that needs an
+  # unfree one (nothing unfree refuses), and a Flatpak (no source here). The
+  # machine must evaluate with the aborting entry declared and nothing held:
+  # it is a part like the others, in the plan by its entry and never by a
+  # derivation, and only its own realizer would read it.
   person-bad-entry-does-not-break-eval =
     let
       built = machineLib.machine { dir = ./fixtures/machine-person; };
       config = built.config;
       variant = module: (built.extendModules { modules = [ module ]; }).config.ronoctua.person.report;
-      heldBy =
-        id: fingerprint:
-        builtins.toFile "held.json" (
-          builtins.toJSON {
-            format = 1;
-            held = [
-              {
-                inherit id fingerprint;
-                reason = "build-failed";
-                since = "2026-10-05T12:00:00Z";
-              }
-            ];
-          }
-        );
       nixEntry = attr: unfree: {
         source = "nix";
         id = "nix:${attr}";
@@ -42224,77 +42204,85 @@ let
         edited-on = "noctua-reference";
         inherit attr unfree;
       };
-      minimalData = built.extendModules {
-        modules = [
-          {
-            ronoctua.profile = lib.mkForce "minimal";
-            ronoctua.software.flatpak = lib.mkForce false;
-            services.flatpak.enable = lib.mkForce true;
-            nixpkgs.overlays = [
-              (final: prev: {
-                fixtureAborts = abort "fixture: reading this package aborts";
-                fixtureUnfreeInner = prev.runCommand "fixture-unfree-inner" {
-                  meta.license = lib.licenses.unfree;
-                } "touch $out";
-                fixtureUnfreeOuter = prev.runCommand "fixture-unfree-outer" {
-                  meta.license = lib.licenses.unfree;
-                  inner = final.fixtureUnfreeInner;
-                } "touch $out";
-                fixtureFreeOuter = prev.runCommand "fixture-free-outer" {
-                  inner = final.fixtureUnfreeInner;
-                } "touch $out";
-              })
-            ];
-            ronoctua.person.data = lib.mkForce (
-              builtins.toFile "declared.json" (
-                builtins.toJSON {
-                  format = 1;
-                  apps = [
-                    (nixEntry "obsidian" true)
-                    (nixEntry "discord" false)
-                    (nixEntry "fixtureAborts" true)
-                    (nixEntry "fixtureUnfreeOuter" true)
-                    (nixEntry "fixtureFreeOuter" false)
-                    {
-                      source = "flatpak";
-                      id = "flatpak:org.example.Fixture";
-                      machines = null;
-                      edited-at = "2026-10-05T12:00:00Z";
-                      edited-on = "noctua-reference";
-                      app-id = "org.example.Fixture";
-                      origin = "flathub";
-                    }
-                  ];
-                }
-              )
-            );
-          }
-        ];
-      };
       minimal =
-        (minimalData.extendModules {
+        (built.extendModules {
           modules = [
             {
-              ronoctua.person.held = lib.mkForce (
-                heldBy "nix:fixtureAborts" minimalData.config.ronoctua.person.fingerprints."nix:fixtureAborts"
+              ronoctua.profile = lib.mkForce "minimal";
+              ronoctua.software.flatpak = lib.mkForce false;
+              services.flatpak.enable = lib.mkForce true;
+              nixpkgs.overlays = [
+                (final: prev: {
+                  fixtureAborts = abort "fixture: reading this package aborts";
+                  fixtureUnfreeInner = prev.runCommand "fixture-unfree-inner" {
+                    meta.license = lib.licenses.unfree;
+                  } "touch $out";
+                  fixtureUnfreeOuter = prev.runCommand "fixture-unfree-outer" {
+                    meta.license = lib.licenses.unfree;
+                    inner = final.fixtureUnfreeInner;
+                  } "touch $out";
+                  fixtureFreeOuter = prev.runCommand "fixture-free-outer" {
+                    inner = final.fixtureUnfreeInner;
+                  } "touch $out";
+                })
+              ];
+              ronoctua.person.data = lib.mkForce (
+                builtins.toFile "declared.json" (
+                  builtins.toJSON {
+                    format = 1;
+                    apps = [
+                      (nixEntry "obsidian" true)
+                      (nixEntry "discord" false)
+                      (nixEntry "fixtureAborts" true)
+                      (nixEntry "fixtureUnfreeOuter" true)
+                      (nixEntry "fixtureFreeOuter" false)
+                      {
+                        source = "flatpak";
+                        id = "flatpak:org.example.Fixture";
+                        machines = null;
+                        edited-at = "2026-10-05T12:00:00Z";
+                        edited-on = "noctua-reference";
+                        app-id = "org.example.Fixture";
+                        origin = "flathub";
+                      }
+                    ];
+                  }
+                )
               );
             }
           ];
         }).config;
-      # The verification's view, BEFORE anything is held: only the two
-      # consented entries are read (reading the aborting one is its own
-      # failure, and stops evaluation as it should).
-      verify = machineLib.entriesOf minimalData;
-      evaluates = drv: (builtins.tryEval (builtins.unsafeDiscardStringContext drv.drvPath)).success;
+      # WHAT A PART'S REALIZER WOULD READ of its own entry: a derivation,
+      # or why its build refuses it — never both.
+      targetOf =
+        c: id:
+        let
+          t = c.ronoctua.person.parts.${id};
+        in
+        if t ? drv then "drv" else t.refused;
+      planOf = c: builtins.fromJSON c.environment.etc."ronoctua/parts-plan.json".text;
+      personPartsOf =
+        c:
+        lib.mapAttrs (_: w: {
+          entry = w.entry.id or null;
+          drv = w ? drv;
+        }) (lib.filterAttrs (_: w: w ? entry) (planOf c).parts);
       facts = pkgs.writeText "person-bad-entry-facts.json" (
         builtins.toJSON {
           report = config.ronoctua.person.report;
-          held = variant {
-            ronoctua.person.held = lib.mkForce (heldBy "nix:sl" config.ronoctua.person.fingerprints."nix:sl");
-          };
-          stale = variant { ronoctua.person.held = lib.mkForce (heldBy "nix:sl" "an-older-fingerprint"); };
+          targets = lib.genAttrs [
+            "nix:cowsay"
+            "nix:obsidian"
+            "nix:gone-from-nixpkgs-fixture"
+            "nix:autoReconfHook"
+            "nix:lib"
+            "nix:discord"
+            "nix:sl"
+            "appimage:fixture-tool"
+          ] (targetOf config);
+          plan = personPartsOf config;
           minimal = {
-            inherit (minimal.ronoctua.person) report unfreeNames;
+            inherit (minimal.ronoctua.person) report;
             allowUnfree = minimal.nixpkgs.config.allowUnfree;
             flatpakSwitch = minimal.ronoctua.software.flatpak;
             systemFlatpak = minimal.services.flatpak.enable;
@@ -42302,11 +42290,13 @@ let
             home =
               builtins.unsafeDiscardStringContext
                 minimal.home-manager.users.${user}.home.activationPackage.drvPath;
-            verified = {
-              obsidian = evaluates verify."nix:obsidian";
-              fixtureUnfreeOuter = evaluates verify."nix:fixtureUnfreeOuter";
-            };
-            verifiable = builtins.attrNames verify;
+            targets = lib.genAttrs [
+              "nix:obsidian"
+              "nix:discord"
+              "nix:fixtureUnfreeOuter"
+              "nix:fixtureFreeOuter"
+            ] (targetOf minimal);
+            plan = personPartsOf minimal;
           };
           newer = variant {
             ronoctua.person.data = lib.mkForce (
@@ -42340,22 +42330,32 @@ let
     mkCheck "person-bad-entry-does-not-break-eval" [ pkgs.python3 ] ''
       python3 - <<'END'
       import json, sys
+      # PARSED: every fact is what evaluation answered — the report, the
+      # parts' plan, each part's own target —, never a source file.
       f = json.load(open("${facts}"))
       wrong = []
 
       def why(report):
           return {s["id"]: (s["reason"], s["detail"]) for s in report["skipped"]}
 
+      PARTS = ["nix:cowsay", "nix:obsidian", "nix:gone-from-nixpkgs-fixture", "nix:autoReconfHook",
+               "nix:lib", "nix:discord", "nix:sl", "appimage:fixture-tool"]
       r = f["report"]
-      expected_applied = ["nix:cowsay", "nix:obsidian", "nix:sl", "flatpak:org.example.Fixture",
-                          "appimage:fixture-tool", "web:fixture-web", "android:org.example.fixture"]
+      expected_applied = ["nix:cowsay", "nix:obsidian", "nix:gone-from-nixpkgs-fixture",
+                          "nix:autoReconfHook", "nix:lib", "nix:discord", "nix:sl",
+                          "flatpak:org.example.Fixture", "appimage:fixture-tool", "web:fixture-web",
+                          "android:org.example.fixture"]
       if r["applied"] != expected_applied:
           wrong.append(f"applied: {r['applied']}")
+      if sorted(r["parts"]) != sorted(PARTS):
+          wrong.append(f"the entries made parts: {sorted(r['parts'])}")
+      plan = f["plan"]
+      if sorted(plan) != sorted(r["parts"].values()) \
+              or sorted(p["entry"] for p in plan.values()) != sorted(PARTS):
+          wrong.append(f"the plan's parts of the person's are not the report's: {plan}")
+      if any(p["drv"] for p in plan.values()):
+          wrong.append("the plan names a derivation of the person's: the system evaluated it")
       expected = {
-          "nix:gone-from-nixpkgs-fixture": "attr-missing",
-          "nix:autoReconfHook": "attr-missing",
-          "nix:lib": "not-a-package",
-          "nix:discord": "refused-by-meta",
           "nix:hello": "other-machine",
           "nix:figlet": "format-unknown",
           "flatpak:org.example.Elsewhere": "source-off",
@@ -42367,11 +42367,18 @@ let
           wrong.append("a skipped entry does not say why")
       if r["machine"] != "noctua-reference" or not r["distro-rev"]:
           wrong.append(f"the report names machine {r['machine']!r}, revision {r['distro-rev']!r}")
-
-      if why(f["held"]).get("nix:sl") != ("held", "build-failed") or "nix:sl" in f["held"]["applied"]:
-          wrong.append("an entry held by its current fingerprint was not held")
-      if "nix:sl" not in f["stale"]["applied"]:
-          wrong.append("an entry held by an OLDER fingerprint stayed held")
+      want_targets = {
+          "nix:cowsay": "drv",
+          "nix:obsidian": "drv",
+          "nix:gone-from-nixpkgs-fixture": "attr-missing",
+          "nix:autoReconfHook": "attr-missing",
+          "nix:lib": "not-a-package",
+          "nix:discord": "refused-by-meta",
+          "nix:sl": "drv",
+          "appimage:fixture-tool": "drv",
+      }
+      if f["targets"] != want_targets:
+          wrong.append(f"what each part's realizer would read: {f['targets']}")
 
       n = f["newer"]
       if n["applied"] != [] or why(n) != {"nix:cowsay": why(n).get("nix:cowsay")} \
@@ -42393,50 +42400,46 @@ let
                        f"{m['flatpakSwitch']}, services.flatpak.enable {m['systemFlatpak']}): "
                        "it proves nothing")
       mr = m["report"]
-      if mr["applied"] != ["nix:obsidian", "nix:fixtureUnfreeOuter", "nix:fixtureFreeOuter"]:
-          wrong.append(f"minimal, applied: {mr['applied']} (a consented unfree package goes in, one "
-                       "that needs another unfree one by its consent, and a free one that needs an "
-                       "unfree one — nothing unfree refuses)")
-      mw = why(mr)
-      want = {
-          "nix:discord": ("refused-by-meta", "consent"),
-          "nix:fixtureAborts": ("held", "build-failed"),
-          "flatpak:org.example.Fixture": ("source-off", "flatpak"),
-      }
-      if set(mw) != set(want) or any(mw[k][0] != r or s not in mw[k][1] for k, (r, s) in want.items()):
-          wrong.append(f"minimal, skipped: {mw}")
-      if m["unfreeNames"] != ["obsidian", "fixture-unfree-outer"]:
-          wrong.append(f"minimal, the consented names: {m['unfreeNames']} (a held entry is never read "
-                       "for its name, and a consent widens no name)")
+      minimal_parts = ["nix:obsidian", "nix:discord", "nix:fixtureAborts", "nix:fixtureUnfreeOuter",
+                       "nix:fixtureFreeOuter"]
+      if mr["applied"] != minimal_parts or sorted(mr["parts"]) != sorted(minimal_parts):
+          wrong.append(f"minimal, applied: {mr['applied']}, parts {sorted(mr['parts'])} (every "
+                       "declared package is a part, the one that aborts included)")
+      if {k: v[0] for k, v in why(mr).items()} != {"flatpak:org.example.Fixture": "source-off"}:
+          wrong.append(f"minimal, skipped: {why(mr)}")
+      if sorted(p["entry"] for p in m["plan"].values()) != sorted(minimal_parts) \
+              or any(p["drv"] for p in m["plan"].values()):
+          wrong.append(f"minimal, the plan's parts of the person's: {m['plan']}")
+      if m["targets"] != {"nix:obsidian": "drv", "nix:discord": "refused-by-meta",
+                          "nix:fixtureUnfreeOuter": "drv", "nix:fixtureFreeOuter": "drv"}:
+          wrong.append(f"minimal, what each part's realizer would read: {m['targets']} (a "
+                       "consented unfree package, one that needs another unfree one, a free one "
+                       "that needs an unfree one: each evaluates alone while a sibling aborts)")
       if not m["etc"].endswith(".drv") or not m["home"].endswith(".drv"):
-          wrong.append("the minimal machine's /etc or the person's generation did not instantiate")
-      if sorted(m["verifiable"]) != sorted(["nix:obsidian", "nix:discord", "nix:fixtureAborts",
-                                            "nix:fixtureUnfreeOuter", "nix:fixtureFreeOuter"]):
-          wrong.append(f"minimal, the entries the update verifies: {m['verifiable']}")
-      if m["verified"] != {"obsidian": True, "fixtureUnfreeOuter": True}:
-          wrong.append("the update's verification of a consented entry fails while a sibling that "
-                       f"aborts is not held yet: {m['verified']}")
+          wrong.append("the minimal machine's /etc or the person's generation did not instantiate "
+                       "while an entry that aborts is declared")
       if wrong:
           print("ERROR: a bad declaration is not skipped and said, or it broke the machine.",
                 file=sys.stderr)
           for w in wrong:
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
-      print(f"OK: {len(r['applied'])} applied, {len(r['skipped'])} skipped with their reasons; "
-            "held, future format and declines said; the machine evaluates; on minimal an unfree "
-            "declaration waits only for the person's yes, a held entry that aborts is never read, "
-            "and each consented entry verifies alone")
+      print(f"OK: {len(r['applied'])} applied ({len(r['parts'])} as parts), {len(r['skipped'])} "
+            "skipped with their reasons; each part's own evaluation says its derivation or why "
+            "not; the machine evaluates with an entry that aborts declared, which no system "
+            "evaluation reads")
       END
     '';
 
   # THE PERSON'S PROGRAMS GO TO THE PERSON.
   #
-  # Every declared program lands in the person's Home Manager profile (a
-  # package, an AppImage's wrapper, a web app's launcher entry), the person's
-  # own Flatpak installation, or the list the reconciler installs Android apps
-  # from — and NOT in `environment.systemPackages` nor the system's Flatpak
-  # installation. And it is there BECAUSE of the declaration: the reference
-  # machine, which declares nothing, has none of them.
+  # Every declared program is the person's: a package or an AppImage is a
+  # PART of theirs (realized after the system, never in its closure), a web
+  # app's launcher entry is in their Home Manager profile, a Flatpak on their
+  # own installation's list, an Android app on the list the reconciler
+  # installs from — and NOT in `environment.systemPackages` nor the system's
+  # Flatpak installation. And it is there BECAUSE of the declaration: the
+  # reference machine, which declares nothing, has none of them.
   person-packages-are-per-user =
     let
       person = (machineLib.machine { dir = ./fixtures/machine-person; }).config;
@@ -42450,10 +42453,14 @@ let
           in
           if r.success then r.value else ""
         ) ps;
+      entryParts =
+        c: lib.mapAttrs (_: p: p.entry.id) (lib.filterAttrs (_: p: p.entry != null) c.ronoctua.parts);
       facts = pkgs.writeText "person-per-user-facts.json" (
         builtins.toJSON {
           home = names person.home-manager.users.${user}.home.packages;
           system = names person.environment.systemPackages;
+          parts = entryParts person;
+          referenceParts = entryParts reference;
           referenceHome = names reference.home-manager.users.${user}.home.packages;
           referenceSystem = names reference.environment.systemPackages;
           flatpakPerson = map (p: p.appId) person.home-manager.users.${user}.services.flatpak.packages;
@@ -42466,16 +42473,24 @@ let
     mkCheck "person-packages-are-per-user" [ pkgs.python3 ] ''
       python3 - <<'END'
       import json, sys
+      # PARSED: what evaluation put where, never a source file.
       f = json.load(open("${facts}"))
       wrong = []
-      for name in ("cowsay", "obsidian", "sl", "ronoctua-appimage-fixture-tool",
-                   "ronoctua-web-fixture-web.desktop"):
-          if name not in f["home"]:
-              wrong.append(f"{name} is not in the person's profile")
-          if name in f["system"]:
-              wrong.append(f"{name} is in environment.systemPackages")
-          if name in f["referenceHome"] or name in f["referenceSystem"]:
-              wrong.append(f"{name} is on the reference machine too: the check proves nothing")
+      parts = set(f["parts"].values())
+      for entry, name in (("nix:cowsay", "cowsay"), ("nix:obsidian", "obsidian"), ("nix:sl", "sl"),
+                          ("appimage:fixture-tool", "ronoctua-appimage-fixture-tool")):
+          if entry not in parts:
+              wrong.append(f"{entry} is not a part of the person's")
+          for where in ("home", "system", "referenceHome", "referenceSystem"):
+              if name in f[where]:
+                  wrong.append(f"{name} is in {where}: a part is never a package of a profile")
+      if f["referenceParts"]:
+          wrong.append(f"the reference machine has parts of a person's: {f['referenceParts']}")
+      if not all(p.startswith("person-") for p in f["parts"]):
+          wrong.append(f"a part of the person's is not named as one: {sorted(f['parts'])}")
+      web = "ronoctua-web-fixture-web.desktop"
+      if web not in f["home"] or web in f["system"] or web in f["referenceHome"]:
+          wrong.append("the web app's launcher is not the person's alone")
       if "org.example.Fixture" not in f["flatpakPerson"]:
           wrong.append("the declared Flatpak is not on the person's installation's list")
       if "org.example.Fixture" in f["flatpakSystem"]:
@@ -42489,7 +42504,8 @@ let
           for w in wrong:
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
-      print("OK: packages, AppImage, web app, Flatpak and apk go to the person, and only by declaring")
+      print(f"OK: {len(parts)} packages and AppImages are parts of the person's; the web app, the "
+            "Flatpak and the apk go to them, and only by declaring")
       END
     '';
 
@@ -44655,9 +44671,9 @@ let
   # decision, 2026-10-20), AS THE SYSTEMS SEE THEM: the judge of a followed
   # pin (`nix/distro-pins.nix`) over the table of cases the Rust judge is
   # held to, and the reference system with a planted table of AppImages that
-  # follow a repository, and the person's options, followed pins, verified
-  # record and held entries planted where root's applier and verify leave
-  # them (`extendModules`). Evaluated, never built.
+  # follow a repository, and the person's options and followed pins planted
+  # where root's applier leaves them (`extendModules`). Evaluated, never
+  # built.
   distroFollowFacts =
     let
       shared = import ../nix/distro-pins.nix;
@@ -44692,21 +44708,6 @@ let
         planted-distro-newer = {
           key = "pdnewer";
           distro = "3.0";
-          followed = "2.0";
-        };
-        planted-held = {
-          key = "pheld";
-          distro = "1.0";
-          followed = "2.0";
-        };
-        planted-stale-hold = {
-          key = "pstale";
-          distro = "1.0";
-          followed = "2.0";
-        };
-        planted-unverified = {
-          key = "punver";
-          distro = "1.0";
           followed = "2.0";
         };
         planted-last = {
@@ -44802,9 +44803,6 @@ let
             "planted-older"
             "planted-equal"
             "planted-distro-newer"
-            "planted-held"
-            "planted-stale-hold"
-            "planted-unverified"
             "planted-dup"
           ]
           ++ [
@@ -44841,45 +44839,8 @@ let
             // lib.optionalAttrs on { distro-apps-follow-releases = true; }
           )
         );
-      heldOf =
-        held:
-        builtins.toFile "held.json" (
-          builtins.toJSON {
-            format = 1;
-            held = lib.mapAttrsToList (id: fingerprint: {
-              id = "distro-appimage:${id}";
-              inherit fingerprint;
-              reason = "build-failed";
-              since = stamp;
-            }) held;
-          }
-        );
-      verifiedOf =
-        verified:
-        builtins.toFile "verified.json" (
-          builtins.toJSON {
-            format = 1;
-            verified = lib.mapAttrsToList (
-              id: v:
-              {
-                id = "distro-appimage:${id}";
-                inherit (v) fingerprint;
-                since = stamp;
-              }
-              // removeAttrs (good id v.version) [
-                "id"
-                "pinned-at"
-              ]
-            ) verified;
-          }
-        );
       plant =
-        {
-          on,
-          last,
-          held ? { },
-          verified ? { },
-        }:
+        { on, last }:
         base.extendModules {
           modules = [
             {
@@ -44889,8 +44850,6 @@ let
               ronoctua.person.distroPins = lib.mkForce (
                 builtins.toFile "distro-pins.json" (builtins.toJSON (followedDoc last))
               );
-              ronoctua.person.held = lib.mkForce (heldOf held);
-              ronoctua.person.verified = lib.mkForce (verifiedOf verified);
             }
           ];
         };
@@ -44918,61 +44877,21 @@ let
             )
           );
           profile = ours (names c.home-manager.users.${user}.home.packages);
-          # WHAT THE PERSON'S LAUNCHER ENTRY RUNS, and whether it keeps the
-          # opener's key: the entry derivation's own inputs.
-          entries = lib.mapAttrsToList (_: b: {
-            inherit (b.package) name;
-            program = b.entry.PROGRAM;
-            fallback = b.entry.FALLBACK;
-          }) c.ronoctua.distroApps.personBuilds;
-          fingerprints = lib.filterAttrs (
-            n: _: lib.hasPrefix "${shared.entry}:" n
-          ) c.ronoctua.person.fingerprints;
-          tried = builtins.filter (lib.hasPrefix "${shared.entry}:") (
-            builtins.attrNames c.ronoctua.person.entries
-          );
+          # WHAT EACH PART'S LAUNCHER ENTRY RUNS, and whether it keeps the
+          # opener's key: the entry derivation's own inputs, among what the
+          # part's package joins.
+          entries = lib.mapAttrsToList (id: p: {
+            inherit id;
+            inherit (p.package) name;
+            program = p.package.entry.PROGRAM;
+            fallback = p.package.entry.FALLBACK;
+          }) (lib.filterAttrs (id: p: mine id && p.wanted) c.ronoctua.parts);
           warnings = builtins.filter (lib.hasInfix "distro pins") c.warnings;
         };
-      # THE FINGERPRINTS NIX GIVES, read off machines that hand them to the
-      # verification: `planted-last` at 2.0, and every candidate as `on` has it.
-      first = seen (plant {
-        on = true;
-        last = "2.0";
-      });
       on = seen (plant {
         on = true;
         last = "2.1";
       });
-      fp = machine: id: machine.fingerprints."${shared.entry}:${id}";
-      records = {
-        planted-newer = {
-          fingerprint = fp on "planted-newer";
-          version = "2.0";
-        };
-        planted-stale-hold = {
-          fingerprint = fp on "planted-stale-hold";
-          version = "2.0";
-        };
-        planted-dup = {
-          fingerprint = fp on "planted-dup";
-          version = "2.0";
-        };
-        # VERIFIED AT ANOTHER FINGERPRINT than the candidate's: not let in.
-        planted-unverified = {
-          fingerprint = "a-fingerprint-of-another-build";
-          version = "2.0";
-        };
-        # THE LAST VERIFIED PIN, 2.0, while 2.1 is held.
-        planted-last = {
-          fingerprint = fp first "planted-last";
-          version = "2.0";
-        };
-      };
-      holds = {
-        planted-held = fp on "planted-held";
-        planted-stale-hold = "a-fingerprint-of-another-pin";
-        planted-last = fp on "planted-last";
-      };
     in
     pkgs.writeText "distro-follow-facts.json" (
       builtins.toJSON {
@@ -44981,39 +44900,29 @@ let
           said = shared.judge cases.table c.pin;
         }) cases.cases;
         inherit on user;
-        verified = seen (plant {
-          on = true;
-          last = "2.1";
-          held = holds;
-          verified = records;
-        });
+        view = (import ../nix/parts-names.nix).viewBin "";
         off = seen (plant {
           on = false;
           last = "2.1";
-          held = holds;
-          verified = records;
         });
         planted = lib.mapAttrs (_: p: { inherit (p) key distro followed; }) planted;
       }
     );
 
-  # A FOLLOWED PIN IS THE PERSON'S PROGRAM, BUILT ONLY WHILE THEY FOLLOW,
-  # ONLY WHEN IT IS NEWER THAN THE DISTRO'S, AND ONLY ONCE ROOT'S VERIFY
-  # BUILT IT; ONE THE JUDGE REFUSES IS SAID, AND NEVER STOPS THE MACHINE.
+  # A FOLLOWED PIN IS THE PERSON'S DOWNLOAD, BUILT ONLY WHILE THEY FOLLOW AND
+  # ONLY WHEN IT IS NEWER THAN THE DISTRO'S, AND ALWAYS AS THE APPIMAGE'S
+  # PART; ONE THE JUDGE REFUSES IS SAID, AND NEVER STOPS THE MACHINE.
   #
   # The judge and the Rust one agree on one table of cases, rule for rule.
-  # On, with no record: no followed pin is built — every newer one waits for
-  # the verification, which is handed each (`personEntries`,
-  # `personFingerprints`, `distro-appimage:<id>`). Verified: the newer pin is
-  # built for the PERSON (their Home Manager profile, the launcher running it
-  # from `/etc/profiles/per-user`, `X-Ronoctua-Fallback=false` kept) and the
-  # distro's of that id is not in `systemPackages` — never both; a record at
-  # another fingerprint lets nothing in; a held candidate falls back to the
-  # last verified pin, never to the older distro one; an older, an equal one
-  # and one the distro's own newer pin passed are not built. Every malformed
-  # pin is refused by its rule, by name, in `distro-apps.json`, and the
-  # registry's `problems` stay empty. Off: nothing followed is built, said
-  # or verified, whatever the files hold.
+  # On: a newer pin is the pin the AppImage's PART is built at — the part,
+  # never `systemPackages` nor the person's Home Manager profile, and a part
+  # that cannot fetch it keeps the generation it had (`ronoctua_parts`);
+  # an older, an equal one and one the distro's own newer pin passed are not
+  # built. Every part's launcher runs its program from the parts' view, the
+  # one place the session finds a part (`X-Ronoctua-Fallback=false` kept
+  # where the table says). Every malformed pin is refused by its rule, by
+  # name, in `distro-apps.json`, and the registry's `problems` stay empty.
+  # Off: nothing followed is built or said, whatever the files hold.
   distro-apps-follow-when-on-and-newer =
     mkCheck "distro-apps-follow-when-on-and-newer" [ pkgs.python3 ]
       ''
@@ -45036,9 +44945,7 @@ let
                 wrong.append(f"no case of the table is refused by the rule {rule}")
 
         planted = facts["planted"]
-        user = facts["user"]
-        candidates = {"planted-newer", "planted-held", "planted-stale-hold", "planted-unverified",
-                      "planted-last", "planted-dup"}
+        view = facts["view"]
         refused = {
             "planted-url": "url", "planted-asset": "asset", "planted-version": "version",
             "planted-hash": "hash", "planted-typed": "version", "nobody": "id", "by-hand": "id",
@@ -45048,9 +44955,9 @@ let
         def package(id, version):
             return f"ronoctua-appimage-{planted[id]['key']}-{version}"
 
-        # `built`: the version built FOR THE PERSON, by id; every other is the
-        # distro's, in the system.
-        def look(name, got, follows, built, held=()):
+        # `built`: the version the part is built at from the person's pin, by
+        # id; every other is built at the distro's.
+        def look(name, got, follows, built):
             if got["problems"]:
                 wrong.append(f"{name}: the registry refuses {got['problems']}")
             if got["followed"]["on"] != follows:
@@ -45064,38 +44971,26 @@ let
                 version = built.get(id, p["distro"])
                 if app["pin"] != want or app["version"] != version:
                     wrong.append(f"{name}: {id} is built from the {app['pin']} pin at {app['version']}, not the {want} pin at {version}")
-                mine, system = package(id, version), package(id, p["distro"])
-                if id in built:
-                    if mine not in got["profile"]:
-                        wrong.append(f"{name}: {id}'s followed build {mine} is not in the person's profile: {sorted(got['profile'])}")
-                    if any(n.startswith(f"ronoctua-appimage-{p['key']}-") for n in got["system"]):
-                        wrong.append(f"{name}: {id} is in systemPackages beside the person's build: {sorted(got['system'])}")
-                else:
-                    if system not in got["system"]:
-                        wrong.append(f"{name}: {id}'s distro build {system} is not in systemPackages")
-                    if any(n.startswith(f"ronoctua-appimage-{p['key']}-") for n in got["profile"]):
-                        wrong.append(f"{name}: {id} is in the person's profile with no verified pin")
+                if package(id, version) not in got["system"]:
+                    wrong.append(f"{name}: {id}'s part is not built at {version}: {sorted(got['system'])}")
+                other = [n for n in got["system"] if n.startswith(f"ronoctua-appimage-{p['key']}-") and n != package(id, version)]
+                if other:
+                    wrong.append(f"{name}: {id} is built twice: {other}")
+                if any(n.startswith(f"ronoctua-appimage-{p['key']}-") for n in got["profile"]):
+                    wrong.append(f"{name}: {id} is in the person's profile: a followed pin rides in the part")
                 if app["distro-version"] != p["distro"]:
                     wrong.append(f"{name}: {id} says the distro's is {app['distro-version']}")
                 taken = follows and refused.get(id) not in ("url", "asset", "version", "hash")
                 if (app["followed-version"] is not None) != taken:
                     wrong.append(f"{name}: {id} says the followed version {app['followed-version']!r}")
-                tried = follows and id in candidates
-                entry = f"distro-appimage:{id}"
-                if (entry in got["fingerprints"]) != tried or (entry in got["tried"]) != tried:
-                    wrong.append(f"{name}: {id} is {'not ' if tried else ""}handed to the verification")
-                if (app["held"] is not None) != (id in held):
-                    wrong.append(f"{name}: {id} says held {app['held']!r}")
-                waits = tried and id not in built and id not in held
-                if app["waiting"] != waits:
-                    wrong.append(f"{name}: {id} says waiting {app['waiting']}, not {waits}")
+            missing = sorted(set(planted) - {e["id"] for e in got["entries"]})
+            if missing:
+                wrong.append(f"{name}: no launcher of a part for {missing}")
             for e in got["entries"]:
-                if e["program"] != f"/etc/profiles/per-user/{user}/bin/" + e["name"].rsplit("-", 1)[0]:
-                    wrong.append(f"{name}: the person's {e['name']} runs {e['program']}, not their own profile's")
-                if e["fallback"] != "false":
-                    wrong.append(f"{name}: the person's {e['name']} lost `X-Ronoctua-Fallback=false`")
-            if len(got["entries"]) != len(built):
-                wrong.append(f"{name}: {len(got['entries'])} followed builds for the person, not {len(built)}")
+                if e["program"] != view + e["name"].rsplit("-", 1)[0]:
+                    wrong.append(f"{name}: {e['id']}'s launcher runs {e['program']}, not the parts' view's")
+                if e["fallback"] not in ("true", "false"):
+                    wrong.append(f"{name}: {e['id']}'s launcher says fallback {e['fallback']!r}")
             said = {r["id"]: r["fault"] for r in got["followed"]["refused"]}
             if said != (refused if follows else {}):
                 wrong.append(f"{name}: the refused pins are {said}, not {refused if follows else {}}")
@@ -45105,10 +45000,8 @@ let
             if got["warnings"]:
                 wrong.append(f"{name}: warned {got['warnings']}")
 
-        look("on, nothing verified", facts["on"], True, {})
-        look("on, verified", facts["verified"], True,
-             {"planted-newer": "2.0", "planted-stale-hold": "2.0", "planted-dup": "2.0", "planted-last": "2.0"},
-             held={"planted-held", "planted-last"})
+        look("on", facts["on"], True,
+             {"planted-newer": "2.0", "planted-dup": "2.0", "planted-last": "2.1"})
         look("off", facts["off"], False, {})
 
         if wrong:
@@ -45117,7 +45010,7 @@ let
             for w in wrong:
                 print("       " + w, file=sys.stderr)
             sys.exit(1)
-        print(f"OK: {len(judged)} cases judged as the Rust judge does; unverified pins wait, a verified newer one is built in the person's profile and not in systemPackages, a held one falls back to the last verified, {len(refused)} malformed ones refused by their rule; off, nothing followed")
+        print(f"OK: {len(judged)} cases judged as the Rust judge does; a newer followed pin is the pin its part is built at, never a profile's; every part's launcher runs from the view; {len(refused)} malformed ones refused by their rule; off, nothing followed")
         END
       '';
   # ── anchor: L05 ──
@@ -45127,26 +45020,6 @@ let
   # trial's way back — and, in `tests/slow.nix`, the boot trial and the
   # migration on machines of their own.
 
-  # A FAILED BUILD PUTS BACK THE LOCK THE RUNNING SYSTEM WAS BUILT FROM.
-  #
-  # The update moves the distro input BEFORE it applies, so the folder may
-  # already name a revision nothing was built from. This runs the EXTRACTED
-  # `ronoctua-machine` — the one the units run as root — on a system root of
-  # its own (`RONOCTUA_MACHINE_SYSROOT`): a store with two toplevels, a
-  # system profile on the first, and `nix`, `nix-env` and `bootctl` that are
-  # small programs keeping a log. A build that fails must leave the folder's
-  # lock as the running system's, the profile where it was, nothing switched
-  # and the record saying `build-failed`; and — so the check bites only on
-  # the failure — the same moved lock with a build that works is KEPT, the
-  # profile moves and the boot trial is armed against the system that
-  # booted.
-  #
-  # AND WITH NO SNAPSHOT YET — the first apply after an installation: the
-  # lock is the one the running system CARRIES. A system built from a machine
-  # flake carries its lock where the machine's table says
-  # (`RONOCTUA_MACHINE_SYSTEM_LOCK`): evaluated here on the VM with a machine
-  # flake's source of its own (`tests/fixtures/machine-lock`), and planted
-  # there in the running system for the program.
   # ── anchor: L25 ──
   # A BUILD THAT FAILED NAMES WHAT IT COULD NOT FETCH. The update recovers
   # like a part: `ronoctua-machine apply` asks Nix's own plan which
@@ -45171,6 +45044,26 @@ let
     expect = "test result: ok. 4 passed";
   };
 
+  # A FAILED BUILD PUTS BACK THE LOCK THE RUNNING SYSTEM WAS BUILT FROM.
+  #
+  # The update moves the distro input BEFORE it applies, so the folder may
+  # already name a revision nothing was built from. This runs the EXTRACTED
+  # `ronoctua-machine` — the one the units run as root — on a system root of
+  # its own (`RONOCTUA_MACHINE_SYSROOT`): a store with two toplevels, a
+  # system profile on the first, and `nix`, `nix-env` and `bootctl` that are
+  # small programs keeping a log. A build that fails must leave the folder's
+  # lock as the running system's, the profile where it was, nothing switched
+  # and the record saying `build-failed`; and — so the check bites only on
+  # the failure — the same moved lock with a build that works is KEPT, the
+  # profile moves and the boot trial is armed against the system that
+  # booted.
+  #
+  # AND WITH NO SNAPSHOT YET — the first apply after an installation: the
+  # lock is the one the running system CARRIES. A system built from a machine
+  # flake carries its lock where the machine's table says
+  # (`RONOCTUA_MACHINE_SYSTEM_LOCK`): evaluated here on the VM with a machine
+  # flake's source of its own (`tests/fixtures/machine-lock`), and planted
+  # there in the running system for the program.
   apply-reverts-the-lock-on-build-failure =
     let
       vm = self.nixosConfigurations.vm;
@@ -45790,8 +45683,6 @@ let
       distro-pins-duplicate:distro-pins:duplicate
       distro-pins-not-a-release:distro-pins:invalid
       distro-pins-not-the-tags-version:distro-pins:invalid
-      held-unknown-reason:held:shape
-      verified-not-a-followed-id:verified:invalid
       not-json:declared:not-json
       signer-not-a-key:signer:invalid
     "
@@ -45820,7 +45711,7 @@ let
       name=$(printf '%s' "$row" | cut -d: -f1)
       [ -f "$fixtures/bad/$name.json" ] || { echo "ERROR: the table names $name, which is not a fixture" >&2; exit 1; }
     done
-    [ "$bad" -ge 16 ] || { echo "ERROR: only $bad bad fixtures; this stopped reaching them" >&2; exit 1; }
+    [ "$bad" -ge 14 ] || { echo "ERROR: only $bad bad fixtures; this stopped reaching them" >&2; exit 1; }
 
     sed 's/"format": 1,/"format": 2,/' "$fixtures/good/declared.json" > newer.json
     cmp -s newer.json "$fixtures/good/declared.json" && { echo "ERROR: the format was not raised" >&2; exit 1; }
@@ -46645,21 +46536,22 @@ let
 
   # THE MACHINE'S COPY OF THE PERSON'S DATA HAS ONE WRITER.
   #
-  # `person/` in the machine directory, `local/held.json`,
-  # `local/approved.json` and `local/signer.json` are written by the
-  # `ronoctua-person` binary, as root, and by nothing else: `apply` swaps
-  # `person/` whole after holding it to the pinned key, `verify` writes what
-  # the update holds back, `approve` records an approval only at the hash
-  # root computed, and `pin` (with `apply`'s counter) keeps the person's key. A second writer — the
-  # machine's rebuild "fixing" `held.json`, an update step copying the
-  # person's mirror straight into `person/` — would be a door around all
-  # three, and every other check of this package would go on passing.
+  # `person/` in the machine directory, `local/approved.json` and
+  # `local/signer.json` are written by the `ronoctua-person` binary, as root,
+  # and by nothing else: `apply` swaps `person/` whole after holding it to the
+  # pinned key (and removes what the retired verification wrote,
+  # `local/held.json` and `local/verified.json`), `approve` records an
+  # approval only at the hash root computed, and `pin` (with `apply`'s
+  # counter) keeps the person's key. A second writer — the machine's rebuild
+  # "fixing" an approval, an update step copying the person's mirror straight
+  # into `person/` — would be a door around all three, and every other check
+  # of this package would go on passing.
   #
   # So: every Rust source outside `crates/ronoctua-person` (tests cut off),
   # and every Nix, shell and Python file under `nix/` and `crates/`, is swept
   # for a WRITE that names one of the three. In Rust, the question is asked
   # of each function: one that names them (`held.json`, `approved.json`,
-  # `names::HELD`, `names::APPROVED`, `MACHINE_PERSON`, `nixos/person`, or a
+  # `names::RETIRED`, `names::APPROVED`, `MACHINE_PERSON`, `nixos/person`, or a
   # constant of its file that holds one of those) and writes a file is the
   # offence; READING them is everybody's right (the update's window, the
   # software centre). In the other languages, a line that names one and
@@ -46667,8 +46559,9 @@ let
   # tmpfiles rule, Python's writes).
   #
   # AND THE DETECTOR IS PROVED ON THE ONE WRITER: the same sweep over
-  # `crates/ronoctua-person` must find its functions that write `held.json`
-  # and `approved.json` — a detector that finds nothing passes over anything.
+  # `crates/ronoctua-person` must find its functions that write
+  # `approved.json` and `signer.json` — a detector that finds nothing passes
+  # over anything.
   one-person-boundary = mkCheck "one-person-boundary" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -46680,7 +46573,7 @@ let
 
     # FILE-WIDE: the sweep reads every source whole (comments off, STRINGS
     # KEPT — the file names are strings), and asks its question per function.
-    TARGET = r'held\.json|approved\.json|signer\.json|\bnames::(?:HELD|APPROVED|SIGNER|MACHINE_PERSON)\b|\bMACHINE_PERSON\b|nixos/person\b'
+    TARGET = r'held\.json|verified\.json|approved\.json|signer\.json|\bnames::(?:RETIRED|APPROVED|SIGNER|MACHINE_PERSON)\b|\bMACHINE_PERSON\b|nixos/person\b'
     WRITE = re.compile(
         r'\bfs::write\b|\bFile::create\b|\bcreate_new\b|\.write\(true\)|\.append\(true\)'
         r'|\bfs::rename\b|\brenameat\w*\(|\bremove_file\b|\bremove_dir\w*\b|\bcreate_dir\w*\b'
@@ -46737,11 +46630,11 @@ let
     floor(swept, 300, "Rust sources outside ronoctua-person swept")
 
     # PROVED ON THE WRITER ITSELF: the sweep finds the functions of
-    # ronoctua-person that write held.json, approved.json and signer.json.
+    # ronoctua-person that write approved.json and signer.json.
     at_home = set()
     for f in sorted(home.rglob("*.rs")):
         at_home |= writers(uncommented(without_tests(f.read_text())))
-    for must_find in ("verify", "record", "write"):
+    for must_find in ("record", "write"):
         if must_find not in at_home:
             wrong.append(f"the sweep does not see ronoctua-person's own `fn {must_find}` write: it would see nobody's")
 
@@ -46769,22 +46662,21 @@ let
         for w in wrong:
             print("       " + w, file=sys.stderr)
         print("", file=sys.stderr)
-        print("       person/, local/held.json, local/approved.json and local/signer.json are", file=sys.stderr)
-        print("       written by the ronoctua-person binary as root (apply, verify, approve, pin) and by nothing", file=sys.stderr)
+        print("       person/, local/approved.json and local/signer.json are", file=sys.stderr)
+        print("       written by the ronoctua-person binary as root (apply, approve, pin) and by nothing", file=sys.stderr)
         print("       else; anybody may READ them. Ask that binary, or stage for it.", file=sys.stderr)
         raise SystemExit(1)
     print(f"OK: {swept} Rust sources and {others} Nix, shell and Python files; only ronoctua-person writes the machine's copy ({', '.join(sorted(at_home))} there)")
     END
   '';
 
-  # THE UPDATE'S CHECK OF THE PERSON'S ENTRIES, AND THE TWO UNITS, ON A
-  # BOOTED MACHINE (`tests/person-vm.nix`): the person's tree applied through
-  # the polkit rule with no agent — a brain module left out until the person's
-  # signing key is pinned through the sudo door, and brought in by the tree
-  # they signed —, `verify` holding exactly the broken entries of a fixture
-  # machine flake with the real Nix — each for its reason, the good one never
-  # — and a brain module approved through the sudo door only at the hash
-  # `nix/person-hash.nix` computes.
+  # THE PERSON'S ROOT HALF ON A BOOTED MACHINE (`tests/person-vm.nix`): the
+  # person's tree applied through the polkit rule with no agent — a brain
+  # module left out until the person's signing key is pinned through the sudo
+  # door, and brought in by the tree they signed —, a brain module approved
+  # through the sudo door only at the hash `nix/person-hash.nix` computes,
+  # and root's lock held by the update. (A broken declared entry failing
+  # alone, as a part, is `parts-are-isolated`.)
   personVm = import ./person-vm.nix {
     inherit pkgs lib;
     person = rust.person;
@@ -55571,7 +55463,7 @@ let
       person-apply-rule-is-narrow
       one-person-boundary
       ;
-    person-verify-holds-only-the-broken-entry = personVm;
+    person-root-half-vm = personVm;
     # ── anchor: L25 ──
     inherit
       parts-rule-is-narrow

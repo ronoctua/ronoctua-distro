@@ -33,7 +33,7 @@ use ronoctua_person::tree::{Refused, TreeWhy};
 use ronoctua_person::{Stamp, names};
 use ronoctua_pq::sign::PublicKey;
 
-use crate::verify;
+use crate::disk;
 
 /// The most a key's file may weigh: one public key and a line end.
 const KEY_MOST_BYTES: u64 = 4096;
@@ -57,7 +57,7 @@ pub enum Pinned {
 /// safe reading of a pin root cannot read; [`TreeWhy::Unreadable`] when the
 /// file could not be read.
 pub fn read(machine: &OwnedFd) -> Result<Option<(Signer, PublicKey)>, Refused> {
-    let bytes = verify::read_local(machine, names::SIGNER)
+    let bytes = disk::read_local(machine, names::SIGNER)
         .map_err(|e| Refused::new(TreeWhy::Unreadable, names::SIGNER, e))?;
     let Some(bytes) = bytes else {
         return Ok(None);
@@ -82,7 +82,7 @@ pub fn read(machine: &OwnedFd) -> Result<Option<(Signer, PublicKey)>, Refused> {
 ///
 /// [`TreeWhy::Unwritable`].
 pub fn write(machine: &OwnedFd, signer: &Signer) -> Result<(), Refused> {
-    verify::write_local(
+    disk::write_local(
         machine,
         names::SIGNER,
         ronoctua_person::to_json(signer).as_bytes(),

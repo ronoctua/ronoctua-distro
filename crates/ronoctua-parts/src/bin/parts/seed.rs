@@ -44,7 +44,9 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
     let here: Vec<String> = plan
         .parts
         .values()
-        .map(|w| w.out.clone())
+        // A PART OF THE PERSON'S names no output: an installation medium
+        // knows no person.
+        .filter_map(|w| w.out.clone())
         .filter(|out| {
             ronoctua_parts::plan::is_store_path(out)
                 && disk::run_quiet(&[

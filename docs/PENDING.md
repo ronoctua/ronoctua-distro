@@ -1678,7 +1678,15 @@ por marcos, cada um verde:
     leva também — pequenos, e inúteis para outra máquina;
   - **a `apply` de uma distro sem fases** (anterior a elas) não sabe o `.drv` do sistema: ela não diz
     o que faltou nem enraíza os downloads.
-- **M8 — as entradas da pessoa viram partes**, e o `verify`/`held.json` delas sai.
+- **O que ficou do M8.** Os pacotes e AppImages que a pessoa declara são partes dela, e os AppImages
+  seguidos são o pin da parte do próprio app (o porquê no `docs/ARCHITECTURE.md`). Ficou para depois:
+  - **os apps do Android que a pessoa declara continuam no sistema**: o apk de cada um é baixado no
+    build e listado em `/etc/ronoctua/declared-android.json`, então um apk que não baixa derruba o
+    rebuild. Uma parte de dados por apk, lida pelo reconciliador pelo caminho estável, resolve;
+  - **a página das partes não distingue as partes da pessoa** das da distro: são todas linhas iguais,
+    nomeadas pelo nome que a pessoa declarou;
+  - **o `wide` do `nix/modules/person.nix`** (um nixpkgs com `allowUnfree`) sobrou da época do
+    predicado: com o sistema admitindo não livre, o caminho que o usa não acontece mais.
 - **M9 — documentação, tamanho e release.**
 
 - acabou quando: o Z16 instala do ISO novo sem cabo e sem Wi-Fi até a sessão, e depois, com rede,

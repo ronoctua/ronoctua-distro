@@ -17,8 +17,9 @@
 //! # Where the table comes from
 //!
 //! The system's own report, `/etc/ronoctua/distro-apps.json`: each AppImage
-//! with its key, the repository and pattern it follows, the distro's pin and
-//! why the verification held a followed one — no Nix evaluation at run time.
+//! with its key, the repository and pattern it follows and the distro's pin
+//! — and whether its part could not fetch the followed download, from the
+//! part's record — no Nix evaluation at run time.
 //! A report of a build before the followed pins knows none: then nothing is
 //! asked and nothing is dropped.
 //!
@@ -322,6 +323,7 @@ pub fn look(
             allows: &ronoctua_consent::allows,
             now: crate::appimage::now(),
             stamp: crate::declaration::now_stamp(),
+            missed: &|id, url| crate::parts::misses(&ctx.roots, id, url),
         },
         net,
         report,
@@ -348,6 +350,9 @@ pub struct LookAt<'a> {
     pub now: u64,
     /// The stamp a new pin carries.
     pub stamp: ronoctua_person::Stamp,
+    /// Whether the part of the AppImage `id` could not fetch the download
+    /// at `url` ([`crate::parts::misses`]).
+    pub missed: &'a dyn Fn(&str, &str) -> bool,
 }
 
 /// [`look`], over what it reads and with the pin of an asset handed in.
@@ -414,7 +419,7 @@ pub fn look_with(
             continue;
         }
         if let Some(c) = current
-            && crate::pins::look(&c.url, &latest.url, image.held) == Look::Nothing
+            && crate::pins::look(&c.url, &latest.url, (at.missed)(&app.id, &c.url)) == Look::Nothing
         {
             continue;
         }
@@ -479,7 +484,6 @@ mod tests {
     use super::*;
     use ronoctua_person::Stamp;
     use ronoctua_person::declared::{GithubReleases, Pin};
-    use ronoctua_person::local::HeldWhy;
     use ronoctua_person::reports::{DistroApp, DistroAppImage, DistroApps, PinFrom};
 
     const RELEASES: &str = "https://github.com/storytold";
@@ -523,8 +527,6 @@ mod tests {
                 distro_version: distro.to_owned(),
                 distro_url: image_url(id, distro),
                 followed_version: None,
-                held: None,
-                waiting: false,
             }),
         }
     }
@@ -580,17 +582,14 @@ mod tests {
     /// FAILS IF, over canned GitHub answers and no Nix: a newer release is
     /// not pinned under the version the distro's builder names it by, an
     /// AppImage the distro caught up keeps a followed pin, one already
-    /// followed to the newest release is downloaded again, one held for a
-    /// download that changed is not fetched again, a moving tag or another
+    /// followed to the newest release is downloaded again, one whose part
+    /// could not fetch its download is not fetched again, a moving tag or another
     /// machine's AppImage is pinned, a pin of an id the table no longer
     /// follows stays, or GitHub is asked without the person's consent.
     #[test]
     fn the_distro_appimages_follow_their_newest_release() {
         let dir = scratch("look");
-        let mut held = app("heldcraft", "0.8.0", true);
-        if let Some(i) = held.appimage.as_mut() {
-            i.held = Some(HeldWhy::UpstreamChanged);
-        }
+        let held = app("heldcraft", "0.8.0", true);
         let mut elsewhere = app("othercraft", "0.8.0", true);
         elsewhere.on_this_machine = false;
         let registry = DistroApps {
@@ -645,6 +644,8 @@ mod tests {
             })
         };
         let all = |_: &str| true;
+        // THE PART OF `heldcraft` could not fetch its followed download.
+        let missed = |id: &str, _: &str| id == "heldcraft";
         let at = LookAt {
             registry: &registry,
             doc: &doc,
@@ -652,6 +653,7 @@ mod tests {
             allows: &all,
             now: 1_000,
             stamp: stamp.clone(),
+            missed: &missed,
         };
         let looked = look_with(&at, &net, &mut Vec::new(), &mut pin_of);
         assert!(!looked.not_let);
@@ -728,6 +730,7 @@ mod tests {
             machine: "noctua".into(),
             distro_rev: "abc1234".into(),
             applied: Vec::new(),
+            parts: Default::default(),
             skipped: Vec::new(),
             declined: Default::default(),
             brain: Default::default(),
@@ -779,6 +782,7 @@ mod tests {
             doc: &doc,
             cache: &dir,
             allows: &all,
+            missed: &|_, _| false,
             now: 1,
             stamp: Stamp::parse("2026-10-20T12:00:00Z").unwrap(),
         };

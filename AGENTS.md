@@ -73,10 +73,13 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    (`lib.machine`, `templates/machine`), e ele usa exatamente os pins que a distro testou
    (`machine-uses-the-distro-pins`); o nome da pasta está escrito só em `nix/machine.nix`
    (`machine-dir-has-one-name`). O que a pessoa declara (`person/software/*.json`) é dado, nunca
-   código Nix: `nix/modules/person.nix` põe os programas no perfil DELA (Home Manager, nix-flatpak
-   `--user`, o apk listado para o reconciliador), nunca no `systemPackages`, e a entrada que não
-   avalia é pulada e dita em `/etc/ronoctua/person-applied.json`. Um módulo do brain da pessoa com
-   metade NixOS só é importado aprovado pelo hash atual (`nix/person-hash.nix`).
+   código Nix: em `nix/modules/person.nix` um pacote ou AppImage declarado é uma PARTE dela, que o
+   sistema nunca avalia e que o realizador avalia sozinha (`personParts`; emenda de 2026-10-25, aprovada no plano das partes), e os
+   lançadores web, os Flatpaks (nix-flatpak `--user`) e o apk listado para o reconciliador vão para
+   ela — nunca para o `systemPackages`. A entrada que não se aplica é pulada e dita em
+   `/etc/ronoctua/person-applied.json`, e a que não avalia ou não constrói falha só a própria parte.
+   Um módulo do brain da pessoa com metade NixOS só é importado aprovado pelo hash atual
+   (`nix/person-hash.nix`).
 
    <!-- anchor: L06 -->
    Emenda aprovada pelo dono (2026-10-05): **as declarações da pessoa chegam à máquina como dados**.
@@ -87,8 +90,9 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    novo e tamanho acima do teto são recusados, e os dados velhos ficam. O único código que viaja
    junto são os módulos do brain da pessoa, e o `module.nix` de um deles só entra num build
    aprovado pela porta do sudo, no hash que o `nix/person-hash.nix` calcula da cópia da máquina
-   (`ronoctua-person-approve.service`, sem regra polkit). O que a atualização segura de uma entrada
-   quebrada fica em `local/held.json`, escrito só por root.
+   (`ronoctua-person-approve.service`, sem regra polkit). Não existe mais entrada retida: a
+   verificação que a segurava em `local/held.json` saiu em 2026-10-25, e todo `apply` apaga esse arquivo
+   e o `local/verified.json`.
 
    <!-- anchor: L13 -->
    Exceção aprovada no mesmo molde (2026-10-05): **o Incus da pessoa**. O daemon, a ponte
@@ -107,7 +111,7 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    reconcile`, que só mexe no próprio registro); nenhum argumento da sequência nomeia o que
    instalar, e o gerador continua recusando todo argumento que instala. A ordem é lei do gerador
    (`steps.nix`, `system-update-laws-refuse`): a pessoa reúne antes da metade root, a metade root
-   migra, move só o input da distro (nunca com a máquina retida), verifica e aplica
+   migra, move só o input da distro (nunca com a máquina retida) e aplica
    (`ronoctua-machine apply`, sob o lock de root dos dados da pessoa), e a pessoa reconcilia e
    publica por último, em toda saída. O input da distro só anda quando o rebuild pode ser tentado
    (o mesmo piso de bateria e a mesma folga no disco), para a pasta da máquina nunca nomear uma
@@ -128,11 +132,11 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    `person-pins` leva cada AppImage da tabela com `follows.github` à release mais nova, em
    `person/software/distro-pins.json`: dado da pessoa, só assinado, como o `options.json`, nunca de
    repositório fora da tabela, e nenhum argumento da sequência nomeia o que instalar. Os bytes são o
-   download da própria pessoa, então a versão seguida vai para o perfil DELA (Home Manager), nunca
-   para o `systemPackages` — o L03 vale —, e só depois que o `person-verify` do root a construiu
-   (`local/verified.json`); até lá fica a última verificada, ou a da distro no sistema. O que o juiz
-   recusa (`nix/distro-pins.nix`, a tabela de casos do Rust) é dito, nunca uma parada (cobra
-   `distro-apps-follow-when-on-and-newer`).
+   download da própria pessoa, então a versão seguida é o pin com que a PARTE do próprio app é
+   construída (todo AppImage da distro é parte, e um que segue tem de ser): nunca no `systemPackages`
+   nem num cache público, e um download que falha deixa a parte na geração anterior — a última que
+   chegou, ou a da distro. O que o juiz recusa (`nix/distro-pins.nix`, a tabela de casos do Rust) é
+   dito, nunca uma parada (cobra `distro-apps-follow-when-on-and-newer`).
    Exceção no mesmo molde (2026-10-20, aprovada no plano da leva): **as extensões do VS Code e o
    Quicklisp da pessoa**. Só pelo gesto dela — a oferta dos pertences ou `ronoctua-vscode install`,
    com o `Pass` de cada host que `hosts_of` nomeia; `quicklisp-install`, digitado — o que a distro
@@ -547,7 +551,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | o Incus (a API REST pelo socket e o CLI) | `ronoctua-incus` (cobra `one-incus-boundary`) |
 | o estado do Claude Code e do Codex, e o endpoint de uso da Anthropic | `ronoctua-llm` (cobra `one-llm-boundary`) |
 | `bootctl`, as variáveis EFI, o `reboot-on-error` do `loader.conf`, o `grub-editenv` e o `grubenv` (BIOS), e o diretório da máquina | `ronoctua-machine` (cobra `one-bootctl-driver`) |
-| os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/held.json`, `local/verified.json`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
+| os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
 | o Cachix: o cache binário da pessoa, o token de envio, o netrc do root e o envio depois da atualização | `ronoctua-cachix` (cobra `binary-cache-token-never-prints`) |
 | o VS Code: o manifesto das extensões instaladas, a lista da pessoa que viaja nos pertences e o `code --install-extension` | `ronoctua-vscode` (cobra `one-vscode-boundary`) |
 | as partes: os perfis delas (`/nix/var/nix/profiles/ronoctua/parts`), os registros, a vista da sessão (`/var/lib/ronoctua-parts`) e as raízes do plano | `ronoctua-parts` (cobram `one-parts-boundary` e `parts-rule-is-narrow`) |
@@ -593,9 +597,9 @@ boot, nunca pelo relógio; a aparagem guarda o último bom e o ensaio (cobra
 
 <!-- anchor: L06 -->
 
-Quem escreve o `person/` da máquina e o `local/` dela (`held.json`, `verified.json`, `approved.json`, `signer.json`)
-é o binário `ronoctua-person`, como root, e só ele (`apply`, `verify`, `approve`, `pin`); ler é de
-todos (cobra `one-person-boundary`). Todo arquivo da pessoa se lê com `ronoctua_person::parse`
+Quem escreve o `person/` da máquina e o `local/` dela (`approved.json`, `signer.json`) é o binário
+`ronoctua-person`, como root, e só ele (`apply`, `approve`, `pin`); ler é de todos (cobra
+`one-person-boundary`). Todo arquivo da pessoa se lê com `ronoctua_person::parse`
 (formato mais novo é recusado antes dos campos) e se escreve com `ronoctua_person::to_json`; o que
 root abre debaixo de uma pasta da pessoa é aberto relativo a ela, com `O_NOFOLLOW` (cobram
 `person-apply-refuses-links` e `person-apply-rule-is-narrow`). Quem mexe nesses dados, ou constrói a

@@ -23,8 +23,6 @@ pub use ronoctua_machine::Why as MachineRefusal;
 /// record says them — named here so the update's view reads them through
 /// this module.
 pub use ronoctua_machine::{NoTrial, TrialOutcome};
-/// Why the verification held a declared program back.
-pub use ronoctua_person::local::HeldWhy;
 
 // The declared sequence, generated from `steps.nix` by `gen-updates.py`
 // (`tables.nix`), with its own types.
@@ -106,15 +104,6 @@ pub fn declined_key(word: &str) -> Option<&'static str> {
     declared::declined_key(word)
 }
 
-/// A declared program the verification held back, and why.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Held {
-    /// The declared entry's id (`<source>:<id>`).
-    pub id: String,
-    /// Why it was held.
-    pub why: HeldWhy,
-}
-
 /// The revision the machine is held at, and since when.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeldAt {
@@ -134,8 +123,6 @@ pub struct Records {
     /// How many plain files of the belongings the last pull left as this
     /// machine has them, changed here and elsewhere.
     pub conflicts: usize,
-    /// The declared programs the verification held back.
-    pub held: Vec<Held>,
     /// The boot trial, when one was armed.
     pub trial: Option<TrialOutcome>,
     /// Why the last apply armed no trial.
@@ -148,7 +135,7 @@ pub struct Records {
 /// folders of their own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordPlaces {
-    /// The machine directory (its `local/held.json`).
+    /// The machine directory.
     pub machine_dir: PathBuf,
     /// The folder of the machine's record (`state.json`).
     pub machine_state: PathBuf,
@@ -171,10 +158,7 @@ impl RecordPlaces {
     /// them again only when one moved.
     #[must_use]
     pub fn files(&self) -> Vec<PathBuf> {
-        let mut out = vec![
-            self.machine_state.join(ronoctua_person::names::STATE),
-            self.machine_dir.join(ronoctua_person::names::HELD),
-        ];
+        let mut out = vec![self.machine_state.join(ronoctua_person::names::STATE)];
         if let Some(b) = &self.belongings {
             out.extend([b.last(), b.prefs()]);
         }
@@ -198,22 +182,8 @@ impl Records {
             run: PathBuf::new(),
         })
         .ok();
-        let held = std::fs::read(at.machine_dir.join(ronoctua_person::names::HELD))
-            .ok()
-            .and_then(|b| ronoctua_person::parse::<ronoctua_person::local::Held>(&b).ok())
-            .map(|h| {
-                h.held
-                    .into_iter()
-                    .map(|e| Held {
-                        id: e.id,
-                        why: e.reason,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         Self {
             conflicts: at.belongings.as_ref().map_or(0, plain_conflicts),
-            held,
             trial: state
                 .as_ref()
                 .and_then(|s| s.trial.as_ref())
@@ -433,19 +403,18 @@ mod tests {
     }
 
     /// THE RECORDS ARE READ THROUGH THE CRATES THAT WRITE THEM: the boot
-    /// trial and the hold from the machine's record, what the verification
-    /// held from `local/held.json`, the conflicts of the CURRENT repository
-    /// from the belongings' last plain run — and an absent or broken file is
-    /// an empty answer, never an invented one.
+    /// trial and the hold from the machine's record, the conflicts of the
+    /// CURRENT repository from the belongings' last plain run — and an
+    /// absent or broken file is an empty answer, never an invented one.
     #[test]
-    fn the_records_say_the_trial_the_hold_the_held_and_the_conflicts() {
+    fn the_records_say_the_trial_the_hold_and_the_conflicts() {
         let dir = Scratch::new("update-records");
         let machine_dir = dir.0.join("machine");
         let machine_state = dir.0.join("state");
         let home = dir.0.join("home");
         let belongings = ronoctua_belongings::places::Places::under(&home);
         let at = RecordPlaces {
-            machine_dir: machine_dir.clone(),
+            machine_dir,
             machine_state: machine_state.clone(),
             belongings: Some(belongings.clone()),
         };
@@ -463,13 +432,6 @@ mod tests {
                 "hold": {"rev": "613862c", "since": "2026-10-05T12:00:00Z"}, "last-apply": null}"#,
         )
         .expect("state");
-        std::fs::create_dir_all(machine_dir.join("local")).expect("mkdir");
-        std::fs::write(
-            machine_dir.join(ronoctua_person::names::HELD),
-            r#"{"format": 1, "held": [{"id": "nix:hello", "fingerprint": "abc",
-                "reason": "build-failed", "since": "2026-10-05T12:00:00Z"}]}"#,
-        )
-        .expect("held");
         std::fs::create_dir_all(&belongings.config).expect("mkdir");
         std::fs::write(
             belongings.prefs(),
@@ -490,13 +452,6 @@ mod tests {
                 rev: "613862c".to_owned(),
                 since: "2026-10-05T12:00:00Z".to_owned()
             })
-        );
-        assert_eq!(
-            r.held,
-            vec![Held {
-                id: "nix:hello".to_owned(),
-                why: HeldWhy::BuildFailed
-            }]
         );
         assert_eq!(r.conflicts, 1);
 

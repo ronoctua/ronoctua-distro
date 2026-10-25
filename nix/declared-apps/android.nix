@@ -88,6 +88,4 @@ in
         }
       ];
     };
-
-  raw = { entry, ... }: apk entry;
 }

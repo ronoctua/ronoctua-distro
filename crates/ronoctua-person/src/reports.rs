@@ -10,11 +10,12 @@
 //!   one the person follows past it (`crate::distro_pins`).
 //! - `declared-android.json`: the Android apps to reconcile, as store apks.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::declared::{AndroidImage, GithubReleases, Source};
 use crate::distro_pins::Fault;
-use crate::local::HeldWhy;
 use crate::local::SignatureRefused;
 use crate::tree::KeptBack;
 use crate::{Document, Refusal, Why, check};
@@ -29,8 +30,14 @@ pub struct PersonApplied {
     pub machine: String,
     /// The distro's revision the system was built from.
     pub distro_rev: String,
-    /// The declared entries in the system.
+    /// The declared entries the system took: in it, or made parts.
     pub applied: Vec<String>,
+    /// Which part each applied entry that is one became, by the entry's id
+    /// (`nix/modules/person.nix`): whether it is HERE is the part's record
+    /// (`ronoctua_parts::record`). A report of a build before parts has
+    /// none.
+    #[serde(default)]
+    pub parts: BTreeMap<String, String>,
     /// The declared entries left out, and why.
     pub skipped: Vec<Skipped>,
     /// What the declines did.
@@ -70,7 +77,9 @@ pub enum SkipWhy {
     NotAPackage,
     /// Its `meta` refused it (unfree without consent, insecure, broken).
     RefusedByMeta,
-    /// The update held it back (`local/held.json`).
+    /// The update's verification held it back — said by a system built
+    /// before the person's packages were parts, and read so a report of
+    /// one a rollback boots stays readable; never written now.
     Held,
     /// This machine does not have its source (Flatpak or Android off).
     SourceOff,
@@ -290,8 +299,8 @@ pub struct DistroAppImage {
     /// The repository whose releases it follows, `None` for a pin moved by
     /// hand alone.
     pub follows: Option<GithubReleases>,
-    /// Whose pin built it — a followed one lives in the person's own
-    /// profile, never in the system's packages.
+    /// Whose pin its part is built at — a followed one is the person's own
+    /// download, in the part and never in the system.
     pub pin: PinFrom,
     /// The version built.
     pub version: String,
@@ -303,14 +312,6 @@ pub struct DistroAppImage {
     /// The person's followed pin the registry took (the option on, the pin
     /// valid), whether newer or not; `None` without one.
     pub followed_version: Option<String>,
-    /// Why the update's verification held the followed pin back — the last
-    /// verified one, or the distro's, built in its place.
-    pub held: Option<HeldWhy>,
-    /// The followed pin is newer and no verification built it yet: it waits
-    /// for the update's, and the last verified one, or the distro's, is
-    /// built meanwhile. A report of a build before it has none.
-    #[serde(default)]
-    pub waiting: bool,
 }
 
 /// One program of the distro's registry.

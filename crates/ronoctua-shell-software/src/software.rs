@@ -5076,6 +5076,27 @@ fn declaration_sheet(b: &mut Builder<'_>, r: &Readings, id: &str) {
             }
         }
         Standing::Waiting => b.note(key::SOFTWARE_DECLARED_NOTE_WAITING),
+        // A PART OF THE PERSON'S ON ITS WAY: the parts' page says how it
+        // stands; one that failed may have a newer pin, or a replacement.
+        Standing::Arriving { failure } => {
+            b.note(key::SOFTWARE_DECLARED_NOTE_ARRIVING);
+            if failure.is_some() {
+                if decl::pin_of(&row.entry).is_some() {
+                    b.deed(
+                        key::SOFTWARE_DECLARED_REFRESH_ONE,
+                        b.texts.t(key::SOFTWARE_DECLARED_REFRESH_ONE_VALUE),
+                        Deed::RefreshPins,
+                        None,
+                    );
+                }
+                b.deed(
+                    key::SOFTWARE_DECLARED_ROW_REPLACE,
+                    b.texts.t(key::SOFTWARE_DECLARED_REPLACE_VALUE),
+                    Deed::FindReplacement(name.clone()),
+                    None,
+                );
+            }
+        }
         Standing::Elsewhere => {
             let mut machines: Vec<String> = row
                 .entry

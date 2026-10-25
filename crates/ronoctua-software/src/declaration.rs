@@ -544,8 +544,16 @@ pub fn declared_android(roots: &Roots) -> Option<DeclaredAndroid> {
     tag = "standing"
 )]
 pub enum Standing {
-    /// In this machine's system.
+    /// In this machine's system — and, for a part of the person's, its part
+    /// arrived.
     Applied,
+    /// A part of the person's that the system took and that has not
+    /// arrived: on its way, or failed — said on the parts' page, with the
+    /// last thing its try said (data, English) when it failed.
+    Arriving {
+        /// What the part's last try said, when it failed.
+        failure: Option<String>,
+    },
     /// Declared since the system was built: the next apply takes it (the
     /// update, or the rebuild a removal starts).
     Waiting,
@@ -886,9 +894,18 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
     let rows = declared
         .apps
         .into_iter()
-        .map(|entry| DeclaredRow {
-            standing: standing_of(&entry, host, applied.as_ref()),
-            entry,
+        .map(|entry| {
+            let standing = standing_of(&entry, host, applied.as_ref());
+            // A PART OF THE PERSON'S is in the system once it ARRIVED.
+            let standing = match crate::parts::of_entry(applied.as_ref(), entry.id()) {
+                Some(part) if standing == Standing::Applied && !crate::parts::here(roots, part) => {
+                    Standing::Arriving {
+                        failure: crate::parts::failure(roots, part),
+                    }
+                }
+                _ => standing,
+            };
+            DeclaredRow { standing, entry }
         })
         .collect();
     let kept = crate::reconcile::ledger(roots);
@@ -1082,6 +1099,7 @@ mod tests {
             machine: "noctua".into(),
             distro_rev: "abc1234".into(),
             applied: vec!["nix:ripgrep".into(), "web:mail".into()],
+            parts: Default::default(),
             skipped: vec![
                 Skipped {
                     id: "nix:gone".into(),
@@ -1370,6 +1388,76 @@ mod tests {
         // A DECLARATION THAT DOES NOT READ leaves nothing leaving.
         std::fs::write(mirror(&roots).join(names::DECLARED), b"{").unwrap();
         assert!(read(&roots, "noctua").leaving.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a declared program that is a part of the person's is said
+    /// to be on this computer before its part arrived — on its way, or
+    /// failed with the words its try said — or still on its way once it is
+    /// here.
+    #[test]
+    fn a_part_stands_as_its_record_says() {
+        use ronoctua_parts::record::{Record, Target, Why};
+        let root = scratch("part-standing");
+        let roots = Roots::under(&root);
+        let mut doc = Declared::default();
+        upsert(&mut doc, nix("ripgrep", None));
+        write_doc(&roots, File::Declared, &doc).unwrap();
+        std::fs::create_dir_all(&roots.system.reports).unwrap();
+        let mut r = report();
+        r.parts
+            .insert("nix:ripgrep".into(), "person-0000000a-ripgrep".into());
+        std::fs::write(
+            roots.system.reports.join(names::PERSON_APPLIED),
+            ronoctua_person::to_json(&r),
+        )
+        .unwrap();
+        let standing = |roots: &Roots| {
+            read(roots, "noctua")
+                .declared
+                .iter()
+                .find(|row| row.entry.id() == "nix:ripgrep")
+                .map(|row| row.standing.clone())
+        };
+        assert_eq!(
+            standing(&roots),
+            Some(Standing::Arriving { failure: None }),
+            "no record yet: on its way"
+        );
+        let fp = "a".repeat(64);
+        let at = ronoctua_person::Stamp::parse("2026-10-25T12:00:00Z").unwrap();
+        let write = |record: &Record| {
+            std::fs::create_dir_all(&roots.system.parts).unwrap();
+            std::fs::write(
+                roots.system.parts.join("person-0000000a-ripgrep.json"),
+                ronoctua_person::to_json(record),
+            )
+            .unwrap();
+        };
+        let failed = Record::new("person-0000000a-ripgrep")
+            .planned_entry(&fp)
+            .failed(
+                Why::EvalFailed,
+                "error: attribute 'ripgrep' missing",
+                at.clone(),
+                true,
+            );
+        write(&failed);
+        assert_eq!(
+            standing(&roots),
+            Some(Standing::Arriving {
+                failure: Some("error: attribute 'ripgrep' missing".into())
+            })
+        );
+        let here = failed
+            .resolved(Target {
+                drv: "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-ripgrep.drv".into(),
+                out: "/nix/store/zyxwvsrqpnmlkjihgfdcba9876543210-ripgrep".into(),
+                interface: 1,
+            })
+            .arrived(at);
+        write(&here);
+        assert_eq!(standing(&roots), Some(Standing::Applied));
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -10,7 +10,7 @@
 #   person/    software/declared.json  software/declined.json
 #              software/distro-pins.json  software/icons/<sha256>.png
 #              brain/<my-id>/…
-#   local/     held.json  verified.json  approved.json   (root only, never synced)
+#   local/     approved.json  signer.json   (root only, never synced)
 #
 # The machine's code is the distro at the revision its lock names, so an update
 # that moves the `ronoctua` input brings new code — the copy of the distro the
@@ -54,10 +54,6 @@ let
     # The distro's AppImages the person follows past its pins
     # (`ronoctua_person::names::DISTRO_PINS`).
     distroPins = "person/software/distro-pins.json";
-    held = "local/held.json";
-    # The followed distro AppImages root's verify built
-    # (`ronoctua_person::names::VERIFIED`).
-    verified = "local/verified.json";
     approved = "local/approved.json";
     # The person's signing key root trusts, and what the last apply made of
     # the signature (`ronoctua_person::names::SIGNER`).
@@ -288,8 +284,6 @@ in
                   ronoctua.person = {
                     data = present parts.declared;
                     declined = present parts.declined;
-                    held = present parts.held;
-                    verified = present parts.verified;
                     icons = present parts.icons;
                     options = present parts.options;
                     distroPins = present parts.distroPins;
@@ -305,31 +299,15 @@ in
 
       defaultSystem = system;
 
-      # WHAT THE UPDATE'S VERIFICATION EVALUATES, one entry at a time: each
-      # entry in the machine as `ronoctua.person.alone` makes it — its own
-      # unfree consent and no other, held or not — so the entry is judged by
-      # itself. Through the machine as it is, a held sibling whose reading
-      # aborts would fail every consented entry that reads the predicate,
-      # and hold them all. The names come from the fingerprints, which read
-      # JSON only.
-      entriesOf =
-        built:
-        lib.mapAttrs (
-          id: _:
-          (built.extendModules {
-            modules = [ { ronoctua.person.alone = id; } ];
-          }).config.ronoctua.person.entries.${id}
-        ) built.config.ronoctua.person.fingerprints;
-
       # WHAT A MACHINE'S `flake.nix` RETURNS.
       #
       # `nixosConfigurations.<attr>` is named after the person
       # (`ronoctua.machine.attr`, which is `ronoctua.user`): the same name the
       # rescue's rebuild and `ronoctua-machine apply` ask for
-      # (`machine-flake-target-exists`). `personEntries` and
-      # `personFingerprints` are what the update's isolated verification
-      # evaluates one entry at a time — never through the graceful consumer,
-      # whose job is to skip what that verification has to see fail.
+      # (`machine-flake-target-exists`). `personParts` is what the realizer
+      # of a part of the person's evaluates of its own entry, and nothing
+      # else (`nix/modules/person.nix`, `ronoctua.person.parts`): lazy, so
+      # an entry that aborts stops only the process that asked for it.
       machineFlake =
         {
           dir,
@@ -349,8 +327,7 @@ in
         else
           {
             nixosConfigurations.${built.config.ronoctua.machine.attr} = built;
-            personEntries = entriesOf built;
-            personFingerprints = built.config.ronoctua.person.fingerprints;
+            personParts = built.config.ronoctua.person.parts;
           };
     in
     {
@@ -360,7 +337,6 @@ in
         pinGuard
         approvals
         distroRev
-        entriesOf
         ;
       # The same functions over other inputs: what a machine flake with a
       # `follows` would hand the distro. Only a check asks for it.

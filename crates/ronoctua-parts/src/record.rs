@@ -36,6 +36,12 @@ pub struct Record {
     /// last failed try would have fetched ([`ronoctua_person::frontier`]). Each is a
     /// way in for the person — a file handed in, a stick, a mirror.
     pub missing: Vec<ronoctua_person::frontier::Download>,
+    /// For a part of the person's, the fingerprint of the declaration the
+    /// plan wants ([`crate::plan::Entry`]): [`Record::wanted`] is what its
+    /// realizer evaluated of THAT declaration, or `None` until it did.
+    /// Absent for the distro's parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared: Option<String>,
 }
 
 /// What the plan wants of a part.
@@ -162,15 +168,19 @@ pub enum Why {
     ProfileFailed,
     /// A file handed in is not the download its name says: other bytes.
     HandInRefused,
+    /// The person's declared entry did not evaluate: a name nixpkgs
+    /// dropped, an alias that throws, a licence they did not accept.
+    EvalFailed,
 }
 
 impl Why {
     /// Every one.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::BuildFailed,
         Self::OutputDiffers,
         Self::ProfileFailed,
         Self::HandInRefused,
+        Self::EvalFailed,
     ];
 
     /// Its kebab-case name.
@@ -181,6 +191,7 @@ impl Why {
             Self::OutputDiffers => "output-differs",
             Self::ProfileFailed => "profile-failed",
             Self::HandInRefused => "hand-in-refused",
+            Self::EvalFailed => "eval-failed",
         }
     }
 }
@@ -224,6 +235,7 @@ impl Record {
             attempts: 0,
             last_failure: None,
             missing: Vec::new(),
+            declared: None,
         }
     }
 
@@ -233,6 +245,7 @@ impl Record {
     /// a boot never forgets how often a part already failed.
     #[must_use]
     pub fn planned(mut self, wanted: Option<Target>) -> Self {
+        self.declared = None;
         if self.wanted != wanted {
             self.attempts = 0;
             self.last_failure = None;
@@ -246,6 +259,39 @@ impl Record {
             Some(_) if self.attempts >= NEEDS_YOU_AFTER => Phase::NeedsYou,
             Some(_) => Phase::Arriving,
         };
+        self
+    }
+
+    /// The record after the plan wants the person's declaration of
+    /// `fingerprint`: the target its realizer evaluated stays while the
+    /// declaration is the same one; another declaration is evaluated anew,
+    /// its tries counted from none.
+    #[must_use]
+    pub fn planned_entry(mut self, fingerprint: &str) -> Self {
+        if self.declared.as_deref() != Some(fingerprint) {
+            self.wanted = None;
+            self.attempts = 0;
+            self.last_failure = None;
+            self.missing.clear();
+        }
+        self.declared = Some(fingerprint.to_owned());
+        self.waiting_for = None;
+        self.phase = match &self.wanted {
+            Some(want) if self.is_current(want) => Phase::Here,
+            _ if self.attempts >= NEEDS_YOU_AFTER => Phase::NeedsYou,
+            _ => Phase::Arriving,
+        };
+        self
+    }
+
+    /// The record after the realizer evaluated the person's declaration
+    /// into `target`: what the part wants from now on.
+    #[must_use]
+    pub fn resolved(mut self, target: Target) -> Self {
+        if self.is_current(&target) {
+            self.phase = Phase::Here;
+        }
+        self.wanted = Some(target);
         self
     }
 
@@ -468,6 +514,42 @@ mod tests {
 
     fn at(s: i64) -> Stamp {
         Stamp::from_unix_s(s)
+    }
+
+    /// FAILS IF: a part of the person's loses the target its realizer
+    /// evaluated while the declaration stays the same — every boot would
+    /// evaluate and try it again —, keeps it when the declaration changed,
+    /// or forgets how often a declaration already failed.
+    #[test]
+    fn a_persons_part_keeps_its_target_while_its_declaration_stays() {
+        let fp_a = "a".repeat(64);
+        let fp_b = "b".repeat(64);
+        let r = Record::new("person-x").planned_entry(&fp_a);
+        assert_eq!((r.phase, r.wanted.clone()), (Phase::Arriving, None));
+        assert!(r.try_now(0), "never tried: tried now");
+        let failed = r.failed(Why::EvalFailed, "error: attribute missing", at(10), true);
+        let again = failed.planned_entry(&fp_a);
+        assert_eq!(again.attempts, 1, "the same declaration keeps its count");
+        let here = again
+            .resolved(want(OUT_1))
+            .arrived(at(20))
+            .planned_entry(&fp_a);
+        assert_eq!(here.phase, Phase::Here);
+        assert!(!here.try_now(100), "here: not tried again at a boot");
+        let changed = here.planned_entry(&fp_b);
+        assert_eq!(
+            (changed.phase, changed.wanted.clone(), changed.attempts),
+            (Phase::Arriving, None, 0)
+        );
+        assert_eq!(
+            changed.current.map(|c| c.out),
+            Some(OUT_1.to_owned()),
+            "the generation it had stays until the next arrives"
+        );
+        let distro = Record::new("x")
+            .planned_entry(&fp_a)
+            .planned(Some(want(OUT_2)));
+        assert_eq!(distro.declared, None, "a distro's part declares nothing");
     }
 
     /// FAILS IF: a part that failed loses the generation it had, or a part

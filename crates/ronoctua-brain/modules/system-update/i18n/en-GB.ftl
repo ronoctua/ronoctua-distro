@@ -131,8 +131,6 @@ system-update-step-person-stage = hand your declarations to the machine
 system-update-step-person-stage-does = ronoctua-software person stage: your declarations put where the machine's narrow applier takes them, validated and swapped into the machine's folder whole — as data, never as code. A rehearsal only checks that they would be taken.
 system-update-step-machine-migrate = give the machine its own flake
 system-update-step-machine-migrate-does = ronoctua-machine migrate: a machine that still carries a copy of the distro gets its own flake, with the distro as an input — built beside the old folder and swapped in only when it builds; a failure leaves the machine exactly as it was. Every other machine skips it. If it fails, the sequence stops here.
-system-update-step-person-verify = try what you declared
-system-update-step-person-verify-does = ronoctua-person verify: every program you declared, built on its own against the distro just fetched, so one that no longer builds is held back with its reason instead of taking the whole rebuild down — and every newer release of the distro's apps you follow, which is used only once it has built here, and tried again at every update until it does. Its rehearsal tries, and writes nothing.
 system-update-step-person-reconcile = bring in what is declared
 system-update-step-person-reconcile-does = ronoctua-software reconcile: what the system cannot do for you — the Android apps your declarations list, installed from the machine's copy — and the copy you installed by hand of a program now declared, taken out so the two do not shadow each other. It touches only what it put there itself.
 system-update-step-person-record = record what this machine did
@@ -147,7 +145,6 @@ system-update-needs-not-held = the machine is held at a revision: the distro sta
 
 system-update-kind-gather = gathers what you declared
 system-update-kind-migrate = migrates the machine's folder
-system-update-kind-verify = tries what you declared
 system-update-kind-reconcile-declared = brings in what is declared
 system-update-kind-publish = publishes what this machine did
 
@@ -166,11 +163,6 @@ system-update-records-conflicts = { $count ->
         [one] One file of your belongings changed here and on another machine, and was left as this machine has it. Open them with { $keys }.
        *[other] { $count } files of your belongings changed here and on another machine, and were left as this machine has them. Open them with { $keys }.
     }
-system-update-records-held = { $id } is held back: { $why }. The rebuild leaves it out until it changes.
-system-update-held-eval-failed = it does not evaluate
-system-update-held-fetch-failed = its download could not be fetched
-system-update-held-upstream-changed = its download is there, and it is another file
-system-update-held-build-failed = it did not build
 system-update-records-hold = This machine is held at { $rev } since { $since }: the update leaves the distro where it is.
 
 # A RUN BY HAND ON A LOW BATTERY asks first, with the no first; a scheduled

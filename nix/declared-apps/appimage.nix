@@ -132,12 +132,4 @@ in
       skip "refused-by-meta" "the wrapper of `${entry.key}` does not evaluate on this machine"
     else
       done { packages = [ package ]; };
-
-  raw =
-    {
-      entry,
-      icons ? null,
-      ...
-    }:
-    wrapped { inherit entry icons; };
 }

@@ -5,23 +5,36 @@
 # `person/` — data, never Nix code. `lib.machine` points the options below at
 # that copy (`nix/machine.nix`), and this module turns it into the machine:
 #
-#   nix       the person's `home.packages`        (`declared-apps/nix.nix`)
+#   nix       a part of the person's                (`declared-apps/nix.nix`)
+#   appimage  a part of the person's, wrapped       (`declared-apps/appimage.nix`)
 #   flatpak   nix-flatpak's list for `--user`      (`declared-apps/flatpak.nix`)
-#   appimage  a wrapped AppImage in `home.packages` (`declared-apps/appimage.nix`)
 #   web       a launcher entry (`xdg.desktopEntries`) (`declared-apps/web.nix`)
 #   android   a fetched apk, listed for the reconciler (`declared-apps/android.nix`)
 #
-# EVERYTHING GOES TO THE PERSON, never to `systemPackages`
-# (`person-packages-are-per-user`): these are the person's programs, carried
-# from machine to machine by their declaration, and they are on this machine
-# because THEY declared them — not because the distro ships them.
+# NOTHING GOES TO `systemPackages` (`person-packages-are-per-user`): these are
+# the person's programs, carried from machine to machine by their
+# declaration, and they are on this machine because THEY declared them — not
+# because the distro ships them.
+#
+# # A package of the person's is a part
+#
+# One `abort` deep in a declared package, or an evaluation error no
+# `tryEval` catches, used to stop the whole system's evaluation, and the
+# update evaluated each entry alone first to hold the broken one back. Now
+# the system never evaluates a declared package at all: a `nix` or
+# `appimage` entry is a PART (`nix/modules/parts.nix`), which the plan names
+# by the entry and its fingerprint, and the part's realizer evaluates that
+# one entry in a process of its own (`ronoctua.person.parts`, the machine
+# flake's `personParts`). A part that does not evaluate or build is that
+# part's failure alone, tried again ever later, and says why on the parts'
+# page; the one it had before stays.
 #
 # # It degrades, and says so
 #
-# An entry that does not evaluate — a name nixpkgs dropped, an alias that
-# throws, an unfree package declared without consent, a source this machine
-# lacks, an entry the update held back — is SKIPPED, and the system evaluates
-# without it (`person-bad-entry-does-not-break-eval`). Each skip is a line in
+# An entry that cannot apply — declared for another machine, a source this
+# machine lacks, a second entry with the same id, a Flatpak remote that is
+# not here — is SKIPPED, and the system evaluates without it
+# (`person-bad-entry-does-not-break-eval`). Each skip is a line in
 # `/etc/ronoctua/person-applied.json` with its reason from a closed set, which
 # is what the software centre draws. A file in a format this distro does not
 # read skips everything it lists, said once per entry.
@@ -31,6 +44,7 @@
 # ever read here, and never the person's own staging.
 {
   config,
+  options,
   lib,
   pkgs,
   inputs,
@@ -135,11 +149,10 @@ let
 
   applies = e: (e.machines or null) == null || builtins.elem host e.machines;
 
-  # THE FINGERPRINT the update's verification holds an entry back by
-  # (`local/held.json`): the entry without its stamps, and the nixpkgs it is
-  # built against. Re-declaring the same thing keeps it held; a new pin, an
-  # edit or a new nixpkgs gives it another try. Computed ONLY here, and handed
-  # out as the machine flake's `personFingerprints`.
+  # THE FINGERPRINT of an entry that is a part: the entry without its stamps,
+  # and the nixpkgs it is built against. Another one is another target, which
+  # the part's realizer evaluates anew (`ronoctua_parts::record`); the same
+  # one keeps what it evaluated. Computed ONLY here.
   fingerprintOf =
     e:
     builtins.hashString "sha256" (
@@ -153,37 +166,36 @@ let
       }
     );
 
-  heldDoc = read cfg.held;
-  heldList =
-    if
-      heldDoc != null && (heldDoc.format or null) == format && builtins.isList (heldDoc.held or null)
-    then
-      builtins.filter (
-        h:
-        builtins.isAttrs h && builtins.isString (h.id or null) && builtins.isString (h.fingerprint or null)
-      ) heldDoc.held
-    else
-      [ ];
-  heldBy = lib.listToAttrs (map (h: lib.nameValuePair h.id h) heldList);
-  # THE FOLLOWED DISTRO APPIMAGES ROOT'S VERIFY BUILT, by id, in a format
-  # this distro reads — nothing else is let in.
-  verifiedDoc = read cfg.verified;
-  verifiedBy =
-    if
-      verifiedDoc != null
-      && (verifiedDoc.format or null) == format
-      && builtins.isList (verifiedDoc.verified or null)
-    then
-      lib.listToAttrs (
-        map (v: lib.nameValuePair v.id v) (
-          builtins.filter (v: builtins.isAttrs v && builtins.isString (v.id or null)) verifiedDoc.verified
-        )
-      )
-    else
-      { };
-  # Held by the fingerprint it has NOW: an edit, a new pin or a new nixpkgs
-  # gives it another try. JSON alone answers it — nothing of the package.
-  isHeld = e: heldBy ? ${e.id} && heldBy.${e.id}.fingerprint == fingerprintOf e;
+  # WHICH SOURCES ARE PARTS: a program Nix builds — a nixpkgs package, an
+  # AppImage wrapped — realized after the system on its own
+  # (`nix/modules/parts.nix`), never in the system's closure: the system
+  # never evaluates what the person declared, so an entry that aborts stops
+  # nothing but its own part. A Flatpak and a web app are lists and
+  # launchers, and an Android app is the reconciler's.
+  isPart =
+    e:
+    builtins.elem e.source [
+      "nix"
+      "appimage"
+    ];
+
+  # A PART'S ID: `person-`, eight hex digits of the entry's id (no two
+  # entries share it) and as much of the entry's own name as fits the shape
+  # of a part's id (`ronoctua_parts::id::is_id`).
+  partIdOf =
+    e:
+    let
+      words = builtins.filter (w: builtins.isString w && w != "") (
+        builtins.split "[^a-z0-9]+" (lib.toLower (sourceIdOf.${e.source} e))
+      );
+      slug = lib.concatStringsSep "-" words;
+      cut = lib.concatStringsSep "-" (
+        builtins.filter (w: w != "") (lib.splitString "-" (builtins.substring 0 32 slug))
+      );
+    in
+    "person-"
+    + builtins.substring 0 8 (builtins.hashString "sha256" e.id)
+    + lib.optionalString (cut != "") "-${cut}";
 
   skip = id: reason: detail: {
     ok = false;
@@ -202,10 +214,17 @@ let
       skip e.id "other-machine" "declared for ${lib.concatStringsSep ", " e.machines}"
     else if !sourceOn.${e.source} then
       skip e.id "source-off" "this machine has no ${e.source} support"
-    else if isHeld e then
-      skip e.id "held" (
-        if builtins.isString (heldBy.${e.id}.reason or null) then heldBy.${e.id}.reason else ""
-      )
+    # A PART IS APPLIED AS A PART: what it builds is its realizer's question.
+    else if isPart e then
+      {
+        ok = true;
+        inherit (e) id;
+        part = partIdOf e;
+        packages = [ ];
+        flatpaks = [ ];
+        desktopEntries = { };
+        apks = [ ];
+      }
     else
       let
         r = builders.${e.source}.build {
@@ -260,27 +279,47 @@ let
   applied = builtins.filter (r: r.ok) results;
   skipped = map (r: { inherit (r) id reason detail; }) (builtins.filter (r: !r.ok) results);
 
-  # The entries the verification evaluates one at a time — this machine's,
-  # with a source it has, held or not (a held entry is verified again, and
-  # comes back when it builds).
-  verifiable = builtins.filter (
-    e: problemOf e == null && applies e && sourceOn.${e.source}
+  # THE ENTRIES THAT ARE PARTS: this machine's, with a source it has.
+  partEntries = builtins.filter (
+    e: problemOf e == null && applies e && sourceOn.${e.source} && isPart e
   ) firsts.kept;
 
-  # THE UNFREE NAMES THE PERSON SAID YES TO — which READS each package, to
-  # learn its name. So never a held one: the entry the verification held back
-  # may be exactly the one whose reading `abort`s or fails in a way no
-  # `tryEval` catches, and through the predicate it would take the whole
-  # machine with it.
-  #
-  # `alone` is the verification's question (`lib.machineFlake`'s
-  # `personEntries`): ONE entry, held or not — it is verified again so it can
-  # come back — and no other, so a sibling that breaks cannot break it.
-  consented = lib.concatMap builders.nix.consented (
-    builtins.filter (
-      e: e.source == "nix" && (if cfg.alone == null then !isHeld e else e.id == cfg.alone)
-    ) verifiable
-  );
+  # ONE PART'S TARGET, as its realizer asks it (`lib.machineFlake`'s
+  # `personParts`): the entry's own build — the protected one, so a refusal
+  # is said as one — or why not. Evaluated by that realizer alone, in its own
+  # process: an entry that aborts stops nothing else.
+  plain = builtins.unsafeDiscardStringContext;
+  targetOf =
+    e:
+    let
+      r = builders.${e.source}.build {
+        entry = e;
+        inherit (cfg) icons;
+      };
+      package =
+        if builtins.length r.packages == 1 then
+          builtins.head r.packages
+        else
+          pkgs.buildEnv {
+            name = "person-${e.source}-${sourceIdOf.${e.source} e}";
+            paths = r.packages;
+          };
+    in
+    {
+      fingerprint = fingerprintOf e;
+    }
+    // (
+      if r.ok then
+        {
+          drv = plain package.drvPath;
+          out = plain package.outPath;
+        }
+      else
+        {
+          refused = r.reason;
+          inherit (r) detail;
+        }
+    );
 
   # ---------------------------------------------------------------------
   # declined.json, against the distro's registry (`ronoctua.apps`)
@@ -378,6 +417,11 @@ let
     machine = host;
     distro-rev = config.ronoctua.machine.distroRev;
     applied = map (r: r.id) applied;
+    # Which part each applied entry that is one became, by the entry's id:
+    # what the software centre and the reconciler ask the parts' records of.
+    parts = lib.listToAttrs (
+      map (r: lib.nameValuePair r.id r.part) (builtins.filter (r: r ? part) applied)
+    );
     inherit skipped;
     declined = {
       honoured = map (d: d.id) honoured;
@@ -432,7 +476,7 @@ let
             return False
 
         report["declined"]["still-present"] = [p["id"] for p in probes if still(p)]
-        order = ["format", "machine", "distro-rev", "applied", "skipped", "declined", "brain", "signature"]
+        order = ["format", "machine", "distro-rev", "applied", "parts", "skipped", "declined", "brain", "signature"]
         declined = ["honoured", "refused", "unknown", "still-present"]
         out = {k: report[k] for k in order}
         out["declined"] = {k: report["declined"][k] for k in declined}
@@ -473,15 +517,6 @@ in
       '';
     };
 
-    unfreeNames = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-      description = ''
-        The unfree packages the person said yes to when declaring them —
-        joined to the one unfree predicate (`nixpkgs-config.nix`).
-      '';
-    };
-
     brainModules = lib.mkOption {
       type = lib.types.listOf lib.types.path;
       default = [ ];
@@ -511,52 +546,6 @@ in
         The registry builds one only while their options say to follow, and
         only when it is newer than the distro's (`nix/modules/distro-apps.nix`).
         `null` for none.
-      '';
-    };
-
-    verified = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
-      default = null;
-      description = ''
-        `local/verified.json` of the machine directory: the followed distro
-        AppImages the update's verification built, each at its fingerprint
-        and with its pin — the allow-list the registry builds one by.
-      '';
-    };
-
-    verifiedBy = lib.mkOption {
-      type = lib.types.raw;
-      readOnly = true;
-      internal = true;
-      default = verifiedBy;
-      defaultText = "the entries `local/verified.json` names, by id";
-      description = ''
-        `local/verified.json` as read here, by id: what the registry asks of a
-        followed distro AppImage before it builds it.
-      '';
-    };
-
-    heldBy = lib.mkOption {
-      type = lib.types.raw;
-      readOnly = true;
-      internal = true;
-      default = heldBy;
-      defaultText = "the entries `local/held.json` holds, by id";
-      description = ''
-        `local/held.json` as read here, by id (`{ id; fingerprint; reason; … }`):
-        what the registry asks of a followed distro AppImage
-        (`distro-appimage:<id>`), the one reader of the file.
-      '';
-    };
-
-    # ── anchor: L03 ──
-    held = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
-      default = null;
-      description = ''
-        `local/held.json` of the machine directory: the entries the update's
-        verification held back, each with the fingerprint it failed with.
-        An entry is skipped while its fingerprint is still that one.
       '';
     };
 
@@ -592,63 +581,21 @@ in
       '';
     };
 
-    alone = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      internal = true;
-      description = ''
-        One entry's id: the machine as the update's verification evaluates
-        that entry (`lib.machineFlake`'s `personEntries`), where the unfree
-        consent is that entry's alone — held or not — so neither a held
-        entry nor a broken sibling decides whether it evaluates. `null` is
-        the machine itself.
-      '';
-    };
-
-    entries = lib.mkOption {
-      # LAZY: a value here may be exactly the entry that throws, and the
-      # names must be readable without reading it.
+    # ── anchor: L25 ──
+    parts = lib.mkOption {
+      # LAZY: a value here may be exactly the entry that aborts, and the
+      # names must read without it.
       type = lib.types.lazyAttrsOf lib.types.unspecified;
       readOnly = true;
       internal = true;
-      # AND THE DISTRO'S APPIMAGES THE PERSON FOLLOWS past its pins, each one
-      # the registry would build (`distro-appimage:<id>`,
-      # `nix/modules/distro-apps.nix`): a release the gate never built is
-      # tried like a declaration before the rebuild meets it.
-      default =
-        lib.listToAttrs (
-          map (
-            e:
-            lib.nameValuePair e.id (
-              builders.${e.source}.raw {
-                entry = e;
-                inherit (cfg) icons;
-              }
-            )
-          ) verifiable
-        )
-        // (config.ronoctua.distroApps.followedEntries or { });
-      defaultText = "one derivation per entry of this machine, and per followed distro AppImage";
+      default = lib.listToAttrs (map (e: lib.nameValuePair e.id (targetOf e)) partEntries);
+      defaultText = "one target per entry of this machine that is a part";
       description = ''
-        Every entry this machine would build, by id, with NO protection. The
-        machine flake's `personEntries` reads each one from the machine as
-        `alone` makes it for that entry, and the update evaluates and builds
-        them one at a time, so that an entry that breaks evaluation is held
-        back before the system ever reads it.
-      '';
-    };
-
-    fingerprints = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      readOnly = true;
-      internal = true;
-      default =
-        lib.listToAttrs (map (e: lib.nameValuePair e.id (fingerprintOf e)) verifiable)
-        // (config.ronoctua.distroApps.followedFingerprints or { });
-      defaultText = "one fingerprint per entry of this machine, and per followed distro AppImage";
-      description = ''
-        The machine flake's `personFingerprints`: what `local/held.json`
-        names an entry by.
+        What each entry that is a part builds, by the entry's id: its
+        derivation and output, or why its build refuses it — always with
+        its fingerprint. The machine flake's `personParts` hands it out,
+        and the part's realizer evaluates its own entry alone, in its own
+        process: the system's evaluation never reads one.
       '';
     };
 
@@ -669,7 +616,7 @@ in
       type = lib.types.package;
       description = ''
         Root's half of the person's data, EXTRACTED from the workspace
-        (`rust.person`): `ronoctua-person apply`, `verify`, `approve`. The
+        (`rust.person`): `ronoctua-person apply`, `approve`, `pin`. The
         units that run it as root must not carry the desktop, so the flake
         sets this next to the import of `person-apply.nix`.
       '';
@@ -703,30 +650,47 @@ in
     '';
   };
 
-  config = {
-    ronoctua.person.unfreeNames = consented;
-    ronoctua.declaredAndroid = lib.concatMap (r: r.apks) applied;
+  config = lib.mkMerge [
+    # ── anchor: L25 ──
+    # THE ENTRIES THAT ARE PARTS, each by its declaration: the plan names
+    # the entry, never a derivation (`nix/modules/parts.nix`), and its
+    # realizer evaluates it. Where the parts' module is imported.
+    (lib.optionalAttrs (options.ronoctua ? parts) {
+      ronoctua.parts = lib.listToAttrs (
+        map (
+          e:
+          lib.nameValuePair (partIdOf e) {
+            wanted = true;
+            entry = {
+              inherit (e) id;
+              fingerprint = fingerprintOf e;
+            };
+            name = if builtins.isString (e.name or null) then e.name else sourceIdOf.${e.source} e;
+          }
+        ) partEntries
+      );
+    })
+    {
+      ronoctua.declaredAndroid = lib.concatMap (r: r.apks) applied;
 
-    # THE PERSON'S PROFILE, through Home Manager — never `systemPackages`.
-    home-manager.users.${user} = {
-      # AND THE DISTRO'S APPIMAGES THE PERSON FOLLOWS past its pins, at the
-      # pin root's verify built: their programs, from their own download
-      # (`nix/modules/distro-apps.nix`, `personPackages`).
-      home.packages =
-        lib.concatMap (r: r.packages) applied ++ (config.ronoctua.distroApps.personPackages or [ ]);
-      xdg.desktopEntries = builtins.foldl' (all: r: all // r.desktopEntries) { } applied;
+      # THE PERSON'S PROFILE, through Home Manager — never `systemPackages`:
+      # their web apps' launchers and their Flatpaks. Their programs are parts.
+      home-manager.users.${user} = {
+        home.packages = lib.concatMap (r: r.packages) applied;
+        xdg.desktopEntries = builtins.foldl' (all: r: all // r.desktopEntries) { } applied;
+      }
+      # nix-flatpak's option exists only where Flatpak is on
+      # (`nix/modules/flatpak.nix` imports its Home Manager module there).
+      // lib.optionalAttrs sourceOn.flatpak {
+        services.flatpak.packages = lib.concatMap (r: r.flatpaks) applied;
+      };
+
+      environment.etc."ronoctua/person-applied.json".source = personApplied;
+      environment.etc."ronoctua/declared-android.json".text = builtins.toJSON {
+        inherit format;
+        apps = config.ronoctua.declaredAndroid;
+      };
     }
-    # nix-flatpak's option exists only where Flatpak is on
-    # (`nix/modules/flatpak.nix` imports its Home Manager module there).
-    // lib.optionalAttrs sourceOn.flatpak {
-      services.flatpak.packages = lib.concatMap (r: r.flatpaks) applied;
-    };
-
-    environment.etc."ronoctua/person-applied.json".source = personApplied;
-    environment.etc."ronoctua/declared-android.json".text = builtins.toJSON {
-      inherit format;
-      apps = config.ronoctua.declaredAndroid;
-    };
-  };
+  ];
   # ── anchor: L06 ──
 }

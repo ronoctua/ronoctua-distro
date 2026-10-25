@@ -242,19 +242,4 @@ in
       ...
     }:
     done { desktopEntries.${prefix + entry.slug} = entryOf { inherit entry icons; }; };
-
-  # The entry as text, for the verification: a web app has nothing to build
-  # but the file the launcher reads.
-  raw =
-    {
-      entry,
-      icons ? null,
-      ...
-    }:
-    pkgs.writeText "${prefix}${entry.slug}.json" (
-      builtins.toJSON (entryOf {
-        inherit entry icons;
-      })
-    );
-
 }

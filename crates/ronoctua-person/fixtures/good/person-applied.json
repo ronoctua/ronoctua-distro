@@ -6,6 +6,9 @@
     "nix:ripgrep",
     "flatpak:org.gnome.Calculator"
   ],
+  "parts": {
+    "nix:ripgrep": "person-4f3e1b2a-ripgrep"
+  },
   "skipped": [
     {
       "id": "nix:gone-from-nixpkgs",

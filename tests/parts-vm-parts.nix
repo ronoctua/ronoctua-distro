@@ -93,5 +93,10 @@ in
   f1 = partOf "f" "1";
   # Carried by the machine already (an ISO's, a test's): seeded, never built.
   g1 = partWith "g" "1" (builtins.toFile "test-part-g-1" (content "g" "1"));
+  # A PART OF THE PERSON'S, which the machine flake hands its realizer
+  # (`personParts`): built in the VM, from nothing it downloads.
+  person1 = partWith "person-good" "1" (
+    builtins.toFile "test-person-good-1" (content "person-good" "1")
+  );
   downloadOf = download;
 }

@@ -4,6 +4,11 @@
 //! dropped is recorded as unwanted (its profile stays until trimmed, so a
 //! rollback finds it). The plan's derivations are rooted, the view rebuilt,
 //! and with `--start` the parts that are not here go to their realizers.
+//!
+//! A part of the person's names their entry, not a derivation: its record
+//! keeps the target its realizer evaluated while the declaration stays the
+//! same ([`Record::planned_entry`]), and the realizer evaluates it anew
+//! otherwise. The planner itself never evaluates anything.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -11,7 +16,8 @@ use std::sync::Mutex;
 
 use ronoctua_parts::exit;
 use ronoctua_parts::names;
-use ronoctua_parts::record::{Record, Target};
+use ronoctua_parts::plan::Wanted;
+use ronoctua_parts::record::{Phase, Record};
 
 use crate::disk::{self, LOCK_WAIT, Lock};
 use crate::{Usage, plan_path, program, say};
@@ -55,12 +61,8 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
             .parts
             .iter()
             .filter(|(id, wanted)| {
-                let target = Target {
-                    drv: wanted.drv.clone(),
-                    out: wanted.out.clone(),
-                    interface: wanted.interface,
-                };
-                !known.get(*id).is_some_and(|r| r.is_current(&target))
+                let record = known.get(*id).cloned().unwrap_or_else(|| Record::new(id));
+                planned(record, wanted).phase != Phase::Here
             })
             .count();
         println!(
@@ -82,13 +84,8 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
             .map(|r| (r.id.clone(), r))
             .collect();
         for (id, wanted) in &plan.parts {
-            let target = Target {
-                drv: wanted.drv.clone(),
-                out: wanted.out.clone(),
-                interface: wanted.interface,
-            };
             let record = known.remove(id).unwrap_or_else(|| Record::new(id));
-            write(&record.planned(Some(target)));
+            write(&planned(record, wanted));
         }
         for (_, record) in known {
             if record.wanted.is_some() {
@@ -145,6 +142,16 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
     Ok(exit::DONE)
 }
 
+/// `record` after the plan wants `wanted`: the distro's part its target, the
+/// person's their declaration.
+fn planned(record: Record, wanted: &Wanted) -> Record {
+    match (wanted.target(), &wanted.entry) {
+        (Some(target), _) => record.planned(Some(target)),
+        (None, Some(entry)) => record.planned_entry(&entry.fingerprint),
+        (None, None) => record.planned(None),
+    }
+}
+
 fn write(record: &Record) {
     if let Err(e) = disk::write_record(record) {
         say(3, &format!("{}: {e}", record.id));
@@ -153,7 +160,9 @@ fn write(record: &Record) {
 
 /// Every wanted part's derivation rooted under [`names::PLAN_ROOTS`] — a
 /// link per part, replaced when the plan changes, removed when the part is
-/// no longer wanted. A link in the collector's roots is all a root is.
+/// no longer wanted. A link in the collector's roots is all a root is. A
+/// part of the person's is rooted at the derivation its realizer evaluated,
+/// once it did ([`root_one`]).
 fn root_derivations(plan: &ronoctua_parts::plan::Plan) {
     let roots = Path::new(names::PLAN_ROOTS);
     if let Err(e) = disk::make_dir(roots, 0o755) {
@@ -170,16 +179,26 @@ fn root_derivations(plan: &ronoctua_parts::plan::Plan) {
         }
     }
     for (id, wanted) in &plan.parts {
-        let link = roots.join(id);
-        if std::fs::read_link(&link).ok().as_deref() == Some(Path::new(&wanted.drv)) {
-            continue;
+        if let Some(drv) = &wanted.drv {
+            root_one(id, drv);
         }
-        let draft = roots.join(format!(".{id}.{}", std::process::id()));
-        let _ = std::fs::remove_file(&draft);
-        let made = std::os::unix::fs::symlink(&wanted.drv, &draft)
-            .and_then(|()| std::fs::rename(&draft, &link));
-        if let Err(e) = made {
-            say(4, &format!("{id}: its derivation was not rooted: {e}"));
-        }
+    }
+}
+
+/// The part `id`'s derivation `drv` rooted under [`names::PLAN_ROOTS`].
+pub fn root_one(id: &str, drv: &str) {
+    let roots = Path::new(names::PLAN_ROOTS);
+    let link = roots.join(id);
+    if std::fs::read_link(&link).ok().as_deref() == Some(Path::new(drv)) {
+        return;
+    }
+    let draft = roots.join(format!(".{id}.{}", std::process::id()));
+    let _ = std::fs::remove_file(&draft);
+    let made = disk::make_dir(roots, 0o755)
+        .map_err(std::io::Error::other)
+        .and_then(|()| std::os::unix::fs::symlink(drv, &draft))
+        .and_then(|()| std::fs::rename(&draft, &link));
+    if let Err(e) = made {
+        say(4, &format!("{id}: its derivation was not rooted: {e}"));
     }
 }

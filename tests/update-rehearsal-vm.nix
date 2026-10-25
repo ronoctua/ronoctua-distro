@@ -13,8 +13,8 @@
 # (offline: its distro is a flake on the machine), the person's staged
 # declarations, their mirror, the reconciler's ledger and the machine's
 # record. Every byte of the machine directory, the record's folder, the
-# staging folder and the person's state is the same afterwards; the
-# verification and the apply REHEARSED (they ran, changing nothing), the
+# staging folder and the person's state is the same afterwards; the apply
+# REHEARSED (it ran, changing nothing), the
 # machine's record was compared and not copied, and no step says it ran.
 {
   pkgs,
@@ -52,17 +52,13 @@ let
       };
     }
   '';
-  # THE MACHINE FLAKE: the distro as its one input, the attribute the
-  # machine builds, and one declared entry with its fingerprint — a plain
-  # token, as `nix/modules/person.nix` makes them (a sha256 in hex): the
-  # verification refuses the whole baseline over one that is not.
+  # THE MACHINE FLAKE: the distro as its one input and the attribute the
+  # machine builds.
   machineFlake = pkgs.writeText "flake.nix" ''
     {
       inputs.${distroInput}.url = "path:/var/lib/fixture-distro";
       outputs = { self, ${distroInput} }: {
         nixosConfigurations.${user}.config.system.build.toplevel = ${distroInput}.lib.system;
-        personEntries."nix:ripgrep" = ${distroInput}.lib.system;
-        personFingerprints."nix:ripgrep" = "a-fingerprint-of-a-test";
       };
     }
   '';
@@ -163,8 +159,7 @@ pkgs.testers.runNixOSTest {
         root = machine.succeed("cat /run/ronoctua-update/system.report")
         mine = machine.succeed("cat /run/user/1000/ronoctua-update/user.report")
         print(root, mine)
-        for step in ("${steps.verify}", "${steps.apply}"):
-            assert re.search(rf"^{step}\trehearsed\t", root, re.M), f"{step} did not rehearse: {root}"
+        assert re.search(r"^${steps.apply}\trehearsed\t", root, re.M), f"the apply did not rehearse: {root}"
         assert re.search(r"^${steps.record}\trehearsed\t", mine, re.M), mine
         assert "would-record" in said, said
         assert "\tran\t" not in root + mine, f"a rehearsal ran a step: {root}{mine}"

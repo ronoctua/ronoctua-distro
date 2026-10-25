@@ -76,8 +76,9 @@ let
 
   # THE NAMES THIS MACHINE CARRIES, for the unfree question: its packages,
   # the person's own, and every program a session or a user unit is handed
-  # by store path. (A part — `uade`, `unrar` — is out of the closure, named
-  # by its stable path, and never pushed.)
+  # by store path. (A part — `uade`, `unrar`, every program the person
+  # declared — is out of the closure, named by its stable path, and never
+  # pushed.)
   candidates = lib.unique (
     builtins.filter (n: n != "") (
       map nameOf config.environment.systemPackages
@@ -92,7 +93,6 @@ let
           )
         )
       )
-      ++ config.ronoctua.person.unfreeNames
     )
   );
   # WHICH OF THEM ARE UNFREE, asked by the release's own three questions

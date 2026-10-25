@@ -262,6 +262,13 @@ fn applied(
         swap(&machine_fd)?;
         Outcome::Applied
     };
+    // WHAT THE UPDATE'S VERIFICATION WROTE, gone with it: an entry is a part
+    // now, which fails alone. Never a reason to refuse the apply.
+    for name in ronoctua_person::names::RETIRED {
+        if let Err(e) = disk::remove_local(&machine_fd, name) {
+            eprintln!("<4>{name}: not removed: {e}");
+        }
+    }
     Ok(Done {
         outcome,
         ignored: assembled.ignored,
@@ -365,6 +372,32 @@ mod tests {
             &at(),
         )
         .1
+    }
+
+    /// FAILS IF: an apply leaves what the retired verification wrote, takes
+    /// anything else of `local/` with it, or follows a link planted where one
+    /// of them was.
+    #[test]
+    fn an_apply_removes_what_the_verification_wrote() {
+        let s = Scratch::new("apply-retired");
+        let _key = signed_good(&s);
+        s.file("machine/local/held.json", br#"{"format": 1, "held": []}"#);
+        s.file("outside", b"kept");
+        std::os::unix::fs::symlink(s.0.join("outside"), s.0.join("machine/local/verified.json"))
+            .unwrap();
+        s.file(
+            "machine/local/approved.json",
+            br#"{"format": 1, "modules": {}}"#,
+        );
+        applied(&s).unwrap();
+        assert!(!s.0.join("machine/local/held.json").exists());
+        assert!(std::fs::symlink_metadata(s.0.join("machine/local/verified.json")).is_err());
+        assert_eq!(
+            std::fs::read(s.0.join("outside")).unwrap(),
+            b"kept",
+            "a link is never followed"
+        );
+        assert!(s.0.join("machine/local/approved.json").is_file());
     }
 
     /// FAILS IF: a good tree is not swapped in whole, a second apply of the

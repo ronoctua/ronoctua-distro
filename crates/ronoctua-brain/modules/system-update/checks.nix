@@ -1191,7 +1191,7 @@ in
           return steps
 
       gathers, migrates, moves = does("gather"), does("migrate"), does("move-inputs")
-      verifies, applies = does("verify"), does("apply-configuration")
+      applies = does("apply-configuration")
       reconciles, publishes = does("reconcile-declared"), does("publish")
       plans, reclaims = does("realize-parts"), does("reclaim-space")
       roots = at(lambda s: s["root"], "as root")
@@ -1223,9 +1223,6 @@ in
           ("a person's step before the root half", moved(declared, person_after[0], 0), "only `gather` comes before it"),
           ("a migration of the person's", changed(migrates[0], root=False), "`migrate` is root's"),
           ("a migration after the inputs moved", moved(declared, migrates[0], moves[0] + 1), "`migrate` after `move-inputs`"),
-          ("a verification of the person's", changed(verifies[0], root=False), "`verify` is root's"),
-          ("a verification before the inputs moved", moved(declared, verifies[0], moves[0]), "`verify` before `move-inputs`"),
-          ("a verification after the rebuild", moved(declared, verifies[0], applies[0] + 1), "`verify` after `apply-configuration`"),
           ("a reconciliation as root", changed(reconciles[0], root=True), "`reconcile-declared` is the person's"),
           ("a reconciliation before the rebuild", moved(declared, reconciles[0], applies[0]), "`reconcile-declared` before `apply-configuration`"),
           ("a publication as root", changed(publishes[0], root=True), "`publish` is the person's"),
@@ -1865,7 +1862,6 @@ in
       runners = vm.ronoctua.update.package;
       rehearsalUnit = units.system-rehearsal;
       steps = {
-        verify = (stepThat "verify the declarations" (s: s.does == "verify")).id;
         apply = (stepThat "apply the configuration" (s: s.does == "apply-configuration")).id;
         # The machine's record, by what it runs: the person's binary cache
         # publishes with a rehearsal of its own too (`binary-cache-push`).

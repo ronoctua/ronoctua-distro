@@ -30,10 +30,6 @@ rec {
   # (`ronoctua_person::options::Options::distro_apps_follow_releases`).
   option = "distro-apps-follow-releases";
 
-  # The word the update's verification names a followed AppImage by
-  # (`ronoctua_person::distro_pins::ENTRY`): `distro-appimage:<id>`.
-  entry = "distro-appimage";
-
   isText = builtins.isString;
   isSlug = s: isText s && builtins.match "[a-z0-9][a-z0-9-]{0,63}" s != null;
   isSegment =

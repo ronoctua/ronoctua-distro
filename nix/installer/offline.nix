@@ -81,9 +81,10 @@ let
 
   partsOf =
     system:
-    lib.filter (p: p.wanted && (if seeded == "every-part" then true else !p.unfree && !p.heavy)) (
-      lib.attrValues system.config.ronoctua.parts
-    );
+    # A PART OF THE PERSON'S is never seeded: an ISO knows no person.
+    lib.filter (
+      p: p.wanted && p.package != null && (if seeded == "every-part" then true else !p.unfree && !p.heavy)
+    ) (lib.attrValues system.config.ronoctua.parts);
   seededParts =
     if seeded == "every-part" then
       lib.concatMap partsOf references

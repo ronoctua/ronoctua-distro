@@ -59,25 +59,23 @@ DOES = {
     "upgrade-software",
     "refresh-cache",
     "reclaim-space",
-    # THE 2026-10-05 WAVE's classes (gather, migrate, verify,
-    # reconcile-declared, publish), after its anchor.
+    # THE 2026-10-05 WAVE's classes (gather, migrate, reconcile-declared,
+    # publish), after its anchor.
     # ── anchor: L19 ──
     #
     # `gather` brings in, as the person and BEFORE the root half, what the
     # person declared elsewhere: the plain part of the belongings, the pins
     # moved forward, the declarations staged for root's applier. `migrate`
     # turns an old machine directory (a copy of the distro) into the
-    # machine's own flake, before anything moves its inputs. `verify` tries
-    # every declared entry on its own, after the inputs moved and before the
-    # rebuild, so one broken entry is held instead of breaking the build.
-    # `reconcile-declared` is the person's half bringing what is DECLARED and
+    # machine's own flake, before anything moves its inputs. (The class that
+    # tried every declared entry before the rebuild, `verify`, is gone: a
+    # declared package is a part, which fails alone.) `reconcile-declared` is the person's half bringing what is DECLARED and
     # nothing else (the Android apps, the imperative copies a declared one
     # replaces). `publish` is the last thing: the machine's record and the
     # plain part pushed, so the person's other machines learn what this one
     # did.
     "gather",
     "migrate",
-    "verify",
     "reconcile-declared",
     "publish",
     # THE 2026-10-23 WAVE's class (the parts), after its anchor.
@@ -96,7 +94,6 @@ DOES_ORDER = [
     "gather",
     "migrate",
     "move-inputs",
-    "verify",
     "apply-configuration",
     "realize-parts",
     "upgrade-software",
@@ -702,15 +699,6 @@ def check_wave_laws(steps: list[dict], moves: list[int], applies: list[int]) -> 
                 complain(at(i), "`migrate` is root's: it rewrites the machine directory")
             if moves and i > moves[0]:
                 complain(at(i), "`migrate` after `move-inputs`: the inputs would move in a layout about to be replaced")
-        # VERIFY: root's, between the inputs moving and the rebuild — it tries
-        # each declared entry against the inputs the rebuild will use.
-        if does == "verify":
-            if not s["root"]:
-                complain(at(i), "`verify` is root's: it writes what the rebuild holds back")
-            if moves and i < moves[0]:
-                complain(at(i), "`verify` before `move-inputs`: it would try the entries against inputs the rebuild no longer uses")
-            if applies and i > applies[0]:
-                complain(at(i), "`verify` after `apply-configuration`: what it holds back would reach no rebuild")
         # RECONCILE-DECLARED: the person's, after the rebuild — it brings what
         # the new system declares, and nothing it does not.
         if does == "reconcile-declared":
@@ -1293,9 +1281,8 @@ def emit_step(s: dict, wiring: dict[str, str], programs: dict[str, str]) -> list
     elif s.get("rehearse") is not None:
         # A PROGRAM WITH A REHEARSAL OF ITS OWN IS REHEARSED FOR REAL, the
         # way a unit with one is: the same program, with the arguments that
-        # change nothing (`apply --rehearse` measures on a copy, `verify
-        # --rehearse` tries and writes nothing), its output in the sequence's
-        # own, its exit the rehearsal's.
+        # change nothing (`apply --rehearse` measures on a copy), its output in
+        # the sequence's own, its exit the rehearsal's.
         rehearsed = " ".join(shlex.quote(a) for a in program_argv(s["rehearse"]))
         out += [
             '  if [ "$execute" != true ]; then',

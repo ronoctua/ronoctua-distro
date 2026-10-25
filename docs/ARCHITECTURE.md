@@ -123,12 +123,17 @@ máquina e no ISO). Três consoles respondem de três jeitos, e cada recusa era 
 - o dummy não aceita nenhuma. Ele fica ligado enquanto o framebuffer do firmware passa ao driver e
   enquanto o fbcon adia a tomada (`fbcon=nodefer` a faz na hora).
 
-O `systemd-vconsole-setup` só roda quando o console ligado aceita fonte (`ronoctua-console-font
-can-take`, no `ExecCondition`), carrega a 8 × 16 — que os dois aceitam — e, no framebuffer, o
-`ronoctua-console-font load` põe a 15 × 32 em cada VT alocado que está em modo texto. Uma regra udev
-o roda de novo quando um console se liga ou um VT nasce, no initrd também. O `installer-console-vm`
-prova os dois firmwares (UEFI e texto VGA) com o journal sem nenhuma queixa, e o `rescue-vm` o
-console de resgate.
+O `systemd-vconsole-setup` só roda quando o console ligado aceita fonte: o processo principal da
+unidade é o `ronoctua-console-font setup`, que vira o `systemd-vconsole-setup` (`exec`) num console
+que aceita e termina com sucesso, sem fazer nada, no dummy. Ele carrega a 8 × 16 — que os dois
+aceitam — e, no framebuffer, o `ronoctua-console-font load` põe a 15 × 32 em cada VT alocado que
+está em modo texto. Uma regra udev o roda de novo quando um console se liga ou um VT nasce, no initrd
+também, em rajadas. Por isso a decisão não é um `ExecCondition`: um reinício que chega enquanto a
+condição responde "pular" para a unidade antes, e numa unidade parando o código 1 da condição é
+FALHA, não pulo — medido, num boot de muitos, com a máquina ocupada, como uma linha de falha no
+journal. O processo principal só sai com 0 ou é parado pelo `SIGTERM` que a unidade do upstream
+conta como sucesso, e nenhuma ordem dos eventos falha. O `installer-console-vm` prova os dois
+firmwares (UEFI e texto VGA) com o journal sem nenhuma queixa, e o `rescue-vm` o console de resgate.
 
 #### Duas cadeias de fallback, uma fonte
 
@@ -15836,7 +15841,7 @@ máquina é um flake dela, e a distro é um INPUT dele (`templates/machine/flake
 ```
 flake.nix  flake.lock  host.nix  facter.json  [secrets.yaml]
 person/    software/declared.json  software/declined.json  software/icons/<sha256>.png  brain/<my-id>/
-local/     held.json  approved.json  signer.json   (só root; nunca sincroniza)
+local/     approved.json  signer.json   (só root; nunca sincroniza)
 ```
 
 O `outputs` inteiro do flake da máquina é `ronoctua.lib.machineFlake { dir = ./.; contract = 1; }`.
@@ -15898,20 +15903,23 @@ estreita valida o JSON da pessoa e o copia para `person/`; o `nix/modules/person
 cópia. O `builtins.fromJSON` não lança um erro capturável, e por isso nada aqui lê a pasta da
 própria pessoa. Cada entrada passa por um dos cinco construtores (`nix/declared-apps/`), que
 respondem o que pôr onde ou por que não, de um conjunto fechado (`attr-missing`, `not-a-package`,
-`refused-by-meta`, `held`, `source-off`, `other-machine`, `format-unknown`). Um nome que o nixpkgs
-não tem é `null` no `lib.attrByPath`; um alias que lança, um pacote quebrado ou inseguro são
-capturados pelo `builtins.tryEval` (o check de `meta` roda quando o `drvPath` é lido). O que o
-`tryEval` NÃO pega é um erro de avaliação dentro de uma dependência (`attribute missing` não é
-`throw`), nem um `abort`, e é por isso que a atualização avalia cada entrada sozinha antes
-(`personEntries`, sem proteção nenhuma) e segura a que quebra em `local/held.json`. "Sozinha" quer
-dizer na máquina como a opção interna `ronoctua.person.alone` a deixa para aquela entrada: o
-consentimento de não livre é o dela e nenhum outro, segurada ou não. Pela máquina como ela é, ler o
-predicado leria o nome de toda entrada consentida, e uma irmã que aborta derrubaria a verificação de
-todas — e todas seriam seguradas por uma. A entrada segurada é pulada enquanto a impressão digital
-dela for a mesma: a entrada sem os carimbos e o `narHash` do nixpkgs — declarar de novo a mesma
-coisa continua segurado; um pin novo, uma edição ou um nixpkgs novo dão outra chance. Só o Nix
-calcula a impressão digital (`personFingerprints`). O `person-bad-entry-does-not-break-eval` planta
-cada maneira de uma entrada dar errado e exige o motivo certo de cada uma.
+`refused-by-meta`, `source-off`, `other-machine`, `format-unknown`; `held` só é lido, num relatório
+de um sistema anterior às partes). Um nome que o nixpkgs não tem é `null` no `lib.attrByPath`; um
+alias que lança, um pacote quebrado ou inseguro são capturados pelo `builtins.tryEval` (o check de
+`meta` roda quando o `drvPath` é lido). O que o `tryEval` NÃO pega é um erro de avaliação dentro de
+uma dependência (`attribute missing` não é `throw`), nem um `abort` — e por isso um pacote ou
+AppImage declarado é uma PARTE da pessoa: o sistema nunca o avalia. O plano das partes o nomeia pela
+entrada e pela impressão digital dela (a entrada sem os carimbos e o `narHash` do nixpkgs), nunca
+por uma derivação, e o realizador da parte avalia aquela entrada sozinha, num processo dele
+(`ronoctua.person.parts`, o `personParts` do flake da máquina): a resposta é o build protegido do
+construtor — a derivação, ou o motivo da recusa —, e uma entrada que aborta derruba só o processo
+que a pediu. O registro guarda o alvo avaliado enquanto a declaração for a mesma; uma impressão
+digital nova (uma edição, um pin novo, um nixpkgs novo) é avaliada de novo. Antes, a atualização
+avaliava cada entrada sozinha antes do rebuild e segurava a quebrada em `local/held.json`; com a
+entrada fora do sistema, a retenção não tem mais o que proteger. O
+`person-bad-entry-does-not-break-eval` planta cada maneira de uma entrada dar errado — e uma que
+aborta — e exige que o sistema avalie e que cada parte diga a própria resposta; o
+`parts-are-isolated` mostra, numa VM, a boa chegar e as quebradas falharem só elas.
 
 **Tudo vai para a pessoa, nunca para o `systemPackages`** (`person-packages-are-per-user`): o pacote
 e o AppImage embrulhado vão para o `home.packages` dela, o web app é uma entrada do
@@ -16335,34 +16343,24 @@ as perguntas da tabela são do registro, no build: um pin recusado não é motiv
 avaliar. Ele sai, com a regra e uma frase, em `followed.refused` do `distro-apps.json`, fora do
 `problems`, que derruba a avaliação (o `problems` continua das linhas da distro).
 
-**Só o que o verify do root construiu entra — uma lista de permitidos.** O `system-rebuild` é `stop`,
-e não é o único build da máquina: a aplicação da central de programas e o rebuild do resgate
-(`ronoctua-machine apply`) não rodam verify nenhum. Por isso cada candidato — o pin seguido mais novo
-que o da distro, nesta máquina — entra no `personEntries`/`personFingerprints` como
-`distro-appimage:<id>`, o verify do root o constrói sozinho antes do rebuild, exatamente como o perfil
-da pessoa o levaria, e só o que CONSTRUIU é anotado em `local/verified.json` (do root, escrito só pelo
-`ronoctua-person verify`), com a impressão digital (id, chave, pin e o nixpkgs) e o pin. O registro usa
-um pin seguido só enquanto essa lista o nomeia na impressão digital de agora; o que não avalia, não
-baixa, mudou no upstream ou não constrói fica em `local/held.json` com o motivo e é tentado de novo
-em toda atualização. Até lá a máquina constrói o ÚLTIMO pin verificado, enquanto ele for mais novo
-que o da distro — nunca um passo atrás numa versão 0.x —, ou o da distro. Um nixpkgs novo muda a
-impressão digital: o último verificado só volta quando o verify o constrói de novo (o que ele faz
-quando é o candidato, o caso de todo dia). O `pins refresh` busca de novo um retido por download
-mudado ou sumido. O custo é baixar e abrir cada release seguida nova a cada atualização.
+**O pin seguido é o da parte do app, e não precisa de lista de permitidos.** Todo AppImage da
+distro é uma parte (`nix/modules/parts.nix`), e um que segue releases tem de ser (o registro recusa
+o contrário). Ligado e mais novo que o da distro, o pin seguido é o pin com que a parte daquele app
+é construída: nunca o `systemPackages`, nunca o perfil da pessoa, nunca um cache público — os bytes
+são o download dela. Antes, o pin seguido ia para o perfil da pessoa, e por isso o verify do root
+tinha de construí-lo antes do rebuild e anotá-lo numa lista de permitidos (`local/verified.json`):
+um build que não o tivesse visto — o da central de programas, o do resgate — não podia encontrar uma
+release nunca tentada no fecho do sistema. Como parte, ele está fora do fecho: uma release que não
+baixa ou não constrói é uma parte que não chega, que fica na geração anterior (a última que chegou,
+ou a da distro) e diz o que lhe falta na página das partes. O `pins refresh` busca de novo, no mesmo
+endereço, o pin cuja parte não conseguiu baixar o download (o registro da parte o lista como
+faltando: mudou no upstream, ou sumiu). O lançador de toda parte AppImage roda o programa pela vista
+das partes, o único lugar em que a sessão acha uma parte.
 
-**O root aplica a preparação dentro da mesma atualização.** O `person-stage` inicia o aplicador do
-root (o `person-decline-chain` cobra), então os pins chegam à máquina antes do `person-verify` da
-mesma atualização, e o verify constrói o que acabou de chegar. Se a metade root não roda (piso de
-bateria, falta de espaço), a lista de permitidos garante que nenhum build — o da central de programas
-ou o do resgate — constrói um pin que o verify não construiu.
-
-O `distro-apps-follow-when-on-and-newer` planta a tabela, as opções, os pins, a lista de permitidos e
-as retenções em máquinas avaliadas: sem lista, nenhum pin seguido é construído e cada candidato
-espera e é entregue ao verify; com ela, o mais novo verificado vai para o perfil da pessoa (o
-lançador no perfil dela, a chave do abridor mantida) e sai do `systemPackages`; uma anotação em outra
-impressão digital não deixa nada entrar; um candidato retido cai no último verificado, não no da
-distro; mais velho, igual ou ultrapassado pela distro não; cada forma ruim é recusada pela sua regra;
-desligado, nada.
+O `distro-apps-follow-when-on-and-newer` planta a tabela, as opções e os pins em máquinas
+avaliadas: ligado, o mais novo é o pin da parte e não está em perfil nenhum; mais velho, igual ou
+ultrapassado pela distro não; todo lançador de parte roda pela vista; cada forma ruim é recusada pela
+sua regra; desligado, nada.
 
 
 <!-- anchor: L05 -->
@@ -16539,8 +16537,8 @@ aparagem das gerações (`ronoctua-system-generations --machine-state`) guarda t
 ensaio, lidos do registro (`generations-keep-the-boot-trial`).
 
 **As travas.** O `apply`, o `bless`, o `disarm`, o `hold` e a `migrate` tomam a trava de root dos
-dados da pessoa (`ronoctua_person::root::Lock`, L06): um build lê esses dados, e um `apply` entre o
-`verify` e o switch entregaria ao build uma entrada que ninguém tentou. Sob o `ronoctua-person hold`
+dados da pessoa (`ronoctua_person::root::Lock`, L06): um build lê esses dados, e um `apply` no meio
+trocaria a árvore debaixo dele. Sob o `ronoctua-person hold`
 da atualização ela chega na entrada padrão, já tomada; sozinho, ele a toma, espera um pouco e diz
 `busy` — menos o bless, que espera longamente (`blessWaitSeconds`, quatro horas), porque o julgamento
 pode esperar e o que subiu já foi escrito. Os filhos nascem sem entrada padrão: herdariam a trava. O
@@ -16593,7 +16591,7 @@ lê as variáveis do carregador). O rollback do resgate escreve o perfil, mas as
 
 <!-- anchor: L06 -->
 
-### Os dados da pessoa na máquina: a cópia root, o verify e a aprovação (L06)
+### Os dados da pessoa na máquina: a cópia root e a aprovação (L06)
 
 **Por que uma cópia root.** O flake da máquina lê o que a pessoa declarou de `person/`, no diretório
 da máquina, e não dos arquivos dela. Um JSON quebrado faz o `builtins.fromJSON` lançar um erro que
@@ -16650,7 +16648,7 @@ nova, nunca metade de cada; a velha vira `person.next` e é apagada. Antes de es
 é comparada com a que está lá, e uma igual não escreve nada (`unchanged`).
 
 **Por que um lock que só root abre, e por que a atualização o segura até o switch.** `apply`,
-`approve`, `verify` e o rebuild da atualização tomam o mesmo lock exclusivo,
+`approve` e o rebuild da atualização tomam o mesmo lock exclusivo,
 `/run/ronoctua-person/machine.lock` (`root::LOCK`): um arquivo `0600` de root, numa pasta de root,
 criado pelo programa. Não é o diretório da máquina: todo mundo lê aquela pasta, o `flock` só pede um
 descritor de leitura, e um processo qualquer da pessoa (ou um malware rodando como ela) seguraria o
@@ -16659,9 +16657,9 @@ o lock em `LOCK_WAIT_S` (30 s) recusa como `busy` e diz no veredito; a espera pe
 cada 200 ms só enquanto espera, porque o `flock` não tem prazo e uma thread presa nele pegaria o
 lock depois da recusa. As unidades ainda têm `TimeoutStartSec`, por garantia.
 
-A atualização segura o lock do `verify` até o fim do switch: soltá-lo entre os dois deixaria uma
-declaração feita no meio (o software inicia a unidade sem senha) entrar numa árvore que o verify
-nunca tentou — exatamente o caso que o verify existe para pegar. Como são processos diferentes, quem
+A atualização segura o lock da migração até o fim do switch: soltá-lo no meio deixaria uma
+declaração feita entre os passos (o software inicia a unidade sem senha) trocar a árvore debaixo do
+rebuild. Como são processos diferentes, quem
 segura passa o lock aos filhos como a ENTRADA PADRÃO (`ronoctua-person hold -- <programa>`,
 `Lock::for_a_child`): o mesmo arquivo aberto, então o `flock` do filho já é dele, e o `Lock::take`
 do filho o acha ali em vez de esperar pelo próprio pai. Sem `unsafe` (o crate o proíbe), a entrada
@@ -16684,22 +16682,14 @@ o lock na mão, para que a resposta de uma execução nunca seja a de outra; o s
 ele foi escrito. Uma recusa sai com status 1 — a unidade fica `failed`, o que é verdade — e quem a
 iniciou segue com os dados velhos e diz por quê; a atualização não para por ela.
 
-**Por que o verify avalia uma entrada por processo.** O consumidor Nix pula o que consegue ver que
-está errado, mas um erro no fundo de uma dependência não é alcançado pelo `tryEval`, e o sistema
-inteiro para de avaliar. Antes do rebuild, `ronoctua-person verify` (root, na atualização) pergunta
-de cada entrada num `nix` próprio: `eval` do `drvPath`, depois `build --no-link`. Primeiro vem a
-linha de base, `personFingerprints`: se o flake da máquina não avalia, a culpa não é de entrada
-nenhuma, nada é segurado e o `held.json` fica como estava. Nenhum log é lido: falha de avaliação é
-`eval-failed`; falha de build de uma entrada com pin pergunta ao `nix store prefetch-file --json`
-pelo endereço do pin — não baixa é `fetch-failed`, baixa com outro hash é `upstream-changed`, o
-mesmo hash é `build-failed`. O lock nunca se move (`--no-update-lock-file`): mover inputs é do
-`flake-update`. Uma entrada que volta a falhar pelo mesmo motivo guarda o `since`. O contrato com o
-flake da máquina: `personEntries` e `personFingerprints` têm os mesmos nomes — toda entrada que a
-máquina construiria, segurada ou não (a segurada é tentada de novo a cada atualização) — e só o Nix
-calcula a impressão. `--rehearse` só avalia e não escreve nada — e por isso não diz `ok` de entrada
-nenhuma: o que avaliou e não foi construído sai como `untried`, e o que o `held.json` segura, na
-mesma impressão, por um motivo que só um build acha (`build-failed`, `fetch-failed`,
-`upstream-changed`) sai como `still-held` e conta no total, porque o rebuild vai continuar pulando.
+**Por que não existe mais verificação das entradas.** Um erro no fundo de uma dependência não é
+alcançado pelo `tryEval`, e uma entrada assim parava a avaliação do sistema inteiro; por isso a
+atualização avaliava cada entrada num `nix` próprio antes do rebuild e segurava a quebrada em
+`local/held.json` (e anotava os AppImages seguidos que construíam em `local/verified.json`). Com o
+pacote declarado como parte da pessoa, o sistema nunca o avalia, e é o realizador da parte que o
+avalia sozinho, num processo dele — a falha é da parte, tentada de novo cada vez mais tarde, e dita
+na página das partes. O passo `person-verify` saiu, e todo `apply` apaga os dois arquivos que ele
+escrevia.
 
 **Por que a aprovação é um verbo sem argumento numa unidade fixa.** O `module.nix` de um módulo da
 pessoa alcança root, então entra num build só no hash que o `local/approved.json` guarda, e só a
@@ -19348,9 +19338,9 @@ da máquina (`refusal_key`), e a página dos pertences diz as recusas de assinat
 (`docs/PENDING.md`).
 
 **O rebuild é um filho da metade root, e não mais a unidade do resgate.** O lock de root dos dados
-da pessoa (`ronoctua-person hold`, L06) só passa por herança da entrada padrão: o `verify` e o
-`ronoctua-machine apply` (L05) rodam como filhos da metade que o segura, e assim o que foi tentado é o
-que é construído. Uma unidade iniciada por `systemctl start` não herdaria nada.
+da pessoa (`ronoctua-person hold`, L06) só passa por herança da entrada padrão: a migração e o
+`ronoctua-machine apply` (L05) rodam como filhos da metade que o segura, e assim nenhuma declaração
+nova entra no meio. Uma unidade iniciada por `systemctl start` não herdaria nada.
 
 **O registro da máquina viaja pela parte em claro.** `ronoctua-person record` (o crate dono do
 esquema `state::MachineState` e dos nomes do espelho) copia o `state.json` de root, validado e na

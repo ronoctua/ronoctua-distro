@@ -2826,8 +2826,8 @@ impl View {
 }
 
 /// What the machine's records say, as sentences: the belongings' conflicts
-/// (a click opens them), each declared program the verification held back,
-/// the boot trial or why there is none, and a hold — each only when it is
+/// (a click opens them), the boot trial or why there is none, and a hold —
+/// each only when it is
 /// there, in the colour of what it costs.
 fn record_sentences(
     r: &module::Records,
@@ -2849,16 +2849,6 @@ fn record_sentences(
             ),
             tokens::color::STATE_WARNING,
             Some(Target::Belongings),
-        ));
-    }
-    for held in &r.held {
-        out.push((
-            texts.t_with(
-                module::key::SYSTEM_UPDATE_RECORDS_HELD,
-                &[("id", &held.id), ("why", &texts.t(held_key(held.why)))],
-            ),
-            tokens::color::STATE_WARNING,
-            None,
         ));
     }
     if let Some(outcome) = r.trial {
@@ -2914,16 +2904,6 @@ pub fn refusal_key(word: &str) -> Option<&'static str> {
         Why::Unreadable => key::MACHINE_REFUSED_UNREADABLE,
         Why::Failed => key::MACHINE_REFUSED_FAILED,
     })
-}
-
-/// The sentence of a reason the verification held a program back.
-const fn held_key(why: module::HeldWhy) -> &'static str {
-    match why {
-        module::HeldWhy::EvalFailed => module::key::SYSTEM_UPDATE_HELD_EVAL_FAILED,
-        module::HeldWhy::FetchFailed => module::key::SYSTEM_UPDATE_HELD_FETCH_FAILED,
-        module::HeldWhy::UpstreamChanged => module::key::SYSTEM_UPDATE_HELD_UPSTREAM_CHANGED,
-        module::HeldWhy::BuildFailed => module::key::SYSTEM_UPDATE_HELD_BUILD_FAILED,
-    }
 }
 
 /// The machine's own sentence of a boot trial's outcome.
@@ -3341,17 +3321,9 @@ Steps — walked in the order they appear:
     #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
     struct Records {
         conflicts: usize,
-        held: Vec<Held>,
         trial: Option<module::TrialOutcome>,
         no_trial: Option<module::NoTrial>,
         hold: Option<Hold>,
-    }
-
-    #[derive(Debug, serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Held {
-        id: String,
-        why: module::HeldWhy,
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -3515,15 +3487,6 @@ Steps — walked in the order they appear:
         let mut w = super::photographed(&scene.reports, &scene.said);
         let records = module::Records {
             conflicts: scene.records.conflicts,
-            held: scene
-                .records
-                .held
-                .into_iter()
-                .map(|h| module::Held {
-                    id: h.id,
-                    why: h.why,
-                })
-                .collect(),
             trial: scene.records.trial,
             no_trial: scene.records.no_trial,
             hold: scene.records.hold.map(|h| module::HeldAt {
@@ -3663,7 +3626,7 @@ Steps — walked in the order they appear:
         #[test]
         fn a_scene_is_its_records_and_nothing_else() {
             let scene: Scene = serde_json::from_str(
-                r#"{"records": {"conflicts": 2, "held": [{"id": "nix:hello", "why": "build-failed"}],
+                r#"{"records": {"conflicts": 2,
                     "trial": "failed", "no-trial": "not-in-menu",
                     "hold": {"rev": "613862c", "since": "2026-10-05T12:00:00Z"}},
                     "battery": {"discharging": true, "percent": 20}, "keys": "SUPER s v"}"#,
@@ -3673,7 +3636,6 @@ Steps — walked in the order they appear:
             let r = w.open.view.records();
             assert_eq!(r.conflicts, 2);
             assert_eq!(r.trial, Some(module::TrialOutcome::Failed));
-            assert_eq!(r.held.len(), 1);
             assert!(serde_json::from_str::<Scene>(r#"{"recrods": {}}"#).is_err());
             assert!(parse(&["--door".to_owned(), "update".to_owned()]).is_err());
         }
@@ -5299,10 +5261,6 @@ mod tests {
     fn every_record() -> module::Records {
         module::Records {
             conflicts: 2,
-            held: vec![module::Held {
-                id: "nix:hello".to_owned(),
-                why: module::HeldWhy::BuildFailed,
-            }],
             trial: Some(module::TrialOutcome::Failed),
             no_trial: Some(module::NoTrial::NotInMenu),
             hold: Some(module::HeldAt {
@@ -5314,9 +5272,8 @@ mod tests {
 
     /// WHAT THE MACHINE'S RECORDS SAY is on top of both doors, each only
     /// when it is there: the conflicts with the keys that open them (and a
-    /// click that does), what the verification held and why, the boot
-    /// trial in the machine's words, why there is none, and a hold with its
-    /// short revision and its day.
+    /// click that does), the boot trial in the machine's words, why there
+    /// is none, and a hold with its short revision and its day.
     #[test]
     fn the_records_are_said_above_the_steps_in_both_doors() {
         let t = texts();
@@ -5329,8 +5286,6 @@ mod tests {
             .join("\n");
         for needle in [
             "SUPER s v",
-            "nix:hello",
-            &t.t(module::key::SYSTEM_UPDATE_HELD_BUILD_FAILED),
             &t.t(key::MACHINE_TRIAL_FAILED),
             &t.t(key::MACHINE_NO_TRIAL_NOT_IN_MENU),
             "613862c ",
@@ -5357,7 +5312,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            region.contains("nix:hello") && region.contains("SUPER s v"),
+            region.contains(&t.t(key::MACHINE_TRIAL_FAILED)) && region.contains("SUPER s v"),
             "{region}"
         );
         let mut v = v;
@@ -5705,13 +5660,13 @@ mod tests {
             apps: ["CADCraft", "FigCraft"]
                 .into_iter()
                 .map(|name| crate::follow::App {
+                    id: name.to_lowercase(),
                     name: name.to_owned(),
                     here: true,
                     pin: ronoctua_person::reports::PinFrom::Followed,
                     version: "0.9.0".to_owned(),
                     followed: Some("0.9.0".to_owned()),
-                    held: None,
-                    waiting: false,
+                    arrival: crate::follow::Arrival::Here,
                     refused: None,
                 })
                 .collect(),

@@ -17,7 +17,12 @@
 #   5. a download its origin does not have comes from a mirror the person
 #      named, by its hash, and only those bytes;
 #   6. a part whose output the machine already carries is seeded — its
-#      profile set with no derivation and no download, as an ISO's are.
+#      profile set with no derivation and no download, as an ISO's are;
+#   7. a part of the person's is evaluated by its own realizer, from the
+#      machine flake (`personParts`), and alone: the good entry arrives, and
+#      one whose evaluation throws, one that ABORTS — which no `tryEval`
+#      catches — and one its build refuses each fail only themselves, said
+#      as `eval-failed`.
 #
 # THE PARTS ARE SMALL ON PURPOSE: a download (a fixed-output derivation that
 # runs curl against the server) and a script around it, built in the VM with
@@ -56,6 +61,41 @@ let
     g1
     ;
   eDownload = parts.downloadOf "e" "1";
+  # THE MACHINE FLAKE of a person with four declared programs, as
+  # `lib.machineFlake` hands them out (`personParts`): the test copies it,
+  # with the parts' file and the programs, into the machine directory.
+  fingerprint = c: builtins.hashString "sha256" c;
+  personFlake = pkgs.writeText "flake.nix" ''
+    {
+      outputs = { self }:
+        let
+          parts = import ./parts-vm-parts.nix (builtins.fromJSON (builtins.readFile ./programs.json));
+        in
+        {
+          personParts = {
+            "nix:good" = {
+              drv = parts.person1.drvPath;
+              out = parts.person1.outPath;
+              fingerprint = "${fingerprint "good"}";
+            };
+            "nix:throws" = throw "nixpkgs has no `gone`";
+            "nix:aborts" = abort "fixture: reading this entry aborts";
+            "nix:refused" = {
+              refused = "refused-by-meta";
+              detail = "`x` is unfree, and its declaration carries no consent";
+              fingerprint = "${fingerprint "refused"}";
+            };
+          };
+        };
+    }
+  '';
+  personPart = id: {
+    wanted = true;
+    entry = {
+      inherit id;
+      fingerprint = fingerprint (lib.removePrefix "nix:" id);
+    };
+  };
 
   # What the server has from the start, and what the test hands it later.
   served = pkgs.runCommand "test-parts-served" { } ''
@@ -139,6 +179,10 @@ pkgs.testers.runNixOSTest {
           wanted = true;
           package = g1;
         };
+        person-good = personPart "nix:good";
+        person-throws = personPart "nix:throws";
+        person-aborts = personPart "nix:aborts";
+        person-refused = personPart "nix:refused";
       };
 
       # THE PERSON'S OPTIONS as root's applier leaves them in the machine
@@ -169,6 +213,7 @@ pkgs.testers.runNixOSTest {
       ];
       environment.etc."ronoctua-test/parts.nix".source = ./parts-vm-parts.nix;
       environment.etc."ronoctua-test/programs.json".text = builtins.toJSON programs;
+      environment.etc."ronoctua-test/person-flake.nix".source = personFlake;
       # The test starts the trigger itself, once the derivations exist.
       systemd.services.ronoctua-parts-trigger.wantedBy = lib.mkForce [ ];
       virtualisation.writableStore = true;
@@ -214,6 +259,11 @@ pkgs.testers.runNixOSTest {
     server.wait_for_unit("nginx.service")
     machine.wait_for_unit("multi-user.target")
     instantiate()
+    # THE PERSON'S MACHINE FLAKE in the machine directory: plain files, as
+    # the machine's own flake is.
+    for name, source in (("flake.nix", "person-flake.nix"), ("parts-vm-parts.nix", "parts.nix"),
+                         ("programs.json", "programs.json")):
+        machine.succeed(f"install -m 0644 /etc/ronoctua-test/{source} /etc/nixos/{name}")
     for drv in ("${plain a1.drvPath}", "${plain b1.drvPath}", "${plain c1.drvPath}"):
         machine.succeed(f"nix-store --check-validity {drv}")
     machine.succeed("systemctl start ronoctua-parts-trigger.service")
@@ -248,6 +298,27 @@ pkgs.testers.runNixOSTest {
         # due time, never a unit left failed (a switch would count it).
         machine.wait_until_succeeds("systemctl is-active ronoctua-parts-retry.timer", timeout=120)
         machine.fail("systemctl is-failed ronoctua-part@b.service")
+
+    with subtest("a part of the person's is evaluated alone, and a broken one fails only itself"):
+        wait_phase("person-good", "here")
+        assert run_as_person("person-good") == "person-good 1"
+        for part in ("person-throws", "person-aborts", "person-refused"):
+            machine.wait_until_succeeds(
+                "jq -e '.attempts >= 1 and .\"last-failure\".why == \"eval-failed\"' "
+                f"/var/lib/ronoctua-parts/parts/{part}.json",
+                timeout=600,
+            )
+            assert record(part)["wanted"] is None, record(part)
+            machine.fail(f"systemctl is-failed ronoctua-part@{part}.service")
+        refused = record("person-refused")["last-failure"]["detail"]
+        assert refused == "refused-by-meta: `x` is unfree, and its declaration carries no consent", refused
+        assert "abort" in record("person-aborts")["last-failure"]["detail"], record("person-aborts")
+        # What it evaluated is kept: the planner, run again, does not ask
+        # the entry again while its declaration stays the same.
+        before = record("person-good")["current"]
+        machine.succeed("systemctl start ronoctua-parts.service")
+        assert record("person-good")["current"] == before
+        assert record("person-good")["declared"] == "${fingerprint "good"}"
 
     with subtest("the person tries a part again, and only the parts' units"):
         server.succeed("cp ${served}/later/${file "b" "1"} /srv/")

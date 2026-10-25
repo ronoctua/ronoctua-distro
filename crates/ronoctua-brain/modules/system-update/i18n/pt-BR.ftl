@@ -131,8 +131,6 @@ system-update-step-person-stage = entregar as suas declarações à máquina
 system-update-step-person-stage-does = ronoctua-software person stage: as suas declarações postas onde o aplicador estreito da máquina as pega, validadas e trocadas inteiras para a pasta da máquina — como dados, nunca como código. Um ensaio só confere que elas seriam aceitas.
 system-update-step-machine-migrate = dar à máquina o próprio flake
 system-update-step-machine-migrate-does = ronoctua-machine migrate: uma máquina que ainda carrega uma cópia da distro ganha o próprio flake, com a distro como input — montado ao lado da pasta velha e trocado só se montar; uma falha deixa a máquina exatamente como estava. Toda outra máquina pula este passo. Se falhar, a sequência para aqui.
-system-update-step-person-verify = experimentar o que você declarou
-system-update-step-person-verify-does = ronoctua-person verify: cada programa que você declarou, montado sozinho contra a distro recém-buscada, para que um que não monta mais seja retido com o motivo em vez de derrubar a reconstrução inteira — e cada versão mais nova dos apps da distro que você segue, que só é usada depois de montar aqui, e é tentada de novo em toda atualização até montar. O ensaio dele experimenta e não escreve nada.
 system-update-step-person-reconcile = trazer o que está declarado
 system-update-step-person-reconcile-does = ronoctua-software reconcile: o que o sistema não faz por você — os apps Android que as suas declarações listam, instalados da cópia da máquina — e a cópia que você instalou à mão de um programa agora declarado, retirada para que as duas não se sobreponham. Mexe só no que ele mesmo pôs.
 system-update-step-person-record = registrar o que esta máquina fez
@@ -147,7 +145,6 @@ system-update-needs-not-held = a máquina está retida numa revisão: a distro f
 
 system-update-kind-gather = junta o que você declarou
 system-update-kind-migrate = migra a pasta da máquina
-system-update-kind-verify = experimenta o que você declarou
 system-update-kind-reconcile-declared = traz o que está declarado
 system-update-kind-publish = publica o que esta máquina fez
 
@@ -166,11 +163,6 @@ system-update-records-conflicts = { $count ->
         [one] Um arquivo dos seus pertences mudou aqui e em outra máquina, e ficou como esta máquina o tem. Abra com { $keys }.
        *[other] { $count } arquivos dos seus pertences mudaram aqui e em outra máquina, e ficaram como esta máquina os tem. Abra com { $keys }.
     }
-system-update-records-held = { $id } está retido: { $why }. A reconstrução o deixa de fora até ele mudar.
-system-update-held-eval-failed = ele não avalia
-system-update-held-fetch-failed = o download dele não pôde ser buscado
-system-update-held-upstream-changed = o download dele está lá, e é outro arquivo
-system-update-held-build-failed = ele não montou
 system-update-records-hold = Esta máquina está retida em { $rev } desde { $since }: a atualização deixa a distro onde está.
 
 # UMA RODADA À MÃO COM A BATERIA BAIXA pergunta antes, com o não primeiro;

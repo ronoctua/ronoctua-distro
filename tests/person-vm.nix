@@ -1,5 +1,5 @@
-# The person's root half on a booted machine: the apply unit, the update's
-# verify, and the approval behind the sudo door.
+# The person's root half on a booted machine: the apply unit and the
+# approval behind the sudo door.
 #
 # WHAT ONLY THIS PROVES
 # ---------------------
@@ -15,25 +15,16 @@
 #      and a brain module never does (`no-key-pinned`); the key is pinned
 #      through the sudo door (`person-signer-pin`, the pin's own unit), and
 #      then the tree the person signed with it brings the module in;
-#   2. Nix: `ronoctua-person verify` over a machine flake with five entries —
-#      one good, one whose evaluation throws, one whose build fails, one
-#      whose pinned download cannot be fetched and one whose download is
-#      there with another hash — holds EXACTLY the four broken ones, each for
-#      its own reason, the good one never; and an entry mended is let go
-#      while the others keep their `since`;
-#   3. sudo and the hash: a brain module is approved through the door at the
+#   2. sudo and the hash: a brain module is approved through the door at the
 #      hash `nix/person-hash.nix` computes of the machine's copy, and a
 #      request at another hash is refused and spent — each said, with its
 #      reason, in the approval's verdict;
-#   4. root's lock: the person cannot even open it (so cannot hold it, and
+#   3. root's lock: the person cannot even open it (so cannot hold it, and
 #      stall root's paths), and while the update holds it (`hold`) the
 #      person's apply waits and then says `busy` — never swapping the tree
 #      under a rebuild.
 #
-# OFFLINE. The machine flake has no input (a builder of `/bin/sh`, Nix's own
-# `<nix/fetchurl.nix>`), the "upstream" is an nginx on this machine behind a
-# certificate made here and trusted here, and `ronoctua.invalid` resolves
-# nowhere.
+# OFFLINE: nothing here reaches a network.
 #
 # THE PERSON IS A PROCESS WITH NO TERMINAL, as the footer is (the
 # `security-vm` precedent): `systemd-run --uid` with stdin from nowhere.
@@ -56,51 +47,7 @@ let
   pq = "${testPq}/bin/ronoctua-test-pq";
   hasher = ../nix/person-hash.nix;
 
-  # THE "UPSTREAM": a certificate for `pins.test`, made at build time.
-  certs = pkgs.runCommand "person-vm-certs" { nativeBuildInputs = [ pkgs.openssl ]; } ''
-    mkdir -p $out
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-      -subj "/CN=pins.test" -addext "subjectAltName=DNS:pins.test" \
-      -keyout $out/key.pem -out $out/cert.pem
-  '';
-  # What the pin says the AppImage is (the empty file), and what upstream
-  # serves now (something else).
-  served = pkgs.writeTextDir "app.AppImage" "a release that is not the pinned one\n";
   emptyHash = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=";
-
-  # THE MACHINE FLAKE: no input, five entries, and their fingerprints as the
-  # machine flake gives them (one per entry, from the entry alone here).
-  machineFlake = pkgs.writeText "flake.nix" ''
-    {
-      outputs = { self }:
-        let
-          sh = args: builtins.derivation {
-            name = "entry";
-            system = "x86_64-linux";
-            builder = "/bin/sh";
-            inherit args;
-          };
-          broken = builtins.pathExists ./broken;
-        in {
-          personEntries = {
-            "nix:good" = sh [ "-c" "echo ok > $out" ];
-            "nix:eval-broken" = throw "an attribute that is gone";
-            "nix:build-broken" = sh [ "-c" (if broken then "exit 3" else "echo mended > $out") ];
-            "appimage:gone" = import <nix/fetchurl.nix> {
-              url = "https://ronoctua.invalid/gone.AppImage";
-              hash = "${emptyHash}";
-            };
-            "appimage:changed" = import <nix/fetchurl.nix> {
-              url = "https://pins.test/app.AppImage";
-              hash = "${emptyHash}";
-            };
-          };
-          personFingerprints = builtins.mapAttrs (
-            id: _: builtins.hashString "sha256" (id + (if broken then "1" else "2"))
-          ) self.personEntries;
-        };
-    }
-  '';
 
   # THE PERSON'S DECLARATIONS, as their software stages them: the two pins,
   # and one brain module.
@@ -162,17 +109,6 @@ pkgs.testers.runNixOSTest {
           "flakes"
         ];
 
-        networking.hosts."127.0.0.1" = [ "pins.test" ];
-        security.pki.certificateFiles = [ "${certs}/cert.pem" ];
-        services.nginx = {
-          enable = true;
-          virtualHosts."pins.test" = {
-            onlySSL = true;
-            sslCertificate = "${certs}/cert.pem";
-            sslCertificateKey = "${certs}/key.pem";
-            root = "${served}";
-          };
-        };
       };
     };
 
@@ -210,14 +146,9 @@ pkgs.testers.runNixOSTest {
         )
 
 
-    def held():
-        return {h["id"]: h for h in json.loads(machine.succeed(f"cat {machine_dir}/local/held.json"))["held"]}
-
-
     start_all()
     machine.wait_for_unit("multi-user.target")
-    machine.wait_for_unit("nginx.service")
-    machine.succeed(f"mkdir -p {machine_dir} && cp ${machineFlake} {machine_dir}/flake.nix && touch {machine_dir}/broken")
+    machine.succeed(f"mkdir -p {machine_dir}")
 
     with subtest("the person stages a tree and the apply unit swaps it in, through polkit"):
         machine.succeed(as_user(
@@ -267,34 +198,6 @@ pkgs.testers.runNixOSTest {
         assert lock == "root:600", lock
         machine.fail(as_user("flock --nonblock /run/ronoctua-person/machine.lock true"))
 
-    with subtest("verify holds exactly the broken entries, each for its reason"):
-        out = machine.succeed(f"{nix} {bin} verify --machine {machine_dir}")
-        print(out)
-        h = held()
-        assert set(h) == {"nix:eval-broken", "nix:build-broken", "appimage:gone", "appimage:changed"}, h
-        assert h["nix:eval-broken"]["reason"] == "eval-failed", h
-        assert h["nix:build-broken"]["reason"] == "build-failed", h
-        assert h["appimage:gone"]["reason"] == "fetch-failed", h
-        assert h["appimage:changed"]["reason"] == "upstream-changed", h
-        assert "ok nix:good" in out, out
-
-    with subtest("a flake that does not evaluate holds nothing and keeps held.json"):
-        before = machine.succeed(f"cat {machine_dir}/local/held.json")
-        machine.succeed(f"mv {machine_dir}/flake.nix {machine_dir}/flake.good")
-        machine.succeed(f"printf '{{ outputs = _: throw \"broken\"; }}' > {machine_dir}/flake.nix")
-        machine.fail(f"{nix} {bin} verify --machine {machine_dir}")
-        assert machine.succeed(f"cat {machine_dir}/local/held.json") == before
-        machine.succeed(f"mv {machine_dir}/flake.good {machine_dir}/flake.nix")
-
-    with subtest("a mended entry is let go, and the others keep their since"):
-        since = held()["appimage:gone"]["since"]
-        machine.succeed(f"rm {machine_dir}/broken")
-        machine.succeed(f"{nix} {bin} verify --machine {machine_dir}")
-        h = held()
-        assert "nix:build-broken" not in h, h
-        assert set(h) == {"nix:eval-broken", "appimage:gone", "appimage:changed"}, h
-        assert h["appimage:gone"]["since"] == since, h
-
     with subtest("a module is approved through the door at the hash root computes"):
         shown = machine.succeed(
             "${pkgs.nix}/bin/nix eval --raw --impure --extra-experimental-features nix-command "
@@ -336,9 +239,8 @@ pkgs.testers.runNixOSTest {
         machine.fail(door("person-module-approve"))
         machine.fail(door("person-module-approve not-a-person-module x"))
 
-    with subtest("while the update holds the lock, verify runs inside it and an apply says busy"):
-        out = machine.succeed(f"{nix} {bin} hold -- {bin} verify --machine {machine_dir} --rehearse")
-        assert "untried nix:good" in out and "still-held appimage:gone fetch-failed" in out, out
+    with subtest("while the update holds the lock, what it runs runs inside it and an apply says busy"):
+        machine.succeed(f"{nix} {bin} hold -- ${pkgs.coreutils}/bin/true")
         machine.succeed(
             f"systemd-run --unit=update-holds {bin} hold -- "
             # Both programs by store path: the transient unit's PATH has no

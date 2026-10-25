@@ -1090,6 +1090,9 @@ fn why_said(why: Why, detail: &str, texts: &ronoctua_i18n::Texts) -> String {
             key::DISTRO_PARTS_ABOUT_WHY_HAND_IN_REFUSED,
             &[("detail", last)],
         ),
+        Why::EvalFailed => {
+            texts.t_with(key::DISTRO_PARTS_ABOUT_WHY_EVAL_FAILED, &[("detail", last)])
+        }
     }
 }
 

@@ -40,7 +40,7 @@ let
     && builtins.stringLength name <= 64
     && builtins.match "[A-Za-z0-9_-][A-Za-z0-9._-]*" name != null;
 
-  # What `nix-flatpak` takes, and what the verification builds.
+  # What `nix-flatpak` takes.
   item = entry: {
     appId = entry."app-id";
     inherit (entry) origin;
@@ -67,9 +67,4 @@ in
       skip "source-off" "the remote `${entry.origin}` is not declared on this machine"
     else
       done { flatpaks = [ (item entry) ]; };
-
-  # Nothing to build: the verification gets the line nix-flatpak is given.
-  raw =
-    { entry, ... }:
-    pkgs.writeText "flatpak-${entry."app-id"}.json" (builtins.toJSON (item entry));
 }

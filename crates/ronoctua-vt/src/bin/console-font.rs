@@ -3,14 +3,21 @@
 //! system (`nix/modules/console.nix`):
 //!
 //! ```text
-//! ronoctua-console-font can-take
+//! ronoctua-console-font setup <systemd-vconsole-setup>
 //! ronoctua-console-font load --setfont <setfont> --font <psf>
 //! ```
 //!
-//! `can-take` is the setup's `ExecCondition`: it answers 1 — the setup is
-//! skipped, which is no failure — while the console is the dummy one, where
-//! every `setfont` is an `ERROR` in the journal; the console that binds after
-//! it starts the setup again (systemd's own `vtconsole` rule). `load` is its
+//! `setup` is the setup's main process: on a console that takes a font it
+//! becomes `systemd-vconsole-setup` (`exec`), and on the dummy one — where
+//! every `setfont` is an `ERROR` in the journal — it sets nothing up and
+//! succeeds; the console that binds after it starts the setup again
+//! (systemd's own `vtconsole` rule). NOT an `ExecCondition`: udev restarts
+//! the setup in bursts (a console and each terminal it allocates), and a
+//! restart that lands while the condition answers "skip" stops the unit
+//! first — and a control process that exits 1 in a stopping unit is a
+//! failure, not a skip (measured: one boot in many under load, in the
+//! journal). The main process can only exit 0 or be stopped by the
+//! `SIGTERM` the unit counts as success. `load` is its
 //! `ExecStartPost`: on the framebuffer console it loads the 15 × 32 on every
 //! allocated terminal in text mode, over the 8 × 16 the setup loaded. A
 //! terminal in graphics mode (the compositor's) refuses a font with
@@ -27,14 +34,14 @@ const KDGETMODE: rustix::ioctl::Opcode = rustix::ioctl::opcode::none(b'K', 0x3B)
 /// `KD_TEXT`, the mode a font is loaded in.
 const KD_TEXT: rustix::ffi::c_int = 0;
 
-const USAGE: &str = "usage: ronoctua-console-font can-take\n       \
+const USAGE: &str = "usage: ronoctua-console-font setup <systemd-vconsole-setup>\n       \
                      ronoctua-console-font load --setfont <setfont> --font <psf>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = Path::new("/");
     match args.first().map(String::as_str) {
-        Some("can-take") if args.len() == 1 => can_take(&console::bound(root)),
+        Some("setup") if args.len() == 2 => setup(&console::bound(root), Path::new(&args[1])),
         Some("load") => match options(&args[1..]) {
             Some((setfont, font)) => load(root, &console::bound(root), &setfont, &font),
             None => refuse(),
@@ -67,10 +74,10 @@ fn options(args: &[String]) -> Option<(PathBuf, PathBuf)> {
     Some((setfont?, font?))
 }
 
-/// 0 when a font can be loaded on the console bound now; 1, said, when not.
-fn can_take(bound: &Bound) -> ExitCode {
+/// Whether the console bound now takes a font — said, when it does not.
+fn takes(bound: &Bound) -> bool {
     if bound.takes_a_font() {
-        return ExitCode::SUCCESS;
+        return true;
     }
     match bound {
         Bound::Other(name) => println!(
@@ -81,7 +88,19 @@ fn can_take(bound: &Bound) -> ExitCode {
              starts the setup again"
         ),
     }
-    ExitCode::from(1)
+    false
+}
+
+/// `systemd-vconsole-setup` at `program`, in this process, on a console that
+/// takes a font; success, with nothing done, on any other.
+fn setup(bound: &Bound, program: &Path) -> ExitCode {
+    use std::os::unix::process::CommandExt as _;
+    if !takes(bound) {
+        return ExitCode::SUCCESS;
+    }
+    let e = Command::new(program).exec();
+    eprintln!("{}: {e}", program.display());
+    ExitCode::FAILURE
 }
 
 /// On the framebuffer console, `font` on every allocated terminal in text
@@ -174,14 +193,20 @@ mod tests {
     }
 
     /// FAILS IF: a font is loaded where the console takes none, or the setup
-    /// is not skipped on the dummy console — where its `setfont` would be an
-    /// error in the journal.
+    /// runs on the dummy console — where its `setfont` would be an error in
+    /// the journal — or fails there instead of succeeding with nothing done.
     #[test]
     fn only_a_console_that_takes_a_font_is_set_up() {
-        assert_eq!(can_take(&Bound::Framebuffer), ExitCode::SUCCESS);
-        assert_eq!(can_take(&Bound::VgaText), ExitCode::SUCCESS);
-        assert_eq!(can_take(&Bound::Dummy), ExitCode::from(1));
-        assert_eq!(can_take(&Bound::Other("x".into())), ExitCode::from(1));
+        assert!(takes(&Bound::Framebuffer));
+        assert!(takes(&Bound::VgaText));
+        assert!(!takes(&Bound::Dummy));
+        assert!(!takes(&Bound::Other("x".into())));
+        // THE DUMMY CONSOLE: success, and the setup never run.
+        let nowhere = Path::new("/nonexistent-setup");
+        assert_eq!(setup(&Bound::Dummy, nowhere), ExitCode::SUCCESS);
+        assert_eq!(setup(&Bound::Other("x".into()), nowhere), ExitCode::SUCCESS);
+        // A console that takes one runs it — here, one that is not there.
+        assert_eq!(setup(&Bound::Framebuffer, nowhere), ExitCode::FAILURE);
         // Nothing to load, and nothing run, off the framebuffer.
         let nowhere = Path::new("/nonexistent-setfont");
         for b in [Bound::VgaText, Bound::Dummy, Bound::Other("x".into())] {

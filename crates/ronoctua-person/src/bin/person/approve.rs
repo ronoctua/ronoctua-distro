@@ -20,7 +20,7 @@ use rustix::io::Errno;
 
 use crate::apply;
 use crate::disk::{self, Whose};
-use crate::verify::{self, Nix};
+use crate::nix::Nix;
 
 /// An approval not recorded: why, what root computed (when it did), and the
 /// detail for the journal.
@@ -230,7 +230,7 @@ pub fn record(
     let computed = hash_of(nix, hasher, &module).map_err(|e| Failed::new(Denied::Unhashable, e))?;
     // A broken approvals file fails CLOSED: nothing in it counts, and a
     // module is imported again only once approved again.
-    let before: Approved = match verify::read_local(&machine_fd, names::APPROVED) {
+    let before: Approved = match disk::read_local(&machine_fd, names::APPROVED) {
         Ok(None) => Approved::default(),
         Ok(Some(bytes)) => ronoctua_person::parse(&bytes).unwrap_or_else(|r| {
             eprintln!("<4>approved.json was refused ({r}); it starts empty");
@@ -251,7 +251,7 @@ pub fn record(
             request.hash
         ),
     })?;
-    verify::write_local(
+    disk::write_local(
         &machine_fd,
         names::APPROVED,
         ronoctua_person::to_json(&after).as_bytes(),

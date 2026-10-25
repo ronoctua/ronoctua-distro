@@ -23,9 +23,9 @@
 //! The machine's registry (`nix/modules/distro-apps.nix`) builds a followed
 //! pin only while the option is on AND the pin is NEWER than the distro's
 //! (`builtins.compareVersions`): when the owner moves the distro's pins past
-//! it, the distro's wins again. Root's verification builds each followed
-//! AppImage before the rebuild and holds the one that does not build
-//! ([`ENTRY`]), so the distro's pin is built in its place.
+//! it, the distro's wins again. A followed pin is the pin the AppImage's
+//! PART is built at (`ronoctua_parts`): one that does not arrive keeps the
+//! part's previous generation — the last that arrived, or the distro's.
 //!
 //! # One rule, twice
 //!
@@ -58,11 +58,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::declared::GithubReleases;
 use crate::{Document, Refusal, Stamp, Why, check};
-
-/// The prefix the update's verification names a followed AppImage by
-/// (`distro-appimage:<id>`, in `personEntries` and `local/held.json`): its
-/// own word, so it never meets a person's `appimage:<key>`.
-pub const ENTRY: &str = "distro-appimage";
 
 /// The hosts following asks: the API that answers which release is the
 /// newest, and the one the download is fetched from. Turning the option on
@@ -110,29 +105,6 @@ impl DistroPins {
     pub fn pin(&self, id: &str) -> Option<&FollowedPin> {
         self.pins.iter().find(|p| p.id == id)
     }
-
-    /// The download of the verification's entry `entry` ([`entry_id`]), as
-    /// `crate::verify::pin_of` gives a declared one's: address and hash.
-    #[must_use]
-    pub fn download_of(&self, entry: &str) -> Option<(&str, &str)> {
-        self.pin(of_entry(entry)?)
-            .map(|p| (p.url.as_str(), p.hash.as_str()))
-    }
-}
-
-/// The verification's id of the followed AppImage `id`.
-#[must_use]
-pub fn entry_id(id: &str) -> String {
-    format!("{ENTRY}:{id}")
-}
-
-/// The table id a verification's id names, when it is one of these.
-#[must_use]
-pub fn of_entry(entry: &str) -> Option<&str> {
-    entry
-        .strip_prefix(ENTRY)?
-        .strip_prefix(':')
-        .filter(|id| check::slug(id))
 }
 
 /// Why a followed pin is refused: the rule, in the order they are asked.
@@ -423,16 +395,12 @@ mod tests {
     /// FAILS IF: a tag's version is not the distro tool's, or the
     /// verification's id does not name its table entry both ways.
     #[test]
-    fn a_tag_is_its_version_and_an_entry_its_id() {
+    fn a_tag_is_its_version() {
         assert_eq!(version_of_tag("v0.9.0"), "0.9.0");
         assert_eq!(version_of_tag("V2"), "2");
         assert_eq!(version_of_tag("vintage-1"), "vintage-1");
         assert_eq!(version_of_tag("1.0"), "1.0");
         assert_eq!(version_of_tag("v"), "v");
-        assert_eq!(entry_id("cadcraft"), "distro-appimage:cadcraft");
-        assert_eq!(of_entry("distro-appimage:cadcraft"), Some("cadcraft"));
-        assert_eq!(of_entry("appimage:cadcraft"), None);
-        assert_eq!(of_entry("distro-appimage:Bad Id"), None);
         assert!(glob("a-*-x.AppImage", "a-1.0-x.AppImage"));
         assert!(!glob("a-*-x.AppImage", "a-1.0-y.AppImage"));
     }

@@ -2,7 +2,6 @@
 //!
 //! ```text
 //! ronoctua-person apply --staged DIR --machine DIR --owner USER [--verdict FILE] [--lock FILE]
-//! ronoctua-person verify [--machine DIR] [--rehearse] [--lock FILE]
 //! ronoctua-person approve --request DIR --pin FILE --machine DIR --owner USER [--verdict FILE] [--lock FILE]
 //! ronoctua-person pin --pin FILE [--owner USER] [--machine DIR] [--lock FILE]
 //! ronoctua-person hold [--lock FILE] [--patient] -- PROGRAM [ARG…]
@@ -15,9 +14,6 @@
 //!   the staged tree, validated and held to the person's signature under
 //!   the key the machine pinned, swapped into the machine directory's
 //!   `person/` whole — or refused, and the machine's data stays as it was.
-//! - `verify` (the update, as root, before the rebuild): every declared
-//!   entry evaluated and built in a `nix` of its own (`RONOCTUA_NIX`); what
-//!   fails goes to `local/held.json`, and the update goes on.
 //! - `approve` (the unit the sudo door's `person-module-approve` starts):
 //!   the staged request and root's pin of what the door was given consumed,
 //!   held to each other, and approved only at the hash
@@ -27,8 +23,8 @@
 //!   own, or the `--owner`'s, consumed as it is read), pinned in
 //!   `local/signer.json`.
 //! - `hold` (the update's root half): root's lock held while PROGRAM runs,
-//!   and handed down to it as its standard input — so the `verify` and the
-//!   rebuild it runs hold it too, and an apply waits until the switch is
+//!   and handed down to it as its standard input — so the rebuild it runs
+//!   holds it too, and an apply waits until the switch is
 //!   done. With `--patient` it waits for the lock until its holder lets go
 //!   (said to the journal), instead of refusing as `busy`.
 //! - `request-approval` (the person): stages that request.
@@ -41,7 +37,7 @@
 //!   left alone when it says the same; `--rehearse` says what it would do
 //!   (`would-record`) and writes nothing.
 //!
-//! `apply`, `verify`, `approve` and `pin` take root's lock (`--lock`, by default
+//! `apply`, `approve` and `pin` take root's lock (`--lock`, by default
 //! `ronoctua_person::root::LOCK`) before anything else, waiting at most
 //! `LOCK_WAIT_S`, and refuse as `busy` after that. `apply` and `approve`
 //! write their verdict (`--verdict`) on every way out, while the lock is
@@ -58,11 +54,11 @@
 mod apply;
 mod approve;
 mod disk;
+mod nix;
 mod pin;
 mod record;
 #[cfg(test)]
 mod testing;
-mod verify;
 mod walk;
 
 use std::path::{Path, PathBuf};
@@ -101,16 +97,15 @@ struct Usage;
 
 fn usage() -> &'static str {
     "usage: ronoctua-person apply --staged DIR --machine DIR --owner USER [--verdict FILE] [--lock FILE]\n\
-     \x20      ronoctua-person verify [--machine DIR] [--rehearse] [--lock FILE]\n\
      \x20      ronoctua-person approve --request DIR --pin FILE --machine DIR --owner USER [--verdict FILE] [--lock FILE]\n\
      \x20      ronoctua-person pin --pin FILE [--owner USER] [--machine DIR] [--lock FILE]\n\
      \x20      ronoctua-person hold [--lock FILE] [--patient] -- PROGRAM [ARG...]\n\
      \x20      ronoctua-person request-approval ID HASH [--into DIR]\n\
      \x20      ronoctua-person read KIND FILE\n\
      \x20      ronoctua-person record [--state DIR] [--into DIR] [--host NAME] [--rehearse]\n\
-     KIND: declared declined held approved options person-applied distro-apps\n\
+     KIND: declared declined approved options person-applied distro-apps\n\
      \x20     declared-android state verdict request approve-verdict signer choice\n\
-     \x20     distro-pins verified"
+     \x20     distro-pins"
 }
 
 /// The value of `--name`, the positional words, and whether `--rehearse`
@@ -320,33 +315,6 @@ fn run(args: &[String]) -> Result<ExitCode, Usage> {
                 Err(r) => refused(r.why.id(), &format!("the staged tree was refused: {r}")),
             }
         }
-        "verify" => {
-            let l = line(rest, &["--machine", "--rehearse", "--lock"])?;
-            if !l.words.is_empty() {
-                return Err(Usage);
-            }
-            let machine = l.machine()?;
-            let nix = match program(NIX) {
-                Ok(p) => verify::Nix {
-                    program: PathBuf::from(p),
-                },
-                Err(e) => return Ok(refused("no-nix", &e)),
-            };
-            let _lock = match take_lock(l.lock()) {
-                Ok(lock) => lock,
-                Err(e) => return Ok(refused(lock_refused(&e, l.lock()).why.id(), &e.to_string())),
-            };
-            match verify::verify(&machine, &nix, l.rehearse, &now()) {
-                Ok(round) => {
-                    for said in verify::lines(&round) {
-                        println!("{said}");
-                    }
-                    println!("done {}", round.held.held.len());
-                    ExitCode::SUCCESS
-                }
-                Err(e) => refused("baseline", &e),
-            }
-        }
         "approve" => {
             let l = line(
                 rest,
@@ -403,7 +371,7 @@ fn run(args: &[String]) -> Result<ExitCode, Usage> {
                 (Ok(request), _, Ok((nix, hasher))) => approve::record(
                     request,
                     &machine,
-                    &verify::Nix {
+                    &nix::Nix {
                         program: PathBuf::from(nix),
                     },
                     &hasher,
@@ -635,7 +603,6 @@ fn read(kind: &str, file: &str) -> Option<ExitCode> {
     let reader: fn(&[u8]) -> Result<String, ronoctua_person::Refusal> = match kind {
         "declared" => one::<declared::Declared>,
         "declined" => one::<declined::Declined>,
-        "held" => one::<local::Held>,
         "approved" => one::<local::Approved>,
         "options" => one::<options::Options>,
         "person-applied" => one::<reports::PersonApplied>,
@@ -648,7 +615,6 @@ fn read(kind: &str, file: &str) -> Option<ExitCode> {
         "signer" => one::<local::Signer>,
         "choice" => one::<choice::Choice>,
         "distro-pins" => one::<distro_pins::DistroPins>,
-        "verified" => one::<local::Verified>,
         _ => return None,
     };
     let bytes = match std::fs::read(file) {

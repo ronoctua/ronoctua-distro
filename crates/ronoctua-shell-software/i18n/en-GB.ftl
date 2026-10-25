@@ -356,6 +356,7 @@ software-declared-heading-fixes = What can be done
 software-declared-row-program = The program
 software-declared-program-value = opens its page
 software-declared-note-waiting = The next update installs it here: nothing has to be done.
+software-declared-note-arriving = It arrives on its own, after the system, as a part: the parts' page says how it stands.
 software-declared-row-also-here = Also on this computer
 software-declared-note-source-off = This computer has no support for its source: a reduced profile has no Android and no AppImages.
 software-declared-note-update-me = Update this computer: a newer distro wrote this declaration.

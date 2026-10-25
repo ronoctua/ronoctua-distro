@@ -255,6 +255,64 @@ pub fn uid_of(owner: &str, passwd: &str) -> Option<u32> {
     })
 }
 
+/// The most a file of `local/` may weigh.
+const LOCAL_MOST_BYTES: u64 = 1 << 20;
+
+/// The `local/` file `name` of the machine directory, if it is there.
+pub fn read_local(machine: &OwnedFd, name: &str) -> Result<Option<Vec<u8>>, String> {
+    let me = Whose {
+        owner: rustix::process::geteuid().as_raw(),
+    };
+    let (folder, file) = name.split_once('/').unwrap_or(("", name));
+    let local = match rustix::fs::openat(
+        machine,
+        folder,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(Errno::NOENT) => return Ok(None),
+        Err(e) => return Err(format!("{folder}: {e}")),
+    };
+    let c_file = c_name(file).map_err(|r| r.to_string())?;
+    let was = match rustix::fs::statat(&local, c_file.as_c_str(), AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(st) => st,
+        Err(Errno::NOENT) => return Ok(None),
+        Err(e) => return Err(format!("{name}: {e}")),
+    };
+    read_at(&local, &c_file, &was, me, LOCAL_MOST_BYTES, name)
+        .map(Some)
+        .map_err(|r| r.to_string())
+}
+
+/// Removes the `local/` file `name` of the machine directory — the entry
+/// itself, a link never followed — when it is there.
+pub fn remove_local(machine: &OwnedFd, name: &str) -> Result<(), String> {
+    let (folder, file) = name.split_once('/').unwrap_or(("", name));
+    let local = match rustix::fs::openat(
+        machine,
+        folder,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(Errno::NOENT) => return Ok(()),
+        Err(e) => return Err(format!("{folder}: {e}")),
+    };
+    let c_file = c_name(file).map_err(|r| r.to_string())?;
+    match rustix::fs::unlinkat(&local, c_file.as_c_str(), AtFlags::empty()) {
+        Ok(()) | Err(Errno::NOENT) => Ok(()),
+        Err(e) => Err(format!("{name}: {e}")),
+    }
+}
+
+/// Writes the `local/` file `name` of the machine directory, whole.
+pub fn write_local(machine: &OwnedFd, name: &str, bytes: &[u8]) -> Result<(), String> {
+    let (folder, file) = name.split_once('/').unwrap_or(("", name));
+    let local = dir_in(machine, folder, 0o755).map_err(|r| r.to_string())?;
+    write_whole(&local, file, bytes, 0o644).map_err(|r| r.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -37,10 +37,39 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
         println!("refused unwanted");
         return Ok(exit::UNWANTED);
     };
-    let target = Target {
-        drv: wanted.drv.clone(),
-        out: wanted.out.clone(),
-        interface: wanted.interface,
+    let nix = program("RONOCTUA_NIX");
+    // A PART OF THE PERSON'S: its target is what this realizer evaluated of
+    // the declaration the plan wants — kept in its record while that
+    // declaration stays the same, evaluated now, alone, otherwise.
+    let target = match (wanted.target(), &wanted.entry) {
+        (Some(target), _) => target,
+        (None, Some(entry)) => {
+            let kept = disk::read_record(id)
+                .ok()
+                .filter(|r| r.declared.as_deref() == Some(entry.fingerprint.as_str()))
+                .and_then(|r| r.wanted);
+            match kept {
+                Some(target) => target,
+                None => match crate::person::evaluate(&nix, entry, wanted.interface) {
+                    Ok(target) => {
+                        crate::plan::root_one(id, &target.drv);
+                        target
+                    }
+                    Err(said) => return Ok(not_evaluated(id, &entry.fingerprint, &said)),
+                },
+            }
+        }
+        (None, None) => {
+            println!("refused unwanted");
+            return Ok(exit::UNWANTED);
+        }
+    };
+    // What the record says the plan wants of this part.
+    let planned = |record: Record| match &wanted.entry {
+        Some(entry) => record
+            .planned_entry(&entry.fingerprint)
+            .resolved(target.clone()),
+        None => record.planned(Some(target.clone())),
     };
 
     // THE RECORD AS THE TRY BEGINS: planned (a boot or a switch may have
@@ -50,8 +79,7 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
             println!("refused busy");
             return Ok(exit::BUSY);
         };
-        let record = disk::read_record(id).unwrap_or_else(|_| Record::new(id));
-        let record = record.planned(Some(target.clone()));
+        let record = planned(disk::read_record(id).unwrap_or_else(|_| Record::new(id)));
         if record.is_current(&target) {
             let _ = disk::write_record(&record);
             println!("here {id}");
@@ -77,7 +105,6 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
         record
     };
 
-    let nix = program("RONOCTUA_NIX");
     let mut result = attempt(id, &target, &nix);
     // WHAT THE BUILD COULD NOT FETCH, asked of Nix's plan — and of the
     // person's mirrors, when they named some: what came is built again at
@@ -146,6 +173,35 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
             }
         }
     }
+}
+
+/// The record of a part of the person's whose declaration did not evaluate
+/// — `said`, Nix's words or its build's refusal —, a counted try: tried
+/// again ever later, and by the person's "try now". The exit code to end
+/// with.
+fn not_evaluated(id: &str, fingerprint: &str, said: &str) -> u8 {
+    let Ok(_lock) = Lock::take(LOCK_WAIT) else {
+        println!("refused busy");
+        return exit::BUSY;
+    };
+    let record = disk::read_record(id)
+        .unwrap_or_else(|_| Record::new(id))
+        .planned_entry(fingerprint)
+        .failed(Why::EvalFailed, said, disk::now(), true);
+    if let Err(e) = disk::write_record(&record) {
+        say(3, &format!("{id}: {e}"));
+    }
+    say(
+        3,
+        &format!(
+            "{id}: its declaration did not evaluate: {said} ({} tries)",
+            record.attempts
+        ),
+    );
+    drop(_lock);
+    crate::retry::arm();
+    println!("failed {}", Why::EvalFailed.id());
+    exit::FAILED
 }
 
 /// One build of the part and, when it gives the plan's output, its profile

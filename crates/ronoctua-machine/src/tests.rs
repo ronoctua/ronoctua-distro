@@ -1074,7 +1074,11 @@ fn old_layout(w: &World) {
     )
     .unwrap();
     std::fs::create_dir_all(dir.join("local")).unwrap();
-    std::fs::write(dir.join("local/held.json"), "{\"format\":1,\"held\":[]}\n").unwrap();
+    std::fs::write(
+        dir.join("local/approved.json"),
+        "{\"format\":1,\"modules\":{}}\n",
+    )
+    .unwrap();
     std::fs::create_dir_all(w.s.path("template")).unwrap();
     std::fs::write(
         w.s.path("template/flake.nix"),
@@ -1141,8 +1145,8 @@ fn a_migration_keeps_the_machine() {
         person_inode.ino()
     );
     assert_eq!(
-        std::fs::read(dir.join("local/held.json")).unwrap(),
-        b"{\"format\":1,\"held\":[]}\n"
+        std::fs::read(dir.join("local/approved.json")).unwrap(),
+        b"{\"format\":1,\"modules\":{}}\n"
     );
     assert!(
         w.read("calls").contains(".next"),

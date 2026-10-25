@@ -120,7 +120,7 @@ pkgs.testers.runNixOSTest {
         "printf 'secret: ENC[...]\\n' > /etc/nixos/secrets/secrets.yaml",
         "chmod 0600 /etc/nixos/secrets/secrets.yaml",
         "printf '{\"format\": 1, \"apps\": []}\\n' > /etc/nixos/person/software/declared.json",
-        "printf '{\"format\": 1, \"held\": []}\\n' > /etc/nixos/local/held.json",
+        "printf '{\"format\": 1, \"modules\": {}}\\n' > /etc/nixos/local/approved.json",
     )
     before = files("/etc/nixos")
     host = machine.succeed("sha256sum < /etc/nixos/host.nix")

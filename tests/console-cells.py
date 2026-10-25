@@ -141,9 +141,9 @@ def console_complaints(m):
     giving up — the sentences `systemd-vconsole-setup` says then — and the
     setup's unit failed. Empty is the answer.
 
-    NOT systemd's line that the setup was skipped on its condition: that is
-    the dummy console passed over, by design, and the setup runs again when
-    the console binds (`nix/modules/console.nix`)."""
+    On the dummy console the setup succeeds with nothing done, by design,
+    and runs again when the console binds (`nix/modules/console.nix`): a
+    restart that lands in the middle is no failure either."""
     said = "|".join(
         [
             "setfont",

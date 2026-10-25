@@ -56,6 +56,7 @@ pub mod found;
 pub mod journal;
 pub mod lock;
 pub mod order;
+pub mod parts;
 pub mod pins;
 pub mod prefs;
 pub mod progress;
@@ -328,6 +329,9 @@ pub struct System {
     /// changed: their own links under `/etc` never move (`/etc/static`
     /// does).
     pub current: PathBuf,
+    /// `/var/lib/ronoctua-parts/parts` — each part's record, a declared
+    /// program's included ([`crate::parts`]).
+    pub parts: PathBuf,
 }
 
 impl System {
@@ -347,6 +351,7 @@ impl System {
             reports: at(REPORTS),
             machine: at(ronoctua_machine::STATE_DIR),
             current: at(CURRENT_SYSTEM),
+            parts: at(ronoctua_parts::names::RECORDS),
         }
     }
 

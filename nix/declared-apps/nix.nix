@@ -8,8 +8,6 @@
 #   { ok = true; packages; flatpaks; desktopEntries; apks; }
 #   { ok = false; reason; detail; }     reason ∈ the report's closed set
 #
-# plus `raw`, the same thing with no protection at all, for the update's
-# isolated verification (`personEntries`), which has to SEE an entry fail.
 #
 # # Why a bad entry cannot take the system down
 #
@@ -22,10 +20,10 @@
 #
 # What it cannot catch is an evaluation ERROR deep inside a dependency
 # (`attribute missing` is not a `throw`, and `tryEval` lets it through), nor an
-# `abort`. That is why the update verifies every entry in an evaluation of its
-# own first, and holds back the one that breaks (`local/held.json`) before the
-# system ever sees it — and why the consumer reads nothing of a held entry,
-# its name included.
+# `abort`. That is why a person's package is a PART (`nix/modules/person.nix`):
+# the system never evaluates it, and the part's realizer evaluates this
+# builder for that one entry, in a process of its own — an entry that aborts
+# fails its own part, and nothing else.
 #
 # # What a consent covers
 #
@@ -198,23 +196,4 @@ in
             "broken, insecure or not for this platform"
         )
       );
-
-  # THE PACKAGE `build` WOULD APPLY, unprotected: the machine's own, or the
-  # one from `wide` exactly where `build` takes that one. Anything else that
-  # is wrong stays wrong here, so the verification sees it fail.
-  raw =
-    { entry, ... }:
-    let
-      pkg = lib.attrByPath (lib.splitString "." entry.attr) (throw "nixpkgs has no `${entry.attr}`") pkgs;
-      covered = widened entry.attr;
-    in
-    if
-      entry.unfree == true
-      && !(builtins.tryEval pkg.drvPath).success
-      && ownRefusal pkg == null
-      && covered != null
-    then
-      covered
-    else
-      pkg;
 }

@@ -17,11 +17,12 @@
 //!   reconcile (the update's, or the session's start) puts it in.
 //! * **The copy a declared program replaces.** A program installed by hand
 //!   and then declared is on this machine twice once its declared copy is
-//!   applied: a Nix package in the profile AND in `home.packages`, an
-//!   AppImage in `~/Applications` AND wrapped, a web app's entry in
+//!   applied: a Nix package in the profile AND in its part, an AppImage in
+//!   `~/Applications` AND wrapped in its part, a web app's entry in
 //!   `~/.local/share/applications` shadowing the system's one of the same
 //!   name. Once `person-applied.json` says the declared copy IS in the
-//!   system, the hand-made one goes ([`Shadow`]).
+//!   system — and, for a part of the person's, its part's record says it
+//!   arrived —, the hand-made one goes ([`Shadow`]).
 //!
 //! # The ledger, and why nothing else is touched
 //!
@@ -381,6 +382,25 @@ fn inside_android(ctx: &Context) -> Option<BTreeMap<String, u64>> {
     )
 }
 
+/// The declared entries the system HAS: applied — and, for a program that
+/// is a part of the person's, one whose part arrived. A hand-made copy goes
+/// only once the declared one is really there (a part may still be on its
+/// way, or have failed).
+fn in_the_system(ctx: &Context) -> Vec<String> {
+    let Some(report) = crate::declaration::person_applied(&ctx.roots) else {
+        return Vec::new();
+    };
+    report
+        .applied
+        .iter()
+        .filter(|id| {
+            crate::parts::of_entry(Some(&report), id)
+                .is_none_or(|part| crate::parts::here(&ctx.roots, part))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Reconcile this machine with the declaration: one source, or all.
 ///
 /// Changes are counted in the outcome's amount. In a rehearsal every program
@@ -394,9 +414,7 @@ pub fn run(ctx: &Context, only: Option<Source>, report: &mut dyn Report) -> Done
     let declared = crate::declaration::declared_android(&ctx.roots)
         .map(|d| d.apps)
         .unwrap_or_default();
-    let applied = crate::declaration::person_applied(&ctx.roots)
-        .map(|r| r.applied)
-        .unwrap_or_default();
+    let applied = in_the_system(ctx);
     let mut ledger = ledger(&ctx.roots);
     let dir = ctx.roots.ours_state();
     let mut changed: u64 = 0;
