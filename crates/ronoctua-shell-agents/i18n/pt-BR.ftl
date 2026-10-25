@@ -126,4 +126,5 @@ agents-refused-offline = A rede não respondeu.
 agents-refused-unknown = Essa conta não existe mais.
 agents-refused-invalid = Isso não é um nome, uma pasta ou uma conta que dê para usar.
 agents-refused-not-installed = O agente não está instalado nesta máquina; ele vem com os agentes do perfil de desenvolvimento.
+agents-refused-arriving = O agente está a caminho: ele chega depois da instalação, por conta própria, e a página das partes diz como ele está.
 agents-refused-failed = Não deu para fazer; o log do sistema diz por quê.

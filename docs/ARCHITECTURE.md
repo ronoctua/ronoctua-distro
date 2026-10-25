@@ -10530,9 +10530,10 @@ pode voltar para corrigir —, e o leitor do ffmpeg acredita e chama o primeiro 
 por isso o cabeçalho é reescrito na fronteira (`decoders::endless`), mantendo o formato do
 decodificador (o do sidplayfp é MONO). E o libsndfile não abre FIFO para escrever WAV, então o
 `fluidsynth` sai em RAW no stdout. O AdPlug não existe no nixpkgs e é empacotado aqui
-(`nix/adplug.nix`). O `uade`, a música do Amiga, é o único decodificador não livre, e entra PELO
-NOME: um nixpkgs próprio cujo predicado admite só ele, então a tabela (`nix/player-tools.nix`) nunca
-pede `allowUnfree` e nenhum outro pacote não livre chega por ela. Os rips de console (PSF, PSF2,
+(`nix/adplug.nix`). O `uade`, a música do Amiga, é o único decodificador não livre, e por isso é uma
+PARTE (`nix/modules/player.nix`): vem da porta única dos não livres (`nix/parts-pkgs.nix`), fica fora
+do fecho do sistema, e a unidade do player recebe o caminho estável dele, que o motor pergunta se
+chegou a cada música (`ronoctua_parts::here`). Os rips de console (PSF, PSF2,
 USF, GSF, 2SF, NCSF, SSF) vão pelo `zxtune`, e o Super Audio CD pelo `sacd`.
 
 **O que o libgme lê precisa do demuxer nomeado.** O ffmpeg reconhece VGM, NSF, SPC e os irmãos com
@@ -12381,6 +12382,30 @@ sistema não depende do minter, e o `ronoctua_ytdlp::pot_flags` pergunta se ele 
 pedido — sem ele, o download segue sem PO token, como numa máquina com `none`. O
 `part-paths-are-read-as-arriving` recusa uma unidade que volte a nomear o caminho do store de uma
 parte, e o `parts-stay-out-of-the-base` lê o fecho dos dois sistemas construídos.
+
+**Nada não livre na base.** Todo programa não livre da distro é uma parte: o Chrome, o VS Code, o
+Claude Code, o Android Studio e o SDK, o unrar e o uade. Eles vêm de uma porta só
+(`nix/parts-pkgs.nix`): uma instância do nixpkgs que admite exatamente esses nomes, e outra para o
+SDK, que ignora predicado. Ela substitui as três instâncias separadas que havia. O sistema não tem
+`allowUnfree`, e o predicado dele só tem o que a pessoa consentiu. O `the-base-admits-no-unfree`
+avalia os três sistemas de referência inteiros assim, e um não livre que voltasse por qualquer
+caminho derrubaria a avaliação com o nome dele. Uma entrada do registro vira parte com
+`part = true` (`heavy` para a que demora), e o registro a declara em vez de pô-la no
+`systemPackages`. Quem roda o programa nomeia o caminho estável, nunca o do store:
+- a unidade do rodapé recebe o do Claude Code e o do VS Code;
+- a sessão recebe o do SDK;
+- a central de programas e o `TryExec` dos web apps usam o Chrome pela VISTA
+  (`nix/parts-names.nix`, `ronoctua_parts::view::bin`), que não depende da interface e só existe
+  quando a parte chegou, então os web apps somem enquanto o Chrome não está aqui.
+
+O unrar saiu do embrulho do shell, que por ele estava no ISO publicado; o crate de arquivos não pode
+depender do das partes (há um ciclo), então quem o chama entrega o caminho
+(`Tools::with_unrar(ronoctua_parts::file_of(…))`).
+
+**Uma saída que já está no store é semeada, nunca construída.** O realizador confere a validade da
+saída do plano antes de construir. A que o ISO ou uma máquina de teste carrega chega sem derivação e
+sem rede, e uma rede tarifada não a segura. É assim que os testes de VM do quiosque, do VS Code e da
+central recebem o Chrome e o VS Code, e é o que o M6 usa para semear o ISO.
 
 **A atualização planeja, e não espera.** Depois do `system-rebuild`, o passo `parts-plan`
 (`realize-parts`, do root, `carry-on`) roda `ronoctua-parts plan`: traz o plano novo para os
@@ -15851,14 +15876,15 @@ de avaliar), e o Android é um apk baixado pelo pin para o store e listado em
 enquanto a sessão roda: o Nix não instala nada dentro de um contêiner que só existe na sessão. Os
 programas estão na máquina porque a pessoa os declarou, e não porque a distro os traz.
 
-**O consentimento do não livre é perguntado no consumidor**, e não só ao predicado: uma máquina com
-o SDK do Android liga `allowUnfree` para tudo, e um pacote que a pessoa nunca aceitou não pode
-entrar por essa porta. Os nomes que ela aceitou (por `lib.getName`, o que o predicado compara)
+**O consentimento do não livre é perguntado no consumidor**, e não só ao predicado: um pacote que a
+pessoa nunca aceitou não pode entrar por porta nenhuma (o sistema não tem `allowUnfree` desde que os
+não livres da distro viraram partes; o SDK do Android, que o ligava, tem uma instância própria na
+porta das partes). Os nomes que ela aceitou (por `lib.getName`, o que o predicado compara)
 entram no predicado único (`nix/modules/nixpkgs-config.nix`); ler um nome não roda o check de
 `meta`, então pedir o nome não volta pelo predicado que ele alimenta. Mas ler o nome LÊ o pacote, e
 por isso uma entrada segurada nunca é lida, nem para o nome: a que a verificação segurou pode ser
 justamente a que aborta ao ser lida, e pelo predicado levaria a máquina inteira junto. O predicado
-só é perguntado onde `allowUnfree` está desligado (o perfil `minimal`), e é lá que o check o prova.
+é perguntado em toda máquina, e o `person-bad-entry-does-not-break-eval` o prova no `minimal`.
 
 **O consentimento cobre o que o programa precisa.** `steam` é não livre e precisa do
 `steam-unwrapped`, não livre com outro nome; o predicado só conhece o nome que a pessoa aceitou, e o
@@ -17626,10 +17652,11 @@ continua o gesto da pessoa, com a senha dela: o que ela traz passa pela mesma as
 **A build da Microsoft, e não o VSCodium**, por decisão do dono: a pessoa pediu o VS Code pelo nome.
 Os termos do Marketplace só admitem os produtos da Microsoft, e várias das extensões com que se
 trabalha (desenvolvimento remoto, Pylance, Copilot) são da Microsoft e se recusam a rodar em outra
-build. É `pkgs.vscode`, não livre — o nome está no `allowUnfreePredicate` com o motivo, junto com o
-`code` do ambiente FHS (abaixo), e o `release-cache-holds-only-free-builds` conta os dois entre os
-que nunca vão a um cache público. Entra pelo registro no grupo `vscode` (`ronoctua.editor.vscode`,
-`mkDefault full`), com o comando `ronoctua-vscode` da pessoa no `extraPackages` da entrada. É
+build. É `vscode`, não livre, e por isso uma PARTE: vem da porta única dos não livres
+(`nix/parts-pkgs.nix`), com o `code` do ambiente FHS (abaixo), e fica fora do fecho do sistema — o
+rodapé e a fila recebem o caminho estável, e `ronoctua_vscode::code` só responde quando ele chegou.
+Entra pelo registro no grupo `vscode` (`ronoctua.editor.vscode`, `mkDefault full`, `part = true`),
+com o comando `ronoctua-vscode` da pessoa no `extraPackages` da entrada, dentro da parte. É
 Wayland nativo sem nada nosso: a sessão exporta `NIXOS_OZONE_WL`, que o embrulho do nixpkgs traduz
 em `--ozone-platform-hint=auto`, e o `auto` do Electron decide pelo `XDG_SESSION_TYPE=wayland` que a
 sessão dá ao gerente — como o do Chrome; sem ele, medido no `vscode-vm`, o Electron escolhe X11 e,
@@ -18842,8 +18869,8 @@ o `release.py` fazia (`ronoctua_cachix::closure::public`, com os testes de lá):
 - todo programa **não livre**, pelos nomes que o `nix/release-unfree.nix` responde — as três
   perguntas de sempre (a licença do pacote daquele nome, o predicado da máquina, e `android…` com o
   Android ligado) — sobre os nomes que a máquina carrega: os pacotes do sistema e da pessoa, e cada
-  programa que uma sessão ou unidade de usuário recebe por caminho do store (é assim que o `uade` e
-  o `unrar`, que entram por um nixpkgs próprio, são pegos);
+  programa que uma sessão ou unidade de usuário recebe por caminho do store. (Os não livres da
+  distro são partes, fora do fecho: nunca chegam a ser empurrados.)
 - e **tudo que referencia um deles**, porque o `cachix push` empurra o caminho com o fechamento.
 
 Um cache **privado** não é redistribuição: recebe o fechamento do sistema que está rodando. E

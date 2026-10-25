@@ -10,20 +10,15 @@
 # Pavlov's own, current, with AES-256 zip, hidden names in 7z and split
 # volumes. The free build has no RAR codec, so RAR stays with `unrar`.
 #
-# `unrar` IS UNFREE, and it is let in BY NAME and alone: a nixpkgs of its own
-# whose predicate admits `unrar` and nothing else, the way
-# `nix/player-tools.nix` admits `uade`. The system already names it in
-# `nix/modules/nixpkgs-config.nix` for the same reason — it is the only thing
-# that opens a `.rar` properly — so the store path is the one the system
-# installs, and nothing new arrives.
+# `unrar` IS UNFREE: it comes through the parts' one door
+# (`nix/parts-pkgs.nix`) — the same store path the machine's part holds
+# (`nix/modules/archives.nix`) — and reaches only the tests here. A
+# machine's programs find it by the part's stable path, never by a variable
+# a wrapper or a unit sets (`ronoctua_archive::Tools::from_env`).
 { pkgs }:
 
 let
-  unrar =
-    (import pkgs.path {
-      inherit (pkgs.stdenv.hostPlatform) system;
-      config.allowUnfreePredicate = pkg: (pkgs.lib.getName pkg) == "unrar";
-    }).unrar;
+  inherit ((import ./parts-pkgs.nix { inherit pkgs; }).unfree) unrar;
 
   # `bsdtar` WITH liblz4 LINKED IN. nixpkgs builds libarchive without it, and
   # then `--lz4` is not a codec but a PIPE to a program named `lz4`, found on

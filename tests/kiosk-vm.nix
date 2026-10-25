@@ -46,6 +46,8 @@
   lib,
   inputs,
   ronoctua,
+  # `ronoctua-parts`, extracted (`rust.parts`): Chrome is a part.
+  partsTool,
 }:
 
 let
@@ -148,6 +150,9 @@ pkgs.testers.runNixOSTest {
         ../nix/modules/browser.nix
         ../nix/modules/browser-extension.nix
         inputs.home-manager.nixosModules.home-manager
+        # CHROME IS A PART (not free): the parts' module realizes it — here
+        # SEEDED, its output carried by the machine (`additionalPaths`).
+        (import ../nix/modules/parts.nix { tool = partsTool; })
       ];
       _module.args.ronoctua = ronoctua;
 
@@ -166,8 +171,10 @@ pkgs.testers.runNixOSTest {
       ronoctua.icons.superpack = false;
       ronoctua.update.enable = false;
       ronoctua.brain.enable = false;
-      # THE REAL CHROME, at the stable path everything opens it by.
+      # THE REAL CHROME, as the machine's part — reached at the stable path
+      # everything opens it by, the parts' view.
       ronoctua.browser.package = chrome;
+      virtualisation.additionalPaths = [ config.ronoctua.parts.chrome.package ];
       # The variable the software tools give the footer when the browser is
       # on (`software.nix` is not under test here).
       systemd.user.services.ronoctua-footer.environment.RONOCTUA_CHROME = chromeStable;
@@ -333,6 +340,8 @@ pkgs.testers.runNixOSTest {
       machine.wait_for_unit("xvfb.service")
       machine.wait_for_unit("kiosk-pages.service")
       machine.wait_for_unit("ronoctua-browser-extension.service")
+      # CHROME ARRIVES, seeded, and the session's view holds its program.
+      machine.wait_until_succeeds(f"test -x {CHROME}", timeout=300)
       uid = machine.succeed(f"id -u {user}").strip()
       runtime = f"/run/user/{uid}"
       ID = machine.succeed("cat /var/lib/ronoctua-browser/id").strip()

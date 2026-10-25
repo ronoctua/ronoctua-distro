@@ -44,9 +44,64 @@ pub fn here(path: &Path) -> Result<PathBuf, Absent> {
     })
 }
 
+/// A file of the part `id` — `bin/unrar` — at the interface the running
+/// system's plan wants ([`crate::names::PLAN`]), when the part is here: what
+/// a program asks on EVERY use of a part's program.
+///
+/// # Errors
+///
+/// [`Absent`] when the plan does not want the part, or it is not here yet.
+pub fn file_of(id: &str, relative: &str) -> Result<PathBuf, Absent> {
+    file_of_in(Path::new(crate::names::PLAN), id, relative)
+}
+
+/// [`file_of`], over the plan at `plan` — a test's.
+///
+/// # Errors
+///
+/// [`Absent`].
+pub fn file_of_in(plan: &Path, id: &str, relative: &str) -> Result<PathBuf, Absent> {
+    let interface = crate::plan::read(plan)
+        .and_then(|p| p.parts.get(id).map(|w| w.interface))
+        .ok_or_else(|| Absent {
+            part: Some(id.to_owned()),
+            path: crate::names::profile(id, 1).join(relative),
+        })?;
+    here(&crate::names::profile(id, interface).join(relative))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: a part the plan does not want is offered, a part is looked
+    /// for at another interface than the plan's, or an absent one is not
+    /// named.
+    #[test]
+    fn a_part_s_file_is_where_the_plan_s_interface_puts_it() {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-parts-file-of-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let plan = dir.join("plan.json");
+        let out = "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-unrar-7";
+        std::fs::write(
+            &plan,
+            format!(
+                r#"{{"format":1,"parts":{{"unrar":{{"drv":"{out}.drv","out":"{out}","kind":"program","interface":3,"heavy":false,"unfree":true,"name":"unrar"}}}}}}"#
+            ),
+        )
+        .unwrap();
+        let absent = file_of_in(&plan, "unrar", "bin/unrar").expect_err("not here in a test");
+        assert_eq!(absent.part.as_deref(), Some("unrar"));
+        assert_eq!(
+            absent.path,
+            crate::names::profile("unrar", 3).join("bin/unrar")
+        );
+        let unwanted = file_of_in(&plan, "uade", "bin/uade").expect_err("not in the plan");
+        assert_eq!(unwanted.part.as_deref(), Some("uade"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// FAILS IF: a missing part is not named, so the screen could not say
     /// WHICH part is arriving — or a path that exists is taken for absent.

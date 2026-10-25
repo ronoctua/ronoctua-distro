@@ -3,8 +3,8 @@
 #
 # NOT ONE PREDICATE: three questions, and a name any of them calls unfree is
 # unfree. The system's `allowUnfreePredicate` is not the only door an unfree
-# package comes in by — `nix/player-tools.nix` and `nix/archive-tools.nix`
-# admit `uade` and `unrar` through a nixpkgs of their own, whose predicate
+# package comes in by — the parts' one door (`nix/parts-pkgs.nix`) admits
+# `uade`, `unrar` and the rest through a nixpkgs of its own, whose predicate
 # the system never sees, and with Android on the system lets EVERY unfree
 # package in (`allowUnfree`) without asking its predicate at all. So:
 #

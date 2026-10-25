@@ -25,6 +25,16 @@ pub const LINKED: [&str; 5] = [
     "share/man",
 ];
 
+/// The program `name` in the view's `bin/` — there only once its part
+/// arrived, at the same path whatever its interface: what a launcher entry's
+/// `TryExec` names (`nix/parts-names.nix`'s `viewBin`, on the Nix side).
+#[must_use]
+pub fn bin(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(crate::names::VIEW)
+        .join("bin")
+        .join(name)
+}
+
 /// One link of the view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {

@@ -21,6 +21,13 @@
 
 let
   cfg = config.ronoctua.dev;
+  # The parts' one nixpkgs (`nix/parts-pkgs.nix`): Claude Code, Android
+  # Studio and the SDK are not free, and so are parts.
+  partsPkgs = config.ronoctua.partsPkgs or (import ../parts-pkgs.nix { inherit pkgs; });
+  # Where a part's program is, by its stable path — `null` where the parts'
+  # module is not imported (a test), and then nothing names it.
+  partFile =
+    id: file: if config.ronoctua ? parts then "${config.ronoctua.parts.${id}.path}/${file}" else null;
 
   # COMMON LISP (2026-10-20): SBCL with its libraries, CCL, ECL, qlot,
   # alive-lsp and the Quicklisp installer — `nix/common-lisp/`, the one file
@@ -29,8 +36,10 @@ let
   home = config.users.users.${config.ronoctua.user}.home;
 
   # The SDK, composed. `androidenv` builds a directory that Studio, gradle and
-  # flutter all accept — which is what `ANDROID_HOME` has to point at.
-  androidSdk = pkgs.androidenv.composeAndroidPackages {
+  # flutter all accept — which is what `ANDROID_HOME` has to point at. From
+  # the parts' own Android nixpkgs (`nix/parts-pkgs.nix`): androidenv ignores
+  # a predicate, and there its `allowUnfree` reaches nothing of the system's.
+  androidSdk = partsPkgs.android.androidenv.composeAndroidPackages {
     platformVersions = [
       "34"
       "35"
@@ -58,10 +67,15 @@ in
     # test imports `scroll.nix` with a `pkgs` the predicate never reaches.
     # It follows the PROGRAM and not only the switch: a person who declined
     # Claude Code is not offered it by the lifeline either.
+    #
+    # AT THE PART'S STABLE PATH (Claude Code is a part, not free): the
+    # lifeline asks whether it is there on every use, and an agent that has
+    # not arrived is not offered.
     systemd.user.services.ronoctua-lifeline.environment =
-      lib.mkIf config.ronoctua.distroApps.installed.claude-code
+      lib.mkIf
+        (config.ronoctua.distroApps.installed.claude-code && partFile "claude-code" "bin/claude" != null)
         {
-          RONOCTUA_CLAUDE = "${pkgs.claude-code}/bin/claude";
+          RONOCTUA_CLAUDE = partFile "claude-code" "bin/claude";
         };
 
     # ANDROID WANTS BOTH VARIABLES.
@@ -70,13 +84,14 @@ in
     # flutter reach for; `ANDROID_SDK_ROOT` is the new one. Setting only the new
     # one gives a build that fails deep inside gradle with a path it invented.
     #
-    # EACH FOLLOWS ITS PROGRAM, and not only the switch: a variable naming the
-    # SDK keeps the SDK in the system's closure and points gradle at it, so a
-    # person who declined it to get the gigabytes back would keep both.
+    # EACH FOLLOWS ITS PROGRAM, and not only the switch: a person who
+    # declined the SDK keeps no variable pointing gradle at it. AT THE PART'S
+    # STABLE PATH (the SDK is a part, not free): a store path here would pull
+    # it back into the system's closure.
     environment.sessionVariables = lib.mkMerge [
-      (lib.mkIf config.ronoctua.distroApps.installed.android-sdk {
-        ANDROID_HOME = "${androidSdk.androidsdk}/libexec/android-sdk";
-        ANDROID_SDK_ROOT = "${androidSdk.androidsdk}/libexec/android-sdk";
+      (lib.mkIf (config.ronoctua.distroApps.installed.android-sdk && partFile "android-sdk" "" != null) {
+        ANDROID_HOME = partFile "android-sdk" "libexec/android-sdk";
+        ANDROID_SDK_ROOT = partFile "android-sdk" "libexec/android-sdk";
       })
       (lib.mkIf cfg.android {
         # Keeps `~/.android` out of $HOME's root, like everything else here
@@ -224,14 +239,20 @@ in
       };
 
       # ---- android ----
+      # NOT FREE, both: parts (`nix/modules/parts.nix`), out of the system's
+      # closure, arriving after the installation — and heavy, so last.
       android-studio = {
-        package = pkgs.android-studio;
+        package = partsPkgs.unfree.android-studio;
+        part = true;
+        heavy = true;
         name = "Android Studio";
         group = "dev-android";
         desktopIds = [ "android-studio.desktop" ];
       };
       android-sdk = {
         package = androidSdk.androidsdk;
+        part = true;
+        heavy = true;
         name = "Android SDK";
         extraPackages = with pkgs; [
           android-tools # adb, fastboot
@@ -249,9 +270,12 @@ in
       # THE CODING AGENTS. nixpkgs' Claude Code wraps the vendor's binary with
       # `DISABLE_AUTOUPDATER=1`, so it never replaces itself behind the
       # generation's back (invariant 6); Codex is built from source. Their
-      # state is the person's, under `$HOME`, like any program's.
+      # state is the person's, under `$HOME`, like any program's. Claude Code
+      # is NOT FREE, and so a part (`nix/modules/parts.nix`): out of the
+      # system's closure, it arrives after the installation.
       claude-code = {
-        package = pkgs.claude-code;
+        package = partsPkgs.unfree.claude-code;
+        part = true;
         group = "dev-agents";
       };
       codex = {
@@ -344,9 +368,12 @@ in
     # own process (`ronoctua_llm::launch_arguments`). Each follows its
     # PROGRAM — a person who declined Codex is not offered a session of it.
     systemd.user.services.ronoctua-footer.environment = lib.mkMerge [
-      (lib.mkIf config.ronoctua.distroApps.installed.claude-code {
-        RONOCTUA_CLAUDE = "${pkgs.claude-code}/bin/claude";
-      })
+      (lib.mkIf
+        (config.ronoctua.distroApps.installed.claude-code && partFile "claude-code" "bin/claude" != null)
+        {
+          RONOCTUA_CLAUDE = partFile "claude-code" "bin/claude";
+        }
+      )
       (lib.mkIf config.ronoctua.distroApps.installed.codex {
         RONOCTUA_CODEX = "${pkgs.codex}/bin/codex";
       })

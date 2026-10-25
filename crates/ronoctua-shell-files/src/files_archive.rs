@@ -569,7 +569,7 @@ impl Drop for Written {
 pub fn list_now(archive: &Path, secret: Option<&Secret>) -> ArchiveReport {
     let stamp = Stamp::of(archive);
     let listed = Written::of(secret).and_then(|written| {
-        ronoctua_archive::Tools::from_env()
+        archive_tools()
             .list(archive, written.path())
             .map(|members| (members, secret.is_some()))
             .map_err(|r| r.why)
@@ -624,7 +624,7 @@ fn open_into(root: &Path, archive: &Path, member: &str, secret: Option<&Secret>)
         Err(why) => return refused(why),
     };
     let taking = ronoctua_files::archive::taking_dir(&dir);
-    let taken = ronoctua_archive::Tools::from_env().extract(
+    let taken = archive_tools().extract(
         archive,
         &taking,
         &[member.to_owned()],
@@ -756,6 +756,13 @@ fn raise(name: &str, work: impl FnOnce() + Send + 'static) {
     {
         tracing::error!(error = %e, thread = name, "could not start the thread");
     }
+}
+
+/// The archive programs as this machine has them: unrar is a part
+/// (`nix/modules/archives.nix`), asked for by its stable path on every run.
+fn archive_tools() -> ronoctua_archive::Tools {
+    ronoctua_archive::Tools::from_env()
+        .with_unrar(ronoctua_parts::file_of("unrar", "bin/unrar").ok())
 }
 
 #[cfg(test)]
@@ -954,7 +961,7 @@ mod tests {
     /// looks for it — the second used to land under `2026 (copy 1)`.
     #[test]
     fn two_members_of_one_folder_open_one_after_the_other() {
-        let tools = ronoctua_archive::Tools::from_env();
+        let tools = archive_tools();
         assert!(
             tools.sevenzz.is_some() && tools.setsid.is_some(),
             "RONOCTUA_7ZZ and RONOCTUA_SETSID are needed: run inside `nix develop` or the tests derivation"

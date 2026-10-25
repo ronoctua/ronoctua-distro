@@ -71,13 +71,16 @@ pub enum Why {
     Invalid,
     /// The agent is not installed on this machine.
     NotInstalled,
+    /// The agent is wanted and has not arrived yet: Claude Code is a part,
+    /// realized after the installation (`nix/modules/dev.nix`).
+    Arriving,
     /// Something else failed.
     Failed,
 }
 
 impl Why {
     /// Every one.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::NotLet,
         Self::Expired,
         Self::NoCredentials,
@@ -86,6 +89,7 @@ impl Why {
         Self::Unknown,
         Self::Invalid,
         Self::NotInstalled,
+        Self::Arriving,
         Self::Failed,
     ];
 
@@ -101,6 +105,7 @@ impl Why {
             Self::Unknown => "unknown",
             Self::Invalid => "invalid",
             Self::NotInstalled => "not-installed",
+            Self::Arriving => "arriving",
             Self::Failed => "failed",
         }
     }
@@ -651,11 +656,19 @@ type Lookup<'a> = &'a dyn Fn(&str) -> Option<std::ffi::OsString>;
 
 /// The agent's program, by the store path the session hands over in its
 /// variable (`RONOCTUA_CLAUDE`, `RONOCTUA_CODEX`): an absolute path to a
-/// file, or not installed.
+/// file, or not installed — and a path that names nothing YET is an agent
+/// on its way: the variable is set where the agent is wanted, at a part's
+/// stable path, asked on every use.
 fn agent_program(kind: Kind, var: Lookup<'_>) -> Result<String, Refusal> {
-    var(kind.program_variable())
+    let path = var(kind.program_variable())
         .map(PathBuf::from)
-        .filter(|p| p.is_absolute() && p.is_file())
+        .filter(|p| p.is_absolute())
+        .ok_or(Refusal::of(Why::NotInstalled))?;
+    if !path.exists() {
+        return Err(Refusal::of(Why::Arriving));
+    }
+    Some(path)
+        .filter(|p| p.is_file())
         .and_then(|p| p.to_str().map(str::to_owned))
         .ok_or(Refusal::of(Why::NotInstalled))
 }
@@ -1036,12 +1049,20 @@ mod tests {
                 path.clone()
             ]
         );
-        for wrong in [
-            None,
-            Some("claude"),
-            Some("/nowhere/claude"),
-            Some(dir.to_str().unwrap()),
-        ] {
+        // A PATH THAT NAMES NOTHING YET is an agent on its way, not one
+        // that is not installed: the variable is set where it is wanted.
+        assert_eq!(
+            launch_from(
+                &account,
+                &given(Some("/nowhere/claude")),
+                Some("/e"),
+                Some(dir.as_path())
+            )
+            .unwrap_err()
+            .why,
+            Why::Arriving
+        );
+        for wrong in [None, Some("claude"), Some(dir.to_str().unwrap())] {
             assert_eq!(
                 launch_from(&account, &given(wrong), Some("/e"), Some(dir.as_path()))
                     .unwrap_err()

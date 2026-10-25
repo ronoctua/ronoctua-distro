@@ -11,6 +11,9 @@ publish.workspace = true
 # `ronoctua-player`, which is what the shell links — see its header for why
 # this is a crate and not a feature.
 [dependencies]
+# A DECODER THAT IS A PART (uade): asked whether it arrived, on every song
+# (`ronoctua_parts::here`) — the library alone, never root's realizer.
+ronoctua-parts = { path = "../ronoctua-parts", default-features = false }
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true

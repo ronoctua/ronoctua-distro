@@ -51,8 +51,12 @@ use crate::{AppKey, Context, Done, Failure, Order, Outcome, Refusal, Roots};
 pub const SOFTWARE: &str = "/run/current-system/sw/bin/ronoctua-software";
 
 /// The `TryExec=` of every web app: without Chrome the launcher hides them,
-/// instead of offering a line that does nothing.
-pub const CHROME: &str = "/run/current-system/sw/bin/google-chrome-stable";
+/// instead of offering a line that does nothing. Chrome is a part (not
+/// free): its program in the session's view, there only once it arrived.
+#[must_use]
+pub fn chrome() -> PathBuf {
+    ronoctua_parts::view::bin("google-chrome-stable")
+}
 
 /// Every web app's `.desktop` is `<PREFIX><slug>.desktop`. Deliberately not
 /// `br.ronoctua.`, which the launcher ranks as the distro's own.
@@ -554,7 +558,7 @@ fn write(
     report: &mut dyn Report,
 ) -> Done {
     report.step(Phase::Resolving, 0, 0, &spec.name);
-    if ctx.tools.chrome.is_none() {
+    if chrome_here(ctx).is_none() {
         return Err(Failure::refused(Refusal::NoBrowser));
     }
     let url = canonical_url(&spec.url).map_err(Failure::refused)?;
@@ -771,7 +775,7 @@ fn wrote(path: &Path, e: &std::io::Error) -> Failure {
 /// `NoBrowser` without Chrome; the URL's refusal when the `.desktop` holds a
 /// bad one.
 pub fn open_argv(ctx: &Context, slug: &str) -> Result<Vec<String>, crate::Refusal> {
-    let chrome = ctx.tools.chrome.as_deref().ok_or(Refusal::NoBrowser)?;
+    let chrome = chrome_here(ctx).ok_or(Refusal::NoBrowser)?;
     let app = read_anywhere(&ctx.roots, slug).ok_or(Refusal::UnknownItem)?;
     argv_for(chrome, &app.url, &app.profile)
 }
@@ -785,11 +789,17 @@ pub fn open_argv(ctx: &Context, slug: &str) -> Result<Vec<String>, crate::Refusa
 /// `NoBrowser` without Chrome, the URL's refusal, and `ProfileUnknown` for a
 /// profile Chrome does not have.
 pub fn once_argv(ctx: &Context, url: &str, profile: &str) -> Result<Vec<String>, Refusal> {
-    let chrome = ctx.tools.chrome.as_deref().ok_or(Refusal::NoBrowser)?;
+    let chrome = chrome_here(ctx).ok_or(Refusal::NoBrowser)?;
     let url = canonical_url(url)?;
     let profile = known_profile(&ctx.roots, profile)
         .map_err(|f| f.refusal.unwrap_or(Refusal::ProfileUnknown))?;
     argv_for(chrome, &url, &profile)
+}
+
+/// Chrome, when it is here: a part, which may not have arrived — asked on
+/// every use, never once at start.
+fn chrome_here(ctx: &Context) -> Option<&Path> {
+    ctx.tools.chrome.as_deref().filter(|c| c.exists())
 }
 
 /// Chrome, the profile and `--app=`. Pure.
@@ -924,6 +934,8 @@ struct Entry<'a> {
 fn desktop_text(e: &Entry<'_>) -> String {
     let choice = storable(e.choice, e.icon);
     let json = serde_json::to_string(&choice).unwrap_or_default();
+    let chrome = chrome();
+    let chrome = chrome.display();
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
@@ -931,7 +943,7 @@ fn desktop_text(e: &Entry<'_>) -> String {
          Name={name}\n\
          Comment={host}\n\
          Exec={SOFTWARE} web-open {slug}\n\
-         TryExec={CHROME}\n\
+         TryExec={chrome}\n\
          Icon={icon}\n\
          Terminal=false\n\
          StartupNotify=true\n\
@@ -1040,7 +1052,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    const FAKE_CHROME: &str = "/run/current-system/sw/bin/google-chrome-stable";
+    /// A path that IS there, standing in for Chrome: Chrome is a part, and
+    /// one that has not arrived is no browser (`chrome_here`). Never run.
+    const FAKE_CHROME: &str = "/bin/sh";
 
     /// A context over a scratch tree of this test process.
     fn scratch(name: &str) -> (Context, PathBuf) {
@@ -1272,7 +1286,7 @@ mod tests {
         };
         assert_eq!(key("Type"), "Application");
         assert_eq!(key("Name"), "WhatsApp");
-        assert_eq!(key("TryExec"), CHROME);
+        assert_eq!(key("TryExec"), chrome().to_str().unwrap());
         assert_eq!(key("StartupWMClass"), "chrome-web.whatsapp.com__-Default");
         assert_eq!(key("X-Ronoctua-Web-Url"), "https://web.whatsapp.com/");
         assert_eq!(key("Categories"), "Network;");

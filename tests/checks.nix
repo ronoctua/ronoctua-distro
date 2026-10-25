@@ -2057,11 +2057,13 @@ let
   # startup) looks like a Chrome setting and is not.
   browser-has-no-keyring = mkCheck "browser-has-no-keyring" [ pkgs.jq ] ''
     system_path=${self.nixosConfigurations.vm.config.system.build.toplevel}
+    # CHROME IS A PART (not free): what the person runs is the part's
+    # output, outside the system's closure — and on the machine all the same.
+    chrome_part=${self.nixosConfigurations.noctua.config.ronoctua.parts.chrome.package}
 
     # 1) The flag reached the wrapper the user actually runs.
-    chrome=$(readlink -f "$system_path/sw/bin/google-chrome-stable" 2>/dev/null \
-             || readlink -f "$system_path/sw/bin/google-chrome" 2>/dev/null || true)
-    [ -n "$chrome" ] || { echo "ERROR: Chrome is not in system_path's closure" >&2; exit 1; }
+    chrome=$(readlink -f "$chrome_part/bin/google-chrome-stable" 2>/dev/null || true)
+    [ -n "$chrome" ] || { echo "ERROR: Chrome's part has no google-chrome-stable" >&2; exit 1; }
     grep -q -- "--password-store=basic" "$chrome" || {
       echo "ERROR: Chrome's wrapper has no --password-store=basic." >&2
       echo "      Without it Chrome looks for a Secret Service and asks for a password." >&2
@@ -2073,7 +2075,7 @@ let
     # `nix-store -qR` and not a grep over the config: the point is what ends up
     # ON THE MACHINE, and a dependency that pulls the keyring in does not appear
     # in any option.
-    found=$(nix-store -qR "$system_path" 2>/dev/null | grep -E "gnome-keyring|kwallet" || true)
+    found=$(nix-store -qR "$system_path" "$chrome_part" 2>/dev/null | grep -E "gnome-keyring|kwallet" || true)
     if [ -n "$found" ]; then
       echo "ERROR: a Secret Service got into the closure:" >&2
       echo "$found" | sed 's/^/       /' >&2
@@ -21771,6 +21773,7 @@ let
     inherit scroll;
     vscodeTool = rust.vscode;
     belongingsTool = rust.belongings;
+    partsTool = rust.parts;
     # The registry's `nixpkgs` as an installed machine locks it
     # (`nix/modules/software.nix`), for rust-analyzer's own NixOS patch.
     nixpkgsInput = inputs.nixpkgs;
@@ -21950,6 +21953,7 @@ let
   # an AppImage in and out without a trace — every order through the queue.
   softwareVm = import ./software-vm.nix {
     inherit pkgs lib inputs;
+    partsTool = rust.parts;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
       inherit themes themed defaultTheme;
@@ -21970,6 +21974,7 @@ let
   # `uade` precedent (`nix/player-tools.nix`).
   kioskVm = import ./kiosk-vm.nix {
     inherit pkgs lib inputs;
+    partsTool = rust.parts;
     ronoctua = {
       inherit fonts fontconfigConf iconSuperpack;
       inherit themes themed defaultTheme;
@@ -28334,9 +28339,39 @@ let
         };
       minimal = closureOf self.nixosConfigurations.minimal.config.system.build.toplevel;
       full = closureOf self.nixosConfigurations.noctua.config.system.build.toplevel;
+      # WHAT EACH PROFILE WANTS AS PARTS: the plan it carries, as text.
+      planOf =
+        name: c:
+        pkgs.writeText "${name}-parts-plan.json" (
+          builtins.unsafeDiscardStringContext c.config.environment.etc."ronoctua/parts-plan.json".text
+        );
+      fullPlan = planOf "full" self.nixosConfigurations.noctua;
+      minimalPlan = planOf "minimal" self.nixosConfigurations.minimal;
     in
     mkCheck "profile-minimal-closes" [ pkgs.gnugrep pkgs.coreutils ] ''
       failed=0
+
+      # THE PARTS EACH PROFILE WANTS (`nix/modules/parts.nix`): what the full
+      # one carries as programs it arrives with, and the reduced one only
+      # what is everybody's — the archives' unrar and the coding agent.
+      for id in chrome vscode android-studio android-sdk claude-code unrar uade; do
+        grep -q -e "\"$id\"" ${fullPlan} || {
+          echo "ERROR: the full profile does not want the part $id" >&2
+          failed=1
+        }
+      done
+      for id in claude-code unrar; do
+        grep -q -e "\"$id\"" ${minimalPlan} || {
+          echo "ERROR: the minimal profile does not want the part $id" >&2
+          failed=1
+        }
+      done
+      for id in chrome vscode android-studio android-sdk; do
+        if grep -q -e "\"$id\"" ${minimalPlan}; then
+          echo "ERROR: the minimal profile wants the part $id" >&2
+          failed=1
+        fi
+      done
 
       # Applications: in the full one, out of the reduced one.
       #
@@ -28360,15 +28395,14 @@ let
       #
       # THE OFFICE AND THE CRAFTING APPS (2026-10-20, `office.enable` and
       # `crafts.enable`): ONLYOFFICE, LibreOffice and the distro's wrapped
-      # AppImages, whose names all start `ronoctua-appimage-`. VS CODE
-      # (`editor.vscode`), ~0,91 GiB: its FHS environment holds the program,
-      # whose store name this is.
-      for app in -android-studio- -google-chrome- -emacs-pgtk-30 -vlc- \
+      # AppImages, whose names all start `ronoctua-appimage-`. (Chrome,
+      # VS Code and Android Studio left this list on 2026-10-24: not free,
+      # they are parts, in neither closure — below.)
+      for app in -emacs-pgtk-30 -vlc- \
                  -flutter- -dart- -go-1 -noctua-iosevka-ttf-3 \
                  -noctua-icon-theme- -waydroid- -appimage-run \
                  -blender-5 -orca-slicer- \
-                 -onlyoffice-desktopeditors- -libreoffice- -ronoctua-appimage- \
-                 -vscode-1; do
+                 -onlyoffice-desktopeditors- -libreoffice- -ronoctua-appimage-; do
         grep -q -e "$app" ${full}/store-paths || {
           echo "ERROR: $app is not in the full profile — did the name change?" >&2
           failed=1
@@ -28407,7 +28441,7 @@ let
       # program the flake does not carry.
       #
       # AND WORKING ON THE DISTRO (2026-10-05): the devshell's rust, QEMU and
-      # OVMF kept for `nix develop`, and the two coding agents.
+      # OVMF kept for `nix develop`, and Codex. (Claude Code is a part: below.)
       #
       # AND COMMON LISP (2026-10-20), in the terminal of both: the three
       # Lisps, alive-lsp, qlot, the two editor servers among the libraries,
@@ -28415,7 +28449,7 @@ let
       for kept in -scroll- -noctua-iosevka-ttf-nerdfonts- -ghostty- \
                   -networkmanager- -systemd- -ffmpeg-full- -exiftool- -flatpak- \
                   -rustc-1 -rust-std-1.*-wasm32-wasip2 -qemu-1 -OVMF- \
-                  -claude-code- -codex- \
+                  -codex- \
                   -sbcl-2 -ccl-1 -ecl-2 -alive-lsp -qlot- -sbcl-swank- -sbcl-slynk- \
                   -quicklisp-install -rlwrap- \
                   -ronoctua-iconset \
@@ -28426,6 +28460,19 @@ let
           echo "ERROR: the minimal profile lost $kept, which is part of the distro" >&2
           failed=1
         }
+      done
+
+      # THE PARTS ARE IN NEITHER (`nix/modules/parts.nix`): not free, they are
+      # realized after the installation and kept out of every system's
+      # closure — a store path of one in a unit would bring it back, and this
+      # is what would say so.
+      for part in -claude-code- -unrar- -uade- -google-chrome- -vscode-1 -android-studio- -androidsdk; do
+        for profile in ${full} ${minimal}; do
+          if grep -q -e "$part" $profile/store-paths; then
+            echo "ERROR: $part is a part and is in a system's closure ($profile)" >&2
+            failed=1
+          fi
+        done
       done
 
       # THE FOOTER, by its store path: `rust.shell`, what the modules run —
@@ -42642,10 +42689,19 @@ let
           c = system.config;
         in
         {
-          installed = map (p: discard (p.outPath or "")) c.environment.systemPackages;
+          # INSTALLED: in `systemPackages` — or, for an entry that is a part
+          # (`nix/modules/parts.nix`), wanted in the plan, its package the
+          # part's.
+          installed =
+            map (p: discard (p.outPath or "")) c.environment.systemPackages
+            ++ lib.mapAttrsToList (_: e: discard e.package.outPath) (
+              lib.filterAttrs (id: e: e.part && (c.ronoctua.parts.${id}.wanted or false)) c.ronoctua.apps
+            );
           programs = lib.mapAttrs (_: e: discard e.package.outPath) (
             lib.filterAttrs (_: e: e.package != null) c.ronoctua.apps
           );
+          # A part is named by its stable path, never its store path.
+          partPaths = lib.mapAttrs (_: p: discard p.path) c.ronoctua.parts;
           report = c.ronoctua.distroApps.declinedReport;
           registry = builtins.fromJSON c.environment.etc."ronoctua/distro-apps.json".text;
           browser = c.ronoctua.browser.enable;
@@ -42700,7 +42756,7 @@ let
             wrong.append(f"without a decline `{app}` is not installed, so its decline proves nothing")
     for app in declined:
         if has(after, app):
-            wrong.append(f"`{app}` was declined and is still in `systemPackages`")
+            wrong.append(f"`{app}` was declined and is still installed (in `systemPackages`, or a wanted part)")
     if not has(after, "zsh"):
         wrong.append("`zsh` is essential and a decline took it away")
     if not has(after, "emacs") or not after["editor"]:
@@ -42714,8 +42770,10 @@ let
     # variable of the lifeline names its store path. Asked first of the
     # machine without declines, where the SDK's path IS in `ANDROID_HOME` —
     # a probe that finds nothing there finds nothing anywhere.
+    # A PART is named by its stable path (`partPaths`), the rest by store path.
     def named(side, app):
-        return [v for v in side["carried"] if side["programs"][app] in v]
+        needles = [side["programs"][app]] + ([side["partPaths"][app]] if app in side["partPaths"] else [])
+        return [v for v in side["carried"] if any(n in v for n in needles)]
     for app in ("android-sdk", "flutter", "claude-code"):
         if not named(before, app):
             wrong.append(f"without a decline no variable names `{app}`, so its absence later proves nothing")
@@ -43028,13 +43086,27 @@ let
           else
             { known = false; }
         );
-      # WHAT A MACHINE HOLDS: its system packages, by path and by name, and
-      # what its session's variables name.
-      holdsOf = c: {
-        paths = map (p: discard (p.outPath or "")) c.environment.systemPackages;
-        names = map (p: p.name or "") c.environment.systemPackages;
-        carried = lib.mapAttrsToList (_: v: discard (toString v)) c.environment.sessionVariables;
-      };
+      # WHAT A MACHINE HOLDS: its system packages, by path and by name — and
+      # the packages of every entry that is a part (`nix/modules/parts.nix`)
+      # and is wanted in its plan, which arrive after the installation and
+      # outside `systemPackages` — and what its session's variables name (a
+      # part by its stable path, among the marks below).
+      holdsOf =
+        c:
+        let
+          wantedParts = lib.filterAttrs (
+            id: e: e.part && (c.ronoctua.parts.${id}.wanted or false)
+          ) c.ronoctua.apps;
+        in
+        {
+          paths =
+            map (p: discard (p.outPath or "")) c.environment.systemPackages
+            ++ lib.concatLists (
+              lib.mapAttrsToList (_: e: map (p: discard p.outPath) ([ e.package ] ++ e.extraPackages)) wantedParts
+            );
+          names = map (p: p.name or "") c.environment.systemPackages;
+          carried = lib.mapAttrsToList (_: v: discard (toString v)) c.environment.sessionVariables;
+        };
       factsOf =
         system:
         holdsOf system.config
@@ -43047,7 +43119,16 @@ let
       # evaluate and looked for in what `minimal` holds.
       fullConfig = base.config;
       marks = lib.genAttrs offered (
-        id: if fullConfig.ronoctua.apps ? ${id} then markOf fullConfig.ronoctua.apps.${id} else null
+        id:
+        if fullConfig.ronoctua.apps ? ${id} then
+          markOf fullConfig.ronoctua.apps.${id}
+          # A PART is named by its stable path: a variable that still names
+          # it is found by that too.
+          // lib.optionalAttrs fullConfig.ronoctua.apps.${id}.part {
+            partPath = discard fullConfig.ronoctua.parts.${id}.path;
+          }
+        else
+          null
       );
     in
     pkgs.writeText "offered-registry.json" (
@@ -43081,7 +43162,8 @@ let
             return [k for k in m["marks"] if any(n.startswith(k) for n in f[side]["names"])]
 
         def carried(side, app):
-            return [v for v in f[side]["carried"] for k in f["marks"][app]["marks"] if k in v]
+            needles = f["marks"][app]["marks"] + ([f["marks"][app]["partPath"]] if "partPath" in f["marks"][app] else [])
+            return [v for v in f[side]["carried"] for k in needles if k in v]
 
         for app in f["offered"]:
             full, minimal = f["full"]["apps"][app], f["minimal"]["apps"][app]
@@ -44498,7 +44580,7 @@ let
         "Version=1.5",
         "Name=Planted Web",
         "Exec=/run/current-system/sw/bin/ronoctua-software web-open planted",
-        "TryExec=/run/current-system/sw/bin/google-chrome-stable",
+        "TryExec=/var/lib/ronoctua-parts/view/bin/google-chrome-stable",
         "Terminal=false",
         "StartupNotify=true",
         "Categories=Network;",
@@ -45744,6 +45826,78 @@ let
     partsTool = rust.parts;
   };
 
+  # THE BASE ADMITS NOTHING UNFREE (the L25 amendment).
+  #
+  # Every unfree program is a part, built from the parts' one door
+  # (`nix/parts-pkgs.nix`) and kept out of the system's closure — never on
+  # the published ISO, never in a public cache, and a download that fails
+  # holds back nothing. Asked of the three evaluated reference machines:
+  #
+  #   - `allowUnfree` is false: the SDK, which forced it once, has an
+  #     instance of its own in the parts' door;
+  #   - the system's predicate refuses every program the door admits, by the
+  #     name nixpkgs asks it (`lib.getName`) — the references consent to
+  #     nothing of the person's, so it refuses everything;
+  #   - the whole system EVALUATES: forcing the toplevel's derivation runs
+  #     nixpkgs' own licence test on every package of the closure, and an
+  #     unfree one that came in by any other way stops it, by name.
+  the-base-admits-no-unfree =
+    let
+      door = import ../nix/parts-pkgs.nix { inherit pkgs; };
+      factsOf =
+        name:
+        let
+          c = self.nixosConfigurations.${name}.config;
+          predicate = c.nixpkgs.config.allowUnfreePredicate or (_: false);
+        in
+        {
+          allowUnfree = c.nixpkgs.config.allowUnfree or false;
+          admitted = builtins.filter (
+            n:
+            predicate {
+              name = "${n}-1";
+              pname = n;
+            }
+          ) door.names;
+          toplevel = builtins.unsafeDiscardStringContext c.system.build.toplevel.drvPath;
+        };
+      facts = pkgs.writeText "the-base-admits-no-unfree.json" (
+        builtins.toJSON {
+          names = door.names;
+          machines = lib.genAttrs [
+            "noctua"
+            "minimal"
+            "vm"
+          ] factsOf;
+        }
+      );
+    in
+    mkCheck "the-base-admits-no-unfree" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      exec(open("${pyPrelude}").read())
+      # PARSED: the evaluated reference machines' policy and toplevels, and
+      # the parts' door's names, as JSON.
+      facts = json.load(open("${facts}"))
+      wrong = []
+      floor(len(facts["names"]), 6, "programs the parts' door admits")
+      for name, m in facts["machines"].items():
+          if m["allowUnfree"]:
+              wrong.append(f"{name}: allowUnfree is on — every unfree package of the closure would be let in")
+          if m["admitted"]:
+              wrong.append(f"{name}: the system's predicate admits {m['admitted']}, which are parts")
+          if not m["toplevel"].startswith("/nix/store/") or not m["toplevel"].endswith(".drv"):
+              wrong.append(f"{name}: the toplevel did not evaluate ({m['toplevel']!r})")
+      if wrong:
+          print("ERROR: the base admits what is not free:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: {len(facts['machines'])} machines evaluate with nothing unfree admitted; "
+            f"{len(facts['names'])} programs reach a machine only as parts")
+      END
+    '';
+
   # THE PARTS' UNITS AND THEIR ONE POLKIT RULE, AND HOW WIDE IT IS.
   #
   # The person starts the planner and a part's realizer with no password
@@ -45968,7 +46122,7 @@ let
     crates = pathlib.Path("${../crates}")
     nix = pathlib.Path("${../nix}")
     NEEDLE = re.compile(r"/nix/var/nix/profiles/ronoctua/parts|/var/lib/ronoctua-parts|/nix/var/nix/gcroots/ronoctua-parts")
-    owners = {crates / "ronoctua-parts", nix / "modules" / "parts.nix"}
+    owners = {crates / "ronoctua-parts", nix / "modules" / "parts.nix", nix / "parts-names.nix"}
     keeps = {nix / "modules" / "persist.nix"}
 
     def text_of(path):
@@ -50273,11 +50427,25 @@ let
               c.programs.zsh.interactiveShellInit + c.programs.bash.interactiveShellInit
             );
           };
-          agents = lib.genAttrs [ "claude-code" "codex" ] (id: {
-            installed = c.ronoctua.distroApps.installed.${id};
-            onThePath = builtins.elem (discard c.ronoctua.apps.${id}.package.outPath) packages;
-            bin = discard "${c.ronoctua.apps.${id}.package}/bin";
-          });
+          # A PART (Claude Code, not free) is on the PATH through the parts'
+          # view once it arrived: wanted in the plan, with the entry's own
+          # package; its `bin` is the part's stable path.
+          agents = lib.genAttrs [ "claude-code" "codex" ] (
+            id:
+            let
+              e = c.ronoctua.apps.${id};
+              p = c.ronoctua.parts.${id};
+            in
+            {
+              installed = c.ronoctua.distroApps.installed.${id};
+              onThePath =
+                if e.part then
+                  p.wanted && discard p.package.outPath == discard e.package.outPath
+                else
+                  builtins.elem (discard e.package.outPath) packages;
+              bin = if e.part then discard "${p.path}/bin" else discard "${e.package}/bin";
+            }
+          );
           footer = {
             claude = if footer ? RONOCTUA_CLAUDE then discard footer.RONOCTUA_CLAUDE else null;
             codex = if footer ? RONOCTUA_CODEX then discard footer.RONOCTUA_CODEX else null;
@@ -50466,7 +50634,8 @@ let
       '';
 
   # THE CODING AGENTS ARE IN BOTH PROFILES, on the PATH, and the footer has
-  # their store paths (the LLM accounts open a session from it).
+  # their paths (the LLM accounts open a session from it): Codex by its store
+  # path, Claude Code — a part — by its stable one.
   agents-in-both-profiles = mkCheck "agents-in-both-profiles" [ pkgs.python3 ] ''
     python3 - <<'END'
     import json, sys
@@ -51172,8 +51341,10 @@ let
         wrong.append(f"a public cache may receive {public['public-roots']}, not the distro's seed {roots}")
     if sorted(facts["elsewhere"]["etc"]["public-roots"]) != roots:
         wrong.append("what a public cache may receive moves with the machine's name")
-    if not {"uade", "unrar"} <= set(public["unfree"]):
-        wrong.append(f"the unfree names {public['unfree']} miss uade or unrar, which come in by a nixpkgs of their own")
+    # uade and unrar ARE PARTS, out of the machine's closure and so out of
+    # what it pushes: a public cache's unfree names never need them.
+    if {"uade", "unrar"} & set(public["unfree"]):
+        wrong.append(f"the unfree names {public['unfree']} name a part, which the machine's closure never holds")
     private = facts["private"]["etc"]
     if private["public-roots"] or private["unfree"]:
         wrong.append("a private cache's file carries a public cache's lists")
@@ -52118,9 +52289,9 @@ let
   # name, the machine's predicate, and `android…` with Android on) of the
   # names the machine carries (`nix/modules/binary-cache.nix`). That question
   # is asked here with the same function, of the evaluated reference machine: Chrome, Claude Code, VS Code (and its FHS environment, `code`), the SDK's pieces — and
-  # the two that come in by a nixpkgs of their own, by their REAL store
-  # names: `uade` (the player's, `nix/player-tools.nix`, which no predicate
-  # of the system names) and `unrar` (the archives'). And of everything the
+  # `uade` and `unrar` (parts, from the parts' one door, `nix/parts-pkgs.nix`,
+  # which no predicate of the system names), by their REAL store names. And
+  # of everything the
   # workspace bakes in (`generated`): an unfree program there is a reference
   # of the most expensive build there is, which then never reaches the cache.
   #
@@ -52141,8 +52312,10 @@ let
             )
           )
         );
-      uade = storeName noctua.config.systemd.user.services.ronoctua-player.environment.RONOCTUA_UADE;
-      unrar = storeName rust.atRunTime.RONOCTUA_UNRAR;
+      # THE PARTS' uade — the same store path the tests are handed.
+      uade = storeName (import ../nix/player-tools.nix { inherit pkgs; }).RONOCTUA_UADE;
+      # THE PART'S unrar — the same store path the tests are handed.
+      unrar = storeName (import ../nix/archive-tools.nix { inherit pkgs; }).RONOCTUA_UNRAR;
       ask =
         names:
         import ../nix/release-unfree.nix {
@@ -52204,8 +52377,14 @@ let
       uade, unrar = facts["uade"], facts["unrar"]
       if not uade.startswith("uade-") or not unrar.startswith("unrar-"):
           wrong.append(f"the player's and the archives' programs are {uade!r} and {unrar!r}")
-      want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.0.30", "vscode-1.119.0", "code-1.119.0",
-              "platform-tools-37.0.0", "androidsdk", "android-studio-stable-2025.1.4.8"}
+      # WHAT THE LICENCE QUESTION STILL CATCHES BY NAME — every unfree
+      # program is a part now (`nix/parts-pkgs.nix`), out of every system's
+      # closure and of the seed, and the system's predicate admits none of
+      # them. The three only that predicate caught (Android Studio's suffixed
+      # name, VS Code's FHS environment `code`, the SDK's pieces) can no
+      # longer be asked by name; they are proved out of every closure by
+      # `profile-minimal-closes` and `parts-stay-out-of-the-base`.
+      want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.0.30", "vscode-1.119.0", "androidsdk"}
       if set(unfree) != want:
           wrong.append(f"the release calls unfree {sorted(unfree)}, not {sorted(want)}")
       floor(facts["baked"], 20, "derivations the workspace bakes in")
@@ -52219,8 +52398,7 @@ let
       KNOWN = {
           "nix/modules/nixpkgs-config.nix": "the system's predicate, which the machine's question asks by name",
           "nix/modules/binary-cache.nix": "reads whether Android let every unfree package in, so every `android…` name stays out of a public cache; admits nothing itself",
-          "nix/player-tools.nix": "uade, by a nixpkgs of its own: asked by licence (the player's store name, above)",
-          "nix/archive-tools.nix": "unrar, by a nixpkgs of its own: asked by licence and predicate (above)",
+          "nix/parts-pkgs.nix": "the parts' one door: what it admits is a part, never in a system's closure nor in a seed, and asked by licence (above)",
           "nix/modules/person.nix": "what a person's consent needs: asked by licence; the consented names are in the predicate",
           "nix/declared-apps/nix.nix": "reads the policy to judge a declaration, and admits nothing itself",
           "flake.nix": "the single-mirror sources: fixed-output downloads, which never go to the cache",
@@ -53820,6 +53998,9 @@ let
             codex = bare (env.RONOCTUA_CODEX or null);
           };
           lifeline = bare (lifeline.RONOCTUA_CLAUDE or null);
+          # CLAUDE CODE IS A PART (not free): where its program is, by the
+          # part's stable path.
+          claudePart = bare "${config.ronoctua.parts.claude-code.path}/bin/claude";
         };
       facts = pkgs.writeText "agents-reach-the-footer.json" (
         builtins.toJSON {
@@ -53839,7 +54020,14 @@ let
               there, given = f["installed"][agent], f["footer"][agent]
               if there:
                   seen += 1
-                  if not (given and given.startswith("/nix/store/") and given.endswith("/bin/" + program)):
+                  # CLAUDE CODE BY THE PART'S STABLE PATH — a store path would
+                  # pull it, unfree, into the system's closure —, Codex (free)
+                  # by its store path.
+                  if agent == "claude":
+                      if given != f["claudePart"] or given.startswith("/nix/store/"):
+                          wrong.append(f"{profile}: claude is installed and the footer is handed {given!r}, "
+                                       f"not the part's {f['claudePart']!r}")
+                  elif not (given and given.startswith("/nix/store/") and given.endswith("/bin/" + program)):
                       wrong.append(f"{profile}: {program} is installed and the footer is handed {given!r}")
               elif given is not None:
                   wrong.append(f"{profile}: {program} is not installed and the footer is handed {given!r}")
@@ -53852,7 +54040,7 @@ let
           print("ERROR: " + w, file=sys.stderr)
       if wrong:
           sys.exit(1)
-      print(f"OK: {seen} installed agents reach the footer by store path, and only those")
+      print(f"OK: {seen} installed agents reach the footer — Claude Code by its part's path, Codex by its store path — and only those")
       END
     '';
 
@@ -55121,6 +55309,7 @@ let
       one-parts-boundary
       part-paths-are-read-as-arriving
       parts-stay-out-of-the-base
+      the-base-admits-no-unfree
       ;
     parts-are-isolated = partsVm;
     # ── anchor: L07 ──

@@ -53,8 +53,10 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
         }
         // A METERED LINK downloads nothing by itself: the person's "try
         // now" is the yes for this one try, and it is taken as it is used.
+        // An output already in the store downloads nothing at all.
         let yes = took_the_yes(id);
-        if ronoctua_parts::record::waits_for_the_meter(metered(), yes) {
+        if !in_the_store(&target.out) && ronoctua_parts::record::waits_for_the_meter(metered(), yes)
+        {
             let record = record.waits(Waiting::Metered);
             if let Err(e) = disk::write_record(&record) {
                 say(3, &format!("{id}: {e}"));
@@ -141,22 +143,45 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
 /// One build of the part and, when it gives the plan's output, its profile
 /// set to it — or why not.
 fn attempt(id: &str, target: &Target, nix: &str) -> Result<(), (Why, String)> {
-    say(6, &format!("{id}: building {}", target.out));
-    let built = disk::run(&ronoctua_parts::argv::build(nix, &target.drv));
-    if !built.ok {
-        return Err((Why::BuildFailed, built.err));
+    // AN OUTPUT ALREADY IN THE STORE IS SEEDED, never built: what an ISO or
+    // a test machine carries arrives with no derivation and no network —
+    // the same path is the same bytes.
+    if in_the_store(&target.out) {
+        say(6, &format!("{id}: {} is in the store already", target.out));
+    } else {
+        say(6, &format!("{id}: building {}", target.out));
+        let built = disk::run(&ronoctua_parts::argv::build(nix, &target.drv));
+        if !built.ok {
+            return Err((Why::BuildFailed, built.err));
+        }
+        if !built
+            .out
+            .lines()
+            .map(str::trim)
+            .any(|line| line == target.out)
+        {
+            return Err((
+                Why::OutputDiffers,
+                format!("built {}, the plan wants {}", built.out.trim(), target.out),
+            ));
+        }
     }
-    if !built
-        .out
-        .lines()
-        .map(str::trim)
-        .any(|line| line == target.out)
-    {
-        return Err((
-            Why::OutputDiffers,
-            format!("built {}, the plan wants {}", built.out.trim(), target.out),
-        ));
-    }
+    set_the_profile(id, target)
+}
+
+/// Whether `out` is a valid path of the store, as Nix says it.
+fn in_the_store(out: &str) -> bool {
+    ronoctua_parts::plan::is_store_path(out)
+        && disk::run_quiet(&[
+            crate::beside_nix("nix-store"),
+            "--check-validity".to_owned(),
+            out.to_owned(),
+        ])
+}
+
+/// The part's profile set to the plan's output, and trimmed to two
+/// generations.
+fn set_the_profile(id: &str, target: &Target) -> Result<(), (Why, String)> {
     let profile = names::profile(id, target.interface);
     let profile_text = profile.to_string_lossy().into_owned();
     let parent = profile.parent().map(std::path::Path::to_path_buf);

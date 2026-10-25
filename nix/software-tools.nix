@@ -70,7 +70,9 @@
   RONOCTUA_WAYDROID = "${waydroid}/bin/waydroid";
 }
 // lib.optionalAttrs chrome {
-  RONOCTUA_CHROME = "/run/current-system/sw/bin/google-chrome-stable";
+  # CHROME IS A PART (not free): reached through the session's view, at a
+  # path that exists only once it arrived — whatever its interface.
+  RONOCTUA_CHROME = (import ./parts-names.nix).viewBin "google-chrome-stable";
 }
 // lib.optionalAttrs (icons != null) {
   RONOCTUA_ICONS = icons;

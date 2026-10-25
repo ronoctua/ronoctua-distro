@@ -209,13 +209,15 @@ impl std::fmt::Display for Refusal {
     }
 }
 
-/// `code`, by the store path [`VARIABLE`] names — `None` where VS Code is
-/// not installed.
+/// `code`, at the path [`VARIABLE`] names — `None` where VS Code is not
+/// installed, or has not arrived yet: it is a part (`nix/modules/vscode.nix`),
+/// asked after on every use.
 #[must_use]
 pub fn code() -> Option<PathBuf> {
     std::env::var_os(VARIABLE)
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
+        .filter(|p| p.exists())
 }
 
 /// Whether `id` is an extension's id as VS Code's own pattern has it,

@@ -312,10 +312,12 @@ impl Footer {
         // since the footer started.
         let ours = kiosk_bridge();
         self.kiosk.bridge_found(ours.clone());
+        // CHROME IS A PART, which may not have arrived: asked on every open.
         let chrome = self
             .software_context
             .as_ref()
-            .and_then(|c| c.tools.chrome.clone());
+            .and_then(|c| c.tools.chrome.clone())
+            .filter(|c| c.exists());
         let nonce = ronoctua_browser::launch::nonce()
             .map_err(|e| tracing::warn!(error = %e, "no nonce for a kiosk"))
             .ok();

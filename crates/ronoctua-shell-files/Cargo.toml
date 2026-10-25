@@ -44,6 +44,9 @@ ronoctua-inspect = { path = "../ronoctua-inspect" }
 ronoctua-tags = { path = "../ronoctua-tags", default-features = false }
 ronoctua-disks = { path = "../ronoctua-disks" }
 ronoctua-archive = { path = "../ronoctua-archive" }
+# unrar IS A PART on a machine: its stable path (`ronoctua_parts::file_of`),
+# handed to the archive's tools on every run — the library alone.
+ronoctua-parts = { path = "../ronoctua-parts", default-features = false }
 ronoctua-transfers = { path = "../ronoctua-transfers" }
 # The history of a repository, found by walking up for `.git`; never cloned.
 ronoctua-git = { path = "../ronoctua-git" }

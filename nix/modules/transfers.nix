@@ -286,13 +286,9 @@ in
           // lib.optionalAttrs (cfg.poToken == "on-demand" && potRoot != null) (
             ronoctua.potProvider.environmentAt potRoot
           )
-          # WHERE unrar IS, read at run time and never baked (`atRunTime` in
-          # `nix/rust.nix`): it is unfree, and baked into the workspace it kept
-          # the workspace out of the public binary cache. The footer gets it
-          # from the shell's wrapper; the queue runs the bare binary.
-          // {
-            inherit (import ../archive-tools.nix { inherit pkgs; }) RONOCTUA_UNRAR;
-          };
+        # unrar IS A PART (`nix/modules/archives.nix`): the queue finds it
+        # by the part's stable path, and no variable here names it.
+        ;
         serviceConfig = {
           ExecStart = "${ronoctua.transfers}/bin/ronoctua-transfers";
           Restart = "on-failure";

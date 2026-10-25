@@ -15,7 +15,9 @@
 #   4. a part whose interface changes is reached at its new path only once it
 #      is there, and the old path stays for a rollback;
 #   5. a download its origin does not have comes from a mirror the person
-#      named, by its hash, and only those bytes.
+#      named, by its hash, and only those bytes;
+#   6. a part whose output the machine already carries is seeded — its
+#      profile set with no derivation and no download, as an ISO's are.
 #
 # THE PARTS ARE SMALL ON PURPOSE: a download (a fixed-output derivation that
 # runs curl against the server) and a script around it, built in the VM with
@@ -51,6 +53,7 @@ let
     d1
     e1
     f1
+    g1
     ;
   eDownload = parts.downloadOf "e" "1";
 
@@ -132,6 +135,10 @@ pkgs.testers.runNixOSTest {
           wanted = true;
           package = f1;
         };
+        g = {
+          wanted = true;
+          package = g1;
+        };
       };
 
       # THE PERSON'S OPTIONS as root's applier leaves them in the machine
@@ -156,6 +163,9 @@ pkgs.testers.runNixOSTest {
         pkgs.bash
         pkgs.curl.bin
         pkgs.coreutils
+        # `g`, BUILT: the machine carries its output, and never its
+        # derivation (the VM does not instantiate it) nor its download.
+        g1
       ];
       environment.etc."ronoctua-test/parts.nix".source = ./parts-vm-parts.nix;
       environment.etc."ronoctua-test/programs.json".text = builtins.toJSON programs;
@@ -219,6 +229,11 @@ pkgs.testers.runNixOSTest {
         assert run_as_person("a") == "a 1"
         assert run_as_person("c") == "c 1"
         machine.fail("su - noctua -c 'command -v b'")
+        # `g` IS SEEDED: its output was in the store, its derivation never
+        # was, and nothing served its download.
+        wait_phase("g", "here")
+        assert run_as_person("g") == "g 1"
+        machine.fail("test -e ${plain g1.drvPath}")
         # THE MIRROR BROUGHT `f`, which its origin never had — by its hash.
         wait_phase("f", "here")
         assert run_as_person("f") == "f 1"

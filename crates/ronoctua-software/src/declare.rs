@@ -1185,7 +1185,12 @@ mod tests {
     fn changing_a_declared_web_app_declares_it_again() {
         let root = scratch("web-edit");
         let (mut ctx, _log) = machine(&root);
-        ctx.tools.chrome = Some(root.join("bin/google-chrome-stable"));
+        // A CHROME THAT IS THERE: it is a part, and one that has not arrived
+        // is no browser (`web::chrome_here`). Never run.
+        let chrome = root.join("bin/google-chrome-stable");
+        std::fs::create_dir_all(chrome.parent().unwrap()).unwrap();
+        std::fs::write(&chrome, b"").unwrap();
+        ctx.tools.chrome = Some(chrome);
         decl::change_declared(&ctx.roots, |d| {
             decl::upsert(
                 d,

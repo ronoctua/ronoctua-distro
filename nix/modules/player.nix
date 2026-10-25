@@ -13,6 +13,7 @@
 {
   config,
   lib,
+  options,
   pkgs,
   ronoctua,
   ...
@@ -20,6 +21,9 @@
 
 let
   cfg = config.ronoctua.player;
+  # The parts' one nixpkgs (`nix/parts-pkgs.nix`): uade is not free.
+  partsPkgs = config.ronoctua.partsPkgs or (import ../parts-pkgs.nix { inherit pkgs; });
+  parts = options.ronoctua ? parts;
 
   # THE SOUNDS ONLY THE DECODERS OPEN, which freedesktop has no type for, the
   # player's own two files (`own`: `.rset` and `.rqueue`), and the subtitle
@@ -150,70 +154,91 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    environment.systemPackages = [ entry ];
-    # `xdg.mime` is what links `share/mime` and `share/applications` and runs
-    # `update-mime-database` over them; the defaults are the entry's own file.
-    xdg.mime.enable = true;
-
-    networking.firewall.interfaces.${config.services.tailscale.interfaceName}.allowedTCPPorts = [
-      cfg.port
-    ];
-
-    systemd.user.services.ronoctua-player = {
-      description = "ronoctua — the player";
-      partOf = [ "graphical-session.target" ];
-      after = [ "graphical-session.target" ];
-      wantedBy = [ "graphical-session.target" ];
-      environment =
-        import ../player-tools.nix {
-          inherit pkgs;
-          # MATROSKA'S TAGS WRITTEN only where the media profile is on: its
-          # tools pull Qt, which only that profile already carries
-          # (`profile-minimal-closes` proves the other one stays without).
-          matroska = config.ronoctua.media.enable;
-        }
-        # YT-DLP ONLY WHERE THE MEDIA PROFILE IS ON, for the queue's reason:
-        # a path here is a reference, and it would drag yt-dlp into the
-        # minimal profile through this unit.
-        // lib.optionalAttrs config.ronoctua.media.enable {
-          RONOCTUA_YT_DLP = "${pkgs.yt-dlp}/bin/yt-dlp";
-        }
-        # AND THE PO TOKEN'S THREE, exactly when the queue has them: playing
-        # YouTube anonymously needs the same attestation downloading does
-        # (`ronoctua_ytdlp::pot_flags`, all three or none).
-        // {
-          RONOCTUA_PLAYER_PORT = toString cfg.port;
-          # MPRIS: `Raise` raises the column through the shell, and
-          # `SupportedMimeTypes` is the list the desktop entry names.
-          RONOCTUA_SHELL = "${ronoctua.shell}/bin/ronoctua-shell";
-          RONOCTUA_PLAYER_TYPES = "${entry}/share/ronoctua/player-types";
-          # THE AMBIENT SOUNDS (`nix/ambience.nix`): the loops and the index
-          # the daemon reads, ~42 MiB, with the player and never without it.
-          RONOCTUA_AMBIENCE = "${ronoctua.ambience}";
-        }
-        # The minter's own three (`nix/pot-provider.nix`), never spelled here,
-        # at the part's stable path (`nix/modules/transfers.nix` declares it).
-        // lib.optionalAttrs (config.ronoctua.transfers.poToken == "on-demand" && config.ronoctua ? parts) (
-          ronoctua.potProvider.environmentAt config.ronoctua.parts.pot-provider.path
-        )
-        # THE WORLD, for the directories' globe (`engine/directory.rs`): where
-        # each country's name goes on a map, so a radio or TV page arrives
-        # with its marks placed and a door only draws them. The same table
-        # the doors draw the globe with, read at run time as they read it
-        # (`atlas-is-at-run-time`) — and without it every row is said to have
-        # no place on the map, never placed at a guess.
-        // lib.optionalAttrs (ronoctua ? atlas) {
-          RONOCTUA_ATLAS = "${ronoctua.atlas}/world.atlas";
-        };
-      serviceConfig = {
-        ExecStart = "${ronoctua.player}/bin/ronoctua-player";
-        Restart = "on-failure";
-        RestartSec = 1;
-        # `session.slice`, beside the footer: music chosen by a person is not
-        # an application oomd may pick at random.
-        Slice = "session.slice";
+  config = lib.mkMerge [
+    # ── anchor: L25 ──
+    # THE AMIGA'S DECODER IS A PART: not free, so never in the system's
+    # closure. Declared outside the switch — the switch is its `wanted` — and
+    # the unit below names its stable path, which the engine asks after on
+    # every song (`ronoctua_parts::here`).
+    (lib.optionalAttrs parts {
+      ronoctua.parts.uade = {
+        wanted = cfg.enable;
+        kind = "program";
+        unfree = true;
+        name = "uade";
+        package = partsPkgs.unfree.uade;
       };
-    };
-  };
+    })
+    (lib.mkIf cfg.enable {
+      environment.systemPackages = [ entry ];
+      # `xdg.mime` is what links `share/mime` and `share/applications` and runs
+      # `update-mime-database` over them; the defaults are the entry's own file.
+      xdg.mime.enable = true;
+
+      networking.firewall.interfaces.${config.services.tailscale.interfaceName}.allowedTCPPorts = [
+        cfg.port
+      ];
+
+      systemd.user.services.ronoctua-player = {
+        description = "ronoctua — the player";
+        partOf = [ "graphical-session.target" ];
+        after = [ "graphical-session.target" ];
+        wantedBy = [ "graphical-session.target" ];
+        environment =
+          import ../player-tools.nix {
+            inherit pkgs;
+            # MATROSKA'S TAGS WRITTEN only where the media profile is on: its
+            # tools pull Qt, which only that profile already carries
+            # (`profile-minimal-closes` proves the other one stays without).
+            matroska = config.ronoctua.media.enable;
+          }
+          # YT-DLP ONLY WHERE THE MEDIA PROFILE IS ON, for the queue's reason:
+          # a path here is a reference, and it would drag yt-dlp into the
+          # minimal profile through this unit.
+          // lib.optionalAttrs config.ronoctua.media.enable {
+            RONOCTUA_YT_DLP = "${pkgs.yt-dlp}/bin/yt-dlp";
+          }
+          # uade AT THE PART'S STABLE PATH, never its store path — which would
+          # pull it, unfree, into the system's closure through this unit.
+          // lib.optionalAttrs parts {
+            RONOCTUA_UADE = "${config.ronoctua.parts.uade.path}/bin/uade123";
+          }
+          # AND THE PO TOKEN'S THREE, exactly when the queue has them: playing
+          # YouTube anonymously needs the same attestation downloading does
+          # (`ronoctua_ytdlp::pot_flags`, all three or none).
+          // {
+            RONOCTUA_PLAYER_PORT = toString cfg.port;
+            # MPRIS: `Raise` raises the column through the shell, and
+            # `SupportedMimeTypes` is the list the desktop entry names.
+            RONOCTUA_SHELL = "${ronoctua.shell}/bin/ronoctua-shell";
+            RONOCTUA_PLAYER_TYPES = "${entry}/share/ronoctua/player-types";
+            # THE AMBIENT SOUNDS (`nix/ambience.nix`): the loops and the index
+            # the daemon reads, ~42 MiB, with the player and never without it.
+            RONOCTUA_AMBIENCE = "${ronoctua.ambience}";
+          }
+          # The minter's own three (`nix/pot-provider.nix`), never spelled here,
+          # at the part's stable path (`nix/modules/transfers.nix` declares it).
+          // lib.optionalAttrs (config.ronoctua.transfers.poToken == "on-demand" && config.ronoctua ? parts) (
+            ronoctua.potProvider.environmentAt config.ronoctua.parts.pot-provider.path
+          )
+          # THE WORLD, for the directories' globe (`engine/directory.rs`): where
+          # each country's name goes on a map, so a radio or TV page arrives
+          # with its marks placed and a door only draws them. The same table
+          # the doors draw the globe with, read at run time as they read it
+          # (`atlas-is-at-run-time`) — and without it every row is said to have
+          # no place on the map, never placed at a guess.
+          // lib.optionalAttrs (ronoctua ? atlas) {
+            RONOCTUA_ATLAS = "${ronoctua.atlas}/world.atlas";
+          };
+        serviceConfig = {
+          ExecStart = "${ronoctua.player}/bin/ronoctua-player";
+          Restart = "on-failure";
+          RestartSec = 1;
+          # `session.slice`, beside the footer: music chosen by a person is not
+          # an application oomd may pick at random.
+          Slice = "session.slice";
+        };
+      };
+    })
+  ];
 }

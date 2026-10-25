@@ -700,6 +700,17 @@ impl Tools {
         }
     }
 
+    /// The same programs, unrar found at `found` when nothing handed it in —
+    /// a machine's unrar is a part, which this crate does not know
+    /// (`ronoctua_parts::file_of`, asked by the caller on every run).
+    #[must_use]
+    pub fn with_unrar(mut self, found: Option<PathBuf>) -> Self {
+        if self.unrar.is_none() {
+            self.unrar = found;
+        }
+        self
+    }
+
     /// The same programs, run under `switch`.
     #[must_use]
     pub fn held_by(self, switch: Switch) -> Self {

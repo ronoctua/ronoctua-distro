@@ -53,8 +53,9 @@ let
       outputHash = builtins.hashString "sha256" (content name version);
     };
 
-  partOf =
-    name: version:
+  # A part around the file `bytes`: its download, or a file of the store.
+  partWith =
+    name: version: bytes:
     derivation {
       name = "test-part-${name}-${version}";
       inherit system;
@@ -69,7 +70,7 @@ let
         ''
           set -e
           ${bin}/mkdir -p $out/bin $out/lib/qt-6/plugins
-          printf '#!${sh}\n${bin}/cat ${download name version}\n' > $out/bin/${name}
+          printf '#!${sh}\n${bin}/cat ${bytes}\n' > $out/bin/${name}
           ${bin}/chmod +x $out/bin/${name}
           # A plugin folder the view must never reach.
           ${bin}/touch $out/lib/qt-6/plugins/never.so
@@ -77,6 +78,7 @@ let
         ''
       ];
     };
+  partOf = name: version: partWith name version (download name version);
 in
 {
   inherit content file;
@@ -89,5 +91,7 @@ in
   e1 = partOf "e" "1";
   # Never at its origin: only on the person's mirror.
   f1 = partOf "f" "1";
+  # Carried by the machine already (an ISO's, a test's): seeded, never built.
+  g1 = partWith "g" "1" (builtins.toFile "test-part-g-1" (content "g" "1"));
   downloadOf = download;
 }

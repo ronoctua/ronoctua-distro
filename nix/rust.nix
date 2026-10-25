@@ -640,7 +640,8 @@ let
     RONOCTUA_GIT_ASKPASS = "${
       import ./git-askpass.nix { inherit pkgs rustToolchain; }
     }/bin/ronoctua-git-askpass";
-    # `RONOCTUA_UNRAR` is NOT here: it is in `atRunTime` (see there).
+    # `RONOCTUA_UNRAR` is NOT here: unfree, it is a part on a machine
+    # (`nix/modules/archives.nix`) and reaches only the tests (`testEnv`).
     inherit (import ./archive-tools.nix { inherit pkgs; })
       RONOCTUA_7ZZ
       RONOCTUA_BSDTAR
@@ -887,17 +888,13 @@ let
     # error. `iconset-is-at-run-time` holds it here.
     RONOCTUA_ICONSET = "${iconset}";
 
-    # UNRAR, AT RUN TIME AND NOT IN `generated`, because it is UNFREE: baked,
-    # its store path was a reference of the workspace, and `nix run .#release`
-    # never pushes to the public cache what refers to an unfree program — so
-    # the workspace, the most expensive build there is, would never be in the
-    # cache, and every machine and every installation would compile it. Set by
-    # the wrapper here, by the queue's unit (`nix/modules/transfers.nix`) and
-    # exported by the devshell and the nested loop; the system carries unrar
-    # anyway (`nix/modules/archives.nix`), so no closure grows.
-    # `release-cache-holds-only-free-builds` refuses an unfree program in
-    # `generated`.
-    inherit (import ./archive-tools.nix { inherit pkgs; }) RONOCTUA_UNRAR;
+    # NO UNRAR: it is UNFREE, and so a PART (`nix/modules/archives.nix`),
+    # never in the system's closure nor in this wrapper's — a store path here
+    # put it in the shell's bundle and, through it, on the published ISO.
+    # The programs find it by the part's stable path
+    # (`ronoctua_archive::Tools::from_env`); only the tests are handed it
+    # (`testEnv`). `release-cache-holds-only-free-builds` refuses an unfree
+    # program in `generated`.
 
   };
 

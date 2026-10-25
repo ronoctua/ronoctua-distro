@@ -366,14 +366,13 @@ fn archived(
     work: &Work,
 ) -> Option<Result<()>> {
     let control = Arc::clone(switch);
-    let tools =
-        ronoctua_archive::Tools::from_env().held_by(ronoctua_archive::Switch::new(move || {
-            match control.flow() {
-                Flow::Run => ronoctua_archive::Hold::Go,
-                Flow::Pause => ronoctua_archive::Hold::Pause,
-                Flow::Stop => ronoctua_archive::Hold::Stop,
-            }
-        }));
+    let tools = archive_tools().held_by(ronoctua_archive::Switch::new(move || {
+        match control.flow() {
+            Flow::Run => ronoctua_archive::Hold::Go,
+            Flow::Pause => ronoctua_archive::Hold::Pause,
+            Flow::Stop => ronoctua_archive::Hold::Stop,
+        }
+    }));
     let mut said = crate::engine::Progress::new(shared, id);
     let outcome = match work {
         Work::Compress {
@@ -547,6 +546,13 @@ impl<'a> Beats<'a> {
     }
 }
 
+/// The archive programs as this machine has them: unrar is a part
+/// (`nix/modules/archives.nix`), asked for by its stable path on every run.
+fn archive_tools() -> ronoctua_archive::Tools {
+    ronoctua_archive::Tools::from_env()
+        .with_unrar(ronoctua_parts::file_of("unrar", "bin/unrar").ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,7 +588,7 @@ mod tests {
     /// THE REAL PROGRAMS, or the test fails: one that returned early would
     /// prove nothing and pass.
     fn programs_are_here() {
-        let tools = ronoctua_archive::Tools::from_env();
+        let tools = archive_tools();
         assert!(
             tools.sevenzz.is_some() && tools.setsid.is_some() && tools.bsdtar.is_some(),
             "RONOCTUA_7ZZ, RONOCTUA_BSDTAR and RONOCTUA_SETSID are needed: run inside `nix develop` or the tests derivation"
@@ -718,9 +724,7 @@ mod tests {
             },
         );
         assert_eq!(converted.stage, Stage::Done, "{:?}", converted.archive);
-        let members = ronoctua_archive::Tools::from_env()
-            .list(&tar, None)
-            .unwrap();
+        let members = archive_tools().list(&tar, None).unwrap();
         let names: Vec<&str> = members
             .iter()
             .map(|m| m.path.trim_end_matches('/'))

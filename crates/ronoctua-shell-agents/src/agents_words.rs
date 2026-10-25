@@ -28,6 +28,7 @@ pub const fn refusal_key(why: Why) -> &'static str {
         Why::Unknown => key::AGENTS_REFUSED_UNKNOWN,
         Why::Invalid => key::AGENTS_REFUSED_INVALID,
         Why::NotInstalled => key::AGENTS_REFUSED_NOT_INSTALLED,
+        Why::Arriving => key::AGENTS_REFUSED_ARRIVING,
         Why::Failed => key::AGENTS_REFUSED_FAILED,
     }
 }

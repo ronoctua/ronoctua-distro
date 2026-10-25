@@ -288,6 +288,29 @@ let
             tools its editor calls, a launcher entry of ours that opens it.
           '';
         };
+        part = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            A PART (`nix/modules/parts.nix`): the program and its companions
+            are realized after the installation and kept out of the system's
+            closure — what is not free (its package from the parts' one door,
+            `config.ronoctua.partsPkgs`), or needs a download no public cache
+            holds. The session finds it in the parts' view once it arrived;
+            whoever runs it names its stable path
+            (`config.ronoctua.parts.<id>.path`). Only a nixpkgs package
+            (`source` nix).
+          '';
+        };
+        heavy = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            A part that takes long to arrive (gigabytes, an hour of building):
+            realized after the light ones, so a machine gets its small parts
+            first.
+          '';
+        };
         flatpak = lib.mkOption {
           type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
           default = null;
@@ -422,6 +445,35 @@ let
 
   installed = lib.mapAttrs (id: e: e.when && !(builtins.elem id honouredIds)) apps;
   installedIds = builtins.filter (id: installed.${id}) ids;
+
+  # ── anchor: L25 ──
+  # THE ENTRIES THAT ARE PARTS: realized after the installation, never in
+  # `systemPackages`. Every one is declared, wanted or not — a part the
+  # person declined is UNWANTED, and its record says so.
+  partIds = builtins.filter (id: apps.${id}.part) ids;
+  partOf =
+    id:
+    let
+      e = apps.${id};
+      paths = [ e.package ] ++ e.extraPackages;
+    in
+    {
+      wanted = installed.${id};
+      inherit (e) heavy;
+      kind = "program";
+      unfree = lib.any (l: !(l.free or true)) (lib.toList (e.package.meta.license or [ ]));
+      name = if e.name != null then e.name else id;
+      # ONE PATH per part: the program alone, or with what comes and goes
+      # with it, joined.
+      package =
+        if e.extraPackages == [ ] then
+          e.package
+        else
+          pkgs.buildEnv {
+            name = "ronoctua-part-${id}";
+            inherit paths;
+          };
+    };
 
   # ---------------------------------------------------------------------
   # The builders of the distro's other sources
@@ -571,7 +623,7 @@ let
       Version=1.5
       Name=${w.name}
       Exec=/run/current-system/sw/bin/ronoctua-software web-open ${w.slug}
-      TryExec=/run/current-system/sw/bin/google-chrome-stable
+      TryExec=${(import ../parts-names.nix).viewBin "google-chrome-stable"}
       Terminal=false
       StartupNotify=true
       Categories=${w.category};
@@ -1377,34 +1429,43 @@ in
     };
   };
 
-  config = {
-    # The table's well-formed lines join the modules' own entries.
-    ronoctua.apps = lib.mapAttrs fromTable wellFormed;
+  config = lib.mkMerge [
+    # ── anchor: L25 ──
+    # THE ENTRIES THAT ARE PARTS, declared as parts (`partOf`): where the
+    # parts' module is imported — every machine; a test that leaves it out
+    # carries none of them.
+    (lib.optionalAttrs (options.ronoctua ? parts) {
+      ronoctua.parts = lib.genAttrs partIds partOf;
+    })
+    {
+      # The table's well-formed lines join the modules' own entries.
+      ronoctua.apps = lib.mapAttrs fromTable wellFormed;
 
-    # THE DISTRO'S PINS, but where the person's followed build takes the
-    # place (`personPackages`): never both.
-    environment.systemPackages =
-      assert checked;
-      lib.concatMap (id: packagesOf id apps.${id}) (
-        builtins.filter (id: !(followedHere id)) installedIds
-      );
+      # THE DISTRO'S PINS, but where the person's followed build takes the
+      # place (`personPackages`): never both.
+      environment.systemPackages =
+        assert checked;
+        lib.concatMap (id: packagesOf id apps.${id}) (
+          builtins.filter (id: !(followedHere id) && !apps.${id}.part) installedIds
+        );
 
-    environment.etc."ronoctua/distro-apps.json".text =
-      assert checked;
-      builtins.toJSON report;
+      environment.etc."ronoctua/distro-apps.json".text =
+        assert checked;
+        builtins.toJSON report;
 
-    warnings =
-      lib.optional (!formatKnown) ''
-        The person's declined programs (${toString declinedFile}) say format
-        ${builtins.toJSON (declinedDoc.format or null)}, which this distro does not read: nothing
-        declined there was honoured.
-      ''
-      ++ lib.optional (!followedFormatKnown) ''
-        The distro pins the person follows (${toString (config.ronoctua.person.distroPins or null)})
-        say format ${builtins.toJSON (followedDoc.format or null)}, which this distro does not
-        read: the distro's own pins are built.
-      '';
-  };
+      warnings =
+        lib.optional (!formatKnown) ''
+          The person's declined programs (${toString declinedFile}) say format
+          ${builtins.toJSON (declinedDoc.format or null)}, which this distro does not read: nothing
+          declined there was honoured.
+        ''
+        ++ lib.optional (!followedFormatKnown) ''
+          The distro pins the person follows (${toString (config.ronoctua.person.distroPins or null)})
+          say format ${builtins.toJSON (followedDoc.format or null)}, which this distro does not
+          read: the distro's own pins are built.
+        '';
+    }
+  ];
 
   # ── anchor: L04 ──
 }

@@ -132,9 +132,16 @@ pkgs.testers.runNixOSTest {
         assert said["say"] == "done", f"{name}: {said}"
         machine.sleep(3)
         a = player({"ask": "look"})
-        machine.sleep(2)
-        b = player({"ask": "look"})
-        assert not b["troubles"], f"{name}: {b['troubles']}"
+        # IT MOVES WITHIN A REGIME, never within two seconds: a film decoded
+        # in software on a machine busy with a battery moved 0.07 s in two
+        # (measured, 2026-10-24). A player that does not play never moves in
+        # the whole minute.
+        for _ in range(60):
+            machine.sleep(1)
+            b = player({"ask": "look"})
+            assert not b["troubles"], f"{name}: {b['troubles']}"
+            if b["position"] > a["position"] + 0.5:
+                break
         assert b["position"] > a["position"] + 0.5, (
             f"{name} does not move: {a['position']} -> {b['position']}"
         )

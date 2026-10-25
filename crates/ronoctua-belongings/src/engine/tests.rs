@@ -364,15 +364,21 @@ fn a_round_trip_restores_everything_and_the_repository_holds_nothing_in_the_clea
             assert_eq!(kind, sealed, "{name} is not sealed post-quantum");
         }
     }
+    // EIGHT BYTES OR MORE, every needle: a sealed chunk is bytes that look
+    // random, and a four-byte word turns up in a few megabytes of them by
+    // chance (`tmdb` did, in the `most` of 2026-10-24) — eight bytes, never
+    // in any repository a test makes.
     for needle in [
         &b"theme.json"[..],
         b"owl-secret-theme",
-        b"tmdb",
-        b"diary",
+        b"player-keys/tmdb",
+        b"tmdb-token-plaintext",
+        b"diary.md",
+        b"dear diary",
         b"plaintext-marker",
-        b"notes",
+        b"home/notes",
         b"machine-alpha",
-        b"config/",
+        b"config/theme",
     ] {
         for (name, content) in names.iter().zip(&bytes) {
             if plain.iter().any(|(p, _)| p == name) {

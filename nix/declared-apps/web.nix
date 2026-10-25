@@ -51,7 +51,9 @@ let
   # The two stable paths `web.rs` names (`SOFTWARE`, `CHROME`): a store path
   # in a launcher entry would open a deleted program after a collection.
   software = "/run/current-system/sw/bin/ronoctua-software";
-  chrome = "/run/current-system/sw/bin/google-chrome-stable";
+  # Chrome is a part: its program in the session's view, there only once it
+  # arrived (`nix/parts-names.nix`).
+  chrome = (import ../parts-names.nix).viewBin "google-chrome-stable";
   prefix = "ronoctua-web-";
 
   # The freedesktop main categories a web app may take (`web::CATEGORIES`);

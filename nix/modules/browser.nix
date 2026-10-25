@@ -36,8 +36,10 @@
 
 let
   cfg = config.ronoctua.browser;
+  # The parts' one nixpkgs (`nix/parts-pkgs.nix`): Chrome is not free.
+  partsPkgs = config.ronoctua.partsPkgs or (import ../parts-pkgs.nix { inherit pkgs; });
 
-  chrome = pkgs.google-chrome.override {
+  chrome = partsPkgs.unfree.google-chrome.override {
     commandLineArgs = [
       # The whole point of this module.
       "--password-store=basic"
@@ -66,6 +68,10 @@ let
   # `.desktop` has room for one language, and that is English (AGENTS.md,
   # invariant 18). `Exec` is the store path, the rule for a program the
   # system calls; `%u` hands an address over when one is opened with it.
+  # `TryExec` is Chrome in the parts' view: Chrome is a part, and the door
+  # hides until it arrived. It lives in the base, not in Chrome's part: it
+  # names the shell, and inside the part every update of the shell would
+  # make Chrome arrive again.
   # No `MimeType`: it opens an address when ASKED, and never takes links
   # from the person's default browser. Its glyph comes from
   # `assets/icons/tray-glyphs.nix`, by this id.
@@ -75,6 +81,7 @@ let
     Name=Chrome kiosk
     Comment=Your Chrome without its bars; the footer draws its tabs
     Exec=${ronoctua.shell}/bin/ronoctua-shell command kiosk-open %u
+    TryExec=${(import ../parts-names.nix).viewBin "google-chrome-stable"}
     Terminal=false
     Categories=Network;WebBrowser;
   '';
@@ -99,10 +106,10 @@ in
       # (`nix/modules/distro-apps.nix`, `carried`).
       apply = carried: carried && !(lib.elem "chrome" config.ronoctua.distroApps.honoured);
     };
-    # THE CHROME THIS MACHINE RUNS. The wrapped one above; `tests/kiosk-vm.nix`
-    # hands in the real Chrome with its own test flags, because a test node's
-    # `pkgs` admits nothing unfree. Whatever is here is what
-    # `/run/current-system/sw/bin/google-chrome-stable` is.
+    # THE CHROME THIS MACHINE RUNS, as a part: the wrapped one above, from
+    # the parts' one door; `tests/kiosk-vm.nix` hands in the real Chrome with
+    # its own test flags. Whatever is here is what the parts' view's
+    # `google-chrome-stable` is, once it arrived.
     package = lib.mkOption {
       type = lib.types.package;
       default = chrome;
@@ -116,9 +123,13 @@ in
     # the kiosk's launcher entry goes and comes with it: a door to the kiosk
     # on a machine without Chrome would open nothing. `when` is this group's
     # switch, `ronoctua.browser.enable`, which a decline turns off (above).
+    #
+    # A PART (`nix/modules/parts.nix`): not free, it arrives after the
+    # installation and stays out of the system's closure; its launcher
+    # entries reach the session through the parts' view.
     ronoctua.apps.chrome = {
       package = cfg.package;
-      extraPackages = [ kioskEntry ];
+      part = true;
       group = "browser";
       desktopIds = [
         "google-chrome.desktop"
@@ -132,6 +143,9 @@ in
     # the trap `RONOCTUA_GRIM` records in `nix/modules/scroll.nix`.
     systemd.user.services.ronoctua-footer.environment.RONOCTUA_BROWSER_MANIFEST =
       lib.mkIf cfg.enable bridgeManifest;
+
+    # THE KIOSK'S DOOR, in the base, wherever Chrome is wanted (above).
+    environment.systemPackages = lib.mkIf config.ronoctua.distroApps.installed.chrome [ kioskEntry ];
 
     # The portal is what a file dialog and a screen share go through on Wayland.
     # `xdg.portal` is already enabled by nix/modules/scroll.nix; this only adds the

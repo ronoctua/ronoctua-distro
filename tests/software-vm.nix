@@ -60,6 +60,9 @@
   lib,
   inputs,
   ronoctua,
+  # `ronoctua-parts`, extracted (`rust.parts`): Chrome is a part, and the
+  # stand-in arrives as one.
+  partsTool,
 }:
 
 let
@@ -250,6 +253,8 @@ pkgs.testers.runNixOSTest {
     {
       imports = [
         ../nix/modules/base.nix
+        # CHROME IS A PART: the stand-in arrives as the real one does, seeded.
+        (import ../nix/modules/parts.nix { tool = partsTool; })
         # THE BRAIN'S MODULES' NIXOS HALVES, for the options they declare —
         # `ronoctua.update.steps` is answered by modules imported here — and
         # nothing else: the brain is off below, and every module's `config`
@@ -288,15 +293,26 @@ pkgs.testers.runNixOSTest {
       ronoctua.update.enable = false;
       ronoctua.brain.enable = false;
 
-      # CHROME AT ITS STABLE PATH, and the variable the software tools give
-      # the two units when the browser is on — see the header.
-      environment.systemPackages = [ fakeChrome ];
+      # CHROME AT ITS STABLE PATH — a part, as on a machine, its output
+      # carried and so seeded into the parts' view — and the variable the
+      # software tools give the two units when the browser is on (see the
+      # header).
+      # Its own id: the registry declares `chrome`, unwanted here (the
+      # browser is off), and the stand-in is another part with the same
+      # program in the view.
+      ronoctua.parts.stand-in-chrome = {
+        wanted = true;
+        kind = "program";
+        name = "google-chrome-stable";
+        package = fakeChrome;
+      };
       systemd.user.services.ronoctua-footer.environment.RONOCTUA_CHROME = chromeStable;
       systemd.user.services.ronoctua-transfers.environment.RONOCTUA_CHROME = chromeStable;
 
       # OFFLINE, and saying so: nothing waits on a substituter it cannot reach.
       nix.settings.substituters = lib.mkForce [ ];
       virtualisation.additionalPaths = [
+        fakeChrome
         firstProbe
         secondProbe
       ];
@@ -505,6 +521,8 @@ pkgs.testers.runNixOSTest {
 
       machine.start()
       machine.wait_for_unit("multi-user.target")
+      # THE STAND-IN CHROME ARRIVES, seeded, in the session's view.
+      machine.wait_until_succeeds(f"test -x {STABLE_CHROME}", timeout=300)
       machine.wait_for_unit("xvfb.service")
       uid = machine.succeed(f"id -u {user}").strip()
       runtime = f"/run/user/{uid}"

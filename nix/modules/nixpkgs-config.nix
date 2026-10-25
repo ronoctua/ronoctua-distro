@@ -19,9 +19,6 @@
   ...
 }:
 
-let
-  cfg = config.ronoctua.dev;
-in
 {
   # THE SAME RUST THAT BUILDS THIS REPOSITORY.
   #
@@ -38,72 +35,24 @@ in
   # in from outside, and in that shape the option takes a single definition.
   # See the note in nix/modules/dev.nix.
   nixpkgs.config = {
-    # The Android SDK's licence, accepted declaratively rather than through
-    # `NIXPKGS_ACCEPT_ANDROID_SDK_LICENSE` in someone's environment.
-    android_sdk.accept_license = cfg.android;
-
-    # THE SDK FORCES `allowUnfree`, AND THAT IS A REAL LOSS.
-    #
-    # The predicate below names each unfree package and its reason, which is
-    # what keeps an unexpected one from slipping in. androidenv does not
-    # respect it: its components are evaluated through a pkgs the predicate
-    # never reaches, and even the exact name (`sdk-tools-linux-4333796.zip`)
-    # is refused with it in the list.
-    #
-    # So enabling Android widens the door for the whole system. What narrows it
-    # again is the option itself: `ronoctua.dev.android = false` puts the
-    # predicate back in charge.
-    allowUnfree = cfg.android;
+    # ── anchor: L25 ──
+    # THE SYSTEM ADMITS NOTHING UNFREE OF THE DISTRO'S: every such program —
+    # Chrome, VS Code, Claude Code, Android Studio and the SDK, unrar, uade —
+    # is a PART (`nix/modules/parts.nix`), built from the parts' one door
+    # (`nix/parts-pkgs.nix`) and kept out of the system's closure: never on
+    # the published ISO, never in a public cache, and a download that fails
+    # holds back nothing. No `allowUnfree` either: the SDK, which forced it,
+    # has an instance of its own there.
+    allowUnfree = false;
 
     allowUnfreePredicate =
       pkg:
-      let
-        name = lib.getName pkg;
-      in
-      builtins.elem name [
-        "unrar" # the only thing that opens .rar properly
-        "google-chrome" # asked for by name
-        "android-studio"
-        "claude-code" # asked for by name; prebuilt, unfree
-        "vscode" # asked for by name: Microsoft's build (`nix/modules/vscode.nix`)
-        # The same VS Code in its FHS environment (`nix/vscode.nix`), by the
-        # name its store path has: nixpkgs asks the environment as `vscode`
-        # (its `pname`), and the release asks it by this one
-        # (`nix/release-unfree.nix`), so a public cache never takes it.
-        "code"
-      ]
-      # The SDK is not one package: it is dozens of them, and the inner ones are
-      # named after the ZIP they came from (`platform-tools_r37.0.0-linux.zip`),
-      # not after the SDK. Listing them by hand is a list that goes stale on the
-      # next bump.
-      #
-      # A prefix rule is safe here for a reason worth stating: this predicate is
-      # only ever consulted for a package that is ALREADY unfree. Matching a name
-      # cannot let a free package through, and the only unfree things shaped like
-      # these are androidenv's.
-      || lib.any (prefix: lib.hasPrefix prefix name) [
-        "android-sdk-"
-        "platform-tools"
-        "build-tools"
-        "platforms-"
-        "cmdline-tools"
-        "sources-"
-        "ndk-"
-        "emulator"
-        "extras-"
-        "system-images"
-        "google-apis"
-        "patcher"
-        "skiaparser"
-        "sdk-tools"
-        "tools_r"
-      ]
       # ── anchor: L03 ──
-      # AND WHAT THE PERSON SAID YES TO when declaring it — by the same name
+      # ONLY WHAT THE PERSON SAID YES TO when declaring it — by the same name
       # this predicate compares (`lib.getName`), from the consumer of their
       # declarations (`nix/modules/person.nix`). An unfree package declared
       # without that consent is skipped there and never reaches this line.
-      || builtins.elem name config.ronoctua.person.unfreeNames;
+      builtins.elem (lib.getName pkg) config.ronoctua.person.unfreeNames;
   };
 
 }

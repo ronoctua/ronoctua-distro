@@ -96,6 +96,8 @@
   fonts,
   vscodeTool,
   belongingsTool,
+  # `ronoctua-parts`, extracted (`rust.parts`): VS Code is a part.
+  partsTool,
   # The flake's own nixpkgs, which an installed machine's registry locks.
   nixpkgsInput,
   ronoctua,
@@ -223,6 +225,9 @@ pkgs.testers.runNixOSTest {
       imports = [
         ../nix/modules/base.nix
         (import ../nix/modules/vscode.nix { inherit vscodeTool; })
+        # VS CODE IS A PART (not free): the parts' module realizes it — here
+        # SEEDED, its output carried by the machine (`additionalPaths`).
+        (import ../nix/modules/parts.nix { tool = partsTool; })
         # THE MACHINE'S REGISTRIES, from the module every machine has them
         # from: `nixpkgs` locked to the system's, the global one the store's.
         ../nix/modules/nix-registries.nix
@@ -240,6 +245,9 @@ pkgs.testers.runNixOSTest {
 
       ronoctua.editor.vscode = true;
       ronoctua.editor.vscodePackage = vscodeFhs;
+      # THE PART'S OUTPUT, carried: the realizer sets its profile with no
+      # derivation and no download, as an ISO's part is.
+      virtualisation.additionalPaths = [ config.ronoctua.parts.vscode.package ];
 
       # THE STAND-IN MARKETPLACE, by the real names, over TLS.
       networking.hosts."127.0.0.1" = galleryNames;
@@ -321,7 +329,10 @@ pkgs.testers.runNixOSTest {
           uid = machine.succeed(f"id -u {user}").strip()
           wrapped = (
               f"runuser -u {user} -- env HOME={home} XDG_RUNTIME_DIR=/run/user/{uid} "
-              f"PATH=/run/current-system/sw/bin sh -c " + shlex.quote(command)
+              # THE SESSION'S PATH, the parts' view after the system's (VS
+              # Code is a part, `nix/modules/parts.nix`).
+              f"PATH=/run/current-system/sw/bin:/var/lib/ronoctua-parts/view/bin sh -c "
+              + shlex.quote(command)
           )
           return machine.succeed(wrapped) if check else machine.execute(wrapped)
 
@@ -401,6 +412,12 @@ pkgs.testers.runNixOSTest {
       machine.start()
       machine.wait_for_unit("multi-user.target")
       machine.wait_for_unit("vscode-gallery.service")
+      # THE PART ARRIVES, seeded, and the session's view holds its `code`.
+      machine.wait_until_succeeds(
+          "test -x /nix/var/nix/profiles/ronoctua/parts/vscode/v1/bin/code"
+          " && test -e /var/lib/ronoctua-parts/view/bin/code",
+          timeout=300,
+      )
 
       with subtest("the policy is the machine's, where the pinned build reads it"):
           policy = json.loads(machine.succeed("cat /etc/vscode/policy.json"))
@@ -414,8 +431,8 @@ pkgs.testers.runNixOSTest {
           found = as_person("readlink -f $(command -v code)").strip()
           assert found == fhs, (found, fhs)
           entries = machine.succeed(
-              "grep -h '^Exec=' /run/current-system/sw/share/applications/code.desktop"
-              " /run/current-system/sw/share/applications/code-url-handler.desktop"
+              "grep -h '^Exec=' /var/lib/ronoctua-parts/view/share/applications/code.desktop"
+              " /var/lib/ronoctua-parts/view/share/applications/code-url-handler.desktop"
           ).splitlines()
           print(entries)
           assert entries and all(e.startswith("Exec=code ") for e in entries), entries

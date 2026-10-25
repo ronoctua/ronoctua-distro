@@ -1020,6 +1020,10 @@
         # the loop pays it, as it pays mkvtoolnix's.
         atRunTime = rust.atRunTime // {
           RONOCTUA_WORDS = "${wordsData}";
+          # AND unrar, a PART on a machine (`nix/modules/archives.nix`): the
+          # loop runs on a developer's machine, where it may be absent, and
+          # never reaches a closure.
+          inherit (import ./nix/archive-tools.nix { inherit pkgs; }) RONOCTUA_UNRAR;
         };
         inherit fonts fontconfigConf iconSuperpack;
         inherit themed themes defaultTheme;
@@ -3000,8 +3004,12 @@
         inherit gitHooks wit;
         inherit pkgs inputs;
         # THE WHOLE TABLE, and not values copied out of it — see the comment on
-        # `env` over there.
-        inherit (rust) atRunTime generated;
+        # `env` over there. And unrar, a part on a machine, for `cargo test`
+        # here (the units get it from `testEnv`).
+        inherit (rust) generated;
+        atRunTime = rust.atRunTime // {
+          inherit (import ./nix/archive-tools.nix { inherit pkgs; }) RONOCTUA_UNRAR;
+        };
         inherit iconSuperpack cargoDirs keysCheckout;
       };
 

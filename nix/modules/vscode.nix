@@ -76,9 +76,17 @@
 let
   cfg = config.ronoctua.editor;
   installed = config.ronoctua.distroApps.installed.vscode;
-  # `code` BY ITS STORE PATH: the queue's child and the footer run with a
-  # minimal `PATH`, and a bare name fails far from its cause.
-  code = "${cfg.vscodePackage}/bin/code";
+  # The parts' one nixpkgs (`nix/parts-pkgs.nix`): VS Code is not free.
+  partsPkgs = config.ronoctua.partsPkgs or (import ../parts-pkgs.nix { inherit pkgs; });
+  parts = config.ronoctua ? parts;
+  # `code` BY THE PART'S STABLE PATH: the queue's child and the footer run
+  # with a minimal `PATH`, and a bare name fails far from its cause — and a
+  # store path would pull VS Code, unfree, into the system's closure. Read
+  # on every use (`ronoctua_vscode::code`): it may not have arrived.
+  code = if parts then "${config.ronoctua.parts.vscode.path}/bin/code" else null;
+  # The person's command, inside the part, names the program by store path:
+  # it comes and goes with it.
+  codeInThePart = "${cfg.vscodePackage}/bin/code";
   # THE PERSON'S COMMAND, with `code` set: `ronoctua-vscode install` from a
   # terminal. A binary wrapper, as the shipped programs have.
   vscodeCli =
@@ -90,7 +98,7 @@ let
       ''
         mkdir -p $out/bin
         makeBinaryWrapper ${vscodeTool}/bin/ronoctua-vscode $out/bin/ronoctua-vscode \
-          --inherit-argv0 --set RONOCTUA_VSCODE ${code}
+          --inherit-argv0 --set RONOCTUA_VSCODE ${codeInThePart}
       '';
 in
 {
@@ -109,13 +117,13 @@ in
     };
     vscodePackage = lib.mkOption {
       type = lib.types.package;
-      default = import ../vscode.nix { inherit pkgs; };
-      defaultText = lib.literalExpression "import nix/vscode.nix { inherit pkgs; }";
+      default = import ../vscode.nix { pkgs = partsPkgs.unfree; };
+      defaultText = lib.literalExpression "import nix/vscode.nix { pkgs = config.ronoctua.partsPkgs.unfree; }";
       internal = true;
       description = ''
-        The VS Code the registry installs: `pkgs.vscode` in its FHS
-        environment (`nix/vscode.nix`). A VM test hands its own in: the
-        `pkgs` a test gets cannot admit an unfree package.
+        The VS Code the registry makes a part: `vscode` in its FHS
+        environment (`nix/vscode.nix`), from the parts' one door — the
+        system's `pkgs` admits nothing unfree.
       '';
     };
   };
@@ -127,8 +135,13 @@ in
       # Its two launcher entries are the package's own (the environment
       # links them); the URL handler's is hidden (`NoDisplay`). The person's
       # command comes and goes with it.
+      #
+      # A PART (`nix/modules/parts.nix`): not free, it arrives after the
+      # installation and stays out of the system's closure; its launcher
+      # entries reach the session through the parts' view.
       ronoctua.apps.vscode = {
         package = cfg.vscodePackage;
+        part = true;
         extraPackages = [ vscodeCli ];
         group = "vscode";
         desktopIds = [
@@ -147,10 +160,14 @@ in
       # WHERE `code` IS: the footer and its windows draw the extensions'
       # offer only where VS Code is (`offers::vscode_here`), and the queue's
       # child installs with it.
-      systemd.user.services.ronoctua-footer.environment.RONOCTUA_VSCODE = code;
-      systemd.user.services.ronoctua-transfers = lib.mkIf (config.ronoctua.transfers.enable or false) {
-        environment.RONOCTUA_VSCODE = code;
+      systemd.user.services.ronoctua-footer.environment = lib.mkIf parts {
+        RONOCTUA_VSCODE = code;
       };
+      systemd.user.services.ronoctua-transfers =
+        lib.mkIf ((config.ronoctua.transfers.enable or false) && parts)
+          {
+            environment.RONOCTUA_VSCODE = code;
+          };
 
       systemd.user.paths.ronoctua-vscode-record = {
         description = "Records the VS Code extensions installed here into the person's list when VS Code's manifest or the list changes";

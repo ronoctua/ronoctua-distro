@@ -930,6 +930,13 @@ mod tests {
     /// Three hundred frames at fifty a second is six seconds of film. Paced by
     /// a fixed sleep AFTER the work, it took seventeen per cent longer and the
     /// error accumulated; paced by due time it does not.
+    ///
+    /// IN A REGIME OF SECONDS, never milliseconds (AGENTS.md: no test holds a
+    /// time under a second): forty-nine periods of 40 ms with 30 ms of work
+    /// each are 1.96 s paced by due time and 3.43 s paced by a fixed sleep,
+    /// and a busy machine only makes the LAST frame late — a due time is
+    /// absolute — so a second of margin tells the two apart on any machine.
+    /// (Forty milliseconds of margin failed under a battery.)
     #[test]
     fn the_clock_does_not_drift() {
         let era = AtomicU64::new(0);
@@ -939,15 +946,15 @@ mod tests {
             held: &held,
             mine: 0,
         };
-        let fps = 50.0_f64;
+        let fps = 25.0_f64;
         let origin = Instant::now();
-        let frames = 20;
+        let frames = 50;
         for n in 0..frames {
             #[allow(clippy::cast_precision_loss)]
             let due = origin + Duration::from_secs_f64(f64::from(n) / fps);
             assert!(clock.wait_until(due), "the clock let go");
             // THE WORK, which a fixed sleep would have added to every period.
-            std::thread::sleep(Duration::from_millis(3));
+            std::thread::sleep(Duration::from_millis(30));
         }
         let ran = origin.elapsed();
         #[allow(clippy::cast_precision_loss)]
@@ -957,10 +964,9 @@ mod tests {
             "it ran faster than the film: {ran:?} against {want:?}"
         );
         // AND NOT MUCH LONGER. Under a fixed sleep this would be `want` plus
-        // three milliseconds a frame — sixty over twenty frames, half again as
-        // long.
+        // thirty milliseconds a frame — 1.47 s over forty-nine periods.
         assert!(
-            ran < want + Duration::from_millis(40),
+            ran < want + Duration::from_secs(1),
             "the clock drifted: {ran:?} against {want:?}"
         );
     }

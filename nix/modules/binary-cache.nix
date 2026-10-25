@@ -76,8 +76,8 @@ let
 
   # THE NAMES THIS MACHINE CARRIES, for the unfree question: its packages,
   # the person's own, and every program a session or a user unit is handed
-  # by store path (the player's `uade`, the archives' `unrar` come in by a
-  # nixpkgs of their own, `nix/release-unfree.nix` says why).
+  # by store path. (A part — `uade`, `unrar` — is out of the closure, named
+  # by its stable path, and never pushed.)
   candidates = lib.unique (
     builtins.filter (n: n != "") (
       map nameOf config.environment.systemPackages

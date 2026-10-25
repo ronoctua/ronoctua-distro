@@ -52,4 +52,4 @@ pub mod view;
 
 mod here;
 
-pub use here::{Absent, here};
+pub use here::{Absent, file_of, file_of_in, here};

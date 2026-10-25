@@ -32,11 +32,13 @@
 
 let
   installed = id: config.ronoctua.distroApps.installed.${id} or false;
+  # Claude Code is a part (`nix/modules/dev.nix`): its stable path.
+  parts = config.ronoctua ? parts;
 in
 {
   config.systemd.user.services.ronoctua-footer.environment = lib.mkMerge [
-    (lib.mkIf (installed "claude-code") {
-      RONOCTUA_CLAUDE = "${pkgs.claude-code}/bin/claude";
+    (lib.mkIf (installed "claude-code" && parts) {
+      RONOCTUA_CLAUDE = "${config.ronoctua.parts.claude-code.path}/bin/claude";
     })
     (lib.mkIf (installed "codex") {
       RONOCTUA_CODEX = "${pkgs.codex}/bin/codex";

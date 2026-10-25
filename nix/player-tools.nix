@@ -25,17 +25,11 @@
 let
   adplay = import ./adplug.nix { inherit pkgs; };
 
-  # THE AMIGA'S DECODER IS UNFREE, and it is let in BY NAME and alone: a
-  # nixpkgs of its own whose predicate admits `uade` and nothing else, so this
-  # table never needs `allowUnfree` and no other unfree package can arrive
-  # through it. The distro already names three unfree packages
-  # (`nix/modules/nixpkgs-config.nix`); this is the fourth, for the formats
-  # every Amiga game and demo wrote its music in.
-  uade =
-    (import pkgs.path {
-      inherit (pkgs.stdenv.hostPlatform) system;
-      config.allowUnfreePredicate = pkg: (pkg.pname or "") == "uade";
-    }).uade;
+  # THE AMIGA'S DECODER IS UNFREE: it comes through the parts' one door
+  # (`nix/parts-pkgs.nix`), the same store path the machine's part holds
+  # (`nix/modules/player.nix`). This table hands it to the tests and the
+  # nested loop; on a machine the unit names the part's stable path instead.
+  inherit ((import ./parts-pkgs.nix { inherit pkgs; }).unfree) uade;
 in
 {
   # The Commodore 64.

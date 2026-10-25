@@ -253,9 +253,10 @@ pub struct Tools {
     pub systemd_run: Option<PathBuf>,
     /// `RONOCTUA_SYSTEMCTL`.
     pub systemctl: Option<PathBuf>,
-    /// `RONOCTUA_CHROME` — a STABLE path (`/run/current-system/sw/bin/…`),
+    /// `RONOCTUA_CHROME` — a STABLE path (the parts' view, `…/view/bin/…`),
     /// never a store path: a `.desktop` written today has to open the Chrome
-    /// of the next generation too.
+    /// of the next generation too. Chrome is a part, so the path may name
+    /// nothing yet: asked after on every use.
     pub chrome: Option<PathBuf>,
     /// `RONOCTUA_SHELL` — our own binary, for "open this in a terminal".
     pub shell: Option<PathBuf>,

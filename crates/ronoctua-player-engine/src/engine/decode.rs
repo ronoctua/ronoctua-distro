@@ -36,6 +36,15 @@ fn start(
 ) -> Result<(Box<dyn Read + Send>, Option<std::process::Child>)> {
     let program =
         std::env::var(decoder.env).with_context(|| format!("{} is not set", decoder.env))?;
+    // A DECODER THAT IS A PART (uade, not free: `nix/modules/player.nix`)
+    // may not have arrived: asked on every song, never once at start.
+    let program = ronoctua_parts::here(Path::new(&program)).map_err(|absent| {
+        anyhow::anyhow!(
+            "{} has not arrived yet (the part {})",
+            absent.path.display(),
+            absent.part.unwrap_or_default()
+        )
+    })?;
     let soundfont = std::env::var("RONOCTUA_SOUNDFONT").unwrap_or_default();
     // A FIFO for the decoders that only write to a file. It lives in the
     // runtime directory, named after this process and a counter.
@@ -96,7 +105,7 @@ fn start(
         })
         .stderr(std::process::Stdio::null())
         .spawn()
-        .with_context(|| format!("running {program}"))?;
+        .with_context(|| format!("running {}", program.display()))?;
     let mut child = Some(child);
     let mut wav: Box<dyn Read + Send> = match (decoder.output, fifo) {
         (decoders::Output::WavToGrowingFile, Some(stem)) => Box::new(Growing::open(

@@ -55,12 +55,14 @@ let
   cfg = config.ronoctua.parts;
   user = config.ronoctua.user;
 
-  # THE NAMES, as `ronoctua_parts::names` writes them.
-  partsRoot = "/nix/var/nix/profiles/ronoctua/parts";
-  stateDir = "/var/lib/ronoctua-parts";
-  view = "${stateDir}/view";
+  # THE NAMES, as `ronoctua_parts::names` writes them (`nix/parts-names.nix`).
+  inherit (import ../parts-names.nix)
+    partsRoot
+    stateDir
+    view
+    gcroots
+    ;
   planFile = "ronoctua/parts-plan.json";
-  gcroots = "/nix/var/nix/gcroots/ronoctua-parts";
   plannerUnit = "ronoctua-parts.service";
   realizerUnit = id: "ronoctua-part@${id}.service";
   acceptUnit = "ronoctua-parts-accept.service";
@@ -194,6 +196,20 @@ let
 in
 {
   # THE PROGRAM, for the update's `parts-plan` step.
+  options.ronoctua.partsPkgs = lib.mkOption {
+    type = lib.types.raw;
+    readOnly = true;
+    internal = true;
+    default = import ../parts-pkgs.nix { inherit pkgs; };
+    defaultText = lib.literalMD "the parts' own nixpkgs (`nix/parts-pkgs.nix`)";
+    description = ''
+      THE ONE DOOR FOR A PACKAGE THAT IS NOT FREE: `unfree` (by name) and
+      `android` (the SDK), evaluated once. A module that makes an unfree
+      program a part takes its package from here, never from the system's
+      `pkgs`, which admits none.
+    '';
+  };
+
   options.ronoctua.partsProgram = lib.mkOption {
     type = lib.types.package;
     readOnly = true;

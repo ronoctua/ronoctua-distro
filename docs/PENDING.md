@@ -1676,12 +1676,13 @@ no terminal e a sessão do Codex encontrando o `CODEX_HOME` criado pela vista.
 
 O mecanismo das partes existe (`ronoctua-parts`, `nix/modules/parts.nix`; o porquê no
 `docs/ARCHITECTURE.md`, "Partes: o que chega depois da instalação") e está provado numa VM, com o
-vigia do brain, a página `s u d` e as quatro saídas de um download teimoso; mas a primeira parte real
-é o minter de PO token, com o passo `parts-plan` na atualização. O plano aprovado em 2026-10-23 segue
+vigia do brain, a página `s u d` e as quatro saídas de um download teimoso, e todo não livre da distro
+é uma parte (a base não admite nenhum), com o passo `parts-plan` na atualização. O plano aprovado em 2026-10-23 segue
 por marcos, cada um verde:
 
-- **M4 — não livre fora da base.** Chrome, VS Code, Claude Code, uade, unrar, Android Studio e SDK
-  viram partes; o `pkgs` do sistema não admite não livre.
+- **O que ficou do M4.** Uma recusa que diga "a caminho" em vez de "sem navegador"
+  (`Refusal::NoBrowser` da central, quando o Chrome é querido e ainda não chegou), e os números do
+  `profile.nix` medidos de novo sem os não livres (com o M5).
 - **M5 — downloads livres e programas do full.** Rust e devshell, Common Lisp, adplay, AppImages,
   apks, `fonts-full` (como downloads, com o `pinGuard` estrutural), superpack, WordNet, escritório,
   oficina, mídia, Emacs, toolchains; o `flake-registry.json` vira asset; todos os locales prontos.

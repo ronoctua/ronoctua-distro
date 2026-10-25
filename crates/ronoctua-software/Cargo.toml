@@ -43,6 +43,9 @@ ronoctua-consent = { path = "../ronoctua-consent" }
 # form, the staged tree laid in the shape its applier reads, and what Nix wrote
 # back read in its reports — never a second spelling of any of them.
 ronoctua-person = { path = "../ronoctua-person", default-features = false }
+# CHROME IS A PART: its program in the session's view, which a web app's
+# `TryExec` names (`ronoctua_parts::view::bin`) — the library alone.
+ronoctua-parts = { path = "../ronoctua-parts", default-features = false }
 # The machine's names this crate starts and reads: the unit that applies the
 # machine directory without moving its inputs, and the folder of its record.
 ronoctua-machine = { path = "../ronoctua-machine" }
