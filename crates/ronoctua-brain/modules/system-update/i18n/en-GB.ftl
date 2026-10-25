@@ -24,6 +24,8 @@ system-update-step-flake-update = fetch the new versions
 system-update-step-flake-update-does = nix flake update of the distro's input, in this machine's own flake: it moves the distro to its newest release and touches nothing but flake.lock — the other inputs are the release's own, as it was tested. It needs the network; it is skipped and says so while the machine is held at a revision, on the ISO, whose machine folder is read-only, and whenever the rebuild would be — on battery below the floor, or with the disk nearly full — so the folder never names a distro the machine did not build.
 system-update-step-system-rebuild = rebuild the system
 system-update-step-system-rebuild-does = ronoctua-machine apply: it builds the new system first and switches only to what built — a build that fails leaves the machine and its folder as they were. After the switch the next boot tries the new system once, and comes back to the last good one by itself if it does not start. It is skipped on battery below the floor unless you said yes, and when the disk is nearly full even after collecting the store's garbage. If it fails, the sequence stops here.
+system-update-step-parts-plan = plan the parts
+system-update-step-parts-plan-does = ronoctua-parts plan: the parts of the system that was just applied — what needs a download no cache holds, what is not free, what only the full profile carries — written into their records, and their derivations kept from the collection below. Each part arrives on its own, by its own unit, after the switch started it; one that does not arrive keeps its previous version and holds back nothing. This step never waits for a download.
 system-update-step-flatpak-system = update the system's Flatpaks
 system-update-step-flatpak-system-does = flatpak update --system: it moves what the machine's own Flatpak installation holds — the Flathub remote, and whatever the configuration declares — and installs nothing. Your own apps are in your installation and move in your half, further down. Without that installation the step is skipped and says so.
 system-update-step-android-images = update Android's system image
@@ -81,6 +83,7 @@ system-update-kind-move-inputs = moves the pinned inputs
 system-update-kind-apply-configuration = applies the configuration
 system-update-kind-upgrade-software = updates programs you installed yourself
 system-update-kind-refresh-cache = refreshes a cache
+system-update-kind-realize-parts = realizes the parts
 system-update-kind-reclaim-space = reclaims disk space
 
 # THE VIEW THAT WATCHES A RUN, in both doors: its keys and what each says under

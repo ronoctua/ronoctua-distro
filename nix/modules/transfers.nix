@@ -34,6 +34,7 @@
 # does not unwind in four seconds is left to the `SIGKILL` and its piece.
 {
   config,
+  options,
   lib,
   pkgs,
   ronoctua,
@@ -42,6 +43,11 @@
 
 let
   cfg = config.ronoctua.transfers;
+
+  # WHERE THE MINTER IS, when this machine has parts at all
+  # (`nix/modules/parts.nix`; a test's stripped-down machine may not, and
+  # mints nothing).
+  potRoot = config.ronoctua.parts.pot-provider.path or null;
 
   # THE ONE DESKTOP ENTRY IN THIS REPOSITORY, and it exists for a reason no
   # other feature has had: a magnet is a LINK, and a link is opened by whatever
@@ -177,123 +183,141 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    environment.systemPackages = [ handler ];
+  # THE MINTER IS A PART (`nix/modules/parts.nix`): its npm cache is a
+  # download no public cache holds, and on 2026-10-23 that download, failing,
+  # stopped an installation. Declared outside the `mkIf`, as every part is —
+  # its presence is `wanted` —, and reached by its stable path, which the
+  # three variables below name as text: no unit depends on the minter, and
+  # `ronoctua_ytdlp::pot_flags` asks whether it is there before every use. A
+  # machine without it downloads without a PO token, as one with `none` does.
+  config = lib.mkMerge [
+    (lib.optionalAttrs (options.ronoctua ? parts) {
+      ronoctua.parts.pot-provider = {
+        wanted = cfg.enable && cfg.poToken == "on-demand";
+        kind = "data";
+      }
+      // lib.optionalAttrs (ronoctua ? potProvider) { package = ronoctua.potProvider; };
+    })
+    (lib.mkIf cfg.enable {
+      environment.systemPackages = [ handler ];
 
-    # WHAT ANSWERS A MAGNET. `xdg.mime.defaultApplications` writes
-    # `/etc/xdg/mimeapps.list`, which is what `xdg-open` reads before it falls
-    # back to guessing — and guessing, with one entry, would still work until
-    # the day a second program claims the same scheme.
-    xdg.mime = {
-      enable = true;
-      defaultApplications = {
-        "x-scheme-handler/magnet" = "ronoctua-transfers.desktop";
-        "application/x-bittorrent" = "ronoctua-transfers.desktop";
-      };
-    };
-
-    # THE SEEDING PORTS, named where a firewall rule can see them.
-    #
-    # They are the same nine `crates/ronoctua-transfers/src/torrent.rs` gives
-    # the session, and the shim has UPnP and NAT-PMP switched off — a program
-    # that asked the router to open a port on its own would have changed this
-    # machine's exposure without anybody deciding to.
-    networking.firewall = {
-      allowedTCPPortRanges = [
-        {
-          from = 6881;
-          to = 6889;
-        }
-      ];
-      allowedUDPPortRanges = [
-        {
-          from = 6881;
-          to = 6889;
-        }
-      ];
-    };
-
-    systemd.user.services.ronoctua-transfers = {
-      description = "ronoctua — the transfer queue";
-      partOf = [ "graphical-session.target" ];
-      after = [ "graphical-session.target" ];
-      wantedBy = [ "graphical-session.target" ];
-      # THE SESSION'S `PATH`, NOT A UNIT'S — the footer's reason, one process
-      # along. The queue is the parent of every program an install, update or
-      # removal starts (`ronoctua-software`, and whatever Flatpak, Nix or an
-      # AppImage start in turn), and a child inherits its parent's `PATH`: we
-      # name our programs by store path, but a bare name anywhere further down
-      # that tree resolves against this unit's. NixOS gives a unit five
-      # packages (coreutils, findutils, grep, sed, systemd) unless told
-      # otherwise; off and with no `path`, no `Environment=PATH` is written
-      # (`nixos/lib/systemd-lib.nix`) and the user manager's is inherited —
-      # the one NixOS builds from `environment.profiles`.
-      enableDefaultPath = false;
-      # WHERE yt-dlp IS, and why it arrives here rather than being baked in.
-      #
-      # `option_env!` with a store path is a REFERENCE, and this one would point
-      # at a package that is deliberately absent from the reduced profile:
-      # yt-dlp lives under `ronoctua.media.enable`, which is `mkDefault full`.
-      # Baked in, it would drag yt-dlp into `minimal` through this binary — the
-      # trap `RONOCTUA_EMACSCLIENT` fell into, with the same fix.
-      #
-      # It used to say "yt-dlp and ffmpeg". `ffmpeg-full` is unconditional now
-      # (see `nix/modules/media.nix`), so it is no longer part of what this
-      # would drag in — but yt-dlp still is, and the argument stands on it.
-      environment =
-        lib.optionalAttrs config.ronoctua.media.enable {
-          RONOCTUA_YT_DLP = "${pkgs.yt-dlp}/bin/yt-dlp";
-        }
-        # EXACTLY ONE OF THE TWO, never both: the Rust reads the file first, so
-        # setting both would make the browser's setting silently dead. An
-        # option that does nothing is worse than one that is absent.
-        // lib.optionalAttrs (cfg.cookies == "browser") {
-          RONOCTUA_COOKIES_BROWSER = cfg.cookiesBrowser;
-        }
-        // lib.optionalAttrs (cfg.cookies == "file") {
-          RONOCTUA_COOKIES_FILE = cfg.cookiesFile;
-        }
-        # ALL THREE OR NONE: the minter is TypeScript and needs the runtime
-        # that reads it, and yt-dlp asks it for a token only through its plugin,
-        # which it loads from the folder it is told and nowhere else — without
-        # `RONOCTUA_POT_PLUGINS` not one token was ever minted. The Rust refuses
-        # a part of the three (`ronoctua_ytdlp::pot_flags_of`). The three are
-        # the minter's own (`potProvider.environment`, `nix/pot-provider.nix`):
-        # where its plugin is is a fact of its layout, and a unit that spelled
-        # it once pointed one level too deep.
-        // lib.optionalAttrs (cfg.poToken == "on-demand") ronoctua.potProvider.environment
-        # WHERE unrar IS, read at run time and never baked (`atRunTime` in
-        # `nix/rust.nix`): it is unfree, and baked into the workspace it kept
-        # the workspace out of the public binary cache. The footer gets it
-        # from the shell's wrapper; the queue runs the bare binary.
-        // {
-          inherit (import ../archive-tools.nix { inherit pkgs; }) RONOCTUA_UNRAR;
+      # WHAT ANSWERS A MAGNET. `xdg.mime.defaultApplications` writes
+      # `/etc/xdg/mimeapps.list`, which is what `xdg-open` reads before it falls
+      # back to guessing — and guessing, with one entry, would still work until
+      # the day a second program claims the same scheme.
+      xdg.mime = {
+        enable = true;
+        defaultApplications = {
+          "x-scheme-handler/magnet" = "ronoctua-transfers.desktop";
+          "application/x-bittorrent" = "ronoctua-transfers.desktop";
         };
-      serviceConfig = {
-        ExecStart = "${ronoctua.transfers}/bin/ronoctua-transfers";
-        Restart = "on-failure";
-        RestartSec = 1;
-        # `session.slice` and NOT `app.slice`.
-        #
-        # `app.slice` is where every foreign application goes and where
-        # `nix/modules/memory.nix` points oomd's pressure killer. A copy holds
-        # page cache by definition — that is what copying IS — so a queue in the
-        # applications' slice would be among the first things chosen under
-        # pressure, and the failure would look like "big copies die at random".
-        Slice = "session.slice";
-        # If the kernel's OOM killer takes a thread of this, the queue's list is
-        # gone and the jobs are orphans. Stopping the unit is the honest answer:
-        # it comes back with an empty list instead of a wrong one.
-        OOMPolicy = "stop";
-        # See the header: the stop unwinds in four seconds, and a long timeout
-        # only delays a logout.
-        TimeoutStopSec = 5;
       };
-    };
 
-    # THE 2026-10-05 WAVE: one region per package, after its anchor.
-    # ── anchor: L13 ──
-    # ── anchor: L17 ──
-    # ── anchor: L22 ──
-  };
+      # THE SEEDING PORTS, named where a firewall rule can see them.
+      #
+      # They are the same nine `crates/ronoctua-transfers/src/torrent.rs` gives
+      # the session, and the shim has UPnP and NAT-PMP switched off — a program
+      # that asked the router to open a port on its own would have changed this
+      # machine's exposure without anybody deciding to.
+      networking.firewall = {
+        allowedTCPPortRanges = [
+          {
+            from = 6881;
+            to = 6889;
+          }
+        ];
+        allowedUDPPortRanges = [
+          {
+            from = 6881;
+            to = 6889;
+          }
+        ];
+      };
+
+      systemd.user.services.ronoctua-transfers = {
+        description = "ronoctua — the transfer queue";
+        partOf = [ "graphical-session.target" ];
+        after = [ "graphical-session.target" ];
+        wantedBy = [ "graphical-session.target" ];
+        # THE SESSION'S `PATH`, NOT A UNIT'S — the footer's reason, one process
+        # along. The queue is the parent of every program an install, update or
+        # removal starts (`ronoctua-software`, and whatever Flatpak, Nix or an
+        # AppImage start in turn), and a child inherits its parent's `PATH`: we
+        # name our programs by store path, but a bare name anywhere further down
+        # that tree resolves against this unit's. NixOS gives a unit five
+        # packages (coreutils, findutils, grep, sed, systemd) unless told
+        # otherwise; off and with no `path`, no `Environment=PATH` is written
+        # (`nixos/lib/systemd-lib.nix`) and the user manager's is inherited —
+        # the one NixOS builds from `environment.profiles`.
+        enableDefaultPath = false;
+        # WHERE yt-dlp IS, and why it arrives here rather than being baked in.
+        #
+        # `option_env!` with a store path is a REFERENCE, and this one would point
+        # at a package that is deliberately absent from the reduced profile:
+        # yt-dlp lives under `ronoctua.media.enable`, which is `mkDefault full`.
+        # Baked in, it would drag yt-dlp into `minimal` through this binary — the
+        # trap `RONOCTUA_EMACSCLIENT` fell into, with the same fix.
+        #
+        # It used to say "yt-dlp and ffmpeg". `ffmpeg-full` is unconditional now
+        # (see `nix/modules/media.nix`), so it is no longer part of what this
+        # would drag in — but yt-dlp still is, and the argument stands on it.
+        environment =
+          lib.optionalAttrs config.ronoctua.media.enable {
+            RONOCTUA_YT_DLP = "${pkgs.yt-dlp}/bin/yt-dlp";
+          }
+          # EXACTLY ONE OF THE TWO, never both: the Rust reads the file first, so
+          # setting both would make the browser's setting silently dead. An
+          # option that does nothing is worse than one that is absent.
+          // lib.optionalAttrs (cfg.cookies == "browser") {
+            RONOCTUA_COOKIES_BROWSER = cfg.cookiesBrowser;
+          }
+          // lib.optionalAttrs (cfg.cookies == "file") {
+            RONOCTUA_COOKIES_FILE = cfg.cookiesFile;
+          }
+          # ALL THREE OR NONE: the minter is TypeScript and needs the runtime
+          # that reads it, and yt-dlp asks it for a token only through its plugin,
+          # which it loads from the folder it is told and nowhere else — without
+          # `RONOCTUA_POT_PLUGINS` not one token was ever minted. The Rust refuses
+          # a part of the three (`ronoctua_ytdlp::pot_flags_of`). The three are
+          # the minter's own (`potProvider.environment`, `nix/pot-provider.nix`):
+          # where its plugin is is a fact of its layout, and a unit that spelled
+          # it once pointed one level too deep.
+          // lib.optionalAttrs (cfg.poToken == "on-demand" && potRoot != null) (
+            ronoctua.potProvider.environmentAt potRoot
+          )
+          # WHERE unrar IS, read at run time and never baked (`atRunTime` in
+          # `nix/rust.nix`): it is unfree, and baked into the workspace it kept
+          # the workspace out of the public binary cache. The footer gets it
+          # from the shell's wrapper; the queue runs the bare binary.
+          // {
+            inherit (import ../archive-tools.nix { inherit pkgs; }) RONOCTUA_UNRAR;
+          };
+        serviceConfig = {
+          ExecStart = "${ronoctua.transfers}/bin/ronoctua-transfers";
+          Restart = "on-failure";
+          RestartSec = 1;
+          # `session.slice` and NOT `app.slice`.
+          #
+          # `app.slice` is where every foreign application goes and where
+          # `nix/modules/memory.nix` points oomd's pressure killer. A copy holds
+          # page cache by definition — that is what copying IS — so a queue in the
+          # applications' slice would be among the first things chosen under
+          # pressure, and the failure would look like "big copies die at random".
+          Slice = "session.slice";
+          # If the kernel's OOM killer takes a thread of this, the queue's list is
+          # gone and the jobs are orphans. Stopping the unit is the honest answer:
+          # it comes back with an empty list instead of a wrong one.
+          OOMPolicy = "stop";
+          # See the header: the stop unwinds in four seconds, and a long timeout
+          # only delays a logout.
+          TimeoutStopSec = 5;
+        };
+      };
+
+      # THE 2026-10-05 WAVE: one region per package, after its anchor.
+      # ── anchor: L13 ──
+      # ── anchor: L17 ──
+      # ── anchor: L22 ──
+    })
+  ];
 }

@@ -12362,6 +12362,20 @@ vista (`/var/lib/ronoctua-parts/view`) tem só `bin/` e um conjunto fechado de `
 e vem depois do sistema no `PATH`: uma parte nunca esconde um programa da base. É refeita inteira e
 trocada com um `renameat2(RENAME_EXCHANGE)`.
 
+**A primeira parte é o minter de PO token**, a causa da instalação que caiu. O `pot-provider` leva o
+próprio `deno` (`bin/deno`, ao lado de `server/` e `plugin/`), e a fila, o player e o video-metrics
+recebem as três variáveis no caminho estável dele (`environmentAt`, em `nix/pot-provider.nix`): o
+sistema não depende do minter, e o `ronoctua_ytdlp::pot_flags` pergunta se ele chegou a cada
+pedido — sem ele, o download segue sem PO token, como numa máquina com `none`. O
+`part-paths-are-read-as-arriving` recusa uma unidade que volte a nomear o caminho do store de uma
+parte, e o `parts-stay-out-of-the-base` lê o fecho dos dois sistemas construídos.
+
+**A atualização planeja, e não espera.** Depois do `system-rebuild`, o passo `parts-plan`
+(`realize-parts`, do root, `carry-on`) roda `ronoctua-parts plan`: traz o plano novo para os
+registros e enraíza as derivações antes da coleta de lixo. Quem realiza é a troca: o gatilho roda a
+cada switch e inicia o planejador sem esperar. O gerador da sequência recusa um segundo
+`realize-parts`, um que seja da pessoa, um antes de aplicar, um `stop` e uma coleta antes dele.
+
 **Os registros são o broadcast.** `/var/lib/ronoctua-parts/parts/<id>.json` (`0644`, escrito inteiro)
 diz a geração em uso, a anterior, o que o plano quer e, quando difere, por quê. A pessoa inicia o
 planejador e o realizador de cada parte querida por uma regra polkit estreita (verbo `start`, cada

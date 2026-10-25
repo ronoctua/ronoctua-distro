@@ -137,6 +137,9 @@ let
       # with the machine's `nix`, its record and — where a cache is named —
       # `cachix`.
       binary-cache = config.ronoctua.binaryCache.pusher;
+      # THE 2026-10-23 WAVE: the parts' root program (`ronoctua-parts`,
+      # EXTRACTED), whose `plan` the update runs after the rebuild.
+      parts = config.ronoctua.partsProgram;
     };
     wiring = {
       shell = pkgs.runtimeShell;

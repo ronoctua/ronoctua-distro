@@ -136,14 +136,29 @@ pub const POT_PLUGINS: &str = "RONOCTUA_POT_PLUGINS";
 /// The token FILE below is the opposite and stays gated: somebody pasted it,
 /// so it is bound to whatever session it was minted in, and sending it with an
 /// anonymous request would attach that session to it.
+///
+/// # A part, asked after at every call
+///
+/// The minter is a PART (`nix/modules/parts.nix`): the three variables name
+/// its stable path, which may not exist yet — it arrives after the
+/// installation, on its own. So each is asked after here, on EVERY call and
+/// never once at start ([`ronoctua_parts::here`]): a minter that arrives
+/// while the queue runs is used from the next request on, and one that is
+/// not there yet leaves the request without a token, as `none` does, never
+/// with a plugin folder that would fail inside yt-dlp.
 #[must_use]
 pub fn pot_flags() -> Vec<String> {
-    let var = |name: &str| std::env::var(name).ok();
+    let var = |name: &str| present(std::env::var(name).ok());
     pot_flags_of(
         var(POT_HOME).as_deref(),
         var(POT_DENO).as_deref(),
         var(POT_PLUGINS).as_deref(),
     )
+}
+
+/// `path` when the part it names is here; nothing when it is not yet.
+fn present(path: Option<String>) -> Option<String> {
+    path.filter(|p| ronoctua_parts::here(std::path::Path::new(p)).is_ok())
 }
 
 /// The same decision, over values a test can hand it.
@@ -184,6 +199,25 @@ pub fn pot_flags_of(home: Option<&str>, deno: Option<&str>, plugins: Option<&str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: a minter that has not arrived is handed to yt-dlp — a
+    /// plugin folder that does not exist fails inside yt-dlp, once per
+    /// request — or one that is here is left out.
+    #[test]
+    fn a_minter_not_here_yet_gives_no_flags() {
+        let missing = "/nix/var/nix/profiles/ronoctua/parts/pot-provider/v1/server".to_owned();
+        assert_eq!(present(Some(missing.clone())), None);
+        let here = std::env::temp_dir().to_string_lossy().into_owned();
+        assert_eq!(present(Some(here.clone())), Some(here.clone()));
+        assert!(
+            pot_flags_of(
+                present(Some(missing)).as_deref(),
+                Some(here.as_str()),
+                Some(here.as_str())
+            )
+            .is_empty()
+        );
+    }
 
     /// FAILS IF: the minter's plugin folder is not handed to yt-dlp (a
     /// token is never asked for), any flag goes out while one of the three

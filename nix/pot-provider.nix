@@ -101,6 +101,13 @@ buildNpmPackage (finalAttrs: {
        ../plugin/yt_dlp_plugins/extractor/getpot_bgutil_script.py \
        $out/plugin/yt_dlp_plugins/extractor/
 
+    # THE RUNTIME TRAVELS WITH THE MINTER: the minter is a part
+    # (`nix/modules/parts.nix`) that arrives after the installation, and what
+    # runs it arrives with it — `bin/deno`, beside `server/` and `plugin/`,
+    # at the part's one path.
+    mkdir -p $out/bin
+    ln -s ${lib.getExe deno} $out/bin/deno
+
     runHook postInstall
   '';
 
@@ -132,12 +139,12 @@ buildNpmPackage (finalAttrs: {
     fi
     test -f $out/server/src/generate_once.ts
     test -d $out/server/node_modules/bgutils-js
-    # And the runtime this is built for.
-    ${lib.getExe deno} --version >/dev/null
+    # And the runtime this is built for, where the part names it.
+    $out/bin/deno --version >/dev/null
   '';
 
-  # THE THREE VARIABLES a unit that asks yt-dlp for YouTube carries — all of
-  # them or none (`ronoctua_ytdlp::pot_flags_of`) — named HERE, where the
+  # THE THREE VARIABLES a unit that asks yt-dlp for YouTube carries — all
+  # of them or none (`ronoctua_ytdlp::pot_flags_of`) — named HERE, where the
   # layout they point into is made, so no unit spells a path of its own.
   #
   # `RONOCTUA_POT_PLUGINS` IS THE ROOT, not `plugin/`: yt-dlp's
@@ -145,10 +152,20 @@ buildNpmPackage (finalAttrs: {
   # `yt_dlp_plugins` one level down in each. Measured: `--plugin-dirs
   # <pot>/plugin` loads nothing ("Plugin directories: none"), `<pot>` loads
   # the script provider. Two units once spelled the two answers apart.
-  passthru.environment = {
-    RONOCTUA_POT_HOME = "${finalAttrs.finalPackage}/server";
-    RONOCTUA_POT_PLUGINS = "${finalAttrs.finalPackage}";
-    RONOCTUA_DENO = lib.getExe deno;
+  #
+  # `environmentAt` IS A MACHINE'S: the minter is a part, reached at its
+  # stable path (`config.ronoctua.parts.pot-provider.path`), which may not
+  # exist yet — the units name the path as text and never depend on the
+  # minter, and the reader asks whether it is there (`ronoctua_parts::here`).
+  # `environment` is the store path itself, for the development loop, which
+  # is no installed machine.
+  passthru = rec {
+    environmentAt = root: {
+      RONOCTUA_POT_HOME = "${root}/server";
+      RONOCTUA_POT_PLUGINS = root;
+      RONOCTUA_DENO = "${root}/bin/deno";
+    };
+    environment = environmentAt "${finalAttrs.finalPackage}";
   };
 
   meta = {

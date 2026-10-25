@@ -73,8 +73,8 @@
 #               `/etc/ronoctua/updates.conf` is `<id> on|off`, and the report
 #               the view reads is keyed by it.
 #   does        gather | migrate | move-inputs | verify | apply-configuration |
-#               upgrade-software | refresh-cache | reclaim-space |
-#               reconcile-declared | publish
+#               realize-parts | upgrade-software | refresh-cache |
+#               reclaim-space | reconcile-declared | publish
 #               What class of thing this step is, and it is load-bearing: there
 #               is exactly ONE `move-inputs` and exactly ONE
 #               `apply-configuration`, `move-inputs` comes before it, and every
@@ -88,6 +88,9 @@
 #               root's, between `move-inputs` and `apply-configuration`;
 #               `reconcile-declared` is the person's, after
 #               `apply-configuration`; `publish` is the person's and last.
+#               And the 2026-10-23 law: exactly one `realize-parts`, root's,
+#               after `apply-configuration`, before every `reclaim-space`, and
+#               `carry-on`.
 #   root        true  -> the system unit, as root, from a store path
 #               false -> the person's user unit, as them, with their PATH
 #   package +   the store path. `package` is the attribute in `nixpkgs`,
@@ -502,6 +505,35 @@ in
         { free-space = roomForARebuild; }
       ];
       on-failure = "stop";
+      enable = true;
+    }
+
+    # 2b. THE PARTS OF THE SYSTEM THAT WAS JUST APPLIED (`nix/modules/parts.nix`).
+    #
+    # What needs a download no public cache holds, what is not free and what
+    # only the full profile carries is a part: never in the system's closure,
+    # realized by its own unit, kept in its own profile. The switch above
+    # already started their realizing (the trigger runs at every switch);
+    # this step only brings the new plan into the records and ROOTS the
+    # parts' derivations, synchronously — the collection below would take
+    # them otherwise — and never waits for a download.
+    #
+    # `carry-on`, always (`realize-parts`'s law): a part that does not arrive
+    # keeps its previous generation, and holds back nothing.
+    {
+      id = "parts-plan";
+      does = "realize-parts";
+      root = true;
+      package = "parts";
+      program = "ronoctua-parts";
+      run = [ "plan" ];
+      rehearse = [
+        "plan"
+        "--rehearse"
+      ];
+      declines = [ "busy" ];
+      needs = [ { always = true; } ];
+      on-failure = "carry-on";
       enable = true;
     }
 

@@ -169,6 +169,15 @@ let
     };
 in
 {
+  # THE PROGRAM, for the update's `parts-plan` step.
+  options.ronoctua.partsProgram = lib.mkOption {
+    type = lib.types.package;
+    readOnly = true;
+    internal = true;
+    default = tool;
+    description = "`ronoctua-parts`, extracted: the parts' root program.";
+  };
+
   options.ronoctua.parts = lib.mkOption {
     type = lib.types.attrsOf (lib.types.submodule part);
     default = { };

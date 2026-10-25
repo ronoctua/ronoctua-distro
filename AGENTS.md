@@ -111,7 +111,9 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    (`ronoctua-machine apply`, sob o lock de root dos dados da pessoa), e a pessoa reconcilia e
    publica por último, em toda saída. O input da distro só anda quando o rebuild pode ser tentado
    (o mesmo piso de bateria e a mesma folga no disco), para a pasta da máquina nunca nomear uma
-   distro que não roda. Uma execução agendada espera por rede tarifada ou bateria abaixo do piso e
+   distro que não roda. Depois de aplicar, um passo do root planeja as partes do sistema novo
+   (`parts-plan`, `realize-parts`: enraíza as derivações delas antes da coleta e não espera download
+   nenhum, nunca `stop`, e não nomeia parte). Uma execução agendada espera por rede tarifada ou bateria abaixo do piso e
    nunca pergunta; uma à mão pergunta com o "não" primeiro — abaixo do piso antes de começar, numa
    rede tarifada quando o cérebro a segura — e o "sim" vale só para aquela execução.
    Exceção no mesmo molde (2026-10-11, decisão do dono): **o cache binário da pessoa**. A escolha

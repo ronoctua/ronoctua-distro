@@ -80,6 +80,14 @@ DOES = {
     "verify",
     "reconcile-declared",
     "publish",
+    # THE 2026-10-23 WAVE's class (the parts), after its anchor.
+    # ── anchor: L25 ──
+    #
+    # `realize-parts` brings the running system's plan of parts into the
+    # records and roots their derivations, so the collection after it takes
+    # none of them; the realizing itself is each part's own unit, started at
+    # the switch, which the update never waits for (`nix/modules/parts.nix`).
+    "realize-parts",
 }
 
 # THE ORDER THE CLASSES ARE DECLARED IN, for the Rust enum: the sequence's own
@@ -90,6 +98,7 @@ DOES_ORDER = [
     "move-inputs",
     "verify",
     "apply-configuration",
+    "realize-parts",
     "upgrade-software",
     "refresh-cache",
     "reclaim-space",
@@ -744,6 +753,31 @@ def check_wave_laws(steps: list[dict], moves: list[int], applies: list[int]) -> 
                 )
 
 
+def check_parts_laws(steps: list[dict], applies: list[int]) -> None:
+    """The parts' law (2026-10-23): one step plans them, as root, right after
+    the system it plans for is applied and before any space is reclaimed, and
+    a part never stops an update.
+    """
+    plans = [i for i, s in enumerate(steps) if s["does"] == "realize-parts"]
+
+    def at(i: int) -> str:
+        return f"steps[{i}] ({steps[i]['id']})"
+
+    if len(plans) != 1:
+        complain("steps", f"there are {len(plans)} `realize-parts` steps and there has to be exactly 1: the plan is the system's, and one step reads it")
+    for i in plans:
+        s = steps[i]
+        if not s["root"]:
+            complain(at(i), "`realize-parts` is root's: it writes root's records and the collector's roots")
+        if applies and i < applies[0]:
+            complain(at(i), "`realize-parts` before `apply-configuration`: it would plan the parts of the system the rebuild replaces")
+        if s["on-failure"] != "carry-on":
+            complain(at(i), "`realize-parts` stops the update: a part never holds back the system or anything after it")
+        for j, t in enumerate(steps):
+            if t["does"] == "reclaim-space" and j < i:
+                complain(at(j), "`reclaim-space` before `realize-parts`: the collection would take the derivations the parts are about to be built from")
+
+
 def check_sequence(steps: list[dict]) -> None:
     """The laws that are about the SEQUENCE and not about any one step."""
     # ---- ORDER LAWS ------------------------------------------------------
@@ -786,6 +820,8 @@ def check_sequence(steps: list[dict]) -> None:
     # last), after its anchor.
     # ── anchor: L19 ──
     check_wave_laws(steps, moves, applies)
+    # ── anchor: L25 ──
+    check_parts_laws(steps, applies)
 
     # ---- ROOT AFTER THE GATHERING, AND NEVER INTERLEAVED ------------------
     #

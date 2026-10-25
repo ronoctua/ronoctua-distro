@@ -23,6 +23,10 @@ const WORKERS: usize = 2;
 
 pub fn run(args: &[String]) -> Result<u8, Usage> {
     let start = args.iter().any(|a| a == "--start");
+    let rehearse = args.iter().any(|a| a == "--rehearse");
+    if start && rehearse {
+        return Err(Usage);
+    }
     let workers = match args.iter().position(|a| a == "--workers") {
         Some(at) => args
             .get(at + 1)
@@ -39,6 +43,32 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
             return Ok(exit::FAILED);
         }
     };
+
+    // A REHEARSAL says what the plan would do, and writes nothing: the
+    // update's rehearsal (`parts-plan`) runs it.
+    if rehearse {
+        let known: BTreeMap<String, Record> = disk::read_records()
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+        let missing = plan
+            .parts
+            .iter()
+            .filter(|(id, wanted)| {
+                let target = Target {
+                    drv: wanted.drv.clone(),
+                    out: wanted.out.clone(),
+                    interface: wanted.interface,
+                };
+                !known.get(*id).is_some_and(|r| r.is_current(&target))
+            })
+            .count();
+        println!(
+            "would plan {} parts, {missing} to realize",
+            plan.parts.len()
+        );
+        return Ok(exit::DONE);
+    }
 
     // THE RECORDS, under the lock: each wanted part planned, each dropped one
     // unwanted.

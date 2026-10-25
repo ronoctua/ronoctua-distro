@@ -192,10 +192,11 @@ in
           # the daemon reads, ~42 MiB, with the player and never without it.
           RONOCTUA_AMBIENCE = "${ronoctua.ambience}";
         }
-        # The minter's own three (`nix/pot-provider.nix`), never spelled here.
-        // lib.optionalAttrs (
-          config.ronoctua.transfers.poToken == "on-demand"
-        ) ronoctua.potProvider.environment
+        # The minter's own three (`nix/pot-provider.nix`), never spelled here,
+        # at the part's stable path (`nix/modules/transfers.nix` declares it).
+        // lib.optionalAttrs (config.ronoctua.transfers.poToken == "on-demand" && config.ronoctua ? parts) (
+          ronoctua.potProvider.environmentAt config.ronoctua.parts.pot-provider.path
+        )
         # THE WORLD, for the directories' globe (`engine/directory.rs`): where
         # each country's name goes on a map, so a radio or TV page arrives
         # with its marks placed and a door only draws them. The same table

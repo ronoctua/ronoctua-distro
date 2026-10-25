@@ -53,6 +53,8 @@
   # The ISO, measured at 3712 MiB. It has no ceiling any more — see the
   # check itself — but building the image is still building an installation.
   "iso-is-measured"
+  # Both reference systems built, to read their closures for a part.
+  "parts-stay-out-of-the-base"
   "iso-has-no-toolchain"
   "iso-carries-the-seed"
   # The ISO booted as it ships, from an emulated USB stick, twice: whole,

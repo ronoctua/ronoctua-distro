@@ -62,6 +62,7 @@ let
         person = standIn "ronoctua-person";
         belongings = standIn "ronoctua-belongings";
         binary-cache = standIn "ronoctua-cachix";
+        parts = standIn "ronoctua-parts";
       }
       // programs;
       wiring = {
@@ -1182,6 +1183,7 @@ in
       gathers, migrates, moves = does("gather"), does("migrate"), does("move-inputs")
       verifies, applies = does("verify"), does("apply-configuration")
       reconciles, publishes = does("reconcile-declared"), does("publish")
+      plans, reclaims = does("realize-parts"), does("reclaim-space")
       roots = at(lambda s: s["root"], "as root")
       person_after = at(lambda s: not s["root"] and s["does"] not in ("gather", "publish"), "of the person's half")
       powered = at(lambda s: any("power" in n for n in s["needs"]), "that needs power")
@@ -1231,6 +1233,13 @@ in
           ("refusals that are no words", changed(applies[0], declines=["Did Not Boot"]), "distinct kebab-case refusal words"),
           ("a lock moved on a battery the rebuild waits for", needs_dropped(moves[0], "power"), "`move-inputs` without the rebuild's `power`"),
           ("a lock moved on a disk the rebuild waits for", needs_dropped(moves[0], "free-space"), "`move-inputs` without the rebuild's `free-space`"),
+          # THE PARTS (2026-10-23): one plan, root's, after the rebuild and
+          # before every collection, and never a stop.
+          ("a plan of the parts of the person's", changed(plans[0], root=False), "`realize-parts` is root's"),
+          ("a plan of the parts before the rebuild", moved(declared, plans[0], applies[0]), "`realize-parts` before `apply-configuration`"),
+          ("a part that stops the update", changed(plans[0], **{"on-failure": "stop"}), "`realize-parts` stops the update"),
+          ("a collection before the plan of the parts", moved(declared, reclaims[0], plans[0]), "`reclaim-space` before `realize-parts`"),
+          ("two plans of the parts", declared[: plans[0] + 1] + [dict(declared[plans[0]], id="parts-plan-again")] + declared[plans[0] + 1 :], "`realize-parts` steps and there has to be exactly 1"),
       ]
 
       clean = generate(declared)

@@ -20,6 +20,10 @@ ronoctua-consent = { path = "../ronoctua-consent" }
 # Where the words of a search may be cut: between grapheme clusters, the
 # tree's one rule (`ronoctua_protocol::cells_of`).
 ronoctua-protocol = { path = "../ronoctua-protocol" }
+# THE MINTER IS A PART, arriving after the installation: whether it is here
+# is asked before every use (`ronoctua_parts::here`). The library alone —
+# its root realizer stays out.
+ronoctua-parts = { path = "../ronoctua-parts", default-features = false }
 
 # A test mints its passes from a consent file of its own; the helpers that
 # read one are `test-support`, never a product's.

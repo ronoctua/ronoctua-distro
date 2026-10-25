@@ -6123,6 +6123,7 @@ name = "ronoctua-ytdlp"
 version = "0.1.0"
 dependencies = [
  "ronoctua-consent",
+ "ronoctua-parts",
  "ronoctua-protocol",
  "serde",
  "serde_json",

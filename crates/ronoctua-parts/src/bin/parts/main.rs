@@ -1,7 +1,7 @@
 //! `ronoctua-parts` — root's realizer of the machine's parts.
 //!
 //! ```text
-//! ronoctua-parts plan [--start] [--workers N] [--plan FILE]
+//! ronoctua-parts plan [--start | --rehearse] [--workers N] [--plan FILE]
 //! ronoctua-parts realize ID [--plan FILE]
 //! ronoctua-parts view
 //! ronoctua-parts trim ID
@@ -13,6 +13,7 @@
 //!   brought to what it wants, the plan's derivations rooted, the view
 //!   rebuilt — and with `--start`, the parts that are not here handed to
 //!   their realizers, `--workers` at a time (2 by default), light ones first.
+//!   `--rehearse` says what it would do and writes nothing.
 //! - `realize` (`ronoctua-part@<id>.service`): one part built and made its
 //!   profile's next generation, or its record says why not. It exits
 //!   [`exit::OFFLINE`] with no link, so the unit is not retried on a clock
@@ -54,7 +55,7 @@ fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(Usage) => {
             eprintln!(
-                "usage: ronoctua-parts plan [--start] [--workers N] [--plan FILE]\n\
+                "usage: ronoctua-parts plan [--start | --rehearse] [--workers N] [--plan FILE]\n\
                  \x20      ronoctua-parts realize ID [--plan FILE]\n\
                  \x20      ronoctua-parts view\n\
                  \x20      ronoctua-parts trim ID\n\

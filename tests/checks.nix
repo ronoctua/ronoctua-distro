@@ -45955,6 +45955,116 @@ let
     END
   '';
 
+  # A PART IS NAMED BY ITS STABLE PATH, NEVER BY ITS STORE PATH.
+  #
+  # The whole promise of a part (`nix/modules/parts.nix`) is that the system
+  # never depends on it: a unit names `/nix/var/nix/profiles/ronoctua/parts/…`
+  # as text and asks whether it is there. A unit that named the part's store
+  # path instead — `${ronoctua.potProvider}` back in an environment, the line
+  # the pilot replaced — would pull the part, and its download, into the
+  # system's closure, and the next failed download would stop the next
+  # installation. Asked of the evaluated system: every environment value of
+  # every system and user unit, on both reference machines, for each wanted
+  # part's output path; and the floor proves the parts' paths ARE reached
+  # (the minter's three, at least).
+  part-paths-are-read-as-arriving =
+    let
+      plain = builtins.unsafeDiscardStringContext;
+      factsOf =
+        machine:
+        let
+          c = self.nixosConfigurations.${machine}.config;
+          values =
+            units:
+            lib.concatLists (
+              lib.mapAttrsToList (
+                unit: u: lib.mapAttrsToList (k: v: "${unit} ${k}=${plain (toString v)}") (u.environment or { })
+              ) units
+            );
+        in
+        {
+          envs = values c.systemd.services ++ values c.systemd.user.services;
+          outs = lib.mapAttrsToList (id: p: {
+            inherit id;
+            out = plain p.package.outPath;
+            path = p.path;
+          }) (lib.filterAttrs (_: p: p.wanted) c.ronoctua.parts);
+        };
+      facts = pkgs.writeText "part-paths-facts.json" (
+        builtins.toJSON {
+          vm = factsOf "vm";
+          noctua = factsOf "noctua";
+        }
+      );
+    in
+    mkCheck "part-paths-are-read-as-arriving" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the evaluated systems arrive as JSON — every unit's
+      # environment, and each wanted part's output and stable path.
+      facts = json.load(open("${facts}"))
+      wrong, reached = [], 0
+      for machine, got in facts.items():
+          floor(len(got["envs"]), 50, f"environment values of {machine}'s units")
+          for part in got["outs"]:
+              for line in got["envs"]:
+                  if part["out"] in line:
+                      wrong.append(f"{machine}: {line.split('=', 1)[0]} names {part['id']}'s store path, not its stable path")
+                  if part["path"] in line:
+                      reached += 1
+      floor(reached, 3, "unit values that reach a part by its stable path")
+      if wrong:
+          print("ERROR: a unit depends on a part, and the part's download would stop an installation:", file=sys.stderr)
+          for w in wrong:
+              print("  " + w, file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: {reached} unit values reach a part by its stable path, and none by its store path")
+      END
+    '';
+
+  # NO PART IS IN THE BASE: the built systems' closures hold neither a wanted
+  # part's output nor anything only that part's build needs to download. It
+  # BUILDS both reference systems (the slow tier), which is the only way to
+  # read a closure; the cheap half is `part-paths-are-read-as-arriving`.
+  parts-stay-out-of-the-base =
+    let
+      plain = builtins.unsafeDiscardStringContext;
+      closureOf =
+        machine:
+        pkgs.closureInfo {
+          rootPaths = [ self.nixosConfigurations.${machine}.config.system.build.toplevel ];
+        };
+      outsOf =
+        machine:
+        lib.mapAttrsToList (id: p: "${id} ${plain p.package.outPath}") (
+          lib.filterAttrs (_: p: p.wanted) self.nixosConfigurations.${machine}.config.ronoctua.parts
+        );
+      outs = pkgs.writeText "parts-outs.txt" (
+        lib.concatStringsSep "\n" (lib.unique (outsOf "vm" ++ outsOf "noctua")) + "\n"
+      );
+    in
+    mkCheck "parts-stay-out-of-the-base" [ pkgs.gnugrep pkgs.coreutils ] ''
+      failed=0
+      count=0
+      # `path`, never `out`: the loop's last read empties what it reads into,
+      # and `$out` is where this check says it passed.
+      while read -r id path; do
+        [ -n "$id" ] || continue
+        count=$((count + 1))
+        for closure in ${closureOf "vm"} ${closureOf "noctua"}; do
+          if grep -qxF "$path" "$closure/store-paths"; then
+            echo "ERROR: the part $id ($path) is in a system's closure: its download would stop an installation" >&2
+            failed=1
+          fi
+        done
+      done < ${outs}
+      [ "$count" -ge 1 ] || { echo "ERROR: no wanted part on either reference machine: this proves nothing" >&2; exit 1; }
+      [ "$failed" = 0 ] || exit 1
+      echo "OK: $count part(s) wanted, none in either system's closure"
+    '';
+
   # THE APPLIER'S ONE POLKIT RULE, AND HOW WIDE IT IS.
   #
   # The person starts `ronoctua-person-apply.service` with no password: the
@@ -54963,6 +55073,8 @@ let
     inherit
       parts-rule-is-narrow
       one-parts-boundary
+      part-paths-are-read-as-arriving
+      parts-stay-out-of-the-base
       ;
     parts-are-isolated = partsVm;
     # ── anchor: L07 ──

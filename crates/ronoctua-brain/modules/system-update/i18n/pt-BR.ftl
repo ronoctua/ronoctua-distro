@@ -24,6 +24,8 @@ system-update-step-flake-update = buscar as versões novas
 system-update-step-flake-update-does = nix flake update do input da distro, no flake desta máquina: leva a distro à versão publicada mais nova e não mexe em nada além do flake.lock — os outros inputs são os da própria versão, como ela foi testada. Precisa de rede; é pulado e diz isso enquanto a máquina está retida numa revisão, no ISO, cuja pasta da máquina é só leitura, e sempre que a reconstrução seria — na bateria abaixo do piso, ou com o disco quase cheio —, para que a pasta nunca nomeie uma distro que a máquina não montou.
 system-update-step-system-rebuild = reconstruir o sistema
 system-update-step-system-rebuild-does = ronoctua-machine apply: monta o sistema novo primeiro e só troca para o que montou — um build que falha deixa a máquina e a pasta dela como estavam. Depois da troca, o próximo boot experimenta o sistema novo uma vez e volta sozinho para o último bom se ele não subir. É pulado na bateria abaixo do piso, a não ser que você tenha dito sim, e com o disco quase cheio mesmo depois de coletar o lixo do store. Se falhar, a sequência para aqui.
+system-update-step-parts-plan = planejar as partes
+system-update-step-parts-plan-does = ronoctua-parts plan: as partes do sistema que acabou de ser aplicado — o que precisa de um download que nenhum cache tem, o que não é livre, o que só o perfil full leva — escritas nos registros delas, e as derivações delas guardadas da coleta logo abaixo. Cada parte chega sozinha, pela unidade dela, que a troca já iniciou; uma que não chega fica na versão anterior e não segura nada. Este passo nunca espera um download.
 system-update-step-flatpak-system = atualizar os Flatpaks do sistema
 system-update-step-flatpak-system-does = flatpak update --system: atualiza o que a instalação Flatpak da própria máquina tem — o remoto do Flathub, e o que a configuração declarar — e não instala nada. Os seus apps estão na sua instalação e andam na sua metade, mais abaixo. Sem essa instalação o passo é pulado e diz isso.
 system-update-step-android-images = atualizar a imagem do sistema Android
@@ -81,6 +83,7 @@ system-update-kind-move-inputs = move os inputs pinados
 system-update-kind-apply-configuration = aplica a configuração
 system-update-kind-upgrade-software = atualiza programas que você mesmo instalou
 system-update-kind-refresh-cache = refaz um cache
+system-update-kind-realize-parts = realiza as partes
 system-update-kind-reclaim-space = recupera espaço em disco
 
 # THE VIEW THAT WATCHES A RUN, in both doors: its keys and what each says under

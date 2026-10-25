@@ -69,7 +69,9 @@ let
     # ALL OF THEM OR NONE, AND THE MINTER'S OWN: the minter is TypeScript and
     # needs the runtime that reads it, and the plugin that asks it is loaded
     # from the provider's root — named once, beside the layout.
-    // lib.optionalAttrs (media && onDemand) ronoctua.potProvider.environment;
+    // lib.optionalAttrs (media && onDemand && config.ronoctua ? parts) (
+      ronoctua.potProvider.environmentAt config.ronoctua.parts.pot-provider.path
+    );
 
   # THE COMMAND LINE, with the scan's environment set unless the caller set
   # one: `add`, `scan`, `hide` and `delete` for a terminal and for a test.

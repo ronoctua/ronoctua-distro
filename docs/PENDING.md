@@ -1676,13 +1676,9 @@ no terminal e a sessão do Codex encontrando o `CODEX_HOME` criado pela vista.
 
 O mecanismo das partes existe (`ronoctua-parts`, `nix/modules/parts.nix`; o porquê no
 `docs/ARCHITECTURE.md`, "Partes: o que chega depois da instalação") e está provado numa VM, mas
-nenhuma parte real usa ele ainda. O plano aprovado em 2026-10-23 segue por marcos, cada um verde:
+a primeira parte real é o minter de PO token, com o passo `parts-plan` na atualização. O plano
+aprovado em 2026-10-23 segue por marcos, cada um verde:
 
-- **M2 — piloto e atualização.** O yt-dlp (o overlay sai do `pkgs` do sistema) e o pot-provider
-  viram partes; os consumidores (fila, player, video-metrics, acesso rápido) leem por
-  `ronoctua_parts::here` a cada uso; o passo `parts-realize` na atualização, `carry-on`, com as leis
-  no `gen-updates.py`. Checks: `the-base-never-reads-a-part`, `parts-stay-out-of-the-base`,
-  `every-download-has-an-owner`, `part-paths-are-read-as-arriving`.
 - **M3 — o que a pessoa vê e faz.** O módulo `parts` do brain (marca e eventos), a página `s u p` da
   vista da atualização nas duas portas, entregar um arquivo (conferido pelo hash), importar e
   exportar por pendrive, espelhos no `options.json`, o "sim, desta vez" numa rede tarifada.
@@ -1691,6 +1687,11 @@ nenhuma parte real usa ele ainda. O plano aprovado em 2026-10-23 segue por marco
 - **M5 — downloads livres e programas do full.** Rust e devshell, Common Lisp, adplay, AppImages,
   apks, `fonts-full` (como downloads, com o `pinGuard` estrutural), superpack, WordNet, escritório,
   oficina, mídia, Emacs, toolchains; o `flake-registry.json` vira asset; todos os locales prontos.
+  E o yt-dlp, que saiu do piloto: ele é uma entrada do registro (`media`) e o overlay dele refaz o
+  mpv, então vira parte junto com a passagem do registro para as partes (`part = true`). Com as
+  partes numerosas, o `every-download-has-an-owner` (todo download é de uma parte ou da lista
+  fechada de fontes da base) e o lado Rust do `part-paths-are-read-as-arriving` (todo leitor de um
+  caminho de parte passa pelo `here`).
 - **M6 — instalação offline e primeiro boot.** O ISO calculado (as bases livres dos dois perfis, as
   partes livres do minimal, as entradas de build da cola do host, todo nó do lock), o instalador
   sem rede (sem o pulo, mirando sempre o ISO, `build-first`, os pertences depois do boot com a senha
