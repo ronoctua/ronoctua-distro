@@ -1246,6 +1246,10 @@ struct Footer {
     /// The way the conversations reach this loop, made the first time a
     /// gesture is made.
     sudo_sender: Option<channel::Sender<crate::sudo_bar::ToBar>>,
+    /// The way a key's passphrase request (the ssh askpass) reaches this loop,
+    /// made the first time one is asked — the same bar, asked for a passphrase
+    /// instead of root (`crate::sudo_bar::serve_askpass`).
+    askpass_sender: Option<channel::Sender<crate::sudo_bar::ToAsk>>,
 
     // ── anchor: L23 ──
     // ── anchor: L17 ──
@@ -2984,6 +2988,7 @@ fn assemble(
         sudo_bar: crate::sudo_bar::Bar::default(),
         sudo_drawn: Vec::new(),
         sudo_sender: None,
+        askpass_sender: None,
         // ── anchor: L17 ──
         // ── anchor: L23 ──
         // ── anchor: L24 ──
@@ -3757,6 +3762,8 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                     Order::Follow(stream) => state.clipboard_followed(stream),
                     // A WINDOW'S ROOT GESTURE, for the sudo bar.
                     Order::Sudo(stream, deed) => state.sudo_serve(stream, deed),
+                    // A KEY'S PASSPHRASE, for the same bar (the ssh askpass).
+                    Order::AskPass(stream, prompt) => state.askpass_serve(stream, prompt),
                     Order::Clipboard { generation, act } => {
                         state.clipboard_asked(generation, act);
                     }
@@ -10751,10 +10758,19 @@ impl Footer {
         self.draw_and_paint();
     }
 
-    /// Arms the clock that alternates the alert's two roles — only while an
-    /// alert is up, and once: the clock lets itself go when the bar goes.
+    /// Whether anything that ALTERNATES its colours is up: the battery's
+    /// maximum alert, or the sudo/askpass bar (invariant 15's one device,
+    /// spent on the bar too so a passphrase or a touch being awaited is
+    /// unmissable). The alert clock runs exactly while this is true.
+    fn flashes(&self) -> bool {
+        self.alerts.showing().is_some() || self.sudo_bar.is_up()
+    }
+
+    /// Arms the clock that alternates the alert's two roles — only while
+    /// something flashes ([`Self::flashes`]), and once: the clock lets itself
+    /// go when nothing does.
     fn keep_the_alert_clock(&mut self) {
-        if self.alerts.showing().is_none() {
+        if !self.flashes() {
             self.alert_phase = false;
             return;
         }
@@ -10767,7 +10783,7 @@ impl Footer {
         let armed = handle.insert_source(
             calloop::timer::Timer::from_duration(crate::alert::phase_lasts()),
             |_, (), state: &mut Self| {
-                if state.alerts.showing().is_none() {
+                if !state.flashes() {
                     state.alert_clock = false;
                     state.alert_phase = false;
                     return calloop::timer::TimeoutAction::Drop;
@@ -11088,6 +11104,7 @@ impl Footer {
             Moved::Nothing => return,
             Moved::Rose | Moved::Fell => {
                 tracing::info!(up = self.sudo_bar.is_up(), "the sudo bar moved");
+                self.keep_the_alert_clock();
                 self.apply_geometry(self.interactivity());
             }
             Moved::Changed => {}
@@ -11101,16 +11118,23 @@ impl Footer {
             crate::sudo_bar::Pressed::Nothing => return,
             crate::sudo_bar::Pressed::Changed => {}
             crate::sudo_bar::Pressed::Paste(id) => self.read_the_clipboard(PasteFor::SudoBar(id)),
+            // THE ASKPASS BAR ANSWERED and went: shrink and give the keyboard
+            // back (the sudo bar waits for a verdict instead and never falls
+            // this way).
+            crate::sudo_bar::Pressed::Fell => self.apply_geometry(self.interactivity()),
         }
         self.draw_and_paint();
     }
 
     /// A control of the bar, clicked where it is drawn — and the keyboard
-    /// asked for again, in case something took it while the bar asked.
+    /// asked for again, in case something took it while the bar asked, or
+    /// given back when the askpass bar fell.
     fn sudo_clicked(&mut self, control: crate::sudo_bar::Control) {
         self.sudo_bar.press(control);
         if self.sudo_bar.is_up() {
             self.apply_geometry(KeyboardInteractivity::Exclusive);
+        } else {
+            self.apply_geometry(self.interactivity());
         }
         self.draw_and_paint();
     }
@@ -11127,6 +11151,51 @@ impl Footer {
                     ronoctua_security::verb::Said::Refused(ronoctua_security::Why::Unstartable);
                 let _ = (&*stream.0).write_all(format!("{}\n", said.line()).as_bytes());
             }
+        }
+    }
+
+    /// The way a key's passphrase reaches this loop, made once — `None` with no
+    /// loop to ask on (a photograph's footer).
+    fn askpass_channel(&mut self) -> Option<channel::Sender<crate::sudo_bar::ToAsk>> {
+        if self.askpass_sender.is_none() {
+            let handle = self.repeat.clone()?;
+            let (sender, heard) = channel::channel::<crate::sudo_bar::ToAsk>();
+            handle
+                .insert_source(heard, |event, (), state: &mut Self| {
+                    if let channel::Event::Msg(msg) = event {
+                        state.askpass_heard(msg);
+                    }
+                })
+                .ok()?;
+            self.askpass_sender = Some(sender);
+        }
+        self.askpass_sender.clone()
+    }
+
+    /// A passphrase request spoke: the bar comes up asking it and takes the
+    /// keyboard, or — the socket gone — the bar goes and gives it back.
+    fn askpass_heard(&mut self, msg: crate::sudo_bar::ToAsk) {
+        let moved = match msg {
+            // A bar already up refuses the ask: `sink` is dropped here, and the
+            // serving thread reads that as a cancel and lets ssh ask its way.
+            crate::sudo_bar::ToAsk::Ask { id, prompt, sink } => self.sudo_bar.ask(id, prompt, sink),
+            crate::sudo_bar::ToAsk::Gone { id } => {
+                self.sudo_bar.drop_ask(id) == crate::sudo_bar::Moved::Fell
+            }
+        };
+        if moved {
+            self.keep_the_alert_clock();
+            self.apply_geometry(self.interactivity());
+            self.draw_and_paint();
+        }
+    }
+
+    /// A key's passphrase came down the control socket: served on a thread of
+    /// its own, the bar asking here (`sudo_bar::serve_askpass`). With no loop
+    /// to ask on, the connection is let go and ssh asks its own way.
+    fn askpass_serve(&mut self, stream: crate::leader::Follower, prompt: String) {
+        if let Some(to_bar) = self.askpass_channel() {
+            crate::sudo_bar::serve_askpass(stream.0, prompt, to_bar);
         }
     }
 
@@ -15664,8 +15733,8 @@ impl Footer {
             // (`crate::sudo_bar`): its two lines, and a lit control in the
             // other alert pair's ink. Remembered in `sudo_drawn` for the
             // pointer, for the band's reason.
-            let sudo = self.sudo_bar.drawn(columns, &self.texts);
-            let (_, _, chip_ink) = crate::sudo_bar::grounds();
+            let sudo = self.sudo_bar.drawn(columns, self.alert_phase, &self.texts);
+            let (_, _, chip_ink) = crate::sudo_bar::grounds(self.alert_phase);
             for piece in &sudo {
                 spans.extend(glyph_and_text(
                     &piece.text,
@@ -16951,7 +17020,7 @@ impl Footer {
             // a chip placed where its letters are (from the edge, as they
             // are).
             if band_top > 0 {
-                let (ground, chip, _) = crate::sudo_bar::grounds();
+                let (ground, chip, _) = crate::sudo_bar::grounds(self.alert_phase);
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: 0.0,
                     y: 0.0,

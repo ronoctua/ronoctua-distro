@@ -92,6 +92,11 @@ pub enum Order {
     /// the connection it came on stays open for the verdict, and for the
     /// gesture's next verbs.
     Sudo(Follower, String),
+    /// A key's passphrase, asked in the bar for the ssh askpass
+    /// (`crate::sudo_bar::serve_askpass`): the connection it came on stays
+    /// open, and the typed passphrase is written back down it. The word after
+    /// [`ASKPASS`] is the ssh prompt, never logged.
+    AskPass(Follower, String),
 }
 
 /// A connection kept open to be written to — the clipboard's window's.
@@ -111,6 +116,11 @@ impl Eq for Follower {}
 
 /// The word a new footer says to the one it is going to replace.
 const YIELD: &str = "quit";
+
+/// The word the ssh askpass (`ronoctua-ssh-askpass`) writes to ask a key's
+/// passphrase, the ssh prompt after it. Hard-coded in the helper too, which
+/// has no crate to share it from.
+pub const ASKPASS: &str = "askpass";
 
 /// How long to wait for the previous footer to die before taking the socket by force.
 ///
@@ -241,6 +251,23 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                     let follower = Follower(std::sync::Arc::new(stream));
                     if channel
                         .send(Order::Sudo(follower, deed.trim().to_owned()))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                // A KEY'S PASSPHRASE, for the askpass bar: the connection kept
+                // open for what is typed, and the prompt never logged. The
+                // prompt may be empty (ssh sometimes asks with none).
+                if let Some(prompt) = line
+                    .trim()
+                    .strip_prefix(ASKPASS)
+                    .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+                {
+                    let follower = Follower(std::sync::Arc::new(stream));
+                    if channel
+                        .send(Order::AskPass(follower, prompt.trim().to_owned()))
                         .is_err()
                     {
                         return;

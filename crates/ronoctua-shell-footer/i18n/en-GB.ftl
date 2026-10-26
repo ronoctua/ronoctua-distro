@@ -987,3 +987,8 @@ sudo-bar-cancel = cancel
 about-sudo-bar-answer = Hands what you typed to sudo, for this gesture alone
 about-sudo-bar-use-password = Stops waiting for the key or the finger, and asks your password
 about-sudo-bar-cancel = Does nothing, and the screen that asked says so
+
+## a key's passphrase, asked in the same bar (crate::sudo_bar's ask).
+
+askpass-bar-title = SSH key
+askpass-bar-ask = Passphrase for your SSH key

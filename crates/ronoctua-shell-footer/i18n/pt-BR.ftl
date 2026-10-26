@@ -987,3 +987,8 @@ sudo-bar-cancel = cancelar
 about-sudo-bar-answer = Entrega ao sudo o que você digitou, só para este gesto
 about-sudo-bar-use-password = Para de esperar a chave ou o dedo, e pede a sua senha
 about-sudo-bar-cancel = Não faz nada, e a tela que pediu diz isso
+
+## a senha de uma chave, pedida na mesma barra (crate::sudo_bar, o ask).
+
+askpass-bar-title = Chave SSH
+askpass-bar-ask = Senha da sua chave SSH

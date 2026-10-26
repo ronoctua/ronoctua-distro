@@ -428,6 +428,101 @@ fn deed_of(json: &str) -> Option<Deed> {
     deed.valid().then_some(deed)
 }
 
+// ─── a key's passphrase, in the same bar ────────────────────────────────────
+//
+// The ssh askpass (`ronoctua-ssh-askpass`, run by ssh as `$SSH_ASKPASS`) asks a
+// key's passphrase in THIS bar, not a floating window: it writes one line to
+// the control socket, the bar comes up asking the password, and what is typed
+// goes back down that line. It never reaches the sudo door — the bar's other
+// half — so `sudo-door-is-one` holds: this half answers a socket, not root.
+
+/// What the askpass bar hands back to the socket that asked.
+#[derive(Debug)]
+pub enum AskAnswer {
+    /// The passphrase typed — possibly empty, as some keys have none.
+    Password(Secret),
+    /// The person cancelled, or the bar fell for them (`Esc`, the socket gone).
+    Cancel,
+}
+
+/// What a passphrase conversation tells the footer's loop: raise the bar, or
+/// drop it because the socket that asked went away.
+pub enum ToAsk {
+    /// Raise the bar asking a passphrase; what is typed goes to `sink`.
+    Ask {
+        /// The conversation, [`NEXT`]'s next — never a sudo one's.
+        id: u64,
+        /// The ssh prompt, drawn after the title; may be empty.
+        prompt: String,
+        /// Where the typed passphrase (or the cancel) goes.
+        sink: std::sync::mpsc::Sender<AskAnswer>,
+    },
+    /// The socket that asked went away — drop the bar `id` if it is still up.
+    Gone {
+        /// The conversation.
+        id: u64,
+    },
+}
+
+impl std::fmt::Debug for ToAsk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ask { id, .. } => f
+                .debug_struct("Ask")
+                .field("id", id)
+                .finish_non_exhaustive(),
+            Self::Gone { id } => f.debug_struct("Gone").field("id", id).finish(),
+        }
+    }
+}
+
+/// Serves an askpass request on a thread of its own: the bar raised through
+/// `to_bar`, the typed passphrase (or nothing, when cancelled) written back
+/// down `stream`. A closed `stream` — ssh went away — drops the bar; writing
+/// nothing closes it, which ssh reads as "no passphrase" and gives up.
+pub fn serve_askpass(stream: Arc<UnixStream>, prompt: String, to_bar: Sender<ToAsk>) {
+    let spawned = std::thread::Builder::new()
+        .name("askpass".into())
+        .spawn(move || serve_askpass_on(&stream, prompt, &to_bar));
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "no thread for a key's passphrase");
+    }
+}
+
+fn serve_askpass_on(stream: &Arc<UnixStream>, prompt: String, to_bar: &Sender<ToAsk>) {
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let (sink, answered) = std::sync::mpsc::channel::<AskAnswer>();
+    // THE SOCKET GOING AWAY — ssh killed, the terminal closed — drops the bar:
+    // the reader sees EOF and tells the loop, which lets the bar's `sink` go
+    // and unblocks the wait below.
+    if let Ok(reading) = stream.try_clone() {
+        let to_bar = to_bar.clone();
+        let watching = std::thread::Builder::new()
+            .name("askpass-hear".into())
+            .spawn(move || {
+                for line in std::io::BufReader::new(reading).lines() {
+                    if line.is_err() {
+                        break;
+                    }
+                }
+                let _ = to_bar.send(ToAsk::Gone { id });
+            });
+        if let Err(e) = watching {
+            tracing::warn!(error = %e, "a key's passphrase cannot be heard going away");
+        }
+    }
+    if to_bar.send(ToAsk::Ask { id, prompt, sink }).is_err() {
+        return;
+    }
+    // The bar answers once, or its `sink` is dropped (cancel, or the socket
+    // gone): a passphrase is written back, nothing else is.
+    if let Ok(AskAnswer::Password(secret)) = answered.recv() {
+        let mut bytes = format!("{}\n", secret.expose()).into_bytes();
+        let _ = (&**stream).write_all(&bytes);
+        bytes.zeroize();
+    }
+}
+
 // ─── the bar, in the footer ─────────────────────────────────────────────────
 
 /// A control of the bar, grabbed where it is drawn.
@@ -450,6 +545,13 @@ enum Ending {
     Cancelling,
 }
 
+/// A key's passphrase asked in the bar: the ssh prompt, and where what is
+/// typed goes — a socket, never the sudo door ([`AskAnswer`]).
+struct AskPass {
+    prompt: String,
+    sink: std::sync::mpsc::Sender<AskAnswer>,
+}
+
 /// What is being asked, while it is.
 struct Up {
     id: u64,
@@ -466,6 +568,11 @@ struct Up {
     ending: Option<Ending>,
     /// The control under a pointer.
     lit: Option<Control>,
+    /// A KEY'S PASSPHRASE, not sudo: set when the bar was raised by the ssh
+    /// askpass ([`Bar::ask`]). The answer goes to its `sink`, `deed` and
+    /// `answerer` are a still-born placeholder the draw never shows, and the
+    /// bar falls the moment it is answered.
+    ask: Option<AskPass>,
 }
 
 impl Drop for Up {
@@ -511,6 +618,9 @@ pub enum Pressed {
     /// The door reads the clipboard for the line ([`Bar::paste`]), for this
     /// conversation.
     Paste(u64),
+    /// The ASKPASS bar answered or cancelled and went at once (no sudo verdict
+    /// to wait for): the footer shrinks and gives the keyboard back.
+    Fell,
 }
 
 /// The id under which the bar's line asks — never a question of the
@@ -568,6 +678,7 @@ impl Bar {
                         line: crate::line::Line::new(LINE_ID, true, None),
                         ending: None,
                         lit: None,
+                        ask: None,
                     });
                     if rose { Moved::Rose } else { Moved::Changed }
                 }
@@ -580,6 +691,64 @@ impl Bar {
                     Moved::Nothing
                 }
             }
+        }
+    }
+
+    /// Raises the bar to ask a key's PASSPHRASE for conversation `id`, what is
+    /// typed going to `sink` — the ssh askpass's socket, never the sudo door.
+    /// `false` when a bar is already up: one is asked at a time, and the caller
+    /// tells ssh so (it falls back to its own way of asking).
+    #[must_use]
+    pub fn ask(
+        &mut self,
+        id: u64,
+        prompt: String,
+        sink: std::sync::mpsc::Sender<AskAnswer>,
+    ) -> bool {
+        if self.up.is_some() {
+            return false;
+        }
+        self.up = Some(Up {
+            id,
+            // A PLACEHOLDER, never drawn and never answered: the askpass branch
+            // of `drawn` shows the prompt instead of this deed, and `press`
+            // sends what is typed to `ask.sink`, not this answerer.
+            deed: Deed {
+                asker: Asker::Security,
+                window: false,
+                verb: RootVerb::Relax {
+                    span: RelaxSpan::Fifteen,
+                },
+                vault: None,
+            },
+            asking: Asking::Password,
+            was: None,
+            answerer: BarAnswerer {
+                answerer: ronoctua_security::authority::answers().0,
+                kept: Kept::default(),
+            },
+            wrong: 0,
+            line: crate::line::Line::new(LINE_ID, true, None),
+            ending: None,
+            lit: None,
+            ask: Some(AskPass { prompt, sink }),
+        });
+        true
+    }
+
+    /// Drops the askpass bar `id` if it is still up — the socket that asked
+    /// went away. Letting the bar go lets its `sink` go with it, which the
+    /// serving thread reads as a cancel.
+    pub fn drop_ask(&mut self, id: u64) -> Moved {
+        if self
+            .up
+            .as_ref()
+            .is_some_and(|u| u.id == id && u.ask.is_some())
+        {
+            self.up = None;
+            Moved::Fell
+        } else {
+            Moved::Nothing
         }
     }
 
@@ -613,6 +782,28 @@ impl Bar {
 
     /// A control pressed — by its key, or by a click where it is drawn.
     pub fn press(&mut self, control: Control) -> Pressed {
+        // THE ASKPASS BAR: what is typed goes to the socket that asked, never
+        // the sudo door, and the bar falls the moment it is answered — there
+        // is no verdict to wait for. "Use the password" is not its control.
+        if self.up.as_ref().is_some_and(|u| u.ask.is_some()) {
+            match control {
+                Control::UsePassword => return Pressed::Nothing,
+                Control::Answer | Control::Cancel => {
+                    let mut up = self.up.take().expect("a bar is up");
+                    let answer = if control == Control::Answer {
+                        AskAnswer::Password(Secret::new(std::mem::take(&mut up.line.text)))
+                    } else {
+                        up.line.text.zeroize();
+                        up.line.text.clear();
+                        AskAnswer::Cancel
+                    };
+                    if let Some(ask) = up.ask.take() {
+                        let _ = ask.sink.send(answer);
+                    }
+                    return Pressed::Fell;
+                }
+            }
+        }
         let Some(up) = self.up.as_mut() else {
             return Pressed::Nothing;
         };
@@ -680,11 +871,15 @@ impl Bar {
     /// and who asks what; then what sudo waits for, the line typed into, and
     /// the controls at the edge. Empty at rest.
     #[must_use]
-    pub fn drawn(&self, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
+    pub fn drawn(&self, columns: u16, phase: bool, texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
         let Some(up) = self.up.as_ref() else {
             return Vec::new();
         };
-        let ink = tokens::color::ALERT_TEXT_ALT;
+        // THE INK OF THE PHASE: the bar alternates between the alert's two
+        // pairs on a clock (`crate::alert::roles`), so a passphrase or a touch
+        // being awaited is unmissable — the one device invariant 15 leaves,
+        // now spent on this bar too.
+        let ink = crate::alert::roles(phase).1;
         let left = tokens::space::MODELINE_EDGELEFT;
         let mut out = Vec::new();
         let text = |row: u16, at: u16, text: String| Piece {
@@ -697,6 +892,62 @@ impl Bar {
             explain: None,
             edge: false,
         };
+        // A KEY'S PASSPHRASE is drawn on its own: the glyph and title, the ssh
+        // prompt, and the line typed into with answer and cancel — no deed, no
+        // touch, no "use the password".
+        if let Some(ask) = up.ask.as_ref() {
+            let right = tokens::space::MODELINE_EDGERIGHT;
+            out.push(text(0, left, tokens::icon::SUDO_BAR.to_string()));
+            let at = left + 2;
+            let title = texts.t(key::ASKPASS_BAR_TITLE).to_uppercase();
+            out.push(text(0, at, title.clone()));
+            let after = at + layout::width(&title) + 2;
+            let room = columns.saturating_sub(right).saturating_sub(after);
+            if room > 0 && !ask.prompt.is_empty() {
+                out.push(text(0, after, layout::elide_end(&ask.prompt, room)));
+            }
+            // THE CONTROLS FIRST, from the edge, because they decide the room.
+            let controls = [
+                (
+                    Control::Answer,
+                    ANSWER_KEY,
+                    key::SUDO_BAR_ANSWER,
+                    key::ABOUT_SUDO_BAR_ANSWER,
+                ),
+                (
+                    Control::Cancel,
+                    CANCEL_KEY,
+                    key::SUDO_BAR_CANCEL,
+                    key::ABOUT_SUDO_BAR_CANCEL,
+                ),
+            ];
+            let mut edge = 0u16;
+            let mut placed = Vec::new();
+            for (control, notation, label, about) in controls.iter().rev() {
+                let shown = format!(" {notation} {} ", texts.t(label));
+                let width = layout::width(&shown);
+                placed.push(Piece {
+                    row: 1,
+                    at: crate::chrome::from_the_edge(columns, edge + width),
+                    text: shown,
+                    color: ink,
+                    lit: up.lit == Some(*control),
+                    control: Some(*control),
+                    explain: Some(texts.t(about)),
+                    edge: true,
+                });
+                edge += width + 1;
+            }
+            let first = placed.iter().map(|p| p.at).min().unwrap_or(columns);
+            let asked = format!("{}: {}", texts.t(key::ASKPASS_BAR_ASK), up.line.shown());
+            out.push(text(
+                1,
+                left,
+                layout::elide_start(&asked, first.saturating_sub(left + 1)),
+            ));
+            out.extend(placed);
+            return out;
+        }
         // THE FIRST LINE: the glyph in the margin, a cell of air, the title in
         // the language's capitals, two cells, and who asks what. WHO ASKS WHAT
         // WINS THE ROOM: on a line too narrow for both, the title gives way
@@ -867,6 +1118,7 @@ impl Bar {
             line,
             ending,
             lit: None,
+            ask: None,
         });
     }
 }
@@ -946,13 +1198,13 @@ pub fn at(drawn: &[Piece], row: u16, column: u16, from_the_edge: Option<u16>) ->
 }
 
 /// The bar's ground and a lit control's: `(ground, chip ground, chip ink)`.
+/// The ground is the alert role of `phase`, and a lit control's chip the other
+/// — the two alternate on the clock, so the bar flashes (`crate::alert::roles`).
 #[must_use]
-pub const fn grounds() -> (tokens::Color, tokens::Color, tokens::Color) {
-    (
-        tokens::color::ALERT_GROUND_ALT,
-        tokens::color::ALERT_GROUND,
-        tokens::color::ALERT_TEXT,
-    )
+pub const fn grounds(phase: bool) -> (tokens::Color, tokens::Color, tokens::Color) {
+    let (ground, _) = crate::alert::roles(phase);
+    let (chip, chip_ink) = crate::alert::roles(!phase);
+    (ground, chip, chip_ink)
 }
 
 #[cfg(test)]
@@ -1318,7 +1570,7 @@ mod tests {
             assert_eq!(bar.key(key(c)), Pressed::Changed);
         }
         let t = texts("en-GB");
-        let drawn = bar.drawn(120, &t);
+        let drawn = bar.drawn(120, true, &t);
         let words: String = drawn.iter().map(|p| p.text.clone()).collect();
         assert!(!words.contains("hunter"), "{words}");
         assert!(words.contains("••••••"), "{words}");
@@ -1334,7 +1586,7 @@ mod tests {
         assert_eq!(bar.heard(ToBar::Over { id: 8 }), Moved::Nothing);
         assert_eq!(bar.heard(ToBar::Over { id: 7 }), Moved::Fell);
         assert_eq!(bar.rows(), 0);
-        assert!(bar.drawn(120, &t).is_empty());
+        assert!(bar.drawn(120, true, &t).is_empty());
     }
 
     /// FAILS IF: `Esc` does not cancel at any stage, "use the password" is
@@ -1347,7 +1599,7 @@ mod tests {
         asked(&mut bar, 1, Asking::Finger, 0);
         let t = texts("pt-BR");
         let controls = |bar: &Bar| -> Vec<Control> {
-            bar.drawn(120, &t)
+            bar.drawn(120, true, &t)
                 .iter()
                 .filter_map(|p| p.control)
                 .collect()
@@ -1394,8 +1646,57 @@ mod tests {
             key::SUDO_BAR_WRONG,
             &[("asked", &t.t(key::SUDO_BAR_PASSWORD))],
         );
-        let words: String = bar.drawn(160, &t).iter().map(|p| p.text.clone()).collect();
+        let words: String = bar
+            .drawn(160, true, &t)
+            .iter()
+            .map(|p| p.text.clone())
+            .collect();
         assert!(words.contains(&wrong), "{words}");
+    }
+
+    /// FAILS IF: the askpass bar does not rise, its draw omits the title or
+    /// masks nothing, a second ask is taken while one is up, the typed
+    /// passphrase does not reach the socket with the bar falling, a cancel
+    /// sends anything but a cancel, or a dropped socket does not take the bar.
+    #[test]
+    fn the_askpass_bar_asks_a_passphrase_and_hands_it_to_the_socket() {
+        let t = texts("en-GB");
+        let mut bar = Bar::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert!(bar.ask(1, "Enter passphrase for key 'id_x'".to_owned(), tx));
+        assert_eq!(bar.rows(), ROWS);
+        // A SECOND ASK is refused while one is up — the caller tells ssh so.
+        let (tx2, _rx2) = std::sync::mpsc::channel();
+        assert!(!bar.ask(2, "other".to_owned(), tx2));
+        for c in ["h", "u", "n", "t"] {
+            assert_eq!(bar.key(key(c)), Pressed::Changed);
+        }
+        let words: String = bar
+            .drawn(120, true, &t)
+            .iter()
+            .map(|p| p.text.clone())
+            .collect();
+        assert!(
+            words.contains(&t.t(key::ASKPASS_BAR_TITLE).to_uppercase()),
+            "no title: {words}"
+        );
+        assert!(words.contains("••••"), "not masked: {words}");
+        assert!(!words.contains("hunt"), "typed in the clear: {words}");
+        // RET hands the passphrase to the socket and the bar falls.
+        assert_eq!(bar.key(key("RET")), Pressed::Fell);
+        assert_eq!(bar.rows(), 0);
+        assert!(matches!(rx.try_recv(), Ok(AskAnswer::Password(s)) if s.expose() == "hunt"));
+        // ESC sends a cancel.
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert!(bar.ask(3, String::new(), tx));
+        assert_eq!(bar.key(key("ESC")), Pressed::Fell);
+        assert!(matches!(rx.try_recv(), Ok(AskAnswer::Cancel)));
+        // THE SOCKET GONE drops the bar, and its sink with it.
+        let (tx, rx) = std::sync::mpsc::channel::<AskAnswer>();
+        assert!(bar.ask(4, String::new(), tx));
+        assert_eq!(bar.drop_ask(99), Moved::Nothing);
+        assert_eq!(bar.drop_ask(4), Moved::Fell);
+        assert!(rx.try_recv().is_err(), "the sink outlived the bar");
     }
 
     /// FAILS IF: a piece runs into another or past the edge, a control is
@@ -1408,7 +1709,7 @@ mod tests {
             let mut bar = Bar::default();
             bar.photographed(shot);
             for columns in [60u16, 100, 200] {
-                let drawn = bar.drawn(columns, &t);
+                let drawn = bar.drawn(columns, true, &t);
                 assert!(drawn.iter().all(|p| p.row < ROWS));
                 for p in &drawn {
                     assert!(
