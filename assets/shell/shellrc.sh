@@ -195,8 +195,19 @@ if command -v bat >/dev/null 2>&1; then
 fi
 
 # The trailing space makes the shell expand the NEXT token as an alias too, so
-# `sudo ll` works. See https://askubuntu.com/q/22037
-alias sudo='sudo '
+# `sudo ll` works (https://askubuntu.com/q/22037). In a graphical session also
+# `-A`, so sudo asks its password in the distro's own bar through SUDO_ASKPASS
+# (`nix/modules/ssh.nix`) instead of on this terminal line: the bar reaches the
+# person whatever window they have in focus, and a password an agent's sudo
+# needs never lands on a bare terminal. This FILE is sourced after the system
+# `/etc/zshrc` where that module also sets the alias, so without this the plain
+# `sudo ` here would quietly undo the `-A`. Not on a bare console, which has no
+# footer to draw the bar and would otherwise be left unable to answer sudo.
+if [ -n "$WAYLAND_DISPLAY" ]; then
+    alias sudo='sudo -A '
+else
+    alias sudo='sudo '
+fi
 
 
 # -----------------------------------------------------------------------------

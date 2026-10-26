@@ -3763,8 +3763,8 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                     // A WINDOW'S ROOT GESTURE, for the sudo bar.
                     Order::Sudo(stream, deed) => state.sudo_serve(stream, deed),
                     // A KEY'S PASSPHRASE, for the same bar (the ssh askpass).
-                    Order::AskPass(stream, kind, prompt) => {
-                        state.askpass_serve(stream, &kind, prompt);
+                    Order::AskPass(stream, kind, context, prompt) => {
+                        state.askpass_serve(stream, &kind, context, prompt);
                     }
                     Order::Clipboard { generation, act } => {
                         state.clipboard_asked(generation, act);
@@ -4888,6 +4888,19 @@ impl Footer {
         // UNDER THE SUDO BAR'S ROWS, which are the topmost while it asks.
         let first = self.sudo_rows();
         (row >= first && row < first + self.band_rows()).then_some(row - first)
+    }
+
+    /// Whether `y` falls within the sudo bar's rows — the topmost of the
+    /// surface while it asks, zero at rest. What tells a click meant for the
+    /// bar (a control, or a force of its keyboard) from one for a region.
+    fn in_the_sudo_bar(&self, y: f64) -> bool {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        if line_height <= 0.0 || y < 0.0 {
+            return false;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let row = (y / line_height) as u16;
+        row < self.sudo_rows()
     }
 
     /// The sudo bar's piece under a pointer — from what was DRAWN
@@ -7019,6 +7032,9 @@ impl Footer {
         let mut band_hit = None;
         // AND THE SUDO BAR'S, above it: a control of the bar that was clicked.
         let mut sudo_hit: Option<crate::sudo_bar::Control> = None;
+        // AND A CLICK ON THE BAR BUT NOT ON A CONTROL, which forces the
+        // keyboard back to it — the owner's way to force focus with the mouse.
+        let mut sudo_refocus = false;
         // WHETHER THE BAND'S CLOCK STARTED OR STOPPED IN THIS FRAME, which is
         // a repaint: the pie becomes a pause and back, and nothing else in the
         // loop would ask for one — the clock that beats the band answers
@@ -7338,12 +7354,19 @@ impl Footer {
                     // band: every control up there is a single, obvious
                     // gesture, and a second meaning for the same target would
                     // be a menu nobody asked for.
-                    // THE SUDO BAR ABOVE IT, the topmost rows while it asks.
-                    if let Some(control) = self
-                        .sudo_at(e.position.0, e.position.1)
-                        .and_then(|p| p.control)
-                    {
-                        sudo_hit = Some(control);
+                    // THE SUDO BAR ABOVE IT, the topmost rows while it asks: a
+                    // control acts, and a click anywhere else on it forces the
+                    // keyboard back (the owner asked to force focus with the
+                    // mouse). Either way the click is the bar's and falls to no
+                    // region under it — the bar is modal while it is up.
+                    if self.sudo_bar.is_up() && self.in_the_sudo_bar(e.position.1) {
+                        match self
+                            .sudo_at(e.position.0, e.position.1)
+                            .and_then(|p| p.control)
+                        {
+                            Some(control) => sudo_hit = Some(control),
+                            None => sudo_refocus = true,
+                        }
                         continue;
                     }
                     if let Some(hit) = self.band_at(e.position.0, e.position.1).and_then(|p| p.hit)
@@ -7553,6 +7576,10 @@ impl Footer {
         // be true for one press.
         if let Some(control) = sudo_hit {
             self.sudo_clicked(control);
+            return;
+        }
+        if sudo_refocus {
+            self.sudo_refocus();
             return;
         }
         if let Some(hit) = band_hit {
@@ -11141,6 +11168,16 @@ impl Footer {
         self.draw_and_paint();
     }
 
+    /// A click on the bar that was not on a control: the keyboard asked for
+    /// again, so a click anywhere on the bar forces focus back to it — the
+    /// owner's way to force it with the mouse when another surface held it.
+    fn sudo_refocus(&mut self) {
+        if self.sudo_bar.is_up() {
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+            self.draw_and_paint();
+        }
+    }
+
     /// A window's root gesture came down the control socket: served on a
     /// thread of its own, the bar asking here (`sudo_bar::serve`). With no
     /// loop to ask on, the window is told so.
@@ -11184,8 +11221,9 @@ impl Footer {
                 id,
                 kind,
                 prompt,
+                context,
                 sink,
-            } => self.sudo_bar.ask(id, kind, prompt, sink),
+            } => self.sudo_bar.ask(id, kind, context, prompt, sink),
             crate::sudo_bar::ToAsk::Gone { id } => {
                 self.sudo_bar.drop_ask(id) == crate::sudo_bar::Moved::Fell
             }
@@ -11202,11 +11240,18 @@ impl Footer {
     /// title the `kind` the helper named (`ssh`/`sudo`). With no loop to ask on
     /// — a photograph's footer — the connection is let go and the asker asks
     /// its own way.
-    fn askpass_serve(&mut self, stream: crate::leader::Follower, kind: &str, prompt: String) {
+    fn askpass_serve(
+        &mut self,
+        stream: crate::leader::Follower,
+        kind: &str,
+        context: Option<String>,
+        prompt: String,
+    ) {
         if let Some(to_bar) = self.askpass_channel() {
             crate::sudo_bar::serve_askpass(
                 stream.0,
                 crate::sudo_bar::Kind::of(kind),
+                context,
                 prompt,
                 to_bar,
             );
@@ -14305,7 +14350,15 @@ impl Footer {
         // IN INDEPENDENT MODE THE FOOTER NEVER TAKES THE WAYLAND KEYBOARD: an
         // exclusive layer would take every seat's (`crate::keys_link`), and
         // the keyboard that opened the region arrives over the socket instead.
-        let keyboard = if self.keys.independent {
+        //
+        // EXCEPT THE SUDO/ASKPASS BAR, which is MODAL: a password must be
+        // answered before anything else types, so it takes every seat's
+        // keyboard ON PURPOSE (the owner's word, 2026-10-26: "capturar tudo"),
+        // overriding the per-keyboard routing until it falls. It is not opened
+        // by a leader, so nothing is diverted over `keys_link` for it — this
+        // Wayland grab is the one and only path its keys take (`took_a_key`,
+        // `key_arrived`'s sudo branch), with no socket to double it.
+        let keyboard = if self.keys.independent && !self.sudo_bar.is_up() {
             KeyboardInteractivity::None
         } else {
             keyboard

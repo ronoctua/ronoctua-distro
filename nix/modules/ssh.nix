@@ -57,13 +57,21 @@ in
   # harmless: `sudo` without `-A` ignores it.
   environment.variables.SUDO_ASKPASS = "${askpass}/bin/ronoctua-sudo-askpass";
 
-  # THE BAR EVEN ON A TERMINAL — BUT ONLY IN THE GRAPHICAL SESSION. A Wayland
-  # session has a footer to ask in, so force ssh to its askpass even when a
-  # terminal could ask, and make `sudo` pass `-A`. SCOPED to `$WAYLAND_DISPLAY`
-  # on purpose: a bare console or a recovery TTY has NO footer, and forcing the
-  # askpass there would make every ssh and sudo unanswerable — a lockout with
-  # no way back. So the console keeps its ordinary terminal prompt, and only a
-  # session that can draw the bar is sent to it.
+  # FORCED EVEN IN A TERMINAL, in a graphical session. The bar now grabs the
+  # keyboard every time it rises, MODALLY — over a focused window, on any
+  # workspace, and in Independent-keyboards mode where it once could not
+  # (`crate::surface`'s `apply_geometry`, the sudo-bar exception). So no secret
+  # on this machine is typed into a bare terminal line when a bar could draw
+  # it: `SSH_ASKPASS_REQUIRE=force` sends ssh to the bar with a tty present,
+  # and `sudo -A` sends sudo's own password there too. The agent that runs
+  # `sudo` in a terminal cannot see the password — the bar reaches the person
+  # instead, whatever they have in focus, which is the point of the bar.
+  #
+  # SCOPED TO A GRAPHICAL SESSION (`$WAYLAND_DISPLAY`): a bare console or a
+  # recovery TTY has no footer to draw the bar, and forcing the askpass there
+  # would make ssh and sudo unanswerable — a lockout with no way back. The
+  # console keeps its terminal prompt; only a session that can draw the bar is
+  # sent to it.
   environment.interactiveShellInit = ''
     if [ -n "$WAYLAND_DISPLAY" ]; then
       export SSH_ASKPASS_REQUIRE=force

@@ -10,10 +10,11 @@
 #
 # A SOURCE OF ITS OWN, with no dependency at all — `rustc` on one file, in
 # seconds — so it needs no workspace, no `Cargo`, and no entry in the rust
-# plan. The two things it shares with the footer, the control socket's path
-# and the `askpass` word, are spelled again in the source (its comments say
-# so): the footer's crates would otherwise all recompile with a helper they do
-# not use, the reason `nix/git-askpass.nix` exists.
+# plan. What it shares with the footer — the control socket's path, the
+# `askpass` word, and the base64 of the sudo context — is spelled again in the
+# source (its comments say so): the footer's crates would otherwise all
+# recompile with a helper they do not use, the reason `nix/git-askpass.nix`
+# exists.
 { pkgs }:
 
 let

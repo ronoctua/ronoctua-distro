@@ -95,9 +95,10 @@ pub enum Order {
     /// A secret, asked in the bar for an askpass helper
     /// (`crate::sudo_bar::serve_askpass`): the connection it came on stays
     /// open, and the typed secret is written back down it. After [`ASKPASS`]
-    /// come the KIND (`ssh`/`sudo`, the title) and then the prompt, never
-    /// logged: `AskPass(follower, kind, prompt)`.
-    AskPass(Follower, String, String),
+    /// come the KIND (`ssh`/`sudo`, the title), the CONTEXT (what sudo serves
+    /// and from where, base64, `-` for none — sudo only), and then the prompt,
+    /// none of them logged: `AskPass(follower, kind, context, prompt)`.
+    AskPass(Follower, String, Option<String>, String),
 }
 
 /// A connection kept open to be written to — the clipboard's window's.
@@ -119,9 +120,40 @@ impl Eq for Follower {}
 const YIELD: &str = "quit";
 
 /// The word an askpass helper (`ronoctua-ssh-askpass`, `-sudo-askpass`) writes
-/// to ask a secret, the KIND (`ssh`/`sudo`) and the prompt after it. Hard-coded
-/// in the helper too, which has no crate to share it from.
+/// to ask a secret, the KIND (`ssh`/`sudo`), the CONTEXT and the prompt after
+/// it. Hard-coded in the helper too, which has no crate to share it from.
 pub const ASKPASS: &str = "askpass";
+
+/// Standard base64 (padding tolerated, not required), for the askpass context
+/// the helper sends as one token (`nix/ssh-askpass.rs`'s `base64`). `None` on
+/// a character the alphabet does not have, or bytes that are not UTF-8 — the
+/// footer shares no base64 crate with the helper, so the pair is spelled on
+/// both sides.
+fn un_base64(token: &str) -> Option<String> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Some(u32::from(c - b'A')),
+        b'a'..=b'z' => Some(u32::from(c - b'a') + 26),
+        b'0'..=b'9' => Some(u32::from(c - b'0') + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let mut bytes = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in token.bytes() {
+        if c == b'=' {
+            break;
+        }
+        acc = (acc << 6) | value(c)?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            #[allow(clippy::cast_possible_truncation)]
+            bytes.push((acc >> bits) as u8);
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
 
 /// How long to wait for the previous footer to die before taking the socket by force.
 ///
@@ -259,21 +291,27 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                     continue;
                 }
                 // A SECRET, for the askpass bar: the connection kept open for
-                // what is typed, and the prompt never logged. `askpass <kind>
-                // <prompt>` — the kind the title (`ssh`/`sudo`), the prompt the
-                // rest, which may be empty (ssh sometimes asks with none).
+                // what is typed, and nothing of it logged. `askpass <kind>
+                // <context> <prompt>` — the kind the title (`ssh`/`sudo`), the
+                // context base64 (`-` for none, sudo's command and origin
+                // otherwise), the prompt the rest, which may be empty (ssh
+                // sometimes asks with none).
                 if let Some(rest) = line
                     .trim()
                     .strip_prefix(ASKPASS)
                     .filter(|rest| rest.is_empty() || rest.starts_with(' '))
                 {
-                    let rest = rest.trim_start();
-                    let (kind, prompt) = rest.split_once(' ').unwrap_or((rest, ""));
+                    let mut parts = rest.trim_start().splitn(3, ' ');
+                    let kind = parts.next().unwrap_or("");
+                    let token = parts.next().unwrap_or("-");
+                    let prompt = parts.next().unwrap_or("");
+                    let context = (token != "-").then(|| un_base64(token)).flatten();
                     let follower = Follower(std::sync::Arc::new(stream));
                     if channel
                         .send(Order::AskPass(
                             follower,
                             kind.to_owned(),
+                            context,
                             prompt.trim().to_owned(),
                         ))
                         .is_err()
@@ -2227,5 +2265,24 @@ mod tests {
         l.set = Set::Window;
         l.activate();
         assert_eq!(l.set_now(), Set::Footer);
+    }
+
+    /// FAILS IF: the base64 the askpass context is sent as is decoded with the
+    /// wrong alphabet or bit order — the pair the helper encodes with
+    /// (`nix/ssh-askpass.rs`) and this decodes with would then disagree — or a
+    /// character the alphabet does not have is not refused.
+    #[test]
+    fn the_askpass_context_base64_decodes_as_the_helper_encodes_it() {
+        // Hand-verified vectors covering the three remainders (0, 1, 2 bytes
+        // over a triple) and a multibyte char, as the helper would emit them.
+        assert_eq!(un_base64("").as_deref(), Some(""));
+        assert_eq!(un_base64("TQ").as_deref(), Some("M"));
+        assert_eq!(un_base64("TWE").as_deref(), Some("Ma"));
+        assert_eq!(un_base64("TWFu").as_deref(), Some("Man"));
+        // `·` is U+00B7 — the separator the helper puts between shell and tty.
+        assert_eq!(un_base64("enNoIMK3").as_deref(), Some("zsh ·"));
+        // Padding is tolerated, and a character off the alphabet is refused.
+        assert_eq!(un_base64("TWE=").as_deref(), Some("Ma"));
+        assert_eq!(un_base64("not base64!"), None);
     }
 }
