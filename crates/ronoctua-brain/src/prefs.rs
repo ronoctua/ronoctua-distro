@@ -544,6 +544,7 @@ mod tests {
                 runaway_minutes: 30,
                 gated: true,
             }),
+            starts_off: false,
             units: crate::module::Units::default(),
             whys: &[],
             marks: &[],

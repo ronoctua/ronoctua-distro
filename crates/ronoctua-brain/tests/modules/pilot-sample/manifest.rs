@@ -112,6 +112,7 @@ pub static MANIFEST: crate::module::Manifest = crate::module::Manifest {
         runaway_minutes: 60,
         gated: false,
     }),
+    starts_off: false,
     units: crate::module::Units {
         run: None,
         rehearse: None,

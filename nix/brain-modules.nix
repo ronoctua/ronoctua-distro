@@ -146,6 +146,10 @@ let
     "actions"
     "events"
     "polkit"
+    # A module the distro ships SWITCHED OFF: its row and switch are there, it
+    # just does not run until the person turns it on. Absent means `false`
+    # (on), so every module that does not name it keeps running as before.
+    "startsOff"
   ];
   scheduleRequired = [
     "kind"
@@ -612,6 +616,10 @@ let
         !(isList polkit && lib.all isString polkit)
       ) "polkit is a list of polkit action ids";
 
+      startsOffProblems = lib.optional (
+        !(isBool (m.startsOff or false))
+      ) "startsOff is a boolean: a module the distro ships switched off declares `startsOff = true`";
+
       what = m.what or null;
       whatProblems = lib.optional (
         !(isString what && what != "" && match ".*\n.*" what == null)
@@ -679,7 +687,8 @@ let
         ++ eventProblems
         ++ usesProblems
         ++ namedByProblems
-        ++ polkitProblems;
+        ++ polkitProblems
+        ++ startsOffProblems;
       textProblems = lib.optionals (
         person && fragmentKeys != null && unknown == [ ] && absent == [ ] && shape == [ ]
       ) (keyProblemsOf fragmentKeys);
@@ -752,6 +761,7 @@ let
             intervalDays = intervalWithoutCalendar;
           }
           // m.schedule;
+      startsOff = m.startsOff or false;
       units = lib.mapAttrs (_: unitOf) (m.units or { });
       # THE ID IS ALWAYS ONE OF ITS PREFIXES: `cmd-<id>-<action>`,
       # `<id>-why-<word>` and `notif-<id>-<event>-…` are built from it.

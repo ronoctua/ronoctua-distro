@@ -26,6 +26,13 @@
   # A WATCH: nothing to run, nothing to gate, nothing to announce.
   schedule = null;
 
+  # SHIPPED SWITCHED OFF. Reading the machine's own errors is a thing the
+  # person opts into, not one they inherit: the row and its switch are on the
+  # brain's page from the first boot, and it begins watching only once the
+  # person turns it on. Its switch is the same one every module has, so turning
+  # it on is a tap and no rebuild (owner, 2026-10-26).
+  startsOff = true;
+
   # The words it refuses with: the kind is not in its list any more
   # (ignored, or forgotten while the page was open); a row's action asked by
   # name, with no row; and the person's file of ignored kinds, which does not

@@ -183,6 +183,12 @@ pub struct Manifest {
     pub needs: Needs,
     /// Its schedule; `None` is a watch.
     pub schedule: Option<Schedule>,
+    /// Whether the distro ships it SWITCHED OFF — its row drawn and its switch
+    /// at hand, but not running until the person turns it on. `false` for all
+    /// but the few whose work is a choice to make rather than inherit
+    /// (`journal-errors`, which reads the journal). Only the person's DEFAULT:
+    /// a saved entry, on or off, still wins over it (see [`Self::defaults`]).
+    pub starts_off: bool,
     /// The units it starts, by name.
     pub units: Units,
     /// The words it may give as `Due::Not { why }` or `Acted::Refused`, with
@@ -228,7 +234,7 @@ impl Manifest {
     pub fn defaults(&self) -> TaskPrefs {
         match self.schedule {
             Some(s) => TaskPrefs {
-                enabled: true,
+                enabled: !self.starts_off,
                 interval_days: s.interval_days,
                 part_of_day: s.part_of_day,
                 countdown_seconds: s.countdown_seconds,
@@ -238,6 +244,7 @@ impl Manifest {
             },
             None => TaskPrefs {
                 countdown_seconds: 0,
+                enabled: !self.starts_off,
                 ..TaskPrefs::default()
             },
         }
@@ -865,6 +872,7 @@ mod tests {
             runaway_minutes: 30,
             gated: false,
         }),
+        starts_off: false,
         units: Units {
             run: Some("fixture.service"),
             rehearse: None,
@@ -915,6 +923,19 @@ mod tests {
         assert_eq!(watch.kind(), Kind::Watch);
         assert!(!watch.gated(), "a watch has no run for the gate to hold");
         assert_eq!(watch.defaults().countdown_seconds, 0);
+
+        // A MODULE THAT SHIPS OFF is not enabled until the person turns it on —
+        // the one default a saved entry still overrides, like every other.
+        let off = Manifest {
+            starts_off: true,
+            ..FIXTURE
+        };
+        assert!(!off.defaults().enabled);
+        let off_watch = Manifest {
+            schedule: None,
+            ..off
+        };
+        assert!(!off_watch.defaults().enabled);
     }
 
     #[test]

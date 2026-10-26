@@ -69,6 +69,7 @@ pub fn manifest(id: &'static str) -> Manifest {
         does_key: leak(format!("brain-task-{id}-does")),
         needs: Needs::default(),
         schedule: Some(ROUTINE),
+        starts_off: false,
         units: Units::default(),
         whys: &[],
         marks: &[],

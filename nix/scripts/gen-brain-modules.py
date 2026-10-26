@@ -357,6 +357,7 @@ def manifest_rs(m: dict, names: list[str], language: str, tables: list[str]) -> 
         f" network: {'true' if m['needs']['network'] else 'false'}, }},"
     )
     A(f"    schedule: {schedule},")
+    A(f"    starts_off: {'true' if m['startsOff'] else 'false'},")
     A(f"    units: crate::module::Units {{ run: {unit_ref('run')}, rehearse: {unit_ref('rehearse')}, }},")
     A(f"    whys: &[{whys}],")
     A(f"    marks: &[{', '.join('mark::' + const(k) for k in sorted(m['marks']))}],")
