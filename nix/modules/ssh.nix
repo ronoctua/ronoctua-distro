@@ -50,6 +50,27 @@ in
     AddKeysToAgent yes
   '';
 
+  # SUDO THROUGH THE SAME BAR. A raw `sudo` (a rebuild from a shell) asks the
+  # system password through `$SUDO_ASKPASS` when it is run `-A`; point it at
+  # the SAME helper under its sudo name, so the bar titles it the system
+  # password, not a key (`nix/ssh-askpass.rs` reads its own name). Set always,
+  # harmless: `sudo` without `-A` ignores it.
+  environment.variables.SUDO_ASKPASS = "${askpass}/bin/ronoctua-sudo-askpass";
+
+  # THE BAR EVEN ON A TERMINAL — BUT ONLY IN THE GRAPHICAL SESSION. A Wayland
+  # session has a footer to ask in, so force ssh to its askpass even when a
+  # terminal could ask, and make `sudo` pass `-A`. SCOPED to `$WAYLAND_DISPLAY`
+  # on purpose: a bare console or a recovery TTY has NO footer, and forcing the
+  # askpass there would make every ssh and sudo unanswerable — a lockout with
+  # no way back. So the console keeps its ordinary terminal prompt, and only a
+  # session that can draw the bar is sent to it.
+  environment.interactiveShellInit = ''
+    if [ -n "$WAYLAND_DISPLAY" ]; then
+      export SSH_ASKPASS_REQUIRE=force
+      alias sudo='sudo -A'
+    fi
+  '';
+
   # Off on this system, and set anyway: a person who turns sshd on gets the
   # hybrids first, a server's narrower classical list after them, and no RSA
   # key made at its first start.

@@ -92,11 +92,12 @@ pub enum Order {
     /// the connection it came on stays open for the verdict, and for the
     /// gesture's next verbs.
     Sudo(Follower, String),
-    /// A key's passphrase, asked in the bar for the ssh askpass
+    /// A secret, asked in the bar for an askpass helper
     /// (`crate::sudo_bar::serve_askpass`): the connection it came on stays
-    /// open, and the typed passphrase is written back down it. The word after
-    /// [`ASKPASS`] is the ssh prompt, never logged.
-    AskPass(Follower, String),
+    /// open, and the typed secret is written back down it. After [`ASKPASS`]
+    /// come the KIND (`ssh`/`sudo`, the title) and then the prompt, never
+    /// logged: `AskPass(follower, kind, prompt)`.
+    AskPass(Follower, String, String),
 }
 
 /// A connection kept open to be written to — the clipboard's window's.
@@ -117,9 +118,9 @@ impl Eq for Follower {}
 /// The word a new footer says to the one it is going to replace.
 const YIELD: &str = "quit";
 
-/// The word the ssh askpass (`ronoctua-ssh-askpass`) writes to ask a key's
-/// passphrase, the ssh prompt after it. Hard-coded in the helper too, which
-/// has no crate to share it from.
+/// The word an askpass helper (`ronoctua-ssh-askpass`, `-sudo-askpass`) writes
+/// to ask a secret, the KIND (`ssh`/`sudo`) and the prompt after it. Hard-coded
+/// in the helper too, which has no crate to share it from.
 pub const ASKPASS: &str = "askpass";
 
 /// How long to wait for the previous footer to die before taking the socket by force.
@@ -257,17 +258,24 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                     }
                     continue;
                 }
-                // A KEY'S PASSPHRASE, for the askpass bar: the connection kept
-                // open for what is typed, and the prompt never logged. The
-                // prompt may be empty (ssh sometimes asks with none).
-                if let Some(prompt) = line
+                // A SECRET, for the askpass bar: the connection kept open for
+                // what is typed, and the prompt never logged. `askpass <kind>
+                // <prompt>` — the kind the title (`ssh`/`sudo`), the prompt the
+                // rest, which may be empty (ssh sometimes asks with none).
+                if let Some(rest) = line
                     .trim()
                     .strip_prefix(ASKPASS)
                     .filter(|rest| rest.is_empty() || rest.starts_with(' '))
                 {
+                    let rest = rest.trim_start();
+                    let (kind, prompt) = rest.split_once(' ').unwrap_or((rest, ""));
                     let follower = Follower(std::sync::Arc::new(stream));
                     if channel
-                        .send(Order::AskPass(follower, prompt.trim().to_owned()))
+                        .send(Order::AskPass(
+                            follower,
+                            kind.to_owned(),
+                            prompt.trim().to_owned(),
+                        ))
                         .is_err()
                     {
                         return;

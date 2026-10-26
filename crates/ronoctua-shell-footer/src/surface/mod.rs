@@ -3763,7 +3763,9 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                     // A WINDOW'S ROOT GESTURE, for the sudo bar.
                     Order::Sudo(stream, deed) => state.sudo_serve(stream, deed),
                     // A KEY'S PASSPHRASE, for the same bar (the ssh askpass).
-                    Order::AskPass(stream, prompt) => state.askpass_serve(stream, prompt),
+                    Order::AskPass(stream, kind, prompt) => {
+                        state.askpass_serve(stream, &kind, prompt);
+                    }
                     Order::Clipboard { generation, act } => {
                         state.clipboard_asked(generation, act);
                     }
@@ -11178,7 +11180,12 @@ impl Footer {
         let moved = match msg {
             // A bar already up refuses the ask: `sink` is dropped here, and the
             // serving thread reads that as a cancel and lets ssh ask its way.
-            crate::sudo_bar::ToAsk::Ask { id, prompt, sink } => self.sudo_bar.ask(id, prompt, sink),
+            crate::sudo_bar::ToAsk::Ask {
+                id,
+                kind,
+                prompt,
+                sink,
+            } => self.sudo_bar.ask(id, kind, prompt, sink),
             crate::sudo_bar::ToAsk::Gone { id } => {
                 self.sudo_bar.drop_ask(id) == crate::sudo_bar::Moved::Fell
             }
@@ -11190,12 +11197,19 @@ impl Footer {
         }
     }
 
-    /// A key's passphrase came down the control socket: served on a thread of
-    /// its own, the bar asking here (`sudo_bar::serve_askpass`). With no loop
-    /// to ask on, the connection is let go and ssh asks its own way.
-    fn askpass_serve(&mut self, stream: crate::leader::Follower, prompt: String) {
+    /// A secret came down the control socket for the askpass bar: served on a
+    /// thread of its own, the bar asking here (`sudo_bar::serve_askpass`), its
+    /// title the `kind` the helper named (`ssh`/`sudo`). With no loop to ask on
+    /// — a photograph's footer — the connection is let go and the asker asks
+    /// its own way.
+    fn askpass_serve(&mut self, stream: crate::leader::Follower, kind: &str, prompt: String) {
         if let Some(to_bar) = self.askpass_channel() {
-            crate::sudo_bar::serve_askpass(stream.0, prompt, to_bar);
+            crate::sudo_bar::serve_askpass(
+                stream.0,
+                crate::sudo_bar::Kind::of(kind),
+                prompt,
+                to_bar,
+            );
         }
     }
 

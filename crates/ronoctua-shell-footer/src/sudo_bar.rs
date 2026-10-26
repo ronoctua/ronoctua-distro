@@ -445,16 +445,57 @@ pub enum AskAnswer {
     Cancel,
 }
 
+/// Which secret the bar asks for: it picks the title and the line's label. The
+/// helper's own name decides it (`nix/ssh-askpass.rs`), written after the
+/// `askpass` word (`crate::leader::ASKPASS`); a name it does not know reads as
+/// [`Kind::Ssh`], the key passphrase this bar began with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// An SSH key's passphrase.
+    Ssh,
+    /// The system (sudo) password.
+    Sudo,
+}
+
+impl Kind {
+    /// The kind the helper's token names.
+    #[must_use]
+    pub fn of(token: &str) -> Self {
+        match token {
+            "sudo" => Self::Sudo,
+            _ => Self::Ssh,
+        }
+    }
+
+    /// The bar's title for this kind.
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Ssh => key::ASKPASS_BAR_TITLE_SSH,
+            Self::Sudo => key::ASKPASS_BAR_TITLE_SUDO,
+        }
+    }
+
+    /// The label the typed line carries for this kind.
+    const fn ask(self) -> &'static str {
+        match self {
+            Self::Ssh => key::ASKPASS_BAR_ASK_SSH,
+            Self::Sudo => key::ASKPASS_BAR_ASK_SUDO,
+        }
+    }
+}
+
 /// What a passphrase conversation tells the footer's loop: raise the bar, or
 /// drop it because the socket that asked went away.
 pub enum ToAsk {
-    /// Raise the bar asking a passphrase; what is typed goes to `sink`.
+    /// Raise the bar asking a secret; what is typed goes to `sink`.
     Ask {
         /// The conversation, [`NEXT`]'s next — never a sudo one's.
         id: u64,
-        /// The ssh prompt, drawn after the title; may be empty.
+        /// Which secret, for the title and the label.
+        kind: Kind,
+        /// The prompt the helper passed, drawn after the title; may be empty.
         prompt: String,
-        /// Where the typed passphrase (or the cancel) goes.
+        /// Where the typed secret (or the cancel) goes.
         sink: std::sync::mpsc::Sender<AskAnswer>,
     },
     /// The socket that asked went away — drop the bar `id` if it is still up.
@@ -480,16 +521,16 @@ impl std::fmt::Debug for ToAsk {
 /// `to_bar`, the typed passphrase (or nothing, when cancelled) written back
 /// down `stream`. A closed `stream` — ssh went away — drops the bar; writing
 /// nothing closes it, which ssh reads as "no passphrase" and gives up.
-pub fn serve_askpass(stream: Arc<UnixStream>, prompt: String, to_bar: Sender<ToAsk>) {
+pub fn serve_askpass(stream: Arc<UnixStream>, kind: Kind, prompt: String, to_bar: Sender<ToAsk>) {
     let spawned = std::thread::Builder::new()
         .name("askpass".into())
-        .spawn(move || serve_askpass_on(&stream, prompt, &to_bar));
+        .spawn(move || serve_askpass_on(&stream, kind, prompt, &to_bar));
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "no thread for a key's passphrase");
     }
 }
 
-fn serve_askpass_on(stream: &Arc<UnixStream>, prompt: String, to_bar: &Sender<ToAsk>) {
+fn serve_askpass_on(stream: &Arc<UnixStream>, kind: Kind, prompt: String, to_bar: &Sender<ToAsk>) {
     let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (sink, answered) = std::sync::mpsc::channel::<AskAnswer>();
     // THE SOCKET GOING AWAY — ssh killed, the terminal closed — drops the bar:
@@ -511,7 +552,15 @@ fn serve_askpass_on(stream: &Arc<UnixStream>, prompt: String, to_bar: &Sender<To
             tracing::warn!(error = %e, "a key's passphrase cannot be heard going away");
         }
     }
-    if to_bar.send(ToAsk::Ask { id, prompt, sink }).is_err() {
+    if to_bar
+        .send(ToAsk::Ask {
+            id,
+            kind,
+            prompt,
+            sink,
+        })
+        .is_err()
+    {
         return;
     }
     // The bar answers once, or its `sink` is dropped (cancel, or the socket
@@ -545,9 +594,10 @@ enum Ending {
     Cancelling,
 }
 
-/// A key's passphrase asked in the bar: the ssh prompt, and where what is
-/// typed goes — a socket, never the sudo door ([`AskAnswer`]).
+/// A secret asked in the bar: its kind (title and label), the helper's prompt,
+/// and where what is typed goes — a socket, never the sudo door ([`AskAnswer`]).
 struct AskPass {
+    kind: Kind,
     prompt: String,
     sink: std::sync::mpsc::Sender<AskAnswer>,
 }
@@ -694,14 +744,15 @@ impl Bar {
         }
     }
 
-    /// Raises the bar to ask a key's PASSPHRASE for conversation `id`, what is
-    /// typed going to `sink` — the ssh askpass's socket, never the sudo door.
+    /// Raises the bar to ask a secret of `kind` for conversation `id`, what is
+    /// typed going to `sink` — the askpass's socket, never the sudo door.
     /// `false` when a bar is already up: one is asked at a time, and the caller
-    /// tells ssh so (it falls back to its own way of asking).
+    /// tells the asker so (it falls back to its own way of asking).
     #[must_use]
     pub fn ask(
         &mut self,
         id: u64,
+        kind: Kind,
         prompt: String,
         sink: std::sync::mpsc::Sender<AskAnswer>,
     ) -> bool {
@@ -731,7 +782,7 @@ impl Bar {
             line: crate::line::Line::new(LINE_ID, true, None),
             ending: None,
             lit: None,
-            ask: Some(AskPass { prompt, sink }),
+            ask: Some(AskPass { kind, prompt, sink }),
         });
         true
     }
@@ -899,7 +950,7 @@ impl Bar {
             let right = tokens::space::MODELINE_EDGERIGHT;
             out.push(text(0, left, tokens::icon::SUDO_BAR.to_string()));
             let at = left + 2;
-            let title = texts.t(key::ASKPASS_BAR_TITLE).to_uppercase();
+            let title = texts.t(ask.kind.title()).to_uppercase();
             out.push(text(0, at, title.clone()));
             let after = at + layout::width(&title) + 2;
             let room = columns.saturating_sub(right).saturating_sub(after);
@@ -939,7 +990,7 @@ impl Bar {
                 edge += width + 1;
             }
             let first = placed.iter().map(|p| p.at).min().unwrap_or(columns);
-            let asked = format!("{}: {}", texts.t(key::ASKPASS_BAR_ASK), up.line.shown());
+            let asked = format!("{}: {}", texts.t(ask.kind.ask()), up.line.shown());
             out.push(text(
                 1,
                 left,
@@ -1655,45 +1706,71 @@ mod tests {
     }
 
     /// FAILS IF: the askpass bar does not rise, its draw omits the title or
-    /// masks nothing, a second ask is taken while one is up, the typed
-    /// passphrase does not reach the socket with the bar falling, a cancel
-    /// sends anything but a cancel, or a dropped socket does not take the bar.
+    /// masks nothing, the KIND does not pick the title (an SSH key vs the
+    /// system password), a second ask is taken while one is up, the typed
+    /// secret does not reach the socket with the bar falling, a cancel sends
+    /// anything but a cancel, or a dropped socket does not take the bar.
     #[test]
-    fn the_askpass_bar_asks_a_passphrase_and_hands_it_to_the_socket() {
+    fn the_askpass_bar_asks_a_secret_by_kind_and_hands_it_to_the_socket() {
         let t = texts("en-GB");
+        let ssh_title = t.t(key::ASKPASS_BAR_TITLE_SSH).to_uppercase();
+        let sudo_title = t.t(key::ASKPASS_BAR_TITLE_SUDO).to_uppercase();
+        let shown = |bar: &Bar| -> String {
+            bar.drawn(120, true, &t)
+                .iter()
+                .map(|p| p.text.clone())
+                .collect()
+        };
         let mut bar = Bar::default();
         let (tx, rx) = std::sync::mpsc::channel();
-        assert!(bar.ask(1, "Enter passphrase for key 'id_x'".to_owned(), tx));
+        assert!(bar.ask(
+            1,
+            Kind::Ssh,
+            "Enter passphrase for key 'id_x'".to_owned(),
+            tx
+        ));
         assert_eq!(bar.rows(), ROWS);
-        // A SECOND ASK is refused while one is up — the caller tells ssh so.
+        // A SECOND ASK is refused while one is up — the caller tells the asker so.
         let (tx2, _rx2) = std::sync::mpsc::channel();
-        assert!(!bar.ask(2, "other".to_owned(), tx2));
+        assert!(!bar.ask(2, Kind::Ssh, "other".to_owned(), tx2));
         for c in ["h", "u", "n", "t"] {
             assert_eq!(bar.key(key(c)), Pressed::Changed);
         }
-        let words: String = bar
-            .drawn(120, true, &t)
-            .iter()
-            .map(|p| p.text.clone())
-            .collect();
+        // THE SSH KIND wears the SSH-key title, not the system one.
+        let words = shown(&bar);
+        assert!(words.contains(&ssh_title), "no ssh title: {words}");
         assert!(
-            words.contains(&t.t(key::ASKPASS_BAR_TITLE).to_uppercase()),
-            "no title: {words}"
+            !words.contains(&sudo_title),
+            "sudo title on an ssh ask: {words}"
         );
         assert!(words.contains("••••"), "not masked: {words}");
         assert!(!words.contains("hunt"), "typed in the clear: {words}");
-        // RET hands the passphrase to the socket and the bar falls.
+        // RET hands the secret to the socket and the bar falls.
         assert_eq!(bar.key(key("RET")), Pressed::Fell);
         assert_eq!(bar.rows(), 0);
         assert!(matches!(rx.try_recv(), Ok(AskAnswer::Password(s)) if s.expose() == "hunt"));
+        // THE SUDO KIND wears the system-password title and its label.
+        let (tx, _rx) = std::sync::mpsc::channel();
+        assert!(bar.ask(2, Kind::Sudo, "[sudo] password for noctua:".to_owned(), tx));
+        let words = shown(&bar);
+        assert!(words.contains(&sudo_title), "no sudo title: {words}");
+        assert!(
+            words.contains(&t.t(key::ASKPASS_BAR_ASK_SUDO)),
+            "no sudo label: {words}"
+        );
+        assert!(
+            !words.contains(&ssh_title),
+            "ssh title on a sudo ask: {words}"
+        );
+        assert_eq!(bar.key(key("ESC")), Pressed::Fell);
         // ESC sends a cancel.
         let (tx, rx) = std::sync::mpsc::channel();
-        assert!(bar.ask(3, String::new(), tx));
+        assert!(bar.ask(3, Kind::Ssh, String::new(), tx));
         assert_eq!(bar.key(key("ESC")), Pressed::Fell);
         assert!(matches!(rx.try_recv(), Ok(AskAnswer::Cancel)));
         // THE SOCKET GONE drops the bar, and its sink with it.
         let (tx, rx) = std::sync::mpsc::channel::<AskAnswer>();
-        assert!(bar.ask(4, String::new(), tx));
+        assert!(bar.ask(4, Kind::Ssh, String::new(), tx));
         assert_eq!(bar.drop_ask(99), Moved::Nothing);
         assert_eq!(bar.drop_ask(4), Moved::Fell);
         assert!(rx.try_recv().is_err(), "the sink outlived the bar");
