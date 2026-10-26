@@ -141,17 +141,31 @@ pub fn plan(
             let layout_own = own
                 .and_then(|u| u.layout.as_ref())
                 .filter(|s| !s.is_empty());
+            // A LAYOUT OF ITS OWN TAKES ITS OWN VARIANT, or none: the machine's
+            // variant belongs to the machine's layout.
+            let variant = if layout_own.is_some() {
+                own.and_then(|u| u.variant.clone()).unwrap_or_default()
+            } else {
+                text(own.and_then(|u| u.variant.as_ref()), &machine.variant)
+            };
+            // THE VARIANT IS CLEARED BEFORE THE LAYOUT IS SET. The compositor
+            // compiles the keymap on the very line that sets `xkb_layout`, with
+            // whatever variant the device still carries — the machine's
+            // (`euro`), merged from `type:keyboard`. A layout that has no such
+            // variant (`gb`) is then compiled as `gb(euro)` and refused
+            // ([XKB-661] in scroll's log), and the keyboard keeps the old
+            // layout. Clearing to none first makes every step a valid pair: an
+            // empty variant (valid for any layout), then the layout, then the
+            // layout's own variant (`nix/modules/scroll.nix`'s note on when
+            // `type:keyboard` merges into a device).
             let mut settings = vec![
+                KeyboardSetting::Variant(String::new()),
                 KeyboardSetting::Layout(text(layout_own, &machine.layout)),
-                // A LAYOUT OF ITS OWN TAKES ITS OWN VARIANT, or none: the
-                // machine's variant belongs to the machine's layout.
-                KeyboardSetting::Variant(if layout_own.is_some() {
-                    own.and_then(|u| u.variant.clone()).unwrap_or_default()
-                } else {
-                    text(own.and_then(|u| u.variant.as_ref()), &machine.variant)
-                }),
-                KeyboardSetting::Options(machine.options.clone()),
             ];
+            if !variant.is_empty() {
+                settings.push(KeyboardSetting::Variant(variant));
+            }
+            settings.push(KeyboardSetting::Options(machine.options.clone()));
             if let Some(r) = own.and_then(|u| u.repeat_rate).filter(|r| *r > 0) {
                 settings.push(KeyboardSetting::RepeatRate(r));
             }
@@ -248,7 +262,10 @@ mod tests {
         );
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].cursor, 2, "the touchpad's cursor, not the first");
-        assert_eq!(p[0].settings[0], KeyboardSetting::Layout("gb".into()));
+        // The variant is cleared first, then the layout — never the layout on
+        // a stale variant.
+        assert_eq!(p[0].settings[0], KeyboardSetting::Variant(String::new()));
+        assert_eq!(p[0].settings[1], KeyboardSetting::Layout("gb".into()));
     }
 
     #[test]
@@ -283,8 +300,10 @@ mod tests {
         assert_eq!(
             p[0].settings,
             vec![
-                KeyboardSetting::Layout("fr".into()),
+                // Cleared first, then the layout; `fr` has no variant of its
+                // own, so none is set after it.
                 KeyboardSetting::Variant(String::new()),
+                KeyboardSetting::Layout("fr".into()),
                 KeyboardSetting::Options("compose:caps".into()),
                 KeyboardSetting::RepeatRate(40),
             ]
