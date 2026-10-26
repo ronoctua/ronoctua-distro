@@ -75,6 +75,17 @@ in
     environment.etc."xdg/gtk-3.0/settings.ini".text = settings;
     environment.etc."xdg/gtk-4.0/settings.ini".text = settings;
 
+    # COMPOSE AND DEAD KEYS IN GTK APPS. Since GTK 4.20 a GTK app no longer
+    # composes `Multi_key`/dead-key sequences by itself on Wayland when no input
+    # method is present — it defers to the IM, and with none the Compose key
+    # (Caps Lock, `compose:caps`) does nothing. Ghostty (the terminal) and every
+    # other GTK app went mute to accents while Chrome, which composes on its
+    # own, did not. `simple` is GTK's built-in X11-style compose — the pre-4.20
+    # behaviour, needing no IBus/Fcitx, which is right for a machine that ships
+    # no input-method framework. The shell's own windows compose in their own
+    # reader (`ronoctua_shell_door::door::compose`) and never read this.
+    environment.sessionVariables.GTK_IM_MODULE = "simple";
+
     # What the settings portal answers: `programs.dconf.enable` is the compositor module's.
     programs.dconf.profiles.user.databases = [
       {
