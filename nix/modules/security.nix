@@ -307,6 +307,16 @@ in
       "d /run/ronoctua-security 0755 root root -"
       "d /run/ronoctua-security/staged 0700 ${user} ${group} -"
       "d /var/lib/ronoctua-security 0755 root root -"
+      # THE FINGER LIST, EMPTY, SO `pam_listfile` OPENS IT INSTEAD OF LOGGING.
+      # `FingerSudo` writes this file (`0644 root`, `fprint::set_sudo`) to list
+      # the users a finger may answer sudo for; until it does, an ABSENT file
+      # made the `pam_listfile` gate above log `Couldn't open …` at every single
+      # sudo — a line that reads like a fault but only ever meant "nobody is
+      # listed". An empty file is the same answer (the user is not in it, so its
+      # `[success=ignore default=3]` jumps over the cue, the tty check and
+      # fprintd) with nothing said. `f` and not `f+`: a machine that has listed
+      # somebody keeps its line across a rebuild.
+      "f /var/lib/ronoctua-security/fingerprint-sudo 0644 root root -"
     ];
 
     # The shell's door finds the helper here: a variable and not a compiled
