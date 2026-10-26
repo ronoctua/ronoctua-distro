@@ -110,6 +110,16 @@ in
     keyboards = { };
   };
 
+  # KEYD EXITS 15 WHEN IT IS STOPPED, AND 15 IS A CLEAN STOP.
+  #
+  # On `SIGTERM` keyd exits with the signal's own number (15) rather than 0, so
+  # every `switch` — which stops the unit before starting the new one — left
+  # `keyd.service: Failed with result 'exit-code'` in the journal, a "failed"
+  # unit after a rebuild where the keyboard never missed a key. It is only the
+  # stop's bookkeeping: `Restart=always` is untouched by this, so a keyd that
+  # truly died mid-session still comes back.
+  systemd.services.keyd.serviceConfig.SuccessExitStatus = 15;
+
   # THE DIRECTORY, ITS SEED, AND THE SYMLINK.
   #
   # `d` makes it belong to the session's user, so the shell writes there with
