@@ -14,6 +14,7 @@ notif-title = Notifications
 notif-rule-important-gets-room = Something important gets room
 notif-rule-bluetooth-connected-is-quiet = A Bluetooth device connecting is said by its mark
 notif-rule-bluetooth-disconnected-is-quiet = A Bluetooth device leaving is said by its mark
+notif-rule-battery-charged-is-quiet = A charged battery is said by its glyph
 notif-rule-small-things-are-quick = Small things go by quickly
 # The manager: three lists, and a heading each.
 notif-column-happened = Received

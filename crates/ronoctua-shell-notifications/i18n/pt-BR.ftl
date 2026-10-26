@@ -14,6 +14,7 @@ notif-title = Notificações
 notif-rule-important-gets-room = O que é importante ganha espaço
 notif-rule-bluetooth-connected-is-quiet = Aparelho Bluetooth que conecta é dito pela marca
 notif-rule-bluetooth-disconnected-is-quiet = Aparelho Bluetooth que sai é dito pela marca
+notif-rule-battery-charged-is-quiet = Bateria carregada é dita pelo glifo
 notif-rule-small-things-are-quick = Coisa pequena passa rápido
 # O gerenciador: três listas, e um título para cada.
 notif-column-happened = Recebidas

@@ -1211,6 +1211,24 @@
         show = "hidden";
       };
     }
+    # A CHARGED BATTERY IS FILED, not held on the band. Above the rule on small
+    # things, because the first rule that catches decides — and at level 10
+    # `small-things-are-quick` would otherwise only SHORTEN it on screen instead
+    # of keeping it off. Matched by the stable tag and never the translated
+    # words (`rewrite = false`: the footer writes "Battery charged" / "Bateria
+    # carregada" from its own keys), so the filter holds in every language.
+    {
+      id = "battery-charged-is-quiet";
+      when = [
+        {
+          field = "tag";
+          is = "battery-charged";
+        }
+      ];
+      apply = {
+        show = "hidden";
+      };
+    }
     # AND SOMETHING UNIMPORTANT DOES NOT HOLD THE SCREEN. The band pushes the
     # content up while it is there; six seconds of "copied" is six seconds of
     # every window being one line shorter.
