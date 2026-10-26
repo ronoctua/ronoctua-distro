@@ -32,6 +32,12 @@ pub enum Said {
     Daemon(FromDaemon),
     /// The daemon went away — Together mode, or it died.
     Gone,
+    /// No daemon answered this reconnect cycle: it is not running. In
+    /// Independent mode the footer reclaims it from here when keyd has taken
+    /// the keyboards (`crate::surface`'s re-assert) — the common way a
+    /// `nixos-rebuild switch` leaves things, keyd started and the remapper
+    /// stopped. Harmless in Together mode, where the footer ignores it.
+    Absent,
 }
 
 /// Keeps a connection to the daemon, reconnecting every two seconds.
@@ -55,6 +61,11 @@ pub fn listen(to: channel::Sender<Said>) {
                     if to.send(Said::Gone).is_err() {
                         return;
                     }
+                } else if to.send(Said::Absent).is_err() {
+                    // NO DAEMON THIS CYCLE: the footer decides whether to
+                    // reclaim Independent mode. Together mode gets this too and
+                    // ignores it — the one connect it always paid, said.
+                    return;
                 }
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }

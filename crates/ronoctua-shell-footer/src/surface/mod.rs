@@ -1025,8 +1025,12 @@ struct Footer {
     /// `mark`), refreshed when the studio rereads its settings.
     camera_mark_allowed: bool,
     /// Independent keyboards: the mode, the link to `ronoctua-keys`, and the
-    /// keyboard the open region belongs to (`crate::keys_link`).
+    /// keyboards the open region belongs to (`crate::keys_link`).
     keys: crate::keys_link::Keys,
+    /// When the footer last reclaimed Independent mode after keyd took over —
+    /// a debounce, so a remapper that cannot stay up does not trade places
+    /// with keyd forever (`reassert_independent_if_keyd_took_over`).
+    keys_reasserted: Option<std::time::Instant>,
     /// The watch on `keyboards.json`, whose mode and units the seats follow.
     _keyboards_watch: Option<ronoctua_files::notice::Notice>,
     /// The sound view's own settings, read from `audio.json`.
@@ -2877,6 +2881,7 @@ fn assemble(
             independent: crate::keys_link::independent(),
             ..Default::default()
         },
+        keys_reasserted: None,
         _keyboards_watch: None,
         audio_prefs: std::rc::Rc::new(std::cell::Cell::new(ronoctua_audio::prefs::store().read())),
         sound: None,
@@ -19405,6 +19410,45 @@ impl Footer {
                     self.keys.release();
                 }
             }
+            Said::Absent => self.reassert_independent_if_keyd_took_over(),
+        }
+    }
+
+    /// INDEPENDENT IS STILL THE CHOICE, BUT NO DAEMON IS RUNNING. Most often a
+    /// `nixos-rebuild switch`: keyd is enabled, so the switch starts it, and
+    /// keyd's conflict stops `ronoctua-keys` — the footer then believes it is
+    /// independent with nothing behind it (no diverts, no twin layouts). The
+    /// person did not choose keyd, so put the remapper back; its own conflict
+    /// stops keyd again.
+    ///
+    /// ONLY WHEN KEYD HAS TAKEN OVER, so a remapper that merely crashed is left
+    /// to systemd's `Restart`/`onFailure` and the footer does not trade places
+    /// with keyd in a loop. And at most once every few seconds, for the same
+    /// reason. Off the event loop: the check and `switch_to` both run
+    /// `systemctl`.
+    fn reassert_independent_if_keyd_took_over(&mut self) {
+        if !self.keys.independent {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Some(last) = self.keys_reasserted
+            && now.duration_since(last) < std::time::Duration::from_secs(5)
+        {
+            return;
+        }
+        self.keys_reasserted = Some(now);
+        let spawned = std::thread::Builder::new()
+            .name("keys-reassert".to_owned())
+            .spawn(|| {
+                if !crate::keyboard::keyd_is_active() {
+                    return;
+                }
+                if let Err(e) = crate::keyboard::switch_to(ronoctua_keyboards::Mode::Independent) {
+                    tracing::warn!(error = %e, "the keyboards fell back to keyd and would not return to Independent");
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "no thread to reclaim Independent mode");
         }
     }
 

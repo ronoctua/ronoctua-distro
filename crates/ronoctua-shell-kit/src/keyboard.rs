@@ -82,6 +82,18 @@ fn active() -> bool {
     active_unit(UNIT)
 }
 
+/// Whether keyd — Together mode's daemon — is active right now.
+///
+/// The footer asks before it reclaims Independent mode: if keyd took the
+/// keyboards back (a `nixos-rebuild switch` starts it, it being enabled), the
+/// remapper goes back on; if the remapper merely died, keyd is NOT active —
+/// systemd's own `Restart`/`onFailure` answers that, and the footer keeps out
+/// of it rather than trading places with keyd in a loop (`crate::surface`).
+#[must_use]
+pub fn keyd_is_active() -> bool {
+    active_unit(UNIT)
+}
+
 fn active_unit(unit: &str) -> bool {
     Command::new(SYSTEMCTL_PATH)
         .args(["is-active", "--quiet", unit])
