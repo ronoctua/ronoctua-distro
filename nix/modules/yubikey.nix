@@ -79,6 +79,16 @@ in
       pkgs.yubikey-personalization
       pkgs.libfido2
     ];
+    # THE GROUP THOSE RULES NAME. `libfido2`'s stock rules assign every
+    # security key `GROUP="plugdev"` (a Debian/Arch convention), a group NixOS
+    # does not define — so udev-worker says "Failed to resolve group
+    # 'plugdev'" for each of the hundred-odd rule lines, on every boot and
+    # every trigger (a thousand lines a boot). The access they grant comes
+    # from the `uaccess` tag they also carry, which hands the key to whoever
+    # holds the seat; the group is vestigial. Defined empty, the clause
+    # resolves and the noise stops, and no one is in a group that grants
+    # nothing.
+    users.groups.plugdev = { };
     programs.gnupg.agent.enable = true;
 
     security.pam.u2f = {

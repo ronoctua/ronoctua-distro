@@ -28,6 +28,7 @@
 //! implements no pointer still answers the pointer, a door that says nothing
 //! about touch still answers a finger.
 
+pub mod compose;
 pub mod handlers;
 pub mod keys;
 pub mod list;
@@ -1723,6 +1724,11 @@ pub struct Door<C: Content> {
     keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
     /// The modifiers of the keyboard whose events are being handled.
     pub mods: Modifiers,
+    /// The compose state, fed every typed key: `Multi_key` (Caps Lock, by
+    /// `compose:caps`) and the keys after it become the one character they
+    /// name. `None` when the locale carries no compose table. See
+    /// [`compose`].
+    compose: Option<compose::Compose>,
     /// Every pointer — one per cursor — with the state of each while another
     /// is `here`. See `crate::seats`.
     pointers: crate::seats::Seats<Hand<C::Hand>>,
@@ -1897,6 +1903,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
         shell,
         keyboards: crate::seats::Seats::default(),
         mods: Modifiers::default(),
+        compose: compose::Compose::from_locale(),
         pointers: crate::seats::Seats::default(),
         shapes: crate::cursor_shape::Shapes::bind(&globals, &qh),
         here: Hand::default(),
@@ -2362,6 +2369,19 @@ impl<C: Content> Door<C> {
     /// list follows the cursor, on the EVENT and never in the paint.
     fn typed(&mut self, event: &KeyEvent, mods: Modifiers) {
         self.ui.keyboard_seat = self.keyboards.colour_number_here();
+        // COMPOSE FIRST: a key mid-sequence types nothing, a finished sequence
+        // types the character it names, and everything else is the key as it
+        // came (`door::compose`). Only an open sequence changes a key, so a
+        // binding, an arrow and a plain letter are untouched.
+        let composed;
+        let event = match self.compose.as_mut().map(|c| c.feed(event)) {
+            Some(compose::Composed::Swallow) => return,
+            Some(compose::Composed::Text(made)) => {
+                composed = made;
+                &composed
+            }
+            Some(compose::Composed::Pass) | None => event,
+        };
         typed_into(
             &mut self.content,
             &mut self.ui,

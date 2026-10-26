@@ -45,6 +45,9 @@ ronoctua-security = { path = "../ronoctua-security" }
 
 smithay-client-toolkit.workspace = true
 wayland-client.workspace = true
+# The compose state a key is fed into (`door::compose`): the same library SCTK
+# compiles every keymap with, pinned as the footer pins it.
+xkbcommon = "0.8"
 # THE WINDOW HANDLES wgpu takes a door's surface by (`door/mod.rs`, its one
 # `unsafe` block).
 raw-window-handle.workspace = true

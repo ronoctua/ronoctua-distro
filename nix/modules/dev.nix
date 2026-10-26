@@ -101,8 +101,11 @@ in
       })
       (lib.mkIf cfg.android {
         # Keeps `~/.android` out of $HOME's root, like everything else here
-        # (Studio's as much as the SDK's).
-        ANDROID_USER_HOME = "$XDG_DATA_HOME/android";
+        # (Studio's as much as the SDK's). BRACED: this value reaches
+        # `/etc/environment` too, which `pam_env` reads, and `pam_env` expands
+        # only `${VAR}` — an unbraced `$XDG_DATA_HOME` it drops with a warning,
+        # leaving the variable unset in every pam session.
+        ANDROID_USER_HOME = "\${XDG_DATA_HOME}/android";
       })
       (lib.mkIf (config.ronoctua.distroApps.installed.flutter && partFile "flutter" "" != null) {
         # Flutter writes its own state; without this it lands in `~/.flutter`.

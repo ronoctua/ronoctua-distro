@@ -190,6 +190,24 @@ pub fn run_quiet(argv: &[String]) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Runs `argv` for its effect alone, with NOTHING of its output reaching the
+/// journal — for a best-effort command whose failure is an expected and
+/// meaningless condition. Stopping the transient retry timer when none is
+/// armed is one: `systemctl` says "Unit … not loaded" to its standard error,
+/// and that is not an error of this machine's (`retry::arm`).
+pub fn run_silent(argv: &[String]) -> bool {
+    let Some((program, args)) = argv.split_first() else {
+        return false;
+    };
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// What a finished program said.
 pub struct Said {
     /// Whether it exited zero.

@@ -4,10 +4,16 @@
 //! The installer runs it after `nixos-install` (`crate::plan` of
 //! `ronoctua-installer`, `INST_STEP_SEED_PARTS`). The machine's own plan
 //! (`/etc/ronoctua/parts-plan.json` of the system under `DIR`) names each
-//! part's output; every one this medium's store holds is copied over, so the
-//! first boot's realizer finds it valid and makes it the part's profile
-//! with no build and no network (`realize`'s seeding). A part the medium
-//! does not hold downloads later, like any other.
+//! part's output and its derivation; every output this medium's store holds
+//! is copied over, so the first boot's realizer finds it valid and makes it
+//! the part's profile with no build and no network (`realize`'s seeding). For
+//! every OTHER wanted part the derivation's graph is carried instead — the
+//! `.drv` files and sources, never a built output — so the first boot BUILDS
+//! it (substituting or fetching what the build needs) rather than finding
+//! neither an output nor a derivation to make one from. Without the graph the
+//! realizer says "don't know how to build these paths": the system's closure
+//! holds no part, and an installation copies the system, not the evaluation
+//! that instantiated the parts' derivations.
 //!
 //! IT NEVER FAILS THE INSTALLATION: a plan it cannot read, or a copy that
 //! does not go, is said and ends [`exit::DONE`] — the machine is whole
@@ -41,22 +47,44 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
         println!("seeded 0");
         return Ok(exit::DONE);
     };
+    let valid = |path: &str| {
+        ronoctua_parts::plan::is_store_path(path)
+            && disk::run_quiet(&[
+                beside_nix("nix-store"),
+                "--check-validity".to_owned(),
+                path.to_owned(),
+            ])
+    };
+    // THE OUTPUTS this medium holds, copied whole: the first boot's realizer
+    // finds each valid and makes it the part's profile with no build and no
+    // network (`realize`'s seeding).
     let here: Vec<String> = plan
         .parts
         .values()
         // A PART OF THE PERSON'S names no output: an installation medium
         // knows no person.
         .filter_map(|w| w.out.clone())
-        .filter(|out| {
-            ronoctua_parts::plan::is_store_path(out)
-                && disk::run_quiet(&[
-                    beside_nix("nix-store"),
-                    "--check-validity".to_owned(),
-                    out.clone(),
-                ])
-        })
+        .filter(|out| valid(out))
         .collect();
-    if here.is_empty() {
+    // THE DERIVATIONS of every OTHER wanted part: its `.drv` graph alone —
+    // the `.drv` files and the sources a build reads, never a built output
+    // (`nix copy` of a `.drv` closes over derivations and sources, not
+    // outputs) — so a part this medium carries no output for is BUILT on the
+    // first boot (`realize`'s `nix build <drv>^*`) instead of found neither
+    // here nor buildable. The system carries none of these: the plan drops
+    // their context on purpose (`nix/modules/parts.nix`), and an installation
+    // copies the system's top, not the evaluation that instantiated it. The
+    // medium's store holds them because the installer built that top here,
+    // and building it instantiated every part's derivation.
+    let seeded: std::collections::BTreeSet<&str> = here.iter().map(String::as_str).collect();
+    let graphs: Vec<String> = plan
+        .parts
+        .values()
+        .filter(|w| w.out.as_deref().is_some_and(|out| !seeded.contains(out)))
+        .filter_map(|w| w.drv.clone())
+        .filter(|drv| valid(drv))
+        .collect();
+    if here.is_empty() && graphs.is_empty() {
         println!("seeded 0");
         return Ok(exit::DONE);
     }
@@ -70,9 +98,10 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
         format!("local?root={}", root.display()),
     ];
     copy.extend(here.iter().cloned());
+    copy.extend(graphs.iter().cloned());
     let said = disk::run(&copy);
     if said.ok {
-        println!("seeded {}", here.len());
+        println!("seeded {} carried {}", here.len(), graphs.len());
     } else {
         say(
             4,

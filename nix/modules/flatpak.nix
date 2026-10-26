@@ -96,6 +96,19 @@ in
       packages = [ ];
     };
 
+    # THE REMOTE'S METADATA NEEDS THE NETWORK. nix-flatpak orders its system
+    # unit after `multi-user.target` alone, so on a cold boot it runs before
+    # DNS, cannot reach Flathub for the remote's summary, and logs a failed
+    # start a minute before its `Restart=on-failure` retry succeeds. The
+    # vendored `.flatpakrepo` makes `remote-add` itself offline (see the
+    # header); only the metadata fetch waits. Order it after the network so
+    # the first try is the one that works (`after`/`wants` merge into the
+    # generated unit; they do not replace it).
+    systemd.services.flatpak-managed-install = {
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+    };
+
     # THE PERSON'S INSTALLATION, through Home Manager.
     #
     # Its activation runs `systemctl --user start … || true`, so a Flathub that

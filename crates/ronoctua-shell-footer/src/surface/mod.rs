@@ -767,6 +767,12 @@ struct Footer {
     /// sequence. Without a key like that, paging would require spending a letter
     /// of the keymap — and the letter spent would be one less for a command.
     right_ctrl: bool,
+    /// The compose state, fed every key the footer takes while it holds the
+    /// keyboard: `Multi_key` (Caps Lock, by `compose:caps`) and the keys after
+    /// it become the one character they name. `None` when the locale carries
+    /// no compose table. The window's reader keeps its own
+    /// (`ronoctua_shell_door::door::compose`).
+    compose: Option<ronoctua_shell_door::door::compose::Compose>,
     /// Who holds the keyboard, as far as the requests and the answers say.
     keyboard_hold: KeyboardHold,
     /// The command registry, for the `M-x` to complete over.
@@ -2822,6 +2828,7 @@ fn assemble(
         clipboard: std::rc::Rc::default(),
         offset: 0,
         right_ctrl: false,
+        compose: ronoctua_shell_door::door::compose::Compose::from_locale(),
         keyboard_hold: KeyboardHold::default(),
         command_registry: registry,
         frames_painted: 0,
@@ -9732,6 +9739,17 @@ impl Footer {
         if !self.grabbing() {
             return;
         }
+        // COMPOSE: a key mid-sequence types nothing, a finished one types the
+        // character it names, everything else is the key as it came
+        // (`ronoctua_shell_door::door::compose`). Fed only while the footer
+        // holds the keyboard, so its compose and a window's never see one key
+        // twice; the leader's tap and the right `Ctrl` above are read first,
+        // and no compose sequence begins with either.
+        let event = match self.compose.as_mut().map(|c| c.feed(&event)) {
+            Some(ronoctua_shell_door::door::compose::Composed::Swallow) => return,
+            Some(ronoctua_shell_door::door::compose::Composed::Text(made)) => made,
+            Some(ronoctua_shell_door::door::compose::Composed::Pass) | None => event,
+        };
         let Some(key) = self.translate(&event) else {
             return;
         };

@@ -24,7 +24,10 @@ pub fn arm() {
         .min();
     let systemctl = program("RONOCTUA_SYSTEMCTL");
     // ONE TIMER: the one before it is gone first, whether it fired or not.
-    let _ = disk::run_quiet(&[
+    // Silent, because stopping it when none is armed — the common case, every
+    // try that fails with nothing due — is systemctl saying "Unit … not
+    // loaded" to no end, and that is not this machine's error to log.
+    let _ = disk::run_silent(&[
         systemctl.clone(),
         "stop".to_owned(),
         format!("{RETRY}.timer"),
