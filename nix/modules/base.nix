@@ -409,12 +409,19 @@ in
     # -----------------------------------------------------------------
 
     # Section 3: the system does not look like a traditional desktop. That starts
-    # at boot: no logo, no progress bar.
+    # at boot: no logo, no progress bar — and the console stays quiet.
+    #
+    # `consoleLogLevel` AND NOT A `loglevel=` PARAMETER: NixOS turns this option
+    # into the kernel's `loglevel=`, APPENDED after everything in `kernelParams`,
+    # and its default is 4. A `loglevel=3` set by hand here was overridden by
+    # that 4 — and at 4 the console prints `err` (level 3), so a touchpad's
+    # benign HID "feature report did not match" landed on the screen right after
+    # the LUKS prompt, half a line of it looking like stray characters. At 3 that
+    # `err` stays in the journal and off the boot console, which is what a boot
+    # with no logo and no progress bar was always meant to be.
     boot.plymouth.enable = false;
-    boot.kernelParams = [
-      "quiet"
-      "loglevel=3"
-    ];
+    boot.consoleLogLevel = 3;
+    boot.kernelParams = [ "quiet" ];
 
     # -----------------------------------------------------------------
     # Minimalism — section 3: minimal NixOS.
