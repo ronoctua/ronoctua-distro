@@ -138,6 +138,13 @@ in
     jq
     iw
     ethtool
+    # ON THE PERSON'S PATH, not just the shell's: the shell copies through its
+    # own `RONOCTUA_WL_COPY` (`nix/rust.nix`), but a terminal program the person
+    # runs — Claude Code pasting a screenshot, which shells out to
+    # `wl-paste --type image/png` — finds the clipboard only if `wl-paste` and
+    # `wl-copy` are on `PATH`. Without this, a capture that IS on the clipboard
+    # still read as "no image found".
+    wl-clipboard
   ];
 
   # `tldr` needs its cache built once; without this the first run of every new

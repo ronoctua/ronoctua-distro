@@ -8826,6 +8826,15 @@ impl Footer {
         match answer {
             Outcome::Saved(at) => {
                 tracing::info!(at = %at.display(), "the screen was captured");
+                // AND ON THE CLIPBOARD, so Ctrl+V pastes the capture. The
+                // notification keeps its "copy image" action for later; this
+                // makes the fresh capture the clipboard's `image/png` at once —
+                // which is what a terminal program reads (Claude Code shells out
+                // to `wl-paste --type image/png`). A failure here is not the
+                // capture's: the file is saved, and the notification names it.
+                if let Err(e) = crate::clipboard_copy::copy_image_to_clipboard(&at) {
+                    tracing::warn!(error = %e, "the capture was not put on the clipboard");
+                }
                 let n = self.capture_notification(&at);
                 self.arrived(n, std::time::Instant::now());
             }
