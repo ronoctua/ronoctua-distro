@@ -54,8 +54,17 @@ pub fn rebuild() {
     }
     let (links, collisions) = links(&parts);
     for c in &collisions {
+        // A RUNTIME COLLISION ALWAYS INVOLVES A PERSON'S PART: two distro parts
+        // over one file is refused at build time (`parts-do-not-collide`). A
+        // person who installed what the distro already offers is the expected,
+        // handled case — the first id in order wins and their copy is shadowed,
+        // and `ronoctua-software` now refuses such an install up front
+        // (`Refusal::ProvidedByAPart`) — so it is said at `info`, not `warning`.
+        // Anything NOT involving a person's part would be genuinely unexpected,
+        // and stays a warning.
+        let expected = c.kept.starts_with("person-") || c.left.starts_with("person-");
         say(
-            4,
+            if expected { 6 } else { 4 },
             &format!(
                 "{} is offered by {} and {}: {}'s is in the view",
                 c.at, c.kept, c.left, c.kept

@@ -114,11 +114,15 @@ pub enum Refusal {
     /// Brought back HERE, and the decline names other computers only: it
     /// is theirs to bring back — or every computer's at once, asked first.
     DeclinedElsewhere,
+    /// A part of the distro already offers this program: the person's own copy
+    /// would only be shadowed (the first id in order wins the view), so it is
+    /// refused rather than installed to sit there, redundant and invisible.
+    ProvidedByAPart,
 }
 
 impl Refusal {
     /// Every one, for `software-words-are-total`.
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 45] = [
         Self::UnfreeNeedsConsent,
         Self::UnverifiedNeedsConsent,
         Self::BigNeedsConsent,
@@ -163,6 +167,7 @@ impl Refusal {
         Self::MachineUnnamed,
         Self::LeavesAtNextApply,
         Self::DeclinedElsewhere,
+        Self::ProvidedByAPart,
     ];
 
     /// The stem of its text key (`software-refusal-<word>`).
@@ -213,6 +218,7 @@ impl Refusal {
             Self::MachineUnnamed => "machine-unnamed",
             Self::LeavesAtNextApply => "leaves-at-next-apply",
             Self::DeclinedElsewhere => "declined-elsewhere",
+            Self::ProvidedByAPart => "provided-by-a-part",
         }
     }
 }

@@ -118,6 +118,7 @@ software-refusal-unavailable = nixpkgs has it, but not for this kind of computer
 software-refusal-source-absent = This computer does not have what that source needs.
 software-refusal-source-unprepared = That source has not been prepared yet.
 software-refusal-declared-in-the-flake = It comes with the system (the flake); only the flake changes it.
+software-refusal-provided-by-a-part = The distro already offers this; your own copy would just sit hidden behind it.
 software-refusal-arm-only = Made only for phone chips; it cannot run on this computer.
 software-refusal-offline = No network to ask.
 software-refusal-rate-limited = The service asked to wait before asking again.

@@ -652,6 +652,32 @@ pub fn vet(ctx: &Context, attr: &str, consent: Consent) -> Result<bool, Failure>
     Ok(row.unfree)
 }
 
+/// The primary program a Nix attribute installs, as the index names it — for
+/// [`already_a_part`]. `None` without an index, without a row, or for a
+/// library (no program of its own).
+fn program_of(ctx: &Context, attr: &str) -> Option<String> {
+    let index = ctx.tools.nix_index.as_deref()?;
+    let program = crate::nix_index::row(index, attr)?.program;
+    (!program.is_empty()).then_some(program)
+}
+
+/// Whether a part already offers `bin/<program>` at the interface the running
+/// system's plan wants: then the distro (or another part) already carries this
+/// program, and a person's own copy would only be shadowed — the view keeps
+/// the first id in order ([`ronoctua_parts::view::links`]). Asked before an
+/// install so the person is TOLD, not left with a redundant, invisible
+/// package. Rooted through the plan and the profiles, so a test gives it its
+/// own room.
+fn already_a_part(system: &crate::System, program: &str) -> bool {
+    let relative = format!("bin/{program}");
+    ronoctua_parts::plan::read(&system.parts_plan).is_some_and(|plan| {
+        plan.parts.keys().any(|id| {
+            ronoctua_parts::file_of_in(&system.parts_plan, &system.part_profiles, id, &relative)
+                .is_ok()
+        })
+    })
+}
+
 /// A Nix call with the unfree door opened when asked.
 fn nix_call<'a>(nix: &'a Path, argv: Vec<String>, unfree: bool) -> Call<'a> {
     let call = Call::new(nix, argv).changing();
@@ -691,6 +717,15 @@ pub fn run_logged(ctx: &Context, call: Call<'_>, report: &mut dyn Report) -> Res
 pub fn install(ctx: &Context, attr: &str, consent: Consent, report: &mut dyn Report) -> Done {
     let nix = crate::run::tool(ctx.tools.nix.as_ref())?;
     let unfree = vet(ctx, attr, consent)?;
+    // THE DISTRO MAY ALREADY OFFER IT. A part that carries this program makes a
+    // person's own copy a shadow (the view keeps the first id in order), so it
+    // is refused here — the person is told — rather than installed to sit
+    // unseen and collide at every activation.
+    if let Some(program) = program_of(ctx, attr)
+        && already_a_part(&ctx.roots.system, &program)
+    {
+        return Err(Failure::refused(Refusal::ProvidedByAPart));
+    }
     report.step(Phase::Resolving, 0, 0, attr);
     let ran = run_logged(ctx, nix_call(nix, add_argv(attr, unfree), unfree), report)?;
     let key = AppKey::Nix {
@@ -1250,6 +1285,42 @@ mod tests {
             run(&c, &system, &mut beats).unwrap_err().refusal,
             Some(Refusal::DeclaredInTheFlake)
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_program_a_part_already_offers_is_refused_before_nix_runs() {
+        let dir = scratch("provided-by-a-part");
+        let nix = fake_nix(&dir, "{}", 0);
+        let c = ctx(&dir, Some(nix));
+        // A part the running system wants, offering `bin/gimp` at its interface.
+        let plan = &c.roots.system.parts_plan;
+        std::fs::create_dir_all(plan.parent().unwrap()).unwrap();
+        std::fs::write(
+            plan,
+            r#"{"format":1,"parts":{"images":{"drv":"/nix/store/0123456789abcdfghijklmnpqrsvwxyz-images.drv","out":"/nix/store/0123456789abcdfghijklmnpqrsvwxyz-images","kind":"program","interface":1,"heavy":false,"unfree":false,"name":"images"}}}"#,
+        )
+        .unwrap();
+        let bin = c.roots.system.part_profiles.join("images/v1/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("gimp"), b"").unwrap();
+        // `gimp` is free, in the index, and its program is `gimp` — which the
+        // part already offers, so the install is refused and Nix never runs.
+        let mut beats: Vec<Beat> = Vec::new();
+        let order = Order::Install {
+            key: AppKey::Nix {
+                attr: "gimp".into(),
+            },
+            consent: Consent::default(),
+        };
+        assert_eq!(
+            run(&c, &order, &mut beats).unwrap_err().refusal,
+            Some(Refusal::ProvidedByAPart),
+        );
+        assert!(calls(&dir).is_empty(), "nothing ran: {:?}", calls(&dir));
+        // The detection, directly: only a program a part offers is a part.
+        assert!(already_a_part(&c.roots.system, "gimp"));
+        assert!(!already_a_part(&c.roots.system, "hello"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
