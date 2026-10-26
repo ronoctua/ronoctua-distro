@@ -30,6 +30,46 @@ let
   # 14, the UI). Built on its own (`nix/ssh-askpass.nix`). In a terminal ssh
   # asks on the terminal and this is never run.
   askpass = import ../ssh-askpass.nix { inherit pkgs; };
+
+  # WHAT MAKES "THE PASSPHRASE ONCE A SESSION" TRUE FOR SIGNING. Git signs a
+  # commit with `ssh-keygen -Y sign`, which reads the key FILE and asks its
+  # passphrase every time the key is not already in the agent — and nothing
+  # puts it there, `AddKeysToAgent` being for ssh CONNECTIONS (a push), never
+  # for this. So this is git's signer (`gpg.ssh.program`) instead: on a sign it
+  # adds the key to the agent ONCE (its passphrase asked in the bar through
+  # `$SSH_ASKPASS`), then hands off to `ssh-keygen` — which now finds the key in
+  # the agent, so this signature and every later one in the session is a touch
+  # of the key alone. On a verify, or with no agent, it is a bare hand-off. NO
+  # IDENTITY LIVES HERE: the key is whatever git names with `-f` at run time, so
+  # it carries nothing of the person — a public distro, where the name, e-mail
+  # and signing key stay in their own `~/.gitconfig`, never in the store.
+  gitSign = pkgs.writeShellApplication {
+    name = "ronoctua-git-sign";
+    runtimeInputs = [ pkgs.openssh ];
+    text = ''
+      want_sign=0
+      keyfile=""
+      prev=""
+      for a in "$@"; do
+        if [ "$prev" = "-Y" ] && [ "$a" = "sign" ]; then want_sign=1; fi
+        if [ "$prev" = "-f" ]; then keyfile="$a"; fi
+        prev="$a"
+      done
+
+      # Only a signature, and only with an agent to add to and a readable key to
+      # add: load it once so the rest of the session is a touch.
+      if [ "$want_sign" = 1 ] && [ -n "''${SSH_AUTH_SOCK:-}" ] && [ -n "$keyfile" ] && [ -r "''${keyfile%.pub}" ]; then
+        fp="$(ssh-keygen -lf "$keyfile" 2>/dev/null | awk '{print $2}')" || fp=""
+        if [ -n "$fp" ] && ! ssh-add -l 2>/dev/null | grep -qF "$fp"; then
+          # The passphrase is asked in the bar, once; a refusal falls through to
+          # ssh-keygen's own file signing — no worse than before.
+          ssh-add "''${keyfile%.pub}" </dev/null || true
+        fi
+      fi
+
+      exec ssh-keygen "$@"
+    '';
+  };
 in
 {
   programs.ssh.kexAlgorithms = table.postQuantum ++ table.classical;
@@ -37,17 +77,29 @@ in
   # AN AGENT A SESSION, SO THE PASSPHRASE IS ASKED ONCE. The person signs their
   # commits with a YubiKey SSH key whose private half carries a passphrase
   # (`~/.ssh/id_yubikey_default`, `sk-ssh-ed25519`). Without an agent every
-  # commit asks for that passphrase AND a touch; with one, `AddKeysToAgent`
-  # gives the agent the key the first time it is used, the passphrase asked
-  # then and only then, and every commit after it in the session is a touch of
-  # the key alone. `startAgent` is the user service and the `SSH_AUTH_SOCK` the
-  # session carries; it does not clash here, `gnupg.agent.enableSSHSupport`
-  # being off (`nix/modules/yubikey.nix`).
+  # commit asks for that passphrase AND a touch; with one, the first signature
+  # adds the key (its passphrase asked then and only then), and every commit
+  # after it in the session is a touch of the key alone. What adds it is
+  # `gitSign` below, git's own signer — NOT `AddKeysToAgent`, which loads a key
+  # on an ssh CONNECTION (a push) and never sees a `ssh-keygen -Y sign`; it
+  # stays on for the connections it does serve. `startAgent` is the user
+  # service and the `SSH_AUTH_SOCK` the session carries; it does not clash here,
+  # `gnupg.agent.enableSSHSupport` being off (`nix/modules/yubikey.nix`).
   programs.ssh.startAgent = true;
   programs.ssh.enableAskPassword = true;
   programs.ssh.askPassword = "${askpass}/bin/ronoctua-ssh-askpass";
   programs.ssh.extraConfig = ''
     AddKeysToAgent yes
+  '';
+
+  # GIT'S SIGNER, SYSTEM-WIDE AND IDENTITY-FREE. `/etc/gitconfig` is read before
+  # anybody's `~/.gitconfig`, so this names the signer for every repo while the
+  # person's OWN config keeps what is theirs — `user.name`, `user.email`,
+  # `user.signingkey`, `commit.gpgsign`. Nothing personal is in the store: only
+  # the path to `gitSign`, which learns the key from git at run time (above).
+  environment.etc."gitconfig".text = ''
+    [gpg "ssh"]
+      program = ${gitSign}/bin/ronoctua-git-sign
   '';
 
   # SUDO THROUGH THE SAME BAR. A raw `sudo` (a rebuild from a shell) asks the
