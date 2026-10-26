@@ -160,8 +160,10 @@ pub struct Keys {
     pub independent: bool,
     /// The half that asks the daemon.
     pub link: Option<Link>,
-    /// The keyboard the open region belongs to.
-    pub owner: Option<Owner>,
+    /// The keyboards the open region belongs to: ONE when a keyboard's leader
+    /// opened it, ALL of a cursor's when a shared mouse did. Empty when no
+    /// region is open — or when one opened with no keyboard to divert.
+    pub owners: Vec<Owner>,
 }
 
 impl Keys {
@@ -176,11 +178,25 @@ impl Keys {
         }
     }
 
-    /// Gives the owning keyboard back to its twin.
+    /// Gives every owning keyboard back to its twin.
     pub fn release(&mut self) {
-        if let Some(o) = self.owner.take() {
-            self.ask(&ronoctua_keys::wire::ToDaemon::Release { unit: o.unit });
+        // THE UNITS FIRST, so the ask does not borrow what the drain holds.
+        let units: Vec<String> = self.owners.drain(..).map(|o| o.unit).collect();
+        for unit in units {
+            self.ask(&ronoctua_keys::wire::ToDaemon::Release { unit });
         }
+    }
+
+    /// Whether `unit` is one of the keyboards the open region belongs to.
+    #[must_use]
+    pub fn owns(&self, unit: &str) -> bool {
+        self.owners.iter().any(|o| o.unit == unit)
+    }
+
+    /// The owner whose keyboard is `unit`, to translate one of its keys with
+    /// that keyboard's own layout.
+    pub fn owner_mut(&mut self, unit: &str) -> Option<&mut Owner> {
+        self.owners.iter_mut().find(|o| o.unit == unit)
     }
 }
 
@@ -226,5 +242,39 @@ mod tests {
         let (e, down, _) = o.key(30, 0);
         assert!(!down);
         assert!(e.utf8.is_none(), "a release carries no text");
+    }
+
+    /// FAILS IF: a region stops owning every keyboard handed to it (a click
+    /// hands it a whole cursor's), or a release leaves one behind. The ask has
+    /// no link here, so release just forgets them.
+    #[test]
+    fn the_region_owns_every_keyboard_handed_to_it() {
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let Some(keymap) = xkb::Keymap::new_from_names(
+            &context,
+            "",
+            "",
+            "us",
+            "",
+            None,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        ) else {
+            // No xkb data in this sandbox: nothing to build an owner from.
+            return;
+        };
+        let owner = |u: &str| Owner {
+            unit: u.to_owned(),
+            state: xkb::State::new(&keymap),
+        };
+        let mut keys = Keys {
+            owners: vec![owner("a"), owner("b")],
+            ..Default::default()
+        };
+        assert!(keys.owns("a") && keys.owns("b"), "both are owners");
+        assert!(!keys.owns("c"), "a keyboard not handed the region is not");
+        assert!(keys.owner_mut("b").is_some(), "its key finds its layout");
+        assert!(keys.owner_mut("c").is_none(), "a stranger's does not");
+        keys.release();
+        assert!(keys.owners.is_empty(), "release gives every one back");
     }
 }

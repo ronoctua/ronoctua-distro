@@ -7630,16 +7630,11 @@ impl Footer {
             return;
         }
         if leader_click {
-            // IN INDEPENDENT MODE THE REGION BELONGS TO A KEYBOARD, and a click
-            // hands it to the one paired with the cursor that clicked.
-            if self.keys.independent
-                && let Some(unit) = self.keyboard_of_the_pointer_here()
-            {
-                self.hand_the_region_to(&unit);
-            }
             // BY THE POINTER, so the list is there at once: a hand on the
             // mouse cannot type fast, and two seconds of nothing would read
-            // as a click that missed.
+            // as a click that missed. In Independent mode the region this
+            // opens is handed to EVERY keyboard on the clicking cursor — the
+            // common path for a pointer-opened region, through `apply_geometry`.
             self.activate_leader(crate::leader::Opener::Pointer);
             return;
         }
@@ -14363,9 +14358,26 @@ impl Footer {
         } else {
             keyboard
         };
-        // AND A REGION THAT CLOSED GIVES ITS KEYBOARD BACK.
+        // AND A REGION THAT CLOSED GIVES ITS KEYBOARDS BACK.
         if !self.grabbing() {
             self.keys.release();
+        }
+        // AND A POINTER-OPENED REGION TAKES THE CLICKING CURSOR'S KEYBOARDS.
+        // In Independent mode a region opened with the mouse — the empty
+        // minibuffer, the bell on the modeline, the window menu — has no
+        // keyboard yet, where a leader-opened one was already diverted to the
+        // single keyboard that tapped it (`keys_said`). This is the one
+        // chokepoint every open passes through, so here every keyboard that
+        // types through the cursor under the pointer is handed the region: two
+        // keyboards at one desk both drive what the shared mouse opened. Not
+        // the modal bar — it takes the Wayland keyboard whole and owns nothing
+        // over the socket (grabbing, but `sudo_bar.is_up`).
+        if self.keys.independent
+            && !self.sudo_bar.is_up()
+            && self.grabbing()
+            && self.keys.owners.is_empty()
+        {
+            self.hand_the_region_to_cursor_here();
         }
         // EVERY screen changes height together.
         //
@@ -15524,11 +15536,13 @@ impl Footer {
         // bars have never hidden; this is the same rule for the other eight
         // views of the footer.
         let bar_showing = self.has_bar();
-        // WHOSE THE REGION IS, in Independent mode: the keyboard that opened it
-        // types through a cursor, and the minibuffer line wears that cursor's
+        // WHOSE THE REGION IS, in Independent mode: the keyboards that opened it
+        // type through one cursor, and the minibuffer line wears that cursor's
         // band — with several people at one desk, the footer says which of them
-        // it is listening to.
-        let owner_tint = self.keys.owner.as_ref().and_then(|o| {
+        // it is listening to. Every owner shares the one cursor (a click hands
+        // the region to a whole cursor, a leader to one keyboard on it), so the
+        // first owner's cursor is the band's.
+        let owner_tint = self.keys.owners.first().and_then(|o| {
             let cursor = self
                 .pointer_snapshot
                 .as_ref()?
@@ -19340,10 +19354,13 @@ impl Footer {
             Said::Connected(link) => self.keys.link = Some(link),
             Said::Gone => {
                 self.keys.link = None;
-                // THE KEYBOARD THAT HELD THE REGION IS GONE WITH IT: the
-                // daemon's end closed, the kernel dropped its grab, and the
-                // region would wait for keys that go elsewhere now.
-                if self.keys.owner.take().is_some() && self.grabbing() {
+                // THE KEYBOARDS THAT HELD THE REGION ARE GONE WITH IT: the
+                // daemon's end closed, the kernel dropped its grabs, and the
+                // region would wait for keys that go elsewhere now. Nothing to
+                // Release to — the link is dead — so just forget them.
+                let held = !self.keys.owners.is_empty();
+                self.keys.owners.clear();
+                if held && self.grabbing() {
                     self.lost_the_keyboard();
                 }
             }
@@ -19352,22 +19369,25 @@ impl Footer {
                 if !self.keys.independent {
                     return;
                 }
-                // ONE REGION, ONE OWNER: a second keyboard's leader waits
-                // until the first one's view closes, and says so.
-                if let Some(o) = self.keys.owner.as_ref()
-                    && o.unit != unit
-                    && self.grabbing()
-                {
-                    let said = self.texts.t(crate::key::KEYS_REGION_TAKEN);
-                    self.echo_message(said);
-                    self.draw_and_paint();
-                    return;
+                // A LEADER OPENS THE REGION FOR THAT KEYBOARD ALONE. While one
+                // is already open, a leader from one of its OWNERS just advances
+                // the sequence (the footer already listens to that keyboard); a
+                // leader from any OTHER keyboard waits until the region closes,
+                // and says so — one region, one set of owners.
+                if self.grabbing() {
+                    if !self.keys.owns(&unit) {
+                        let said = self.texts.t(crate::key::KEYS_REGION_TAKEN);
+                        self.echo_message(said);
+                        self.draw_and_paint();
+                        return;
+                    }
+                } else {
+                    self.hand_the_region_to_keyboard(&unit);
                 }
-                self.hand_the_region_to(&unit);
                 self.activate_leader(crate::leader::Opener::Key);
             }
             Said::Daemon(FromDaemon::Key { unit, code, value }) => {
-                let Some(owner) = self.keys.owner.as_mut().filter(|o| o.unit == unit) else {
+                let Some(owner) = self.keys.owner_mut(&unit) else {
                     return;
                 };
                 let (event, down, mods) = owner.key(code, value);
@@ -19388,25 +19408,49 @@ impl Footer {
         }
     }
 
-    /// Makes `unit` the keyboard the region belongs to, and asks the daemon
-    /// for its keys.
-    fn hand_the_region_to(&mut self, unit: &str) {
-        if self.keys.owner.as_ref().is_some_and(|o| o.unit == unit) {
+    /// Makes exactly `units` the keyboards the region belongs to, each diverted
+    /// with its own layout; an owner not in the new set is released first. A
+    /// keyboard with no keymap is left out, and the region opens without it.
+    fn hand_the_region_to(&mut self, units: &[String]) {
+        // ALREADY EXACTLY THESE: leave the diverts alone — re-asking would
+        // release and re-grab the same keyboards for nothing.
+        if units.len() == self.keys.owners.len() && units.iter().all(|u| self.keys.owns(u)) {
             return;
         }
         self.keys.release();
-        match crate::keys_link::Owner::of(unit) {
-            Some(owner) => {
-                self.keys.owner = Some(owner);
-                self.mods = Modifiers::default();
-                self.keys.ask(&ronoctua_keys::wire::ToDaemon::Divert {
-                    unit: unit.to_owned(),
-                });
+        self.mods = Modifiers::default();
+        for unit in units {
+            match crate::keys_link::Owner::of(unit) {
+                Some(owner) => {
+                    self.keys.owners.push(owner);
+                    self.keys
+                        .ask(&ronoctua_keys::wire::ToDaemon::Divert { unit: unit.clone() });
+                }
+                None => {
+                    tracing::warn!(
+                        unit,
+                        "no keymap for the keyboard; it is left out of the region"
+                    );
+                }
             }
-            None => tracing::warn!(
-                unit,
-                "no keymap for the keyboard; the region opens without it"
-            ),
+        }
+    }
+
+    /// The region a keyboard's OWN leader opened belongs to that keyboard alone
+    /// (`keys_said`) — the isolation of an interface opened by one keyboard.
+    fn hand_the_region_to_keyboard(&mut self, unit: &str) {
+        self.hand_the_region_to(&[unit.to_owned()]);
+    }
+
+    /// A region opened WITH THE MOUSE belongs to every keyboard that types
+    /// through the cursor that clicked — several people at one desk share what
+    /// the shared mouse opened, not just the one whose keyboard happens to be
+    /// first. Does nothing when the cursor has no keyboard (the region opens
+    /// without one, as it did before).
+    fn hand_the_region_to_cursor_here(&mut self) {
+        let units = self.keyboards_of_the_pointer_here();
+        if !units.is_empty() {
+            self.hand_the_region_to(&units);
         }
     }
 
@@ -19894,22 +19938,35 @@ impl Footer {
         .map(std::rc::Rc::new);
     }
 
-    /// The keyboard paired with the cursor `here` — what a click that opens
-    /// the leader hands the region to, in Independent mode.
-    fn keyboard_of_the_pointer_here(&self) -> Option<String> {
+    /// The cursor number the pointer `here` types through — `seat0` is the
+    /// first, a `ronoctua-cursor-N` seat is `N`. The cursor whose keyboards a
+    /// click hands its region to, in Independent mode.
+    fn cursor_of_the_pointer_here(&self) -> Option<u16> {
         let seat = self.pointers.seat_here()?;
         let name = self.seats.info(seat).and_then(|i| i.name)?;
-        let number = if name == "seat0" {
-            ronoctua_pointers::FIRST
+        if name == "seat0" {
+            Some(ronoctua_pointers::FIRST)
         } else {
-            name.strip_prefix("ronoctua-cursor-")?.parse().ok()?
+            name.strip_prefix("ronoctua-cursor-")?.parse().ok()
+        }
+    }
+
+    /// EVERY keyboard that types through the cursor under the pointer — the
+    /// ones a click hands its region to (`hand_the_region_to_cursor_here`).
+    fn keyboards_of_the_pointer_here(&self) -> Vec<String> {
+        let Some(number) = self.cursor_of_the_pointer_here() else {
+            return Vec::new();
         };
         self.pointer_snapshot
-            .as_ref()?
-            .keyboards
-            .iter()
-            .find(|k| k.cursor == number)
-            .map(|k| k.identity.clone())
+            .as_ref()
+            .map(|snap| {
+                snap.keyboards
+                    .iter()
+                    .filter(|k| k.cursor == number)
+                    .map(|k| k.identity.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn pointer_event(&mut self, e: ronoctua_pointers::Event) {
