@@ -15,14 +15,40 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 
 let
   table = import ../../assets/ssh.nix;
+
+  # WHAT ASKS FOR A KEY'S PASSPHRASE WHEN THERE IS NO TERMINAL to ask on — a
+  # commit a tool makes on the person's behalf, a GUI git. ssh, finding no tty
+  # and a display, runs `$SSH_ASKPASS`; this helper asks in the DISTRO'S OWN
+  # bar above the modeline (`crate::sudo_bar`'s ask), over the control socket —
+  # not a floating window, which no other prompt on this machine is (invariant
+  # 14, the UI). Built on its own (`nix/ssh-askpass.nix`). In a terminal ssh
+  # asks on the terminal and this is never run.
+  askpass = import ../ssh-askpass.nix { inherit pkgs; };
 in
 {
   programs.ssh.kexAlgorithms = table.postQuantum ++ table.classical;
+
+  # AN AGENT A SESSION, SO THE PASSPHRASE IS ASKED ONCE. The person signs their
+  # commits with a YubiKey SSH key whose private half carries a passphrase
+  # (`~/.ssh/id_yubikey_default`, `sk-ssh-ed25519`). Without an agent every
+  # commit asks for that passphrase AND a touch; with one, `AddKeysToAgent`
+  # gives the agent the key the first time it is used, the passphrase asked
+  # then and only then, and every commit after it in the session is a touch of
+  # the key alone. `startAgent` is the user service and the `SSH_AUTH_SOCK` the
+  # session carries; it does not clash here, `gnupg.agent.enableSSHSupport`
+  # being off (`nix/modules/yubikey.nix`).
+  programs.ssh.startAgent = true;
+  programs.ssh.enableAskPassword = true;
+  programs.ssh.askPassword = "${askpass}/bin/ronoctua-ssh-askpass";
+  programs.ssh.extraConfig = ''
+    AddKeysToAgent yes
+  '';
 
   # Off on this system, and set anyway: a person who turns sshd on gets the
   # hybrids first, a server's narrower classical list after them, and no RSA
