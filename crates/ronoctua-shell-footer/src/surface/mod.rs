@@ -12368,16 +12368,24 @@ impl Footer {
         self.draw_and_paint();
     }
 
-    /// The build-switch apply ended without restarting the footer, which means
-    /// it FAILED — a switch that worked would have taken the session down and
-    /// brought it up clear. Clear the switching mark and say so; the glyph goes
-    /// back to the build that is still running.
+    /// The build-switch apply ended WITHOUT restarting the footer. A switch
+    /// that changed the running build would have taken the session down and
+    /// brought it up clear, so reaching here means one of two things, and both
+    /// now get a word — the glyph going quiet with no message was the whole of
+    /// the owner's complaint:
+    ///   - it FAILED (`ok == false`): say so, the build is unchanged;
+    ///   - it SUCCEEDED with nothing to switch (`ok == true`): the built
+    ///     system is the one already running, which is the ordinary answer when
+    ///     you are already on this build (a dev build whose checkout has not
+    ///     moved). Say that, rather than leave the person wondering.
     fn build_switch_done(&mut self, ok: bool) {
         self.switching = None;
-        if !ok {
-            let m = self.texts.t(crate::key::ECHO_BUILD_SWITCH_FAILED);
-            self.echo_message(m);
-        }
+        let m = self.texts.t(if ok {
+            crate::key::ECHO_BUILD_UNCHANGED
+        } else {
+            crate::key::ECHO_BUILD_SWITCH_FAILED
+        });
+        self.echo_message(m);
         self.draw_and_paint();
     }
 

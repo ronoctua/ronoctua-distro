@@ -50,13 +50,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Show {
-    /// Only on a reference build — THE DISTRO DEFAULT. The machine's own build
-    /// is where a developer lives, and a mark on it every day would be the
-    /// chrome invariant 14 keeps off; the reference build is the exception
-    /// worth a glyph, so the glyph IS the exception.
-    #[default]
+    /// Only on a dev build — a mark when you are running the local checkout,
+    /// and nothing on the installed system. Pick this to keep the installed
+    /// build free of the glyph.
     Dev,
-    /// On both builds, wherever there is a checkout to switch to.
+    /// On both builds, wherever there is a checkout to build from — THE
+    /// DEFAULT, so the glyph is there to CLICK from the installed system to
+    /// build the checkout, and there to say so once you are on it. A dev
+    /// machine has a checkout; a plain install has none and draws no glyph
+    /// either way.
+    #[default]
     Always,
     /// Never — the glyph is off, and the page is reached by its key alone.
     Never,
@@ -77,7 +80,7 @@ impl Show {
     /// setting nobody changed, the house rule for every switch in that file.
     #[must_use]
     pub fn is_default(&self) -> bool {
-        matches!(self, Self::Dev)
+        matches!(self, Self::Always)
     }
 }
 
@@ -127,12 +130,14 @@ impl Build {
     }
 }
 
-/// Whether a distro revision is a DEV build — a working-tree checkout with
-/// changes, which `nix/machine.nix` stamps `<rev>-dirty`. A clean installed
-/// system carries a plain revision. Pure.
+/// Whether a distro revision is a DEV build of the local checkout. The switch
+/// builds with a `path:` override, which carries no git revision, so
+/// `nix/machine.nix` stamps `unknown`; a dirty `git+file` would be
+/// `<rev>-dirty`. A clean installed system carries a plain revision from its
+/// lock. Pure.
 #[must_use]
 pub fn is_dev_rev(distro_rev: &str) -> bool {
-    distro_rev.ends_with("-dirty")
+    distro_rev == "unknown" || distro_rev.ends_with("-dirty")
 }
 
 /// The `distro-rev` a `person-applied.json` records, or `None` when it names
@@ -268,6 +273,10 @@ mod tests {
     #[test]
     fn a_dirty_revision_is_a_dev_build() {
         assert!(is_dev_rev("f9a21ab1073f-dirty"));
+        // The switch builds with a `path:` override, which has no git rev, so
+        // the stamp is `unknown` — that IS a dev build (the reason the glyph
+        // showed nothing before this fix).
+        assert!(is_dev_rev("unknown"));
         assert!(!is_dev_rev("f9a21ab1073f"));
         // of(dev): dirty => the dev (checkout) build; clean => the installed one.
         assert_eq!(Build::of(true), Build::Reference);
@@ -335,21 +344,23 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_the_glyph_only_on_a_reference_build() {
-        assert_eq!(Show::default(), Show::Dev);
-        assert!(Show::Dev.is_default() && !Show::Always.is_default() && !Show::Never.is_default());
+    fn the_default_is_the_glyph_on_both_builds() {
+        // THE DEFAULT SHOWS THE GLYPH ON BOTH BUILDS (with a checkout), so it
+        // is there to click from the installed system to build the checkout.
+        assert_eq!(Show::default(), Show::Always);
+        assert!(Show::Always.is_default() && !Show::Dev.is_default() && !Show::Never.is_default());
         // No checkout: never a glyph, whatever the setting.
         for show in [Show::Dev, Show::Always, Show::Never] {
             assert_eq!(glyph(show, Build::Own, false), None);
             assert_eq!(glyph(show, Build::Reference, false), None);
         }
-        // Dev (the default): the reference build only.
+        // Dev: the dev build only.
         assert_eq!(glyph(Show::Dev, Build::Own, true), None);
         assert_eq!(
             glyph(Show::Dev, Build::Reference, true),
             Some(Build::Reference)
         );
-        // Always: whichever runs. Never: neither.
+        // Always (the default): whichever runs. Never: neither.
         assert_eq!(glyph(Show::Always, Build::Own, true), Some(Build::Own));
         assert_eq!(
             glyph(Show::Always, Build::Reference, true),

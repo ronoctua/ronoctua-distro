@@ -74,6 +74,7 @@ hint-build-reference = A dev build, from your local checkout — click to rebuil
 hint-build-switching = Switching builds — the machine is rebuilding; wait for it to come back
 echo-build-in-progress = A build switch is already underway
 echo-build-switch-failed = The build switch did not complete; the build is unchanged
+echo-build-unchanged = The build finished — nothing to switch; you are already running this build
 # THE BUILD SWITCH'S PAGE (LEADER / p, the glyph's right-click).
 cmd-build-open = The build switch: its page
 cmd-build-show-cycle = When the build glyph is drawn

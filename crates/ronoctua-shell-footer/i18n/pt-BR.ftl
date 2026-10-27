@@ -74,6 +74,7 @@ hint-build-reference = Um build de dev, do seu checkout local — clique para re
 hint-build-switching = Trocando de build — a máquina está reconstruindo; espere ela voltar
 echo-build-in-progress = Uma troca de build já está em andamento
 echo-build-switch-failed = A troca de build não foi concluída; o build não mudou
+echo-build-unchanged = Build concluído — nada para trocar; você já está rodando este build
 # A PÁGINA DA TROCA DE BUILD (LEADER / p, o clique direito no glifo).
 cmd-build-open = A troca de build: a página
 cmd-build-show-cycle = Quando o glifo de build é mostrado
