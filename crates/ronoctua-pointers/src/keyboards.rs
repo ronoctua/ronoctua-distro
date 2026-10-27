@@ -29,7 +29,8 @@ use crate::plan::Plan;
 use crate::prefs::FIRST;
 
 /// The machine's own keyboard, which a unit without a layout of its own
-/// keeps — `RONOCTUA_XKB_*`, set by the footer's unit from
+/// keeps — read by [`Machine::read`] from the generation's
+/// `/etc/ronoctua/keyboard` (the environment outside Nix), both filled from
 /// `config.ronoctua.keyboard`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Machine {
@@ -41,8 +42,45 @@ pub struct Machine {
     pub options: String,
 }
 
+/// Where the LIVE generation records the machine's keyboard, so a running
+/// footer re-reads it after a `switch` instead of carrying the layout its unit
+/// started with — the staleness that put a reference build's `gb` on a laptop
+/// that is `us` (`nix/modules/scroll.nix` writes it). Absent outside Nix
+/// (`cargo run`, a test), where the environment is the only source.
+pub const GENERATION_FILE: &str = "/etc/ronoctua/keyboard";
+
 impl Machine {
-    /// From the environment the footer's unit sets.
+    /// The machine's keyboard — from the live generation's file, re-read on
+    /// every recompute so a `switch` reaches a running footer, or from the
+    /// environment when there is no such file (outside Nix). The two agree:
+    /// `scroll.nix` fills both from `config.ronoctua.keyboard`.
+    #[must_use]
+    pub fn read() -> Self {
+        std::fs::read_to_string(GENERATION_FILE)
+            .ok()
+            .map(|text| Self::parse(&text))
+            .unwrap_or_else(Self::from_env)
+    }
+
+    /// `layout=…`, `variant=…` and `options=…`, one per line and in any order;
+    /// a line with no `=` or an unknown key is skipped. A missing key is the
+    /// empty string, as an unset variable is.
+    #[must_use]
+    fn parse(text: &str) -> Self {
+        let mut machine = Self::default();
+        for (key, value) in text.lines().filter_map(|l| l.split_once('=')) {
+            match key.trim() {
+                "layout" => machine.layout = value.to_owned(),
+                "variant" => machine.variant = value.to_owned(),
+                "options" => machine.options = value.to_owned(),
+                _ => {}
+            }
+        }
+        machine
+    }
+
+    /// From the environment the footer's unit sets — the fallback when the
+    /// generation file is absent.
     #[must_use]
     pub fn from_env() -> Self {
         let var = |n: &str| std::env::var(n).unwrap_or_default();
@@ -307,6 +345,35 @@ mod tests {
                 KeyboardSetting::Options("compose:caps".into()),
                 KeyboardSetting::RepeatRate(40),
             ]
+        );
+    }
+
+    #[test]
+    fn the_generation_file_is_read_by_key_in_any_order() {
+        let m =
+            Machine::parse("variant=euro\noptions=compose:caps,shift:both_capslock\nlayout=us\n");
+        assert_eq!(
+            m,
+            Machine {
+                layout: "us".into(),
+                variant: "euro".into(),
+                options: "compose:caps,shift:both_capslock".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_missing_key_is_empty_and_junk_lines_are_skipped() {
+        // No variant line, a blank line and a line with no `=`: variant is the
+        // empty string, as an unset variable is, and nothing else trips.
+        let m = Machine::parse("layout=gb\n\nnonsense\noptions=\n");
+        assert_eq!(
+            m,
+            Machine {
+                layout: "gb".into(),
+                variant: String::new(),
+                options: String::new(),
+            }
         );
     }
 }

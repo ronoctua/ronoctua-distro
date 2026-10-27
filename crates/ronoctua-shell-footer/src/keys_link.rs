@@ -97,7 +97,7 @@ impl Owner {
     pub fn of(unit: &str) -> Option<Self> {
         let prefs = ronoctua_keyboards::store().read();
         let own = prefs.units.get(unit);
-        let machine = ronoctua_pointers::keyboards::Machine::from_env();
+        let machine = ronoctua_pointers::keyboards::Machine::read();
         let layout = own
             .and_then(|u| u.layout.clone())
             .filter(|l| !l.is_empty())

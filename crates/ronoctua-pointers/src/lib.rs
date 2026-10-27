@@ -462,7 +462,10 @@ fn keyboards_of(devices: &[Device], plan: &Plan) -> Vec<keyboards::KeyboardPlan>
         &units,
         devices,
         plan,
-        &keyboards::Machine::from_env(),
+        // READ, not `from_env`: the live generation's file, so a `switch`
+        // reaches this running footer when the compositor pokes a recompute
+        // (`Order::Look` on the generation change), not only after a restart.
+        &keyboards::Machine::read(),
     )
 }
 

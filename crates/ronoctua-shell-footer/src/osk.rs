@@ -800,7 +800,7 @@ pub fn store() -> ronoctua_store::Store<Prefs> {
 /// a keyboard of our own cycles its own list.
 #[must_use]
 pub fn machine_language() -> Language {
-    let machine = ronoctua_pointers::keyboards::Machine::from_env();
+    let machine = ronoctua_pointers::keyboards::Machine::read();
     let first = |s: &str| s.split(',').next().unwrap_or("").trim().to_owned();
     let layout = first(&machine.layout);
     Language {

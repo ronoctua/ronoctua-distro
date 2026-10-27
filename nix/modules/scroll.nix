@@ -598,15 +598,17 @@ in
         #
         # `screenshots-land-in-a-declared-directory` reads THIS unit, not the
         # source, which is what turns that from a comment into a gate.
-        # THE MACHINE'S KEYBOARD, for a keyboard of its own in Independent
-        # mode: its `input "<twin>"` block carries these whole, because the
-        # compositor merges `type:keyboard` into a device's block only when
-        # the device already exists as the config is read — and a twin made
-        # after it would come up with no layout at all (`input.c`,
-        # `store_input_config`).
-        RONOCTUA_XKB_LAYOUT = keyboard.layout;
-        RONOCTUA_XKB_VARIANT = keyboard.variant;
-        RONOCTUA_XKB_OPTIONS = keyboard.options;
+        # THE MACHINE'S KEYBOARD IS NOT HERE ANY MORE — it is the generation's
+        # `/etc/ronoctua/keyboard` (above). In this unit's environment it was
+        # frozen when the footer started, so a layout change could not reach a
+        # running footer: a reference build's `gb` sat on a `us` laptop until a
+        # restart. Reading the file (`ronoctua_pointers::keyboards::Machine::
+        # read`) on every recompute, poked by the `/run/current-system` watch,
+        # a `switch` re-applies the layout live. The twins still carry it whole
+        # — the compositor merges `type:keyboard` only into a device that exists
+        # as the config is read (`input.c`, `store_input_config`) — but from the
+        # file, not from here, so the keyboard changing no longer restarts the
+        # unit.
         RONOCTUA_SCREENSHOTS = screenshotDir;
         RONOCTUA_GRIM = "${pkgs.grim}/bin/grim";
       };
@@ -728,6 +730,20 @@ in
     # config holds are the CHORDS, generated from the same command table.
     # -----------------------------------------------------------------
     environment.etc."scroll/config".source = configScroll;
+
+    # THE MACHINE'S KEYBOARD, WRITTEN INTO THE GENERATION, so a running footer
+    # re-reads it after a `switch` instead of carrying the layout its unit
+    # started with (`RONOCTUA_XKB_*` below, frozen at start). `/etc` is rebuilt
+    # on every switch, so this file holds the new generation's layout before
+    # `/run/current-system` — which the footer watches — swings to it. The same
+    # three values as the environment, from the same option; the Rust reads the
+    # file when it is there and the environment when it is not (`cargo run`, a
+    # test) — `ronoctua_pointers::keyboards::Machine::read`.
+    environment.etc."ronoctua/keyboard".text = ''
+      layout=${keyboard.layout}
+      variant=${keyboard.variant}
+      options=${keyboard.options}
+    '';
 
     environment.sessionVariables = {
       # THE LEADER'S ON-SCREEN LABEL comes from the SAME place as the bind,

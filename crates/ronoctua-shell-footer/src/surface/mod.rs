@@ -814,6 +814,11 @@ struct Footer {
     notes: ronoctua_notify::store::Where,
     /// The watch on `theme.json`: the file is the broadcast (see `theme.rs`).
     _theme_watch: Option<ronoctua_files::notice::Notice>,
+    /// The watch on `/run/current-system` — the symlink a `switch` swings to
+    /// the new generation. It is how a build change reaches this running footer
+    /// without a restart: the keyboard re-applies and the build glyph re-reads
+    /// (`build_switch`, `Machine::read`). Held so it lives as long as the footer.
+    _generation_watch: Option<ronoctua_files::notice::Notice>,
     /// The watch on `language.json`. Held so it lives as long as the footer.
     _language_watch: Option<ronoctua_files::notice::Notice>,
     /// The watch on `locale.json` — the dates' shape, the units, the zone.
@@ -2964,6 +2969,7 @@ fn assemble(
         zone: ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime")),
         notes,
         _theme_watch: None,
+        _generation_watch: None,
         _language_watch: None,
         _locale_watch: None,
         _world_watch: None,
@@ -3479,6 +3485,27 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the theme channel: {e}"))?;
+
+    // THE GENERATION, watched: `/run/current-system` is the symlink a `switch`
+    // swings to the new system, and watching its directory for that name
+    // catches the `MOVED_TO` the swap makes. It is how a build change reaches a
+    // running footer without a restart — the keyboard re-applies and the build
+    // glyph re-reads (`generation_changed`).
+    let (generation_sender, generation_changed) = channel::channel::<()>();
+    state._generation_watch = ronoctua_files::notice::Notice::on_file(
+        std::path::Path::new("/run"),
+        "current-system",
+        ronoctua_files::notice::Pace::Coalesced,
+        move || generation_sender.send(()).is_ok(),
+    )
+    .ok();
+    handle
+        .insert_source(generation_changed, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(()) = event {
+                state.generation_changed();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the generation watch: {e}"))?;
 
     // THE LANGUAGE'S FILE, watched like the theme's. The footer WRITES it when
     // somebody chooses in `LEADER s l`, and adopts it on the spot so the frame
@@ -9684,6 +9711,20 @@ impl Footer {
         if changed || said || self.theme_chooser.is_some() {
             self.draw_and_paint();
         }
+    }
+
+    /// `/run/current-system` swung to a new generation — a `switch` landed.
+    /// Re-read which build is running (the modeline glyph) and poke the
+    /// pointers to recompute, which re-reads `Machine::read` and re-applies the
+    /// new generation's keyboard to every twin — so a layout change reaches
+    /// this running footer without a restart (`build_switch`, the flaw this
+    /// closes).
+    fn generation_changed(&mut self) {
+        self.build_state = crate::build_switch::read();
+        if let Some(h) = self.pointer_thread.as_ref() {
+            h.send(ronoctua_pointers::Order::Look);
+        }
+        self.draw_and_paint();
     }
 
     /// What the theme's file had REFUSED — an answer this system does not
