@@ -73,5 +73,43 @@
         )
         control("brain-act journal-errors seen-all")
         settled(lambda layout: layout and mark not in layout)
+
+    with subtest("a line the shipped filter holds is counted on the filter and never on the mark"):
+        def filtered():
+            """The shipped default filter's record in the kept list, or None."""
+            kept = machine.succeed(
+                "cat /root/.local/state/ronoctua/brain/journal-errors/errors.json 2>/dev/null || echo '{}'"
+            )
+            for f in json.loads(kept).get("filtered-since", []):
+                if f.get("text") == "Ignoring duplicate name":
+                    return f
+            return None
+
+        # THE DBUS NOISE THE SHIPPED FILTER IS FOR: one err line carrying the
+        # trecho, written by a unit of its own as the plant above. It must be
+        # counted on the filter, never become a kind, and never light the mark.
+        machine.succeed(
+            "systemd-run --wait --quiet --unit=brain-modules-vm-filtered "
+            "${pkgs.bash}/bin/sh -c 'echo \"<3>Ignoring duplicate name org.example.Planted in a service file\"'"
+        )
+
+        for _ in range(30):
+            f = filtered()
+            if f is not None and f.get("since", 0) >= 1:
+                break
+            machine.sleep(1)
+        else:
+            raise AssertionError("the shipped filter never caught the planted line")
+
+        # NOT A KIND, and the mark stays down: the filtered line is off the list.
+        kept = json.loads(
+            machine.succeed(
+                "cat /root/.local/state/ronoctua/brain/journal-errors/errors.json"
+            )
+        )
+        assert not any(
+            "Ignoring duplicate name" in g.get("message", "") for g in kept.get("groups", [])
+        ), "a filtered line became a kind"
+        settled(lambda layout: layout and mark not in layout)
   '';
 }

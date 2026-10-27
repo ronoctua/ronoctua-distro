@@ -54,13 +54,16 @@ use crate::module::{
 };
 use crate::moment::Moment;
 
-use rules::{Book, Group, Ignored, Kind};
+use rules::{Book, Filter, Group, Ignored, Kind, Origin};
 
 /// The list, under its state directory.
 const LIST_FILE: &str = "errors.json";
 
 /// What is ignored, under its config directory.
 const IGNORED_FILE: &str = "ignored.json";
+
+/// What is filtered, under its config directory.
+const FILTERS_FILE: &str = "filters.json";
 
 /// How long a change of the list waits before it is written, in seconds — so
 /// a burst of a thousand lines is one write.
@@ -85,6 +88,9 @@ struct JournalErrors {
     state_dir: Option<PathBuf>,
     /// What is ignored: the person's file.
     ignored: Store<IgnoredFile>,
+    /// What is filtered: the person's file (their trechos and which shipped
+    /// ones they turned off).
+    filters: Store<FiltersFile>,
     /// This boot, in the journal's spelling; empty when it could not be read,
     /// and then every kind is this boot's.
     boot: String,
@@ -112,6 +118,9 @@ struct ListFile {
     groups: Vec<Group>,
     /// How many times each ignored kind was heard since it was ignored.
     ignored_since: Vec<Since>,
+    /// How many lines each filter has caught, and the last one, keyed by
+    /// trecho — STATE, kept with the list, never in the person's file.
+    filtered_since: Vec<Caught>,
 }
 
 /// How many times an ignored kind was heard since.
@@ -122,12 +131,72 @@ struct Since {
     since: u64,
 }
 
+/// How many lines a filter has caught, and the last one.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct Caught {
+    text: String,
+    since: u64,
+    message: String,
+}
+
 /// What is ignored as it is kept — the person's choice, and nothing that
 /// moves on its own.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 struct IgnoredFile {
     ignored: Vec<Ignored>,
+}
+
+/// What is filtered as it is kept — the person's choice, and nothing that
+/// moves on its own. A shipped trecho turned off is here with `off`; one they
+/// typed is here; a shipped trecho left as it is is NOT here, and on by being
+/// shipped.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct FiltersFile {
+    filters: Vec<Choice>,
+}
+
+/// One trecho in the person's file.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct Choice {
+    /// The trecho.
+    text: String,
+    /// Off: a shipped trecho the person turned off (never written for one of
+    /// their own, which simply leaves the file).
+    off: bool,
+}
+
+impl FiltersFile {
+    /// Its trechos as `(text, off)` pairs, for the book to rebuild from.
+    fn choices(&self) -> Vec<(String, bool)> {
+        self.filters
+            .iter()
+            .map(|c| (c.text.clone(), c.off))
+            .collect()
+    }
+
+    /// The file for these filters: the shipped ones turned off, and the
+    /// person's own — never a shipped trecho left as it is.
+    fn of(filters: &[Filter]) -> Self {
+        Self {
+            filters: filters
+                .iter()
+                .filter_map(|f| match f.origin {
+                    Origin::Default => f.off.then(|| Choice {
+                        text: f.text.clone(),
+                        off: true,
+                    }),
+                    Origin::Custom => Some(Choice {
+                        text: f.text.clone(),
+                        off: f.off,
+                    }),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// The brain's own state file, or its default when there is none or it does
@@ -155,10 +224,16 @@ impl JournalErrors {
     /// One keeping its list and its choices in these two directories.
     fn keeping(state_dir: Option<PathBuf>, config_dir: Option<PathBuf>, boot: String) -> Self {
         let list: ListFile = read(state_dir.as_deref(), LIST_FILE);
-        let store = Store::at(config_dir, IGNORED_FILE);
-        // A FILE THAT DOES NOT PARSE is read as nothing ignored — `read` says
-        // so in the log, loud — and is never written over (see `act`).
-        let ignored: IgnoredFile = store.parsed().unwrap_or_else(|| store.read());
+        let ignored_store = Store::at(config_dir.clone(), IGNORED_FILE);
+        let filters_store = Store::at(config_dir, FILTERS_FILE);
+        // A FILE THAT DOES NOT PARSE is read as nothing — `read` says so in the
+        // log, loud — and is never written over (see `act`).
+        let ignored: IgnoredFile = ignored_store
+            .parsed()
+            .unwrap_or_else(|| ignored_store.read());
+        let filters: FiltersFile = filters_store
+            .parsed()
+            .unwrap_or_else(|| filters_store.read());
         let mut book = Book {
             groups: list
                 .groups
@@ -170,17 +245,36 @@ impl JournalErrors {
                 .into_iter()
                 .map(|i| (i.kind.clone(), i))
                 .collect(),
+            filters: Vec::new(),
         };
         for Since { kind, since } in list.ignored_since {
             if let Some(i) = book.ignored.get_mut(&kind) {
                 i.since = since;
             }
         }
+        // THE FILTERS, from the shipped defaults and the person's file, with
+        // the counts the brain kept — then a sweep of the kept list for a kind
+        // an active filter now holds (a default added since it was written).
+        book.set_filters(&filters.choices());
+        for Caught {
+            text,
+            since,
+            message,
+        } in list.filtered_since
+        {
+            let folded = text.to_lowercase();
+            if let Some(f) = book.filters.iter_mut().find(|f| f.folded == folded) {
+                f.since = since;
+                f.message = message;
+            }
+        }
+        book.apply_filters();
         // WHAT WAS SEEN IN ANOTHER BOOT is over: read, and done.
         book.forget_seen_before(&boot);
         Self {
             state_dir,
-            ignored: store,
+            ignored: ignored_store,
+            filters: filters_store,
             boot,
             state: Mutex::new(State {
                 book,
@@ -211,6 +305,17 @@ impl JournalErrors {
                     .map(|i| Since {
                         kind: i.kind.clone(),
                         since: i.since,
+                    })
+                    .collect(),
+                filtered_since: state
+                    .book
+                    .filters()
+                    .iter()
+                    .filter(|f| f.since > 0)
+                    .map(|f| Caught {
+                        text: f.text.clone(),
+                        since: f.since,
+                        message: f.message.clone(),
                     })
                     .collect(),
             },
@@ -260,6 +365,30 @@ impl JournalErrors {
         });
         if let Err(e) = written {
             tracing::warn!(error = %e, "the ignored kinds could not be kept");
+        }
+        Acted::Done
+    }
+
+    /// Changes the person's filters: reads their file first with `parsed`
+    /// (one that does not parse is refused and left as it is), rebuilds the
+    /// book's filters from it — so what they edited by hand stays — makes the
+    /// one change, and writes the file as it is now with that change.
+    fn refile(&self, state: &mut State, change: impl FnOnce(&mut Book) -> Acted) -> Acted {
+        let Some(file) = self.filters.parsed() else {
+            tracing::error!(
+                path = ?self.filters.path(),
+                "the file of filters does not parse; it is left as it is"
+            );
+            return Acted::Refused(super::why::UNREADABLE);
+        };
+        state.book.set_filters(&file.choices());
+        let acted = change(&mut state.book);
+        if acted != Acted::Done {
+            return acted;
+        }
+        let written = self.filters.write(&FiltersFile::of(state.book.filters()));
+        if let Err(e) = written {
+            tracing::warn!(error = %e, "the filters could not be kept");
         }
         Acted::Done
     }
@@ -396,14 +525,57 @@ impl Module for JournalErrors {
                 }],
             });
         }
+        // THE FILTERS, at the foot of the page: each trecho, the last line it
+        // caught and how many — one that is on to turn off, one that is off to
+        // turn on. A filtered line is counted here and never on the mark.
+        let filters = state.book.filters();
+        if !filters.is_empty() {
+            let mut shown: Vec<&Filter> = filters.iter().collect();
+            shown.sort_by(|a, b| a.off.cmp(&b.off).then_with(|| a.folded.cmp(&b.folded)));
+            sections.push(Section {
+                heading: super::key::JOURNAL_ERRORS_HEADING_FILTERED.into(),
+                rows: shown
+                    .iter()
+                    .map(|f| Row {
+                        id: f.id(),
+                        label: Cell::Data(f.text.clone()),
+                        value: Cell::Data(f.message.clone()),
+                        note: Cell::Count(f.since),
+                        tone: Tone::Quiet,
+                        act: Some(Word::Borrowed(if f.off {
+                            super::action::REFILTER.id
+                        } else {
+                            super::action::UNFILTER.id
+                        })),
+                        also: None,
+                    })
+                    .collect(),
+            });
+        }
         Screen { sections }
     }
 
     fn act(&self, act: &Act, ctx: &Ctx) -> Acted {
         let mut state = self.state();
         let action = act.action.as_str();
+        // THE PAGE'S OWN, needing no row: mark everything seen, or add a filter
+        // from what the person typed.
         if action == super::action::SEEN_ALL.id {
             state.book.see_all();
+        } else if action == super::action::FILTER.id {
+            let answer = act.answer.as_deref().unwrap_or("");
+            let acted = self.refile(&mut state, |book| {
+                let text = answer.trim();
+                if text.is_empty() {
+                    Acted::Refused(super::why::EMPTY)
+                } else {
+                    book.filter(text);
+                    Acted::Done
+                }
+            });
+            if acted != Acted::Done {
+                return acted;
+            }
         } else {
             // A ROW'S ACTION ASKED BY NAME, with no row: said so, and not taken
             // for a row that went away.
@@ -420,6 +592,20 @@ impl Module for JournalErrors {
                 }
                 a if a == super::action::IGNORE.id => self.choose(&mut state, row, true),
                 a if a == super::action::UNIGNORE.id => self.choose(&mut state, row, false),
+                a if a == super::action::UNFILTER.id => self.refile(&mut state, |book| {
+                    if book.unfilter(row) {
+                        Acted::Done
+                    } else {
+                        Acted::Refused(super::why::GONE)
+                    }
+                }),
+                a if a == super::action::REFILTER.id => self.refile(&mut state, |book| {
+                    if book.refilter(row) {
+                        Acted::Done
+                    } else {
+                        Acted::Refused(super::why::GONE)
+                    }
+                }),
                 _ => return Acted::Refused("unknown"),
             };
             if acted != Acted::Done {
@@ -883,12 +1069,22 @@ mod tests {
         let m = errors();
         let screen = m.screen(&look());
         let rows: Vec<&Row> = screen.sections.iter().flat_map(|s| &s.rows).collect();
-        assert_eq!(rows.len(), 1);
+        // THE NONE ROW first, and the one shipped filter at the foot.
         assert_eq!(
             rows[0].label,
             key(super::super::key::JOURNAL_ERRORS_ROW_NONE)
         );
         assert!(rows[0].act.is_none());
+        let filtered = screen
+            .sections
+            .iter()
+            .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_FILTERED)
+            .expect("the filtered section");
+        assert_eq!(filtered.rows.len(), 1, "the shipped default is not shown");
+        assert_eq!(
+            filtered.rows[0].act.as_deref(),
+            Some(super::super::action::UNFILTER.id)
+        );
         let (ctx, _) = Ctx::kept(super::super::ID, 1);
         m.heard(
             Heard::Lost {
@@ -925,5 +1121,99 @@ mod tests {
             }
         );
         assert!(wanted.fields.is_empty() && wanted.message_contains.is_none());
+    }
+
+    #[test]
+    fn a_shipped_filter_catches_the_noise_and_the_person_may_add_and_turn_off() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        let m = JournalErrors::keeping(
+            Some(state_dir.clone()),
+            Some(config_dir.clone()),
+            BOOT.to_owned(),
+        );
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        // THE SHIPPED DEFAULT holds the dbus noise, both buses: heard, counted
+        // on the filter, never on the mark.
+        assert!(hear(&m, &ctx, fixtures::DBUS_SYSTEM));
+        assert!(hear(&m, &ctx, fixtures::DBUS_USER));
+        assert!(marks(&m).is_empty(), "the dbus noise reached the mark");
+        hear(&m, &ctx, fixtures::NGINX_BIND_80);
+        assert_eq!(marks(&m)[0].count, 1, "only the real error counts");
+
+        // THE PERSON ADDS A FILTER by typing it (the `filter` action's answer),
+        // and it sweeps the nginx error off the mark at once.
+        let typed = |answer: &str| Act {
+            action: super::super::action::FILTER.id.to_owned(),
+            row: None,
+            answer: Some(answer.to_owned()),
+        };
+        assert_eq!(m.act(&typed("bind() to"), &ctx), Acted::Done);
+        assert!(marks(&m).is_empty(), "a new filter did not sweep the list");
+        // AN EMPTY ANSWER is refused with the module's word.
+        assert_eq!(
+            m.act(&typed("   "), &ctx),
+            Acted::Refused(super::super::why::EMPTY)
+        );
+
+        // THE SHIPPED DEFAULT is turned off from its row, and the dbus noise
+        // counts again from here (off is not retroactive).
+        let default_id = filter_row(&m, "Ignoring duplicate name").expect("the default row");
+        let on_row = |action: &str, id: &str| Act {
+            action: action.to_owned(),
+            row: Some(id.to_owned()),
+            answer: None,
+        };
+        assert_eq!(
+            m.act(
+                &on_row(super::super::action::UNFILTER.id, &default_id),
+                &ctx
+            ),
+            Acted::Done
+        );
+        hear(&m, &ctx, fixtures::DBUS_SYSTEM);
+        assert_eq!(
+            marks(&m)[0].count,
+            1,
+            "the default off let no dbus error through"
+        );
+
+        // A NEW BRAIN, the same directories: the person's own filter and their
+        // choice to turn the default off both come back.
+        let again = JournalErrors::keeping(Some(state_dir), Some(config_dir), BOOT.to_owned());
+        let screen = again.screen(&look());
+        let filtered = screen
+            .sections
+            .iter()
+            .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_FILTERED)
+            .expect("the filtered section");
+        assert!(
+            filtered.rows.iter().any(
+                |r| matches!(&r.label, Cell::Data(d) if d == "Ignoring duplicate name")
+                    && r.act.as_deref() == Some(super::super::action::REFILTER.id)
+            ),
+            "the default did not come back off"
+        );
+        assert!(
+            filtered
+                .rows
+                .iter()
+                .any(|r| matches!(&r.label, Cell::Data(d) if d == "bind() to")
+                    && r.act.as_deref() == Some(super::super::action::UNFILTER.id)),
+            "the person's own filter was lost"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The id of the filtered row whose trecho is `text`, for a test.
+    fn filter_row(m: &JournalErrors, text: &str) -> Option<String> {
+        m.screen(&look())
+            .sections
+            .iter()
+            .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_FILTERED)?
+            .rows
+            .iter()
+            .find(|r| matches!(&r.label, Cell::Data(d) if d == text))
+            .map(|r| r.id.clone())
     }
 }

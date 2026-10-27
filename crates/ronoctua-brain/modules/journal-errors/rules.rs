@@ -26,6 +26,18 @@ pub const KINDS_KEPT: usize = 100;
 /// The most kinds ignored.
 pub const IGNORED_KEPT: usize = 200;
 
+/// The most trechos the person filters by, past the shipped ones; over it,
+/// the one of theirs added longest ago goes.
+pub const FILTERS_KEPT: usize = 50;
+
+/// The trechos a fresh install filters, each shipped ON — the person opts out
+/// of them the way they opt into the module (the manifest's `starts_off`): the
+/// row is on its page from the first boot, and a tap turns it off. `dbus-broker`
+/// writes `Ignoring duplicate name` at `err` once per name a service file
+/// clashes on — dozens on a NixOS boot, one noise — so it is off the mark by
+/// default.
+pub const DEFAULTS: &[&str] = &["Ignoring duplicate name"];
+
 /// The longest message kept, in bytes (cut on a character's edge): the row
 /// shows one line, and the footer the rest of it.
 pub const MESSAGE_MOST: usize = 600;
@@ -178,6 +190,18 @@ fn is_id(word: &str) -> bool {
     word.len() >= 8 && hex(word) && word.chars().any(|c| c.is_ascii_digit())
 }
 
+/// The line a row shows and a filter is matched against: `<who>: <message>`,
+/// or the message alone when nothing said it — the journal's own line, as
+/// `journalctl` prints it.
+#[must_use]
+pub fn line(who: &str, message: &str) -> String {
+    if who.is_empty() {
+        message.to_owned()
+    } else {
+        format!("{who}: {message}")
+    }
+}
+
 /// `text` cut to at most `most` bytes, on a character's edge.
 #[must_use]
 pub fn cut(text: &str, most: usize) -> &str {
@@ -265,13 +289,83 @@ pub struct Ignored {
     pub since: u64,
 }
 
-/// The book of kinds: the list and what is ignored.
+/// Where a filter came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Origin {
+    /// Shipped with the brain ([`DEFAULTS`]): a tap turns it off, and it stays
+    /// on the page to turn on again.
+    #[default]
+    Default,
+    /// The person typed it: a tap takes it off the page.
+    Custom,
+}
+
+/// A trecho the person filters the journal's errors by. A line whose
+/// `<who>: <message>` holds it — case folded, so `ERROR` and `error` are one —
+/// is counted here and never reaches the list or the mark.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Filter {
+    /// The trecho, as it was written or shipped.
+    pub text: String,
+    /// It, case folded: the identity, and what a line is searched for.
+    pub folded: String,
+    /// Shipped, or the person's.
+    pub origin: Origin,
+    /// On the page, not filtering.
+    pub off: bool,
+    /// How many lines it has caught. STATE, like [`Ignored::since`].
+    pub since: u64,
+    /// The last line it caught, to show what it is catching.
+    pub message: String,
+}
+
+impl Filter {
+    /// A shipped filter, on.
+    #[must_use]
+    pub fn shipped(text: &str) -> Self {
+        Self::new(text, Origin::Default, false)
+    }
+
+    /// The person's own, on or off.
+    #[must_use]
+    pub fn own(text: &str, off: bool) -> Self {
+        Self::new(text, Origin::Custom, off)
+    }
+
+    fn new(text: &str, origin: Origin, off: bool) -> Self {
+        Self {
+            text: text.to_owned(),
+            folded: text.to_lowercase(),
+            origin,
+            off,
+            since: 0,
+            message: String::new(),
+        }
+    }
+
+    /// Its id on the page: sixteen hexadecimal digits of the folded trecho
+    /// (FNV-1a), the same across runs — DATA, the row's id the page hands back.
+    #[must_use]
+    pub fn id(&self) -> String {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in self.folded.bytes() {
+            h ^= u64::from(byte);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        format!("{h:016x}")
+    }
+}
+
+/// The book of kinds: the list, what is ignored, and what is filtered.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Book {
     /// The list, by kind.
     pub groups: BTreeMap<Kind, Group>,
     /// What is ignored, by kind.
     pub ignored: BTreeMap<Kind, Ignored>,
+    /// What is filtered, by trecho: the shipped ones and the person's, each on
+    /// or off. Built from [`DEFAULTS`] and the person's file ([`Book::set_filters`]).
+    pub filters: Vec<Filter>,
 }
 
 /// What hearing one entry did to the book.
@@ -283,12 +377,27 @@ pub enum Heard {
     Again,
     /// A kind that is ignored happened; counted, and nothing else.
     Ignored,
+    /// A line a filter holds happened; counted on the filter, and nothing else.
+    Filtered,
 }
 
 impl Book {
     /// One entry heard at `at` (the journal's second).
     pub fn hear(&mut self, entry: &Entry, at: Moment) -> Heard {
         let kind = Kind::of(entry);
+        // A FILTER FIRST: a line a trecho holds is counted on the trecho and
+        // is never a kind — off the list and off the mark.
+        let shown = line(&kind.who, &entry.message);
+        let hay = shown.to_lowercase();
+        if let Some(f) = self
+            .filters
+            .iter_mut()
+            .find(|f| !f.off && !f.folded.is_empty() && hay.contains(&f.folded))
+        {
+            f.since += 1;
+            f.message = cut(&shown, MESSAGE_MOST).to_owned();
+            return Heard::Filtered;
+        }
         if let Some(ignored) = self.ignored.get_mut(&kind) {
             ignored.since += 1;
             return Heard::Ignored;
@@ -416,6 +525,125 @@ impl Book {
             return false;
         };
         self.ignored.remove(&kind).is_some()
+    }
+
+    /// The filters, for the page.
+    #[must_use]
+    pub fn filters(&self) -> &[Filter] {
+        &self.filters
+    }
+
+    /// Rebuilds the filters from the shipped [`DEFAULTS`] and the person's
+    /// choices — each a trecho and whether it is off — keeping the count the
+    /// brain had for a trecho it still has. The person's choices are the base,
+    /// so a trecho they added or took out by hand stays; this sweeps nothing
+    /// ([`Book::apply_filters`] does, once the counts are back).
+    pub fn set_filters(&mut self, choices: &[(String, bool)]) {
+        let kept: Vec<(String, u64, String)> = self
+            .filters
+            .iter()
+            .map(|f| (f.folded.clone(), f.since, f.message.clone()))
+            .collect();
+        let mut out: Vec<Filter> = DEFAULTS.iter().map(|t| Filter::shipped(t)).collect();
+        for (text, off) in choices {
+            if text.trim().is_empty() {
+                continue;
+            }
+            let folded = text.to_lowercase();
+            if let Some(f) = out.iter_mut().find(|f| f.folded == folded) {
+                f.off = *off;
+            } else {
+                out.push(Filter::own(text, *off));
+            }
+        }
+        for f in &mut out {
+            if let Some((_, since, message)) = kept.iter().find(|(folded, ..)| *folded == f.folded)
+            {
+                f.since = *since;
+                f.message = message.clone();
+            }
+        }
+        self.filters = out;
+    }
+
+    /// Filters by a trecho from now on, and sweeps what was already heard. A
+    /// trecho already there is turned on if it was off. The oldest of the
+    /// person's own goes once there are more than [`FILTERS_KEPT`] of them.
+    pub fn filter(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let folded = text.to_lowercase();
+        if let Some(f) = self.filters.iter_mut().find(|f| f.folded == folded) {
+            f.off = false;
+        } else {
+            self.filters.push(Filter::own(text, false));
+            while self
+                .filters
+                .iter()
+                .filter(|f| f.origin == Origin::Custom)
+                .count()
+                > FILTERS_KEPT
+            {
+                let Some(pos) = self.filters.iter().position(|f| f.origin == Origin::Custom) else {
+                    break;
+                };
+                self.filters.remove(pos);
+            }
+        }
+        self.apply_filters();
+    }
+
+    /// Takes a filter off, by id: the person's own leaves the page; a shipped
+    /// one stays, off, to turn on again. `false` when there is none with this id.
+    pub fn unfilter(&mut self, id: &str) -> bool {
+        let Some(pos) = self.filters.iter().position(|f| f.id() == id) else {
+            return false;
+        };
+        match self.filters[pos].origin {
+            Origin::Custom => {
+                self.filters.remove(pos);
+            }
+            Origin::Default => self.filters[pos].off = true,
+        }
+        true
+    }
+
+    /// Turns a filter back on, by id, and sweeps what was already heard.
+    /// `false` when there is none with this id.
+    pub fn refilter(&mut self, id: &str) -> bool {
+        let Some(f) = self.filters.iter_mut().find(|f| f.id() == id) else {
+            return false;
+        };
+        if f.off {
+            f.off = false;
+            self.apply_filters();
+        }
+        true
+    }
+
+    /// Sweeps the list of every kind an active filter now holds: it leaves the
+    /// list (and the mark), its count folded onto the filter. What a new or
+    /// turned-on filter, or a start reading the kept list, does to what was
+    /// already heard.
+    pub fn apply_filters(&mut self) {
+        let filters = &mut self.filters;
+        self.groups.retain(|kind, g| {
+            let shown = line(&kind.who, &g.message);
+            let hay = shown.to_lowercase();
+            match filters
+                .iter_mut()
+                .find(|f| !f.off && !f.folded.is_empty() && hay.contains(&f.folded))
+            {
+                Some(f) => {
+                    f.since += g.count;
+                    f.message = cut(&shown, MESSAGE_MOST).to_owned();
+                    false
+                }
+                None => true,
+            }
+        });
     }
 
     /// Forgets the kinds seen whose last occurrence was in another boot —
@@ -663,6 +891,107 @@ mod tests {
         assert_eq!(
             journal_boot("0123ABCD-4567-89ab-cdef-0123456789ab\n"),
             "0123abcd456789abcdef0123456789ab"
+        );
+    }
+
+    #[test]
+    fn a_filter_counts_a_line_and_keeps_it_off_the_list_and_the_mark() {
+        let mut book = Book::default();
+        // THE SHIPPED DEFAULT, on, and nothing of the person's.
+        book.set_filters(&[]);
+        assert_eq!(book.filters().len(), 1);
+        assert!(!book.filters()[0].off);
+        // A dbus line at err, on the system bus and on the person's — one kind
+        // each by `who`, both held by the one trecho, case folded.
+        let sys = entry(
+            &[("_SYSTEMD_UNIT", "dbus-broker.service")],
+            "Ignoring duplicate name 'org.freedesktop.UPower' in service file '/nix/store/x'",
+        );
+        let usr = entry(
+            &[("_SYSTEMD_UNIT", "user@1000.service")],
+            "ignoring DUPLICATE name 'org.freedesktop.portal.Flatpak' in service file '/y'",
+        );
+        assert_eq!(book.hear(&sys, 10), Heard::Filtered);
+        assert_eq!(book.hear(&usr, 20), Heard::Filtered);
+        assert!(book.groups.is_empty(), "a filtered line became a kind");
+        assert_eq!(book.unseen(), 0, "a filtered line marked the modeline");
+        assert_eq!(book.filters()[0].since, 2, "both buses, one trecho");
+        // A line the trecho does not hold is an error as ever.
+        let other = entry(&[("_SYSTEMD_UNIT", "nginx.service")], "bind() failed");
+        assert_eq!(book.hear(&other, 30), Heard::New);
+        assert_eq!(book.unseen(), 1);
+    }
+
+    #[test]
+    fn a_turned_on_filter_sweeps_what_was_heard_and_off_is_not_retroactive() {
+        let mut book = Book::default();
+        book.set_filters(&[]);
+        // Turn the default off: the dbus lines count as errors.
+        let id = book.filters()[0].id();
+        assert!(book.unfilter(&id));
+        let dbus = |n: &str| {
+            entry(
+                &[("_SYSTEMD_UNIT", "dbus-broker.service")],
+                &format!("Ignoring duplicate name '{n}' in service file '/x'"),
+            )
+        };
+        // Each name is its own kind.
+        assert_eq!(book.hear(&dbus("a"), 10), Heard::New);
+        assert_eq!(book.hear(&dbus("b"), 20), Heard::New);
+        assert_eq!(book.unseen(), 2);
+        // Turn it back on: the kinds leave the list and the mark, their counts
+        // folded onto the filter.
+        assert!(book.refilter(&id));
+        assert!(book.groups.is_empty());
+        assert_eq!(book.unseen(), 0);
+        assert_eq!(book.filters()[0].since, 2);
+        // OFF AGAIN IS NOT RETROACTIVE: what it caught is gone, and a line of
+        // that kind is news again.
+        assert!(book.unfilter(&id));
+        assert_eq!(book.hear(&dbus("a"), 30), Heard::New);
+        assert_eq!(book.unseen(), 1);
+    }
+
+    #[test]
+    fn the_persons_choices_rebuild_the_filters_and_keep_the_counts() {
+        let mut book = Book::default();
+        book.set_filters(&[]);
+        book.hear(
+            &entry(
+                &[("_SYSTEMD_UNIT", "dbus-broker.service")],
+                "Ignoring duplicate name 'x'",
+            ),
+            1,
+        );
+        assert_eq!(book.filters()[0].since, 1);
+        // A person's file: the default turned off, and one of their own.
+        book.set_filters(&[
+            ("Ignoring duplicate name".to_owned(), true),
+            ("timed out".to_owned(), false),
+        ]);
+        assert_eq!(book.filters().len(), 2);
+        let def = book
+            .filters()
+            .iter()
+            .find(|f| f.origin == Origin::Default)
+            .expect("the default");
+        assert!(def.off, "the person's choice was not kept");
+        assert_eq!(def.since, 1, "the count the brain had was lost");
+        assert!(
+            book.filters()
+                .iter()
+                .any(|f| f.origin == Origin::Custom && f.text == "timed out")
+        );
+        // THE CAP keeps the person's own bounded.
+        for n in 0..=FILTERS_KEPT {
+            book.filter(&format!("trecho {n}"));
+        }
+        assert!(
+            book.filters()
+                .iter()
+                .filter(|f| f.origin == Origin::Custom)
+                .count()
+                <= FILTERS_KEPT
         );
     }
 }

@@ -29,3 +29,11 @@ pub const WARNING: &str = r#"{"__CURSOR":"s=7d2e1f0a3b4c5d6e7f8091a2b3c4d5e6;i=2
 
 /// A line that names no priority: journald's `info`.
 pub const INFO_NO_PRIORITY: &str = r#"{"__CURSOR":"s=7d2e1f0a3b4c5d6e7f8091a2b3c4d5e6;i=2f04;b=0123456789abcdef0123456789abcdef;m=1ee81a51;t=63a1b2c4b9e52;x=aa11bb22cc33dd47","__REALTIME_TIMESTAMP":"1790000062000000","_BOOT_ID":"0123456789abcdef0123456789abcdef","_TRANSPORT":"journal","SYSLOG_IDENTIFIER":"backup","MESSAGE":"failed to reach the server, will try again"}"#;
+
+/// `dbus-broker` on the system bus: a name clashing between two service
+/// directories, at `err` — the noise the shipped filter catches.
+pub const DBUS_SYSTEM: &str = r#"{"__CURSOR":"s=7d2e1f0a3b4c5d6e7f8091a2b3c4d5e6;i=2f05;b=0123456789abcdef0123456789abcdef;m=1ee81a60;t=63a1b2c4b9e60;x=aa11bb22cc33dd48","__REALTIME_TIMESTAMP":"1790000100000000","_BOOT_ID":"0123456789abcdef0123456789abcdef","_TRANSPORT":"stdout","PRIORITY":"3","SYSLOG_IDENTIFIER":"dbus-broker-launch","_COMM":"dbus-broker-lau","_SYSTEMD_UNIT":"dbus-broker.service","MESSAGE":"Ignoring duplicate name 'org.freedesktop.UPower' in service file '/nix/store/abc-upower/share/dbus-1/system-services/org.freedesktop.UPower.service'"}"#;
+
+/// The same on the person's bus, under `user@1000.service` — a second kind by
+/// `who`, the one trecho catches both.
+pub const DBUS_USER: &str = r#"{"__CURSOR":"s=8e3f2a1b4c5d6e7f8091a2b3c4d5e6f7;i=7a20;b=0123456789abcdef0123456789abcdef;m=1ee81a61;t=63a1b2c4b9e61;x=bb22cc33dd44ee56","__REALTIME_TIMESTAMP":"1790000101000000","_BOOT_ID":"0123456789abcdef0123456789abcdef","_TRANSPORT":"stdout","PRIORITY":"3","SYSLOG_IDENTIFIER":"dbus-broker-launch","_COMM":"dbus-broker-lau","_SYSTEMD_UNIT":"user@1000.service","MESSAGE":"Ignoring duplicate name 'org.freedesktop.portal.Flatpak' in service file '/nix/store/def-flatpak/share/dbus-1/services/org.freedesktop.portal.Flatpak.service'"}"#;

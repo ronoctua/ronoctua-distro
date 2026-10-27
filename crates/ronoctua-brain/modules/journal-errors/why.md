@@ -51,6 +51,31 @@ tirou à mão continua. Uma rajada de erros vira uma escrita da lista alguns seg
 depois — o relógio só fica armado enquanto algo espera para ser escrito —, e um gesto da pessoa é
 escrito na hora, para um cérebro parado um segundo depois não trazer a marca de volta.
 
+## Filtrados
+
+Um erro pode ser ruído: o `dbus-broker` escreve `Ignoring duplicate name` em `err` uma vez por nome
+que colide entre dois diretórios de serviço — dezenas numa partida do NixOS, cada nome um tipo,
+todos uma coisa só. Ignorar tipo a tipo seriam dezenas de toques, e um nome novo voltaria. Um filtro
+é um trecho de texto: toda linha cujo `<unidade>: <mensagem>` o contém, com maiúsculas e minúsculas
+dobradas, é ouvida e contada no filtro e nunca vira um tipo — fora da lista e fora da marca.
+
+Criar um filtro é a ação `filter` da página: ela pede um trecho e passa a filtrar dali em diante. A
+linha de um filtro o desliga (`unfilter`) ou o religa (`refilter`); o seu próprio sai da página ao
+ser desligado, um de fábrica fica, desligado, para religar. Ligar ou religar varre também o que já
+foi ouvido: os tipos que o trecho pega saem da lista na hora, a contagem deles somada ao filtro.
+Desligar não é retroativo — o que já foi escondido acabou, e uma linha daquele tipo é novidade de
+novo.
+
+Um trecho vem ligado de fábrica, o do ruído do `dbus-broker`, como o módulo vem desligado (o
+`starts_off` do manifesto): está na página desde a primeira partida e um toque o desliga. Até
+cinquenta trechos seus, fora os de fábrica; passando disso, sai o que você pôs há mais tempo.
+
+O que a lista guarda de cada filtro — quantas linhas pegou e a última — é estado (`errors.json`), com
+ela; o que você filtra é sua escolha (`filters.json`, no diretório de configuração, pelo
+`ronoctua-store`) e só muda quando você age, relido com `parsed` antes de escrever como o dos tipos
+ignorados. Um trecho de fábrica deixado como está não vai no seu arquivo: fica ligado por ser de
+fábrica, e só o que você desligou ou acrescentou é escrito.
+
 ## A marca
 
 Enquanto houver um tipo não visto, uma marca na modeline com quantos tipos, na cor de uma vigia (a

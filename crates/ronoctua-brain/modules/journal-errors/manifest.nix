@@ -5,7 +5,10 @@
 # watching (on its first start, this boot's last few too). Entries of one kind
 # — the same unit saying the same thing with other numbers — are one row with
 # a count. While a kind is not seen yet, a mark on the modeline says how many
-# there are, in the colour of a watch. Why each is so is in `why.md`.
+# there are, in the colour of a watch. A trecho the person filters by holds the
+# lines that carry it — off the list and off the mark — and one is shipped on
+# (the `dbus-broker` duplicate-name noise), to turn off. Why each is so is in
+# `why.md`.
 {
   what = "Group the journal's errors by unit and kind, and mark the modeline until they are seen.";
 
@@ -33,13 +36,15 @@
   # it on is a tap and no rebuild (owner, 2026-10-26).
   startsOff = true;
 
-  # The words it refuses with: the kind is not in its list any more
-  # (ignored, or forgotten while the page was open); a row's action asked by
-  # name, with no row; and the person's file of ignored kinds, which does not
-  # parse and is left as it is rather than written over.
+  # The words it refuses with: the kind (or filter) is not in its list any
+  # more (ignored, filtered, or forgotten while the page was open); a row's
+  # action asked by name, with no row; a filter asked for with no trecho; and
+  # a person's file (of ignored kinds or of filters) which does not parse and
+  # is left as it is rather than written over.
   whys = [
     "gone"
     "no-row"
+    "empty"
     "unreadable"
   ];
 
@@ -60,8 +65,14 @@
   # WHAT A PERSON DOES WITH A KIND. Each row of its page does ONE of them
   # (the row's own action): a kind not seen yet is marked seen, a seen one is
   # ignored from then on, and an ignored one is heard again. `seen-all` is the
-  # page's, for everything at once. All four are also commands, by name; the
-  # three a row's by name, with no row, say to choose one on the page.
+  # page's, for everything at once.
+  #
+  # AND WHAT A PERSON DOES WITH A FILTER. `filter` is the page's: it asks for
+  # a trecho and holds from then on every line whose `<unit>: <message>` carries
+  # it (case folded) — off the list and off the mark. A filter's row turns it
+  # off (`unfilter`: the person's own leaves the page, a shipped one stays to
+  # turn on again) or back on (`refilter`). All are also commands, by name; a
+  # row's by name with no row says to choose one on the page.
   actions = {
     seen = {
       row = true;
@@ -73,6 +84,15 @@
       row = true;
     };
     seen-all = { };
+    filter = {
+      asks = "ask-journal-errors-filter";
+    };
+    unfilter = {
+      row = true;
+    };
+    refilter = {
+      row = true;
+    };
   };
 
   uses = [
