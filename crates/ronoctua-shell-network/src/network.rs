@@ -281,6 +281,20 @@ pub enum Target {
     /// Filter the registered locations by a country or city, typed on the line;
     /// an empty answer shows them all.
     VpnFilter,
+    /// Flip a VPN runtime setting (`ronoctua_network::vpn::Settings`) — no
+    /// rebuild: the change is staged and the sync applies it.
+    VpnToggle(VpnSetting),
+    /// Type the VPN's DNS resolvers (comma-separated; empty for each file's own).
+    VpnDns,
+}
+
+/// Which VPN runtime setting a toggle row flips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VpnSetting {
+    /// The IPv6 leak guard — route `::/0` into the tunnel.
+    Ipv6,
+    /// The kill switch — block all non-tunnel egress.
+    KillSwitch,
 }
 
 /// One of the switches the two tunnel sections carry.
@@ -468,6 +482,9 @@ pub enum Errand {
         /// The private key, typed once, hidden.
         key: Password,
     },
+    /// Apply new VPN runtime settings — staged for the sync, which persists and
+    /// applies them (`ronoctua_network::vpn::stage_settings`). None are secret.
+    VpnSettings(ronoctua_network::vpn::Settings),
     /// Close the view.
     Close,
 }
@@ -498,7 +515,7 @@ impl Question {
     }
 
     /// Every question this view asks.
-    pub const THE_VIEWS: [Self; 8] = [
+    pub const THE_VIEWS: [Self; 9] = [
         Self::PASSWORD,
         Self::PATH,
         Self::TOR_VALUE,
@@ -507,6 +524,7 @@ impl Question {
         Self::VPN_PASSWORD,
         Self::VPN_REGISTER_KEY,
         Self::VPN_FILTER,
+        Self::VPN_DNS,
     ];
 
     /// The password of a secured network with no profile.
@@ -555,6 +573,12 @@ impl Question {
     /// typed to be read back; an empty answer shows them all.
     pub const VPN_FILTER: Self = Self {
         id: "network-vpn-filter",
+        secret: false,
+    };
+    /// The VPN's DNS resolvers, comma-separated — in the clear; an empty answer
+    /// keeps each location's own.
+    pub const VPN_DNS: Self = Self {
+        id: "network-vpn-dns",
         secret: false,
     };
 }
@@ -1234,6 +1258,9 @@ pub struct View {
     /// on the shelf (`Target::VpnFilter`); empty shows them all. Lower-case, so
     /// the match is case-insensitive.
     vpn_filter: String,
+    /// The VPN's runtime settings, read when the view opens; a toggle updates
+    /// this copy at once and stages the change for the sync to apply.
+    vpn_settings: ronoctua_network::vpn::Settings,
 }
 
 /// The files a tunnel is brought in from, as the file picker shows them: a
@@ -1473,6 +1500,9 @@ impl View {
             bringing: None,
             registering: false,
             vpn_filter: String::new(),
+            vpn_settings: ronoctua_network::vpn::read_settings(std::path::Path::new(
+                ronoctua_network::vpn::SETTINGS,
+            )),
             sharing: None,
             anchor: None,
             level: Level::List,
@@ -1785,6 +1815,15 @@ impl View {
             "network-vpn-filter" => {
                 self.vpn_filter = text.trim().to_lowercase();
                 Errand::Nothing
+            }
+            // THE VPN'S DNS, comma-separated; empty keeps each location's own.
+            "network-vpn-dns" => {
+                self.vpn_settings.dns = text
+                    .split(',')
+                    .map(|d| d.trim().to_owned())
+                    .filter(|d| !d.is_empty())
+                    .collect();
+                Errand::VpnSettings(self.vpn_settings.clone())
             }
             _ => Errand::Nothing,
         }
@@ -2276,6 +2315,21 @@ impl View {
                 }
                 // FILTER THE LOCATIONS: a line to type a country or city into.
                 Target::VpnFilter => Errand::Ask(Question::VPN_FILTER),
+                // FLIP A RUNTIME SETTING — applied without a rebuild (the sync
+                // takes the staged change). The copy is updated at once so the
+                // row redraws flipped before the sync has run.
+                Target::VpnToggle(which) => {
+                    match which {
+                        VpnSetting::Ipv6 => {
+                            self.vpn_settings.ipv6 = !self.vpn_settings.ipv6;
+                        }
+                        VpnSetting::KillSwitch => {
+                            self.vpn_settings.kill_switch = !self.vpn_settings.kill_switch;
+                        }
+                    }
+                    Errand::VpnSettings(self.vpn_settings.clone())
+                }
+                Target::VpnDns => Errand::Ask(Question::VPN_DNS),
                 // INTO THE SHEET. The cursor starts at the top of it, and
                 // not where it happened to be in the list.
                 Target::TorSheet => {
@@ -2667,6 +2721,38 @@ impl View {
                 ),
                 String::new(),
                 Target::VpnRegister,
+                false,
+            );
+            // THE RUNTIME SETTINGS, toggled right here — no rebuild: `RET` flips
+            // a switch (or types the DNS), the change is staged, and the sync
+            // picks it up at once (`ronoctua_network::vpn::Settings`).
+            let on_off = |on: bool| {
+                texts.t(if on {
+                    key::NETWORK_VPN_ON
+                } else {
+                    key::NETWORK_VPN_OFF
+                })
+            };
+            b.pair(
+                texts.t(key::NETWORK_VPN_IPV6),
+                on_off(self.vpn_settings.ipv6),
+                Target::VpnToggle(VpnSetting::Ipv6),
+                false,
+            );
+            b.pair(
+                texts.t(key::NETWORK_VPN_KILLSWITCH),
+                on_off(self.vpn_settings.kill_switch),
+                Target::VpnToggle(VpnSetting::KillSwitch),
+                false,
+            );
+            b.pair(
+                texts.t(key::NETWORK_VPN_DNS),
+                if self.vpn_settings.dns.is_empty() {
+                    texts.t(key::NETWORK_VPN_DNS_PROVIDER)
+                } else {
+                    self.vpn_settings.dns.join(", ")
+                },
+                Target::VpnDns,
                 false,
             );
             let up: Vec<&ronoctua_network::Active> =

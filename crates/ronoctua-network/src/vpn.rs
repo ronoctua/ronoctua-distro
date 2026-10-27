@@ -589,6 +589,98 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     f.write_all(bytes)
 }
 
+// ---------------------------------------------------------------------------
+// THE RUNTIME SETTINGS — IPv6, the kill switch, the DNS — changed from the
+// shell WITHOUT a rebuild. A `key=value` file, not JSON: the shell stages a
+// copy, the sync persists it and applies it (regenerating the profiles, adding
+// or removing the kill-switch table). None are secret, so the live file is
+// world-readable and the view reads it to draw the toggles
+// (`nix/modules/vpn.nix`, `nix/scripts/vpn-sync.py`).
+// ---------------------------------------------------------------------------
+
+/// The live settings the sync reads and applies.
+pub const SETTINGS: &str = "/var/lib/ronoctua-vpn/settings.conf";
+/// Its file name, in the state folder.
+pub const SETTINGS_FILE: &str = "settings.conf";
+/// Where the shell stages a settings change for the sync to take.
+pub const SETTINGS_STAGING: &str = "/run/ronoctua-vpn/settings.conf";
+
+/// The VPN's runtime settings. None are secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Settings {
+    /// Route IPv6 into the tunnel so the real address cannot leak.
+    pub ipv6: bool,
+    /// Block ALL traffic that is not through a tunnel (the hard kill switch).
+    pub kill_switch: bool,
+    /// Resolvers for every location, or empty for each location's own.
+    pub dns: Vec<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            ipv6: true,
+            kill_switch: false,
+            dns: Vec::new(),
+        }
+    }
+}
+
+impl Settings {
+    /// The `key=value` text a settings file holds — what the shell stages and
+    /// the sync persists.
+    #[must_use]
+    pub fn text(&self) -> String {
+        format!(
+            "ipv6={}\nkill-switch={}\ndns={}\n",
+            u8::from(self.ipv6),
+            u8::from(self.kill_switch),
+            self.dns.join(","),
+        )
+    }
+}
+
+/// The settings a `key=value` text holds; a missing or malformed key keeps its
+/// default, so a short or absent file reads as the defaults. Pure.
+#[must_use]
+pub fn settings_of(text: &str) -> Settings {
+    let mut s = Settings::default();
+    for line in text.lines() {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "ipv6" => s.ipv6 = value.trim() == "1",
+            "kill-switch" => s.kill_switch = value.trim() == "1",
+            "dns" => {
+                s.dns = value
+                    .split(',')
+                    .map(|d| d.trim().to_owned())
+                    .filter(|d| !d.is_empty())
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+    s
+}
+
+/// The settings a file holds, or the defaults when it is absent or unreadable.
+#[must_use]
+pub fn read_settings(path: &std::path::Path) -> Settings {
+    std::fs::read_to_string(path).map_or_else(|_| Settings::default(), |t| settings_of(&t))
+}
+
+/// Stages a settings change for the sync to take — `0600` in the person's own
+/// runtime folder. The sync persists it to [`SETTINGS`] and applies it.
+///
+/// # Errors
+///
+/// The staging folder is not there, or the file could not be written.
+pub fn stage_settings(settings: &Settings, staging: &std::path::Path) -> std::io::Result<()> {
+    write_private(staging, settings.text().as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,6 +800,29 @@ auth-user-pass
             Err(RegisterWhy::NoServers)
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_runtime_settings_round_trip_and_default() {
+        let d = Settings::default();
+        assert!(d.ipv6 && !d.kill_switch && d.dns.is_empty());
+        let s = Settings {
+            ipv6: false,
+            kill_switch: true,
+            dns: vec!["1.1.1.1".to_owned(), "1.0.0.1".to_owned()],
+        };
+        assert_eq!(settings_of(&s.text()), s);
+        // A short, absent or malformed file keeps the defaults.
+        assert_eq!(settings_of(""), Settings::default());
+        assert!(!settings_of("ipv6=0\n").ipv6);
+        assert_eq!(
+            settings_of("garbage\nkill-switch=1"),
+            Settings {
+                ipv6: true,
+                kill_switch: true,
+                dns: vec![],
+            }
+        );
     }
 
     #[test]

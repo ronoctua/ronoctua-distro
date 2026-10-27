@@ -115,12 +115,120 @@ def write_profile(out: Path, name: str, text: str) -> None:
     os.chmod(path, 0o600)
 
 
+# THE RUNTIME SETTINGS — IPv6, the kill switch, the DNS — changed from the
+# shell without a rebuild (`ronoctua_network::vpn::Settings`). A `key=value`
+# file the view reads (0644) and stages a change to in /run; this sync persists
+# the staged copy and applies it.
+SETTINGS = Path(env("RONOCTUA_VPN_SETTINGS", "/var/lib/ronoctua-vpn/settings.conf"))
+SETTINGS_STAGING = Path(env("RONOCTUA_VPN_SETTINGS_STAGING", "/run/ronoctua-vpn/settings.conf"))
+# The kill switch's own nftables table — added and removed at run time, never
+# in the declarative ruleset, so a toggle takes without a rebuild.
+KS_TABLE = "ronoctua_vpn_ks"
+
+
+def settings_text(s: dict) -> str:
+    return "ipv6={}\nkill-switch={}\ndns={}\n".format(
+        1 if s["ipv6"] else 0,
+        1 if s["kill-switch"] else 0,
+        ",".join(s["dns"]),
+    )
+
+
+def parse_settings(text: str, base: dict) -> dict:
+    s = dict(base)
+    for line in text.splitlines():
+        line = line.strip()
+        if "=" not in line:
+            continue
+        key, value = (p.strip() for p in line.split("=", 1))
+        if key == "ipv6":
+            s["ipv6"] = value == "1"
+        elif key == "kill-switch":
+            s["kill-switch"] = value == "1"
+        elif key == "dns":
+            s["dns"] = [d.strip() for d in value.split(",") if d.strip()]
+    return s
+
+
+def effective_settings() -> dict:
+    """The live settings: the module's options are the base; a change the shell
+    staged is persisted over them and read back."""
+    base = {
+        "ipv6": env("RONOCTUA_VPN_IPV6", "1") == "1",
+        "kill-switch": env("RONOCTUA_VPN_KILLSWITCH", "0") == "1",
+        "dns": [d for d in env("RONOCTUA_VPN_DNS").split(",") if d],
+    }
+    if SETTINGS_STAGING.is_file():
+        try:
+            s = parse_settings(SETTINGS_STAGING.read_text("utf-8"), base)
+            SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+            SETTINGS.write_text(settings_text(s), "utf-8")
+            SETTINGS.chmod(0o644)
+        except OSError as e:
+            print(f"ronoctua-vpn-sync: could not persist the staged settings: {e}", file=sys.stderr)
+        finally:
+            try:
+                SETTINGS_STAGING.unlink()
+            except FileNotFoundError:
+                pass
+    if SETTINGS.is_file():
+        try:
+            return parse_settings(SETTINGS.read_text("utf-8"), base)
+        except OSError:
+            pass
+    return base
+
+
+def apply_kill_switch(on: bool) -> None:
+    """Add or remove the kill switch's nftables table. Its own table, so adding
+    and removing it never touches the person's firewall; at boot the sync runs
+    and re-adds it when it is on."""
+    nft = env("RONOCTUA_NFT", "nft")
+    # Clear it first, always — idempotent, and the whole of "turn it off".
+    subprocess.run(
+        [nft, "delete", "table", "inet", KS_TABLE],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if not on:
+        return
+    # LOOPBACK, THE TUNNELS, THE LOCAL NETWORK AND THE WIREGUARD HANDSHAKE pass;
+    # everything else is dropped. So with no tunnel up, only the LAN answers.
+    ruleset = (
+        "table inet %s {\n"
+        "  chain output {\n"
+        "    type filter hook output priority 100; policy accept;\n"
+        '    oifname "lo" accept\n'
+        '    oifname "rvpn-*" accept\n'
+        "    ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept\n"
+        "    ip6 daddr { fe80::/10, fc00::/7, ff00::/8 } accept\n"
+        "    udp dport 51820 accept\n"
+        "    udp dport { 67, 68 } accept\n"
+        "    counter drop\n"
+        "  }\n"
+        "}\n"
+    ) % KS_TABLE
+    r = subprocess.run(
+        [nft, "-f", "-"],
+        input=ruleset,
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    if r.returncode != 0:
+        print(f"ronoctua-vpn-sync: the kill switch could not be set: {r.stderr.strip()}", file=sys.stderr)
+
+
 def main() -> int:
     locations_path = Path(env("RONOCTUA_VPN_LOCATIONS"))
     out = Path(env("RONOCTUA_VPN_OUT", "/etc/NetworkManager/system-connections"))
     nmcli = env("RONOCTUA_NMCLI", "nmcli")
-    ipv6 = env("RONOCTUA_VPN_IPV6", "1") == "1"
-    dns_override = [d for d in env("RONOCTUA_VPN_DNS").split(",") if d]
+    # THE RUNTIME SETTINGS: take a change the shell staged, persist it, and read
+    # the live ones (the module's options are the fallback).
+    settings = effective_settings()
+    ipv6 = settings["ipv6"]
+    dns_override = settings["dns"]
 
     locations: list[dict] = []
     if locations_path.is_file():
@@ -161,6 +269,10 @@ def main() -> int:
         subprocess.run([nmcli, "connection", "reload"], check=False, stdout=subprocess.DEVNULL)
     except OSError as e:
         print(f"ronoctua-vpn-sync: could not reload NetworkManager: {e}", file=sys.stderr)
+
+    # THE KILL SWITCH, as the live settings say — added or removed every run, so
+    # a toggle from the shell takes at once and a reboot re-applies it.
+    apply_kill_switch(settings["kill-switch"])
 
     print(f"ronoctua-vpn-sync: {len(wanted)} profile(s) written, {pruned} pruned")
     return 0

@@ -285,5 +285,15 @@ network-vpn-filter = Filtrar por país…
 network-vpn-filter-on = Mostrando só: { $filter } — RET para mudar
 network-vpn-filter-none = nenhum local corresponde
 ask-network-vpn-filter = País ou cidade para mostrar (vazio: todos)
+# As configurações de runtime da VPN, alternadas da vista sem rebuild.
+network-vpn-ipv6 = Levar o IPv6 pelo túnel
+network-vpn-killswitch = Kill switch (bloquear tudo fora do túnel)
+network-vpn-dns = Resolvedores para todos os locais
+network-vpn-on = ligado
+network-vpn-off = desligado
+network-vpn-dns-provider = o do próprio provedor
+ask-network-vpn-dns = Resolvedores de toda VPN, separados por vírgula (vazio: o de cada um)
+echo-network-vpn-settings = as configurações da VPN foram salvas
+echo-network-vpn-settings-failed = as configurações da VPN não puderam ser preparadas
 # O enlace de um celular na vista da rede, e as recusas do próprio crate da rede.
 network-fact-phone = celular

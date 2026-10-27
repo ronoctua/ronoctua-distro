@@ -285,5 +285,15 @@ network-vpn-filter = Filter by country…
 network-vpn-filter-on = Showing only: { $filter } — RET to change
 network-vpn-filter-none = no location matches that
 ask-network-vpn-filter = Country or city to show (empty: all)
+# The VPN's runtime settings, toggled from the view without a rebuild.
+network-vpn-ipv6 = Carry IPv6 in the tunnel
+network-vpn-killswitch = Kill switch (block all but the tunnel)
+network-vpn-dns = Resolvers for every location
+network-vpn-on = on
+network-vpn-off = off
+network-vpn-dns-provider = the provider's own
+ask-network-vpn-dns = Resolvers for every VPN, comma-separated (empty: each one's own)
+echo-network-vpn-settings = the VPN settings are saved
+echo-network-vpn-settings-failed = the VPN settings could not be staged
 # A phone's link in the network view, and the network crate's own refusals.
 network-fact-phone = phone

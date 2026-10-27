@@ -162,7 +162,9 @@ in
     #  - the state folder and the key's folder are root's, 0700.
     systemd.tmpfiles.rules = [
       "d ${stagingDir} 0700 ${user} ${config.users.users.${user}.group} -"
-      "d ${stateDir} 0700 root root -"
+      # 0755: the locations and the settings are PUBLIC (no key), and the view
+      # reads the settings to draw the toggles. The key is in /persist, not here.
+      "d ${stateDir} 0755 root root -"
       "d ${blobDir} 0700 root root -"
     ];
 
@@ -206,28 +208,45 @@ in
         RONOCTUA_VPN_LOCATIONS = cfg.locations;
         RONOCTUA_VPN_OUT = "/etc/NetworkManager/system-connections";
         RONOCTUA_NMCLI = nmcli;
+        RONOCTUA_NFT = "${pkgs.nftables}/bin/nft";
+        # THE DEFAULTS, when no runtime settings are set — the module's options.
+        # The shell changes the LIVE settings (`settings.conf`); the sync reads
+        # the staged change, persists it, and applies it.
         RONOCTUA_VPN_IPV6 = if cfg.ipv6 then "1" else "0";
         RONOCTUA_VPN_DNS = lib.concatStringsSep "," cfg.dns;
+        RONOCTUA_VPN_KILLSWITCH = if cfg.killSwitch then "1" else "0";
+        RONOCTUA_VPN_SETTINGS = "${stateDir}/settings.conf";
+        RONOCTUA_VPN_SETTINGS_STAGING = "${stagingDir}/settings.conf";
       };
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${sync}/bin/ronoctua-vpn-sync";
         ProtectSystem = "strict";
-        ReadWritePaths = [ "/etc/NetworkManager/system-connections" ];
+        # The profiles, the live settings it persists, and the staged change it
+        # spends. It runs `nft` for the kill switch (as root, over netlink — no
+        # address-family restriction that would block it).
+        ReadWritePaths = [
+          "/etc/NetworkManager/system-connections"
+          stateDir
+          stagingDir
+        ];
         ProtectHome = true;
         PrivateTmp = true;
         NoNewPrivileges = true;
       };
     };
 
-    # THE LOCATIONS CHANGED: regenerate. The install's write is what this
-    # catches, so the register never needs privilege to make the profiles
-    # appear — the file lands, the path fires, the sync runs.
+    # A CHANGE LANDED — the locations the install wrote, or a settings change the
+    # shell staged: regenerate. The file lands, the path fires, the sync runs,
+    # so neither the register nor a toggle needs privilege of its own.
     systemd.paths.ronoctua-vpn-sync = {
-      description = "Regenerates the WireGuard profiles when the registered locations change";
+      description = "Regenerates the WireGuard profiles when the locations or settings change";
       wantedBy = [ "multi-user.target" ];
       pathConfig = {
-        PathModified = cfg.locations;
+        PathModified = [
+          cfg.locations
+          "${stagingDir}/settings.conf"
+        ];
         Unit = "ronoctua-vpn-sync.service";
       };
     };
@@ -251,40 +270,14 @@ in
       });
     '';
 
-    # THE KILL SWITCH, when the person asked for it. An inet table of its own in
-    # the OUTPUT hook: loopback, the tunnels (`rvpn-*`), the local network and
-    # the WireGuard handshake (UDP) pass; everything else is dropped. So with no
-    # tunnel up, only the local network answers — which is the promise, and the
-    # reason it is off by default. Declared with `networking.nftables.tables`,
-    # never `ruleset`, so it composes with the person's firewall table
-    # (`nix/modules/security.nix`) instead of flushing it.
-    networking.nftables.tables.ronoctua-vpn-killswitch = lib.mkIf cfg.killSwitch {
-      family = "inet";
-      content = ''
-        chain output {
-          # AFTER the firewall's own hooks: this only ever takes away.
-          type filter hook output priority 100; policy accept;
-
-          oifname "lo" accept
-          oifname "rvpn-*" accept
-
-          # The local network, so a machine on the LAN stays reachable with no
-          # tunnel: RFC1918 and the IPv6 link-local and unique-local ranges.
-          ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept
-          ip6 daddr { fe80::/10, fc00::/7, ff00::/8 } accept
-
-          # The WireGuard handshake and data to the endpoints: one UDP port,
-          # carrying both. Without this the tunnel could never come up.
-          udp dport 51820 accept
-
-          # DHCP, so the LAN lease still renews.
-          udp dport { 67, 68 } accept
-
-          # Everything else leaves only through a tunnel. It does not here.
-          counter drop
-        }
-      '';
-    };
+    # THE KILL SWITCH IS RUN-TIME NOW, not declarative: the sync adds or removes
+    # its own `inet` table (`ronoctua_vpn_ks`, loopback + the tunnels + the LAN
+    # + the WireGuard handshake pass, everything else dropped) as the live
+    # settings say (`nix/scripts/vpn-sync.py`), so a toggle from the shell takes
+    # without a rebuild, and a reboot re-applies it because the sync runs at
+    # boot. A table of its own, so it never touches the person's firewall
+    # (`nix/modules/security.nix`). `ronoctua.vpn.killSwitch` is only the default
+    # for a machine that has never set it from the shell.
 
     # WHAT MUST SURVIVE THE WIPE IS NAMED IN ONE PLACE — `nix/modules/persist.nix`
     # — and the state folder is in it. The sealed key is under `/persist`

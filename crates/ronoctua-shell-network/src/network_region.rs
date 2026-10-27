@@ -304,6 +304,22 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             },
             Echo::Normal,
         )),
+        // A RUNTIME SETTING CHANGED — IPv6, the kill switch or the DNS. No root
+        // unit and no secret: stage the `key=value` file in the person's own
+        // runtime folder and the path unit fires the sync, which persists it and
+        // applies it (the kill switch's nftables table, the profiles' IPv6/DNS).
+        // No `--wait`: the sync is a beat behind the key and the view already
+        // reads the flipped switch.
+        Errand::VpnSettings(settings) => Some((
+            match ronoctua_network::vpn::stage_settings(
+                &settings,
+                std::path::Path::new(ronoctua_network::vpn::SETTINGS_STAGING),
+            ) {
+                Ok(()) => way.texts().t(key::ECHO_NETWORK_VPN_SETTINGS),
+                Err(_) => way.texts().t(key::ECHO_NETWORK_VPN_SETTINGS_FAILED),
+            },
+            Echo::Normal,
+        )),
         // THE GATEWAY'S ROUND TRIP, on a thread: three echoes a fifth of a
         // second apart are the better part of a second.
         Errand::Measure(gateway) => match lines.lan {
