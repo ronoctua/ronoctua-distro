@@ -70,6 +70,10 @@ echo-build-failed = Não foi possível iniciar a troca de build: { $why }
 # O que o glifo de build diz na linha de mensagem enquanto o ponteiro repousa nele.
 hint-build-own = O build próprio desta máquina — clique para experimentar o build de referência de um checkout
 hint-build-reference = Build de referência de um checkout (não o próprio desta máquina) — clique para voltar
+# Enquanto uma troca de build está em andamento (minutos): o glifo é a marca de troca.
+hint-build-switching = Trocando de build — a máquina está reconstruindo; espere ela voltar
+echo-build-in-progress = Uma troca de build já está em andamento
+echo-build-switch-failed = A troca de build não foi concluída; o build não mudou
 # A PÁGINA DA TROCA DE BUILD (LEADER / p, o clique direito no glifo).
 cmd-build-open = A troca de build: a página
 cmd-build-show-cycle = Quando o glifo de build é mostrado

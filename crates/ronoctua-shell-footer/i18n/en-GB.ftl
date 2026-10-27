@@ -70,6 +70,10 @@ echo-build-failed = The build switch could not start: { $why }
 # What the build glyph says on the message line while the pointer rests on it.
 hint-build-own = This machine's own build — click to try a distro checkout's reference build
 hint-build-reference = A distro checkout's reference build (not this machine's own) — click to switch back
+# While a build switch is applying (minutes): the glyph is the switching mark.
+hint-build-switching = Switching builds — the machine is rebuilding; wait for it to come back
+echo-build-in-progress = A build switch is already underway
+echo-build-switch-failed = The build switch did not complete; the build is unchanged
 # THE BUILD SWITCH'S PAGE (LEADER / p, the glyph's right-click).
 cmd-build-open = The build switch: its page
 cmd-build-show-cycle = When the build glyph is drawn

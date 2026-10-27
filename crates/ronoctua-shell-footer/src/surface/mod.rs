@@ -800,6 +800,15 @@ struct Footer {
     /// WHICH BUILD IS RUNNING and the checkout to switch to (`LEADER / b`),
     /// read once at start — a switch restarts the footer (`build_switch`).
     build_state: crate::build_switch::State,
+    /// The build a switch is applying to, while one runs: the glyph is the
+    /// switching mark and the toggle is refused until it ends. `None` at rest.
+    /// Reset by a switch that worked restarting the footer, or by
+    /// [`Footer::build_switch_done`] when an apply fails.
+    switching: Option<crate::build_switch::Build>,
+    /// Where the thread that waits on the build-switch apply says it ended —
+    /// only on failure, since a switch that worked restarts the footer. `None`
+    /// outside the event loop (tests).
+    build_switch_sender: Option<calloop::channel::Sender<bool>>,
     /// The watch on the resizer's file, which is the broadcast: it is how a
     /// curtain's `Esc`, a drag and a footer started again all hear the cut.
     _resizer_watch: Option<ronoctua_files::notice::Notice>,
@@ -2872,6 +2881,8 @@ fn assemble(
         capturing: false,
         resizer: None,
         build_state: crate::build_switch::read(),
+        switching: None,
+        build_switch_sender: None,
         _resizer_watch: None,
         resizer_sender: None,
         apps: None,
@@ -3476,6 +3487,18 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the resizer watch: {e}"))?;
+
+    // THE BUILD SWITCH'S THREAD says when an apply ended — only on failure, as
+    // a switch that worked restarts this footer (`build_toggle`).
+    let (build_switch_sender, build_switch_done) = channel::channel::<bool>();
+    state.build_switch_sender = Some(build_switch_sender);
+    handle
+        .insert_source(build_switch_done, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(ok) = event {
+                state.build_switch_done(ok);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the build-switch channel: {e}"))?;
 
     // THE THEME'S FILE, watched. The person's choice is written there by this
     // very door and read by every other; hearing it here is what makes a
@@ -4736,6 +4759,11 @@ impl Footer {
                     self.build_state.build,
                     self.build_state.checkout.is_some(),
                 ),
+                // A SWITCH IS APPLYING: the switching mark replaces the build
+                // glyph (`segments`), whatever the setting — action feedback,
+                // not a rest-state mark. It can only be set where there was a
+                // checkout to start it.
+                build_switching: self.switching.is_some(),
                 player: self.player.as_ref().and_then(crate::player_mark::mark),
                 workspaces: &workspaces,
                 drawer: self.in_the_drawer().len(),
@@ -5295,12 +5323,15 @@ impl Footer {
             self.run_command("dev-resizer");
             return;
         }
-        // THE BUILD MARK (either state): the LEFT button switches, the command
+        // THE BUILD MARK (any state): the LEFT button switches, the command
         // `LEADER / b` runs — a stray click rebuilds, but the apply's boot
         // trial is the net, a reference build that will not come up rolled back
         // on the next boot. The RIGHT button opens the page (`build-open`), the
-        // footer's left-acts/right-opens convention.
-        if id == "build-own" || id == "build-reference" {
+        // footer's left-acts/right-opens convention. While SWITCHING the mark is
+        // `build-switching`: the left button still reaches `build-toggle`, which
+        // then refuses with "a switch is underway" rather than starting a
+        // second — so a click cannot race the apply.
+        if id == "build-own" || id == "build-reference" || id == "build-switching" {
             self.run_command(if forward {
                 "build-toggle"
             } else {
@@ -5791,6 +5822,9 @@ impl Footer {
             // switch would bring, which neither glyph alone can.
             "build-own" => Some(self.texts.t(crate::key::HINT_BUILD_OWN)),
             "build-reference" => Some(self.texts.t(crate::key::HINT_BUILD_REFERENCE)),
+            // WHILE SWITCHING the mark says the apply is underway, not what a
+            // click does — a click does nothing until it ends.
+            "build-switching" => Some(self.texts.t(crate::key::HINT_BUILD_SWITCHING)),
             _ => None,
         }
     }
@@ -12271,10 +12305,13 @@ impl Footer {
     ///
     /// The apply runs as root in `ronoctua-build-switch-<own|reference>`, which
     /// resolves the checkout itself (`nix/modules/machine.nix`), rebuilds and
-    /// restarts the session onto the new build — the footer comes up again and
-    /// its glyph reads the new state. `--no-block`: the build takes minutes and
-    /// the session goes down when it lands, so the footer must not wait on it.
-    /// A machine that builds from no checkout has nothing to switch to.
+    /// restarts the session onto the new build. It takes MINUTES, so the glyph
+    /// becomes the switching mark and the toggle is refused until it ends: a
+    /// thread waits on the apply off the loop. A switch that works takes the
+    /// session down and brings it up with `switching` clear; so the thread's
+    /// word back is heard mainly on failure, and clears the mark itself
+    /// ([`Footer::build_switch_done`]). A machine with no checkout has nothing
+    /// to switch to.
     fn build_toggle(&mut self) {
         // The `systemctl`, by path: a unit's `PATH` is minimal. See
         // `session_end::SYSTEMCTL`, the same reason.
@@ -12282,41 +12319,65 @@ impl Footer {
             Some(c) => c,
             None => "systemctl",
         };
+        // A SWITCH IS ALREADY UNDERWAY: a second start would race two applies on
+        // the one system profile. This is what makes the switching glyph's click
+        // (and `LEADER / b`) a no-op that says so, rather than a second start.
+        if self.switching.is_some() {
+            let m = self.texts.t(crate::key::ECHO_BUILD_IN_PROGRESS);
+            self.echo_message(m);
+            self.draw_and_paint();
+            return;
+        }
         if self.build_state.checkout.is_none() {
             let m = self.texts.t(crate::key::ECHO_BUILD_NO_CHECKOUT);
             self.echo_message(m);
             self.draw_and_paint();
             return;
         }
+        let Some(sender) = self.build_switch_sender.clone() else {
+            return;
+        };
         let target = self.build_state.other_build();
         let instance = match target {
             crate::build_switch::Build::Own => "own",
             crate::build_switch::Build::Reference => "reference",
         };
         let unit = format!("ronoctua-build-switch-{instance}.service");
-        let started = std::process::Command::new(SYSTEMCTL)
-            .args(["start", "--no-block", &unit])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .and_then(|mut child| child.wait());
-        let m = match started {
-            Ok(status) if status.success() => self.texts.t(match target {
-                crate::build_switch::Build::Own => crate::key::ECHO_BUILD_TO_OWN,
-                crate::build_switch::Build::Reference => crate::key::ECHO_BUILD_TO_REFERENCE,
-            }),
-            Ok(status) => self.texts.t_with(
-                crate::key::ECHO_BUILD_FAILED,
-                &[("why", &format!("systemctl: {status}"))],
-            ),
-            Err(e) => {
-                tracing::warn!(error = %e, %unit, "the build switch could not be started");
-                self.texts
-                    .t_with(crate::key::ECHO_BUILD_FAILED, &[("why", &e.to_string())])
-            }
-        };
+        // WAIT FOR THE APPLY, off the loop (`--wait` blocks until the oneshot
+        // ends). On success its switch-to-configuration restarts the footer, so
+        // this thread dies with the old process and the new footer comes up with
+        // `switching` clear — the flag resets itself. The word below is sent,
+        // and heard, only where the apply ended without that restart: a failure.
+        std::thread::spawn(move || {
+            let ok = std::process::Command::new(SYSTEMCTL)
+                .args(["start", "--wait", &unit])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            let _ = sender.send(ok);
+        });
+        self.switching = Some(target);
+        let m = self.texts.t(match target {
+            crate::build_switch::Build::Own => crate::key::ECHO_BUILD_TO_OWN,
+            crate::build_switch::Build::Reference => crate::key::ECHO_BUILD_TO_REFERENCE,
+        });
         self.echo_message(m);
+        self.draw_and_paint();
+    }
+
+    /// The build-switch apply ended without restarting the footer, which means
+    /// it FAILED — a switch that worked would have taken the session down and
+    /// brought it up clear. Clear the switching mark and say so; the glyph goes
+    /// back to the build that is still running.
+    fn build_switch_done(&mut self, ok: bool) {
+        self.switching = None;
+        if !ok {
+            let m = self.texts.t(crate::key::ECHO_BUILD_SWITCH_FAILED);
+            self.echo_message(m);
+        }
         self.draw_and_paint();
     }
 
@@ -20384,7 +20445,10 @@ fn segment_color(
         // "this is not what it looks like" the resizer marks.
         "camera" | "gestures" | "resizer" | "build-reference" => tokens::color::MODELINE_WATCHING,
         // A KEY MODE IS ON: every key means something else until it ends.
-        "compositor-mode" => tokens::color::STATE_ACCENT,
+        // A SWITCH IN PROGRESS wears the accent too: the machine is changing
+        // underfoot, which is the same "something is happening now" a key mode
+        // is, and the switching mark is as transient.
+        "compositor-mode" | "build-switching" => tokens::color::STATE_ACCENT,
 
         // A BRAIN MODULE'S MARK, in the colour its tone MEANS — watching is
         // the gestures' faded pink beside the camera's, danger is the

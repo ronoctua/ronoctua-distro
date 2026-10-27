@@ -69,6 +69,10 @@ pub struct Marks<'a> {
     /// `build_switch`). `None` on an installed machine — nothing to switch to,
     /// and a modeline at rest says nothing.
     pub build: Option<crate::build_switch::Build>,
+    /// A build switch is APPLYING: the build glyph becomes the switching mark
+    /// (`sync`) until it lands. Takes precedence over [`Marks::build`], which
+    /// it hides while on — the two are never drawn at once (`build_switch`).
+    pub build_switching: bool,
     /// The player has something loaded: the play/pause glyph of its pair,
     /// which says what a click does — pause or play (`player_mark::mark`). Absent with
     /// nothing loaded — a modeline at rest says nothing.
@@ -515,7 +519,20 @@ pub fn segments(
     // that the machine is no longer its own — `host.nix` is not read, so the
     // layout, the profile and the hostname are the distro's defaults, not this
     // machine's. The way back is one gesture (`build_switch`, `LEADER / b`).
-    if let Some(build) = marks.build {
+    // While a switch is APPLYING it is the switching mark instead (`sync`): the
+    // apply takes minutes, the toggle is refused meanwhile, and this says why on
+    // sight rather than leaving the old glyph looking idle.
+    if marks.build_switching {
+        out.push(Segment {
+            id: "build-switching",
+            text: tokens::icon::SYNC.to_string(),
+            priority: 1,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    } else if let Some(build) = marks.build {
         let (id, glyph) = match build {
             crate::build_switch::Build::Own => ("build-own", tokens::icon::NIX),
             crate::build_switch::Build::Reference => {
@@ -942,6 +959,9 @@ mod tests {
                         // AND THE BUILD MARK, on a machine that builds from a
                         // checkout: the fullest line carries it beside the rest.
                         build: Some(crate::build_switch::Build::Reference),
+                        // Not switching — the build glyph and the switching mark
+                        // are never drawn at once, so the fuller case is one mark.
+                        build_switching: false,
                     },
                 ),
             ) {
