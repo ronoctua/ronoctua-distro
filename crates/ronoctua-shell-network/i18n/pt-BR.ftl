@@ -251,6 +251,7 @@ echo-network-deleted = { $network } apagado
 
 file-picker-filter-tunnels = Túneis (.conf, .ovpn)
 network-pick-tunnel = Um túnel para trazer
+network-pick-vpn-folder = Uma pasta de configs WireGuard para cadastrar
 
 ## file info editing — everything the info panel can change
 
@@ -271,5 +272,13 @@ ask-network-vpn-user = Usuário desta VPN
 ask-network-vpn-password = Senha desta VPN
 echo-network-vpn-stored = { $network } vai subir sem perguntar
 echo-network-vpn-store-failed = a senha da VPN não foi guardada: { $reason }
+# Cadastrar uma pasta inteira de servidores WireGuard, graficamente — a chave uma vez.
+network-vpn-register = Cadastrar VPNs de uma pasta…
+ask-network-vpn-register-key = Chave privada WireGuard (uma vez, para a pasta toda)
+echo-network-vpn-registered = { $count } servidor(es) de VPN cadastrado(s) — suba um da lista
+echo-network-vpn-not-a-key = isso não é uma chave privada WireGuard (44 caracteres base64)
+echo-network-vpn-no-servers = nenhum servidor WireGuard foi encontrado nessa pasta
+echo-network-vpn-unreadable = não foi possível ler essa pasta
+echo-network-vpn-install-failed = o cadastro da VPN não foi concluído
 # O enlace de um celular na vista da rede, e as recusas do próprio crate da rede.
 network-fact-phone = celular

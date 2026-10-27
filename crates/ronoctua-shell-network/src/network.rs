@@ -274,6 +274,10 @@ pub enum Target {
     /// Measure the round trip to this gateway — ON DEMAND, the row's own
     /// `RET` (see `ronoctua_lan::measure` for why a sweep never does).
     Latency(String),
+    /// Register a whole folder of WireGuard servers at once — `RET` opens a
+    /// folder picker, then asks the one key (`ronoctua_network::vpn`). The
+    /// graphical way in, so the person never opens a terminal.
+    VpnRegister,
 }
 
 /// One of the switches the two tunnel sections carry.
@@ -450,6 +454,17 @@ pub enum Errand {
         /// The password, typed hidden.
         password: Password,
     },
+    /// Register a folder of WireGuard servers: the key is sealed and the public
+    /// locations installed by the root unit
+    /// (`ronoctua_network::vpn::stage_registration`, then
+    /// `ronoctua-vpn-install.service`). The DOOR holds the key only for the call
+    /// that stages it; it is `0600` on disk and never in a log.
+    VpnRegister {
+        /// The folder of `.conf` files the person chose.
+        folder: String,
+        /// The private key, typed once, hidden.
+        key: Password,
+    },
     /// Close the view.
     Close,
 }
@@ -480,13 +495,14 @@ impl Question {
     }
 
     /// Every question this view asks.
-    pub const THE_VIEWS: [Self; 6] = [
+    pub const THE_VIEWS: [Self; 7] = [
         Self::PASSWORD,
         Self::PATH,
         Self::TOR_VALUE,
         Self::TOR_LINE,
         Self::VPN_USER,
         Self::VPN_PASSWORD,
+        Self::VPN_REGISTER_KEY,
     ];
 
     /// The password of a secured network with no profile.
@@ -522,6 +538,13 @@ impl Question {
     /// profile ([`Errand::VpnSecret`]) — the one secret this view writes.
     pub const VPN_PASSWORD: Self = Self {
         id: "network-vpn-password",
+        secret: true,
+    };
+    /// The private key for a folder registration — hidden, typed ONCE for the
+    /// whole folder; the root unit seals it in the TPM
+    /// (`ronoctua_network::vpn::stage_registration`).
+    pub const VPN_REGISTER_KEY: Self = Self {
+        id: "network-vpn-register-key",
         secret: true,
     };
 }
@@ -567,6 +590,8 @@ enum Asking {
     VpnUser(String),
     /// Its password: the VPN, and the user typed a moment ago.
     VpnPassword(String, String),
+    /// A folder registration: the folder is chosen and waiting for the key.
+    VpnRegisterKey(String),
 }
 
 /// The question after a typed password: keep it, or not.
@@ -1191,6 +1216,10 @@ pub struct View {
     /// The VPN just brought in that asks for a user and a password, by its
     /// name — asked by [`View::after_bring`] once the import has worked.
     bringing_secret: Option<String>,
+    /// A folder registration is choosing its folder: the picker up is for a
+    /// FOLDER of `.conf` files, not a single tunnel file, so the chosen path is
+    /// a folder to register — not a file to bring in.
+    registering: bool,
 }
 
 /// The files a tunnel is brought in from, as the file picker shows them: a
@@ -1428,6 +1457,7 @@ impl View {
         Self {
             cursor: 1,
             bringing: None,
+            registering: false,
             sharing: None,
             anchor: None,
             level: Level::List,
@@ -1721,6 +1751,18 @@ impl View {
                     user,
                     password: Password::typed(text),
                 },
+                _ => Errand::Nothing,
+            },
+            // THE FOLDER'S KEY, typed ONCE for the whole folder. An empty answer
+            // is never mind; a key that is not one is caught by the root unit,
+            // which says so (`stage_registration` validates it).
+            "network-vpn-register-key" => match asked {
+                Some(Asking::VpnRegisterKey(folder)) if !text.trim().is_empty() => {
+                    Errand::VpnRegister {
+                        folder,
+                        key: Password::typed(text.trim()),
+                    }
+                }
                 _ => Errand::Nothing,
             },
             _ => Errand::Nothing,
@@ -2186,6 +2228,31 @@ impl View {
                     self.bringing = None;
                     Errand::Nothing
                 }
+                // REGISTER A FOLDER OF VPN SERVERS, the graphical way: open a
+                // FOLDER picker; the chosen folder is registered (not a file
+                // brought in — `pick_key` branches on `registering`), and then
+                // the one key is asked.
+                Target::VpnRegister => {
+                    self.registering = true;
+                    self.picking = Some(crate::file_picker::Hosted::open(
+                        crate::file_picker::Request {
+                            purpose: "network-vpn-folder",
+                            mode: crate::file_picker::Mode::Folder,
+                            filters: &[],
+                            start: crate::file_picker::Start::Place(
+                                crate::file_picker::Xdg::DOWNLOAD,
+                            ),
+                            addresses: false,
+                            extras: &[],
+                            alternate: None,
+                        },
+                        (),
+                        crate::key::NETWORK_PICK_VPN_FOLDER,
+                        self.wake.as_ref(),
+                    ));
+                    self.settle_the_picker(facts, columns, texts);
+                    Errand::Nothing
+                }
                 // INTO THE SHEET. The cursor starts at the top of it, and
                 // not where it happened to be in the list.
                 Target::TorSheet => {
@@ -2305,6 +2372,7 @@ impl View {
             Hosting::Nothing => Errand::Nothing,
             Hosting::Back => {
                 self.picking = None;
+                self.registering = false;
                 Errand::Nothing
             }
             Hosting::Say(e) => Errand::Said(texts.t_with(e.key, &e.borrowed())),
@@ -2315,6 +2383,13 @@ impl View {
                     .first()
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_default();
+                // A FOLDER was chosen for a registration: ask the one key, then
+                // register the whole folder. Otherwise it is a single tunnel
+                // file to bring in.
+                if std::mem::take(&mut self.registering) {
+                    self.asking = Some(Asking::VpnRegisterKey(typed));
+                    return Errand::Ask(Question::VPN_REGISTER_KEY);
+                }
                 return self.import(&typed, facts, columns, texts);
             }
             Hosting::Picked(..) => Errand::Nothing,
@@ -2558,6 +2633,19 @@ impl View {
             // 4. THE TUNNELS — what is up, what is stored, and what is waiting
             // at the door.
             b.heading(key::NETWORK_HEADING_TUNNELS);
+            // REGISTER A FOLDER OF VPN SERVERS, the graphical way (no terminal):
+            // `RET` opens a folder picker, then asks the one key for the whole
+            // folder (`Target::VpnRegister`).
+            b.pair(
+                format!(
+                    "{} {}",
+                    tokens::icon::VPN,
+                    texts.t(key::NETWORK_VPN_REGISTER)
+                ),
+                String::new(),
+                Target::VpnRegister,
+                false,
+            );
             let up: Vec<&ronoctua_network::Active> =
                 net.active.iter().filter(|a| a.tunnel()).collect();
             let stored: Vec<&Saved> = net

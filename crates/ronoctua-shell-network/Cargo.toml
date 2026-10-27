@@ -49,4 +49,6 @@ workspace = true
 
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
-env = ["RONOCTUA_KEYS_DIR"]
+# RONOCTUA_SYSTEMCTL: the VPN register starts `ronoctua-vpn-install.service`
+# (`network_region::carry_out`), by the baked path — a unit's PATH is minimal.
+env = ["RONOCTUA_KEYS_DIR", "RONOCTUA_SYSTEMCTL"]

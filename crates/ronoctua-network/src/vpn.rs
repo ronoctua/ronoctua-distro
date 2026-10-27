@@ -291,6 +291,304 @@ pub fn location_of(id: &str) -> Option<Location> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// REGISTERING A FOLDER, from the shell — the same work `nix/scripts/vpn-import.py`
+// does, in Rust, so the person never opens a terminal. The view reads a folder
+// of `.conf` files, asks the key once, and stages the two files the install
+// unit takes (`ronoctua_security::vpn`): the key sealed in the TPM, the public
+// locations turned into NetworkManager profiles by the sync. The key leaves here
+// as ONE `0600` file and nothing else.
+// ---------------------------------------------------------------------------
+
+/// The staging the install unit takes from — the SAME three names the Rust root
+/// half (`ronoctua_security::vpn`) and `nix/scripts/vpn-import.py` use. Kept in
+/// step by the comment: they are in another crate, so no test ties them.
+pub const STAGING_DIR: &str = "/run/ronoctua-vpn";
+/// The staged key's file, `0600`, the bare base64.
+pub const KEY_FILE: &str = "private.key";
+/// The staged locations' file.
+pub const LOCATIONS_FILE: &str = "locations.json";
+
+/// The interface IPv6 address that anchors the `::/0` route into the tunnel —
+/// the same literal `nix/scripts/vpn-import.py` uses. A provider that does not
+/// egress IPv6 black-holes it in the tunnel, which is no leak.
+const ULA6: &str = "fdce:1a2b:3c4d::2/64";
+
+/// Whether `text` is a WireGuard private key: 32 bytes as 44 base64 characters
+/// ending in `=`. The same check the root half makes
+/// (`ronoctua_security::vpn::is_wireguard_key`). Pure.
+#[must_use]
+pub fn is_wireguard_key(text: &str) -> bool {
+    let b = text.as_bytes();
+    b.len() == 44
+        && b.ends_with(b"=")
+        && b[..43]
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/'))
+}
+
+/// The public facts a `.conf` carries that a registration needs — including the
+/// PUBLIC key, which the preview drops (it keeps only what a tunnel DOES). The
+/// private key is read past.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfFacts {
+    /// The interface's IPv4 address, or `None`.
+    pub address4: Option<String>,
+    /// Its IPv6 address, or `None` (the provider's simplified files have none).
+    pub address6: Option<String>,
+    /// The resolvers it names.
+    pub dns: Vec<String>,
+    /// The peer's public key.
+    pub public_key: String,
+    /// What the peer takes.
+    pub allowed: Vec<String>,
+    /// Where the peer is.
+    pub endpoint: String,
+}
+
+/// Parses a WireGuard `.conf` for registration. `None` when it is not a
+/// WireGuard file, or names no peer public key and endpoint. The `PrivateKey`
+/// line is read past. Pure.
+#[must_use]
+pub fn parse_conf(text: &str) -> Option<ConfFacts> {
+    if !text.contains("[Interface]") {
+        return None;
+    }
+    let mut section = "";
+    let mut address4 = None;
+    let mut address6 = None;
+    let mut dns = Vec::new();
+    let mut public_key = None;
+    let mut allowed = Vec::new();
+    let mut endpoint = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.eq_ignore_ascii_case("[interface]") {
+            section = "interface";
+            continue;
+        }
+        if line.eq_ignore_ascii_case("[peer]") {
+            section = "peer";
+            continue;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let (key, value) = (key.trim().to_ascii_lowercase(), value.trim());
+        match (section, key.as_str()) {
+            ("interface", "address") => {
+                for part in value.split(',').map(str::trim) {
+                    if part.contains(':') {
+                        address6 = Some(part.to_owned());
+                    } else if !part.is_empty() {
+                        address4 = Some(part.to_owned());
+                    }
+                }
+            }
+            ("interface", "dns") => {
+                dns = value
+                    .split(',')
+                    .map(|d| d.trim().to_owned())
+                    .filter(|d| !d.is_empty())
+                    .collect();
+            }
+            ("peer", "publickey") => public_key = Some(value.to_owned()),
+            ("peer", "allowedips") => {
+                allowed = value
+                    .split(',')
+                    .map(|a| a.trim().to_owned())
+                    .filter(|a| !a.is_empty())
+                    .collect();
+            }
+            ("peer", "endpoint") => endpoint = Some(value.to_owned()),
+            _ => {}
+        }
+    }
+    Some(ConfFacts {
+        address4,
+        address6,
+        dns,
+        public_key: public_key?,
+        allowed,
+        endpoint: endpoint?,
+    })
+}
+
+/// JSON-escapes `s` into `out`, quotes included. Correct for any string; the
+/// values a `.conf` carries are ASCII, so it rarely does more than wrap them.
+fn json_str(out: &mut String, s: &str) {
+    use std::fmt::Write as _;
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// A JSON array of strings.
+fn json_array(out: &mut String, items: &[String]) {
+    out.push('[');
+    for (i, it) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        json_str(out, it);
+    }
+    out.push(']');
+}
+
+/// The `allowed-ips` a location registers with: what the file named, plus the
+/// two defaults so the IP cannot leak (the sync still gates IPv6 on the module's
+/// option). IPv4 first.
+fn allowed_with_defaults(allowed: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = allowed.to_vec();
+    for net in ["0.0.0.0/0", "::/0"] {
+        if !out.iter().any(|a| a == net) {
+            out.push(net.to_owned());
+        }
+    }
+    out
+}
+
+/// The locations document (`format` 1, the shape the sync and the install unit
+/// read) for a set of `.conf` files, given as `(file-name, contents)`. Returns
+/// the JSON text and the file names it SKIPPED (not a WireGuard file, or no
+/// peer). Pure.
+#[must_use]
+pub fn locations_json(confs: &[(String, String)]) -> (String, Vec<String>) {
+    let mut out =
+        String::from("{\n  \"format\": 1,\n  \"provider\": \"imported\",\n  \"locations\": [");
+    let mut skipped = Vec::new();
+    let mut first = true;
+    for (name, contents) in confs {
+        let id = name.strip_suffix(".conf").unwrap_or(name).to_owned();
+        let Some(facts) = parse_conf(contents) else {
+            skipped.push(name.clone());
+            continue;
+        };
+        let label = location_of(&format!("{LOCATION_PREFIX}{id}"))
+            .map_or_else(|| id.clone(), |l| l.label());
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        out.push_str("\n    {\"id\": ");
+        json_str(&mut out, &id);
+        out.push_str(", \"name\": ");
+        json_str(&mut out, &label);
+        out.push_str(", \"endpoint\": ");
+        json_str(&mut out, &facts.endpoint);
+        out.push_str(", \"publicKey\": ");
+        json_str(&mut out, &facts.public_key);
+        out.push_str(", \"dns\": ");
+        json_array(&mut out, &facts.dns);
+        out.push_str(", \"address4\": ");
+        json_str(
+            &mut out,
+            facts.address4.as_deref().unwrap_or("10.14.0.2/16"),
+        );
+        out.push_str(", \"address6\": ");
+        json_str(&mut out, facts.address6.as_deref().unwrap_or(ULA6));
+        out.push_str(", \"allowedIPs\": ");
+        json_array(&mut out, &allowed_with_defaults(&facts.allowed));
+        out.push('}');
+    }
+    out.push_str("\n  ]\n}\n");
+    (out, skipped)
+}
+
+/// What a registration staged — for the message the view shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Registered {
+    /// How many servers were registered.
+    pub count: usize,
+    /// The file names SKIPPED (not a WireGuard file).
+    pub skipped: Vec<String>,
+}
+
+/// Why a folder could not be registered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisterWhy {
+    /// The key is not a WireGuard key.
+    NotAKey,
+    /// The folder has no WireGuard server to register.
+    NoServers,
+    /// The folder could not be read, or a staged file not written.
+    Unreadable,
+}
+
+/// Reads every `.conf` in `folder`, builds the public locations, and stages the
+/// key (`0600`) and the locations (`0600`) in `staging_dir` for the install unit
+/// (`ronoctua_security::vpn`), which seals the key in the TPM; the sync then
+/// writes the profiles. The key leaves here as ONE `0600` file and nothing else.
+///
+/// # Errors
+///
+/// [`RegisterWhy::NotAKey`] when the key is not one; [`RegisterWhy::NoServers`]
+/// when the folder has no WireGuard server; [`RegisterWhy::Unreadable`] when the
+/// folder cannot be read or a staged file not written.
+pub fn stage_registration(
+    folder: &std::path::Path,
+    key: &str,
+    staging_dir: &std::path::Path,
+) -> Result<Registered, RegisterWhy> {
+    let key = key.trim();
+    if !is_wireguard_key(key) {
+        return Err(RegisterWhy::NotAKey);
+    }
+    let mut confs: Vec<(String, String)> = Vec::new();
+    for entry in std::fs::read_dir(folder).map_err(|_| RegisterWhy::Unreadable)? {
+        let path = entry.map_err(|_| RegisterWhy::Unreadable)?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("conf") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            confs.push((name, contents));
+        }
+    }
+    confs.sort();
+    let (json, skipped) = locations_json(&confs);
+    let count = confs.len() - skipped.len();
+    if count == 0 {
+        return Err(RegisterWhy::NoServers);
+    }
+    write_private(&staging_dir.join(KEY_FILE), format!("{key}\n").as_bytes())
+        .map_err(|_| RegisterWhy::Unreadable)?;
+    write_private(&staging_dir.join(LOCATIONS_FILE), json.as_bytes())
+        .map_err(|_| RegisterWhy::Unreadable)?;
+    Ok(Registered { count, skipped })
+}
+
+/// Writes `0600` from creation (the key must never exist readable).
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +631,83 @@ auth-user-pass
         // Not the register's: left to the ordinary tunnel list.
         assert_eq!(location_of("my-work-vpn"), None);
         assert_eq!(location_of("ronoctua-vpn-"), None);
+    }
+
+    /// A key of the shape, with nothing real in it (invariant 13).
+    const A_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0=";
+
+    #[test]
+    fn a_key_is_44_base64_characters() {
+        assert!(is_wireguard_key(A_KEY));
+        assert!(!is_wireguard_key("short="));
+        assert!(!is_wireguard_key(&"A".repeat(44)), "no trailing =");
+        assert!(!is_wireguard_key(&format!("{A_KEY}\n")), "a line break");
+    }
+
+    #[test]
+    fn a_conf_parses_its_public_facts_and_reads_the_key_past() {
+        let f = parse_conf(WIREGUARD).unwrap();
+        assert_eq!(f.public_key, "1111111111111111111111111111111111111111111=");
+        assert_eq!(f.endpoint, "vpn.example.invalid:51820");
+        assert_eq!(f.address4.as_deref(), Some("198.51.100.2/32"));
+        assert_eq!(f.dns, ["198.51.100.1", "198.51.100.9"]);
+        assert!(f.allowed.iter().any(|a| a == "0.0.0.0/0"));
+        // AND THE PRIVATE KEY IS NOWHERE IN THE FACTS.
+        assert!(!format!("{f:?}").contains("0000000000"));
+        // Not a WireGuard file, or an interface with no peer endpoint.
+        assert_eq!(parse_conf("just text"), None);
+        assert_eq!(parse_conf("[Interface]\nAddress = 10.0.0.2/32\n"), None);
+    }
+
+    #[test]
+    fn the_locations_json_carries_every_field_and_adds_ipv6() {
+        let (json, skipped) = locations_json(&[("us-nyc.conf".to_owned(), WIREGUARD.to_owned())]);
+        assert!(skipped.is_empty());
+        assert!(json.contains("\"format\": 1"));
+        assert!(json.contains("\"id\": \"us-nyc\""));
+        assert!(json.contains("\"name\": \"US · NYC\""));
+        assert!(json.contains("\"publicKey\": \"1111"));
+        assert!(json.contains("\"endpoint\": \"vpn.example.invalid:51820\""));
+        assert!(json.contains("::/0"), "IPv6 is added so the IP cannot leak");
+        // A file that is not a WireGuard conf is skipped, and named.
+        let (_, skipped) = locations_json(&[("bad.conf".to_owned(), "nope".to_owned())]);
+        assert_eq!(skipped, ["bad.conf"]);
+    }
+
+    #[test]
+    fn registering_a_folder_stages_the_key_0600_and_the_locations() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = std::env::temp_dir().join(format!("ronoctua-vpn-reg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let folder = root.join("confs");
+        let staging = root.join("staging");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(folder.join("us-nyc.conf"), WIREGUARD).unwrap();
+        std::fs::write(folder.join("notes.txt"), "ignored").unwrap();
+
+        let reg = stage_registration(&folder, A_KEY, &staging).unwrap();
+        assert_eq!(reg.count, 1);
+        assert!(reg.skipped.is_empty());
+        // The key is staged `0600`, the bare base64.
+        let key_path = staging.join(KEY_FILE);
+        assert_eq!(
+            std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read_to_string(&key_path).unwrap().trim(), A_KEY);
+        let loc = std::fs::read_to_string(staging.join(LOCATIONS_FILE)).unwrap();
+        assert!(loc.contains("us-nyc") && loc.contains("\"format\": 1"));
+        // A bad key, or a folder with no server, stages nothing.
+        assert_eq!(
+            stage_registration(&folder, "nope", &staging),
+            Err(RegisterWhy::NotAKey)
+        );
+        assert_eq!(
+            stage_registration(&staging, A_KEY, &staging),
+            Err(RegisterWhy::NoServers)
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

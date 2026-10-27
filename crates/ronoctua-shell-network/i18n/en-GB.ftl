@@ -251,6 +251,7 @@ echo-network-deleted = { $network } deleted
 
 file-picker-filter-tunnels = Tunnels (.conf, .ovpn)
 network-pick-tunnel = A tunnel to bring in
+network-pick-vpn-folder = A folder of WireGuard configs to register
 
 ## file info editing — everything the info panel can change
 
@@ -271,5 +272,13 @@ ask-network-vpn-user = User for this VPN
 ask-network-vpn-password = Password for this VPN
 echo-network-vpn-stored = { $network } will come up without asking
 echo-network-vpn-store-failed = the VPN's password was not stored: { $reason }
+# Registering a whole folder of WireGuard servers, graphically — the key typed once.
+network-vpn-register = Register VPNs from a folder…
+ask-network-vpn-register-key = WireGuard private key (once, for the whole folder)
+echo-network-vpn-registered = registered { $count } VPN server(s) — raise one from the list
+echo-network-vpn-not-a-key = that is not a WireGuard private key (44 base64 characters)
+echo-network-vpn-no-servers = no WireGuard server was found in that folder
+echo-network-vpn-unreadable = that folder could not be read
+echo-network-vpn-install-failed = the VPN registration did not complete
 # A phone's link in the network view, and the network crate's own refusals.
 network-fact-phone = phone

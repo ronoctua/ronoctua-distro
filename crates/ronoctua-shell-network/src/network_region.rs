@@ -257,6 +257,53 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             },
             Echo::Normal,
         )),
+        // REGISTER A FOLDER OF VPN SERVERS: stage the key (`0600`) and the
+        // public locations, then start the root install unit, which seals the
+        // key in the TPM and installs the locations; the sync writes the
+        // profiles after. The key leaves the door ONLY as the one `0600` staged
+        // file. The install is a oneshot of a second or two, so `--wait` here is
+        // the brief pause of an explicit action, not the minutes a build is.
+        Errand::VpnRegister { folder, key } => Some((
+            match ronoctua_network::vpn::stage_registration(
+                std::path::Path::new(&folder),
+                key.as_str(),
+                std::path::Path::new(ronoctua_network::vpn::STAGING_DIR),
+            ) {
+                Err(why) => way.texts().t(match why {
+                    ronoctua_network::vpn::RegisterWhy::NotAKey => key::ECHO_NETWORK_VPN_NOT_A_KEY,
+                    ronoctua_network::vpn::RegisterWhy::NoServers => {
+                        key::ECHO_NETWORK_VPN_NO_SERVERS
+                    }
+                    ronoctua_network::vpn::RegisterWhy::Unreadable => {
+                        key::ECHO_NETWORK_VPN_UNREADABLE
+                    }
+                }),
+                Ok(reg) => {
+                    // The `systemctl` by its baked path where there is one; a
+                    // session's PATH has it either way.
+                    const SYSTEMCTL: &str = match option_env!("RONOCTUA_SYSTEMCTL") {
+                        Some(c) => c,
+                        None => "systemctl",
+                    };
+                    let ok = std::process::Command::new(SYSTEMCTL)
+                        .args(["start", "--wait", "ronoctua-vpn-install.service"])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    if ok {
+                        let count = reg.count.to_string();
+                        way.texts()
+                            .t_with(key::ECHO_NETWORK_VPN_REGISTERED, &[("count", &count)])
+                    } else {
+                        way.texts().t(key::ECHO_NETWORK_VPN_INSTALL_FAILED)
+                    }
+                }
+            },
+            Echo::Normal,
+        )),
         // THE GATEWAY'S ROUND TRIP, on a thread: three echoes a fifth of a
         // second apart are the better part of a second.
         Errand::Measure(gateway) => match lines.lan {
