@@ -54,6 +54,40 @@ pub fn name_of(passwd: &str, uid: u32) -> Option<String> {
     })
 }
 
+/// The uid of `name` in a passwd file's text; `None` when the name is not
+/// [`plain`] or no line has it. Pure.
+#[must_use]
+pub fn uid_of(passwd: &str, name: &str) -> Option<u32> {
+    if !plain(name) {
+        return None;
+    }
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        let this = fields.next()?;
+        let _password = fields.next()?;
+        let id: u32 = fields.next()?.parse().ok()?;
+        (this == name).then_some(id)
+    })
+}
+
+/// The uid of a plain user name, read from `/etc/passwd`: for a unit that acts
+/// for the one person it was GIVEN BY NAME (`nix/modules/vpn.nix` bakes the
+/// name into the unit), with no `SUDO_UID` to name them.
+///
+/// # Errors
+///
+/// [`Why::Invalid`] for a name that is not [`plain`] or has no line;
+/// [`Why::NotAllowed`] for uid 0 (root stages nothing for itself);
+/// [`Why::Unreadable`] when `/etc/passwd` cannot be read.
+pub fn uid_named(name: &str) -> Result<u32, Refusal> {
+    let passwd = std::fs::read_to_string(PASSWD).map_err(|_| refused(Why::Unreadable))?;
+    let uid = uid_of(&passwd, name).ok_or(refused(Why::Invalid))?;
+    if uid == 0 {
+        return Err(refused(Why::NotAllowed));
+    }
+    Ok(uid)
+}
+
 /// The person of a `SUDO_UID` value and a passwd text. Pure.
 ///
 /// # Errors
@@ -121,6 +155,17 @@ mod tests {
         assert_eq!(person_of("-1", PASSWD_TEXT).unwrap_err().why, Why::Invalid);
         assert_eq!(person_of("", PASSWD_TEXT).unwrap_err().why, Why::Invalid);
         assert_eq!(name_of(PASSWD_TEXT, 4).as_deref(), Some("messagebus"));
+    }
+
+    /// FAILS IF: a plain name does not resolve to its uid, an absent name
+    /// resolves to anything, or a name that is not plain is looked up at all.
+    #[test]
+    fn a_name_resolves_to_its_uid() {
+        assert_eq!(uid_of(PASSWD_TEXT, "someone"), Some(1000));
+        assert_eq!(uid_of(PASSWD_TEXT, "root"), Some(0));
+        assert_eq!(uid_of(PASSWD_TEXT, "nobody-here"), None);
+        // "Odd Name" is not a plain name, so it is never even searched for.
+        assert_eq!(uid_of(PASSWD_TEXT, "Odd Name"), None);
     }
 
     #[test]

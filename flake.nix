@@ -1275,6 +1275,11 @@
         # modeline mark. Tor carries the one new polkit rule in the system.
         ./nix/modules/tailscale.nix
         ./nix/modules/tor.nix
+        # A folder of WireGuard servers registered at once, the IP kept from
+        # leaking by IPv6, and the one private key the whole set shares sealed
+        # in the TPM2 — `nix run .#vpn-import <folder>`. Its view is the
+        # network view's locations shelf.
+        ./nix/modules/vpn.nix
         ./nix/modules/syncthing.nix
         # THE TWO SYNCS THE OWNER ASKED FOR. Both install a CLIENT that costs
         # nothing until it is told where a server is, and both offer a SERVER
@@ -3007,6 +3012,32 @@
           );
           meta = {
             description = "says what an edit rebuilds in the Rust build and what it costs, before building";
+            platforms = [ system ];
+          };
+        };
+
+        # REGISTER A WHOLE FOLDER OF WIREGUARD SERVERS AT ONCE: reads every
+        # `.conf`, asks the private key once, adds IPv6 so the IP does not leak
+        # around the tunnel, and hands the lot to root to seal and install
+        # (`nix/modules/vpn.nix`, `nix/scripts/vpn-import.py`). The provider's
+        # placeholder key is ignored; the key is sealed in the TPM2 as one blob
+        # for every server, and is in no keyfile, store path or repository.
+        vpn-import = {
+          type = "app";
+          program = lib.getExe (
+            pkgs.writeShellApplication {
+              name = "ronoctua-vpn-import";
+              runtimeInputs = [
+                pkgs.python3
+                pkgs.systemd
+              ];
+              text = ''
+                exec python3 ${./nix/scripts/vpn-import.py} "$@"
+              '';
+            }
+          );
+          meta = {
+            description = "registers a folder of WireGuard servers at once, with IPv6 and one shared key";
             platforms = [ system ];
           };
         };

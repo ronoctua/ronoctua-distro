@@ -57,6 +57,12 @@ const ASK_AGAIN: u32 = 0x2;
 /// The keyfile section where the WPA password lives.
 const SECURITY_SECTION: &str = "802-11-wireless-security";
 
+/// The setting NetworkManager asks a WireGuard private key under. The person
+/// has one key for every location (`crate::secret::seal_wireguard`), carried
+/// with `private-key-flags=1`, so this is the one other section this agent
+/// answers.
+const WIREGUARD_SECTION: &str = "wireguard";
+
 /// The errors NetworkManager understands from an agent.
 ///
 /// The error's name on the bus matters: `NoSecrets` makes NM move on to the
@@ -96,6 +102,37 @@ fn left_to_this_agent(connection: &HashMap<String, HashMap<String, OwnedValue>>)
         .is_some_and(|f| f & crate::KEPT_BY_THE_AGENT != 0)
 }
 
+/// NetworkManager asking for the WireGuard private key: the one sealed blob,
+/// returned under `private-key`.
+///
+/// `NoSecrets` sends the question on — to the person, or to nobody — exactly
+/// as the Wi-Fi path does: a machine whose key is not sealed yet, or whose TPM
+/// refuses, meets a location that will not come up, which the view reports as
+/// the daemon having no key, not as this agent failing.
+fn wireguard_secret(flags: u32) -> Result<HashMap<String, HashMap<String, OwnedValue>>, Failure> {
+    // NM telling us the key we have is no good: nothing else to try (there is
+    // one key), so send it on rather than hand the same one back in a loop.
+    if flags & ASK_AGAIN != 0 {
+        return Err(Failure::NoSecrets(
+            "NetworkManager asked for a new WireGuard key; the stored one does not do".into(),
+        ));
+    }
+
+    let key = secret::open_wireguard().map_err(|e| {
+        // The reason (the TPM's path and state) goes to the log, not the bus.
+        tracing::info!(error = %e, "no WireGuard key stored");
+        Failure::NoSecrets("there is no WireGuard key stored".into())
+    })?;
+
+    let mut wireguard = HashMap::new();
+    wireguard.insert(
+        "private-key".to_owned(),
+        OwnedValue::try_from(Value::from(key))
+            .map_err(|e| Failure::NoSecrets(format!("pack the key: {e}")))?,
+    );
+    Ok(HashMap::from([(WIREGUARD_SECTION.to_owned(), wireguard)]))
+}
+
 #[zbus::interface(name = "org.freedesktop.NetworkManager.SecretAgent")]
 impl Agent {
     /// NetworkManager asking for the password.
@@ -112,9 +149,17 @@ impl Agent {
         _hints: Vec<String>,
         flags: u32,
     ) -> Result<HashMap<String, HashMap<String, OwnedValue>>, Failure> {
+        // THE WIREGUARD KEY — the one sealed blob, handed over by
+        // `private-key`. A VPN location's profile carries `private-key-flags=1`
+        // and no key of its own (`nix/modules/vpn.nix`), so NM asks here at
+        // activation, the way it asks for a Wi-Fi password.
+        if section == WIREGUARD_SECTION {
+            return wireguard_secret(flags);
+        }
+
         if section != SECURITY_SECTION {
             return Err(Failure::NotSupported(format!(
-                "this agent only knows about `{SECURITY_SECTION}`, and `{section}` was asked for"
+                "this agent knows `{SECURITY_SECTION}` and `{WIREGUARD_SECTION}`, and `{section}` was asked for"
             )));
         }
 

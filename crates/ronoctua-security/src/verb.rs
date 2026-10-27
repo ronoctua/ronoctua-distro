@@ -334,6 +334,17 @@ pub enum UnitVerb {
     /// one gets its timer back (a transient timer does not survive a
     /// reboot), one with no limit stays.
     RelaxBoot,
+    /// Install the person's WireGuard key and locations
+    /// (`ronoctua-vpn-install.service`, which the person starts through the
+    /// one narrow polkit rule — NEVER the sudo door). The key is not a word
+    /// of the verb: the gesture staged it in the person's runtime folder, and
+    /// the unit takes it (`crate::vpn::install`). The person is named, not
+    /// `SUDO_UID`'d, because a unit has no caller — the name is baked into the
+    /// unit by `nix/modules/vpn.nix`, and the uid read from `/etc/passwd`.
+    VpnInstall {
+        /// The person whose staged key and locations to take, [`crate::users::plain`].
+        user: String,
+    },
 }
 
 impl UnitVerb {
@@ -357,6 +368,7 @@ impl UnitVerb {
                 vec!["relax-expire".to_owned(), until_unix_s.to_string()]
             }
             Self::RelaxBoot => vec!["relax-boot".to_owned()],
+            Self::VpnInstall { user } => vec!["vpn-install".to_owned(), user.clone()],
         }
     }
 
@@ -393,6 +405,11 @@ impl UnitVerb {
                     .map(|until_unix_s| Self::RelaxExpire { until_unix_s })
             }
             ["relax-boot"] => Some(Self::RelaxBoot),
+            // ONE PLAIN NAME, the person the unit was baked for, and nothing
+            // that would let it say more.
+            ["vpn-install", user] if crate::users::plain(user) => Some(Self::VpnInstall {
+                user: (*user).to_owned(),
+            }),
             _ => None,
         }
     }
@@ -654,6 +671,9 @@ mod tests {
                 until_unix_s: 1_790_000_000,
             },
             UnitVerb::RelaxExpire { until_unix_s: 0 },
+            UnitVerb::VpnInstall {
+                user: "someone".to_owned(),
+            },
         ] {
             assert_eq!(UnitVerb::parse(&verb.arguments()), Some(verb.clone()));
             assert_eq!(RootVerb::parse(&verb.arguments()), None);
@@ -674,9 +694,16 @@ mod tests {
             words(&["relax-expire", "99999999999999999999"]),
             words(&["relax-expire", "1", "2"]),
             words(&["relax-boot", "now"]),
+            // A VPN INSTALL'S WORD is one plain name, nothing else.
+            words(&["vpn-install"]),
+            words(&["vpn-install", "Odd Name"]),
+            words(&["vpn-install", "a\nb"]),
+            words(&["vpn-install", "someone", "more"]),
         ] {
             assert_eq!(UnitVerb::parse(&bad), None, "{bad:?}");
         }
+        // AND IT IS A UNIT'S VERB, never the door's.
+        assert_eq!(RootVerb::parse(&words(&["vpn-install", "someone"])), None);
     }
 
     #[test]

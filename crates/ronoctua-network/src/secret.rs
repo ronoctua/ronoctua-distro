@@ -116,7 +116,23 @@ pub fn seal(ssid: &str, password: &str) -> Result<()> {
 ///
 /// There is no TPM, `systemd-creds` refused, or the directory could not be created.
 pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
-    let destination = path_at(directory, ssid);
+    seal_named(&name(ssid), &path_at(directory, ssid), password.as_bytes())
+}
+
+/// Seals `secret` into the TPM under `name` and writes the blob at
+/// `destination`, `0600` from creation (see [`write_restricted`]).
+///
+/// The secret goes in through **stdin**, never `argv`: `/proc/<pid>/cmdline`
+/// is readable by any process on the machine. THE NAME IS AUTHENTICATED along
+/// with the content — a blob sealed under one name opens only when the same
+/// name is asked for, which is what stops one network's (or one key's) file
+/// standing in for another's.
+///
+/// # Errors
+///
+/// There is no TPM, `systemd-creds` refused, or the directory could not be
+/// created.
+fn seal_named(name: &str, destination: &Path, secret: &[u8]) -> Result<()> {
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -124,10 +140,7 @@ pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
     let mut child = Command::new(SYSTEMD_CREDS_PATH)
         .arg("encrypt")
         .arg("--with-key=tpm2")
-        // THE NAME IS AUTHENTICATED along with the content: a blob sealed with one
-        // name only opens when the same name is asked for. It is what prevents swapping one
-        // network's file for another's and having the machine connect to the wrong one.
-        .arg(format!("--name={}", name(ssid)))
+        .arg(format!("--name={name}"))
         .arg("-")
         .arg("-")
         .stdin(Stdio::piped())
@@ -140,8 +153,8 @@ pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
         .stdin
         .take()
         .context("no stdin for systemd-creds")?
-        .write_all(password.as_bytes())
-        .context("send the password to systemd-creds")?;
+        .write_all(secret)
+        .context("send the secret to systemd-creds")?;
 
     let output = child.wait_with_output().context("wait for systemd-creds")?;
     if !output.status.success() {
@@ -154,7 +167,7 @@ pub fn seal_at(directory: &str, ssid: &str, password: &str) -> Result<()> {
         return Err(crate::refusal::Named(crate::refusal::Refusal::Vault).into());
     }
 
-    write_restricted(&destination, &output.stdout)
+    write_restricted(destination, &output.stdout)
         .with_context(|| format!("write {}", destination.display()))
 }
 
@@ -174,12 +187,23 @@ pub fn open(ssid: &str) -> Result<String> {
 ///
 /// There is no blob, the TPM is not the same one, or `systemd-creds` refused.
 pub fn open_at(directory: &str, ssid: &str) -> Result<String> {
-    let origin = path_at(directory, ssid);
-    let blob = std::fs::read(&origin).with_context(|| format!("read {}", origin.display()))?;
+    let bytes = open_named(&name(ssid), &path_at(directory, ssid))?;
+    // The password may contain any byte; `from_utf8_lossy` would swap an invalid
+    // byte for `U+FFFD` and the network would refuse the connection without saying why.
+    String::from_utf8(bytes).context("the stored password is not valid text")
+}
+
+/// Opens the blob at `origin`, sealed under `name`, and returns its bytes.
+///
+/// # Errors
+///
+/// There is no blob, the TPM is not the same one, or `systemd-creds` refused.
+fn open_named(name: &str, origin: &Path) -> Result<Vec<u8>> {
+    let blob = std::fs::read(origin).with_context(|| format!("read {}", origin.display()))?;
 
     let mut child = Command::new(SYSTEMD_CREDS_PATH)
         .arg("decrypt")
-        .arg(format!("--name={}", name(ssid)))
+        .arg(format!("--name={name}"))
         .arg("-")
         .arg("-")
         .stdin(Stdio::piped())
@@ -203,10 +227,7 @@ pub fn open_at(directory: &str, ssid: &str) -> Result<String> {
         );
         return Err(crate::refusal::Named(crate::refusal::Refusal::Vault).into());
     }
-
-    // The password may contain any byte; `from_utf8_lossy` would swap an invalid
-    // byte for `U+FFFD` and the network would refuse the connection without saying why.
-    String::from_utf8(output.stdout).context("the stored password is not valid text")
+    Ok(output.stdout)
 }
 
 /// Deletes a network's blob. Silent when there was none.
@@ -220,6 +241,108 @@ pub fn erase(ssid: &str) -> Result<()> {
         Ok(()) => Ok(()),
         // Forgetting a network that was never remembered is not an error: it is the result
         // that was asked for.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("delete {}", target.display())),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The WireGuard private key — ONE key, ONE blob.
+//
+// The person has a single key (a Surfshark account has one), and every
+// location's profile carries it with `private-key-flags=1`: the key is never
+// in the keyfile, the agent hands it over at activation (`crate::agent`).
+// So, unlike the Wi-Fi password, there is no name to key a file by — there is
+// one file, under a directory of its own beside the Wi-Fi blobs, routed out
+// of the wipe by `persist.nix`. Sealed the same way (`--with-key=tpm2`, no PCR
+// policy), so a backup of `/persist` carries a blob useless on any other TPM.
+// ---------------------------------------------------------------------------
+
+/// Where the person's one WireGuard private key is sealed.
+pub const WIREGUARD_DIRECTORY: &str = "/persist/etc/ronoctua/wireguard";
+
+/// The blob's file name, and the name authenticated into it. Fixed, because
+/// there is exactly one key.
+const WIREGUARD_NAME: &str = "wireguard-private";
+
+/// The path of the WireGuard key's blob in a given directory. The directory is
+/// a parameter for the same reason as [`path_at`]: the installer seals for a
+/// target mounted elsewhere.
+#[must_use]
+pub fn wireguard_path_at(directory: &str) -> PathBuf {
+    Path::new(directory).join(format!("{WIREGUARD_NAME}.cred"))
+}
+
+/// The path of the WireGuard key's blob in the default place.
+#[must_use]
+pub fn wireguard_path() -> PathBuf {
+    wireguard_path_at(WIREGUARD_DIRECTORY)
+}
+
+/// Is the WireGuard key sealed?
+#[must_use]
+pub fn has_wireguard() -> bool {
+    wireguard_path().is_file()
+}
+
+/// Seals the WireGuard private key. The key comes through stdin, never `argv`.
+///
+/// # Errors
+///
+/// There is no TPM, `systemd-creds` refused, or the directory could not be
+/// created.
+pub fn seal_wireguard(key: &str) -> Result<()> {
+    seal_wireguard_at(WIREGUARD_DIRECTORY, key)
+}
+
+/// Seals the WireGuard private key into a given directory (see
+/// [`wireguard_path_at`]).
+///
+/// # Errors
+///
+/// There is no TPM, `systemd-creds` refused, or the directory could not be
+/// created.
+pub fn seal_wireguard_at(directory: &str, key: &str) -> Result<()> {
+    // The bare base64, never a trailing newline: it becomes the keyfile's
+    // `private-key` value verbatim.
+    seal_named(
+        WIREGUARD_NAME,
+        &wireguard_path_at(directory),
+        key.trim().as_bytes(),
+    )
+}
+
+/// Opens the WireGuard key's blob and returns the key.
+///
+/// # Errors
+///
+/// There is no blob, the TPM is not the same one, or `systemd-creds` refused.
+pub fn open_wireguard() -> Result<String> {
+    open_wireguard_at(WIREGUARD_DIRECTORY)
+}
+
+/// Opens the WireGuard key's blob of a given directory.
+///
+/// # Errors
+///
+/// There is no blob, the TPM is not the same one, or `systemd-creds` refused.
+pub fn open_wireguard_at(directory: &str) -> Result<String> {
+    let bytes = open_named(WIREGUARD_NAME, &wireguard_path_at(directory))?;
+    Ok(String::from_utf8(bytes)
+        .context("the stored WireGuard key is not valid text")?
+        .trim()
+        .to_owned())
+}
+
+/// Deletes the WireGuard key's blob. Silent when there was none.
+///
+/// # Errors
+///
+/// The file exists and could not be removed.
+pub fn erase_wireguard() -> Result<()> {
+    let target = wireguard_path();
+    match std::fs::remove_file(&target) {
+        Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e).with_context(|| format!("delete {}", target.display())),
     }
@@ -279,5 +402,19 @@ mod tests {
     fn two_different_networks_do_not_share_the_same_blob() {
         assert_ne!(name("home"), name("home "));
         assert_ne!(path("home"), path("Home"));
+    }
+
+    #[test]
+    fn the_one_wireguard_blob_is_fixed_and_not_a_network() {
+        // ONE key, ONE file: the WireGuard blob does not depend on any name,
+        // and it never collides with a network's `<hex>.cred` (a network's
+        // name is hex digits; this one is a word).
+        let p = wireguard_path();
+        assert!(p.starts_with(WIREGUARD_DIRECTORY));
+        assert_eq!(
+            p.file_name().unwrap().to_string_lossy(),
+            "wireguard-private.cred"
+        );
+        assert_ne!(wireguard_path_at(DIRECTORY), path(""));
     }
 }

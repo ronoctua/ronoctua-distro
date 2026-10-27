@@ -34,6 +34,7 @@ use ronoctua_security::tools::{self, Tools};
 use ronoctua_security::u2f;
 use ronoctua_security::users::{self, Person};
 use ronoctua_security::verb::{RootVerb, Said, UnitVerb};
+use ronoctua_security::vpn;
 use ronoctua_security::{Refusal, Why};
 
 /// The file manager's privileged unit, which keeps its own hardening.
@@ -282,6 +283,16 @@ fn unit_verb(verb: UnitVerb, tools: &Tools) -> Result<(), Refusal> {
                 eprintln!("<6>the passwordless window at boot: {at_boot:?}");
             }
             Ok(())
+        }
+        // THE PERSON'S VPN KEY AND LOCATIONS: the unit the person started
+        // through the one narrow polkit rule takes what they staged, seals the
+        // key in the TPM and writes the locations for the sync service
+        // (`ronoctua_security::vpn`). The person is NAMED by the unit — a unit
+        // has no `SUDO_UID` — and the name becomes the uid from `/etc/passwd`;
+        // the staged files must be that uid's own (`vpn::install`).
+        UnitVerb::VpnInstall { user } => {
+            let uid = users::uid_named(&user)?;
+            vpn::install(uid)
         }
     }
 }

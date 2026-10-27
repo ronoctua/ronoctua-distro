@@ -345,6 +345,13 @@ in
         # and by the installer. Lost, the machine reads the private cache no
         # more until the person sets the token again.
         (import ../binary-cache.nix).netrcDir
+        # THE REGISTERED WIREGUARD LOCATIONS (`nix/modules/vpn.nix`): the public
+        # keys and endpoints the person registered, which the sync turns into
+        # NetworkManager profiles. Lost, the folder of VPN servers is empty
+        # until `nix run .#vpn-import` runs again. The one private key needs no
+        # line — it is sealed under `/persist/etc/ronoctua/wireguard`, like the
+        # Wi-Fi password, and the profiles are in system-connections above.
+        "/var/lib/ronoctua-vpn"
       ]
       # INCUS'S STATE — its database, its images, every instance and its
       # snapshots — where Incus is on (the full profile). On btrfs the

@@ -224,6 +224,73 @@ fn openvpn(name: String, text: &str) -> Preview {
     out
 }
 
+/// The prefix every profile the VPN register writes carries
+/// (`nix/modules/vpn.nix`, `nix/scripts/vpn-sync.py`). A connection whose id
+/// begins with it is one of the person's registered locations, which the view
+/// lists apart — on a shelf of its own, with a readable label and a filter —
+/// instead of a hundred flat rows under the tunnels heading.
+pub const LOCATION_PREFIX: &str = "ronoctua-vpn-";
+
+/// A registered location, as its connection id names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    /// The country code, lower-case (`us`); or the whole rest of the id when it
+    /// is not the `<country>-<city>` shape.
+    pub country: String,
+    /// The city code, lower-case (`nyc`); empty when the id had none.
+    pub city: String,
+}
+
+impl Location {
+    /// The label a row shows: the codes upper-cased (`US · NYC`), or the
+    /// country alone when there is no city.
+    #[must_use]
+    pub fn label(&self) -> String {
+        if self.city.is_empty() {
+            self.country.to_uppercase()
+        } else {
+            format!(
+                "{} · {}",
+                self.country.to_uppercase(),
+                self.city.to_uppercase()
+            )
+        }
+    }
+
+    /// What a typed filter is matched against, lower-case: the codes joined, so
+    /// `us`, `nyc` and `us-nyc` all find `ronoctua-vpn-us-nyc`.
+    #[must_use]
+    pub fn haystack(&self) -> String {
+        if self.city.is_empty() {
+            self.country.clone()
+        } else {
+            format!("{}-{}", self.country, self.city)
+        }
+    }
+}
+
+/// The registered location a connection id names, or `None` when the id is not
+/// one of the register's ([`LOCATION_PREFIX`]). Pure.
+#[must_use]
+pub fn location_of(id: &str) -> Option<Location> {
+    let rest = id.strip_prefix(LOCATION_PREFIX)?;
+    if rest.is_empty() {
+        return None;
+    }
+    // `<country>-<city>` is the ordinary shape; anything else is kept whole as
+    // the country, so a generically-named profile still shows and filters.
+    Some(match rest.split_once('-') {
+        Some((cc, city)) if !cc.is_empty() && !city.is_empty() => Location {
+            country: cc.to_owned(),
+            city: city.to_owned(),
+        },
+        _ => Location {
+            country: rest.to_owned(),
+            city: String::new(),
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +318,22 @@ redirect-gateway def1
 dhcp-option DNS 198.51.100.1
 auth-user-pass
 ";
+
+    #[test]
+    fn a_registered_location_is_read_from_its_connection_id() {
+        let us = location_of("ronoctua-vpn-us-nyc").unwrap();
+        assert_eq!(us.country, "us");
+        assert_eq!(us.city, "nyc");
+        assert_eq!(us.label(), "US · NYC");
+        assert_eq!(us.haystack(), "us-nyc");
+        // A generic name with no city still shows and filters.
+        let office = location_of("ronoctua-vpn-office").unwrap();
+        assert_eq!(office.label(), "OFFICE");
+        assert_eq!(office.haystack(), "office");
+        // Not the register's: left to the ordinary tunnel list.
+        assert_eq!(location_of("my-work-vpn"), None);
+        assert_eq!(location_of("ronoctua-vpn-"), None);
+    }
 
     #[test]
     fn a_wireguard_file_says_what_it_would_do_and_never_its_key() {

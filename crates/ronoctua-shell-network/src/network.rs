@@ -318,6 +318,10 @@ pub enum Shelf {
     Neighbours,
     /// The other machines of the tailnet.
     Peers,
+    /// The person's registered VPN locations (`nix/modules/vpn.nix`): a
+    /// hundred and more, so they get a shelf of their own rather than a
+    /// hundred flat rows under the tunnels heading.
+    Locations,
 }
 
 /// How many rows a shelf draws, whatever it holds.
@@ -2562,12 +2566,30 @@ impl View {
                 .filter(|s| s.tunnel())
                 .filter(|s| !up.iter().any(|a| a.id == s.id))
                 .collect();
+            // THE PERSON'S REGISTERED LOCATIONS are listed APART, on a shelf of
+            // their own and with a readable label (`US · NYC`): a Surfshark
+            // folder is a hundred servers and more, and a hundred flat rows
+            // under one heading is the page nobody can use. A one-off import or
+            // another VPN (no `ronoctua-vpn-` id) stays a flat row.
+            let located: Vec<&Saved> = stored
+                .iter()
+                .copied()
+                .filter(|s| ronoctua_network::vpn::location_of(&s.id).is_some())
+                .collect();
+            let others: Vec<&Saved> = stored
+                .iter()
+                .copied()
+                .filter(|s| ronoctua_network::vpn::location_of(&s.id).is_none())
+                .collect();
             if up.is_empty() && stored.is_empty() {
                 b.note(key::NETWORK_NO_TUNNEL);
             }
+            let label_of = |id: &str| {
+                ronoctua_network::vpn::location_of(id).map_or_else(|| id.to_owned(), |l| l.label())
+            };
             for a in up {
                 b.pair(
-                    format!("{} {}", tokens::icon::VPN, a.id),
+                    format!("{} {}", tokens::icon::VPN, label_of(&a.id)),
                     texts.t(key::NETWORK_TUNNEL_DROP),
                     Target::Tunnel(a.at.clone()),
                     false,
@@ -2576,7 +2598,7 @@ impl View {
             if let Some((path, preview)) = &self.bringing {
                 Self::bringing_rows(&mut b, path, preview);
             }
-            for s in stored {
+            for s in others {
                 b.pair(
                     format!("{} {}", tokens::icon::VPN, s.id),
                     texts.t(key::NETWORK_TUNNEL_RAISE),
@@ -2586,6 +2608,18 @@ impl View {
                     // with a sentence nobody wrote.
                     flying,
                 );
+            }
+            if !located.is_empty() {
+                b.shelf(Shelf::Locations, |b| {
+                    for s in &located {
+                        b.pair(
+                            format!("{} {}", tokens::icon::VPN, label_of(&s.id)),
+                            texts.t(key::NETWORK_TUNNEL_RAISE),
+                            Target::Saved(s.at.clone()),
+                            flying,
+                        );
+                    }
+                });
             }
         }
 

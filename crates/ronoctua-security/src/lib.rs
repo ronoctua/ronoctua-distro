@@ -66,6 +66,7 @@ pub mod tools;
 pub mod u2f;
 pub mod users;
 pub mod verb;
+pub mod vpn;
 
 /// The variable naming the root helper's store path — the session's
 /// (`nix/modules/security.nix`), read by the sudo door (`authority`) to run
