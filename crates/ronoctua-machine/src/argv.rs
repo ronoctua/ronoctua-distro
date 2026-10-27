@@ -35,6 +35,37 @@ pub fn flake(dir: &Path) -> String {
     format!("path:{}", dir.display())
 }
 
+/// Rewrite a flake command so it builds the distro from a local CHECKOUT
+/// instead of the machine flake's own `ronoctua` input. The build switch's own
+/// direction needs this: that input is a user-owned `git+file` repo a root
+/// apply may not fetch, and it tracks a branch, so `--no-update-lock-file`
+/// would refuse the re-lock. `path:<checkout>` is neither — no git to own, no
+/// branch to re-resolve. The override is itself a lock change, so the lock is
+/// recomputed in memory and never written. `None` leaves the words untouched,
+/// which is every other apply.
+#[must_use]
+pub fn with_override(mut words: Vec<String>, over: Option<&Path>) -> Vec<String> {
+    let Some(dir) = over else {
+        return words;
+    };
+    for word in &mut words {
+        if word == "--no-update-lock-file" {
+            *word = "--no-write-lock-file".to_owned();
+        }
+    }
+    // Before the flake reference, which every such command ends with.
+    let reference = words
+        .pop()
+        .expect("a flake command ends with its reference");
+    words.extend([
+        "--override-input".to_owned(),
+        "ronoctua".to_owned(),
+        flake(dir),
+        reference,
+    ]);
+    words
+}
+
 /// How many derivations a build runs at once and how many cores each is
 /// given — `--max-jobs` and `--cores`, as the machine's sizing says
 /// (`crate::build::Sizing`). Never Nix's own `auto` and `0`: that is every
@@ -440,6 +471,35 @@ mod tests {
             !dry.contains(&"--out-link".to_owned()),
             "a rehearsal leaves no root"
         );
+    }
+
+    #[test]
+    fn an_override_points_ronoctua_at_a_checkout_and_stops_writing_the_lock() {
+        let base = build(
+            Path::new("/etc/nixos"),
+            "noctua",
+            Path::new("/run/next"),
+            SIZED,
+        );
+        // With no override the words are untouched.
+        assert_eq!(with_override(base.clone(), None), base);
+        let over = with_override(base.clone(), Some(Path::new("/home/p/distro")));
+        // The lock no longer may move AT ALL; it is recomputed, not written.
+        assert!(!over.contains(&"--no-update-lock-file".to_owned()));
+        assert!(over.contains(&"--no-write-lock-file".to_owned()));
+        // `ronoctua` is overridden to the checkout as a `path:` — no git.
+        let at = over
+            .iter()
+            .position(|w| w == "--override-input")
+            .expect("the override is named");
+        assert_eq!(over[at + 1], "ronoctua");
+        assert_eq!(over[at + 2], "path:/home/p/distro");
+        // The flake reference is still the last word, as nix wants it.
+        assert_eq!(over.last().unwrap(), base.last().unwrap());
+        // And `sources`, which keeps what was built, is rewritten the same way.
+        let src = with_override(sources(Path::new("/etc/nixos")), Some(Path::new("/d")));
+        assert!(src.contains(&"--no-write-lock-file".to_owned()));
+        assert_eq!(src.last().unwrap(), "path:/etc/nixos");
     }
 
     #[test]

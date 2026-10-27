@@ -29,6 +29,12 @@ pub const MACHINE_STATE: &str = "RONOCTUA_MACHINE_STATE";
 pub const MACHINE_RUN: &str = "RONOCTUA_MACHINE_RUN";
 /// The `nixosConfigurations` attribute the machine flake builds.
 pub const MACHINE_ATTR: &str = "RONOCTUA_MACHINE_ATTR";
+/// A distro checkout to OVERRIDE the machine flake's `ronoctua` input with, as
+/// a `path:` of it — what the build switch's own direction sets, so a root
+/// apply builds `/etc/nixos`'s own system WITHOUT fetching its input when that
+/// input is a user-owned `git+file` repo root may not read. Unset on every
+/// other apply.
+pub const MACHINE_OVERRIDE_DIR: &str = "RONOCTUA_MACHINE_OVERRIDE_DIR";
 /// How many generations the boot menu lists.
 pub const MENU_LIMIT: &str = "RONOCTUA_MACHINE_MENU_LIMIT";
 /// How long the bless waits for root's lock of the person's data, in
@@ -85,6 +91,7 @@ impl Env {
                 MACHINE_STATE,
                 MACHINE_RUN,
                 MACHINE_ATTR,
+                MACHINE_OVERRIDE_DIR,
                 MENU_LIMIT,
                 BLESS_WAIT,
                 TEMPLATE,
@@ -141,6 +148,10 @@ pub struct System {
     pub root: Option<PathBuf>,
     /// The attribute the machine flake builds.
     pub attr: Option<String>,
+    /// A distro checkout to override the `ronoctua` input with (the build
+    /// switch's own direction) — a `path:` of it, so the apply does not fetch
+    /// a user-owned `git+file` input as root. `None` on every other apply.
+    pub override_dir: Option<PathBuf>,
     /// The machine's `nix`.
     pub nix: Option<PathBuf>,
     /// `bootctl`.
@@ -174,6 +185,7 @@ impl System {
         Self {
             root: env.path(SYSROOT).filter(|p| p != Path::new("/")),
             attr: env.get(MACHINE_ATTR).map(str::to_owned),
+            override_dir: env.path(MACHINE_OVERRIDE_DIR),
             nix: env.path(NIX),
             bootctl: env.path(BOOTCTL),
             grub_editenv: env.path(GRUB_EDITENV),

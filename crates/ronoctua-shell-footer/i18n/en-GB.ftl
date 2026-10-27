@@ -67,6 +67,9 @@ echo-build-no-checkout = No checkout to switch to
 echo-build-to-own = Switching to this machine's build — it will rebuild and restart
 echo-build-to-reference = Switching to the checkout's reference build — it will rebuild and restart
 echo-build-failed = The build switch could not start: { $why }
+# What the build glyph says on the message line while the pointer rests on it.
+hint-build-own = This machine's own build — click to try a distro checkout's reference build
+hint-build-reference = A distro checkout's reference build (not this machine's own) — click to switch back
 cmd-window-right = Focus right
 cmd-window-up = Focus up
 cmd-window-down = Focus down

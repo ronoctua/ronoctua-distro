@@ -372,7 +372,12 @@ pub(crate) fn system(
     disk::remove(&held.0).map_err(|e| disk::failed(&held.0, &e))?;
     std::fs::create_dir_all(&held.0).map_err(|e| disk::failed(&held.0, &e))?;
 
-    let ran = run::capture(nix, &argv::phases(dir, attr))?;
+    // THE BUILD SWITCH'S OWN DIRECTION builds `/etc/nixos`'s system with the
+    // `ronoctua` input overridden to a `path:` of the checkout, so root does
+    // not fetch a user-owned `git+file` input (`argv::with_override`). Unset on
+    // every other apply, where it changes nothing.
+    let over = m.system.override_dir.as_deref();
+    let ran = run::capture(nix, &argv::with_override(argv::phases(dir, attr), over))?;
     let read = if ran.ok() {
         Phases::parse(&ran.stdout)
     } else {
@@ -412,7 +417,11 @@ pub(crate) fn system(
                      system is built in one step, sized, and its units are not kept"
                 ),
             );
-            if run::status(nix, &argv::build(dir, attr, out, sizing.rest))? != Some(0) {
+            if run::status(
+                nix,
+                &argv::with_override(argv::build(dir, attr, out, sizing.rest), over),
+            )? != Some(0)
+            {
                 return Err(not_built().into());
             }
             return Ok(Built {
@@ -523,7 +532,13 @@ pub(crate) fn keep(m: &Machine, kept: &[String]) {
 /// refusal, as [`keep`] is none — what could not be done is said.
 pub(crate) fn keep_sources(m: &Machine, nix: &Path) -> bool {
     const LOST: &str = "the next update may fetch them again";
-    let Ok(ran) = run::capture(nix, &argv::sources(&m.places.dir)) else {
+    // The same override the build used (`system`), so the sources listed are
+    // the ones it evaluated from — the checkout, not the unfetched input.
+    let over = m.system.override_dir.as_deref();
+    let Ok(ran) = run::capture(
+        nix,
+        &argv::with_override(argv::sources(&m.places.dir), over),
+    ) else {
         return false;
     };
     if ran.code != Some(0) {

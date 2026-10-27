@@ -5761,6 +5761,11 @@ impl Footer {
                     &[("state", &self.texts.t(&format!("state-{now}")))],
                 ))
             }
+            // THE BUILD MARK says which build is running and what a click does:
+            // the sentence names the build the mark stands for and the one the
+            // switch would bring, which neither glyph alone can.
+            "build-own" => Some(self.texts.t(crate::key::HINT_BUILD_OWN)),
+            "build-reference" => Some(self.texts.t(crate::key::HINT_BUILD_REFERENCE)),
             _ => None,
         }
     }
