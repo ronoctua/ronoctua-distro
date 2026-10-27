@@ -455,16 +455,41 @@ pub enum Kind {
     Ssh,
     /// The system (sudo) password.
     Sudo,
+    /// A security key's PIN.
+    Pin,
+    /// A login password (`user@host`).
+    LoginPassword,
+    /// A security key's touch (user presence): a CONFIRMATION, not a secret —
+    /// no line is typed into, and Answer alone (or Enter) confirms it.
+    Touch,
+    /// A host's authenticity on a first connection: `yes` is typed to trust it.
+    HostAuthenticity,
+    /// An ssh ask none of the above name: a neutral title and its own prompt,
+    /// never titled a passphrase.
+    SshOther,
 }
 
 impl Kind {
-    /// The kind the helper's token names.
+    /// The kind the helper's token names (`nix/ssh-askpass.rs`'s `ssh_kind`).
+    /// A token it does not know is [`Kind::SshOther`], shown as what it is —
+    /// an ssh ask — and never as a passphrase.
     #[must_use]
     pub fn of(token: &str) -> Self {
         match token {
             "sudo" => Self::Sudo,
-            _ => Self::Ssh,
+            "ssh-passphrase" => Self::Ssh,
+            "ssh-pin" => Self::Pin,
+            "ssh-password" => Self::LoginPassword,
+            "ssh-touch" => Self::Touch,
+            "ssh-host" => Self::HostAuthenticity,
+            _ => Self::SshOther,
         }
+    }
+
+    /// Whether a line is typed into for this kind: all but a touch, which
+    /// carries no secret — its bar shows no line, and Answer confirms it.
+    const fn typed(self) -> bool {
+        !matches!(self, Self::Touch)
     }
 
     /// The bar's title for this kind.
@@ -472,14 +497,24 @@ impl Kind {
         match self {
             Self::Ssh => key::ASKPASS_BAR_TITLE_SSH,
             Self::Sudo => key::ASKPASS_BAR_TITLE_SUDO,
+            Self::Pin => key::ASKPASS_BAR_TITLE_PIN,
+            Self::LoginPassword => key::ASKPASS_BAR_TITLE_PASSWORD,
+            Self::Touch => key::ASKPASS_BAR_TITLE_TOUCH,
+            Self::HostAuthenticity => key::ASKPASS_BAR_TITLE_HOST,
+            Self::SshOther => key::ASKPASS_BAR_TITLE_SSH_OTHER,
         }
     }
 
-    /// The label the typed line carries for this kind.
+    /// The label the line (or, for a touch, the bar) carries for this kind.
     const fn ask(self) -> &'static str {
         match self {
             Self::Ssh => key::ASKPASS_BAR_ASK_SSH,
             Self::Sudo => key::ASKPASS_BAR_ASK_SUDO,
+            Self::Pin => key::ASKPASS_BAR_ASK_PIN,
+            Self::LoginPassword => key::ASKPASS_BAR_ASK_PASSWORD,
+            Self::Touch => key::ASKPASS_BAR_ASK_TOUCH,
+            Self::HostAuthenticity => key::ASKPASS_BAR_ASK_HOST,
+            Self::SshOther => key::ASKPASS_BAR_ASK_SSH_OTHER,
         }
     }
 }
@@ -1019,7 +1054,13 @@ impl Bar {
                 edge += width + 1;
             }
             let first = placed.iter().map(|p| p.at).min().unwrap_or(columns);
-            let asked = format!("{}: {}", texts.t(ask.kind.ask()), up.line.shown());
+            // A TOUCH shows no line — there is nothing to type, and Answer
+            // alone confirms it; every other kind shows what is typed.
+            let asked = if ask.kind.typed() {
+                format!("{}: {}", texts.t(ask.kind.ask()), up.line.shown())
+            } else {
+                texts.t(ask.kind.ask())
+            };
             out.push(text(
                 1,
                 left,
@@ -1820,6 +1861,55 @@ mod tests {
         assert_eq!(bar.drop_ask(99), Moved::Nothing);
         assert_eq!(bar.drop_ask(4), Moved::Fell);
         assert!(rx.try_recv().is_err(), "the sink outlived the bar");
+    }
+
+    /// FAILS IF: a token is read as the wrong kind, a non-passphrase ask is
+    /// titled a passphrase, or a touch draws a secret line instead of a bar a
+    /// touch alone confirms.
+    #[test]
+    fn the_kind_is_read_from_the_token_and_a_touch_carries_no_line() {
+        assert_eq!(Kind::of("sudo"), Kind::Sudo);
+        assert_eq!(Kind::of("ssh-passphrase"), Kind::Ssh);
+        assert_eq!(Kind::of("ssh-pin"), Kind::Pin);
+        assert_eq!(Kind::of("ssh-password"), Kind::LoginPassword);
+        assert_eq!(Kind::of("ssh-touch"), Kind::Touch);
+        assert_eq!(Kind::of("ssh-host"), Kind::HostAuthenticity);
+        assert_eq!(Kind::of("ssh"), Kind::SshOther);
+        assert_eq!(Kind::of("anything-else"), Kind::SshOther);
+
+        let t = texts("en-GB");
+        let shown = |bar: &Bar| -> String {
+            bar.drawn(120, true, &t)
+                .iter()
+                .map(|p| p.text.clone())
+                .collect()
+        };
+        // A TOUCH wears its own title, draws NO secret line, and Answer alone
+        // (an empty secret to the socket) confirms it.
+        let mut bar = Bar::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert!(bar.ask(
+            1,
+            Kind::Touch,
+            None,
+            "Confirm user presence for key ED25519-SK SHA256:x".to_owned(),
+            tx
+        ));
+        let words = shown(&bar);
+        assert!(
+            words.contains(&t.t(key::ASKPASS_BAR_TITLE_TOUCH).to_uppercase()),
+            "no touch title: {words}"
+        );
+        assert!(
+            !words.contains(&t.t(key::ASKPASS_BAR_TITLE_SSH).to_uppercase()),
+            "a touch titled a passphrase: {words}"
+        );
+        assert!(
+            !words.contains("••••"),
+            "a touch drew a secret line: {words}"
+        );
+        assert_eq!(bar.key(key("RET")), Pressed::Fell);
+        assert!(matches!(rx.try_recv(), Ok(AskAnswer::Password(s)) if s.expose().is_empty()));
     }
 
     /// FAILS IF: a piece runs into another or past the edge, a control is

@@ -2,9 +2,12 @@
 //! their askpass to ask a secret in the footer's OWN bar
 //! (`ronoctua_shell_footer::sudo_bar`'s ask), never a floating window.
 //!
-//! ONE PROGRAM, TWO NAMES. Its own name says the KIND: a name containing
-//! `sudo` asks the system password, any other an SSH key's passphrase. It
-//! writes one line to the footer's control socket —
+//! ONE PROGRAM, TWO NAMES, MANY KINDS. Its own name says sudo (the system
+//! password) from ssh; and WHICH ssh ask it is — a key's passphrase, a
+//! security key's touch or PIN, a host's authenticity, a login password — is
+//! read from OpenSSH's `SSH_ASKPASS_PROMPT` and the prompt's words
+//! (`ssh_kind`), so the bar titles each as what it is and ONLY a passphrase as
+//! a passphrase. It writes one line to the footer's control socket —
 //! `askpass <kind> <context> <prompt>`
 //! (`ronoctua_shell_footer::leader::ASKPASS`, spelled again here: built on its
 //! own, with no crate to share the word from) — and reads one line back: the
@@ -167,31 +170,63 @@ fn sudo_context() -> Option<String> {
     Some(joined.replace(['\n', '\r', '\t'], " "))
 }
 
+/// The kind token the bar is titled by (`sudo_bar::Kind::of`). Only a request
+/// that IS an SSH key's passphrase is called one; a security key's touch, its
+/// PIN, a host's authenticity and a login password each say what they are, and
+/// an ask none of these words name stays the neutral `ssh`.
+///
+/// OpenSSH's own signal leads: `SSH_ASKPASS_PROMPT=confirm` marks a yes/no (a
+/// touch, a host's authenticity) rather than a secret; the prompt's words tell
+/// the rest apart.
+fn ssh_kind(prompt: &str, confirm: bool) -> &'static str {
+    let p = prompt.to_ascii_lowercase();
+    if confirm {
+        if p.contains("presence") {
+            "ssh-touch"
+        } else {
+            "ssh-host"
+        }
+    } else if p.contains("passphrase") {
+        "ssh-passphrase"
+    } else if p.contains("pin") {
+        "ssh-pin"
+    } else if p.contains("password") {
+        "ssh-password"
+    } else {
+        "ssh"
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    // THE KIND IS THIS PROGRAM'S OWN NAME: `…-sudo-askpass` asks the system
-    // password, any other name an SSH key's passphrase. The footer titles the
-    // bar by it (`sudo_bar::Kind`).
-    let kind = args
-        .first()
-        .and_then(|a0| a0.rsplit('/').next())
-        .map_or("ssh", |name| {
-            if name.contains("sudo") { "sudo" } else { "ssh" }
-        });
-    // THE CONTEXT, base64, for sudo alone — `-` otherwise (no context, and the
-    // sentinel a `/proc` that gave nothing falls back to).
-    let context = if kind == "sudo" {
-        sudo_context().map(|c| base64(c.as_bytes()))
-    } else {
-        None
-    };
-    let context = context.unwrap_or_else(|| "-".to_owned());
     // ssh/sudo pass the prompt as the one argument; keep it to a single line,
     // as the socket is line-based.
     let prompt = args
         .get(1)
         .map(|p| p.replace(['\n', '\r'], " "))
         .unwrap_or_default();
+    // THE KIND. `…-sudo-askpass` asks the system password; otherwise it is an
+    // ssh ask, and WHICH ssh ask is read from OpenSSH's `SSH_ASKPASS_PROMPT`
+    // (`confirm` for a yes/no) and the prompt's words (`ssh_kind`), so the bar
+    // titles a passphrase a passphrase and a touch a touch — never one as the
+    // other. The footer titles the bar by this token (`sudo_bar::Kind`).
+    let is_sudo = args
+        .first()
+        .and_then(|a0| a0.rsplit('/').next())
+        .is_some_and(|name| name.contains("sudo"));
+    let kind = if is_sudo {
+        "sudo"
+    } else {
+        ssh_kind(&prompt, std::env::var("SSH_ASKPASS_PROMPT").as_deref() == Ok("confirm"))
+    };
+    // THE CONTEXT, base64, for sudo alone — `-` otherwise (no context, and the
+    // sentinel a `/proc` that gave nothing falls back to).
+    let context = if is_sudo {
+        sudo_context().map(|c| base64(c.as_bytes()))
+    } else {
+        None
+    };
+    let context = context.unwrap_or_else(|| "-".to_owned());
     let Some(path) = socket_path() else {
         return ExitCode::FAILURE;
     };
