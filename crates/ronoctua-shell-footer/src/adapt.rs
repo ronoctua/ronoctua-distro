@@ -457,6 +457,11 @@ pub struct Prefs {
     /// for and not one the footer puts up.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub hours: bool,
+    /// When the build-switch glyph is drawn (`crate::build_switch::Show`, set
+    /// on the dev page `crate::build_page`). ABSENT IS `Dev` — the distro
+    /// default, the glyph only on a reference build.
+    #[serde(skip_serializing_if = "crate::build_switch::Show::is_default")]
+    pub build_show: crate::build_switch::Show,
 }
 
 /// The two hidden modes of the modeline and the minibuffer.

@@ -78,6 +78,9 @@ mod brain;
 // WHICH BUILD IS RUNNING (the machine's own, or a distro checkout's reference),
 // and the switch between them — `LEADER / b` and the modeline glyph.
 mod build_switch;
+// THE BUILD SWITCH'S PAGE (`LEADER / p`, the glyph's right-click): what it is,
+// which build runs, and the setting that says when the glyph is drawn.
+mod build_page;
 pub mod events;
 // THE CAMERA'S HANDS: what a pose means, and the command each runs.
 pub mod gestures;

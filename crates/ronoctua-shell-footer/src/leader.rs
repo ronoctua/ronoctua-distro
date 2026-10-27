@@ -1010,6 +1010,30 @@ pub const BASE: Contribution = Contribution {
             id: "build-toggle",
             label: key::CMD_BUILD_TOGGLE,
         },
+        // THE BUILD PAGE, `/ p` and the glyph's right-click: what the feature
+        // is, which build runs, and the glyph setting (`crate::build_page`).
+        // Its three view keys and the setting's own command are reached
+        // through the view (`base_reached`), as the footer settings' are.
+        Command {
+            id: "build-open",
+            label: key::CMD_BUILD_OPEN,
+        },
+        Command {
+            id: "build-show-cycle",
+            label: key::CMD_BUILD_SHOW_CYCLE,
+        },
+        Command {
+            id: "build-page-up",
+            label: key::CMD_BUILD_PAGE_UP,
+        },
+        Command {
+            id: "build-page-down",
+            label: key::CMD_BUILD_PAGE_DOWN,
+        },
+        Command {
+            id: "build-page-enter",
+            label: key::CMD_BUILD_PAGE_ENTER,
+        },
         // THE REFERENCE for several keyboards in one app — by name only: it
         // is a model for apps to come, not a place anybody goes daily.
         Command {
@@ -1684,6 +1708,10 @@ pub const BASE: Contribution = Contribution {
         // through a constant, so the check that every key reaches an arm of
         // `run_with` reads it.
         ("/ b", "build-toggle", None),
+        // `/ p` — THE BUILD PAGE, the hub the right-click on the glyph opens
+        // too. Written out, not through a constant, so the check that every
+        // key reaches an arm of `run_with` reads it.
+        ("/ p", "build-open", None),
     ],
     groups: &[
         ("w", key::GROUP_WINDOW),
@@ -1873,6 +1901,7 @@ fn base_reached() -> Vec<&'static str> {
     out.extend(OF_THEME_VIEW.iter().map(|(_, id)| *id));
     out.extend(crate::kiosk_view::reached());
     out.extend(crate::footer_settings::reached());
+    out.extend(crate::build_page::reached());
     out
 }
 

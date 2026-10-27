@@ -464,6 +464,7 @@ mod tests {
         };
         assert_eq!(runs("/ r"), Some("dev-resizer"));
         assert_eq!(runs("/ b"), Some("build-toggle"));
+        assert_eq!(runs("/ p"), Some("build-open"));
         assert_eq!(runs("g"), Some("world-glance"));
         assert_eq!(GLANCE_KEYS, "g");
         assert_eq!(runs(GLANCE_KEYS), Some("world-glance"));
@@ -928,6 +929,16 @@ mod tests {
             "gestures",
             "gestures-calibrate",
             "dev-resizer",
+            // The build switch (`/ b`, the glyph) and its page (`/ p`, the
+            // glyph's right-click): the toggle, the page's door, its three
+            // view keys and the glyph setting — all in `build_page_commands`
+            // and `build_toggle`.
+            "build-toggle",
+            "build-open",
+            "build-show-cycle",
+            "build-page-up",
+            "build-page-down",
+            "build-page-enter",
             "camera-settings-open",
             "camera-settings-window",
             "camera-settings-up",

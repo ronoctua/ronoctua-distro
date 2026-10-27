@@ -102,6 +102,7 @@ mod apps;
 mod clipboard_history;
 // THE NOTIFICATION DESK the footer keeps — its queue, the person's filter
 // book and the bus — and what a view or the band asks of it.
+mod build_page;
 mod desk;
 mod footer_settings;
 /// WHAT THE FOOTER HOLDS that a region of the slot host reads and does not
@@ -1213,6 +1214,9 @@ struct Footer {
     /// THE FOOTER'S OWN SETTINGS (`LEADER s r r`), while the view is open.
     /// What it draws is read from `modeline` — the file both doors draw.
     footer_settings: Option<crate::footer_settings::View>,
+    /// THE BUILD SWITCH'S PAGE (`LEADER / p`), while it is open. Its facts are
+    /// read from `build_state`, its setting from `modeline` (`build_show`).
+    build_page: Option<crate::build_page::View>,
     /// THE MAXIMUM ALERT BAR (`crate::alert`): what is up, and what a hand
     /// closed. While one is up it takes the notification band's place.
     alerts: crate::alert::Alerts,
@@ -1486,6 +1490,9 @@ enum ViewState {
     /// The footer's own settings — the bars, the free minibuffer, the kiosk
     /// (`LEADER s r r`, `crate::footer_settings`).
     FooterSettings,
+    /// The build switch's page — what it is, which build runs, and the glyph
+    /// setting (`LEADER / p`, the glyph's right-click; `crate::build_page`).
+    BuildPage,
     /// Everything the Chrome kiosk can do — its modeline's `…`, `LEADER w
     /// B`. Just above the window menu, which is one of its doors.
     Kiosk,
@@ -1513,6 +1520,8 @@ enum Rank {
     Themes,
     /// The footer's own settings.
     FooterSettings,
+    /// The build switch's page.
+    BuildPage,
     /// The kiosk's view.
     Kiosk,
     /// The window menu.
@@ -1530,6 +1539,7 @@ impl From<Rank> for ViewState {
             Rank::Applications => Self::Applications,
             Rank::Themes => Self::Themes,
             Rank::FooterSettings => Self::FooterSettings,
+            Rank::BuildPage => Self::BuildPage,
             Rank::Kiosk => Self::Kiosk,
             Rank::WindowMenu => Self::WindowMenu,
             Rank::Commands => Self::Commands,
@@ -1677,6 +1687,10 @@ const PRECEDENCE: &[Rank] = &[
     // catalogue kept alive showed the settings while the catalogue's work
     // waited underneath.
     Rank::FooterSettings,
+    // The build switch's page — three facts, one setting and the switch, a
+    // cursor over them: it holds nothing built by hand, so it ranks with the
+    // footer's own settings, below every view that holds work.
+    Rank::BuildPage,
     // The file manager. ABOVE THE LOCATOR AND THE LEADER, because it holds
     // state a person built by hand: a directory navigated to, a set of marks,
     // an armed confirmation, a question half answered. Every other view can be
@@ -1758,6 +1772,7 @@ fn ranking_refusals(precedence: &[Rank], regions: &[&'static str]) -> Vec<String
         Rank::Applications,
         Rank::Themes,
         Rank::FooterSettings,
+        Rank::BuildPage,
         Rank::Kiosk,
         Rank::WindowMenu,
         Rank::Commands,
@@ -2106,6 +2121,8 @@ enum Click {
     Kiosk(usize),
     /// A row of the footer's own settings.
     FooterSettings(usize),
+    /// A row of the build switch's page.
+    BuildPage(usize),
     /// A row of the region the slot host shows, by its place in the region's
     /// rows (`Region::clicked`): one region is shown at a time, so the row
     /// alone says which.
@@ -2984,6 +3001,7 @@ fn assemble(
         brain_answers: None,
         // ── end of brain-ui ──
         footer_settings: None,
+        build_page: None,
         alerts: crate::alert::Alerts::default(),
         alert_phase: false,
         alert_clock: false,
@@ -4707,15 +4725,17 @@ impl Footer {
                 recording: self.studio_rolling(),
                 gestures: self.gestures.is_some(),
                 resizer: self.resizer.is_some(),
-                // WHICH BUILD IS RUNNING — only on a machine that builds from a
-                // local checkout (`State::checkout`), where there is a
-                // reference build to switch to. Read once at start: a switch
-                // restarts the footer, which reads it again.
-                build: self
-                    .build_state
-                    .checkout
-                    .as_ref()
-                    .map(|_| self.build_state.build),
+                // WHICH BUILD IS RUNNING, as the dev page's setting says to
+                // draw it (`build_switch::glyph`, `modeline.json`'s `build_show`
+                // — ABSENT IS `Dev`, the glyph only on a reference build). A
+                // machine with no checkout never draws one. The build is read
+                // once at start; a switch restarts the footer, which reads it
+                // again.
+                build: crate::build_switch::glyph(
+                    self.modeline.build_show,
+                    self.build_state.build,
+                    self.build_state.checkout.is_some(),
+                ),
                 player: self.player.as_ref().and_then(crate::player_mark::mark),
                 workspaces: &workspaces,
                 drawer: self.in_the_drawer().len(),
@@ -5275,12 +5295,17 @@ impl Footer {
             self.run_command("dev-resizer");
             return;
         }
-        // THE BUILD MARK (either state): the switch to the other build, the
-        // command `LEADER / b` runs. A stray click rebuilds, but the apply's
-        // boot trial is the net — a reference build that will not come up is
-        // rolled back on the next boot (`ronoctua-machine apply`).
+        // THE BUILD MARK (either state): the LEFT button switches, the command
+        // `LEADER / b` runs — a stray click rebuilds, but the apply's boot
+        // trial is the net, a reference build that will not come up rolled back
+        // on the next boot. The RIGHT button opens the page (`build-open`), the
+        // footer's left-acts/right-opens convention.
         if id == "build-own" || id == "build-reference" {
-            self.run_command("build-toggle");
+            self.run_command(if forward {
+                "build-toggle"
+            } else {
+                "build-open"
+            });
             return;
         }
         // AND THE CAMERA'S TWO, to the camera's settings.
@@ -8363,6 +8388,7 @@ impl Footer {
             || self.themes_commands(id, argument)
             || self.radio_commands(id, argument)
             || self.footer_settings_commands(id, argument)
+            || self.build_page_commands(id, argument)
             || self.kiosk_commands(id, argument)
             || self.window_menu_commands(id, argument)
             || self.hosted_command(id, argument)
@@ -10022,6 +10048,7 @@ impl Footer {
             ViewState::Applications => self.apps_key(key),
             ViewState::Themes => self.themes_key(key),
             ViewState::FooterSettings => self.footer_settings_key(key),
+            ViewState::BuildPage => self.build_page_key(key),
             ViewState::Kiosk => self.kiosk_view_key(key),
             ViewState::WindowMenu => self.window_menu_key(key),
             ViewState::Commands => self.minibuffer_key(key),
@@ -11551,6 +11578,7 @@ impl Footer {
             Rank::Applications => self.apps.is_some(),
             Rank::Themes => self.theme_chooser.is_some(),
             Rank::FooterSettings => self.footer_settings.is_some(),
+            Rank::BuildPage => self.build_page.is_some(),
             Rank::Kiosk => self.kiosk_view.is_some(),
             Rank::WindowMenu => self.window_menu.is_some(),
             Rank::Commands => self.mx.active(),
@@ -11675,6 +11703,7 @@ impl Footer {
         match showing {
             ViewState::Themes => self.themes_hint(),
             ViewState::FooterSettings => self.footer_settings_hint(),
+            ViewState::BuildPage => self.build_page_hint(),
             ViewState::Kiosk => self.kiosk_hint(),
             ViewState::WindowMenu => self.window_menu_hint(),
             ViewState::Region(hosted) => self.hosted_hint(hosted),
@@ -13524,6 +13553,7 @@ impl Footer {
             ViewState::Applications => self.apps_expansion(),
             ViewState::Themes => self.themes_expansion(),
             ViewState::FooterSettings => self.footer_settings_expansion(),
+            ViewState::BuildPage => self.build_page_expansion(),
             ViewState::Kiosk => self.kiosk_expansion(),
             ViewState::WindowMenu => self.window_menu_expansion(),
             ViewState::Commands => self.commands_expansion(),
@@ -14192,6 +14222,7 @@ impl Footer {
             Some(Click::Bars) => self.cycle_the_bars(),
             Some(Click::Application(n)) => self.apps_click(n),
             Some(Click::FooterSettings(n)) => self.footer_settings_click(n),
+            Some(Click::BuildPage(n)) => self.build_page_click(n),
             Some(Click::Kiosk(n)) => self.kiosk_view_clicked(n),
             Some(Click::WindowMenu(n)) => self.window_menu_click(n),
             Some(Click::Theme(n)) => self.themes_click(n),
@@ -14369,6 +14400,7 @@ impl Footer {
             ViewState::Applications => self.apps_cursor(),
             ViewState::Themes => self.themes_cursor(),
             ViewState::FooterSettings => self.footer_settings_cursor(),
+            ViewState::BuildPage => self.build_page_cursor(),
 
             // THE DRAWN ROW — a shelf's first line, a caret's — found by identity.
             ViewState::Kiosk => self.kiosk_cursor(),

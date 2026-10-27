@@ -36,6 +36,61 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
+/// When the modeline draws the build glyph — the dev page's one setting
+/// (`crate::build_page`), kept in `modeline.json` (`crate::adapt::Prefs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Show {
+    /// Only on a reference build — THE DISTRO DEFAULT. The machine's own build
+    /// is where a developer lives, and a mark on it every day would be the
+    /// chrome invariant 14 keeps off; the reference build is the exception
+    /// worth a glyph, so the glyph IS the exception.
+    #[default]
+    Dev,
+    /// On both builds, wherever there is a checkout to switch to.
+    Always,
+    /// Never — the glyph is off, and the page is reached by its key alone.
+    Never,
+}
+
+impl Show {
+    /// The next value `RET` on the page's row walks to, round the three.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::Dev => Self::Always,
+            Self::Always => Self::Never,
+            Self::Never => Self::Dev,
+        }
+    }
+
+    /// Whether it is the default — so `modeline.json` keeps nothing for a
+    /// setting nobody changed, the house rule for every switch in that file.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        matches!(self, Self::Dev)
+    }
+}
+
+/// Which build the glyph draws, under this setting — or `None` for no glyph.
+/// A machine with no checkout has nothing to switch to and never draws one;
+/// otherwise `Never` draws nothing, `Dev` draws only a reference build, and
+/// `Always` draws whichever is running. Pure: the view tests it with no
+/// compositor.
+#[must_use]
+pub fn glyph(show: Show, build: Build, has_checkout: bool) -> Option<Build> {
+    if !has_checkout {
+        return None;
+    }
+    match show {
+        Show::Never => None,
+        Show::Dev => (build == Build::Reference).then_some(build),
+        Show::Always => Some(build),
+    }
+}
+
 /// Present iff the running build has a machine flake of its own — see the
 /// module's note. Absent on the reference build.
 pub const MACHINE_LOCK: &str = "/etc/ronoctua/machine.lock";
@@ -242,6 +297,38 @@ mod tests {
             hostname_of("/nix/store/xxxx-nixos-system-noctua-reference-26.05.1"),
             Some("noctua-reference".to_owned())
         );
+    }
+
+    #[test]
+    fn the_default_is_the_glyph_only_on_a_reference_build() {
+        assert_eq!(Show::default(), Show::Dev);
+        assert!(Show::Dev.is_default() && !Show::Always.is_default() && !Show::Never.is_default());
+        // No checkout: never a glyph, whatever the setting.
+        for show in [Show::Dev, Show::Always, Show::Never] {
+            assert_eq!(glyph(show, Build::Own, false), None);
+            assert_eq!(glyph(show, Build::Reference, false), None);
+        }
+        // Dev (the default): the reference build only.
+        assert_eq!(glyph(Show::Dev, Build::Own, true), None);
+        assert_eq!(
+            glyph(Show::Dev, Build::Reference, true),
+            Some(Build::Reference)
+        );
+        // Always: whichever runs. Never: neither.
+        assert_eq!(glyph(Show::Always, Build::Own, true), Some(Build::Own));
+        assert_eq!(
+            glyph(Show::Always, Build::Reference, true),
+            Some(Build::Reference)
+        );
+        assert_eq!(glyph(Show::Never, Build::Own, true), None);
+        assert_eq!(glyph(Show::Never, Build::Reference, true), None);
+    }
+
+    #[test]
+    fn the_setting_walks_the_three_round() {
+        assert_eq!(Show::Dev.next(), Show::Always);
+        assert_eq!(Show::Always.next(), Show::Never);
+        assert_eq!(Show::Never.next(), Show::Dev);
     }
 
     #[test]
