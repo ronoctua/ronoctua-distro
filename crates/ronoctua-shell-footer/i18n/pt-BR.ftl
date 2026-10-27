@@ -64,12 +64,12 @@ echo-no-action = { $command } ainda não faz nada
 # A TROCA DE BUILD (LEADER / b, e o glifo da modeline): um build de referência
 # reconstrói e reinicia a sessão, então a linha diz o que vai acontecer.
 echo-build-no-checkout = Nenhum checkout local para construir
-echo-build-to-own = Reconstruindo esta máquina a partir do seu checkout local — vai reconstruir e reiniciar
-echo-build-to-reference = Reconstruindo esta máquina a partir do seu checkout local — vai reconstruir e reiniciar
+echo-build-to-own = Construindo a versão instalada (commitada) — vai reconstruir e reiniciar
+echo-build-to-reference = Construindo a sua árvore de trabalho (dev) — vai reconstruir e reiniciar
 echo-build-failed = Não foi possível iniciar a troca de build: { $why }
 # O que o glifo de build diz na linha de mensagem enquanto o ponteiro repousa nele.
-hint-build-own = O build instalado (lançado) — clique para reconstruir esta máquina a partir do seu checkout local
-hint-build-reference = Um build de dev, do seu checkout local — clique para reconstruir; volte ao instalado pela tela de boot
+hint-build-own = O build instalado (commitado) — clique para construir e rodar a sua árvore de trabalho (dev)
+hint-build-reference = Um build de dev da sua árvore de trabalho — clique para voltar ao build instalado (commitado)
 # Enquanto uma troca de build está em andamento (minutos): o glifo é a marca de troca.
 hint-build-switching = Trocando de build — a máquina está reconstruindo; espere ela voltar
 echo-build-in-progress = Uma troca de build já está em andamento
@@ -85,11 +85,11 @@ build-page-up = cima
 build-page-down = baixo
 build-page-enter = agir
 build-page-title = A troca de build
-build-page-note = O build instalado é o /etc/nixos na revisão lançada do distro; um build de dev é a MESMA máquina — com o seu host.nix e hardware — construída a partir do seu checkout local do distro. A troca nunca constrói a máquina de referência do distro: ela não tem hardware e é para a VM (nix run .#vm).
+build-page-note = O build instalado é o /etc/nixos no HEAD commitado do checkout — o sistema estável. Um build de dev é a MESMA máquina (com o host.nix e o hardware) construída a partir da sua árvore de trabalho, com mudanças não commitadas. Cada um fica a um gesto do outro; a troca nunca constrói a máquina de referência do distro (sem hardware, só para a VM).
 build-page-running = Rodando agora
 build-page-build = Build
-build-page-build-own = O build instalado (lançado)
-build-page-build-reference = Um build de dev (seu checkout local)
+build-page-build-own = O build instalado (commitado)
+build-page-build-reference = Um build de dev (sua árvore de trabalho)
 build-page-host = Hostname
 build-page-unknown = desconhecido
 build-page-checkout = Checkout
@@ -99,9 +99,9 @@ build-page-show = Mostrar o glifo
 build-page-show-dev = Só num build de dev
 build-page-show-always = Nos dois builds
 build-page-show-never = Nunca
-build-page-show-note = Só-em-dev é o padrão: uma marca quando você está rodando o seu checkout local, a exceção que merece uma, e nada no build instalado.
-build-page-switch-to-own = Reconstruir e trocar para o seu checkout local
-build-page-switch-to-reference = Reconstruir e trocar para o seu checkout local
+build-page-show-note = Só-em-dev é o padrão: uma marca enquanto você roda a sua árvore de trabalho, a exceção que merece uma, e nada no build instalado.
+build-page-switch-to-own = Construir e trocar para o build instalado (commitado)
+build-page-switch-to-reference = Construir e trocar para um build de dev (sua árvore de trabalho)
 cmd-window-right = Focar à direita
 cmd-window-up = Focar acima
 cmd-window-down = Focar abaixo

@@ -64,12 +64,12 @@ echo-no-action = { $command } does nothing yet
 # THE BUILD SWITCH (LEADER / b, and the modeline glyph): a reference build
 # rebuilds and restarts the session, so the line says what is about to happen.
 echo-build-no-checkout = No local checkout to build from
-echo-build-to-own = Rebuilding this machine against your local checkout — it will rebuild and restart
-echo-build-to-reference = Rebuilding this machine against your local checkout — it will rebuild and restart
+echo-build-to-own = Building the installed (committed) version — it will rebuild and restart
+echo-build-to-reference = Building your working tree (dev) — it will rebuild and restart
 echo-build-failed = The build switch could not start: { $why }
 # What the build glyph says on the message line while the pointer rests on it.
-hint-build-own = The installed, released build — click to rebuild this machine against your local checkout
-hint-build-reference = A dev build, from your local checkout — click to rebuild it; roll back from the boot menu to return to the installed one
+hint-build-own = The installed, committed build — click to build & run your working tree (dev)
+hint-build-reference = A dev build of your working tree — click to go back to the installed, committed build
 # While a build switch is applying (minutes): the glyph is the switching mark.
 hint-build-switching = Switching builds — the machine is rebuilding; wait for it to come back
 echo-build-in-progress = A build switch is already underway
@@ -85,11 +85,11 @@ build-page-up = up
 build-page-down = down
 build-page-enter = act
 build-page-title = The build switch
-build-page-note = The installed build is /etc/nixos at its released distro revision; a dev build is the SAME machine — its host.nix and hardware — built against your local distro checkout. The switch never builds the distro's fixture reference machine: that has no hardware and is for the VM (nix run .#vm).
+build-page-note = The installed build is /etc/nixos at the checkout's committed HEAD — the stable system. A dev build is the SAME machine (its host.nix and hardware) built from your working tree, uncommitted changes and all. Each is one gesture from the other; the switch never builds the distro's fixture reference machine (no hardware, for the VM alone).
 build-page-running = Running now
 build-page-build = Build
-build-page-build-own = The installed, released build
-build-page-build-reference = A dev build (your local checkout)
+build-page-build-own = The installed, committed build
+build-page-build-reference = A dev build (your working tree)
 build-page-host = Hostname
 build-page-unknown = unknown
 build-page-checkout = Checkout
@@ -99,9 +99,9 @@ build-page-show = Show the glyph
 build-page-show-dev = Only on a dev build
 build-page-show-always = On both builds
 build-page-show-never = Never
-build-page-show-note = Only-on-dev is the default: a mark when you are running your local checkout, the exception worth one, and nothing on the installed build.
-build-page-switch-to-own = Rebuild & switch to your local checkout
-build-page-switch-to-reference = Rebuild & switch to your local checkout
+build-page-show-note = Only-on-dev is the default: a mark while you run your working tree, the exception worth one, and nothing on the installed build.
+build-page-switch-to-own = Build & switch to the installed (committed) build
+build-page-switch-to-reference = Build & switch to a dev build (your working tree)
 cmd-window-right = Focus right
 cmd-window-up = Focus up
 cmd-window-down = Focus down

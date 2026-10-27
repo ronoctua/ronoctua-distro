@@ -592,25 +592,40 @@ in
       };
 
       # THE BUILD SWITCH — what the modeline's glyph and `LEADER / b` start to
-      # move between the machine's OWN build and a distro checkout's REFERENCE
-      # build (`ronoctua_shell_footer::build_switch`). Both run the same apply
-      # the update does, so the boot trial is the net either way: a build that
-      # will not come up is rolled back on the next boot, as any trial is.
+      # move between the machine's INSTALLED build and a DEV build of the local
+      # distro checkout (`ronoctua_shell_footer::build_switch`). Both run the
+      # same apply the update does, so the boot trial is the net either way: a
+      # build that will not come up is rolled back on the next boot.
       #
-      # THE OWN DIRECTION builds `/etc/nixos`'s own system (its `host.nix`) but
-      # with `ronoctua` OVERRIDDEN to a `path:` of the checkout
-      # (`RONOCTUA_MACHINE_OVERRIDE_DIR`, `argv::with_override`). Without that, a
-      # root apply would fetch the machine flake's `git+file` input — a
-      # user-owned repo git refuses root, and a branch `--no-update-lock-file`
-      # will not re-resolve. The override is the same checkout the reference
-      # direction builds, so neither fetches git as root.
+      # BOTH BUILD THIS MACHINE'S OWN SYSTEM (`/etc/nixos`, its `host.nix` and
+      # `facter.json`) — the hardware is kept either way. They differ ONLY in
+      # which state of the checkout feeds the `ronoctua` input:
+      #
+      #   - THE INSTALLED DIRECTION (`-own`) builds the checkout's COMMITTED
+      #     HEAD (`git+file`, NO override): the stable system, what a plain
+      #     `nixos-rebuild` would make, and the one gesture BACK from a dev
+      #     build. Root reads the person's repo as git, which git refuses as
+      #     another owner's without `safe.directory` — set here, scoped to that
+      #     one checkout. (Root already builds the repo's code in the dev
+      #     direction; reading it as git is strictly less than that.)
+      #
+      #   - THE DEV DIRECTION (`-reference`) builds the WORKING TREE
+      #     (`RONOCTUA_MACHINE_OVERRIDE_DIR`, a `path:` override): the person's
+      #     UNCOMMITTED changes, running on the real machine. `path:` copies the
+      #     tree, so no git is fetched as root.
+      #
+      # IT NEVER BUILDS THE FIXTURE REFERENCE MACHINE (`.#noctua`). That reads
+      # `tests/fixtures/machine`, has NONE of this laptop's hardware, and
+      # switching the real machine to it left it with no Wi-Fi and no Bluetooth
+      # (2026-10-27), a plain `reboot` coming up broken. The fixture build is
+      # for `nix run .#vm` alone, never a switch of the host.
       #
       # TWO NAMED UNITS, not one templated by the directory: the polkit rule
       # then names exactly the two the person may start, and no instance can
       # smuggle an arbitrary flake to apply as root — the parts module's reason
       # (`polkit-rules-are-the-ones-we-know`), applied here.
       systemd.services.ronoctua-build-switch-own = {
-        description = "Builds and switches to this machine's own build";
+        description = "Builds and switches to this machine's installed (committed) build";
         environment = cfg.environment;
         serviceConfig = {
           Type = "oneshot";
@@ -618,9 +633,13 @@ in
           ExecStart = pkgs.writeShellScript "ronoctua-build-switch-own" ''
             set -eu
             dir=$(${distroCheckout}) || exit 1
-            # Keep RONOCTUA_MACHINE_DIR (`/etc/nixos`, the machine's own system);
-            # only override the distro input with the checkout.
-            export RONOCTUA_MACHINE_OVERRIDE_DIR="$dir"
+            # THE COMMITTED HEAD, not the working tree: NO override, so the
+            # machine flake's `git+file` input re-resolves to HEAD. Let root
+            # read the person's repo as git — git refuses another owner's repo
+            # without this, scoped to the one checkout (`HOME=/root` so the
+            # write and nix's read share `/root/.gitconfig`).
+            export HOME=/root
+            ${pkgs.git}/bin/git config --global --replace-all safe.directory "$dir"
             exec ${cfg.applyCommand}
           '';
           RuntimeDirectory = baseNameOf cfg.runDir;
@@ -631,23 +650,12 @@ in
         restartIfChanged = false;
         stopIfChanged = false;
       };
-      # THE DEV DIRECTION builds THIS MACHINE'S OWN system (`/etc/nixos`, its
-      # `host.nix` and `facter.json`) with `ronoctua` OVERRIDDEN to the
-      # checkout — the SAME safe build as the own direction. It is "run my
-      # local distro changes on this laptop, with my hardware".
-      #
-      # IT DELIBERATELY NO LONGER BUILDS THE FIXTURE REFERENCE MACHINE. That
-      # build reads `tests/fixtures/machine`, so it has NONE of this laptop's
-      # hardware — switching the REAL machine to it left it with no Wi-Fi
-      # device listed and no Bluetooth (2026-10-27), to the point a plain
-      # `reboot` came up broken. The fixture reference build is a clean-room
-      # thing and belongs to `nix run .#vm` alone, never a switch of the host.
-      # Keeping `RONOCTUA_MACHINE_DIR` (`/etc/nixos`) and only overriding the
-      # distro input is what keeps the hardware. `argv::with_override` stops the
-      # lock being written, so a root apply never fetches the user-owned
-      # `git+file` input.
+      # THE DEV DIRECTION: the WORKING TREE, via a `path:` override (see the
+      # block above). Keeps `RONOCTUA_MACHINE_DIR` (`/etc/nixos`, with host.nix)
+      # and only overrides the distro input, so the hardware is kept and no git
+      # is fetched as root. It NEVER builds the fixture reference machine.
       systemd.services.ronoctua-build-switch-reference = {
-        description = "Builds and switches to this machine's build against the local distro checkout";
+        description = "Builds and switches to a dev build of the local checkout (working tree)";
         environment = cfg.environment;
         serviceConfig = {
           Type = "oneshot";
@@ -655,9 +663,6 @@ in
           ExecStart = pkgs.writeShellScript "ronoctua-build-switch-reference" ''
             set -eu
             dir=$(${distroCheckout}) || exit 1
-            # Keep RONOCTUA_MACHINE_DIR (`/etc/nixos`, with host.nix); only
-            # override the distro input with the checkout — never point the
-            # machine directory at the checkout's fixture host.
             export RONOCTUA_MACHINE_OVERRIDE_DIR="$dir"
             exec ${cfg.applyCommand}
           '';

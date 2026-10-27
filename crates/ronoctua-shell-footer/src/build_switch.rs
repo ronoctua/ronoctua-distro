@@ -50,16 +50,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Show {
-    /// Only on a dev build — a mark when you are running the local checkout,
-    /// and nothing on the installed system. Pick this to keep the installed
-    /// build free of the glyph.
-    Dev,
-    /// On both builds, wherever there is a checkout to build from — THE
-    /// DEFAULT, so the glyph is there to CLICK from the installed system to
-    /// build the checkout, and there to say so once you are on it. A dev
-    /// machine has a checkout; a plain install has none and draws no glyph
-    /// either way.
+    /// Only on a dev build — THE DEFAULT, by the owner's ask. A mark while you
+    /// are running your working tree, and nothing on the installed (committed)
+    /// build, which keeps it free of the glyph. To start a dev build from the
+    /// installed one, `LEADER / b` or the page (`LEADER / p`) reach the switch
+    /// without a glyph; `Always` puts the glyph on both builds to click.
     #[default]
+    Dev,
+    /// On both builds, wherever there is a checkout to build from — so the
+    /// glyph is there to CLICK from the installed build too.
     Always,
     /// Never — the glyph is off, and the page is reached by its key alone.
     Never,
@@ -80,7 +79,7 @@ impl Show {
     /// setting nobody changed, the house rule for every switch in that file.
     #[must_use]
     pub fn is_default(&self) -> bool {
-        matches!(self, Self::Always)
+        matches!(self, Self::Dev)
     }
 }
 
@@ -344,23 +343,23 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_the_glyph_on_both_builds() {
-        // THE DEFAULT SHOWS THE GLYPH ON BOTH BUILDS (with a checkout), so it
-        // is there to click from the installed system to build the checkout.
-        assert_eq!(Show::default(), Show::Always);
-        assert!(Show::Always.is_default() && !Show::Dev.is_default() && !Show::Never.is_default());
+    fn the_default_is_the_glyph_only_on_a_dev_build() {
+        // THE DEFAULT, by the owner's ask: the glyph only on a dev build — the
+        // installed (committed) build stays free of it.
+        assert_eq!(Show::default(), Show::Dev);
+        assert!(Show::Dev.is_default() && !Show::Always.is_default() && !Show::Never.is_default());
         // No checkout: never a glyph, whatever the setting.
         for show in [Show::Dev, Show::Always, Show::Never] {
             assert_eq!(glyph(show, Build::Own, false), None);
             assert_eq!(glyph(show, Build::Reference, false), None);
         }
-        // Dev: the dev build only.
+        // Dev (the default): the dev build only.
         assert_eq!(glyph(Show::Dev, Build::Own, true), None);
         assert_eq!(
             glyph(Show::Dev, Build::Reference, true),
             Some(Build::Reference)
         );
-        // Always (the default): whichever runs. Never: neither.
+        // Always: whichever runs. Never: neither.
         assert_eq!(glyph(Show::Always, Build::Own, true), Some(Build::Own));
         assert_eq!(
             glyph(Show::Always, Build::Reference, true),
