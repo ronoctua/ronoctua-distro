@@ -61,6 +61,12 @@ echo-no-on-box = { $sequence } não está ligado — { $other } está
 echo-cancelled = Cancelado
 echo-no-window = Nenhuma janela em foco
 echo-no-action = { $command } ainda não faz nada
+# A TROCA DE BUILD (LEADER / b, e o glifo da modeline): um build de referência
+# reconstrói e reinicia a sessão, então a linha diz o que vai acontecer.
+echo-build-no-checkout = Nenhum checkout para onde alternar
+echo-build-to-own = Alternando para o build desta máquina — vai reconstruir e reiniciar
+echo-build-to-reference = Alternando para o build de referência do checkout — vai reconstruir e reiniciar
+echo-build-failed = Não foi possível iniciar a troca de build: { $why }
 cmd-window-right = Focar à direita
 cmd-window-up = Focar acima
 cmd-window-down = Focar abaixo
@@ -386,6 +392,7 @@ cmd-leader-set-full = A árvore inteira de teclas, com cada submenu como era
 ## O painel de memoria — LEADER s m
 
 cmd-memory-open = Memória do sistema
+cmd-build-toggle = Alternar build: próprio ⇄ referência
 cmd-example-open = Vários teclados num app, a referência
 cmd-format-open = Formatar um disco
 group-system = sistema

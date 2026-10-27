@@ -565,15 +565,88 @@ in
         stopIfChanged = false;
       };
 
-      # WHO MAY START IT: the person, verb `start`, this unit and no other,
+      # THE BUILD SWITCH — what the modeline's glyph and `LEADER / b` start to
+      # move between the machine's OWN build and a distro checkout's REFERENCE
+      # build (`ronoctua_shell_footer::build_switch`). Both run the same apply
+      # the update does and differ only in RONOCTUA_MACHINE_DIR, so the boot
+      # trial is the net either way: a reference build that will not come up is
+      # rolled back on the next boot, as any trial is.
+      #
+      # TWO NAMED UNITS, not one templated by the directory: the polkit rule
+      # then names exactly the two the person may start, and no instance can
+      # smuggle an arbitrary flake to apply as root — the parts module's reason
+      # (`polkit-rules-are-the-ones-we-know`), applied here.
+      systemd.services.ronoctua-build-switch-own = {
+        description = "Builds and switches to this machine's own build";
+        environment = cfg.environment;
+        serviceConfig = {
+          Type = "oneshot";
+          TimeoutStartSec = "infinity";
+          ExecStart = cfg.applyCommand;
+          RuntimeDirectory = baseNameOf cfg.runDir;
+          RuntimeDirectoryPreserve = "yes";
+          CPUSchedulingPolicy = "idle";
+          IOSchedulingClass = "idle";
+        };
+        restartIfChanged = false;
+        stopIfChanged = false;
+      };
+      # The reference build comes from a checkout this machine's flake names as
+      # a LOCAL input — `inputs.ronoctua.url = "git+file:///…"`, or a bare
+      # `path:/…` that is not in the store. The wrapper reads that one line the
+      # way the glyph's Rust does (`build_switch::checkout_of` — keep the two in
+      # step) and applies it in place of the machine directory. A machine whose
+      # input is a published distro has no such checkout, the wrapper refuses,
+      # and the glyph is away there in the first place.
+      systemd.services.ronoctua-build-switch-reference = {
+        description = "Builds and switches to a distro checkout's reference build";
+        environment = cfg.environment;
+        serviceConfig = {
+          Type = "oneshot";
+          TimeoutStartSec = "infinity";
+          ExecStart = pkgs.writeShellScript "ronoctua-build-switch-reference" ''
+            set -eu
+            flake="${cfg.dir}/flake.nix"
+            # The ronoctua input's URL — the first quoted value on the one
+            # uncommented line that carries both `ronoctua` and `url`.
+            url=$(${pkgs.gawk}/bin/awk \
+              '!/^[[:space:]]*#/ && /ronoctua/ && /url/ { if (match($0, /"[^"]*"/)) { print substr($0, RSTART + 1, RLENGTH - 2); exit } }' \
+              "$flake")
+            case "$url" in
+              git+file://*) dir=''${url#git+file://} ;;
+              path:*)       dir=''${url#path:} ;;
+              *) echo "the machine flake names no local checkout to switch to" >&2; exit 1 ;;
+            esac
+            dir=''${dir%%\?*}
+            case "$dir" in
+              /nix/store/*) echo "the ronoctua input is a store copy, not a checkout" >&2; exit 1 ;;
+              /*) ;;
+              *) echo "the checkout path is not absolute: $dir" >&2; exit 1 ;;
+            esac
+            export RONOCTUA_MACHINE_DIR="$dir"
+            exec ${cfg.applyCommand}
+          '';
+          RuntimeDirectory = baseNameOf cfg.runDir;
+          RuntimeDirectoryPreserve = "yes";
+          CPUSchedulingPolicy = "idle";
+          IOSchedulingClass = "idle";
+        };
+        restartIfChanged = false;
+        stopIfChanged = false;
+      };
+
+      # WHO MAY START THEM: the person, verb `start`, these units and no other,
       # `YES` — there is no polkit agent in this session, and the software
-      # centre starts it when nobody is looking at a prompt. The width is
-      # bought back the way the update's rule buys it: one unit, one verb,
-      # one user, no argument (`update-apply-rule-is-narrow`).
+      # centre starts the update's when nobody is looking at a prompt. The width
+      # is bought back the way the update's rule buys it: named units, one verb,
+      # one user, no argument (`update-apply-rule-is-narrow`). The build
+      # switch's two join the update's apply in the one rule.
       security.polkit.extraConfig = ''
         polkit.addRule(function (action, subject) {
           if (action.id == "org.freedesktop.systemd1.manage-units" &&
-              action.lookup("unit") == "ronoctua-update-apply.service" &&
+              (action.lookup("unit") == "ronoctua-update-apply.service" ||
+               action.lookup("unit") == "ronoctua-build-switch-own.service" ||
+               action.lookup("unit") == "ronoctua-build-switch-reference.service") &&
               action.lookup("verb") == "start" &&
               subject.user == "${user}") {
             return polkit.Result.YES;

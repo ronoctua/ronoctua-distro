@@ -64,6 +64,11 @@ pub struct Marks<'a> {
     /// The screen is cut by the resizer (`LEADER / r`): what everything is
     /// laid out in is not the whole monitor.
     pub resizer: bool,
+    /// Which build is running, on a machine that builds from a local checkout:
+    /// the machine's own, or a distro checkout's REFERENCE build (`LEADER / b`,
+    /// `build_switch`). `None` on an installed machine — nothing to switch to,
+    /// and a modeline at rest says nothing.
+    pub build: Option<crate::build_switch::Build>,
     /// The player has something loaded: the play/pause glyph of its pair,
     /// which says what a click does — pause or play (`player_mark::mark`). Absent with
     /// nothing loaded — a modeline at rest says nothing.
@@ -503,6 +508,30 @@ pub fn segments(
             removable: true,
         });
     }
+    // WHICH BUILD IS RUNNING, on a machine that builds from a checkout: the
+    // machine's own (the `nix` mark, quiet) or a REFERENCE build from the tree
+    // (a flask, in the dev colour). A developer runs `.#noctua` from a checkout
+    // to try the distro in a clean room, and this is the one sign on screen
+    // that the machine is no longer its own — `host.nix` is not read, so the
+    // layout, the profile and the hostname are the distro's defaults, not this
+    // machine's. The way back is one gesture (`build_switch`, `LEADER / b`).
+    if let Some(build) = marks.build {
+        let (id, glyph) = match build {
+            crate::build_switch::Build::Own => ("build-own", tokens::icon::NIX),
+            crate::build_switch::Build::Reference => {
+                ("build-reference", tokens::icon::SOFTWARE_TRIAL)
+            }
+        };
+        out.push(Segment {
+            id,
+            text: glyph.to_string(),
+            priority: 1,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+        });
+    }
     // A KEY MODE, at the top rung: while it is on every key means something
     // else, and a person who does not know that is a person whose keys have
     // stopped working.
@@ -910,6 +939,9 @@ mod tests {
                             "{} 23:45",
                             tokens::icon::SECURITY_SUDO_OPEN
                         )),
+                        // AND THE BUILD MARK, on a machine that builds from a
+                        // checkout: the fullest line carries it beside the rest.
+                        build: Some(crate::build_switch::Build::Reference),
                     },
                 ),
             ) {

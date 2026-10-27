@@ -61,6 +61,12 @@ echo-no-on-box = { $sequence } is not bound — { $other } is
 echo-cancelled = Quit
 echo-no-window = No focused window
 echo-no-action = { $command } does nothing yet
+# THE BUILD SWITCH (LEADER / b, and the modeline glyph): a reference build
+# rebuilds and restarts the session, so the line says what is about to happen.
+echo-build-no-checkout = No checkout to switch to
+echo-build-to-own = Switching to this machine's build — it will rebuild and restart
+echo-build-to-reference = Switching to the checkout's reference build — it will rebuild and restart
+echo-build-failed = The build switch could not start: { $why }
 cmd-window-right = Focus right
 cmd-window-up = Focus up
 cmd-window-down = Focus down
@@ -387,6 +393,7 @@ cmd-leader-set-full = The whole tree of keys, with every submenu as it was
 ## The memory panel — LEADER s m
 
 cmd-memory-open = System memory
+cmd-build-toggle = Switch build: own ⇄ reference
 cmd-example-open = Several keyboards in one app, the reference
 cmd-format-open = Format a disk
 group-system = system

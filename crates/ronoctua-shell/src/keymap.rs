@@ -463,6 +463,7 @@ mod tests {
             _ => None,
         };
         assert_eq!(runs("/ r"), Some("dev-resizer"));
+        assert_eq!(runs("/ b"), Some("build-toggle"));
         assert_eq!(runs("g"), Some("world-glance"));
         assert_eq!(GLANCE_KEYS, "g");
         assert_eq!(runs(GLANCE_KEYS), Some("world-glance"));

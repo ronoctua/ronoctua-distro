@@ -75,6 +75,9 @@ pub mod adapt;
 mod apps;
 // THE BRAIN'S LINE, under the minibuffer, and the thread that feeds it.
 mod brain;
+// WHICH BUILD IS RUNNING (the machine's own, or a distro checkout's reference),
+// and the switch between them — `LEADER / b` and the modeline glyph.
+mod build_switch;
 pub mod events;
 // THE CAMERA'S HANDS: what a pose means, and the command each runs.
 pub mod gestures;

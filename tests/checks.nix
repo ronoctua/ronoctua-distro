@@ -15416,11 +15416,15 @@ let
           "org.freedesktop.fwupd.refresh-remote": "upstream: fwupd",
           # THE 2026-10-05 WAVE: a package that adds a rule names it here.
           # ── anchor: L05 ──
-          # `machine` (`nix/modules/machine.nix`) signs `manage-units` above for
-          # ONE unit, `ronoctua-update-apply.service`, verb `start`, the one
-          # user, `YES` — the software centre applies a declaration with
-          # nothing to ask (`update-apply-rule-is-narrow`). The boot's bless
-          # has NO rule: only systemd starts it.
+          # `machine` (`nix/modules/machine.nix`) signs `manage-units` above in
+          # ONE rule for THREE units, verb `start`, the one user, `YES`:
+          # `ronoctua-update-apply.service` (the software centre applies a
+          # declaration with nothing to ask), and the build switch's
+          # `ronoctua-build-switch-own.service` and
+          # `ronoctua-build-switch-reference.service` (the modeline's glyph and
+          # `LEADER / b` move between the machine's own build and a distro
+          # checkout's reference build) — all `update-apply-rule-is-narrow`. The
+          # boot's bless has NO rule: only systemd starts it.
           # ── anchor: L06 ──
           # `person` (`nix/modules/person-apply.nix`) signs `manage-units` above
           # for ONE unit, `ronoctua-person-apply.service`, verb `start`, the one

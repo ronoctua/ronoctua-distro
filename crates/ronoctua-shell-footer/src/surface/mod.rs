@@ -796,6 +796,9 @@ struct Footer {
     /// THE SCREEN RESIZER (`LEADER / r`), while it is on: the cut its file
     /// says — the room everything is laid out in (`resizer`, the overlay's).
     resizer: Option<crate::room::State>,
+    /// WHICH BUILD IS RUNNING and the checkout to switch to (`LEADER / b`),
+    /// read once at start — a switch restarts the footer (`build_switch`).
+    build_state: crate::build_switch::State,
     /// The watch on the resizer's file, which is the broadcast: it is how a
     /// curtain's `Esc`, a drag and a footer started again all hear the cut.
     _resizer_watch: Option<ronoctua_files::notice::Notice>,
@@ -2846,6 +2849,7 @@ fn assemble(
         capture_sender: None,
         capturing: false,
         resizer: None,
+        build_state: crate::build_switch::read(),
         _resizer_watch: None,
         resizer_sender: None,
         apps: None,
@@ -4676,6 +4680,15 @@ impl Footer {
                 recording: self.studio_rolling(),
                 gestures: self.gestures.is_some(),
                 resizer: self.resizer.is_some(),
+                // WHICH BUILD IS RUNNING — only on a machine that builds from a
+                // local checkout (`State::checkout`), where there is a
+                // reference build to switch to. Read once at start: a switch
+                // restarts the footer, which reads it again.
+                build: self
+                    .build_state
+                    .checkout
+                    .as_ref()
+                    .map(|_| self.build_state.build),
                 player: self.player.as_ref().and_then(crate::player_mark::mark),
                 workspaces: &workspaces,
                 drawer: self.in_the_drawer().len(),
@@ -5233,6 +5246,14 @@ impl Footer {
         // `LEADER / r` runs.
         if id == "resizer" {
             self.run_command("dev-resizer");
+            return;
+        }
+        // THE BUILD MARK (either state): the switch to the other build, the
+        // command `LEADER / b` runs. A stray click rebuilds, but the apply's
+        // boot trial is the net — a reference build that will not come up is
+        // rolled back on the next boot (`ronoctua-machine apply`).
+        if id == "build-own" || id == "build-reference" {
+            self.run_command("build-toggle");
             return;
         }
         // AND THE CAMERA'S TWO, to the camera's settings.
@@ -8371,6 +8392,7 @@ impl Footer {
             "gestures" => self.toggle_gestures(),
             "gestures-calibrate" => self.calibrate_gestures(),
             "dev-resizer" => self.toggle_resizer(),
+            "build-toggle" => self.build_toggle(),
             // THE BARE KEYS. These reach the machine's sound with NO view
             // open, which is the common case for a key on the keyboard's own
             // top row — so they act on the default device and say so on the
@@ -12165,6 +12187,60 @@ impl Footer {
             let _ = sender.send(crate::room::last_word(&said));
         });
         let m = self.texts.t(crate::key::ECHO_RESIZER_ON);
+        self.echo_message(m);
+        self.draw_and_paint();
+    }
+
+    /// Build the OTHER of the machine's own and a distro checkout's REFERENCE
+    /// build, and switch to it — `LEADER / b`, and the modeline glyph's click.
+    ///
+    /// The apply runs as root in `ronoctua-build-switch-<own|reference>`, which
+    /// resolves the checkout itself (`nix/modules/machine.nix`), rebuilds and
+    /// restarts the session onto the new build — the footer comes up again and
+    /// its glyph reads the new state. `--no-block`: the build takes minutes and
+    /// the session goes down when it lands, so the footer must not wait on it.
+    /// A machine that builds from no checkout has nothing to switch to.
+    fn build_toggle(&mut self) {
+        // The `systemctl`, by path: a unit's `PATH` is minimal. See
+        // `session_end::SYSTEMCTL`, the same reason.
+        const SYSTEMCTL: &str = match option_env!("RONOCTUA_SYSTEMCTL") {
+            Some(c) => c,
+            None => "systemctl",
+        };
+        if self.build_state.checkout.is_none() {
+            let m = self.texts.t(crate::key::ECHO_BUILD_NO_CHECKOUT);
+            self.echo_message(m);
+            self.draw_and_paint();
+            return;
+        }
+        let target = self.build_state.other_build();
+        let instance = match target {
+            crate::build_switch::Build::Own => "own",
+            crate::build_switch::Build::Reference => "reference",
+        };
+        let unit = format!("ronoctua-build-switch-{instance}.service");
+        let started = std::process::Command::new(SYSTEMCTL)
+            .args(["start", "--no-block", &unit])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .and_then(|mut child| child.wait());
+        let m = match started {
+            Ok(status) if status.success() => self.texts.t(match target {
+                crate::build_switch::Build::Own => crate::key::ECHO_BUILD_TO_OWN,
+                crate::build_switch::Build::Reference => crate::key::ECHO_BUILD_TO_REFERENCE,
+            }),
+            Ok(status) => self.texts.t_with(
+                crate::key::ECHO_BUILD_FAILED,
+                &[("why", &format!("systemctl: {status}"))],
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, %unit, "the build switch could not be started");
+                self.texts
+                    .t_with(crate::key::ECHO_BUILD_FAILED, &[("why", &e.to_string())])
+            }
+        };
         self.echo_message(m);
         self.draw_and_paint();
     }
@@ -20225,7 +20301,10 @@ fn segment_color(
         // beside it. Not the recording red: looking is not yet keeping.
         // AND THE RESIZER, in the gestures' colour: the owner's choice, for a
         // mark that says the screen is not what it looks like.
-        "camera" | "gestures" | "resizer" => tokens::color::MODELINE_WATCHING,
+        // A REFERENCE BUILD wears it too (`build-own` stays the quiet default):
+        // the machine running something other than its own is the same kind of
+        // "this is not what it looks like" the resizer marks.
+        "camera" | "gestures" | "resizer" | "build-reference" => tokens::color::MODELINE_WATCHING,
         // A KEY MODE IS ON: every key means something else until it ends.
         "compositor-mode" => tokens::color::STATE_ACCENT,
 

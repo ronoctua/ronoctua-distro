@@ -1003,6 +1003,13 @@ pub const BASE: Contribution = Contribution {
             id: "memory-open",
             label: key::CMD_MEMORY_OPEN,
         },
+        // THE BUILD SWITCH, `/ b` — the development group's: build and switch
+        // to the other of the machine's own and a distro checkout's reference
+        // build, and say which is running on the modeline (`build_switch`).
+        Command {
+            id: "build-toggle",
+            label: key::CMD_BUILD_TOGGLE,
+        },
         // THE REFERENCE for several keyboards in one app — by name only: it
         // is a model for apps to come, not a place anybody goes daily.
         Command {
@@ -1671,6 +1678,12 @@ pub const BASE: Contribution = Contribution {
         // the doubled key is the footer's door, `w` the window's.
         ("s r r", "footer-settings-open", None),
         ("s r w", "footer-settings-window", None),
+        // `/ b` — THE BUILD SWITCH, the development group's second tool beside
+        // `/ r`'s resizer: build the OTHER of the machine's own and a distro
+        // checkout's reference build, and switch to it. Written out, not
+        // through a constant, so the check that every key reaches an arm of
+        // `run_with` reads it.
+        ("/ b", "build-toggle", None),
     ],
     groups: &[
         ("w", key::GROUP_WINDOW),
