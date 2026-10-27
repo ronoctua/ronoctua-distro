@@ -280,5 +280,10 @@ echo-network-vpn-not-a-key = that is not a WireGuard private key (44 base64 char
 echo-network-vpn-no-servers = no WireGuard server was found in that folder
 echo-network-vpn-unreadable = that folder could not be read
 echo-network-vpn-install-failed = the VPN registration did not complete
+# Filtering the registered locations by country or city.
+network-vpn-filter = Filter by country…
+network-vpn-filter-on = Showing only: { $filter } — RET to change
+network-vpn-filter-none = no location matches that
+ask-network-vpn-filter = Country or city to show (empty: all)
 # A phone's link in the network view, and the network crate's own refusals.
 network-fact-phone = phone

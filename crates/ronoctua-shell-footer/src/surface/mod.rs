@@ -4778,7 +4778,17 @@ impl Footer {
                 history: self.history_mark(),
                 adrift: self.net.adrift(),
                 airplane: self.net.airplane(),
-                tunnel: self.net.tunnel().is_some(),
+                // A TUNNEL IS UP, and WHERE it goes when it is a registered
+                // location (`US · NYC`); empty for an unnamed one. The temporary
+                // lives to the end of this statement, like `transfer` above.
+                tunnel: self
+                    .net
+                    .tunnel()
+                    .map(|a| {
+                        ronoctua_network::vpn::location_of(&a.id)
+                            .map_or_else(String::new, |l| l.label())
+                    })
+                    .as_deref(),
                 // RUNNING, and not installed: a tailnet nobody has logged
                 // into and a Tor that is not started draw nothing.
                 tailscale: self.tunnels.on_tailnet(),

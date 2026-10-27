@@ -110,8 +110,9 @@ pub struct Marks<'a> {
     pub adrift: bool,
     /// Networking off, by somebody's own decision.
     pub airplane: bool,
-    /// A tunnel is up.
-    pub tunnel: bool,
+    /// A tunnel is up — `Some` with where it goes (a country, for a registered
+    /// location; empty for an unnamed tunnel), `None` when none is up.
+    pub tunnel: Option<&'a str>,
     /// This machine is on its tailnet.
     pub tailscale: bool,
     /// Tor has a circuit.
@@ -606,10 +607,17 @@ pub fn segments(
             removable: true,
         });
     }
-    if marks.tunnel {
+    if let Some(place) = marks.tunnel {
         out.push(Segment {
             id: "vpn",
-            text: tokens::icon::VPN.to_string(),
+            // THE COUNTRY BESIDE THE GLYPH, when the tunnel is a registered
+            // location (`US · NYC`); `Shrink::Cut` drops back to the glyph alone
+            // when the line is tight.
+            text: if place.is_empty() {
+                tokens::icon::VPN.to_string()
+            } else {
+                format!("{} {place}", tokens::icon::VPN)
+            },
             priority: 5,
             min_cols: 1,
             side: Side::Right,
@@ -936,7 +944,7 @@ mod tests {
                         // machine: a VPN inside a tailnet with Tor on top is
                         // three marks, and the narrowest line has to survive
                         // them.
-                        tunnel: true,
+                        tunnel: Some(""),
                         tailscale: true,
                         tor: true,
                         workspaces: &[],
@@ -1011,7 +1019,7 @@ mod tests {
                     clip: Some(false),
                     history: Some(false),
                     adrift: true,
-                    tunnel: true,
+                    tunnel: Some(""),
                     tailscale: true,
                     tor: true,
                     drawer: 3,

@@ -278,6 +278,9 @@ pub enum Target {
     /// folder picker, then asks the one key (`ronoctua_network::vpn`). The
     /// graphical way in, so the person never opens a terminal.
     VpnRegister,
+    /// Filter the registered locations by a country or city, typed on the line;
+    /// an empty answer shows them all.
+    VpnFilter,
 }
 
 /// One of the switches the two tunnel sections carry.
@@ -495,7 +498,7 @@ impl Question {
     }
 
     /// Every question this view asks.
-    pub const THE_VIEWS: [Self; 7] = [
+    pub const THE_VIEWS: [Self; 8] = [
         Self::PASSWORD,
         Self::PATH,
         Self::TOR_VALUE,
@@ -503,6 +506,7 @@ impl Question {
         Self::VPN_USER,
         Self::VPN_PASSWORD,
         Self::VPN_REGISTER_KEY,
+        Self::VPN_FILTER,
     ];
 
     /// The password of a secured network with no profile.
@@ -546,6 +550,12 @@ impl Question {
     pub const VPN_REGISTER_KEY: Self = Self {
         id: "network-vpn-register-key",
         secret: true,
+    };
+    /// A country or city to filter the registered locations by — in the clear,
+    /// typed to be read back; an empty answer shows them all.
+    pub const VPN_FILTER: Self = Self {
+        id: "network-vpn-filter",
+        secret: false,
     };
 }
 
@@ -1220,6 +1230,10 @@ pub struct View {
     /// FOLDER of `.conf` files, not a single tunnel file, so the chosen path is
     /// a folder to register — not a file to bring in.
     registering: bool,
+    /// What the registered locations are filtered by — a country or city typed
+    /// on the shelf (`Target::VpnFilter`); empty shows them all. Lower-case, so
+    /// the match is case-insensitive.
+    vpn_filter: String,
 }
 
 /// The files a tunnel is brought in from, as the file picker shows them: a
@@ -1458,6 +1472,7 @@ impl View {
             cursor: 1,
             bringing: None,
             registering: false,
+            vpn_filter: String::new(),
             sharing: None,
             anchor: None,
             level: Level::List,
@@ -1765,6 +1780,12 @@ impl View {
                 }
                 _ => Errand::Nothing,
             },
+            // A COUNTRY OR CITY TO SHOW — kept on the view, empty shows them
+            // all. Not an `Asking`: it is a lasting filter, not a one-shot.
+            "network-vpn-filter" => {
+                self.vpn_filter = text.trim().to_lowercase();
+                Errand::Nothing
+            }
             _ => Errand::Nothing,
         }
     }
@@ -2253,6 +2274,8 @@ impl View {
                     self.settle_the_picker(facts, columns, texts);
                     Errand::Nothing
                 }
+                // FILTER THE LOCATIONS: a line to type a country or city into.
+                Target::VpnFilter => Errand::Ask(Question::VPN_FILTER),
                 // INTO THE SHEET. The cursor starts at the top of it, and
                 // not where it happened to be in the list.
                 Target::TorSheet => {
@@ -2659,10 +2682,21 @@ impl View {
             // folder is a hundred servers and more, and a hundred flat rows
             // under one heading is the page nobody can use. A one-off import or
             // another VPN (no `ronoctua-vpn-` id) stays a flat row.
-            let located: Vec<&Saved> = stored
+            let located_all: Vec<&Saved> = stored
                 .iter()
                 .copied()
                 .filter(|s| ronoctua_network::vpn::location_of(&s.id).is_some())
+                .collect();
+            // FILTERED BY WHAT THE PERSON TYPED (a country or city); empty shows
+            // them all. The haystack is the codes, lower-case (`location_of`).
+            let located: Vec<&Saved> = located_all
+                .iter()
+                .copied()
+                .filter(|s| {
+                    self.vpn_filter.is_empty()
+                        || ronoctua_network::vpn::location_of(&s.id)
+                            .is_some_and(|l| l.haystack().contains(self.vpn_filter.as_str()))
+                })
                 .collect();
             let others: Vec<&Saved> = stored
                 .iter()
@@ -2697,8 +2731,21 @@ impl View {
                     flying,
                 );
             }
-            if !located.is_empty() {
+            // THE REGISTERED LOCATIONS, on a shelf so a hundred do not push the
+            // page around — with a FILTER ROW above when there are any to
+            // filter: `RET` opens a line for a country or city, and the row
+            // says what is shown.
+            if !located_all.is_empty() {
+                let filter_label = if self.vpn_filter.is_empty() {
+                    texts.t(key::NETWORK_VPN_FILTER)
+                } else {
+                    texts.t_with(key::NETWORK_VPN_FILTER_ON, &[("filter", &self.vpn_filter)])
+                };
+                b.pair(filter_label, String::new(), Target::VpnFilter, false);
                 b.shelf(Shelf::Locations, |b| {
+                    if located.is_empty() {
+                        b.note(key::NETWORK_VPN_FILTER_NONE);
+                    }
                     for s in &located {
                         b.pair(
                             format!("{} {}", tokens::icon::VPN, label_of(&s.id)),
