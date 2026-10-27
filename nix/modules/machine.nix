@@ -631,10 +631,23 @@ in
         restartIfChanged = false;
         stopIfChanged = false;
       };
-      # THE REFERENCE DIRECTION builds the checkout itself (its fixture host),
-      # so it points the machine directory at it — no override, no git.
+      # THE DEV DIRECTION builds THIS MACHINE'S OWN system (`/etc/nixos`, its
+      # `host.nix` and `facter.json`) with `ronoctua` OVERRIDDEN to the
+      # checkout — the SAME safe build as the own direction. It is "run my
+      # local distro changes on this laptop, with my hardware".
+      #
+      # IT DELIBERATELY NO LONGER BUILDS THE FIXTURE REFERENCE MACHINE. That
+      # build reads `tests/fixtures/machine`, so it has NONE of this laptop's
+      # hardware — switching the REAL machine to it left it with no Wi-Fi
+      # device listed and no Bluetooth (2026-10-27), to the point a plain
+      # `reboot` came up broken. The fixture reference build is a clean-room
+      # thing and belongs to `nix run .#vm` alone, never a switch of the host.
+      # Keeping `RONOCTUA_MACHINE_DIR` (`/etc/nixos`) and only overriding the
+      # distro input is what keeps the hardware. `argv::with_override` stops the
+      # lock being written, so a root apply never fetches the user-owned
+      # `git+file` input.
       systemd.services.ronoctua-build-switch-reference = {
-        description = "Builds and switches to a distro checkout's reference build";
+        description = "Builds and switches to this machine's build against the local distro checkout";
         environment = cfg.environment;
         serviceConfig = {
           Type = "oneshot";
@@ -642,7 +655,10 @@ in
           ExecStart = pkgs.writeShellScript "ronoctua-build-switch-reference" ''
             set -eu
             dir=$(${distroCheckout}) || exit 1
-            export RONOCTUA_MACHINE_DIR="$dir"
+            # Keep RONOCTUA_MACHINE_DIR (`/etc/nixos`, with host.nix); only
+            # override the distro input with the checkout — never point the
+            # machine directory at the checkout's fixture host.
+            export RONOCTUA_MACHINE_OVERRIDE_DIR="$dir"
             exec ${cfg.applyCommand}
           '';
           RuntimeDirectory = baseNameOf cfg.runDir;

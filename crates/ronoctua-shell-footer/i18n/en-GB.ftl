@@ -63,13 +63,13 @@ echo-no-window = No focused window
 echo-no-action = { $command } does nothing yet
 # THE BUILD SWITCH (LEADER / b, and the modeline glyph): a reference build
 # rebuilds and restarts the session, so the line says what is about to happen.
-echo-build-no-checkout = No checkout to switch to
-echo-build-to-own = Switching to this machine's build — it will rebuild and restart
-echo-build-to-reference = Switching to the checkout's reference build — it will rebuild and restart
+echo-build-no-checkout = No local checkout to build from
+echo-build-to-own = Rebuilding this machine against your local checkout — it will rebuild and restart
+echo-build-to-reference = Rebuilding this machine against your local checkout — it will rebuild and restart
 echo-build-failed = The build switch could not start: { $why }
 # What the build glyph says on the message line while the pointer rests on it.
-hint-build-own = This machine's own build — click to try a distro checkout's reference build
-hint-build-reference = A distro checkout's reference build (not this machine's own) — click to switch back
+hint-build-own = The installed, released build — click to rebuild this machine against your local checkout
+hint-build-reference = A dev build, from your local checkout — click to rebuild it; roll back from the boot menu to return to the installed one
 # While a build switch is applying (minutes): the glyph is the switching mark.
 hint-build-switching = Switching builds — the machine is rebuilding; wait for it to come back
 echo-build-in-progress = A build switch is already underway
@@ -84,23 +84,23 @@ build-page-up = up
 build-page-down = down
 build-page-enter = act
 build-page-title = The build switch
-build-page-note = This machine's own build is /etc/nixos with its host.nix; a distro checkout's reference build comes up on the distro's defaults — a different layout, profile and hostname.
+build-page-note = The installed build is /etc/nixos at its released distro revision; a dev build is the SAME machine — its host.nix and hardware — built against your local distro checkout. The switch never builds the distro's fixture reference machine: that has no hardware and is for the VM (nix run .#vm).
 build-page-running = Running now
 build-page-build = Build
-build-page-build-own = This machine's own
-build-page-build-reference = A checkout's reference
+build-page-build-own = The installed, released build
+build-page-build-reference = A dev build (your local checkout)
 build-page-host = Hostname
 build-page-unknown = unknown
 build-page-checkout = Checkout
 build-page-no-checkout = none — this machine builds from no local checkout
 build-page-glyph = The modeline glyph
 build-page-show = Show the glyph
-build-page-show-dev = Only on a reference build
+build-page-show-dev = Only on a dev build
 build-page-show-always = On both builds
 build-page-show-never = Never
-build-page-show-note = Only-on-dev is the default: a mark on the reference build, the exception worth one, and nothing on the machine's own.
-build-page-switch-to-own = Switch to this machine's own build
-build-page-switch-to-reference = Switch to the checkout's reference build
+build-page-show-note = Only-on-dev is the default: a mark when you are running your local checkout, the exception worth one, and nothing on the installed build.
+build-page-switch-to-own = Rebuild & switch to your local checkout
+build-page-switch-to-reference = Rebuild & switch to your local checkout
 cmd-window-right = Focus right
 cmd-window-up = Focus up
 cmd-window-down = Focus down
@@ -427,7 +427,7 @@ cmd-leader-set-full = The whole tree of keys, with every submenu as it was
 ## The memory panel — LEADER s m
 
 cmd-memory-open = System memory
-cmd-build-toggle = Switch build: own ⇄ reference
+cmd-build-toggle = Build & switch to your local checkout
 cmd-example-open = Several keyboards in one app, the reference
 cmd-format-open = Format a disk
 group-system = system

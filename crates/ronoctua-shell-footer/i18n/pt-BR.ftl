@@ -63,13 +63,13 @@ echo-no-window = Nenhuma janela em foco
 echo-no-action = { $command } ainda não faz nada
 # A TROCA DE BUILD (LEADER / b, e o glifo da modeline): um build de referência
 # reconstrói e reinicia a sessão, então a linha diz o que vai acontecer.
-echo-build-no-checkout = Nenhum checkout para onde alternar
-echo-build-to-own = Alternando para o build desta máquina — vai reconstruir e reiniciar
-echo-build-to-reference = Alternando para o build de referência do checkout — vai reconstruir e reiniciar
+echo-build-no-checkout = Nenhum checkout local para construir
+echo-build-to-own = Reconstruindo esta máquina a partir do seu checkout local — vai reconstruir e reiniciar
+echo-build-to-reference = Reconstruindo esta máquina a partir do seu checkout local — vai reconstruir e reiniciar
 echo-build-failed = Não foi possível iniciar a troca de build: { $why }
 # O que o glifo de build diz na linha de mensagem enquanto o ponteiro repousa nele.
-hint-build-own = O build próprio desta máquina — clique para experimentar o build de referência de um checkout
-hint-build-reference = Build de referência de um checkout (não o próprio desta máquina) — clique para voltar
+hint-build-own = O build instalado (lançado) — clique para reconstruir esta máquina a partir do seu checkout local
+hint-build-reference = Um build de dev, do seu checkout local — clique para reconstruir; volte ao instalado pela tela de boot
 # Enquanto uma troca de build está em andamento (minutos): o glifo é a marca de troca.
 hint-build-switching = Trocando de build — a máquina está reconstruindo; espere ela voltar
 echo-build-in-progress = Uma troca de build já está em andamento
@@ -84,23 +84,23 @@ build-page-up = cima
 build-page-down = baixo
 build-page-enter = agir
 build-page-title = A troca de build
-build-page-note = O build próprio desta máquina é o /etc/nixos com o seu host.nix; o build de referência de um checkout sobe nos padrões do distro — outro layout, perfil e hostname.
+build-page-note = O build instalado é o /etc/nixos na revisão lançada do distro; um build de dev é a MESMA máquina — com o seu host.nix e hardware — construída a partir do seu checkout local do distro. A troca nunca constrói a máquina de referência do distro: ela não tem hardware e é para a VM (nix run .#vm).
 build-page-running = Rodando agora
 build-page-build = Build
-build-page-build-own = O próprio desta máquina
-build-page-build-reference = A referência de um checkout
+build-page-build-own = O build instalado (lançado)
+build-page-build-reference = Um build de dev (seu checkout local)
 build-page-host = Hostname
 build-page-unknown = desconhecido
 build-page-checkout = Checkout
 build-page-no-checkout = nenhum — esta máquina não constrói de um checkout local
 build-page-glyph = O glifo da modeline
 build-page-show = Mostrar o glifo
-build-page-show-dev = Só num build de referência
+build-page-show-dev = Só num build de dev
 build-page-show-always = Nos dois builds
 build-page-show-never = Nunca
-build-page-show-note = Só-em-dev é o padrão: uma marca no build de referência, a exceção que merece uma, e nada no build próprio da máquina.
-build-page-switch-to-own = Trocar para o build próprio desta máquina
-build-page-switch-to-reference = Trocar para o build de referência do checkout
+build-page-show-note = Só-em-dev é o padrão: uma marca quando você está rodando o seu checkout local, a exceção que merece uma, e nada no build instalado.
+build-page-switch-to-own = Reconstruir e trocar para o seu checkout local
+build-page-switch-to-reference = Reconstruir e trocar para o seu checkout local
 cmd-window-right = Focar à direita
 cmd-window-up = Focar acima
 cmd-window-down = Focar abaixo
@@ -426,7 +426,7 @@ cmd-leader-set-full = A árvore inteira de teclas, com cada submenu como era
 ## O painel de memoria — LEADER s m
 
 cmd-memory-open = Memória do sistema
-cmd-build-toggle = Alternar build: próprio ⇄ referência
+cmd-build-toggle = Construir e trocar para o seu checkout local
 cmd-example-open = Vários teclados num app, a referência
 cmd-format-open = Formatar um disco
 group-system = sistema

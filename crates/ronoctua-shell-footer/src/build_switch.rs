@@ -1,27 +1,34 @@
-//! Which system build is running — this machine's own, or the local distro
-//! repository's reference build — and the switch between the two
+//! Which system build is running — this machine's INSTALLED system, or a build
+//! of the local distro checkout — and the switch between the two
 //! (`LEADER / b`, and the modeline glyph it draws).
 //!
 //! # Why this exists
 //!
-//! `nixos-rebuild switch --flake .#noctua` run from a distro checkout builds
-//! the REFERENCE machine (`flake.nix`'s `referenceMachine`), which reads
-//! `tests/fixtures/machine` and NOT `/etc/nixos/host.nix` — so it comes up on
-//! the distro's default layout, profile and hostname rather than this
-//! machine's. A developer runs that by hand to try the tree in a clean room,
-//! and nothing on screen says the machine is no longer its own: the first sign
-//! is a key typing the wrong character, or a profile missing its programs.
-//! This draws the difference, and makes the way back one gesture.
+//! A developer edits the distro in a local checkout and wants to see the change
+//! RUNNING on this laptop, not in a VM. The switch rebuilds THIS MACHINE'S OWN
+//! system (`/etc/nixos`, its `host.nix` and `facter.json`) with the `ronoctua`
+//! input overridden to the checkout (`nix/modules/machine.nix`), so the machine
+//! keeps all its hardware and gains the checkout's code. The glyph says when
+//! the running system is such a dev build rather than the released one, and
+//! makes the rebuild one gesture.
+//!
+//! IT MUST NEVER BUILD THE DISTRO'S FIXTURE REFERENCE MACHINE (`.#noctua`): that
+//! reads `tests/fixtures/machine`, has NONE of this laptop's hardware, and
+//! switching the real machine to it left it with no Wi-Fi device and no
+//! Bluetooth — a `reboot` into it came up broken (2026-10-27). The fixture
+//! build is for `nix run .#vm` alone, never a switch of the host.
 //!
 //! # Telling the two apart
 //!
-//! `nix/modules/machine.nix` writes `/etc/ronoctua/machine.lock` — the machine
-//! flake's own `flake.lock` — only where the build HAS a machine flake of its
-//! own (`config.ronoctua.machine.source != null`), which the reference build
-//! leaves null. The file's PRESENCE is "this is the machine's own build"; its
-//! absence, "this is a reference build from a checkout". The decision is a
-//! pure function of that one bit, so the surface tests it with a path that is
-//! there or not — no compositor, no root.
+//! `nix/machine.nix` stamps the built system's distro revision into
+//! `/etc/ronoctua/person-applied.json` as `distro-rev`; a working-tree checkout
+//! with changes is `<rev>-dirty` ([`is_dev_rev`]), a clean released build is a
+//! plain revision. The `-dirty` suffix IS "this is a dev build of the
+//! checkout"; its absence, "this is the installed, released system". The
+//! decision is a pure function of that string, so the surface tests it with no
+//! compositor and no root. (A dev build from a perfectly clean checkout reads
+//! as installed — the switch is safe either way, so the only cost is the glyph
+//! staying away.)
 //!
 //! # Where the checkout is
 //!
@@ -91,33 +98,51 @@ pub fn glyph(show: Show, build: Build, has_checkout: bool) -> Option<Build> {
     }
 }
 
-/// Present iff the running build has a machine flake of its own — see the
-/// module's note. Absent on the reference build.
-pub const MACHINE_LOCK: &str = "/etc/ronoctua/machine.lock";
+/// The system's record the running distro revision is read from.
+pub const PERSON_APPLIED: &str = "/etc/ronoctua/person-applied.json";
 /// The machine's flake, read for the distro checkout it names.
 pub const MACHINE_FLAKE: &str = "/etc/nixos/flake.nix";
 /// The link whose target names the running build (`nixos-system-<host>-<ver>`).
 pub const CURRENT_SYSTEM: &str = "/run/current-system";
 
-/// Which of the two builds is running.
+/// Which of the two builds is running — BOTH this machine's own
+/// (`/etc/nixos`, with its `host.nix` and hardware); they differ only in the
+/// distro revision underneath.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Build {
-    /// The machine's own build — `/etc/nixos`, with its `host.nix`.
+    /// The installed, released system — a clean distro revision.
     Own,
-    /// A reference build from a distro checkout — no `host.nix`.
+    /// A dev build: this machine built against the local checkout
+    /// (`<rev>-dirty`). NOT the fixture reference machine — the module's note
+    /// says why that is never built on the real host.
     Reference,
 }
 
 impl Build {
-    /// The machine's own build HAS the lock; the reference build does not.
+    /// A dev build runs the local checkout (`<rev>-dirty`, [`is_dev_rev`]); the
+    /// installed system runs a clean released revision.
     #[must_use]
-    pub fn of(lock_present: bool) -> Self {
-        if lock_present {
-            Self::Own
-        } else {
-            Self::Reference
-        }
+    pub fn of(dev: bool) -> Self {
+        if dev { Self::Reference } else { Self::Own }
     }
+}
+
+/// Whether a distro revision is a DEV build — a working-tree checkout with
+/// changes, which `nix/machine.nix` stamps `<rev>-dirty`. A clean installed
+/// system carries a plain revision. Pure.
+#[must_use]
+pub fn is_dev_rev(distro_rev: &str) -> bool {
+    distro_rev.ends_with("-dirty")
+}
+
+/// The `distro-rev` a `person-applied.json` records, or `None` when it names
+/// none. One field, read without a JSON dependency: the value of the first
+/// `"distro-rev"`. Pure.
+#[must_use]
+pub fn distro_rev_of(person_applied: &str) -> Option<String> {
+    let after = person_applied.split_once("\"distro-rev\"")?.1;
+    let after = after.split_once(':')?.1;
+    quoted(after)
 }
 
 /// Everything the glyph and the switch read, gathered once.
@@ -218,7 +243,10 @@ pub fn hostname_of(current_system_target: &str) -> Option<String> {
 /// the current system's hostname and the machine flake's checkout.
 #[must_use]
 pub fn read() -> State {
-    let lock_present = std::path::Path::new(MACHINE_LOCK).exists();
+    let dev = std::fs::read_to_string(PERSON_APPLIED)
+        .ok()
+        .and_then(|j| distro_rev_of(&j))
+        .is_some_and(|r| is_dev_rev(&r));
     let hostname = std::fs::read_link(CURRENT_SYSTEM)
         .ok()
         .and_then(|p| hostname_of(&p.to_string_lossy()));
@@ -227,7 +255,7 @@ pub fn read() -> State {
         .and_then(|f| checkout_of(&f))
         .filter(|p| p.exists());
     State {
-        build: Build::of(lock_present),
+        build: Build::of(dev),
         hostname,
         checkout,
     }
@@ -238,9 +266,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_lock_is_the_machines_own_build() {
-        assert_eq!(Build::of(true), Build::Own);
-        assert_eq!(Build::of(false), Build::Reference);
+    fn a_dirty_revision_is_a_dev_build() {
+        assert!(is_dev_rev("f9a21ab1073f-dirty"));
+        assert!(!is_dev_rev("f9a21ab1073f"));
+        // of(dev): dirty => the dev (checkout) build; clean => the installed one.
+        assert_eq!(Build::of(true), Build::Reference);
+        assert_eq!(Build::of(false), Build::Own);
+        // The revision is read from person-applied.json's one field.
+        let json = r#"{ "format": 1, "distro-rev": "abc123-dirty", "applied": [] }"#;
+        assert_eq!(distro_rev_of(json).as_deref(), Some("abc123-dirty"));
+        assert_eq!(distro_rev_of(r#"{"applied":[]}"#), None);
     }
 
     #[test]
