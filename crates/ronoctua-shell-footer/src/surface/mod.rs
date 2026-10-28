@@ -20472,10 +20472,19 @@ fn segment_color(
         // beside it. Not the recording red: looking is not yet keeping.
         // AND THE RESIZER, in the gestures' colour: the owner's choice, for a
         // mark that says the screen is not what it looks like.
-        // A REFERENCE BUILD wears it too (`build-own` stays the quiet default):
-        // the machine running something other than its own is the same kind of
-        // "this is not what it looks like" the resizer marks.
-        "camera" | "gestures" | "resizer" | "build-reference" => tokens::color::MODELINE_WATCHING,
+        "camera" | "gestures" | "resizer" => tokens::color::MODELINE_WATCHING,
+        // A TUNNEL IS UP — the VPN mark, and the tailscale and tor ones beside
+        // it: they answer the same question (is this machine going out through
+        // something else) and wear one tone, the modeline's own muted green
+        // (`modeline.tunnel`). Not the loud success green: a quiet mark on a
+        // line of quiet marks.
+        "vpn" | "tailscale" | "tor" => tokens::color::MODELINE_TUNNEL,
+        // A DEV BUILD IS RUNNING — the flask of a REFERENCE build from a
+        // checkout, or the machine's own `nix` mark: the modeline's muted amber
+        // (`modeline.build`). The machine running a build is a caution, which
+        // is amber's job; it used to borrow the camera's `watching` pink, which
+        // said the wrong thing.
+        "build-reference" | "build-own" => tokens::color::MODELINE_BUILD,
         // A KEY MODE IS ON: every key means something else until it ends.
         // A SWITCH IN PROGRESS wears the accent too: the machine is changing
         // underfoot, which is the same "something is happening now" a key mode
@@ -20960,7 +20969,14 @@ mod tests {
         assert_eq!(paint("gestures", &[], None), color::MODELINE_WATCHING);
         assert_eq!(paint("resizer", &[], None), color::MODELINE_WATCHING);
         assert_eq!(paint("bt-2", &["bt-2"], None), color::STATE_ERROR);
-        assert_eq!(paint("vpn", &[], None), color::TEXT_SECONDARY);
+        // THE TUNNEL MARKS share the modeline's muted green, and the build
+        // marks its muted amber — each a quiet mark in its own tone, not the
+        // body-text grey a mark used to fall back to.
+        assert_eq!(paint("vpn", &[], None), color::MODELINE_TUNNEL);
+        assert_eq!(paint("tailscale", &[], None), color::MODELINE_TUNNEL);
+        assert_eq!(paint("tor", &[], None), color::MODELINE_TUNNEL);
+        assert_eq!(paint("build-reference", &[], None), color::MODELINE_BUILD);
+        assert_eq!(paint("build-own", &[], None), color::MODELINE_BUILD);
         assert_eq!(paint("ws-3", &[], Some("ws-3")), color::TEXT_PRIMARY);
         assert_eq!(paint("ws-1", &[], Some("ws-3")), color::TEXT_DIM);
     }

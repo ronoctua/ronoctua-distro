@@ -131,6 +131,24 @@
       text-chroma = 0.36;
       text-shift = 0;
     };
+    # THE TUNNEL MARK (`modeline.tunnel`): the GREEN this theme's modeline did
+    # not have. A hue of its own, brighter and more saturated than the drawer's
+    # faded green so the two greens read apart on one line, and far enough from
+    # the steel accent (245) to never be taken for it.
+    tunnel = {
+      hue = 165;
+      text-chroma = 0.55;
+      text-shift = 8;
+    };
+    # THE DEV BUILD MARK (`modeline.build`): a YELLOW/amber — the one warm thing
+    # this cold theme allows beside `answer`'s pale gold — a step quieter than
+    # the `warning` amber (55) the band and the alert bar wear, and told from it
+    # and from the warm `answer` by the gates.
+    build = {
+      hue = 60;
+      text-chroma = 0.55;
+      text-shift = 0;
+    };
     # THE SUBTITLE LANES, drawn on a film: the same in every seed (the
     # generator refuses two that differ). 109 is lane one's yellow; 0.70
     # keeps the closest pair 0.10 apart.

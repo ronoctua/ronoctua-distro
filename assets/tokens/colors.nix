@@ -1431,6 +1431,30 @@
     # every seed): a faded green at the device's rung, the owner's request.
     # Not the selection's green, which is the outline's and louder.
     drawer = "drawer.text";
+    # A TUNNEL IS UP — the VPN mark's glyph and the place beside it (`US · NYC`),
+    # in a family of its own (`tunnel`, in every seed). A GREEN, because a
+    # tunnel that carries the traffic is a thing working as it should, and
+    # green is what this palette already spends on that; but its OWN muted
+    # green and not the state's loud `success` — the owner wanted it in the
+    # modeline marks' quiet register, close to the device blue and the
+    # drawer's green, not the shouting success tone the alert and the
+    # selection wear. A hue of its own (`industrial` reads a green where its
+    # modeline had none), told from the drawer's faded green, the device blue,
+    # the selection's bright green and the accent by the gates
+    # (`gen-theme.py`). The tailscale and tor marks, which answer the same
+    # question on the same line, wear it too (`segment_color`).
+    tunnel = "tunnel.text";
+    # A DEV BUILD IS RUNNING — the flask of a REFERENCE build from a checkout
+    # (`build-reference`), and the machine's own `nix` mark (`build-own`), in a
+    # family of its own (`build`, in every seed). A YELLOW/amber, because a
+    # developer build is a caution — the machine is not being itself — and
+    # amber is the palette's caution hue; but its OWN muted amber and not the
+    # loud `warning` the notification band and the alert bar wear, because this
+    # is a quiet modeline mark and not an alarm. Told from the warning amber,
+    # the watching pink, the device blue, the drawer's green and the warm text
+    # ramp by the gates. It was the camera's `watching` pink before, which said
+    # the wrong thing: a reference build is not the camera looking.
+    build = "build.text";
   };
 
   # THE MAXIMUM ALERT BAR (`crate::alert`) — the one line on screen that

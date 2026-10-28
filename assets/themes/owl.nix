@@ -142,6 +142,21 @@
       text-chroma = 0.36;
       text-shift = 0;
     };
+    # THE TUNNEL MARK (`modeline.tunnel`): a green of its own, brighter and more
+    # saturated than the drawer's faded green so the two greens read apart on
+    # one line, and told from the accent and the device blue by the gates.
+    tunnel = {
+      hue = 165;
+      text-chroma = 0.55;
+      text-shift = 8;
+    };
+    # THE DEV BUILD MARK (`modeline.build`): a muted amber, the caution hue a
+    # step quieter than the warning the band and the alert bar wear.
+    build = {
+      hue = 60;
+      text-chroma = 0.55;
+      text-shift = 0;
+    };
     # THE SUBTITLE LANES, drawn on a film: the same in every seed (the
     # generator refuses two that differ). 109 is lane one's yellow; 0.70
     # keeps the closest pair 0.10 apart.

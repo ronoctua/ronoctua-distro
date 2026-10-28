@@ -164,6 +164,23 @@
       text-chroma = 0.36;
       text-shift = 0;
     };
+    # THE TUNNEL MARK (`modeline.tunnel`): a green of its own, told apart from
+    # the drawer's faded green by hue and chroma here rather than by lightness —
+    # a light theme's text ladder is compressed near its ceiling, so a brighter
+    # green (the dark themes' trick) collapses the top two rungs; this one leans
+    # cooler and more saturated instead.
+    tunnel = {
+      hue = 168;
+      text-chroma = 0.90;
+      text-shift = 3;
+    };
+    # THE DEV BUILD MARK (`modeline.build`): a muted amber, the caution hue a
+    # step quieter than the warning the band and the alert bar wear.
+    build = {
+      hue = 60;
+      text-chroma = 0.55;
+      text-shift = 0;
+    };
     # THE SUBTITLE LANES, drawn on a film: the same in every seed (the
     # generator refuses two that differ). 109 is lane one's yellow; 0.70
     # keeps the closest pair 0.10 apart.

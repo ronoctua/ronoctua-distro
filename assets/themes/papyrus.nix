@@ -133,6 +133,24 @@
       text-chroma = 0.42;
       text-shift = 0;
     };
+    # THE TUNNEL MARK (`modeline.tunnel`): a green of its own, told apart from
+    # the drawer's faded green by hue and chroma rather than lightness — this
+    # light theme's compressed text ladder collapses a brighter green's top
+    # rungs, so it leans cooler and more saturated instead.
+    tunnel = {
+      hue = 168;
+      text-chroma = 0.90;
+      text-shift = 3;
+    };
+    # THE DEV BUILD MARK (`modeline.build`): a muted YELLOW/olive rather than a
+    # low amber here. The paper's warm text ramp is hue 60 and the film's orange
+    # (`#FF6000`) sits just below it, so an amber build would be either lost in
+    # the text or too near the film colour; a more yellow hue clears both.
+    build = {
+      hue = 75;
+      text-chroma = 0.75;
+      text-shift = 2;
+    };
     # THE SUBTITLE LANES, drawn on a film: the same in every seed (the
     # generator refuses two that differ). 109 is lane one's yellow; 0.70
     # keeps the closest pair 0.10 apart.

@@ -449,6 +449,13 @@ impl Snapshot {
             && self.linked()
             && self.way != Way::Unknown
             && !self.way.out()
+            // A TUNNEL IS THE WAY OUT, even when the daemon says `Limited`:
+            // a VPN that carries IPv6 into a provider with no v6 egress makes
+            // the connectivity check's v6 half fail, and the daemon reports the
+            // whole as `Limited` though the person's traffic is leaving fine.
+            // A tunnel that never answered is already torn down (`agent::raise`),
+            // so an active one IS a way out — not a fault to mark.
+            && self.tunnel().is_none()
     }
 }
 
