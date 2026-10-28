@@ -67,7 +67,8 @@ fi
 # -----------------------------------------------------------------------------
 # 5. Keybindings
 # -----------------------------------------------------------------------------
-# Same Up-arrow behaviour as zsh: filter by what has been typed.
+# Same as zsh: these are the FALLBACK. atuin (section 6) takes the Up key when
+# it is installed — its init runs later and rebinds `\e[A`.
 
 bind '"\e[A": history-search-backward' 2>/dev/null
 bind '"\e[B": history-search-forward' 2>/dev/null
@@ -79,13 +80,17 @@ bind '"\e[B": history-search-forward' 2>/dev/null
 # bash has NO native preexec/precmd — that is zsh's. atuin needs them to know
 # when a command started and when it ended, so `bash-preexec.sh` comes FIRST.
 # Without it atuin loads, appears to work, and records nothing.
+#
+# THE UP ARROW OPENS ATUIN'S SEARCH, the same window Ctrl+R opens; this init
+# runs after section 5 and takes the Up key, leaving `history-search-backward`
+# there as the fallback for when atuin is absent.
 
 if [ -r /run/current-system/sw/share/bash-preexec/bash-preexec.sh ]; then
     . /run/current-system/sw/share/bash-preexec/bash-preexec.sh
 fi
 
 if command -v atuin >/dev/null 2>&1; then
-    eval "$(atuin init bash --disable-up-arrow)"
+    eval "$(atuin init bash)"
 fi
 
 

@@ -97,7 +97,7 @@ zstyle ':completion:*' cache-path "${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompcach
 # else.
 
 bindkey -e
-bindkey '^[[A' history-search-backward     # Up filters by what was typed
+bindkey '^[[A' history-search-backward     # FALLBACK: atuin (section 8) takes Up when present
 bindkey '^[[B' history-search-forward
 bindkey '^[[1;5C' forward-word             # Ctrl+Right
 bindkey '^[[1;5D' backward-word            # Ctrl+Left
@@ -133,11 +133,14 @@ fi
 # -----------------------------------------------------------------------------
 # zsh has native `preexec`/`precmd` hooks, so atuin plugs straight in.
 #
-# `--disable-up-arrow`: the Up arrow keeps filtering by prefix (section 6),
-# which is muscle memory. Ctrl+R is what opens atuin's search.
+# THE UP ARROW OPENS ATUIN'S SEARCH — the same window Ctrl+R opens (compact,
+# `inline_height` lines, growing upward). Which history it starts in is
+# `filter_mode_shell_up_key_binding` in `~/.config/atuin/config.toml`.
+# This init runs AFTER section 6, so it takes the Up key when atuin is present
+# and the `history-search-backward` there remains the fallback when it is not.
 
 if command -v atuin >/dev/null 2>&1; then
-    eval "$(atuin init zsh --disable-up-arrow)"
+    eval "$(atuin init zsh)"
 fi
 
 

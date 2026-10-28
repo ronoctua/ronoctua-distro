@@ -78,7 +78,12 @@ let
     style = "compact"
     inline_height = 20
     search_mode = "fuzzy"
-    filter_mode_shell_up_key_binding = "session"
+
+    # THE UP ARROW OPENS ATUIN'S SEARCH — the same window Ctrl+R opens (see
+    # `assets/shell/zshrc.zsh`). "global" so Up searches all history exactly as
+    # Ctrl+R does, since Ctrl+R's own `filter_mode` is unset and so defaults to
+    # global too. Narrow it to "session"/"directory" here if Up should scope.
+    filter_mode_shell_up_key_binding = "global"
 
     # WHAT IS NEVER RECORDED. These are regular expressions, and they are the
     # answer to "a command with a token in its argv": a line that matches never
