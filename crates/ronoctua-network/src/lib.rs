@@ -1220,7 +1220,20 @@ impl Manager {
     /// there answers an empty snapshot, which is what the screen draws.
     #[must_use]
     pub fn look(&self) -> Snapshot {
-        let Ok(manager) = self.manager() else {
+        // READ EVERY PROPERTY LIVE, NOT FROM THE CACHE. zbus reuses a proxy per
+        // connection+object and caches its properties, kept current by the
+        // `PropertiesChanged` signal — but the watch's own message stream
+        // (`watch`) consumes those signals on this long-lived connection, so a
+        // cached `ActiveConnections` froze at what it was when the shell
+        // started and a tunnel raised afterwards never appeared (the modeline
+        // drew no mark, the view stayed empty until it was reopened). A fresh
+        // `Get` every reading is a few more calls on a path that already reads
+        // the whole of the network, and it is the difference between the
+        // snapshot telling the truth and telling the past.
+        let Ok(manager) = nm::ManagerProxyBlocking::builder(&self.connection)
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+        else {
             return Snapshot::default();
         };
         let mut out = Snapshot {
@@ -1235,6 +1248,7 @@ impl Manager {
         for at in manager.active_connections().unwrap_or_default() {
             let Ok(active) = nm::ActiveProxyBlocking::builder(&self.connection)
                 .path(at.clone())
+                .map(|b| b.cache_properties(zbus::proxy::CacheProperties::No))
                 .and_then(zbus::blocking::proxy::Builder::build)
             else {
                 continue;
