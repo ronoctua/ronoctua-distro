@@ -349,6 +349,10 @@ in
       ];
       requires = [ "NetworkManager.service" ];
       wantedBy = [ "multi-user.target" ];
+      # `wg show <iface> latest-handshakes` is how a raise tells a tunnel that
+      # ANSWERS from one that merely came up (`crate::agent`): with no handshake
+      # the `0.0.0.0/0` route is a black hole, and the agent takes it back down.
+      environment.RONOCTUA_WG = "${pkgs.wireguard-tools}/bin/wg";
       serviceConfig = {
         Type = "simple";
         ExecStart = "${ronoctua.networkAgent}/bin/ronoctua-network-agent";

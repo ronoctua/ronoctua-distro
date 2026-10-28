@@ -1517,6 +1517,27 @@ impl Manager {
         Ok(())
     }
 
+    /// Brings a VPN location up THROUGH THE ROOT AGENT — the only way the
+    /// sealed key is handed over for a tunnel the person raised.
+    ///
+    /// NetworkManager serves an agent-owned secret for a user-raised
+    /// connection only from an agent whose uid matches the person's; our key's
+    /// agent is root, so the activation must come from root too. This asks the
+    /// root agent to do it (`crate::agent::Ronoctua::raise`), which also makes
+    /// sure the tunnel actually answers and takes it down if it does not. It
+    /// returns as soon as the bringing-up has started — the snapshot and the
+    /// modeline tell how it went.
+    ///
+    /// # Errors
+    ///
+    /// The network agent is not on the bus.
+    pub fn raise_tunnel(&self, at: &str) -> Result<()> {
+        self.vault()?
+            .raise(at)
+            .context("the network agent would not bring the tunnel up")?;
+        Ok(())
+    }
+
     /// Deletes a stored profile.
     ///
     /// # Errors

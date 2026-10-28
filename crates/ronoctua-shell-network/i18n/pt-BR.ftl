@@ -295,5 +295,9 @@ network-vpn-dns-provider = o do próprio provedor
 ask-network-vpn-dns = Resolvedores de toda VPN, separados por vírgula (vazio: o de cada um)
 echo-network-vpn-settings = as configurações da VPN foram salvas
 echo-network-vpn-settings-failed = as configurações da VPN não puderam ser preparadas
+# Subir um local (via root) e esquecer um.
+echo-network-vpn-connecting = conectando a { $place } — a modeline mostra o país quando ele responder
+echo-network-vpn-forgotten = { $place } foi esquecido
+echo-network-vpn-forget-failed = não foi possível esquecer esse local
 # O enlace de um celular na vista da rede, e as recusas do próprio crate da rede.
 network-fact-phone = celular

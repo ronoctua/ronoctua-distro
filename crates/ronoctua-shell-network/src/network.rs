@@ -286,6 +286,15 @@ pub enum Target {
     VpnToggle(VpnSetting),
     /// Type the VPN's DNS resolvers (comma-separated; empty for each file's own).
     VpnDns,
+    /// A registered location: `RET` raises it THROUGH ROOT (the only way the
+    /// sealed key is handed over for one the person raised — see
+    /// `ronoctua_network::Manager::raise_tunnel`), the delete key forgets it.
+    VpnRaise {
+        /// Its object path — what raising it names.
+        at: String,
+        /// Its profile id — what forgetting it names.
+        id: String,
+    },
 }
 
 /// Which VPN runtime setting a toggle row flips.
@@ -485,6 +494,16 @@ pub enum Errand {
     /// Apply new VPN runtime settings — staged for the sync, which persists and
     /// applies them (`ronoctua_network::vpn::stage_settings`). None are secret.
     VpnSettings(ronoctua_network::vpn::Settings),
+    /// Bring a registered location up through the root agent
+    /// (`ronoctua_network::Manager::raise_tunnel`): the string is its object
+    /// path. The outcome shows in the list and on the modeline, not here — the
+    /// agent brings it up on a thread and takes it back down if it never
+    /// answers.
+    VpnRaise(String),
+    /// Forget a registered location — stage the id for the sync, which drops it
+    /// from the locations and prunes its profile
+    /// (`ronoctua_network::vpn::stage_forget`). The string is its profile id.
+    VpnForget(String),
     /// Close the view.
     Close,
 }
@@ -2242,6 +2261,11 @@ impl View {
             Press::Forget => match &target {
                 Target::Wireless(n) if n.saved => Errand::Forget(n.ssid.clone()),
                 Target::Saved(at) => Errand::Delete(at.clone()),
+                // A REGISTERED LOCATION IS FORGOTTEN BY ITS ID, not its NM
+                // profile: deleting the profile alone would have the sync write
+                // it straight back from the locations. The id leaves, the sync
+                // prunes the profile (`Errand::VpnForget`).
+                Target::VpnRaise { id, .. } => Errand::VpnForget(id.clone()),
                 _ => Errand::Nothing,
             },
             // A DISABLED ROW REFUSES — it is drawn dim and says why; sending
@@ -2272,6 +2296,10 @@ impl View {
                 Target::Link(medium, interface) => Errand::Disconnect(medium, interface),
                 Target::Tunnel(at) => Errand::Drop(at),
                 Target::Saved(at) => Errand::Raise(at),
+                // A LOCATION GOES UP THROUGH ROOT, not the user-side raise: NM
+                // hands the sealed key over only to a uid-matching agent, and
+                // the key's agent is root (`Errand::VpnRaise`).
+                Target::VpnRaise { at, .. } => Errand::VpnRaise(at),
                 // THE FILE THAT HAS BEEN LOOKED AT, and only now brought
                 // in: the reading is what the person answered `RET` to.
                 Target::Hotspot(on) => Errand::Hotspot(on),
@@ -2836,7 +2864,10 @@ impl View {
                         b.pair(
                             format!("{} {}", tokens::icon::VPN, label_of(&s.id)),
                             texts.t(key::NETWORK_TUNNEL_RAISE),
-                            Target::Saved(s.at.clone()),
+                            Target::VpnRaise {
+                                at: s.at.clone(),
+                                id: s.id.clone(),
+                            },
                             flying,
                         );
                     }
@@ -4016,6 +4047,19 @@ impl Wire {
     /// The path is not one of the daemon's, or it refused.
     pub fn raise(&mut self, at: &str) -> anyhow::Result<()> {
         self.wire()?.activate(at)
+    }
+
+    /// Brings a registered VPN location up THROUGH THE ROOT AGENT — the only
+    /// way NetworkManager hands over the sealed key for a tunnel the person
+    /// raised (`ronoctua_network::Manager::raise_tunnel`). Returns as soon as
+    /// the bringing-up has started; the snapshot and the modeline tell how it
+    /// went.
+    ///
+    /// # Errors
+    ///
+    /// The network agent is not on the bus.
+    pub fn raise_tunnel(&mut self, at: &str) -> anyhow::Result<()> {
+        self.wire()?.raise_tunnel(at)
     }
 
     /// Turns the radio into an access point.

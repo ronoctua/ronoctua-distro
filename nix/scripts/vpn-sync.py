@@ -220,10 +220,45 @@ def apply_kill_switch(on: bool) -> None:
         print(f"ronoctua-vpn-sync: the kill switch could not be set: {r.stderr.strip()}", file=sys.stderr)
 
 
+def apply_forgets(locations_path: Path) -> None:
+    """Drops the ids the shell staged to forget from the locations file.
+
+    The shell cannot write the root-owned locations (it has no key and no
+    privilege); it APPENDS ids, one per line, to a forget file in its own
+    runtime folder, and this — running as root — removes them from the
+    locations and spends the file. The profiles go on the prune below, since
+    they are no longer wanted. The key is untouched: it is the whole set's."""
+    forget_path = Path(env("RONOCTUA_VPN_FORGET", "/run/ronoctua-vpn/forget"))
+    if not forget_path.is_file():
+        return
+    try:
+        forget = {line.strip() for line in forget_path.read_text("utf-8").splitlines() if line.strip()}
+    except OSError as e:
+        print(f"ronoctua-vpn-sync: could not read the forget list: {e}", file=sys.stderr)
+        return
+    if forget and locations_path.is_file():
+        try:
+            doc = json.loads(locations_path.read_text("utf-8"))
+            doc["locations"] = [loc for loc in doc.get("locations", []) if loc.get("id") not in forget]
+            locations_path.write_text(json.dumps(doc, indent=2) + "\n", "utf-8")
+            locations_path.chmod(0o644)
+        except (OSError, ValueError) as e:
+            print(f"ronoctua-vpn-sync: could not drop the forgotten locations: {e}", file=sys.stderr)
+    # SPEND THE FILE whatever happened — a forget that could not be read is not
+    # one to retry forever, and leaving it would re-fire the path every run.
+    try:
+        forget_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def main() -> int:
     locations_path = Path(env("RONOCTUA_VPN_LOCATIONS"))
     out = Path(env("RONOCTUA_VPN_OUT", "/etc/NetworkManager/system-connections"))
     nmcli = env("RONOCTUA_NMCLI", "nmcli")
+    # TAKE ANY FORGOTTEN LOCATIONS OUT FIRST, so the generation below writes and
+    # prunes against the reduced set.
+    apply_forgets(locations_path)
     # THE RUNTIME SETTINGS: take a change the shell staged, persist it, and read
     # the live ones (the module's options are the fallback).
     settings = effective_settings()

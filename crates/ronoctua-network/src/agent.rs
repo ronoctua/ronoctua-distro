@@ -33,6 +33,7 @@
 //! answer.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use zbus::zvariant::{OwnedValue, Value};
 
@@ -277,6 +278,197 @@ impl Ronoctua {
     fn has(&self, ssid: String) -> bool {
         secret::ha(&ssid)
     }
+
+    /// Brings a tunnel up, as ROOT, so NetworkManager asks THIS agent for the
+    /// sealed key.
+    ///
+    /// # Why it has to be root who activates
+    ///
+    /// NetworkManager serves a secret the person RAISED only from an agent
+    /// whose uid matches the person's (`USER_REQUESTED`); a root agent is
+    /// ignored for it ("No agents were available"). Our key's agent is root —
+    /// it holds the TPM — so the activation itself must come from root for the
+    /// key to be handed over. A location that is `autoconnect=false` and raised
+    /// from the shell would otherwise never get its key.
+    ///
+    /// # Why it returns before it is up
+    ///
+    /// The bringing-up asks US, over this same bus, for the key. Blocking here
+    /// would stop this connection answering that and the key would never land.
+    /// So the work goes to a thread, and the shell learns the outcome from the
+    /// link itself (the snapshot, the modeline), not from this call.
+    ///
+    /// # The safety the thread carries
+    ///
+    /// A WireGuard device reaches `activated` the instant its routes are set —
+    /// with `0.0.0.0/0;::/0` that is the default route — and with NO handshake.
+    /// If the server never answers (the key is wrong, or it is unreachable)
+    /// every packet is black-holed and the way out dies. So the thread VERIFIES
+    /// a handshake and, failing one, takes the tunnel back DOWN.
+    fn raise(&self, connection: String) {
+        let Ok(path) = zbus::zvariant::OwnedObjectPath::try_from(connection) else {
+            tracing::warn!("raise was given something that is not a connection path");
+            return;
+        };
+        let spawned = std::thread::Builder::new()
+            .name("ronoctua-vpn-raise".to_owned())
+            .spawn(move || {
+                if let Err(e) = raise_and_watch(&path) {
+                    tracing::info!(error = %e, "the tunnel was not brought up");
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "no thread to bring the tunnel up");
+        }
+    }
+}
+
+/// `NM_ACTIVE_CONNECTION_STATE_ACTIVATED`.
+const ACTIVATED: u32 = 2;
+
+/// Brings `path` up and makes sure it actually CONNECTED, taking it back down
+/// if it did not — see [`Ronoctua::raise`]. Runs on a thread, off the agent's
+/// own bus connection, so NetworkManager can still ask that connection for the
+/// key while this waits.
+fn raise_and_watch(path: &zbus::zvariant::OwnedObjectPath) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    let conn = zbus::blocking::Connection::system().context("the system bus is away")?;
+    let nm =
+        crate::nm::ManagerProxyBlocking::new(&conn).context("NetworkManager is off the bus")?;
+
+    // ONE LOCATION AT A TIME: take down any other VPN of ours that is up, so
+    // two tunnels never fight over the default route.
+    for active in nm.active_connections().unwrap_or_default() {
+        if active_is_ours(&conn, &active) {
+            let _ = nm.deactivate_connection(&active.as_ref());
+        }
+    }
+
+    let none = zbus::zvariant::ObjectPath::try_from("/")?;
+    let active = nm
+        .activate_connection(&path.as_ref(), &none, &none)
+        .context("NetworkManager would not bring it up")?;
+
+    // WAIT for the link to stand. A WireGuard device gets here at once.
+    let standing = wait_until(Duration::from_secs(5), || {
+        state_of(&conn, &active) == Some(ACTIVATED)
+    });
+    if !standing {
+        let _ = nm.deactivate_connection(&active.as_ref());
+        anyhow::bail!("the tunnel did not activate");
+    }
+
+    // VERIFY it answers. No handshake in a few seconds — the key is wrong or
+    // the server is unreachable — and the default route it holds is a black
+    // hole, so take it back down to keep the way out.
+    let answered = iface_of(&conn, &active)
+        .is_some_and(|iface| handshake_within(&iface, Duration::from_secs(8)));
+    if !answered {
+        tracing::info!("no WireGuard handshake; taking the tunnel back down");
+        let _ = nm.deactivate_connection(&active.as_ref());
+        anyhow::bail!("the server never answered");
+    }
+    Ok(())
+}
+
+/// Polls `ready` until it holds or the time runs out.
+fn wait_until(within: Duration, mut ready: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + within;
+    loop {
+        if ready() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// The activation's state, or `None` once it no longer answers.
+fn state_of(
+    conn: &zbus::blocking::Connection,
+    active: &zbus::zvariant::OwnedObjectPath,
+) -> Option<u32> {
+    crate::nm::ActiveProxyBlocking::builder(conn)
+        .path(active.clone())
+        .ok()
+        .and_then(|b| b.build().ok())
+        .and_then(|a| a.state().ok())
+}
+
+/// Whether an active connection is one of our VPN locations (`ronoctua-vpn-*`).
+fn active_is_ours(
+    conn: &zbus::blocking::Connection,
+    active: &zbus::zvariant::OwnedObjectPath,
+) -> bool {
+    crate::nm::ActiveProxyBlocking::builder(conn)
+        .path(active.clone())
+        .ok()
+        .and_then(|b| b.build().ok())
+        .and_then(|a| a.id().ok())
+        .is_some_and(|id| id.starts_with(crate::vpn::LOCATION_PREFIX))
+}
+
+/// The `rvpn-*` interface an activation runs over, for reading its handshake.
+fn iface_of(
+    conn: &zbus::blocking::Connection,
+    active: &zbus::zvariant::OwnedObjectPath,
+) -> Option<String> {
+    let ac = crate::nm::ActiveProxyBlocking::builder(conn)
+        .path(active.clone())
+        .ok()?
+        .build()
+        .ok()?;
+    let device = ac.devices().ok()?.into_iter().next()?;
+    let d = crate::nm::DeviceProxyBlocking::builder(conn)
+        .path(device)
+        .ok()?
+        .build()
+        .ok()?;
+    d.ip_interface()
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| d.interface().ok())
+        .filter(|s| !s.is_empty())
+}
+
+/// Whether the tunnel on `iface` has had a handshake within the time — the one
+/// true sign a WireGuard link is carrying, and not just configured.
+fn handshake_within(iface: &str, within: Duration) -> bool {
+    // `wg` by its baked path (`RONOCTUA_WG`, set by `nix/modules/network.nix`);
+    // a bare name is the fallback for a shell that has it on PATH.
+    let wg = std::env::var("RONOCTUA_WG").unwrap_or_else(|_| "wg".to_owned());
+    let deadline = Instant::now() + within;
+    loop {
+        if latest_handshake(&wg, iface) > 0 {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+}
+
+/// The newest handshake time on `iface`, in seconds since the epoch, or `0`
+/// for "never" — `wg show <iface> latest-handshakes` reads it (needs root,
+/// which this daemon is).
+fn latest_handshake(wg: &str, iface: &str) -> u64 {
+    let Ok(out) = std::process::Command::new(wg)
+        .args(["show", iface, "latest-handshakes"])
+        .output()
+    else {
+        return 0;
+    };
+    // Each line is `<public-key>\t<unix-seconds>`; any nonzero time is a
+    // handshake that landed.
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next_back())
+        .filter_map(|ts| ts.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -133,6 +133,13 @@ fn name_of_saved(net: &Snapshot, at: &str) -> String {
         .map_or_else(|| at.to_owned(), |s| s.id.clone())
 }
 
+/// A registered location's readable label, out of the profile at `at` — the
+/// country and city, or the raw id when the profile is not one of ours.
+fn vpn_place(net: &Snapshot, at: &str) -> String {
+    let id = name_of_saved(net, at);
+    ronoctua_network::vpn::location_of(&id).map_or(id, |l| l.label())
+}
+
 /// The sentence for a profile that has just been removed.
 ///
 /// ONE KEY, ONE IDEA. From the person's side, `f` on a Wi-Fi row and `f` on
@@ -285,6 +292,13 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
                         Some(c) => c,
                         None => "systemctl",
                     };
+                    // THE INSTALL seals the key, writes the locations AND waits
+                    // for the sync (its `ExecStartPost`), so by the time this
+                    // returns the profiles are on disk and NetworkManager has
+                    // reloaded them — the view's re-read below then shows the
+                    // list filled, instead of the person having to reopen it.
+                    // Only the install unit is the person's to start (the polkit
+                    // rule); the sync it waits on is root's.
                     let ok = std::process::Command::new(SYSTEMCTL)
                         .args(["start", "--wait", "ronoctua-vpn-install.service"])
                         .stdin(std::process::Stdio::null())
@@ -320,6 +334,43 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             },
             Echo::Normal,
         )),
+        // BRING A LOCATION UP, THROUGH ROOT — the only agent NetworkManager
+        // hands the sealed key to for one the person raised. The call returns
+        // at once (root brings it up on a thread and takes it back down if the
+        // server never answers), so the word here is "connecting" and the list
+        // and the modeline tell how it went.
+        Errand::VpnRaise(at) => {
+            let place = vpn_place(held.net, &at);
+            Some((
+                match held.wire.raise_tunnel(&at) {
+                    Ok(()) => way
+                        .texts()
+                        .t_with(key::ECHO_NETWORK_VPN_CONNECTING, &[("place", &place)]),
+                    Err(e) => crate::network_words::refused(&e, way.texts()),
+                },
+                Echo::Normal,
+            ))
+        }
+        // FORGET A LOCATION: stage its id for the sync, which drops it from the
+        // locations and prunes its profile. The key is the whole set's, so it
+        // stays. The path unit fires the sync; the list loses the row on the
+        // next read.
+        Errand::VpnForget(id) => {
+            let place =
+                ronoctua_network::vpn::location_of(&id).map_or_else(|| id.clone(), |l| l.label());
+            Some((
+                match ronoctua_network::vpn::stage_forget(
+                    &id,
+                    std::path::Path::new(ronoctua_network::vpn::FORGET_STAGING),
+                ) {
+                    Ok(()) => way
+                        .texts()
+                        .t_with(key::ECHO_NETWORK_VPN_FORGOTTEN, &[("place", &place)]),
+                    Err(_) => way.texts().t(key::ECHO_NETWORK_VPN_FORGET_FAILED),
+                },
+                Echo::Normal,
+            ))
+        }
         // THE GATEWAY'S ROUND TRIP, on a thread: three echoes a fifth of a
         // second apart are the better part of a second.
         Errand::Measure(gateway) => match lines.lan {
@@ -763,12 +814,18 @@ fn opened_on(argument: &str) -> Option<Target> {
 }
 
 /// The shelf behind the number the footer knows it by.
-const SHELVES: [Shelf; 5] = [
+///
+/// EVERY SHELF THE VIEW DRAWS MUST BE HERE, or the footer has no number to
+/// scroll it by and it sits stuck at its first five rows — which is exactly
+/// what the registered locations did until `Locations` was added: a hundred
+/// servers behind a window that would not move.
+const SHELVES: [Shelf; 6] = [
     Shelf::Wifi,
     Shelf::Remembered,
     Shelf::Ports,
     Shelf::Neighbours,
     Shelf::Peers,
+    Shelf::Locations,
 ];
 
 /// WHAT THE VIEW KEEPS FOR THE LIFE OF THE PROCESS, with the view closed or

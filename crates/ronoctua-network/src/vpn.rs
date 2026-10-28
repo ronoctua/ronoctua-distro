@@ -681,6 +681,33 @@ pub fn stage_settings(settings: &Settings, staging: &std::path::Path) -> std::io
     write_private(staging, settings.text().as_bytes())
 }
 
+/// Where the shell stages the ids of locations to forget — one per line, for
+/// the sync to drop from the locations and prune.
+pub const FORGET_STAGING: &str = "/run/ronoctua-vpn/forget";
+
+/// Stages a location to be forgotten: APPENDS its id (one per line) to the
+/// forget file, so forgetting two before the sync runs drops both. The id is
+/// the short one the locations carry (the `ronoctua-vpn-` prefix taken off).
+///
+/// The key is NOT touched: it is the whole set's, not one location's. The sync
+/// removes the id from the locations and NetworkManager loses the profile on
+/// the prune.
+///
+/// # Errors
+///
+/// The staging folder is not there, or the line could not be appended.
+pub fn stage_forget(id: &str, staging: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let short = id.strip_prefix(LOCATION_PREFIX).unwrap_or(id);
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .mode(0o600)
+        .open(staging)?;
+    writeln!(f, "{short}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -175,10 +175,17 @@ in
     # folder and the staging folder, and nothing else of the file system.
     systemd.services.ronoctua-vpn-install = {
       description = "Takes the person's staged WireGuard key and locations, and seals the key in the TPM2";
-      # The profiles follow from the locations; the sync watches the file.
+      # The profiles follow from the locations; the sync watches the file. But
+      # the person who registered is WAITING ON THIS unit to see the list fill,
+      # so run the sync HERE too, `--wait`, before this returns: root starts it
+      # (the person may not), it writes the profiles and reloads NetworkManager,
+      # and only then does the view read again with the locations on it. The
+      # path unit fires the sync on its own as well; this only waits for a run
+      # that has seen the new locations.
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${helper} vpn-install ${user}";
+        ExecStartPost = "${config.systemd.package}/bin/systemctl start --wait ronoctua-vpn-sync.service";
         ProtectSystem = "strict";
         ReadWritePaths = [
           "-${blobDir}"
@@ -217,6 +224,9 @@ in
         RONOCTUA_VPN_KILLSWITCH = if cfg.killSwitch then "1" else "0";
         RONOCTUA_VPN_SETTINGS = "${stateDir}/settings.conf";
         RONOCTUA_VPN_SETTINGS_STAGING = "${stagingDir}/settings.conf";
+        # The locations the shell staged to FORGET — one id per line. The sync
+        # drops them from the locations and prunes their profiles.
+        RONOCTUA_VPN_FORGET = "${stagingDir}/forget";
       };
       serviceConfig = {
         Type = "oneshot";
@@ -246,6 +256,7 @@ in
         PathModified = [
           cfg.locations
           "${stagingDir}/settings.conf"
+          "${stagingDir}/forget"
         ];
         Unit = "ronoctua-vpn-sync.service";
       };

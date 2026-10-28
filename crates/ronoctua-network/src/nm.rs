@@ -199,6 +199,11 @@ pub trait Active {
     /// the connection's privacy settings out of.
     #[zbus(property)]
     fn connection(&self) -> zbus::Result<OwnedObjectPath>;
+
+    /// The devices it runs over — for a WireGuard location, the one `rvpn-*`
+    /// link, whose handshake says whether the tunnel actually answers.
+    #[zbus(property)]
+    fn devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
 }
 
 #[zbus::proxy(
@@ -364,6 +369,13 @@ pub trait Vault {
 
     /// Is there a stored password for this network?
     fn has(&self, ssid: &str) -> zbus::Result<bool>;
+
+    /// Brings a tunnel up THROUGH ROOT, so NetworkManager asks this (root)
+    /// agent for the sealed key: a connection the person raises is served only
+    /// by a uid-matching agent, and the key's agent is root. Returns at once;
+    /// root then makes sure it actually connected, and tears it down if the
+    /// server never answers (`crate::agent`).
+    fn raise(&self, connection: &str) -> zbus::Result<()>;
 }
 
 #[zbus::proxy(
