@@ -2137,6 +2137,53 @@ let
     echo "OK: section 2's eleven directories reach user-dirs.dirs"
   '';
 
+  # THE TWO ZSH PLUGINS ARE LINKED where `.zshrc` sources them.
+  #
+  # The plugins ride with zsh in `systemPackages` (`nix/modules/home.nix`), and
+  # `.zshrc` sources each from `/run/current-system/sw/share/…` behind a `-r`
+  # guard — the guard that lets one shared file serve a machine that carries the
+  # package and one that does not. But a package that IS in `systemPackages` and
+  # is not LINKED into the system path is skipped by that same guard in silence,
+  # looking exactly like one the person declined: a shell that quietly lost its
+  # colours. NixOS links only a fixed set of `/share/*` subdirs into the system
+  # path, and the two plugins' own are not in it — they are added by hand
+  # (`environment.pathsToLink`). This reads the sourced paths OUT of `.zshrc` —
+  # the source of truth, so a path that moves is followed — and asks whether
+  # each is present in the built system path. A plugin added to the file without
+  # its `pathsToLink` entry fails here, not on a cold install.
+  zsh-plugins-are-linked = mkCheck "zsh-plugins-are-linked" [ ] ''
+    sw=${self.nixosConfigurations.vm.config.system.path}
+    zshrc=${../assets/shell/zshrc.zsh}
+
+    # Every path `.zshrc` sources from the system path. The `-r` guard and the
+    # `.` that follows it name the same file, so `sort -u` leaves one per plugin.
+    paths=$(grep -oE '/run/current-system/sw/share/[^ ]+\.zsh' "$zshrc" | sort -u || true)
+    count=$(printf '%s\n' "$paths" | grep -c . || true)
+    if [ "$count" -lt 2 ]; then
+      echo "ERROR: .zshrc sources $count plugin(s) from the system path; expected at" >&2
+      echo "       least 2 (zsh-autosuggestions, zsh-syntax-highlighting). Did the" >&2
+      echo "       plugin lines leave the file?" >&2
+      exit 1
+    fi
+
+    missing=0
+    for p in $paths; do
+      rel=''${p#/run/current-system/sw}
+      if [ -r "$sw$rel" ]; then
+        echo "  OK  $p"
+      else
+        echo "ERROR: $p is not in the system path." >&2
+        echo "       The plugin is in systemPackages but its /share dir is not in" >&2
+        echo "       environment.pathsToLink (nix/modules/home.nix), so .zshrc's -r" >&2
+        echo "       guard skips it in silence." >&2
+        missing=1
+      fi
+    done
+    [ "$missing" = 0 ] || exit 1
+
+    echo "OK: $count zsh plugins are linked where .zshrc sources them"
+  '';
+
   # THE LOCALE AND THE TIMEZONE EXIST, and the check is where that gets asked.
   #
   # `ronoctua.locale` is a free string on purpose: the real list is glibc's
@@ -54486,6 +54533,7 @@ let
       architecture-sections
       english-names
       xdg-user-dirs
+      zsh-plugins-are-linked
       browser-has-no-keyring
       format-captures-resolve
       generator-flags-agree
@@ -54857,6 +54905,7 @@ let
     inherit
       fontconfig-nested-finds-font
       xdg-user-dirs
+      zsh-plugins-are-linked
       screenshots-land-in-a-declared-directory
       disks-adds-no-polkit-rule-of-its-own
       disks-tools-are-pinned

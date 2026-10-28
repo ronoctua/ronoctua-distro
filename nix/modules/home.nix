@@ -102,7 +102,19 @@ in
 
   # `nix-direnv` caches the devshell, so `cd` into the repository does not
   # re-evaluate the flake every time.
-  environment.pathsToLink = [ "/share/nix-direnv" ];
+  #
+  # AND THE TWO ZSH PLUGINS' OWN SHARE DIRS. They ride with zsh in
+  # `systemPackages` (`ronoctua.apps.zsh.extraPackages` above), but NixOS links
+  # only a fixed set of `/share/*` into `/run/current-system/sw`, and these two
+  # are not in it. Without this, the files never reach the path `.zshrc` sources
+  # them from (`/run/current-system/sw/share/zsh-{autosuggestions,syntax-highlighting}`)
+  # and the `-r` guard there skips both in silence — a packaging gap wearing the
+  # disguise of a declined package. `zsh-plugins-are-linked` holds the path.
+  environment.pathsToLink = [
+    "/share/nix-direnv"
+    "/share/zsh-autosuggestions"
+    "/share/zsh-syntax-highlighting"
+  ];
 
   home-manager = {
     useGlobalPkgs = true;
