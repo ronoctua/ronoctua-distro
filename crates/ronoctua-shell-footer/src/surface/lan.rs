@@ -18,9 +18,11 @@ const NETWORK: &str = "network";
 impl Footer {
     /// A fresh reading of the way out.
     ///
-    /// Repaints only when one of the three MARKS changed, or the view is
-    /// open: NetworkManager talks constantly while a link settles, and a frame
-    /// for a reading that draws the same pixels is a frame wasted.
+    /// Repaints only when one of the three MARKS changed — the way out, the
+    /// aeroplane, or WHICH tunnel is up (its id, not merely whether one is:
+    /// switching servers must redraw the place the modeline names) — or the
+    /// view is open: NetworkManager talks constantly while a link settles, and
+    /// a frame for a reading that draws the same pixels is a frame wasted.
     pub(super) fn net_arrived(&mut self, s: ronoctua_network::Snapshot) {
         // WHAT THE FOOTER HEARD, told to every region of the slot host first:
         // the network view follows the rows that are left.
@@ -28,7 +30,7 @@ impl Footer {
         let before = (
             self.net.adrift(),
             self.net.airplane(),
-            self.net.tunnel().is_some(),
+            self.net.tunnel().map(|a| a.id.clone()),
         );
         // A NETWORK, A TUNNEL OR THE AEROPLANE COMING AND GOING is said —
         // after the repaint below, once the modeline draws the new reading.
@@ -40,7 +42,7 @@ impl Footer {
         let after = (
             self.net.adrift(),
             self.net.airplane(),
-            self.net.tunnel().is_some(),
+            self.net.tunnel().map(|a| a.id.clone()),
         );
         if before != after || self.regions.is_open(NETWORK) {
             // AND THE REGION IS ONLY CLAMPED — see `settle_region`: nothing an

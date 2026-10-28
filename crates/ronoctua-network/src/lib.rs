@@ -2264,7 +2264,16 @@ pub fn watch<F>(on_change: F) -> Result<()>
 where
     F: Fn(Snapshot) + Send + 'static,
 {
-    let manager = Manager::fresh()?;
+    // TWO CONNECTIONS, NOT ONE — the liveness twin of the stale-cache lesson in
+    // `look`. A `MessageIterator` and a blocking method call on the SAME
+    // connection do not mix: when `look`'s `Get` calls pump the connection for
+    // their replies, they swallow the very `PropertiesChanged` signals the
+    // iterator is waiting on, and after the first burst `next()` blocks for
+    // ever (the modeline froze on the first tunnel, the view only caught up on
+    // a keystroke, which re-reads on its own). So the iterator gets a
+    // connection nothing else ever touches, and the readings get theirs.
+    let listener = Manager::fresh()?;
+    let reader = Manager::fresh()?;
     std::thread::Builder::new()
         .name("net-watch".to_owned())
         .spawn(move || {
@@ -2285,12 +2294,12 @@ where
                 return;
             };
             let Ok(messages) =
-                zbus::blocking::MessageIterator::for_match_rule(rule, manager.bus(), None)
+                zbus::blocking::MessageIterator::for_match_rule(rule, listener.bus(), None)
             else {
                 tracing::warn!("no NetworkManager stream; the marks will not reread");
                 return;
             };
-            on_change(manager.look());
+            on_change(reader.look());
             let mut last = std::time::Instant::now();
             for _ in messages {
                 // A FLOOR BETWEEN READINGS. NetworkManager talks constantly
@@ -2300,7 +2309,7 @@ where
                     std::thread::sleep(std::time::Duration::from_millis(250));
                 }
                 last = std::time::Instant::now();
-                on_change(manager.look());
+                on_change(reader.look());
             }
             tracing::info!("the NetworkManager stream ended; no automatic reread");
         })
