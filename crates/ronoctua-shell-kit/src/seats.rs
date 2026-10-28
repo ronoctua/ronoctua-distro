@@ -264,6 +264,33 @@ const CURSOR_HOVERS: [Color; 8] = [
     ronoctua_tokens::color::CURSOR_HOVER_EIGHT,
 ];
 
+/// The eight cursors' MINIBUFFER OWNER bands, in the order of the cursor
+/// colours: the whisper of hue the footer lays over the minibuffer line to say
+/// which cursor's keyboard opened the region. Far quieter than the hover bands
+/// (`cursor.band.*`, drained in `gen-theme.py`) — only ever one is on screen at
+/// a time, so it is drawn to read as the minibuffer's own grey leaning the
+/// cursor's way, not to be told apart from the other seven.
+const CURSOR_BANDS: [Color; 8] = [
+    ronoctua_tokens::color::CURSOR_BAND_ONE,
+    ronoctua_tokens::color::CURSOR_BAND_TWO,
+    ronoctua_tokens::color::CURSOR_BAND_THREE,
+    ronoctua_tokens::color::CURSOR_BAND_FOUR,
+    ronoctua_tokens::color::CURSOR_BAND_FIVE,
+    ronoctua_tokens::color::CURSOR_BAND_SIX,
+    ronoctua_tokens::color::CURSOR_BAND_SEVEN,
+    ronoctua_tokens::color::CURSOR_BAND_EIGHT,
+];
+
+/// The faint band the minibuffer wears while the cursor `colour`'s keyboard
+/// owns the region. The caller paints it ONLY with more than one cursor on the
+/// screen (`Seats::many`): with a single cursor there is no second hand to tell
+/// it apart from, so the minibuffer keeps the theme's own grey and no band is
+/// drawn at all.
+#[must_use]
+pub const fn owner_band_colour(colour: u8) -> Color {
+    CURSOR_BANDS[(colour % 8) as usize]
+}
+
 /// The colour a seat's cursor wears, read the way `ronoctua-pointers` wrote
 /// it: from the seat's name to its cursor number, and from the number to the
 /// colour chosen for it.
@@ -300,6 +327,18 @@ mod tests {
         assert_eq!(
             band_colour(true, 9),
             ronoctua_tokens::color::CURSOR_HOVER_TWO
+        );
+    }
+
+    #[test]
+    fn the_owner_band_is_the_cursor_colour_wrapped() {
+        assert_eq!(
+            owner_band_colour(1),
+            ronoctua_tokens::color::CURSOR_BAND_TWO
+        );
+        assert_eq!(
+            owner_band_colour(9),
+            ronoctua_tokens::color::CURSOR_BAND_TWO
         );
     }
 

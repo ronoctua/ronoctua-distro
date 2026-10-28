@@ -15803,20 +15803,33 @@ impl Footer {
         // it is listening to. Every owner shares the one cursor (a click hands
         // the region to a whole cursor, a leader to one keyboard on it), so the
         // first owner's cursor is the band's.
-        let owner_tint = self.keys.owners.first().and_then(|o| {
-            let cursor = self
-                .pointer_snapshot
-                .as_ref()?
-                .keyboards
-                .iter()
-                .find(|k| k.identity == o.unit)?
-                .cursor;
-            let colour = ronoctua_pointers::prefs::store()
-                .read()
-                .cursor(cursor)
-                .colour;
-            Some(crate::seats::band_colour(true, colour))
-        });
+        //
+        // ONLY WITH MORE THAN ONE CURSOR ON THE SCREEN (`Seats::many`). With a
+        // single cursor there is no second hand to tell this one apart from, so
+        // colouring the minibuffer says nothing: it keeps the theme's own grey
+        // and no band is drawn. And where a band IS drawn it is the quiet
+        // `cursor.band.*` whisper, not the loud hover colour — the owner asked
+        // for a tone "muito mais próxima da cor padrão do minibuffer".
+        let owner_tint = self
+            .pointers
+            .many()
+            .then(|| {
+                self.keys.owners.first().and_then(|o| {
+                    let cursor = self
+                        .pointer_snapshot
+                        .as_ref()?
+                        .keyboards
+                        .iter()
+                        .find(|k| k.identity == o.unit)?
+                        .cursor;
+                    let colour = ronoctua_pointers::prefs::store()
+                        .read()
+                        .cursor(cursor)
+                        .colour;
+                    Some(crate::seats::owner_band_colour(colour))
+                })
+            })
+            .flatten();
         let first_paint = self.frames_painted < 3;
         let mut painted = false;
         // THE SCREEN THE FULLSCREEN EDGE HOLDS OUT over its window — the

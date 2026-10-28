@@ -116,11 +116,22 @@ in
   chart = eight;
 
   # ONE CURSOR PER SEAT (`CURSOR_COUNT`): its fill, its hover band and its
-  # selection band, and the one dark rim they share.
+  # selection band, the quiet band its keyboard lays over the minibuffer, and
+  # the one dark rim they share.
   cursor = {
     fill = eight;
     hover = eight;
     selection = eight;
+    # THE MINIBUFFER'S OWNER BAND, and ONLY with more than one cursor on the
+    # screen: the band under the minibuffer line that says WHICH cursor's
+    # keyboard opened the region. The hover band (above) is loud on purpose —
+    # eight of them may light eight rows at once and each must be told from the
+    # others. This one is never more than one band at a time, so it is the
+    # cursor's hue drained to a WHISPER over the modeline's own grey: the owner
+    # asked for it to sit "muito mais próxima da cor padrão do minibuffer",
+    # close enough to read as the same bar, just leaning the cursor's way. With
+    # one cursor there is nothing to say, and the host paints no band at all.
+    band = eight;
     outline = true;
   };
 

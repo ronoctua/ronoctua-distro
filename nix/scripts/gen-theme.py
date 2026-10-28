@@ -1049,6 +1049,18 @@ CURSOR_HOVER_CHROMA = {"dark": 0.95, "light": 0.60}
 #: "the keyboard is here", once per keyboard. A single keyboard keeps the
 #: accent's own selection, the rule the hover bands follow.
 CURSOR_SELECTION_CHROMA = {"dark": 0.95, "light": 0.60}
+#: AND THE MINIBUFFER'S OWNER BAND (`cursor.band.*`, read by the footer): the
+#: cursor's hue at the hover row's lightness, like the hover band — but drained
+#: to a WHISPER. The hover band is loud because eight of them may light eight
+#: rows at once and each must be told from the others; this one is never more
+#: than ONE band at a time (the minibuffer the owner's keyboard opened), so it
+#: owes nothing to the other seven and everything to the grey it lies on. The
+#: owner asked for "um azul bem desaturado e próximo do cinza usado no
+#: minibuffer": a tone that reads as the same bar, leaning the cursor's way.
+#: NOT gated against the other bands or the ground — the distinguishability the
+#: hover band is held to (`CURSOR_HOVER_GAP`) is exactly what would make this
+#: loud again, and with one cursor the footer paints no band at all.
+CURSOR_BAND_CHROMA = {"dark": 0.22, "light": 0.14}
 
 
 def shaped_tokens(theme: Theme) -> dict[str, Resolved]:
@@ -1106,6 +1118,8 @@ def shaped_tokens(theme: Theme) -> dict[str, Resolved]:
         put(f"cursor.hover.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, at the neutral hover's L {hover_l:.3f}"), "computed")
         lch, rgb8 = band(selection_l, hue, CURSOR_SELECTION_CHROMA[polarity], base_selection_l)
         put(f"cursor.selection.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, at the selection's L {selection_l:.3f}"), "computed")
+        lch, rgb8 = band(hover_l, hue, CURSOR_BAND_CHROMA[polarity], base_hover_l)
+        put(f"cursor.band.{WORDS[i + 1]}", Swatch(lch, rgb8, f"h {hue:.0f}, a whisper at the neutral hover's L {hover_l:.3f}"), "computed")
     lch, rgb8 = cs.screen_colour(CURSOR_OUTLINE_L, CURSOR_START_HUE, 0.0)
     put("cursor.outline", Swatch(lch, rgb8, f"achromatic, L {CURSOR_OUTLINE_L:.2f}"), "computed")
 
