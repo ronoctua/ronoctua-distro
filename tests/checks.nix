@@ -22043,6 +22043,22 @@ let
     };
   };
 
+  # A DEPLOY DOES NOT STOP THE COMPOSITOR. Boots the real `scroll.service` on a
+  # booted session and runs a `switch-to-configuration` to a specialisation
+  # that changes its unit — the path a rebuild takes — asserting the compositor
+  # keeps its PID (`restartIfChanged = false` holds), with a control that
+  # restarts it to prove the test can see one. See `tests/scroll-deploy-vm.nix`.
+  scrollDeployVm = import ./scroll-deploy-vm.nix {
+    inherit pkgs lib inputs;
+    ronoctua = {
+      inherit fonts fontconfigConf iconSuperpack;
+      inherit themes themed defaultTheme;
+      inherit cursors;
+      inherit scroll;
+      shell = rust.shell;
+    };
+  };
+
   # The contract against the pinned compositor (milestone 4). See the file
   # for why there is no second version any more.
   compositorContract = import ./compositor-contract.nix {
@@ -54803,6 +54819,7 @@ let
     transfers-vm = transfersVm;
     extension-vm = extensionVm;
     kiosk-vm = kioskVm;
+    scroll-deploy-vm = scrollDeployVm;
     inherit kiosk-bridge-obeys-in-order;
     inherit
       files-actions-have-text
