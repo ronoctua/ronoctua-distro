@@ -43,6 +43,13 @@ pub fn key_of(event: &KeyEvent, mods: Modifiers) -> Option<Key> {
         Keysym::Return | Keysym::KP_Enter => Sym::Enter,
         Keysym::Tab | Keysym::ISO_Left_Tab => Sym::Tab,
         Keysym::BackSpace => Sym::Backspace,
+        // THE DELETE KEY IS A DELETE KEY: the notation has one symbol for
+        // "remove" (`DEL` = `Sym::Backspace`), and the hand that reaches for
+        // `Delete` means the same as the one that reaches for `Backspace`. xkb
+        // gives `Delete` the text U+007F, which `char_of` throws away, so
+        // without this line it fell through to a character nobody can see and
+        // the key did nothing at all.
+        Keysym::Delete | Keysym::KP_Delete => Sym::Backspace,
         Keysym::space => Sym::Space,
         Keysym::Left => Sym::Left,
         Keysym::Right => Sym::Right,
@@ -227,14 +234,22 @@ mod tests {
         }
     }
 
-    /// THE DEFECT: `Delete` typed U+007F into a window's search. It is no
-    /// character, by either of the two ways a window reads a key.
+    /// `Delete` IS THE DELETE KEY, and types NO CHARACTER. The notation has one
+    /// "remove" symbol (`Sym::Backspace`), so `Delete` reads as that — it
+    /// forgets and erases wherever `Backspace` does. And the old defect stays
+    /// fixed: it still types nothing (xkb's U+007F is a control character
+    /// `char_of` throws away, and a window's text reader strips it), rather than
+    /// putting a character nobody can see into a search.
     #[test]
-    fn delete_types_nothing() {
+    fn delete_is_the_delete_key_and_types_no_character() {
         let e = pressed(Keysym::Delete, Some("\u{7f}"));
-        assert_eq!(key_of(&e, Modifiers::default()), None);
+        assert_eq!(
+            key_of(&e, Modifiers::default()).map(|k| k.sym),
+            Some(Sym::Backspace),
+            "Delete is the remove key, the same one Backspace is"
+        );
         let (read, _) = as_read(&e, Modifiers::default(), false);
-        assert_eq!(read.utf8, None);
+        assert_eq!(read.utf8, None, "Delete types no character");
         assert_eq!(
             read.keysym,
             Keysym::Delete,

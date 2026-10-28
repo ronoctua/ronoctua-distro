@@ -351,22 +351,40 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
                 Echo::Normal,
             ))
         }
-        // FORGET A LOCATION: stage its id for the sync, which drops it from the
-        // locations and prunes its profile. The key is the whole set's, so it
-        // stays. The path unit fires the sync; the list loses the row on the
-        // next read.
+        // FORGET A LOCATION: stage its id, then RUN THE SYNC AND WAIT — it drops
+        // the id from the locations, prunes the profile and reloads
+        // NetworkManager, so the view's re-read below loses the row at once
+        // rather than keeping it until something reopens the page. Doing it
+        // `--wait` (not by the path unit, a beat behind and racing a second
+        // forget) is what makes forgetting several in a row keep working. The
+        // key is the whole set's, so it stays.
         Errand::VpnForget(id) => {
+            const SYSTEMCTL: &str = match option_env!("RONOCTUA_SYSTEMCTL") {
+                Some(c) => c,
+                None => "systemctl",
+            };
             let place =
                 ronoctua_network::vpn::location_of(&id).map_or_else(|| id.clone(), |l| l.label());
+            let staged = ronoctua_network::vpn::stage_forget(
+                &id,
+                std::path::Path::new(ronoctua_network::vpn::FORGET_STAGING),
+            )
+            .is_ok();
+            let done = staged
+                && std::process::Command::new(SYSTEMCTL)
+                    .args(["start", "--wait", "ronoctua-vpn-sync.service"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
             Some((
-                match ronoctua_network::vpn::stage_forget(
-                    &id,
-                    std::path::Path::new(ronoctua_network::vpn::FORGET_STAGING),
-                ) {
-                    Ok(()) => way
-                        .texts()
-                        .t_with(key::ECHO_NETWORK_VPN_FORGOTTEN, &[("place", &place)]),
-                    Err(_) => way.texts().t(key::ECHO_NETWORK_VPN_FORGET_FAILED),
+                if done {
+                    way.texts()
+                        .t_with(key::ECHO_NETWORK_VPN_FORGOTTEN, &[("place", &place)])
+                } else {
+                    way.texts().t(key::ECHO_NETWORK_VPN_FORGET_FAILED)
                 },
                 Echo::Normal,
             ))

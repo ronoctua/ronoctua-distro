@@ -256,24 +256,28 @@ in
         PathModified = [
           cfg.locations
           "${stagingDir}/settings.conf"
-          "${stagingDir}/forget"
         ];
         Unit = "ronoctua-vpn-sync.service";
       };
     };
 
-    # THE ONE NEW POLKIT RULE, its whole width on these lines: `YES`, `start`,
-    # one unit, one user. The same shape as the firewall's shields and tor's
+    # THE POLKIT RULE, its whole width on these lines: `YES`, `start`, two
+    # units, one user. The same shape as the firewall's shields and tor's
     # start — there is no polkit agent in this session, so `YES` is the answer
-    # that works, and what buys it is that the door is one unit wide. (Bringing
-    # a profile UP needs no rule: NetworkManager grants an active local session
-    # `network-control` already.)
+    # that works, and what buys it is that the door is two named units wide.
+    # `install` seals the key and writes the locations; `sync` REGENERATES the
+    # profiles — the person starts it `--wait` to register, to forget a
+    # location, and to refresh, so each is finished (and the view reads the
+    # result) rather than left to a path unit a beat behind. Neither carries a
+    # secret or any argument. (Bringing a profile UP needs no rule:
+    # NetworkManager grants an active local session `network-control` already.)
     security.polkit.extraConfig = ''
       polkit.addRule(function (action, subject) {
         if (
           action.id == "org.freedesktop.systemd1.manage-units" &&
           action.lookup("verb") == "start" &&
-          action.lookup("unit") == "ronoctua-vpn-install.service" &&
+          (action.lookup("unit") == "ronoctua-vpn-install.service" ||
+           action.lookup("unit") == "ronoctua-vpn-sync.service") &&
           subject.user == "${user}"
         ) {
           return polkit.Result.YES;
