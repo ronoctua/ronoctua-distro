@@ -472,6 +472,34 @@ in
     };
 
     systemd.user.services.scroll = {
+      # A DEPLOY DOES NOT TOUCH THE RUNNING COMPOSITOR.
+      #
+      # `nixos-rebuild switch` restarts a user service whose unit changed, and
+      # this one changes for reasons that have nothing to do with the running
+      # compositor: its `XCURSOR_PATH` below carries `ronoctua.cursors`, which
+      # is keyed to the DEFAULT THEME, so a theme change — or a new scroll
+      # binary, or a WLR flag — rewrites the unit. The switch then STOPS the
+      # compositor to swap it, and stopping it disconnects every Wayland client
+      # at once: the footer, every window, and the very terminal the deploy runs
+      # in. The machine lands at the TTY and the switch dies with its own shell.
+      # Measured, not reasoned: `systemd[user]: Stopped Scroll …` mid-switch on
+      # 2026-10-28, after a deploy that only moved the default theme.
+      #
+      # So the switch LEAVES IT ALONE. This is the lever NixOS gives a display
+      # manager for exactly this reason: the compositor IS the session, and a
+      # session is ended by the person — logout, reboot — never by a background
+      # rebuild. The new unit is written and the user daemon learns it; the
+      # running compositor keeps the old one until the NEXT session start, which
+      # is a reboot or a relogin, its natural lifecycle. The border and the
+      # binary are read once at start (the config is baked at build time,
+      # `/etc/scroll/config`), so "on next start" is also WHEN they would be
+      # read anyway — a deploy was never going to restyle a live compositor.
+      #
+      # NOT the restart-LOOP guard below (`ExecStartPre`, `WLR_BACKENDS`): that
+      # made a restart SUCCEED instead of looping to the TTY. This makes a
+      # DEPLOY not restart at all. Both are load-bearing — a crash still
+      # restarts (`Restart=on-failure`) and that restart still has to recover.
+      restartIfChanged = false;
       # NO CEILING ON RESTARTS. systemd's default gives up after 5 starts in
       # 10 s, and giving up here means a machine with no compositor — there is
       # no outcome worse than that, so there is no ceiling.
