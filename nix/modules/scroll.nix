@@ -434,15 +434,17 @@ in
     # NEITHER OF THE TWO UNITS BELOW CARRIES `OOMScoreAdjust`, and that is not an
     # oversight.
     #
-    # `user@.service` ships `OOMScoreAdjust=100`, which everything in the session
-    # inherits. A user unit cannot go BELOW its inherited value: the kernel
-    # returns `EACCES` without `CAP_SYS_RESOURCE`, and systemd swallows it —
-    # "Failed to adjust OOM setting, assuming containerized execution, ignoring",
-    # at DEBUG level. The setting would build, deploy, and do nothing.
+    # `user@.service` ships `OOMScoreAdjust=100`, and the user manager's
+    # `DefaultOOMScoreAdjust` is that plus 100 — so a session unit that sets
+    # nothing lands at 200, which is what these two actually run at (NOT 100).
+    # A user unit cannot go BELOW the value it would inherit: the kernel returns
+    # `EACCES` without `CAP_SYS_RESOURCE`, and systemd swallows it — "Failed to
+    # adjust OOM setting, assuming containerized execution, ignoring", at DEBUG
+    # level. The setting would build, deploy, and do nothing.
     #
     # The ordering is made the other way round, by raising the APPLICATIONS,
     # which needs no privilege: see `choom` in
-    # `crates/ronoctua-shell-kit/src/foreign.rs`. Apps 500, these two 100.
+    # `crates/ronoctua-shell-kit/src/foreign.rs`. Apps 500, these two 200.
     # THE SESSION TARGET, which exists because the compositor cannot say it is
     # ready.
     #

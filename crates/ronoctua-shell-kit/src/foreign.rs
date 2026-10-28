@@ -78,9 +78,11 @@ pub const APP_SLICE: &str = "app.slice";
 
 /// How much worse than the desktop a foreign application is, for the kernel.
 ///
-/// The desktop sits at the 100 it inherits from `user@.service`; this is the
-/// distance from it. Any positive distance would do — 500 leaves room for a
-/// future "this one first" without renumbering.
+/// The desktop sits at 200 — `user@.service`'s `OOMScoreAdjust=100` plus the
+/// +100 the user manager's `DefaultOOMScoreAdjust` adds to any session unit
+/// that sets nothing of its own. This is the distance past that. Any positive
+/// distance would do — 500 leaves room, well above 200, for a future "this one
+/// first" without renumbering.
 pub const APP_OOM_SCORE_ADJUST: i32 = 500;
 
 /// `choom`, by STORE PATH and not by name: inside a systemd scope the `PATH` is
@@ -151,10 +153,12 @@ pub fn scope_command(
     }
     // FIRST IN LINE TO DIE, for the kernel's own OOM killer.
     //
-    // `user@.service` sets `OOMScoreAdjust=100` for everything in the session,
-    // and a user unit cannot go BELOW its inherited value — the kernel returns
-    // `EACCES` and systemd swallows the failure at debug level. So the desktop
-    // stays at 100 and the applications are RAISED, which needs no privilege.
+    // `user@.service` sets `OOMScoreAdjust=100`, and the user manager's
+    // `DefaultOOMScoreAdjust` lands every session unit that sets nothing of its
+    // own at 200 (100 + 100). A user unit cannot go BELOW that — the kernel
+    // returns `EACCES` and systemd swallows the failure at debug level. So the
+    // desktop stays at 200 and the applications are RAISED, which needs no
+    // privilege.
     //
     // The `--` matters: without it `choom` would read the application's own
     // arguments as its own.
@@ -664,11 +668,12 @@ mod tests {
         assert_eq!(c[choom + 3], "--");
         assert_eq!(c[choom + 4], "alacritty");
 
-        // And it is POSITIVE: the desktop inherits 100 from `user@.service` and
-        // cannot go below it, so the ordering only exists if this one is above.
-        // A `const` block, so a future edit that lowers it fails to COMPILE
-        // rather than failing a test somebody might be tempted to adjust.
-        const { assert!(APP_OOM_SCORE_ADJUST > 100) };
+        // And it is ABOVE THE DESKTOP: a session unit that sets nothing lands at
+        // 200 (`user@.service`'s 100 plus the manager's `DefaultOOMScoreAdjust`
+        // of +100), and cannot go below it, so the ordering only exists if this
+        // one is higher still. A `const` block, so a future edit that lowers it
+        // fails to COMPILE rather than failing a test somebody might adjust.
+        const { assert!(APP_OOM_SCORE_ADJUST > 200) };
     }
 
     #[test]
