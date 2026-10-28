@@ -522,6 +522,19 @@ in
         # is reported as a SUCCESSFUL start. `exec` waits for the exec itself
         # to succeed, which is the most systemd can be told here.
         Type = "exec";
+        # EVERY START BEGINS FROM A CLEAN SLATE — the fix for the restart loop
+        # that leaves the machine at the TTY. The config's `import-environment`
+        # exports `WAYLAND_DISPLAY`/`DISPLAY` into the user manager when the
+        # compositor comes up, and NOTHING removes them when it stops. On a
+        # restart the new process inherits the stale pair, and wlroots — seeing
+        # `WAYLAND_DISPLAY` set — picks the NESTED Wayland backend, tries to
+        # reach a parent compositor that is gone ("Could not connect to remote
+        # display"), exits 1, and `Restart=on-failure` with no start limit turns
+        # that into a loop that never leaves the TTY. Backend selection runs
+        # BEFORE the config does, so the compositor cannot unset them from
+        # inside. Clear them here first; the `-` keeps a start that had nothing
+        # to clear from failing on it.
+        ExecStartPre = "-${config.systemd.package}/bin/systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY SCROLLSOCK SWAYSOCK WAYLAND_SOCKET";
         # `-c` EXPLICITLY, and this is not belt and braces.
         #
         # The search order prefers `~/.scroll/config` and
@@ -538,6 +551,17 @@ in
         # own icons come after, for a theme somebody installed by hand.
         Environment = [
           "XCURSOR_PATH=${ronoctua.cursors}/share/icons:/run/current-system/sw/share/icons"
+          # PIN THE NATIVE BACKEND — the belt to the ExecStartPre's braces. With
+          # `WLR_BACKENDS` set, wlroots creates exactly these and never
+          # autodetects from `WAYLAND_DISPLAY`/`DISPLAY`, so a stale display
+          # variable cannot send the login compositor into the nested backend at
+          # all. `drm` is the GPU/KMS output, `libinput` the seat's input. This
+          # machine's compositor is only ever the one on the hardware (the VM
+          # tests run it on virtio's DRM just the same), so pinning them states
+          # the truth rather than restricting it — the one cost is that scroll
+          # can no longer be run nested inside another compositor, which nothing
+          # here does.
+          "WLR_BACKENDS=drm,libinput"
         ];
         Restart = "on-failure";
         Slice = "session.slice";
