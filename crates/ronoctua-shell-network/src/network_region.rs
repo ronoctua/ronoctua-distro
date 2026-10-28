@@ -1358,6 +1358,32 @@ impl crate::region::Region for NetworkRegion {
         }
     }
 
+    /// A CLICK ON A LOCATION'S TRASH GLYPH FORGETS IT — the mouse half of
+    /// `DEL`/`f`. A registered location draws a trash glyph as its value
+    /// (`View::rows`); the glyph is a field at its own cell, so a click from
+    /// that cell rightward is the glyph, and anywhere left of it is the name,
+    /// which raises like any list row. Everything that is not that glyph falls
+    /// through to the plain row click.
+    fn clicked_at(&mut self, row: usize, cell: Option<u16>, way: &mut dyn Doorway) {
+        let rows = self.rows_at(way.columns(), way.texts());
+        let on_forget = rows.get(row).is_some_and(|r| {
+            matches!(r.target, Target::VpnRaise { .. })
+                && r.fields
+                    .iter()
+                    .find(|f| f.text.starts_with(ronoctua_tokens::icon::TRASH))
+                    .zip(cell)
+                    .is_some_and(|(glyph, c)| c >= glyph.at)
+        });
+        if on_forget {
+            // Put the cursor on the row, then forget it — the same errand `DEL`
+            // raises on a location (`View::key`'s `Press::Forget`).
+            self.view.clicked(row, &rows);
+            self.press(Press::Forget, way);
+            return;
+        }
+        self.clicked(row, way);
+    }
+
     /// What was typed on the footer's line for the view's question.
     fn answered(&mut self, id: &'static str, text: &str, way: &mut dyn Doorway) {
         self.told(id, text, way);

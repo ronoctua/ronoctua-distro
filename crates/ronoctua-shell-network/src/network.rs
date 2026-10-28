@@ -165,6 +165,10 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("r", "network-wifi-toggle", Where::OnTheList),
     ("d", "network-disconnect", Where::OnTheList),
     ("f", "network-forget", Where::OnTheList),
+    // THE DELETE KEY FORGETS TOO — `f` is the Emacs-shaped key, `DEL` is the
+    // one a hand reaches for to remove a thing; both do the one idea, so the
+    // person who pressed `Delete` on a VPN location is not met with nothing.
+    ("DEL", "network-forget", Where::OnTheList),
     ("a", "network-airplane", Where::OnTheList),
     ("i", "network-link", Where::OnTheList),
     ("l", "network-lan", Where::OnTheList),
@@ -2861,9 +2865,14 @@ impl View {
                         b.note(key::NETWORK_VPN_FILTER_NONE);
                     }
                     for s in &located {
+                        // THE VALUE IS A TRASH GLYPH, and it is clickable: a
+                        // click on the NAME raises the location, a click on the
+                        // glyph forgets it (`network_region`'s `clicked_at`).
+                        // So the mouse does both, the way the keyboard does with
+                        // `RET` and `DEL`.
                         b.pair(
                             format!("{} {}", tokens::icon::VPN, label_of(&s.id)),
-                            texts.t(key::NETWORK_TUNNEL_RAISE),
+                            tokens::icon::TRASH.to_string(),
                             Target::VpnRaise {
                                 at: s.at.clone(),
                                 id: s.id.clone(),
@@ -5106,6 +5115,40 @@ mod tests {
             rows.iter()
                 .any(|r| r.target == Target::Saved("/s/3".to_owned())),
             "the remembered network went nowhere at all"
+        );
+    }
+
+    #[test]
+    fn a_location_carries_a_clickable_trash_glyph_to_forget_it() {
+        // MOUSE PARITY for the delete that `DEL` and `f` do by key: a
+        // registered location draws a trash glyph as its value, and forgetting
+        // it — the glyph's click (`network_region`'s `clicked_at`) or the key —
+        // yields `VpnForget` of its id. Raising stays the row's own `RET`.
+        let t = texts();
+        let mut snap = machine();
+        snap.saved = vec![Saved {
+            at: "/s/1".to_owned(),
+            id: "ronoctua-vpn-us-nyc".to_owned(),
+            kind: "wireguard".to_owned(),
+            ssid: None,
+        }];
+        let mut v = View::fresh();
+        let rows = v.rows(&facts(&snap, &[]), DECIDING_WIDTH, &t);
+        let i = rows
+            .iter()
+            .position(|r| matches!(r.target, Target::VpnRaise { .. }))
+            .expect("the registered location is not on its own shelf");
+        assert!(
+            rows[i]
+                .fields
+                .iter()
+                .any(|f| f.text.starts_with(tokens::icon::TRASH)),
+            "the location row has no trash glyph for the mouse to forget it by"
+        );
+        v.clicked(i, &rows);
+        assert_eq!(
+            v.key(Press::Forget, &facts(&snap, &[]), DECIDING_WIDTH, &t),
+            Errand::VpnForget("ronoctua-vpn-us-nyc".to_owned()),
         );
     }
 
