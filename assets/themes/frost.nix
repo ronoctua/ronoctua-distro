@@ -89,7 +89,7 @@
     };
     subtle = {
       hue = 30;
-      text-chroma = 0.20;
+      text-chroma = 0.16;
       text-shift = -3;
     };
     # The sentence under an opened line of shortcuts: a COOL grey, quieter

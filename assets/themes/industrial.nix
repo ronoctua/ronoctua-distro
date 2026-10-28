@@ -101,7 +101,7 @@
     };
     subtle = {
       hue = 20;
-      text-chroma = 0.22;
+      text-chroma = 0.16;
       text-shift = -3;
     };
     # The sentence under an opened line of shortcuts: a COOL grey, quieter
@@ -228,6 +228,28 @@
   overrides = {
     text = {
       answer = "answer.text-strong";
+    };
+    # THE FOCUSED WINDOW'S OUTLINE — A FADED GREEN, AND NOT THE STEEL.
+    #
+    # Everywhere else the focused border is `accent.border` (the header of the
+    # `border` block in `assets/tokens/colors.nix` says why both borders are the
+    # theme's accent). The owner asked for this one theme to break that: *"a
+    # borda da janela em foco do tema industrial, que hoje é um azul, passe a
+    # ser um verde bem desbotado — mais desbotado que o atual azul."*
+    #
+    # Green is already a WINDOW-OUTLINE colour in this system: a selected
+    # window wears `border.selected` (`success.solid`) in every theme. This is
+    # the same family's `border` rung — a paint step, not a word — with half
+    # its colour drained out, so it lands MORE FADED than the steel it replaces
+    # (`accent`'s 0.85 chroma at paint-chroma 1.4) and still clears the gate
+    # against the bright `border.selected` by its rung. The unfocused border is
+    # untouched: it stays the accent's element one rung down, so leaning on the
+    # leader still dims the outline toward steel rather than erasing it.
+    border = {
+      active = {
+        of = "success.border";
+        chroma = 0.5;
+      };
     };
   };
 }

@@ -100,14 +100,15 @@
       chroma = 0.90;
       shift = 4;
     };
-    # NEARLY TWICE THE CHROMA THE OTHER THEMES GIVE IT, and the grey ramp is
-    # why. The discreet register has to stay apart from the quiet text and the
-    # dim text, and in every other theme the RAMP moves away from it; here the
-    # ramp has nowhere to move, so the register does. At the shared 0.12 both
-    # pairs sat inside the warn band.
+    # MORE CHROMA THAN THE OTHER THEMES GIVE IT, and the grey ramp is why. The
+    # discreet register has to stay apart from the quiet text and the dim text,
+    # and in every other theme the RAMP moves away from it; here the ramp has
+    # nowhere to move, so the register does. At the shared 0.12 both pairs sat
+    # inside the warn band. Dropped from 0.22 when the owner asked for the hint
+    # inks to be greyer, but held above the themes whose ramp carries the gap.
     subtle = {
       hue = 340;
-      text-chroma = 0.22;
+      text-chroma = 0.15;
       text-shift = -3;
     };
     # The sentence under an opened line of shortcuts: a COOL grey, quieter
