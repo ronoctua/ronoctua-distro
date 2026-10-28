@@ -353,6 +353,14 @@ padrão do instalador, sem o LibreOffice) ou `"minimal"` (~12,5 GiB), com a tabe
   também alcança (cobra `footer-mouse-reaches-nothing-new`).
 - Se o rodapé morre, o `OnFailure=` levanta a linha de vida (`ronoctua-shell lifeline <unidade>`).
   Os binds de emergência morrem com ele, porque escrevem no socket dele. `Ctrl+Alt+Del` é o resgate.
+- **Uma vista que segue um daemon lê ao vivo, não do cache.** Quando o rodapé vigia um daemon por
+  um fluxo de sinais de longa vida — um `MessageIterator` de `PropertiesChanged` numa conexão que
+  vive com o processo — e desenha a partir das MESMAS propriedades, leia-as SEM cache
+  (`CacheProperties::No` nos proxies do snapshot, um `Get` ao vivo por leitura). O próprio vigia
+  consome o fluxo que manteria o cache de propriedade em dia, então uma leitura em cache congela no
+  estado de quando o processo subiu, e a vista (e a modeline) passam a mostrar o passado — atualizando
+  só quando a página é reaberta, que relê do zero. O snapshot que alimenta a vista é a verdade de
+  agora, não a de quando o rodapé nasceu.
 
 ### Portas: toda janela é uma `Door`
 
@@ -440,6 +448,12 @@ padrão do instalador, sem o LibreOffice) ou `"minimal"` (~12,5 GiB), com a tabe
   cinco reinícios por minuto (cobram `a-dead-footer-stays-dead` e
   `the-dev-loop-ends-with-the-session`). Soquete de servidor morto por sinal continua no disco:
   `[ -S ]` não prova que o servidor está vivo.
+- **Trocar o binário do rodapé não precisa de reboot nem logout.** Depois de um `nixos-rebuild
+  switch`, o rodapé novo entra reiniciando só o serviço de usuário dele —
+  `systemctl --user daemon-reload && systemctl --user restart ronoctua-footer.service` —, que o
+  reexecuta enquanto o compositor e as janelas seguem de pé (a barra só pisca). O `switch` em geral
+  já reinicia esse serviço; o comando é a garantia, e é instantâneo perto de reiniciar a máquina.
+  Dá para rodá-lo de um shell sem sessão gráfica desde que o ambiente tenha `XDG_RUNTIME_DIR`.
 
 ### Tokens, textos e temas
 
