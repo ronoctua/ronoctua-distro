@@ -65,6 +65,8 @@ network-way-none = sem saída
 network-way-portal = uma página de login está no caminho
 network-way-limited = conectado, mas ela não responde
 network-way-full = ela responde
+# A SAÍDA É UM TÚNEL: nomeado, em vez do palpite de conectividade do daemon.
+network-way-vpn = por { $place }
 # A VISTA — uma lista, quatro títulos, e as mesmas linhas nas duas portas.
 network-heading-overview = num relance
 network-heading-links = cabo e Wi-Fi

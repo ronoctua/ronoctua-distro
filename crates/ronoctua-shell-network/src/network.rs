@@ -2563,12 +2563,28 @@ impl View {
         if !net.daemon {
             b.note(key::ECHO_NETWORK_UNAVAILABLE);
         }
-        let way = texts.t(&format!("network-way-{}", net.way.id()));
-        b.fact_coloured(
-            key::NETWORK_WAY,
-            way,
-            (!net.way.out()).then_some(tokens::color::STATE_WARNING),
-        );
+        // THE WAY OUT — or, WHEN A TUNNEL CARRIES IT, the tunnel. A VPN is up:
+        // name it, in the accent of a thing that is working, rather than show
+        // the daemon's connectivity guess. That guess reads `limited` when
+        // IPv6 is carried into a tunnel whose provider drops it — dead on
+        // purpose, not a fault — and "connected, but it is not answering" over
+        // a VPN that is answering perfectly well is the lie the person caught.
+        if let Some(active) = net.tunnel() {
+            let place = ronoctua_network::vpn::location_of(&active.id)
+                .map_or_else(|| active.id.clone(), |l| l.label());
+            b.fact_coloured(
+                key::NETWORK_WAY,
+                texts.t_with(key::NETWORK_WAY_VPN, &[("place", &place)]),
+                Some(tokens::color::STATE_SUCCESS),
+            );
+        } else {
+            let way = texts.t(&format!("network-way-{}", net.way.id()));
+            b.fact_coloured(
+                key::NETWORK_WAY,
+                way,
+                (!net.way.out()).then_some(tokens::color::STATE_WARNING),
+            );
+        }
         let flying = net.airplane();
         if net.daemon {
             b.pair(
@@ -2828,11 +2844,15 @@ impl View {
                 ronoctua_network::vpn::location_of(id).map_or_else(|| id.to_owned(), |l| l.label())
             };
             for a in up {
-                b.pair(
+                // THE ACTIVE TUNNEL STANDS OUT — in the accent of a thing that
+                // is on, so the one connection carrying the whole machine is
+                // not another grey row among the hundred it could be.
+                b.coloured(
                     format!("{} {}", tokens::icon::VPN, label_of(&a.id)),
                     texts.t(key::NETWORK_TUNNEL_DROP),
                     Target::Tunnel(a.at.clone()),
                     false,
+                    Some(tokens::color::STATE_SUCCESS),
                 );
             }
             if let Some((path, preview)) = &self.bringing {

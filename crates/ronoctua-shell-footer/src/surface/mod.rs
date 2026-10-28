@@ -5420,10 +5420,24 @@ impl Footer {
             return;
         }
         if id == "vpn" {
-            // AND THE TUNNEL'S MARK OPENS ON THE TUNNEL. A mark that opened a
-            // list and left the person to find the row it was about would be
-            // a door onto the right building and the wrong floor.
             let at = self.net.tunnel().map(|a| a.at.clone());
+            // THE RIGHT BUTTON DROPS THE TUNNEL, on a thread so the modeline
+            // does not wait on D-Bus. Dropping needs no secret (only raising
+            // does), so it goes straight to NetworkManager; the watch hears the
+            // tunnel go and the mark clears itself.
+            if !forward {
+                if let Some(at) = at {
+                    std::thread::spawn(move || {
+                        if let Ok(m) = ronoctua_network::Manager::fresh() {
+                            let _ = m.deactivate(&at);
+                        }
+                    });
+                }
+                return;
+            }
+            // THE LEFT BUTTON OPENS ON THE TUNNEL. A mark that opened a list and
+            // left the person to find the row it was about would be a door onto
+            // the right building and the wrong floor.
             match at {
                 Some(at) => self.run_with(
                     "network-open",

@@ -65,6 +65,8 @@ network-way-none = no way out
 network-way-portal = a login page is in the way
 network-way-limited = connected, but it is not answering
 network-way-full = it answers
+# THE WAY OUT IS A TUNNEL: named, instead of the daemon's connectivity guess.
+network-way-vpn = through { $place }
 # THE VIEW — one list, four headings, and the same rows in both doors.
 network-heading-overview = at a glance
 network-heading-links = cable and Wi-Fi

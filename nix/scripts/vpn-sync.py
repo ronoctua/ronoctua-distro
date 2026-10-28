@@ -94,6 +94,18 @@ def profile(location: dict, ipv6: bool, dns_override: list[str]) -> str:
     if ipv6:
         lines.append(f"address1={address6}")
         lines.append("method=manual")
+        # THE LINK-LOCAL WITHOUT A MAC — the whole of "carry IPv6 in the
+        # tunnel". A WireGuard link has no hardware address, so the default
+        # (EUI-64) cannot make a link-local and NetworkManager aborts IPv6 on
+        # the interface ("linklocal6: failed to get interface identifier; IPv6
+        # cannot continue"). With IPv6 aborted the `::/0` route from the peer's
+        # allowed-ips is never installed, and the person's real IPv6 goes out
+        # the physical link — the very leak the option is meant to close.
+        # `stable-privacy` makes the link-local from a stable hash instead, so
+        # IPv6 comes up, `::/0` routes INTO the tunnel, and a provider that does
+        # not egress IPv6 (Surfshark, on these configs) black-holes it there —
+        # dead, but not leaking, which is what "carry it in the tunnel" means.
+        lines.append("addr-gen-mode=stable-privacy")
         if dns:
             lines.append("dns-priority=-1")
     else:
