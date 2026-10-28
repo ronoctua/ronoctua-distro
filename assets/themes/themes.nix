@@ -57,5 +57,5 @@
 
   # What a machine shows before anyone has chosen. Must be one of `order`;
   # `themes-are-declared` refuses a name that is not.
-  default = "cyber";
+  default = "industrial";
 }
