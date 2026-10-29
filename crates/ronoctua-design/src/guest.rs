@@ -133,6 +133,7 @@ impl From<&wit::Context> for ronoctua_protocol::Context {
                 large: ctx.heights.large,
                 huge: ctx.heights.huge,
             },
+            hide_header: ctx.hide_header,
         }
     }
 }

@@ -1823,6 +1823,12 @@ pub struct Hinted {
     /// to be every one of those calls, and the one forgotten would take a
     /// click a line away from where the header was drawn.
     top: u16,
+    /// Whether this window wears NO header — the "no header" mode
+    /// (`ronoctua_shell_kit::header`). With it on, [`head`](Self::head) draws
+    /// nothing, keeps no mark and no chevron, and the drawer shuts; the door's
+    /// list reclaims line 0 (`Ui::first_of_list`). Set on every window but the
+    /// column, whose line 0 is its own control line, never a header.
+    hidden: bool,
 }
 
 impl Default for Hinted {
@@ -1845,6 +1851,7 @@ impl Default for Hinted {
             chevron_lit: false,
             right_ctrl: false,
             top: 0,
+            hidden: false,
         }
     }
 }
@@ -1863,6 +1870,23 @@ impl Hinted {
     #[must_use]
     pub const fn top(&self) -> u16 {
         self.top
+    }
+
+    /// Turns the "no header" mode on or off — see [`Hinted::hidden`]. Turning
+    /// it on takes the last frame's header off the surface at once
+    /// ([`withdraw`](Self::withdraw)), so no stale mark or chevron answers a
+    /// pointer on a line that is now the list's.
+    pub fn hide_header(&mut self, on: bool) {
+        self.hidden = on;
+        if on {
+            self.withdraw();
+        }
+    }
+
+    /// Whether this window wears NO header.
+    #[must_use]
+    pub const fn is_hidden(&self) -> bool {
+        self.hidden
     }
 
     /// Takes the header OFF the surface: no shortcut, no chevron and no
@@ -2050,6 +2074,14 @@ impl Hinted {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<ronoctua_render::Span> {
+        // NO HEADER: the window's list has reclaimed line 0, so this draws
+        // nothing and keeps no mark, no chevron and no sentence a pointer could
+        // land on; the drawer shuts. The keys it would have shown are the
+        // footer's minibuffer's now (`ronoctua_shell_kit::header`).
+        if self.hidden {
+            self.withdraw();
+            return Vec::new();
+        }
         let size = tokens::text::size();
         // THE SHORTCUT UNDER THE POINTER, LIT — see [`lit`].
         let mut line: Vec<Piece> = lit(pieces, self.lit);

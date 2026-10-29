@@ -140,6 +140,8 @@ impl Footer {
                 }
             }
             "footer-hours" => self.flip_the_hours(),
+            "footer-hide-header" => self.flip_the_header(),
+            "footer-hide-shortcuts" => self.flip_the_shortcuts(),
             _ => return false,
         }
         true

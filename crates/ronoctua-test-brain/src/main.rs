@@ -131,7 +131,7 @@ fn declared_steps() -> Vec<&'static ronoctua_brain_daemon::Step> {
 /// happen to meet, and that width depends on how long a sentence came out in
 /// whichever language is loaded.
 fn look(inst: &mut ronoctua_runtime::Instance) -> Result<ronoctua_protocol::DisplayList> {
-    let list = inst.render(COLUMNS, ROWS, heights())?;
+    let list = inst.render(COLUMNS, ROWS, heights(), false)?;
     ronoctua_runtime::driven::note(&list);
     for columns in [46, 80, COLUMNS] {
         // THE NARROW ONES ARE NOT MEASURED, only looked at. A `fill` column
@@ -140,7 +140,7 @@ fn look(inst: &mut ronoctua_runtime::Instance) -> Result<ronoctua_protocol::Disp
         let at = if columns == COLUMNS {
             list.clone()
         } else {
-            inst.render(columns, ROWS, heights())?
+            inst.render(columns, ROWS, heights(), false)?
         };
         if let Err(e) = at.nothing_overlaps(heights(), columns) {
             bail!("at {columns} columns, {e}");

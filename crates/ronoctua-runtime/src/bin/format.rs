@@ -120,7 +120,7 @@ impl Screen {
 /// Here on EVERY reading, and not only in the width walk below: the walk goes
 /// over one screen, and the three this buffer has do not lay out alike.
 fn look(inst: &mut ronoctua_runtime::Instance) -> Result<Screen> {
-    let list = inst.render(COLUMNS, ROWS, heights())?;
+    let list = inst.render(COLUMNS, ROWS, heights(), false)?;
     ronoctua_runtime::driven::note(&list);
     nothing_touches(&list, COLUMNS)?;
     Ok(Screen::of(&list))
@@ -298,7 +298,7 @@ fn main() -> Result<()> {
     // the only sign that a disk could not be written to. A colour alone is a
     // rule somebody has to already know, which is what this screen exists not
     // to require.
-    let narrow = Screen::of(&inst.render(46, ROWS, heights())?);
+    let narrow = Screen::of(&inst.render(46, ROWS, heights(), false)?);
     if !narrow.shows(NEEDED) {
         bail!(
             "in a 46-column window the reason fell outside: {:?}",
@@ -313,7 +313,7 @@ fn main() -> Result<()> {
     // appears at the width where two fields happen to meet — and that width
     // depends on how long a sentence came out in whichever language is loaded.
     for columns in [46, 60, 80, 110, 160] {
-        nothing_touches(&inst.render(columns, ROWS, heights())?, columns)?;
+        nothing_touches(&inst.render(columns, ROWS, heights(), false)?, columns)?;
     }
     println!("and nothing touches anything, from 46 to 160 columns");
 

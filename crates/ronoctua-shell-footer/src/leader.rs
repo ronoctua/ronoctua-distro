@@ -387,6 +387,16 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
 /// as `SPC` is.
 pub const BARS_TAP_KEY: &str = "CTRL";
 
+/// The key the shortcuts row stands for — a tap of `Alt` at the leader's root
+/// opens the focused window's shortcuts (`LEADER Alt`, [`Tapped::Shortcuts`]).
+/// A key's name, never text, as [`BARS_TAP_KEY`] is.
+pub const SHORTCUTS_TAP_KEY: &str = "ALT";
+
+/// The command that opens the focused window's shortcuts in the region and on
+/// the minibuffer's line — what the `Alt` tap, a click on its row, and
+/// `LEADER :` all reach (`Footer::open_window_shortcuts`).
+pub const WINDOW_SHORTCUTS_COMMAND: &str = "window-shortcuts";
+
 /// A modifier TAPPED — pressed and released with no other key in between.
 ///
 /// # What a tap means now (2026-09-30)
@@ -448,42 +458,59 @@ impl Tap {
         self.armed = None;
     }
 
-    /// A key came UP: `true` when it ends a clean tap of `Ctrl` — the one
-    /// tap that means something ([`cycles_the_bars`]).
-    pub fn released(&mut self, sym: smithay_client_toolkit::seat::keyboard::Keysym) -> bool {
+    /// A key came UP: what a clean tap of it does at the leader's root — a tap
+    /// of `Ctrl` cycles the bars, a tap of `Alt` opens the focused window's
+    /// shortcuts (`LEADER Alt`), and anything else is [`Tapped::Nothing`].
+    pub fn released(&mut self, sym: smithay_client_toolkit::seat::keyboard::Keysym) -> Tapped {
         match self.armed {
             Some(held) if held == sym => {
                 self.armed = None;
-                cycles_the_bars(sym)
+                tapped_of(sym)
             }
-            _ => false,
+            _ => Tapped::Nothing,
         }
     }
 }
 
+/// What a clean tap of a modifier at the leader's root asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tapped {
+    /// Not a clean tap, or a modifier that means nothing tapped.
+    Nothing,
+    /// A tap of `Ctrl`: the bars' modes in turn (`crate::hidden::next_mode`).
+    Bars,
+    /// A tap of `Alt`: the focused window's shortcuts, in the region and on the
+    /// minibuffer's line (`LEADER Alt`, `Footer::open_window_shortcuts`).
+    Shortcuts,
+}
+
+/// What a clean tap of this key does — either `Ctrl` cycles the bars, either
+/// `Alt` opens the shortcuts, and nothing else arms a tap ([`arms`]).
+const fn tapped_of(sym: smithay_client_toolkit::seat::keyboard::Keysym) -> Tapped {
+    use smithay_client_toolkit::seat::keyboard::Keysym;
+    match sym {
+        Keysym::Control_L | Keysym::Control_R => Tapped::Bars,
+        Keysym::Alt_L | Keysym::Alt_R => Tapped::Shortcuts,
+        _ => Tapped::Nothing,
+    }
+}
+
 /// Whether a tap of the ON-SCREEN keyboard's modifier cycles the bars — the
-/// same answer the physical keys give ([`cycles_the_bars`]): `Ctrl`, and
+/// same answer the physical keys give for `Ctrl` ([`tapped_of`]): `Ctrl`, and
 /// neither `Alt` nor `AltGr`.
 #[must_use]
 pub const fn osk_tap_cycles_the_bars(m: crate::osk::Modifier) -> bool {
     matches!(m, crate::osk::Modifier::Ctrl)
 }
 
-/// Whether this key, pressed alone, ARMS a tap: the two modifiers a tap was
-/// ever made of. `Alt` arms and answers nothing when it comes up, so that a
-/// `Ctrl` under a held `Alt` is a chord and not a tap.
+/// Whether this key, pressed alone, ARMS a tap: the two modifiers a tap is
+/// ever made of — `Ctrl` (cycles the bars) and `Alt` (opens the shortcuts).
 fn arms(sym: smithay_client_toolkit::seat::keyboard::Keysym) -> bool {
     use smithay_client_toolkit::seat::keyboard::Keysym;
     matches!(
         sym,
         Keysym::Alt_L | Keysym::Alt_R | Keysym::Control_L | Keysym::Control_R
     )
-}
-
-/// Whether a clean tap of this key cycles the bars: either `Ctrl`.
-fn cycles_the_bars(sym: smithay_client_toolkit::seat::keyboard::Keysym) -> bool {
-    use smithay_client_toolkit::seat::keyboard::Keysym;
-    matches!(sym, Keysym::Control_L | Keysym::Control_R)
 }
 
 /// The leader's own hint at the ROOT: the NEXT set, which the leader pressed
@@ -1528,6 +1555,18 @@ pub const BASE: Contribution = Contribution {
             id: "footer-hours",
             label: key::CMD_FOOTER_HOURS,
         },
+        Command {
+            id: "footer-hide-header",
+            label: key::CMD_FOOTER_HIDE_HEADER,
+        },
+        Command {
+            id: "footer-hide-shortcuts",
+            label: key::CMD_FOOTER_HIDE_SHORTCUTS,
+        },
+        Command {
+            id: "window-shortcuts",
+            label: key::CMD_WINDOW_SHORTCUTS,
+        },
     ],
     // `(sequence, command, argument)`: see `bindings::Row` for why the
     // sequence leaves the leader out and the label is not here.
@@ -1807,6 +1846,15 @@ pub const BASE: Contribution = Contribution {
         // THE HOURS OF THE FREE MINIBUFFER, on or off by name: a row of the
         // footer's settings (`LEADER s r`), whose `RET` is the view's own key.
         "footer-hours",
+        // THE "NO HEADER" MODE AND ITS SHORTCUTS, on or off by name: two more
+        // rows of the footer's settings (`LEADER s r`). The shortcuts toggle is
+        // also the glyph beside the minibuffer's chevron (`crate::surface`).
+        "footer-hide-header",
+        "footer-hide-shortcuts",
+        // THE FOCUSED WINDOW'S SHORTCUTS, opened by name as a tap of `Alt` at
+        // the leader's root opens them (`LEADER Alt`) — its row's click and
+        // `LEADER :` both reach it.
+        "window-shortcuts",
     ],
     generated: base_generated,
     reached: base_reached,
@@ -2126,13 +2174,17 @@ mod tests {
             let mut t = Tap::default();
             t.pressed(sym);
             t.pointer_acted();
-            assert!(!t.released(sym), "{sym:?}: a chord with the hand");
+            assert_eq!(
+                t.released(sym),
+                Tapped::Nothing,
+                "{sym:?}: a chord with the hand"
+            );
         }
         // THE POINTER BEFORE THE PRESS takes nothing from the tap after it.
         let mut t = Tap::default();
         t.pointer_acted();
         t.pressed(Keysym::Control_L);
-        assert!(t.released(Keysym::Control_L));
+        assert_eq!(t.released(Keysym::Control_L), Tapped::Bars);
         // AND THE ON-SCREEN KEYBOARD'S TAP answers what the keys answer.
         use crate::osk::Modifier;
         assert!(osk_tap_cycles_the_bars(Modifier::Ctrl));
@@ -2147,15 +2199,16 @@ mod tests {
     }
 
     /// FAILS IF: a tap stops being a tap — a chord counts, a release with no
-    /// press counts, `Alt` or `AltGr` cycles the bars, a `Ctrl` under a held
-    /// `Alt` counts, or `Control_R` held for the paging arrows cycles the bars
-    /// when it is let go.
+    /// press counts, `AltGr` counts, a `Ctrl` under a held `Alt` counts, or
+    /// `Control_R` held for the paging arrows cycles the bars when it is let
+    /// go — or a clean tap stops meaning what it means: `Ctrl` the bars,
+    /// `Alt` the window's shortcuts.
     #[test]
-    fn only_a_clean_tap_of_ctrl_cycles_the_bars() {
+    fn a_clean_tap_of_ctrl_cycles_and_of_alt_opens_the_shortcuts() {
         use smithay_client_toolkit::seat::keyboard::Keysym;
         let tapped = |keys: &[(bool, Keysym)]| {
             let mut t = Tap::default();
-            let mut last = false;
+            let mut last = Tapped::Nothing;
             for (down, sym) in keys {
                 if *down {
                     t.pressed(*sym);
@@ -2165,69 +2218,94 @@ mod tests {
             }
             last
         };
-        // A CLEAN TAP, either hand.
-        assert!(tapped(&[
-            (true, Keysym::Control_L),
-            (false, Keysym::Control_L)
-        ]));
+        // A CLEAN TAP OF `Ctrl`, either hand, cycles the bars.
+        assert_eq!(
+            tapped(&[(true, Keysym::Control_L), (false, Keysym::Control_L)]),
+            Tapped::Bars
+        );
         // THE RIGHT CTRL TAPPED ALONE is a tap too...
-        assert!(tapped(&[
-            (true, Keysym::Control_R),
-            (false, Keysym::Control_R)
-        ]));
+        assert_eq!(
+            tapped(&[(true, Keysym::Control_R), (false, Keysym::Control_R)]),
+            Tapped::Bars
+        );
         // ...and HELD WITH AN ARROW it is the paging chord, and no tap.
-        assert!(!tapped(&[
-            (true, Keysym::Control_R),
-            (true, Keysym::Right),
-            (false, Keysym::Right),
-            (false, Keysym::Control_R),
-        ]));
-        // `ALT` CHOOSES NOTHING ANY MORE, either hand (the owner, 2026-09-30).
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Control_R),
+                (true, Keysym::Right),
+                (false, Keysym::Right),
+                (false, Keysym::Control_R),
+            ]),
+            Tapped::Nothing
+        );
+        // A CLEAN TAP OF `Alt`, either hand, opens the window's shortcuts.
         for alt in [Keysym::Alt_L, Keysym::Alt_R] {
-            assert!(!tapped(&[(true, alt), (false, alt)]), "{alt:?}");
+            assert_eq!(
+                tapped(&[(true, alt), (false, alt)]),
+                Tapped::Shortcuts,
+                "{alt:?}"
+            );
         }
         // A KEY IN BETWEEN is a chord.
-        assert!(!tapped(&[
-            (true, Keysym::Control_L),
-            (true, Keysym::n),
-            (false, Keysym::Control_L),
-        ]));
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Control_L),
+                (true, Keysym::n),
+                (false, Keysym::Control_L),
+            ]),
+            Tapped::Nothing
+        );
         // A RELEASE WITH NO PRESS: the leader's own `Ctrl` and `Alt` in the
         // nested loop, pressed before the footer had the keyboard.
-        assert!(!tapped(&[
-            (false, Keysym::Control_L),
-            (false, Keysym::Alt_L)
-        ]));
+        assert_eq!(
+            tapped(&[(false, Keysym::Control_L), (false, Keysym::Alt_L)]),
+            Tapped::Nothing
+        );
         // TWO MODIFIERS AT ONCE is a chord, whichever came first.
-        assert!(!tapped(&[
-            (true, Keysym::Control_L),
-            (true, Keysym::Alt_L),
-            (false, Keysym::Alt_L),
-            (false, Keysym::Control_L),
-        ]));
-        assert!(!tapped(&[
-            (true, Keysym::Alt_L),
-            (true, Keysym::Control_L),
-            (false, Keysym::Control_L),
-        ]));
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Control_L),
+                (true, Keysym::Alt_L),
+                (false, Keysym::Alt_L),
+                (false, Keysym::Control_L),
+            ]),
+            Tapped::Nothing
+        );
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Alt_L),
+                (true, Keysym::Control_L),
+                (false, Keysym::Control_L),
+            ]),
+            Tapped::Nothing
+        );
         // `AltGr` IS NOTHING HERE.
-        assert!(!tapped(&[
-            (true, Keysym::ISO_Level3_Shift),
-            (false, Keysym::ISO_Level3_Shift),
-        ]));
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::ISO_Level3_Shift),
+                (false, Keysym::ISO_Level3_Shift),
+            ]),
+            Tapped::Nothing
+        );
         // A REPEAT OF THE SAME MODIFIER is still one tap.
-        assert!(tapped(&[
-            (true, Keysym::Control_L),
-            (true, Keysym::Control_L),
-            (false, Keysym::Control_L),
-        ]));
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Control_L),
+                (true, Keysym::Control_L),
+                (false, Keysym::Control_L),
+            ]),
+            Tapped::Bars
+        );
         // AND A TAP AFTER A TAP: each release answers its own.
-        assert!(tapped(&[
-            (true, Keysym::Alt_L),
-            (false, Keysym::Alt_L),
-            (true, Keysym::Control_L),
-            (false, Keysym::Control_L),
-        ]));
+        assert_eq!(
+            tapped(&[
+                (true, Keysym::Alt_L),
+                (false, Keysym::Alt_L),
+                (true, Keysym::Control_L),
+                (false, Keysym::Control_L),
+            ]),
+            Tapped::Bars
+        );
     }
 
     /// FAILS IF: the leader's hint at the root stops teaching the NEXT set as

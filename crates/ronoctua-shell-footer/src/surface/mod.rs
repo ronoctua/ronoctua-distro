@@ -631,6 +631,15 @@ struct Footer {
     /// Remembered and not recomputed, for the reason `band_placed` is: what
     /// the pointer clicks has to be what was DRAWN.
     fold_control: Option<u16>,
+    /// Where the SHORTCUTS glyph was drawn — the eye left of the chevron that
+    /// hides or shows the relocated shortcuts (`adapt::Prefs::shortcuts`), as
+    /// its cell and its line: beside the chevron on one line, under it when the
+    /// minibuffer opened to two or more (the owner's ask). `None` when the "no
+    /// header" mode is off and there is nothing to toggle. Remembered for the
+    /// reason `fold_control` is.
+    shortcuts_control: Option<(u16, u16)>,
+    /// Whether the pointer rests on that glyph, which lights.
+    shortcuts_lit: bool,
     /// Where the PAGE COUNTER was drawn (`RCtrl ←→  2/3`), as its first cell
     /// and its width on the minibuffer's line — it is a control: a click turns
     /// the page. Remembered for the reason `fold_control` is.
@@ -2093,6 +2102,10 @@ enum Click {
     /// (`crate::hidden::bars_row`). Its key is a tap of `Ctrl`, which no tree
     /// holds, so the click runs the cycle the tap runs.
     Bars,
+    /// The root's row that opens the focused window's shortcuts (`LEADER Alt`).
+    /// Its key is a tap of `Alt`, which no tree holds, so the click opens them
+    /// the way the tap does (`Footer::open_window_shortcuts`).
+    Shortcuts,
     /// Choose the candidate at index `n` in the finder and confirm.
     Candidate(usize),
     /// Open the application at index `n` of the visible list.
@@ -2844,6 +2857,8 @@ fn assemble(
         fold_lit: false,
         fold: crate::fold::Fold::default(),
         fold_control: None,
+        shortcuts_control: None,
+        shortcuts_lit: false,
         page_control: None,
         fold_wrapped: 0,
         fold_scroll: ronoctua_design::Scroll {
@@ -3697,7 +3712,12 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                 // and never there, from a real click or a synthetic one), and
                 // hands no click to this footer. Asked BEFORE the state takes
                 // the event, which is what says the focus MOVED.
-                if state.every_workspace && state.focus_moved(&e) {
+                // ASKED BEFORE THE STATE TAKES THE EVENT — the one place that
+                // says the focus MOVED, reused below to re-read the newly
+                // focused window's shortcuts for the minibuffer and the
+                // `LEADER Alt` region (`refresh_buffer_keymap`).
+                let focus_changed = state.focus_moved(&e);
+                if state.every_workspace && focus_changed {
                     state.show_every_workspace(false);
                 }
                 // A COMPOSITOR THAT LEFT, or one heard from the start again,
@@ -3715,6 +3735,13 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                     state.software_window_closed();
                 }
                 state.windows.apply_to(&e);
+                // THE FOCUSED WINDOW'S SHORTCUTS, re-read on every change of
+                // focus — not only when the leader opens — so the minibuffer's
+                // line and the `LEADER Alt` region always carry the window in
+                // front (`refresh_buffer_keymap`, `minibuffer_rest_pieces`).
+                if focus_changed {
+                    state.refresh_buffer_keymap();
+                }
                 // THE KIOSKS: a launch's title half, a video's fullscreen
                 // ending over one, a kiosk's window closing.
                 state.kiosk_follows(&e);
@@ -7196,6 +7223,9 @@ impl Footer {
         // row what it is.
         let mut brain_hit = None;
         let mut fold_toggle = false;
+        // AND WHETHER THE SHORTCUTS GLYPH was clicked — hide or show the
+        // relocated shortcuts (`flip_the_shortcuts`).
+        let mut shortcuts_click = false;
         // A SHORTCUT OF THE HINT LINE that was clicked: what its key would do.
         let mut hint_act: Option<crate::chrome::Act> = None;
         let mut page_click: Option<bool> = None;
@@ -7299,6 +7329,7 @@ impl Footer {
                         .hint_act_under(e.position.0, e.position.1)
                         .and_then(|_| self.hint_under(e.position.0, e.position.1));
                     self.fold_lit = self.fold_at(e.position.0, e.position.1);
+                    self.shortcuts_lit = self.shortcuts_control_at(e.position.0, e.position.1);
                     // AND THE POINTER RESTING ON THE BAND STOPS ITS CLOCK.
                     //
                     // ANYWHERE on it, and not only on a piece: what is being
@@ -7387,6 +7418,7 @@ impl Footer {
                     self.hint_said = None;
                     self.hint_lit = None;
                     self.fold_lit = false;
+                    self.shortcuts_lit = false;
                     // AND A LINGERING HINT GOES WITH THE HAND that left.
                     self.lingering_hint = None;
                     self.here.dragging = false;
@@ -7534,6 +7566,12 @@ impl Footer {
                     // THE PAGE COUNTER, on the same line and at its right end.
                     if self.page_control_at(e.position.0, e.position.1) {
                         page_click = Some(true);
+                        continue;
+                    }
+                    // THE SHORTCUTS GLYPH, beside the chevron — a click hides or
+                    // shows the relocated shortcuts (`flip_the_shortcuts`).
+                    if self.shortcuts_control_at(e.position.0, e.position.1) {
+                        shortcuts_click = true;
                         continue;
                     }
                     // A SHORTCUT OF THE HINT LINE IS A CONTROL — the owner's
@@ -7744,6 +7782,9 @@ impl Footer {
         }
         if fold_toggle {
             self.toggle_fold();
+        }
+        if shortcuts_click {
+            self.flip_the_shortcuts();
         }
         if let Some(act) = hint_act {
             // AN EVENT'S ACTION WAS CLICKED: with an event on the line and no
@@ -8491,6 +8532,9 @@ impl Footer {
             // What has to end before the compositor ends first
             // (`crate::session_end`).
             "session-quit" => self.session_quit(),
+            // THE FOCUSED WINDOW'S SHORTCUTS, by name — `LEADER Alt` reached
+            // without the tap (`LEADER :`, the row's click).
+            "window-shortcuts" => self.open_window_shortcuts(),
             "onscreen-keyboard" => self.toggle_the_keyboard(),
             // WHAT WAS JUST INSTALLED, opened — the event's "open it", the
             // notification's, and by name: the footer keeps which entry the
@@ -10489,16 +10533,28 @@ impl Footer {
             return None;
         };
         let mut inputs = crate::leader::condensed_root(e);
-        // The buffer's row goes in only when there IS a buffer answering.
-        if !self.buffer_bindings.is_empty()
-            && let Ok(key) = ronoctua_keymap::Key::parse(ronoctua_protocol::LOCAL_PREFIX)
-        {
+        // THE FOCUSED WINDOW'S SHORTCUTS, as a row — the one standard entry for
+        // every window (`LEADER Alt`): a tap of `Alt` opens them
+        // (`shortcuts_tapped`) and a click on this row does the same
+        // (`Click::Shortcuts`). It stands in for the window's keys the way the
+        // bars' row stands in for the `Ctrl` tap (`hidden::bars_row`), and goes
+        // in only when the focused window published something.
+        if !self.buffer_bindings.is_empty() {
+            let alt = ronoctua_keymap::Mods {
+                alt: true,
+                ..ronoctua_keymap::Mods::default()
+            };
             inputs.push(ronoctua_keymap::Entry {
-                key: ronoctua_protocol::LOCAL_PREFIX.to_owned(),
-                sym: key,
-                label: crate::key::WHICH_BUFFER.to_owned(),
-                command: None,
-                is_group: true,
+                key: crate::leader::SHORTCUTS_TAP_KEY.to_owned(),
+                // UNBINDABLE, as the bars' row is: `Alt+ESC`, so this data is
+                // never taken for a tree binding.
+                sym: ronoctua_keymap::Key {
+                    mods: alt,
+                    sym: ronoctua_keymap::Sym::Esc,
+                },
+                label: format!("cmd-{}", crate::leader::WINDOW_SHORTCUTS_COMMAND),
+                command: Some(crate::leader::WINDOW_SHORTCUTS_COMMAND.to_owned()),
+                is_group: false,
             });
         }
         // AND THE TAP OF `Ctrl`, as a row: the cycle of the bars' modes,
@@ -10516,8 +10572,10 @@ impl Footer {
         if sym == Keysym::Control_R {
             self.right_ctrl = false;
         }
-        if self.tap.released(sym) {
-            self.bars_tapped();
+        match self.tap.released(sym) {
+            crate::leader::Tapped::Bars => self.bars_tapped(),
+            crate::leader::Tapped::Shortcuts => self.shortcuts_tapped(),
+            crate::leader::Tapped::Nothing => {}
         }
     }
 
@@ -10530,6 +10588,62 @@ impl Footer {
             return;
         }
         self.cycle_the_bars();
+    }
+
+    /// A tap of `Alt` arrived — `LEADER Alt`. Like the bars' tap it counts only
+    /// where the leader is the view, at its root, with nothing typed; there it
+    /// opens the focused window's shortcuts ([`Footer::open_window_shortcuts`]).
+    fn shortcuts_tapped(&mut self) {
+        if self.a_tap_counts() {
+            self.open_window_shortcuts();
+        }
+    }
+
+    /// Opens the focused window's shortcuts: the region fills with them and
+    /// the minibuffer's line yields (they are one set — `minibuffer_rest_pieces`).
+    ///
+    /// It presses the local prefix for the person — the very submenu
+    /// [`Footer::buffer_key`] already draws and runs, now reached by one
+    /// standardised gesture instead of a key the window named. Does nothing
+    /// when the focused window published no shortcuts.
+    fn open_window_shortcuts(&mut self) {
+        if let Ok(key) = ronoctua_keymap::Key::parse(ronoctua_protocol::LOCAL_PREFIX) {
+            self.buffer_key(key);
+            self.draw_and_paint();
+        }
+    }
+
+    /// The focused window's shortcuts as the FREE minibuffer's line shows them
+    /// — the same set `LEADER Alt` lists in the region, so the line and the
+    /// region never disagree. Empty unless the header is hidden, the shortcuts
+    /// are not, and the window in front published some: then the header's line
+    /// is the footer's to lend, and this is what it lends.
+    ///
+    /// Read-only runs, each its keys and the command's own words — a click on
+    /// the line opens the region (`open_window_shortcuts`), where every one is
+    /// pressed or clicked and run.
+    fn minibuffer_rest_pieces(&self) -> Vec<crate::chrome::Piece> {
+        if !(self.modeline.hide_header()
+            && !self.modeline.hide_shortcuts()
+            && !self.buffer_bindings.is_empty())
+        {
+            return Vec::new();
+        }
+        let mut out = Vec::with_capacity(self.buffer_bindings.len() * 3);
+        for (keys, command) in &self.buffer_bindings {
+            if !out.is_empty() {
+                out.push(crate::chrome::Piece::separator());
+            }
+            out.push(crate::chrome::Piece::key_in(
+                keys.clone(),
+                crate::chrome::Register::Key,
+            ));
+            out.push(crate::chrome::Piece::prose(format!(
+                " {}",
+                self.texts.t(command)
+            )));
+        }
+        out
     }
 
     /// Whether a tap of `Ctrl` means the cycle here: the leader is the view,
@@ -10924,6 +11038,20 @@ impl Footer {
         self.write_the_modeline(|p| crate::footer_settings::Setting::Hours.change(p));
     }
 
+    /// `footer-hide-header`: the "no header" mode on or off — written into
+    /// `modeline.json` merged, which a window hears through its own watch
+    /// (`ronoctua_shell_kit::header`) and the footer through `self.modeline`.
+    fn flip_the_header(&mut self) {
+        self.write_the_modeline(|p| crate::footer_settings::Setting::Header.change(p));
+    }
+
+    /// `footer-hide-shortcuts`: the relocated shortcuts on the minibuffer
+    /// hidden or shown — the row of the settings view AND the glyph beside the
+    /// chevron run this (`minibuffer_rest_pieces`, `shortcuts_control`).
+    fn flip_the_shortcuts(&mut self) {
+        self.write_the_modeline(|p| crate::footer_settings::Setting::Shortcuts.change(p));
+    }
+
     /// `minibuffer-fold-open` and `minibuffer-fold-close`: what the right
     /// `Ctrl` with `↓` and `↑` does to the minibuffer's line
     /// (`Footer::fold_key`), by name — the compositor's transient bind while
@@ -11221,6 +11349,7 @@ impl Footer {
             .hint_act_under(x, y)
             .and_then(|_| self.hint_under(x, y));
         self.fold_lit = self.fold_at(x, y);
+        self.shortcuts_lit = self.shortcuts_control_at(x, y);
         let hit = self.segment_hit(x, y);
         self.here.segment_under_pointer = hit.map(|(id, _)| id);
         self.here.mark_zone_under_pointer = pair_zone(hit);
@@ -13789,15 +13918,14 @@ impl Footer {
                     None => format!("{GROUP_MARK}{}", self.texts.t(&e.label)),
                 },
                 description: Some(self.texts.t(&e.label)),
-                // THE TAP'S OWN ROW runs the cycle, not a key of the tree
-                // — see `Click::Bars`.
-                click: Some(
-                    if e.command.as_deref() == Some(crate::hidden::CYCLE_COMMAND) {
-                        Click::Bars
-                    } else {
-                        Click::Key(e.sym)
-                    },
-                ),
+                // THE TWO TAP ROWS run their gesture, not a key of the tree —
+                // the bars' cycle (`Click::Bars`) and the window's shortcuts
+                // (`Click::Shortcuts`); every other row presses its key.
+                click: Some(match e.command.as_deref() {
+                    Some(crate::hidden::CYCLE_COMMAND) => Click::Bars,
+                    Some(crate::leader::WINDOW_SHORTCUTS_COMMAND) => Click::Shortcuts,
+                    _ => Click::Key(e.sym),
+                }),
                 text_color: if e.is_group {
                     tokens::color::TEXT_GROUP
                 } else {
@@ -13937,6 +14065,27 @@ impl Footer {
         // and a chevron does not fill it; a target the size of the ink is a
         // target one has to aim at.
         cell + 1 >= at
+    }
+
+    /// Is the pointer on the shortcuts glyph (`Footer::shortcuts_control`)? It
+    /// asks the cell AND the line that were DRAWN, as `fold_at` asks the cell —
+    /// the glyph may sit left of the chevron or on the line under it. The air
+    /// beside it is part of the target, bounded so it does not reach the
+    /// chevron two cells to its right.
+    fn shortcuts_control_at(&self, x: f64, y: f64) -> bool {
+        let Some((at, line)) = self.shortcuts_control else {
+            return false;
+        };
+        let Some(f) = self.metric() else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        if f.line_at(y as f32) != Some(line) {
+            return false;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let cell = f.column_at(x as f32);
+        cell + 1 >= at && cell <= at + 1
     }
 
     /// Whether a press landed on the minibuffer's line with nothing on it.
@@ -14332,6 +14481,7 @@ impl Footer {
                 self.apply_leader_effect(effect);
             }
             Some(Click::Bars) => self.cycle_the_bars(),
+            Some(Click::Shortcuts) => self.open_window_shortcuts(),
             Some(Click::Application(n)) => self.apps_click(n),
             Some(Click::FooterSettings(n)) => self.footer_settings_click(n),
             Some(Click::BuildPage(n)) => self.build_page_click(n),
@@ -15259,6 +15409,11 @@ impl Footer {
             })
             .flatten();
         let mini_at_rest = crate::modeline::minibuffer_at_rest();
+        // THE FOCUSED WINDOW'S SHORTCUTS, on the free line — the same set
+        // `LEADER Alt` lists in the region, shown only while the header is
+        // hidden and the shortcuts are not (`minibuffer_rest_pieces`). Empty
+        // otherwise, and then the line is the resting blank it always was.
+        let mini_rest_pieces = self.minibuffer_rest_pieces();
         // THE PROMPT OF THE MINIBUFFER'S LINE, from either of the two
         // finders.
         //
@@ -16362,6 +16517,10 @@ impl Footer {
                 // THE FLASH IS DRAWN BELOW, placed by `sound::line` — the
                 // same drawing the row above the modeline carries.
                 Vec::new()
+            } else if !mini_rest_pieces.is_empty() {
+                // THE RELOCATED SHORTCUTS, when the window in front gave some
+                // and the mode asks for them — the line the header gave up.
+                mini_rest_pieces.clone()
             } else {
                 vec![crate::chrome::Piece::said(mini_at_rest.clone())]
             };
@@ -16381,7 +16540,18 @@ impl Footer {
                 && prompt_mx.is_none()
                 && held_pieces.is_none()
                 && pending.is_none();
-            let opens = self.shape.draws_minibuffer() && (held.open || !at_rest);
+            // OPENS when the line carries something — an event, a message, a
+            // chord — OR when it carries the window's relocated shortcuts, which
+            // routinely run past the line and want the chevron to read in full.
+            let opens = self.shape.draws_minibuffer()
+                && (held.open || !at_rest || !mini_rest_pieces.is_empty());
+            // THE SHORTCUTS GLYPH is drawn whenever the "no header" mode is on —
+            // the eye that hides or shows the relocated shortcuts, in either
+            // state, so it toggles both ways. Beside the chevron on one line
+            // (and reserving a cell there); under it when the line opened to
+            // two or more, where the opened drawer already keeps the edge.
+            let glyph = self.modeline.hide_header() && self.shape.draws_minibuffer();
+            let glyph_beside = glyph && !held.open;
             // THE RIGHT END OF THE LINE, COUNTED FROM THE BORDER — the control,
             // and the page counter one cell of air to its left — so the air
             // after the control is the modeline's one cell at every width.
@@ -16402,13 +16572,18 @@ impl Footer {
             // one arithmetic, `minibuffer_room`, for this screen and for the
             // narrowest one the event's actions are placed for.
             let indicator_cells = indicator.as_deref().map(layout::width);
-            let mini_room = minibuffer_room(columns, indicator_cells, opens);
+            let mini_room = minibuffer_room(columns, indicator_cells, opens, glyph_beside);
             // WHAT SAYS A HINT IS CUT (`Footer::linger`): the room the line
             // gives its text with the chevron beside it — which a hint that
             // does not fit always has.
-            self.minibuffer_room = minibuffer_room(columns, indicator_cells, true);
-            let action_room =
-                room_for_the_actions(columns, narrowest_columns, indicator_cells, opens);
+            self.minibuffer_room = minibuffer_room(columns, indicator_cells, true, glyph_beside);
+            let action_room = room_for_the_actions(
+                columns,
+                narrowest_columns,
+                indicator_cells,
+                opens,
+                glyph_beside,
+            );
             // WHERE EVERY SHORTCUT OF THIS LINE LANDED, for the pointer.
             //
             // Collected while drawing and never rebuilt afterwards — see
@@ -16523,6 +16698,49 @@ impl Footer {
                         tokens::color::TEXT_SUBTLE_STRONG
                     } else {
                         tokens::color::TEXT_SUBTLE_DEFAULT
+                    },
+                    edge: true,
+                    foot: false,
+                });
+            }
+
+            // THE SHORTCUTS GLYPH, the eye that hides or shows the relocated
+            // shortcuts (`adapt::Prefs::shortcuts`) — drawn whenever the "no
+            // header" mode is on, in whichever of its two states the file says,
+            // so a click toggles it both ways. Beside the chevron on one line;
+            // under it (same column, line below) when the line opened to two or
+            // more — the owner's ask for the two controls to stack.
+            self.shortcuts_control = glyph.then(|| {
+                if held.open {
+                    (crate::chrome::from_the_edge(columns, 1), mini_line + 1)
+                } else {
+                    let col = indicator_at.or(chevron_at).map_or_else(
+                        || crate::chrome::from_the_edge(columns, 1),
+                        |c| c.saturating_sub(2),
+                    );
+                    (col, mini_line)
+                }
+            });
+            if let Some((col, line)) = self.shortcuts_control {
+                let eye = if self.modeline.hide_shortcuts() {
+                    tokens::icon::SHORTCUTS_HIDDEN
+                } else {
+                    tokens::icon::SHORTCUTS_SHOWN
+                };
+                spans.push(ronoctua_render::Span {
+                    size: ronoctua_render::Size::OnTheCell(chrome_size_of(eye)),
+                    text: eye.to_string(),
+                    column: col,
+                    line,
+                    // LIT under the pointer; otherwise the subtle default while
+                    // the shortcuts are hidden and the stronger ink while they
+                    // are shown — the small step every header's controls take.
+                    color: if self.shortcuts_lit {
+                        tokens::color::TEXT_SUBTLE_LIT_KEY
+                    } else if self.modeline.hide_shortcuts() {
+                        tokens::color::TEXT_SUBTLE_DEFAULT
+                    } else {
+                        tokens::color::TEXT_SUBTLE_STRONG
                     },
                     edge: true,
                     foot: false,
@@ -18466,7 +18684,12 @@ const fn above_row_taken(
 /// The room the minibuffer's line gives its text on a screen `columns` wide:
 /// from the margin to one cell before whatever stands at its right end — the
 /// page counter (`indicator_cells` wide) and the drawer's chevron.
-fn minibuffer_room(columns: u16, indicator_cells: Option<u16>, chevron: bool) -> u16 {
+fn minibuffer_room(
+    columns: u16,
+    indicator_cells: Option<u16>,
+    chevron: bool,
+    glyph: bool,
+) -> u16 {
     let taken = indicator_cells.map_or(0, |w| w + 1);
     let plain_room = columns
         .saturating_sub(tokens::space::MODELINE_EDGELEFT)
@@ -18476,7 +18699,15 @@ fn minibuffer_room(columns: u16, indicator_cells: Option<u16>, chevron: bool) ->
         Some(c) => c.saturating_sub(1 + w),
         None => crate::chrome::from_the_edge(columns, w),
     });
-    match indicator_at.or(chevron_at) {
+    // THE SHORTCUTS GLYPH, one cell with a cell of air, left of whatever the
+    // chevron and the counter already took — or at the edge when it stands
+    // alone (`Footer::shortcuts_control`).
+    let right = indicator_at.or(chevron_at);
+    let glyph_at = glyph.then(|| match right {
+        Some(c) => c.saturating_sub(2),
+        None => crate::chrome::from_the_edge(columns, 1),
+    });
+    match glyph_at.or(right) {
         Some(at) => at.saturating_sub(tokens::space::MODELINE_EDGELEFT + 1),
         None => plain_room,
     }
@@ -18500,9 +18731,10 @@ fn room_for_the_actions(
     narrowest_columns: Option<u16>,
     indicator_cells: Option<u16>,
     chevron: bool,
+    glyph: bool,
 ) -> u16 {
     let columns = narrowest_columns.map_or(own_columns, |n| n.min(own_columns));
-    minibuffer_room(columns, indicator_cells, chevron)
+    minibuffer_room(columns, indicator_cells, chevron, glyph)
 }
 
 fn pixels_of(lines: u32) -> u32 {
@@ -20871,10 +21103,10 @@ mod tests {
         let (narrow, wide) = (90_u16, 160_u16);
         for (indicator, chevron) in [(None, true), (Some(4), true), (None, false)] {
             let placed = |columns: u16| -> Vec<(u16, u16, &'static str)> {
-                let room = minibuffer_room(columns, indicator, chevron);
+                let room = minibuffer_room(columns, indicator, chevron, false);
                 let one = crate::chrome::room_for_actions(
                     &line,
-                    room_for_the_actions(columns, Some(narrow), indicator, chevron),
+                    room_for_the_actions(columns, Some(narrow), indicator, chevron, false),
                 );
                 crate::chrome::hint_marks(&one, tokens::space::MODELINE_EDGELEFT, 0, room)
                     .into_iter()

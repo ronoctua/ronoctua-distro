@@ -2934,6 +2934,11 @@ pub struct Context {
     pub lines: u16,
     /// How many cells of height each scale occupies.
     pub heights: Heights,
+    /// The "no header" mode is on: a buffer that draws a header of its own
+    /// draws NONE and lays its content from row 0 — its keys move to the
+    /// footer's minibuffer (`ronoctua_shell_kit::header`, `LEADER Alt`). A
+    /// buffer with no header of its own ignores it.
+    pub hide_header: bool,
 }
 
 /// How many **cells** of height each scale occupies.

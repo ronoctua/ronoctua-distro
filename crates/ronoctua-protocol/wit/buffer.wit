@@ -1796,6 +1796,13 @@ interface types {
         columns: u16,
         lines: u16,
         heights: heights,
+        // THE "NO HEADER" MODE is on — the person asked for every window to
+        // give up its top line (`ronoctua_shell_kit::header`). A buffer that
+        // draws a header of its own (a glyph, a name, its taught keys) must
+        // then draw NONE and lay its content from row 0: the keys move to the
+        // footer's minibuffer, where `LEADER Alt` surfaces them. A buffer with
+        // no header of its own ignores it.
+        hide-header: bool,
     }
 
     // Where the pointer touched, in CELLS of the buffer's grid — never in pixels.

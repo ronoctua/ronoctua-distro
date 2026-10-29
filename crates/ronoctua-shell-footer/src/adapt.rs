@@ -41,6 +41,7 @@ use std::collections::BTreeMap;
 use ronoctua_compositor::Window;
 use ronoctua_i18n::Texts;
 use ronoctua_render::layout::{self, Placed, Segment, Side};
+use ronoctua_shell_kit::header::{Header, Shortcuts};
 use serde::{Deserialize, Serialize};
 
 /// What an adapter's segment does when it is pointed at: a command of the
@@ -462,6 +463,18 @@ pub struct Prefs {
     /// default, the glyph only on a reference build.
     #[serde(skip_serializing_if = "crate::build_switch::Show::is_default")]
     pub build_show: crate::build_switch::Show,
+    /// Whether windows wear their header, and whether the footer shows the keys
+    /// a hidden header gives up (`ronoctua_shell_kit::header`). ABSENT IS
+    /// HIDDEN for both — the distro ships "no header, keys in the minibuffer"
+    /// (the owner's ask). They live in the kit because a WINDOW reads them too
+    /// (the door cannot read this struct); the footer keeps the same two words
+    /// in the same file.
+    #[serde(skip_serializing_if = "Header::is_default")]
+    pub header: Header,
+    /// The other half of [`Self::header`]'s rule — whether the footer shows a
+    /// hidden header's shortcuts on the minibuffer. ABSENT IS HIDDEN.
+    #[serde(skip_serializing_if = "Shortcuts::is_default")]
+    pub shortcuts: Shortcuts,
 }
 
 /// The two hidden modes of the modeline and the minibuffer.
@@ -485,6 +498,20 @@ impl Prefs {
     #[must_use]
     pub fn adapts(&self, id: &str) -> bool {
         self.adapt.get(id).copied().unwrap_or(true)
+    }
+
+    /// Whether windows must draw NO header.
+    #[must_use]
+    pub fn hide_header(&self) -> bool {
+        self.header.is_default()
+    }
+
+    /// Whether the footer must NOT show a hidden header's shortcuts. Only ever
+    /// consulted while the header is hidden — with a header on screen the keys
+    /// are on it, not on the minibuffer.
+    #[must_use]
+    pub fn hide_shortcuts(&self) -> bool {
+        self.shortcuts.is_default()
     }
 }
 

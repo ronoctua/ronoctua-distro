@@ -4456,7 +4456,15 @@ impl State {
             // worth losing, and the body takes what is left.
             let told = s.told();
             let mut left = ctx.lines;
-            let head = s.header_rows().min(left);
+            // THE "NO HEADER" MODE gives the header's rows to the body: the
+            // glyph, the name and the taught keys go, and the activity reclaims
+            // the top (`ronoctua_shell_kit::header`). The keys are the footer's
+            // minibuffer's now, where `LEADER Alt` surfaces them.
+            let head = if ctx.hide_header {
+                0
+            } else {
+                s.header_rows().min(left)
+            };
             left -= head;
             let warn = u16::from(s.warned()).min(left);
             left -= warn;
@@ -4511,7 +4519,9 @@ impl State {
             };
             let _ = left;
 
-            s.header(&mut screen);
+            if !ctx.hide_header {
+                s.header(&mut screen);
+            }
             s.warning(&mut screen);
             s.draw_notices(&mut screen);
             match s.page {

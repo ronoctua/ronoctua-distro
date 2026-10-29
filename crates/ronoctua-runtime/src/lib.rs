@@ -245,6 +245,7 @@ impl Instance {
         columns: u16,
         lines: u16,
         heights: ronoctua_protocol::Heights,
+        hide_header: bool,
     ) -> Result<ronoctua_protocol::DisplayList> {
         use wasmtime::component::Val;
 
@@ -269,6 +270,7 @@ impl Instance {
                     ("huge".into(), Val::U16(heights.huge)),
                 ]),
             ),
+            ("hide-header".into(), Val::Bool(hide_header)),
         ]);
         let mut out = [Val::Bool(false)];
         func.call(&mut self.store, &[ctx], &mut out)
@@ -366,7 +368,7 @@ impl Runtime {
         lines: u16,
         heights: ronoctua_protocol::Heights,
     ) -> Result<ronoctua_protocol::DisplayList> {
-        self.open(component)?.render(columns, lines, heights)
+        self.open(component)?.render(columns, lines, heights, false)
     }
 
     fn instantiate_with(

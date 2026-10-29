@@ -538,6 +538,7 @@ mod tests {
                 columns,
                 lines: 24,
                 heights,
+                hide_header: false,
             };
             let mut screen = Screen::<Tokens>::new(&ctx);
             let mut row = screen.row_of(0, &layout);
@@ -576,6 +577,7 @@ mod tests {
             columns: 40,
             lines: 8,
             heights,
+            hide_header: false,
         };
         let mut screen = Screen::<Tokens>::new(&ctx);
         let mut row = screen.row_of(0, &layout);
@@ -608,6 +610,7 @@ mod tests {
             columns: 40,
             lines: 8,
             heights,
+            hide_header: false,
         };
         let mut screen = Screen::<Tokens>::new(&ctx);
         let mut row = screen.row_of(0, &layout);

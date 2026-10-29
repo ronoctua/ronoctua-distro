@@ -693,7 +693,15 @@ impl Ui {
     /// header is on, which is 1 in a column (`Content::header_line`).
     #[must_use]
     pub fn first_of_list(&self) -> u16 {
-        FIRST_OF_LIST + self.hinted.top() + self.hinted.rows()
+        // NO HEADER: the list reclaims line 0 — the `FIRST_OF_LIST` the header
+        // sat on is dropped (`chrome::Hinted::is_hidden`). The column is never
+        // hidden (its line 0 is its own control line), so there `top()` is 1
+        // and the list still starts under it.
+        if self.hinted.is_hidden() {
+            self.hinted.top() + self.hinted.rows()
+        } else {
+            FIRST_OF_LIST + self.hinted.top() + self.hinted.rows()
+        }
     }
 
     /// How many rows of the list fit under the header.
@@ -1520,6 +1528,31 @@ pub trait Content: Sized + 'static {
         Vec::new()
     }
 
+    /// THE WINDOW'S SHORTCUTS OF THE CURRENT MODE — the one list behind the
+    /// header line, the footer's minibuffer line and the `LEADER Alt` region
+    /// (`ronoctua_shell_footer`): `(keys, command id)` each, the same shape the
+    /// buffer socket already carries (`ronoctua_protocol::Binding`).
+    ///
+    /// Asked of `&self`, so a window answers with the set OF THE MODE IT IS IN
+    /// — a mode change is a different answer, with nothing to push. The footer
+    /// reads it over the per-PID socket on every change of focus and renders it
+    /// (the label is the command's own text, `texts.t`, in the one language
+    /// both sides share). The default is a window that teaches no shortcut.
+    fn shortcuts(&self, ui: &Ui) -> Vec<ronoctua_protocol::Binding> {
+        let _ = ui;
+        Vec::new()
+    }
+
+    /// RUNS ONE OF THIS WINDOW'S SHORTCUTS, by the command id it declared in
+    /// [`Content::shortcuts`] — what a key or a click on the shortcut (on the
+    /// header, the minibuffer line or the `LEADER Alt` region) asks the window
+    /// to do. Answers whether the id was this window's; the default is a window
+    /// that runs none (and the footer says the click reached nothing).
+    fn run_shortcut(&mut self, ui: &mut Ui, command: &str) -> bool {
+        let _ = (ui, command);
+        false
+    }
+
     /// The rows of the list, each already placed in cells.
     fn rows(&self, ui: &Ui) -> Vec<Vec<crate::fields::Field>> {
         let _ = ui;
@@ -1623,6 +1656,17 @@ pub trait Content: Sized + 'static {
     /// its own answers `false`.
     fn header_keys(&self) -> bool {
         true
+    }
+
+    /// Whether this window SERVES ITS OWN per-PID control socket already — a
+    /// buffer does (`ronoctua_shell_buffers`), binding it to answer `keymap`,
+    /// `states` and `command`. `false`, the default, is a window the base door
+    /// serves for: it binds the same socket and answers `keymap` from
+    /// [`Content::shortcuts`] and `command` through [`Content::run_shortcut`],
+    /// so the footer reaches EVERY window's shortcuts one way (`crate::ipc`).
+    /// Two binders on one path is the double-bind this keeps apart.
+    fn serves_own_socket(&self) -> bool {
+        false
     }
 
     /// A key came up.
@@ -1762,6 +1806,13 @@ pub struct Door<C: Content> {
     /// The state last told to the footer (`Content::state`), so it is told
     /// once per change and not once per turn.
     state_told: Option<(&'static str, ronoctua_protocol::Tone)>,
+    /// The shortcut set published on this window's per-PID socket, shared with
+    /// the listener thread (`serve_shortcuts`) — `None` for a window that
+    /// serves its own socket (a buffer, `Content::serves_own_socket`).
+    shortcuts_socket: Option<std::sync::Arc<std::sync::Mutex<ShortcutSnapshot>>>,
+    /// The set last published, so the socket's answer is rewritten once per
+    /// change of the set (a mode re-keying the window) and not once per turn.
+    shortcuts_told: Vec<ronoctua_protocol::Binding>,
     /// The queue, for a window that makes Wayland objects of its own.
     pub qh: QueueHandle<Self>,
     /// What the door's own threads hand back — a paste, a footer that did
@@ -1849,8 +1900,40 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
     let surface = compositor.create_surface(&qh);
     let shell = content.open(&wiring, surface)?;
     let header_line = content.header_line();
+    // THE "NO HEADER" MODE, read once at start and watched thereafter
+    // (`hang_the_watches`). The distro default is hidden, so a window that
+    // never heard of the switch still comes up without a header.
+    crate::header::adopt();
 
     let watches = hang_the_watches(&handle)?;
+
+    // THE SHORTCUT SOCKET, for a window the base door serves (not a buffer):
+    // the footer reads `keymap` from it on every change of focus and sends
+    // `command <id>` back when a shortcut is pressed or clicked
+    // (`Content::serves_own_socket`, `serve_shortcuts`, `Content::run_shortcut`).
+    let shortcuts_socket = if content.serves_own_socket() {
+        None
+    } else {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(ShortcutSnapshot::default()));
+        let (orders, order_channel) = channel::channel::<String>();
+        if serve_shortcuts(std::sync::Arc::clone(&shared), orders) {
+            if handle
+                .insert_source(order_channel, |event, (), door: &mut Door<C>| {
+                    if let channel::Event::Msg(id) = event
+                        && door.content.run_shortcut(&mut door.ui, &id)
+                    {
+                        door.ui.ask_paint();
+                    }
+                })
+                .is_err()
+            {
+                tracing::warn!("could not hang this window's shortcut channel");
+            }
+            Some(shared)
+        } else {
+            None
+        }
+    };
 
     let margin = content.margin();
     let mut door = Door {
@@ -1870,7 +1953,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             quit: false,
             owed: false,
             offset: 0,
-            hinted: crate::chrome::Hinted::at(header_line),
+            hinted: fresh_hinted(header_line),
             room: crate::chrome::Room::default(),
             conn: conn.clone(),
             surface: shell.wl_surface().clone(),
@@ -1920,6 +2003,8 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
         selection: None,
         _watches: watches,
         state_told: None,
+        shortcuts_socket,
+        shortcuts_told: Vec::new(),
         qh: qh.clone(),
         back,
     };
@@ -1954,6 +2039,107 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
 /// a clock turned to twelve hours in the footer left every open window
 /// writing twenty-four — the language view's own window included, which then
 /// wrote its stale copy back over the footer's choice.
+/// The current shortcut set this window publishes, as its per-PID socket
+/// answers it — see [`serve_shortcuts`]. Shared with the listener thread and
+/// rewritten by the loop ([`Door::settle`]) whenever the set changes, so a
+/// mode that re-keys the window is answered with its new keys, never a stale
+/// line.
+#[derive(Default)]
+struct ShortcutSnapshot {
+    /// `<keys> <command>` per shortcut, newline-joined — the `keymap` verb's
+    /// answer, the shape the footer's `ipc::buffer_keymap` already reads.
+    answer: String,
+    /// The ids declared, so `command <id>` runs ONLY one the window named: the
+    /// socket sits in `XDG_RUNTIME_DIR`, reachable by anything this user runs
+    /// (the rule a buffer states for its own socket).
+    known: std::collections::HashSet<String>,
+}
+
+/// Serves this window's shortcuts on its per-PID socket, for a window the base
+/// door serves — not a buffer ([`Content::serves_own_socket`]). `keymap`
+/// answers the current set, `command <id>` is forwarded to the loop over
+/// `orders` and run there ([`Content::run_shortcut`]); `states` answers empty,
+/// because a plain window has none. The thread runs for the life of the
+/// process and the socket file is cleaned on the next bind, as a buffer's is.
+fn serve_shortcuts(
+    shared: std::sync::Arc<std::sync::Mutex<ShortcutSnapshot>>,
+    orders: channel::Sender<String>,
+) -> bool {
+    use std::io::{BufRead as _, Write as _};
+    let Ok(path) = crate::ipc::buffer_socket_path(std::process::id()) else {
+        return false;
+    };
+    // An orphan socket from a dead process of the same PID would block the bind.
+    let _ = std::fs::remove_file(&path);
+    let listener = match std::os::unix::net::UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "could not open this window's shortcut socket");
+            return false;
+        }
+    };
+    let built = std::thread::Builder::new()
+        .name("shortcuts".into())
+        .spawn(move || {
+            for connection in listener.incoming() {
+                let Ok(mut stream) = connection else { continue };
+                let mut line = String::new();
+                let Ok(clone) = stream.try_clone() else { continue };
+                if std::io::BufReader::new(clone)
+                    .read_line(&mut line)
+                    .is_err()
+                {
+                    continue;
+                }
+                let reply = match line.trim().split_once(' ') {
+                    None if line.trim() == "keymap" => {
+                        shared.lock().map(|s| s.answer.clone()).unwrap_or_default()
+                    }
+                    // A PLAIN WINDOW HAS NO STATES — empty, so the footer's
+                    // `buffer_states` reads `None` rather than a state called
+                    // `?` on the modeline.
+                    None if line.trim() == "states" => String::new(),
+                    // ONLY A COMMAND THIS WINDOW DECLARED (`known`), as a
+                    // buffer's socket does — the footer only ever sends back
+                    // what it was just told.
+                    Some(("command", id)) => {
+                        let known = shared.lock().map(|s| s.known.contains(id)).unwrap_or(false);
+                        if !known {
+                            "?".into()
+                        } else if orders.send(id.to_owned()).is_err() {
+                            // The loop is gone; so is the reason to listen.
+                            return;
+                        } else {
+                            "ok".into()
+                        }
+                    }
+                    _ => "?".into(),
+                };
+                let _ = writeln!(stream, "{reply}");
+            }
+        });
+    if let Err(e) = built {
+        tracing::warn!(error = %e, "could not start this window's shortcut thread");
+        let _ = std::fs::remove_file(&path);
+        return false;
+    }
+    true
+}
+
+/// A header for a window whose header is on `header_line`, already wearing the
+/// "no header" mode if that is what `modeline.json` says now (`crate::header`).
+///
+/// Read fresh here because a door is reopened — a column moved to another
+/// screen (`reopen`) — long after start, by which time the mode may have
+/// turned; the watch keeps `header::current` up to date, so this reads it.
+/// ONLY A LINE-0 HEADER HIDES: a column's line 0 is its own control line, never
+/// a header, so it keeps its line whatever the mode.
+fn fresh_hinted(header_line: u16) -> crate::chrome::Hinted {
+    let mut hinted = crate::chrome::Hinted::at(header_line);
+    hinted.hide_header(header_line == 0 && crate::header::hide_header());
+    hinted
+}
+
 fn hang_the_watches<C: Content>(
     handle: &calloop::LoopHandle<'static, Door<C>>,
 ) -> Result<Vec<ronoctua_files::notice::Notice>> {
@@ -2013,6 +2199,26 @@ fn hang_the_watches<C: Content>(
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the locale channel: {e}"))?;
+
+    // THE "NO HEADER" MODE, turned in the footer's settings and heard here
+    // through the file (`crate::header`). The header goes or comes back, and
+    // the list reclaims line 0 or gives it up — which is a change of size, so
+    // the door lays out again (`retake_the_size`), not merely repaints.
+    let (header_sender, header_changed) = channel::channel::<()>();
+    kept.extend(crate::header::watch(move || header_sender.send(()).is_ok()));
+    handle
+        .insert_source(header_changed, |event, (), door: &mut Door<C>| {
+            if let channel::Event::Msg(()) = event {
+                crate::header::adopt();
+                let header_line = door.content.header_line();
+                door.ui
+                    .hinted
+                    .hide_header(header_line == 0 && crate::header::hide_header());
+                door.ui.retake_the_size();
+                door.ui.ask_paint();
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the header channel: {e}"))?;
     Ok(kept)
 }
 
@@ -2222,6 +2428,26 @@ impl<C: Content> Door<C> {
                 Self::report_to_the_footer(state_order(std::process::id(), id, tone));
             }
             self.state_told = state;
+        }
+        // THE SHORTCUTS, published to this window's socket when the SET
+        // CHANGES — the current mode's keys (`Content::shortcuts`), so the
+        // footer's `LEADER Alt` region and its minibuffer line carry the
+        // window as it is now. Only for a window the base door serves; a
+        // buffer answers `keymap` from its own socket.
+        if let Some(shared) = &self.shortcuts_socket {
+            let now = self.content.shortcuts(&self.ui);
+            if now != self.shortcuts_told {
+                let answer = now
+                    .iter()
+                    .map(|b| format!("{} {}", b.keys, b.command))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if let Ok(mut g) = shared.lock() {
+                    g.answer = answer;
+                    g.known = now.iter().map(|b| b.command.clone()).collect();
+                }
+                self.shortcuts_told = now;
+            }
         }
         let mut untaken = false;
         for order in std::mem::take(&mut self.ui.orders) {
@@ -2859,7 +3085,7 @@ impl<C: Content> Detached<C> {
     /// The window `content` in `ui`, its header on the line the window says.
     #[must_use]
     pub fn new(mut ui: Ui, content: C) -> Self {
-        ui.hinted = crate::chrome::Hinted::at(content.header_line());
+        ui.hinted = fresh_hinted(content.header_line());
         // THE COLUMNS COUNTED AGAIN with the window's own margin, as a
         // door counts them against every configure.
         ui.margin = content.margin();

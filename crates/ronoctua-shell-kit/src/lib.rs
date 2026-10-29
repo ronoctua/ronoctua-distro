@@ -50,6 +50,7 @@ pub mod fields;
 pub mod fold;
 pub mod foreign;
 pub mod glyph;
+pub mod header;
 pub mod hidpi;
 pub mod ipc;
 pub mod key;

@@ -1136,6 +1136,7 @@ pub fn host_it(
             ronoctua_tokens::space::TERMINAL_COLUMNS,
             ronoctua_tokens::space::TERMINAL_LINES,
             Host::heights(),
+            ronoctua_shell_kit::header::hide_header(),
         )?;
         tracing::info!(
             commands = list.commands.len(),
@@ -2214,7 +2215,10 @@ impl Host {
     ///
     fn re_render(&mut self) {
         let (columns, lines) = self.context_of();
-        match self.instance.render(columns, lines, Self::heights()) {
+        match self
+            .instance
+            .render(columns, lines, Self::heights(), ronoctua_shell_kit::header::hide_header())
+        {
             // THE GATE HOLDS ON EVERY FRAME, and not only the first.
             //
             // A component can emit the gated primitive only after
@@ -4235,6 +4239,13 @@ impl Content for Host {
     /// the door's, and `Esc` is its key and its modifier (see [`Escape`]).
     fn header_keys(&self) -> bool {
         false
+    }
+
+    /// A BUFFER BINDS ITS OWN per-PID socket (`publish_keymap`), answering
+    /// `keymap`, `states` and `command` — so the base door must NOT bind the
+    /// same path (`Content::serves_own_socket`).
+    fn serves_own_socket(&self) -> bool {
+        true
     }
 
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {

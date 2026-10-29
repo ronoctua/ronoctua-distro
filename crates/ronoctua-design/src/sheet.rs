@@ -141,6 +141,7 @@ mod tests {
             columns,
             lines: 24,
             heights: Heights::from_sizes(12.0, 14.0, 20.0, 28.0, 40.0, 1.45),
+            hide_header: false,
         }
     }
 

@@ -202,6 +202,16 @@
   # direction rather than as a state.
   expand = "cod-chevron_down";
   collapse = "cod-chevron_up";
+  # THE KEYS A HIDDEN HEADER MOVED HERE, shown or hidden — the glyph a click
+  # turns, to the LEFT of the chevron on the minibuffer (`crate::surface`). An
+  # EYE, open while the shortcuts are on the line and struck through while they
+  # are off: the shape everybody reads as "shown"/"hidden", and a matched pair
+  # from one family (`md-eye_outline` is `task-watch`'s drawing, `md-eye_off`
+  # is the anti-features badge's — one weight, so the cell does not twitch when
+  # the mode turns). NOT the `expand`/`collapse` chevrons beside it: those open
+  # a line, and the owner's rule reserves them for that.
+  shortcuts-shown = "md-eye_outline";
+  shortcuts-hidden = "md-eye_off";
   # THE DOT BETWEEN ONE SHORTCUT AND THE NEXT, for a BUFFER.
   #
   # The minibuffer already draws one, and it draws it from `mark.separator` —

@@ -68,7 +68,7 @@ fn reported(effects: &[Effect]) -> Option<&str> {
 /// language is loaded. A single size proves the single size.
 fn look(inst: &mut ronoctua_runtime::Instance, name: &str) -> Result<()> {
     for columns in [46, 80, COLUMNS] {
-        let list = inst.render(columns, ROWS, heights())?;
+        let list = inst.render(columns, ROWS, heights(), false)?;
         if let Err(e) = list.nothing_overlaps(heights(), columns) {
             bail!("{name}: at {columns} columns, {e}");
         }

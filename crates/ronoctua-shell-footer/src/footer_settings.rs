@@ -57,6 +57,14 @@ pub const HOURS_COMMAND: &str = "footer-hours";
 /// kiosk's grid ran before it moved here.
 pub const KIOSK_COMMAND: &str = "modeline-adapt-kiosk";
 
+/// The command that hides the windows' header, or shows it — the "no header"
+/// mode, which moves a window's shortcuts to the minibuffer.
+pub const HEADER_COMMAND: &str = "footer-hide-header";
+
+/// The command that hides the relocated shortcuts on the minibuffer, or shows
+/// them. The glyph beside the chevron runs it too (`crate::surface`).
+pub const SHORTCUTS_COMMAND: &str = "footer-hide-shortcuts";
+
 /// Every command this view's keys and rows reach — for `bindings::reachable`,
 /// which is what says a command has a key.
 pub fn reached() -> impl Iterator<Item = &'static str> {
@@ -75,11 +83,22 @@ pub enum Setting {
     Hours,
     /// The modeline adapting to a kiosk.
     Kiosk,
+    /// Whether windows wear their header.
+    Header,
+    /// Whether the minibuffer shows a hidden header's shortcuts.
+    Shortcuts,
 }
 
 impl Setting {
-    /// The three, in the order drawn.
-    pub const ALL: [Self; 3] = [Self::Bars, Self::Hours, Self::Kiosk];
+    /// The five, in the order drawn. `Header` and `Shortcuts` are two rows of
+    /// one section (`heading`), so they sit last and together.
+    pub const ALL: [Self; 5] = [
+        Self::Bars,
+        Self::Hours,
+        Self::Kiosk,
+        Self::Header,
+        Self::Shortcuts,
+    ];
 
     /// The command `RET` on its row runs in the footer's door.
     #[must_use]
@@ -88,6 +107,8 @@ impl Setting {
             Self::Bars => crate::hidden::CYCLE_COMMAND,
             Self::Hours => HOURS_COMMAND,
             Self::Kiosk => KIOSK_COMMAND,
+            Self::Header => HEADER_COMMAND,
+            Self::Shortcuts => SHORTCUTS_COMMAND,
         }
     }
 
@@ -103,6 +124,8 @@ impl Setting {
                 let on = prefs.adapts(crate::kiosk::ADAPTER);
                 prefs.adapt.insert(crate::kiosk::ADAPTER.to_owned(), !on);
             }
+            Self::Header => prefs.header = prefs.header.toggle(),
+            Self::Shortcuts => prefs.shortcuts = prefs.shortcuts.toggle(),
         }
     }
 
@@ -112,6 +135,9 @@ impl Setting {
             Self::Bars => key::FOOTER_SETTINGS_BARS,
             Self::Hours => key::FOOTER_SETTINGS_FREE,
             Self::Kiosk => key::FOOTER_SETTINGS_KIOSK,
+            // ONE SECTION, TWO ROWS: the header and the keys it gives up are
+            // one concept, so they share a heading (`rows` draws it once).
+            Self::Header | Self::Shortcuts => key::FOOTER_SETTINGS_HEADER,
         }
     }
 
@@ -121,6 +147,8 @@ impl Setting {
             Self::Bars => key::FOOTER_SETTINGS_BARS_MODE,
             Self::Hours => key::FOOTER_SETTINGS_HOURS,
             Self::Kiosk => key::FOOTER_SETTINGS_KIOSK_ADAPT,
+            Self::Header => key::FOOTER_SETTINGS_HEADER_HIDE,
+            Self::Shortcuts => key::FOOTER_SETTINGS_SHORTCUTS_HIDE,
         }
     }
 
@@ -142,6 +170,10 @@ impl Setting {
             },
             Self::Hours => on(prefs.hours),
             Self::Kiosk => on(prefs.adapts(crate::kiosk::ADAPTER)),
+            // THE ROW NAMES THE HIDING: `on` is the hiding active (the distro
+            // default), `off` is the header — or the keys — back on screen.
+            Self::Header => on(prefs.hide_header()),
+            Self::Shortcuts => on(prefs.hide_shortcuts()),
         }
     }
 
@@ -163,6 +195,8 @@ impl Setting {
             )),
             Self::Hours => Some(texts.t(key::FOOTER_SETTINGS_HOURS_NOTE)),
             Self::Kiosk => None,
+            Self::Header => Some(texts.t(key::FOOTER_SETTINGS_HEADER_NOTE)),
+            Self::Shortcuts => Some(texts.t(key::FOOTER_SETTINGS_SHORTCUTS_NOTE)),
         }
     }
 }
@@ -340,25 +374,33 @@ impl View {
             .collect();
         let column = crate::chrome::section_column(left, room, &pairs);
         let mut out: Vec<Row> = Vec::new();
+        let mut last_heading: Option<&str> = None;
         for setting in Setting::ALL {
-            // AIR BEFORE EVERY TITLE but the first — `chrome::AIR`.
-            if !out.is_empty() {
+            let heading = setting.heading();
+            // A NEW SECTION gets its air and its title; a SECOND ROW OF THE
+            // SAME SECTION — the header's two switches — joins the one above,
+            // so the title is drawn once and the two rows read as one list.
+            if last_heading != Some(heading) {
+                // AIR BEFORE EVERY TITLE but the first — `chrome::AIR`.
+                if !out.is_empty() {
+                    out.push(Row {
+                        fields: crate::chrome::AIR,
+                        setting: None,
+                        heading: true,
+                    });
+                }
                 out.push(Row {
-                    fields: crate::chrome::AIR,
+                    fields: vec![piece(
+                        left,
+                        texts.t(heading),
+                        tokens::color::TEXT_HEADING,
+                        room,
+                    )],
                     setting: None,
                     heading: true,
                 });
+                last_heading = Some(heading);
             }
-            out.push(Row {
-                fields: vec![piece(
-                    left,
-                    texts.t(setting.heading()),
-                    tokens::color::TEXT_HEADING,
-                    room,
-                )],
-                setting: None,
-                heading: true,
-            });
             let focused = self.cursor == out.len();
             let lines = crate::chrome::aligned_pair(
                 left,
@@ -516,14 +558,20 @@ mod tests {
         }
         assert_eq!(
             seen,
-            [crate::hidden::CYCLE_COMMAND, HOURS_COMMAND, KIOSK_COMMAND]
+            [
+                crate::hidden::CYCLE_COMMAND,
+                HOURS_COMMAND,
+                KIOSK_COMMAND,
+                HEADER_COMMAND,
+                SHORTCUTS_COMMAND
+            ]
         );
         // ROUND THE END, back on the first.
         let rows = v.rows(&prefs, 80, &t);
         assert_eq!(rows[v.cursor()].setting, Some(Setting::Bars));
         v.press(Press::Up, &prefs, 80, &t);
         let rows = v.rows(&prefs, 80, &t);
-        assert_eq!(rows[v.cursor()].setting, Some(Setting::Kiosk));
+        assert_eq!(rows[v.cursor()].setting, Some(Setting::Shortcuts));
         assert_eq!(v.press(Press::Escape, &prefs, 80, &t), Errand::Close);
     }
 
@@ -541,6 +589,14 @@ mod tests {
                 "the hours are off until asked for"
             );
             assert_eq!(Setting::Kiosk.value(&prefs), key::FOOTER_SETTINGS_ON);
+            // THE DISTRO DEFAULT: no header, its shortcuts hidden — so both rows
+            // read `on` (the hiding is on) until a hand turns them off.
+            assert_eq!(
+                Setting::Header.value(&prefs),
+                key::FOOTER_SETTINGS_ON,
+                "the distro ships with the header hidden"
+            );
+            assert_eq!(Setting::Shortcuts.value(&prefs), key::FOOTER_SETTINGS_ON);
             for (hidden, word) in [
                 (None, key::FOOTER_SETTINGS_BARS_SHOWN),
                 (Some(Hidden::Push), key::FOOTER_SETTINGS_BARS_PUSH),

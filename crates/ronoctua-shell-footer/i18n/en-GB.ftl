@@ -999,6 +999,14 @@ footer-settings-kiosk = Kiosk
 footer-settings-kiosk-adapt = Adapt the modeline to a kiosk
 footer-settings-on = on
 footer-settings-off = off
+cmd-footer-hide-header = Hide the window header, or show it
+cmd-footer-hide-shortcuts = Hide the shortcuts a hidden header moved to the minibuffer, or show them
+cmd-window-shortcuts = Show the focused window's shortcuts
+footer-settings-header = The header
+footer-settings-header-hide = Hide the window header
+footer-settings-header-note = Every window loses its top line, and the list reclaims it; the window's shortcuts move to the minibuffer while it is focused.
+footer-settings-shortcuts-hide = Hide those shortcuts
+footer-settings-shortcuts-note = While the header is hidden, keep its moved shortcuts off the minibuffer. The glyph beside the chevron turns them on.
 
 ## file info editing — everything the info panel can change
 
