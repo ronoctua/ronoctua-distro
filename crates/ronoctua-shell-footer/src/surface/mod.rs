@@ -2021,7 +2021,7 @@ struct ExpansionRow {
     /// to the right one. No everywhere else: a line with no key takes the
     /// whole width, which is the history's case, and the reason `text_start`
     /// moves the text left. (The theme chooser, which used this for two lists
-    /// side by side, lays its five columns out as fields of its own.)
+    /// side by side, lays its six columns out as fields of its own.)
     aside: bool,
     key_color: tokens::Color,
     text_color: tokens::Color,

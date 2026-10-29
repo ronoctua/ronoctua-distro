@@ -39,7 +39,7 @@
 //!
 //! # The answers about the theme
 //!
-//! The file carries four answers beside the theme, each one a choice ABOUT
+//! The file carries five answers beside the theme, each one a choice ABOUT
 //! it and none of them a theme of its own (`LEADER s t`, one column each):
 //!
 //! - [`Backdrop`]: what the compositor paints where no window is — the
@@ -52,6 +52,10 @@
 //!   they host and the terminal.
 //! - [`Borders`]: the windows' outlines — standard, or discreet (a quiet one
 //!   on the focused window and an extremely faint one on every other).
+//! - [`Gaps`]: the space between the windows and round the screen's edge —
+//!   the standing 8px, or none at all. Not a colour, so it alone of the five
+//!   is not a palette page but a plain compositor fragment of its own
+//!   (`scroll-gaps.conf`), switched the same way the rest are.
 //!
 //! The generator writes one compositor fragment per desk and borders, and one
 //! terminal fragment per ground; which ones the footer copies IS the answer
@@ -88,8 +92,8 @@ pub use ronoctua_tokens::theme::Ground as Page;
 
 /// The file, under `$XDG_CONFIG_HOME/ronoctua`:
 /// `{ "theme": "forest", "backdrop": "theme", "footer": "desk", "windows":
-/// "theme", "borders": "discreet" }`. Only `theme` is required; an absent
-/// answer is its default.
+/// "theme", "borders": "discreet", "gaps": "none" }`. Only `theme` is
+/// required; an absent answer is its default.
 pub const FILE: &str = "theme.json";
 
 /// The variable naming the generator's output, where the fragments are.
@@ -318,7 +322,61 @@ impl Borders {
     }
 }
 
-/// What the file says, whole: the theme and the four answers about it. They
+/// Whether there is space between the windows and round the screen's edge
+/// (`LEADER s t`, the sixth column).
+///
+/// Unlike the four answers above it, this one is NOT a colour: it is the
+/// compositor's `gaps` setting, carried in a fragment of its own
+/// ([`fragments`]) rather than in a page of the palette. Nothing the shell
+/// paints reads it — only the compositor, through the fragment it includes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Gaps {
+    /// The standing gap — `gaps inner 8`, the eight pixels every window has
+    /// had between it and its neighbours and the edge. The default, because
+    /// it is what every machine has shown until now.
+    #[default]
+    With,
+    /// No gap at all — `gaps inner 0 / gaps outer 0`: the windows meet one
+    /// another and the screen's edge, with only their own border between.
+    None,
+}
+
+impl Gaps {
+    /// Every answer, in the order the chooser lists them.
+    pub const ALL: [Self; 2] = [Self::With, Self::None];
+
+    /// The id, as the file spells it.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::With => "with",
+            Self::None => "none",
+        }
+    }
+
+    /// The answer an id names.
+    #[must_use]
+    pub fn by_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|g| g.id() == id)
+    }
+
+    /// The text key of its name on the chooser's row (invariant 8).
+    #[must_use]
+    pub const fn text_key(self) -> &'static str {
+        match self {
+            Self::With => crate::key::THEME_GAPS_WITH,
+            Self::None => crate::key::THEME_GAPS_NONE,
+        }
+    }
+
+    /// Where it sits in [`Self::ALL`].
+    #[must_use]
+    pub fn position(self) -> usize {
+        Self::ALL.iter().position(|g| *g == self).unwrap_or(0)
+    }
+}
+
+/// What the file says, whole: the theme and the five answers about it. They
 /// are written together and the fragments follow the whole of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Choice {
@@ -332,6 +390,8 @@ pub struct Choice {
     pub windows: Ground,
     /// How loud the windows' outlines are (`borders`).
     pub borders: Borders,
+    /// Whether the windows have a gap round them (`gaps`).
+    pub gaps: Gaps,
 }
 
 impl Choice {
@@ -345,6 +405,7 @@ impl Choice {
             footer: Ground::default(),
             windows: Ground::default(),
             borders: Borders::default(),
+            gaps: Gaps::default(),
         }
     }
 
@@ -392,11 +453,11 @@ impl Choice {
         }
     }
 
-    /// The four answers in one byte, for the process-wide copy ([`wear`]):
+    /// The five answers in one byte, for the process-wide copy ([`wear`]):
     /// the desk in the two low bits (nought is the default, the theme's own),
-    /// then one bit each for the footer, the windows and the borders. The
-    /// ANSWER is kept, not the desk it paints: a near-white under a dark
-    /// theme stays `Near` here and is worn as the absolute desk by
+    /// then one bit each for the footer, the windows, the borders and the
+    /// gaps. The ANSWER is kept, not the desk it paints: a near-white under a
+    /// dark theme stays `Near` here and is worn as the absolute desk by
     /// [`Self::worn_backdrop`].
     const fn answers(self) -> u8 {
         let desk = match self.backdrop {
@@ -407,6 +468,7 @@ impl Choice {
         desk | ((matches!(self.footer, Ground::Desk) as u8) << 2)
             | ((matches!(self.windows, Ground::Desk) as u8) << 3)
             | ((matches!(self.borders, Borders::Discreet) as u8) << 4)
+            | ((matches!(self.gaps, Gaps::None) as u8) << 5)
     }
 
     /// The answers a byte from [`Self::answers`] names, on `theme`. Only
@@ -435,6 +497,11 @@ impl Choice {
             } else {
                 Borders::Discreet
             },
+            gaps: if bits & 32 == 0 {
+                Gaps::With
+            } else {
+                Gaps::None
+            },
         }
     }
 }
@@ -446,7 +513,7 @@ impl Choice {
 /// [`resolve_at_start`] says otherwise.
 static WORN: AtomicU8 = AtomicU8::new(0);
 
-/// Makes `choice` what this process draws in — the theme and the four
+/// Makes `choice` what this process draws in — the theme and the five
 /// answers, together. `true` if anything changed.
 ///
 /// What the file's readers do ([`resolve_at_start`], [`reload`]) and what the
@@ -459,7 +526,7 @@ pub fn wear(choice: Choice) -> bool {
     theme_moved || answers_moved
 }
 
-/// What this process draws in now: the theme and the four answers.
+/// What this process draws in now: the theme and the five answers.
 #[must_use]
 pub fn worn() -> Choice {
     Choice::with_answers(theme::current(), WORN.load(Ordering::Relaxed))
@@ -500,18 +567,26 @@ pub fn focus_line() -> Color {
 }
 
 /// The fragments copied on a change: `(name in the theme's directory, name in
-/// the configuration directory)`. The compositor `include`s the first — absent
-/// is not fatal there by construction — and Ghostty the second with `?`, so a
-/// machine that never chose has neither
+/// the configuration directory)`. The compositor `include`s the first and the
+/// third — absent is not fatal there by construction — and Ghostty the second
+/// with `?`, so a machine that never chose has none of them
 /// and is on the default — and [`sync_with_file`] keeps that true, removing
-/// both when there is no file. Which generated file is copied depends on the
-/// answers: one compositor fragment per desk and borders, one terminal
-/// fragment per ground the windows stand on — copying is choosing. A PREVIEW
-/// writes BOTH, because a preview writes the file (see [`show_everywhere`]) —
+/// them all when there is no file. Which generated file is copied depends on
+/// the answers: one compositor fragment per desk and borders, one terminal
+/// fragment per ground the windows stand on, one gaps fragment per spacing
+/// answer — copying is choosing. A PREVIEW
+/// writes them all, because a preview writes the file (see [`show_everywhere`]) —
 /// a terminal opened over one wears the palette on screen, which is the
-/// point, and `Esc` puts both back.
+/// point, and `Esc` puts them all back.
+///
+/// THE GAPS FRAGMENT IS NOT A COLOUR, so it is the same two lines in every
+/// theme's directory; it is copied per theme only because every fragment is,
+/// and it is `with` or `none` always, never absent — a prior `none` must be
+/// put back to `with`, so the `with` variant restates the standing gap rather
+/// than leaving the file off (`themes-have-fragments` holds it to the static
+/// config's own `gaps`).
 #[must_use]
-pub fn fragments(choice: Choice) -> [(&'static str, &'static str); 2] {
+pub fn fragments(choice: Choice) -> [(&'static str, &'static str); 3] {
     // THE DESK AS WORN, not as asked: a near-white under a dark theme is
     // the absolute desk, and that is the fragment the compositor gets.
     let desk = choice.worn_backdrop();
@@ -530,9 +605,15 @@ pub fn fragments(choice: Choice) -> [(&'static str, &'static str); 2] {
         (Ground::Desk, Backdrop::Near) => "ghostty-near.conf",
         (Ground::Desk, Backdrop::Absolute) => "ghostty-absolute.conf",
     };
+    // The windows' spacing: the standing gap, or none.
+    let gaps = match choice.gaps {
+        Gaps::With => "scroll-gaps-with.conf",
+        Gaps::None => "scroll-gaps-none.conf",
+    };
     [
         (compositor, "scroll-theme.conf"),
         (terminal, "ghostty-theme.conf"),
+        (gaps, "scroll-gaps.conf"),
     ]
 }
 
@@ -577,8 +658,8 @@ pub enum Complaint {
     /// that quietly became a default is how "my choice reset" happens with
     /// nothing anywhere saying why.
     Unknown {
-        /// The file's own key: `theme`, `backdrop`, `footer`, `windows` or
-        /// `borders`.
+        /// The file's own key: `theme`, `backdrop`, `footer`, `windows`,
+        /// `borders` or `gaps`.
         field: &'static str,
         /// What it said, as it said it.
         value: String,
@@ -699,6 +780,7 @@ fn answered(theme: Theme, w: &Written) -> Choice {
         footer: answer(w.footer.as_ref(), Ground::by_id),
         windows: answer(w.windows.as_ref(), Ground::by_id),
         borders: answer(w.borders.as_ref(), Borders::by_id),
+        gaps: answer(w.gaps.as_ref(), Gaps::by_id),
     }
 }
 
@@ -825,6 +907,8 @@ struct Written {
     windows: Option<ronoctua_store::Node>,
     #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     borders: Option<ronoctua_store::Node>,
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    gaps: Option<ronoctua_store::Node>,
 }
 
 /// A field that is THERE is `Some`, whatever it holds — `null` included,
@@ -845,6 +929,7 @@ impl Written {
             footer: id(choice.footer.id()),
             windows: id(choice.windows.id()),
             borders: id(choice.borders.id()),
+            gaps: id(choice.gaps.id()),
         }
     }
 
@@ -858,7 +943,7 @@ impl Written {
 }
 
 /// The five fields, as the file names them, in the order a complaint is said.
-const FIELDS: [&str; 5] = ["theme", "backdrop", "footer", "windows", "borders"];
+const FIELDS: [&str; 6] = ["theme", "backdrop", "footer", "windows", "borders", "gaps"];
 
 /// What the store refuses in the file: a theme that is not declared, an
 /// answer this system does not know, a value that is not a word. Each is a
@@ -873,7 +958,8 @@ fn refusals(w: &Written, env: Option<&str>) -> Vec<ronoctua_store::Refused> {
             "backdrop" => &w.backdrop,
             "footer" => &w.footer,
             "windows" => &w.windows,
-            _ => &w.borders,
+            "borders" => &w.borders,
+            _ => &w.gaps,
         };
         let Some(value) = value else {
             continue;
@@ -883,6 +969,7 @@ fn refusals(w: &Written, env: Option<&str>) -> Vec<ronoctua_store::Refused> {
             ("backdrop", ronoctua_store::Node::String(id)) => Backdrop::by_id(id).is_some(),
             ("footer" | "windows", ronoctua_store::Node::String(id)) => Ground::by_id(id).is_some(),
             ("borders", ronoctua_store::Node::String(id)) => Borders::by_id(id).is_some(),
+            ("gaps", ronoctua_store::Node::String(id)) => Gaps::by_id(id).is_some(),
             _ => false,
         };
         if known {
@@ -1375,20 +1462,23 @@ mod tests {
     }
 
     /// Every choice the file can hold, on `theme`: three desks, two grounds
-    /// twice and two borders — twenty-four.
+    /// twice, two borders and two gaps — forty-eight.
     fn every_choice(theme: Theme) -> Vec<Choice> {
         let mut all = Vec::new();
         for backdrop in Backdrop::ALL {
             for footer in Ground::ALL {
                 for windows in Ground::ALL {
                     for borders in Borders::ALL {
-                        all.push(Choice {
-                            theme,
-                            backdrop,
-                            footer,
-                            windows,
-                            borders,
-                        });
+                        for gaps in Gaps::ALL {
+                            all.push(Choice {
+                                theme,
+                                backdrop,
+                                footer,
+                                windows,
+                                borders,
+                                gaps,
+                            });
+                        }
                     }
                 }
             }
@@ -1465,6 +1555,10 @@ mod tests {
             let name = format!("ghostty-{ground}.conf");
             std::fs::write(dir.join(&name), format!("{name}\n")).unwrap();
         }
+        for spacing in ["with", "none"] {
+            let name = format!("scroll-gaps-{spacing}.conf");
+            std::fs::write(dir.join(&name), format!("{name}\n")).unwrap();
+        }
         root
     }
 
@@ -1509,6 +1603,10 @@ mod tests {
             std::fs::read_to_string(dir.join("ghostty-theme.conf")).unwrap(),
             "ghostty-backdrop.conf\n"
         );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("scroll-gaps.conf")).unwrap(),
+            "scroll-gaps-with.conf\n"
+        );
         // `Esc`: EVERYTHING goes away again. Looking at a list must not be
         // what gives a machine a choice it never made — and by now the file
         // exists, so only the chooser can still say it did not.
@@ -1519,6 +1617,7 @@ mod tests {
         );
         assert!(!dir.join("scroll-theme.conf").exists());
         assert!(!dir.join("ghostty-theme.conf").exists());
+        assert!(!dir.join("scroll-gaps.conf").exists());
 
         // A MACHINE THAT CHOSE. `Esc` puts back what it had, in all three.
         persist_in(&dir, Some(&root), committed).unwrap();
@@ -1538,6 +1637,10 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dir.join("ghostty-theme.conf")).unwrap(),
             "ghostty-theme.conf\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("scroll-gaps.conf")).unwrap(),
+            "scroll-gaps-with.conf\n"
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(root.parent().unwrap());
@@ -1669,9 +1772,9 @@ mod tests {
     #[test]
     fn an_absent_answer_is_its_default_and_the_defaults_are_the_owners() {
         // THE THEME'S OWN DESK, the chrome under the footer, the chrome under
-        // the windows and the standard borders: what every machine was on
-        // before the answers existed, and what a file that names only a theme
-        // still says.
+        // the windows, the standard borders and the standing gap: what every
+        // machine was on before the answers existed, and what a file that
+        // names only a theme still says.
         let dir = scratch("defaults");
         let owl = theme::default_one();
         std::fs::write(dir.join(FILE), format!("{{\"theme\":\"{}\"}}", owl.id())).unwrap();
@@ -1685,6 +1788,7 @@ mod tests {
                 footer: Ground::Theme,
                 windows: Ground::Theme,
                 borders: Borders::Standard,
+                gaps: Gaps::With,
             }
         );
         assert_eq!(c, Choice::with_theme(owl));
@@ -1701,7 +1805,7 @@ mod tests {
         // footer's line says (`refused`), where the file is read.
         let dir = scratch("refused");
         let owl = theme::default_one().id();
-        for field in ["backdrop", "footer", "windows", "borders"] {
+        for field in ["backdrop", "footer", "windows", "borders", "gaps"] {
             std::fs::write(
                 dir.join(FILE),
                 format!("{{\"theme\":\"{owl}\",\"{field}\":\"purple\"}}"),
@@ -1840,6 +1944,10 @@ mod tests {
             assert_eq!(Borders::by_id(b.id()), Some(b));
             assert_eq!(Borders::ALL[b.position()], b);
         }
+        for g in Gaps::ALL {
+            assert_eq!(Gaps::by_id(g.id()), Some(g));
+            assert_eq!(Gaps::ALL[g.position()], g);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1888,12 +1996,16 @@ mod tests {
 
     #[test]
     fn the_fragments_are_the_generators_names_for_every_answer() {
-        // THE NAMES `gen-theme.py` WRITES: `scroll-<desk>-<borders>.conf` and
-        // `ghostty-<ground>.conf`, the terminal's ground being the theme's
-        // own page or the chosen desk. The check `themes-have-fragments`
-        // holds the generator to the same list.
+        // THE NAMES `gen-theme.py` WRITES: `scroll-<desk>-<borders>.conf`,
+        // `ghostty-<ground>.conf` (the terminal's ground being the theme's
+        // own page or the chosen desk) and `scroll-gaps-<with|none>.conf`. The
+        // check `themes-have-fragments` holds the generator to the same list.
         for c in theme::all().flat_map(every_choice) {
-            let [(compositor, to_compositor), (terminal, to_terminal)] = fragments(c);
+            let [
+                (compositor, to_compositor),
+                (terminal, to_terminal),
+                (gaps, to_gaps),
+            ] = fragments(c);
             let desk = match c.backdrop.worn_in(c.theme.is_light()) {
                 Backdrop::Theme => "backdrop",
                 Backdrop::Near => "near",
@@ -1905,9 +2017,14 @@ mod tests {
                 Ground::Desk => desk,
             };
             assert_eq!(terminal, format!("ghostty-{ground}.conf"));
+            assert_eq!(gaps, format!("scroll-gaps-{}.conf", c.gaps.id()));
             assert_eq!(
-                (to_compositor, to_terminal),
-                ("scroll-theme.conf", "ghostty-theme.conf")
+                (to_compositor, to_terminal, to_gaps),
+                (
+                    "scroll-theme.conf",
+                    "ghostty-theme.conf",
+                    "scroll-gaps.conf"
+                )
             );
         }
     }
@@ -1943,10 +2060,12 @@ mod tests {
             .flat_map(|b| [b.text_key(false), b.text_key(true)])
             .chain(Ground::ALL.iter().map(|g| g.text_key()))
             .chain(Borders::ALL.iter().map(|b| b.text_key()))
+            .chain(Gaps::ALL.iter().map(|g| g.text_key()))
             .chain([
                 crate::key::THEME_OPTION_FOOTER,
                 crate::key::THEME_OPTION_WINDOWS,
                 crate::key::THEME_OPTION_BORDERS,
+                crate::key::THEME_OPTION_GAPS,
             ]);
         let every: Vec<ronoctua_i18n::Texts> = ronoctua_i18n::LANGUAGES
             .iter()
@@ -2011,7 +2130,11 @@ mod tests {
         assert_eq!(read.footer_page(), Page::Absolute);
         assert_eq!(
             fragments(read).map(|(from, _)| from),
-            ["scroll-absolute-standard.conf", "ghostty-absolute.conf"]
+            [
+                "scroll-absolute-standard.conf",
+                "ghostty-absolute.conf",
+                "scroll-gaps-with.conf"
+            ]
         );
         // BACK TO A LIGHT THEME: the same answer is the near-white again.
         let back = Choice {
@@ -2022,7 +2145,11 @@ mod tests {
         assert_eq!(back.desk_page(), Page::Near);
         assert_eq!(
             fragments(back).map(|(from, _)| from),
-            ["scroll-near-standard.conf", "ghostty-near.conf"]
+            [
+                "scroll-near-standard.conf",
+                "ghostty-near.conf",
+                "scroll-gaps-with.conf"
+            ]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

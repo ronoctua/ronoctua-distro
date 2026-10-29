@@ -13,12 +13,13 @@
 //! The row is the id alone, an identifier as the `M-x` list shows command ids;
 //! a name in the person's language was a second spelling of the same thing.
 //!
-//! # Five columns, each a list of its own
+//! # Six columns, each a list of its own
 //!
-//! Beside the themes, the four choices about a theme (`crate::theme`): the
+//! Beside the themes, the five choices about a theme (`crate::theme`): the
 //! desk the compositor paints where no window is ([`Backdrop`]), what the
 //! footer stands on and what the windows stand on ([`Ground`], asked twice),
-//! and how loud the windows' outlines are ([`Borders`]). One column each,
+//! how loud the windows' outlines are ([`Borders`]) and whether they have a
+//! gap round them ([`Gaps`]). One column each,
 //! side by side, a rule between every two (`chrome::divider`).
 //!
 //! EVERY COLUMN IS ITS OWN LIST, and the owner asked for exactly that: its own
@@ -34,7 +35,7 @@
 //! (`theme::show_everywhere`), which is the channel every other door already
 //! watches, so the windows, the desk and the terminals move with the footer;
 //! `Esc` puts the file back — or takes it away, when there was none — and
-//! `RET` applies the five answers under the five cursors. A file the person
+//! `RET` applies the six answers under the six cursors. A file the person
 //! wrote that does not read whole is written over by none of them, and never
 //! taken away (`theme::Before`, `theme::NotWritten`): the line says why.
 //!
@@ -46,10 +47,10 @@
 //! move when the person changes language, and the desk's column would move
 //! when the preview crosses from a dark theme to a light one ("Black" and
 //! "White" are not the same width in every language). When the footer is too
-//! narrow for all five, the widest give first and their labels are elided at
+//! narrow for all six, the widest give first and their labels are elided at
 //! the end ([`Layout::of`]).
 //!
-//! # Why the state is five cursors and a choice
+//! # Why the state is six cursors and a choice
 //!
 //! The cursors and which column has the keyboard are where the person is;
 //! `committed` is what the file says. They differ while a preview is on, and
@@ -65,7 +66,7 @@ use ronoctua_tokens::Color;
 use ronoctua_tokens::theme::{self, Theme};
 
 use crate::fields::{Field, Hit, Ink};
-use crate::theme::{Backdrop, Before, Borders, Choice, Ground};
+use crate::theme::{Backdrop, Before, Borders, Choice, Gaps, Ground};
 
 /// The cell a check mark would have taken, when there is no check.
 ///
@@ -100,16 +101,19 @@ pub enum Column {
     Windows,
     /// How loud the windows' outlines are ([`Borders`]).
     Borders,
+    /// Whether the windows have a gap round them ([`Gaps`]).
+    Gaps,
 }
 
 impl Column {
     /// Every column, left to right.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Themes,
         Self::Desk,
         Self::Footer,
         Self::Windows,
         Self::Borders,
+        Self::Gaps,
     ];
 
     /// Where it sits in [`Self::ALL`].
@@ -121,6 +125,7 @@ impl Column {
             Self::Footer => 2,
             Self::Windows => 3,
             Self::Borders => 4,
+            Self::Gaps => 5,
         }
     }
 
@@ -133,6 +138,7 @@ impl Column {
             Self::Footer => crate::key::THEME_OPTION_FOOTER,
             Self::Windows => crate::key::THEME_OPTION_WINDOWS,
             Self::Borders => crate::key::THEME_OPTION_BORDERS,
+            Self::Gaps => crate::key::THEME_OPTION_GAPS,
         }
     }
 
@@ -146,6 +152,7 @@ impl Column {
             Self::Desk => Backdrop::offered(light).len(),
             Self::Footer | Self::Windows => Ground::ALL.len(),
             Self::Borders => Borders::ALL.len(),
+            Self::Gaps => Gaps::ALL.len(),
         }
     }
 
@@ -162,6 +169,7 @@ impl Column {
             Self::Footer => choice.footer.position(),
             Self::Windows => choice.windows.position(),
             Self::Borders => choice.borders.position(),
+            Self::Gaps => choice.gaps.position(),
         }
     }
 
@@ -178,6 +186,7 @@ impl Column {
                 .map(|b| texts.t(b.text_key(light))),
             Self::Footer | Self::Windows => Ground::ALL.get(n).map(|g| texts.t(g.text_key())),
             Self::Borders => Borders::ALL.get(n).map(|b| texts.t(b.text_key())),
+            Self::Gaps => Gaps::ALL.get(n).map(|g| texts.t(g.text_key())),
         }
     }
 }
@@ -566,6 +575,10 @@ impl View {
                 .get(self.cursor(Column::Borders))
                 .copied()
                 .unwrap_or_default(),
+            gaps: Gaps::ALL
+                .get(self.cursor(Column::Gaps))
+                .copied()
+                .unwrap_or_default(),
         }
     }
 
@@ -880,14 +893,14 @@ mod tests {
     }
 
     #[test]
-    fn the_arrows_cross_between_the_five_columns_and_walk_the_focused_one() {
+    fn the_arrows_cross_between_the_six_columns_and_walk_the_focused_one() {
         let mut v = View::fresh_one(on(Backdrop::Absolute), Before::Chosen);
         // ACROSS, and never past either end.
         assert_eq!(v.cross(-1), Column::Themes);
         for c in &Column::ALL[1..] {
             assert_eq!(v.cross(1), *c);
         }
-        assert_eq!(v.cross(1), Column::Borders, "no sixth column");
+        assert_eq!(v.cross(1), Column::Gaps, "no seventh column");
         for c in Column::ALL[..COLUMNS - 1].iter().rev() {
             assert_eq!(v.cross(-1), *c);
         }
@@ -953,7 +966,10 @@ mod tests {
         v.cross(1);
         expected.borders = Borders::Discreet;
         assert_eq!(v.move_by(1), Some(expected));
-        // THE THEME COLUMN CARRIES THE OTHER FOUR.
+        v.cross(1);
+        expected.gaps = Gaps::None;
+        assert_eq!(v.move_by(1), Some(expected));
+        // THE THEME COLUMN CARRIES THE OTHER FIVE.
         while v.column() != Column::Themes {
             v.cross(-1);
         }
@@ -962,12 +978,19 @@ mod tests {
             .or_else(|| v.move_by(-1))
             .expect("more than one theme");
         assert_eq!(
-            (moved.backdrop, moved.footer, moved.windows, moved.borders),
+            (
+                moved.backdrop,
+                moved.footer,
+                moved.windows,
+                moved.borders,
+                moved.gaps
+            ),
             (
                 Backdrop::Theme,
                 Ground::Desk,
                 Ground::Desk,
-                Borders::Discreet
+                Borders::Discreet,
+                Gaps::None
             )
         );
         assert_eq!(moved, v.focused_choice());

@@ -188,6 +188,7 @@ echo-brain-unreachable = The brain is not answering
 theme-option-footer = Footer
 theme-option-windows = Windows
 theme-option-borders = Borders
+theme-option-gaps = Spacing
 theme-backdrop-black = Black
 theme-backdrop-white = White
 theme-backdrop-near = Near white
@@ -196,6 +197,8 @@ theme-ground-theme = The theme's
 theme-ground-desk = The desk's
 theme-borders-standard = Standard
 theme-borders-discreet = Discreet
+theme-gaps-with = With gaps
+theme-gaps-none = No gaps
 echo-theme-unsaved = the theme could not be saved: { $error }
 
 ## footer, windows, borders) and `$value` what it said — the file's words.

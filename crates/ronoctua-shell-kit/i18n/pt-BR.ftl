@@ -183,6 +183,7 @@ echo-brain-unreachable = O cérebro não está respondendo
 theme-option-footer = Rodapé
 theme-option-windows = Janelas
 theme-option-borders = Bordas
+theme-option-gaps = Espaçamento
 theme-backdrop-black = Preto
 theme-backdrop-white = Branco
 theme-backdrop-near = Quase branco
@@ -191,6 +192,8 @@ theme-ground-theme = Do tema
 theme-ground-desk = Do fundo
 theme-borders-standard = Padrão
 theme-borders-discreet = Discretas
+theme-gaps-with = Com folga
+theme-gaps-none = Sem folga
 echo-theme-unsaved = não deu para gravar o tema: { $error }
 
 ## footer, windows, borders) and `$value` what it said — the file's words.

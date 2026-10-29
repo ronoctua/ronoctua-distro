@@ -961,7 +961,7 @@ mod tests {
     /// footer is.
     #[test]
     fn every_row_stands_on_the_page_chosen_for_it() {
-        use crate::theme::{Backdrop, Borders, Choice, Ground, Page};
+        use crate::theme::{Backdrop, Borders, Choice, Gaps, Ground, Page};
         use tokens::color;
         for t in tokens::theme::all() {
             for backdrop in Backdrop::ALL {
@@ -972,6 +972,7 @@ mod tests {
                         footer,
                         windows: Ground::Theme,
                         borders: Borders::Standard,
+                        gaps: Gaps::With,
                     };
                     let page_of = |s: Shape| s.page(c.footer_page(), c.desk_page());
                     let band = |s: Shape, page: Page| {
@@ -1053,7 +1054,7 @@ mod tests {
     /// page than the rest.
     #[test]
     fn the_pictures_wear_the_page_of_the_screen_the_person_is_at() {
-        use crate::theme::{Backdrop, Borders, Choice, Ground};
+        use crate::theme::{Backdrop, Borders, Choice, Gaps, Ground};
         for t in tokens::theme::all() {
             for backdrop in Backdrop::ALL {
                 for footer in Ground::ALL {
@@ -1063,6 +1064,7 @@ mod tests {
                         footer,
                         windows: Ground::Theme,
                         borders: Borders::Standard,
+                        gaps: Gaps::With,
                     };
                     let (f, d) = (c.footer_page(), c.desk_page());
                     for hidden in [None, Some(Hidden::Push), Some(Hidden::Cover)] {

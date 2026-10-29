@@ -173,6 +173,14 @@ let
     # one piece of window chrome this config otherwise never draws.
     default_floating_border pixel 2
     titlebar_padding 1
+    # THE STANDING GAP — eight pixels between the windows and nothing round
+    # the screen's edge — AND THE FRESH-MACHINE DEFAULT. A machine with no
+    # `theme.json` has no `scroll-gaps.conf` fragment and shows exactly this.
+    # `LEADER s t`'s Spacing column turns it off: the footer copies the chosen
+    # `scroll-gaps-<with|none>.conf` over the include at the end of this file,
+    # and a later `gaps` wins. The generator writes `scroll-gaps-with.conf`
+    # saying these same two lines, and `themes-have-fragments` holds the two
+    # equal so they cannot drift.
     gaps inner 8
     gaps outer 0
 
@@ -333,12 +341,16 @@ let
     # the absolute `surface.absolute`, black or white) and per borders
     # (standard or discreet),
     # `scroll-<desk>-<borders>.conf` — and the footer copies the chosen one
-    # here (`theme::fragments`). `ronoctua-display` writes the screens one.
-    # Both are re-read when
+    # here (`theme::fragments`). It writes two more that are NOT a colour —
+    # `scroll-gaps-<with|none>.conf`, the windows' spacing — and copies the
+    # chosen one to `scroll-gaps.conf`, included below, which overrides the
+    # static `gaps` above. `ronoctua-display` writes the screens one.
+    # All are re-read when
     # the shell asks for a re-read, and a refusal comes back to it on the same
     # call rather than as an event nobody is listening for.
     {
       echo 'include "''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-theme.conf"'
+      echo 'include "''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-gaps.conf"'
       echo 'include "''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-display.conf"'
       echo 'include "''${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/scroll-pointers.conf"'
     } >> $out

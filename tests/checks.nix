@@ -26136,12 +26136,23 @@ let
 
         compositor="scroll-backdrop-standard.conf scroll-backdrop-discreet.conf scroll-near-standard.conf scroll-near-discreet.conf scroll-absolute-standard.conf scroll-absolute-discreet.conf"
         terminal="ghostty-theme.conf ghostty-backdrop.conf ghostty-near.conf ghostty-absolute.conf"
+        gaps="scroll-gaps-with.conf scroll-gaps-none.conf"
+        # THE STATIC CONFIG'S OWN SPACING, to hold the `with` fragment to it.
+        # Both are theme-independent and must not drift (`nix/modules/
+        # scroll.nix`): a fresh machine has no fragment and shows the static
+        # `gaps`, and a machine that chose `with` copies a fragment that has to
+        # say the very same thing, or the toggle would move the gap on its own.
+        cp ${self.nixosConfigurations.vm.config.environment.etc."scroll/config".source} static-config
+        grep '^gaps ' static-config > static-gaps
+        test "$(wc -l < static-gaps)" = 2 || {
+          echo "ERROR: the static config no longer has its two \`gaps\` lines:" >&2
+          cat static-gaps >&2; exit 1; }
         for id in ${lib.escapeShellArgs themes}; do
           d=${themed}/$id
           # THE BYTES OF A TOKEN, as `#RRGGBB`, from the palette the shell's
           # table is generated from.
           hex() { jq -r --arg k "$1" '.[$k]' "${themed}/$id.json" | sed -E 's/^0x([0-9A-F]{6})FF$/#\1/'; }
-          for f in compositor-border-active compositor-border-inactive compositor-background $compositor $terminal mode; do
+          for f in compositor-border-active compositor-border-inactive compositor-background $compositor $terminal $gaps mode; do
             test -s "$d/$f" || { echo "ERROR: the theme $id has no fragment $f" >&2; exit 1; }
           done
           # THE OLD NAMES ARE GONE: a footer that still copied one would copy
@@ -26237,8 +26248,32 @@ let
             grep -q '^palette = 15=#' "$d/$f" || {
               echo "ERROR: $id/$f has no sixteenth ANSI colour" >&2; exit 1; }
           done
+          # THE SPACING, two fragments and NOT a colour: the standing gap, or
+          # none at all. Each must parse in front of the compositor — a
+          # misspelt `gaps` directive is one it drops in silence — the `none`
+          # one must zero the inner gap, and the `with` one must say exactly
+          # what the static config says, so the toggle never moves the gap on
+          # its own.
+          for spacing in with none; do
+            f=scroll-gaps-$spacing.conf
+            printf 'include "%s"\n' "$d/$f" > "$id-gaps.conf"
+            scroll --validate --config "$id-gaps.conf" > said.txt 2>&1 || true
+            if grep -q 'Error' said.txt; then
+              echo "ERROR: the compositor refuses $id/$f:" >&2; cat said.txt >&2; exit 1
+            fi
+          done
+          grep -qxF "gaps inner 0" "$d/scroll-gaps-none.conf" || {
+            echo "ERROR: $id/scroll-gaps-none.conf does not zero the inner gap:" >&2
+            grep '^gaps' "$d/scroll-gaps-none.conf" >&2; exit 1; }
+          grep -qxF "gaps outer 0" "$d/scroll-gaps-none.conf" || {
+            echo "ERROR: $id/scroll-gaps-none.conf does not zero the outer gap:" >&2
+            grep '^gaps' "$d/scroll-gaps-none.conf" >&2; exit 1; }
+          grep '^gaps ' "$d/scroll-gaps-with.conf" > with-gaps
+          diff static-gaps with-gaps || {
+            echo "ERROR: $id/scroll-gaps-with.conf drifted from the static config's \`gaps\`" >&2
+            exit 1; }
         done
-        echo "OK: every theme carries its fragments — six desks-and-borders, four terminal grounds — each says what its name says, the compositor merges each over a desk already painted, and the static desk and outlines are the default answer's"
+        echo "OK: every theme carries its fragments — six desks-and-borders, four terminal grounds, two spacings — each says what its name says, the compositor merges each over a desk already painted, and the static desk, outlines and gap are the default answer's"
       '';
 
   # GHOSTTY STILL RELOADS ON THE SIGNAL THIS SYSTEM SENDS.
