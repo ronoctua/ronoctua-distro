@@ -330,6 +330,13 @@ pub struct Screen<P: Palette> {
     /// A count and not a flag, because the number is what makes a failing test
     /// say how bad it is. [`Screen::check`] refuses any frame with one.
     refused: u32,
+    /// THE "NO HEADER" MODE: the host asked for the window's top title line to
+    /// go, the way `ronoctua_shell_kit::header` reads it off `modeline.json`.
+    /// When set, [`Screen::heading`] at row zero draws nothing and keeps its
+    /// rows for the body — the glyph and title are the footer's minibuffer now,
+    /// where `LEADER Alt` surfaces them. A heading drawn below the top (a
+    /// panel's own section title) is untouched: it was never the window header.
+    hide_header: bool,
 }
 
 impl<P: Palette> Screen<P> {
@@ -346,6 +353,7 @@ impl<P: Palette> Screen<P> {
             foot_from: None,
             mismeasured: 0,
             refused: 0,
+            hide_header: ctx.hide_header,
         }
     }
 
@@ -765,6 +773,13 @@ impl<P: Palette> Screen<P> {
     /// exists to end.
     pub fn heading(&mut self, icon: P::Icon, key: &str) -> u16 {
         let start = self.row;
+        // THE WINDOW HEADER IS THE HEADING AT ROW ZERO, and the "no header" mode
+        // gives its rows to the body: the glyph and the title go to the footer's
+        // minibuffer (`Screen::hide_header`). A heading below the top is a
+        // panel's own section title, not the window's header, and stays.
+        if self.hide_header && start == 0 {
+            return start;
+        }
         let cells = self.tall(Scale::Normal);
         let (title, content) = heading_block(start, cells, self.lines);
 
@@ -1566,6 +1581,39 @@ mod tests {
             "a rule appeared in a heading"
         );
         assert_eq!(content, AIR * 2 + tall(&heights(), Scale::Normal));
+    }
+
+    /// THE "NO HEADER" MODE drops the window's top heading and keeps its rows.
+    ///
+    /// The glyph and the title are the footer's minibuffer now
+    /// ([`Screen::hide_header`], `ronoctua_shell_kit::header`); the body reclaims
+    /// row zero. A heading drawn BELOW the top is a panel's own section title,
+    /// not the window header, so it stays — which is why the gate is `row == 0`
+    /// and not every heading.
+    #[test]
+    fn the_no_header_mode_drops_the_top_heading_and_keeps_the_rows() {
+        let hidden = Context {
+            hide_header: true,
+            ..context(80, 24)
+        };
+        let mut screen = Screen::<Tokens>::new(&hidden);
+        let content = screen.heading("disk", "cmd-format-disk");
+        assert_eq!(content, 0, "the body reclaims the header's row zero");
+        assert_eq!(
+            screen.as_protocol().commands.len(),
+            0,
+            "the header drew neither a glyph nor a title"
+        );
+
+        // A SECTION TITLE BELOW THE TOP still draws — it was never the header.
+        screen.skip(4);
+        let below = screen.heading("key", "cmd-format-disk");
+        assert!(below > 4, "a heading below the top keeps its air and rows");
+        assert_eq!(
+            screen.as_protocol().commands.len(),
+            2,
+            "the section title drew its glyph and title"
+        );
     }
 
     /// The air gives way; "nothing leaks" does not.

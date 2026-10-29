@@ -239,8 +239,7 @@ mod tests {
     /// switches of the footer's file must be passed over, not refused.
     #[test]
     fn it_reads_only_its_two_fields_out_of_the_footers_file() {
-        let root =
-            std::env::temp_dir().join(format!("ronoctua-header-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ronoctua-header-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("a scratch directory");
         let path = root.join(FILE);

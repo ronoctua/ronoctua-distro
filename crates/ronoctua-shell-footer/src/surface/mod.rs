@@ -18684,12 +18684,7 @@ const fn above_row_taken(
 /// The room the minibuffer's line gives its text on a screen `columns` wide:
 /// from the margin to one cell before whatever stands at its right end — the
 /// page counter (`indicator_cells` wide) and the drawer's chevron.
-fn minibuffer_room(
-    columns: u16,
-    indicator_cells: Option<u16>,
-    chevron: bool,
-    glyph: bool,
-) -> u16 {
+fn minibuffer_room(columns: u16, indicator_cells: Option<u16>, chevron: bool, glyph: bool) -> u16 {
     let taken = indicator_cells.map_or(0, |w| w + 1);
     let plain_room = columns
         .saturating_sub(tokens::space::MODELINE_EDGELEFT)

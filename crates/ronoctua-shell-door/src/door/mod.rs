@@ -2084,11 +2084,10 @@ fn serve_shortcuts(
             for connection in listener.incoming() {
                 let Ok(mut stream) = connection else { continue };
                 let mut line = String::new();
-                let Ok(clone) = stream.try_clone() else { continue };
-                if std::io::BufReader::new(clone)
-                    .read_line(&mut line)
-                    .is_err()
-                {
+                let Ok(clone) = stream.try_clone() else {
+                    continue;
+                };
+                if std::io::BufReader::new(clone).read_line(&mut line).is_err() {
                     continue;
                 }
                 let reply = match line.trim().split_once(' ') {

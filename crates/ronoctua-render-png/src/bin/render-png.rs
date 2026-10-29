@@ -583,12 +583,12 @@ fn main() -> Result<()> {
     // A FIRST FRAME BEFORE ANYTHING, because the host draws one too — and a
     // component that only computes its screen lazily would otherwise be
     // photographed from a frame it never drew.
-    inst.render(ask.columns, ask.lines, paint::heights())?;
+    inst.render(ask.columns, ask.lines, paint::heights(), false)?;
     for input in &ask.inputs {
         inst.event(input)?;
-        inst.render(ask.columns, ask.lines, paint::heights())?;
+        inst.render(ask.columns, ask.lines, paint::heights(), false)?;
     }
-    let list = inst.render(ask.columns, ask.lines, paint::heights())?;
+    let list = inst.render(ask.columns, ask.lines, paint::heights(), false)?;
     if let Err(e) = list.validate(&d.capabilities) {
         bail!("the frame was refused by the host's own gate: {e}");
     }

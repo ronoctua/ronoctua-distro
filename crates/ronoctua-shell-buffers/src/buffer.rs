@@ -2215,10 +2215,12 @@ impl Host {
     ///
     fn re_render(&mut self) {
         let (columns, lines) = self.context_of();
-        match self
-            .instance
-            .render(columns, lines, Self::heights(), ronoctua_shell_kit::header::hide_header())
-        {
+        match self.instance.render(
+            columns,
+            lines,
+            Self::heights(),
+            ronoctua_shell_kit::header::hide_header(),
+        ) {
             // THE GATE HOLDS ON EVERY FRAME, and not only the first.
             //
             // A component can emit the gated primitive only after
