@@ -513,13 +513,14 @@ pub fn segments(
             removable: true,
         });
     }
-    // WHICH BUILD IS RUNNING, on a machine that builds from a checkout: the
-    // machine's own (the `nix` mark, quiet) or a REFERENCE build from the tree
-    // (a flask, in the dev colour). A developer runs `.#noctua` from a checkout
-    // to try the distro in a clean room, and this is the one sign on screen
-    // that the machine is no longer its own — `host.nix` is not read, so the
-    // layout, the profile and the hostname are the distro's defaults, not this
-    // machine's. The way back is one gesture (`build_switch`, `LEADER / b`).
+    // WHICH BUILD IS RUNNING, on a machine that builds from a LOCAL checkout.
+    // Both marks are this machine's own system, with its host.nix and hardware;
+    // they differ only in the distro code underneath, and both wear the dev
+    // colour. The committed checkout is a `git-commit` mark; the working tree,
+    // with its uncommitted edits, is a flask. Two dev builds, and the way
+    // between them is one gesture (`build_switch`, `LEADER / b`). The installed,
+    // released system has no checkout, nothing to switch to, and draws no mark
+    // here — the `nix` snowflake stays reserved for it, off the two dev marks.
     // While a switch is APPLYING it is the switching mark instead (`sync`): the
     // apply takes minutes, the toggle is refused meanwhile, and this says why on
     // sight rather than leaving the old glyph looking idle.
@@ -535,7 +536,7 @@ pub fn segments(
         });
     } else if let Some(build) = marks.build {
         let (id, glyph) = match build {
-            crate::build_switch::Build::Own => ("build-own", tokens::icon::NIX),
+            crate::build_switch::Build::Own => ("build-own", tokens::icon::GIT_COMMIT),
             crate::build_switch::Build::Reference => {
                 ("build-reference", tokens::icon::SOFTWARE_TRIAL)
             }

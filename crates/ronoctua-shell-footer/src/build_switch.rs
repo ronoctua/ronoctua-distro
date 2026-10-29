@@ -8,9 +8,11 @@
 //! RUNNING on this laptop, not in a VM. The switch rebuilds THIS MACHINE'S OWN
 //! system (`/etc/nixos`, its `host.nix` and `facter.json`) with the `ronoctua`
 //! input overridden to the checkout (`nix/modules/machine.nix`), so the machine
-//! keeps all its hardware and gains the checkout's code. The glyph says when
-//! the running system is such a dev build rather than the released one, and
-//! makes the rebuild one gesture.
+//! keeps all its hardware and gains the checkout's code. The glyph says which
+//! build is running — the committed checkout (`git-commit`) or the working tree
+//! (a flask) — and makes the rebuild one gesture. The installed, released
+//! system (no checkout) draws no mark; the `nix` snowflake stays reserved for
+//! it.
 //!
 //! IT MUST NEVER BUILD THE DISTRO'S FIXTURE REFERENCE MACHINE (`.#noctua`): that
 //! reads `tests/fixtures/machine`, has NONE of this laptop's hardware, and
@@ -21,14 +23,16 @@
 //! # Telling the two apart
 //!
 //! `nix/machine.nix` stamps the built system's distro revision into
-//! `/etc/ronoctua/person-applied.json` as `distro-rev`; a working-tree checkout
-//! with changes is `<rev>-dirty` ([`is_dev_rev`]), a clean released build is a
-//! plain revision. The `-dirty` suffix IS "this is a dev build of the
-//! checkout"; its absence, "this is the installed, released system". The
-//! decision is a pure function of that string, so the surface tests it with no
-//! compositor and no root. (A dev build from a perfectly clean checkout reads
-//! as installed — the switch is safe either way, so the only cost is the glyph
-//! staying away.)
+//! `/etc/ronoctua/person-applied.json` as `distro-rev`: a working tree with
+//! changes is `<rev>-dirty` and a `path:` override (which carries no git rev)
+//! is `unknown` — both [`is_dev_rev`] — while a build off a clean commit is a
+//! plain revision. On a machine that builds from a LOCAL checkout, the
+//! `-dirty`/`unknown` form is the WORKING-TREE build (the flask) and a plain
+//! revision is the COMMITTED-checkout build (the `git-commit` mark): two dev
+//! builds, told apart by the stamp. A plain revision is the installed, released
+//! system only where there is NO checkout — and there the segment draws no mark
+//! at all. The decision is a pure function of the stamp and the checkout, so
+//! the surface tests it with no compositor and no root.
 //!
 //! # Where the checkout is
 //!
@@ -50,11 +54,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Show {
-    /// Only on a dev build — THE DEFAULT, by the owner's ask. A mark while you
-    /// are running your working tree, and nothing on the installed (committed)
-    /// build, which keeps it free of the glyph. To start a dev build from the
-    /// installed one, `LEADER / b` or the page (`LEADER / p`) reach the switch
-    /// without a glyph; `Always` puts the glyph on both builds to click.
+    /// Only on the WORKING-TREE build — THE DEFAULT, by the owner's ask. A mark
+    /// while you are running your working tree, and nothing on the committed
+    /// build, which keeps it free of the glyph. To reach the switch from the
+    /// committed build, `LEADER / b` or the page (`LEADER / p`) reach it without
+    /// a glyph; `Always` puts the glyph on both dev builds to click.
     #[default]
     Dev,
     /// On both builds, wherever there is a checkout to build from — so the
@@ -112,11 +116,15 @@ pub const CURRENT_SYSTEM: &str = "/run/current-system";
 /// distro revision underneath.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Build {
-    /// The installed, released system — a clean distro revision.
+    /// The build off a CLEAN distro revision. On a machine that builds from a
+    /// local checkout this is the COMMITTED checkout — a dev build, the
+    /// modeline's `git-commit` mark; on a machine with no checkout it is the
+    /// installed, released system, which draws no mark (nothing to switch to).
     Own,
-    /// A dev build: this machine built against the local checkout
-    /// (`<rev>-dirty`). NOT the fixture reference machine — the module's note
-    /// says why that is never built on the real host.
+    /// The WORKING-TREE dev build: this machine built against the local
+    /// checkout with uncommitted edits (`<rev>-dirty`) or a `path:` override
+    /// (`unknown`) — the modeline's flask. NOT the fixture reference machine —
+    /// the module's note says why that is never built on the real host.
     Reference,
 }
 
@@ -277,7 +285,9 @@ mod tests {
         // showed nothing before this fix).
         assert!(is_dev_rev("unknown"));
         assert!(!is_dev_rev("f9a21ab1073f"));
-        // of(dev): dirty => the dev (checkout) build; clean => the installed one.
+        // of(dev): dirty/unknown => the working-tree build; clean => the
+        // committed one (a dev build where there is a checkout, the installed
+        // system where there is none).
         assert_eq!(Build::of(true), Build::Reference);
         assert_eq!(Build::of(false), Build::Own);
         // The revision is read from person-applied.json's one field.
