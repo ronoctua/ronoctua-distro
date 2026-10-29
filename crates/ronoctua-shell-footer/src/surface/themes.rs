@@ -30,7 +30,7 @@ impl Footer {
             let text = e.said(&self.texts);
             self.echo_message(text);
         }
-        self.tell_the_compositor_to_reread();
+        self.tell_the_compositor_to_reread(choice);
     }
 
     /// The theme chooser's preview of `choice`, whichever gesture moved a
@@ -74,9 +74,10 @@ impl Footer {
                     }
                     // AND THE DESK COMES BACK IN THE SAME BREATH, for the
                     // reason it went: the compositor never notices on its
-                    // own, and `Esc` would leave the previewed desk on
-                    // screen for the rest of the session.
-                    self.tell_the_compositor_to_reread();
+                    // own, and `Esc` would leave the previewed desk — and the
+                    // previewed spacing — on screen for the rest of the
+                    // session.
+                    self.tell_the_compositor_to_reread(v.committed());
                 }
                 self.first_page();
                 self.apply_geometry(self.interactivity());

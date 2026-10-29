@@ -241,6 +241,16 @@ fn main() -> Result<()> {
     }
     println!("seats: {} — the pass's own among them", seats.len());
 
+    // ---- the gaps, set on every workspace ----------------------------
+    // NOT a transient ask, and the re-read below does NOT undo it: the
+    // theme's Spacing answer reaches the workspaces already on screen with
+    // this, because the configuration's own `gaps` only touches the ones
+    // born after it. Both values, so the pass proves the command parses
+    // either way; an `Ok` says it was carried, as everywhere here.
+    wm.set_gaps(0, 0).context("setting every gap to none")?;
+    wm.set_gaps(8, 0).context("setting the gaps back")?;
+    println!("gaps: set on every workspace, inner and outer");
+
     // ---- and the re-read, which is also the whole of undo -------------
     // AND AN `Ok` HERE SAYS THE REQUEST WAS CARRIED, nothing more: this
     // compositor answers `success` whatever parsed (measured — see

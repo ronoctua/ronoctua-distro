@@ -796,6 +796,22 @@ pub trait Compositor: Send {
     /// request that flushes it from outside, and it changes nothing else.
     fn settle(&mut self) -> Result<()>;
 
+    /// Set the inner and outer gaps on EVERY workspace now — the ones already
+    /// on screen included.
+    ///
+    /// This is NOT [`Self::reread`]'s job, and it cannot be. A `gaps`
+    /// directive in the configuration is applied to a workspace when it is
+    /// BORN and never again (the compositor's own manual: "This affects new
+    /// workspaces only"), so a re-read moves the gap the NEXT workspace will
+    /// have and leaves the current one exactly as it was. The theme's Spacing
+    /// answer writes that default — the fragment `reread` picks up, for new
+    /// workspaces and the next session — and calls THIS, for the workspace the
+    /// person is looking at.
+    ///
+    /// It is a SET and not a transient [`Self::ask`]: it stays until something
+    /// sets it again, which is what the Spacing answer wants of it.
+    fn set_gaps(&mut self, inner: u16, outer: u16) -> Result<()>;
+
     /// Every input device it can see.
     fn devices(&mut self) -> Result<Vec<Device>>;
 
@@ -924,6 +940,9 @@ impl Compositor for Absent {
     fn settle(&mut self) -> Result<()> {
         Self::nothing_there()
     }
+    fn set_gaps(&mut self, _inner: u16, _outer: u16) -> Result<()> {
+        Self::nothing_there()
+    }
     fn devices(&mut self) -> Result<Vec<Device>> {
         Ok(Vec::new())
     }
@@ -1014,6 +1033,8 @@ pub enum Said {
     Reread,
     /// The windows told the layout already worked out.
     Settled,
+    /// The gaps set on every workspace: inner, then outer.
+    Gaps(u16, u16),
     /// A setting asked of a device.
     Input(String, Setting),
     /// Something asked of a seat.
@@ -1109,6 +1130,11 @@ impl Compositor for Scripted {
     fn settle(&mut self) -> Result<()> {
         self.allowed()?;
         self.told.push(Said::Settled);
+        Ok(())
+    }
+    fn set_gaps(&mut self, inner: u16, outer: u16) -> Result<()> {
+        self.allowed()?;
+        self.told.push(Said::Gaps(inner, outer));
         Ok(())
     }
     fn devices(&mut self) -> Result<Vec<Device>> {

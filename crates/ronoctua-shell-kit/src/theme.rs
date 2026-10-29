@@ -617,6 +617,57 @@ pub fn fragments(choice: Choice) -> [(&'static str, &'static str); 3] {
     ]
 }
 
+/// The inner and outer gap, in pixels, the compositor must put on the
+/// workspaces ALREADY on screen for `choice`'s spacing.
+///
+/// # Why this, beside the fragment
+///
+/// Because this compositor's `gaps` DIRECTIVE is new-workspace only (its
+/// manual: "This affects new workspaces only"). The fragment a re-read picks
+/// up moves the default the NEXT workspace will have; this moves the
+/// here-and-now, through `ronoctua_compositor::Compositor::set_gaps`.
+///
+/// # Why it is READ and not spelled here
+///
+/// So this process never names the number. The eight lives in the static
+/// config and in the generator's fragment, held equal by
+/// `themes-have-fragments`; a third copy in this crate is a third thing to
+/// keep in step. The value comes from the SOURCE fragment — always there,
+/// every theme has both — so a machine that never chose still gets the
+/// default answer's gap, which is what it shows.
+///
+/// `None` when the generator's output is not where [`FRAGMENTS_ENV`] says, or
+/// the fragment does not parse: the compositor then keeps what the re-read
+/// gave it, which for the current workspace is the gap it was born with.
+#[must_use]
+pub fn gaps_pixels(choice: Choice) -> Option<(u16, u16)> {
+    gaps_pixels_in(fragments_root()?.as_path(), choice)
+}
+
+/// [`gaps_pixels`], with the generator's output root as a parameter — the
+/// rule every reader here follows, so a test never reads the real one.
+fn gaps_pixels_in(root: &Path, choice: Choice) -> Option<(u16, u16)> {
+    let [.., (gaps, _)] = fragments(choice);
+    parse_gaps(&std::fs::read_to_string(root.join(choice.theme.id()).join(gaps)).ok()?)
+}
+
+/// The `inner` and `outer` a gaps fragment's two lines name, the header
+/// comment and any blank line skipped. `None` if either line is absent or not
+/// a number — a half-read fragment is not a gap this says to set.
+fn parse_gaps(text: &str) -> Option<(u16, u16)> {
+    let mut inner = None;
+    let mut outer = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("gaps inner ") {
+            inner = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("gaps outer ") {
+            outer = v.trim().parse().ok();
+        }
+    }
+    Some((inner?, outer?))
+}
+
 /// The configuration directory, found ONCE per process in
 /// [`resolve_at_start`] and kept here for every reader and writer below.
 ///
@@ -2027,6 +2078,49 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn the_gap_pixels_are_read_from_the_generators_fragment_not_spelled_here() {
+        // THE NUMBER IS THE GENERATOR'S, read back — not a constant in this
+        // crate that could drift from the static config and the fragment
+        // (`themes-have-fragments` holds those two equal; this reads what they
+        // agree on). The header comment and blank lines are skipped.
+        assert_eq!(
+            parse_gaps("# generated\ngaps inner 8\ngaps outer 0\n"),
+            Some((8, 0))
+        );
+        assert_eq!(parse_gaps("gaps inner 0\ngaps outer 0"), Some((0, 0)));
+        assert_eq!(parse_gaps("gaps inner 8"), None, "a half fragment is None");
+        assert_eq!(parse_gaps("nothing about gaps"), None);
+
+        // AND READ FROM THE SOURCE FRAGMENT the generator wrote, by choice.
+        let root = scratch("gap-pixels").join("themed");
+        let dir = root.join(theme::default_one().id());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("scroll-gaps-with.conf"),
+            "gaps inner 8\ngaps outer 0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("scroll-gaps-none.conf"),
+            "gaps inner 0\ngaps outer 0\n",
+        )
+        .unwrap();
+        let with = Choice::with_theme(theme::default_one());
+        assert_eq!(gaps_pixels_in(&root, with), Some((8, 0)));
+        assert_eq!(
+            gaps_pixels_in(
+                &root,
+                Choice {
+                    gaps: Gaps::None,
+                    ..with
+                }
+            ),
+            Some((0, 0))
+        );
+        let _ = std::fs::remove_dir_all(root.parent().unwrap());
     }
 
     #[test]

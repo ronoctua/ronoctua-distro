@@ -244,6 +244,17 @@ impl Compositor for Scroll {
         self.run("nop")
     }
 
+    fn set_gaps(&mut self, inner: u16, outer: u16) -> Result<()> {
+        // `all set`, NOT the configuration directive: the directive is
+        // new-workspace-only (`gaps inner|outer <amount>` — "This affects new
+        // workspaces only"), and this reaches the workspaces already on
+        // screen (`gaps inner|outer all <amount>`, `cmd_gaps`). Two commands
+        // in one request, which `run` sends and fails as one.
+        self.run(&format!(
+            "gaps inner all set {inner}; gaps outer all set {outer}"
+        ))
+    }
+
     fn devices(&mut self) -> Result<Vec<Device>> {
         Ok(read::devices_in(&self.request(wire::Kind::Inputs, "")?))
     }

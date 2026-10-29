@@ -9014,8 +9014,27 @@ impl Footer {
         n
     }
 
-    fn tell_the_compositor_to_reread(&self) {
-        let asked = open_the_compositor().and_then(|mut wm| wm.reread());
+    /// Tells the running compositor to re-read its configuration, and sets the
+    /// spacing on the workspaces ALREADY on screen.
+    ///
+    /// The re-read carries the desk, the outlines and the DEFAULT gap the next
+    /// workspace will have — the fragments the config includes. It does NOT
+    /// carry the gap of the workspace the person is looking at: this
+    /// compositor's `gaps` directive is new-workspace only, so the current one
+    /// keeps the gap it was born with until something SETS it. That something
+    /// is `set_gaps`, with the pixels the generator's own fragment names
+    /// (`theme::gaps_pixels`) — both on one socket round trip.
+    fn tell_the_compositor_to_reread(&self, choice: crate::theme::Choice) {
+        let asked = open_the_compositor().and_then(|mut wm| {
+            wm.reread()?;
+            // A MACHINE THAT NEVER CHOSE has no fragment and so no pixels to
+            // read; the static config's gap stands, and there is nothing to
+            // set here.
+            if let Some((inner, outer)) = crate::theme::gaps_pixels(choice) {
+                wm.set_gaps(inner, outer)?;
+            }
+            Ok(())
+        });
         if let Err(e) = asked {
             tracing::debug!(error = %e, "the compositor was not told to reread its config");
         }
