@@ -569,6 +569,13 @@ impl Files {
     /// AND THE SHORTCUT'S EXPLANATION, when the pointer is on one. It is the
     /// same argument one line further: a line the listing does not get.
     fn first_of_region(&self, ui: &Ui) -> u16 {
+        // THE "NO HEADER" MODE gives line 0 back to the listing: this window's
+        // own control line — the shortcuts, the filter, what the pointer
+        // explains — moves to a line off the BOTTOM (`geometry`'s `strip`), the
+        // way every window gives its top line up (`ronoctua_shell_kit::header`).
+        if crate::header::hide_header() {
+            return 0;
+        }
         FIRST_OF_REGION + crate::fold::rows(self.fold) + ui.hinted.rows()
     }
 
@@ -752,7 +759,11 @@ impl Files {
         if !mods.ctrl {
             self.right_ctrl = false;
         }
-        if self.right_ctrl {
+        // NOT WHILE THE HEADER IS HIDDEN: the drawer that line 0 opens is not
+        // drawn then (`frame`'s `opens`), so the keys that walk it do nothing —
+        // `Ctrl`+arrows fall through to the listing, which is what they would
+        // reach with no drawer to open.
+        if self.right_ctrl && !crate::header::hide_header() {
             let ask = match event.keysym {
                 Keysym::Down if self.fold.open => Some(crate::fold::Ask::By(1)),
                 Keysym::Down => Some(crate::fold::Ask::Toggle),
@@ -1104,7 +1115,11 @@ impl Files {
         Geometry {
             metric: self.metric(ui),
             columns: ui.columns,
-            strip: panes.strip,
+            // THE "NO HEADER" MODE keeps a line off the bottom for the control
+            // line it moved there (`first_of_region`, `frame`): the strip is
+            // what the listing already gives the bottom, so one more line of it
+            // is a line the listing does not draw over.
+            strip: panes.strip + u16::from(crate::header::hide_header()),
             chrome: self.chrome_lines(),
         }
     }
@@ -2395,11 +2410,23 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // early — found by the review of the notification window, whose paint
     // was written against this one.
     let plain_room = s.geo.columns;
-    // THE CONTROL IS ALWAYS THERE (`chrome::Hinted::head` says why), and the
-    // header is told whether this door's drawer is open, which is what shows
-    // the sentence about the key under the pointer.
-    let opens = true;
-    s.hinted.open_elsewhere(s.fold.open);
+    // THE CONTROL IS THERE UNLESS THE HEADER IS HIDDEN (`chrome::Hinted::head`
+    // says why it is always there otherwise), and the header is told whether
+    // this door's drawer is open, which is what shows the sentence about the
+    // key under the pointer. In the "no header" mode the control line is NOT at
+    // the top: it moved to a line off the bottom (`base`, reserved by
+    // `geometry`'s `strip`), and the drawer that opens line 0 does not open — a
+    // line pinned to the foot has nothing above it to grow into.
+    let opens = !crate::header::hide_header();
+    // WHERE THE CONTROL LINE IS: line 0 at the top, or the reserved foot line
+    // just under the listing when the header is hidden. Every run of the line —
+    // the hint, the message, the marks a click lands on — is drawn from here.
+    let base = if opens {
+        0
+    } else {
+        s.geo.metric.first + u16::try_from(s.geo.room()).unwrap_or(0)
+    };
+    s.hinted.open_elsewhere(opens && s.fold.open);
     let room = plain_room.saturating_sub(crate::fold::WIDTH);
     // HOW TALL THE LINE WOULD BE, written down for the geometry — see
     // `fold_wrapped`. Measured whenever there is a control, open or not,
@@ -2409,7 +2436,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     } else {
         0
     };
-    if s.fold.open {
+    if opens && s.fold.open {
         // OPENED, the line is its own first row and the rest follow under it.
         let (showing, scroll) = crate::fold::opened(&line_pieces, room, s.fold);
         for (n, row) in showing.into_iter().enumerate() {
@@ -2465,7 +2492,7 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             &pieces,
             ronoctua_render::Size::Px(size),
             margin,
-            0,
+            base,
             room,
         ));
     } else if hinting {
@@ -2483,10 +2510,10 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
             &line_pieces,
             ronoctua_render::Size::Px(size),
             margin,
-            0,
+            base,
             room,
         ));
-        marks.extend(crate::chrome::hint_marks(&line_pieces, margin, 0, room));
+        marks.extend(crate::chrome::hint_marks(&line_pieces, margin, base, room));
     }
     // WHERE EACH SHORTCUT LANDED — what the pointer asks, and what was drawn.
     s.hinted.took(marks);
@@ -2495,7 +2522,11 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // hint: the line the owner asked for. It costs the region one row for as
     // long as the pointer is on a key — `first_of_region` is where that is
     // paid — and nothing above it moves.
-    if let Some(said) = s.hinted.said() {
+    // ONLY WITH THE CONTROL AT THE TOP: the spelt-out shortcut goes on the line
+    // BELOW the hint, and the hidden-header control line is already at the foot
+    // with nothing under it but the preview strip. The pointer's description is
+    // a second register this line can do without when it has moved.
+    if opens && let Some(said) = s.hinted.said() {
         spans.push(ronoctua_render::Span {
             size: ronoctua_render::Size::Px(size),
             text: ronoctua_render::layout::elide_end(said, plain_room),

@@ -1537,10 +1537,15 @@ pub trait Content: Sized + 'static {
     /// — a mode change is a different answer, with nothing to push. The footer
     /// reads it over the per-PID socket on every change of focus and renders it
     /// (the label is the command's own text, `texts.t`, in the one language
-    /// both sides share). The default is a window that teaches no shortcut.
+    /// both sides share).
+    ///
+    /// THE DEFAULT IS THE KEYS THE HEADER ALREADY TEACHES: a window that draws a
+    /// [`Content::hint`] answers `LEADER Alt` for nothing, because the hint is
+    /// the same set in the same shape (`chrome::bindings_of_hint`). A window
+    /// with no hint teaches no shortcut, and one with keys the hint cannot spell
+    /// overrides this.
     fn shortcuts(&self, ui: &Ui) -> Vec<ronoctua_protocol::Binding> {
-        let _ = ui;
-        Vec::new()
+        crate::chrome::bindings_of_hint(&self.hint(ui))
     }
 
     /// RUNS ONE OF THIS WINDOW'S SHORTCUTS, by the command id it declared in
@@ -1920,7 +1925,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             if handle
                 .insert_source(order_channel, |event, (), door: &mut Door<C>| {
                     if let channel::Event::Msg(id) = event
-                        && door.content.run_shortcut(&mut door.ui, &id)
+                        && door.run_or_replay_shortcut(&id)
                     {
                         door.ui.ask_paint();
                     }
@@ -2628,6 +2633,35 @@ impl<C: Content> Door<C> {
             &self.painted,
             act,
         );
+    }
+
+    /// Runs the shortcut `id` the footer sent back over this window's socket —
+    /// a key pressed or clicked in the minibuffer line or the `LEADER Alt`
+    /// region. The window's own [`Content::run_shortcut`] first; when it
+    /// declines (the default), THE KEY THE HEADER TEACHES FOR THAT ID, found in
+    /// the hint and pressed the way a click on the hint presses it
+    /// ([`Door::act`]). So a window that only draws a hint answers `LEADER Alt`
+    /// with no code of its own — the footer listed what [`Content::shortcuts`]
+    /// derived from that hint, and this runs the same key back.
+    fn run_or_replay_shortcut(&mut self, id: &str) -> bool {
+        if self.content.run_shortcut(&mut self.ui, id) {
+            return true;
+        }
+        let act = self
+            .content
+            .hint(&self.ui)
+            .into_iter()
+            .find_map(|p| match p.press {
+                Some(act) if p.id.is_some_and(|pid| pid == id) => Some(act),
+                _ => None,
+            });
+        match act {
+            Some(act) => {
+                self.act(act);
+                true
+            }
+            None => false,
+        }
     }
 
     /// THE BACK BUTTON IS `Esc` — see [`went_back_into`].

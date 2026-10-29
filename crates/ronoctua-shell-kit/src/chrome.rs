@@ -1133,6 +1133,36 @@ pub fn hint_of_marked(
     out
 }
 
+/// THE WINDOW'S SHORTCUTS, read straight off the keys its header teaches.
+///
+/// The bridge that lets every window which draws a hint ([`Content::hint`],
+/// built by [`hint_of_marked`]) answer `Content::shortcuts` for nothing: each
+/// key piece already carries the notation as its `text` and the command's id as
+/// its `id`, so the pair is a `Binding { keys, command }`. The footer lists and
+/// runs them the same for a plain window as for a buffer — `LEADER Alt` over
+/// anything — and the door, given the id back, finds the same key and presses
+/// it ([`Act::Key`]).
+///
+/// Only a KEY piece that a click can reach (an `id` and a `press`) is a
+/// shortcut; the words beside it carry the same id and are skipped, and so is a
+/// separator or a line of prose. Each id appears once, in the order the hint
+/// drew it.
+#[must_use]
+pub fn bindings_of_hint(pieces: &[Piece]) -> Vec<ronoctua_protocol::Binding> {
+    let mut out: Vec<ronoctua_protocol::Binding> = Vec::new();
+    for p in pieces {
+        let Some(id) = p.id else { continue };
+        if !p.is_a_key() || p.press.is_none() || out.iter().any(|b| b.command == id) {
+            continue;
+        }
+        out.push(ronoctua_protocol::Binding {
+            keys: p.text.clone(),
+            command: id.to_owned(),
+        });
+    }
+    out
+}
+
 /// A moment, as a date a person reads.
 ///
 /// # Why it is here and not written where it is needed
@@ -5503,6 +5533,26 @@ mod tests {
         let again = with_the_way_back(led.clone(), &t);
         assert_eq!(again, led, "Esc was taught twice");
         assert_eq!(with_the_way_back(Vec::new(), &t).len(), 2);
+    }
+
+    /// THE SHORTCUTS A WINDOW TEACHES ARE ITS BINDINGS, one per key.
+    ///
+    /// The bridge every native door now answers `LEADER Alt` through
+    /// (`Content::shortcuts`): each key the hint draws paired with the command
+    /// its words name, each id once, and nothing for a line that is not a hint.
+    #[test]
+    fn the_bindings_are_the_keys_the_hint_teaches() {
+        use super::{Piece, bindings_of_hint, hint_of};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let hint = hint_of(&[("r", "network-window"), ("C-w", "power-window")], &t);
+        let bindings = bindings_of_hint(&hint);
+        assert_eq!(bindings.len(), 2, "a binding per key, not per piece");
+        assert_eq!(bindings[0].keys, "r", "the key's own notation");
+        assert_eq!(bindings[0].command, "network-window");
+        assert_eq!(bindings[1].command, "power-window");
+        // A LINE OF PROSE IS NO SHORTCUT — no key, no press, no binding.
+        assert!(bindings_of_hint(&[Piece::prose("just words")]).is_empty());
+        assert!(bindings_of_hint(&[]).is_empty());
     }
 
     /// FAILS IF: a header told to sit on line 1 — a column's, under the

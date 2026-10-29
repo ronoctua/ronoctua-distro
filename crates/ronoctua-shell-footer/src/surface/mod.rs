@@ -470,6 +470,12 @@ struct Footer {
     /// group is THIS footer's (`kiosk_view::local_bindings`) and a sequence
     /// runs here, by `run_with`, instead of in a buffer's process.
     local_runs_here: Option<u64>,
+    /// `LEADER Alt` is open as a FLAT list of the focused window's shortcuts,
+    /// not the buffer's `,` submenu. A window whose keys are flat (every native
+    /// door, now that `Content::shortcuts` derives from the hint) lists them at
+    /// depth zero — no prefix to press — and `buffer_key` resolves the keys from
+    /// an empty pending. Cleared whenever the leader closes or the focus moves.
+    shortcuts_flat: bool,
 
     // --- notifications (section 4.2) ---
     /// One at a time, the rest waiting. It lives in the daemon, like the
@@ -2815,6 +2821,7 @@ fn assemble(
         buffer_pid: None,
         buffer_pending: Vec::new(),
         local_runs_here: None,
+        shortcuts_flat: false,
         notifications: ronoctua_notify::Queue::with_history(notes.history()),
         kills: ronoctua_notify::oom::Kills::fresh_one(),
         book: {
@@ -9328,6 +9335,7 @@ impl Footer {
         self.state_pending = false;
         self.state_menu.clear();
         self.local_runs_here = None;
+        self.shortcuts_flat = false;
 
         // A KIOSK'S `,` GROUP IS THIS FOOTER'S OWN: Chrome publishes no
         // keymap, and what the group runs is the kiosk's commands, generated
@@ -9469,13 +9477,18 @@ impl Footer {
         let typed = ronoctua_keymap::notation(&[key]);
 
         if self.buffer_pending.is_empty() {
-            // Opening it. Only at the ROOT of the sequence, and only when the
-            // focused window actually published something — `m` after `w` is
-            // `w m`, which belongs to the tree, and a window that is not one of
-            // our buffers has no `SPC m` at all.
-            if !(self.leader.at_root()
-                && typed == ronoctua_protocol::LOCAL_PREFIX
-                && !self.buffer_bindings.is_empty())
+            // FLAT MODE: `LEADER Alt` opened the window's shortcuts at depth
+            // zero (`open_window_shortcuts`), so the first key IS a binding key
+            // — narrow from the empty pending, no `,` to press.
+            //
+            // Otherwise, opening the `,` submenu: only at the ROOT of the
+            // sequence, and only when the focused window actually published
+            // something — `m` after `w` is `w m`, which belongs to the tree,
+            // and a window that is not one of our buffers has no `SPC m` at all.
+            if !self.shortcuts_flat
+                && !(self.leader.at_root()
+                    && typed == ronoctua_protocol::LOCAL_PREFIX
+                    && !self.buffer_bindings.is_empty())
             {
                 return false;
             }
@@ -10607,10 +10620,29 @@ impl Footer {
     /// standardised gesture instead of a key the window named. Does nothing
     /// when the focused window published no shortcuts.
     fn open_window_shortcuts(&mut self) {
-        if let Ok(key) = ronoctua_keymap::Key::parse(ronoctua_protocol::LOCAL_PREFIX) {
-            self.buffer_key(key);
-            self.draw_and_paint();
+        if self.buffer_bindings.is_empty() {
+            return;
         }
+        // A BUFFER UNDER THE LOCAL PREFIX opens its `,` submenu as it always
+        // has — the key is pressed for the person. A window whose keys are FLAT
+        // (every native door, now that `Content::shortcuts` derives from the
+        // hint) lists them at depth zero, with no prefix to press.
+        let prefixed = self.buffer_bindings.iter().any(|(sequence, _)| {
+            sequence.split_whitespace().next() == Some(ronoctua_protocol::LOCAL_PREFIX)
+        });
+        if prefixed {
+            if let Ok(key) = ronoctua_keymap::Key::parse(ronoctua_protocol::LOCAL_PREFIX) {
+                self.buffer_key(key);
+            }
+        } else {
+            self.shortcuts_flat = true;
+            self.buffer_pending.clear();
+            self.inputs = self.buffer_inputs();
+            self.first_page();
+            self.echo = None;
+            self.apply_geometry(KeyboardInteractivity::Exclusive);
+        }
+        self.draw_and_paint();
     }
 
     /// The focused window's shortcuts as the FREE minibuffer's line shows them
@@ -10634,14 +10666,20 @@ impl Footer {
             if !out.is_empty() {
                 out.push(crate::chrome::Piece::separator());
             }
-            out.push(crate::chrome::Piece::key_in(
-                keys.clone(),
-                crate::chrome::Register::Key,
-            ));
-            out.push(crate::chrome::Piece::prose(format!(
-                " {}",
-                self.texts.t(command)
-            )));
+            // A CLICK ON THE LINE OPENS THE REGION, where each shortcut is run
+            // by its own key or click — the direct run of ONE line shortcut
+            // wants a runtime command on the piece, and `chrome::Act::Run` holds
+            // a `&'static str`. So both halves carry the one gesture the line
+            // can give (`window-shortcuts`, `Footer::open_window_shortcuts`),
+            // and the region behind it is where a shortcut is actually pressed.
+            out.push(
+                crate::chrome::Piece::key_in(keys.clone(), crate::chrome::Register::Key)
+                    .running(crate::leader::WINDOW_SHORTCUTS_COMMAND),
+            );
+            out.push(
+                crate::chrome::Piece::prose(format!(" {}", self.texts.t(command)))
+                    .running(crate::leader::WINDOW_SHORTCUTS_COMMAND),
+            );
         }
         out
     }
@@ -11745,6 +11783,7 @@ impl Footer {
     fn close_leader(&mut self) {
         self.leader.finish();
         self.inputs.clear();
+        self.shortcuts_flat = false;
         // AND A LIST THAT WAS WAITING IS NOT ANY MORE: its timer, when it
         // fires, finds nothing to show.
         self.list_patience = crate::leader::Patience::Shown;
@@ -14477,8 +14516,16 @@ impl Footer {
         };
         match line.click {
             Some(Click::Key(t)) => {
-                let effect = self.leader.key(self.tree, t);
-                self.apply_leader_effect(effect);
+                // CLICKING IS PRESSING THE KEY, in the same order `key_arrived`
+                // presses it: the focused window's own keymap first (the flat
+                // `LEADER Alt` list, or the `,` submenu — `buffer_key`), and the
+                // tree only when the key is not the window's. Without this a
+                // click on a flat shortcut went to the tree, which has no such
+                // key, and ran nothing.
+                if !self.buffer_key(t) {
+                    let effect = self.leader.key(self.tree, t);
+                    self.apply_leader_effect(effect);
+                }
             }
             Some(Click::Bars) => self.cycle_the_bars(),
             Some(Click::Shortcuts) => self.open_window_shortcuts(),

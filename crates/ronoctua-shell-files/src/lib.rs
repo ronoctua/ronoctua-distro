@@ -31,8 +31,8 @@ use ronoctua_shell_inspect::{
 };
 use ronoctua_shell_keep::keep;
 use ronoctua_shell_kit::{
-    bars, bindings, chrome, clipboard_copy, doors, echo, fields, fold, glyph, line, minibuffer,
-    paint, security_words, sizes, slide, text_select, wake, wheel, when,
+    bars, bindings, chrome, clipboard_copy, doors, echo, fields, fold, glyph, header, line,
+    minibuffer, paint, security_words, sizes, slide, text_select, wake, wheel, when,
 };
 use ronoctua_shell_report::report;
 use ronoctua_shell_work::{jobs, seal, vault};
