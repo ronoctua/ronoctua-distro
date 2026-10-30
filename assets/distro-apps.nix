@@ -67,6 +67,7 @@
     "claude-code"
     "codex"
     "common-lisp"
+    "craft-launcher"
     "crosspipe"
     "deckcraft"
     "delta"
@@ -126,6 +127,7 @@
     "shfmt"
     "smartmontools"
     "socat"
+    "solidcraft"
     "soundcraft"
     "sox"
     "starship"
@@ -148,7 +150,21 @@
     "zsh"
   ];
 
-  retired = { };
+  retired = {
+    cadcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    deckcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    designcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    effectcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    figcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    filmcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    gridcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    lightcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    pdfcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    photocraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    soundcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    vectorcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+    wordcraft = "subsumed by the Craft Launcher (craft-launcher), which downloads and updates the Crafting Apps itself";
+  };
 
   # WHAT THE INSTALLER OFFERS TO LEAVE OUT, one row per program of the
   # registry (`nix/offered.nix` writes the installer's table from here, and
@@ -213,69 +229,14 @@
       name = "LibreOffice";
     }
     {
-      id = "photocraft";
+      id = "craft-launcher";
       checked = true;
-      name = "PhotoCraft";
+      name = "ArtCraft Launcher";
     }
     {
-      id = "vectorcraft";
+      id = "solidcraft";
       checked = true;
-      name = "VectorCraft";
-    }
-    {
-      id = "filmcraft";
-      checked = true;
-      name = "FilmCraft";
-    }
-    {
-      id = "lightcraft";
-      checked = true;
-      name = "LightCraft";
-    }
-    {
-      id = "pdfcraft";
-      checked = true;
-      name = "PdfCraft";
-    }
-    {
-      id = "effectcraft";
-      checked = true;
-      name = "EffectCraft";
-    }
-    {
-      id = "designcraft";
-      checked = true;
-      name = "DesignCraft";
-    }
-    {
-      id = "wordcraft";
-      checked = true;
-      name = "WordCraft";
-    }
-    {
-      id = "soundcraft";
-      checked = true;
-      name = "SoundCraft";
-    }
-    {
-      id = "deckcraft";
-      checked = true;
-      name = "DeckCraft";
-    }
-    {
-      id = "gridcraft";
-      checked = true;
-      name = "GridCraft";
-    }
-    {
-      id = "figcraft";
-      checked = true;
-      name = "FigCraft";
-    }
-    {
-      id = "cadcraft";
-      checked = true;
-      name = "CADCraft";
+      name = "SolidCraft";
     }
   ];
 
@@ -325,170 +286,35 @@
   # substrate stays declarative with rollback (the owner's amendment of
   # 2026-10-30, replacing 'nothing imperative').
   apps = {
-    cadcraft = {
+    # THE CRAFT LAUNCHER manages the Crafting Apps (PhotoCraft, VectorCraft,
+    # FilmCraft, …) — it downloads and updates them by itself, under `$HOME`
+    # and outside the generation (owner amendment 2026-10-30). The distro
+    # declares the launcher, not each craft; the retired craft ids below are
+    # the ones it subsumed.
+    craft-launcher = {
       source = "appimage";
-      key = "cadcraft";
-      name = "CADCraft";
+      key = "craft-launcher";
+      name = "ArtCraft Launcher";
       follows = {
         github = {
-          repo = "storytold/cadcraft";
-          assetPattern = "cadcraft-*-linux-x86_64.AppImage";
+          repo = "storytold/craft-launcher";
+          assetPattern = "artcraft-launcher-*-linux-x86_64.AppImage";
         };
       };
       fallback = false;
       group = "crafts";
     };
-    deckcraft = {
+    # SOLIDCRAFT — parametric 3D CAD in Rust (`tangency-labs/solidcraft`,
+    # MIT/Apache-2.0). Its x86_64 AppImage follows the repository's releases;
+    # the app keeps itself current, a fast-mover like the rest (2026-10-30).
+    solidcraft = {
       source = "appimage";
-      key = "deckcraft";
-      name = "DeckCraft";
+      key = "solidcraft";
+      name = "SolidCraft";
       follows = {
         github = {
-          repo = "storytold/deckcraft";
-          assetPattern = "deckcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    designcraft = {
-      source = "appimage";
-      key = "designcraft";
-      name = "DesignCraft";
-      follows = {
-        github = {
-          repo = "storytold/designcraft";
-          assetPattern = "designcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    effectcraft = {
-      source = "appimage";
-      key = "effectcraft";
-      name = "EffectCraft";
-      follows = {
-        github = {
-          repo = "storytold/effectcraft";
-          assetPattern = "effectcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    figcraft = {
-      source = "appimage";
-      key = "figcraft";
-      name = "FigCraft";
-      follows = {
-        github = {
-          repo = "storytold/figcraft";
-          assetPattern = "figcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    filmcraft = {
-      source = "appimage";
-      key = "filmcraft";
-      name = "FilmCraft";
-      follows = {
-        github = {
-          repo = "storytold/filmcraft";
-          assetPattern = "filmcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    gridcraft = {
-      source = "appimage";
-      key = "gridcraft";
-      name = "GridCraft";
-      follows = {
-        github = {
-          repo = "storytold/gridcraft";
-          assetPattern = "gridcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    lightcraft = {
-      source = "appimage";
-      key = "lightcraft";
-      name = "LightCraft";
-      follows = {
-        github = {
-          repo = "storytold/lightcraft";
-          assetPattern = "lightcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    pdfcraft = {
-      source = "appimage";
-      key = "pdfcraft";
-      name = "PdfCraft";
-      follows = {
-        github = {
-          repo = "storytold/pdfcraft";
-          assetPattern = "pdfcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    photocraft = {
-      source = "appimage";
-      key = "photocraft";
-      name = "PhotoCraft";
-      follows = {
-        github = {
-          repo = "storytold/photocraft";
-          assetPattern = "photocraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    soundcraft = {
-      source = "appimage";
-      key = "soundcraft";
-      name = "SoundCraft";
-      follows = {
-        github = {
-          repo = "storytold/soundcraft";
-          assetPattern = "soundcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    vectorcraft = {
-      source = "appimage";
-      key = "vectorcraft";
-      name = "VectorCraft";
-      follows = {
-        github = {
-          repo = "storytold/vectorcraft";
-          assetPattern = "vectorcraft-*-linux-x86_64.AppImage";
-        };
-      };
-      fallback = false;
-      group = "crafts";
-    };
-    wordcraft = {
-      source = "appimage";
-      key = "wordcraft";
-      name = "WordCraft";
-      follows = {
-        github = {
-          repo = "storytold/wordcraft";
-          assetPattern = "wordcraft-*-linux-x86_64.AppImage";
+          repo = "tangency-labs/solidcraft";
+          assetPattern = "solidcraft-*-linux-x86_64.AppImage";
         };
       };
       fallback = false;

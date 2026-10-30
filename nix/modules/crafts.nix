@@ -23,10 +23,11 @@
     type = lib.types.bool;
     default = false;
     description = ''
-      The Crafting Apps (PhotoCraft, VectorCraft, FilmCraft, LightCraft,
-      PdfCraft, EffectCraft, DesignCraft, WordCraft, SoundCraft, DeckCraft,
-      GridCraft, FigCraft and CADCraft), each its release AppImage, wrapped.
-      On in the full profile.
+      The craft tools, each its release AppImage, wrapped. The group now
+      carries the ArtCraft Launcher — which downloads and updates the Crafting
+      Apps (PhotoCraft, VectorCraft, FilmCraft and the rest) by itself, under
+      the person's home and outside the generation — and SolidCraft, parametric
+      3D CAD. On in the full profile.
     '';
   };
 }

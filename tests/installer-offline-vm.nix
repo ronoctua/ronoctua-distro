@@ -54,7 +54,7 @@ let
     RONOCTUA_INST_LANGUAGE = "pt-BR";
     RONOCTUA_INST_DISK = "/dev/disk/by-id/virtio-target";
     RONOCTUA_INST_PROFILE = "full";
-    RONOCTUA_INST_LEFT_OUT = "libreoffice,vlc,photocraft";
+    RONOCTUA_INST_LEFT_OUT = "libreoffice,vlc,solidcraft";
     RONOCTUA_INST_KEYBOARD = "pt";
     RONOCTUA_INST_KEYBOARD_VARIANT = "";
     RONOCTUA_INST_COMPOSE_KEY = "compose:menu";
@@ -185,7 +185,7 @@ let
               # installed system's parts plan, read through its own profile
               # (the system was built in this live store, so its paths are here).
               plan = run(live, "cat $(readlink -f /mnt/nix/var/nix/profiles/system-1-link)/etc/ronoctua/parts-plan.json")
-              for gone in ("libreoffice", "vlc", "photocraft"):
+              for gone in ("libreoffice", "vlc", "solidcraft"):
                   assert f'"{gone}"' not in plan, f"{gone} was left out and is in the plan"
               assert '"blender"' in plan, "blender was kept and is not in the plan"
               left = run(live, "ls /mnt/persist/etc/ronoctua/first-boot")

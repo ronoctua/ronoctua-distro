@@ -28515,7 +28515,7 @@ let
       # one carries as programs it arrives with, and the reduced one only
       # what is everybody's — the archives' unrar and the coding agent.
       for id in chrome vscode android-studio android-sdk claude-code unrar uade \
-                vlc flutter blender orca-slicer onlyoffice libreoffice cadcraft wordcraft \
+                vlc flutter blender orca-slicer onlyoffice libreoffice craft-launcher solidcraft \
                 icon-superpack go python javascript nix-tools build-tools fonts-full; do
         grep -q -e "\"$id\"" ${fullPlan} || {
           echo "ERROR: the full profile does not want the part $id" >&2
@@ -28528,7 +28528,7 @@ let
           failed=1
         }
       done
-      for id in chrome vscode android-studio android-sdk vlc flutter blender orca-slicer onlyoffice libreoffice cadcraft \
+      for id in chrome vscode android-studio android-sdk vlc flutter blender orca-slicer onlyoffice libreoffice craft-launcher solidcraft \
                 icon-superpack go python javascript fonts-full; do
         if grep -q -e "\"$id\"" ${minimalPlan}; then
           echo "ERROR: the minimal profile wants the part $id" >&2
