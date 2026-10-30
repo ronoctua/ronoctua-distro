@@ -8233,6 +8233,16 @@ impl Footer {
         use ronoctua_compositor::Event;
         match event {
             Event::FocusChanged(Some(id)) => self.windows.focused().map(|w| w.id) != Some(*id),
+            // FOCUS LEFT EVERYTHING — the window in front closed or minimised
+            // and nothing took its place. Its shortcuts were on the minibuffer's
+            // line, and a bare desktop teaches none: without this they stayed up
+            // until the next window took the focus (`refresh_buffer_keymap`).
+            Event::FocusChanged(None) => self.windows.focused().is_some(),
+            // THE WINDOW IN FRONT CLOSED, and the compositor may send no
+            // `FocusChanged` after it (the last window on a workspace going):
+            // its shortcuts go with it. Asked before `windows.apply_to`, so the
+            // focused window is still the one that is closing.
+            Event::WindowClosed(id) => self.windows.focused().map(|w| w.id) == Some(*id),
             Event::Workspaces(all) => {
                 let now = all.iter().find(|w| w.focused).and_then(|w| w.number);
                 now.is_some() && now != self.current_workspace()
@@ -16787,7 +16797,13 @@ impl Footer {
             // so a click toggles it both ways. Beside the chevron on one line;
             // under it (same column, line below) when the line opened to two or
             // more — the owner's ask for the two controls to stack.
-            self.shortcuts_control = (glyph && hover).then(|| {
+            // THE HIT-TEST'S CELL IS KEPT WHENEVER THE MODE IS ON, not only
+            // under the hand: `shortcuts_lit` is read from the LAST frame's
+            // control, so a control that appeared only on the hovering frame
+            // lagged a frame behind the pointer — the eye lit (and said what it
+            // does) one move late, which over a shown list never caught up. The
+            // EYE itself is still drawn only under the pointer (`hover`).
+            self.shortcuts_control = glyph.then(|| {
                 if held.open {
                     (crate::chrome::from_the_edge(columns, 1), mini_line + 1)
                 } else {
@@ -16798,7 +16814,7 @@ impl Footer {
                     (col, mini_line)
                 }
             });
-            if let Some((col, line)) = self.shortcuts_control {
+            if let Some((col, line)) = self.shortcuts_control.filter(|_| hover) {
                 let eye = if self.modeline.hide_shortcuts() {
                     tokens::icon::SHORTCUTS_HIDDEN
                 } else {

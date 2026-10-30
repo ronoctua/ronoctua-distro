@@ -598,6 +598,17 @@ impl Content for Notifications {
         format!("*{}*", texts.t(crate::key::NOTIF_TITLE))
     }
 
+    /// THE KEYS THIS WINDOW TEACHES, the same set its header draws (`paint`,
+    /// `View::hint_of`) — so that with the header hidden the footer's minibuffer
+    /// carries them (`Content::shortcuts` derives from this, and the footer only
+    /// shows them while the header is gone). Without it a hidden header took the
+    /// shortcuts off the screen entirely.
+    fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+        let lists = crate::notifications::Lists::of(&self.records, &self.book);
+        let place = Some((self.view.cursor(), lists.len(self.view.pane())));
+        self.view.hint_of(place, &lists, &ui.texts)
+    }
+
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
         let Some(press) = press_of(event) else {
             return;

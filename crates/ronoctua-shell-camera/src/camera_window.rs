@@ -865,6 +865,15 @@ impl Content for CameraWindow {
         texts.t(crate::key::CAMERA_TITLE)
     }
 
+    /// THE KEYS THIS WINDOW TEACHES, the same set its header draws
+    /// (`camera::hint`) — so a hidden header moves them to the footer's
+    /// minibuffer (`Content::shortcuts` derives from this; the footer only
+    /// shows them while the header is gone). Without it a hidden header took
+    /// the shortcuts off the screen entirely.
+    fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+        camera::hint(&ui.texts)
+    }
+
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         // AN OPEN MENU TAKES THE ARROWS, `RET` AND `Esc` — and nothing else,
         // so the ring keys and the other menus' keys still work under it.

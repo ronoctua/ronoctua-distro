@@ -3156,6 +3156,14 @@ fn small_size() -> (u32, u32) {
 }
 
 impl Content for Player {
+    /// THE KEYS THIS WINDOW TEACHES, the same set its header draws
+    /// (`View::hint`) — so a hidden header moves them to the footer's minibuffer
+    /// (`Content::shortcuts` derives from this; the footer only shows them while
+    /// the header is gone). Without it a hidden header took them off the screen.
+    fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+        self.view.hint(self.player.as_ref(), ui.columns, &ui.texts)
+    }
+
     /// The size before the compositor tiles it: tall enough for the picture
     /// and the transport under it.
     fn default_size(&self) -> (u32, u32) {
