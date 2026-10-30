@@ -37,6 +37,10 @@ in
 
   unfree = import pkgs.path {
     inherit system;
+    # THE ONE Claude Code, pinned newer than this nixpkgs' and apart from its
+    # packaging — so the agent is new enough to speak the current models
+    # (`nix/claude-code.nix`).
+    overlays = [ (import ./claude-code.nix) ];
     config.allowUnfreePredicate = p: builtins.elem (lib.getName p) names;
   };
 

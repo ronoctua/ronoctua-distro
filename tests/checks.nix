@@ -52815,7 +52815,7 @@ let
         uade
         unrar
         "google-chrome-141.0.7390.65"
-        "claude-code-2.0.30"
+        "claude-code-2.1.314"
         "vscode-1.119.0"
         "code-1.119.0"
         "platform-tools-37.0.0"
@@ -52863,7 +52863,7 @@ let
       # package's licence answers, Android Studio's included; VS Code's FHS
       # environment `code` and the SDK's other pieces are proved out of every
       # closure by `profile-minimal-closes` and `parts-stay-out-of-the-base`.
-      want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.0.30", "vscode-1.119.0", "androidsdk",
+      want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.1.314", "vscode-1.119.0", "androidsdk",
               "android-studio-stable-2025.1.4.8"}
       if set(unfree) != want:
           wrong.append(f"the release calls unfree {sorted(unfree)}, not {sorted(want)}")
