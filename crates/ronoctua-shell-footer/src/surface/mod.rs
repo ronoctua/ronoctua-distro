@@ -16654,7 +16654,14 @@ impl Footer {
             // DRAWN only under the pointer (`hover`). Beside the chevron on one
             // line; under it when the line opened to two or more.
             let glyph = self.modeline.hide_header() && self.shape.draws_minibuffer();
-            let glyph_beside = glyph && !held.open;
+            // THE EYE MOVES BELOW THE CHEVRON ONLY WHEN THE LINE ACTUALLY GREW
+            // to two rows or more — a line break that made it taller. A drawer
+            // that opened onto a SINGLE row keeps the eye beside the chevron
+            // (and keeps the cell for it); `held.open` alone put it below even
+            // then, into the content under a line that had not grown at all.
+            // `fold::rows` is the opened line's measured height (0 while shut).
+            let stacked = held.open && crate::fold::rows(held) >= 2;
+            let glyph_beside = glyph && !stacked;
             // THE RIGHT END OF THE LINE, COUNTED FROM THE BORDER — the control,
             // and the page counter one cell of air to its left — so the air
             // after the control is the modeline's one cell at every width.
@@ -16831,7 +16838,7 @@ impl Footer {
             // does) one move late, which over a shown list never caught up. The
             // EYE itself is still drawn only under the pointer (`hover`).
             self.shortcuts_control = glyph.then(|| {
-                if held.open {
+                if stacked {
                     (crate::chrome::from_the_edge(columns, 1), mini_line + 1)
                 } else {
                     let col = indicator_at.or(chevron_at).map_or_else(
