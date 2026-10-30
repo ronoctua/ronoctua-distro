@@ -285,9 +285,14 @@ let
     };
   claimsFixtures = {
     not-a-tie = refusedClaim "claim-not-a-tie" {
-      glob = "*.lsp";
+      # `*.cl` IS a real tie (`text/x-common-lisp` ↔ `text/x-opencl-csrc`
+      # upstream), but this row names the WRONG partner: `text/x-opencl-c++src`
+      # exists in shared-mime-info 2.5.1 yet does not claim `*.cl`. (Before
+      # 2.5.1 this fixture used `*.lsp`/`text/x-opencl-src`; that tie is gone —
+      # `.lsp` is no longer shared and `x-opencl-src` is now only an alias.)
+      glob = "*.cl";
       mime = "text/x-common-lisp";
-      shares = "text/x-opencl-src";
+      shares = "text/x-opencl-c++src";
       content = [ "(in-package" ];
     } "the tie is not the one written here";
     wrong-weight = refusedClaim "claim-wrong-weight" {

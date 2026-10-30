@@ -421,7 +421,9 @@ in
     # `err` stays in the journal and off the boot console, which is what a boot
     # with no logo and no progress bar was always meant to be.
     boot.plymouth.enable = false;
-    boot.consoleLogLevel = 3;
+    # `mkDefault` so a NixOS VM test's `test-instrumentation` (which sets 7) wins
+    # in the test harness without conflicting; a real system keeps 3.
+    boot.consoleLogLevel = lib.mkDefault 3;
     boot.kernelParams = [ "quiet" ];
 
     # -----------------------------------------------------------------

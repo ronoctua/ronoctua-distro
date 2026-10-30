@@ -505,10 +505,11 @@ mod tests {
     }
 
     #[test]
-    fn the_update_moves_the_distro_alone() {
+    fn the_update_moves_the_distro_and_nixpkgs() {
         let words = update_distro(&PathBuf::from("/run/ronoctua-update/rehearsal"));
         let at = words.iter().position(|w| w == "update").unwrap();
         assert_eq!(words[at + 3], crate::DISTRO_INPUT);
+        assert_eq!(words[at + 4], "nixpkgs");
         assert_eq!(words.last().unwrap(), "path:/run/ronoctua-update/rehearsal");
     }
 

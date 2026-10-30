@@ -793,7 +793,7 @@ mod tests {
         assert!(!cl.sure, "`*.cl` came back as settled");
         // UPSTREAM'S TYPE IS THE FIRST OF THE TIE, so a name alone still says
         // what it said before.
-        assert_eq!(cl.mime, "text/x-opencl-src");
+        assert_eq!(cl.mime, "text/x-opencl-csrc");
     }
 
     /// FAILS IF: the tie `*.cl` is made on stops being broken by the head —
@@ -819,10 +819,10 @@ mod tests {
             b"__kernel void blur(__global float *a) { a[0] = 1; }\n",
         )
         .expect("write");
-        assert_eq!(of_path(&kernel, Kind::File, false), "text/x-opencl-src");
+        assert_eq!(of_path(&kernel, Kind::File, false), "text/x-opencl-csrc");
         let neither = dir.join("notes.cl");
         std::fs::write(&neither, b"nothing that says what this is\n").expect("write");
-        assert_eq!(of_path(&neither, Kind::File, false), "text/x-opencl-src");
+        assert_eq!(of_path(&neither, Kind::File, false), "text/x-opencl-csrc");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -849,16 +849,16 @@ mod tests {
         }
         // A CHANGED FILE is read again.
         std::fs::write(&lisp, b"__kernel void k(void) {}\n/* a longer kernel */\n").expect("write");
-        assert_eq!(of_path(&lisp, Kind::File, false), "text/x-opencl-src");
+        assert_eq!(of_path(&lisp, Kind::File, false), "text/x-opencl-csrc");
         // AND A VAULT THAT MAY NOT BE TOUCHED is not read: the name's answer.
         let vaulted = dir.join("vaulted.cl");
         std::fs::write(&vaulted, b"(in-package #:vaulted)\n").expect("write");
         assert_eq!(
-            settled(&vaulted, "vaulted.cl", "text/x-opencl-src", &|_| false),
-            "text/x-opencl-src"
+            settled(&vaulted, "vaulted.cl", "text/x-opencl-csrc", &|_| false),
+            "text/x-opencl-csrc"
         );
         assert_eq!(
-            settled(&vaulted, "vaulted.cl", "text/x-opencl-src", &|_| true),
+            settled(&vaulted, "vaulted.cl", "text/x-opencl-csrc", &|_| true),
             "text/x-common-lisp"
         );
         let _ = std::fs::remove_dir_all(&dir);

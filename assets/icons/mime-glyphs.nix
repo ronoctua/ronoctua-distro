@@ -342,7 +342,8 @@
   # does not exist, and this one does.
   #
   # `*.cl` IS CLAIMED TWICE, ON PURPOSE. Upstream gives it to OpenCL
-  # (`text/x-opencl-src`), and Common Lisp writes `.cl` too. A row with
+  # (`text/x-opencl-csrc`; `text/x-opencl-src` is its alias since
+  # shared-mime-info 2.5.1), and Common Lisp writes `.cl` too. A row with
   # `shares` joins upstream's claimant at the same weight: a TIE, which
   # `mime::named` reports as unsettled and `mime::of_path` reads the head for
   # (the `*.ogg` case). There the magic decides first; then the first row

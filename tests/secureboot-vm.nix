@@ -39,13 +39,11 @@ pkgs.testers.runNixOSTest {
       tpm.enable = true;
       useBootLoader = true;
       useEFIBoot = true;
-      # It gives firmware capable of Secure Boot. It enrolls no key: whoever does
-      # that is the first boot, below.
-      useSecureBoot = true;
 
       # OVMF WITH TPM SUPPORT.
       #
-      # The default of `useSecureBoot` knows how to do Secure Boot but **does not
+      # nixos-unstable removed `virtualisation.useSecureBoot` — the default OVMF
+      # is always Secure Boot capable now. But that default **does not
       # measure**: with no TCG protocol compiled in, PCRs 7 and 11 stay zeroed even
       # with Secure Boot on and the UKI signed. The symptom is deceptive —
       # `bootctl` says `Secure Boot: enabled` and the loader even reports active

@@ -7,10 +7,11 @@
 # - OrcaSlicer as the DEFAULT for `model/stl`, `model/3mf` and `model/step`,
 #   in `/etc/xdg/mimeapps.list` (`xdg.mime.defaultApplications`, which merges
 #   with the queue's magnet default in `transfers.nix`). The file manager
-#   reads the defaults before the declarations (`ronoctua_apps::defaults`),
-#   and that is what a `.step` needs: the database makes `model/step` a
-#   `text/plain`, OrcaSlicer's entry does not name it, and without a default
-#   the first editor that declares `text/plain` opened it.
+#   reads the defaults before the declarations (`ronoctua_apps::defaults`).
+#   OrcaSlicer's own entry now claims all three upstream (orca-slicer 2.4.2 on
+#   nixos-unstable gained `model/step`), so the default no longer rescues a
+#   `.step` from a `text/plain` editor — it makes OrcaSlicer win
+#   deterministically over any other claimant.
 #
 # `/etc/xdg` sits above `$XDG_DATA_DIRS/applications`, where the player keeps
 # its own defaults, and below the person's `~/.config/mimeapps.list`: a
@@ -39,7 +40,8 @@ let
   cfg = config.ronoctua.workshop;
   orca = pkgs.orca-slicer;
   # THE PACKAGE'S OWN ENTRY (see above), watched by `models-open-in-orca`.
-  orcaEntry = "OrcaSlicer.desktop";
+  # nixos-unstable renamed it to the reverse-DNS id (was `OrcaSlicer.desktop`).
+  orcaEntry = "com.orcaslicer.OrcaSlicer.desktop";
   models = [
     "model/stl"
     "model/3mf"

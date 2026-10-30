@@ -28564,7 +28564,7 @@ let
       # free —, and so did VLC, Flutter, the workshop, the office and the
       # Crafting Apps — gigabytes the ISO need not hold: all PARTS, in
       # neither closure, below.)
-      for app in -emacs-pgtk-30 \
+      for app in -emacs-pgtk- \
                  -waydroid- -appimage-run; do
         grep -q -e "$app" ${full}/store-paths || {
           echo "ERROR: $app is not in the full profile — did the name change?" >&2
@@ -29521,7 +29521,9 @@ let
           lib.optional (c.environment.sessionVariables ? GTK_THEME) "environment.sessionVariables"
           ++ lib.optional (c.environment.variables ? GTK_THEME) "environment.variables"
           ++ lib.optional (c.systemd.globalEnvironment ? GTK_THEME) "systemd.globalEnvironment"
-          ++ lib.optional (says c.systemd.user.extraConfig) "systemd.user.extraConfig"
+          ++ lib.optional (says (
+            lib.concatStringsSep " " (c.systemd.user.settings.Manager.DefaultEnvironment or [ ])
+          )) "systemd.user.settings.Manager.DefaultEnvironment"
           ++ units "system" c.systemd.services
           ++ units "user" c.systemd.user.services
           ++ overrides "system Flatpak" (c.services.flatpak.overrides or { })
@@ -36258,18 +36260,16 @@ let
         }
       done
 
-      # THE SAME FILES WITHOUT THE LIST: the declarations alone send the
-      # `.step` to the editor. If they did not, the half above would prove
-      # nothing about the defaults.
-      without=$(asked "$root/nowhere")
-      echo "$without"
-      echo "$without" | grep -q -P "/bracket\.step\tplain-editor$" || {
-        echo "ERROR: without a default the .step did not reach the editor — the check proves nothing" >&2
-        failed=1
-      }
+      # OrcaSlicer's own entry now claims model/stl, model/3mf AND model/step
+      # upstream (orca-slicer 2.4.2 on nixos-unstable; model/step was added to
+      # it, where before it named only stl and 3mf). So a `.step` no longer
+      # falls to a text/plain editor when no default is set — the old negative
+      # control cannot prove its point any more. The default is kept so
+      # OrcaSlicer wins deterministically over any other claimant, and the
+      # `with` run above is what proves all three reach it.
 
       [ "$failed" = 0 ] || exit 1
-      echo "OK: .stl, .3mf, .step and .stp open in OrcaSlicer, and the .step only by the default"
+      echo "OK: .stl, .3mf, .step and .stp open in OrcaSlicer by the system's defaults"
     '';
 
   # A DOCUMENT OPENS IN ITS SUITE — Microsoft's formats (OOXML, the binary
@@ -43075,7 +43075,7 @@ let
     # OrcaSlicer, a part (`nix/modules/workshop.nix`; `models-open-in-orca`
     # watches the name against the package).
     orca = lambda r: next(a["desktop-ids"] for a in r["apps"] if a["id"] == "orca-slicer")
-    if orca(before["registry"]) != ["OrcaSlicer.desktop"] or orca(after["registry"]) != orca(before["registry"]):
+    if orca(before["registry"]) != ["com.orcaslicer.OrcaSlicer.desktop"] or orca(after["registry"]) != orca(before["registry"]):
         wrong.append(f"OrcaSlicer's launcher entry is not the one name: {orca(before['registry'])} before, "
                      f"{orca(after['registry'])} after a decline")
 
@@ -55265,17 +55265,22 @@ let
     # VM test of the disk layout (section 7.2). Heavy: it brings up a VM with
     # KVM, partitions a real disk and mounts it. Exposed separately so it can be
     # run on its own during the work.
-    disko-vm = import ./disko-vm.nix {
-      inherit pkgs lib;
-      inherit (inputs) disko;
-    };
-    # The same layout on a machine that starts from BIOS: GRUB's partition,
-    # and GRUB booting the installed system (`nix/modules/boot-loader.nix`).
-    disko-vm-bios = import ./disko-vm.nix {
-      inherit pkgs lib;
-      inherit (inputs) disko;
-      firmware = "bios";
-    };
+    #
+    # SKIPPED ON nixos-unstable (2026-10-30, owner's call): disko's upstream
+    # `makeDiskoTest` reads `boot.initrd.systemd.enable`, which nixos-unstable
+    # removed on 2026-10-27 (scripted initrd gone), and disko has not adapted
+    # yet. This is upstream lag, not the distro's config, which is unchanged and
+    # builds. RE-ENABLE by restoring `import ./disko-vm.nix { inherit pkgs lib;
+    # inherit (inputs) disko; }` (and the `firmware = "bios"` variant) once a
+    # disko release stops referencing that option.
+    disko-vm = pkgs.runCommand "disko-vm-skipped-unstable" { } ''
+      echo "disko-vm skipped: disko's makeDiskoTest references the removed boot.initrd.systemd.enable (nixos-unstable, 2026-10-27); re-enable when disko adapts" >&2
+      touch $out
+    '';
+    disko-vm-bios = pkgs.runCommand "disko-vm-bios-skipped-unstable" { } ''
+      echo "disko-vm-bios skipped: same disko/nixos-unstable reason as disko-vm; re-enable when disko adapts" >&2
+      touch $out
+    '';
 
     # ===================================================================
     # MILESTONE 2 — NixOS base + the whole font and icon layer.

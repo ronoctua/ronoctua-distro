@@ -454,26 +454,34 @@ in
         if 'machine-state = "''${config.ronoctua.machine.stateDir}/state.json";' not in nix:
             wrong.append("the root half's hold test does not read the record from ronoctua.machine.stateDir")
 
-        # AND THE DISTRO'S INPUT: the update moves it through
-        # `ronoctua-machine update-distro`, which moves `DISTRO_INPUT` — the
-        # input it also judges a hold by and moves in its rehearsal — and it
-        # is the template's one input. Renamed on one side, the update would
-        # move an input no machine flake has.
+        # AND THE DISTRO'S INPUT AND nixpkgs: the machine rolls on
+        # nixos-unstable now (owner amendment 2026-10-30), so the update moves
+        # BOTH through `ronoctua-machine update-distro` — `DISTRO_INPUT` (the
+        # input it also judges a hold by and moves in its rehearsal) and
+        # `nixpkgs` — and both are the template's two inputs. Renamed on one
+        # side, the update would move an input no machine flake has.
         moves = facts["moves"]
         distro = re.search(r'pub const DISTRO_INPUT: &str = "([^"]+)";', crate)
+        argv = uncommented((root / "crates/ronoctua-machine/src/argv.rs").read_text())
+        floor(len(argv), 2000, "characters of ronoctua-machine's argv.rs")
+        body = re.search(r'pub fn update_distro\b.*?\n\}', argv, re.S)
         if moves != ["update-distro"]:
             wrong.append(f"the step that moves the inputs runs {moves}, not ronoctua-machine's `update-distro`")
         if not distro:
             wrong.append("`DISTRO_INPUT` went away from ronoctua-machine")
-        elif facts["templateInputs"] != [distro.group(1)]:
-            wrong.append(f"the machine template's inputs are {facts['templateInputs']}, and ronoctua-machine moves `{distro.group(1)}`")
+        elif set(facts["templateInputs"]) != {distro.group(1), "nixpkgs"}:
+            wrong.append(f"the machine template's inputs are {facts['templateInputs']}, not `{distro.group(1)}` and `nixpkgs`")
+        elif not body:
+            wrong.append("`update_distro` went away from ronoctua-machine's argv.rs")
+        elif "crate::DISTRO_INPUT" not in body.group(0) or '"nixpkgs"' not in body.group(0):
+            wrong.append("`update_distro` no longer moves both the distro input and `nixpkgs`")
 
         if wrong:
             print("ERROR: a name of the update does not agree with itself.", file=sys.stderr)
             for w in wrong:
                 print("       " + w, file=sys.stderr)
             raise SystemExit(1)
-        print("OK: the four units are the manifest's, the window reads where both halves write, and the distro's input is one name")
+        print("OK: the four units are the manifest's, the window reads where both halves write, and the distro's input and nixpkgs are the template's two, both moved by update-distro")
         END
       '';
 

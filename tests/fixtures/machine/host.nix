@@ -8,7 +8,7 @@
   ronoctua.disk = "/dev/disk/by-id/reference-machine-not-a-disk";
   ronoctua.language = "en-GB";
   ronoctua.profile = "full";
-  ronoctua.theme = "cyber";
+  ronoctua.theme = "industrial";
   ronoctua.locale = "en_GB.UTF-8";
   ronoctua.keyboard.layout = "gb";
   ronoctua.keyboard.variant = "";

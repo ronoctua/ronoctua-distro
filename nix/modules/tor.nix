@@ -185,8 +185,12 @@ in
     # one gets through is not known in advance. The view writes both lines and
     # reads these paths out of the environment, the way every other external
     # program in this tree is found.
+    # `pkgs.obfs4` ships the `lyrebird` binary (the maintained obfs4 fork). On
+    # nixos-unstable the top-level `pkgs.lyrebird` attribute was taken over by
+    # an unrelated "Voice Changer" GUI app, so the transport is named `obfs4`
+    # here now; the binary the view finds on PATH is still `lyrebird`.
     environment.systemPackages = [
-      pkgs.lyrebird
+      pkgs.obfs4
       pkgs.snowflake
     ];
 
