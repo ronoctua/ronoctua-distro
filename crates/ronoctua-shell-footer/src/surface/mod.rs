@@ -15571,6 +15571,10 @@ impl Footer {
         let leader_set = (self.leader.at_root() && self.buffer_pending.is_empty())
             .then(|| self.leader.set_now());
         let leader_label = self.leader_label.as_str();
+        // "HIDE SHORTCUTS" takes the leader's HEADER line off the minibuffer the
+        // way it takes a program's (`view_hint`'s `Region`/`Kiosk`), while the
+        // list of keys below it keeps showing. Captured here for the closure.
+        let hide_shortcuts = self.modeline.hide_shortcuts();
         let hint = move || {
             view_hint
                 .clone()
@@ -15593,11 +15597,23 @@ impl Footer {
                 // there ends the whole sequence, as the leader's rule has it. At
                 // the root the next set follows it (`leader::set_hint`).
                 .or_else(|| {
-                    (showing == ViewState::Leader).then(|| {
-                        leader_set
-                            .map(|s| crate::leader::set_hint(s, leader_label, texts))
-                            .unwrap_or_default()
-                    })
+                    if showing != ViewState::Leader {
+                        return None;
+                    }
+                    match leader_set {
+                        // AT REST, the leader's header line is the set it teaches
+                        // — and "hide shortcuts" takes THAT line off the
+                        // minibuffer, like a region's or the kiosk's, leaving the
+                        // list of keys below it to keep showing. `None`, not
+                        // `Some(empty)`, so the way-back does not stand alone on a
+                        // line that otherwise went (a region's goes whole).
+                        Some(_) if hide_shortcuts => None,
+                        Some(s) => Some(crate::leader::set_hint(s, leader_label, texts)),
+                        // A SEQUENCE IN PROGRESS is not the header: the typed keys
+                        // still show, and the way-back after them, whatever the
+                        // switch says.
+                        None => Some(Vec::new()),
+                    }
                 })
                 .map(|h| match showing {
                     ViewState::NoneOf | ViewState::Commands => h,
