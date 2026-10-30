@@ -3353,10 +3353,18 @@ pub const AIR: Vec<crate::fields::Field> = Vec::new();
 /// LAST of them is the answer either way.
 #[must_use]
 pub fn information_of(fields: &[crate::fields::Field]) -> Option<String> {
-    debug_assert!(
-        fields.len() <= 2,
-        "an informative row grew a third piece; `information_of` copies the last"
-    );
+    // A SIMPLE FACT IS ONE OR TWO PIECES — a label and its value, or a
+    // sentence that is its own information — and the LAST is the datum to copy.
+    //
+    // A row of THREE is not a datum to paste: it is an id, its state and a
+    // quiet gloss ([`field_pair`]'s sibling `triple`), a row that carries a
+    // target of its own. `takes_at` asks this of every row to decide whether a
+    // click copies, so it has to be asked of those too — and the honest answer
+    // is nothing, not a guess at the last of three (which would be the gloss).
+    // The row still takes a click: through its target, not through this.
+    if fields.len() > 2 {
+        return None;
+    }
     fields
         .last()
         .map(|f| f.text.trim().to_owned())
