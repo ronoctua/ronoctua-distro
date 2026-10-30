@@ -654,22 +654,17 @@ pub(crate) fn watched_in(roots: &Roots, account: &Account) -> Watched {
 /// An environment variable, as the process sees it — or as a test says.
 type Lookup<'a> = &'a dyn Fn(&str) -> Option<std::ffi::OsString>;
 
-/// The agent's program. The app layer self-updates (owner amendment
-/// 2026-10-30): a NATIVE install under `$HOME` (`~/.local/bin/claude`,
-/// `~/.local/bin/codex`) keeps itself current, and the footer PREFERS it. The
-/// variable (`RONOCTUA_CLAUDE`, `RONOCTUA_CODEX`) is the SEED — the flake's
-/// first binary, at a part's stable path — used to bootstrap and as the
-/// fallback until the native install is there; a seed path that names nothing
-/// YET is an agent on its way.
-fn agent_program(kind: Kind, var: Lookup<'_>, home: Option<&Path>) -> Result<String, Refusal> {
-    if let Some(home) = home {
-        let native = home.join(".local/bin").join(kind.id());
-        if native.is_file()
-            && let Some(s) = native.to_str()
-        {
-            return Ok(s.to_owned());
-        }
-    }
+/// The agent's program, by the store path the session hands over in its
+/// variable (`RONOCTUA_CLAUDE`, `RONOCTUA_CODEX`): an absolute path to a
+/// file, or not installed — and a path that names nothing YET is an agent
+/// on its way: the variable is set where the agent is wanted, at a part's
+/// stable path, asked on every use.
+///
+/// PART-ONLY (owner amendment 2026-10-30, reverting the native-install
+/// attempt): a native `~/.local/bin/<agent>` auto-updater downloads a
+/// generic-linux binary that NixOS cannot run without nix-ld, so the footer
+/// launches the store PART (patched, pinned), never a `$HOME` install.
+fn agent_program(kind: Kind, var: Lookup<'_>) -> Result<String, Refusal> {
     let path = var(kind.program_variable())
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
@@ -710,7 +705,7 @@ fn launch_from(
     env: Option<&str>,
     home: Option<&Path>,
 ) -> Result<Vec<String>, Refusal> {
-    let program = agent_program(account.kind, var, home)?;
+    let program = agent_program(account.kind, var)?;
     let env = env.ok_or(Refusal::of(Why::Failed))?;
     launch_with(account, &program, env, home)
 }

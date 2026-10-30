@@ -350,15 +350,25 @@ pkgs.testers.runNixOSTest {
           assert default() is None, "the default is the menu's own again"
           if not GRUB:
               assert not restarts(), "a verdict takes the restart away with the default"
-          newest = machine.succeed("readlink /nix/var/nix/profiles/system").strip()
-          number = newest.removeprefix("system-").removesuffix("-link")
           if GRUB:
               # The menu's first entry is the newest generation: the last good.
               first = next(iter(grub_menu().values()))
               assert f"init={good}/init" in first, first
           else:
+              # systemd-boot's configured default is the newest generation, the
+              # last good. It is named by its content hash now
+              # (`nixos-<sha256>.conf`), not `nixos-generation-N`, so check what
+              # that default entry BOOTS, not what it is called.
               loader = machine.succeed("cat /boot/loader/loader.conf")
-              assert f"default nixos-generation-{number}.conf" in loader, loader
+              default_line = next(
+                  (l for l in loader.splitlines() if l.startswith("default ")), None
+              )
+              assert default_line, f"loader.conf has no `default`:\n{loader}"
+              default_entry = default_line.split(None, 1)[1].strip()
+              assert f"init={good}/init" in boots(default_entry), (
+                  f"loader.conf's default ({default_entry}) does not boot the "
+                  f"last good system:\n{loader}"
+              )
 
       with subtest("the boot after that is the last good one, by the menu alone"):
           machine.reboot()

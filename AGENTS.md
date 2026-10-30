@@ -55,8 +55,10 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
      roda `nix flake update` + `ronoctua-machine apply` sozinho (espera rede não-tarifada e bateria
      baixa, nunca pergunta). A máquina não segue mais "os pins que a distro testou"; rola por conta
      própria, e o código próprio da distro ainda versiona pelo seu repositório.
-   - **Fast-movers na última do fornecedor** (mais novos que o nixpkgs): Claude Code e Codex pelo
-     updater nativo deles (grava sob `$HOME`; a cadeia de launch prefere essa cópia à do store); os
+   - **Fast-movers na última do fornecedor** (mais novos que o nixpkgs): o Claude Code e o Codex pela
+     **PART do store** (empacotada, corrigida para NixOS e pinada em `nix/claude-code.nix`/`pkgs.codex`;
+     a versão sobe quando o pin sobe). O updater nativo sob `$HOME` foi revertido (emenda do dono,
+     2026-10-30): ele baixa um binário Linux genérico que o NixOS não roda sem `nix-ld`. Os
      Craft Apps pelo **Craft Launcher** (`storytold/craft-launcher`), que baixa e atualiza os crafts
      sozinho sob `$HOME`; o **SolidCraft** como AppImage que segue os releases de
      `tangency-labs/solidcraft`.

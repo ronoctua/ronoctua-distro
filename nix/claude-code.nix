@@ -23,13 +23,12 @@
 # `claude-code` outright with a self-contained copy of the prebuilt-binary
 # recipe — depending on nothing of whatever nixpkgs happens to carry.
 #
-# The wrapper keeps `DISABLE_AUTOUPDATER=1`, as nixpkgs' own does, and under the
-# new model that is deliberate: this store binary is READ-ONLY and only SEEDS
-# the native install under `$HOME` (`claude install`, bootstrapped by
-# `ronoctua-agent-bootstrap` in `nix/modules/agents.nix`). It is that native
-# install — the fast-mover — that keeps itself current, and the footer prefers
-# it (`ronoctua_llm::agent_program`). This pin's version moves when the pin
-# below moves, seeding a fresh native install when it does.
+# The wrapper keeps `DISABLE_AUTOUPDATER=1`, as nixpkgs' own does: this store
+# binary is the one that RUNS. The native-install model was reverted (owner
+# amendment 2026-10-30) — a native `~/.local/bin/claude` auto-updater downloads
+# a generic-linux binary that NixOS cannot run without nix-ld — so this PART,
+# patched and pinned, is what the footer launches (`ronoctua_llm::agent_program`).
+# This pin's version moves when the pin below moves.
 #
 # # Who reads it
 #

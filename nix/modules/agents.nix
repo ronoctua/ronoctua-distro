@@ -36,40 +36,18 @@ let
   parts = config.ronoctua ? parts;
 in
 {
-  config.systemd.user.services = {
-    ronoctua-footer.environment = lib.mkMerge [
-      (lib.mkIf (installed "claude-code" && parts) {
-        RONOCTUA_CLAUDE = "${config.ronoctua.parts.claude-code.path}/bin/claude";
-      })
-      (lib.mkIf (installed "codex") {
-        RONOCTUA_CODEX = "${pkgs.codex}/bin/codex";
-      })
-    ];
-
-    # BOOTSTRAP THE SELF-UPDATING NATIVE INSTALL (owner amendment 2026-10-30).
-    # The footer runs `~/.local/bin/claude` when it is there — a native install
-    # that updates itself in the background — in preference to the flake's seed
-    # (`ronoctua_llm::agent_program`). This seeds it once, best-effort: if
-    # `claude install` cannot run (offline, or the seed refuses) the footer
-    # falls back to the seed and the person can run `claude install` by hand.
-    # Guarded by the file's absence, so the native install's own updater takes
-    # over after the first time. Codex has no such native install yet, so it
-    # stays the seed until it does.
-    ronoctua-agent-bootstrap = lib.mkIf (installed "claude-code" && parts) {
-      description = "Seed the self-updating native install of Claude Code under $HOME";
-      wantedBy = [ "default.target" ];
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-      };
-      script = ''
-        seed=${config.ronoctua.parts.claude-code.path}/bin/claude
-        if [ ! -x "''${HOME}/.local/bin/claude" ] && [ -x "$seed" ]; then
-          "$seed" install || true
-        fi
-      '';
-    };
-  };
+  # PART-ONLY (owner amendment 2026-10-30, reverting the native-install
+  # attempt): the footer launches the store PART at its stable path. A native
+  # `~/.local/bin/claude` auto-updater downloads a generic-linux binary that
+  # NixOS cannot run without nix-ld, so there is no bootstrap and no $HOME
+  # preference — the PART (patched, pinned, `DISABLE_AUTOUPDATER`) is the one
+  # that runs. The pin moves the version (`nix/claude-code.nix`).
+  config.systemd.user.services.ronoctua-footer.environment = lib.mkMerge [
+    (lib.mkIf (installed "claude-code" && parts) {
+      RONOCTUA_CLAUDE = "${config.ronoctua.parts.claude-code.path}/bin/claude";
+    })
+    (lib.mkIf (installed "codex") {
+      RONOCTUA_CODEX = "${pkgs.codex}/bin/codex";
+    })
+  ];
 }
