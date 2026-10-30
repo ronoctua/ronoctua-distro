@@ -7,11 +7,16 @@
 # (`nix flake update ronoctua`) and rebuilds; nothing else here changes on its
 # own.
 #
-# THE DISTRO'S OWN PINS ARE USED AS THEY ARE: no `follows` and no override.
-# The distro refuses to build with any input other than the ones its release
-# was tested with (`machine-uses-the-distro-pins`).
+# THE DISTRO'S OWN PINS ARE USED AS THEY ARE, EXCEPT nixpkgs, WHICH THIS
+# MACHINE ROLLS (owner amendment 2026-10-30). The whole system follows
+# `nixos-unstable`: this flake carries its own `nixpkgs` input and points the
+# distro's at it, and the weekly update moves it (`nix flake update nixpkgs`).
+# Every other input stays the distro's tested pin (`machine-uses-the-distro-pins`).
 {
   description = "This machine: the ronoctua distro, its host.nix and the person's declarations";
+
+  # ROLLING: nixos-unstable, moved weekly by the update.
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   # `github:` and not `git+https:`, decided: the tarball carries no history,
   # and Nix fetches it over HTTP by itself. A `git+https:` input needs a `git`
@@ -19,6 +24,8 @@
   # whose PATH is minimal. The GitHub API answers 60 unauthenticated requests
   # an hour per address; a machine asks once per update.
   inputs.ronoctua.url = "github:ronoctua/ronoctua-distro/release";
+  # The distro builds against this machine's rolling nixpkgs.
+  inputs.ronoctua.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs =
     { ronoctua, ... }:

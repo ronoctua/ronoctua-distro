@@ -41993,17 +41993,17 @@ let
       END
     '';
 
-  # THE MACHINE USES EXACTLY THE PINS THE GATE TESTED.
+  # THE MACHINE USES THE DISTRO'S TESTED PINS — EXCEPT nixpkgs, WHICH IT ROLLS.
   #
   # `lib.machine` compares every input the distro received — all the way down
-  # the lock graph — with the `narHash` the distro's own `flake.lock` names.
-  # This builds the reference machine over FOUR sets of inputs: the real ones
-  # (it must build), and three a machine flake could hand the distro — its
-  # nixpkgs replaced (`ronoctua.inputs.nixpkgs.follows`), an input of an input
-  # replaced (`ronoctua/lanzaboote/crane`), and a `follows` of the distro's own
-  # lock rewired (`ronoctua/lanzaboote/nixpkgs`). Each of the three must stop
-  # evaluation. Everything but the hash is the real input, so nothing else
-  # could be what refused.
+  # the lock graph — with the `narHash` the distro's own `flake.lock` names,
+  # and lets any path ending in `nixpkgs` differ (the rolling package set, owner
+  # amendment 2026-10-30). This builds the reference machine over FOUR sets of
+  # inputs: the real ones (it must build); its nixpkgs replaced
+  # (`ronoctua.inputs.nixpkgs`) and a nixpkgs-follows rewired
+  # (`ronoctua/lanzaboote/nixpkgs`), both of which must now BUILD; and a
+  # non-nixpkgs input of an input replaced (`ronoctua/lanzaboote/crane`), which
+  # must still stop evaluation. Everything but the hash is the real input.
   machine-uses-the-distro-pins =
     let
       tamper = input: input // { narHash = "sha256-${lib.fixedWidthString 43 "A" ""}="; };
@@ -42044,17 +42044,21 @@ let
       wrong = []
       if f["real"] != {"success": True, "value": "noctua-reference"}:
           wrong.append(f"the distro's own pins do not build the reference machine: {f['real']}")
-      for case, what in (("replaced", "the distro's nixpkgs replaced"),
-                         ("deeper", "an input of an input replaced (lanzaboote/crane)"),
-                         ("followed", "a follows of the lock rewired (lanzaboote/nixpkgs)")):
-          if f[case]:
-              wrong.append(f"a machine built with {what}")
+      # nixpkgs ROLLS (owner amendment 2026-10-30): a replaced top-level nixpkgs
+      # and a rewired nixpkgs-follows are ACCEPTED — the machine moves its own.
+      for case, what in (("replaced", "the machine's own nixpkgs (ronoctua.inputs.nixpkgs)"),
+                         ("followed", "a rewired nixpkgs follows (lanzaboote/nixpkgs)")):
+          if not f[case]:
+              wrong.append(f"{what} was refused, but the machine rolls nixpkgs")
+      # A non-nixpkgs input of an input is still the distro's tested pin.
+      if f["deeper"]:
+          wrong.append("a machine built with an input of an input replaced (lanzaboote/crane)")
       if wrong:
-          print("ERROR: a machine does not stop at pins the gate never tested.", file=sys.stderr)
+          print("ERROR: the machine pins are not what the rolling model wants.", file=sys.stderr)
           for w in wrong:
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
-      print("OK: the distro's pins build; a replaced input, a deeper one and a rewired follows refuse")
+      print("OK: the distro's pins build; the machine's own nixpkgs is accepted; a non-nixpkgs input refuses")
       END
     '';
 

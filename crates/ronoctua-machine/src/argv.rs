@@ -325,8 +325,9 @@ pub fn lock(dir: &Path) -> Vec<String> {
     ]
 }
 
-/// `nix flake update` of the distro input alone — what the update's
-/// `flake-update` step does, done by a rehearsal on its copy.
+/// `nix flake update` of the distro input AND `nixpkgs` — the machine rolls on
+/// nixos-unstable now (owner amendment 2026-10-30), so the weekly
+/// `flake-update` step moves both; done by a rehearsal on its copy.
 #[must_use]
 pub fn update_distro(dir: &Path) -> Vec<String> {
     vec![
@@ -335,6 +336,7 @@ pub fn update_distro(dir: &Path) -> Vec<String> {
         "--extra-experimental-features".to_owned(),
         FEATURES.to_owned(),
         crate::DISTRO_INPUT.to_owned(),
+        "nixpkgs".to_owned(),
         "--flake".to_owned(),
         flake(dir),
     ]

@@ -96,19 +96,21 @@ in
       # `person-applied.json`. A dirty tree says so (`<rev>-dirty`).
       distroRev = self.rev or self.dirtyRev or "unknown";
 
-      # THE MACHINE USES EXACTLY THE PINS THE GATE TESTED.
+      # THE MACHINE USES THE DISTRO'S TESTED PINS — EXCEPT nixpkgs, WHICH IT
+      # ROLLS (owner amendment 2026-10-30).
       #
-      # When a machine flake locks or updates its `ronoctua` input, Nix copies
-      # the distro's own inputs from the distro's `flake.lock`; only a
-      # `follows`, an `--override-input` or `nix flake update ronoctua/<x>`
-      # would change them, and the template has none. This is the belt over
-      # those braces: every input the distro received — and every input of
-      # theirs, all the way down — must carry the `narHash` the distro's own
-      # lock names, or evaluation stops here with the path that differs.
+      # The whole system rolls on `nixos-unstable`: the machine flake carries
+      # its OWN `nixpkgs` input and points the distro's at it
+      # (`ronoctua.inputs.nixpkgs.follows = "nixpkgs"`), and the weekly update
+      # moves it (`nix flake update nixpkgs`). So a path ending in `nixpkgs` is
+      # ALLOWED to differ from the distro's lock — it is the rolling package
+      # set. Every OTHER input the distro received — and every input of theirs,
+      # all the way down — must still carry the `narHash` the distro's own lock
+      # names, or evaluation stops here with the path that differs.
       #
       # By the LOCK GRAPH and not by the direct inputs alone: a machine flake
-      # that rewires `ronoctua/lanzaboote/nixpkgs` changes nothing the root
-      # names, and would still build against an untested nixpkgs.
+      # that rewires `ronoctua/lanzaboote/scroll-src` changes nothing the root
+      # names, and would still build against an untested compositor.
       pinGuard =
         {
           lockFile,
@@ -150,7 +152,12 @@ in
                 node.inputs or { }
               )
             );
-          wrong = builtins.filter (p: p.want != null && p.got != p.want) (visit [ ] inputs lock.root);
+          # A path ending in `nixpkgs` is the rolling package set the machine
+          # moves itself (see the header); it may differ from the distro's lock.
+          rolled = p: lib.last (lib.splitString "/" p.path) == "nixpkgs";
+          wrong = builtins.filter (p: p.want != null && p.got != p.want && !(rolled p)) (
+            visit [ ] inputs lock.root
+          );
         in
         if wrong == [ ] then
           true
