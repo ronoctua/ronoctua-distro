@@ -22254,7 +22254,8 @@ let
       plantedFound =
         (archivingOf {
           planted = pkgs.runCommand "planted-crane-leaf" { doInstallCargoArtifacts = true; } "";
-        }) ? planted;
+        })
+          ? planted;
       # The census reaches `nix/rust.nix`'s derivations, or finding no leaf
       # proves nothing: the named programs a module runs are among them.
       reached = lib.all (n: rustDerivations ? ${n}) [

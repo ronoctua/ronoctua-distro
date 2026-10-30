@@ -79,7 +79,7 @@
   # binary, its store path is a reference no profile switch can remove. The
   # installed system's build (`emacsPkg` in `nix/modules/emacs.nix`), so the
   # client speaks to the person's daemon as the session's does.
-  emacs30-pgtk,
+  emacs-pgtk,
   writeShellScript,
   # The screenshot editor, for the notification a capture raises.
   swappy,
@@ -175,7 +175,7 @@ let
       unset DISPLAY
     fi
     unset RONOCTUA_INSTANCE RONOCTUA_DEV_PID
-    exec ${emacs30-pgtk}/bin/emacsclient "$@"
+    exec ${emacs-pgtk}/bin/emacsclient "$@"
   '';
 
   # WHAT THE BUILD BAKES, EXPORTED FOR THE BINARY THIS LOOP COMPILES.

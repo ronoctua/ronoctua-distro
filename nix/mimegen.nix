@@ -40,7 +40,7 @@
 
 let
   # It has to match what `share/mime/version` says. The generator checks.
-  version = "2.4";
+  version = "2.5.1";
 
   # The tokens live in Nix (invariant 9) and the generator is Python. The
   # bridge is JSON, generated here — there is no Nix parser in Python, and

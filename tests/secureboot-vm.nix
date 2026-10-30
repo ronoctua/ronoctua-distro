@@ -93,7 +93,6 @@ pkgs.testers.runNixOSTest {
       enable = true;
       pkiBundle = "/etc/secureboot";
     };
-    boot.initrd.systemd.enable = true;
 
     security.tpm2 = {
       enable = true;

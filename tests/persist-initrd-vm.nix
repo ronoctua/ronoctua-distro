@@ -35,7 +35,6 @@ pkgs.testers.runNixOSTest {
       imports = [ ../nix/modules/persist.nix ];
 
       # THE DISTRO'S STAGE 1 (`nix/modules/host.nix`), where the bind is read.
-      boot.initrd.systemd.enable = true;
 
       virtualisation = {
         memorySize = 1024;

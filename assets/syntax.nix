@@ -2306,7 +2306,7 @@
       label = "Shell";
       kind = "code";
       # `application/x-csh` is a subclass and arrives on its own.
-      mime = [ "application/x-shellscript" ];
+      mime = [ "text/x-shellscript" ];
       tags = [
         "sh"
         "shell"
@@ -2527,7 +2527,7 @@
       id = "awk";
       label = "AWK";
       kind = "code";
-      mime = [ "application/x-awk" ];
+      mime = [ "text/x-awk" ];
       tags = [ "awk" ];
       guessable = false;
       shebang = [
@@ -3262,7 +3262,7 @@
       kind = "code";
       mime = [
         "text/x-tex"
-        "text/x-texinfo"
+        "application/texinfo"
       ];
       tags = [
         "tex"

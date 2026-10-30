@@ -227,10 +227,11 @@ in
     # Generated with every other: `base.nix` asks glibc for all of them.
     i18n.defaultLocale = cfg.locale;
 
-    # THE SYSTEMD INITRD: it asks the disk's passphrase (the only key — the
-    # TPM holds nothing for the disk, `nix/disko/default.nix` says why), and
-    # the wipe of `@root` is one of its units (`nix/modules/persist.nix`).
-    boot.initrd.systemd.enable = lib.mkDefault true;
+    # THE SYSTEMD INITRD — the only initrd now (nixos-unstable removed the
+    # scripted one, so `boot.initrd.systemd.enable` is gone and on by default):
+    # it asks the disk's passphrase (the only key — the TPM holds nothing for
+    # the disk, `nix/disko/default.nix` says why), and the wipe of `@root` is
+    # one of its units (`nix/modules/persist.nix`).
 
     # WHERE HIBERNATION RESUMES FROM, and without this line it resumes from
     # nowhere.

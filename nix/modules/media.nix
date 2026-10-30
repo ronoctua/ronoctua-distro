@@ -24,7 +24,7 @@ let
     gst-plugins-bad
     gst-plugins-ugly
     gst-libav
-    gst-vaapi
+    # VAAPI folded into gst-plugins-bad in GStreamer 1.28 (gst-vaapi removed).
   ];
   # The player's table, asked for its Matroska half (below).
   matroska = import ../player-tools.nix {

@@ -189,7 +189,6 @@ pkgs.testers.runNixOSTest {
         };
         boot.loader.systemd-boot.configurationLimit = 5;
         boot.loader.grub.configurationLimit = 5;
-        boot.initrd.systemd.enable = true;
         # GRUB on the serial line too, which is the console the test reads:
         # it says there when it falls back.
         boot.loader.grub.extraConfig = lib.mkBefore ''

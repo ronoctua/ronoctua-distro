@@ -52,6 +52,19 @@
       name = "text-x-generic-template";
       token = "file";
     }
+    # Generic icons shared-mime-info 2.5.1 added (mail, contacts, calendar).
+    {
+      name = "emblem-mail";
+      token = "mail";
+    }
+    {
+      name = "x-office-address-book";
+      token = "book";
+    }
+    {
+      name = "x-office-calendar";
+      token = "document";
+    }
     {
       name = "text-x-generic";
       token = "file";
@@ -232,8 +245,18 @@
       token = "common-lisp";
     }
     {
-      mime = "application/x-shellscript";
+      mime = "text/x-shellscript";
       token = "terminal";
+    }
+    {
+      # Upstream since shared-mime-info 2.5.1 (invented here before).
+      mime = "text/x-nix";
+      token = "nix";
+    }
+    {
+      # Upstream since 2.5.1, both *.step and *.stp (invented here before).
+      mime = "model/step";
+      token = "mesh";
     }
     {
       mime = "application/x-desktop";
@@ -339,7 +362,7 @@
     {
       glob = "*.cl";
       mime = "text/x-common-lisp";
-      shares = "text/x-opencl-src";
+      shares = "text/x-opencl-csrc";
       content = [
         "(in-package"
         "(defpackage"
@@ -387,12 +410,6 @@
   # place in the hierarchy — rather than in four places that each know a
   # quarter of it.
   ours = [
-    {
-      mime = "text/x-nix";
-      glob = "*.nix";
-      under = "text/plain";
-      token = "nix";
-    }
     # TYPESCRIPT, and upstream's silence here is not an oversight.
     #
     # `*.ts` in shared-mime-info 2.4 is `video/mp2t` — an MPEG transport
@@ -463,21 +480,6 @@
       # Same argument as the PLY: the specification allows the file to be a zip
       # OR the bare XML, under one extension.
       under = "application/octet-stream";
-      token = "mesh";
-    }
-    # STEP, under BOTH of its extensions. It is plain text, and saying so is
-    # what lets the preview fall back to showing the source if the geometry
-    # ever refuses.
-    {
-      mime = "model/step";
-      glob = "*.step";
-      under = "text/plain";
-      token = "mesh";
-    }
-    {
-      mime = "model/step";
-      glob = "*.stp";
-      under = "text/plain";
       token = "mesh";
     }
   ]

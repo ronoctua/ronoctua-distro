@@ -129,15 +129,8 @@ in
     })
   );
 
-  # The unit lives in the systemd initrd, and a scripted one would drop it
-  # without a word.
-  assertions = [
-    {
-      assertion = config.boot.initrd.systemd.enable;
-      message = "the installer ISO's medium check is an initrd systemd unit: boot.initrd.systemd.enable must stay on";
-    }
-  ];
-
+  # The medium-check unit lives in the systemd initrd — the only initrd now
+  # (nixos-unstable removed the scripted one), so nothing need assert it on.
   boot.initrd.systemd.services.medium-check = {
     description = "Check that the stick holds this ISO whole";
     requiredBy = [ roStore ];

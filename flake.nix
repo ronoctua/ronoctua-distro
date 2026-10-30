@@ -2,7 +2,11 @@
   description = "ronoctua-distro — a NixOS distribution with no bar, dock or start menu: only the content and a two-line footer";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # ROLLING: the whole system follows nixos-unstable (owner amendment
+    # 2026-10-30). Machines carry their own `nixpkgs` and roll it weekly
+    # (`nix/machine.nix` pinGuard, `templates/machine`); the distro's own
+    # reference builds and gate use this.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # --- compositor -----------------------------------------------------
     # Invariant 3: NO FORK, NO PATCH — neither of the compositor nor of the
@@ -41,7 +45,8 @@
     # $HOME — imperative, with no rollback, and drifting the moment someone
     # edits the copy. home-manager makes the shell a generation like any other.
     home-manager = {
-      url = "github:nix-community/home-manager/release-26.05";
+      # master, to track nixpkgs-unstable (the system rolls, 2026-10-30).
+      url = "github:nix-community/home-manager/master";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     nixos-facter-modules.url = "github:nix-community/nixos-facter-modules";
@@ -556,7 +561,10 @@
       # only under `packages` because `nix/rust.nix` needs the PATH: the crate
       # that links it has to be told where it is, like every other data file this
       # project hands the Rust.
-      ghosttyVt = pkgs.callPackage ./nix/ghostty-vt.nix { };
+      # Zig 0.16 explicitly: libghostty-vt's build.zig.zon pins
+      # `minimum_zig_version = "0.16.0"`, and nixos-unstable's default `zig` is
+      # now 0.17 (was 0.16 on the old pin). See nix/ghostty-vt.nix.
+      ghosttyVt = pkgs.callPackage ./nix/ghostty-vt.nix { zig = pkgs.zig_0_16; };
 
       # THE C BORDER IN FRONT OF LIBTORRENT, built on its own so that no `.cpp`
       # has to survive `nix/rust.nix`'s file set — and so `build.rs` stays a

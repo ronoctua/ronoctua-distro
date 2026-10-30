@@ -57,7 +57,7 @@ let
   # restarts the daemon before it asks the compositor to leave (below). The
   # buffers still go, but through `kill-emacs`. `tests/emacs-vm.nix` proves
   # the frame native and holds the measure (`docs/ARCHITECTURE.md`).
-  emacsBuild = pkgs.emacs30-pgtk;
+  emacsBuild = pkgs.emacs-pgtk;
 
   # THE ENTRY THAT IS NOT THE DAEMON'S SAYS SO (the owner's decision,
   # 2026-10-20). The package ships two launchers: `emacsclient.desktop`

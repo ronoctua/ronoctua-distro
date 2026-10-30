@@ -23,13 +23,23 @@ let
   };
   inherit (pkgs) lib;
 
+  # ASCII ONLY. The index is serialized with `builtins.toJSON`, which THROWS on
+  # invalid UTF-8 — and nixos-unstable has shipped package metadata with
+  # truncated UTF-8 that makes the final toJSON lose the WHOLE index. `tryEval`
+  # does not catch a toJSON error, so the strings are sanitised before they
+  # reach it: only printable ASCII is kept (membership, never `charToInt`, which
+  # itself throws on a stray byte). Dropping the odd accent from a search row
+  # costs nothing.
+  asciiSet = lib.stringToCharacters " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+  asciiOnly = s: lib.concatStrings (lib.filter (c: lib.elem c asciiSet) (lib.stringToCharacters s));
+
   # A field that a tab or a newline would split. Descriptions are data and lose
   # nothing by being flattened; the length is capped because a row shows one
   # line and the index is read on every keystroke.
   flat =
     s:
     let
-      one = lib.replaceStrings [ "\t" "\n" "\r" ] [ " " " " " " ] (toString s);
+      one = asciiOnly (lib.replaceStrings [ "\t" "\n" "\r" ] [ " " " " " " ] (toString s));
     in
     if lib.stringLength one > 200 then lib.substring 0 200 one else one;
 
