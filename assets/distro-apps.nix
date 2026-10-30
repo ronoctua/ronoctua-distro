@@ -300,9 +300,12 @@
   # one AppImage each, wrapped at build (`appimageTools.wrapType2`) as
   # `ronoctua-appimage-<key>`, in the `crafts` group (`nix/modules/crafts.nix`,
   # on in the full profile). They follow their repository's latest release,
-  # which `nix run .#distro-pins` pins; the owner moves the pins, by hand —
-  # and a person who turned on following them moves their own past those
-  # (`software/distro-pins.json`, the owner's decision of 2026-10-20).
+  # which `nix run .#distro-pins` pins; the owner moves the pins, by hand.
+  # Following releases is the default model now, not a gesture a person turns
+  # on: the whole system rolls on `nixos-unstable` and these fast-movers track
+  # their upstream rather than sit on a stable pin
+  # (`software/distro-pins.json`, the owner's amendment of 2026-10-30,
+  # replacing 'nothing imperative').
   # The pattern names the x86_64 image alone: the `.zsync` beside it and the
   # aarch64 one never match. No MIME default rides with them: they are 0.x.
   # And `fallback = false`: their launchers claim photographs, films, songs
@@ -314,9 +317,13 @@
   # LEFT OUT, and why:
   # - ArtCraft itself (`storytold/artcraft`, the AI engine): its releases
   #   carry a macOS and a Windows build, and no Linux one.
-  # - The Craft Launcher (`storytold/craft-launcher`): it downloads and
-  #   updates the apps by itself, outside the flake — invariant 6.
   # - AniCraft (`storytold/AniCraft`): no release to pin.
+  #
+  # The Craft Launcher (`storytold/craft-launcher`) downloads and updates the
+  # Craft Apps by itself, under $HOME and outside the generation — and that is
+  # now the chosen mechanism for them: the app layer self-updates while the OS
+  # substrate stays declarative with rollback (the owner's amendment of
+  # 2026-10-30, replacing 'nothing imperative').
   apps = {
     cadcraft = {
       source = "appimage";

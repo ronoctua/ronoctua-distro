@@ -387,7 +387,8 @@ in
       lib.concatStringsSep " " cfg.session.restartBeforeQuit;
 
     # -----------------------------------------------------------------
-    # Nix — section 7.1: everything through flakes, nothing imperative.
+    # Nix — section 7.1: the OS substrate through flakes, declarative
+    # with rollback; the app layer self-updates outside the generation.
     # -----------------------------------------------------------------
     nix.settings = {
       experimental-features = [

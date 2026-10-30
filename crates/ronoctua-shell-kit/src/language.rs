@@ -18,7 +18,7 @@
 //! # Why a file at all, when `LANG` already says
 //!
 //! Because `LANG` is the MACHINE's answer and it takes a rebuild to change:
-//! it comes from the NixOS module, and invariant 6 says nothing imperative.
+//! it comes from the NixOS module — the substrate stays declarative.
 //! Changing the interface's language was therefore a rebuild, for a setting
 //! that is two values and belongs to whoever is reading the screen.
 //!

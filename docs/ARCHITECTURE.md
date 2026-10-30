@@ -5627,7 +5627,8 @@ teria mensagem para cancelar uma cópia de quarenta gibibytes, porque ela não e
 #### Instalar fora da Web Store, sem chave no repositório
 
 O Chrome não carrega uma extensão de um diretório sem alguém ligar o modo de desenvolvedor e clicar,
-o que é imperativo e o invariante 6 recusa. O que ele faz sem ninguém clicar é honrar uma política em
+um ato manual que nenhum rebuild repõe — e a integração do navegador é substrato, que o invariante 6
+mantém declarado. O que ele faz sem ninguém clicar é honrar uma política em
 `/etc/opt/chrome/policies/managed/` — mas uma extensão *force-installed* precisa de um `.crx`
 assinado e de um id estável, e o id vem da chave de assinatura.
 
@@ -8220,7 +8221,7 @@ sentidos — uma opção que ele acrescentou e uma que nós inventamos falham a 
 simplesmente não estarem lá.
 
 1. **O flake fixa 14.** Desenhadas, alcançáveis e RECUSANDO, com a frase dizendo de onde vem o
-   valor. É o invariante 6 na tela: oferecê-las como editáveis seria oferecer uma tecla cujo efeito
+   valor. É o substrato declarativo do invariante 6 na tela: oferecê-las como editáveis seria oferecer uma tecla cujo efeito
    o próximo `nixos-rebuild` desfaz em silêncio. **Duas das catorze são padrão do nixpkgs e não do
    nosso módulo** — `localAnnouncePort` e `maxFolderConcurrency` —, e só o
    `syncthing-flake-owned-rows-refuse` as viu: as duas estavam declaradas editáveis.
@@ -9351,7 +9352,7 @@ crate nunca vê senha, e um console de resgate é o pior lugar possível para er
 #### O que ele não faz, e por quê
 
 **Não edita o config do compositor.** `/etc/scroll/config` é link para o store e é gerado
-(`nix/modules/scroll.nix`): editar seria imperativo (inv. 6) e sumiria no rebuild. Ele **abre em
+(`nix/modules/scroll.nix`): o compositor é substrato, que segue declarado no flake (inv. 6), e editar o arquivo gerado sumiria no rebuild. Ele **abre em
 leitura**, dizendo de qual arquivo do flake nasceu — o que a pessoa procura é o arquivo cujo nome ela
 sabe, e encontrá-lo junto com a origem é a diferença entre resposta e beco sem saída. O único
 arquivo que a máquina de fato possui é o `host.nix`, e esse abre para editar.
@@ -9952,7 +9953,7 @@ a razão é boa: a próxima checagem poria de volta. As duas linhas continuam DE
 uma frase, em vez de sumirem — uma linha que não é desenhada e uma que não pode ser usada são a
 mesma coisa vista de uma cadeira, e só uma delas se explica.
 
-**O fuso passou a ser da pessoa, e isso é uma decisão sobre o invariante 6.** `time.timeZone = null`
+**O fuso passou a ser da pessoa, e é a linha que o invariante 6 traça: o estado fica com a pessoa, o substrato com o flake.** `time.timeZone = null`
 não é uma brecha: é o NixOS declarando que o `/etc/localtime` é do `timedated`, e é a forma que
 `ronoctua.power.profile` (um piso que um arquivo vence) já tem. Preenchendo `ronoctua.time.zone`, o
 flake retoma o fuso, o NixOS põe `NIXOS_STATIC_TIMEZONE=1`, e a linha é desenhada RECUSANDO — que é
@@ -12058,9 +12059,9 @@ para uma tecla que age sobre uma linha que ninguém vê (`Tenant::acts_without_r
 
 O dono pediu, numa feature só, instalar, experimentar, atualizar e remover programas **só para a
 pessoa** — pacotes Nix, Flatpak, AppImage, apps Android e web apps —, com busca em todas as fontes.
-Isso colide com o invariante 6 ("se não está no flake, não existe"), e a exceção foi APROVADA
-pelo dono e escrita no próprio invariante: os programas da pessoa ficam fora do flake; o sistema,
-o repositório e `/etc` nunca. As duas únicas escritas fora da home são a imagem do Android, que a
+Isso é exatamente o que o invariante 6 agora diz: os programas da pessoa vivem fora do flake,
+atualizados pelos próprios mecanismos; o sistema, o repositório e `/etc` nunca. A camada de apps é
+imperativa; o substrato continua declarado. As duas únicas escritas fora da home são a imagem do Android, que a
 pessoa pede (uma unidade root estreita), e o store, que quem escreve é o daemon do Nix. O SUPORTE —
 Flatpak, nix-flatpak, `appimage-run`, Waydroid, o índice de busca — continua declarado.
 
@@ -14657,7 +14658,7 @@ do fprintd). `UnitVerb` é o que unidades e o dispatcher do NetworkManager pedem
 a linha da janela sem tocar em nada (`print relax-line`), para o `relax-line-parses` passá-la pelo
 `visudo` no build.
 
-**A janela sem senha (exceção do inv. 6).** `@includedir /var/lib/ronoctua-sudo`, escrito depois da
+**A janela sem senha (estado de runtime fora do fecho — o invariante 6; o substrato do sudoers segue declarado).** `@includedir /var/lib/ronoctua-sudo`, escrito depois da
 regra do wheel (vence a última que casa). O helper escreve `<pessoa> ALL=(ALL:ALL) NOTAFTER=<UTC>
 NOPASSWD:SETENV: ALL` (sem `NOTAFTER` quando não tem prazo) num rascunho com ponto (`.relax` — o sudo
 ignora nome com ponto), passa pelo `visudo -cf` pelo caminho no store, e só então renomeia para
@@ -14733,7 +14734,8 @@ porta — acrescentar uma credencial exige a que já existe —, e o helper, com
 TODOS os serviços PAM do sistema avaliado.
 
 **Firmware só lido.** O fwupd entra para dizer o nível HSI e as atualizações conhecidas; instalar
-firmware seria uma categoria nova de ato imperativo e fica de fora, e o `fwupd-refresh.timer` é
+firmware fica de fora por decisão do dono — não está entre os auto-updaters que o invariante 6
+nomeia —, e o `fwupd-refresh.timer` é
 desligado à força (a máquina não vai à rede por relógio para algo em que não age). A regra polkit que o
 fwupd do upstream traz é assinada no censo como "upstream".
 
@@ -16279,8 +16281,9 @@ aarch64 ficam de fora —, e o `nix run .#distro-pins` move o pin para a release
 são quase diárias (as treze de agora saíram entre 17 e 18/10); mover os pins da distro é do dono, que
 roda a ferramenta, lê o diff e faz o commit: o pin é o que o gate testou. A pessoa que quiser as
 releases antes disso liga a opção de segui-las (abaixo). Ficaram de fora o ArtCraft em si
-(o motor de IA: as releases só têm macOS e Windows), o Craft Launcher (baixa e atualiza os apps
-sozinho, fora do flake — invariante 6) e o AniCraft (sem release). Padrão de MIME não há: os apps são
+(o motor de IA: as releases só têm macOS e Windows) e o AniCraft (sem release). O Craft Launcher
+(`storytold/craft-launcher`) deixou de ser recusado: o invariante 6 agora o nomeia como o mecanismo
+dos Crafts — baixa e atualiza os crafts sozinho, fora da geração, sob `$HOME`. Padrão de MIME não há: os apps são
 0.x — e eles declaram fotos, filmes, som e documentos, e o `opener`, que sem padrão vai pela ordem
 dos nomes, os entregava a eles: o FigCraft vinha antes do Google Chrome nas imagens, o FilmCraft e o
 SoundCraft antes do VLC, o LightCraft e o PhotoCraft eram os únicos a declarar TIFF, HEIC, RAW, BMP
@@ -16293,7 +16296,7 @@ compositor sobre o Xvfb, sem GPU): os treze abrem janela, uns pelo Wayland
 pelo Vulkan do `/run/opengl-driver` (o FilmCraft não diz, e desenha), e o PhotoCraft, o LightCraft
 e o DesignCraft avisam que passaram a desenhar na CPU.
 
-**Uma imagem nunca se instala sozinha** (invariante 6). O `AppRun` do PhotoCraft e do FigCraft
+**Uma imagem se atualiza, mas não escreve o próprio lançador** (o substrato dos lançadores é da distro — invariante 6). O `AppRun` do PhotoCraft e do FigCraft
 escreve um lançador próprio em `~/.local/share/applications` e os ícones em `~/.local/share/icons`
 quando acha que roda de um arquivo AppImage — a convenção é o `$APPIMAGE` nomear o arquivo —, e esse
 lançador nomearia um programa que a pessoa não roda e que o registro não recusa. O embrulho do
@@ -18251,8 +18254,8 @@ montada em `/private` só quando pedida. As decisões e o porquê:
 
 Containers de sistema e máquinas virtuais da pessoa, só no perfil `full` (decisão do dono): QEMU,
 OVMF, LXC e o daemon são ferramenta que se instala para USAR, e as imagens caem em
-`/var/lib/incus`, não no fecho. É a exceção do inv. 6 no molde do Podman: o daemon, a ponte, o pool
-e o perfil `default` são declarados; o que a pessoa cria dentro dele é dela.
+`/var/lib/incus`, não no fecho. É o invariante 6 no molde do Podman: o daemon, a ponte, o pool
+e o perfil `default` são declarados — o substrato —; o que a pessoa cria dentro dele é dela, fora do fecho.
 
 #### REST pelo socket, e o CLI só onde precisa
 
@@ -21701,8 +21704,8 @@ conjunto anterior (o da versão que roda). O conjunto é enraizado depois do BUI
 dele que a próxima atualização parte, e um `did-not-boot` não muda isso.
 
 Fica em `/var/lib/ronoctua-machine/kept-units/` (persistido com o registro da máquina), raízes
-indiretas pelo próprio Nix da máquina. Não é configuração fora do flake (inv. 6): nada do que a
-máquina É muda; é a coleta de lixo deixando de levar o que o build dela fez, como as raízes que o
+indiretas pelo próprio Nix da máquina. Não toca o substrato (inv. 6): nada do que a
+máquina É muda nem sai do flake; é a coleta de lixo deixando de levar o que o build dela fez, como as raízes que o
 apply já deixava durante o build — a decisão 4 do dono, e nenhuma emenda de invariante.
 
 **E os fontes de que o sistema foi avaliado** (regra do dono, 2026-10-21: um arquivo que não mudou e

@@ -43,8 +43,27 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
 4. **O shell nunca reimplementa layout de janelas.** Um `xdg_toplevel` por buffer nativo; quem
    posiciona é o compositor.
 5. **Sem lógica Nix reimplementada em Rust.**
-6. **Nada imperativo.** Se não está no flake, não existe. As exceções aprovadas pelo dono — cada uma
-   dado, nunca código, e nunca no repositório ou em `/etc`:
+6. **A máquina se mantém na última versão sozinha.** O flake declara **quais** apps existem e **de
+   onde** vêm; o sistema segue o `nixos-unstable` e se reconstrói num timer, e cada *fast-mover* se
+   atualiza pelo **seu próprio updater**, fora da geração, gravando sob `$HOME`. Não há pin estável,
+   reprodutibilidade nem cache público de app; o **boot-trial e o rollback de geração** permanecem
+   como a rede que recupera um boot que não sobe. *(Emenda do dono, 2026-10-30; substitui "Nada
+   imperativo. Se não está no flake, não existe.", ela mesma uma emenda de 2026-10-05.)*
+
+   O modelo, por fonte:
+   - **O sistema inteiro rola no `nixos-unstable`**: o `nixpkgs` do flake segue essa branch e um timer
+     roda `nix flake update` + `ronoctua-machine apply` sozinho (espera rede não-tarifada e bateria
+     baixa, nunca pergunta). A máquina não segue mais "os pins que a distro testou"; rola por conta
+     própria, e o código próprio da distro ainda versiona pelo seu repositório.
+   - **Fast-movers na última do fornecedor** (mais novos que o nixpkgs): Claude Code e Codex pelo
+     updater nativo deles (grava sob `$HOME`; a cadeia de launch prefere essa cópia à do store); os
+     Craft Apps pelo **Craft Launcher** (`storytold/craft-launcher`), que baixa e atualiza os crafts
+     sozinho sob `$HOME`; o **SolidCraft** como AppImage que segue os releases de
+     `tangency-labs/solidcraft`.
+   - **Flatpak e Android** se atualizam pelos próprios mecanismos (`update.auto.enable`; F-Droid).
+
+   As superfícies imperativas que a segurança ainda guarda — cada uma dado, nunca código, e nunca no
+   repositório ou em `/etc`:
    - **Programas da pessoa** (`ronoctua-software`): instala/experimenta/atualiza/remove, só para o
      usuário, pacotes do perfil Nix, Flatpaks `--user`, AppImages, web apps e apps Android sob `$HOME`;
      o suporte é declarado no flake. Fora da home só a imagem do Android (`/var/lib/waydroid`, unidade
@@ -58,12 +77,6 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
      cria/abre/tranca uma imagem LUKS em `/var/lib/ronoctua-private` (subvolume `@private`) montada em
      `/private`; `ronoctua-private-lock` a tranca antes de dormir. Nunca no flake, `/etc`, `fstab` ou
      `crypttab`.
-   - <!-- anchor: L03 --> **A máquina tem o próprio flake, e a pessoa declara**: `/etc/nixos` é o flake
-     da máquina, a distro como input na branch `release` (`lib.machine`, `templates/machine`), com os
-     pins que a distro testou (`machine-uses-the-distro-pins`); o nome da pasta só em `nix/machine.nix`
-     (`machine-dir-has-one-name`). O que a pessoa declara (`person/software/*.json`) é dado: cada
-     pacote/AppImage/app Android é uma PARTE (`personParts`) que o realizador avalia sozinho; web apps e
-     Flatpaks `--user` vão para ela, nunca para o `systemPackages`.
    - <!-- anchor: L06 --> **As declarações da pessoa chegam como dados**: `ronoctua-person-apply.service`
      (uma regra polkit de verbo/unidade/usuário) valida o JSON em `/run/ronoctua-person/staged` e o
      troca para `person/` na forma canônica (link, especial, formato novo e tamanho acima do teto são
@@ -71,35 +84,14 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
      porta do sudo no hash de `nix/person-hash.nix` (`ronoctua-person-approve.service`).
    - <!-- anchor: L13 --> **O Incus da pessoa**: daemon, ponte `incusbr0`, pool e perfil `default`
      declarados (`nix/modules/incus.nix`, perfil `full`); instâncias/imagens/volumes em
-     `/var/lib/incus`. Não busca sozinho (`images.auto_update_interval = 0`), e toda chamada a um remoto
-     leva o `Pass` de cada host (`hosts_of`; cobra `incus-asks-with-a-pass`). `incus-admin` ≡ root.
-   - <!-- anchor: L19 --> **A atualização instala só o declarado**: `ronoctua.apps` e `person/software/`
-     entram pelo rebuild e pelo reconciliador (`ronoctua-software reconcile`); nenhum argumento nomeia o
-     que instalar. A ordem é lei do gerador (`steps.nix`, `system-update-laws-refuse`): a pessoa reúne,
-     a metade root migra/move só o input da distro e aplica (`ronoctua-machine apply`), a pessoa
-     reconcilia por último; depois `parts-plan`/`realize-parts` enraíza as partes. Agendada espera rede
-     tarifada/bateria baixa e nunca pergunta; à mão pergunta com o "não" primeiro.
+     `/var/lib/incus`. Toda chamada a um remoto leva o `Pass` de cada host (`hosts_of`; cobra
+     `incus-asks-with-a-pass`). `incus-admin` ≡ root.
    - **O cache binário da pessoa**: escolha no `options.json`, token de envio só na parte cifrada; fora
      da home só o netrc do root (`/var/lib/ronoctua-binary-cache/netrc`, `0600`, `binary-cache-netrc`),
      removido quando o token/cache saem; nunca no flake, store ou `/etc`.
-   - **Apps da distro seguindo releases**: só com `distro-apps-follow-releases` ligada (o gesto que
-     permite `api.github.com`/`github.com`), o `person-pins` leva cada AppImage com `follows.github` à
-     release nova (dado assinado da pessoa); os bytes são download dela, a versão é o pin da PARTE,
-     nunca no `systemPackages` nem num cache público, e um download que falha fica na geração anterior
-     (cobra `distro-apps-follow-when-on-and-newer`).
    - **Extensões do VS Code e o Quicklisp**: só pelo gesto (com o `Pass` de `hosts_of`), vão para
      `~/.vscode/extensions`/`~/quicklisp` a partir de lista-dado ou arquivos pinados; nunca no flake,
      `/etc` ou repositório.
-   - <!-- anchor: L25 --> **O que precisa de download chega como PARTE, fora do sistema**: declarada no
-     flake (`ronoctua.parts.<id>`, fora de `mkIf`), realizada só pelo `ronoctua-parts` (root) num perfil
-     Nix do root; o fecho do sistema nunca a contém (o plano `/etc/ronoctua/parts-plan.json` a nomeia
-     como texto, lida por `ronoctua_parts::here`, e a tela diz que ela está chegando). Cada parte é um
-     `ronoctua-part@<id>`: uma que falta é retentada mais tarde e fica na geração anterior; a sessão a
-     vê por `/var/lib/ronoctua-parts/view` (`bin/` + `share/`, nunca `lib/`). **Não livre é aprovado**
-     (cobra `unfree-never-refuses`) mas **nunca entra no ISO publicado** (cobra
-     `iso-carries-nothing-undistributable`). **A instalação nunca usa rede** (`nix/installer/offline.nix`,
-     todo `nix` `--offline`); o ISO completo `.#iso-complete` é do desenvolvedor e **nunca publicado**
-     (cobra `the-complete-iso-is-never-released`).
 
 7. **`nix flake check` tem que passar** antes de qualquer coisa ser considerada pronta. Só o
    `nix run .#gate` roda tudo. Emenda aprovada pelo dono (2026-10-21): o gate faz as perguntas do

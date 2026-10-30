@@ -1038,8 +1038,8 @@ senha nova). O que eles não alcançam:
 ### Instalar firmware — fora, por decisão do dono · registro
 
 O fwupd entra só para LER: o nível HSI e as atualizações conhecidas, na central de segurança.
-Instalar firmware seria uma categoria nova de ato imperativo (invariante 6), e o dono a deixou de
-fora na leva de 2026-09-30; o porquê está no `ARCHITECTURE.md` ("Firmware só lido").
+Instalar firmware fica de fora por decisão do dono — não está entre os auto-updaters que o
+invariante 6 nomeia —, na leva de 2026-09-30; o porquê está no `ARCHITECTURE.md` ("Firmware só lido").
 
 - acabou quando: o dono decidir que instalar firmware entra, e com que forma de exceção
 
@@ -1355,7 +1355,8 @@ O lado root e a barra do sudo (2026-10-11) estão prontos.
   final). É ele que prova o `/private` montado visível fora da unidade (o `findmnt` depois do
   `create`, com as unidades sem namespace de montagem) e o gancho do sono desmontando a montagem
   de verdade. A chave FIDO2 não tem como ser testada lá.
-- **A exceção do inv. 6 para o `/private`** foi escrita no `AGENTS.md` a partir do plano aprovado
+- **O enquadramento do `/private` no inv. 6** — o cofre é estado da pessoa fora do fecho, e o
+  substrato que o monta segue declarado — foi escrito no `AGENTS.md` a partir do plano aprovado
   da leva; o dono confirma o texto.
 
 <!-- anchor: L13 -->

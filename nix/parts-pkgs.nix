@@ -11,6 +11,13 @@
 # predicate is written once and nixpkgs is evaluated once more, not once per
 # program.
 #
+# Under the new model (owner amendment 2026-10-30, replacing "nothing
+# imperative") this door is narrowing: the fast-moving apps are moving to their
+# own updaters, under `$HOME` and outside the generation, so fewer unfree
+# programs need a part at all. There is still no public cache of apps and the
+# OS substrate stays declarative with rollback; what remains here is the
+# seeding of what an updater later keeps current.
+#
 # BY NAME, each with its reason: the predicate is only ever asked about a
 # package that is already unfree, so a name here lets in exactly that
 # program.

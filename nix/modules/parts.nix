@@ -10,6 +10,15 @@
 # PART: declared here, never in the system's closure, realized on its own by
 # root (`ronoctua-parts`), and kept in a Nix profile of its own.
 #
+# UNDER THE NEW MODEL (owner amendment 2026-10-30, replacing "nothing
+# imperative") the parts system is being RETIRED FOR APPS: the fast-moving
+# programs it used to carry — the coding agents, the Craft Apps, SolidCraft —
+# now keep themselves current through their own updaters, under `$HOME` and
+# outside the generation, so they no longer wait on a part to arrive. The
+# mechanism below is described as it still stands while that migration runs;
+# its rationale is now the narrow one of seeding what an updater later takes
+# over, not the old "if it is not in the flake it does not exist".
+#
 # THE CONTRACT
 # ------------
 # - The system names a part only by its stable path,

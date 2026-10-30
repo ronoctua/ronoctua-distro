@@ -4,9 +4,13 @@
 # -----------------------------------------------------
 # Those managers each keep their own copy of a compiler under $HOME, and then
 # the answer to "which rustc is this" depends on which shell was opened. On this
-# distro the answer is the generation — invariant 6. `~/.shellrc.local` can still
-# override it on the day a nightly is genuinely needed, and that override is
-# then visible in one file instead of implied by a directory's existence.
+# distro the answer is the generation: a compiler is part of the declarative
+# substrate, pinned with the rest of it and rolled forward on the unstable
+# channel rather than installed per shell. (The app layer is the exception —
+# the coding agents below self-update under `$HOME` — but a toolchain is not an
+# app.) `~/.shellrc.local` can still override it on the day a nightly is
+# genuinely needed, and that override is then visible in one file instead of
+# implied by a directory's existence.
 #
 # ANDROID IS THE EXPENSIVE ONE. The SDK is several GB and unfree. It is behind
 # `ronoctua.dev.android` so a machine that does not do mobile work can say so and
@@ -291,12 +295,15 @@ in
         group = "dev-android";
       };
 
-      # THE CODING AGENTS. nixpkgs' Claude Code wraps the vendor's binary with
-      # `DISABLE_AUTOUPDATER=1`, so it never replaces itself behind the
-      # generation's back (invariant 6); Codex is built from source. Their
-      # state is the person's, under `$HOME`, like any program's. Claude Code
-      # is NOT FREE, and so a part (`nix/modules/parts.nix`): out of the
-      # system's closure, it arrives after the installation.
+      # THE CODING AGENTS — the app layer's fast-movers. Under the new model
+      # Claude Code and Codex keep themselves current through their own native
+      # updater, under `$HOME` and outside the generation, so they always list
+      # the model of the day without waiting on a rebuild. The flake only seeds
+      # the first binary (Claude Code from the pinned prebuilt, Codex from
+      # source); their state, like their updates, is the person's, under
+      # `$HOME`. Claude Code is NOT FREE, and so a part
+      # (`nix/modules/parts.nix`): out of the system's closure, it arrives after
+      # the installation.
       claude-code = {
         package = partsPkgs.unfree.claude-code;
         part = true;

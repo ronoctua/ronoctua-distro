@@ -19,38 +19,47 @@
 # it of its filters — "ORDER MATTERS: the FIRST one that catches decides" — and
 # the reasoning is the same here.
 #
-# THE INVARIANT THIS FILE WALKS INTO, IN THE OPEN
-# ------------------------------------------------
-# The owner asked for the language managers too — rust, go, js, npm. Invariant 6
-# is "nothing imperative: if it is not in the flake, it does not exist", and
-# `nix/modules/dev.nix` opens by naming those managers as the thing this distro
-# refuses: each keeps a compiler under $HOME, and then "which rustc is this"
-# depends on which shell was opened.
+# THE MODEL THIS FILE WALKS INTO, IN THE OPEN
+# -------------------------------------------
+# The owner asked for the language managers too — rust, go, js, npm. The model
+# now (the owner's amendment of 2026-10-30, replacing "nothing imperative: if it
+# is not in the flake, it does not exist") is that the whole system rolls on
+# `nixos-unstable` and auto-rebuilds on a timer, while the fast-movers
+# self-update outside the generation, under $HOME: the OS substrate stays
+# declarative with rollback, and only the app layer is imperative.
+# `nix/modules/dev.nix` still names those managers — each keeps a compiler under
+# $HOME, and then "which rustc is this" depends on which shell was opened — but
+# that is now the app layer doing its own thing, not the thing this distro
+# refuses.
 #
-# Both halves are kept, and this is how:
+# The substrate still holds to a few shapes, and this is how:
 #
 #   1. Every step declares a PRECONDITION. A step whose precondition is false is
 #      SKIPPED AND SAID SO — never skipped in silence, which is the only way a
 #      declared step can be honest about a machine it does not fit.
-#   2. NO STEP MAY INSTALL ANYTHING. Updating what is already there is not
-#      imperative package management; putting it there is. The generator refuses
-#      any argument that contains `install`, every install verb it knows, every
-#      shell metacharacter and every way of spelling "run this through a shell"
-#      — so there is no argument left that could smuggle one in.
-#      WHAT IS DECLARED IS NOT AN INSTALL BY HAND (invariant 6 as the owner
-#      amended it, 2026-10-05): the update brings in what the distro or the
-#      person DECLARED, and nothing else — the rebuild builds it, and the
+#   2. NO SUBSTRATE STEP INSTALLS ANYTHING BY HAND. Updating what the generation
+#      already holds is the substrate's job; putting a program there by hand is
+#      not. The generator refuses any argument that contains `install`, every
+#      install verb it knows, every shell metacharacter and every way of
+#      spelling "run this through a shell" — so there is no argument left that
+#      could smuggle one in. What the substrate brings in is what the distro or
+#      the person DECLARED, and nothing else — the rebuild builds it, and the
 #      one step that reconciles (`reconcile-declared`) brings the declared
 #      Android apps from the machine's copy and touches only its own ledger.
 #      No argument of it names a program: what it installs is the
-#      declaration's, read by the program, never this table's.
+#      declaration's, read by the program, never this table's. The fast-movers
+#      (Claude Code and Codex by their native updater, the Craft Apps by the
+#      Craft Launcher, SolidCraft as an AppImage) update themselves, outside the
+#      generation and under $HOME — that layer is imperative now, and not this
+#      sequence's to do.
 #   3. A step that names a BARE BINARY — one the flake does not provide — is
 #      REFUSED unless it is off by default. That is not a convention: the
 #      generator will not build a table where such a step ships on, because a
-#      default that depends on something outside the flake is invariant 6 broken
-#      by the distro itself. Turning one on is one line in `configuration.nix`,
-#      on the machine where the owner put the tool there by hand — the same
-#      shape as the `~/.shellrc.local` escape hatch `dev.nix` already sanctions.
+#      substrate default that depends on something outside the generation is a
+#      surprise the rollback net cannot catch. Turning one on is one line in
+#      `configuration.nix`, on the machine where the owner put the tool there by
+#      hand — the same shape as the `~/.shellrc.local` escape hatch `dev.nix`
+#      already sanctions.
 #
 # ROOT FIRST, THEN THE PERSON, AND NEVER INTERLEAVED
 # --------------------------------------------------
@@ -80,7 +89,7 @@
 #               `apply-configuration`, `move-inputs` comes before it, and every
 #               `upgrade-software` and every `reclaim-space` comes after it. The
 #               generator enforces all five. `upgrade-software` is the person's
-#               own programs (invariant 6's dated exception): it moves what is
+#               own programs (the app layer that self-updates): it moves what is
 #               installed to a newer version and never adds one.
 #               And the 2026-10-05 laws: `gather` is the person's and comes
 #               before the root half, and nothing else of the person's does;
@@ -731,7 +740,7 @@ in
     # THE PERSON'S OWN PROGRAMS — what they installed, moved forward
     # =================================================================
     #
-    # Invariant 6's dated exception (`AGENTS.md`, 2026-09-26): the person
+    # The app layer, which self-updates (2026-10-30 model): the person
     # installs programs for themselves, and the update keeps them current. Four
     # steps, one per source, and every one of them is `ronoctua-software
     # upgrade <source>` — the SAME program and the same per-source lock the

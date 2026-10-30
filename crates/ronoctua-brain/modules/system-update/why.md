@@ -29,16 +29,19 @@ pessoa, e nenhum processo root a acha. A metade da pessoa inicia a de root e esp
 (`oneshot`), então é uma sequência só, com uma trava e um status de saída. O gerador recusa um passo
 de root depois de um da pessoa: intercalar custaria uma ida ao polkit a cada troca.
 
-Nenhum passo pode INSTALAR: o gerador recusa o substrato `install`, os verbos de instalação, todo
-metacaractere de shell e todo jeito de passar um argumento por um shell. Um passo que cita um binário
-de fora da flake nasce desligado, não roda como root e declara o binário em `needs`, para a máquina
-que não o tem ganhar um passo pulado e dito, não uma falha.
+Nenhum passo do substrato instala à mão: o gerador recusa o substrato `install`, os verbos de
+instalação, todo metacaractere de shell e todo jeito de passar um argumento por um shell. Um passo
+que cita um binário de fora da flake nasce desligado, não roda como root e declara o binário em
+`needs`, para a máquina que não o tem ganhar um passo pulado e dito, não uma falha.
 
-O que está DECLARADO não é instalar à mão (o inv. 6 emendado pelo dono, 2026-10-05): a atualização
-traz o que a distro ou a pessoa declarou, e nada além. Quem traz é o rebuild e, para o que o sistema
-não faz pela pessoa (os apps do Android, a cópia imperativa que um declarado substitui), o
-reconciliador (`ronoctua-software reconcile`), que só mexe no próprio registro. Nenhum argumento da
-tabela nomeia um programa a instalar: o que entra é o da declaração, lido pelo programa.
+O que o substrato traz é o que foi DECLARADO (o modelo que o dono emendou em 2026-10-30, no lugar do
+"nada imperativo"): a atualização traz o que a distro ou a pessoa declarou, e nada além. Quem traz é
+o rebuild e, para o que o sistema não faz pela pessoa (os apps do Android, a cópia imperativa que um
+declarado substitui), o reconciliador (`ronoctua-software reconcile`), que só mexe no próprio
+registro. Nenhum argumento da tabela nomeia um programa a instalar: o que entra é o da declaração,
+lido pelo programa. Os fast-movers (Claude Code e Codex pelo updater nativo, os Craft Apps pelo Craft
+Launcher, o SolidCraft como AppImage) se atualizam sozinhos, fora da geração e sob o $HOME — essa
+camada é imperativa agora, e não é tarefa desta sequência.
 
 ## Nada que ela faça pode perguntar
 
