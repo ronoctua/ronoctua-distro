@@ -1002,6 +1002,7 @@ footer-settings-off = desligado
 cmd-footer-hide-header = Esconder o cabeçalho da janela, ou mostrá-lo
 cmd-footer-hide-shortcuts = Esconder os atalhos que um cabeçalho escondido moveu ao minibuffer, ou mostrá-los
 cmd-window-shortcuts = Mostrar os atalhos da janela em foco
+footer-minibuffer-expand = Abrir a linha para ler o resto, ou fechar
 footer-settings-header = O cabeçalho
 footer-settings-header-hide = Esconder o cabeçalho da janela
 footer-settings-header-note = Toda janela perde sua linha de cima, e a lista a recupera; os atalhos da janela vão para o minibuffer enquanto ela está em foco.

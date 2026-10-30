@@ -16560,6 +16560,19 @@ impl Footer {
                 out
             } else if let Some(p) = &pending {
                 vec![crate::chrome::Piece::pending(p.clone())]
+            } else if self.fold_lit {
+                // THE CHEVRON SAYS WHAT IT DOES, on the line it sits on and
+                // never in a tooltip (invariant 14): the hand is on the control
+                // that opens this line, so this line is where its name belongs.
+                vec![crate::chrome::Piece::said(
+                    self.texts.t(crate::key::FOOTER_MINIBUFFER_EXPAND),
+                )]
+            } else if self.shortcuts_lit {
+                // AND THE EYE THE SAME — what a click on it does, said on the
+                // line: hide the moved shortcuts, or show them.
+                vec![crate::chrome::Piece::said(
+                    self.texts.t(crate::key::CMD_FOOTER_HIDE_SHORTCUTS),
+                )]
             } else if self.flashing_on_the_minibuffer() && self.glance.is_some() {
                 // THE FLASH IS DRAWN BELOW, placed by `sound::line` — the
                 // same drawing the row above the modeline carries.
@@ -16592,11 +16605,17 @@ impl Footer {
             // routinely run past the line and want the chevron to read in full.
             let opens = self.shape.draws_minibuffer()
                 && (held.open || !at_rest || !mini_rest_pieces.is_empty());
-            // THE SHORTCUTS GLYPH is drawn whenever the "no header" mode is on —
-            // the eye that hides or shows the relocated shortcuts, in either
-            // state, so it toggles both ways. Beside the chevron on one line
-            // (and reserving a cell there); under it when the line opened to
-            // two or more, where the opened drawer already keeps the edge.
+            // THE POINTER IS OVER THE MINIBUFFER'S LINE. The controls come up
+            // only then — the way the file manager's own line-0 chevron does —
+            // so a resting minibuffer is bare and the glyphs appear under the
+            // hand. `on_minibuffer` is set on every move and cleared on leave.
+            let hover = self.shape.draws_minibuffer() && self.here.on_minibuffer;
+            // THE SHORTCUTS GLYPH — the eye that hides or shows the relocated
+            // shortcuts, in either state, so it toggles both ways. Its CELL is
+            // kept whenever the "no header" mode is on, so the line does not
+            // reflow as the eye comes and goes with the hand; the eye itself is
+            // DRAWN only under the pointer (`hover`). Beside the chevron on one
+            // line; under it when the line opened to two or more.
             let glyph = self.modeline.hide_header() && self.shape.draws_minibuffer();
             let glyph_beside = glyph && !held.open;
             // THE RIGHT END OF THE LINE, COUNTED FROM THE BORDER — the control,
@@ -16607,7 +16626,12 @@ impl Footer {
             // measured against the bell on the modeline above it. And the two
             // used to share the last cell: the counter flush right, the control
             // on top of its last digit.
-            let chevron_at = opens.then(|| crate::chrome::from_the_edge(columns, 1));
+            // THE CHEVRON HAS A PLACE when the line OPENS (which is what keeps
+            // the text's room for it, so nothing reflows) OR the hand is over
+            // the line (so it comes up on a bare minibuffer too). It is drawn
+            // wherever it has a place — content keeps it, and the hover adds it
+            // where the line was empty.
+            let chevron_at = (opens || hover).then(|| crate::chrome::from_the_edge(columns, 1));
             let indicator_at = indicator.as_ref().map(|i| {
                 let w = layout::width(i);
                 match chevron_at {
@@ -16619,7 +16643,13 @@ impl Footer {
             // one arithmetic, `minibuffer_room`, for this screen and for the
             // narrowest one the event's actions are placed for.
             let indicator_cells = indicator.as_deref().map(layout::width);
-            let mini_room = minibuffer_room(columns, indicator_cells, opens, glyph_beside);
+            // THE CHEVRON'S CELL IS KEPT when the line opens OR the hand is over
+            // it — the same `opens || hover` the chevron is placed by — so the
+            // glyph's own hover text (and anything on a bare line under the
+            // hand) stops a cell short of it instead of running under it. A line
+            // with real content already has `opens`, so the hover adds nothing
+            // and nothing reflows.
+            let mini_room = minibuffer_room(columns, indicator_cells, opens || hover, glyph_beside);
             // WHAT SAYS A HINT IS CUT (`Footer::linger`): the room the line
             // gives its text with the chevron beside it — which a hint that
             // does not fit always has.
@@ -16757,7 +16787,7 @@ impl Footer {
             // so a click toggles it both ways. Beside the chevron on one line;
             // under it (same column, line below) when the line opened to two or
             // more — the owner's ask for the two controls to stack.
-            self.shortcuts_control = glyph.then(|| {
+            self.shortcuts_control = (glyph && hover).then(|| {
                 if held.open {
                     (crate::chrome::from_the_edge(columns, 1), mini_line + 1)
                 } else {

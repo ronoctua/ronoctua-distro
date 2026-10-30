@@ -1002,6 +1002,7 @@ footer-settings-off = off
 cmd-footer-hide-header = Hide the window header, or show it
 cmd-footer-hide-shortcuts = Hide the shortcuts a hidden header moved to the minibuffer, or show them
 cmd-window-shortcuts = Show the focused window's shortcuts
+footer-minibuffer-expand = Open the line to read the rest, or close it
 footer-settings-header = The header
 footer-settings-header-hide = Hide the window header
 footer-settings-header-note = Every window loses its top line, and the list reclaims it; the window's shortcuts move to the minibuffer while it is focused.
