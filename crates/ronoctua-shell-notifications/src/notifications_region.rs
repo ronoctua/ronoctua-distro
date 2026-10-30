@@ -458,7 +458,7 @@ impl Region for Manager {
             // on the column that holds them.
             "notif-filters" => {
                 if self.shown {
-                    self.press(Press::Letter('f'), way);
+                    self.press(Press::Letter('/'), way);
                 } else {
                     self.shown = true;
                 }

@@ -109,7 +109,7 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     // the same letter as adding a file to the queue, taught with its own
     // words where it means this (`pressed` reads the first `a`, the add).
     ("a", "player-also", Where::OnATrack),
-    ("r", "player-rename", Where::OnAnEntry),
+    ("e", "player-rename", Where::OnAnEntry),
     // `u` FOR THE SUBTITLES over the picture — their page, from anywhere
     // while a picture plays (`LEADER p u` from outside the view).
     ("u", "player-subtitles", Where::WithAPicture),
@@ -8133,8 +8133,8 @@ mod tests {
                 t.t_with(crate::key::PLAYER_RENAMED, &[("name", "Morning")])
             )
         );
-        // `r` ON AN ENTRY: that one.
-        assert_eq!(pressed("r"), Some(Press::Rename));
+        // `e` ON AN ENTRY: that one.
+        assert_eq!(pressed("e"), Some(Press::Rename));
         let rows = v.rows(Some(&s), 80, &t);
         let at = rows
             .iter()

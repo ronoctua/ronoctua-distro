@@ -123,13 +123,14 @@ pub const OF_THE_VIEW: &[(&str, &str, Column)] = &[
     // rely on when they refuse to count Shift. See `files::OF_THE_VIEW`.
     ("S-TAB", "notif-pane-previous", Column::Anywhere),
     ("r", "notif-read-all", Column::Anywhere),
-    // `f` FOR THE FILTERS, from either column of records — on the filters
+    // `/` FOR THE FILTERS — the distro-wide search/find/filter key — from
+    // either column of records; on the filters
     // themselves it would be a key that says "go where you are". The catalogue
     // was the third stop of `TAB` and nothing on screen named it, so the whole
     // of it — every kind of notification the distro ships, every filter, and
     // the person's own — existed only for somebody who pressed `TAB` twice and
     // looked.
-    ("f", "notif-filters", Column::ARecord),
+    ("/", "notif-filters", Column::ARecord),
     // THE SAME KEY, THE OTHER MEANING. On the catalogue `RET` opens the
     // entry's sheet, and calling that "run its action" was the label lying at
     // one of the two levels — the same reason `notif-restore` exists.
@@ -3260,9 +3261,10 @@ impl View {
                 Errand::Nothing
             }
             Press::Letter('r') => Errand::ReadAll,
-            // STRAIGHT TO THE FILTERS, wherever the cursor is. The letter is
-            // reserved against a notification's own actions, like `r` and `d`.
-            Press::Letter('f') => {
+            // STRAIGHT TO THE FILTERS, wherever the cursor is. `/` is the
+            // distro-wide key for search/find/filter, reserved against a
+            // notification's own actions like `r` and `d`.
+            Press::Letter('/') => {
                 self.pane = Pane::Catalogue;
                 let there = lists.len(Pane::Catalogue);
                 self.set_cursor(self.cursor().min(there.saturating_sub(1)));

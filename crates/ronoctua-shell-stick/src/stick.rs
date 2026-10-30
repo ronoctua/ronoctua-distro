@@ -60,7 +60,7 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("<down>", "stick-down"),
     ("<up>", "stick-up"),
     ("RET", "stick-enter"),
-    ("C-r", "stick-reread"),
+    ("r", "stick-reread"),
 ];
 
 /// A key, already reduced to what the view cares about.
@@ -538,7 +538,7 @@ impl Feed {
         }
     }
 
-    /// Reads the drives again from a new watch — what `C-r` does when udisks
+    /// Reads the drives again from a new watch — what `r` does when udisks
     /// did not answer.
     pub fn reread_drives(&mut self) {
         self.watch_drives();
@@ -612,7 +612,7 @@ impl Feed {
     }
 }
 
-/// What `C-r` reads again, in either door (through [`View::kept`]): GitHub,
+/// What `r` reads again, in either door (through [`View::kept`]): GitHub,
 /// when it is let; the cache; and the drives from a new watch when udisks
 /// did not answer — or has not yet — so a refusal there is not for ever.
 pub fn reread(r: &mut Readings, feed: Option<&mut Feed>) {
@@ -919,7 +919,7 @@ impl View {
         errand
     }
 
-    /// Changes the readings the way a DOOR does — `C-r`, the hosts just
+    /// Changes the readings the way a DOOR does — `r`, the hosts just
     /// let ([`reread`]) — keeping the cursor on what it stood on, as
     /// [`View::heard`] does for a thread: while GitHub is asked again the
     /// release's rows fold into one line, and every drive's line moves up
@@ -1896,7 +1896,7 @@ mod tests {
         );
     }
 
-    /// THE QUESTION KEEPS THE RELEASE IT WAS ASKED WITH: `C-r` is neither
+    /// THE QUESTION KEEPS THE RELEASE IT WAS ASKED WITH: `r` is neither
     /// taught nor heard over it, and GitHub refusing meanwhile changes
     /// nothing — the question is still drawn, `no` still under the cursor,
     /// and `yes` writes the release the person read.
@@ -1908,7 +1908,7 @@ mod tests {
         v.cursor = row_of(&v, &r, &t, &Act::Drive(0));
         let _ = press(&mut v, &r, &t, Press::Enter);
         let taught: String = v.hint(&r, &t).iter().map(|p| p.text.clone()).collect();
-        assert!(!taught.contains("C-r"), "{taught}");
+        assert!(!taught.contains("ask again"), "{taught}");
         assert_eq!(press(&mut v, &r, &t, Press::Reread), Errand::Nothing);
         let _ = v.heard(&mut r, Came::Latest(Err(Why::Offline)), &zone(), WIDTH, &t);
         let rows = v.rows(&r, &zone(), WIDTH, &t);
@@ -1922,9 +1922,9 @@ mod tests {
             Errand::Arm(armed) => assert_eq!(armed.release.label, "26.05.20261005"),
             other => panic!("{other:?}"),
         }
-        // OUT OF THE QUESTION, `C-r` is taught again.
+        // OUT OF THE QUESTION, `r` is taught again.
         let taught: String = v.hint(&r, &t).iter().map(|p| p.text.clone()).collect();
-        assert!(taught.contains("C-r"), "{taught}");
+        assert!(taught.contains("ask again"), "{taught}");
     }
 
     /// A rack of USB sticks, in this order.
@@ -1982,7 +1982,7 @@ mod tests {
         assert!(!rows[v.cursor()].heading);
     }
 
-    /// `C-r` FOLDS THE RELEASE'S ROWS INTO ONE LINE while GitHub is asked
+    /// `r` FOLDS THE RELEASE'S ROWS INTO ONE LINE while GitHub is asked
     /// again, and every drive's line moves up: the cursor moves with its
     /// drive, never onto the drive that slid under it. The LAST drive, so
     /// that "the first row that acts", where a lost cursor lands, is not it.
@@ -2030,9 +2030,9 @@ mod tests {
         let read = |n: &str| press_of_key(ronoctua_keymap::Key::parse(n).expect("a key"));
         assert_eq!(read("<down>"), Some(Press::Down));
         assert_eq!(read("RET"), Some(Press::Enter));
-        assert_eq!(read("C-r"), Some(Press::Reread));
+        assert_eq!(read("r"), Some(Press::Reread));
         assert_eq!(read("ESC"), Some(Press::Escape));
-        assert_eq!(read("r"), None, "a bare letter is not the chord");
+        assert_eq!(read("C-r"), None, "the old chord is no longer the key");
         for (taught, id) in OF_THE_VIEW {
             assert!(read(taught).is_some() && press_of(id).is_some(), "{taught}");
         }

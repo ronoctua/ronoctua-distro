@@ -98,8 +98,8 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("<right>", "security-right"),
     ("C-r", "security-relax"),
     ("C-b", "security-shields"),
-    ("C-a", "security-rule-add"),
-    ("C-d", "security-rule-delete"),
+    ("a", "security-rule-add"),
+    ("d", "security-rule-delete"),
     ("C-e", "security-enrol"),
 ];
 

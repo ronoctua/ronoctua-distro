@@ -21,7 +21,7 @@
 //!
 //! # Read-only, and what it does do
 //!
-//! Nothing here changes a repository. The safe actions are: fetch (`C-r`,
+//! Nothing here changes a repository. The safe actions are: fetch (`r`,
 //! which never asks for anything — a remote that wants credentials is a
 //! refusal that says so), copy a commit's id (`C-y`), open the version of a
 //! file a commit had as a READ-ONLY copy in a bounded cache (`C-o`), and a
@@ -1193,7 +1193,7 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("C-a", "files-git-blame"),
     ("C-y", "files-git-copy"),
     ("C-o", "files-git-open-version"),
-    ("C-r", "files-git-fetch"),
+    ("r", "files-git-fetch"),
     ("C-t", "files-git-terminal"),
     ("C-[", "files-git-left"),
     ("C-]", "files-git-right"),
@@ -3760,9 +3760,9 @@ mod tests {
     fn the_safe_actions_name_what_is_under_the_cursor() {
         let mut v = with_history();
         assert_eq!(key(&mut v, "C-y"), Errand::Copy(id(3).0));
-        assert_eq!(key(&mut v, "C-r"), Errand::Fetch);
+        assert_eq!(key(&mut v, "r"), Errand::Fetch);
         assert_eq!(
-            key(&mut v, "C-r"),
+            key(&mut v, "r"),
             Errand::Say(crate::key::FILES_GIT_FETCHING),
             "two fetches at once"
         );

@@ -161,13 +161,14 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     // modifier and the window does not test for one.
     ("TAB", "network-section-next", Where::OnTheList),
     ("S-TAB", "network-section-previous", Where::OnTheList),
-    ("s", "network-scan", Where::OnTheList),
-    ("r", "network-wifi-toggle", Where::OnTheList),
-    ("d", "network-disconnect", Where::OnTheList),
-    ("f", "network-forget", Where::OnTheList),
-    // THE DELETE KEY FORGETS TOO — `f` is the Emacs-shaped key, `DEL` is the
-    // one a hand reaches for to remove a thing; both do the one idea, so the
-    // person who pressed `Delete` on a VPN location is not met with nothing.
+    ("r", "network-scan", Where::OnTheList),
+    ("w", "network-wifi-toggle", Where::OnTheList),
+    ("x", "network-disconnect", Where::OnTheList),
+    ("d", "network-forget", Where::OnTheList),
+    // THE DELETE KEY FORGETS TOO — `d` is the distro-wide key for discarding a
+    // thing, `DEL` is the one a hand reaches for to remove a thing; both do
+    // the one idea, so the person who pressed `Delete` on a VPN location is
+    // not met with nothing.
     ("DEL", "network-forget", Where::OnTheList),
     ("a", "network-airplane", Where::OnTheList),
     ("i", "network-link", Where::OnTheList),
@@ -4690,7 +4691,7 @@ mod tests {
         // every row key would read as dead, which is a fixture saying nothing
         // rather than a view doing nothing.
         let mut snap = machine();
-        // AND A SAVED PROFILE, so `f` has something to forget: without one
+        // AND A SAVED PROFILE, so `d` has something to forget: without one
         // the key is honest in doing nothing, and the test would be reading
         // a silent fixture as a dead key.
         snap.saved = vec![ronoctua_network::Saved {

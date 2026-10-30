@@ -305,8 +305,8 @@ impl crate::region::Region for BluetoothRegion {
 
     /// The arrows, `RET`, `Esc` and twelve bare letters — nothing is typed
     /// here, so a letter is free — read by the WHOLE notation through the
-    /// reader the window calls too (`bluetooth_words::press_of_key`): `C-f`
-    /// is not `f`, and does not forget the device under the cursor.
+    /// reader the window calls too (`bluetooth_words::press_of_key`): `C-d`
+    /// is not `d`, and does not forget the device under the cursor.
     fn key(&mut self, key: ronoctua_keymap::Key, way: &mut dyn Doorway) -> Taken {
         match crate::bluetooth_words::press_of_key(key) {
             Some(press) => {

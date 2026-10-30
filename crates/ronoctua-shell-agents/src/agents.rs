@@ -70,14 +70,13 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<down>", "agents-down", Where::Anywhere),
     ("<up>", "agents-up", Where::Anywhere),
     ("RET", "agents-enter", Where::Anywhere),
-    // ON AN ACCOUNT: `C-`, never `M-` — the `M-` family is the compositor's
-    // and never reaches a window.
-    ("C-n", SESSION_COMMAND, Where::OnAnAccount),
-    ("C-l", LOGIN_COMMAND, Where::OnAnAccount),
-    ("C-r", "agents-rename", Where::OnAnAccount),
-    ("C-d", "agents-default", Where::OnAnAccount),
-    ("C-k", "agents-remove", Where::OnAnAccount),
-    ("C-u", "agents-refresh", Where::Anywhere),
+    // ON AN ACCOUNT: single keys, the distro-wide standard for a list view.
+    ("n", SESSION_COMMAND, Where::OnAnAccount),
+    ("l", LOGIN_COMMAND, Where::OnAnAccount),
+    ("e", "agents-rename", Where::OnAnAccount),
+    ("f", "agents-default", Where::OnAnAccount),
+    ("d", "agents-remove", Where::OnAnAccount),
+    ("r", "agents-refresh", Where::Anywhere),
 ];
 
 /// The commands the view's ROWS run — every one reachable by name too
@@ -93,9 +92,9 @@ pub const OF_THE_ROWS: &[&str] = &[
 /// The command that opens the view in the footer (`LEADER m a a`) — and
 /// the one a mark on the modeline runs, with the account's place.
 pub const OPEN_COMMAND: &str = "agents-open";
-/// A session of an account (`LEADER m a n`, `C-n` on one).
+/// A session of an account (`LEADER m a n`, `n` on one).
 pub const SESSION_COMMAND: &str = "agents-session";
-/// A login of an account (`LEADER m a l`, `C-l` on one).
+/// A login of an account (`LEADER m a l`, `l` on one).
 pub const LOGIN_COMMAND: &str = "agents-login";
 
 /// Every command this view's keys and rows reach — for `bindings::reachable`.

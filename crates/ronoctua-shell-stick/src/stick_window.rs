@@ -179,7 +179,7 @@ usage: ronoctua-shell photograph --door stick [--scene <file.json>] [options] [s
 
 Steps — walked in the order they appear:
 
-  --key <notation>      a key, as the keymap writes it: <down>, RET, C-r
+  --key <notation>      a key, as the keymap writes it: <down>, RET, r
   --hover <col,line>    rests the pointer on a cell, counted from 0 (line 0
                         is the header and its keys)
   --click <col,line>    a press and a release there";

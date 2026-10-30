@@ -185,16 +185,16 @@ mod tests {
         w.answered(ui, line.id, text);
     }
 
-    /// THE FILTER IS ASKED ON THIS WINDOW'S OWN LINE — by `f`, as the footer
+    /// THE FILTER IS ASKED ON THIS WINDOW'S OWN LINE — by `/`, as the footer
     /// asks it on its minibuffer — and no sentence sends the person to the
     /// footer, and nothing is handed to it.
     ///
-    /// THE DEFECT THIS CATCHES: `f` printed "typing happens in the footer",
+    /// THE DEFECT THIS CATCHES: `/` printed "typing happens in the footer",
     /// and the list this window exists to read could not be narrowed here.
     #[test]
     fn the_filter_is_asked_on_the_windows_own_line() {
         let (mut w, mut ui, dir) = a_window("asks");
-        key(&mut w, &mut ui, "f");
+        key(&mut w, &mut ui, "/");
         let line = ui.asking.as_ref().expect("the filter is not asked here");
         assert_eq!(line.id, crate::geo::FIND);
         assert!(!line.secret, "a filter is read back, not hidden");
@@ -212,7 +212,7 @@ mod tests {
         let (mut footer, _, other) = a_window("narrows-footer");
         let all = w.view.shown().len();
 
-        key(&mut w, &mut ui, "f");
+        key(&mut w, &mut ui, "/");
         // A COPIED NAME, with its line break: the line takes it as one line.
         let line = ui.asking.as_mut().expect("the filter is asked here");
         let _ = line.paste("zzzz-no-region-is-called-this\n");
@@ -230,7 +230,7 @@ mod tests {
         );
 
         // NOTHING TYPED IS EVERYTHING AGAIN.
-        key(&mut w, &mut ui, "f");
+        key(&mut w, &mut ui, "/");
         answer(&mut w, &mut ui, "");
         assert_eq!(w.view.filter(), "");
         assert_eq!(w.view.shown().len(), all);
@@ -307,8 +307,8 @@ mod tests {
 
     /// THE TWO DOORS READ A KEY ONE WAY: every row of the table is its own
     /// press, `Esc` is the way back whatever is held, and a chord is not the
-    /// letter under it — `C-f` asked for the filter in both doors, because
-    /// each matched the symbol and dropped the modifier.
+    /// letter under it — `C-d` acted on the row in both doors, because each
+    /// matched the symbol and dropped the modifier.
     #[test]
     fn the_window_reads_the_views_keys_as_the_footer_does() {
         use crate::geo::{Press, press_of_key};
@@ -316,11 +316,11 @@ mod tests {
         assert_eq!(read("<down>"), Some(Press::Down));
         assert_eq!(read("<up>"), Some(Press::Up));
         assert_eq!(read("RET"), Some(Press::Enter));
-        assert_eq!(read("f"), Some(Press::Find));
+        assert_eq!(read("/"), Some(Press::Find));
         assert_eq!(read("d"), Some(Press::Remove));
         assert_eq!(read("ESC"), Some(Press::Escape));
         assert_eq!(read("S-ESC"), Some(Press::Escape));
-        assert_eq!(read("C-f"), None);
+        assert_eq!(read("C-d"), None);
         assert_eq!(read("M-d"), None);
         assert_eq!(read("x"), None);
         for (taught, _) in crate::geo::OF_THE_VIEW {

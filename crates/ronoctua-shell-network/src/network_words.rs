@@ -165,7 +165,7 @@ mod tests {
         // and walking is `<up>`/`<down>`.
         assert_eq!(press_of_key(key("<right>")), None);
         // A CHORD IS NOT THE LETTER UNDER IT.
-        assert_eq!(press_of_key(key("C-s")), None);
+        assert_eq!(press_of_key(key("C-r")), None);
         assert_eq!(
             press_of_key(key("S-TAB")),
             Some(crate::network::Press::SectionBack)
@@ -204,7 +204,7 @@ mod tests {
             ..Modifiers::default()
         };
         assert_eq!(
-            pressed(Keysym::S, Some("S"), caps),
+            pressed(Keysym::R, Some("R"), caps),
             Some(crate::network::Press::Scan)
         );
         assert_eq!(

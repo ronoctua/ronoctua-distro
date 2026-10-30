@@ -660,7 +660,7 @@ mod tests {
     fn a_name_is_typed_here_from_the_one_it_has() {
         let (mut w, mut ui) = a_window();
         w.view = crate::bluetooth::View::fresh_at("/d/1");
-        press(&mut w, &mut ui, "r");
+        press(&mut w, &mut ui, "e");
         let line = ui.asking.clone().expect("the name is asked here");
         assert_eq!(line.id, RENAME);
         assert!(!line.secret);

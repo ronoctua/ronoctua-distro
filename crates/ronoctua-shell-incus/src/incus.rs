@@ -25,7 +25,7 @@
 //!
 //! # A new instance is a draft, never a question
 //!
-//! `C-l` (and `LEADER s x n`) opens the draft in the detail's place: the kind
+//! `a` (and `LEADER s x n`) opens the draft in the detail's place: the kind
 //! (container or VM), the name, the image, the three limits, and the row that
 //! launches it on the queue. Each value is typed on the door's own line
 //! (`Errand::Ask`), and the draft is KEPT when it is put away — what a person
@@ -60,10 +60,10 @@ pub use crate::places::{BAR_CELLS, Layout, Pane, PaneScroll, extent, places};
 
 /// The keys this view teaches, and where each one applies.
 ///
-/// EVERY COMMAND IS `C-`, the rule of every view with a detail to act on,
-/// and `M-` never: `M-` is the compositor's family. `C-n` and `C-p` walk,
-/// as in every list, so a new instance is `C-l` — Incus's own word for
-/// "make and start", `launch`.
+/// The DISTRO-WIDE standard keys come first: `a` makes a new instance (the
+/// draft, Incus's own `launch`), `d` deletes. The rest are `C-`, the rule of
+/// every view with a detail to act on, and `M-` never: `M-` is the
+/// compositor's family. `C-n` and `C-p` walk, as in every list.
 pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<down>", "incus-down", Where::Anywhere),
     ("<up>", "incus-up", Where::Anywhere),
@@ -74,11 +74,11 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<right>", "incus-right", Where::Rightward),
     ("S-<left>", "incus-previous-tab", Where::OnADetail),
     ("S-<right>", "incus-next-tab", Where::OnADetail),
-    ("C-l", "incus-launch", Where::OnAnswering),
+    ("a", "incus-launch", Where::OnAnswering),
     ("C-s", "incus-start-stop", Where::OnAnInstance),
     ("C-r", "incus-restart", Where::OnARunning),
     ("C-f", "incus-freeze", Where::OnFreezable),
-    ("C-d", "incus-delete", Where::OnDeletable),
+    ("d", "incus-delete", Where::OnDeletable),
     ("C-o", "incus-console", Where::OnARunning),
     ("C-v", "incus-screen", Where::OnARunningVm),
     ("C-t", "incus-shell", Where::OnARunning),
@@ -2165,7 +2165,7 @@ impl View {
             return;
         }
         // EACH SNAPSHOT a row that acts: `RET` restores it after a question,
-        // `C-d` deletes it after one. Its name is the daemon's — data.
+        // `d` deletes it after one. Its name is the daemon's — data.
         let pairs: Vec<(u16, u16, u16)> = i
             .snapshots
             .iter()

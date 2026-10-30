@@ -20,7 +20,7 @@
 //!
 //! # What a photograph reaches
 //!
-//! Nothing past the door: a photograph that pressed `C-n` would open a
+//! Nothing past the door: a photograph that pressed `n` would open a
 //! session of an agent, and one that opened would refresh — the network.
 //! Both go through one field ([`Reach`]); a photograph's writes down what
 //! would have happened instead, and reads on the spot ([`Reader::Here`]).

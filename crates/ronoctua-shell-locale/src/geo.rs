@@ -49,10 +49,10 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // BARE LETTERS, for the reason the locale view gives: nothing is typed
     // INTO the list. The filter is asked for on a line of its own — the
     // minibuffer in the footer, the header's line in a window — and while
-    // that line asks, every key is the line's, `f` and `d` included. So a
+    // that line asks, every key is the line's, `/` and `d` included. So a
     // letter here is not a query, and it is the shortest way to a row's
     // second verb.
-    ("f", "geo-find"),
+    ("/", "geo-find"),
     ("d", "geo-remove"),
 ];
 

@@ -58,8 +58,9 @@ use crate::places::{BAR_CELLS, Layout, Pane, PaneScroll, extent, places};
 
 /// The keys this view teaches, and where each one applies.
 ///
-/// EVERY COMMAND IS `C-`, the rule of every view with a detail to act on,
-/// and `M-` never: `M-` is the compositor's family.
+/// The DISTRO-WIDE standard key leads: `d` removes. The rest are `C-`, the
+/// rule of every view with a detail to act on, and `M-` never: `M-` is the
+/// compositor's family.
 pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<down>", "containers-down", Where::Anywhere),
     ("<up>", "containers-up", Where::Anywhere),
@@ -72,7 +73,7 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("S-<right>", "containers-next-tab", Where::OnADetail),
     ("C-s", "containers-start-stop", Where::OnStartable),
     ("C-r", "containers-restart", Where::OnRestartable),
-    ("C-d", "containers-remove", Where::OnRemovable),
+    ("d", "containers-remove", Where::OnRemovable),
     ("C-l", "containers-logs", Where::OnAContainer),
     ("C-t", "containers-shell", Where::OnARunning),
     ("C-i", "containers-inspect", Where::OnInspectable),
