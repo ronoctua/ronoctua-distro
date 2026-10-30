@@ -11955,12 +11955,23 @@ impl Footer {
     /// are the paint's (`Footer::paint`): what they show is what is typed, or
     /// the compositor's mode.
     fn view_hint(&self, showing: ViewState) -> Option<Vec<crate::chrome::Piece>> {
+        // WITH "HIDE SHORTCUTS" ON, a PROGRAM that opens in the footer gives its
+        // keys up to the line the same way a window does — a feature's panel
+        // (`Region`, the footer version of the network, the audio, the
+        // bluetooth…) and the Chrome kiosk. The region keeps its content and
+        // answers the arrows and `RET`; only the line's teaching goes. The
+        // footer's OWN views — its settings, the theme chooser, the build page,
+        // a window's menu — are not programs and keep their line, so the row
+        // that turns shortcuts back on stays legible.
+        let hide = self.modeline.hide_shortcuts();
         match showing {
             ViewState::Themes => self.themes_hint(),
             ViewState::FooterSettings => self.footer_settings_hint(),
             ViewState::BuildPage => self.build_page_hint(),
+            ViewState::Kiosk if hide => None,
             ViewState::Kiosk => self.kiosk_hint(),
             ViewState::WindowMenu => self.window_menu_hint(),
+            ViewState::Region(_) if hide => None,
             ViewState::Region(hosted) => self.hosted_hint(hosted),
             ViewState::Applications
             | ViewState::Commands

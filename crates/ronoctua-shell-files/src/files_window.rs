@@ -1865,6 +1865,17 @@ impl Content for Files {
         "*files*".to_owned()
     }
 
+    /// THE KEYS THIS WINDOW TEACHES — the set `frame` draws on its own control
+    /// line (`View::hint`). With the header shown they are on that line; with it
+    /// hidden the line moves to the foot and keeps only what it is asked or has
+    /// to say, and these go to the footer's minibuffer instead (the bridge
+    /// derives `Content::shortcuts` from this, and the footer shows them only
+    /// while the header is gone). Without it a hidden header left the file
+    /// manager the one window whose shortcuts the minibuffer never carried.
+    fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+        self.manager.view.hint(&ui.texts)
+    }
+
     /// THE LANGUAGE MOVED, and the manager speaks it — the facts panel too,
     /// which kept the sheet it had read in the old one.
     fn language_changed(&mut self, ui: &mut Ui) {
@@ -2390,7 +2401,12 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     let hinting = s.question.is_some() || (second.is_none() && !s.view.filtering());
     let line_pieces: Vec<crate::chrome::Piece> = if let Some(asked) = s.question.clone() {
         asked
-    } else if hinting {
+    } else if hinting && !crate::header::hide_header() {
+        // THE SHORTCUT HINT IS THIS LINE'S ONLY AT THE TOP. With the header
+        // hidden the control line moved to the foot, and the window's shortcuts
+        // are the FOOTER's now (`Content::hint`, the minibuffer) — so the foot
+        // line keeps only what it is asked or has to say, never a second copy
+        // of the keys the minibuffer already carries.
         let mut out = s.view.hint(s.texts);
         // AND THE KEYS THAT OPEN AND WALK IT — see `fold::teaching`.
         crate::fold::teach_after(&mut out, s.texts);
