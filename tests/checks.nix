@@ -29380,17 +29380,17 @@ let
       END
     '';
 
-  # NIX-FLATPAK LEAVES THE PERSON'S APPS ALONE, on both of its sides.
+  # NIX-FLATPAK UPDATES THE PERSON'S APPS BUT NEVER REMOVES THEM, on both sides.
   #
   # `flatpak.nix` imports nix-flatpak as a NixOS module AND as a Home Manager
-  # module, and both default to deciding things a person installed by hand is
-  # theirs to take back: `uninstallUnmanaged = true` would uninstall, at the
-  # next activation, every Flatpak the software view put in (`uninstallUnused`
-  # follows it for runtimes), and an update on activation or on nix-flatpak's
-  # own timer would be a second answer to "when does this machine change" —
-  # the distro's update sequence is the first (`flatpak-system`,
-  # `flatpak-user`). Read from the EVALUATED configuration of both profiles:
-  # a value set in a module that never loads is not a value the machine has.
+  # module. Under the new model (owner amendment 2026-10-30) the app layer keeps
+  # itself current: `update.onActivation` and `update.auto.enable` are ON, so a
+  # person's Flatpaks move to the latest on their own. But `uninstallUnmanaged`
+  # (and `uninstallUnused`, for runtimes) stay OFF: updating the person's apps is
+  # the model, removing them is never — `true` there would uninstall, at the next
+  # activation, every Flatpak the software view put in. Read from the EVALUATED
+  # configuration of both profiles: a value set in a module that never loads is
+  # not a value the machine has.
   nix-flatpak-leaves-your-apps-alone =
     let
       side = cfg: services: {
@@ -29444,24 +29444,28 @@ let
               if not s["imported"]:
                   wrong.append(f"{said}: nix-flatpak is not imported")
                   continue
+              # NEVER REMOVES: these stay off, or the person's apps go.
               for option, why in (
                   ("uninstallUnmanaged", "every app the person installed goes at the next activation"),
                   ("uninstallUnused", "runtimes the person's apps use are judged by a list that does not know them"),
-                  ("onActivation", "every rebuild updates Flatpaks behind the update sequence's back"),
-                  ("auto", "a timer of its own updates Flatpaks behind the update sequence's back"),
               ):
                   if s[option] is not False:
                       wrong.append(f"{said}: `{option}` is {s[option]!r}; {why}")
-              if s["timer"]:
-                  wrong.append(f"{said}: the unit `flatpak-managed-install-timer` exists")
+              # KEEPS CURRENT: these stay on, so the app layer self-updates.
+              for option, why in (
+                  ("onActivation", "the person's Flatpaks would not move to the latest on a rebuild"),
+                  ("auto", "nothing would keep the person's Flatpaks current on their own"),
+              ):
+                  if s[option] is not True:
+                      wrong.append(f"{said}: `{option}` is {s[option]!r}; {why}")
 
       if wrong:
-          print("ERROR: nix-flatpak would decide about the person's own apps.", file=sys.stderr)
+          print("ERROR: nix-flatpak does not update-but-keep the person's apps.", file=sys.stderr)
           print("", file=sys.stderr)
           for w in wrong:
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
-      print(f"OK: {len(machines)} profiles, both modules, nothing uninstalled and nothing updated from there")
+      print(f"OK: {len(machines)} profiles, both modules, apps kept current and never removed")
       END
     '';
 

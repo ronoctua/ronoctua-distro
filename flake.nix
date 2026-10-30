@@ -34,7 +34,8 @@
       url = "github:nix-community/lanzaboote/v1.1.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # THE DOTFILES ARE DECLARATIVE TOO (invariant 6).
+    # THE DOTFILES ARE DECLARATIVE TOO — part of the substrate, which stays
+    # declarative with rollback (invariant 6, 2026-10-30).
     #
     # Without it, `~/.zshrc` would be an activation script copying files into
     # $HOME — imperative, with no rollback, and drifting the moment someone
@@ -50,8 +51,8 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # Declarative Flatpaks, READY and holding nothing but the Flathub remote:
-    # the person installs imperatively through `ronoctua-software` (invariant
-    # 6's dated exception), and this is the door for the day something should
+    # the person installs through `ronoctua-software` and apps now self-update
+    # (invariant 6, 2026-10-30), and this is the door for the day something should
     # be declared instead. A TAG, never `latest` (which moves) nor `main`. The
     # flake has no inputs of its own, so there is nothing to `follows`.
     nix-flatpak.url = "github:gmodena/nix-flatpak/?ref=v0.7.0";

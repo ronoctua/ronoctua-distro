@@ -23,12 +23,13 @@
 # `claude-code` outright with a self-contained copy of the prebuilt-binary
 # recipe — depending on nothing of whatever nixpkgs happens to carry.
 #
-# The wrapper still carries `DISABLE_AUTOUPDATER=1`, as nixpkgs' own does, but
-# under the new model that is on its way out: the agent is a fast-mover meant
-# to keep itself current through its own native updater, under `$HOME` and
-# outside the generation. The flag flip lands in a later code phase; until then
-# this pin only seeds the first binary, and its version moves when the pin
-# below moves.
+# The wrapper keeps `DISABLE_AUTOUPDATER=1`, as nixpkgs' own does, and under the
+# new model that is deliberate: this store binary is READ-ONLY and only SEEDS
+# the native install under `$HOME` (`claude install`, bootstrapped by
+# `ronoctua-agent-bootstrap` in `nix/modules/agents.nix`). It is that native
+# install — the fast-mover — that keeps itself current, and the footer prefers
+# it (`ronoctua_llm::agent_program`). This pin's version moves when the pin
+# below moves, seeding a fresh native install when it does.
 #
 # # Who reads it
 #

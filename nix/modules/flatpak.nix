@@ -66,14 +66,17 @@ let
     # FALSE, AND IT IS THE LINE THAT MATTERS MOST. `true` makes nix-flatpak
     # uninstall, at the next activation, every app and every remote it did not
     # declare — which is every Flatpak the person installed through the
-    # software view, gone on the next `nixos-rebuild`.
+    # software view, gone on the next `nixos-rebuild`. It stays false under the
+    # new model too: the machine keeps apps CURRENT, it never removes the
+    # person's.
     uninstallUnmanaged = false;
-    # NO UPDATES FROM HERE. The distro's own sequence updates Flatpaks
-    # (`flatpak-system` and `flatpak-user` in the update's `steps.nix`) when the
-    # brain or the person decides; a second updater on its own timer would be
-    # a second answer to "when does this machine change".
-    update.onActivation = false;
-    update.auto.enable = false;
+    # AUTO-UPDATE FROM HERE (owner amendment 2026-10-30, "the machine keeps
+    # itself on the latest"): nix-flatpak updates the person's Flatpaks on its
+    # own timer and on each activation — the app layer keeping itself current
+    # outside the generation. The update sequence's `flatpak-system` /
+    # `flatpak-user` steps remain for a manual, on-demand run.
+    update.onActivation = true;
+    update.auto.enable = true;
   };
 in
 {
