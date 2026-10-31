@@ -155,7 +155,7 @@ workspace = true
 
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
-env = ["RONOCTUA_BOTTOM", "RONOCTUA_BTOP", "RONOCTUA_KEYS_DIR", "RONOCTUA_SYSTEMCTL"]
+env = ["RONOCTUA_BOTTOM", "RONOCTUA_BTOP", "RONOCTUA_KEYS_DIR", "RONOCTUA_MACHINE_DIR", "RONOCTUA_SYSTEMCTL"]
 run-env = ["RONOCTUA_BOTTOM", "RONOCTUA_BTOP", "RONOCTUA_ZONEINFO"]
 run-env-absent = ["RONOCTUA_BUFFER_BRAIN", "RONOCTUA_BUFFER_EXAMPLE", "RONOCTUA_BUFFER_FORMAT", "RONOCTUA_BUFFER_KEYBOARD", "RONOCTUA_BUFFER_MEMORY"]
 beside = ["ronoctua-rescue"]

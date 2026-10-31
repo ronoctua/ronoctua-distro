@@ -22,6 +22,8 @@
 //!   an install or a removal is confirmed by listing the apps again.
 
 use std::collections::BTreeMap;
+#[cfg(feature = "net")]
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -50,6 +52,10 @@ pub const RECORD: &str = "android.json";
 pub const APK_MOST: u64 = 2 << 30;
 /// The property that gives every app its own window.
 pub const MULTI_WINDOWS: &str = "persist.waydroid.multi_windows";
+/// The refusal word `upgrade android` ends with while the person's Android
+/// runs — the update's step reads it as news (`declines`), and says its
+/// sentence, the update's own: nothing is replaced under somebody using it.
+pub const IN_USE: &str = "android-in-use";
 
 /// The apps the image itself brings — Waydroid's own list of what it hides
 /// from the launcher, and the Play Store. They are Android, not the person's
@@ -142,6 +148,19 @@ pub fn session_start_argv(waydroid: &Path) -> Vec<String> {
 #[must_use]
 pub fn session_stop_argv() -> Vec<String> {
     vec!["session".into(), "stop".into()]
+}
+
+/// `systemctl --user stop` of the session's transient unit: what a session
+/// that did not come up in time is stopped with. `waydroid session stop`
+/// speaks to a session that got far enough to say it runs, and this one did
+/// not; stopping the unit ends its `waydroid session start` wherever it is.
+#[must_use]
+pub fn session_unit_stop_argv() -> Vec<String> {
+    vec![
+        "--user".into(),
+        "stop".into(),
+        format!("{SESSION_UNIT}.service"),
+    ]
 }
 
 /// `waydroid status`.
@@ -485,6 +504,14 @@ pub(crate) fn running(ctx: &Context) -> bool {
 
 /// Start the session unless it runs, and wait until it does. Answers whether
 /// it had to be started.
+///
+/// A SESSION THAT DID NOT COME UP IN TIME IS STOPPED before the refusal goes
+/// out. Its unit was started and would go on starting after this gave up: a
+/// slow one would come up behind a refusal that says Android is not running,
+/// hold its memory with nobody having asked for it (an update run nobody
+/// watches would leave it there, and every later run would find Android in
+/// use and replace nothing), and keep its unit's name taken, so the next
+/// start fails at `systemd-run` until it is up.
 fn ensure_session(
     ctx: &Context,
     places: &Places,
@@ -511,11 +538,26 @@ fn ensure_session(
             return Ok(true);
         }
         if started.elapsed() >= places.patience {
+            // The refusal is the same either way; the trouble says whether
+            // the stop took.
+            let stopped = run::tool(ctx.tools.systemctl.as_ref())
+                .and_then(|systemctl| {
+                    Call::new(systemctl, session_unit_stop_argv())
+                        .changing()
+                        .quietly(ctx)
+                })
+                .and_then(run::Ran::ok)
+                .is_ok();
             return Err(Failure {
                 refusal: Some(Refusal::SessionDown),
                 trouble: format!(
-                    "the session did not start in {} s",
-                    places.patience.as_secs()
+                    "the session did not start in {} s, and {}",
+                    places.patience.as_secs(),
+                    if stopped {
+                        "was stopped"
+                    } else {
+                        "could not be stopped"
+                    }
                 ),
             });
         }
@@ -837,6 +879,17 @@ fn install_app(
     })
 }
 
+/// Move the recorded F-Droid apps to the newer version the signed index names.
+///
+/// THE SIGNED INDEX IS ASKED AGAIN FIRST: nothing else moves the catalogue for
+/// an app installed by hand, and against the old one an upgrade finds nothing
+/// newer week after week and says "done". It is asked only when what this
+/// upgrade would move came from F-Droid, and a refresh that fails is the
+/// upgrade's failure — never "nothing new" read off the old catalogue.
+///
+/// AND IT MOVES ONLY WHAT ANDROID HOLDS NOW: an app taken out inside Android
+/// stays out. The record entry is skipped, not forgotten — a list read right
+/// after `session start` could still be short.
 #[cfg(feature = "net")]
 fn upgrade(
     ctx: &Context,
@@ -846,6 +899,20 @@ fn upgrade(
     net: &dyn crate::github::Fetch,
 ) -> Done {
     let kept = record(&ctx.roots);
+    let from_fdroid = |r: &Recorded| r.source == Came::Fdroid;
+    let asks_fdroid = match scope {
+        Scope::One {
+            key: AppKey::Android { package },
+        } => kept.get(package).is_some_and(from_fdroid),
+        Scope::Source {
+            source: Source::Android,
+        }
+        | Scope::Everything => kept.values().any(from_fdroid),
+        _ => false,
+    };
+    if asks_fdroid {
+        crate::fdroid::refresh_with(net, &ctx.roots, report)?;
+    }
     let wanted: Vec<&String> = match scope {
         Scope::One {
             key: AppKey::Android { package },
@@ -876,34 +943,80 @@ fn upgrade(
     }
     // An update run that had to start Android stops it again: nobody asked
     // for it to keep running, and it costs memory for as long as it does.
+    // EVERY WAY OUT of the block below passes the one stop after it; a
+    // session that did not come up in time `ensure_session` stops itself.
     let started = ensure_session(ctx, places, report)?;
-    let (mut moved, mut troubles) = (0u64, Vec::new());
-    for app in &due {
-        // Installed once, so the person already answered its questions.
-        let consent = Consent {
-            arm_only: true,
-            big: true,
-            ..Consent::default()
+    let done = 'moving: {
+        // WHAT ANDROID HOLDS NOW. A rehearsal started nothing, and has
+        // nothing to ask.
+        let present: Option<BTreeSet<String>> = if ctx.rehearse {
+            None
+        } else {
+            match listed(ctx) {
+                Ok(l) => Some(l.into_iter().map(|a| a.package).collect()),
+                Err(f) => break 'moving Err(f),
+            }
         };
-        match install_app(ctx, app, consent, places, report, net) {
-            Ok(_) => moved += 1,
-            Err(f) => troubles.push(format!("{}: {f}", app.package)),
+        // A LIST WITH NONE OF THE PERSON'S APPS, while the record holds apps
+        // from F-Droid to move (`due` is never empty here), is an Android
+        // that has not finished starting or a waydroid whose words this does
+        // not read — never "nothing to move", which would say "done (0)"
+        // every week while nothing moved.
+        if present
+            .as_ref()
+            .is_some_and(|p| p.iter().all(|a| SYSTEM_APPS.contains(&a.as_str())))
+        {
+            break 'moving Err(Failure {
+                refusal: Some(Refusal::ToolFailed),
+                trouble: "Android listed none of your apps".to_owned(),
+            });
         }
-    }
+        let (mut moved, mut troubles) = (0u64, Vec::new());
+        for app in &due {
+            if present.as_ref().is_some_and(|p| !p.contains(&app.package)) {
+                // ONE APP ASKED FOR BY NAME is refused with a sentence that
+                // says why: a "done" would say it moved, and "nothing by that
+                // name" would deny the row the person pressed (the record
+                // draws it while Android is down).
+                if let Scope::One { .. } = scope {
+                    break 'moving Err(Failure {
+                        refusal: Some(Refusal::NotInsideAndroid),
+                        trouble: format!(
+                            "{} is no longer inside Android: an update does not put it back",
+                            app.package
+                        ),
+                    });
+                }
+                println!("{}: no longer inside Android, so not put back", app.package);
+                continue;
+            }
+            // Installed once, so the person already answered its questions.
+            let consent = Consent {
+                arm_only: true,
+                big: true,
+                ..Consent::default()
+            };
+            match install_app(ctx, app, consent, places, report, net) {
+                Ok(_) => moved += 1,
+                Err(f) => troubles.push(format!("{}: {f}", app.package)),
+            }
+        }
+        if troubles.is_empty() {
+            Ok(Outcome {
+                amount: Some(moved),
+                ..Outcome::default()
+            })
+        } else {
+            Err(Failure {
+                refusal: Some(Refusal::ToolFailed),
+                trouble: troubles.join("\n"),
+            })
+        }
+    };
     if started {
         let _ = tell(ctx, session_stop_argv());
     }
-    if troubles.is_empty() {
-        Ok(Outcome {
-            amount: Some(moved),
-            ..Outcome::default()
-        })
-    } else {
-        Err(Failure {
-            refusal: Some(Refusal::ToolFailed),
-            trouble: troubles.join("\n"),
-        })
-    }
+    done
 }
 
 #[cfg(test)]
@@ -1078,6 +1191,10 @@ mod tests {
             ["app", "install", "/c/a.apk"]
         );
         assert_eq!(app_remove_argv("org.x"), ["app", "remove", "org.x"]);
+        assert_eq!(
+            session_unit_stop_argv(),
+            ["--user", "stop", "ronoctua-android-session.service"]
+        );
     }
 
     #[test]
@@ -1161,6 +1278,8 @@ mod tests {
         assert!(status_in(&fake.ctx, &fake.places).session);
     }
 
+    /// FAILS IF: a session that does not come up in time is not a refusal
+    /// in time, or its unit is left to go on starting behind that refusal.
     #[test]
     fn a_session_that_never_starts_is_a_refusal_in_time() {
         let fake = Fake::new("never", true, false);
@@ -1181,6 +1300,14 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(f.refusal, Some(Refusal::SessionDown));
+        assert!(f.trouble.ends_with("was stopped"), "{}", f.trouble);
+        let calls = fake.calls();
+        assert!(
+            calls
+                .trim_end()
+                .ends_with("systemctl --user stop ronoctua-android-session.service"),
+            "{calls}"
+        );
     }
 
     #[test]
@@ -1378,14 +1505,77 @@ mod tests {
                 license: None,
                 web_site: None,
             };
+            // THE INDEX THE REAL `entry.jar` VOUCHES FOR, so a refresh served
+            // that jar finds this catalogue current and downloads nothing.
             let c = crate::fdroid::Catalogue {
                 format: crate::fdroid::FORMAT,
                 timestamp: 1,
-                index_sha256: "c".repeat(64),
+                index_sha256: crate::fdroid::verify_jar(&entry_jar())
+                    .unwrap()
+                    .index
+                    .sha256
+                    .to_ascii_lowercase(),
                 apps: vec![app.clone()],
             };
             crate::fdroid::keep(&fake.ctx.roots, &c).unwrap();
             app
+        }
+
+        /// F-Droid's real signed entry point (`fdroid.rs`'s fixture).
+        fn entry_jar() -> Vec<u8> {
+            std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/android/entry.jar"),
+            )
+            .unwrap()
+        }
+
+        /// A network that answers `entry.jar` `times` times and serves `apk`
+        /// at `app`'s address.
+        fn fdroid_serving(times: usize, app: &crate::fdroid::App, apk: Vec<u8>) -> Canned {
+            let jar = entry_jar();
+            Canned::new(
+                (0..times)
+                    .map(|_| (crate::fdroid::ENTRY, 200, vec![], jar.clone()))
+                    .collect(),
+            )
+            .serving(&app.apk_url(), apk)
+        }
+
+        /// The record holding `package` at version 3, from `source`.
+        fn recorded_at_three(fake: &Fake, package: &str, source: Came) {
+            let mut kept = BTreeMap::new();
+            kept.insert(
+                package.to_owned(),
+                Recorded {
+                    name: "Notes".into(),
+                    version_code: 3,
+                    version_name: "1.3".into(),
+                    sha256: String::new(),
+                    source,
+                },
+            );
+            keep_record(&fake.ctx.roots, &kept).unwrap();
+        }
+
+        /// Android lists `packages` beside the image's own Settings.
+        fn listing(fake: &Fake, packages: &[&str]) {
+            let mut list = std::fs::read_to_string(fake.dir.join("apps")).unwrap();
+            for p in packages {
+                list.push_str(&format!("Name: {p}\npackageName: {p}\ncategories:\n"));
+            }
+            std::fs::write(fake.dir.join("apps"), list).unwrap();
+        }
+
+        fn upgrade_all() -> Order {
+            Order::Upgrade {
+                scope: Scope::Source {
+                    source: Source::Android,
+                },
+            }
+        }
+
+        fn upgrade_with(fake: &Fake, order: &Order, net: &Canned) -> Done {
+            run_in(&fake.ctx, order, &mut Vec::<Beat>::new(), net, &fake.places)
         }
 
         #[test]
@@ -1461,42 +1651,24 @@ mod tests {
             assert_eq!(f.refusal, Some(Refusal::ArmOnly));
         }
 
+        /// FAILS IF: an upgrade does not ask F-Droid's signed entry first, does
+        /// not reinstall what the catalogue has newer over an app Android
+        /// lists, leaves running the Android it started, or moves an app twice.
         #[test]
         fn an_upgrade_reinstalls_what_the_catalogue_has_newer_and_stops_what_it_started() {
             let fake = Fake::new("fdroid-up", true, false);
             std::fs::write(fake.dir.join("new-package"), "org.example.notes").unwrap();
             let apk = zip_of(&[("AndroidManifest.xml", b"x"), ("classes.dex", b"dex")]);
             let app = catalogue_with(&fake, &apk, &[]);
-            let mut kept = BTreeMap::new();
-            kept.insert(
-                app.package.clone(),
-                Recorded {
-                    name: "Notes".into(),
-                    version_code: 3,
-                    version_name: "1.3".into(),
-                    sha256: String::new(),
-                    source: Came::Fdroid,
-                },
-            );
-            keep_record(&fake.ctx.roots, &kept).unwrap();
-            let net = Canned::default().serving(&app.apk_url(), apk);
-            let order = Order::Upgrade {
-                scope: Scope::Source {
-                    source: Source::Android,
-                },
-            };
+            recorded_at_three(&fake, &app.package, Came::Fdroid);
+            listing(&fake, &[&app.package]);
+            // Each upgrade asks the entry once: two upgrades, two answers.
+            let net = fdroid_serving(2, &app, apk);
             assert_eq!(
-                run_in(
-                    &fake.ctx,
-                    &order,
-                    &mut Vec::<Beat>::new(),
-                    &net,
-                    &fake.places
-                )
-                .unwrap()
-                .amount,
+                upgrade_with(&fake, &upgrade_all(), &net).unwrap().amount,
                 Some(1)
             );
+            assert_eq!(net.asked.borrow()[0].0, crate::fdroid::ENTRY);
             assert_eq!(record(&fake.ctx.roots)[&app.package].version_code, 7);
             assert!(
                 fake.calls().trim_end().ends_with("waydroid session stop"),
@@ -1504,16 +1676,204 @@ mod tests {
                 fake.calls()
             );
             assert_eq!(
-                run_in(
-                    &fake.ctx,
-                    &order,
-                    &mut Vec::<Beat>::new(),
-                    &net,
-                    &fake.places
-                )
-                .unwrap()
-                .amount,
+                upgrade_with(&fake, &upgrade_all(), &net).unwrap().amount,
                 Some(0)
+            );
+            assert_eq!(net.asked.borrow().len(), 2, "the entry, asked again");
+        }
+
+        /// FAILS IF: an upgrade with nothing from F-Droid to move reaches a
+        /// host, or starts Android — for the whole source, or for one app the
+        /// record does not hold or that came from a file.
+        #[test]
+        fn an_upgrade_with_nothing_from_fdroid_asks_no_host() {
+            let fake = Fake::new("fdroid-none", true, false);
+            recorded_at_three(&fake, "org.example.notes", Came::File);
+            let net = Canned::default();
+            assert_eq!(
+                upgrade_with(&fake, &upgrade_all(), &net).unwrap().amount,
+                Some(0)
+            );
+            let one = |package: &str| Order::Upgrade {
+                scope: Scope::One {
+                    key: AppKey::Android {
+                        package: package.into(),
+                    },
+                },
+            };
+            assert_eq!(
+                upgrade_with(&fake, &one("org.example.notes"), &net)
+                    .unwrap()
+                    .amount,
+                Some(0)
+            );
+            assert_eq!(
+                upgrade_with(&fake, &one("org.example.absent"), &net)
+                    .unwrap_err()
+                    .refusal,
+                Some(Refusal::UnknownItem)
+            );
+            assert!(net.asked.borrow().is_empty(), "{:?}", net.asked.borrow());
+            assert!(net.fetched.borrow().is_empty());
+            assert!(!fake.calls().contains("session start"), "{}", fake.calls());
+        }
+
+        /// FAILS IF: an upgrade whose signed index could not be asked moves
+        /// anything, starts Android, or answers "nothing new" off the old
+        /// catalogue.
+        #[test]
+        fn an_index_that_cannot_be_fetched_moves_nothing() {
+            let fake = Fake::new("fdroid-offline", true, false);
+            let apk = zip_of(&[("AndroidManifest.xml", b"x"), ("classes.dex", b"dex")]);
+            let app = catalogue_with(&fake, &apk, &[]);
+            recorded_at_three(&fake, &app.package, Came::Fdroid);
+            listing(&fake, &[&app.package]);
+            // The APK is there; the entry is not.
+            let net = Canned::default().serving(&app.apk_url(), apk);
+            let f = upgrade_with(&fake, &upgrade_all(), &net).unwrap_err();
+            assert_eq!(f.refusal, Some(Refusal::Offline));
+            let calls = fake.calls();
+            assert!(!calls.contains("session start"), "{calls}");
+            assert!(!calls.contains("app install"), "{calls}");
+            assert!(net.fetched.borrow().is_empty());
+            assert_eq!(record(&fake.ctx.roots)[&app.package].version_code, 3);
+        }
+
+        /// FAILS IF: an upgrade puts back an app the person took out inside
+        /// Android, forgets it from the record, or leaves Android running.
+        #[test]
+        fn an_app_taken_out_inside_android_is_not_put_back() {
+            let fake = Fake::new("fdroid-gone", true, false);
+            std::fs::write(fake.dir.join("new-package"), "org.example.notes").unwrap();
+            let apk = zip_of(&[("AndroidManifest.xml", b"x"), ("classes.dex", b"dex")]);
+            let app = catalogue_with(&fake, &apk, &[]);
+            recorded_at_three(&fake, &app.package, Came::Fdroid);
+            // Another app of the person's is there: Android answered.
+            listing(&fake, &["org.example.maps"]);
+            let net = fdroid_serving(1, &app, apk);
+            assert_eq!(
+                upgrade_with(&fake, &upgrade_all(), &net).unwrap().amount,
+                Some(0)
+            );
+            let calls = fake.calls();
+            assert!(!calls.contains("app install"), "{calls}");
+            assert!(net.fetched.borrow().is_empty(), "no APK was downloaded");
+            assert!(
+                calls.trim_end().ends_with("waydroid session stop"),
+                "{calls}"
+            );
+            assert_eq!(
+                record(&fake.ctx.roots)[&app.package].version_code,
+                3,
+                "skipped, not forgotten"
+            );
+        }
+
+        /// FAILS IF: a list with none of the person's apps — Android not done
+        /// starting, or words this does not read — is "done (0)" instead of a
+        /// failure, or leaves Android running.
+        #[test]
+        fn a_list_with_none_of_your_apps_is_a_failure_and_not_nothing() {
+            let fake = Fake::new("fdroid-empty", true, false);
+            let apk = zip_of(&[("AndroidManifest.xml", b"x"), ("classes.dex", b"dex")]);
+            let app = catalogue_with(&fake, &apk, &[]);
+            recorded_at_three(&fake, &app.package, Came::Fdroid);
+            // Only the image's own Settings.
+            let net = fdroid_serving(1, &app, apk);
+            let f = upgrade_with(&fake, &upgrade_all(), &net).unwrap_err();
+            assert_eq!(f.refusal, Some(Refusal::ToolFailed));
+            assert_eq!(f.trouble, "Android listed none of your apps");
+            let calls = fake.calls();
+            assert!(!calls.contains("app install"), "{calls}");
+            assert!(
+                calls.trim_end().ends_with("waydroid session stop"),
+                "{calls}"
+            );
+        }
+
+        /// FAILS IF: an upgrade whose Android did not come up in time leaves
+        /// the session unit it started running — a slow one would come up
+        /// after the run gave up, hold its memory, and every later update run
+        /// would find Android in use and move nothing — or moves anything.
+        #[test]
+        fn a_session_that_does_not_come_up_in_time_is_stopped_by_the_upgrade() {
+            let fake = Fake::new("fdroid-slow", true, false);
+            let apk = zip_of(&[("AndroidManifest.xml", b"x"), ("classes.dex", b"dex")]);
+            let app = catalogue_with(&fake, &apk, &[]);
+            recorded_at_three(&fake, &app.package, Came::Fdroid);
+            // The unit is started, and its session never says it runs.
+            let slow = script(
+                &fake.dir,
+                "fake-slow-run",
+                &format!(
+                    "echo \"systemd-run $*\" >> '{}'\n",
+                    fake.dir.join("calls.log").display()
+                ),
+            );
+            let ctx = Context {
+                tools: crate::Tools {
+                    systemd_run: Some(slow),
+                    ..fake.ctx.tools.clone()
+                },
+                ..fake.ctx.clone()
+            };
+            let net = fdroid_serving(1, &app, apk);
+            let f = run_in(
+                &ctx,
+                &upgrade_all(),
+                &mut Vec::<Beat>::new(),
+                &net,
+                &fake.places,
+            )
+            .unwrap_err();
+            assert_eq!(f.refusal, Some(Refusal::SessionDown));
+            let calls = fake.calls();
+            assert!(
+                calls.contains("systemd-run --user --unit=ronoctua-android-session"),
+                "{calls}"
+            );
+            assert!(
+                calls
+                    .trim_end()
+                    .ends_with("systemctl --user stop ronoctua-android-session.service"),
+                "{calls}"
+            );
+            assert!(!calls.contains("app install"), "{calls}");
+            assert!(net.fetched.borrow().is_empty(), "no APK was downloaded");
+            assert_eq!(record(&fake.ctx.roots)[&app.package].version_code, 3);
+        }
+
+        /// FAILS IF: an update of ONE app Android no longer lists says it was
+        /// done, puts it back, leaves Android running, or is refused with a
+        /// sentence that is not that one ("nothing by that name" would deny
+        /// the row the person pressed).
+        #[test]
+        fn one_app_android_no_longer_lists_is_refused_with_a_sentence() {
+            let fake = Fake::new("fdroid-one-gone", true, false);
+            let apk = zip_of(&[("AndroidManifest.xml", b"x"), ("classes.dex", b"dex")]);
+            let app = catalogue_with(&fake, &apk, &[]);
+            recorded_at_three(&fake, &app.package, Came::Fdroid);
+            listing(&fake, &["org.example.maps"]);
+            let net = fdroid_serving(1, &app, apk);
+            let order = Order::Upgrade {
+                scope: Scope::One {
+                    key: AppKey::Android {
+                        package: app.package,
+                    },
+                },
+            };
+            let f = upgrade_with(&fake, &order, &net).unwrap_err();
+            assert_eq!(f.refusal, Some(Refusal::NotInsideAndroid));
+            assert!(
+                f.trouble.contains("no longer inside Android"),
+                "{}",
+                f.trouble
+            );
+            let calls = fake.calls();
+            assert!(!calls.contains("app install"), "{calls}");
+            assert!(
+                calls.trim_end().ends_with("waydroid session stop"),
+                "{calls}"
             );
         }
     }

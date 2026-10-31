@@ -9535,20 +9535,31 @@ impl Footer {
             return true;
         }
 
+        self.show_the_buffer_level();
+        true
+    }
+
+    /// The focused window's keys at the depth typed so far
+    /// (`buffer_pending`), on the leader's list — or, when the window answers
+    /// to none there, the sequence ended, like any other key that leads
+    /// nowhere.
+    ///
+    /// It RUNS nothing: [`Footer::buffer_key`] runs a complete sequence, and
+    /// [`Footer::open_window_shortcuts`] — which `window-shortcuts` reaches
+    /// through `run_with` — opens the list through here, so a command by name
+    /// never comes back round to the key that runs one
+    /// (`the-footer-does-not-ask-itself`).
+    fn show_the_buffer_level(&mut self) {
         let narrowed = self.buffer_inputs();
         if narrowed.is_empty() {
-            // A key the buffer does not answer to ends the sequence, like any
-            // other key that leads nowhere.
             self.buffer_pending.clear();
             self.close_leader();
-            return true;
+            return;
         }
-
         self.inputs = narrowed;
         self.first_page();
         self.echo = None;
         self.apply_geometry(KeyboardInteractivity::Exclusive);
-        true
     }
 
     fn buffer_pending_refs(&self) -> Vec<&str> {
@@ -10625,33 +10636,32 @@ impl Footer {
     /// Opens the focused window's shortcuts: the region fills with them and
     /// the minibuffer's line yields (they are one set — `minibuffer_rest_pieces`).
     ///
-    /// It presses the local prefix for the person — the very submenu
-    /// [`Footer::buffer_key`] already draws and runs, now reached by one
-    /// standardised gesture instead of a key the window named. Does nothing
-    /// when the focused window published no shortcuts.
+    /// It opens the very submenu [`Footer::buffer_key`] draws and runs, now
+    /// reached by one standardised gesture instead of a key the window named
+    /// — and opens it by its level (`show_the_buffer_level`), never by
+    /// pressing a key through `buffer_key`: that one runs what a sequence
+    /// completes, by `run_with` for a kiosk's group, and `run_with` is where
+    /// `window-shortcuts` comes in. Does nothing when the focused window
+    /// published no shortcuts.
     fn open_window_shortcuts(&mut self) {
         if self.buffer_bindings.is_empty() {
             return;
         }
         // A BUFFER UNDER THE LOCAL PREFIX opens its `,` submenu as it always
-        // has — the key is pressed for the person. A window whose keys are FLAT
+        // has — the prefix typed for the person. A window whose keys are FLAT
         // (every native door, now that `Content::shortcuts` derives from the
-        // hint) lists them at depth zero, with no prefix to press.
+        // hint) lists them at depth zero, with no prefix to type.
         let prefixed = self.buffer_bindings.iter().any(|(sequence, _)| {
             sequence.split_whitespace().next() == Some(ronoctua_protocol::LOCAL_PREFIX)
         });
+        self.buffer_pending.clear();
         if prefixed {
-            if let Ok(key) = ronoctua_keymap::Key::parse(ronoctua_protocol::LOCAL_PREFIX) {
-                self.buffer_key(key);
-            }
+            self.buffer_pending
+                .push(ronoctua_protocol::LOCAL_PREFIX.to_owned());
         } else {
             self.shortcuts_flat = true;
-            self.buffer_pending.clear();
-            self.inputs = self.buffer_inputs();
-            self.first_page();
-            self.echo = None;
-            self.apply_geometry(KeyboardInteractivity::Exclusive);
         }
+        self.show_the_buffer_level();
         self.draw_and_paint();
     }
 
@@ -11595,9 +11605,9 @@ impl Footer {
 
     /// A secret came down the control socket for the askpass bar: served on a
     /// thread of its own, the bar asking here (`sudo_bar::serve_askpass`), its
-    /// title the `kind` the helper named (`ssh`/`sudo`). With no loop to ask on
-    /// — a photograph's footer — the connection is let go and the asker asks
-    /// its own way.
+    /// title the `kind` the helper named, read with whether a context came
+    /// (`sudo_bar::Kind::of`). With no loop to ask on — a photograph's footer
+    /// — the connection is let go and the asker asks its own way.
     fn askpass_serve(
         &mut self,
         stream: crate::leader::Follower,
@@ -11608,7 +11618,7 @@ impl Footer {
         if let Some(to_bar) = self.askpass_channel() {
             crate::sudo_bar::serve_askpass(
                 stream.0,
-                crate::sudo_bar::Kind::of(kind),
+                crate::sudo_bar::Kind::of(kind, context.is_some()),
                 context,
                 prompt,
                 to_bar,
@@ -11954,24 +11964,22 @@ impl Footer {
     /// The leader's line, the `M-x`'s, the launcher's and the closed region's
     /// are the paint's (`Footer::paint`): what they show is what is typed, or
     /// the compositor's mode.
+    ///
+    /// WITH "HIDE SHORTCUTS" ON, a PROGRAM that opens in the footer gives its
+    /// keys up to the line the same way a window does — a feature's panel
+    /// (`Region`, the footer version of the network, the audio, the
+    /// bluetooth…) and the Chrome kiosk. Each asks that itself, in its own
+    /// line (`kiosk_hint`, `hosted_hint`): nothing but `view()` decides which
+    /// line runs here. The footer's OWN views — its settings, the theme
+    /// chooser, the build page, a window's menu — are not programs and keep
+    /// their line, so the row that turns shortcuts back on stays legible.
     fn view_hint(&self, showing: ViewState) -> Option<Vec<crate::chrome::Piece>> {
-        // WITH "HIDE SHORTCUTS" ON, a PROGRAM that opens in the footer gives its
-        // keys up to the line the same way a window does — a feature's panel
-        // (`Region`, the footer version of the network, the audio, the
-        // bluetooth…) and the Chrome kiosk. The region keeps its content and
-        // answers the arrows and `RET`; only the line's teaching goes. The
-        // footer's OWN views — its settings, the theme chooser, the build page,
-        // a window's menu — are not programs and keep their line, so the row
-        // that turns shortcuts back on stays legible.
-        let hide = self.modeline.hide_shortcuts();
         match showing {
             ViewState::Themes => self.themes_hint(),
             ViewState::FooterSettings => self.footer_settings_hint(),
             ViewState::BuildPage => self.build_page_hint(),
-            ViewState::Kiosk if hide => None,
             ViewState::Kiosk => self.kiosk_hint(),
             ViewState::WindowMenu => self.window_menu_hint(),
-            ViewState::Region(_) if hide => None,
             ViewState::Region(hosted) => self.hosted_hint(hosted),
             ViewState::Applications
             | ViewState::Commands
@@ -12569,6 +12577,9 @@ impl Footer {
         let Some(sender) = self.build_switch_sender.clone() else {
             return;
         };
+        // READ NOW: whether a system waits for the next boot moves no link
+        // of the running one.
+        self.build_state = crate::build_switch::read();
         let target = self.build_state.other_build();
         let instance = match target {
             crate::build_switch::Build::Own => "own",
@@ -12592,9 +12603,16 @@ impl Footer {
             let _ = sender.send(ok);
         });
         self.switching = Some(target);
-        let m = self.texts.t(match target {
-            crate::build_switch::Build::Own => crate::key::ECHO_BUILD_TO_OWN,
-            crate::build_switch::Build::Reference => crate::key::ECHO_BUILD_TO_REFERENCE,
+        // A SYSTEM ALREADY WAITS FOR THE RESTART: the apply sets this one for
+        // the next restart too (`ronoctua-machine`), and the line says so.
+        let later = self.build_state.waits_for_restart(target);
+        let m = self.texts.t(match (target, later) {
+            (crate::build_switch::Build::Own, false) => crate::key::ECHO_BUILD_TO_OWN,
+            (crate::build_switch::Build::Reference, false) => crate::key::ECHO_BUILD_TO_REFERENCE,
+            (crate::build_switch::Build::Own, true) => crate::key::ECHO_BUILD_TO_OWN_NEXT_RESTART,
+            (crate::build_switch::Build::Reference, true) => {
+                crate::key::ECHO_BUILD_TO_REFERENCE_NEXT_RESTART
+            }
         });
         self.echo_message(m);
         self.draw_and_paint();
@@ -12611,11 +12629,16 @@ impl Footer {
     ///     you are already on this build (a dev build whose checkout has not
     ///     moved). Say that, rather than leave the person wondering.
     fn build_switch_done(&mut self, ok: bool) {
-        self.switching = None;
-        let m = self.texts.t(if ok {
-            crate::key::ECHO_BUILD_UNCHANGED
-        } else {
-            crate::key::ECHO_BUILD_SWITCH_FAILED
+        let target = self.switching.take();
+        // SET FOR THE NEXT RESTART — a system already waited, or `nixpkgs`
+        // moved — is a third answer: the build that runs stays until then,
+        // and the one that waits is what the switch made.
+        self.build_state = crate::build_switch::read();
+        let waits = target.is_some() && self.build_state.waiting == target;
+        let m = self.texts.t(match (ok, waits) {
+            (true, true) => crate::key::ECHO_BUILD_NEXT_RESTART,
+            (true, false) => crate::key::ECHO_BUILD_UNCHANGED,
+            (false, _) => crate::key::ECHO_BUILD_SWITCH_FAILED,
         });
         self.echo_message(m);
         self.draw_and_paint();

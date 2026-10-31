@@ -166,6 +166,7 @@ pub const fn refusal_key(why: Refusal) -> &'static str {
         Refusal::NoUpdateInfo => key::SOFTWARE_REFUSAL_NO_UPDATE_INFO,
         Refusal::CannotTry => key::SOFTWARE_REFUSAL_CANNOT_TRY,
         Refusal::SessionDown => key::SOFTWARE_REFUSAL_SESSION_DOWN,
+        Refusal::NotInsideAndroid => key::SOFTWARE_REFUSAL_NOT_INSIDE_ANDROID,
         Refusal::WillNotParse => key::SOFTWARE_REFUSAL_WILL_NOT_PARSE,
         Refusal::WrongUser => key::SOFTWARE_REFUSAL_WRONG_USER,
         Refusal::NotLet => key::SOFTWARE_REFUSAL_NOT_LET,
@@ -176,6 +177,7 @@ pub const fn refusal_key(why: Refusal) -> &'static str {
         Refusal::ApplyFailed => key::SOFTWARE_DECLARED_REFUSAL_APPLY_FAILED,
         Refusal::MachineUnnamed => key::SOFTWARE_DECLARED_REFUSAL_MACHINE_UNNAMED,
         Refusal::LeavesAtNextApply => key::SOFTWARE_DECLARED_REFUSAL_LEAVES_AT_NEXT_APPLY,
+        Refusal::LeavesAtNextRestart => key::SOFTWARE_DECLARED_REFUSAL_LEAVES_AT_NEXT_RESTART,
         Refusal::DeclinedElsewhere => key::SOFTWARE_DECLARED_REFUSAL_DECLINED_ELSEWHERE,
         Refusal::ProvidedByAPart => key::SOFTWARE_REFUSAL_PROVIDED_BY_A_PART,
     }
@@ -375,6 +377,7 @@ pub const fn standing_key(standing: &Standing) -> &'static str {
         Standing::Arriving { failure: None } => key::SOFTWARE_DECLARED_STANDING_ARRIVING,
         Standing::Arriving { failure: Some(_) } => key::SOFTWARE_DECLARED_STANDING_NOT_ARRIVED,
         Standing::Waiting => key::SOFTWARE_DECLARED_STANDING_WAITING,
+        Standing::NextRestart => key::SOFTWARE_DECLARED_STANDING_NEXT_RESTART,
         Standing::Elsewhere => key::SOFTWARE_DECLARED_STANDING_ELSEWHERE,
         Standing::Skipped { reason, .. } => skip_key(*reason),
     }
@@ -422,6 +425,7 @@ pub const fn decline_key(state: &DeclineState) -> &'static str {
         DeclineState::Unknown => key::SOFTWARE_DECLARED_DECLINE_UNKNOWN,
         DeclineState::Elsewhere => key::SOFTWARE_DECLARED_DECLINE_ELSEWHERE,
         DeclineState::Waiting => key::SOFTWARE_DECLARED_DECLINE_WAITING,
+        DeclineState::NextRestart => key::SOFTWARE_DECLARED_DECLINE_NEXT_RESTART,
     }
 }
 
@@ -558,7 +562,12 @@ mod tests {
             for o in Origin::ALL {
                 said_well(&t, origin_key(o));
             }
-            for s in [Standing::Applied, Standing::Waiting, Standing::Elsewhere] {
+            for s in [
+                Standing::Applied,
+                Standing::Waiting,
+                Standing::NextRestart,
+                Standing::Elsewhere,
+            ] {
                 said_well(&t, standing_key(&s));
             }
             for r in SkipWhy::ALL {
@@ -584,6 +593,7 @@ mod tests {
                 DeclineState::Unknown,
                 DeclineState::Elsewhere,
                 DeclineState::Waiting,
+                DeclineState::NextRestart,
             ] {
                 said_well(&t, decline_key(&d));
             }

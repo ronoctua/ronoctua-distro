@@ -44,9 +44,24 @@
             rows = [g for g in json.loads(kept).get("groups", []) if "planted" in g.get("message", "")]
             raise AssertionError(f"the planted error never was {what}: {rows}")
 
-        # WHAT THIS BOOT ALREADY WROTE AT `err` was heard on the first start
-        # (the backfill), and may have marked the modeline before anything was
-        # planted: seen first, so the mark below is the planted line's.
+        # SHIPPED SWITCHED OFF (`startsOff`): with no entry of the person's in
+        # `brain.json` the row reads off, and an off module hears nothing and
+        # shows no mark — every wait below would wait for nothing. So it is
+        # switched on first, by the one knob the row's own switch sends; the
+        # brain rings its watch thread, which starts hearing the journal from
+        # then on.
+        # (`row`, not the harness's `rows`: the script is one scope, and that
+        # one is a set.)
+        row = next((t for t in mind()["tasks"] if t["id"] == "journal-errors"), None)
+        assert row is not None and not row["enabled"], f"journal-errors does not ship switched off: {row}"
+        said = brain({"ask": "set", "task": "journal-errors", "knob": {"enabled": True}})
+        assert said.get("say") not in ("refused", "declined"), f"switching it on was refused: {said}"
+        row = next((t for t in said["mind"]["tasks"] if t["id"] == "journal-errors"), None)
+        assert row is not None and row["enabled"], f"journal-errors is still off: {row}"
+
+        # WHAT THE MACHINE WRITES AT `err` from the moment it is on may mark
+        # the modeline before anything is planted: seen first, so the mark
+        # below is the planted line's.
         machine.sleep(5)
         control("brain-act journal-errors seen-all")
         settled(lambda layout: layout and mark not in layout)
@@ -86,7 +101,7 @@
             return None
 
         # THE DBUS NOISE THE SHIPPED FILTER IS FOR: one err line carrying the
-        # trecho, written by a unit of its own as the plant above. It must be
+        # snippet, written by a unit of its own as the plant above. It must be
         # counted on the filter, never become a kind, and never light the mark.
         machine.succeed(
             "systemd-run --wait --quiet --unit=brain-modules-vm-filtered "

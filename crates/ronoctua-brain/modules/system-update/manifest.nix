@@ -8,11 +8,11 @@
 # this.
 {
   # WHAT IT IS, as the page says it: the person's declarations gathered,
-  # the distro moved forward, the system built and switched to (not "a
-  # rebuild for the next boot" — the switch happens now, and only a new
-  # kernel waits for the restart, which the boot trial guards), the person's
-  # own programs and caches, and what this machine did published.
-  what = "Update the system: gather what you declared, move the distro forward, build and switch to the new system with a boot trial, update your own programs, and publish what this machine did.";
+  # the distro and `nixpkgs` moved forward, the system built and SET FOR THE
+  # NEXT BOOT (2026-10-30: nothing that runs is switched under the session;
+  # the restart tries the new system once, which the boot trial guards), the
+  # person's own programs and caches, and what this machine did published.
+  what = "Update the system: gather what you declared, move the distro and nixpkgs forward, build the new system and set it for the next boot with a boot trial, update your own programs, and publish what this machine did.";
 
   needs = {
     root = false;
@@ -49,6 +49,33 @@
     runawayMinutes = 120;
     gated = true;
   };
+
+  # ONE EVENT IN TWO WORDINGS: a run whose rebuild set a new system for the
+  # next boot ends telling the person to restart — said on the minibuffer, a
+  # notification when the line is busy — once per such run. The new system
+  # is used only from that restart, and a machine never restarted stacks one
+  # waiting system a week until the boot menu has no room for the last good
+  # one. `restart` promises the boot trial's way back; `restart-unguarded`
+  # is the same when no trial could be armed (`no-trial`), and promises
+  # none. Never a mark: at rest the modeline says nothing (invariant 14).
+  events =
+    let
+      restart = {
+        notification = {
+          show = "full";
+          life = "long";
+          loud = false;
+          level = 40;
+          icon = "power";
+          tags = [ "system" ];
+          actions = [ ];
+        };
+      };
+    in
+    {
+      inherit restart;
+      restart-unguarded = restart;
+    };
 
   # FOUR UNITS, all declared by `module.nix` under these names.
   #

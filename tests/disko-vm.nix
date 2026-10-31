@@ -17,6 +17,9 @@
 # already knows how to bring the installer VM up, run the script in the right
 # order and reboot to prove that the system boots from the partitioned disk.
 # Rewriting that would be reimplementing disko's logic (invariant 5, in spirit).
+# The one piece that is ours is the installed system's BASE (`installed`,
+# below), and only until disko's `lib/tests.nix` stops reading the removed
+# `boot.initrd.systemd.enable`.
 #
 # ON BOTH FIRMWARES (`firmware`): UEFI, and BIOS (`disko-vm-bios`), where
 # the same layout carries GRUB's own partition and the machine boots GRUB
@@ -33,8 +36,53 @@
 
 let
   bios = firmware == "bios";
+  layout = if bios then ./disko-config-bios-test.nix else ./disko-config-test.nix;
+  inherit (disko.lib) testLib;
+
+  # THE INSTALLED SYSTEM'S BASE, handed to `makeDiskoTest` through its own
+  # `extendModules` argument (the door disko's `module.nix` uses for
+  # `installTest`).
+  #
+  # Left to itself, the harness builds this base from `installed-system`
+  # (disko's `lib/tests.nix`, lines 148-154 at cedd626), which reads
+  # `config.boot.initrd.systemd.enable` to choose between the scripted
+  # initrd's `preDeviceCommands` and an initrd secret. nixos-unstable removed
+  # the scripted initrd on 2026-10-27, and both options with it
+  # (`mkRemovedOptionModule`: the value is a `throw`), so merely evaluating
+  # that base throws, before any VM starts.
+  #
+  # This is that module without the question. The `/tmp/secret.key` initrd
+  # secret it would plant is left out too: this layout has no key file, so the
+  # installed system's initrd carries no secret, as no machine's does. That
+  # system is still a bare NixOS (disko's module, the test layout, the
+  # harness's instrumentation and, on BIOS, `nix/modules/boot-loader.nix`),
+  # not a machine of the distro. The layout, the installer VM, the script and
+  # the reboot are still disko's — and disko moved from ff8702b to cedd626
+  # (new luks and gpt scripts) in 14d928c, right after ae7224b rolled systemd
+  # from 260.2 to 262, so this is not the system of the last green run.
+  #
+  # DELETE this binding and `extendModules` below once disko's
+  # `installed-system` stops reading the option. Master's head (cedd626)
+  # still read it on 2026-10-30, and the open PRs #1304 and #1305 do not
+  # touch `lib/tests.nix`.
+  installed = import (pkgs.path + "/nixos/lib/eval-config.nix") {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    modules = [
+      {
+        imports = [
+          disko.nixosModules.disko
+          (testLib.prepareDiskoConfig (import layout { inherit lib; }) testLib.devices)
+        ];
+        disko.enableConfig = true;
+        documentation.enable = false;
+        hardware.enableAllFirmware = lib.mkForce false;
+        boot.consoleLogLevel = lib.mkForce 100;
+        boot.loader.systemd-boot.enable = lib.mkDefault (!bios);
+      }
+    ];
+  };
 in
-disko.lib.testLib.makeDiskoTest {
+testLib.makeDiskoTest {
   inherit pkgs;
   name = "ronoctua-layout-7-2" + lib.optionalString bios "-bios";
 
@@ -42,7 +90,10 @@ disko.lib.testLib.makeDiskoTest {
   # production is >= RAM and here has to fit on the VM's disk. See the header of
   # disko-config-test.nix — the `makeDiskoTest` imports the file with the
   # default arguments and accepts no parameters; so BIOS is a file of its own.
-  disko-config = if bios then ./disko-config-bios-test.nix else ./disko-config-test.nix;
+  disko-config = layout;
+
+  # The installed system's base (see `installed`, above).
+  extendModules = installed.extendModules;
 
   # UEFI, as section 2 recommends of the target machines — or BIOS, which
   # they may still start from.
@@ -61,17 +112,11 @@ disko.lib.testLib.makeDiskoTest {
     ];
   };
 
-  # Typing the passphrase at boot is NOT a workaround — it is the test of the
-  # recovery path of section 7.2.
-  #
-  # The VM has no TPM2, so the crypttab's `tpm2-device=auto` finds no token
-  # ("No valid TPM2 token data found") and systemd falls back to the prompt.
-  # That fallback is exactly what 7.2 requires: "with a recovery passphrase
-  # ALWAYS enrolled in parallel". If one day the volume opened with no TPM and
-  # no passphrase, it would be a serious bug — and this test would start
-  # failing here.
-  #
-  # Unlocking BY TPM2, with PCR 7/11/12/15, is milestone 8, with swtpm.
+  # Typing the passphrase at boot is NOT a workaround — it is the test of how
+  # the machine unlocks its disk: the passphrase is the key, and the crypttab
+  # asks no TPM (`nix/disko/default.nix` says why). If one day the volume
+  # opened with no passphrase, it would be a serious bug — and this test would
+  # start failing here.
 
   # The INSTALLED system needs the tools the asserts use. `lsattr` comes from
   # e2fsprogs and is not in a minimal NixOS.

@@ -26,6 +26,17 @@
 //! the system's generations is the store's. This module owns neither; it
 //! owns WHEN, and what the screen says about it.
 //!
+//! # The run activates nothing, and says to restart
+//!
+//! The routine IS the timer invariant 6 names (`module.nix` says why it is
+//! not a systemd `.timer`), and its rebuild sets the new system for the NEXT
+//! BOOT (`ronoctua-machine apply --next-boot`): nothing that runs is
+//! stopped or restarted under the person. So a run whose apply set a system
+//! for the next boot ends by TELLING them to restart ([`restart_told`]),
+//! once: the new system is used only from then, and a machine nobody
+//! restarts stacks one waiting system a week until the boot menu has no
+//! room left for the last good one.
+//!
 //! # A scheduled run waits, and never asks
 //!
 //! On a metered way out, or on a battery below the sequence's floor, the run
@@ -51,7 +62,7 @@ use std::sync::Arc;
 // THE SHARED HALF (`shared.rs`, compiled into the library beside the
 // manifest): what the update's doors read of the same machine and table.
 use super::{Charge, HOLD_METERED, steps};
-use crate::module::{Birth, Manifest, Module, Run, Scheduled};
+use crate::module::{Birth, Event, Manifest, Module, Run, Scheduled};
 use crate::moment::{Moment, Offset};
 use crate::prefs::{TaskPrefs, Where};
 use crate::pulse::Pulse;
@@ -194,7 +205,16 @@ impl Scheduled for SystemUpdate {
             };
         }
         match run.watch(before) {
-            Watched::Ended(sheet) => ended(sheet.steps, &sheet.trouble),
+            Watched::Ended(sheet) => {
+                if !run.is_rehearsal()
+                    && restart_told(&super::RecordPlaces::here(), sheet.began, |event| {
+                        run.ctx().tell(event)
+                    })
+                {
+                    tracing::info!("the new system waits for the next restart, said");
+                }
+                ended(sheet.steps, &sheet.trouble)
+            }
             Watched::Runaway(sheet) => Outcome::Failed {
                 at: last_step(&sheet.steps),
                 // A WORD of ours, because this is the brain's own conclusion
@@ -239,6 +259,39 @@ fn ended(steps: Vec<StepOutcome>, trouble: &str) -> Outcome {
         };
     }
     Outcome::Done(steps)
+}
+
+/// Tells the person to restart when this run's apply — the machine's last,
+/// at or after `began` — set a new system for the next boot, and a system
+/// waits for it ([`super::next_boot`], from the profile and the system that
+/// runs): the manifest's `restart` event, or `restart-unguarded` when no
+/// boot trial could be armed for it, which promises no way back. Whether it
+/// told.
+fn restart_told(at: &super::RecordPlaces, began: Moment, tell: impl FnOnce(Event)) -> bool {
+    let state = ronoctua_machine::state(&ronoctua_machine::Places {
+        dir: at.machine_dir.clone(),
+        state: at.machine_state.clone(),
+        run: std::path::PathBuf::new(),
+    })
+    .ok();
+    let this_run = state
+        .as_ref()
+        .and_then(|s| s.last_apply.as_ref())
+        .is_some_and(|a| {
+            a.result == ronoctua_machine::ApplyResult::Staged && a.at.unix_s() >= began
+        });
+    let Some(next) = this_run
+        .then(|| super::next_boot(&at.root, state.as_ref()))
+        .flatten()
+    else {
+        return false;
+    };
+    tell(Event::of(if next.guarded {
+        &super::event::RESTART
+    } else {
+        &super::event::RESTART_UNGUARDED
+    }));
+    true
 }
 
 /// The last step that was reported — where a run that went quiet was standing.
@@ -651,6 +704,85 @@ mod tests {
             Verdict::Go,
             "a desktop that cannot say"
         );
+    }
+
+    /// A RUN WHOSE APPLY SET A SYSTEM FOR THE NEXT BOOT says to restart,
+    /// once — without promising a way back when no trial guards it — and a
+    /// run whose apply switched, or set nothing, or a system set for the
+    /// next boot by an earlier run, or one that no longer waits (it runs, or
+    /// its trial failed and the profile went back), says nothing.
+    #[test]
+    fn a_run_that_set_the_next_boot_says_to_restart() {
+        let dir = Scratch::new("update-restart");
+        let state = dir.0.join("state");
+        std::fs::create_dir_all(&state).expect("mkdir");
+        let at = super::super::RecordPlaces {
+            machine_dir: dir.0.join("machine"),
+            machine_state: state.clone(),
+            belongings: None,
+            root: dir.0.clone(),
+        };
+        let store = |name: &str| {
+            let top =
+                format!("/nix/store/0000000000000000000000000000000{name}-nixos-system-{name}");
+            std::fs::create_dir_all(dir.0.join(top.trim_start_matches('/'))).expect("mkdir");
+            top
+        };
+        let (a, c) = (store("a"), store("c"));
+        let link = |at: &str, to: &str| {
+            let at = dir.0.join(at);
+            std::fs::create_dir_all(at.parent().expect("parent")).expect("mkdir");
+            let _ = std::fs::remove_file(&at);
+            std::os::unix::fs::symlink(dir.0.join(to.trim_start_matches('/')), at).expect("link");
+        };
+        let file = ronoctua_machine::Places {
+            dir: at.machine_dir.clone(),
+            state,
+            run: std::path::PathBuf::new(),
+        }
+        .state_file();
+        let record = |result: &str, when: &str, trial: &str| {
+            std::fs::write(
+                &file,
+                format!(
+                    r#"{{"format": 1, "last-good": null,
+                        "trial": {{"toplevel": "{c}", "outcome": "{trial}"}}, "hold": null,
+                        "last-apply": {{"at": "{when}", "result": "{result}", "toplevel": "{c}"}}}}"#
+                ),
+            )
+            .expect("state");
+        };
+        // 2026-10-30T12:00:00Z.
+        let began: Moment = 1_793_361_600;
+        let told = |at: &super::super::RecordPlaces| {
+            let mut events = Vec::new();
+            let said = restart_told(at, began, |e| events.push(e.tag.into_owned()));
+            assert_eq!(said, !events.is_empty());
+            events
+        };
+        link("run/current-system", &a);
+        link("nix/var/nix/profiles/system", &c);
+        record("staged", "2026-10-30T12:20:00Z", "pending");
+        assert_eq!(told(&at), [super::super::event::RESTART.tag]);
+        record("staged", "2026-10-30T12:20:00Z", "good");
+        assert_eq!(
+            told(&at),
+            [super::super::event::RESTART_UNGUARDED.tag],
+            "no trial guards it: no way back is promised"
+        );
+        record("switched", "2026-10-30T12:20:00Z", "pending");
+        assert!(told(&at).is_empty(), "a switch needs no restart");
+        record("staged", "2026-10-30T11:00:00Z", "pending");
+        assert!(
+            told(&at).is_empty(),
+            "an earlier run's system was told then"
+        );
+        record("staged", "2026-10-30T12:20:00Z", "failed");
+        link("nix/var/nix/profiles/system", &a);
+        assert!(told(&at).is_empty(), "its trial failed: nothing waits");
+        link("nix/var/nix/profiles/system", &c);
+        link("run/current-system", &c);
+        assert!(told(&at).is_empty(), "the system already runs");
     }
 
     /// A planted `/sys`: the batteries given, by name, as

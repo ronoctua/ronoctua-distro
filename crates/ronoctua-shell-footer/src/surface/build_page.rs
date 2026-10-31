@@ -16,6 +16,10 @@ impl Footer {
             return;
         }
         if self.build_page.is_none() {
+            // READ NOW: a system set for the next boot (an update's, or a
+            // switch's) moves no link of the running one, so nothing else
+            // told this footer.
+            self.build_state = crate::build_switch::read();
             self.build_page = Some(crate::build_page::View::fresh(
                 &self.build_state,
                 self.modeline.build_show,
@@ -46,9 +50,24 @@ impl Footer {
                 self.apply_geometry(self.interactivity());
                 self.draw_and_paint();
             }
-            // THE ROW'S COMMAND, which `LEADER :` reaches too: the setting's
-            // walks `modeline.json`, the switch's is `build-toggle`.
-            Errand::Act(act) => self.run_command(act.command()),
+            Errand::Act(act) => self.build_page_act(act),
+        }
+    }
+
+    /// What `RET` on a row does: the deed of the row's command
+    /// (`Act::command`, which `LEADER :` reaches too) — the setting's walks
+    /// `modeline.json`, the switch's is `build-toggle`'s.
+    ///
+    /// THE DEED ITSELF, and not the command by name: `run_command` asks every
+    /// view's commands, this page's among them (`build_page_commands`), whose
+    /// keys press back into `build_page_press` — a ring through the footer's
+    /// one door that `the-footer-does-not-ask-itself` refuses. Called here,
+    /// neither deed can come back round: one writes a file, the other starts
+    /// a unit.
+    fn build_page_act(&mut self, act: crate::build_page::Act) {
+        match act {
+            crate::build_page::Act::Show => self.cycle_build_show(),
+            crate::build_page::Act::Switch => self.build_toggle(),
         }
     }
 

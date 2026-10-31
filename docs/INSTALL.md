@@ -97,7 +97,7 @@ primeiro boot.
 | instalação | `full` ou `minimal` — veja a seção abaixo |
 | programas opcionais | só na `full`: os programas pesados, cada um marcado ou não. O desmarcado fica de fora desta máquina — veja a seção abaixo |
 | layout do teclado | o nome do xkb: `br`, `us`, `gb`. É onde você vai digitar a frase-secreta |
-| variante do teclado | `abnt2`, `nodeadkeys`, ou nenhuma |
+| variante do teclado | `abnt2`, `nodeadkeys`, ou nenhuma. No `us`, o padrão é `euro`, que põe o `€` no AltGr+5 e não move tecla |
 | tecla de acentos | qual tecla compõe acentos. O padrão é o `Caps Lock` — e os dois Shifts juntos passam a ser o Caps Lock |
 | locale do sistema | data, número, papel e unidades. O padrão é `en_GB.UTF-8`, que é métrico |
 | fuso horário | o padrão é `Europe/London` |
@@ -122,20 +122,20 @@ teclado não: o `nixos-facter` lê hardware, e layout é o que os seus dedos esp
 |---|---|---|
 | tamanho | ~37 GiB com tudo; ~35,5 com as escolhas padrão da instalação (sem o LibreOffice) | ~12,5 GiB |
 | o que traz | tudo | o sistema e o trabalho nele (o toolchain do devshell, o rust, o Common Lisp e os agentes de código), sem os aplicativos |
-| fica de fora | — | Android Studio e Flutter, os outros compiladores (go, python, node, gcc), o Blender e o OrcaSlicer, o ONLYOFFICE e o LibreOffice, os Crafting Apps, o Chrome, o Emacs, o VS Code, os players de mídia e as variantes extras da fonte |
+| fica de fora | — | Android Studio e Flutter, os outros compiladores (go, python, node, gcc), o Blender e o OrcaSlicer, o ONLYOFFICE e o LibreOffice, o ArtCraft Launcher e o SolidCraft, o Chrome, o Emacs, o VS Code, os players de mídia e as variantes extras da fonte |
 
 **A recomendada é a `full`**: ela é a que não pede uma segunda decisão depois.
 
 **Na `full`, a tela seguinte lista os programas pesados** — Android Studio, Flutter, o Android SDK, o
-VS Code, o Blender, o OrcaSlicer, o VLC, o ONLYOFFICE, o LibreOffice e as Crafting Apps —, cada um
-marcado ou não; o LibreOffice vem desmarcado. `Enter` (ou espaço) numa linha marca ou desmarca, e
-`Enter` em "Seguir com estes" continua. O desmarcado não é baixado agora, e nenhuma atualização o
-traz, **só nesta máquina**: ele vira uma recusa sua, válida só para o nome desta máquina e gravada
-no seu repositório — assinada e enviada antes de o disco ser tocado quando o repositório já tem algo;
-num repositório vazio, assinada pelo `init`, depois da instalação. Um programa marcado que esta
-máquina (pelo mesmo nome) deixou de fora antes volta; só uma recusa que os seus pertences têm para
-todas as máquinas continua valendo, e a instalação a diz. Para trazer um programa de volta depois, é
-a central de programas ("Trazer de volta"), nunca o `host.nix`.
+VS Code, o Blender, o OrcaSlicer, o VLC, o ONLYOFFICE, o LibreOffice, o ArtCraft Launcher e o
+SolidCraft —, cada um marcado ou não; o LibreOffice vem desmarcado. `Enter` (ou espaço) numa linha
+marca ou desmarca, e `Enter` em "Seguir com estes" continua. O desmarcado não é baixado agora, e
+nenhuma atualização o traz, **só nesta máquina**: ele vira uma recusa sua, válida só para o nome
+desta máquina e gravada no seu repositório — assinada e enviada antes de o disco ser tocado quando o
+repositório já tem algo; num repositório vazio, assinada pelo `init`, depois da instalação. Um
+programa marcado que esta máquina (pelo mesmo nome) deixou de fora antes volta; só uma recusa que os
+seus pertences têm para todas as máquinas continua valendo, e a instalação a diz. Para trazer um
+programa de volta depois, é a central de programas ("Trazer de volta"), nunca o `host.nix`.
 
 A `minimal` não é outra distro — compositor, rodapé, fonte, teclado, rede, impermanência e terminal
 continuam lá. O que muda é que ela **baixa uma fração** do que a `full` baixa, e é por isso que ela
@@ -155,7 +155,7 @@ ronoctua.dev.android    = true;    # Android Studio, SDK, Flutter
 ronoctua.dev.agents     = true;    # Claude Code e Codex
 ronoctua.workshop.enable = true;   # Blender e OrcaSlicer (que abre .stl, .3mf e .step)
 ronoctua.office.enable  = true;    # ONLYOFFICE e LibreOffice (~3 GiB)
-ronoctua.crafts.enable  = true;    # os Crafting Apps: PhotoCraft, VectorCraft, FilmCraft… (~2,2 GiB)
+ronoctua.crafts.enable  = true;    # o ArtCraft Launcher (traz os Crafting Apps) e o SolidCraft
 ronoctua.fonts.full     = true;    # as 27 variantes da Iosevka
 ```
 
@@ -189,25 +189,31 @@ Três atalhos ficam fora dela de propósito, para o caso de a máquina parar de 
 
 ### Os Crafting Apps
 
-Nenhum Crafting App abre um tipo de arquivo sozinho: eles ficam no "abrir com" do gerenciador de
-arquivos, onde você escolhe um deles para um arquivo. Para um tipo abrir sempre num deles, o padrão é
-uma linha sua no `~/.config/mimeapps.list`, com o nome do lançador da distro,
-`ronoctua-appimage-<app>.desktop`:
+O grupo `crafts` traz dois programas: o **ArtCraft Launcher**, que baixa os Crafting Apps
+(PhotoCraft, VectorCraft, FilmCraft…) e os mantém atualizados na sua home, sozinho, e o
+**SolidCraft**, CAD 3D paramétrico. Abra o launcher pelo lançador: é ele que traz os apps.
+
+Os dois programas da distro nunca tomam um tipo de arquivo pela ordem dos nomes: ficam no "abrir
+com" do gerenciador de arquivos para os tipos que declaram. Para um tipo abrir sempre num deles, o
+padrão é uma linha sua no `~/.config/mimeapps.list`, com o nome do lançador da distro,
+`ronoctua-appimage-<chave>.desktop` (`ronoctua-appimage-solidcraft.desktop`, por exemplo):
 
 ```
 [Default Applications]
-application/vnd.oasis.opendocument.text=ronoctua-appimage-wordcraft.desktop
+<tipo>=ronoctua-appimage-solidcraft.desktop
 ```
 
 Um tipo `text/*` (Markdown, RTF, HTML, texto puro) é exceção no gerenciador de arquivos: ele vai
-sempre para o editor, antes de qualquer `mimeapps.list` ser lido, e ali um Crafting App só abre o
+sempre para o editor, antes de qualquer `mimeapps.list` ser lido, e ali outro programa só abre o
 arquivo pelo "abrir com", um de cada vez. A linha do `mimeapps.list` para um tipo `text/*` vale para
 os outros programas que abrem arquivos (o `xdg-open`).
 
-Não use o botão "tornar padrão" do próprio app. O do WordCraft (o único observado; os outros não
-foram conferidos) reescreve a linha do tipo no `mimeapps.list` com o nome que o app espera,
-`ai.storyteller.wordcraft.desktop`, que a distro não usa: ele desfaz a linha que você escreveu, e o
-que fica no lugar nenhum programa lê.
+Os Crafting Apps que o launcher baixa não são programas da distro: ela não os embrulha nem escreve o
+lançador deles. Como eles aparecem no lançador e no "abrir com", que tipos tomam e o que o botão
+"tornar padrão" de cada um escreve no `mimeapps.list` ainda não foi visto numa máquina. Até
+2026-10-30 a distro trazia treze deles, cada um com o próprio lançador
+(`ronoctua-appimage-wordcraft.desktop` e os outros): uma linha do seu `mimeapps.list` com um desses
+nomes não abre mais nada, e pode sair.
 
 ### O Emacs
 
@@ -276,12 +282,14 @@ O `"chat.disableAIFeatures": true` esconde o chat e a IA, mas não cala nada dis
 
 `/etc/nixos` não é uma cópia da distro: é o flake **desta máquina**, e a distro é um input dele, que
 segue a branch `release`. Ali ficam o `flake.nix` (saído de `templates/machine`), o `flake.lock` (que
-fixa a versão da distro), o `host.nix` e o `facter.json` que o instalador escreveu, as declarações da
+fixa a versão da distro e a do nixpkgs, que a máquina segue no `nixos-unstable`), o `host.nix` e o
+`facter.json` que o instalador escreveu, as declarações da
 pessoa em `person/` e o que só o root escreve em `local/`. A pasta sobrevive à raiz apagada a cada
 boot.
 
-Atualizar é mover o input da distro e reconstruir — a atualização faz as duas coisas sozinha. Para
-aplicar à mão uma linha nova do `host.nix`:
+Atualizar é mover a distro e o nixpkgs e reconstruir — a atualização semanal faz isso sozinha, e
+deixa o sistema novo para o próximo reinício: nada do que roda é trocado, e uma notificação pede que
+você reinicie. Para aplicar à mão uma linha nova do `host.nix`:
 
 ```
 sudo systemctl start ronoctua-rescue-rebuild.service
@@ -289,16 +297,20 @@ sudo systemctl start ronoctua-rescue-rebuild.service
 
 É o mesmo rebuild do resgate (`ronoctua-machine apply`): constrói antes — dimensionado à memória
 livre e nas fases que a distro descreve, só o que o Nix diz que falta —, troca depois e arma o
-ensaio de boot; um sistema novo que não sobe volta sozinho ao último bom. Depois de um build que deu
-certo, a máquina guarda as unidades compiladas da versão em uso
-(`/var/lib/ronoctua-machine/kept-units`, ~2 GiB), para a atualização seguinte recompilar só o que
-mudou, e os fontes de que o sistema foi avaliado (`kept-sources`: o flake da máquina, a distro e
+ensaio de boot; um sistema novo que não sobe volta sozinho ao último bom. Quando um sistema já
+espera o reinício, ou o nixpkgs da pasta andou, ele também deixa o sistema novo para o próximo
+reinício em vez de trocar. Depois de um build que deu certo, a máquina guarda as unidades compiladas
+da versão em uso (`/var/lib/ronoctua-machine/kept-units`, ~2 GiB), para a atualização seguinte
+recompilar só o que mudou — enquanto o nixpkgs fica parado: quando ele anda, o compilador e as
+bibliotecas de baixo mudam, e quase tudo o que só a distro compila é compilado de novo —, e os
+fontes de que o sistema foi avaliado (`kept-sources`: o flake da máquina, a distro e
 cada input dela, também a cada boot), para a atualização seguinte não baixar de novo o que não
 mudou. Com a atualização rodando, ele recusa por estar ocupado. O atributo do flake tem o nome da
 pessoa (`noctua`), e não o da máquina.
 
-A pasta não aceita outra versão do nixpkgs nem de outro input além da que a distro testou: um
-`follows` ou um `--override-input` faz a avaliação parar dizendo qual input mudou.
+O nixpkgs é da máquina: o `flake.nix` tem o próprio input `nixpkgs` (o `nixos-unstable`) e aponta o
+da distro para ele, e a atualização o move. Todo outro input é o que a distro testou: um `follows`
+ou um `--override-input` em qualquer outro faz a avaliação parar dizendo qual input mudou.
 
 <!-- anchor: L12 -->
 
@@ -325,10 +337,12 @@ nix run github:ronoctua/ronoctua-distro/release#fetch-iso
 ```
 
 Uma máquina instalada também grava o pendrive sozinha (`LEADER s z`), da mesma versão. O ISO escrito
-no pendrive com `dd` é o mesmo nos dois casos. O ISO leva sempre a semente — os programas que só a
-distro compila, nunca as unidades de que eles são feitos —, e a instalação baixa o resto do
-`cache.nixos.org`. A primeira atualização que muda o código de um crate compila na máquina o que
-fica abaixo dos programas que mudaram.
+no pendrive com `dd` é o mesmo nos dois casos. O ISO leva tudo o que a instalação constrói — a
+semente dos programas que só a distro compila, nunca as unidades de que eles são feitos —, e a
+instalação não baixa nada; o que precisa de download chega depois, como parte. A máquina nasce no
+nixpkgs que a distro testou, e a primeira atualização com rede o leva ao `nixos-unstable` do dia.
+Uma atualização que muda o código de um crate, ou que move o nixpkgs por baixo dele, compila na
+máquina o que fica abaixo dos programas que mudaram, a menos que o seu cache binário já o tenha.
 
 ### O seu cache binário
 
@@ -375,8 +389,9 @@ Tenha à mão, antes de começar:
 A rede é opcional: "sem Wi-Fi" serve para um cabo e para nenhuma rede. Uma rede escolhida fica
 guardada na máquina instalada. Sem rede, as telas do repositório dizem que o primeiro boot o confere.
 
-**A máquina nasce da versão do pendrive** e passa a seguir a branch `release` na primeira
-atualização com rede.
+**A máquina nasce da versão do pendrive** — o nixpkgs inclusive: o lock dela parte do lock da
+distro, e nada é resolvido sem rede — e passa a seguir a branch `release` e o `nixos-unstable` na
+primeira atualização com rede.
 
 Sem terminal (`ronoctua-install` lendo o ambiente), o acesso é o **arquivo** da chave ou do token
 (`RONOCTUA_INST_BELONGINGS_ACCESS`) e a senha vem em `RONOCTUA_INST_BELONGINGS_PASSPHRASE`; com rede,

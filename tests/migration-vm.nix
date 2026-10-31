@@ -15,7 +15,9 @@
 #   1. a distro that does not build leaves every byte where it was, and
 #      nothing of the attempt behind;
 #   2. a distro that builds gives the template's flake (pointed at it), the
-#      new lock — kept too as the one an apply that fails puts back —,
+#      new lock — kept too as the one an apply that fails puts back, and
+#      started from the distro's own: its `nixpkgs` is the node the distro's
+#      `flake.lock` pins, not the template's branch resolved on the day —,
 #      `host.nix`, `facter.json` and the secrets byte for byte, `person/` and
 #      `local/` untouched — and the old layout whole under
 #      `/var/lib/ronoctua-machine/legacy-<stamp>`, the mount still there;
@@ -28,15 +30,26 @@
 # with a derivation `/bin/sh` builds in the sandbox (or one that fails).
 # Evaluating the real distro inside a VM would need its every input and the
 # network; what is proved here is the migration's handling of the folder and
-# of Nix, which is the same either way.
+# of Nix, which is the same either way. The template's `nixpkgs` is the real
+# one: the lock the migration starts from is the distro's own
+# (`RONOCTUA_MACHINE_REFERENCE_LOCK`, as `nix/modules/machine.nix` sets it),
+# and with no network only that keeps the template's `nixos-unstable` from
+# being a branch to resolve. Its source is in the store, as on a machine
+# that built the distro, so the sources the flake names are all there.
 {
   pkgs,
   lib,
   # `ronoctua-machine`, extracted (`rust.machine`).
   machineTool,
+  # The distro's own `nixpkgs` input: the source of the node its lock pins.
+  testedNixpkgs,
 }:
 
 let
+  # THE NIXPKGS THE DISTRO TESTED: the node its root names in its own lock
+  # (by the root's entry, never `nodes.nixpkgs`, which is another one).
+  distroLock = builtins.fromJSON (builtins.readFile ../flake.lock);
+  tested = distroLock.nodes.${distroLock.nodes.${distroLock.root}.inputs.nixpkgs};
   distro =
     builds:
     pkgs.writeTextDir "flake.nix" ''
@@ -75,6 +88,7 @@ pkgs.testers.runNixOSTest {
       virtualisation.additionalPaths = [
         good
         bad
+        testedNixpkgs
       ];
       nix.settings = {
         experimental-features = [
@@ -151,6 +165,13 @@ pkgs.testers.runNixOSTest {
         assert 'inputs.ronoctua.url = "path:${good}";' in flake, flake
         assert "machineFlake" in flake, flake
         assert "${good}" in machine.succeed("cat /etc/nixos/flake.lock")
+        # THE LOCK STARTED FROM THE DISTRO'S OWN: the template's rolling
+        # nixpkgs is the node the distro tested, offline, its branch unresolved.
+        lock = json.loads(machine.succeed("cat /etc/nixos/flake.lock"))
+        rolled = lock["nodes"][lock["nodes"][lock["root"]]["inputs"]["nixpkgs"]]
+        tested = json.loads(r"""${builtins.toJSON tested}""")
+        assert rolled["locked"] == tested["locked"], f"the machine's nixpkgs is {rolled['locked']}, not {tested['locked']}"
+        assert rolled["original"] == tested["original"], rolled
         # The lock it built is the one a failed apply puts back: the system
         # that runs was built from the old layout and carries none.
         machine.succeed("cmp /etc/nixos/flake.lock /var/lib/ronoctua-machine/applied.lock")
@@ -170,12 +191,14 @@ pkgs.testers.runNixOSTest {
     with subtest("the sources the machine's flake was evaluated from outlive a collection"):
         # WHAT `keep-sources` ROOTS — at every boot, and the apply after
         # every build — is what `nix flake archive` names off the lock: here
-        # the machine's flake and the distro. Nothing else holds them: no
-        # derivation of a system cites them, and before the roots a
-        # collection would take them (a later update fetching them again).
+        # the machine's flake, the distro and the nixpkgs it rolls. Nothing
+        # else holds them: no derivation of a system cites them, and before
+        # the roots a collection would take them (a later update fetching
+        # them again).
         names = json.loads(machine.succeed("nix flake archive --dry-run --json path:/etc/nixos"))
         sources = [names["path"]] + [i["path"] for i in names["inputs"].values()]
-        assert len(sources) == 2, sources
+        assert len(sources) == 3, sources
+        assert "${testedNixpkgs}" in sources, f"the tested nixpkgs is not a source: {sources}"
         dead = set(machine.succeed("nix-store --gc --print-dead 2>/dev/null").split())
         assert dead & set(sources), "no source is garbage before the roots: this proves nothing"
         status, out = machine.execute("ronoctua-machine keep-sources 2>&1")

@@ -11,6 +11,10 @@ Não há relato de depuração aqui, e não há changelog. Quando um bug ensinou
 ensinamento virou uma armadilha no `AGENTS.md` ou uma frase sobre o desenho atual; a história de como
 o sistema chegou até aqui não sobreviveu de propósito.
 
+Uma versão dita "pinada" (do nixpkgs, ou de um pacote dele) é a do `flake.lock` da distro na data em
+que foi medida: desde 2026-10-30 cada máquina rola o próprio nixpkgs no `nixos-unstable` (a seção "A
+máquina tem o próprio flake") e roda uma mais nova.
+
 A interface toma emprestadas algumas ideias e alguns nomes de editores de teclado — modeline,
 minibuffer, a lista que aparece quando a tecla líder é apertada. É empréstimo de vocabulário, e não
 um compromisso: nada aqui precisa se parecer com nenhum outro programa.
@@ -21,7 +25,7 @@ um compromisso: nada aqui precisa se parecer com nenhum outro programa.
 
 | Área | Decisão | Alternativa descartada |
 |---|---|---|
-| Sistema | NixOS mínimo, tudo por flakes | qualquer coisa imperativa |
+| Sistema | NixOS mínimo; o sistema por flakes, rolando no `nixos-unstable` e trocado no próximo boot, com ensaio de boot e rollback de geração; a camada de apps se atualiza fora da geração (inv. 6, 2026-10-30) | um pin estável num release do NixOS; um sistema mudado à mão |
 | Compositor | Scroll upstream, sem fork nem patch, atrás de um contrato | fork com integração direta |
 | Chrome | rodapé de duas linhas, só | barra, dock, popup de canto |
 | Sistema de arquivos | btrfs | ZFS (out-of-tree), bcachefs (fora do mainline na 6.18) |
@@ -4855,14 +4859,14 @@ do próprio `mkIf`, e o `nix/dev.nix` para o laço aninhado. Quem perguntou foi 
 #### O Emacs é o puro, e a configuração é da pessoa
 
 Decisão do dono (2026-10-19): a distro não instala o Doom e não escreve configuração nenhuma do
-Emacs. O `nix/modules/emacs.nix` traz o pacote (`emacs30-pgtk`), o daemon (`services.emacs`, unidade de
-usuário: o `e`, o `$EDITOR` e o gerenciador de arquivos abrem com `emacsclient` num processo que já
-carregou tudo), o `RONOCTUA_EMACSCLIENT` e o interruptor — e só. Nenhum `init.el` ou `default.el`,
-nenhum arquivo em `~/.config/emacs` ou `~/.emacs.d`, nada em `/etc` que o Emacs leia; no máximo a
-pasta VAZIA `~/.config/emacs`, que a unidade do daemon cria antes do Emacs numa casa sem nenhum dos
-lugares dele, para que a primeira configuração da pessoa nasça no lugar que os pertences levam (o
-porquê, medido, na seção dos alvos dos pertences). O `site-start.el` que vem no pacote é o do
-nixpkgs (os caminhos dos perfis Nix e da compilação nativa, o `PATH` remoto do `tramp`): é como o
+Emacs. O `nix/modules/emacs.nix` traz o pacote (`emacs-pgtk`), o daemon (`services.emacs`, unidade
+de usuário: o `e`, o `$EDITOR` e o gerenciador de arquivos abrem com `emacsclient` num processo que
+já carregou tudo), o `RONOCTUA_EMACSCLIENT` e o interruptor — e só. Nenhum `init.el` ou
+`default.el`, nenhum arquivo em `~/.config/emacs` ou `~/.emacs.d`, nada em `/etc` que o Emacs leia;
+no máximo a pasta VAZIA `~/.config/emacs`, que a unidade do daemon cria antes do Emacs numa casa sem
+nenhum dos lugares dele, para que a primeira configuração da pessoa nasça no lugar que os pertences
+levam (o porquê, medido, na seção dos alvos dos pertences). O `site-start.el` que vem no pacote é o
+do nixpkgs (os caminhos dos perfis Nix e da compilação nativa, o `PATH` remoto do `tramp`): é como o
 pacote acha o que está instalado, e não escolhe nada pela pessoa.
 
 Uma configuração da distro ou briga com a da pessoa ou é sobrescrita por ela. E o Doom era a única
@@ -4886,11 +4890,12 @@ conecta (seção "Common Lisp nos dois perfis").
 
 #### O Emacs é o pure-GTK, e um compositor que acaba leva o daemon
 
-O pacote é o `emacs30-pgtk` (2026-10-19). O `emacs30` do nixpkgs é o build X11 com o toolkit Lucid
-(Xaw3d), não GTK — e na sessão daqui ele não abria janela nenhuma: a linha da sessão importava para
-o gerente do usuário o `WAYLAND_DISPLAY` e nunca o `DISPLAY`, e o `emacsclient` do build X11 só lê o
-`DISPLAY` (hoje a sessão exporta os dois — "Xwayland", na seção 2). Disparado como o rodapé dispara
-(é assim que o gerenciador de arquivos abre um texto), o `-c` saía com 1 sem quadro; com
+O pacote é o `emacs-pgtk` (escolhido em 2026-10-19 como `emacs30-pgtk`; o `nixos-unstable` tirou a
+versão do nome, e é o Emacs 31 desde 2026-10-30). O `emacs30` do nixpkgs é o build X11 com o toolkit
+Lucid (Xaw3d), não GTK — e na sessão daqui ele não abria janela nenhuma: a linha da sessão importava
+para o gerente do usuário o `WAYLAND_DISPLAY` e nunca o `DISPLAY`, e o `emacsclient` do build X11 só
+lê o `DISPLAY` (hoje a sessão exporta os dois — "Xwayland", na seção 2). Disparado como o rodapé
+dispara (é assim que o gerenciador de arquivos abre um texto), o `-c` saía com 1 sem quadro; com
 `DISPLAY=:0` à mão, abria pelo XWayland em 1,2 s. O `emacsclient` do pgtk lê o `WAYLAND_DISPLAY`
 primeiro, e o quadro é um `xdg_toplevel` do compositor.
 
@@ -5020,7 +5025,8 @@ sendo o embrulho do build (`--inherit-argv0`; a vigia do cérebro ainda vê um `
 recusa quando a entrada não é a que ele conhece — o arquivo mudou de lugar, ou tem um segundo `Name=`
 ou um traduzido, que um localizador em outro idioma mostraria no lugar —, para o nome velho nunca
 ficar na tela calado. O daemon, o registro e o `RONOCTUA_EMACSCLIENT` usam o mesmo pacote, e o nome
-da derivação continua com `emacs-pgtk-30`. No registro, a entrada do cliente vem primeiro: a central
+da derivação começa com `emacs-pgtk-` (o número anda com o nixpkgs, e o `profile-minimal-closes`
+procura sem ele). No registro, a entrada do cliente vem primeiro: a central
 de programas nomeia um programa da distro pela primeira entrada que acha, e o editor é o cliente. O
 `emacs-vm` cobra os dois nomes no `share/applications` do sistema e que o daemon roda o build a que
 o `bin/emacs` do pacote leva.
@@ -6360,14 +6366,19 @@ tem letras dentro. Consertar só a frase teria sido trocar uma mentira por um si
 
 ##### "É texto?" é UMA pergunta, e quem responde é a base do freedesktop
 
-`is_a(mime, "text/plain")`, e nada mais. Sem cláusula `starts_with("text/")`: todo `text/*` já
+`is_a(mime, "text/plain")`, e nada mais. Sem cláusula `starts_with("text/")`: todo `text/*`
 descende de `text/plain`, e uma segunda regra escrita à mão é uma segunda resposta a uma pergunta que
-a base resolve.
+a base resolve. A especificação diz que essa descendência é implícita; até o 2.4 o
+`shared-mime-info` a escrevia em quase todo tipo, e o 2.5.1 (2026-10-30) deixou de escrevê-la em
+alguns — o `text/x-shellscript`, os scripts de AWK, sed e csh, o `text/x-gradle` —, e um `.sh`
+deixou de ser texto. Então o `gen-mimedb.py` escreve a regra implícita como linha do banco gerado
+onde nenhuma linha já chega a `text/plain`, e recusa um `text/*` que ainda não chegue: a pergunta
+continua uma só, respondida pela tabela.
 
-Ela alcança mais do que parece — **277 tipos** chegam a `text/plain` pelo DAG, incluindo
-`application/json` (na profundidade três), `application/xml`, `application/x-shellscript`,
-`application/toml`, `application/yaml`, `application/x-desktop` e `application/sql`. Nenhum precisa
-ser nomeado.
+Ela alcança mais do que parece — **277 tipos** chegavam a `text/plain` pelo DAG no 2.4 (o 2.5.1 não
+foi recontado), incluindo `application/json` (na profundidade três), `application/xml`, o script de
+shell (`text/x-shellscript` desde o 2.5.1), `application/toml`, `application/yaml`,
+`application/x-desktop` e `application/sql`. Nenhum precisa ser nomeado.
 
 E os quatro descendentes que NÃO são texto — `image/svg+xml`, `image/x-eps`, `audio/x-mpegurl`,
 `video/vnd.mpegurl` — também não precisam de lista de exceção, porque **a figura é pedida primeiro**:
@@ -7217,19 +7228,23 @@ de 2 536.
 
 #### O que foi inventado no banco de tipos, e o que não
 
-Seis dos onze já existem no `shared-mime-info` 2.4 que o flake pina: `model/stl`, `model/3mf`,
-`model/obj`, `model/gltf+json`, `model/gltf-binary` e `model/iges` — e o gerador RECUSA pôr em `ours`
-um tipo que a base já conhece. A resolução também já funcionava para os dois primeiros: um STL
-binário não tem magic nenhum (a única regra do freedesktop é a palavra `solid`, que é a forma ASCII),
-então o sniff devolve `None` e `settled` fica com o nome; um 3MF sniffa `application/zip` e a base diz
-que ele DESCENDE disso, então os dois concordam e o nome, mais fino, vence. É a mesma figura que o
-`.dng` já tinha escrita.
+Oito dos onze já existem no `shared-mime-info` 2.5.1 que o flake pina desde 2026-10-30: `model/stl`,
+`model/3mf`, `model/obj`, `model/gltf+json`, `model/gltf-binary` e `model/iges`, que o 2.4 já tinha,
+e o `model/step` (`*.step` e `*.stp`) e o `application/x-amf`, que o 2.5.1 trouxe — e o gerador
+RECUSA pôr em `ours` um tipo que a base já conhece. A resolução também já funcionava para os dois
+primeiros: um STL binário não tem magic nenhum (a única regra do freedesktop é a palavra `solid`,
+que é a forma ASCII), então o sniff devolve `None` e `settled` fica com o nome; um 3MF sniffa
+`application/zip` e a base diz que ele DESCENDE disso, então os dois concordam e o nome, mais fino,
+vence. É a mesma figura que o `.dng` já tinha escrita.
 
-Os outros cinco a base não tem — conferido: `*.ply`, `*.off`, `*.dae`, `*.amf`, `*.step` e `*.stp` não
-têm UM reivindicante upstream. Nascem no `ours` do `mime-glyphs.nix`, **com `under`**, e o COLLADA
-usa `model/vnd.collada+xml`, que é o nome registrado dele: o que falta upstream é a linha, não o
-nome. O AMF usa `model/x-amf` e não `application/x-amf`, que é do Action Message Format da Adobe há
-vinte anos.
+Os outros três a base não tem — conferido no `globs2` do 2.5.1: `*.ply`, `*.off` e `*.dae` não têm
+UM reivindicante upstream. Nascem no `ours` do `mime-glyphs.nix`, **com `under`**, e o COLLADA usa
+`model/vnd.collada+xml`, que é o nome registrado dele: o que falta upstream é a linha, não o nome.
+Eram cinco no 2.4: o STEP e o AMF também nasciam no `ours`. O STEP saiu quando o 2.5.1 trouxe o tipo
+(o gerador recusou a linha pelo nome); o AMF, inventado como `model/x-amf` para fugir do nome que o
+Action Message Format da Adobe usa no HTTP, empatou calado no `*.amf` com o `application/x-amf` que
+o 2.5.1 dá ao formato 3D, e perdeu — por isso o gerador agora recusa uma linha de `ours` em qualquer
+nome que a base dê a um tipo.
 
 E todos ganharam glifo: para o freedesktop são `image-x-generic` — correto e inútil numa coluna de
 trinta linhas, onde uma peça que se imprime fica indistinguível de uma fotografia.
@@ -7412,8 +7427,9 @@ duas vezes, então o hospedeiro lê a malha uma vez e usa a resposta para as dua
 saber que há algo para girar. Malha que não analisa é `Refusal::Failed` com frase, nunca uma espera
 sem fim por um quadro que não vem.
 
-Uma FORMA não é texto, e três dos onze tipos SÃO texto pela conta do banco — `model/obj`,
-`model/x-off` e `model/step` descendem de `text/plain`, porque descendem mesmo. Sem esse braço, o
+Uma FORMA não é texto, e dois dos onze tipos SÃO texto pela conta do banco — `model/obj` e
+`model/x-off` descendem de `text/plain`, porque descendem mesmo (o `model/step` também descendia,
+enquanto nascia no `ours`; o do 2.5.1 não descende, e tem magic). Sem esse braço, o
 `.obj` de 4,3 MB do dono era lido por um mebibyte, realçado e jogado fora: `preview_fields` devolve
 brancos para tudo que gira, então nenhuma linha dele podia chegar à tela.
 
@@ -8428,15 +8444,18 @@ resolvem cento e cinquenta e oito tipos.**
 
 ##### E quando a base não tem o tipo, ele nasce em UM lugar
 
-Acontece, e o TypeScript é o exemplo trabalhado: `*.ts` é `video/mp2t` no freedesktop, e o
+Acontece, e o TypeScript foi o exemplo trabalhado: `*.ts` é `video/mp2t` no freedesktop, e o
 freedesktop está **certo** — `.ts` significou fluxo de transporte MPEG anos antes de a linguagem
-existir. Zig, Swift, Vue e Dockerfile simplesmente não estão lá.
+existir. No 2.4, Zig, Swift, Vue, Dockerfile e o próprio TypeScript simplesmente não estavam lá.
 
 A resposta **não** é uma lista de extensões no `assets/syntax.nix`. É uma linha no bloco `ours` de
-`assets/icons/mime-glyphs.nix`, que já existia, já carregava o `text/x-nix` e já trazia a régua
-escrita: o critério é o upstream não ter tipo nenhum. O gerador recusa um tipo que não esteja em
-lugar nenhum dos dois, **nomeando aquele arquivo** — de modo que a regra não pode ser esquecida, só
-discutida.
+`assets/icons/mime-glyphs.nix`, que já existia, carregava o `text/x-nix` até o 2.5.1 trazê-lo e já
+trazia a régua escrita: o critério é o upstream não ter tipo nenhum. O gerador recusa um tipo que
+não esteja em lugar nenhum dos dois, **nomeando aquele arquivo** — de modo que a regra não pode ser
+esquecida, só discutida. Quando a base ganha o tipo, a linha sai: o gerador recusa uma linha de
+`ours` em qualquer nome que a base dê a algum tipo, e o TypeScript, que o 2.5.1 nomeou
+`application/typescript` (no `*.ts`, abaixo do fluxo de transporte), virou uma linha de `claims`,
+que o junta ao empate e o decide pelo conteúdo.
 
 Uma coisa esse bloco não tinha, e um teste a cobrou: **cada tipo inventado diz de que descende**
 (`under`). Sem isso o `is_a` responde `false` a toda pergunta sobre ele, e a primeira que se fez foi
@@ -8996,9 +9015,11 @@ programa, e ele recusa qualquer um que não se chame `system` ou esteja sob `per
   construtor do menu usa as L mais novas e remove o resto, e com L ≤ N toda entrada está entre as
   guardadas. Quando a instalação do loader falha e o perfil avança mesmo assim, o menu fica para
   trás; por isso a aparagem lê os pontos de montagem de boot (`/boot`, a ESP, o XBOOTLDR, os
-  `mirroredBoots`) e guarda a geração cujo número está no nome de uma entrada
-  (`nixos-generation-7.conf`, a UKI do lanzaboote) ou cujo toplevel está no texto de um menu (grub,
-  extlinux, limine, rEFInd). Menu ilegível ou ausente não lista nada: vale a contagem.
+  `mirroredBoots`) e guarda a geração cujo número está no nome de uma entrada (a UKI do lanzaboote;
+  o `nixos-generation-7.conf` do systemd-boot até a 26.05) ou cujo toplevel está no texto de um menu
+  (grub, extlinux, limine, rEFInd e, no `nixos-unstable`, o próprio systemd-boot, cujas entradas se
+  chamam pelo hash do texto, `nixos-<sha256>.conf`, e só nomeiam o sistema no `init=`). Menu
+  ilegível ou ausente não lista nada: vale a contagem.
 
 Ele **nunca** roda `switch-to-configuration`: o switch pega `/run/nixos/switch-to-configuration.lock`
 sem esperar, e uma unidade automática que o rodasse mataria o `nixos-rebuild` de alguém no meio.
@@ -9465,7 +9486,8 @@ em 2026-10-20, antes do Common Lisp, que soma 0,63 GiB a cada um, e do VS Code, 
 `full`; a tabela das medidas está no
 `nix/modules/profile.nix`). Sai o Android (6,5), saem os outros compiladores (go, python, node, gcc),
 saem as variantes da fonte (2,0), saem o navegador, o editor e a mídia (2,0), saem o Blender e o
-OrcaSlicer, e saem o escritório (2,65) e os Crafting Apps (1,97). O trabalho na distro — o toolchain do
+OrcaSlicer, e saem o escritório (2,65) e o grupo `crafts` (os treze Crafting Apps de então mediram
+1,97; o launcher e o SolidCraft de agora não foram medidos). O trabalho na distro — o toolchain do
 devshell, o rust, o Common Lisp, o KVM e os agentes de código — fica nos dois (seção do L15 e "Common
 Lisp nos dois perfis").
 
@@ -9501,7 +9523,7 @@ Duas coisas apareceram ao medir isto, e as duas eram interruptores que não inte
 #### A décima oitava pergunta: os programas que a `full` deixa de fora (2026-10-20)
 
 Alguns programas da `full` pesam gigabytes que a pessoa talvez nunca abra (o Android Studio, o
-Blender, as suítes de escritório, as Crafting Apps). Logo depois da instalação, uma tela lista esses
+Blender, as suítes de escritório, o grupo `crafts`). Logo depois da instalação, uma tela lista esses
 programas, cada um marcado ou não, e o desmarcado não é baixado nesta máquina nem por atualização
 nenhuma, até a central de programas o trazer de volta. É uma pergunta pelo mesmo motivo da
 instalação: diz para que a máquina serve, e nada no hardware diz isso.
@@ -9575,6 +9597,13 @@ contra o teto de 4096. Desses, ~3,5 GiB são nixpkgs de prateleira — a parte q
 minutos. Levar só o que ninguém tem em cache deu **3702 MiB**, e o alvo continua não compilando nada.
 
 O que sobrou de comparação honesta: a máquina alvo agora *baixa* onde antes *compilava*.
+
+Até o nixpkgs dela andar. Desde 2026-10-30 a máquina segue o `nixos-unstable` por conta própria (o
+`follows` do flake dela), e a semente é do nixpkgs do lock da distro. Quando o nixpkgs da máquina
+anda, o stdenv e o toolchain de baixo de todo programa que só a distro compila mudam com ele, e a
+atualização os compila na máquina — as unidades guardadas só poupam o que o nixpkgs parado deixou
+igual —, a menos que o cache binário da pessoa já os tenha. Quanto isso custa por semana não foi
+medido (`docs/PENDING.md`).
 
 #### O ISO carregava 2,94 GiB que não eram dele
 
@@ -10138,6 +10167,17 @@ journal como "argumento" do `network-connect`.
 primeiras já existiam; as duas novas são RUNNING e não INSTALADO: um tailnet em que ninguém entrou e
 um Tor parado não desenham nada. Clicar numa abre a vista NA LINHA dela (`View::fresh_at`), porque
 uma marca é uma porta para a coisa de que ela fala, não para o prédio.
+
+**O registro do WireGuard tem uma regra polkit de duas unidades.** A importação
+(`nix run .#vpn-import`) e a vista da rede dão `start` em `ronoctua-vpn-install.service` (a chave que
+a pessoa deixou em `/run/ronoctua-vpn`, pasta dela e `0700`, selada no TPM2, e os locais escritos) e em
+`ronoctua-vpn-sync.service` (os perfis refeitos). Não há agente polkit na sessão, então a regra
+devolve `YES` — para essas duas unidades, o verbo `start` e um usuário, num `if` só —, e nenhuma
+delas leva argumento. O `install` não tem teto de partidas (`startLimitIntervalSec = 0`), porque só
+um gesto o inicia; o `sync` fica com o teto padrão, porque a unidade de caminho e o boot também o
+iniciam. `vpn-rule-is-narrow` mede isso nas regras mescladas, e também que a pasta é a mesma nos três
+lugares que a escrevem (o verbo root, o shell e a importação). A regra entrou sem esse check e sem o
+nome `vpn` no censo `polkit-rules-are-the-ones-we-know`, e foi a contagem do censo que acusou.
 
 ### O que a revisão do entregável encontrou, e o que virou regra
 
@@ -12138,15 +12178,20 @@ transação "quieta" que imprime uma linha por operação e nenhuma porcentagem;
 `FLATPAK_FANCY_OUTPUT=0` sai a tabela e o ` NN%`. O progresso é em MILÉSIMOS da transação, nunca
 bytes — a saída simples não tem byte nenhum.
 
-**nix-flatpak** (v0.7.0, módulos NixOS e Home Manager) está pronto para o declarativo, com três
-travas: `uninstallUnmanaged = false` (senão toda instalação da pessoa sumiria na próxima ativação),
-nada de atualização na ativação nem por timer (quem atualiza é a sequência da distro), e o remoto
-flathub vem de um `.flatpakrepo` VENDORIZADO (`assets/flatpak/`), para a ativação funcionar
-offline. `ronoctua.software.declaredFlatpaks` vira `services.flatpak.packages` do HM — uma linha
-à mão no `host.nix`; a central declara no `declared.json` da pessoa (seção L18). **Tirar um id
-dessa lista DESINSTALA o app** na próxima ativação
-(lido no script gerado do nix-flatpak); o que a pessoa instalou à mão continua protegido. Um app
-declarado aparece na lista como do flake e recusa remover (`DeclaredInTheFlake`), com frase.
+**nix-flatpak** (v0.7.0, módulos NixOS e Home Manager) está pronto para o declarativo, com duas
+travas e uma escolha. As travas: `uninstallUnmanaged = false` (senão toda instalação da pessoa
+sumiria na próxima ativação), e o remoto flathub vem de um `.flatpakrepo` VENDORIZADO
+(`assets/flatpak/`), para declará-lo sem rede. A escolha (emenda do dono ao inv. 6, 2026-10-30): a
+atualização LIGADA, na ativação e no timer do próprio nix-flatpak (`update.onActivation`,
+`update.auto.enable`) — os Flatpaks andam sozinhos, fora da geração, e os passos `flatpak-system` e
+`flatpak-user` da sequência continuam rodando em toda atualização. Esse tráfego vai ao Flathub sem
+`Pass` do `ronoctua-consent`, e a regra do consentimento não foi emendada para ele
+(`docs/PENDING.md`); se uma ativação sem rede ainda passa inteira com a atualização na ativação não
+foi conferido de novo. `ronoctua.software.declaredFlatpaks` vira `services.flatpak.packages` do HM —
+uma linha à mão no `host.nix`; a central declara no `declared.json` da pessoa (seção L18). **Tirar
+um id dessa lista DESINSTALA o app** na próxima ativação (lido no script gerado do nix-flatpak); o
+que a pessoa instalou à mão continua protegido. Um app declarado aparece na lista como do flake e
+recusa remover (`DeclaredInTheFlake`), com frase.
 
 **Busca**: a API do Flathub quer `pt-BR` — medido ao vivo, `pt_BR` responde em inglês e `pt-br`
 em português de Portugal. Sem rede, responde o catálogo appstream que o próprio flatpak deixa
@@ -12424,14 +12469,26 @@ ela (seção "Instalação sem rede"). Uma entrada do registro vira parte com
   (`nix/parts-names.nix`, `ronoctua_parts::view::bin`), que não depende da interface e só existe
   quando a parte chegou, então os web apps somem enquanto o Chrome não está aqui.
 
+**O Claude Code anda pelo pin, não pelo updater dele** (emenda do dono ao inv. 6, 2026-10-30). Ele é
+a parte de uma receita nossa, `nix/claude-code.nix`, que substitui a do nixpkgs: o binário do
+fornecedor, corrigido para o NixOS, numa versão à frente da do nixpkgs (que estava semanas atrás, e
+o modelo do dia só se escolhe numa versão nova), embrulhado com `DISABLE_AUTOUPDATER=1` — a cópia do
+store é a que RODA, e a versão sobe quando o pin sobe. No mesmo dia tentou-se o contrário: uma
+instalação nativa sob o `$HOME`, que o updater do próprio fornecedor manteria em dia, preferida pelo
+rodapé. Foi revertida: o updater baixa um binário Linux genérico, que o NixOS não roda sem `nix-ld`,
+e depois de uma atualização dele o rodapé lançava um programa que não subia, e a máquina ficava sem
+o agente. Não refaça sem resolver isso primeiro. O Codex não é parte: é o `pkgs.codex` do nixpkgs,
+construído da fonte, e anda com o nixpkgs que a máquina rola.
+
 O unrar saiu do embrulho do shell, que por ele estava no ISO publicado; o crate de arquivos não pode
 depender do das partes (há um ciclo), então quem o chama entrega o caminho
 (`Tools::with_unrar(ronoctua_parts::file_of(…))`).
 
 **Os programas grandes do full também são partes.** O fecho do full caiu de ~37 GiB para ~19 GiB
 com o M4 e esta leva, para o ISO caber com a base livre dos dois perfis:
-- as 13 Crafting Apps: toda AppImage da distro é parte por padrão (`part` vale `true` para a fonte
-  AppImage), porque o download é do GitHub e nenhum cache público o tem;
+- as AppImages da distro (hoje o Craft Launcher e o SolidCraft; até 2026-10-30, as 13 Crafting
+  Apps): toda AppImage da distro é parte por padrão (`part` vale `true` para a fonte AppImage),
+  porque o download é do GitHub e nenhum cache público o tem;
 - LibreOffice, ONLYOFFICE, Blender, OrcaSlicer, VLC e Flutter;
 - as cinco toolchains do full (Go, Python, JavaScript, as ferramentas de Nix e as de build);
 - o pacote de ícones, parte de dados que a vista mostra em `share/icons` e cuja variável aponta o
@@ -13778,9 +13835,10 @@ Dois módulos do cérebro sobre o seguidor único do journal que o núcleo roda 
   unidade com o segundo, e a linha relida depois de um reinício não é outra morte. O seguidor lê até
   `notice`, nunca `info`, e a passada do núcleo sobre o passado (pedida pelo `journal-errors`) lê na
   prioridade do seguidor: ele segue do fim dela, e nada de antes chega a quem não pediu passado.
-- **`journal-errors`** ouve tudo em `err` ou pior (na primeira partida, os últimos 200 desta
-  inicialização pela passada única do núcleo) e agrupa por quem disse e pelo modelo da mensagem, com
-  números e ids dobrados. A página lista os tipos em quatro seções — não vistos desta inicialização,
+- **`journal-errors`** ouve tudo em `err` ou pior (e os últimos 200 desta inicialização pela
+  passada única do núcleo, só se já estiver ligado na primeira partida do cérebro, sem cursor; vem
+  desligado, e ligado depois ouve dali em diante — `docs/PENDING.md`) e agrupa por quem disse e pelo
+  modelo da mensagem, com números e ids dobrados. A página lista os tipos em quatro seções — não vistos desta inicialização,
   não vistos de uma anterior, vistos e ignorados —; o aperto de uma linha marca visto, ignora o tipo
   ou volta a ouvir, e uma linha não vista também ignora o tipo pela segunda ação (`Row::also`, a
   tecla `, v` da página, ensinada só sobre uma linha que a tem), sem passar pelos vistos. O rodapé
@@ -15023,7 +15081,7 @@ marca nomeia (`MarkId::opens`, o mesmo caminho das marcas dos containers), não 
   `$XDG_DATA_DIRS/applications` (o do player), com o `<desktop>-mimeapps.list` antes do comum em
   cada pasta. Ganha o primeiro id instalado, listado ou não; um que não está instalado é pulado. Só o tipo
   exato (ou um apelido dele) conta: o padrão do pai não responde pelo filho, porque foi pela herança
-  que o `.step` (`model/step`, filho de `text/plain` no banco) ia para o editor. Lido a cada
+  que o `.step` (`model/step`, filho de `text/plain` no banco do 2.4) ia para o editor. Lido a cada
   abertura, sem cache: um padrão que a pessoa muda vale na próxima.
 - **Um padrão alcança o que o lançador não lista** (2026-10-20). O catálogo é o que o lançador
   LISTA, e o `NoDisplay=true` deixa uma entrada de fora; mas o `NoDisplay` diz "não me mostre num
@@ -15039,13 +15097,19 @@ marca nomeia (`MarkId::opens`, o mesmo caminho das marcas dos containers), não 
   (`DesktopEntry::fallback`) é pulada nessa ordem — pelo tipo exato e pelo pai, nossa ou de
   qualquer um —, continua no "abrir com" (que filtra pelo `MimeType=`) e ainda vence onde um padrão
   a nomeia. Quem escreve a chave é o registro, nos lançadores que ele escreve (`fallback = false` na
-  tabela de `assets/distro-apps.nix`; hoje, os treze Crafting Apps). O `files-open-by-choice` roda
-  o `opener` sobre o `system.path` construído do `full`: nenhum arquivo comum abre numa AppImage da
-  distro, e som e filme abrem no player.
-- **O id do OrcaSlicer é lido do pacote na avaliação** — a decisão e o custo estão na seção da
-  varredura do sistema, mais abaixo. O `system.checks` confere que a entrada é aplicação e declara
-  `model/stl`; o `models-open-in-orca` prova o caminho inteiro com o `ronoctua-shell opener`, e prova
-  também que sem a lista o `.step` chega ao editor.
+  tabela de `assets/distro-apps.nix`; hoje, o Craft Launcher e o SolidCraft). O
+  `files-open-by-choice` roda o `opener` sobre o `system.path` construído do `full`: nenhum arquivo
+  comum abre numa AppImage da distro, e som e filme abrem no player. Um lançador que um craft
+  baixado pelo launcher escreva em `~/.local/share/applications` não está no `system.path`, não leva
+  a chave, e esse check não o vê (`docs/PENDING.md`).
+- **O id do OrcaSlicer é uma constante** (`com.orcaslicer.OrcaSlicer.desktop` desde que o
+  `nixos-unstable` o renomeou; antes `OrcaSlicer.desktop`) — a decisão e o custo estão na seção da
+  varredura do sistema, mais abaixo. O `models-open-in-orca` lê a entrada do próprio pacote, exige
+  que o padrão a nomeie para os cinco tipos (`model/stl`, `model/3mf`, `model/step`, `model/obj` e
+  `application/x-amf`) e prova o caminho inteiro com o `ronoctua-shell opener`. A entrada do
+  orca-slicer 2.4.2 declara os cinco (o `model/obj` pelo apelido), então sem a lista nenhum modelo
+  cai mais no editor, e a prova do contrário (o `.step` no editor sem a lista) saiu do check; o
+  padrão é o que faz o OrcaSlicer vencer, sempre, outro programa que declare um modelo.
 - **Os lookups e os diretórios do player pedem com pass**, cunhado do `consent.json` na hora do
   pedido: `request_let` para o host do pedido, ou `request_under(pass, domínio, …)` para um host que
   a parte consentida nomeia sob o próprio domínio — os servidores do radio-browser sob
@@ -15876,16 +15940,36 @@ não fosse este.
 **O input segue a branch `release` por `github:`, e não por `git+https:`.** O tarball não traz
 histórico, e o Nix o baixa sozinho por HTTP; um input `git+https:` precisa de um `git` no `PATH` de
 quem atualiza, e a atualização roda numa unidade, cujo `PATH` é mínimo. O limite da API do GitHub
-(60 pedidos por hora por endereço, sem autenticação) é folgado: cada atualização pede uma vez.
+(60 pedidos por hora por endereço, sem autenticação) é folgado: cada atualização pede duas vezes, a
+distro e o nixpkgs.
 
-**A máquina usa exatamente os pins que o gate testou.** Ao travar ou atualizar o input `ronoctua`, o
-Nix copia os inputs da distro do `flake.lock` dela; só um `follows`, um `--override-input` ou um
-`nix flake update ronoctua/<x>` os mudariam, e o template não tem nenhum. Por cima disso, o
-`lib.machine` compara cada input que a distro recebeu com o `narHash` que o lock dela dá, e recusa
-com o caminho que difere. A comparação percorre o GRAFO do lock inteiro: um flake que religasse
-`ronoctua/lanzaboote/nixpkgs` não mudaria nada do que a raiz nomeia e ainda construiria contra um
-nixpkgs não testado (`machine-uses-the-distro-pins` prova os três casos). O mesmo vale para a máquina
-de referência: avaliar a distro com `--override-input` sem gravar o lock também é recusado.
+**A máquina usa os pins que o gate testou, menos o nixpkgs, que ela rola** (emenda do dono ao inv.
+6, 2026-10-30). O flake da máquina tem o próprio input `nixpkgs` (`nixos-unstable`) e aponta o da
+distro para ele (`inputs.ronoctua.inputs.nixpkgs.follows`), e o passo `flake-update` da atualização
+move os dois (`ronoctua-machine update-distro`: `nix flake update ronoctua nixpkgs`). Todo OUTRO
+input continua o do lock da distro: ao travar ou atualizar o input `ronoctua`, o Nix copia os inputs
+dela do `flake.lock` dela, e o `lib.machine` compara cada input que a distro recebeu com o `narHash`
+que esse lock dá e recusa com o caminho que difere, deixando passar só um caminho que termina em
+`nixpkgs` (`pinGuard`, `nix/machine.nix`). A comparação percorre o GRAFO do lock inteiro: um flake
+que religasse `ronoctua/lanzaboote/crane` não mudaria nada do que a raiz nomeia e ainda construiria
+contra um input não testado. O `machine-uses-the-distro-pins` prova quatro casos: os inputs da
+distro constroem; o nixpkgs trocado e um `follows` de nixpkgs religado
+(`ronoctua/lanzaboote/nixpkgs`) constroem; um input de input que não é nixpkgs
+(`ronoctua/lanzaboote/crane`) para a avaliação. O mesmo vale para a máquina de referência: avaliar a
+distro com `--override-input` de um input que não é o nixpkgs, sem gravar o lock, também é recusado.
+Uma máquina nova começa no nixpkgs que a distro testou: o instalador e a migração travam o flake
+dela a partir do lock da distro (`--reference-lock-file`), e a primeira atualização com rede o rola
+(`a-new-machine-starts-on-the-tested-nixpkgs`).
+
+**O preço é dito como é.** O gate prova a distro com o nixpkgs do lock DELA, que nada move sozinho
+(o `.#release` não roda `nix flake update`; quem o move é o dono, à mão), e cada máquina a constrói
+contra um nixpkgs mais novo. Três coisas podem acontecer numa atualização: um build que falha
+devolve o lock (`apply-reverts-the-lock-on-build-failure`), e a máquina segue como estava; um
+sistema que não sobe volta sozinho ao último bom, pelo ensaio de boot; e uma regressão que SOBE
+chega à pessoa, e nada na máquina a pega — só o gate, quando o nixpkgs da distro chega lá. Foi assim
+com o Tor: no `nixos-unstable` o `pkgs.lyrebird` passou a ser outro programa (um modificador de
+voz), e o transporte obfs4 de que a ponte precisa é o `pkgs.obfs4`, que ainda instala um binário
+`lyrebird`; o gate pegou, e uma máquina que tivesse rolado antes teria perdido as pontes calada.
 
 **O contrato.** O `flake.nix` da máquina diz para qual contrato foi escrito (`contract = 1`), e uma
 distro que fala outro recusa com uma frase, em vez de construir algo entendido pela metade.
@@ -16113,10 +16197,10 @@ terminfo daquele módulo também é o do terminal nativo, e a recusa tira só o 
 **Nenhuma entrada fica dentro de um `mkIf`.** O interruptor lê `honoured`, que lê os nomes do
 registro. Uma entrada definida dentro de `mkIf <interruptor>` faria os nomes do registro dependerem
 do interruptor, e a avaliação andaria em círculo. Estar numa máquina é o `when`, nunca a definição.
-(O OrcaSlicer só lê o nome do próprio lançador onde está instalado: ler é import-from-derivation, e
-uma máquina sem ele — o workshop desligado ou a pessoa o recusou — não pode ter de baixá-lo para
-dizer que não o tem. Não anda em círculo porque o `installed` lê o `when` e as recusas, nunca um
-`desktopIds`.)
+(O nome do lançador do OrcaSlicer é uma constante, `workshop.nix`: lê-lo do pacote era
+import-from-derivation, e uma máquina sem ele — o workshop desligado ou a pessoa o recusou — não
+pode ter de baixá-lo para dizer que não o tem. Não anda em círculo porque o `installed` lê o `when`
+e as recusas, nunca um `desktopIds`.)
 
 **Um id sobrevive ao nome.** Uma recusa viaja meses entre máquinas que se atualizam em dias
 diferentes; um id que sumisse a transformaria em "desconhecido" e o programa voltaria. Por isso
@@ -16179,25 +16263,25 @@ passar U+0080–U+009F e um U+00A0 sozinho. E quando o `distro-apps.json` não s
 novo, ausente), a central diz isso, em vez de mostrar uma lista vazia de programas da distro.
 
 **As outras fontes da distro: formas da pessoa, pins num arquivo da ferramenta.** Flatpaks,
-AppImages, web apps e apps Android da distro vêm de `assets/distro-apps.nix` (hoje, as AppImages dos
-Crafting Apps), nas formas das declarações da pessoa, e os pins ficam em `assets/distro-pins.json`. O que é declarado à
+AppImages, web apps e apps Android da distro vêm de `assets/distro-apps.nix` (hoje, as AppImages do
+grupo `crafts`: o Craft Launcher e o SolidCraft), nas formas das declarações da pessoa, e os pins
+ficam em `assets/distro-pins.json`. O que é declarado à
 mão e o que a ferramenta escreve moram em arquivos separados, como `flake.nix` e `flake.lock`: o
 `nix run .#distro-pins` move só o que segue uma fonte (a release mais nova de um repositório do
 GitHub, a versão que o F-Droid sugere), mantém o pin escrito à mão do que não segue nada, recusa uma
 release com tag sem número (`continuous` serve bytes novos sob o mesmo nome — o defeito que o
 `downloads-are-pinned` recusa) e não faz commit: quem commita é o `.#release`, que a roda antes do
 gate de cada versão (abaixo, "Os pins andam antes de cada versão"), ou o dono, à mão — o pin é o que
-o gate testou (a pessoa pode seguir os AppImages além dele, no perfil dela — veja os Crafting Apps,
-abaixo).
-O Flatpak da distro vai para a instalação `--user` pela lista do nix-flatpak, a mesma do
-`declaredFlatpaks` (sair dela é o que desinstala). O AppImage é embrulhado no build
-(`appimageTools.wrapType2`) como `ronoctua-appimage-<chave>`, o nome que o AppImage declarado da
-pessoa recebe — uma chave nunca esconde um programa de mesmo nome. O lançador e o ícone saem da
-imagem no build, sem import-from-derivation, numa derivação à parte do embrulho (o ambiente FHS são
-centenas de pacotes; o lançador só precisa da imagem aberta), e o lançador é ESCRITO, não copiado:
-um AppImage é arquivo de outra pessoa e o lançador dele não escolhe o que roda. Ficam só as chaves
-de que um lançador precisa, mais uma nossa, `X-Ronoctua-Fallback=false`, onde a linha da tabela diz
-`fallback = false`; `Name=` é o da tabela, `Exec=` é o caminho estável do embrulho mais o
+o gate testou (a pessoa pode seguir os AppImages além dele, no perfil dela — veja "O escritório e os
+Crafting Apps", abaixo). O Flatpak da distro vai para a instalação `--user` pela lista do
+nix-flatpak, a mesma do `declaredFlatpaks` (sair dela é o que desinstala). O AppImage é embrulhado
+no build (`appimageTools.wrapType2`) como `ronoctua-appimage-<chave>`, o nome que o AppImage
+declarado da pessoa recebe — uma chave nunca esconde um programa de mesmo nome. O lançador e o ícone
+saem da imagem no build, sem import-from-derivation, numa derivação à parte do embrulho (o ambiente
+FHS são centenas de pacotes; o lançador só precisa da imagem aberta), e o lançador é ESCRITO, não
+copiado: um AppImage é arquivo de outra pessoa e o lançador dele não escolhe o que roda. Ficam só as
+chaves de que um lançador precisa, mais uma nossa, `X-Ronoctua-Fallback=false`, onde a linha da
+tabela diz `fallback = false`; `Name=` é o da tabela, `Exec=` é o caminho estável do embrulho mais o
 código de campo que a imagem pediu, e as ações ficam para trás (cada uma nomeia um programa de
 dentro da imagem, que nenhum caminho de fora alcança). O ícone é o `.DirIcon`, seguido só enquanto
 fica dentro da imagem e só quando É um PNG ou um SVG. O id é `ronoctua-appimage-<chave>.desktop`, o
@@ -16219,7 +16303,7 @@ cabeçalho ELF que diz `AI 2` e um squashfs atrás, que é tudo o que o `appimag
 `nix run .#distro-pins -- --check` pergunta primeiro o que não precisa de rede (`offline_problems`:
 o arquivo na forma da ferramenta, cada pin de uma entrada do seu tipo, cada entrada com o seu pin),
 e é isso, e não o planejador inteiro, que o check pergunta ao arquivo da árvore: com a tabela
-seguindo fontes (os Crafting Apps seguem o GitHub), o planejador precisaria de rede.
+seguindo fontes (o Craft Launcher e o SolidCraft seguem o GitHub), o planejador precisaria de rede.
 
 **O Emacs aparece no lançador, e o comentário dizia que não.** O `emacs.nix` afirmava que
 `services.emacs.install = false` mantinha `emacs.desktop` e `emacsclient.desktop` fora do lançador.
@@ -16229,13 +16313,26 @@ daemon diz isso no nome (decisão do dono, 2026-10-20; na seção do Emacs).
 
 ### O escritório e os Crafting Apps (2026-10-20)
 
+**Desde 2026-10-30, o grupo `crafts` é o Craft Launcher e o SolidCraft** (emenda do dono ao inv. 6).
+Os treze AppImages desta leva saíram da tabela — os ids ficam em `retired`, no livro-razão de
+`assets/distro-apps.nix` — e no lugar deles entraram duas linhas: o ArtCraft Launcher
+(`storytold/craft-launcher`), que baixa e atualiza os Crafting Apps sozinho, sob o `$HOME` e fora da
+geração, e o SolidCraft (`tangency-labs/solidcraft`, CAD paramétrico em Rust, MIT/Apache-2.0). As
+duas são linhas como as treze eram: embrulhadas pelo `appimageOf`, partes, `fallback = false`, com o
+pin movido pelo `nix run .#distro-pins`. O que esta seção diz dos treze — tamanhos, tipos
+declarados, o que o `AppRun` deles escrevia, o que a VM abriu — é a medida de 2026-10-20. Os crafts
+que o launcher baixa não passam pelo embrulho da distro, e o que eles fazem numa máquina (se rodam
+fora de um ambiente FHS, o lançador que escrevem em `~/.local/share/applications`, os tipos que
+tomam) não foi medido, nem a licença do launcher, nem o tamanho das duas imagens
+(`docs/PENDING.md`).
+
 **Dois grupos novos do perfil.** `office` (`nix/modules/office.nix`: o ONLYOFFICE e o LibreOffice
 `fresh`, do nixpkgs) e `crafts` (`nix/modules/crafts.nix`, que só declara o interruptor; os apps são
 linhas da tabela de `assets/distro-apps.nix`). Os dois ligam com o `full` e com uma linha no
 `host.nix`, e cada programa é uma entrada do registro, que a pessoa recusa uma a uma (a lista do
 instalador traz o LibreOffice desmarcado). Medidos como o `toplevel` com o grupo menos o sem ele: o
-escritório acrescenta 2,65 GiB ao `full` e 2,96 ao `minimal`; os Crafting Apps, 1,97 e 2,24 (o
-ambiente FHS em que rodam é o do `appimage-run`, que o `full` já tem).
+escritório acrescenta 2,65 GiB ao `full` e 2,96 ao `minimal`; os treze Crafting Apps de então, 1,97
+e 2,24 (o ambiente FHS em que rodam é o do `appimage-run`, que o `full` já tem).
 
 **O ONLYOFFICE não é não livre.** No nixpkgs pinado ele é `agpl3Plus`, um build do `.deb` de upstream
 (`binaryNativeCode`): o predicado do não livre não o nomeia, e o censo do cache público fica igual. O
@@ -16258,8 +16355,8 @@ do pacote seria import-from-derivation de dois gigabytes em toda avaliação), e
 cada uma no build: existe, é aplicação e declara o tipo. O `documents-open-in-their-suite` constrói
 o `system.path`, a lista e essa leitura de três máquinas `full` — as duas suítes, o ONLYOFFICE
 recusado, o LibreOffice recusado (o padrão do instalador) — e pergunta ao `opener` do shell por um
-arquivo de cada tipo, sobre o catálogo de verdade de cada uma, com o WordCraft, o GridCraft e o
-DeckCraft, que também declaram documentos.
+arquivo de cada tipo, sobre o catálogo de verdade de cada uma (até 2026-10-30, também com o
+WordCraft, o GridCraft e o DeckCraft, que declaravam documentos).
 
 **O `xdg-open` também manda texto ao cliente do Emacs.** O gerenciador de arquivos manda todo
 `text/*` ao editor sozinho, mas o `xdg-open` — o que um download do navegador, um terminal, qualquer
@@ -16272,18 +16369,19 @@ pergunta ao `xdg-mime` de verdade do sistema construído, e tira os tipos do `mi
 um tipo de texto novo que uma suíte ou um Crafting App pegue primeiro falha ali até o padrão o
 nomear.
 
-**Por que AppImage, e a cadência.** Os Crafting Apps (`storytold/<app>` no GitHub, Apache-2.0, Rust
-puro, do projeto ArtCraft) não estão no nixpkgs, e cada release traz um AppImage x86_64. O
-`appimageOf` do registro o embrulha (`appimageTools.wrapType2`) como `ronoctua-appimage-<chave>`,
-com o lançador escrito a partir da imagem; os 13 têm um `.desktop` só na raiz, e todos foram
-construídos. O `assetPattern` (`<app>-*-linux-x86_64.AppImage`) casa uma imagem só — o `.zsync` e a
-aarch64 ficam de fora —, e o `nix run .#distro-pins` move o pin para a release mais nova. As releases
-são quase diárias (as treze de agora saíram entre 17 e 18/10); mover os pins da distro é do dono, que
-roda a ferramenta, lê o diff e faz o commit: o pin é o que o gate testou. A pessoa que quiser as
-releases antes disso liga a opção de segui-las (abaixo). Ficaram de fora o ArtCraft em si
-(o motor de IA: as releases só têm macOS e Windows) e o AniCraft (sem release). O Craft Launcher
-(`storytold/craft-launcher`) deixou de ser recusado: o invariante 6 agora o nomeia como o mecanismo
-dos Crafts — baixa e atualiza os crafts sozinho, fora da geração, sob `$HOME`. Padrão de MIME não há: os apps são
+**Por que AppImage, e a cadência** (a leva de 2026-10-20). Os Crafting Apps (`storytold/<app>` no
+GitHub, Apache-2.0, Rust puro, do projeto ArtCraft) não estão no nixpkgs, e cada release traz um
+AppImage x86_64. O `appimageOf` do registro o embrulha (`appimageTools.wrapType2`) como
+`ronoctua-appimage-<chave>`, com o lançador escrito a partir da imagem; os 13 têm um `.desktop` só
+na raiz, e todos foram construídos. O `assetPattern` (`<app>-*-linux-x86_64.AppImage`) casa uma
+imagem só — o `.zsync` e a aarch64 ficam de fora —, e o `nix run .#distro-pins` move o pin para a
+release mais nova. As releases são quase diárias (as treze de então saíram entre 17 e 18/10); mover
+os pins da distro é do dono, que roda a ferramenta, lê o diff e faz o commit: o pin é o que o gate
+testou. A pessoa que quiser as releases antes disso liga a opção de segui-las (abaixo). Ficaram de
+fora o ArtCraft em si (o motor de IA: as releases só têm macOS e Windows) e o AniCraft (sem
+release). O Craft Launcher (`storytold/craft-launcher`), recusado então por atualizar os apps
+sozinho, fora do flake, é desde 2026-10-30 o mecanismo dos Crafts que o invariante 6 nomeia, e a
+linha que substituiu os treze (acima). Padrão de MIME não há: os apps são
 0.x — e eles declaram fotos, filmes, som e documentos, e o `opener`, que sem padrão vai pela ordem
 dos nomes, os entregava a eles: o FigCraft vinha antes do Google Chrome nas imagens, o FilmCraft e o
 SoundCraft antes do VLC, o LightCraft e o PhotoCraft eram os únicos a declarar TIFF, HEIC, RAW, BMP
@@ -16296,26 +16394,30 @@ compositor sobre o Xvfb, sem GPU): os treze abrem janela, uns pelo Wayland
 pelo Vulkan do `/run/opengl-driver` (o FilmCraft não diz, e desenha), e o PhotoCraft, o LightCraft
 e o DesignCraft avisam que passaram a desenhar na CPU.
 
-**Uma imagem se atualiza, mas não escreve o próprio lançador** (o substrato dos lançadores é da distro — invariante 6). O `AppRun` do PhotoCraft e do FigCraft
-escreve um lançador próprio em `~/.local/share/applications` e os ícones em `~/.local/share/icons`
-quando acha que roda de um arquivo AppImage — a convenção é o `$APPIMAGE` nomear o arquivo —, e esse
-lançador nomearia um programa que a pessoa não roda e que o registro não recusa. O embrulho do
-`appimageTools` roda a imagem já aberta e não define `$APPIMAGE`, mas deixaria passar um de quem o
-chamou; então o programa que o sistema roda (o `wrapper` do `appimageOf`) tira o `$APPIMAGE` e põe o
-`<CHAVE>_NO_DESKTOP_INTEGRATION=1` que o `AppRun` deles lê (procurado com `strings` nos treze: só os
-dois o leem; numa imagem que não o lê, a variável não custa nada).
+**Uma imagem da tabela não escreve o próprio lançador** (o lançador é do registro). O `AppRun` do
+PhotoCraft e do FigCraft escrevia um lançador próprio em `~/.local/share/applications` e os ícones
+em `~/.local/share/icons` quando acha que roda de um arquivo AppImage — a convenção é o `$APPIMAGE`
+nomear o arquivo —, e esse lançador nomearia um programa que a pessoa não roda e que o registro não
+recusa. O embrulho do `appimageTools` roda a imagem já aberta e não define `$APPIMAGE`, mas deixaria
+passar um de quem o chamou; então o programa que o sistema roda (o `wrapper` do `appimageOf`) tira o
+`$APPIMAGE` e põe o `<CHAVE>_NO_DESKTOP_INTEGRATION=1` que o `AppRun` deles lia (procurado com
+`strings` nos treze: só os dois o liam; numa imagem que não o lê, a variável não custa nada). O
+embrulho vale para toda AppImage da tabela — hoje o launcher e o SolidCraft, cujos `AppRun` não
+foram procurados —, e os crafts que o launcher baixa não passam por ele.
 
-**O que os apps fazem e a distro não segura.** O "tornar padrão" do WordCraft roda `xdg-mime` com o
-id dele (`ai.storyteller.wordcraft.desktop`), que não existe aqui — o lançador é
-`ronoctua-appimage-wordcraft.desktop` —: ele reescreve a linha do tipo no `~/.config/mimeapps.list`
-da pessoa com um nome morto, que todo leitor pula, e desfaz o padrão que ela tenha escrito ali. O
-lançador fica com o nome da distro (o id do app mudaria o que o registro e a central usam), e o
-`docs/INSTALL.md` diz à pessoa que o padrão se escolhe pela distro — o "abrir com", e uma linha no
-`mimeapps.list` com o nome do lançador daqui, que o gerenciador de arquivos não lê para um tipo
-`text/*` (esse vai sempre ao editor) — e que não use o botão (2026-10-20). E o
-"Verificar atualizações" do PdfCraft, à mão, pergunta ao GitHub pela release mais nova e anuncia uma
-versão que a distro só entrega quando o dono move o pin — ou na próxima atualização de quem segue as
-releases (abaixo).
+**O que os apps faziam e a distro não segurava** (a leva de 2026-10-20). O "tornar padrão" do
+WordCraft rodava `xdg-mime` com o id dele (`ai.storyteller.wordcraft.desktop`), que não existia aqui
+— o lançador era `ronoctua-appimage-wordcraft.desktop` —: ele reescrevia a linha do tipo no
+`~/.config/mimeapps.list` da pessoa com um nome morto, que todo leitor pula, e desfazia o padrão que
+ela tivesse escrito ali. O lançador ficava com o nome da distro (o id do app mudaria o que o
+registro e a central usam), e o `docs/INSTALL.md` dizia à pessoa que o padrão se escolhe pela distro
+— o "abrir com", e uma linha no `mimeapps.list` com o nome do lançador daqui, que o gerenciador de
+arquivos não lê para um tipo `text/*` (esse vai sempre ao editor) — e que não usasse o botão. E o
+"Verificar atualizações" do PdfCraft, à mão, perguntava ao GitHub pela release mais nova e anunciava
+uma versão que a distro só entregava quando o dono movia o pin. Desde 2026-10-30 quem entrega a
+versão nova de um craft é o launcher, o lançador do WordCraft é o que o launcher escrever, e o que o
+botão faz agora não foi visto; uma linha do `mimeapps.list` que nomeie um lançador aposentado
+(`ronoctua-appimage-wordcraft.desktop` e os outros doze) está morta, e o `docs/INSTALL.md` diz isso.
 
 **Os arquivos fixados têm um nome só** (`nix/distro-downloads.nix`): o `nix run .#distro-pins` baixa
 cada release nova para tirar o hash com o mesmo nome que o `fetchurl` do build dá, então o download
@@ -16324,14 +16426,15 @@ cobra os dois nomes). Os arquivos ficam presos pela raiz das fontes guardadas (`
 ~0,95 GB): uma release que o upstream apaga não volta. E o `downloads-are-pinned` lê o
 `assets/distro-pins.json` também.
 
-**Os Crafting Apps podem seguir as próprias releases (decisão do dono, 2026-10-20).** O pin da distro
-continua o que o gate testou, e só o dono o move; o que mudou é que a pessoa pode deixar a atualização
-de rotina levar, NAS MÁQUINAS DELA, cada AppImage da tabela que segue um repositório
-(`follows.github` — hoje os Crafting Apps) até a release mais nova. A escolha é dela, desligada por
-padrão, e viaja assinada com as opções (`distro-apps-follow-releases` no `options.json`, escrito só
-enquanto ligado: uma máquina cuja distro é mais velha, cujo leitor recusa campo desconhecido, recusa
-o arquivo de opções até a distro dela andar — a página diz isso). Liga-se na vista da atualização, nas
-duas portas (`f`, `LEADER s u f`, `ronoctua-shell-update/src/follow.rs`): ligar é o gesto que permite
+**Os AppImages da distro podem seguir as próprias releases (decisão do dono, 2026-10-20).** O pin da
+distro continua o que o gate testou, e só o dono o move; o que mudou é que a pessoa pode deixar a
+atualização de rotina levar, NAS MÁQUINAS DELA, cada AppImage da tabela que segue um repositório
+(`follows.github` — hoje o Craft Launcher e o SolidCraft) até a release mais nova. A escolha é dela,
+desligada por padrão, e viaja assinada com as opções (`distro-apps-follow-releases` no
+`options.json`, escrito só enquanto ligado: uma máquina cuja distro é mais velha, cujo leitor recusa
+campo desconhecido, recusa o arquivo de opções até a distro dela andar — a página diz isso). Liga-se
+na vista da atualização, nas duas portas (`f`, `LEADER s u f`,
+`ronoctua-shell-update/src/follow.rs`): ligar é o gesto que permite
 `api.github.com` e `github.com` no `consent.json`; a página diz os dois hosts, o que esta máquina
 construiu e, por app, a versão, de quem é o pin e — na própria linha, para as duas portas dizerem ao
 lado do cursor — por que uma mais nova não está em uso (espera a verificação, foi retida e por quê,
@@ -16422,8 +16525,8 @@ Os programas (`nix`, `bootctl`) e os lugares chegam por UMA tabela (`ronoctua.ma
 que as unidades põem no `Environment=` e o embrulho no `PATH` põe com `--set-default`; nada se procura
 num `PATH`.
 
-**A pasta da máquina descreve o sistema que roda.** A atualização move o input da distro ANTES de
-aplicar, então o lock que o `apply` encontra pode nomear uma revisão da qual nada foi construído. O
+**A pasta da máquina descreve o sistema que roda.** A atualização move a distro e o nixpkgs ANTES de
+aplicar, então o lock que o `apply` encontra pode nomear revisões das quais nada foi construído. O
 lock do qual o sistema do perfil FOI construído é sabido fora da pasta: o próprio sistema o carrega
 (`/etc/ronoctua/machine.lock`, o texto do `flake.lock` da fonte que o `lib.machine` recebeu — texto e
 não link, que poria o flake da máquina inteiro, segredos inclusive, no fechamento), e o lugar dentro
@@ -16436,25 +16539,26 @@ failure`, que prova também o caso sem cópia nenhuma: o primeiro `apply` depois
 atualização que falhou deixa a pasta como a máquina roda, e o próximo `apply` constrói o que roda,
 não o que falhou.
 
-**O ensaio de boot é nosso.** O NixOS 26.05 não tem contagem de boot (o builder do systemd-boot não
-escreve contador, e não há opção). Depois de um switch cujo kernel, initrd ou parâmetros diferem dos
-do último sistema bom, `bootctl set-default` nomeia a entrada do ÚLTIMO BOM e `bootctl set-oneshot` a
-do NOVO: o próximo boot tenta o novo uma vez (a variável `LoaderEntryOneShot` some ao ser lida), e
-qualquer boot depois disso volta ao último bom. A entrada de um sistema é achada pelo `init=` que o
-`bootctl list` mostra — nada mais diz qual sistema uma entrada sobe. Para o boot ruim virar boot de
-novo sem ninguém: `panic=10` (um kernel em pânico reinicia em dez segundos), `boot.panic_on_fail` (um
-estágio 1 que falha entra em pânico em vez de esperar num shell de emergência cujo root está trancado;
-o initrd systemd do nixpkgs faz isso com `panic-on-fail.service`), o watchdog de hardware
-(`RuntimeWatchdogSec`) e um prazo para o estágio 2. Um estágio 2 que cai no modo de emergência (uma
-montagem que falhou) ou que nunca termina (uma unidade sem fim) deixa o PID 1 vivo e o watchdog
-alimentado, e esperaria para sempre num console trancado: o `ronoctua-boot-trial-deadline.service`
-começa com o estágio 2, sobrevive ao isolamento do modo de emergência ou de resgate (que também o
-querem) e, num boot que TENTA um sistema, reinicia a máquina se o alvo padrão não chegou em
-`trialBootSeconds`. Um boot tenta um sistema quando o `LoaderEntryDefault` está posto e o
-`LoaderEntrySelected` (que o systemd-boot escreve a cada boot) é outro — só um ensaio deixa o default
-posto, e todo julgamento o apaga —, então nenhum boot comum ganha prazo, e um estágio 2 quebrado num
-sistema já bom não vira um laço de reinícios. Três senhas erradas no disco são uma falha dessas, e
-reiniciam.
+**O ensaio de boot é nosso.** O NixOS não nos deu contagem de boot: na 26.05 o builder do
+systemd-boot não escrevia contador, e não havia opção; no `nixos-unstable`, que a distro segue desde
+2026-10-30, isso não foi conferido de novo. Depois de um switch cujo kernel, initrd ou parâmetros
+diferem dos do último sistema bom, `bootctl set-default` nomeia a entrada do ÚLTIMO BOM e `bootctl
+set-oneshot` a do NOVO: o próximo boot tenta o novo uma vez (a variável `LoaderEntryOneShot` some ao
+ser lida), e qualquer boot depois disso volta ao último bom. A entrada de um sistema é achada pelo
+`init=` que o `bootctl list` mostra — nada mais diz qual sistema uma entrada sobe. Para o boot ruim
+virar boot de novo sem ninguém: `panic=10` (um kernel em pânico reinicia em dez segundos),
+`boot.panic_on_fail` (um estágio 1 que falha entra em pânico em vez de esperar num shell de
+emergência cujo root está trancado; o initrd systemd do nixpkgs faz isso com
+`panic-on-fail.service`), o watchdog de hardware (`RuntimeWatchdogSec`) e um prazo para o estágio 2.
+Um estágio 2 que cai no modo de emergência (uma montagem que falhou) ou que nunca termina (uma
+unidade sem fim) deixa o PID 1 vivo e o watchdog alimentado, e esperaria para sempre num console
+trancado: o `ronoctua-boot-trial-deadline.service` começa com o estágio 2, sobrevive ao isolamento
+do modo de emergência ou de resgate (que também o querem) e, num boot que TENTA um sistema, reinicia
+a máquina se o alvo padrão não chegou em `trialBootSeconds`. Um boot tenta um sistema quando o
+`LoaderEntryDefault` está posto e o `LoaderEntrySelected` (que o systemd-boot escreve a cada boot) é
+outro — só um ensaio deixa o default posto, e todo julgamento o apaga —, então nenhum boot comum
+ganha prazo, e um estágio 2 quebrado num sistema já bom não vira um laço de reinícios. Três senhas
+erradas no disco são uma falha dessas, e reiniciam.
 
 **Um ensaio que o carregador não consegue iniciar também volta sozinho.** O prazo e o bless só veem um
 kernel que rodou; um kernel que o carregador não carrega (um arquivo que ele não lê, ou que nem é
@@ -16531,7 +16635,8 @@ ensaio esperando, o que subiu e durou é o último bom.
 **O sistema que não subiu não é tentado de novo.** O `apply` que constrói exatamente o toplevel cujo
 ensaio falhou recusa (`did-not-boot`) e devolve o lock: sem isso, a atualização seguinte (ou a
 central de programas) trocaria para ele de novo e o próximo reinício falharia igual, para sempre.
-Uma revisão NOVA da distro constrói outro sistema, e esse é tentado.
+Uma revisão NOVA da distro, ou do nixpkgs que a máquina rola, constrói outro sistema (o `apply`
+compara o toplevel), e esse é tentado.
 
 **O ensaio que falhou é dito, uma vez.** Quando o sistema novo não subiu, a máquina já voltou
 sozinha — e ninguém estava olhando: o boot que falhou foi um pânico, e o que voltou parece qualquer
@@ -16589,31 +16694,111 @@ pode esperar e o que subiu já foi escrito. Os filhos nascem sem entrada padrão
 código próprio, em vez de construir a pasta enquanto a atualização reescreve o lock dela. O
 `update-apply-rule-is-narrow` lê o nome dessa trava nas fontes da atualização.
 
-**A regra polkit é de uma unidade.** A central inicia o `ronoctua-update-apply.service` sem ninguém
-olhando um pedido, e não há agente polkit na sessão: a regra devolve `YES` para a pessoa, verbo
-`start`, essa unidade, e a condição não testa mais nada. O bless não tem regra: só o systemd o inicia.
+**A regra polkit é de três unidades, e uma delas aplica o que a pessoa escreve.** A central inicia o
+`ronoctua-update-apply.service` sem ninguém olhando um pedido, e não há agente polkit na sessão: a
+regra devolve `YES` para a pessoa, verbo `start`, num `if` só, e a condição não testa mais nada. Ela
+lista também as duas unidades do interruptor de build, `ronoctua-build-switch-own` e `-reference`,
+que o glifo da modeline e `LEADER / b` iniciam: rodam a mesma linha do apply, com a mesma trava,
+depois de ler o checkout que o flake da máquina nomeia — por isso dividem a regra em vez de ganhar
+outra. Nenhuma das três tem teto de partidas (`startLimitIntervalSec = 0`): só um gesto da pessoa as
+inicia, e o teto padrão recusaria o sexto como `start-limit-hit`. O `-own` constrói a revisão que o
+lock de root fixa. O `-reference` constrói e ativa, como root, a ÁRVORE DE TRABALHO do checkout — e
+quem pode iniciá-lo é quem escreve essa árvore: numa máquina cujo flake nomeia um checkout local,
+qualquer processo que roda como a pessoa chega a root por ele, sem senha. Isso não é a regra da
+porta do sudo (código que alcança root passa pela senha, como o `module.nix` de um módulo do brain,
+L06) e espera a decisão do dono (`docs/PENDING.md`); até lá, o `update-apply-rule-is-narrow` segura
+essa passagem numa unidade só. O bless não tem regra: só o systemd o inicia.
 
 **`hold` só retém a revisão que roda.** Um lock escrito com `--override-input` nomearia outra revisão
 por um tempo e voltaria na primeira avaliação que o comparasse com o endereço do `flake.nix` — uma
 retenção que não retém. Então a revisão pedida tem de ser a do sistema em execução (o lock guardado,
 senão o da pasta), e a pasta volta a ela se tinha andado. O `apply` de uma máquina retida cujo lock
-nomeia outra revisão recusa (`held`); o passo `flake-update` da atualização é que não move o input
-enquanto o registro disser `hold`.
+nomeia outra revisão recusa (`held`); o passo `flake-update` da atualização é que não move os
+inputs (nem a distro nem o nixpkgs) enquanto o registro disser `hold`.
 
 **A migração só troca o layout se o novo constrói, e nunca renomeia a pasta.** Com a raiz apagada a
 cada boot, a pasta da máquina é uma montagem bind do `/persist`, e um ponto de montagem não se renomeia;
 o registro em `/var/lib` é outra montagem, e um `rename` entre as duas falha. Então: o flake novo nasce
 DENTRO da pasta (`.next`: o `flake.nix` do template, `host.nix`, `facter.json` e os segredos byte a
 byte — `secrets/secrets.yaml` vira `secrets.yaml` —, mais uma cópia de `person/` e `local/` para o
-build construir o que a máquina vai construir), é travado e CONSTRUÍDO; qualquer falha apaga `.next` e
-nada mais. Só então o layout velho é COPIADO inteiro para `legacy-<carimbo>` (um é guardado), as
+build construir o que a máquina vai construir), é travado — a partir do lock da própria distro
+(`RONOCTUA_MACHINE_REFERENCE_LOCK`), para o nixpkgs que a máquina rola começar no pin testado sem
+resolver a branch — e CONSTRUÍDO; qualquer falha apaga `.next` e nada mais. Só então o layout velho
+é COPIADO inteiro para `legacy-<carimbo>` (um é guardado), as
 entradas velhas saem e as novas entram por `rename` no mesmo sistema de arquivos. `person/` e `local/`
 nunca se movem: só o `ronoctua-person` os escreve (`one-person-boundary`), e a cópia do build é
 descartada. O `RONOCTUA_MACHINE_DISTRO` aponta o input da distro para outro endereço (o teste de VM, a
 adoção a partir de um checkout); sem ele vale o do template.
 
+**A atualização deixa o sistema para o próximo boot (2026-10-30).** A máquina segue o
+`nixos-unstable`, e no dia em que ela passou a rolar a troca ao vivo do 26.05 para ele reiniciou a
+máquina do dono; a causa não foi registrada, e nenhuma VM prova uma troca ao vivo entre dois nixpkgs
+(`docs/PENDING.md`) — é por isso que a atualização não troca nada sob a sessão. Então o `apply` da
+atualização é `apply --next-boot`: constrói, põe o sistema no
+perfil e roda `switch-to-configuration boot` — nada do que roda é parado ou reiniciado —, o registro
+diz `staged` e nomeia o sistema que espera (`last-apply.toplevel`, um campo que entrou no formato 1
+como `missing` e `no-trial` entraram), e o ensaio de boot é armado de verdade, nunca `boot-identical`,
+porque nada rodou o userland novo. Qualquer outro `apply` faz o mesmo, sem pedir, em dois casos: o
+perfil nomeia um sistema que não roda (um sistema deixado para o próximo boot continua para o próximo
+boot — trocar para ele ao vivo seria o salto que isto evita), ou o lock da pasta não prova que o
+`nixpkgs` é o do sistema do perfil (`NIXPKGS_INPUT`, o do próprio flake ou, num flake que não o rola, o
+da distro; comparado pelo `rev`, senão pelo `narHash`): andou — a atualização cujo apply morreu deixou
+o lock andado — ou não dá para saber — um lock sem esse input, um sistema cujo lock não se conhece —,
+e o desconhecido não é prova de que nada andou. Fora disso — a troca de build que só move a distro, a
+central de programas numa máquina sem nada esperando — o `apply` troca na hora; um `boot` que falha é
+`next-boot-failed`, não `switch-failed`. O bless sabe que um ensaio cujo one-shot o carregador ainda
+guarda (`LoaderEntryOneShot`, o `next_entry` do GRUB) não foi tentado, mesmo sem o registro do boot
+que o armou: os dois carregadores esquecem o one-shot no instante em que um boot o lê.
+
+**Se um sistema espera o reinício é o perfil que diz, não o último apply.** `ronoctua_machine::
+next_boot` responde: espera o sistema que o perfil nomeia quando o que roda (`/run/current-system`)
+não é ele nem uma especialização dele, e o reinício o experimenta com volta quando o ensaio pendente é
+dele. O último apply mentiria nos dois sentidos — um ensaio que falhou põe o perfil de volta e deixa o
+registro dizendo `staged`; um apply seguinte que não construiu nada (recusa, build falho) apaga o
+`staged` com o sistema ainda esperando. Leem assim a página da atualização e o aviso do fim da
+execução (`restart`, ou `restart-unguarded`, que não promete volta quando nenhum ensaio pôde ser
+armado), a central de programas ("chega/sai no próximo reinício", lendo os relatórios DENTRO do sistema
+que espera), as linhas da máquina do cache binário e de seguir as versões, a página das partes, a
+página e a linha da troca de build, e o `ronoctua-parts plan --next`, que enraíza sob `NEXT_ROOTS` as
+derivações das partes desse sistema. Só o envio ao cache binário lê o último apply, e de propósito:
+ele segue UM apply, uma vez, logo depois dele, e empurra ESSE sistema com o cache do arquivo DELE.
+Os dados de um Flatpak removido de vez não somem sob o sistema que ainda o roda: o pedido fica no
+razão do reconciliador (`erase`) e é cumprido quando a máquina roda um sistema sem ele e nada mais
+espera — ou descartado, se ele foi declarado de novo ou continua ali.
+
+**O resgate volta para um sistema que rodou.** Com aplicações deixando sistemas para o próximo boot, a
+geração antes da do perfil pode ser uma que ninguém subiu (duas aplicações antes de um reinício deixam
+duas), talvez de outro nixpkgs e sem ensaio de boot. Então o `ronoctua-rescue-rollback@` é o verbo
+`ronoctua-machine rollback switch|boot`: com um sistema esperando, volta para o que RODA (a geração
+dele, nenhuma nova) e não troca nada; sem nada esperando, para a geração anterior, pulando a que é o
+próprio sistema que roda e a do ensaio que falhou. O ensaio deixado é desarmado como o `disarm` faz.
+
+**Uma hibernação não gasta o ensaio.** A volta de uma hibernação é um boot do firmware, que leria o
+one-shot: outro kernel não retoma a imagem, e o mesmo gasta o one-shot à toa, e o reinício de verdade
+depois sobe no padrão e o ensaio é julgado falho. Um sistema deixado para o próximo boot espera dias
+por esse reinício, e a máquina hiberna sozinha com a bateria no fim. O gancho do `systemd-sleep`
+(`ronoctua-machine hibernate pre|post`) põe o one-shot de lado antes (a volta sobe no padrão, o último
+bom, cujo kernel roda) e o devolve depois; uma máquina que não voltou pela retomada acha a nota
+(`trial-asleep.json`) no bless seguinte, e o ensaio é armado de novo em vez de julgado.
+
+**O formato 1 tem uma janela em aberto (decisão do dono).** Um leitor anterior a `staged`/`toplevel`
+recusa o registro (`unreadable`). Entre máquinas isso passa na atualização de cada uma; NUMA máquina, a
+volta do ensaio pode cair num sistema anterior ao leitor — a geração que o trouxe foi trocada ao vivo
+com kernel novo, o ensaio dela ficou pendente, e o último bom é anterior a ela —, e ali o bless e o
+apply recusam o registro: ninguém julga o ensaio e toda atualização falha no rebuild até alguém tirar
+o `last-apply` do `/var/lib/ronoctua-machine/state.json` (ou o arquivo inteiro, que se lê como um
+registro novo). Manter o formato 1, só escrever `staged` quando o último bom já o lê, ou subir o
+formato é escolha do dono.
+
+**Uma entrada do menu é lida pelo que diz, não pelo nome.** O builder do systemd-boot do
+`nixos-unstable` nomeia cada entrada pelo SHA-256 do próprio texto (`nixos-<sha256>.conf`), não mais
+`nixos-generation-<n>.conf`. O que todo builder escreve DENTRO dela é o mesmo — `version Generation
+<n> …` e o título, com ` (<especialização>)` ou ` [<perfil>]` —, então a geração de uma entrada sai do
+`version` (o que o `bootctl list` imprime, ou o arquivo da entrada quando o `bootctl` não pode ser
+perguntado), e o nome é só o último recurso.
+
 **O ensaio não muda nada.** `apply --rehearse` copia a pasta para `/run/ronoctua-update/rehearsal`,
-move o input da distro LÁ (como a atualização faria, menos com `hold`), e mede o build com
+move a distro e o nixpkgs LÁ (como a atualização faria, menos com `hold`), e mede o build com
 `--dry-run`: quanto baixar e quantas derivações construir. A cópia some no fim; nem o registro é
 escrito.
 
@@ -19380,8 +19565,8 @@ cruza a fronteira do módulo.
 
 **Três tempos, e o gerador é quem os garante.** A pessoa reúne o que declarou em outras máquinas
 ANTES da metade root (`gather`: puxar a parte em claro, adiantar as fixações, entregar ao aplicador
-de root), a metade root migra, move só o input da distro, verifica e aplica, e a pessoa reconcilia e
-publica por último. Cada lei é uma recusa com frase no `gen-updates.py`, e o
+de root), a metade root migra, move a distro e o nixpkgs e aplica para o próximo boot, e a pessoa
+reconcilia e publica por último. Cada lei é uma recusa com frase no `gen-updates.py`, e o
 `system-update-laws-refuse` quebra cada uma uma vez — porque uma ordem que mora numa convenção é uma
 ordem que a próxima edição troca sem ninguém ver. O `system-update-gathers-first-and-publishes-last`
 roda as duas metades geradas inteiras num mundo de dublês que anotam o que lhes pediram.
@@ -19513,13 +19698,15 @@ testes respondem os jobs sem rede, e o modo sem terminal roda os mesmos jobs em 
 
 **O plano faz o flake da máquina a partir do template e constrói o sistema antes do disco:**
 `templates/machine`, mirado na árvore do ISO → `host.nix` → `facter.json` → `nix flake lock
---offline` → o atributo, perguntado ao próprio flake (`nixosConfigurations`) → as recusas encenadas do
-root aplicadas (abaixo) → **o sistema construído** (`build-first`). Só então `disko`, a cópia, a senha,
-o Wi-Fi e o `nixos-install`, que copia o que o `build-first` construiu, e as partes que o ISO leva
-semeadas no store da máquina (`ronoctua-parts seed`). Depois, na home da pessoa: o acesso
-(`0700`/`0600`, dela), o servidor no `consent.json`, o `belongings.json`, o registro do primeiro boot
-e a senha selada no TPM. A cópia da parte em claro, a chave fixada, as declarações aplicadas e a
-restauração são do primeiro boot (seção "Instalação sem rede").
+--offline`, a partir do lock da própria árvore (`--reference-lock-file`: o nixpkgs que a máquina
+rola nasce no pin que a distro testou e o ISO leva, sem resolver a branch `nixos-unstable`, que só o
+GitHub resolve) → o atributo, perguntado ao próprio flake (`nixosConfigurations`) → as recusas
+encenadas do root aplicadas (abaixo) → **o sistema construído** (`build-first`). Só então `disko`, a
+cópia, a senha, o Wi-Fi e o `nixos-install`, que copia o que o `build-first` construiu, e as partes
+que o ISO leva semeadas no store da máquina (`ronoctua-parts seed`). Depois, na home da pessoa: o
+acesso (`0700`/`0600`, dela), o servidor no `consent.json`, o `belongings.json`, o registro do
+primeiro boot e a senha selada no TPM. A cópia da parte em claro, a chave fixada, as declarações
+aplicadas e a restauração são do primeiro boot (seção "Instalação sem rede").
 
 **O programa que a pessoa desmarca (a décima oitava pergunta) é uma RECUSA dela, não uma linha do
 `host.nix`.** É a decisão da pessoa sobre um programa, e não um fato da máquina: vai para o
@@ -19759,7 +19946,8 @@ salta mais para o release (o `--from-release` saiu). O flake da máquina aponta 
 (`path:/nix/store/…`), e a máquina guarda o par `flake.nix`/`flake.lock` com que foi construída. Um
 `nix flake update` de um input `path:` trava o mesmo caminho, então o passo `flake-update` roda
 `ronoctua-machine update-distro`. Ele escreve de volta o endereço do template, lido do
-`templates/machine/flake.nix` dessa mesma árvore, e move o input. Se o movimento não acontece (sem
+`templates/machine/flake.nix` dessa mesma árvore, e move os dois inputs que a máquina segue (a
+distro e o nixpkgs). Se o movimento não acontece (sem
 rede), o `flake.nix` volta como estava, porque um `flake.nix` que discorda da trava é recusado por toda
 avaliação que não pode mexer nela.
 

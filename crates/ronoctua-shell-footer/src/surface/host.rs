@@ -1295,8 +1295,13 @@ impl Footer {
     /// The keys the shown region's hint teaches — none, when it teaches
     /// nothing now (`Region::teaches`: a filter being typed, a menu with a
     /// line of its own): the line then says what it says without a view's
-    /// keys.
+    /// keys. And none with "hide shortcuts" on: a feature's panel is a
+    /// program, and gives its keys up to the line the way a window does —
+    /// it keeps its content and answers the arrows and `RET`.
     pub(super) fn hosted_hint(&self, id: &str) -> Option<Vec<crate::chrome::Piece>> {
+        if self.modeline.hide_shortcuts() {
+            return None;
+        }
         let seen = self.region_seen();
         self.regions
             .get(id)

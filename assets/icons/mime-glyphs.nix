@@ -274,12 +274,13 @@
       mime = "application/pgp-keys";
       token = "key";
     }
-    # THE SHAPES THE DATABASE ALREADY KNOWS. All six are generically
+    # THE SHAPES THE DATABASE ALREADY KNOWS. All of them are generically
     # `image-x-generic`, so without these a `.stl` wears the photograph's
     # glyph — correct by freedesktop's lights and useless in a listing, which
-    # is exactly what this block is for.
+    # is exactly what this block is for. (`model/step`, above, and
+    # `application/x-amf`, below, joined them with shared-mime-info 2.5.1.)
     #
-    # The five the database does NOT know are in `ours`, further down, and the
+    # The three the database does NOT know are in `ours`, further down, and the
     # generator refuses to let a type appear in both.
     {
       mime = "model/stl";
@@ -305,6 +306,15 @@
       mime = "model/iges";
       token = "mesh";
     }
+    # Upstream since 2.5.1 as the Additive Manufacturing File, `*.amf`
+    # (invented here as `model/x-amf` before, under the same glob). The name
+    # is also what Adobe's Action Message Format travels as over HTTP, which
+    # is why the invented type avoided it; freedesktop's database gives it
+    # only to the 3D format, and a `.amf` file is that.
+    {
+      mime = "application/x-amf";
+      token = "mesh";
+    }
   ];
 
   # WHEN TWO TYPES CLAIM THE SAME NAME AND UPSTREAM DOES NOT DECIDE.
@@ -325,11 +335,24 @@
   # when either does not actually claim that pattern, or when their weights
   # already differ — the last because upstream would then have decided and this
   # row would be doing nothing while looking deliberate.
+  #
+  # `*.obj` HAS A THIRD CLAIMANT since shared-mime-info 2.5.1:
+  # `application/x-coff`, a Windows object file, at the same weight and FIRST
+  # in `globs2` — so with TGIF gone a `.obj` mesh tied with object code, and a
+  # bare one (no `mtllib`, no exporter's banner) came out as object code. The
+  # bytes cannot break that tie here: COFF's magic is `little16` words, which
+  # `gen-mimedb.py` skips. A model is what an `.obj` is on this machine, so
+  # each loser is a row, and each is refused on its own the day it goes stale.
   prefer = [
     {
       glob = "*.obj";
       mime = "model/obj";
       over = "application/x-tgif";
+    }
+    {
+      glob = "*.obj";
+      mime = "model/obj";
+      over = "application/x-coff";
     }
   ];
 
@@ -351,10 +374,24 @@
   # — markers only a Lisp file writes; and otherwise upstream's type stands,
   # so an OpenCL kernel, which writes none of them, stays OpenCL.
   #
-  # AND IT REFUSES TO GO STALE: the type has to exist; a row that does not
-  # say `shares` has to be its glob's only claimant (or it would tie in
-  # silence); the type it `shares` with has to claim that glob upstream at
-  # the same weight; and `content` comes with `shares`, and only with it.
+  # AND IT REFUSES TO GO STALE: the type has to exist, and may not already
+  # claim the glob upstream at 50 or more (the row would add nothing); a row
+  # that does not say `shares` has to be its glob's only claimant (or it
+  # would tie in silence); the types it `shares` with — one, or a list — have
+  # to be exactly the glob's other claimants upstream, at the same weight;
+  # and `content` comes with `shares`, and only with it.
+  #
+  # TYPESCRIPT (`application/typescript`, upstream since shared-mime-info
+  # 2.5.1) is claimed the same way, on two names. Upstream gives it `*.ts` at
+  # weight 40, under the MPEG transport stream and the Qt Linguist catalogue
+  # at 50 — `.ts` meant a transport stream years before the language existed,
+  # and the database is right to keep it — and does not give it `*.tsx`,
+  # which is a Tiled tileset's. By name alone a TypeScript file was never
+  # TypeScript here. The rows join it to both ties: a stream and a catalogue
+  # have magic, which decides first; the markers below are what a script
+  # writes and they do not; and with neither, upstream's first claimant
+  # stands. Not a bare `export ` for `*.tsx`: a tileset writes
+  # `<export target=…>`.
   claims = [
     {
       glob = "*.lsp";
@@ -369,6 +406,36 @@
         "(defpackage"
         "(defsystem"
         "(uiop:define-package"
+      ];
+    }
+    {
+      glob = "*.ts";
+      mime = "application/typescript";
+      shares = [
+        "text/vnd.trolltech.linguist"
+        "video/mp2t"
+      ];
+      content = [
+        "import "
+        "export "
+        "const "
+        "interface "
+        "declare "
+        "function "
+        "require("
+      ];
+    }
+    {
+      glob = "*.tsx";
+      mime = "application/typescript";
+      shares = "application/x-tiled-tsx";
+      content = [
+        "import "
+        "export default"
+        "export const"
+        "export function"
+        "const "
+        "function "
       ];
     }
   ];
@@ -390,14 +457,21 @@
 
   # WHAT FREEDESKTOP DOES NOT KNOW, AND THIS MACHINE DOES.
   #
-  # `shared-mime-info` has no type for a Nix expression, so every `.nix` file on
-  # a NixOS distribution — which is to say, the whole of this repository and the
-  # whole of `/etc/nixos` — comes back as plain text. These rows are added to
-  # the glob table with the database's own default weight, and they are OURS:
-  # the `x-` prefix says nobody registered them, which is the truth.
+  # `shared-mime-info` had no type for a Nix expression until 2.5.1, so every
+  # `.nix` file on a NixOS distribution — the whole of this repository and the
+  # whole of `/etc/nixos` — came back as plain text; this block is where
+  # `text/x-nix` was invented then. These rows are added to the glob table
+  # with the database's own default weight, and they are OURS: the `x-` prefix
+  # says nobody registered them, which is the truth.
   #
   # The bar for adding one is that upstream has no type at all. A type that
-  # exists and is merely inconvenient belongs in `exact`.
+  # exists and is merely inconvenient belongs in `exact` (its glyph) or in
+  # `claims` (a name it is given too weakly). And the generator refuses a row
+  # on a name upstream gives to ANY type, at any weight: at 50 or more the
+  # row ties or loses in silence, below it hides upstream's own answer. Both
+  # happened before that was asked — `model/x-amf` lost `*.amf` to upstream's
+  # `application/x-amf`, and `text/x-typescript` never once won `*.ts` or
+  # `*.tsx`.
   #
   # AND EACH ONE SAYS WHAT IT DESCENDS FROM, in `under`.
   #
@@ -411,28 +485,9 @@
   # place in the hierarchy — rather than in four places that each know a
   # quarter of it.
   ours = [
-    # TYPESCRIPT, and upstream's silence here is not an oversight.
+    # (TYPESCRIPT was invented here as `text/x-typescript` until upstream named
+    # it `application/typescript` in 2.5.1; its names are in `claims` now.)
     #
-    # `*.ts` in shared-mime-info 2.4 is `video/mp2t` — an MPEG transport
-    # stream — and the database is RIGHT: `.ts` meant that years before the
-    # language existed. So there is no type to correct in `exact`; there is a
-    # type that does not exist, which is what this block is for.
-    #
-    # It matters beyond the icon: `assets/syntax.nix` claims MIME types and is
-    # refused if it invents one, so without this line a TypeScript file would
-    # be offered a video's preview and no highlighting at all.
-    {
-      mime = "text/x-typescript";
-      glob = "*.ts";
-      under = "text/plain";
-      token = "code";
-    }
-    {
-      mime = "text/x-typescript";
-      glob = "*.tsx";
-      under = "text/plain";
-      token = "code";
-    }
     # ZIG, which upstream has no type for at all.
     {
       mime = "text/x-zig";
@@ -441,20 +496,20 @@
       token = "code";
     }
 
-    # THE FIVE 3D FORMATS THE DATABASE HAS NO TYPE FOR.
+    # THE THREE 3D FORMATS THE DATABASE HAS NO TYPE FOR.
     #
-    # Checked against the pinned `globs2`: not one of `*.ply`, `*.off`,
-    # `*.dae`, `*.amf`, `*.step` or `*.stp` has a single claimant upstream. The
-    # day one of them gains a type, the generator refuses this row by name and
-    # says so — which is the behaviour wanted, because the row would then be a
-    # second answer to a question the database had started answering.
+    # Checked against the pinned `globs2` (shared-mime-info 2.5.1): not one of
+    # `*.ply`, `*.off` or `*.dae` has a claimant upstream. There were five:
+    # 2.5.1 gained `model/step` (`*.step`, `*.stp`) and `application/x-amf`
+    # (`*.amf`), which are in `exact` now. The generator refused the STEP rows
+    # by name, because the type itself arrived; the AMF one tied in silence
+    # under another name, which is why it now refuses an `ours` row on any
+    # name upstream gives. The day one of these three gains a claimant, the
+    # build says so.
     #
     # `model/vnd.collada+xml` is COLLADA's registered name, so it is used
     # rather than an `x-` one invented here: what is missing upstream is the
     # entry, not the name.
-    #
-    # `model/x-amf` and not `application/x-amf`, which Adobe's Action Message
-    # Format has had for twenty years.
     {
       mime = "model/x-ply";
       glob = "*.ply";
@@ -473,14 +528,6 @@
       mime = "model/vnd.collada+xml";
       glob = "*.dae";
       under = "application/xml";
-      token = "mesh";
-    }
-    {
-      mime = "model/x-amf";
-      glob = "*.amf";
-      # Same argument as the PLY: the specification allows the file to be a zip
-      # OR the bare XML, under one extension.
-      under = "application/octet-stream";
       token = "mesh";
     }
   ]

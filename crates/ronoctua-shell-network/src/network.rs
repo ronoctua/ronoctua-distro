@@ -2775,11 +2775,15 @@ impl View {
             // THE RUNTIME SETTINGS, toggled right here — no rebuild: `RET` flips
             // a switch (or types the DNS), the change is staged, and the sync
             // picks it up at once (`ronoctua_network::vpn::Settings`).
+            // THE VIEW'S ONE "ON" AND "OFF" (`network-on`, `network-off`), the
+            // radio's and Tor's: one word, one key — two keys of one view saying
+            // it are two labels nobody can tell apart
+            // (`labels-of-a-view-are-distinct`).
             let on_off = |on: bool| {
                 texts.t(if on {
-                    key::NETWORK_VPN_ON
+                    key::NETWORK_ON
                 } else {
-                    key::NETWORK_VPN_OFF
+                    key::NETWORK_OFF
                 })
             };
             b.pair(

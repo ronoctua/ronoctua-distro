@@ -186,6 +186,7 @@ pkgs.testers.runNixOSTest {
     in
     ''
       ${xvfb.prelude}
+      import datetime
       import json
       import re
       import shlex
@@ -477,7 +478,10 @@ pkgs.testers.runNixOSTest {
               "tty", f"${pkgs.python3}/bin/python3 ${pty} {client} -t /home/{user}/tty.txt",
               "TERM=xterm-256color",
           )
-          retry(lambda last_try: any(f.startswith("t /dev/pts/") for f in frames()), timeout_seconds=60)
+          retry(
+              lambda last_try: any(f.startswith("t /dev/pts/") for f in frames()),
+              timeout=datetime.timedelta(seconds=60),
+          )
           # ITS FRAME GOES, and the client with it, as `C-x C-c` would.
           ask_emacs(
               "(dolist (f (frame-list)) (when (string-prefix-p \"/dev/pts/\" "
@@ -513,7 +517,10 @@ pkgs.testers.runNixOSTest {
           machine.succeed(
               f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg '[con_id={w['id']}] kill'"
           )
-          retry(lambda last_try: not [x for x in windows(sock) if x.get("pid") == before[0]], timeout_seconds=30)
+          retry(
+              lambda last_try: not [x for x in windows(sock) if x.get("pid") == before[0]],
+              timeout=datetime.timedelta(seconds=30),
+          )
           machine.wait_until_succeeds(
               f"systemctl --user --machine={user}@ show gui1 -p SubState | grep -x SubState=exited > /dev/null",
               timeout=30,

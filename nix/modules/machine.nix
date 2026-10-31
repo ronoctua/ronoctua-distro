@@ -199,6 +199,12 @@ in
         );
         # The template a migrated machine's `flake.nix` is written from.
         RONOCTUA_MACHINE_TEMPLATE = "${../../templates/machine}";
+        # AND THE LOCK ITS LOCK STARTS FROM: the distro's own, this file alone
+        # in the store. The template rolls `nixpkgs` on a branch, and only the
+        # reference keeps a migrated machine on the nixpkgs the distro tested
+        # instead of resolving the branch on the day
+        # (`a-new-machine-starts-on-the-tested-nixpkgs`).
+        RONOCTUA_MACHINE_REFERENCE_LOCK = "${../../flake.lock}";
         # By store path: a unit's `PATH` is minimal, and the machine's own
         # Nix is the one that filled this store.
         RONOCTUA_NIX = "${config.nix.package}/bin/nix";
@@ -221,7 +227,7 @@ in
         else
           { RONOCTUA_BOOTCTL = "${config.systemd.package}/bin/bootctl"; }
       );
-      defaultText = "the machine directory, its attribute, the state and run folders, the menu's limit, the template, nix, the boot loader's tool (bootctl, or grub-editenv), the build sizing, what builds the units and what keeps them";
+      defaultText = "the machine directory, its attribute, the state and run folders, the menu's limit, the template and the distro's lock a migrated machine's lock starts from, nix, the boot loader's tool (bootctl, or grub-editenv), the build sizing, what builds the units and what keeps them";
       description = ''
         What `ronoctua-machine` is told, by every unit that runs it and by
         its wrapper: one table, so the rescue's rebuild, the update and the
@@ -476,9 +482,30 @@ in
       # an installation, the first trial that fails, a rollback by hand —
       # with no snapshot taken before. The text, not a link: a link would put
       # the whole machine flake (its secrets file included) in the closure.
-      environment.etc = lib.mkIf (
-        cfg.source != null && builtins.pathExists (cfg.source + "/flake.lock")
-      ) { ${systemLock}.text = builtins.readFile (cfg.source + "/flake.lock"); };
+      environment.etc = lib.mkMerge [
+        (lib.mkIf (cfg.source != null && builtins.pathExists (cfg.source + "/flake.lock")) {
+          ${systemLock}.text = builtins.readFile (cfg.source + "/flake.lock");
+        })
+        # A HIBERNATION DOES NOT SPEND THE BOOT TRIAL (`ronoctua-machine
+        # hibernate`, `crates/ronoctua-machine/src/sleep.rs`): its resume is
+        # a firmware boot, which would start the trial's one-shot — another
+        # kernel cannot resume the image, and the same one spends the
+        # one-shot on nothing, so the real restart after comes up on the
+        # default and the trial is judged failed. A system set for the next
+        # boot waits days for that restart, and the machine hibernates on
+        # its own on a low battery (`nix/modules/power.nix`). systemd-sleep
+        # runs this with `pre` or `post` and the kind of sleep: only one that
+        # can end in a firmware boot puts the one-shot aside, and its resume
+        # puts it back.
+        {
+          "systemd/system-sleep/ronoctua-boot-trial".source =
+            pkgs.writeShellScript "ronoctua-boot-trial-sleep" ''
+              case "$2" in
+                hibernate | hybrid-sleep | suspend-then-hibernate) exec ${tool} hibernate "$1" ;;
+              esac
+            '';
+        }
+      ];
 
       # The record's folder: root's, readable by everybody — the person's
       # half publishes a copy of `state.json`, and the update's view reads it.
@@ -570,12 +597,21 @@ in
 
       # APPLY WITHOUT MOVING THE INPUTS — what the software centre starts after
       # the person declared or forgot a program, so it lands now and not at
-      # the next weekly update. The update's lock first (`flock -n`: busy is
-      # an answer, said with its own code), then root's lock of the person's
-      # data, which `ronoctua-machine` takes itself.
+      # the next weekly update — or, while an update's system waits for the
+      # next boot (or the lock moved `nixpkgs`), at that boot: `ronoctua-machine`
+      # keeps a system set for the next boot for the next boot, and the
+      # software centre says so (`Rebuilt::Staged`). The update's lock first
+      # (`flock -n`: busy is an answer, said with its own code), then root's
+      # lock of the person's data, which `ronoctua-machine` takes itself.
       systemd.services.${lib.removeSuffix ".service" "ronoctua-update-apply.service"} = {
         description = "Applies the machine directory without moving its inputs";
         environment = cfg.environment;
+        # NO START LIMIT: each start is one order of the person's (a program
+        # declared, forgotten, declined or brought back), and the unit never
+        # restarts by itself — systemd's default of five starts in ten seconds
+        # would refuse a sixth order as `start-limit-hit`, say after a few
+        # quick busy answers (exit 75) while the update holds its lock.
+        startLimitIntervalSec = 0;
         serviceConfig = {
           Type = "oneshot";
           # A build compiles; the default start timeout is 90 seconds.
@@ -595,7 +631,10 @@ in
       # move between the machine's INSTALLED build and a DEV build of the local
       # distro checkout (`ronoctua_shell_footer::build_switch`). Both run the
       # same apply the update does, so the boot trial is the net either way: a
-      # build that will not come up is rolled back on the next boot.
+      # build that will not come up is rolled back on the next boot. A build
+      # that moves only the distro switches now; while an update's system
+      # waits for the next boot, or across a moved `nixpkgs`, it is set for
+      # the next boot too (`ronoctua_machine::Applying`).
       #
       # BOTH BUILD THIS MACHINE'S OWN SYSTEM (`/etc/nixos`, its `host.nix` and
       # `facter.json`) — the hardware is kept either way. They differ ONLY in
@@ -627,6 +666,9 @@ in
       systemd.services.ronoctua-build-switch-own = {
         description = "Builds and switches to this machine's installed (committed) build";
         environment = cfg.environment;
+        # NO START LIMIT, the update's apply's reason: only the person's
+        # gesture starts it, and it never restarts by itself.
+        startLimitIntervalSec = 0;
         serviceConfig = {
           Type = "oneshot";
           TimeoutStartSec = "infinity";
@@ -657,6 +699,8 @@ in
       systemd.services.ronoctua-build-switch-reference = {
         description = "Builds and switches to a dev build of the local checkout (working tree)";
         environment = cfg.environment;
+        # NO START LIMIT, as `-own`.
+        startLimitIntervalSec = 0;
         serviceConfig = {
           Type = "oneshot";
           TimeoutStartSec = "infinity";
@@ -681,6 +725,14 @@ in
       # is bought back the way the update's rule buys it: named units, one verb,
       # one user, no argument (`update-apply-rule-is-narrow`). The build
       # switch's two join the update's apply in the one rule.
+      #
+      # WHAT THE WIDTH DOES NOT BUY BACK: `-reference` builds and activates,
+      # as root, the working tree the person writes, so anything that runs as
+      # the person reaches root through it with no password, on a machine whose
+      # flake names a local checkout. That is not the sudo door's rule (code
+      # that reaches root passes the password); it waits on the owner's
+      # decision (`docs/PENDING.md`), and the check says so instead of calling
+      # the door narrow.
       security.polkit.extraConfig = ''
         polkit.addRule(function (action, subject) {
           if (action.id == "org.freedesktop.systemd1.manage-units" &&

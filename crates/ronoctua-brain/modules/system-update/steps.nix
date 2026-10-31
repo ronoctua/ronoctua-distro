@@ -24,9 +24,11 @@
 # The owner asked for the language managers too — rust, go, js, npm. The model
 # now (the owner's amendment of 2026-10-30, replacing "nothing imperative: if it
 # is not in the flake, it does not exist") is that the whole system rolls on
-# `nixos-unstable` and auto-rebuilds on a timer, while the fast-movers
-# self-update outside the generation, under $HOME: the OS substrate stays
-# declarative with rollback, and only the app layer is imperative.
+# `nixos-unstable` and rebuilds itself on a timer (this module's weekly
+# routine, its new system set for the next boot), while the fast-moving apps
+# that update themselves (the Crafting Apps, through the ArtCraft Launcher) do
+# it outside the generation, under $HOME: the OS substrate stays declarative
+# with rollback, and only the app layer is imperative.
 # `nix/modules/dev.nix` still names those managers — each keeps a compiler under
 # $HOME, and then "which rustc is this" depends on which shell was opened — but
 # that is now the app layer doing its own thing, not the thing this distro
@@ -47,11 +49,16 @@
 #      one step that reconciles (`reconcile-declared`) brings the declared
 #      Android apps from the machine's copy and touches only its own ledger.
 #      No argument of it names a program: what it installs is the
-#      declaration's, read by the program, never this table's. The fast-movers
-#      (Claude Code and Codex by their native updater, the Craft Apps by the
-#      Craft Launcher, SolidCraft as an AppImage) update themselves, outside the
-#      generation and under $HOME — that layer is imperative now, and not this
-#      sequence's to do.
+#      declaration's, read by the program, never this table's. The fast-moving
+#      apps that update themselves (the Crafting Apps, which the ArtCraft
+#      Launcher fetches) do it outside the generation and under $HOME — that
+#      layer is imperative now, and not this sequence's to do. The launcher
+#      and SolidCraft are not among them: they are distro AppImages, parts
+#      pinned like the rest, and move when their pin moves. Nor are Claude
+#      Code and Codex: their native updater was reverted (owner amendment
+#      2026-10-30), and the store binary is the one that runs — Claude Code a
+#      part pinned in `nix/claude-code.nix`, Codex nixpkgs' `pkgs.codex` —, so
+#      the rebuild moves them when their pin, or `nixpkgs`, moves.
 #   3. A step that names a BARE BINARY — one the flake does not provide — is
 #      REFUSED unless it is off by default. That is not a convention: the
 #      generator will not build a table where such a step ships on, because a
@@ -232,8 +239,9 @@ in
     # Android app that follows F-Droid — each to the version and the digest
     # it has now, written into the declaration. And, while the person's
     # options say to follow them (the owner's decision, 2026-10-20), the
-    # distro's AppImages that follow a repository (the Crafting Apps), past
-    # the pins the distro tested, into their `software/distro-pins.json`;
+    # distro's AppImages that follow a repository (today the ArtCraft
+    # Launcher and SolidCraft), past the pins the distro tested, into their
+    # `software/distro-pins.json`;
     # with the option off, that file goes. No argument names a program: the
     # table says what follows, the program reads it from the system's
     # report. Without the person's folder there is nothing to move.
@@ -375,11 +383,13 @@ in
     # the machine directory is a read-only symlink into the store: the step is skipped and
     # says so, instead of failing with a permission error nobody expected.
     #
-    # ONE INPUT, THE DISTRO's — `nix flake update <distro>`, never the whole
-    # lock. The machine flake's other inputs are the distro's own (copied
-    # from its lock, which `lib.machine` refuses to see changed), so moving
-    # the distro moves everything the release was tested with, and nothing
-    # it was not.
+    # TWO INPUTS, THE DISTRO AND `nixpkgs` (2026-10-30: the machine rolls on
+    # `nixos-unstable`, inv. 6) — `nix flake update ronoctua nixpkgs`, never
+    # the whole lock. Every other input of the machine flake is the
+    # release's tested pin (`lib.machine`'s `pinGuard`), so moving the two
+    # moves the distro and the base it rolls on, and nothing else. The
+    # rebuild after it sets the result for the NEXT BOOT: a `nixpkgs` that
+    # moved is never switched to under the running session.
     #
     # AND NOT WHILE THE MACHINE IS HELD (`ronoctua-machine hold <rev>`): the
     # record says which revision it stays on, and the step is skipped and
@@ -396,10 +406,10 @@ in
       id = "flake-update";
       does = "move-inputs";
       root = true;
-      # `nix flake update <distro>` through the machine's program, which
-      # first puts a machine the installer AIMED at its own tree back on the
-      # release (`ronoctua_machine::aim`): a `path:` input updated stays the
-      # same path.
+      # `nix flake update <distro> nixpkgs` through the machine's program,
+      # which first puts a machine the installer AIMED at its own tree back
+      # on the release (`ronoctua_machine::aim`): a `path:` input updated
+      # stays the same path.
       package = "machine";
       program = "ronoctua-machine";
       run = [ "update-distro" ];
@@ -414,16 +424,27 @@ in
       enable = true;
     }
 
-    # 2. AND IT IS THE MACHINE'S OWN APPLY.
+    # 2. AND IT IS THE MACHINE'S OWN APPLY — FOR THE NEXT BOOT.
     #
     # `ronoctua-machine apply` is the one build-then-switch of this
     # repository: the rescue console's rebuild runs it too, and the software
-    # centre's apply without moving the inputs. It BUILDS first and switches
-    # only what built — a failed build puts the lock back on the system that
-    # runs, so the machine directory always describes the running system —
-    # and after the switch it arms the boot trial: the next boot tries the
-    # new system once, and comes back to the last good one by itself if it
-    # does not start (`ronoctua-boot-bless.service`).
+    # centre's apply without moving the inputs. It BUILDS first and sets up
+    # only what built — a failed build puts the lock back on the system the
+    # profile names, so the machine directory always describes it.
+    #
+    # `--next-boot`, AND NEVER A LIVE SWITCH (2026-10-30). The machine rolls
+    # on `nixos-unstable`, and a live switch across a moved `nixpkgs` can
+    # restart the session under the person — it did, the day the machine
+    # first rolled. So what built is set for the next boot
+    # (`switch-to-configuration boot`): nothing that runs is stopped or
+    # restarted, the record says `staged`, and the boot trial is armed for
+    # real — the next restart tries the new system once, and comes back to
+    # the last good one by itself if it does not start
+    # (`ronoctua-boot-bless.service`). The run ends telling the person to
+    # restart (`module.rs`). And while a system waits for that restart, every
+    # other apply sets its own for the next boot too (`ronoctua-machine`).
+    # The flag is FIXED here, never crossed from the brain: the generator
+    # refuses an `apply-configuration` without it.
     #
     # A CHILD OF THIS HALF, and not a unit started from it: root's lock of
     # the person's data reaches it on its standard input, so no apply of the
@@ -433,8 +454,8 @@ in
     # and build, and changes nothing.
     #
     # `did-not-boot` IS NEWS AND NOT A FAILURE: after a trial that did not
-    # start, the same system is refused until the distro moves on — there is
-    # nothing new to apply, and the rest of the update goes on.
+    # start, the same system is refused until the distro or `nixpkgs` moves
+    # on — there is nothing new to apply, and the rest of the update goes on.
     #
     # It needs the battery floor (twenty minutes of every core) and room on
     # the store's disk, garbage collected first; short of either it is
@@ -452,7 +473,10 @@ in
       root = true;
       package = "machine";
       program = "ronoctua-machine";
-      run = [ "apply" ];
+      run = [
+        "apply"
+        "--next-boot"
+      ];
       rehearse = [
         "apply"
         "--rehearse"
@@ -467,15 +491,19 @@ in
       enable = true;
     }
 
-    # 2b. THE PARTS OF THE SYSTEM THAT WAS JUST APPLIED (`nix/modules/parts.nix`).
+    # 2b. THE PARTS (`nix/modules/parts.nix`).
     #
     # What needs a download no public cache holds, what is not free and what
     # only the full profile carries is a part: never in the system's closure,
-    # realized by its own unit, kept in its own profile. The switch above
-    # already started their realizing (the trigger runs at every switch);
-    # this step only brings the new plan into the records and ROOTS the
-    # parts' derivations, synchronously — the collection below would take
-    # them otherwise — and never waits for a download.
+    # realized by its own unit, kept in its own profile. The apply above set
+    # its system for the NEXT BOOT, and `switch-to-configuration boot` starts
+    # nothing: the parts of that system are realized by the planner of that
+    # boot. This step brings the RUNNING plan into the records and roots its
+    # derivations, as it always did, and with `--next` ROOTS the derivations
+    # of the plan of the system that waits (`ronoctua_parts::names::
+    # NEXT_ROOTS`) — the collection below would take them otherwise, and the
+    # restart would find its parts' derivations gone. Synchronous, and it
+    # never waits for a download.
     #
     # `carry-on`, always (`realize-parts`'s law): a part that does not arrive
     # keeps its previous generation, and holds back nothing.
@@ -485,10 +513,14 @@ in
       root = true;
       package = "parts";
       program = "ronoctua-parts";
-      run = [ "plan" ];
+      run = [
+        "plan"
+        "--next"
+      ];
       rehearse = [
         "plan"
         "--rehearse"
+        "--next"
       ];
       declines = [ "busy" ];
       needs = [ { always = true; } ];
@@ -699,9 +731,11 @@ in
 
     # 9. THE FONT CACHE, AFTER the rebuild and not before.
     #
-    # A rebuild can change the font set — `nix/fonts.nix` builds five derivations
-    # and 27 variants — and a cache built before it describes the previous
-    # generation. `-rf` is the same pair the rescue console uses
+    # A system can change the font set — `nix/fonts.nix` builds five
+    # derivations and 27 variants — and a cache built for another generation
+    # describes the wrong one. The rebuild above sets its system for the next
+    # boot, so this refreshes the cache of the fonts the session RUNS, and the
+    # first run after the restart refreshes the new ones. `-rf` is the same pair the rescue console uses
     # (`crates/ronoctua-rescue/src/action.rs`): rebuild from scratch, ignore the
     # timestamps, because a stale cache whose mtime looks fresh is exactly the
     # case that brings somebody here.
@@ -751,13 +785,16 @@ in
     # never adds a program, and the generator refuses every argument that could
     # say otherwise, with no exception for these.
     #
-    # EACH ONE'S DIRECTORY EXISTS ONLY WHEN THAT SOURCE HAS SOMETHING, so a
-    # machine where nobody ever installed an AppImage skips the AppImage step
-    # and says so, instead of running a program to find nothing.
+    # EACH ONE'S PRECONDITION EXISTS ONLY WHEN THAT SOURCE HAS SOMETHING — a
+    # directory, and for Android the program's own record — so a machine
+    # where nobody ever installed an AppImage skips the AppImage step and says
+    # so, instead of running a program to find nothing.
 
-    # 11. THE NIX PROFILE: `nix profile upgrade`, against the `nixpkgs` the rebuild
-    # just pinned in the registry (`nix/modules/base.nix`). The CLI splits the
-    # free packages from the ones the person consented to as not free — those
+    # 11. THE NIX PROFILE: `nix profile upgrade`, against the `nixpkgs` the
+    # RUNNING system pins in the registry (`nix/modules/base.nix`) — the
+    # rebuild above waits for the next boot, so its `nixpkgs` reaches the
+    # profile at the first update after the restart. The CLI splits the free
+    # packages from the ones the person consented to as not free — those
     # need `--impure`, and only for the packages that were agreed to.
     {
       id = "nix-profile";
@@ -820,8 +857,22 @@ in
     }
 
     # 14. THE APPS INSIDE ANDROID, from F-Droid, every one checked against the
-    # signer and the digest the index names. OFF here for the reason the
-    # AppImages are; `nix/modules/software.nix` turns it on with Waydroid.
+    # signer and the digest the index names (the 2026-10-30 model: the apps
+    # update themselves). F-Droid's signed index is asked again first —
+    # nothing else moves the catalogue for an app installed by hand — and only
+    # the apps the record holds AND Android still lists move: one taken out
+    # inside Android stays out. Android is started for it and stopped again.
+    # While the person has Android running nothing is replaced under them:
+    # the program ends `refused android-in-use`, news, and the apps wait for
+    # the next run. `fdroid-not-let` — a consent that does not let
+    # f-droid.org — is news too. The record
+    # (`ronoctua_software::android::RECORD`, under the program's state) exists
+    # only once an app went in through it, so a machine with no Android app
+    # skips the step and says so.
+    #
+    # ON here changes only what the update's page draws: the run reads
+    # `/etc/ronoctua/updates.conf`, which `nix/modules/software.nix` writes —
+    # on with Waydroid, off without it.
     {
       id = "android-apps";
       does = "upgrade-software";
@@ -832,12 +883,16 @@ in
         "upgrade"
         "android"
       ];
+      declines = [
+        "android-in-use"
+        "fdroid-not-let"
+      ];
       needs = [
-        { directory = "$XDG_DATA_HOME/waydroid"; }
+        { file = "$XDG_STATE_HOME/ronoctua/software/android.json"; }
         { network = true; }
       ];
       on-failure = "carry-on";
-      enable = false;
+      enable = true;
     }
 
     # =================================================================
@@ -1082,7 +1137,9 @@ in
     # 2026-10-11 wave) — their own Cachix cache, never the distro's, which
     # has none. Only where the person named one (the machine's file, which
     # `nix/modules/binary-cache.nix` writes from their validated options),
-    # only after an update that SWITCHED the machine since the last push,
+    # only after an update that BUILT the machine a new system since the
+    # last push (switched to, or set for the next boot — then the system
+    # that waits is the one pushed, read from its own file),
     # only with their token (sealed, `0600`) and with every host it reaches
     # let: the four are news, never a failure, and it never asks. A PUBLIC
     # cache receives the distro's own outputs and nothing of the person's,

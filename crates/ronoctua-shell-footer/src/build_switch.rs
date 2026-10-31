@@ -34,6 +34,15 @@
 //! at all. The decision is a pure function of the stamp and the checkout, so
 //! the surface tests it with no compositor and no root.
 //!
+//! # A build set for the next restart
+//!
+//! The apply sets its system for the next boot instead of switching while a
+//! system already waits for one, or across a moved `nixpkgs`
+//! (`ronoctua-machine`): then the running build does not change, and the one
+//! that waits is told apart the same way, by ITS own stamp ([`State::waiting`])
+//! — the page says it, the switch is relative to it, and the line says the
+//! build waits for the restart rather than that nothing changed.
+//!
 //! # Where the checkout is
 //!
 //! The owner chose [parse the `/etc/nixos` flake] over a new option: the
@@ -106,8 +115,10 @@ pub fn glyph(show: Show, build: Build, has_checkout: bool) -> Option<Build> {
 
 /// The system's record the running distro revision is read from.
 pub const PERSON_APPLIED: &str = "/etc/ronoctua/person-applied.json";
-/// The machine's flake, read for the distro checkout it names.
-pub const MACHINE_FLAKE: &str = "/etc/nixos/flake.nix";
+/// The machine's flake, read for the distro checkout it names — under the
+/// machine directory's one name (`RONOCTUA_MACHINE_DIR`, `nix/machine.nix`;
+/// `machine-dir-has-one-name`), never spelled again here.
+pub const MACHINE_FLAKE: &str = concat!(env!("RONOCTUA_MACHINE_DIR"), "/flake.nix");
 /// The link whose target names the running build (`nixos-system-<host>-<ver>`).
 pub const CURRENT_SYSTEM: &str = "/run/current-system";
 
@@ -169,17 +180,30 @@ pub struct State {
     /// `None` leaves the glyph away: an installed machine has nothing to switch
     /// to.
     pub checkout: Option<PathBuf>,
+    /// The build of the system that waits for the next restart, when one
+    /// does (`ronoctua_software::next_boot`), told by its own stamp.
+    pub waiting: Option<Build>,
 }
 
 impl State {
     /// The build a switch lands on — what names the service it starts
-    /// (`ronoctua-build-switch-{own,reference}`) and the line it says.
+    /// (`ronoctua-build-switch-{own,reference}`) and the line it says: the
+    /// other of the one that waits for the restart, when one does, else of
+    /// the one that runs.
     #[must_use]
     pub fn other_build(&self) -> Build {
-        match self.build {
+        match self.waiting.unwrap_or(self.build) {
             Build::Own => Build::Reference,
             Build::Reference => Build::Own,
         }
+    }
+
+    /// Whether a switch to `target` will be set for the next restart: a
+    /// system already waits, and `target` is not the build that runs (which
+    /// a switch only puts back).
+    #[must_use]
+    pub fn waits_for_restart(&self, target: Build) -> bool {
+        self.waiting.is_some() && target != self.build
     }
 }
 
@@ -266,10 +290,22 @@ pub fn read() -> State {
         .ok()
         .and_then(|f| checkout_of(&f))
         .filter(|p| p.exists());
+    // THE SYSTEM THAT WAITS FOR THE RESTART, by its own stamp.
+    let waiting = ronoctua_software::next_boot(std::path::Path::new("/"), None).map(|next| {
+        let stamped =
+            std::path::Path::new(&next.toplevel).join(PERSON_APPLIED.trim_start_matches('/'));
+        Build::of(
+            std::fs::read_to_string(stamped)
+                .ok()
+                .and_then(|j| distro_rev_of(&j))
+                .is_some_and(|r| is_dev_rev(&r)),
+        )
+    });
     State {
         build: Build::of(dev),
         hostname,
         checkout,
+        waiting,
     }
 }
 
@@ -392,13 +428,37 @@ mod tests {
             build: Build::Own,
             hostname: None,
             checkout: Some(PathBuf::from("/home/p/distro")),
+            waiting: None,
         };
         assert_eq!(own.other_build(), Build::Reference);
+        assert!(!own.waits_for_restart(Build::Reference));
         let reference = State {
             build: Build::Reference,
             hostname: None,
             checkout: Some(PathBuf::from("/home/p/distro")),
+            waiting: None,
         };
         assert_eq!(reference.other_build(), Build::Own);
+    }
+
+    /// FAILS IF: with a dev build set for the next restart, the switch
+    /// offers that same build again — the running one is the way back —, or
+    /// a switch is said to wait for the restart when it only puts back the
+    /// build that runs; or one to another build, while a system waits, is
+    /// not.
+    #[test]
+    fn a_build_that_waits_for_the_restart_turns_the_switch() {
+        let waiting = State {
+            build: Build::Own,
+            hostname: None,
+            checkout: Some(PathBuf::from("/home/p/distro")),
+            waiting: Some(Build::Reference),
+        };
+        assert_eq!(waiting.other_build(), Build::Own);
+        assert!(
+            !waiting.waits_for_restart(Build::Own),
+            "the running build is put back"
+        );
+        assert!(waiting.waits_for_restart(Build::Reference));
     }
 }

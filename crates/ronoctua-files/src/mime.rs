@@ -187,9 +187,10 @@ pub fn claims(mime: &str, name: &str) -> bool {
 /// The cost is bounded by how many names tie, which is a property of the
 /// DATABASE and not of the folder: measured over the owner's own directory,
 /// eight names of sixty-four, and every one of them a media container, a
-/// playlist — or, since `*.cl` ties on purpose (below), a `.cl`. Everything
-/// else — every `.jpg`, `.rs`, `.pdf` — is still answered without touching
-/// the file. And a tied file is read ONCE: its answer is kept by the file
+/// playlist — or a name that ties on purpose (below): a `.cl`, a `.ts`, a
+/// `.tsx`. Everything else — every `.jpg`, `.rs`, `.pdf` — is still answered
+/// without touching the file. And a tied file is read ONCE: its answer is
+/// kept by the file
 /// (device, inode, modification time, size; [`settled`]), because a listing
 /// asks again at every reread, on the loop that draws it. Under `/private`
 /// nothing is read unless the vault is open (`ronoctua_private::may_touch`):
@@ -198,11 +199,13 @@ pub fn claims(mime: &str, name: &str) -> bool {
 ///
 /// # A tie made on purpose
 ///
-/// `assets/icons/mime-glyphs.nix` makes one: `*.cl` is OpenCL's upstream and
-/// Common Lisp's too (`claims` with `shares`). The magic still decides first;
-/// then a row of [`SHARED_CONTENT`] whose pattern matches and one of whose
-/// markers is in the head (`(in-package`, which no kernel source writes); and
-/// otherwise upstream's type, which is the first of the tie.
+/// `assets/icons/mime-glyphs.nix` makes them (`claims` with `shares`): `*.cl`
+/// is OpenCL's upstream and Common Lisp's too, and `*.ts`/`*.tsx` are an MPEG
+/// transport stream's, a Qt Linguist catalogue's and a Tiled tileset's
+/// upstream, and TypeScript's too. The magic still decides first; then a row
+/// of [`SHARED_CONTENT`] whose pattern matches and one of whose markers is in
+/// the head (`(in-package`, which no kernel source writes); and otherwise
+/// upstream's type, which is the first of the tie.
 #[must_use]
 pub fn of_path(path: &Path, kind: Kind, read_content: bool) -> &'static str {
     match kind {
@@ -685,6 +688,49 @@ mod tests {
         assert!(!is_a("application/octet-stream", "application/zip"));
     }
 
+    /// FAILS IF: the generator stops writing the spec's implicit "every
+    /// `text/*` is a `text/plain`" into the table. shared-mime-info 2.5.1
+    /// leaves it implicit on a handful of types, and without the rows a `.sh`
+    /// (`text/x-shellscript`, explicitly only an `application/x-executable`)
+    /// and a `.gradle` (no parent at all) stop being text to every `is_a`.
+    #[test]
+    fn every_text_type_is_plain_text() {
+        assert!(is_a("text/x-shellscript", "text/plain"));
+        assert!(is_a("application/x-shellscript", "text/plain"));
+        assert!(is_a("text/x-gradle", "text/plain"));
+        // THROUGH ITS PARENT, which is what got the row.
+        assert!(is_a("text/x-csh", "text/plain"));
+        let mut text = 0;
+        for g in &GLOBS {
+            if g.mime.starts_with("text/") {
+                text += 1;
+                assert!(is_a(g.mime, "text/plain"), "`{}` is not text", g.mime);
+            }
+        }
+        assert!(text > 100, "only {text} names of `text/*` types");
+        // AND THE RULE IS THE SPEC'S, not a wider one.
+        assert!(!is_a("image/png", "text/plain"));
+    }
+
+    /// FAILS IF: a 3D model's extension stops naming the model alone — the
+    /// shape shared-mime-info 2.5.1 brought twice: `application/x-coff`
+    /// claims `*.obj` at `model/obj`'s weight and ahead of it (the second
+    /// `prefer` row), and `*.amf` became upstream's `application/x-amf`, which
+    /// a type invented here would tie with in silence.
+    #[test]
+    fn a_model_is_named_by_its_own_type() {
+        for (name, mime) in [
+            ("part.obj", "model/obj"),
+            ("part.amf", "application/x-amf"),
+            ("part.step", "model/step"),
+            ("part.stp", "model/step"),
+        ] {
+            let found = named(name).expect("the database knows the name");
+            assert_eq!(found.mime, mime, "{name}");
+            assert!(found.sure, "`{name}` came back as a tie");
+        }
+    }
+
     #[test]
     fn an_old_name_resolves_to_the_current_one() {
         assert_eq!(canonical("application/acrobat"), "application/pdf");
@@ -823,6 +869,90 @@ mod tests {
         let neither = dir.join("notes.cl");
         std::fs::write(&neither, b"nothing that says what this is\n").expect("write");
         assert_eq!(of_path(&neither, Kind::File, false), "text/x-opencl-csrc");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a TypeScript file stops being TypeScript — named by the Qt
+    /// Linguist catalogue or the MPEG transport stream that claim `*.ts` at
+    /// 50 upstream (TypeScript's own claim is at 40), or by the Tiled tileset
+    /// that claims `*.tsx` — or a catalogue, a stream or a tileset starts
+    /// being taken for TypeScript.
+    ///
+    /// Before the `claims` rows, the name `.ts` was a tie TypeScript (then an
+    /// invented `text/x-typescript`) never won: a script came out as a Qt
+    /// catalogue, and was coloured as XML.
+    #[test]
+    fn a_typescript_file_is_typescript_and_only_it() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-mime-ts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the test directory");
+        let of = |name: &str, bytes: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).expect("write the fixture");
+            of_path(&path, Kind::File, false)
+        };
+        const TYPESCRIPT: &str = "application/typescript";
+
+        // A NAME ONLY TYPESCRIPT GIVES is settled by the name.
+        let cts = named("config.cts").expect("the database knows `*.cts`");
+        assert_eq!((cts.mime, cts.sure), (TYPESCRIPT, true));
+        // AND THE TWO THAT TIE are reported as ties.
+        assert!(!named("main.ts").expect("`*.ts`").sure);
+        assert!(!named("view.tsx").expect("`*.tsx`").sure);
+
+        // A SCRIPT, by what a script writes — led by an import, which no
+        // magic names, and by a comment, which TypeScript's own magic does.
+        assert_eq!(
+            of(
+                "main.ts",
+                b"import { a } from \"./a\";\n\nconsole.log(a);\n"
+            ),
+            TYPESCRIPT
+        );
+        assert_eq!(
+            of(
+                "lib.ts",
+                b"// The library.\nexport function f(): number { return 1; }\n"
+            ),
+            TYPESCRIPT
+        );
+        assert_eq!(
+            of(
+                "view.tsx",
+                b"import React from 'react';\n\nexport default function View() { return <div />; }\n"
+            ),
+            TYPESCRIPT
+        );
+
+        // A CATALOGUE is named by its magic before any marker is looked for,
+        // and this one says `Import ` in its text.
+        assert_eq!(
+            of(
+                "app_pt.ts",
+                b"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE TS>\n\
+                  <TS version=\"2.1\" language=\"pt_BR\">\n<context>\n<name>Main</name>\n\
+                  <message><source>Import settings</source>\
+                  <translation>Importar ajustes</translation></message>\n\
+                  </context>\n</TS>\n"
+            ),
+            "text/vnd.trolltech.linguist"
+        );
+        // A STREAM, by its sync bytes every 188.
+        let mut stream = vec![0u8; 1024];
+        for at in [0, 188, 376, 564, 752] {
+            stream[at] = 0x47;
+        }
+        assert_eq!(of("clip.ts", &stream), "video/mp2t");
+        // A TILESET writes `<export target=…>`, and is still a tileset.
+        assert_eq!(
+            of(
+                "tiles.tsx",
+                b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                  <tileset version=\"1.10\" name=\"t\" tilewidth=\"16\" tileheight=\"16\" \
+                  tilecount=\"4\" columns=\"2\">\n <export target=\"t.json\" format=\"json\"/>\n \
+                  <image source=\"t.png\" width=\"32\" height=\"32\"/>\n</tileset>\n"
+            ),
+            "application/x-tiled-tsx"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

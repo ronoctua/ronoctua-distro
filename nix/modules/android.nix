@@ -71,7 +71,17 @@ in
     virtualisation.waydroid.enable = true;
 
     # SKIPPED, NOT FAILED, until Prepare has run — see the header.
-    systemd.services.waydroid-container.unitConfig.ConditionPathExists = configured;
+    #
+    # AND NEVER RESTARTED BY A SWITCH: the machine rolls on nixos-unstable and
+    # the update switches it unattended, and a new waydroid or lxc changes
+    # this unit — whose restart ends the Android session somebody may be
+    # using. The new container takes over at the next boot. (NixOS restarts a
+    # changed unit by default; the rendered unit carried no
+    # `X-RestartIfChanged=false` before this line.)
+    systemd.services.waydroid-container = {
+      unitConfig.ConditionPathExists = configured;
+      restartIfChanged = false;
+    };
 
     # PREPARE: download and set up the image the person chose.
     #

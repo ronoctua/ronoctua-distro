@@ -223,7 +223,10 @@ in
     # the module that knows the support is there — the shape `nix/modules/cli.nix`
     # has for `tldr-cache`. A step for a source this machine does not have
     # would only ever be skipped, and a skipped line on every run teaches
-    # people to stop reading the list. `android-images` is not here: it
+    # people to stop reading the list. The table ships `android-apps` on, as
+    # it ships the Flatpak steps; these lines are what turn each off on a
+    # machine without its support, and what the run reads — the table's
+    # default only draws the update's page. `android-images` is not here: it
     # rewrites the system image as root, and it ships off everywhere until a
     # machine's own configuration turns it on.
     #

@@ -515,6 +515,35 @@ fn report_read<T: Document>(roots: &Roots, name: &str) -> Result<Option<T>, rono
         })
 }
 
+/// The system that waits for the NEXT RESTART, when one does — read off the
+/// system profile and the system that runs ([`ronoctua_machine::next_boot`]),
+/// never off the machine's last apply: a trial that failed, a rollback or a
+/// later apply that built nothing would each make that one wrong.
+fn waiting_system(roots: &Roots) -> Option<String> {
+    let state = crate::stage::machine_state(&roots.system.machine);
+    ronoctua_machine::next_boot(&roots.system.root, state.as_ref()).map(|n| n.toplevel)
+}
+
+/// The report `name` of the system `toplevel`, read inside it, where its
+/// `/etc` keeps it; `None` when it is not there or does not read.
+fn report_of<T: Document>(roots: &Roots, toplevel: &str, name: &str) -> Option<T> {
+    let file = roots
+        .system
+        .root
+        .join(toplevel.trim_start_matches('/'))
+        .join(crate::REPORTS.trim_start_matches('/'))
+        .join(name);
+    let bytes = std::fs::read(&file).ok()?;
+    ronoctua_person::parse(&bytes).ok()
+}
+
+/// The `person-applied.json` of the system that waits for the NEXT RESTART
+/// ([`waiting_system`]), when one does.
+#[must_use]
+pub fn staged_applied(roots: &Roots) -> Option<PersonApplied> {
+    report_of(roots, &waiting_system(roots)?, names::PERSON_APPLIED)
+}
+
 /// `person-applied.json`: what this system applied, skipped, and did with
 /// the declines.
 #[must_use]
@@ -557,6 +586,9 @@ pub enum Standing {
     /// Declared since the system was built: the next apply takes it (the
     /// update, or the rebuild a removal starts).
     Waiting,
+    /// In the system the machine's last apply set for the NEXT BOOT, and not
+    /// in the one that runs: it is here from the next restart.
+    NextRestart,
     /// Declared on the person's other machines only.
     Elsewhere,
     /// Left out by this machine, and why (`person-applied.json`).
@@ -603,6 +635,9 @@ pub enum DeclineState {
     Elsewhere,
     /// Declined since the system was built: the next apply takes it.
     Waiting,
+    /// Declined since the system was built, and the system that waits for
+    /// the next restart already leaves it out: it leaves at that restart.
+    NextRestart,
 }
 
 /// One decline, named.
@@ -664,6 +699,21 @@ pub struct Declarations {
     /// here until this machine's next apply builds a system without it.
     #[serde(default)]
     pub leaving: Vec<String>,
+    /// Whether a system waits for the next restart ([`staged_applied`]):
+    /// what it brings in or takes away is here from then, and the page says
+    /// so.
+    #[serde(default)]
+    pub next_restart: bool,
+    /// What is [`Declarations::leaving`] and the system that waits for the
+    /// next restart already left out: it leaves at that restart, not at the
+    /// next update.
+    #[serde(default)]
+    pub leaving_at_restart: Vec<String>,
+    /// The distro's programs the system that runs leaves out here and the
+    /// one that waits for the next restart has: a decline undone, back from
+    /// that restart.
+    #[serde(default)]
+    pub back_at_restart: Vec<String>,
 }
 
 impl Declarations {
@@ -838,6 +888,13 @@ pub fn distro_name(app: &DistroApp, data_dirs: &[PathBuf]) -> String {
 #[must_use]
 pub fn read(roots: &Roots, host: &str) -> Declarations {
     let applied = person_applied(roots);
+    let waiting = waiting_system(roots);
+    let staged: Option<PersonApplied> = waiting
+        .as_deref()
+        .and_then(|top| report_of(roots, top, names::PERSON_APPLIED));
+    let waiting_registry: Option<DistroApps> = waiting
+        .as_deref()
+        .and_then(|top| report_of(roots, top, names::DISTRO_APPS));
     let mut unreadable = Vec::new();
     let declared = read_declared(roots).unwrap_or_else(|why| {
         unreadable.push(Unreadable {
@@ -885,8 +942,19 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
                 .iter()
                 .find(|d| d.app.id == declining.id)
                 .map_or_else(|| declining.id.clone(), |d| d.name.clone());
+            let state = match decline_state_of(&declining, host, applied.as_ref()) {
+                // THE SYSTEM THAT WAITS FOR THE RESTART already leaves it out.
+                DeclineState::Waiting
+                    if staged
+                        .as_ref()
+                        .is_some_and(|next| next.declined.honoured.contains(&declining.id)) =>
+                {
+                    DeclineState::NextRestart
+                }
+                state => state,
+            };
             DeclinedRow {
-                state: decline_state_of(&declining, host, applied.as_ref()),
+                state,
                 name,
                 declining,
             }
@@ -897,6 +965,17 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
         .into_iter()
         .map(|entry| {
             let standing = standing_of(&entry, host, applied.as_ref());
+            // IN THE SYSTEM THAT WAITS FOR THE NEXT RESTART, and not in the
+            // one that runs: here from the restart, not at the next update.
+            let standing = match &staged {
+                Some(next)
+                    if !matches!(standing, Standing::Applied | Standing::Elsewhere)
+                        && next.applied.iter().any(|id| id == entry.id()) =>
+                {
+                    Standing::NextRestart
+                }
+                _ => standing,
+            };
             // A PART OF THE PERSON'S is in the system once it ARRIVED.
             let standing = match crate::parts::of_entry(applied.as_ref(), entry.id()) {
                 Some(part) if standing == Standing::Applied && !crate::parts::here(roots, part) => {
@@ -909,6 +988,26 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
             DeclaredRow { standing, entry }
         })
         .collect();
+    // WHAT THE SYSTEM THAT WAITS ALREADY TOOK OUT, or already brought back.
+    let leaving_at_restart = staged.as_ref().map_or_else(Vec::new, |next| {
+        leaving
+            .iter()
+            .filter(|id| !next.applied.contains(id))
+            .cloned()
+            .collect()
+    });
+    let back_at_restart = waiting_registry.map_or_else(Vec::new, |next| {
+        next.apps
+            .into_iter()
+            .filter(|app| app.on_this_machine)
+            .filter(|app| {
+                distro
+                    .iter()
+                    .any(|d| d.app.id == app.id && !d.app.on_this_machine)
+            })
+            .map(|app| app.id)
+            .collect()
+    });
     let kept = crate::reconcile::ledger(roots);
     // WAITING FOR ANDROID: not in yet, and here to go in — one whose part is
     // still arriving waits for its part, and its row says so.
@@ -930,6 +1029,9 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
         reported: applied.is_some(),
         android_pending,
         leaving,
+        next_restart: staged.is_some(),
+        leaving_at_restart,
+        back_at_restart,
     }
 }
 
@@ -949,6 +1051,9 @@ pub fn watched(roots: &Roots) -> Vec<PathBuf> {
         reports.join(names::DISTRO_APPS),
         reports.join(names::DECLARED_ANDROID),
         roots.system.current.clone(),
+        // AN APPLY FOR THE NEXT BOOT moves no link of the running system:
+        // the machine's record is what says one waits.
+        roots.system.machine.join(names::STATE),
         roots.ours_state().join(crate::reconcile::LEDGER),
     ]
 }
@@ -972,6 +1077,15 @@ pub fn watched_folders(roots: &Roots) -> Vec<PathBuf> {
 /// [`Refusal::LeavesAtNextApply`] as its trouble: it is still here.
 pub fn shape(installed: &mut Vec<Installed>, d: &Declarations, roots: &Roots) {
     let leaving = |key: &AppKey| id_of(key).is_some_and(|id| d.leaving.contains(&id));
+    // LEAVING AT THE NEXT RESTART, when the system that waits for it already
+    // left it out; at the next update otherwise.
+    let why_leaving = |id: &str| {
+        if d.leaving_at_restart.iter().any(|x| x == id) {
+            Refusal::LeavesAtNextRestart
+        } else {
+            Refusal::LeavesAtNextApply
+        }
+    };
     for i in installed.iter_mut() {
         i.origin = d.origin_of(&i.key, &i.desktop_ids, i.origin == Origin::Declared);
         // A FLATPAK OR AN ANDROID APP LEAVING is the system's copy in the
@@ -984,7 +1098,7 @@ pub fn shape(installed: &mut Vec<Installed>, d: &Declarations, roots: &Roots) {
             && leaving(&i.key)
         {
             i.origin = Origin::MineDeclared;
-            i.trouble = Some(Refusal::LeavesAtNextApply);
+            i.trouble = id_of(&i.key).map(|id| why_leaving(&id));
         }
     }
     // THE LEAVING COPIES NO LIST SEES — a Nix package of `home.packages`, a
@@ -1015,7 +1129,7 @@ pub fn shape(installed: &mut Vec<Installed>, d: &Declarations, roots: &Roots) {
             unfree: false,
             origin: Origin::MineDeclared,
             icon: None,
-            trouble: Some(Refusal::LeavesAtNextApply),
+            trouble: Some(why_leaving(id)),
         });
     }
     for row in d
@@ -1327,6 +1441,148 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// FAILS IF: a declared program that only the system that waits for the
+    /// next restart applied is said to wait for the next update — it is here
+    /// from the restart —, what that system already left out (a removal, a
+    /// decline) or already brought back (a decline undone) is said to change
+    /// at the next update, the page does not say a system waits — or what
+    /// waits is read off the last apply: a system that runs, or that the
+    /// profile no longer names (its trial failed, the profile went back),
+    /// waits for nothing, whatever the record says.
+    #[test]
+    fn what_the_next_boot_brings_arrives_at_the_restart() {
+        let root = scratch("next-restart");
+        let roots = Roots::under(&root);
+        let mut doc = Declared::default();
+        upsert(&mut doc, nix("ripgrep", None));
+        upsert(&mut doc, nix("fresh", None));
+        upsert(&mut doc, nix("later", None));
+        write_doc(&roots, File::Declared, &doc).unwrap();
+        let mut declined = Declined::default();
+        declined.decline("krita", None, &stamp(), "noctua");
+        write_doc(&roots, File::Declined, &declined).unwrap();
+        std::fs::create_dir_all(&roots.system.reports).unwrap();
+        // THE SYSTEM THAT RUNS applied web:mail, which the declaration no
+        // longer names; it has kdenlive left out by a decline since undone.
+        std::fs::write(
+            roots.system.reports.join(names::PERSON_APPLIED),
+            ronoctua_person::to_json(&report()),
+        )
+        .unwrap();
+        let registry = |kdenlive_here: bool| {
+            ronoctua_person::to_json(&DistroApps {
+                format: 1,
+                apps: vec![DistroApp {
+                    id: "kdenlive".into(),
+                    name: None,
+                    source: ronoctua_person::declared::Source::Nix,
+                    desktop_ids: Vec::new(),
+                    essential: None,
+                    group: "video".into(),
+                    on_this_machine: kdenlive_here,
+                    declined_here: !kdenlive_here,
+                    appimage: None,
+                }],
+                followed: ronoctua_person::reports::FollowedReport::default(),
+            })
+        };
+        std::fs::write(
+            roots.system.reports.join(names::DISTRO_APPS),
+            registry(false),
+        )
+        .unwrap();
+        // THE SYSTEM THAT WAITS applied nix:fresh, left web:mail and krita
+        // out, and has kdenlive back.
+        let store = |name: &str| {
+            let top =
+                format!("/nix/store/0123456789abcdfghijklmnpqrsvwxy{name}-nixos-system-{name}");
+            std::fs::create_dir_all(
+                roots
+                    .system
+                    .root
+                    .join(top.trim_start_matches('/'))
+                    .join("etc/ronoctua"),
+            )
+            .unwrap();
+            top
+        };
+        let (a, top) = (store("a"), store("b"));
+        let inside = roots
+            .system
+            .root
+            .join(top.trim_start_matches('/'))
+            .join("etc/ronoctua");
+        let mut next = report();
+        next.applied = vec!["nix:ripgrep".into(), "nix:fresh".into()];
+        next.declined.honoured.push("krita".into());
+        std::fs::write(
+            inside.join(names::PERSON_APPLIED),
+            ronoctua_person::to_json(&next),
+        )
+        .unwrap();
+        std::fs::write(inside.join(names::DISTRO_APPS), registry(true)).unwrap();
+        let link = |at: &str, to: &str| {
+            let at = roots.system.root.join(at);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            let _ = std::fs::remove_file(&at);
+            std::os::unix::fs::symlink(roots.system.root.join(to.trim_start_matches('/')), at)
+                .unwrap();
+        };
+        let standing = |d: &Declarations, id: &str| {
+            d.declared
+                .iter()
+                .find(|r| r.entry.id() == id)
+                .map(|r| r.standing.clone())
+        };
+        let decline = |d: &Declarations| d.declined[0].state.clone();
+        link("run/current-system", &a);
+        link("nix/var/nix/profiles/system", &top);
+        let d = read(&roots, "noctua");
+        assert!(d.next_restart);
+        assert_eq!(standing(&d, "nix:fresh"), Some(Standing::NextRestart));
+        assert_eq!(standing(&d, "nix:ripgrep"), Some(Standing::Applied));
+        assert_eq!(standing(&d, "nix:later"), Some(Standing::Waiting));
+        assert_eq!(d.leaving, ["web:mail"]);
+        assert_eq!(d.leaving_at_restart, ["web:mail"]);
+        assert_eq!(decline(&d), DeclineState::NextRestart);
+        assert_eq!(d.back_at_restart, ["kdenlive"]);
+        let mut installed = Vec::new();
+        shape(&mut installed, &d, &roots);
+        assert_eq!(
+            installed
+                .iter()
+                .find(|i| i.key
+                    == AppKey::Web {
+                        slug: "mail".into()
+                    })
+                .and_then(|i| i.trouble),
+            Some(Refusal::LeavesAtNextRestart)
+        );
+        assert!(watched(&roots).contains(&roots.system.machine.join(names::STATE)));
+        // A STAGED RECORD whose system the profile no longer names (its
+        // trial failed and the profile went back): nothing waits.
+        std::fs::create_dir_all(&roots.system.machine).unwrap();
+        std::fs::write(
+            roots.system.machine.join(names::STATE),
+            format!(
+                r#"{{"format": 1, "last-good": null, "trial": null, "hold": null,
+                   "last-apply": {{"at": "2026-10-30T12:00:00Z", "result": "staged", "toplevel": "{top}"}}}}"#
+            ),
+        )
+        .unwrap();
+        link("nix/var/nix/profiles/system", &a);
+        let d = read(&roots, "noctua");
+        assert!(!d.next_restart);
+        assert_eq!(standing(&d, "nix:fresh"), Some(Standing::Waiting));
+        assert!(d.leaving_at_restart.is_empty() && d.back_at_restart.is_empty());
+        assert_eq!(decline(&d), DeclineState::Waiting);
+        // RESTARTED INTO IT: it runs, and its own reports say so.
+        link("nix/var/nix/profiles/system", &top);
+        link("run/current-system", &top);
+        assert!(!read(&roots, "noctua").next_restart);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// FAILS IF: what the system applied and the declaration no longer names
     /// is not said as leaving — or vanishes from the list while it is still
     /// here — or a person's own copy of it (a profile entry) is taken for
@@ -1518,6 +1774,7 @@ mod tests {
             "/room/sys/etc/ronoctua/distro-apps.json",
             "/room/sys/etc/ronoctua/declared-android.json",
             "/room/sys/run/current-system",
+            "/room/sys/var/lib/ronoctua-machine/state.json",
         ] {
             assert!(
                 watched.iter().any(|w| w == Path::new(wanted)),

@@ -394,7 +394,7 @@ pkgs.testers.runNixOSTest {
           return machine.succeed(logged(data) + " 2>/dev/null || true")
 
 
-      def start_code(unit, data, program=code, *extra):
+      def start_code(unit, data, program=code, *extra, setenv=""):
           """VS Code as the session starts it, on the compositor, as root:
           with the session's `XDG_SESSION_TYPE`, which is what Electron's
           `auto` platform reads (without it, measured, it takes X11 and, with
@@ -403,7 +403,7 @@ pkgs.testers.runNixOSTest {
           machine.succeed(
               f"systemd-run --unit={unit} ${xvfb.env} "
               "--setenv=WAYLAND_DISPLAY=wayland-1 --setenv=NIXOS_OZONE_WL=1 "
-              "--setenv=XDG_SESSION_TYPE=wayland --setenv=HOME=/root "
+              f"--setenv=XDG_SESSION_TYPE=wayland --setenv=HOME=/root {setenv} "
               f"{program} --verbose --log trace --no-sandbox --disable-gpu "
               f"--user-data-dir {data} --skip-welcome --skip-release-notes {args}"
           )
@@ -636,7 +636,18 @@ pkgs.testers.runNixOSTest {
 
 
       with subtest("with the plain package, the extension's server never starts"):
-          start_code("code-plain", "/root/code-plain", plain, opened)
+          # WITH THE SESSION'S `PATH`, which has a `sh`. nixpkgs-unstable's
+          # plain package (1.142) keeps the launcher's `#!/usr/bin/env sh`
+          # (1.119's named the store's `sh`), so outside the FHS environment,
+          # whose `/usr/bin` has one, the program needs a `sh` on the `PATH`.
+          # The session's has it; a system unit's (the manager's) has none,
+          # and the start ended 127 before any window ("env: 'sh': No such
+          # file or directory", measured) — the measure never reached the
+          # extension.
+          start_code(
+              "code-plain", "/root/code-plain", plain, opened,
+              setenv="--setenv=PATH=/run/current-system/sw/bin",
+          )
           # THE EXTENSION RAN AND TRIED: a server that never starts is the
           # program's, not an extension that never woke.
           try:

@@ -7,10 +7,13 @@
 //! 1. The new flake is made BESIDE the old one, in `<dir>/.next`: the
 //!    template's `flake.nix`, and what is the machine's own copied byte for
 //!    byte — `host.nix`, `facter.json`, the secrets (`secrets/secrets.yaml`
-//!    becomes `secrets.yaml`). Then it is locked and BUILT — with a copy of
-//!    the person's `person/` and root's `local/` beside it, so it builds
-//!    what the machine will. Any failure removes `.next` and nothing else:
-//!    the old layout is untouched, and the machine updates as before.
+//!    becomes `secrets.yaml`). Then it is locked — starting from the
+//!    distro's own lock ([`crate::system::REFERENCE_LOCK`]), so the
+//!    `nixpkgs` the machine rolls is the distro's tested pin and no branch is
+//!    resolved — and BUILT, with a copy of the person's `person/` and root's
+//!    `local/` beside it, so it builds what the machine will. Any failure
+//!    removes `.next` and nothing else: the old layout is untouched, and the
+//!    machine updates as before.
 //! 2. The old layout is COPIED to `<state>/legacy-<stamp>` (one is kept),
 //!    before anything is removed from it.
 //! 3. The old entries leave the folder and the new ones are moved in —
@@ -72,10 +75,11 @@ pub(crate) fn migrate(m: &Machine) -> Result<Migrated, Refusal> {
     let attr = apply::attr(m)?;
     let nix = needed(s.nix.as_ref(), system::NIX)?;
     let template = needed(s.template.as_ref(), system::TEMPLATE)?;
+    let reference = needed(s.reference_lock.as_ref(), system::REFERENCE_LOCK)?;
 
     let next = dir.join(NEXT);
     disk::remove(&next).map_err(|e| disk::failed(&next, &e))?;
-    let made = make_next(m, &next, &template, &nix, &attr);
+    let made = make_next(m, &next, &template, &reference, &nix, &attr);
     if let Err(r) = made {
         let _ = disk::remove(&next);
         say(3, "the old layout stays as it was");
@@ -151,11 +155,13 @@ pub(crate) fn migrate(m: &Machine) -> Result<Migrated, Refusal> {
     Ok(Migrated { legacy })
 }
 
-/// The new flake in `next`, locked and built.
+/// The new flake in `next`, made from `template`, locked from `reference`
+/// (the distro's own lock, [`system::REFERENCE_LOCK`]) and built.
 fn make_next(
     m: &Machine,
     next: &Path,
     template: &Path,
+    reference: &Path,
     nix: &Path,
     attr: &str,
 ) -> Result<(), Refusal> {
@@ -193,7 +199,11 @@ fn make_next(
         }
     }
 
-    if run::status(nix, &argv::lock(next))? != Some(0) {
+    // THE LOCK STARTS FROM THE DISTRO'S OWN: the machine is born on the
+    // nixpkgs the distro tested, never on the branch's newest of the day —
+    // which a migration that then switches would jump to, and which with no
+    // network is no lock at all. The machine's update rolls it afterwards.
+    if run::status(nix, &argv::lock(next, reference))? != Some(0) {
         say(
             3,
             "the new machine flake could not be locked (build-failed)",

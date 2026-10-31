@@ -39,9 +39,13 @@ O que o substrato traz é o que foi DECLARADO (o modelo que o dono emendou em 20
 o rebuild e, para o que o sistema não faz pela pessoa (os apps do Android, a cópia imperativa que um
 declarado substitui), o reconciliador (`ronoctua-software reconcile`), que só mexe no próprio
 registro. Nenhum argumento da tabela nomeia um programa a instalar: o que entra é o da declaração,
-lido pelo programa. Os fast-movers (Claude Code e Codex pelo updater nativo, os Craft Apps pelo Craft
-Launcher, o SolidCraft como AppImage) se atualizam sozinhos, fora da geração e sob o $HOME — essa
-camada é imperativa agora, e não é tarefa desta sequência.
+lido pelo programa. O que se atualiza sozinho fora da geração — os Crafting Apps, que o ArtCraft
+Launcher baixa e atualiza sob o `$HOME` — não é tarefa desta sequência. O launcher e o SolidCraft
+não estão entre eles: são AppImages da distro, partes fixadas como as outras, e andam quando o pin
+anda. Nem o Claude Code e o Codex: rodam do store e andam com o rebuild — o Claude Code como a parte
+que `nix/claude-code.nix` fixa (o updater nativo foi revertido em 2026-10-30: baixa um binário que o
+NixOS não roda sem `nix-ld`), o Codex como o `pkgs.codex` do nixpkgs que a máquina rola. Os Flatpaks
+andam pelos dois caminhos: pelo timer do próprio nix-flatpak e pelos passos `flatpak-*` daqui.
 
 ## Nada que ela faça pode perguntar
 
@@ -107,7 +111,7 @@ A sequência agora tem três tempos, e o gerador recusa qualquer outra ordem
    (`ronoctua-belongings plain pull`, sem senha; um conflito fica como esta máquina o tem e nunca
    bloqueia; o que a chave da pessoa não assinou fica retido), adianta as fixações (`pins refresh`;
    com a opção da pessoa ligada, também os AppImages da distro que seguem as próprias releases, além
-   dos pins da distro — `docs/ARCHITECTURE.md`, os Crafting Apps),
+   dos pins da distro — `docs/ARCHITECTURE.md`; hoje o ArtCraft Launcher e o SolidCraft),
    assina o resultado com a chave da pessoa (`ronoctua-belongings sign`, só com a identidade que a
    sessão guarda; sem ela, recusa com `no-passphrase`: o que as outras máquinas assinaram e o
    `plain pull` trouxe com a assinatura chega a root assim mesmo, e só o que mudou AQUI sem
@@ -120,11 +124,11 @@ A sequência agora tem três tempos, e o gerador recusa qualquer outra ordem
    preparo são dela — root não tem nenhum dos três. Nenhum outro passo da pessoa vem antes da
    metade root.
 2. **A metade root** migra (`migrate`, antes de mover os inputs: o lock do layout velho não é o do
-   flake da máquina; e `stop`, porque tudo depois fala o layout novo), move SÓ o input da distro
-   (`nix flake update ronoctua`: os outros inputs são os da distro, copiados do lock dela, e mover a
-   distro move tudo o que a release testou e nada além; pulado e dito enquanto a máquina está retida
-   — `not-held`) e aplica com o `ronoctua-machine apply` — construir primeiro, trocar só o que
-   construiu, e armar o ensaio de boot. Um programa que a pessoa declarou não entra no rebuild: é uma
+   flake da máquina; e `stop`, porque tudo depois fala o layout novo), move a distro e o nixpkgs
+   (`nix flake update ronoctua nixpkgs`: a máquina segue o `nixos-unstable`, e todo outro input é o
+   pin testado da release; pulado e dito enquanto a máquina está retida — `not-held`) e aplica com o
+   `ronoctua-machine apply --next-boot` — construir primeiro, deixar só o que construiu para o
+   próximo boot, e armar o ensaio de boot (a seção "Para o próximo boot", abaixo). Um programa que a pessoa declarou não entra no rebuild: é uma
    parte dela, que o realizador avalia sozinha depois da troca, e a que não avalia ou não constrói
    falha sozinha (antes, um passo `verify` tentava cada entrada antes do rebuild e retinha a quebrada
    em `local/held.json`). A metade inteira roda sob `ronoctua-person hold`: o lock de root dos dados
@@ -156,8 +160,9 @@ A sequência agora tem três tempos, e o gerador recusa qualquer outra ordem
    rebuild que falhou é algo que esta máquina fez, e as outras só ficam sabendo se for empurrado.
    O último de todos (2026-10-11) envia ao cache binário DA PESSOA o que a máquina construiu
    (`ronoctua-cachix push`). Ele roda em toda saída, como os outros, mas só envia depois de um
-   `apply` que TROCOU a máquina desde o último envio — o registro da máquina diz qual —, então um
-   rebuild que falhou não publica nada no cache. Sem cache nomeado, sem token, sem os hosts
+   `apply` que MONTOU um sistema para a máquina desde o último envio — trocou para ele, ou o deixou
+   para o próximo boot; o registro da máquina diz qual, e então é ESSE sistema o enviado, com o
+   cache que o arquivo dele nomeia —, então um rebuild que falhou não publica nada no cache. Sem cache nomeado, sem token, sem os hosts
    permitidos ou sem nada novo, ele recusa com notícia (`no-cache`, `no-token`, `not-let`,
    `nothing-new`), nunca com falha. O arquivo da máquina é perguntado pelo programa, e não por uma
    precondição `file`: a notícia diz qual das quatro o segurou, e uma precondição diria só que falta
@@ -166,9 +171,58 @@ A sequência agora tem três tempos, e o gerador recusa qualquer outra ordem
 **Uma recusa é notícia ou é motivo.** Os programas da máquina terminam uma recusa com a última linha
 `refused <palavra>`. Uma palavra que o passo declara em `declines` é notícia (`declined-<palavra>`,
 a sequência segue): `did-not-boot` (o sistema cujo ensaio falhou não é tentado de novo até a distro
-andar), `nothing-to-migrate` e as quatro do envio ao cache. Qualquer outra é falha que GUARDA a palavra (`failed-<palavra>`), e a
+ou o nixpkgs andarem), `nothing-to-migrate` e as quatro do envio ao cache. Qualquer outra é falha
+que GUARDA a palavra (`failed-<palavra>`), e a
 vista diz a frase da máquina para ela, em vez de só "falhou". Uma última linha que não é recusa, ou
 uma palavra que não é kebab, é `failed` puro: nunca uma palavra inventada.
+
+## Para o próximo boot, nunca sob a sessão (2026-10-30)
+
+O relógio do invariante 6 ("um timer reconstrói sozinho") é a rotina deste módulo — semanal, à tarde,
+atrás do portão, com um minuto de aviso —, e não um `.timer` do systemd: o cérebro sabe se a máquina
+está ocupada, segura uma rede tarifada e a bateria abaixo do piso sem perguntar, roda a metade da
+pessoa (reunir, assinar, publicar, que root não pode) e desenha a data na página. Um calendário do
+systemd ao lado seria um segundo relógio que não sabe nada disso.
+
+E a execução NÃO ATIVA NADA. O rebuild é `ronoctua-machine apply --next-boot`: constrói, põe o
+sistema novo no perfil e roda `switch-to-configuration boot` — nenhuma unidade que roda é parada ou
+reiniciada, o registro diz `staged` (com o sistema que espera, `last-apply.toplevel`) e o ensaio de
+boot é armado de verdade, nunca `boot-identical`: nada rodou o userland novo. No dia em que a máquina
+passou a seguir o `nixos-unstable` (2026-10-30), a troca ao vivo do 26.05 para ele reiniciou a
+máquina do dono, e a causa não foi registrada (`docs/PENDING.md`). O argumento é FIXO no
+`steps.nix`, nunca cruza do cérebro, e o gerador recusa um
+`apply-configuration` sem ele.
+
+**Um sistema deixado para o próximo boot continua para o próximo boot.** Enquanto o perfil nomeia um
+sistema que não roda, toda outra aplicação — a da central de programas, a do resgate, a da troca de
+build — também deixa o seu para o próximo boot; e também quando o lock da pasta não prova que o
+nixpkgs é o do sistema do perfil: andou (uma atualização cujo apply morreu ou foi desligado deixou o
+lock andado), ou não dá para saber. Fora disso, uma aplicação que não cruza nada disso ainda troca na
+hora. Tudo isso mora no `ronoctua-machine`, o único que muda o sistema.
+
+**Se um sistema espera é o perfil que diz, não o último apply.** O `ronoctua_machine::next_boot` lê o
+perfil e o sistema que roda: um ensaio que falhou põe o perfil de volta e deixa o registro dizendo
+`staged`, e um apply seguinte que não construiu nada apaga o `staged` com o sistema ainda esperando —
+o último apply erraria nos dois sentidos. A página, o aviso do fim, a central de programas e o
+`plan --next` perguntam a ele; só o envio ao cache binário segue o último apply, porque segue UM, logo
+depois dele.
+
+**As partes do sistema que espera** só são realizadas pelo planejador do boot dele, e até lá nada
+segura as derivações delas (o plano as leva como texto): a coleta logo depois as levaria. Por isso o
+passo das partes é `plan --next`, que, além do plano que roda, enraíza as derivações do plano do
+sistema que espera sob `NEXT_ROOTS` — nunca registros nem a vista a partir dele.
+
+**A execução termina pedindo o reinício** (o evento `restart`, no minibuffer, uma notificação quando
+a linha está ocupada), uma vez por execução que deixou um sistema esperando — `restart-unguarded`
+quando nenhum ensaio pôde ser armado para ele, que não promete volta além do menu; e a vista da atualização
+diz, acima dos passos, que um sistema novo espera o próximo reinício, como a central de programas diz
+do que ele traz. Sem reiniciar, cada semana empilha um sistema esperando, e o menu de boot, que lista
+poucos, recusa a atualização quando o último bom cairia dele (`last-good-would-fall-out`). Não há
+marca em repouso nem tecla de reiniciar: as duas pediriam emenda do dono.
+
+Os passos da pessoa depois do rebuild agem sobre o sistema que RODA: o `nix profile upgrade` resolve o
+nixpkgs dele, e o cache de fontes é o das fontes dele; o do sistema novo chega a eles na primeira
+atualização depois do reinício.
 
 ## Bateria, disco e rede tarifada: esperar, e nunca perguntar
 

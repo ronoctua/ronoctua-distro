@@ -177,8 +177,8 @@ FIELDS = {
     # THE REFUSALS THAT ARE NEWS AND NOT FAILURES: the program's last line on
     # standard output is `refused <word>`, and a word listed here is recorded
     # `declined-<word>` and the sequence goes on. The machine's apply refuses
-    # the system whose boot trial failed until the distro moves on: nothing
-    # new to apply is not an update that broke.
+    # the system whose boot trial failed until the distro or nixpkgs moves:
+    # nothing new to apply is not an update that broke.
     "declines",
 }
 
@@ -741,10 +741,19 @@ def check_wave_laws(steps: list[dict], moves: list[int], applies: list[int]) -> 
                 )
 
 
+# THE WORD THAT SETS THE UPDATE'S SYSTEM FOR THE NEXT BOOT
+# (`ronoctua-machine apply --next-boot`), and the one that keeps the parts of
+# that system (`ronoctua-parts plan --next`).
+NEXT_BOOT = "--next-boot"
+NEXT_PLAN = "--next"
+
+
 def check_parts_laws(steps: list[dict], applies: list[int]) -> None:
     """The parts' law (2026-10-23): one step plans them, as root, right after
     the system it plans for is applied and before any space is reclaimed, and
-    a part never stops an update.
+    a part never stops an update — and (2026-10-30) it keeps the parts of the
+    system set for the next boot (`--next`), which the collection after it
+    would otherwise take before that boot realizes them.
     """
     plans = [i for i, s in enumerate(steps) if s["does"] == "realize-parts"]
 
@@ -761,6 +770,8 @@ def check_parts_laws(steps: list[dict], applies: list[int]) -> None:
             complain(at(i), "`realize-parts` before `apply-configuration`: it would plan the parts of the system the rebuild replaces")
         if s["on-failure"] != "carry-on":
             complain(at(i), "`realize-parts` stops the update: a part never holds back the system or anything after it")
+        if NEXT_PLAN not in s["run"]:
+            complain(at(i), f"`realize-parts` without `{NEXT_PLAN}`: the parts of the system set for the next boot would lose their derivations to the collection before that boot")
         for j, t in enumerate(steps):
             if t["does"] == "reclaim-space" and j < i:
                 complain(at(j), "`reclaim-space` before `realize-parts`: the collection would take the derivations the parts are about to be built from")
@@ -793,16 +804,35 @@ def check_sequence(steps: list[dict]) -> None:
                     "`reclaim-space` before `apply-configuration`: the sweep "
                     "would erase what the rebuild is about to use.",
                 )
-            # THE PERSON'S PROGRAMS MOVE AGAINST THE NEW SYSTEM. `nix profile
-            # upgrade` resolves `nixpkgs` through the registry the rebuild
-            # pins, and `flatpak update` should be the Flatpak the rebuild just
-            # installed — before it, both would answer with the old ones.
+            # THE PERSON'S PROGRAMS MOVE AFTER THE REBUILD. `nix profile
+            # upgrade` resolves `nixpkgs` through the registry of the system
+            # that RUNS, and the rebuild sets its own for the next boot
+            # (`--next-boot`, below) — so the profile meets the new one at
+            # the first update after the restart. Before the rebuild they
+            # would move ahead of a system that may yet be refused, and a
+            # failed rebuild stops the sequence before them.
             if s["does"] == "upgrade-software" and i < applies[0]:
                 complain(
                     f"steps[{i}] ({s['id']})",
                     "`upgrade-software` before `apply-configuration`: it would "
                     "resolve against the system the rebuild is about to replace.",
                 )
+
+    # THE UPDATE ACTIVATES NOTHING (2026-10-30). It runs when nobody asked,
+    # on a base that rolls (`nixos-unstable`): a live switch across a moved
+    # `nixpkgs` can restart the session under the person. Its apply sets the
+    # new system for the next boot (`ronoctua-machine apply --next-boot`),
+    # with the boot trial armed, and the generator refuses one that would
+    # switch now.
+    if len(applies) == 1:
+        s = steps[applies[0]]
+        if s["kind"] != "package" or NEXT_BOOT not in s["run"]:
+            complain(
+                f"steps[{applies[0]}] ({s['id']})",
+                "`apply-configuration` activates now: an update runs when nobody asked, "
+                "on a base that rolls, and sets the new system for the next boot "
+                f"(`{NEXT_BOOT}`), never under the running session",
+            )
 
     # THE 2026-10-05 WAVE's laws (gather → root half → person half, publish
     # last), after its anchor.

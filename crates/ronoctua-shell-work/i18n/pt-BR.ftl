@@ -143,6 +143,7 @@ software-refusal-tool-failed = O programa que fazia isso falhou; as palavras del
 software-refusal-no-update-info = Não diz nada sobre atualizações; veja no site.
 software-refusal-cannot-try = Só um pacote Nix roda sem instalar, e só um que tenha algo para rodar.
 software-refusal-session-down = O Android não está rodando.
+software-refusal-not-inside-android = Esse app não está mais dentro do Android: foi tirado lá, e uma atualização não o põe de volta.
 software-refusal-will-not-parse = O software.json não é legível, e escrever o substituiria.
 software-refusal-wrong-user = Isso roda como outro usuário, não este.
 notif-software-installed-summary = { $app } está instalado
@@ -214,6 +215,7 @@ software-declared-standing-applied = neste computador
 software-declared-standing-arriving = a caminho deste computador
 software-declared-standing-not-arrived = ainda não chegou: a página das partes diz por quê
 software-declared-standing-waiting = chega com a próxima atualização
+software-declared-standing-next-restart = chega no próximo reinício
 software-declared-standing-elsewhere = só nos seus outros computadores
 software-declared-skipped-attr-missing = deixado de fora: os pacotes deste computador não têm mais esse nome
 software-declared-skipped-not-a-package = deixado de fora: esse nome não é um programa aqui
@@ -232,7 +234,9 @@ software-declared-decline-essential = mantido: a distro precisa dele
 software-declared-decline-unknown = esta distro não o conhece mais
 software-declared-decline-elsewhere = recusado em { $machines }
 software-declared-decline-waiting = sai com a próxima atualização
+software-declared-decline-next-restart = sai no próximo reinício
 software-declared-refusal-leaves-at-next-apply = Sai na próxima atualização deste computador: a sua declaração não o tem mais, e o sistema daqui ainda tem.
+software-declared-refusal-leaves-at-next-restart = Sai no próximo reinício deste computador: a sua declaração não o tem mais, o sistema daqui ainda tem, e o novo que espera o reinício não tem.
 software-declared-refusal-declined-elsewhere = Ele é recusado só nos seus outros computadores, então este não tem o que trazer de volta: cada um deles o traz, ou todos de uma vez pela página dele.
 
 ## AS CHAVES DA CENTRAL DE SEGURANÇA, e a contagem da janela sem senha.

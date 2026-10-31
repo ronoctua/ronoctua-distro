@@ -239,16 +239,25 @@ let
       installPhase = "true";
     };
 
-  # AND THE `claims` REFUSALS, each built broken on its own: a row whose
-  # `shares` names a type that does not claim the glob (a tie that is not
-  # one), a row that shares a glob upstream claims at another weight (it
-  # would not tie), and a row with `content` and no `shares` (nothing to
-  # settle). Each must fail, and say the reason it was planted for.
-  refusedClaim =
-    name: row: owed:
+  # AND THE REFUSALS OF A NAME THAT WOULD TIE IN SILENCE, each built broken on
+  # its own: a `claims` row whose `shares` names a type that does not claim
+  # the glob, or only part of its claimants (a tie that is not the one
+  # written); one that shares a glob upstream claims at another weight (it
+  # would not tie); one with `content` and no `shares` (nothing to settle);
+  # one for a type that already claims the glob upstream at 50 (it adds
+  # nothing); an `ours` row on a name upstream gives (the `*.amf` that lost to
+  # `application/x-amf` in silence); and a name given here to two types.
+  # Each must fail, and say the reason it was planted for.
+  refusedTable =
+    name: change: owed:
     let
       broken = writeText "mime-glyphs-${name}.json" (
-        builtins.toJSON ((import mimeTableFile) // { claims = [ row ]; })
+        builtins.toJSON (
+          let
+            t = import mimeTableFile;
+          in
+          t // change t
+        )
       );
     in
     stdenvNoCC.mkDerivation {
@@ -283,6 +292,11 @@ let
       '';
       installPhase = "true";
     };
+  refusedClaim =
+    name: row:
+    refusedTable name (_: {
+      claims = [ row ];
+    });
   claimsFixtures = {
     not-a-tie = refusedClaim "claim-not-a-tie" {
       # `*.cl` IS a real tie (`text/x-common-lisp` ↔ `text/x-opencl-csrc`
@@ -306,6 +320,36 @@ let
       mime = "text/x-common-lisp";
       content = [ "(in-package" ];
     } "has `content` and no `shares`";
+    # `*.ts` has TWO claimants at 50 upstream; naming one is not the tie.
+    part-of-the-tie = refusedClaim "claim-part-of-the-tie" {
+      glob = "*.ts";
+      mime = "application/typescript";
+      shares = [ "video/mp2t" ];
+      content = [ "import " ];
+    } "the tie is not the one written here";
+    # Upstream gives `*.cts` to TypeScript at 50 already: the row adds nothing.
+    # (`*.ts`, at 40, is the case the rule lets through.)
+    at-its-own-weight = refusedClaim "claim-at-its-own-weight" {
+      glob = "*.cts";
+      mime = "application/typescript";
+    } "already claims it upstream at weight 50";
+    # THE REGRESSION ITSELF: the `model/x-amf` row as it stood before
+    # shared-mime-info 2.5.1 gave `*.amf` to `application/x-amf`.
+    invented-on-a-given-name = refusedTable "ours-on-a-given-name" (t: {
+      ours = t.ours ++ [
+        {
+          mime = "model/x-amf";
+          glob = "*.amf";
+          under = "application/octet-stream";
+          token = "mesh";
+        }
+      ];
+    }) "upstream already gives that name to `application/x-amf`";
+    # A name nobody upstream gives, given HERE twice: Zig's, by a claim.
+    given-twice = refusedClaim "claim-given-twice" {
+      glob = "*.zig";
+      mime = "text/x-common-lisp";
+    } "is given here to";
   };
 in
 base

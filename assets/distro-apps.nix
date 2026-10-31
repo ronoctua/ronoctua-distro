@@ -177,8 +177,8 @@
   # them is on a `minimal` machine (`offered-programs-are-the-registrys`).
   #
   # IN THIS ORDER ON SCREEN, so the order is the list's: the development
-  # tools, the editors and makers, media, the office, then the Crafting
-  # Apps. `name` is the program's own name, the same in every language — data
+  # tools, the editors and makers, media, the office, then the crafts
+  # group. `name` is the program's own name, the same in every language — data
   # and not a text key, like a launcher entry's `Name=`.
   offered = [
     {
@@ -257,34 +257,34 @@
       "the console of the person's Incus virtual machines, which comes with Incus and not as a program";
   };
 
-  # THE CRAFTING APPS (`storytold/<app>` on GitHub, Apache-2.0, pure Rust):
-  # one AppImage each, wrapped at build (`appimageTools.wrapType2`) as
-  # `ronoctua-appimage-<key>`, in the `crafts` group (`nix/modules/crafts.nix`,
-  # on in the full profile). They follow their repository's latest release,
-  # which `nix run .#distro-pins` pins; the owner moves the pins, by hand.
-  # Following releases is the default model now, not a gesture a person turns
-  # on: the whole system rolls on `nixos-unstable` and these fast-movers track
-  # their upstream rather than sit on a stable pin
-  # (`software/distro-pins.json`, the owner's amendment of 2026-10-30,
-  # replacing 'nothing imperative').
+  # THE CRAFTS GROUP (`nix/modules/crafts.nix`, on in the full profile): since
+  # 2026-10-30 the ArtCraft Launcher (`storytold/craft-launcher`), which
+  # downloads and updates the Crafting Apps by itself, under $HOME and
+  # outside the generation (the owner's amendment of 2026-10-30, replacing
+  # 'nothing imperative'), and SolidCraft (`tangency-labs/solidcraft`). Until
+  # then the group was thirteen Crafting Apps, one line each; their ids are
+  # `retired` above. One AppImage each, wrapped at build
+  # (`appimageTools.wrapType2`) as `ronoctua-appimage-<key>`, and a part. Each
+  # follows its repository's latest release, which `nix run .#distro-pins`
+  # pins and `nix run .#release` moves before each gate. A person who turns
+  # on following them (`distro-apps-follow-releases` in `options.json`, OFF
+  # by default: `ronoctua_person::options`) moves their own machines past
+  # those pins (`software/distro-pins.json`).
   # The pattern names the x86_64 image alone: the `.zsync` beside it and the
-  # aarch64 one never match. No MIME default rides with them: they are 0.x.
-  # And `fallback = false`: their launchers claim photographs, films, songs
-  # and documents, and the file manager's opener, which goes by name order
-  # where no default chose, would hand them to whichever app's name sorts
-  # first ("FigCraft" before "Google Chrome"). They stay in "open with", and
-  # a default — the person's or the distro's — still reaches them.
+  # aarch64 one never match. No MIME default rides with them. And
+  # `fallback = false`: the thirteen claimed photographs, films, songs and
+  # documents, and the file manager's opener, which goes by name order where
+  # no default chose, handed them to whichever app's name sorted first
+  # ("FigCraft" before "Google Chrome"). They stay in "open with", and a
+  # default — the person's or the distro's — still reaches them. The crafts
+  # the launcher fetches are not lines here: the distro neither wraps them
+  # nor writes their launchers, and neither they nor the launcher's licence
+  # have been measured (`docs/PENDING.md`).
   #
   # LEFT OUT, and why:
   # - ArtCraft itself (`storytold/artcraft`, the AI engine): its releases
   #   carry a macOS and a Windows build, and no Linux one.
   # - AniCraft (`storytold/AniCraft`): no release to pin.
-  #
-  # The Craft Launcher (`storytold/craft-launcher`) downloads and updates the
-  # Craft Apps by itself, under $HOME and outside the generation — and that is
-  # now the chosen mechanism for them: the app layer self-updates while the OS
-  # substrate stays declarative with rollback (the owner's amendment of
-  # 2026-10-30, replacing 'nothing imperative').
   apps = {
     # THE CRAFT LAUNCHER manages the Crafting Apps (PhotoCraft, VectorCraft,
     # FilmCraft, …) — it downloads and updates them by itself, under `$HOME`
@@ -305,8 +305,9 @@
       group = "crafts";
     };
     # SOLIDCRAFT — parametric 3D CAD in Rust (`tangency-labs/solidcraft`,
-    # MIT/Apache-2.0). Its x86_64 AppImage follows the repository's releases;
-    # the app keeps itself current, a fast-mover like the rest (2026-10-30).
+    # MIT/Apache-2.0). Its x86_64 AppImage follows the repository's releases
+    # through the distro's pin, which moves as the launcher's does; nothing
+    # here updates it under $HOME (2026-10-30).
     solidcraft = {
       source = "appimage";
       key = "solidcraft";

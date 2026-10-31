@@ -38,6 +38,7 @@ in
 
   script = ''
     with subtest("emacs-daemon: the watch tells the daemon, its client and a second Emacs apart"):
+        import datetime
         import re
 
         person = "noctua"
@@ -73,7 +74,7 @@ in
                     print("the watch's row:", rows)
                 return last.get("began", 0) > asked and last.get("kind") == "done"
 
-            retry(looked, timeout_seconds=180)
+            retry(looked, timeout=datetime.timedelta(seconds=180))
             return sorted(n["what"]["id"] for n in mind()["notices"] if n["module"] == "emacs-daemon")
 
         machine.wait_for_unit("user@1000.service")
@@ -83,7 +84,10 @@ in
 
         # THE DAEMON AND ITS CLIENT: all in hand, nothing to say.
         as_person("emacs-daemon-vm-client", f"{bin}/emacsclient -t /home/{person}/notes.txt")
-        retry(lambda last_try: any(t.startswith("/dev/pts/") for t in terminals()), timeout_seconds=60)
+        retry(
+            lambda last_try: any(t.startswith("/dev/pts/") for t in terminals()),
+            timeout=datetime.timedelta(seconds=60),
+        )
         assert says() == [], "the daemon and its own client made the watch speak"
 
         # A SECOND EMACS, which loaded a configuration of its own: the daemon

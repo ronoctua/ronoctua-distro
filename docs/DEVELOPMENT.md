@@ -452,8 +452,11 @@ Boot, TPM, hibernação e desempenho gráfico não se provam em VM.
 
 **O ISO carrega o que ninguém tem em cache** — o shell, o compositor pinado, o `libghostty-vt`, os
 buffers wasm e as fontes vão no `isoImage.storeContents`, sempre: a distro não tem cache binário. A
-máquina alvo não compila nada; o resto ela baixa do `cache.nixos.org` — e do cache binário da pessoa,
-quando os pertences dela nomeiam um.
+instalação não compila nem baixa nada: o ISO leva tudo o que ela constrói, e o que precisa de
+download chega depois, como parte. A máquina nasce no nixpkgs do lock da distro e depois segue o
+`nixos-unstable` por conta própria: uma atualização que move o nixpkgs por baixo dos programas da
+distro os compila nela, a menos que o cache binário da pessoa, quando os pertences dela nomeiam um,
+já os tenha.
 
 **A instalação `minimal` tem ~12,5 GiB contra ~37 da `full` (~35,5 com o padrão do instalador).** Ela
 deixa de fora os aplicativos, não a distro nem o trabalho nela — o toolchain do devshell, o Common Lisp
@@ -522,6 +525,14 @@ As máquinas seguem a branch `release`, e só o `nix run .#release` a move — p
 gate. Ele roda na `main` limpa e igual à `origin/main`, e recusa antes de qualquer custo o que não
 estiver assim (o login do `gh` também).
 
+**O nixpkgs não anda com a release.** Cada máquina rola o próprio no `nixos-unstable` (o `follows`
+do template; a atualização semanal o move junto com a distro), e o gate prova a distro com o nixpkgs
+do `flake.lock` desta árvore, que nada move sozinho: nem o `.#release` nem o `.#distro-pins` rodam
+`nix flake update`, e quem o move é o dono, à mão (`docs/PENDING.md`). Numa máquina, um build que
+falha devolve o lock e um sistema que não sobe volta ao último bom; uma regressão que sobe — no
+`nixos-unstable` o `pkgs.lyrebird` passou a ser outro programa, e o transporte do Tor é o
+`pkgs.obfs4` — chega à pessoa, e só o gate a pega, quando o nixpkgs desta árvore chega lá.
+
 ```
 nix run .#release -- --dry-run          confere tudo que é de graça e diz o que faria
 nix run .#release                       gate, sistemas, ISO (com a semente), rascunho, release, publicação
@@ -544,7 +555,8 @@ folga no `/nix`; é para instalar as máquinas da própria pessoa sem rede, nunc
 
 Para ver o checkout na própria máquina sem publicar, `nix run .#apply-here` (`-- --dry-run` só mede):
 constrói o flake da máquina com o checkout no lugar do input e troca para ele, sem tocar o lock; a
-próxima atualização volta à `release`. A troca recusa enquanto a atualização roda, enquanto um ensaio
+próxima atualização volta à `release`. O nixpkgs é o da máquina (o `follows` do flake dela vale aqui
+também), não o do lock do checkout. A troca recusa enquanto a atualização roda, enquanto um ensaio
 de boot espera ser julgado e quando a geração nova tiraria do menu de boot a última que deu certo.
 
 ## Se algo der errado

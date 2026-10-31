@@ -48,6 +48,12 @@ commands:
   upgrade <source>          bring one source's programs up to date:
                             nix, flatpak, appimage, android — or
                             android-system (the Android images; root only).
+                            android asks F-Droid's signed index again first
+                            and moves only the apps Android still lists;
+                            while Android runs it replaces nothing and ends
+                            `refused android-in-use`, and with f-droid.org
+                            not let in the consent it ends `refused
+                            fdroid-not-let`.
   tidy <source>             free what nothing uses any more: nix, flatpak,
                             appimage.
   web-open <slug>           open a web app (what its launcher entry runs).
@@ -500,6 +506,12 @@ pub fn perform(ctx: &Context, order: &Order, report: &mut dyn Report) -> Done {
     let done = route(order)
         .map_err(Failure::refused)
         .and_then(|r| run_routed(ctx, r, order, report));
+    write_down(ctx, order, &done);
+    done
+}
+
+/// The journal line of an order that ran.
+fn write_down(ctx: &Context, order: &Order, done: &Done) {
     // A REHEARSAL LEAVES NO HISTORY: nothing was done, and a line saying
     // "installed" would be the history lying.
     if !ctx.rehearse {
@@ -519,7 +531,6 @@ pub fn perform(ctx: &Context, order: &Order, report: &mut dyn Report) -> Done {
             tracing::warn!(error = %e, "could not write the history");
         }
     }
-    done
 }
 
 /// One routed order, under its lane.
@@ -887,13 +898,13 @@ pub fn main() -> ExitCode {
             answer(report.as_mut(), done)
         }
         Verb::Upgrade(Target::Source(source)) => {
-            let done = perform(
-                &ctx,
-                &Order::Upgrade {
-                    scope: Scope::Source { source },
-                },
-                report.as_mut(),
-            );
+            let order = Order::Upgrade {
+                scope: Scope::Source { source },
+            };
+            if source == Source::Android {
+                return android_upgrade(&ctx, &order, report.as_mut());
+            }
+            let done = perform(&ctx, &order, report.as_mut());
             answer(report.as_mut(), done)
         }
         Verb::Upgrade(Target::AndroidSystem) => {
@@ -1015,8 +1026,9 @@ fn person_stage(ctx: &Context, check: bool) -> ExitCode {
     }
 }
 
-/// What `person stage` says: its last line on standard output, its line on
-/// standard error, and whether it did what it was asked.
+/// What a verb the update's runner reads says (`person stage`, `upgrade
+/// android`): its last line on standard output, its line on standard error,
+/// and whether it did what it was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Said {
     out: Option<String>,
@@ -1066,6 +1078,91 @@ fn person_stage_said(ctx: &Context, check: bool) -> Said {
         ),
         Err(f) => refused(crate::stage::refused_why(&f), f.to_string()),
     }
+}
+
+/// `upgrade android`, as the update runs it: the Android apps moved, unless
+/// the person is using Android. Its words go out the way `person stage`'s
+/// do, after the upgrade's own final beat.
+fn android_upgrade(ctx: &Context, order: &Order, report: &mut dyn Report) -> ExitCode {
+    let said = android_upgrade_said(ctx, order, report);
+    if let Some(line) = &said.err {
+        let _ = writeln!(std::io::stderr(), "ronoctua-software: {line}");
+    }
+    if let Some(line) = &said.out {
+        println!("{line}");
+    }
+    if said.ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// [`android_upgrade`]'s answer.
+///
+/// THE UPDATE NEVER REPLACES AN APP UNDER THE PERSON: Android stops an app it
+/// replaces, and a run nobody watches would close what somebody is using. So
+/// while a session runs nothing moves, and the last line is `refused
+/// android-in-use` — news the update's step declares, and the apps wait for
+/// a run when Android is not running. Asked WHILE ANDROID'S LANE IS HELD: a
+/// software view's order holding the lane may start Android and leave it
+/// running, and a question asked before the wait would be stale after it.
+/// The software view's own update comes through `run`, where the person
+/// asked for it, and does not wait.
+///
+/// The upgrade itself is `perform`'s, minus the lane this already holds:
+/// the module, and the journal line. A consent that does not let
+/// f-droid.org ends `refused fdroid-not-let`, news too; offline and a broken
+/// signature stay failures.
+fn android_upgrade_said(ctx: &Context, order: &Order, report: &mut dyn Report) -> Said {
+    android_upgrade_said_with(ctx, order, report, &|ctx, order, report| {
+        module(ctx, Route::Source(Source::Android), order, report)
+    })
+}
+
+/// [`android_upgrade_said`] over any `upgrade` — the module on the machine,
+/// and in a test the module over the test's network and places, so all the
+/// rest (the lane, the question, the journal line, the final beat, the
+/// word) is the one the update runs.
+fn android_upgrade_said_with(
+    ctx: &Context,
+    order: &Order,
+    report: &mut dyn Report,
+    upgrade: &dyn Fn(&Context, &Order, &mut dyn Report) -> Done,
+) -> Said {
+    let done = match lane(ctx, Source::Android, &name_of(order), report) {
+        Ok(_held) => {
+            if crate::android::running(ctx) {
+                return Said {
+                    out: Some(format!("refused {}", crate::android::IN_USE)),
+                    err: Some(
+                        "Android is running: its apps are not replaced while it is, and wait \
+                         for a run when it is not"
+                            .to_owned(),
+                    ),
+                    ok: false,
+                };
+            }
+            upgrade(ctx, order, report)
+        }
+        Err(f) => Err(f),
+    };
+    write_down(ctx, order, &done);
+    let news = android_news(&done);
+    let ok = done.is_ok();
+    answer(report, done);
+    Said {
+        out: news.map(|word| format!("refused {word}")),
+        err: None,
+        ok,
+    }
+}
+
+/// The word an Android upgrade's answer ends with when it is news and not a
+/// failure: f-droid.org not let in the person's consent, which is their
+/// choice. Offline, a broken signature and the rest stay failures.
+fn android_news(done: &Done) -> Option<&'static str> {
+    matches!(done, Err(f) if f.refusal == Some(Refusal::NotLet)).then_some(crate::fdroid::NOT_LET)
 }
 
 /// Becomes Chrome, with the web app's window: `exec`, so the launcher's scope
@@ -1483,6 +1580,255 @@ mod tests {
             assert_eq!(said.err.is_some(), !ok, "{tag}: {said:?}");
             let _ = std::fs::remove_dir_all(&root);
         }
+    }
+
+    /// A prepared machine whose Android session is `state` (RUNNING or
+    /// STOPPED), every call to its waydroid written down, and a record
+    /// holding one app that came from `source` — with the places a test hands
+    /// in for the machine's (`/var/lib/waydroid`).
+    fn android_at(
+        tag: &str,
+        state: &str,
+        source: crate::android::Came,
+    ) -> (std::path::PathBuf, Context, crate::android::Places) {
+        let root = scratch(tag);
+        let waydroid = root.join("bin/waydroid");
+        crate::write_executable(
+            &waydroid,
+            &format!(
+                "#!/bin/sh\necho \"waydroid $*\" >> '{}'\ncase \"$1\" in\n\
+                 status) printf 'Session:\\t{state}\\n';;\nesac\n",
+                root.join("calls.log").display()
+            ),
+        );
+        let ctx = context(
+            &root,
+            Tools {
+                waydroid: Some(waydroid),
+                ..Tools::default()
+            },
+        );
+        let record = [(
+            "org.example.notes".to_owned(),
+            crate::android::Recorded {
+                name: "Notes".into(),
+                version_code: 3,
+                version_name: "1.3".into(),
+                sha256: String::new(),
+                source,
+            },
+        )]
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+        std::fs::create_dir_all(ctx.roots.ours_state()).unwrap();
+        std::fs::write(
+            ctx.roots.ours_state().join(crate::android::RECORD),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        let places = crate::android::Places {
+            waydroid: root.join("var-lib-waydroid"),
+            android_id: root.join("android-id"),
+            patience: std::time::Duration::from_millis(300),
+            every: std::time::Duration::from_millis(20),
+        };
+        std::fs::create_dir_all(&places.waydroid).unwrap();
+        std::fs::write(places.waydroid.join("waydroid.cfg"), "[waydroid]\n").unwrap();
+        (root, ctx, places)
+    }
+
+    fn android_calls(root: &std::path::Path) -> String {
+        std::fs::read_to_string(root.join("calls.log")).unwrap_or_default()
+    }
+
+    fn upgrade_android() -> Order {
+        Order::Upgrade {
+            scope: Scope::Source {
+                source: Source::Android,
+            },
+        }
+    }
+
+    /// The update's `upgrade android` with the module over the test's
+    /// network and places, never the machine's.
+    fn android_upgrade_here(
+        ctx: &Context,
+        places: &crate::android::Places,
+        net: &dyn crate::net::Fetch,
+        beats: &mut Vec<Beat>,
+    ) -> Said {
+        android_upgrade_said_with(
+            ctx,
+            &upgrade_android(),
+            beats,
+            &|ctx: &Context, order: &Order, report: &mut dyn Report| {
+                crate::android::run_in(ctx, order, report, net, places)
+            },
+        )
+    }
+
+    /// A network on which the person's consent lets no host: what
+    /// `net::request` answers before a byte is sent (`net::pass_for`).
+    #[derive(Default)]
+    struct NotLetting {
+        asked: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl NotLetting {
+        fn refuse(&self, url: &str) -> Failure {
+            self.asked.lock().unwrap().push(url.to_owned());
+            Failure {
+                refusal: Some(Refusal::NotLet),
+                trouble: format!("{url}: its host was not let in consent.json"),
+            }
+        }
+    }
+
+    impl crate::net::Fetch for NotLetting {
+        fn get(&self, url: &str, _: &[(&str, &str)], _: u64) -> Result<crate::net::Got, Failure> {
+            Err(self.refuse(url))
+        }
+
+        fn post_json(&self, url: &str, _: &str, _: u64) -> Result<crate::net::Got, Failure> {
+            Err(self.refuse(url))
+        }
+
+        fn download(
+            &self,
+            url: &str,
+            _: u64,
+            _: &std::path::Path,
+            _: &mut dyn FnMut(u64, Option<u64>) -> bool,
+        ) -> Result<(), Failure> {
+            Err(self.refuse(url))
+        }
+    }
+
+    /// FAILS IF: the update's `upgrade android` goes ahead while the
+    /// person's Android runs, does not end `refused android-in-use` (the
+    /// word its step declares), calls that done, or writes a history of an
+    /// upgrade that did not happen.
+    #[test]
+    fn the_update_replaces_no_android_app_while_android_runs() {
+        let (root, ctx, places) =
+            android_at("android-in-use", "RUNNING", crate::android::Came::Fdroid);
+        let net = crate::net::canned::Canned::default();
+        let mut beats: Vec<Beat> = Vec::new();
+        let said = android_upgrade_here(&ctx, &places, &net, &mut beats);
+        assert_eq!(said.out.as_deref(), Some("refused android-in-use"));
+        assert!(!said.ok, "{said:?}");
+        assert!(said.err.is_some(), "the person is told why: {said:?}");
+        assert!(
+            !beats
+                .iter()
+                .any(|b| matches!(b, Beat::Done(_) | Beat::Failed(_))),
+            "no verdict of an upgrade that did not run: {beats:?}"
+        );
+        assert!(net.asked.borrow().is_empty(), "{:?}", net.asked.borrow());
+        let calls = android_calls(&root);
+        assert!(calls.contains("waydroid status"), "{calls}");
+        assert!(!calls.contains("session"), "{calls}");
+        assert!(crate::journal::read(&ctx.roots.ours_state()).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: with Android stopped, the update's `upgrade android` does
+    /// not run the upgrade and write it down, or ends with a refusal word.
+    #[test]
+    fn a_stopped_android_is_upgraded_and_written_down() {
+        let (root, ctx, places) =
+            android_at("android-stopped", "STOPPED", crate::android::Came::File);
+        let net = crate::net::canned::Canned::default();
+        let mut beats: Vec<Beat> = Vec::new();
+        let said = android_upgrade_here(&ctx, &places, &net, &mut beats);
+        assert_eq!(
+            said,
+            Said {
+                out: None,
+                err: None,
+                ok: true
+            }
+        );
+        assert!(
+            matches!(beats.last(), Some(Beat::Done(o)) if o.amount == Some(0)),
+            "{beats:?}"
+        );
+        assert!(net.asked.borrow().is_empty(), "nothing from F-Droid to ask");
+        let history = crate::journal::read(&ctx.roots.ours_state());
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            (history[0].order.as_str(), history[0].ok),
+            ("upgrade", true)
+        );
+        assert!(android_calls(&root).contains("waydroid status"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: the update's `upgrade android`, with f-droid.org not let in
+    /// the person's consent, does not end `refused fdroid-not-let` (the word
+    /// its step declares as news) after the upgrade's final beat, calls it
+    /// done, starts Android, or writes the history without the reason — or
+    /// if an offline network is said as that news instead of a failure.
+    #[test]
+    fn a_consent_without_fdroid_ends_with_the_word_its_step_declares() {
+        let (root, ctx, places) =
+            android_at("android-not-let", "STOPPED", crate::android::Came::Fdroid);
+        let net = NotLetting::default();
+        let mut beats: Vec<Beat> = Vec::new();
+        let said = android_upgrade_here(&ctx, &places, &net, &mut beats);
+        assert_eq!(
+            said,
+            Said {
+                out: Some("refused fdroid-not-let".to_owned()),
+                err: None,
+                ok: false
+            }
+        );
+        assert!(
+            matches!(beats.last(), Some(Beat::Failed(f)) if f.refusal == Some(Refusal::NotLet)),
+            "the final beat is the upgrade's own: {beats:?}"
+        );
+        assert_eq!(*net.asked.lock().unwrap(), [crate::fdroid::ENTRY]);
+        let calls = android_calls(&root);
+        assert!(!calls.contains("session"), "{calls}");
+        let history = crate::journal::read(&ctx.roots.ours_state());
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            (history[0].ok, history[0].refusal),
+            (false, Some(Refusal::NotLet))
+        );
+        // OFFLINE STAYS A FAILURE: no word, so the step is red.
+        let offline = crate::net::canned::Canned::default();
+        let mut beats: Vec<Beat> = Vec::new();
+        let said = android_upgrade_here(&ctx, &places, &offline, &mut beats);
+        assert_eq!(
+            said,
+            Said {
+                out: None,
+                err: None,
+                ok: false
+            }
+        );
+        assert!(
+            matches!(beats.last(), Some(Beat::Failed(f)) if f.refusal == Some(Refusal::Offline)),
+            "{beats:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a consent that does not let f-droid.org stops being news
+    /// (`fdroid-not-let`), or a failure that is one — offline, a broken
+    /// signature — is said as news.
+    #[test]
+    fn only_a_consent_taken_back_is_news_for_android() {
+        let failed = |r: Refusal| -> Done { Err(Failure::refused(r)) };
+        assert_eq!(
+            android_news(&failed(Refusal::NotLet)),
+            Some("fdroid-not-let")
+        );
+        assert_eq!(android_news(&failed(Refusal::Offline)), None);
+        assert_eq!(android_news(&failed(Refusal::Integrity)), None);
+        assert_eq!(android_news(&Ok(Outcome::default())), None);
     }
 
     fn context(root: &std::path::Path, tools: Tools) -> Context {

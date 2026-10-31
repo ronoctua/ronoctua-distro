@@ -465,6 +465,12 @@ fn applied(ctx: &Context, report: &mut dyn Report, signing: bool) -> Result<Appl
 pub enum Rebuilt {
     /// The machine runs the change.
     Switched,
+    /// The change is in a system set for the NEXT BOOT (`ronoctua-machine`'s
+    /// `staged`: an update's system waited for a restart, or `nixpkgs`
+    /// moved): the machine runs it from the next restart, and until then
+    /// runs what it ran — so nothing the old system still runs (a Flatpak's
+    /// data) is taken away yet.
+    Staged,
     /// The update holds the machine: the change waits for the apply after
     /// that update's.
     Busy,
@@ -488,11 +494,14 @@ pub fn rebuilt_of(
     state: Option<&ronoctua_person::state::MachineState>,
 ) -> Result<Rebuilt, Failure> {
     use ronoctua_person::state::ApplyResult;
+    let result = state.and_then(|s| s.last_apply.as_ref()).map(|a| a.result);
     match status {
+        // SET FOR THE NEXT BOOT: the apply did its work, and the machine
+        // runs it from the restart.
+        Some(0) if result == Some(ApplyResult::Staged) => Ok(Rebuilt::Staged),
         Some(0) => Ok(Rebuilt::Switched),
         Some(UPDATE_BUSY) => Ok(Rebuilt::Busy),
         _ => {
-            let result = state.and_then(|s| s.last_apply.as_ref()).map(|a| a.result);
             match result {
                 // SWITCHED, SOME UNIT FAILED: the system runs the change.
                 Some(ApplyResult::SwitchedWithFailures) => Ok(Rebuilt::Switched),
@@ -533,8 +542,11 @@ pub fn rebuild(ctx: &Context, report: &mut dyn Report) -> Result<Rebuilt, Failur
     let ran = Call::new(systemctl, start_argv(unit))
         .changing()
         .quietly(ctx)?;
-    if ran.rehearsed || ran.code == Some(0) {
+    if ran.rehearsed {
         return Ok(Rebuilt::Switched);
+    }
+    if ran.code == Some(0) {
+        return rebuilt_of(Some(0), machine_state(&ctx.roots.system.machine).as_ref());
     }
     let status = Call::new(systemctl, exit_status_argv(unit))
         .keep_stdout()
@@ -839,7 +851,9 @@ mod tests {
     }
 
     /// FAILS IF: the update holding the machine is a failure, a switch with a
-    /// failed unit is not a switch, or a failed build loses its word.
+    /// failed unit is not a switch, a failed build loses its word, or an
+    /// apply set for the next boot is taken for a switch — what the old
+    /// system still runs (a Flatpak's data) would be erased under it.
     #[test]
     fn a_rebuild_says_what_the_machine_did() {
         use ronoctua_person::state::{ApplyResult, LastApply, MachineState};
@@ -849,10 +863,19 @@ mod tests {
             last_apply: Some(LastApply {
                 at: Stamp::parse("2026-10-05T12:00:00Z").unwrap(),
                 result,
+                toplevel: None,
                 missing: Vec::new(),
             }),
             ..MachineState::default()
         };
+        assert_eq!(
+            rebuilt_of(Some(0), Some(&with(ApplyResult::Staged))),
+            Ok(Rebuilt::Staged)
+        );
+        assert_eq!(
+            rebuilt_of(Some(0), Some(&with(ApplyResult::Switched))),
+            Ok(Rebuilt::Switched)
+        );
         assert_eq!(
             rebuilt_of(Some(4), Some(&with(ApplyResult::SwitchedWithFailures))),
             Ok(Rebuilt::Switched)

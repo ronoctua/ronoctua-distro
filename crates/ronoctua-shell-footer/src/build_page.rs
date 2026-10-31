@@ -175,11 +175,20 @@ impl View {
             Show::Always => key::BUILD_PAGE_SHOW_ALWAYS,
             Show::Never => key::BUILD_PAGE_SHOW_NEVER,
         });
-        let facts = [
-            (texts.t(key::BUILD_PAGE_BUILD), build_value),
-            (texts.t(key::BUILD_PAGE_HOST), host_value),
-            (texts.t(key::BUILD_PAGE_CHECKOUT), checkout_value),
-        ];
+        // A BUILD SET FOR THE NEXT RESTART is said beside the one that runs:
+        // the running one does not change until then.
+        let build_of = |b: Build| {
+            texts.t(match b {
+                Build::Own => key::BUILD_PAGE_BUILD_OWN,
+                Build::Reference => key::BUILD_PAGE_BUILD_REFERENCE,
+            })
+        };
+        let mut facts = vec![(texts.t(key::BUILD_PAGE_BUILD), build_value)];
+        if let Some(next) = state.waiting {
+            facts.push((texts.t(key::BUILD_PAGE_NEXT_RESTART), build_of(next)));
+        }
+        facts.push((texts.t(key::BUILD_PAGE_HOST), host_value));
+        facts.push((texts.t(key::BUILD_PAGE_CHECKOUT), checkout_value));
         let show_label = texts.t(key::BUILD_PAGE_SHOW);
         let width = ronoctua_render::layout::width;
         let pairs: Vec<(u16, u16, u16)> = facts
@@ -236,9 +245,12 @@ impl View {
         // which build it lands on.
         if state.checkout.is_some() {
             out.push(air());
-            let switch = texts.t(match state.other_build() {
-                Build::Own => key::BUILD_PAGE_SWITCH_TO_OWN,
-                Build::Reference => key::BUILD_PAGE_SWITCH_TO_REFERENCE,
+            let target = state.other_build();
+            let switch = texts.t(match (target, state.waits_for_restart(target)) {
+                (Build::Own, false) => key::BUILD_PAGE_SWITCH_TO_OWN,
+                (Build::Reference, false) => key::BUILD_PAGE_SWITCH_TO_REFERENCE,
+                (Build::Own, true) => key::BUILD_PAGE_RESTART_TO_OWN,
+                (Build::Reference, true) => key::BUILD_PAGE_RESTART_TO_REFERENCE,
             });
             let focused = self.cursor == out.len();
             let lines = crate::chrome::aligned_pair(
@@ -425,6 +437,7 @@ mod tests {
             build,
             hostname: Some("noctua-z16".to_owned()),
             checkout: checkout.map(PathBuf::from),
+            waiting: None,
         }
     }
 
@@ -448,6 +461,37 @@ mod tests {
             .filter_map(|r| r.act)
             .collect();
         assert_eq!(acts, [Act::Show]);
+    }
+
+    /// FAILS IF: a build set for the next restart is not said on the page —
+    /// it looks as if nothing changed, and invites the same switch again —,
+    /// or the switch it offers then is not the way back to the build that
+    /// runs.
+    #[test]
+    fn a_build_that_waits_for_the_restart_is_said() {
+        let t = texts("en-GB");
+        let s = State {
+            waiting: Some(Build::Reference),
+            ..state(Build::Own, Some("/home/p/distro"))
+        };
+        let drawn: String = View::default()
+            .rows(&s, Show::Dev, 120, &t)
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            drawn.contains(&t.t(key::BUILD_PAGE_NEXT_RESTART)),
+            "{drawn}"
+        );
+        assert!(
+            drawn.contains(&t.t(key::BUILD_PAGE_BUILD_REFERENCE)),
+            "{drawn}"
+        );
+        assert!(
+            drawn.contains(&t.t(key::BUILD_PAGE_SWITCH_TO_OWN)),
+            "{drawn}"
+        );
     }
 
     /// FAILS IF: `RET` on the setting runs anything but the cycle command, on
@@ -478,9 +522,17 @@ mod tests {
     fn the_page_has_words_in_every_language() {
         for language in ["en-GB", "pt-BR"] {
             let t = texts(language);
-            for build in [Build::Own, Build::Reference] {
+            for (build, waiting) in [
+                (Build::Own, None),
+                (Build::Reference, None),
+                (Build::Own, Some(Build::Reference)),
+                (Build::Reference, Some(Build::Own)),
+            ] {
                 for show in [Show::Dev, Show::Always, Show::Never] {
-                    let s = state(build, Some("/home/p/distro"));
+                    let s = State {
+                        waiting,
+                        ..state(build, Some("/home/p/distro"))
+                    };
                     let rows = View::default().rows(&s, show, 100, &t);
                     let drawn: String = rows
                         .iter()

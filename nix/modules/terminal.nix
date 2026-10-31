@@ -50,6 +50,15 @@ let
   # flag and the activation this becomes a copy of the entry and nothing
   # more; `ghostty-windows-are-processes` measures what is installed either
   # way.
+  #
+  # THE PATHS ARE ABSOLUTE BECAUSE THIS WRITES THEM SO. nixpkgs-unstable's
+  # Ghostty turns its own `Exec=$out/bin/ghostty` back into `Exec=ghostty`
+  # (and `TryExec` names `ghostty` too), which hands the entry to whatever
+  # `PATH` its launcher has — and a program the system calls is called by
+  # its store path, never by name (a unit's `PATH` is minimal; AGENTS.md,
+  # "Regras de código"). So both keys are pointed at the binary here; the
+  # day upstream writes the path itself the expression matches nothing and
+  # the line stays as it came.
   ghosttyPerWindow = pkgs.symlinkJoin {
     name = "ghostty-per-window";
     paths = [ pkgs.ghostty ];
@@ -57,7 +66,8 @@ let
       entry=share/applications/com.mitchellh.ghostty.desktop
       test -e "$out/$entry" || { echo "ERROR: Ghostty's desktop entry moved: $entry" >&2; exit 1; }
       rm "$out/$entry"
-      sed -e 's/ --gtk-single-instance=true//g' -e '/^DBusActivatable=true$/d' \
+      sed -E -e 's/ --gtk-single-instance=true//g' -e '/^DBusActivatable=true$/d' \
+        -e 's#^(Exec|TryExec)=ghostty( |$)#\1=${pkgs.ghostty}/bin/ghostty\2#' \
         "${pkgs.ghostty}/$entry" > "$out/$entry"
       rm -f "$out/share/dbus-1/services/com.mitchellh.ghostty.service"
     '';

@@ -27,6 +27,12 @@
 //!   name. Once `person-applied.json` says the declared copy IS in the
 //!   system — and, for a part of the person's, its part's record says it
 //!   arrived —, the hand-made one goes ([`Shadow`]).
+//! * **What a Flatpak removed for good saved**, when the rebuild that takes
+//!   it out was set for the next boot (or waits for an update): the system
+//!   that runs still has the app, so its data (`~/.var/app/<id>`) is erased
+//!   only once the machine runs a system without it and nothing waits
+//!   ([`erase_later`]) — and never when it is declared again, or is still
+//!   here then (that system never came, and what it saved stays).
 //!
 //! # The ledger, and why nothing else is touched
 //!
@@ -86,6 +92,11 @@ pub struct Ledger {
     /// The Android apps it answers for.
     #[serde(default)]
     pub android: Vec<Kept>,
+    /// The Flatpaks removed for good, their data to go with them, whose
+    /// removal waits for a system the machine does not run yet: what they
+    /// saved is erased once it does ([`erase_later`]). Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub erase: Vec<String>,
 }
 
 impl Default for Ledger {
@@ -93,6 +104,7 @@ impl Default for Ledger {
         Self {
             format: FORMAT,
             android: Vec::new(),
+            erase: Vec::new(),
         }
     }
 }
@@ -122,6 +134,39 @@ pub fn ledger(roots: &crate::Roots) -> Ledger {
             }),
         Err(_) => Ledger::default(),
     }
+}
+
+/// What the Flatpak `id` saved is to go once the machine runs a system
+/// without it — its removal for good set for the next boot, or waiting for
+/// an update ([`run`] erases it then). A ledger that is there and does not
+/// read is not written over: the request is dropped, and the data stays.
+///
+/// # Errors
+///
+/// The ledger could not be written.
+pub fn erase_later(ctx: &Context, id: &str) -> Result<(), Failure> {
+    if ctx.rehearse || !crate::flatpak::valid_id(id) {
+        return Ok(());
+    }
+    let path = ctx.roots.ours_state().join(LEDGER);
+    if path.exists() && ledger_that_reads(&path).is_none() {
+        tracing::warn!(file = %path.display(), "the reconciler's ledger does not read: what the app saved stays");
+        return Ok(());
+    }
+    let mut ledger = ledger(&ctx.roots);
+    if !ledger.erase.iter().any(|x| x == id) {
+        ledger.erase.push(id.to_owned());
+        keep(&ctx.roots.ours_state(), &ledger)?;
+    }
+    Ok(())
+}
+
+/// The ledger at `path`, when it reads at this format.
+fn ledger_that_reads(path: &Path) -> Option<Ledger> {
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice::<Ledger>(&bytes)
+        .ok()
+        .filter(|l| l.format == FORMAT)
 }
 
 /// Write the ledger, whole and atomically.
@@ -456,6 +501,33 @@ pub fn run(ctx: &Context, only: Option<Source>, report: &mut dyn Report) -> Done
         changed += 1;
     }
 
+    // WHAT A FLATPAK REMOVED FOR GOOD SAVED, once the machine runs a system
+    // that has none of it and nothing waits for the next boot: erased when
+    // the app is gone and not declared again, the request dropped either
+    // way.
+    if only.is_none_or(|s| s == Source::Flatpak) && !ledger.erase.is_empty() {
+        let settled = std::fs::canonicalize(&ctx.roots.system.current).is_ok()
+            && ronoctua_machine::next_boot(&ctx.roots.system.root, None).is_none();
+        if settled {
+            let declared = crate::flatpak::declared(&ctx.roots);
+            let installed = crate::flatpak::installed(ctx);
+            for id in std::mem::take(&mut ledger.erase) {
+                let here = installed
+                    .iter()
+                    .any(|i| i.key == AppKey::Flatpak { id: id.clone() });
+                if !here && !declared.contains(&id) {
+                    if !ctx.rehearse {
+                        crate::flatpak::erase_data(ctx, &id);
+                    }
+                    changed += 1;
+                }
+            }
+            if !ctx.rehearse {
+                keep(&dir, &ledger)?;
+            }
+        }
+    }
+
     // ANDROID, in its lane.
     if only.is_none_or(|s| s == Source::Android) && ctx.tools.waydroid.is_some() {
         let _lane = lane(ctx, Source::Android, report)?;
@@ -643,6 +715,7 @@ mod tests {
                 kept("org.gone.byhand", 1),
                 kept("org.declared.old", 2),
             ],
+            erase: Vec::new(),
         };
         let inside: BTreeMap<String, u64> = [
             ("org.declared.there", 7),
@@ -937,6 +1010,7 @@ mod tests {
             &Ledger {
                 format: FORMAT,
                 android: vec![kept("org.gone", 1), kept("org.declared.late", 1)],
+                erase: Vec::new(),
             },
         )
         .unwrap();

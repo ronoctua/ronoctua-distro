@@ -350,13 +350,16 @@ in
         CPUSchedulingPolicy = "idle";
         IOSchedulingClass = "idle";
       };
-      # A REBUILD RESTARTS CHANGED UNITS — INCLUDING THIS ONE.
+      # A SWITCH RESTARTS CHANGED UNITS — INCLUDING THIS ONE.
       #
-      # Step two is `nixos-rebuild switch`, and `switch-to-configuration`
-      # restarts every service whose definition moved. If the update that just
-      # landed changed this unit, systemd would stop the sequence in the middle
-      # of itself and start it again from the top. Not a hypothetical: it is
-      # exactly what the flake update makes likely.
+      # The update's own rebuild sets its system for the NEXT BOOT
+      # (`ronoctua-machine apply --next-boot`, `switch-to-configuration
+      # boot`) and restarts nothing. But the software centre's apply, the
+      # rescue's and the build switch's still switch live when nothing waits
+      # for a restart and `nixpkgs` did not move, and `switch-to-configuration
+      # switch` restarts every service whose definition moved: one that
+      # landed while this ran would stop the sequence in the middle of itself
+      # and start it again from the top.
       restartIfChanged = false;
       stopIfChanged = false;
     };
@@ -441,17 +444,25 @@ in
       stopIfChanged = false;
     };
 
-    # NO TIMER, AND THAT IS A DECISION.
+    # THE TIMER IS THE BRAIN'S ROUTINE, AND IT ACTIVATES FOR THE NEXT BOOT.
     #
-    # The store's garbage is collected by Nix itself when a build finds the
-    # disk short (`nix/modules/store.nix`), and `nix/modules/cli.nix` refreshes
-    # the tldr cache on a schedule. Moving the pinned inputs and rebuilding
-    # the system do not belong on a clock: this sequence can bring a kernel
-    # that does not boot, and the machine choosing the moment for that on its
-    # own is the thing `system.autoUpgrade` does and this distro deliberately
-    # does not have.
+    # Inv. 6 (2026-10-30): the machine rolls on `nixos-unstable` and rebuilds
+    # itself on a timer, asking nobody. That timer is this module's schedule
+    # (`manifest.nix`: weekly, in the afternoon, behind the gate, with a
+    # minute of warning), and not a systemd `.timer`: the brain knows whether
+    # the machine is busy, holds a run on a metered network or a battery
+    # below the floor without asking (`module.rs`), runs the person's half —
+    # the gathering, the signature, the publication, which root cannot — and
+    # draws the date on its page. A systemd calendar beside it would be a
+    # second clock that knows none of that. `system.autoUpgrade` stays out.
     #
-    # The moment is chosen by the person, or later by `ronoctua-brain`, which is
-    # a different thing from a calendar: it knows whether anything is running.
+    # AND THE RUN ACTIVATES NOTHING: its rebuild sets the new system for the
+    # next boot (`ronoctua-machine apply --next-boot`, `steps.nix`), with the
+    # boot trial armed, and ends telling the person to restart. A live switch
+    # across a moved `nixpkgs` restarted the session the day the machine first
+    # rolled. The store's garbage is still collected by Nix itself when a
+    # build finds the disk short (`nix/modules/store.nix`), and
+    # `nix/modules/cli.nix` still refreshes the tldr cache on its own
+    # schedule.
   };
 }

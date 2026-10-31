@@ -7,9 +7,14 @@ marca na modeline enquanto houver algo que você não viu.
 ## Desde quando
 
 Desde que começou a vigiar. O seguidor do núcleo guarda o cursor, então o que aconteceu com o
-cérebro desligado é ouvido na volta; na PRIMEIRA partida, sem cursor, a passada única do núcleo
-sobre o passado lhe entrega os últimos 200 desta inicialização — o bastante para a primeira página
-não nascer vazia, sem ler o journal inteiro.
+cérebro desligado é ouvido na volta. Na PRIMEIRA partida do cérebro, sem cursor, a passada única do
+núcleo sobre o passado entrega os últimos 200 desta inicialização aos módulos ligados nela — o
+bastante para a primeira página não nascer vazia, sem ler o journal inteiro.
+
+Só que este módulo vem desligado: numa máquina nova, essa partida passa por ele e guarda o cursor, e
+ligado depois ele ouve dali em diante — a primeira página nasce vazia até o próximo erro, e o que o
+journal disse antes não é relido para ele. O núcleo não roda passada para um módulo que liga no meio
+da sessão; se deve rodar é decisão pendente (`docs/PENDING.md`).
 
 ## Um tipo é uma unidade e um modelo
 

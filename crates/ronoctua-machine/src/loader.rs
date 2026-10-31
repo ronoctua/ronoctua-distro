@@ -53,6 +53,12 @@ pub const LOADER_CONF: &str = "/boot/loader/loader.conf";
 /// systemd-boot starts fails — a trial's only, as a trial's default is.
 pub const REBOOT_ON_ERROR: &str = "reboot-on-error yes";
 
+/// systemd-boot's `LoaderEntryOneShot`, as the kernel shows the EFI variable
+/// (`efivarfs`): four bytes of attributes, then the entry's id in UTF-16LE,
+/// ended by a NUL. The boot loader removes it the moment a boot reads it.
+pub const ONESHOT_VARIABLE: &str =
+    "/sys/firmware/efi/efivars/LoaderEntryOneShot-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f";
+
 /// The loader, and the tool that writes what it keeps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Loader {
@@ -62,6 +68,8 @@ pub(crate) enum Loader {
         bootctl: PathBuf,
         /// Its `loader.conf`, on the disk.
         conf: PathBuf,
+        /// Its one-shot's EFI variable ([`ONESHOT_VARIABLE`]), read only.
+        oneshot: PathBuf,
     },
     /// GRUB, through `grub-editenv` on the block beside its menu.
     Grub {
@@ -79,6 +87,7 @@ impl Loader {
             return Some(Self::Systemd {
                 bootctl: bootctl.clone(),
                 conf: system.real(LOADER_CONF),
+                oneshot: system.real(ONESHOT_VARIABLE),
             });
         }
         system.grub_editenv.as_ref().map(|editenv| Self::Grub {
@@ -134,7 +143,7 @@ impl Loader {
     /// it is unset, written or not.
     pub(crate) fn set_default(&self, entry: &str) -> bool {
         match self {
-            Self::Systemd { bootctl, conf } => {
+            Self::Systemd { bootctl, conf, .. } => {
                 let set = bootctl_word(bootctl, &argv::set_default(entry));
                 if entry.is_empty() || set {
                     restart_on_error(conf, !entry.is_empty());
@@ -158,6 +167,54 @@ impl Loader {
         self.set_oneshot("");
         self.set_default("");
     }
+
+    /// The entry the next boot tries once, as the loader keeps it now: an
+    /// empty one when none is set, `None` when it cannot be read. Both
+    /// loaders forget it the moment a boot reads it, so a one-shot still set
+    /// is a boot nobody has tried yet.
+    pub(crate) fn oneshot(&self) -> Option<String> {
+        match self {
+            Self::Systemd { oneshot, .. } => match std::fs::read(oneshot) {
+                Ok(bytes) => efi_text(&bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // NO VARIABLE in a folder of them is none set; no folder
+                    // at all is a machine whose variables nobody can read.
+                    oneshot.parent()?.is_dir().then(String::new)
+                }
+                Err(_) => None,
+            },
+            Self::Grub { editenv, dir } => {
+                let block = dir.join("grubenv");
+                if !block.exists() {
+                    return Some(String::new());
+                }
+                let ran = run::capture(editenv, &argv::grub_list(&block)).ok()?;
+                if !ran.ok() {
+                    return None;
+                }
+                Some(
+                    ran.stdout
+                        .lines()
+                        .find_map(|l| l.strip_prefix(GRUB_ONESHOT)?.strip_prefix('='))
+                        .unwrap_or_default()
+                        .to_owned(),
+                )
+            }
+        }
+    }
+}
+
+/// The text of an EFI variable that holds one, as `efivarfs` shows it: four
+/// bytes of attributes, then UTF-16LE up to a NUL; `None` for bytes that are
+/// not that.
+fn efi_text(bytes: &[u8]) -> Option<String> {
+    let units: Vec<u16> = bytes
+        .get(4..)?
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .take_while(|&u| u != 0)
+        .collect();
+    String::from_utf16(&units).ok()
 }
 
 /// One `bootctl` word; whether it worked, said when it did not.
@@ -259,4 +316,28 @@ fn grub_set(editenv: &Path, dir: &Path, name: &str, value: &str) -> bool {
         return false;
     }
     word(&argv::grub_set(&block, name, value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FAILS IF: systemd-boot's one-shot is not read as `efivarfs` shows it
+    /// — attributes first, then UTF-16LE to the NUL —, or bytes that are no
+    /// such text are read as an entry.
+    #[test]
+    fn the_one_shot_is_read_as_the_firmware_keeps_it() {
+        let mut bytes = vec![7, 0, 0, 0];
+        for u in "nixos-0a1b.conf".encode_utf16().chain([0]) {
+            bytes.extend(u.to_le_bytes());
+        }
+        assert_eq!(efi_text(&bytes).as_deref(), Some("nixos-0a1b.conf"));
+        assert_eq!(efi_text(&[7, 0, 0, 0]).as_deref(), Some(""));
+        assert_eq!(efi_text(&[7, 0]), None);
+        assert_eq!(
+            efi_text(&[7, 0, 0, 0, 0x00, 0xd8]),
+            None,
+            "a lone surrogate"
+        );
+    }
 }

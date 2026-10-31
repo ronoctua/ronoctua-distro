@@ -2,10 +2,12 @@
 #
 # A watch on the journal the core already follows: every entry at `err` or
 # worse, of the system's and the person's journals, from the moment it began
-# watching (on its first start, this boot's last few too). Entries of one kind
+# watching. This boot's last few come too only when it is already on at the
+# brain's very first start, before any cursor is kept; switched on later — and
+# it ships off — it hears from then on (`docs/PENDING.md`). Entries of one kind
 # — the same unit saying the same thing with other numbers — are one row with
 # a count. While a kind is not seen yet, a mark on the modeline says how many
-# there are, in the colour of a watch. A trecho the person filters by holds the
+# there are, in the colour of a watch. A snippet the person filters by holds the
 # lines that carry it — off the list and off the mark — and one is shipped on
 # (the `dbus-broker` duplicate-name noise), to turn off. Why each is so is in
 # `why.md`.
@@ -38,7 +40,7 @@
 
   # The words it refuses with: the kind (or filter) is not in its list any
   # more (ignored, filtered, or forgotten while the page was open); a row's
-  # action asked by name, with no row; a filter asked for with no trecho; and
+  # action asked by name, with no row; a filter asked for with no snippet; and
   # a person's file (of ignored kinds or of filters) which does not parse and
   # is left as it is rather than written over.
   whys = [
@@ -68,7 +70,7 @@
   # page's, for everything at once.
   #
   # AND WHAT A PERSON DOES WITH A FILTER. `filter` is the page's: it asks for
-  # a trecho and holds from then on every line whose `<unit>: <message>` carries
+  # a snippet and holds from then on every line whose `<unit>: <message>` carries
   # it (case folded) — off the list and off the mark. A filter's row turns it
   # off (`unfilter`: the person's own leaves the page, a shipped one stays to
   # turn on again) or back on (`refilter`). All are also commands, by name; a

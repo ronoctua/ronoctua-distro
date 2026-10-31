@@ -3,9 +3,9 @@
 # The ronoctua distro, as an input that follows its `release` branch, and
 # beside this file what is this machine's own: `host.nix` and `facter.json`
 # (written by the installer), the person's declarations under `person/`, and
-# root's `local/`. The update moves the `ronoctua` input forward
-# (`nix flake update ronoctua`) and rebuilds; nothing else here changes on its
-# own.
+# root's `local/`. The update moves the `ronoctua` and `nixpkgs` inputs
+# forward (`nix flake update ronoctua nixpkgs`) and rebuilds, for the next
+# boot; nothing else here changes on its own.
 #
 # THE DISTRO'S OWN PINS ARE USED AS THEY ARE, EXCEPT nixpkgs, WHICH THIS
 # MACHINE ROLLS (owner amendment 2026-10-30). The whole system follows
@@ -22,7 +22,8 @@
   # and Nix fetches it over HTTP by itself. A `git+https:` input needs a `git`
   # program on the PATH of whoever updates — and the update runs in a unit,
   # whose PATH is minimal. The GitHub API answers 60 unauthenticated requests
-  # an hour per address; a machine asks once per update.
+  # an hour per address; a machine asks twice per update (the distro and
+  # nixpkgs).
   inputs.ronoctua.url = "github:ronoctua/ronoctua-distro/release";
   # The distro builds against this machine's rolling nixpkgs.
   inputs.ronoctua.inputs.nixpkgs.follows = "nixpkgs";

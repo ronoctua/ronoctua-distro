@@ -10,8 +10,8 @@
   ronoctua.profile = "full";
   ronoctua.theme = "industrial";
   ronoctua.locale = "en_GB.UTF-8";
-  ronoctua.keyboard.layout = "gb";
-  ronoctua.keyboard.variant = "";
+  ronoctua.keyboard.layout = "us";
+  ronoctua.keyboard.variant = "euro";
   ronoctua.keyboard.compose = "compose:caps";
   ronoctua.facterReport = ./facter.json;
   # No resume offset (a swapfile smaller than the RAM, or one not measured):

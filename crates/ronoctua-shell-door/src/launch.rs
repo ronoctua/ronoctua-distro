@@ -482,8 +482,10 @@ fn subdirectories(
 /// package's. The first entry a list names that IS installed wins (listed
 /// or not, below); one that is not installed is skipped. Only when no list names an
 /// installed entry for the type do the declarations below answer — and that
-/// order is what keeps a `.step`, which the database makes a `text/plain`,
-/// out of the first editor that declares `text/plain`.
+/// order is what keeps a model the database makes a `text/plain` (a `.obj`;
+/// a `.step` until shared-mime-info 2.5.1) out of the first editor that
+/// declares `text/plain`. A declaration counts under any spelling of the
+/// type: an entry naming an alias declares the type itself.
 ///
 /// # A default may name what the launcher does not list
 ///
@@ -548,7 +550,16 @@ pub fn opens_by<'a>(
     // directory lists them in, which is nobody's decision. A program of this
     // system opening a file this system knows how to play is.
     let ours = |e: &&ronoctua_apps::DesktopEntry| e.id.starts_with(OURS);
-    let exact = |e: &&ronoctua_apps::DesktopEntry| e.mime_types.iter().any(|m| m == wanted);
+    // AN ALIAS IS THE TYPE here too, as in the lists above. OrcaSlicer's
+    // entry names a `.obj` only as `application/prs.wavefront-obj`, the old
+    // spelling of `model/obj`: compared as written it was no declaration of
+    // the type, only of a "parent", and the editor whose name sorts first
+    // took the model by `text/plain`.
+    let exact = |e: &&ronoctua_apps::DesktopEntry| {
+        e.mime_types
+            .iter()
+            .any(|m| ronoctua_files::mime::canonical(m) == wanted)
+    };
     let parent = |e: &&ronoctua_apps::DesktopEntry| {
         e.mime_types
             .iter()

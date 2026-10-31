@@ -1,10 +1,5 @@
-# What the ISO carries so the SUBSTRATE installs with NO download — computed,
-# never listed by hand. See docs/ARCHITECTURE.md, "Instalação offline".
-#
-# This seeds the OS substrate offline, which stays declarative with rollback;
-# the apps are no longer part of it — they are fetched online and self-update
-# (the fast-movers under $HOME, Flatpak and Android by their own mechanisms),
-# the owner's amendment of 2026-10-30, replacing 'nothing imperative'.
+# What the ISO carries so an installation needs NO download — computed, never
+# listed by hand. See docs/ARCHITECTURE.md, "Instalação sem rede (L25)".
 #
 # An installed system is the reference's store paths plus a few dozen
 # derivations that depend on the answers and the hardware (`etc`, the

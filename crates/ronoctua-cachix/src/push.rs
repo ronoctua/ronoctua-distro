@@ -1,24 +1,42 @@
 //! The push — the update's last step, as the person, after an update that
-//! switched the machine.
+//! built the machine a new system.
 //!
 //! # When
 //!
 //! Only when the machine names a cache ([`crate::SYSTEM_FILE`];
 //! [`Why::NoCache`] otherwise), only when the machine's record says an
-//! apply SWITCHED the machine since the last push ([`Why::NothingNew`]
-//! otherwise: a failed update publishes nothing, and an update that changed
-//! nothing pushes nothing again), only with a token ([`Why::NoToken`]) and
-//! only with every host it reaches let by the person ([`Why::NotLet`]). It
-//! never asks: the four are news the update records, and the screen says
-//! them.
+//! apply SET UP A SYSTEM since the last push — switched to it, or set it for
+//! the next boot ([`Why::NothingNew`] otherwise: a failed update publishes
+//! nothing, and an update that changed nothing pushes nothing again), only
+//! with a token ([`Why::NoToken`]) and only with every host it reaches let
+//! by the person ([`Why::NotLet`]). It never asks: the four are news the
+//! update records, and the screen says them.
+//!
+//! # Which system
+//!
+//! The one the last apply set up. Switched to, it is the one that runs, and
+//! its `/etc` says the cache. SET FOR THE NEXT BOOT (`staged`, the update's
+//! way since the machine rolls on `nixos-unstable`), it does not run yet:
+//! the record names it ([`staged_system`]), and the cache, its visibility
+//! and its public roots are read from ITS file
+//! (`<toplevel>/etc/ronoctua/binary-cache.json`), and a private cache gets
+//! ITS closure — never the running system's, which the last push already
+//! carried, nor the running `/etc`, which may name another cache.
+//!
+//! The LAST APPLY is the right record here, and not whether a system waits
+//! for the restart (what the update's page and the software centre ask
+//! `ronoctua-machine`): a push follows one apply, once, as the update's last
+//! step right after it — nothing can fail its trial or roll it back between
+//! the two —, and an apply that built nothing has nothing new to push, even
+//! while an earlier system still waits (its own run pushed it).
 //!
 //! # What
 //!
 //! A PUBLIC cache: the distro's own outputs this machine has valid in its
 //! store ([`crate::system::System::public_roots`]) and their closure, with
 //! the downloads, the unfree programs and what refers to them taken out
-//! ([`crate::closure::public`]). A PRIVATE cache: the running system's
-//! closure ([`crate::closure::private`]). And of either, only what
+//! ([`crate::closure::public`]). A PRIVATE cache: the system's closure
+//! ([`crate::closure::private`]). And of either, only what
 //! `cache.nixos.org` does not serve — asked of it, by `nix-store
 //! --check-validity` against it.
 //!
@@ -98,6 +116,9 @@ pub struct Places {
     pub machine_state: PathBuf,
     /// The running system.
     pub current_system: PathBuf,
+    /// Where a store path is on the disk: `/` — a test's own folder in a
+    /// test —, so a system set for the next boot is read where it is.
+    pub root: PathBuf,
     /// The token's folder.
     pub keys: Option<Dir>,
     /// The record of pushes — `None` with no home: nothing is kept.
@@ -105,6 +126,15 @@ pub struct Places {
 }
 
 impl Places {
+    /// What the system `toplevel` was built with: its own
+    /// [`crate::SYSTEM_FILE`], under [`Places::root`].
+    #[must_use]
+    pub fn system_file_of(&self, toplevel: &str) -> PathBuf {
+        self.root
+            .join(toplevel.trim_start_matches('/'))
+            .join(crate::SYSTEM_FILE.trim_start_matches('/'))
+    }
+
     /// This machine's and this person's.
     ///
     /// # Errors
@@ -120,6 +150,7 @@ impl Places {
             system: PathBuf::from(crate::SYSTEM_FILE),
             machine_state,
             current_system: PathBuf::from(CURRENT_SYSTEM),
+            root: PathBuf::from("/"),
             keys: crate::token::dir(),
             record: crate::record::path(),
         })
@@ -154,16 +185,37 @@ impl Passes {
     }
 }
 
-/// The apply a push would follow: the machine's last, when it switched.
+/// The apply a push would follow: the machine's last, when it set up a
+/// system — switched to it, or set it for the next boot.
 #[must_use]
 pub fn switched_at(state: &MachineState) -> Option<&Stamp> {
     state.last_apply.as_ref().and_then(|a| {
         matches!(
             a.result,
-            ApplyResult::Switched | ApplyResult::SwitchedWithFailures
+            ApplyResult::Switched | ApplyResult::SwitchedWithFailures | ApplyResult::Staged
         )
         .then_some(&a.at)
     })
+}
+
+/// The system the machine's last apply set for the next boot, if it set one
+/// — what a push carries, and reads its cache from, instead of the one that
+/// runs.
+#[must_use]
+pub fn staged_system(state: &MachineState) -> Option<&str> {
+    state
+        .last_apply
+        .as_ref()
+        .filter(|a| a.result == ApplyResult::Staged)
+        .and_then(|a| a.toplevel.as_deref())
+        .filter(|t| crate::system::is_store_path(t))
+}
+
+/// The machine's record, if it reads.
+fn machine_state(places: &Places) -> Option<MachineState> {
+    std::fs::read(&places.machine_state)
+        .ok()
+        .and_then(|b| ronoctua_person::parse::<MachineState>(&b).ok())
 }
 
 /// One push — or, `rehearse`, what one would carry, pushing nothing and
@@ -180,7 +232,14 @@ pub fn push(
     now: Stamp,
     say: &mut dyn FnMut(String),
 ) -> Record {
-    let system = System::read_at(&places.system).ok();
+    // THE SYSTEM THE LAST APPLY SET UP: one set for the next boot says its
+    // cache in its own file; one that runs, in the running `/etc`.
+    let state = machine_state(places);
+    let staged = state.as_ref().and_then(staged_system).map(str::to_owned);
+    let file = staged
+        .as_deref()
+        .map_or_else(|| places.system.clone(), |t| places.system_file_of(t));
+    let system = System::read_at(&file).ok();
     let (cache, visibility) = system.as_ref().map_or((None, None), |s| {
         (Some(s.cache.name.clone()), Some(s.cache.visibility))
     });
@@ -191,21 +250,22 @@ pub fn push(
         applied_at,
         outcome,
     };
-    let done = system
-        .ok_or(Why::NoCache)
-        .and_then(|s| carried(places, tools, mint, rehearse, &s, say).map(|c| (s, c)));
+    let applied = state.as_ref().and_then(|s| switched_at(s).cloned());
+    let done = system.ok_or(Why::NoCache).and_then(|s| {
+        let of = Of {
+            system: &s,
+            applied: applied.as_ref(),
+            staged: staged.as_deref(),
+        };
+        carried(places, tools, mint, rehearse, &of, say)
+    });
     let record = match done {
-        Ok((_, Carried::Rehearsed { paths, bytes })) => {
-            ended(Outcome::Rehearsed { paths, bytes }, None)
-        }
-        Ok((
-            _,
-            Carried::Pushed {
-                paths,
-                bytes,
-                applied,
-            },
-        )) => ended(Outcome::Pushed { paths, bytes }, Some(applied)),
+        Ok(Carried::Rehearsed { paths, bytes }) => ended(Outcome::Rehearsed { paths, bytes }, None),
+        Ok(Carried::Pushed {
+            paths,
+            bytes,
+            applied,
+        }) => ended(Outcome::Pushed { paths, bytes }, Some(applied)),
         Err(why) => ended(Outcome::Refused { why }, None),
     };
     if !rehearse && let Some(path) = places.record.as_ref() {
@@ -233,20 +293,28 @@ enum Carried {
     },
 }
 
+/// What a push is of: the system file it read, the apply it would follow
+/// ([`switched_at`]) and the system that apply set for the next boot, if it
+/// did ([`staged_system`]).
+struct Of<'a> {
+    system: &'a System,
+    applied: Option<&'a Stamp>,
+    staged: Option<&'a str>,
+}
+
 fn carried(
     places: &Places,
     tools: Option<&Tools>,
     mint: &dyn Fn(&str) -> Result<Pass, NotLet>,
     rehearse: bool,
-    system: &System,
+    of: &Of<'_>,
     say: &mut dyn FnMut(String),
 ) -> Result<Carried, Why> {
+    let system = of.system;
     let name = &system.cache.name;
-    // AFTER AN UPDATE THAT SWITCHED, once. A rehearsal follows no apply.
-    let applied = std::fs::read(&places.machine_state)
-        .ok()
-        .and_then(|b| ronoctua_person::parse::<MachineState>(&b).ok())
-        .and_then(|s| switched_at(&s).cloned());
+    // AFTER AN UPDATE THAT SET UP A SYSTEM, once. A rehearsal follows no
+    // apply.
+    let applied = of.applied.cloned();
     if !rehearse {
         let Some(at) = applied.as_ref() else {
             return Err(Why::NothingNew);
@@ -284,12 +352,16 @@ fn carried(
             }
         }
         Visibility::Private => {
-            // THE LINK'S TARGET, which is the system's store path (a link
-            // to a link is followed once more, never further).
-            let current = std::fs::read_link(&places.current_system)
-                .map_err(|_| Why::StoreFailed)?
-                .to_string_lossy()
-                .into_owned();
+            // THE SYSTEM SET FOR THE NEXT BOOT, when one waits; else THE
+            // LINK'S TARGET, which is the running system's store path (a
+            // link to a link is followed once more, never further).
+            let current = match of.staged {
+                Some(staged) => staged.to_owned(),
+                None => std::fs::read_link(&places.current_system)
+                    .map_err(|_| Why::StoreFailed)?
+                    .to_string_lossy()
+                    .into_owned(),
+            };
             if !crate::system::is_store_path(&current) {
                 return Err(Why::StoreFailed);
             }
@@ -567,10 +639,24 @@ mod tests {
         );
         std::fs::write(root.join("public.json"), public).unwrap();
         std::fs::write(root.join("private.json"), private).unwrap();
+        // A SYSTEM SET FOR THE NEXT BOOT: its own closure — the shell
+        // again, and a newer system and `/etc`.
+        let staged = s("nixos-system-noctua-26.11");
+        let staged_etc = s("etc-26.11");
+        std::fs::write(
+            root.join("staged.json"),
+            format!(
+                r#"{{"{staged}": {{"ca": null, "references": ["{staged_etc}", "{shell}"], "narSize": 2}},
+                    "{staged_etc}": {{"ca": null, "references": [], "narSize": 3}},
+                    "{shell}": {{"ca": null, "references": ["{glibc}"], "narSize": 10}},
+                    "{glibc}": {{"ca": null, "references": [], "narSize": 5}}}}"#
+            ),
+        )
+        .unwrap();
         script(
             &root.join("bin/nix"),
             &format!(
-                "echo \"nix $*\" >>{calls}\ncase \"$*\" in *{system}*) cat {r}/private.json ;; *) cat {r}/public.json ;; esac\n",
+                "echo \"nix $*\" >>{calls}\ncase \"$*\" in *{system}*) cat {r}/private.json ;; *{staged}*) cat {r}/staged.json ;; *) cat {r}/public.json ;; esac\n",
                 calls = calls.display(),
                 r = root.display()
             ),
@@ -598,6 +684,7 @@ mod tests {
             system: root.join("binary-cache.json"),
             machine_state: root.join("state.json"),
             current_system: root.join("current-system"),
+            root: root.clone(),
             keys: Some(keys),
             record: Some(root.join("state").join(crate::record::FILE)),
         };
@@ -777,6 +864,77 @@ mod tests {
         assert!(
             !pushed.contains(&s("glibc-2.40-66")),
             "cache.nixos.org serves it"
+        );
+        let _ = std::fs::remove_dir_all(&b.root);
+    }
+
+    /// FAILS IF: after an apply that set a system for the next boot — the
+    /// update's, with no boot trial or with one —, the push says nothing is
+    /// new, carries the RUNNING system's closure, or takes the cache, its
+    /// visibility or its roots from the running `/etc` rather than from the
+    /// system that waits; or does not follow that apply once.
+    #[test]
+    fn a_system_set_for_the_next_boot_is_the_one_pushed() {
+        // THE RUNNING `/etc` says a public cache; the system set for the next
+        // boot, a private one.
+        let b = bench("staged", "public", None);
+        b.token();
+        b.let_all();
+        let staged = s("nixos-system-noctua-26.11");
+        let own = b.places.system_file_of(&staged);
+        std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+        std::fs::write(
+            &own,
+            format!(
+                r#"{{"format": 1, "cache": {{"name": "someone", "public-key": "{KEY}", "visibility": "private"}},
+                   "public-roots": [], "unfree": [], "android-unfree": false}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            &b.places.machine_state,
+            format!(
+                r#"{{"format": 1, "last-good": null, "trial": null, "hold": null,
+                   "last-apply": {{"at": "{}", "result": "staged", "toplevel": "{staged}"}}}}"#,
+                Stamp::from_unix_s(50)
+            ),
+        )
+        .unwrap();
+        let (r, _) = b.run(false, 100);
+        assert_eq!(
+            r.outcome,
+            Outcome::Pushed {
+                paths: 3,
+                bytes: 15
+            },
+            "{}",
+            b.calls()
+        );
+        assert_eq!(r.visibility, Some(Visibility::Private));
+        let pushed: BTreeSet<String> = b.pushed().into_iter().collect();
+        assert!(pushed.contains(&staged), "{pushed:?}");
+        assert!(pushed.contains(&s("etc-26.11")), "{pushed:?}");
+        assert!(
+            !pushed.contains(&s("nixos-system-noctua-26.05")),
+            "the running system went: {pushed:?}"
+        );
+        assert_eq!(
+            crate::record::read_at(b.places.record.as_ref().unwrap()).followed(),
+            Some(&Stamp::from_unix_s(50))
+        );
+        let (again, _) = b.run(false, 200);
+        assert_eq!(
+            again.outcome,
+            Outcome::Refused {
+                why: Why::NothingNew
+            }
+        );
+        // A SYSTEM THAT NAMES NO CACHE OF ITS OWN is no cache, whatever the
+        // running `/etc` says.
+        std::fs::remove_file(&own).unwrap();
+        assert_eq!(
+            b.run(true, 300).0.outcome,
+            Outcome::Refused { why: Why::NoCache }
         );
         let _ = std::fs::remove_dir_all(&b.root);
     }

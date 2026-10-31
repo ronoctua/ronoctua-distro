@@ -4560,7 +4560,10 @@ fn installed_sheet(b: &mut Builder<'_>, i: &Installed, r: &Readings) {
     );
     // WHAT IS LEAVING is no longer declared by anybody: its source alone,
     // and why it is still here is said below.
-    let leaving = i.trouble == Some(Refusal::LeavesAtNextApply);
+    let leaving = matches!(
+        i.trouble,
+        Some(Refusal::LeavesAtNextApply | Refusal::LeavesAtNextRestart)
+    );
     b.fact_at(
         b.texts.t(key::SOFTWARE_ROW_SOURCE),
         if leaving {
@@ -4862,6 +4865,11 @@ fn declared_level(b: &mut Builder<'_>, r: &Readings) {
     if !d.reported {
         b.note(key::SOFTWARE_DECLARED_NOT_REPORTED);
     }
+    // A SYSTEM SET FOR THE NEXT BOOT: what it brings in or takes away is
+    // here from the restart, not at the next update.
+    if d.next_restart {
+        b.note(key::SOFTWARE_DECLARED_NOTE_RESTART);
+    }
     if d.declared.is_empty() {
         let t = b.texts.t(key::SOFTWARE_DECLARED_NONE);
         b.said(t, tokens::color::TEXT_DIM);
@@ -5076,6 +5084,7 @@ fn declaration_sheet(b: &mut Builder<'_>, r: &Readings, id: &str) {
             }
         }
         Standing::Waiting => b.note(key::SOFTWARE_DECLARED_NOTE_WAITING),
+        Standing::NextRestart => b.note(key::SOFTWARE_DECLARED_NOTE_NEXT_RESTART),
         // A PART OF THE PERSON'S ON ITS WAY: the parts' page says how it
         // stands; one that failed may have a newer pin, or a replacement.
         Standing::Arriving { failure } => {
@@ -5268,10 +5277,13 @@ fn distro_rows(b: &mut Builder<'_>, r: &Readings, id: &str) {
             // the next apply brings it back.
             let returning =
                 d.app.declined_here && declined.is_none_or(|row| !row.declining.applies_to(host));
-            b.note(if returning {
-                key::SOFTWARE_DECLARED_RETURNING
-            } else {
-                key::SOFTWARE_DECLARED_NOT_ON_THIS_MACHINE
+            // BACK AT THE NEXT RESTART when the system that waits for it has
+            // it already.
+            let at_restart = decls.is_some_and(|x| x.back_at_restart.iter().any(|b| b == id));
+            b.note(match (returning, at_restart) {
+                (true, true) => key::SOFTWARE_DECLARED_RETURNING_RESTART,
+                (true, false) => key::SOFTWARE_DECLARED_RETURNING,
+                (false, _) => key::SOFTWARE_DECLARED_NOT_ON_THIS_MACHINE,
             });
         }
         if d.app.essential.is_some() {

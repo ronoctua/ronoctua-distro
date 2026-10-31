@@ -501,8 +501,13 @@ impl Footer {
     }
 
     /// The keys the minibuffer's line teaches while the view is shown —
-    /// the view's own line of `Footer::view_hint`.
+    /// the view's own line of `Footer::view_hint`. None with "hide shortcuts"
+    /// on: the kiosk is a program, and gives its keys up to the line the way
+    /// a window does.
     pub(super) fn kiosk_hint(&self) -> Option<Vec<crate::chrome::Piece>> {
+        if self.modeline.hide_shortcuts() {
+            return None;
+        }
         // THE KIOSK'S VIEW: the grid names the tab it acts on, the
         // zoom says where it is, and a list teaches its keys.
         let texts = &self.texts;

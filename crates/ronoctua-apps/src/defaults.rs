@@ -5,12 +5,17 @@
 //!
 //! The catalogue answers "who DECLARES this type", and for most types that is
 //! the whole question. It is not for a type that descends from another: a
-//! `.step` is `model/step`, which the database makes a child of `text/plain`,
-//! and OrcaSlicer's entry does not name `model/step` — so the file went to
-//! the first editor that declares `text/plain`. The distribution's answer is
-//! a default (`nix/modules/workshop.nix` writes `/etc/xdg/mimeapps.list`), and
-//! a person's answer is the same file under their own `~/.config`. Neither
-//! was read.
+//! `.step` was `model/step`, which the database then made a child of
+//! `text/plain` (shared-mime-info 2.4, where the type was ours; upstream's own
+//! since 2.5.1 has no parent), and OrcaSlicer's entry did not name
+//! `model/step` — so the file went to the first editor that declares
+//! `text/plain`. A `.obj` (`model/obj`) is a `text/plain` still, and reaches
+//! OrcaSlicer by its declaration only because the opener reads the alias its
+//! entry names it by (`application/prs.wavefront-obj`) as the type. The
+//! distribution's answer is a default for every model type OrcaSlicer opens
+//! (`nix/modules/workshop.nix` writes `/etc/xdg/mimeapps.list`), and a
+//! person's answer is the same file under their own `~/.config`. Neither was
+//! read.
 //!
 //! # The order is the specification's, and it is the preference
 //!
@@ -31,7 +36,7 @@
 //!
 //! # Only the type itself, never its parents
 //!
-//! A default for `text/plain` does not answer `model/step`: that inheritance
+//! A default for `text/plain` does not answer `model/obj`: that inheritance
 //! is exactly how a model reached an editor. The parents are the catalogue's
 //! business (`MimeType=`), after the defaults had nothing to say.
 //!

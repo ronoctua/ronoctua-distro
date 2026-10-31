@@ -143,6 +143,7 @@ software-refusal-tool-failed = The program doing it failed; its own words are in
 software-refusal-no-update-info = It says nothing about updates; look on its site.
 software-refusal-cannot-try = Only a Nix package runs without being installed, and only one that has something to run.
 software-refusal-session-down = Android is not running.
+software-refusal-not-inside-android = That app is no longer inside Android: it was taken out there, and an update does not put it back.
 software-refusal-will-not-parse = software.json will not parse, and writing would replace it.
 software-refusal-wrong-user = That runs as a different user from this one.
 notif-software-installed-summary = { $app } is installed
@@ -214,6 +215,7 @@ software-declared-standing-applied = on this computer
 software-declared-standing-arriving = on its way to this computer
 software-declared-standing-not-arrived = did not arrive yet: the parts' page says why
 software-declared-standing-waiting = arrives with the next update
+software-declared-standing-next-restart = arrives at the next restart
 software-declared-standing-elsewhere = on your other computers only
 software-declared-skipped-attr-missing = left out: this computer's packages no longer have that name
 software-declared-skipped-not-a-package = left out: that name is not a program here
@@ -232,7 +234,9 @@ software-declared-decline-essential = kept: the distro needs it
 software-declared-decline-unknown = this distro no longer knows it
 software-declared-decline-elsewhere = declined on { $machines }
 software-declared-decline-waiting = leaves with the next update
+software-declared-decline-next-restart = leaves at the next restart
 software-declared-refusal-leaves-at-next-apply = Leaves at this computer's next update: your declaration no longer has it, and the system here still does.
+software-declared-refusal-leaves-at-next-restart = Leaves at this computer's next restart: your declaration no longer has it, the system here still does, and the new one that waits for the restart does not.
 software-declared-refusal-declined-elsewhere = It is declined on your other computers only, so this one has nothing to bring back: each of them brings it back, or all of them at once from its page.
 
 ## THE SECURITY CENTRE'S KEYS, and the passwordless window's count.

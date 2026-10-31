@@ -686,7 +686,7 @@ pub fn read(path: &Path, mime: &str) -> Result<Read, Refusal> {
         "model/gltf+json" => gltf::read(&bytes, path),
         "model/gltf-binary" => gltf::read_binary(&bytes),
         "model/vnd.collada+xml" => dae::read(&bytes),
-        "model/x-amf" => amf::read(&bytes),
+        "application/x-amf" => amf::read(&bytes),
         "model/step" => step::read(&bytes),
         "model/iges" => iges::read(&bytes),
         // Not a shape at all. The host asks `pixels::turns` before reaching

@@ -6,9 +6,10 @@
 # the answer to "which rustc is this" depends on which shell was opened. On this
 # distro the answer is the generation: a compiler is part of the declarative
 # substrate, pinned with the rest of it and rolled forward on the unstable
-# channel rather than installed per shell. (The app layer is the exception —
-# the coding agents below self-update under `$HOME` — but a toolchain is not an
-# app.) `~/.shellrc.local` can still override it on the day a nightly is
+# channel rather than installed per shell. (The coding agents below are store
+# builds too: their native self-updater was reverted on 2026-10-30, since it
+# fetches a generic-linux binary NixOS cannot run without nix-ld.)
+# `~/.shellrc.local` can still override it on the day a nightly is
 # genuinely needed, and that override is then visible in one file instead of
 # implied by a directory's existence.
 #
@@ -295,15 +296,17 @@ in
         group = "dev-android";
       };
 
-      # THE CODING AGENTS — the app layer's fast-movers. Under the new model
-      # Claude Code and Codex keep themselves current through their own native
-      # updater, under `$HOME` and outside the generation, so they always list
-      # the model of the day without waiting on a rebuild. The flake only seeds
-      # the first binary (Claude Code from the pinned prebuilt, Codex from
-      # source); their state, like their updates, is the person's, under
-      # `$HOME`. Claude Code is NOT FREE, and so a part
-      # (`nix/modules/parts.nix`): out of the system's closure, it arrives after
-      # the installation.
+      # THE CODING AGENTS — the app layer's fast-moving apps, kept current BY
+      # THE STORE. Their native updater under `$HOME` was reverted (owner
+      # amendment 2026-10-30): it downloads a generic-linux binary that NixOS
+      # cannot run without nix-ld. So the store binary is the one that runs,
+      # and its version rises when its pin does: Claude Code is the pinned
+      # prebuilt of `nix/claude-code.nix` (patched, `DISABLE_AUTOUPDATER`),
+      # Codex is nixpkgs' own `pkgs.codex`, which moves as the system rolls on
+      # `nixos-unstable`. Only their state is the person's, under `$HOME`.
+      # Claude Code is NOT FREE, and so a part (`nix/modules/parts.nix`): out
+      # of the system's closure, it arrives after the installation, and the
+      # footer launches it at its stable path (`nix/modules/agents.nix`).
       claude-code = {
         package = partsPkgs.unfree.claude-code;
         part = true;

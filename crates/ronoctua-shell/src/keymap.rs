@@ -1305,6 +1305,12 @@ mod tests {
             "footer-settings-down",
             "footer-settings-enter",
             "footer-hours",
+            // THE "NO HEADER" MODE'S TWO SWITCHES (`footer_settings_commands`)
+            // and the focused window's shortcuts by name — `LEADER Alt`
+            // without the tap (`run_with`, `open_window_shortcuts`).
+            "footer-hide-header",
+            "footer-hide-shortcuts",
+            "window-shortcuts",
             "icons-open",
             "icons-window",
             "icons-nerd-fonts",

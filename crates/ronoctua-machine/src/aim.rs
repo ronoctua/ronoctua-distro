@@ -1,6 +1,6 @@
-//! `update-distro`: the update's `flake-update` step — the distro input
-//! moved forward, and a machine the installer AIMED put back on the
-//! release first.
+//! `update-distro`: the update's `flake-update` step — the distro and
+//! `nixpkgs` inputs moved forward, and a machine the installer AIMED put
+//! back on the release first.
 //!
 //! # Aimed
 //!
@@ -10,7 +10,7 @@
 //! `nix flake update` of a `path:` input locks the same path again: the
 //! machine would never follow the release. So the first update writes the
 //! template's address back — read from that very tree's
-//! `templates/machine/flake.nix`, never spelled here — and moves the input;
+//! `templates/machine/flake.nix`, never spelled here — and moves the inputs;
 //! when the move does not go (no network), `flake.nix` is put back as it
 //! was, for a `flake.nix` that disagrees with its lock is refused by every
 //! evaluation that may not move the lock.
@@ -65,7 +65,7 @@ pub(crate) fn update_distro(m: &Machine) -> Result<String, Refusal> {
     let dir = &m.places.dir;
     let nix = system::needed(m.system.nix.as_ref(), system::NIX)?;
     if disk::read_state(&m.places)?.hold.is_some() {
-        say(6, "held: the distro input stays where it is");
+        say(6, "held: the distro and nixpkgs inputs stay where they are");
         return Ok("held".to_owned());
     }
     let file = dir.join("flake.nix");

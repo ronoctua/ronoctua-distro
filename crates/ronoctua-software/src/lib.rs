@@ -98,6 +98,11 @@ pub mod net;
 
 pub use order::Order;
 pub use refusal::Refusal;
+/// Whether a system waits for the next restart — the machine's own answer
+/// (`ronoctua-machine`, from the system profile and the system that runs),
+/// re-exported so the shell, which reads the machine through this crate,
+/// asks it the same way the declaration's page does.
+pub use ronoctua_machine::{NextBoot, next_boot};
 /// The person's declared data, as its one schema says it — re-exported, so
 /// the screen reads a declaration in the types this crate writes it in.
 pub use ronoctua_person as person;
@@ -338,6 +343,10 @@ pub struct System {
     /// `/nix/var/nix/profiles/ronoctua/parts` — the parts' profiles, where
     /// a declared apk is read from once it arrived ([`crate::parts::file`]).
     pub part_profiles: PathBuf,
+    /// `/` — the root a store path is read under: the system the machine's
+    /// last apply set for the next boot keeps its reports in itself
+    /// ([`crate::declaration::staged_applied`]).
+    pub root: PathBuf,
 }
 
 impl System {
@@ -360,6 +369,7 @@ impl System {
             parts: at(ronoctua_parts::names::RECORDS),
             parts_plan: at(ronoctua_parts::names::PLAN),
             part_profiles: at(ronoctua_parts::names::PARTS_ROOT),
+            root: at("/"),
         }
     }
 
@@ -708,8 +718,10 @@ mod tests {
         assert_eq!(here.reports, PathBuf::from(REPORTS));
         assert_eq!(here.machine, PathBuf::from(ronoctua_machine::STATE_DIR));
         assert_eq!(here.current, PathBuf::from(CURRENT_SYSTEM));
+        assert_eq!(here.root, PathBuf::from("/"));
         let room = System::of_machine(Some(Path::new("/room/sys")));
         assert_eq!(room.reports, PathBuf::from("/room/sys/etc/ronoctua"));
+        assert_eq!(room.root, PathBuf::from("/room/sys"));
         assert_eq!(room.current, PathBuf::from("/room/sys/run/current-system"));
         assert_eq!(
             room.staged(),

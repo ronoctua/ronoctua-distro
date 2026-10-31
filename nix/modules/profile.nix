@@ -172,9 +172,11 @@ in
     # `ronoctua.office.enable = true;` in `host.nix` brings them to a
     # reduced machine.
     office.enable = lib.mkDefault full;
-    # THE CRAFTING APPS, thirteen AppImages (1,97 GiB measured, 2,24 on a
-    # reduced machine, which lacks the FHS environment): the same, and the
-    # same line, `ronoctua.crafts.enable = true;`.
+    # THE CRAFTS GROUP, since 2026-10-30 two AppImages, the ArtCraft Launcher
+    # and SolidCraft (not measured; the thirteen craft images the group
+    # carried before measured 1,97 GiB, 2,24 on a reduced machine, which
+    # lacks the FHS environment): the same, and the same line,
+    # `ronoctua.crafts.enable = true;`.
     crafts.enable = lib.mkDefault full;
 
     # THE 2026-10-05 WAVE: one region per package, after its anchor.

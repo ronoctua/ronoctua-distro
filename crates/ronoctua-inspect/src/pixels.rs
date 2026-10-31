@@ -176,23 +176,25 @@ pub struct Row {
 /// types only and never walks the subclass DAG.
 pub const TABLE: [Row; 9] = [
     Row {
-        // ELEVEN TYPES, AND SIX OF THEM ARE ALREADY IN THE DATABASE: the
+        // ELEVEN TYPES, AND EIGHT OF THEM ARE ALREADY IN THE DATABASE: the
         // pinned shared-mime-info has `model/stl` by its `*.stl` glob,
         // `model/3mf` by `*.3mf` plus a subclass edge to `application/zip`,
-        // and `model/obj`, `model/gltf+json`, `model/gltf-binary` and
-        // `model/iges` by their globs. That zip edge is what makes
+        // and `model/obj`, `model/gltf+json`, `model/gltf-binary`,
+        // `model/iges`, `model/step` and `application/x-amf` (the last two
+        // since 2.5.1) by their globs. That zip edge is what makes
         // `crate::settled` keep the name for a 3MF, which sniffs as a zip
         // because it IS one — the same shape the `.dng` note further down
         // describes.
         //
-        // The other five are invented in `assets/icons/mime-glyphs.nix`,
+        // The other three are invented in `assets/icons/mime-glyphs.nix`,
         // which is the ONLY place a type is invented and which refuses to
         // invent one the database already has.
         //
         // A binary STL has no magic at all (freedesktop's only rule is the
         // word `solid`, which is the ASCII form), so its type comes from the
         // name alone and the sniff correctly says nothing. The same is true of
-        // a `.step`, a `.ply` and a `.dae`.
+        // a `.ply` and a `.dae`. (A `.step` was too, until shared-mime-info
+        // 2.5.1 gave `model/step` the magic `ISO-10303-21;`.)
         //
         // TWO OF THEM HOLD NO TRIANGLE — `model/step` and `model/iges` are
         // boundary representations and are MESHED here — see `mesh::brep`.
@@ -209,7 +211,7 @@ pub const TABLE: [Row; 9] = [
             "model/gltf+json",
             "model/gltf-binary",
             "model/vnd.collada+xml",
-            "model/x-amf",
+            "application/x-amf",
             "model/step",
             "model/iges",
         ],

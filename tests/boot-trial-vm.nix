@@ -31,7 +31,13 @@
 #      person at the menu: systemd-boot restarts (the `reboot-on-error` the
 #      trial posts in `loader.conf`), GRUB boots its `fallback` in the same
 #      boot — and either way the last good system is the one boot that
-#      follows.
+#      follows;
+#   7. the UPDATE's apply (`apply --next-boot`, 2026-10-30) of a system that
+#      boots sets it for the next boot and activates nothing — a unit whose
+#      definition it changes keeps running as it was, and the system that
+#      runs stays — with a real trial armed though it boots like the last
+#      good one; the restart boots it, and the bless makes it the last good
+#      one.
 #
 # The apply's BUILD is a stand-in (`RONOCTUA_NIX` names a `nix` that answers
 # a build with the broken system, built here): building a NixOS system inside
@@ -151,7 +157,7 @@ pkgs.testers.runNixOSTest {
   name = "ronoctua-boot-trial" + lib.optionalString (firmware == "bios") "-bios";
 
   nodes.machine =
-    { config, ... }:
+    { config, extendModules, ... }:
     {
       imports = [
         ../nix/modules/machine.nix
@@ -165,6 +171,16 @@ pkgs.testers.runNixOSTest {
         default = "noctua";
       };
 
+      # A SYSTEM THAT BOOTS, set for the next boot by the update's apply:
+      # this machine with ONE unit's definition changed (`staged-witness`),
+      # which a live switch would restart and a boot-only one leaves alone.
+      # Its kernel, initrd and parameters are this machine's — a clean switch
+      # would bless it at once, and a staged apply must not.
+      options.test.staged = lib.mkOption {
+        type = lib.types.package;
+        internal = true;
+      };
+
       config = {
         ronoctua.machine.tool = machineTool;
         # A few seconds after the default target, not a minute: the test
@@ -173,6 +189,22 @@ pkgs.testers.runNixOSTest {
         ronoctua.machine.trialBootSeconds = 30;
 
         ronoctua.firmware = firmware;
+
+        # THE WITNESS: a unit that runs once and stays, saying which system
+        # defined it.
+        systemd.services.staged-witness = {
+          wantedBy = [ "multi-user.target" ];
+          environment.WITNESS = lib.mkDefault "good";
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            ExecStart = "${pkgs.coreutils}/bin/true";
+          };
+        };
+        test.staged =
+          (extendModules {
+            modules = [ { systemd.services.staged-witness.environment.WITNESS = "staged"; } ];
+          }).config.system.build.toplevel;
         # `grub-editenv`, to read GRUB's block from the test.
         environment.systemPackages = lib.optional (firmware == "bios") pkgs.grub2;
         virtualisation = {
@@ -184,6 +216,7 @@ pkgs.testers.runNixOSTest {
             (broken config.system.build.toplevel)
             (stuck config.system.build.toplevel)
             (unloadable config.system.build.toplevel)
+            config.test.staged
             (fakeNix config.nix.package)
           ];
         };
@@ -210,6 +243,7 @@ pkgs.testers.runNixOSTest {
       BROKEN = "${broken good}"
       STUCK = "${stuck good}"
       UNLOADABLE = "${unloadable good}"
+      STAGED = "${nodes.machine.test.staged}"
       VENDOR = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
       GRUB = "${firmware}" == "bios"
       # What GRUB puts on the command line of a boot that tries.
@@ -289,9 +323,17 @@ pkgs.testers.runNixOSTest {
           return len(json.loads(machine.succeed("journalctl --list-boots -o json")))
 
 
-      def apply(builds):
+      def apply(builds, *words):
           return machine.execute(
-              f"RONOCTUA_NIX=${fake}/bin/nix RONOCTUA_TEST_BUILDS={builds} ronoctua-machine apply 2>&1"
+              f"RONOCTUA_NIX=${fake}/bin/nix RONOCTUA_TEST_BUILDS={builds} ronoctua-machine apply {' '.join(words)} 2>&1"
+          )
+
+
+      def witness():
+          """The witness unit's run and the system that defined it."""
+          return (
+              machine.succeed("systemctl show -p InvocationID --value staged-witness.service").strip(),
+              machine.succeed("systemctl show -p Environment --value staged-witness.service").strip(),
           )
 
 
@@ -437,5 +479,52 @@ pkgs.testers.runNixOSTest {
           assert oneshot() is None and default() is None
           if not GRUB:
               assert not restarts()
+
+      with subtest("the update's apply sets a system for the next boot, and the restart blesses it"):
+          before = witness()
+          # NixOS puts PATH and the locale beside it: the witness is one word.
+          assert "WITNESS=good" in before[1].split(), before
+          status, out = apply(STAGED, "--next-boot")
+          print(out)
+          assert status == 0, out
+          assert out.strip().endswith("set for the next boot; trial pending"), out
+          # NOTHING WAS ACTIVATED: the system that runs, and the unit whose
+          # definition changed, are as they were.
+          assert machine.succeed("readlink -f /run/current-system").strip() == good
+          assert witness() == before, (before, witness())
+          assert machine.succeed("readlink -f /nix/var/nix/profiles/system").strip() == STAGED
+          s = state()
+          assert s["last-apply"]["result"] == "staged", s
+          assert s["last-apply"]["toplevel"] == STAGED, s
+          # A REAL TRIAL, though it boots like the last good one.
+          assert s["trial"] == {"toplevel": STAGED, "outcome": "pending"}, s
+          assert f"init={STAGED}/init" in boots(oneshot()), oneshot()
+          assert f"init={good}/init" in boots(default()), default()
+          # A bless in this boot judges nothing.
+          machine.succeed("systemctl restart ronoctua-boot-bless.service")
+          assert state()["trial"]["outcome"] == "pending"
+          # A HIBERNATION DOES NOT SPEND THE ONE-SHOT: systemd-sleep's hook
+          # puts it aside before (the resume boots the default, whose kernel
+          # runs) and back after the resume; a plain suspend touches nothing.
+          # Run here as systemd-sleep runs it, with no hibernation: this VM
+          # has no swap to resume from.
+          hook = "/etc/systemd/system-sleep/ronoctua-boot-trial"
+          once = oneshot()
+          machine.succeed(f"{hook} pre suspend")
+          assert oneshot() == once, oneshot()
+          machine.succeed(f"{hook} pre hibernate")
+          assert oneshot() is None, oneshot()
+          assert f"init={good}/init" in boots(default()), default()
+          machine.succeed(f"{hook} post hibernate")
+          assert oneshot() == once, oneshot()
+          machine.reboot()
+          machine.wait_for_unit("multi-user.target")
+          assert machine.succeed("readlink -f /run/booted-system").strip() == STAGED
+          machine.wait_for_unit("ronoctua-boot-bless.service")
+          s = state()
+          assert s["trial"] == {"toplevel": STAGED, "outcome": "good"}, s
+          assert s["last-good"]["toplevel"] == STAGED, s
+          assert "WITNESS=staged" in witness()[1].split(), witness()
+          assert oneshot() is None and default() is None
     '';
 }

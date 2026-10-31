@@ -123,8 +123,9 @@ let
           printf 'moved\n' >> "$FIXTURE_MACHINE/flake.lock"
         fi
         ;;
-      # A REHEARSAL GOES THROUGH EVERY REFUSAL THE RUN DOES.
-      "ronoctua-machine apply" | "ronoctua-machine apply --rehearse")
+      # A REHEARSAL GOES THROUGH EVERY REFUSAL THE RUN DOES — and the run
+      # is `apply --next-boot` (2026-10-30), whatever its words.
+      "ronoctua-machine apply" | "ronoctua-machine apply "*)
         if [ -n "''${FIXTURE_DID_NOT_BOOT:-}" ]; then
           echo "a trial of this system did not start" >&2
           echo "refused did-not-boot"
@@ -366,6 +367,8 @@ in
             # update-distro`, which moves `DISTRO_INPUT`), and the distro's
             # input as the machine template names it.
             moves = (stepThat "moves the inputs" (s: s.does == "move-inputs")).run;
+            # AND WHAT THE REBUILD RUNS: `apply --next-boot` (2026-10-30).
+            applies = (stepThat "applies the configuration" (s: s.does == "apply-configuration")).run;
             templateInputs = builtins.attrNames (import ../../../../templates/machine/flake.nix).inputs;
           }
         );
@@ -462,6 +465,7 @@ in
         # side, the update would move an input no machine flake has.
         moves = facts["moves"]
         distro = re.search(r'pub const DISTRO_INPUT: &str = "([^"]+)";', crate)
+        nixpkgs = re.search(r'pub const NIXPKGS_INPUT: &str = "([^"]+)";', crate)
         argv = uncommented((root / "crates/ronoctua-machine/src/argv.rs").read_text())
         floor(len(argv), 2000, "characters of ronoctua-machine's argv.rs")
         body = re.search(r'pub fn update_distro\b.*?\n\}', argv, re.S)
@@ -473,15 +477,26 @@ in
             wrong.append(f"the machine template's inputs are {facts['templateInputs']}, not `{distro.group(1)}` and `nixpkgs`")
         elif not body:
             wrong.append("`update_distro` went away from ronoctua-machine's argv.rs")
-        elif "crate::DISTRO_INPUT" not in body.group(0) or '"nixpkgs"' not in body.group(0):
+        elif not nixpkgs or nixpkgs.group(1) != "nixpkgs":
+            wrong.append("`NIXPKGS_INPUT` went away from ronoctua-machine, or names another input than `nixpkgs`")
+        elif "crate::DISTRO_INPUT" not in body.group(0) or "crate::NIXPKGS_INPUT" not in body.group(0):
             wrong.append("`update_distro` no longer moves both the distro input and `nixpkgs`")
+
+        # AND THE REBUILD SETS ITS SYSTEM FOR THE NEXT BOOT (2026-10-30): the
+        # words the step runs are words the machine's CLI takes, read back
+        # by `Verb::parse` as the next boot's.
+        parse = must(body_of(crate, "parse"), "`Verb::parse`")
+        if facts["applies"] != ["apply", "--next-boot"]:
+            wrong.append(f"the rebuild runs {facts['applies']}, not `apply --next-boot`")
+        elif '["apply", "--next-boot"] => Some(Self::Apply' not in parse or "Applying::NextBoot" not in parse:
+            wrong.append("ronoctua-machine's `Verb::parse` does not read `apply --next-boot` as the next boot's apply")
 
         if wrong:
             print("ERROR: a name of the update does not agree with itself.", file=sys.stderr)
             for w in wrong:
                 print("       " + w, file=sys.stderr)
             raise SystemExit(1)
-        print("OK: the four units are the manifest's, the window reads where both halves write, and the distro's input and nixpkgs are the template's two, both moved by update-distro")
+        print("OK: the four units are the manifest's, the window reads where both halves write, the distro's input and nixpkgs are the template's two, both moved by update-distro, and the rebuild is the CLI's `apply --next-boot`")
         END
       '';
 
@@ -1255,6 +1270,10 @@ in
           ("a part that stops the update", changed(plans[0], **{"on-failure": "stop"}), "`realize-parts` stops the update"),
           ("a collection before the plan of the parts", moved(declared, reclaims[0], plans[0]), "`reclaim-space` before `realize-parts`"),
           ("two plans of the parts", declared[: plans[0] + 1] + [dict(declared[plans[0]], id="parts-plan-again")] + declared[plans[0] + 1 :], "`realize-parts` steps and there has to be exactly 1"),
+          # FOR THE NEXT BOOT (2026-10-30): the rebuild activates nothing, and
+          # the plan keeps the parts of the system that waits.
+          ("a rebuild that activates under the session", changed(applies[0], run=[w for w in declared[applies[0]]["run"] if w != "--next-boot"]), "`apply-configuration` activates now"),
+          ("a plan of the parts that forgets the next boot", changed(plans[0], run=[w for w in declared[plans[0]]["run"] if w != "--next"]), "`realize-parts` without `--next`"),
       ]
 
       clean = generate(declared)

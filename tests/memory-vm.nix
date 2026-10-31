@@ -101,18 +101,41 @@ pkgs.testers.runNixOSTest {
             timeout=60,
         )
 
-        w, h, x, y = compositor_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        # THE WHOLE WINDOW, by the geometry the compositor reports — cropping by an
-        # assumed position would be assuming layout, which invariant 4 forbids.
-        machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
-            "-colorspace gray -negate -resize 200% /tmp/panel.png"
-        )
-        read_back = machine.succeed(
-            "${pkgs.tesseract}/bin/tesseract /tmp/panel.png stdout --psm 6 2>/dev/null"
-        ).strip()
-        print(f"OCR: {read_back!r}")
+        # THE PANEL'S OWN RECTANGLE, read from the compositor's tree — cropping
+        # by an assumed position would be assuming layout, which invariant 4
+        # forbids. Not the whole OUTPUT, which is what this crop used to be:
+        # the panel is a window inside a wider output, so much of that crop
+        # was empty desk, and `tesseract --psm 6`, which wants one uniform
+        # block of text, read nothing at all from it. The argument is in the
+        # prelude, above `window_box`.
+        w, h, x, y = window_box(sock, "br.ronoctua.memory")
+
+        # READ UNTIL BOTH ARE THERE, at most fifteen times one second apart:
+        # the first sample may not be on screen yet on a loaded machine, and
+        # that must not change the verdict.
+        read_back = ""
+        for _ in range(15):
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
+                "-colorspace gray -negate -resize 200% /tmp/panel.png"
+            )
+            # DIAGNOSIS BEFORE THE OCR, the shape `modeline-vm` uses: `cores=1`
+            # says "uniform image, nothing drawn", which separates a wrong crop
+            # from an absent drawing — and from a tesseract that drifted on a
+            # rolling nixpkgs — in one run.
+            print("the memory panel: " + machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/panel.png "
+                "-format 'cores=%k mean=%[fx:mean]' info:"
+            ))
+            read_back = machine.succeed(
+                "${pkgs.tesseract}/bin/tesseract /tmp/panel.png stdout --psm 6 2>/dev/null"
+            ).strip()
+            print(f"OCR: {read_back!r}")
+            low = read_back.lower()
+            if "ram" in low and ("gib" in low or "mib" in low):
+                break
+            machine.sleep(1)
 
         # The key that came out translated…
         assert "ram" in read_back.lower(), (

@@ -145,6 +145,31 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
+### 0.0000027. O interruptor de build dá root, sem senha, a quem roda como a pessoa · pequeno a médio, e é uma decisão do dono
+
+A regra polkit do `ronoctua-update-apply.service` (`nix/modules/machine.nix`) lista também as duas
+unidades do interruptor de build e devolve `YES` à pessoa, sem senha. O
+`ronoctua-build-switch-reference` constrói e ativa, como root, a ÁRVORE DE TRABALHO do checkout que o
+flake da máquina nomeia — e essa árvore é da pessoa. Numa máquina cujo flake nomeia um checkout
+local, qualquer processo que roda como ela (um navegador comprometido, um agente) edita a árvore e dá
+`systemctl start` na unidade: é root sem senha. Isso contraria a porta do sudo (código que alcança
+root passa pela senha, como o `module.nix` de um módulo do brain, L06), e nenhum invariante aprova a
+passagem. O `update-apply-rule-is-narrow` a diz e a segura numa unidade só (só o `-reference` leva o
+`RONOCTUA_MACHINE_OVERRIDE_DIR`), mas não a fecha.
+
+- **O gesto pela barra do sudo**: o `-reference` sai da regra `YES` e o glifo e `LEADER / b` o
+  iniciam por um verbo da porta do sudo (`sudo_bar.rs` → `ronoctua_security::authority`), que pede a
+  senha, a chave ou o dedo como os outros gestos de root. O `-own` pode ficar na regra: aplica a
+  revisão que o lock de root fixa.
+- **Ou uma exceção escrita**: o dono aprova a passagem no `AGENTS.md`, com a razão (uma máquina de
+  desenvolvimento) e o limite (só onde o flake nomeia um checkout local), e o check a cita.
+- **O `-own` lê o repositório da pessoa como git de root** (`safe.directory` só para esse checkout).
+  Antes de deixá-lo na regra, conferir que o fetcher do Nix não executa nada da configuração do
+  repositório (`core.fsmonitor`, hooks, filtros) ao ler a revisão travada.
+- acabou quando: nenhuma regra `YES` nomeia o `ronoctua-build-switch-reference` e o glifo o inicia
+  pela barra do sudo, ou o `AGENTS.md` traz a exceção aprovada pelo dono e o
+  `update-apply-rule-is-narrow` a cita
+
 ### 0.0000028. A folga do disco — o que nem os testes nem as VMs escritas alcançam · pequeno cada
 
 A folga (`docs/ARCHITECTURE.md`, "Quando o disco aperta", e o `why.md` do módulo `disk-space`) foi
@@ -796,6 +821,19 @@ de `nix/graphics-host.nix`. O caminho gráfico da distro instalada é mais curto
 
 - acabou quando: o mesmo comando roda num NixOS instalado e os números entram no `ARCHITECTURE.md`
 
+### 3.1. Os testes de VM dão duração em número ao driver do unstable · pequeno, mas largo
+
+O driver de teste do `nixos-unstable` só aceita `int`/`float` como segundos por compatibilidade, e
+avisa a cada chamada (`passing a bare int/float as a duration is deprecated`): `timeout=30`,
+`machine.sleep(5)`, `delay=` no `send_key`… São centenas de linhas nos `tests/*-vm.nix`, nos `vm.nix`
+dos módulos do brain e no `nix/shot*.nix` (um `git grep -E 'timeout=[0-9]|\.sleep\([0-9]|delay=[0-9]'`
+acha ~540). Hoje é só aviso; quando o nixpkgs tirar o número cru, cada teste de VM cai num
+`TypeError` no meio da corrida, ou na checagem de tipos antes de subir a VM, como o `copy_from_vm`
+caiu.
+
+- acabou quando: toda duração dada ao driver é um `datetime.timedelta`, e o log de um teste de VM não
+  tem mais o aviso
+
 ### 0.0000029b. O alívio do disco confia na conta do Nix · pequeno
 
 O módulo `disk-space` faz uma coleta só, `nix-store --gc --max-freed`, e não mede o disco de novo
@@ -857,8 +895,19 @@ A B1 tirou a prévia e os fatos do `files::View` sem mudar nada na tela (`inspec
 - **A palavra do systemd sobre uma unidade de gerente delegado que não seja `user@<uid>.service`**
   (um contêiner, um serviço com `Delegate=`) é tomada por folha: numa morte dentro dele, a linha do
   kernel pode casar com ela em vez da unidade de dentro, se esta chegar mais longe no tempo.
+- **O `journal-errors` ligado no meio da sessão não lê o passado.** A passada única do núcleo
+  (`Follower::read_the_past`, no `watch.rs`) só roda na primeira partida do cérebro, sem cursor, e o
+  `Msg::Past` só entrega a quem está ligado nela. O módulo vem desligado (`startsOff`), então numa
+  máquina nova essa partida descarta a parte dele e guarda o cursor; ligado depois, o `reconcile` o
+  chama em `started`, que ele não implementa, e os últimos 200 desta inicialização nunca chegam — a
+  primeira página nasce vazia até o próximo erro. Duas saídas, do dono: (a) o núcleo roda uma
+  passada para o módulo que liga, limitada ao cursor em que o seguidor está (o que vem depois o
+  seguidor já entrega) e, num religar, só desde que ele saiu — o livro (`rules::Book::hear`) não
+  desduplica, e reouvir uma linha conta de novo e devolve à marca um tipo já visto; isso muda também
+  o `security-watch`, que pede passado; ou (b) aceitar que ele ouve dali em diante, como o `why.md`
+  já diz.
 - acabou quando: a foto da faixa tocando existe nas duas línguas, e o dono decidiu os adiamentos na
-  faixa
+  faixa e a passada de um módulo que liga no meio da sessão
 
 ### O seletor de arquivos — o que ficou de fora · pequeno cada
 
@@ -1144,14 +1193,15 @@ frase da página dos pertences, nunca resolvido por ela:
   caminho de um alvo passa a ser o alvo — com uma migração que não quebre o "guardar de novo" nem uma
   máquina na versão anterior.
 
-### Seguir as releases dos Crafting Apps nunca rodou de ponta a ponta · médio
+### Seguir as releases dos AppImages da distro nunca rodou de ponta a ponta · médio
 
 A opção (`distro-apps-follow-releases`) foi provada por partes: o `pins refresh` sobre respostas
 gravadas do GitHub e sem Nix, o juiz nos dois lados pela tabela de casos, o registro, a lista de
 permitidos e o perfil da pessoa em máquinas avaliadas (`distro-apps-follow-when-on-and-newer`), o
 verify do root com um `nix` de mentira. Nenhuma execução juntou o GitHub de verdade, o
-`prefetch-file` com o nome do builder, a assinatura, a aplicação do root dentro da própria atualização, o verify construindo um Craft seguido e o rebuild que o põe
-no perfil da pessoa.
+`prefetch-file` com o nome do builder, a assinatura, a aplicação do root dentro da própria
+atualização, o verify construindo um AppImage seguido (hoje o ArtCraft Launcher ou o SolidCraft) e o
+rebuild que o põe no perfil da pessoa.
 
 - acabou quando: um teste de VM (ou uma atualização numa máquina de teste) segue uma release real,
   o verify a anota e o perfil da pessoa roda a versão seguida; e outra, com o pin seguido estragado,
@@ -1186,16 +1236,19 @@ a modeline a nomeia como o Chrome. Hoje a tabela da distro não tem web app.
   `did-not-boot`, e um ensaio cujo estágio 2 cai no modo de emergência e é reiniciado pelo prazo. Ele
   decide o que o desenho deixou aberto: que o `LoaderEntryDefault` vence o `default` do `loader.conf`
   no systemd-boot pinado, que o `LoaderEntrySelected` chega ao estágio 2 e que o prazo sobrevive ao
-  isolamento do `emergency.target`. (O `migration-keeps-the-machine` e o `rescue-vm` passaram no
-  `.#most`.)
+  isolamento do `emergency.target`. Ganhou o subteste `staged` (a atualização que deixa o sistema
+  para o próximo boot e o ensaio armado de verdade), que também não rodou. (O
+  `migration-keeps-the-machine` e o `rescue-vm` passaram no `.#most`.)
   - pronto quando: ele passa.
-- **O rollback do resgate desarma, e nenhuma VM o roda**: o `disarm` está provado nos testes do
-  crate e a fiação (o rollback chama o `disarm` entre o `--rollback` e o switch) no
-  `update-apply-rule-is-narrow`; o `rescue-vm` não aperta a linha do rollback.
+- **O rollback do resgate desarma, e nenhuma VM o roda**: o verbo `ronoctua-machine rollback` (que
+  escolhe a volta, desarma o ensaio que deixa e troca) está provado nos testes do crate, e a fiação
+  (a unidade do resgate roda esse verbo) no `update-apply-rule-is-narrow`; o `rescue-vm` não aperta
+  a linha do rollback.
   - pronto quando: uma VM arma um ensaio, faz o rollback pelo resgate e sobe no sistema de volta.
 - **Tentar de novo o sistema que falhou**: o `apply` recusa para sempre o toplevel cujo ensaio falhou
-  (ou foi desfeito), até a distro andar. Uma falha de acaso (a luz caiu no boot do ensaio) não tem
-  como ser tentada de novo sem uma revisão nova.
+  (ou foi desfeito), até a distro ou o nixpkgs andarem e o toplevel mudar. Uma falha de acaso (a luz
+  caiu no boot do ensaio) só é tentada de novo quando um dos dois anda — no `nixos-unstable`, em
+  geral na atualização seguinte —, e nunca o mesmo sistema.
   - pronto quando: o dono decidir se existe um gesto para isso (e qual porta o oferece).
 - **Secure Boot (lanzaboote)**: as entradas são UKIs (`type2`), e não foi medido se o `bootctl list`
   mostra o `init=` delas. Até lá uma máquina com lanzaboote cai em `no-trial: not-in-menu` e fica
@@ -1430,8 +1483,8 @@ distro não tem cache binário (decisão do dono, 2026-10-11): o ISO leva sempre
   licença do pacote de topo daquele nome, o predicado da distro e, com o Android, o prefixo
   `android` — o `uade`, que entra por um nixpkgs próprio, já era um caso, e é coberto pela licença.
   Fica de fora o não livre sem nome de topo, fora do predicado e sem `android` no nome: um AppImage
-  ou app Android que a distro registrar (`assets/distro-apps.nix`; hoje, os treze Crafting Apps,
-  todos Apache-2.0) não tem
+  ou app Android que a distro registrar (`assets/distro-apps.nix`; hoje, o ArtCraft Launcher, cuja
+  licença a tabela não registra, e o SolidCraft, MIT/Apache-2.0) não tem
   `meta.license` do nixpkgs, e se for proprietário tem de entrar no predicado de
   `nix/modules/nixpkgs-config.nix`, senão o `.#release` o empurra para um cache público. O
   `release-cache-holds-only-free-builds` lista as portas do repositório por onde um não livre entra.
@@ -1505,8 +1558,8 @@ Cachix nem uma instalação.
   (`Refusal::LeavesAtNextApply`).
   - pronto quando: o fim do trabalho leva que a mudança espera, e a notificação diz isso.
 - **Os programas da distro de fora do Nix (Flatpak, AppImage, web, Android do registro) não passaram
-  pela vista**: a tabela do L04 só tem as AppImages dos Crafting Apps (2026-10-20), e nenhuma foi
-  desenhada na central; o `Declarations::distro_of` acha um Flatpak e um app
+  pela vista**: a tabela do L04 só tem AppImages (o ArtCraft Launcher e o SolidCraft, 2026-10-30), e
+  nenhuma foi desenhada na central; o `Declarations::distro_of` acha um Flatpak e um app
   Android pelo `.desktop` e pela fonte (a instalação é uma só), e uma AppImage ou um web app da
   distro pela entrada do sistema, e nenhum foi desenhado.
   - pronto quando: o registro tiver um, e a foto das duas portas o mostrar recusável.
@@ -1526,6 +1579,71 @@ Cachix nem uma instalação.
   `signer.json`); as outras só o diário.
   - pronto quando: a vista disser a frase de cada razão do aplicador que um `person-stage` pode dar.
 
+### O nixos-unstable e a camada de apps (2026-10-30) — o que ficou · médio
+
+A emenda do dono ao inv. 6 — a máquina rola o `nixos-unstable`, a atualização deixa o sistema para o
+próximo boot, a camada de apps se atualiza fora da geração — está no `docs/ARCHITECTURE.md` ("A
+máquina tem o próprio flake", "A atualização deixa o sistema para o próximo boot"). Ficou:
+
+- **Nenhuma VM prova uma troca ao vivo entre dois nixpkgs.** A troca ao vivo do 26.05 para o
+  `nixos-unstable` reiniciou a máquina do dono em 2026-10-30, e a causa não foi registrada. A
+  atualização não troca mais nada sob a sessão (`apply --next-boot`, e todo `apply` deixa para o
+  próximo boot quando o nixpkgs da pasta andou), mas o `scroll-deploy-vm` só troca entre
+  especializações do mesmo nixpkgs, e o `.#apply-here` (`nix/release.nix`) troca ao vivo: recusa só
+  um ensaio pendente, e não pergunta se um sistema espera sem ensaio nem se o nixpkgs da pasta
+  andou.
+  - acabou quando: a causa está escrita no `ARCHITECTURE.md`, e uma VM troca ao vivo de um lock de
+    nixpkgs para o seguinte com o compositor e a sessão de pé — ou o dono decide que uma troca ao
+    vivo através de um nixpkgs nunca acontece, um check o prende e o `.#apply-here` segue a mesma
+    regra.
+- **A instalação e a migração que travam a partir do lock da distro não rodaram numa VM.** O
+  `installer-offline-vm` e o `migration-keeps-the-machine` (`tests/migration-vm.nix`) aprenderam o
+  `--reference-lock-file` e foram escritos, não rodados; o caminho foi conferido à mão, sem rede, e
+  o `a-new-machine-starts-on-the-tested-nixpkgs` prende a precondição.
+  - acabou quando: os dois passam no `.#gate` com o template de agora.
+- **Os crafts que o ArtCraft Launcher baixa nunca foram vistos numa máquina.** A distro embrulha só
+  o launcher (o FHS do `appimageTools`, sem `$APPIMAGE`); o que ele baixa sob o `$HOME` são binários
+  Linux genéricos, como o do updater do Claude Code que foi revertido. Não se sabe se rodam fora de
+  um ambiente FHS, nem se o lançador que escrevem em `~/.local/share/applications` toma tipos pela
+  ordem dos nomes — sem o `X-Ronoctua-Fallback=false`, o FigCraft voltaria a vir antes do Chrome nas
+  imagens, e o `files-open-by-choice` só lê o `system.path` construído. A licença do launcher não
+  está na tabela (a regra do cache público conta que as AppImages da distro são livres), e o tamanho
+  das duas imagens do grupo não foi medido (`nix/modules/profile.nix`).
+  - acabou quando: uma VM ou a máquina do dono instala um craft pelo launcher, e o `ARCHITECTURE.md`
+    e o `INSTALL.md` dizem o que se vê (se roda, o lançador que escreve, os tipos que toma, o que o
+    "tornar padrão" faz); a licença do launcher está registrada; e o `profile.nix` tem a medida.
+- **O custo semanal de rolar o nixpkgs não foi medido.** Quando o nixpkgs da máquina anda, o stdenv
+  e o toolchain de baixo de todo programa que só a distro compila mudam, e as unidades guardadas
+  (`kept-units`) não poupam quase nada: sem o cache binário da pessoa, a atualização compila de novo
+  quase tudo o que a distro faz. Se isso cabe nos `runawayMinutes = 120` da rotina não se sabe.
+  - acabou quando: uma atualização de verdade depois de um nixpkgs que andou é medida numa máquina
+    de 14 GiB sem cache binário, e o número vai ao `ARCHITECTURE.md` (com o `runawayMinutes` mudado,
+    se não couber).
+- **O nixpkgs do lock da distro não tem quem o mova.** O gate prova a distro com ele, e as máquinas
+  constroem contra um mais novo a cada semana; nem o `.#release` nem o `.#distro-pins` rodam
+  `nix flake update`, e a distância cresce até o dono movê-lo à mão. Uma regressão que sobe numa
+  máquina (o `pkgs.lyrebird` do `nixos-unstable` virou outro programa) só é pega quando o lock da
+  distro chega lá.
+  - acabou quando: o dono decide quem move o nixpkgs da distro e quando (o `.#release` antes do
+    gate, como os pins dos AppImages, ou uma cadência escrita), e o `DEVELOPMENT.md` diz.
+- **Seguir as releases dos AppImages da distro vem desligado, e a emenda fala em segui-las.** O
+  código desliga por padrão (`distro_apps_follow_releases`, `ronoctua_person::options`); o inv. 6
+  diz que o SolidCraft é um AppImage "que segue os releases", o que o pin da distro já faz a cada
+  versão; e um comentário da tabela chegou a dizer que seguir virou o padrão.
+  - acabou quando: o dono decide — ligar por padrão (o código, os testes do `options.rs` e do
+    `follow.rs`, a página) ou deixar como escolha da pessoa — e o inv. 6, a tabela e o
+    `ARCHITECTURE.md` dizem o mesmo.
+- **O nix-flatpak fala com o Flathub sem `Pass`.** A atualização dos Flatpaks na ativação e no timer
+  do nix-flatpak (`update.onActivation`, `update.auto.enable`) não passa pelo `ronoctua-consent`, e
+  a regra "nada fala com a rede antes de a pessoa permitir o host" não foi emendada para ela. Se uma
+  ativação sem rede ainda passa inteira com a atualização na ativação também não foi conferido.
+  - acabou quando: o dono decide se esse tráfego é uma exceção escrita da regra do consentimento ou
+    passa por ela, e uma VM sem rede ativa um sistema com Flatpak.
+- **A janela do formato 1 para o `staged`**, descrita no `ARCHITECTURE.md` ("O formato 1 tem uma
+  janela em aberto"), espera a escolha do dono.
+  - acabou quando: o dono escolhe entre manter o formato 1, só escrever `staged` quando o último bom
+    já o lê, ou subir o formato, e um teste do `ronoctua-person` prende a escolha.
+
 <!-- anchor: L20 -->
 
 ### O instalador com o repositório da pessoa (L20) — o que a pista não provou · médio
@@ -1537,9 +1655,10 @@ Cachix nem uma instalação.
     SSH) termina com a home restaurada, o `person-applied.json` nomeando um programa declarado e o
     registro do primeiro boot apagado.
 - **A primeira atualização de uma máquina instalada pelo ISO nunca rodou contra o release de
-  verdade**: o `ronoctua-machine update-distro` desmira e move o input, com os testes da troca da
-  string e do passo. Acabou quando: uma máquina instalada sem rede, numa atualização com o release no
-  ar, termina com o `flake.nix` do template e uma trava do release, e o `apply` a constrói.
+  verdade**: o `ronoctua-machine update-distro` desmira e move os dois inputs (a distro e o
+  nixpkgs), com os testes da troca da string e do passo. Acabou quando: uma máquina instalada sem
+  rede, numa atualização com o release no ar, termina com o `flake.nix` do template e uma trava do
+  release e do `nixos-unstable`, e o `apply` a constrói.
 - **A espera do link numa máquina real**: o tempo para a rede escolhida conectar e para a medição foi
   escolhido, não medido.
 - **As telas novas foram vistas como texto (`--show`) e como imagem** (o QR lido de volta pelo
@@ -1659,7 +1778,8 @@ por marcos, cada um verde:
 
 - **O que ficou do M4.** Uma recusa que diga "a caminho" em vez de "sem navegador"
   (`Refusal::NoBrowser` da central, quando o Chrome é querido e ainda não chegou).
-- **O que ficou do M5.** Já são partes as Crafting Apps, o escritório, a oficina, o VLC, o Flutter,
+- **O que ficou do M5.** Já são partes as AppImages da distro (hoje o ArtCraft Launcher e o
+  SolidCraft), o escritório, a oficina, o VLC, o Flutter,
   as toolchains do full, o pacote de ícones e as variantes de fonte (o full mediu 19,2 GiB antes das
   três últimas). Falta virar parte o que tem ligações mais fundas:
   - o Rust e o toolchain do devshell, que o `system.extraDependencies` guarda nos dois perfis para
@@ -1674,7 +1794,8 @@ por marcos, cada um verde:
   `parts-do-not-collide`, `parts-build`, o lado Rust do `part-paths-are-read-as-arriving` e o
   `parts-absent-vm`. Por fim, a espera pela bateria abaixo do piso e os números do `profile.nix`
   medidos de novo.
-- **O que ficou do M6.** A instalação sem rede está provada (`installer-offline-vm`), o ISO tem
+- **O que ficou do M6.** A instalação sem rede foi provada (`installer-offline-vm`, antes de o
+  template ganhar o próprio nixpkgs; "O nixos-unstable e a camada de apps", acima), o ISO tem
   6,4 GiB e cabe num pendrive de 8 GB, e o ISO completo existe (`.#iso-complete`, nunca publicado).
   Ficou para depois:
   - **o hardware que espera a primeira rede só aparece pelo que lhe falta**: a página das partes diz

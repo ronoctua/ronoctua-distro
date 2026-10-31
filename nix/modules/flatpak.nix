@@ -74,7 +74,9 @@ let
     # itself on the latest"): nix-flatpak updates the person's Flatpaks on its
     # own timer and on each activation — the app layer keeping itself current
     # outside the generation. The update sequence's `flatpak-system` /
-    # `flatpak-user` steps remain for a manual, on-demand run.
+    # `flatpak-user` steps still run with every update, scheduled or by hand.
+    # This traffic reaches Flathub with no `Pass` from `ronoctua-consent`
+    # (`docs/PENDING.md`).
     update.onActivation = true;
     update.auto.enable = true;
   };

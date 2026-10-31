@@ -15,8 +15,10 @@
 
   script = ''
     with subtest("reminders: a reminder due in a minute rings as an alarm and stays until dismissed"):
+        import datetime
+
         # THE FOOTER, AND THE BRAIN IT WAKES, RUN AS ROOT in the harness.
-        file = "/root/.config/ronoctua/brain/reminders/reminders.json"
+        file ="/root/.config/ronoctua/brain/reminders/reminders.json"
         said = brain({
             "ask": "act",
             "module": "reminders",
@@ -37,7 +39,7 @@
         assert [r["text"] for r in kept["reminders"]] == ["the alarm of the VM"], kept
 
         # WITHIN A MINUTE AND A BIT: the watch thread's clock, armed for it.
-        retry(lambda last_try: len(alarms()) == 1, timeout_seconds=120)
+        retry(lambda last_try: len(alarms()) == 1, timeout=datetime.timedelta(seconds=120))
         alarm = alarms()[0]
         assert alarm["dismiss"] is True, alarm
         assert alarm["snooze"] == [5, 10, 60], alarm
@@ -49,7 +51,7 @@
 
         said = brain({"ask": "dismiss", "module": "reminders", "notice": "due"})
         assert said.get("say") not in ("refused", "declined"), f"the dismissal was refused: {said}"
-        retry(lambda last_try: not alarms(), timeout_seconds=30)
+        retry(lambda last_try: not alarms(), timeout=datetime.timedelta(seconds=30))
         kept = json.loads(machine.succeed(f"cat {file}"))
         assert kept["reminders"] == [], f"a once-only reminder stayed after it was answered: {kept}"
         rang = [

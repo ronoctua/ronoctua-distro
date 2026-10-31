@@ -13,16 +13,24 @@
 //!
 //! - `migrate`: old layout (a copy of the distro) → the machine's own flake,
 //!   only when the new one builds; the old goes to `legacy-<stamp>`.
-//! - `apply [--rehearse]`: build → switch → arm the boot trial; a failed
-//!   build puts back the lock the running system was built from, so the
-//!   directory always describes the running system. The build is the
-//!   distro's units, each by its class, then the system, sized to the
+//! - `apply [--rehearse | --next-boot]`: build → switch → arm the boot
+//!   trial; a failed build puts back the lock the running system was built
+//!   from, so the directory always describes the running system. The build
+//!   is the distro's units, each by its class, then the system, sized to the
 //!   machine, and keeps the compiled units it was built from for the next
-//!   one ([`build`]).
+//!   one ([`build`]). `--next-boot` — the update's — sets what built for the
+//!   next boot and activates nothing ([`Applying::NextBoot`]); so does every
+//!   apply while a system already waits for the next boot, or across a
+//!   moved `nixpkgs`.
 //! - `bless`: after a good boot, the trial becomes the last good generation;
 //!   after a bad one, back to the last good.
-//! - `disarm`: the profile was rolled back by hand (the rescue console); the
-//!   trial it left is not tried again, and the EFI variables are unset.
+//! - `rollback switch | boot`: the rescue console's way back — to the
+//!   system that runs when another waits for the next boot, else to the
+//!   generation before — and the trial it leaves disarmed ([`rollback`]).
+//! - `disarm`: the profile was rolled back by hand; the trial it left is not
+//!   tried again, and the EFI variables are unset.
+//! - `hibernate pre | post`: the trial's one-shot put aside for a
+//!   hibernation, and back after the resume ([`sleep`]).
 //! - `hold <rev>` / `unhold`.
 //!
 //! # Who runs what
@@ -47,6 +55,13 @@
 //! (`ronoctua-boot-bless.service`, a minute after the system's default
 //! target) reads which of the two the first boot after the arming one booted
 //! ([`boots`]).
+//!
+//! A system set for the next boot ([`Applying::NextBoot`]) is armed the same
+//! way, and always for real: nothing has run its userland. Until the restart
+//! the one-shot still names it, which is how a bless in the boot that set it
+//! knows it was not tried, even when the record of that boot is lost. Whether
+//! one waits is [`next_boot`]'s to say, from the profile and the running
+//! system — never from the last apply.
 
 #![forbid(unsafe_code)]
 
@@ -64,7 +79,10 @@ mod hold;
 mod loader;
 mod migrate;
 pub mod mirror;
+mod next;
+mod rollback;
 mod run;
+pub mod sleep;
 mod system;
 #[cfg(test)]
 mod tests;
@@ -74,6 +92,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub use next::{NextBoot, next_boot};
 pub use ronoctua_person::state::{
     ApplyResult, Hold, LastApply, LastGood, MachineState, NoTrial, Trial, TrialOutcome,
 };
@@ -104,6 +123,12 @@ pub const UPDATE_APPLY_UNIT: &str = "ronoctua-update-apply.service";
 /// The input of the machine flake that is the distro.
 pub const DISTRO_INPUT: &str = "ronoctua";
 
+/// The input of the machine flake that is `nixpkgs` (`nixos-unstable`, which
+/// the update moves with the distro): a lock that names another revision of
+/// it than the system the profile names is a jump no live switch takes
+/// ([`Applying`]).
+pub const NIXPKGS_INPUT: &str = "nixpkgs";
+
 /// The lock the running system was built from (a copy of `flake.lock`,
 /// under [`Places::state`]).
 pub const APPLIED_LOCK: &str = "applied.lock";
@@ -126,8 +151,13 @@ pub enum Why {
     BuildFailed,
     /// The switch failed.
     SwitchFailed,
+    /// Setting the new system for the next boot failed
+    /// (`switch-to-configuration boot`): nothing that runs changed, and the
+    /// boot menu may not list it.
+    NextBootFailed,
     /// The system built is the one whose boot trial failed (or that was
-    /// rolled away from): it is not tried again before the distro moves on.
+    /// rolled away from): it is not tried again before the distro or
+    /// `nixpkgs` moves on.
     DidNotBoot,
     /// The last good generation would fall out of the boot menu.
     LastGoodWouldFallOut,
@@ -141,12 +171,13 @@ pub enum Why {
 
 impl Why {
     /// Every one.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::NotRoot,
         Self::Busy,
         Self::NothingToMigrate,
         Self::BuildFailed,
         Self::SwitchFailed,
+        Self::NextBootFailed,
         Self::DidNotBoot,
         Self::LastGoodWouldFallOut,
         Self::Held,
@@ -163,6 +194,7 @@ impl Why {
             Self::NothingToMigrate => "nothing-to-migrate",
             Self::BuildFailed => "build-failed",
             Self::SwitchFailed => "switch-failed",
+            Self::NextBootFailed => "next-boot-failed",
             Self::DidNotBoot => "did-not-boot",
             Self::LastGoodWouldFallOut => "last-good-would-fall-out",
             Self::Held => "held",
@@ -201,20 +233,72 @@ impl std::fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
+/// How an apply is asked to set up what it builds.
+///
+/// # For the next boot
+///
+/// The machine rolls on `nixos-unstable` (inv. 6, 2026-10-30): a live switch
+/// across a `nixpkgs` that moved can restart the session under the person —
+/// it did, the day the machine first rolled. So the update's apply
+/// ([`Applying::NextBoot`]) builds, sets the profile and runs
+/// `switch-to-configuration boot`: nothing that runs is stopped or
+/// restarted, the record says [`ApplyResult::Staged`], and a REAL boot trial
+/// is armed (never `boot-identical`: nothing proved the new userland runs).
+///
+/// And any apply — the software centre's, the rescue's, the build switch's
+/// — sets its system for the next boot, without being asked, while:
+///
+/// - the profile already names another system than the one that runs (a
+///   system set for the next boot stays for the next boot — switching to it
+///   live would take the jump this exists to avoid), or
+/// - the folder's lock names another `nixpkgs` than the profile's system was
+///   built from ([`NIXPKGS_INPUT`]): an update whose apply never ran (killed,
+///   or switched off) left the lock moved — or one this cannot tell (a lock
+///   that names none, a system whose lock is not known): an unknown is no
+///   proof that nothing moved.
+///
+/// An apply that crosses neither — the owner's build switch of the distro
+/// alone, the software centre's declaration on a machine with nothing
+/// waiting — still switches now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Applying {
+    /// Build and switch now — unless something waits for the next boot, or
+    /// `nixpkgs` moved.
+    Now,
+    /// Build and set for the next boot, activating nothing (`--next-boot`).
+    NextBoot,
+    /// Only measure (a copy under `/run`, `nix build --dry-run`).
+    Rehearse,
+}
+
 /// What the CLI is asked to do — a closed set, read back by [`Verb::parse`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Verb {
     /// Old layout → the machine's own flake.
     Migrate,
-    /// Build, switch and arm the boot trial; with `rehearse`, nothing changes.
+    /// Build, switch (or set for the next boot) and arm the boot trial; a
+    /// rehearsal changes nothing.
     Apply {
-        /// Only measure (a copy under `/run`, `nix build --dry-run`).
-        rehearse: bool,
+        /// How ([`Applying`]).
+        how: Applying,
     },
     /// After the boot: bless the trial, or go back to the last good one.
     Bless,
+    /// The rescue's way back: to the system that runs when another waits,
+    /// else to the generation before; switched to now (`now`), or set for
+    /// the next boot.
+    Rollback {
+        /// `switch` (true) or `boot`.
+        now: bool,
+    },
     /// After a rollback by hand: the trial left is not tried again.
     Disarm,
+    /// Around a hibernation: the trial's one-shot put aside (`pre`), and
+    /// back after the resume (`post`, `resumed`).
+    Hibernate {
+        /// `post` (true) or `pre`.
+        resumed: bool,
+    },
     /// Hold the distro at a revision.
     Hold {
         /// The revision (hex).
@@ -224,8 +308,8 @@ pub enum Verb {
     Unhold,
     /// Root the sources the machine's flake was evaluated from.
     KeepSources,
-    /// The distro input moved forward — an aimed machine put back on the
-    /// release first (`aim`).
+    /// The distro and `nixpkgs` inputs moved forward — an aimed machine put
+    /// back on the release first (`aim`).
     UpdateDistro,
 }
 
@@ -235,10 +319,23 @@ impl Verb {
     pub fn arguments(&self) -> Vec<String> {
         match self {
             Self::Migrate => vec!["migrate".to_owned()],
-            Self::Apply { rehearse: false } => vec!["apply".to_owned()],
-            Self::Apply { rehearse: true } => vec!["apply".to_owned(), "--rehearse".to_owned()],
+            Self::Apply { how: Applying::Now } => vec!["apply".to_owned()],
+            Self::Apply {
+                how: Applying::NextBoot,
+            } => vec!["apply".to_owned(), "--next-boot".to_owned()],
+            Self::Apply {
+                how: Applying::Rehearse,
+            } => vec!["apply".to_owned(), "--rehearse".to_owned()],
             Self::Bless => vec!["bless".to_owned()],
+            Self::Rollback { now } => vec![
+                "rollback".to_owned(),
+                if *now { "switch" } else { "boot" }.to_owned(),
+            ],
             Self::Disarm => vec!["disarm".to_owned()],
+            Self::Hibernate { resumed } => vec![
+                "hibernate".to_owned(),
+                if *resumed { "post" } else { "pre" }.to_owned(),
+            ],
             Self::Hold { rev } => vec!["hold".to_owned(), rev.clone()],
             Self::Unhold => vec!["unhold".to_owned()],
             Self::KeepSources => vec!["keep-sources".to_owned()],
@@ -253,10 +350,19 @@ impl Verb {
         let words: Vec<&str> = args.iter().map(String::as_str).collect();
         match words.as_slice() {
             ["migrate"] => Some(Self::Migrate),
-            ["apply"] => Some(Self::Apply { rehearse: false }),
-            ["apply", "--rehearse"] => Some(Self::Apply { rehearse: true }),
+            ["apply"] => Some(Self::Apply { how: Applying::Now }),
+            ["apply", "--next-boot"] => Some(Self::Apply {
+                how: Applying::NextBoot,
+            }),
+            ["apply", "--rehearse"] => Some(Self::Apply {
+                how: Applying::Rehearse,
+            }),
             ["bless"] => Some(Self::Bless),
+            ["rollback", "switch"] => Some(Self::Rollback { now: true }),
+            ["rollback", "boot"] => Some(Self::Rollback { now: false }),
             ["disarm"] => Some(Self::Disarm),
+            ["hibernate", "pre"] => Some(Self::Hibernate { resumed: false }),
+            ["hibernate", "post"] => Some(Self::Hibernate { resumed: true }),
             ["hold", rev] if is_rev(rev) => Some(Self::Hold {
                 rev: (*rev).to_owned(),
             }),
@@ -374,12 +480,14 @@ impl Machine {
             Verb::Migrate => self
                 .migrate()
                 .map(|m| format!("migrated; the old layout is in {}", m.legacy.display())),
-            Verb::Apply { rehearse } => self.apply(*rehearse).map(|a| {
+            Verb::Apply { how } => self.apply(*how).map(|a| {
                 let no_trial = self.state().ok().and_then(|s| s.no_trial);
                 verdict(&a, no_trial)
             }),
             Verb::Bless => self.bless().map(|o| format!("trial {}", outcome_word(o))),
+            Verb::Rollback { now } => self.rollback(*now),
             Verb::Disarm => self.disarm().map(|()| "disarmed".to_owned()),
+            Verb::Hibernate { resumed } => sleep::hibernate(self, *resumed),
             Verb::Hold { rev } => self.hold(rev).map(|()| format!("held at {rev}")),
             Verb::Unhold => self.unhold().map(|()| "not held".to_owned()),
             Verb::UpdateDistro => aim::update_distro(self),
@@ -404,19 +512,18 @@ impl Machine {
         migrate::migrate(self)
     }
 
-    /// `apply [--rehearse]`.
+    /// `apply [--rehearse | --next-boot]`.
     ///
     /// # Errors
     ///
     /// [`Why::NotRoot`], [`Why::Busy`], [`Why::Held`],
     /// [`Why::BuildFailed`] (the lock put back), [`Why::DidNotBoot`],
     /// [`Why::LastGoodWouldFallOut`], [`Why::SwitchFailed`],
-    /// [`Why::Unreadable`], [`Why::Failed`].
-    pub fn apply(&self, rehearse: bool) -> Result<Applied, Refusal> {
-        if rehearse {
-            apply::rehearse(self)
-        } else {
-            apply::apply(self)
+    /// [`Why::NextBootFailed`], [`Why::Unreadable`], [`Why::Failed`].
+    pub fn apply(&self, how: Applying) -> Result<Applied, Refusal> {
+        match how {
+            Applying::Rehearse => apply::rehearse(self),
+            Applying::Now | Applying::NextBoot => apply::apply(self, how),
         }
     }
 
@@ -427,6 +534,17 @@ impl Machine {
     /// [`Why::NotRoot`], [`Why::Busy`], [`Why::Unreadable`], [`Why::Failed`].
     pub fn bless(&self) -> Result<TrialOutcome, Refusal> {
         bless::bless(self)
+    }
+
+    /// `rollback switch` (`now`) or `rollback boot`: the line it ends with.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::NotRoot`], [`Why::Busy`], [`Why::Unreadable`], [`Why::Failed`]
+    /// (nowhere to go back to), [`Why::SwitchFailed`],
+    /// [`Why::NextBootFailed`].
+    pub fn rollback(&self, now: bool) -> Result<String, Refusal> {
+        rollback::rollback(self, now)
     }
 
     /// `disarm`.
@@ -513,6 +631,7 @@ fn verdict(applied: &Applied, no_trial: Option<NoTrial>) -> String {
         ApplyResult::SwitchFailed => "switch failed",
         ApplyResult::Rehearsed => "rehearsed",
         ApplyResult::Refused => "refused",
+        ApplyResult::Staged => "set for the next boot",
     };
     match (&applied.trial, no_trial) {
         (Some(t), _) => format!("{result}; trial {}", outcome_word(t.outcome)),
@@ -549,13 +668,13 @@ pub fn migrate(places: &Places) -> Result<Migrated, Refusal> {
     Machine::from_env(places.clone()).migrate()
 }
 
-/// `apply [--rehearse]`.
+/// `apply [--rehearse | --next-boot]`.
 ///
 /// # Errors
 ///
 /// See [`Machine::apply`].
-pub fn apply(places: &Places, rehearse: bool) -> Result<Applied, Refusal> {
-    Machine::from_env(places.clone()).apply(rehearse)
+pub fn apply(places: &Places, how: Applying) -> Result<Applied, Refusal> {
+    Machine::from_env(places.clone()).apply(how)
 }
 
 /// `bless`.
@@ -664,10 +783,19 @@ mod verbs {
     fn every_verb_crosses_and_nothing_else_does() {
         for verb in [
             Verb::Migrate,
-            Verb::Apply { rehearse: false },
-            Verb::Apply { rehearse: true },
+            Verb::Apply { how: Applying::Now },
+            Verb::Apply {
+                how: Applying::NextBoot,
+            },
+            Verb::Apply {
+                how: Applying::Rehearse,
+            },
             Verb::Bless,
+            Verb::Rollback { now: true },
+            Verb::Rollback { now: false },
             Verb::Disarm,
+            Verb::Hibernate { resumed: false },
+            Verb::Hibernate { resumed: true },
             Verb::Hold {
                 rev: "613862c".to_owned(),
             },
@@ -681,6 +809,12 @@ mod verbs {
             &["hold", "HEAD"][..],
             &["hold", "abc"],
             &["apply", "--force"],
+            &["apply", "--next-boot", "--rehearse"],
+            &["apply", "--rehearse", "--next-boot"],
+            &["rollback"],
+            &["rollback", "now"],
+            &["hibernate"],
+            &["hibernate", "suspend"],
             &["rm", "-rf"],
             &[],
         ] {

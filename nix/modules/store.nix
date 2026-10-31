@@ -193,9 +193,12 @@ let
   #   last good one, and the way back must still be there when the trial
   #   does not boot — however many generations the applies made since;
   # - every generation the BOOT MENU lists (`--menu`, each boot mount): by
-  #   the generation number in an entry's file name (`nixos-generation-7.conf`,
-  #   a lanzaboote `nixos-generation-7-….efi`) or by its toplevel's store path
-  #   in a menu's text (grub, extlinux, limine, rEFInd). Normally the menu is
+  #   the generation number in an entry's file name (a lanzaboote
+  #   `nixos-generation-7-….efi`; systemd-boot's `nixos-generation-7.conf` up
+  #   to 26.05) or by its toplevel's store path in a menu's text (grub,
+  #   extlinux, limine, rEFInd, and systemd-boot on nixos-unstable, whose
+  #   entries are named by a hash of their text, `nixos-<sha256>.conf`, and
+  #   name the system only in their `init=`). Normally the menu is
   #   inside the newest N; when an install of the loader failed while the
   #   profile moved on, it is not, and its entries must still boot.
   #

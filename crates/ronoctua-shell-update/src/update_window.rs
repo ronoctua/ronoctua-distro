@@ -611,8 +611,18 @@ pub(crate) fn record_places() -> module::RecordPlaces {
     if let Some(room) = crate::photo::room() {
         at.machine_dir = room.join(crate::photo::MACHINE_DIR);
         at.machine_state = room.join(crate::photo::MACHINE_STATE);
+        at.root = room;
     }
     at
+}
+
+/// The toplevel of the system that waits for the next restart under `root`
+/// (`/`, or the camera's room), when one does — the machine's own answer,
+/// read off the system profile and the system that runs through the
+/// module's shared half: what the update's other pages ask before they say
+/// "from the next update".
+pub(crate) fn waiting_system(root: &std::path::Path) -> Option<String> {
+    module::next_boot(root, None).map(|n| n.toplevel)
 }
 
 // ---------------------------------------------------------------------------
@@ -2826,8 +2836,8 @@ impl View {
 }
 
 /// What the machine's records say, as sentences: the belongings' conflicts
-/// (a click opens them), the boot trial or why there is none, and a hold —
-/// each only when it is
+/// (a click opens them), a new system that waits for the next restart, the
+/// boot trial or why there is none, and a hold — each only when it is
 /// there, in the colour of what it costs.
 fn record_sentences(
     r: &module::Records,
@@ -2849,6 +2859,20 @@ fn record_sentences(
             ),
             tokens::color::STATE_WARNING,
             Some(Target::Belongings),
+        ));
+    }
+    // A SYSTEM SET FOR THE NEXT BOOT: the update did its work, and the
+    // machine uses it from the restart — said before the trial that guards
+    // that restart, and promising its way back only when one is armed.
+    if let Some(next) = &r.staged {
+        out.push((
+            texts.t(if next.guarded {
+                module::key::SYSTEM_UPDATE_RECORDS_STAGED
+            } else {
+                module::key::SYSTEM_UPDATE_RECORDS_STAGED_UNGUARDED
+            }),
+            tokens::color::STATE_WARNING,
+            None,
         ));
     }
     if let Some(outcome) = r.trial {
@@ -2898,6 +2922,7 @@ pub fn refusal_key(word: &str) -> Option<&'static str> {
         Why::NothingToMigrate => key::MACHINE_REFUSED_NOTHING_TO_MIGRATE,
         Why::BuildFailed => key::MACHINE_REFUSED_BUILD_FAILED,
         Why::SwitchFailed => key::MACHINE_REFUSED_SWITCH_FAILED,
+        Why::NextBootFailed => key::MACHINE_REFUSED_NEXT_BOOT_FAILED,
         Why::DidNotBoot => key::MACHINE_REFUSED_DID_NOT_BOOT,
         Why::LastGoodWouldFallOut => key::MACHINE_REFUSED_LAST_GOOD_WOULD_FALL_OUT,
         Why::Held => key::MACHINE_REFUSED_HELD,
@@ -3246,6 +3271,9 @@ Steps — walked in the order they appear:
         let_in: bool,
         registry: Option<ronoctua_person::reports::DistroApps>,
         applied: Option<ronoctua_person::reports::PersonApplied>,
+        /// The registry of a system that waits for the next restart, when
+        /// one does.
+        waiting: Option<ronoctua_person::reports::DistroApps>,
     }
 
     impl FollowScene {
@@ -3271,6 +3299,10 @@ Steps — walked in the order they appear:
                     .applied
                     .as_ref()
                     .map_or(crate::follow::Taken::Yes, crate::follow::Taken::of),
+                waiting: self
+                    .waiting
+                    .as_ref()
+                    .map(|r| crate::follow::of_registry(r).0),
             })
         }
     }
@@ -3285,6 +3317,10 @@ Steps — walked in the order they appear:
         token: Option<String>,
         netrc: bool,
         last: Option<ronoctua_cachix::record::Record>,
+        /// Whether a system waits for the next restart, and the cache it
+        /// was built with (`waiting`, none when absent).
+        waits: bool,
+        waiting: Option<ronoctua_person::options::BinaryCache>,
     }
 
     impl CacheScene {
@@ -3313,6 +3349,7 @@ Steps — walked in the order they appear:
                 netrc: self.netrc,
                 last: self.last,
                 verdict: None,
+                waiting: self.waits.then_some(self.waiting),
             })
         }
     }
@@ -3323,6 +3360,7 @@ Steps — walked in the order they appear:
         conflicts: usize,
         trial: Option<module::TrialOutcome>,
         no_trial: Option<module::NoTrial>,
+        staged: bool,
         hold: Option<Hold>,
     }
 
@@ -3489,6 +3527,12 @@ Steps — walked in the order they appear:
             conflicts: scene.records.conflicts,
             trial: scene.records.trial,
             no_trial: scene.records.no_trial,
+            // THE SYSTEM THAT WAITS, as a scene says it: guarded unless the
+            // scene says why no trial could be armed.
+            staged: scene.records.staged.then(|| module::NextBoot {
+                toplevel: String::new(),
+                guarded: scene.records.no_trial.is_none(),
+            }),
             hold: scene.records.hold.map(|h| module::HeldAt {
                 rev: h.rev,
                 since: h.since,
@@ -5263,6 +5307,10 @@ mod tests {
             conflicts: 2,
             trial: Some(module::TrialOutcome::Failed),
             no_trial: Some(module::NoTrial::NotInMenu),
+            staged: Some(module::NextBoot {
+                toplevel: "/nix/store/00000000000000000000000000000002-nixos-system-c".to_owned(),
+                guarded: false,
+            }),
             hold: Some(module::HeldAt {
                 rev: "613862c5a0ff".to_owned(),
                 since: "2026-10-05T12:00:00Z".to_owned(),
@@ -5286,6 +5334,7 @@ mod tests {
             .join("\n");
         for needle in [
             "SUPER s v",
+            &t.t(module::key::SYSTEM_UPDATE_RECORDS_STAGED_UNGUARDED),
             &t.t(key::MACHINE_TRIAL_FAILED),
             &t.t(key::MACHINE_NO_TRIAL_NOT_IN_MENU),
             "613862c ",
@@ -5317,6 +5366,20 @@ mod tests {
         );
         let mut v = v;
         assert_eq!(v.clicked(Target::Belongings), Errand::OpenBelongings);
+        // A SYSTEM THAT WAITS WITH ITS TRIAL ARMED is promised its way back;
+        // one with none (above) is not.
+        let mut guarded = every_record();
+        guarded.staged = guarded
+            .staged
+            .map(|n| module::NextBoot { guarded: true, ..n });
+        let said: Vec<String> = a_view()
+            .with_records(guarded, "SUPER s v".to_owned())
+            .top_lines(200, &t)
+            .into_iter()
+            .map(|l| l.text)
+            .collect();
+        assert!(said.contains(&t.t(module::key::SYSTEM_UPDATE_RECORDS_STAGED)));
+        assert!(!said.contains(&t.t(module::key::SYSTEM_UPDATE_RECORDS_STAGED_UNGUARDED)));
         // AND NOTHING THERE IS NOTHING SAID.
         let quiet = a_view();
         assert_eq!(quiet.top_lines(200, &t), {
@@ -5657,6 +5720,7 @@ mod tests {
             copy: crate::follow::Choice::On,
             let_in: true,
             machine: Some(true),
+            waiting: None,
             apps: ["CADCraft", "FigCraft"]
                 .into_iter()
                 .map(|name| crate::follow::App {

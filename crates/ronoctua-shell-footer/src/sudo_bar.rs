@@ -469,19 +469,40 @@ pub enum Kind {
     SshOther,
 }
 
+/// The token the askpass helper sends when sudo runs it (`SUDO_ASKPASS`,
+/// `nix/ssh-askpass.rs`, spelled again there): the person's own password, for
+/// a root gesture typed in a terminal — [`Kind::Sudo`].
+///
+/// NAMED BY WHAT IS ASKED, never by the program asking: only the sudo door
+/// (`ronoctua_security::authority`) names sudo (`sudo-door-is-one`), and a
+/// token that spelled it here would be a second name for the door.
+pub const SYSTEM_PASSWORD: &str = "system-password";
+
 impl Kind {
-    /// The kind the helper's token names (`nix/ssh-askpass.rs`'s `ssh_kind`).
-    /// A token it does not know is [`Kind::SshOther`], shown as what it is —
-    /// an ssh ask — and never as a passphrase.
+    /// The kind the helper's token names (`nix/ssh-askpass.rs`'s `ssh_kind`),
+    /// and whether the ask came with a CONTEXT (what is served and from
+    /// where). A token it does not know is [`Kind::SshOther`], shown as what
+    /// it is — an ssh ask — and never as a passphrase.
+    ///
+    /// UNLESS IT CAME WITH A CONTEXT: the helper sends one for the system
+    /// password alone, and `-` for every ssh ask, so an unknown token that
+    /// carries one is the system password asked by an OLDER helper, one that
+    /// spelled the kind by the program asking. `SUDO_ASKPASS` is a session
+    /// variable: a terminal of a session that began before a switch still
+    /// runs the helper of that session's generation until the person logs in
+    /// again, long after this footer was restarted on the new one — and the
+    /// bar titles that ask for what it is all the while.
     #[must_use]
-    pub fn of(token: &str) -> Self {
+    pub fn of(token: &str, context: bool) -> Self {
         match token {
-            "sudo" => Self::Sudo,
+            SYSTEM_PASSWORD => Self::Sudo,
             "ssh-passphrase" => Self::Ssh,
             "ssh-pin" => Self::Pin,
             "ssh-password" => Self::LoginPassword,
             "ssh-touch" => Self::Touch,
             "ssh-host" => Self::HostAuthenticity,
+            "ssh" => Self::SshOther,
+            _ if context => Self::Sudo,
             _ => Self::SshOther,
         }
     }
@@ -1868,14 +1889,21 @@ mod tests {
     /// touch alone confirms.
     #[test]
     fn the_kind_is_read_from_the_token_and_a_touch_carries_no_line() {
-        assert_eq!(Kind::of("sudo"), Kind::Sudo);
-        assert_eq!(Kind::of("ssh-passphrase"), Kind::Ssh);
-        assert_eq!(Kind::of("ssh-pin"), Kind::Pin);
-        assert_eq!(Kind::of("ssh-password"), Kind::LoginPassword);
-        assert_eq!(Kind::of("ssh-touch"), Kind::Touch);
-        assert_eq!(Kind::of("ssh-host"), Kind::HostAuthenticity);
-        assert_eq!(Kind::of("ssh"), Kind::SshOther);
-        assert_eq!(Kind::of("anything-else"), Kind::SshOther);
+        assert_eq!(Kind::of("system-password", true), Kind::Sudo);
+        assert_eq!(Kind::of("system-password", false), Kind::Sudo);
+        assert_eq!(Kind::of("ssh-passphrase", false), Kind::Ssh);
+        assert_eq!(Kind::of("ssh-pin", false), Kind::Pin);
+        assert_eq!(Kind::of("ssh-password", false), Kind::LoginPassword);
+        assert_eq!(Kind::of("ssh-touch", false), Kind::Touch);
+        assert_eq!(Kind::of("ssh-host", false), Kind::HostAuthenticity);
+        assert_eq!(Kind::of("ssh", false), Kind::SshOther);
+        assert_eq!(Kind::of("anything-else", false), Kind::SshOther);
+        // A KNOWN TOKEN DECIDES, context or not.
+        assert_eq!(Kind::of("ssh-passphrase", true), Kind::Ssh);
+        assert_eq!(Kind::of("ssh", true), Kind::SshOther);
+        // AN OLDER HELPER'S SYSTEM PASSWORD: a token this footer does not know,
+        // with the context only the system password carries.
+        assert_eq!(Kind::of("anything-else", true), Kind::Sudo);
 
         let t = texts("en-GB");
         let shown = |bar: &Bar| -> String {

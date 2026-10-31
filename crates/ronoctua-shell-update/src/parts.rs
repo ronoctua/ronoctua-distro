@@ -101,6 +101,9 @@ pub struct Places {
     /// The machine's record (`state.json`), whose last apply names what the
     /// system could not fetch.
     pub state: PathBuf,
+    /// Where the system's own links are: `/`, or the camera's room — whether
+    /// a system waits for the next restart is read there.
+    pub root: PathBuf,
 }
 
 impl Places {
@@ -124,6 +127,7 @@ impl Places {
             state: crate::update_window::record_places()
                 .machine_state
                 .join(ronoctua_person::names::STATE),
+            root: crate::update_window::record_places().root,
         }
     }
 
@@ -139,6 +143,7 @@ impl Places {
             Some(self.stick.clone()),
             self.media.clone(),
             self.options.clone(),
+            Some(self.state.clone()),
         ]
         .iter()
         .map(|p| p.as_deref().and_then(mtime))
@@ -275,6 +280,9 @@ pub struct Readings {
     pub stick: Option<Said>,
     /// The person's mirrors.
     pub mirrors: Mirrors,
+    /// Whether a system waits for the next restart: the parts drawn are the
+    /// running system's, and its own arrive after that restart.
+    pub next_restart: bool,
 }
 
 impl Readings {
@@ -299,6 +307,7 @@ impl Readings {
         r.system = System::of(state.as_ref().and_then(|s| s.last_apply.as_ref()), |out| {
             Path::new(out).exists()
         });
+        r.next_restart = crate::update_window::waiting_system(&places.root).is_some();
         r
     }
 
@@ -326,6 +335,7 @@ impl Readings {
             parts,
             stick,
             mirrors: Mirrors::default(),
+            next_restart: false,
         }
     }
 }
@@ -837,6 +847,11 @@ impl Page {
                     said.push((texts.t(k), tokens::color::STATE_WARNING));
                 }
             }
+        }
+        // A SYSTEM THAT WAITS FOR THE RESTART brings parts of its own, which
+        // this page shows only once it runs.
+        if r.next_restart && matches!(row, Row::System | Row::Part(_)) {
+            said.push((texts.t(key::DISTRO_PARTS_ABOUT_NEXT_RESTART), secondary));
         }
         // THE LAST STICK GESTURE, on the stick's rows: how it ended, whole.
         if matches!(row, Row::Import | Row::Export)
@@ -1466,6 +1481,7 @@ mod tests {
         let last = ronoctua_person::state::LastApply {
             at: Stamp::from_unix_s(2_000),
             result: ronoctua_person::state::ApplyResult::BuildFailed,
+            toplevel: None,
             missing: vec![
                 download(
                     "crate-x.tar.gz",
@@ -1496,6 +1512,7 @@ mod tests {
         let nothing = ronoctua_person::state::LastApply {
             at: Stamp::from_unix_s(2_000),
             result: ronoctua_person::state::ApplyResult::Switched,
+            toplevel: None,
             missing: Vec::new(),
         };
         assert_eq!(System::of(Some(&nothing), |_| false), None);

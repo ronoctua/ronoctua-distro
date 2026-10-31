@@ -105,13 +105,17 @@ pub struct Read {
 /// # One question, one answer, and freedesktop's
 ///
 /// `is_a(mime, "text/plain")` and nothing else. There is no
-/// `starts_with("text/")` clause: every `text/*` in the database already
-/// descends from `text/plain`, and a second rule written by hand is a second
-/// answer to a question the database settles.
+/// `starts_with("text/")` clause: every `text/*` in the table descends from
+/// `text/plain`, and a second rule written by hand is a second answer to a
+/// question the database settles. That "every" is the SPEC's — its implicit
+/// rule, which shared-mime-info 2.5.1 stopped spelling out on
+/// `text/x-shellscript`, the AWK and sed scripts and `text/x-gradle` — and
+/// `nix/scripts/gen-mimedb.py` writes it into the table as rows, so it is
+/// still the database answering.
 ///
-/// It reaches further than it looks. Two hundred and seventy-seven types reach
+/// It reaches further than it looks. Some three hundred types reach
 /// `text/plain` through the subclass DAG — `application/json` at depth three,
-/// `application/xml`, `application/x-shellscript`, `application/toml`,
+/// `application/xml`, `text/x-shellscript`, `application/toml`,
 /// `application/yaml`, `application/x-desktop`, `application/sql`. None of
 /// them needs naming here.
 ///
@@ -303,6 +307,13 @@ mod tests {
     /// FAILS IF: somebody writes a second rule beside the database's. Every one
     /// of these is settled by the subclass DAG, and none of them is named in
     /// this crate.
+    ///
+    /// The shell script both ways: `text/x-shellscript`, its name since
+    /// shared-mime-info 2.5.1, whose only explicit parent is
+    /// `application/x-executable` (it is text by the spec's implicit rule,
+    /// which the generator writes down), and `application/x-shellscript`, the
+    /// old name, now an alias. And `text/x-gradle`, which 2.5.1 gives no parent
+    /// at all.
     #[test]
     fn what_counts_as_text_comes_from_the_database() {
         for yes in [
@@ -316,7 +327,9 @@ mod tests {
             "application/xml",
             "application/toml",
             "application/yaml",
+            "text/x-shellscript",
             "application/x-shellscript",
+            "text/x-gradle",
             "application/x-desktop",
             "application/sql",
         ] {

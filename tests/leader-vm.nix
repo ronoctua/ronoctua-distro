@@ -926,14 +926,21 @@ pkgs.testers.runNixOSTest {
             "journalctl -u footer --no-pager | grep 'set switched.*LEADER LEADER-' > /dev/null",
             timeout=30,
         )
-        # AND `Alt` TAPPED THERE CHOOSES NOTHING ANY MORE: the chord stays the
-        # window set's, and no set switch is logged for it.
+        # AND `Alt` TAPPED THERE CHOOSES NO SET: no set switch is logged for
+        # it. It is `LEADER Alt` now — the focused window's shortcuts
+        # (`Tapped::Shortcuts`, `Footer::open_window_shortcuts`), which take
+        # the keys that follow when the window published any — so the leader
+        # is closed (`Escape` ends either list) and opened on the window set
+        # again before `s n` is pressed there.
         switched = journal_now().count("set switched")
         press_key("Alt_L")
         machine.sleep(1)
         assert journal_now().count("set switched") == switched, (
             "a tap of Alt switched the leader's set"
         )
+        press_key("Escape")
+        open_leader()
+        leader_again()
         press_key("s")
         press_key("n")
         machine.wait_until_succeeds(

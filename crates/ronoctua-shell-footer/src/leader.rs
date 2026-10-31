@@ -95,8 +95,9 @@ pub enum Order {
     /// A secret, asked in the bar for an askpass helper
     /// (`crate::sudo_bar::serve_askpass`): the connection it came on stays
     /// open, and the typed secret is written back down it. After [`ASKPASS`]
-    /// come the KIND (`ssh`/`sudo`, the title), the CONTEXT (what sudo serves
-    /// and from where, base64, `-` for none — sudo only), and then the prompt,
+    /// come the KIND (an `ssh…` token or `system-password`, the title), the
+    /// CONTEXT (what sudo serves and from where, base64, `-` for none — the
+    /// system password only), and then the prompt,
     /// none of them logged: `AskPass(follower, kind, context, prompt)`.
     AskPass(Follower, String, Option<String>, String),
 }
@@ -120,8 +121,9 @@ impl Eq for Follower {}
 const YIELD: &str = "quit";
 
 /// The word an askpass helper (`ronoctua-ssh-askpass`, `-sudo-askpass`) writes
-/// to ask a secret, the KIND (`ssh`/`sudo`), the CONTEXT and the prompt after
-/// it. Hard-coded in the helper too, which has no crate to share it from.
+/// to ask a secret, the KIND (`sudo_bar::Kind::of`), the CONTEXT and the
+/// prompt after it. Hard-coded in the helper too, which has no crate to share
+/// it from.
 pub const ASKPASS: &str = "askpass";
 
 /// Standard base64 (padding tolerated, not required), for the askpass context
@@ -292,7 +294,7 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                 }
                 // A SECRET, for the askpass bar: the connection kept open for
                 // what is typed, and nothing of it logged. `askpass <kind>
-                // <context> <prompt>` — the kind the title (`ssh`/`sudo`), the
+                // <context> <prompt>` — the kind the title (`Kind::of`), the
                 // context base64 (`-` for none, sudo's command and origin
                 // otherwise), the prompt the rest, which may be empty (ssh
                 // sometimes asks with none).

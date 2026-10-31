@@ -749,6 +749,30 @@ fn an_alias_and_a_descendant_both_arrive() {
     assert_eq!(of_mime("text/x-markdown"), Some(Language::Markdown));
 }
 
+/// FAILS IF: TypeScript stops being reached by upstream's own type (since
+/// shared-mime-info 2.5.1; it was invented here as `text/x-typescript`
+/// before), or takes JavaScript, which upstream makes a CHILD of it — a
+/// direct claim is nearer than an inherited one, and JavaScript claims its
+/// type directly.
+#[test]
+fn typescript_is_upstreams_type_and_javascript_stays_javascript() {
+    assert_eq!(
+        of_mime("application/typescript").map(Language::id),
+        Some("typescript")
+    );
+    for javascript in [
+        "text/javascript",
+        "application/javascript",
+        "application/x-ns-proxy-autoconfig",
+    ] {
+        assert_eq!(
+            of_mime(javascript).map(Language::id),
+            Some("javascript"),
+            "{javascript}"
+        );
+    }
+}
+
 /// FAILS IF: prose starts being coloured — which looks like a feature.
 #[test]
 fn text_plain_is_not_a_language() {

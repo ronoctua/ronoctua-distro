@@ -23,17 +23,17 @@
 #
 # WHAT TO DO WHEN THE DATABASE HAS NO TYPE
 # ----------------------------------------
-# It happens, and TypeScript is the worked example: `*.ts` is `video/mp2t`
-# upstream, and upstream is RIGHT — `.ts` meant an MPEG transport stream years
-# before the language existed. Zig, Swift, Vue and Dockerfile simply are not
-# there at all.
+# It happens: Zig, Swift, Vue and Dockerfile simply are not there at all.
+# (Nix and TypeScript were not either, until shared-mime-info 2.5.1 named them
+# `text/x-nix` and `application/typescript`.)
 #
 # The answer is NOT a list of extensions in this file. It is one row in the
-# `ours` block of `assets/icons/mime-glyphs.nix`, which already exists, already
-# carries `text/x-nix`, and already states the bar: upstream must have no type
-# at all. A type is invented THERE, with its glob and its icon, and only then
-# claimed HERE. The generator refuses a type that is in neither, naming that
-# file — so the rule cannot be forgotten, only argued with.
+# `ours` block of `assets/icons/mime-glyphs.nix`, which already states the bar:
+# upstream must have no type at all. A type is invented THERE, with its glob
+# and its icon, and only then claimed HERE. The generator refuses a type that
+# is in neither, naming that file — so the rule cannot be forgotten, only
+# argued with. And a type upstream HAS, on a name it gives that type too
+# weakly or not at all (`*.ts`, `*.tsx`), is a `claims` row there.
 #
 # ORDER MATTERS, and there is no `order` field on purpose. `guess` — the door
 # for text that arrives with no usable name — tries the languages in the order
@@ -1470,10 +1470,13 @@
       id = "typescript";
       label = "TypeScript";
       kind = "code";
-      # THE WORKED EXAMPLE of the two-file rule. `*.ts` is `video/mp2t`
-      # upstream and the database is right; the type below is invented in the
-      # `ours` block of `assets/icons/mime-glyphs.nix`, and only then claimed.
-      mime = [ "text/x-typescript" ];
+      # UPSTREAM'S TYPE since shared-mime-info 2.5.1 (`*.cts` alone, and `*.ts`
+      # at a weight under the MPEG transport stream's). It was invented in the
+      # `ours` block of `assets/icons/mime-glyphs.nix` as `text/x-typescript`
+      # before; the names `*.ts` and `*.tsx` reach it through `claims` there.
+      # `text/javascript` is a child of it upstream, and stays JavaScript's:
+      # a direct claim is nearer than an inherited one.
+      mime = [ "application/typescript" ];
       tags = [
         "typescript"
         "ts"
@@ -2691,9 +2694,8 @@
       id = "nix";
       label = "Nix";
       kind = "code";
-      # NOT UPSTREAM. It comes from the `ours` block of
-      # `assets/icons/mime-glyphs.nix`, which is the one place allowed to
-      # invent a type. Inventing it here would be the second place.
+      # UPSTREAM since shared-mime-info 2.5.1, under the name the `ours` block
+      # of `assets/icons/mime-glyphs.nix` had invented for it before.
       mime = [ "text/x-nix" ];
       tags = [ "nix" ];
       guessable = true;
@@ -4338,12 +4340,18 @@
       ];
     }
 
-    # Gradle's build files are Groovy, and `text/x-gradle` comes along through the subclass DAG.
+    # Gradle's build files are Groovy, so `text/x-gradle` is claimed by name. It
+    # came through the subclass DAG until shared-mime-info 2.5.1, which dropped
+    # its `sub-class-of text/x-groovy` and left it with no parent at all. (The
+    # Kotlin flavour, `text/x-gradle-kts`, still descends from `text/x-kotlin`.)
     {
       id = "groovy";
       label = "Groovy";
       kind = "code";
-      mime = [ "text/x-groovy" ];
+      mime = [
+        "text/x-groovy"
+        "text/x-gradle"
+      ];
       tags = [
         "groovy"
         "gradle"

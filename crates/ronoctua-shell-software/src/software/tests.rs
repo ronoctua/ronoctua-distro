@@ -2786,6 +2786,9 @@ fn declared_machine() -> Snapshot {
         reported: true,
         android_pending: Vec::new(),
         leaving: Vec::new(),
+        next_restart: false,
+        leaving_at_restart: Vec::new(),
+        back_at_restart: Vec::new(),
     };
     s
 }
@@ -3195,14 +3198,23 @@ fn a_decline_is_brought_back_where_it_applies_and_kept_here_too() {
         .unwrap();
     firefox.app.on_this_machine = false;
     firefox.app.declined_here = true;
-    let r = readings(Some(snap));
-    for t in every_language() {
-        let mut v = open(Opening::Home, &r);
-        v.level = Level::Distro("firefox".into());
-        let said = drawn(&rows_of(&v, &r, &t));
-        let returning = t.t(crate::key::SOFTWARE_DECLARED_RETURNING);
-        let first: String = returning.chars().take(20).collect();
-        assert!(said.contains(&first), "{said}");
+    // AND WITH THE SYSTEM THAT WAITS FOR THE RESTART HAVING IT ALREADY: it
+    // comes back with that restart.
+    let mut waits = snap.clone();
+    waits.declarations.back_at_restart = vec!["firefox".into()];
+    for (snap, k) in [
+        (snap, crate::key::SOFTWARE_DECLARED_RETURNING),
+        (waits, crate::key::SOFTWARE_DECLARED_RETURNING_RESTART),
+    ] {
+        let r = readings(Some(snap));
+        for t in every_language() {
+            let mut v = open(Opening::Home, &r);
+            v.level = Level::Distro("firefox".into());
+            let said = drawn(&rows_of(&v, &r, &t));
+            let returning = t.t(k);
+            let first: String = returning.chars().take(40).collect();
+            assert!(said.contains(&first), "{said}");
+        }
     }
 }
 
@@ -3211,8 +3223,16 @@ fn a_decline_is_brought_back_where_it_applies_and_kept_here_too() {
 /// not say so on its row, or cannot be asked again to go.
 #[test]
 fn what_leaves_at_the_next_update_says_so() {
+    // AT THE NEXT UPDATE, or — the system that waits for the restart left
+    // it out already — at that restart.
+    for why in [Refusal::LeavesAtNextApply, Refusal::LeavesAtNextRestart] {
+        leaves_and_says_so(why);
+    }
+}
+
+fn leaves_and_says_so(why: Refusal) {
     let mut snap = declared_machine();
-    snap.installed[0].trouble = Some(Refusal::LeavesAtNextApply);
+    snap.installed[0].trouble = Some(why);
     let key = snap.installed[0].key.clone();
     let r = readings(Some(snap));
     for t in every_language() {
@@ -3222,8 +3242,8 @@ fn what_leaves_at_the_next_update_says_so() {
             .iter()
             .find(|x| x.spot == Spot::Program(key.clone()))
             .expect("still listed");
-        let sentence = t.t(words::refusal_key(Refusal::LeavesAtNextApply));
-        let first: String = sentence.chars().take(16).collect();
+        let sentence = t.t(words::refusal_key(why));
+        let first: String = sentence.chars().take(40).collect();
         assert!(
             drawn(std::slice::from_ref(row)).contains(&first),
             "{}",

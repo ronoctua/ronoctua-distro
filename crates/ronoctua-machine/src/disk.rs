@@ -114,6 +114,62 @@ pub(crate) fn locked_rev(lock: &[u8], input: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// What a `flake.lock` locks the `nixpkgs` its system is built with at: the
+/// root's own [`crate::NIXPKGS_INPUT`] (a machine flake that rolls it), else
+/// the distro's ([`crate::DISTRO_INPUT`]'s own input of that name) — its
+/// `locked.rev`, else its `locked.narHash`, else its whole `locked` (a `path:`
+/// or a tarball locks no revision); `None` when the lock does not read or
+/// names no such input.
+#[must_use]
+pub(crate) fn locked_nixpkgs(lock: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(lock).ok()?;
+    let nodes = value.get("nodes")?;
+    let root = value.get("root")?.as_str()?;
+    let key = input_of(nodes, root, root, crate::NIXPKGS_INPUT).or_else(|| {
+        let distro = input_of(nodes, root, root, crate::DISTRO_INPUT)?;
+        input_of(nodes, root, &distro, crate::NIXPKGS_INPUT)
+    })?;
+    let locked = nodes.get(&key)?.get("locked")?;
+    for field in ["rev", "narHash"] {
+        if let Some(text) = locked.get(field).and_then(serde_json::Value::as_str) {
+            return Some(format!("{field} {text}"));
+        }
+    }
+    locked.is_object().then(|| locked.to_string())
+}
+
+/// The node the input `name` of the node `node` is, in a lock whose root is
+/// `root`: a node's key, or a `follows` path from the root (a list of input
+/// names), followed [`FOLLOWS_DEPTH`] steps deep at most — a path that goes
+/// round in a circle names nothing.
+fn input_of(nodes: &serde_json::Value, root: &str, node: &str, name: &str) -> Option<String> {
+    input_within(nodes, root, node, name, FOLLOWS_DEPTH)
+}
+
+/// How deep a `follows` path is followed.
+const FOLLOWS_DEPTH: usize = 8;
+
+fn input_within(
+    nodes: &serde_json::Value,
+    root: &str,
+    node: &str,
+    name: &str,
+    depth: usize,
+) -> Option<String> {
+    let depth = depth.checked_sub(1)?;
+    match nodes.get(node)?.get("inputs")?.get(name)? {
+        serde_json::Value::String(key) => Some(key.clone()),
+        serde_json::Value::Array(path) => {
+            let mut here = root.to_owned();
+            for step in path {
+                here = input_within(nodes, root, &here, step.as_str()?, depth)?;
+            }
+            Some(here)
+        }
+        _ => None,
+    }
+}
+
 /// The lock snapshot called `name`, under the state folder.
 pub(crate) fn snapshot(places: &Places, name: &str) -> PathBuf {
     places.state.join(name)
@@ -199,6 +255,37 @@ mod tests {
         assert_eq!(locked_rev(lock, "ronoctua").as_deref(), Some("613862cabc"));
         assert_eq!(locked_rev(lock, "nixpkgs"), None);
         assert_eq!(locked_rev(b"{", "ronoctua"), None);
+    }
+
+    /// FAILS IF: the `nixpkgs` a system is built with is not found where a
+    /// machine flake locks it — its own input, the distro's following it, or
+    /// (a flake that does not roll it) the distro's own —, or a lock that
+    /// names no revision (a tarball, a `path:`) reads as none at all.
+    #[test]
+    fn a_lock_names_the_nixpkgs_the_system_is_built_with() {
+        // ROLLED by the machine, the distro following it.
+        let rolled = br#"{"nodes":{"root":{"inputs":{"ronoctua":"ronoctua","nixpkgs":"nixpkgs"}},
+            "ronoctua":{"inputs":{"nixpkgs":["nixpkgs"]},"locked":{"rev":"aaaa"}},
+            "nixpkgs":{"locked":{"rev":"1111","narHash":"sha256-x"}}},"root":"root","version":7}"#;
+        assert_eq!(locked_nixpkgs(rolled).as_deref(), Some("rev 1111"));
+        // THE DISTRO'S, on a machine flake that does not roll it.
+        let pinned = br#"{"nodes":{"root":{"inputs":{"ronoctua":"ronoctua"}},
+            "ronoctua":{"inputs":{"nixpkgs":"nixpkgs_2"},"locked":{"rev":"aaaa"}},
+            "nixpkgs_2":{"locked":{"rev":"2222"}}},"root":"root","version":7}"#;
+        assert_eq!(locked_nixpkgs(pinned).as_deref(), Some("rev 2222"));
+        // A TARBALL: its hash, then.
+        let tarball = br#"{"nodes":{"root":{"inputs":{"nixpkgs":"n"}},
+            "n":{"locked":{"narHash":"sha256-y","type":"tarball","url":"https://x"}}},"root":"root","version":7}"#;
+        assert_eq!(locked_nixpkgs(tarball).as_deref(), Some("narHash sha256-y"));
+        // NONE NAMED, or no lock.
+        let none = br#"{"nodes":{"root":{"inputs":{"ronoctua":"ronoctua"}},
+            "ronoctua":{"locked":{"rev":"aaaa"}}},"root":"root","version":7}"#;
+        assert_eq!(locked_nixpkgs(none), None);
+        assert_eq!(locked_nixpkgs(b"{"), None);
+        // A FOLLOWS that goes round in a circle names nothing.
+        let circle =
+            br#"{"nodes":{"root":{"inputs":{"nixpkgs":["nixpkgs"]}}},"root":"root","version":7}"#;
+        assert_eq!(locked_nixpkgs(circle), None);
     }
 
     #[test]

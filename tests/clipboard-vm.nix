@@ -135,16 +135,45 @@ pkgs.testers.runNixOSTest {
     with subtest("the copied text is ON SCREEN"):
         # The queue keeping is not the same thing as the region showing. The OCR
         # closes the chain: capture -> queue -> expansion -> span -> pixel.
+        #
+        # THE FOOTER'S BAND, and not the whole output, the way `apps-vm` crops
+        # it. The history is drawn in the footer, anchored at the BOTTOM, so a
+        # crop of the whole screen is mostly empty desk, and
+        # `tesseract --psm 6`, which expects one uniform block of text, reads
+        # nothing at all from it. The band is as tall as the footer says it
+        # resolved (two fixed lines plus the open expansion), counted from the
+        # bottom edge; the argument is in the prelude, above `footer_band`.
+        #
+        # READ UNTIL IT SAYS IT, at most fifteen times one second apart: the
+        # expansion may not be on screen yet on a loaded machine, and that must
+        # not change the verdict. The band is asked again on every round,
+        # because the footer may still be settling its height.
         w, h, x, y = compositor_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
-        machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
-            "-colorspace gray -negate -resize 200% /tmp/clip.png"
-        )
-        read_back = machine.succeed(
-            "${pkgs.tesseract}/bin/tesseract /tmp/clip.png stdout --psm 6 2>/dev/null"
-        ).strip()
-        print(f"OCR: {read_back!r}")
+        read_back = ""
+        for _ in range(15):
+            band = min(h, footer_band())
+            top = max(0, h - band)
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
+                f"-crop {w}x{band}+0+{top} +repage "
+                "-colorspace gray -negate -resize 200% /tmp/clip.png"
+            )
+            # DIAGNOSIS BEFORE THE OCR, the shape `modeline-vm` uses: `cores=1`
+            # says "uniform band, nothing drawn", which separates a wrong crop
+            # from an absent drawing — and from a tesseract that drifted on a
+            # rolling nixpkgs — in one run.
+            print(f"the footer's band ({band} px): " + machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/clip.png "
+                "-format 'cores=%k mean=%[fx:mean]' info:"
+            ))
+            read_back = machine.succeed(
+                "${pkgs.tesseract}/bin/tesseract /tmp/clip.png stdout --psm 6 2>/dev/null"
+            ).strip()
+            print(f"OCR: {read_back!r}")
+            if "copied" in read_back.lower():
+                break
+            machine.sleep(1)
         assert "copied" in read_back.lower(), (
             f"the copied content is not on screen; OCR read {read_back!r}"
         )

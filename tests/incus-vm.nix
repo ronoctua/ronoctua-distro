@@ -278,7 +278,7 @@ pkgs.testers.runNixOSTest {
           ops = [e for e in events if e["type"] == "operation"]
           assert ops, f"no operation event: {events}"
           has("an operation event", ops[0]["metadata"], ["id", "description", "status_code", "resources", "may_cancel", "err"])
-          machine.copy_from_vm("/tmp/fixtures", "fixtures")
+          machine.copy_from_machine("/tmp/fixtures", "fixtures")
 
       with subtest("the queue's child pushes, pulls, exports and refuses"):
           as_person("printf 'from the host\\n' > ~/note.txt && chmod 0640 ~/note.txt")

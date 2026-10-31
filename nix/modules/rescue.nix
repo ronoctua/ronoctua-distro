@@ -57,33 +57,27 @@ let
   # is an edit that silently did nothing.
   staged = "/run/ronoctua-rescue/staged";
 
-  # THE ROLLBACK, without evaluating anything.
+  # THE ROLLBACK, without evaluating anything — the machine's own verb
+  # (`ronoctua-machine rollback switch|boot`, `crates/ronoctua-machine/src/
+  # rollback.rs`).
   #
   # `nixos-rebuild switch --rollback` would work, and it drags the whole
-  # evaluation in. These two commands are what it does underneath, and they run
-  # with no flake, no network and no `nix` evaluation at all — which matters,
-  # because the generation one is rolling back FROM may be the reason evaluation
-  # is broken.
+  # evaluation in; the verb runs with no flake, no network and no `nix`
+  # evaluation at all — which matters, because the generation one is rolling
+  # back FROM may be the reason evaluation is broken.
   #
-  # AND THE BOOT TRIAL IS DISARMED (`ronoctua-machine disarm`). An update arms
-  # one in two EFI variables the rollback does not touch: the one-shot would
-  # take the next boot straight back into the system rolled away from, and the
-  # default would keep every boot after it off `loader.conf`. The system left
-  # is recorded as one that did not boot, so the next update does not switch
-  # into it again. A disarm that is refused (another change holds the lock)
-  # is said, and the rollback goes on.
-  rollback = pkgs.writeShellScript "ronoctua-rescue-rollback" ''
-    set -eu
-    profile=/nix/var/nix/profiles/system
-    ${pkgs.nix}/bin/nix-env --profile "$profile" --rollback
-    ${machine.package}/bin/ronoctua-machine disarm \
-      || echo "the boot trial was not disarmed: the next boot may still try the system rolled away from" >&2
-    case "$1" in
-      switch) "$profile"/bin/switch-to-configuration switch ;;
-      boot)   "$profile"/bin/switch-to-configuration boot ;;
-      *) echo "unknown mode: $1" >&2; exit 2 ;;
-    esac
-  '';
+  # NOT `nix-env --rollback`: updates set their system for the NEXT BOOT, so
+  # the generation before the profile's may be one nobody ever booted (two
+  # applies before a restart leave two) — on another nixpkgs, perhaps, and
+  # with no boot trial behind it. While a system waits, the way back is the
+  # system that RUNS, and nothing is switched; otherwise the generation
+  # before, passing over the one whose trial failed. AND THE BOOT TRIAL IS
+  # DISARMED by the same verb: an update arms one in two EFI variables a
+  # rollback does not touch — the one-shot would take the next boot straight
+  # back into the system rolled away from —, and the system left is recorded
+  # as one that did not boot, so the next update does not switch into it
+  # again. The instance (`switch` or `boot`) is the verb's word.
+  rollback = "${machine.package}/bin/ronoctua-machine rollback";
 
   # WHAT INSTALLS WHAT THE EDITOR WROTE — and refuses what does not parse.
   #
@@ -224,7 +218,7 @@ in
     # WHAT IT MAY ASK FOR
     # ---------------------------------------------------------------
     systemd.services."ronoctua-rescue-rollback@" = {
-      description = "Goes back to the previous generation (%i)";
+      description = "Goes back to the system that runs, or the previous generation (%i)";
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${rollback} %i";

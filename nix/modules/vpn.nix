@@ -182,6 +182,13 @@ in
       # and only then does the view read again with the locations on it. The
       # path unit fires the sync on its own as well; this only waits for a run
       # that has seen the new locations.
+      #
+      # NO START LIMIT: only the person's gesture starts it (the import, the
+      # network view's register), and it never restarts by itself — systemd's
+      # default of five starts in ten seconds would refuse a sixth register as
+      # `start-limit-hit`. The sync keeps the default: its path unit and the
+      # boot start it on their own, and there the limit is a guard.
+      startLimitIntervalSec = 0;
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${helper} vpn-install ${user}";
@@ -271,6 +278,8 @@ in
     # result) rather than left to a path unit a beat behind. Neither carries a
     # secret or any argument. (Bringing a profile UP needs no rule:
     # NetworkManager grants an active local session `network-control` already.)
+    # Its width is `vpn-rule-is-narrow`'s, and `vpn` is signed for it in
+    # `polkit-rules-are-the-ones-we-know`.
     security.polkit.extraConfig = ''
       polkit.addRule(function (action, subject) {
         if (

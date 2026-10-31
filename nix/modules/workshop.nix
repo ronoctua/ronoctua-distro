@@ -4,14 +4,18 @@
 # ----------------
 # - Blender and OrcaSlicer, from nixpkgs. Programs one installs to USE, so
 #   `profile.nix` turns this on in the full profile only.
-# - OrcaSlicer as the DEFAULT for `model/stl`, `model/3mf` and `model/step`,
-#   in `/etc/xdg/mimeapps.list` (`xdg.mime.defaultApplications`, which merges
-#   with the queue's magnet default in `transfers.nix`). The file manager
-#   reads the defaults before the declarations (`ronoctua_apps::defaults`).
-#   OrcaSlicer's own entry now claims all three upstream (orca-slicer 2.4.2 on
-#   nixos-unstable gained `model/step`), so the default no longer rescues a
-#   `.step` from a `text/plain` editor — it makes OrcaSlicer win
-#   deterministically over any other claimant.
+# - OrcaSlicer as the DEFAULT for every model type its entry opens —
+#   `model/stl`, `model/3mf`, `model/step`, `model/obj` and
+#   `application/x-amf` — in `/etc/xdg/mimeapps.list`
+#   (`xdg.mime.defaultApplications`, which merges with the queue's magnet
+#   default in `transfers.nix`). The file manager reads the defaults before
+#   the declarations (`ronoctua_apps::defaults`). OrcaSlicer's own entry
+#   declares all five (orca-slicer 2.4.2 on nixos-unstable gained
+#   `model/step`; it names `model/obj` by its alias,
+#   `application/prs.wavefront-obj`, which the opener reads as the type), so
+#   the declarations alone keep a model from a `text/plain` editor. What the
+#   default adds is that OrcaSlicer wins deterministically over any other
+#   program that declares a model.
 #
 # `/etc/xdg` sits above `$XDG_DATA_DIRS/applications`, where the player keeps
 # its own defaults, and below the person's `~/.config/mimeapps.list`: a
@@ -46,6 +50,8 @@ let
     "model/stl"
     "model/3mf"
     "model/step"
+    "model/obj"
+    "application/x-amf"
   ];
 
 in
@@ -58,8 +64,8 @@ in
     type = lib.types.bool;
     default = false;
     description = ''
-      Blender and OrcaSlicer, with OrcaSlicer as the default for
-      `model/stl`, `model/3mf` and `model/step`. On in the full profile.
+      Blender and OrcaSlicer, with OrcaSlicer as the default for the 3D
+      models it opens (STL, 3MF, STEP, OBJ and AMF). On in the full profile.
     '';
   };
 

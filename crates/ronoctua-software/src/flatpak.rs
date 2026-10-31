@@ -402,6 +402,24 @@ fn every_argv() -> Vec<Vec<String>> {
     ]
 }
 
+/// What a Flatpak saved (`~/.var/app/<id>`), once the app itself is gone —
+/// the second, danger-coloured answer of "remove for good".
+pub(crate) fn erase_data(ctx: &Context, id: &str) {
+    if !valid_id(id)
+        || installed(ctx)
+            .iter()
+            .any(|i| i.key == AppKey::Flatpak { id: id.to_owned() })
+    {
+        return;
+    }
+    let dir = ctx.roots.home.join(".var/app").join(id);
+    if let Err(e) = std::fs::remove_dir_all(&dir)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(error = %e, dir = %dir.display(), "what the app saved was not erased");
+    }
+}
+
 /// Whether `id` is an application id this crate will put on a command line.
 ///
 /// Three or more dot-separated parts of ASCII letters, digits, `_` and `-`,

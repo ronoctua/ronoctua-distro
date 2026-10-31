@@ -51,7 +51,7 @@
 # # The distro's other sources
 #
 # Flatpaks, AppImages, web apps and Android apps of the distro come from
-# `assets/distro-apps.nix` (the Crafting Apps' AppImages, today), pinned in
+# `assets/distro-apps.nix` (the crafts group's AppImages, today), pinned in
 # `assets/distro-pins.json` (`nix run .#distro-pins`). A Flatpak goes to the
 # person's `--user` installation through nix-flatpak (`flatpak.nix`), an
 # AppImage is wrapped (`appimageTools.wrapType2`) in a part of its own, a web
@@ -63,8 +63,8 @@
 # # The AppImages the person follows past the distro's pins
 #
 # The owner's decision (2026-10-20): the person may let the routine update
-# move the AppImages whose table entry follows a GitHub repository (the
-# Crafting Apps) past the release the gate tested. Their option
+# move the AppImages whose table entry follows a GitHub repository (today
+# the ArtCraft Launcher and SolidCraft) past the release the gate tested. Their option
 # (`distro-apps-follow-releases` in `options.json`) and their followed pins
 # (`software/distro-pins.json`) are the person's signed data, root's
 # validated copy (`ronoctua.person.options`, `ronoctua.person.distroPins`).
@@ -538,18 +538,20 @@ let
   # image's own `X-` keys never survive the writing, so the key is always
   # this table's.
   #
-  # AND THE IMAGE NEVER INSTALLS ITSELF (invariant 6). An `AppRun` may write
-  # its own launcher and icons into `~/.local/share` when it believes it runs
-  # from an AppImage file — the AppImage convention is that `$APPIMAGE` names
-  # the file — and that launcher would name a program the person cannot run
-  # and the registry cannot decline. The wrapper runs the image already
+  # AND THE IMAGE NEVER WRITES ITS OWN LAUNCHER: the launcher is the
+  # registry's (`entry`, below). An `AppRun` may write its own launcher and
+  # icons into `~/.local/share` when it believes it runs from an AppImage
+  # file — the AppImage convention is that `$APPIMAGE` names the file — and
+  # that launcher would name a program the person cannot run and the
+  # registry cannot decline. The wrapper runs the image already
   # unpacked and never sets `$APPIMAGE`, but it would pass one through from
   # whoever started it; so the program the system runs (`wrapper`) unsets it
-  # and sets the opt-out the Crafting Apps' `AppRun` reads,
-  # `<KEY>_NO_DESKTOP_INTEGRATION=1` (`PHOTOCRAFT_…`, `FIGCRAFT_…`, the two
-  # that have one), from the key — a variable an image does not read costs
-  # nothing. Measured in a VM: with `$APPIMAGE` pointing at a file, nothing
-  # is written.
+  # and sets the opt-out an `AppRun` may read,
+  # `<KEY>_NO_DESKTOP_INTEGRATION=1`, from the key — a variable an image does
+  # not read costs nothing. Measured in a VM on the thirteen craft images of
+  # 2026-10-20 (`PHOTOCRAFT_…` and `FIGCRAFT_…` were the two read): with
+  # `$APPIMAGE` pointing at a file, nothing was written. The ArtCraft
+  # Launcher's and SolidCraft's images were not searched for it.
   appimageOf =
     {
       key,

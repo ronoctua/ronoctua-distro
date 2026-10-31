@@ -25,6 +25,14 @@ pub const LOCK: &str = "/var/lib/ronoctua-parts/records.lock";
 /// switch and a part's realization never takes what is still to be built.
 pub const PLAN_ROOTS: &str = "/nix/var/nix/gcroots/ronoctua-parts/plan";
 
+/// The roots of the derivations of the plan of a system SET FOR THE NEXT
+/// BOOT (`plan --next`): that system's parts are realized only after the
+/// restart, and the update's garbage collection in between would take
+/// their derivations, which nothing else holds (the plan carries them as
+/// text). One link per part, the set replaced whole by each update, and
+/// emptied when nothing waits for the next boot.
+pub const NEXT_ROOTS: &str = "/nix/var/nix/gcroots/ronoctua-parts/next";
+
 /// The downloads of each part that is here, rooted so a wrapper's change
 /// never fetches them again and a stick can carry them (`export`):
 /// `<KEPT>/<id>/<name>`.

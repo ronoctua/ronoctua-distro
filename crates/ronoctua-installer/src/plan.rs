@@ -20,14 +20,20 @@
 //!    working directory: the TEMPLATE (`templates/machine`), aimed at the
 //!    ISO's own tree, `host.nix`, the hardware report, the lock, and the name
 //!    of the system it builds — asked of the flake itself, never spelled
-//!    here.
+//!    here. The lock STARTS FROM THE TREE'S OWN (`--reference-lock-file`):
+//!    every input the template names besides the distro's — today the
+//!    `nixpkgs` the machine rolls on `nixos-unstable` — is the pin the
+//!    distro tested and the ISO carries, never a branch resolved here; the
+//!    machine's first update rolls it.
 //! 2. The programs left out, as root's staged declines applied to the
 //!    working flake (below).
 //! 3. The system BUILT, before the disk is touched: what the machine needs
 //!    and the ISO does not carry fails with the disk intact.
 //! 4. `disko`, the flake to the target, the password, the Wi-Fi, and
-//!    `nixos-install`, which copies what step 3 built; then the parts the ISO
-//!    carries, seeded into the machine's store (`ronoctua-parts seed`).
+//!    `nixos-install`, which copies what step 3 built; then what the parts
+//!    need to arrive on the first boot, seeded into the machine's store
+//!    (`ronoctua-parts seed`): their derivations, and any output this medium
+//!    holds.
 //! 5. The person's home: the access to the repository (the deploy key or the
 //!    token), the consent for its host and `belongings.json` — and what the
 //!    first boot finishes (`crate::first_boot`): the record, and the
@@ -379,6 +385,22 @@ pub fn aimed_flake() -> String {
 /// The lock file's name, beside a flake's `flake.nix`.
 pub const LOCK_FILE: &str = "flake.lock";
 
+/// The working flake's lock — what the lock step writes, and nothing after
+/// it.
+#[must_use]
+pub fn work_lock() -> String {
+    format!("{WORK_DIRECTORY}/{LOCK_FILE}")
+}
+
+/// The lock the working flake's starts from: the distro tree's own. Every
+/// input the template names besides the distro's is kept at the node this
+/// lock has for it, so the machine is born on the distro's tested pins and
+/// no branch is resolved (see the lock step in [`steps`]).
+#[must_use]
+pub fn reference_lock(origin: &Origin) -> String {
+    format!("{}/{LOCK_FILE}", origin.distro)
+}
+
 /// The mark in a command where the attribute the machine's flake names goes
 /// — asked of the flake ([`Capture::Attribute`]) and filled in by the
 /// executor. The plan never spells the person's name as a system's.
@@ -636,10 +658,12 @@ pub fn host_nix(r: &Answers) -> String {
     // the machine comes up on the layout of the computer this was written on.
     let _ = writeln!(s, "  ronoctua.keyboard.layout = \"{}\";", r.keyboard);
     // THE VARIANT AND THE COMPOSE KEY are written even when EMPTY, and that is
-    // deliberate: empty is an answer here — `gb` wants no variant, and a layout
-    // that already carries the accents wants no Compose key. Writing the line
-    // makes the file say what was chosen; omitting it would leave the module's
-    // default in force and make the answer invisible.
+    // deliberate: empty is an answer here — a plain `us` without the default
+    // `euro`, or a layout whose plain map is the right one, wants no variant,
+    // and a layout that already carries the accents wants no Compose key.
+    // Writing the line makes the file say what was chosen; omitting it would
+    // leave the module's default (`us`'s `euro`) in force on any layout and
+    // make the answer invisible.
     let _ = writeln!(
         s,
         "  ronoctua.keyboard.variant = \"{}\";",
@@ -893,9 +917,21 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
         // it does is destructive.
         false,
     ));
-    // THE LOCK: the ISO's tree the machine is built from, and every input of
-    // the distro's exactly as its lock pinned them — every one in the ISO's
-    // store (`nix/installer/offline.nix`), so nothing is fetched.
+    // THE LOCK, STARTED FROM THE DISTRO'S OWN (`--reference-lock-file`): the
+    // ISO's tree the machine is built from, locked fresh, and every other
+    // input the template names — today `nixpkgs`, which the machine rolls —
+    // kept at the node the tree's lock has for it, whose `original` is the
+    // template's (`a-new-machine-starts-on-the-tested-nixpkgs`). So the
+    // machine is born on the nixpkgs the distro tested and the ISO carries,
+    // and its first update rolls it (`ronoctua-machine`'s `flake-update`).
+    //
+    // NOT THE TEMPLATE LOCKED ON ITS OWN: `nixos-unstable` is a branch, and
+    // turning a branch into a revision asks GitHub. With no network that
+    // fails; with one it locks the newest unstable, which the ISO does not
+    // carry, and the build below would compile the whole system on the live
+    // ISO instead of copying it. The distro's tree (`--distro`, or the ISO's
+    // own) is where the reference is read; the written lock is the working
+    // flake's, said rather than left to Nix's default.
     sequence.push(offline(
         key::INST_STEP_LOCK,
         vec![
@@ -903,6 +939,10 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
             "flake".into(),
             "lock".into(),
             "--offline".into(),
+            "--reference-lock-file".into(),
+            reference_lock(origin),
+            "--output-lock-file".into(),
+            work_lock(),
             work_flake.clone(),
         ],
         false,
@@ -1094,10 +1134,13 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
         ],
         true,
     ));
-    // THE PARTS THE ISO CARRIES, into the machine's store: a part the plan
-    // wants and this medium holds arrives on the first boot with no
-    // network (`ronoctua-parts seed`). It never fails the installation —
-    // a part that is not here downloads later, like any other.
+    // WHAT THE PARTS NEED TO ARRIVE ON THE FIRST BOOT, into the machine's
+    // store (`ronoctua-parts seed`): every wanted part's derivations — the
+    // `.drv` graph building the system here instantiated, which the system's
+    // closure does not carry —, so each part BUILDS on the first boot instead
+    // of being found neither here nor buildable; and any output this medium
+    // holds, which then arrives with no network at all. It never fails the
+    // installation — a part that is not here downloads later, like any other.
     sequence.push(Step {
         // The `nix` it copies with, by path: the installer's own.
         env: vec![("RONOCTUA_NIX".to_owned(), origin.nix.clone())],
@@ -1565,8 +1608,9 @@ mod tests {
 
     /// FAILS IF: the system is not built before the disk is touched — out of
     /// its order, from anything but the working flake's system, or not
-    /// offline — or anything destructive comes first; or the parts the ISO
-    /// carries are not seeded after `nixos-install`, with its `nix` by path.
+    /// offline — or anything destructive comes first; or what the parts need
+    /// on the first boot is not seeded after `nixos-install`, with its `nix`
+    /// by path.
     #[test]
     fn the_system_is_built_before_the_disk_is_touched() {
         let p = steps(&answers(), &origin());
@@ -1666,6 +1710,10 @@ mod tests {
                     "flake",
                     "lock",
                     "--offline",
+                    "--reference-lock-file",
+                    "/etc/ronoctua/distro/flake.lock",
+                    "--output-lock-file",
+                    "/tmp/ronoctua-flake/flake.lock",
                     &format!("path:{WORK_DIRECTORY}")
                 ]
             );
@@ -1703,6 +1751,86 @@ mod tests {
                 p[copied].command[p[copied].command.len() - 2..],
                 [WORK_DIRECTORY.to_owned(), TARGET_DIRECTORY.to_owned()]
             );
+        }
+    }
+
+    /// FAILS IF: the machine's lock does not start from the distro tree's
+    /// own — no `--reference-lock-file`, a reference other than the tree's
+    /// `flake.lock` (the ISO's, or the one `--distro` names), a lock written
+    /// anywhere but the working flake's, or a lock step that is not offline
+    /// — or the lock comes before the template is in place and aimed, or
+    /// after anything evaluates the flake, or there are two. Locked on its
+    /// own, the template's `nixos-unstable` is a branch only GitHub can turn
+    /// into a revision: with no network the installation stops there, and
+    /// with one it locks a nixpkgs the ISO does not carry. That the tree's
+    /// lock HAS the node the template's input keeps is
+    /// `a-new-machine-starts-on-the-tested-nixpkgs`'s.
+    #[test]
+    fn the_lock_starts_from_the_distros_own() {
+        for aimed in [false, true] {
+            for distro in ["/etc/ronoctua/distro", "/nix/store/zzzz-source"] {
+                let origin = Origin {
+                    aimed,
+                    distro: distro.to_owned(),
+                    ..origin()
+                };
+                let p = steps(&answers(), &origin);
+                let lock = at(&p, key::INST_STEP_LOCK);
+                let words = &p[lock].command;
+                let after = |flag: &str| {
+                    words
+                        .iter()
+                        .position(|w| w == flag)
+                        .and_then(|i| words.get(i + 1))
+                        .cloned()
+                };
+                assert_eq!(
+                    after("--reference-lock-file"),
+                    Some(format!("{distro}/flake.lock")),
+                    "{words:?}"
+                );
+                assert_eq!(reference_lock(&origin), format!("{distro}/flake.lock"));
+                assert_eq!(
+                    after("--output-lock-file"),
+                    Some("/tmp/ronoctua-flake/flake.lock".to_owned()),
+                    "{words:?}"
+                );
+                assert_eq!(work_lock(), "/tmp/ronoctua-flake/flake.lock");
+                assert_eq!(
+                    words.last().map(String::as_str),
+                    Some("path:/tmp/ronoctua-flake"),
+                    "the flake locked is not the working one"
+                );
+                assert!(words.iter().any(|w| w == "--offline"), "{words:?}");
+                assert!(
+                    p[lock]
+                        .env
+                        .iter()
+                        .any(|(n, v)| n == "NIX_CONFIG" && v == OFFLINE_NIX_CONFIG),
+                    "the lock asks a substituter or the registry"
+                );
+                // AFTER THE TEMPLATE AND ITS AIM, BEFORE ANYTHING EVALUATES IT.
+                assert!(at(&p, key::INST_STEP_TEMPLATE) < lock);
+                if aimed {
+                    assert!(at(&p, key::INST_STEP_AIM) < lock);
+                }
+                for later in [
+                    key::INST_STEP_ATTRIBUTE,
+                    key::INST_STEP_BUILD_FIRST,
+                    key::INST_STEP_PARTITION,
+                ] {
+                    assert!(lock < at(&p, later), "`{later}` comes before the lock");
+                }
+                let locks = p
+                    .iter()
+                    .filter(|s| {
+                        s.command
+                            .windows(2)
+                            .any(|w| w[0] == "flake" && w[1] == "lock")
+                    })
+                    .count();
+                assert_eq!(locks, 1, "aimed: {aimed}");
+            }
         }
     }
 

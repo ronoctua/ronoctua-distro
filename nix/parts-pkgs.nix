@@ -11,12 +11,11 @@
 # predicate is written once and nixpkgs is evaluated once more, not once per
 # program.
 #
-# Under the new model (owner amendment 2026-10-30, replacing "nothing
-# imperative") this door is narrowing: the fast-moving apps are moving to their
-# own updaters, under `$HOME` and outside the generation, so fewer unfree
-# programs need a part at all. There is still no public cache of apps and the
-# OS substrate stays declarative with rollback; what remains here is the
-# seeding of what an updater later keeps current.
+# The 2026-10-30 model (owner amendment, replacing "nothing imperative")
+# leaves this door as it was. Claude Code stays a part from here, at the
+# version `nix/claude-code.nix` pins: its native self-updater was reverted the
+# same day (it fetches a generic-linux binary NixOS cannot run without
+# nix-ld), so the build from here is the one that runs.
 #
 # BY NAME, each with its reason: the predicate is only ever asked about a
 # package that is already unfree, so a name here lets in exactly that

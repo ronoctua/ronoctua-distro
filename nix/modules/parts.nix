@@ -10,14 +10,19 @@
 # PART: declared here, never in the system's closure, realized on its own by
 # root (`ronoctua-parts`), and kept in a Nix profile of its own.
 #
-# UNDER THE NEW MODEL (owner amendment 2026-10-30, replacing "nothing
-# imperative") the parts system is being RETIRED FOR APPS: the fast-moving
-# programs it used to carry — the coding agents, the Craft Apps, SolidCraft —
-# now keep themselves current through their own updaters, under `$HOME` and
-# outside the generation, so they no longer wait on a part to arrive. The
-# mechanism below is described as it still stands while that migration runs;
-# its rationale is now the narrow one of seeding what an updater later takes
-# over, not the old "if it is not in the flake it does not exist".
+# UNDER THE 2026-10-30 MODEL (owner amendment, replacing "nothing
+# imperative") the parts stay what they were. The Crafting Apps the ArtCraft
+# Launcher fetches keep themselves current under `$HOME`, outside the
+# generation, and wait on no part; the launcher itself and SolidCraft are
+# parts, as every distro AppImage is. Claude Code is a part too
+# (`nix/claude-code.nix`, pinned and patched for NixOS; Codex is nixpkgs'
+# `pkgs.codex`, no part): the native updater tried in its place downloads a
+# binary NixOS cannot run, and was reverted the same day.
+#
+# AND THE UPDATE SETS ITS SYSTEM FOR THE NEXT BOOT (`ronoctua-machine apply
+# --next-boot`): that system's parts are realized by the planner of its boot,
+# and until then the update's `plan --next` roots their derivations
+# (`ronoctua_parts::names::NEXT_ROOTS`), which nothing else holds.
 #
 # THE CONTRACT
 # ------------

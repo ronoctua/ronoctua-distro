@@ -1,13 +1,26 @@
-//! `apply`: build, switch, arm the boot trial — and `apply --rehearse`,
-//! which only measures.
+//! `apply`: build, switch, arm the boot trial — `apply --next-boot`, which
+//! sets what built for the next boot instead of switching, and `apply
+//! --rehearse`, which only measures.
+//!
+//! # For the next boot
+//!
+//! The update's apply sets the new system for the next boot
+//! (`switch-to-configuration boot`): nothing that runs is stopped or
+//! restarted, and the boot trial is armed for real, the next boot trying
+//! the new system once ([`crate::Applying`] says why). Any other apply does
+//! the same, unasked, while a system already waits for the next boot or the
+//! folder's lock moved `nixpkgs` past the profile's system ([`switches_now`]).
+//! The record says [`ApplyResult::Staged`] and names the system that waits
+//! ([`LastApply::toplevel`]).
 //!
 //! # The machine directory describes the system the profile names
 //!
-//! The update moves the distro input (`nix flake update ronoctua`) BEFORE it
-//! applies, so the lock apply finds may already name a revision nothing was
-//! built from. The lock the profile's system WAS built from is known apart
-//! from the folder: the system carries it (`etc/ronoctua/machine.lock`, put
-//! there by `nix/modules/machine.nix`), and for a system that carries none —
+//! The update moves the distro and `nixpkgs` inputs (`nix flake update
+//! ronoctua nixpkgs`) BEFORE it applies, so the lock apply finds may already
+//! name revisions nothing was built from. The lock the profile's system WAS
+//! built from is known apart from the folder: the system carries it
+//! (`etc/ronoctua/machine.lock`, put there by `nix/modules/machine.nix`), and
+//! for a system that carries none —
 //! the old layout's, right after a migration — a snapshot
 //! ([`crate::APPLIED_LOCK`], written by the migration and every time the
 //! profile takes a new system) says it. Every way out of an apply that did
@@ -40,7 +53,8 @@
 //! starts at once) judges a trial an earlier boot tried, the way the bless
 //! would ([`crate::bless`]): it must not arm a new trial against a last good
 //! system that is not the last one, nor build again the system that did not
-//! boot. That one is refused (`did-not-boot`) until the distro moves.
+//! boot. That one is refused (`did-not-boot`) until the distro or `nixpkgs`
+//! moves and another system is built.
 
 use ronoctua_person::frontier::Download;
 use ronoctua_person::state::{ApplyResult, LastApply, MachineState, TrialOutcome};
@@ -50,8 +64,8 @@ use crate::build::{Built, Unbuilt};
 use crate::loader::Loader;
 use crate::system::{self, needed};
 use crate::{
-    APPLIED_LOCK, Applied, DISTRO_INPUT, Machine, Refusal, Why, bless, boot, boots, build, disk,
-    dry, guard, mirror, run, say, trial,
+    APPLIED_LOCK, Applied, Applying, DISTRO_INPUT, Machine, NIXPKGS_INPUT, Refusal, Why, bless,
+    boot, boots, build, disk, dry, guard, mirror, run, say, trial,
 };
 
 /// The attribute the machine flake builds, or a refusal.
@@ -121,16 +135,19 @@ impl Locks {
     }
 }
 
-/// Records how the apply ended, and what its build could not fetch.
+/// Records how the apply ended, the system it set up (if it set one up)
+/// and what its build could not fetch.
 fn record(
     m: &Machine,
     state: &mut MachineState,
     result: ApplyResult,
+    toplevel: Option<&str>,
     missing: Vec<Download>,
 ) -> Result<(), Refusal> {
     state.last_apply = Some(LastApply {
         at: disk::now(),
         result,
+        toplevel: toplevel.map(str::to_owned),
         missing,
     });
     disk::write_state(&m.places, state)
@@ -145,7 +162,7 @@ fn refuse(
     why: Why,
 ) -> Refusal {
     locks.put_back();
-    let _ = record(m, state, result, Vec::new());
+    let _ = record(m, state, result, None, Vec::new());
     Refusal::of(why)
 }
 
@@ -154,12 +171,13 @@ fn refuse(
 /// offers to hand in or bring on a stick.
 fn unbuilt(m: &Machine, locks: &Locks, state: &mut MachineState, failed: Unbuilt) -> Refusal {
     locks.put_back();
-    let _ = record(m, state, ApplyResult::BuildFailed, failed.missing);
+    let _ = record(m, state, ApplyResult::BuildFailed, None, failed.missing);
     failed.refusal
 }
 
-/// `apply`.
-pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
+/// `apply`, now or for the next boot (`how`: never a rehearsal, which is
+/// [`rehearse`]).
+pub(crate) fn apply(m: &Machine, how: Applying) -> Result<Applied, Refusal> {
     let _lock = guard(m)?;
     let (p, s) = (&m.places, &m.system);
     let attr = attr(m)?;
@@ -280,6 +298,7 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
     let made = Made {
         toplevel: &toplevel,
         missing,
+        how,
     };
     let outcome = switch_to(m, &nix_env, &loader, limit, &locks, &mut state, made);
     let _ = disk::remove(&out);
@@ -287,10 +306,89 @@ pub(crate) fn apply(m: &Machine) -> Result<Applied, Refusal> {
 }
 
 /// What a good build made: the system, and what it left missing — the
-/// hardware that waits for a network, when it was built without it again.
+/// hardware that waits for a network, when it was built without it again —
+/// and how the apply was asked to set it up.
 struct Made<'a> {
     toplevel: &'a str,
     missing: Vec<Download>,
+    how: Applying,
+}
+
+/// Whether an apply asked as `how` may switch to `toplevel` NOW: it was not
+/// asked for the next boot, and either `toplevel` is what already runs (a
+/// switch to it activates nothing new) or the system that runs is the
+/// profile's (or one of its specialisations) — a system set for the next
+/// boot stays for the next boot — and the folder's lock names the very
+/// `nixpkgs` the profile's system was built from ([`disk::locked_nixpkgs`]).
+/// A `nixpkgs` this cannot tell — a lock that names none, a profile's system
+/// whose lock is not known — is no proof that nothing moved: that system is
+/// set for the next boot too, and the journal says why. Pure but for the
+/// specialisations, read off the systems.
+pub(crate) fn switches_now(
+    m: &Machine,
+    how: Applying,
+    toplevel: &str,
+    systems: (Option<&str>, Option<&str>),
+    locks: (Option<&[u8]>, Option<&[u8]>),
+) -> bool {
+    if how != Applying::Now {
+        return false;
+    }
+    let (profile, running) = systems;
+    if let Some(running) = running
+        && boot::tops_of(&m.system, toplevel)
+            .iter()
+            .any(|t| t == running)
+    {
+        return true;
+    }
+    if let (Some(profile), Some(running)) = (profile, running)
+        && !boot::tops_of(&m.system, profile)
+            .iter()
+            .any(|t| t == running)
+    {
+        say(
+            6,
+            "the system profile names a system that does not run yet: this one is set for the \
+             next boot too, and nothing that runs is switched",
+        );
+        return false;
+    }
+    let (now, built_from) = locks;
+    let nixpkgs = |lock: Option<&[u8]>| lock.and_then(disk::locked_nixpkgs);
+    match (nixpkgs(now), nixpkgs(built_from)) {
+        (Some(now), Some(then)) if now == then => true,
+        (Some(now), Some(then)) => {
+            say(
+                6,
+                &format!(
+                    "the lock moved {NIXPKGS_INPUT} from {then} to {now}: the new system is set for \
+                     the next boot, and nothing that runs is switched across it"
+                ),
+            );
+            false
+        }
+        (None, _) => {
+            say(
+                6,
+                &format!(
+                    "the folder's lock names no {NIXPKGS_INPUT} this can read: whether it moved is \
+                     not known, so the new system is set for the next boot"
+                ),
+            );
+            false
+        }
+        (Some(_), None) => {
+            say(
+                6,
+                &format!(
+                    "the {NIXPKGS_INPUT} the profile's system was built from is not known: whether \
+                     it moved is not either, so the new system is set for the next boot"
+                ),
+            );
+            false
+        }
+    }
 }
 
 /// The machine's system built into `out` — and, when the build failed for
@@ -329,14 +427,19 @@ fn switch_to(
     state: &mut MachineState,
     made: Made,
 ) -> Result<Applied, Refusal> {
-    let Made { toplevel, missing } = made;
+    let Made {
+        toplevel,
+        missing,
+        how,
+    } = made;
     let s = &m.system;
     let profile = s.resolve(system::PROFILE);
     let running = s.resolve(system::CURRENT);
 
     // THE SYSTEM THAT DID NOT BOOT is not tried again: the next update would
     // switch into it, and the next restart fail the same way. A newer distro
-    // revision builds another system, and that one is tried.
+    // revision, or a `nixpkgs` the machine rolled on, builds another system,
+    // and that one is tried.
     if let Some(t) = &state.trial
         && t.outcome == TrialOutcome::Failed
         && t.toplevel == toplevel
@@ -344,7 +447,7 @@ fn switch_to(
         say(
             3,
             "this is the system that did not start when it was tried (or was rolled back): it is \
-             not tried again before the distro moves on (did-not-boot)",
+             not tried again before the distro or nixpkgs moves on (did-not-boot)",
         );
         return Err(refuse(
             m,
@@ -358,7 +461,7 @@ fn switch_to(
     // NOTHING TO SWITCH: the profile and the running system already are it.
     if profile.as_deref() == Some(toplevel) && running.as_deref() == Some(toplevel) {
         locks.adopt(m);
-        record(m, state, ApplyResult::Switched, missing)?;
+        record(m, state, ApplyResult::Switched, Some(toplevel), missing)?;
         say(6, "the built system is the one running: nothing to switch");
         return Ok(Applied {
             result: ApplyResult::Switched,
@@ -395,6 +498,20 @@ fn switch_to(
         }
     }
 
+    // NOW, OR FOR THE NEXT BOOT — decided before the profile moves, against
+    // the system it names now and the lock that system was built from.
+    let switch_how = if switches_now(
+        m,
+        how,
+        toplevel,
+        (profile.as_deref(), running.as_deref()),
+        (locks.now.as_deref(), locks.running.as_deref()),
+    ) {
+        Switch::Switch
+    } else {
+        Switch::Boot
+    };
+
     // THE PROFILE: from here the next boot is the new system, and the
     // folder's lock is the one it was built from.
     if run::status(nix_env, &argv::set_profile(&s.profile(), toplevel))? != Some(0) {
@@ -410,18 +527,22 @@ fn switch_to(
     locks.adopt(m);
 
     // THE SWITCH. 4 is "switched, and some units it started failed": the
-    // new system runs, and that is not a failed apply.
+    // new system runs, and that is not a failed apply. FOR THE NEXT BOOT
+    // (`boot`) only the boot loader is written: nothing runs the new system
+    // yet, and 0 is `staged`.
     let switch = s.real(toplevel).join("bin/switch-to-configuration");
-    let result = match run::status(&switch, &argv::switch(Switch::Switch))? {
-        Some(0) => ApplyResult::Switched,
-        Some(4) => ApplyResult::SwitchedWithFailures,
+    let result = match (switch_how, run::status(&switch, &argv::switch(switch_how))?) {
+        (Switch::Boot, Some(0)) => ApplyResult::Staged,
+        (Switch::Switch, Some(0)) => ApplyResult::Switched,
+        (Switch::Switch, Some(4)) => ApplyResult::SwitchedWithFailures,
         _ => ApplyResult::SwitchFailed,
     };
 
     // THE TRIAL — armed even after a failed switch: the profile already
     // names the new system, and the next boot needs its way back most then.
     // Only a switch that returned 0 may bless at once a system that boots
-    // like the last good one; any other is tried by a boot.
+    // like the last good one; any other — a system set for the next boot
+    // above all, which nothing has run — is tried by a boot.
     let armed = trial::arm(m, loader, state, toplevel, result == ApplyResult::Switched);
     match &armed {
         Ok(t) => {
@@ -434,13 +555,25 @@ fn switch_to(
             boots::forget(m);
         }
     }
-    record(m, state, result, missing)?;
+    record(m, state, result, Some(toplevel), missing)?;
     if result == ApplyResult::SwitchFailed {
-        say(
-            3,
-            "the switch failed; the next boot tries the new system with the way back armed",
-        );
-        return Err(Refusal::of(Why::SwitchFailed));
+        return Err(match switch_how {
+            Switch::Switch => {
+                say(
+                    3,
+                    "the switch failed; the next boot tries the new system with the way back armed",
+                );
+                Refusal::of(Why::SwitchFailed)
+            }
+            Switch::Boot => {
+                say(
+                    3,
+                    "setting the new system for the next boot failed: nothing that runs changed, \
+                     and the boot menu may not list it (next-boot-failed)",
+                );
+                Refusal::of(Why::NextBootFailed)
+            }
+        });
     }
     Ok(Applied {
         result,
@@ -450,8 +583,8 @@ fn switch_to(
 }
 
 /// `apply --rehearse`: the machine directory copied under the run folder,
-/// the distro input moved THERE (as the update would, unless held), and the
-/// build only measured. Nothing of the machine changes.
+/// the distro and `nixpkgs` inputs moved THERE (as the update would, unless
+/// held), and the build only measured. Nothing of the machine changes.
 pub(crate) fn rehearse(m: &Machine) -> Result<Applied, Refusal> {
     let _lock = guard(m)?;
     let (p, s) = (&m.places, &m.system);
@@ -468,11 +601,12 @@ pub(crate) fn rehearse(m: &Machine) -> Result<Applied, Refusal> {
             if run::status(&nix, &argv::update_distro(&copy))? != Some(0) {
                 say(
                     4,
-                    "the distro input did not move (no network?): measured with the lock as it is",
+                    "the distro and nixpkgs inputs did not move (no network?): measured with the \
+                     lock as it is",
                 );
             }
         } else {
-            say(6, "held: the distro input stays where it is");
+            say(6, "held: the distro and nixpkgs inputs stay where they are");
         }
         let ran = run::capture(&nix, &argv::dry_run(&copy, &attr))?;
         eprint!("{}", ran.stderr);

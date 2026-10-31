@@ -19,6 +19,13 @@ use crate::task::{Hold, Step};
 /// last line is `refused <word>`): the report keeps the word
 /// (`failed-<word>`), and the view says the machine's sentence for it.
 pub use ronoctua_machine::Why as MachineRefusal;
+/// Whether a system waits for the next restart, and whether that restart
+/// tries it with the way back armed — the machine's own answer, read off
+/// the system profile and the system that runs, never off the last apply: a
+/// trial that failed, a rollback or a later apply that built nothing would
+/// make that one wrong. Named here so the update's pages read it through
+/// this module.
+pub use ronoctua_machine::{NextBoot, next_boot};
 /// The boot trial's outcome and why an apply armed none, as the machine's
 /// record says them — named here so the update's view reads them through
 /// this module.
@@ -129,6 +136,9 @@ pub struct Records {
     pub no_trial: Option<NoTrial>,
     /// The revision the machine is held at.
     pub hold: Option<HeldAt>,
+    /// A new system that waits for the next restart ([`next_boot`]): it is
+    /// used from then.
+    pub staged: Option<NextBoot>,
 }
 
 /// Where the records are — parameters, so a test and a photograph read
@@ -141,6 +151,9 @@ pub struct RecordPlaces {
     pub machine_state: PathBuf,
     /// The person's belongings' places; `None` with no home.
     pub belongings: Option<ronoctua_belongings::places::Places>,
+    /// Where the system's own links are — the system profile,
+    /// `/run/current-system` —: `/`, or a test's folder ([`next_boot`]).
+    pub root: PathBuf,
 }
 
 impl RecordPlaces {
@@ -151,6 +164,7 @@ impl RecordPlaces {
             machine_dir: PathBuf::from(env!("RONOCTUA_MACHINE_DIR")),
             machine_state: PathBuf::from(ronoctua_machine::STATE_DIR),
             belongings: ronoctua_belongings::places::Places::from_env(),
+            root: PathBuf::from("/"),
         }
     }
 
@@ -189,6 +203,7 @@ impl Records {
                 .and_then(|s| s.trial.as_ref())
                 .map(|t| t.outcome),
             no_trial: state.as_ref().and_then(|s| s.no_trial),
+            staged: next_boot(&at.root, state.as_ref()),
             hold: state.and_then(|s| s.hold).map(|h| HeldAt {
                 rev: h.rev,
                 since: h.since.as_str().to_owned(),
@@ -417,6 +432,7 @@ mod tests {
             machine_dir,
             machine_state: machine_state.clone(),
             belongings: Some(belongings.clone()),
+            root: dir.0.clone(),
         };
         assert_eq!(
             Records::read_at(&at),
@@ -454,6 +470,64 @@ mod tests {
             })
         );
         assert_eq!(r.conflicts, 1);
+
+        assert_eq!(r.staged, None, "nothing applied: nothing waits");
+
+        // WHAT WAITS IS READ OFF THE PROFILE AND THE SYSTEM THAT RUNS, never
+        // off the last apply: a staged b whose trial failed (the profile went
+        // back on a) waits no more; a staged c after which an apply built
+        // nothing (the record says build-failed, the profile still names c)
+        // still does, guarded by its trial while it is pending.
+        let store = |name: &str| {
+            let top =
+                format!("/nix/store/0000000000000000000000000000000{name}-nixos-system-{name}");
+            std::fs::create_dir_all(dir.0.join(top.trim_start_matches('/'))).expect("mkdir");
+            top
+        };
+        let (a, b, c) = (store("a"), store("b"), store("c"));
+        let link = |at: &str, to: &str| {
+            let at = dir.0.join(at);
+            std::fs::create_dir_all(at.parent().expect("parent")).expect("mkdir");
+            let _ = std::fs::remove_file(&at);
+            std::os::unix::fs::symlink(dir.0.join(to.trim_start_matches('/')), at).expect("link");
+        };
+        let record = |trial: &str, top: &str, result: &str| {
+            std::fs::write(
+                machine_state.join(ronoctua_person::names::STATE),
+                format!(
+                    r#"{{"format": 1, "last-good": null,
+                        "trial": {{"toplevel": "{top}", "outcome": "{trial}"}}, "hold": null,
+                        "last-apply": {{"at": "2026-10-30T12:00:00Z", "result": "{result}", "toplevel": "{b}"}}}}"#
+                ),
+            )
+            .expect("state");
+        };
+        link("run/current-system", &a);
+        link("nix/var/nix/profiles/system", &a);
+        record("failed", &b, "staged");
+        assert_eq!(
+            Records::read_at(&at).staged,
+            None,
+            "a failed trial is no system that waits"
+        );
+        link("nix/var/nix/profiles/system", &c);
+        record("pending", &c, "build-failed");
+        assert_eq!(
+            Records::read_at(&at).staged,
+            Some(NextBoot {
+                toplevel: c.clone(),
+                guarded: true
+            }),
+            "an apply that built nothing leaves what waits waiting"
+        );
+        record("good", &a, "staged");
+        assert_eq!(
+            Records::read_at(&at).staged.map(|n| n.guarded),
+            Some(false),
+            "with no trial pending on it, the restart boots it unguarded"
+        );
+        link("run/current-system", &c);
+        assert_eq!(Records::read_at(&at).staged, None, "it runs: nothing waits");
 
         // A BASE OF ANOTHER REPOSITORY is a first run's: no conflict of it
         // is this one's.

@@ -59,11 +59,22 @@ pub fn read_record(id: &str) -> Result<Record, String> {
 ///
 /// What there is no record of, or a record that does not read.
 pub fn system_missing() -> Result<Vec<ronoctua_person::frontier::Download>, String> {
+    Ok(machine_state()?
+        .last_apply
+        .map(|a| a.missing)
+        .unwrap_or_default())
+}
+
+/// The machine's record (`ronoctua-machine`'s `state.json`).
+///
+/// # Errors
+///
+/// What there is no record of, or a record that does not read.
+pub fn machine_state() -> Result<ronoctua_person::state::MachineState, String> {
     let path = Path::new(ronoctua_machine::STATE_DIR).join(ronoctua_person::names::STATE);
     let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let state = ronoctua_person::parse::<ronoctua_person::state::MachineState>(&bytes)
-        .map_err(|r| format!("{}: {r}", path.display()))?;
-    Ok(state.last_apply.map(|a| a.missing).unwrap_or_default())
+    ronoctua_person::parse::<ronoctua_person::state::MachineState>(&bytes)
+        .map_err(|r| format!("{}: {r}", path.display()))
 }
 
 pub fn read_records() -> Vec<Record> {

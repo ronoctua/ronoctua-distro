@@ -41,4 +41,7 @@
   # And what an edit rebuilds, asked of the build graph at evaluation: the
   # granularity the whole build is for, kept from drifting back.
   "granularity-of-an-edit"
+  # A new machine's lock starts from the distro's own: a second of evaluation
+  # for what only the slow tier's offline install would otherwise catch.
+  "a-new-machine-starts-on-the-tested-nixpkgs"
 ]

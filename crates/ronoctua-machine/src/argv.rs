@@ -313,14 +313,25 @@ pub fn dry_run(dir: &Path, attr: &str) -> Vec<String> {
     ]
 }
 
-/// `nix flake lock` of a machine flake that has no lock yet.
+/// `nix flake lock` of a machine flake that has no lock yet, STARTED FROM
+/// `reference` — the distro's own lock (`--reference-lock-file`): Nix keeps
+/// every input whose node there has the `original` the flake names (the
+/// `nixpkgs` the machine rolls, at the distro's tested pin) and locks the
+/// rest, the distro input, fresh. Locked on its own, the template's
+/// `nixos-unstable` is a branch only GitHub resolves: offline the lock
+/// fails, and online it jumps to the newest unstable. The lock is written
+/// beside the flake, said rather than left to Nix's default.
 #[must_use]
-pub fn lock(dir: &Path) -> Vec<String> {
+pub fn lock(dir: &Path, reference: &Path) -> Vec<String> {
     vec![
         "flake".to_owned(),
         "lock".to_owned(),
         "--extra-experimental-features".to_owned(),
         FEATURES.to_owned(),
+        "--reference-lock-file".to_owned(),
+        reference.display().to_string(),
+        "--output-lock-file".to_owned(),
+        dir.join("flake.lock").display().to_string(),
         flake(dir),
     ]
 }
@@ -336,7 +347,7 @@ pub fn update_distro(dir: &Path) -> Vec<String> {
         "--extra-experimental-features".to_owned(),
         FEATURES.to_owned(),
         crate::DISTRO_INPUT.to_owned(),
-        "nixpkgs".to_owned(),
+        crate::NIXPKGS_INPUT.to_owned(),
         "--flake".to_owned(),
         flake(dir),
     ]
@@ -351,6 +362,18 @@ pub fn set_profile(profile: &Path, toplevel: &str) -> Vec<String> {
         profile.display().to_string(),
         "--set".to_owned(),
         toplevel.to_owned(),
+    ]
+}
+
+/// `nix-env` making generation `number` the profile's current one again,
+/// as `--rollback` does to the one before: no generation is made.
+#[must_use]
+pub fn switch_generation(profile: &Path, number: u64) -> Vec<String> {
+    vec![
+        "--profile".to_owned(),
+        profile.display().to_string(),
+        "--switch-generation".to_owned(),
+        number.to_string(),
     ]
 }
 
@@ -395,6 +418,13 @@ pub fn grub_set(block: &std::path::Path, name: &str, value: &str) -> Vec<String>
     } else {
         vec![block, "set".to_owned(), format!("{name}={value}")]
     }
+}
+
+/// `grub-editenv <block> list`: every variable of GRUB's environment block,
+/// one `name=value` a line.
+#[must_use]
+pub fn grub_list(block: &std::path::Path) -> Vec<String> {
+    vec![block.display().to_string(), "list".to_owned()]
 }
 
 /// How a toplevel is switched to.
@@ -444,6 +474,43 @@ mod tests {
         );
     }
     use std::path::PathBuf;
+
+    /// FAILS IF: a new machine flake is locked without the distro's own
+    /// lock as the reference, writes its lock anywhere but beside its
+    /// `flake.nix`, or names another flake than the folder — the template's
+    /// rolling `nixpkgs` would then be resolved on the day (no network: no
+    /// lock; a network: the newest unstable, not the tested pin).
+    #[test]
+    fn a_new_flake_is_locked_from_the_distros_own() {
+        let words = lock(
+            Path::new("/etc/nixos/.next"),
+            Path::new("/nix/store/zzzz-flake.lock"),
+        );
+        let after = |flag: &str| {
+            words
+                .iter()
+                .position(|w| w == flag)
+                .and_then(|i| words.get(i + 1))
+                .map(String::as_str)
+        };
+        assert_eq!(words[..2], ["flake", "lock"]);
+        assert_eq!(
+            after("--reference-lock-file"),
+            Some("/nix/store/zzzz-flake.lock")
+        );
+        assert_eq!(
+            after("--output-lock-file"),
+            Some("/etc/nixos/.next/flake.lock")
+        );
+        assert_eq!(
+            words.last().map(String::as_str),
+            Some("path:/etc/nixos/.next")
+        );
+        assert!(
+            !words.iter().any(|w| w == "--update-input" || w == "update"),
+            "{words:?}"
+        );
+    }
 
     const SIZED: Sized = Sized { jobs: 3, cores: 2 };
 
@@ -509,7 +576,7 @@ mod tests {
         let words = update_distro(&PathBuf::from("/run/ronoctua-update/rehearsal"));
         let at = words.iter().position(|w| w == "update").unwrap();
         assert_eq!(words[at + 3], crate::DISTRO_INPUT);
-        assert_eq!(words[at + 4], "nixpkgs");
+        assert_eq!(words[at + 4], crate::NIXPKGS_INPUT);
         assert_eq!(words.last().unwrap(), "path:/run/ronoctua-update/rehearsal");
     }
 
@@ -600,6 +667,7 @@ mod tests {
         assert_eq!(list_entries(), ["--no-pager", "list", "--json=short"]);
         let block = std::path::Path::new("/boot/grub/grubenv");
         assert_eq!(grub_create(block), ["/boot/grub/grubenv", "create"]);
+        assert_eq!(grub_list(block), ["/boot/grub/grubenv", "list"]);
         assert_eq!(
             grub_set(block, "next_entry", "a>b c (1)"),
             ["/boot/grub/grubenv", "set", "next_entry=a>b c (1)"]

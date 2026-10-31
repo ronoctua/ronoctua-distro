@@ -6,9 +6,13 @@
 //!
 //! One match ([`Watcher::sources`]): every entry at `err` or worse, of the
 //! system's journal and the person's (the core's follower reads both). On the
-//! FIRST start — no cursor yet — the core's one pass over the past hands it
-//! this boot's last [`rules::BACKFILL_MOST`]; on every later start the cursor
-//! decides, and what happened while the brain was off is heard then.
+//! brain's FIRST start — no cursor yet — the core's one pass over the past
+//! hands this boot's last [`rules::BACKFILL_MOST`] to the modules on THEN; on
+//! every later start the cursor decides, and what happened while the brain
+//! was off is heard then. It ships off, so on a new machine that first start
+//! passes it by and keeps the cursor: switched on later, it hears from that
+//! moment, and nothing the journal said before is read again for it (the
+//! core runs no pass for a module that comes on; `docs/PENDING.md`).
 //!
 //! # The book
 //!
@@ -88,7 +92,7 @@ struct JournalErrors {
     state_dir: Option<PathBuf>,
     /// What is ignored: the person's file.
     ignored: Store<IgnoredFile>,
-    /// What is filtered: the person's file (their trechos and which shipped
+    /// What is filtered: the person's file (their snippets and which shipped
     /// ones they turned off).
     filters: Store<FiltersFile>,
     /// This boot, in the journal's spelling; empty when it could not be read,
@@ -119,7 +123,7 @@ struct ListFile {
     /// How many times each ignored kind was heard since it was ignored.
     ignored_since: Vec<Since>,
     /// How many lines each filter has caught, and the last one, keyed by
-    /// trecho — STATE, kept with the list, never in the person's file.
+    /// snippet — STATE, kept with the list, never in the person's file.
     filtered_since: Vec<Caught>,
 }
 
@@ -149,8 +153,8 @@ struct IgnoredFile {
 }
 
 /// What is filtered as it is kept — the person's choice, and nothing that
-/// moves on its own. A shipped trecho turned off is here with `off`; one they
-/// typed is here; a shipped trecho left as it is is NOT here, and on by being
+/// moves on its own. A shipped snippet turned off is here with `off`; one they
+/// typed is here; a shipped snippet left as it is is NOT here, and on by being
 /// shipped.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -158,19 +162,19 @@ struct FiltersFile {
     filters: Vec<Choice>,
 }
 
-/// One trecho in the person's file.
+/// One snippet in the person's file.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 struct Choice {
-    /// The trecho.
+    /// The snippet.
     text: String,
-    /// Off: a shipped trecho the person turned off (never written for one of
+    /// Off: a shipped snippet the person turned off (never written for one of
     /// their own, which simply leaves the file).
     off: bool,
 }
 
 impl FiltersFile {
-    /// Its trechos as `(text, off)` pairs, for the book to rebuild from.
+    /// Its snippets as `(text, off)` pairs, for the book to rebuild from.
     fn choices(&self) -> Vec<(String, bool)> {
         self.filters
             .iter()
@@ -179,7 +183,7 @@ impl FiltersFile {
     }
 
     /// The file for these filters: the shipped ones turned off, and the
-    /// person's own — never a shipped trecho left as it is.
+    /// person's own — never a shipped snippet left as it is.
     fn of(filters: &[Filter]) -> Self {
         Self {
             filters: filters
@@ -525,7 +529,7 @@ impl Module for JournalErrors {
                 }],
             });
         }
-        // THE FILTERS, at the foot of the page: each trecho, the last line it
+        // THE FILTERS, at the foot of the page: each snippet, the last line it
         // caught and how many — one that is on to turn off, one that is off to
         // turn on. A filtered line is counted here and never on the mark.
         let filters = state.book.filters();
@@ -1205,7 +1209,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The id of the filtered row whose trecho is `text`, for a test.
+    /// The id of the filtered row whose snippet is `text`, for a test.
     fn filter_row(m: &JournalErrors, text: &str) -> Option<String> {
         m.screen(&look())
             .sections

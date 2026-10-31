@@ -91,11 +91,13 @@ pkgs.testers.runNixOSTest {
             raise
 
         journal = machine.succeed("journalctl -u buffer --no-pager")
-        # A FULL FRAME: the heading, the note, the list's six items and the
-        # form's two fields — the reference app for several keyboards. A floor
-        # and not a count, because the number is the app's to change; what it
-        # guards is a `render` that came back EMPTY, with everything below then
-        # passing over a blank window.
+        # A FULL FRAME: the note, the list's six items and the form's two
+        # fields — the reference app for several keyboards. The title is not
+        # counted: it is the window's header, which the distro ships hidden
+        # (`Screen::heading` draws nothing at row 0 under `hide_header`). A
+        # floor and not a count, because the number is the app's to change;
+        # what it guards is a `render` that came back EMPTY, with everything
+        # below then passing over a blank window.
         import re as _re
         drawn = [int(n) for n in _re.findall(r"component rendered commands=(\d+)", journal)]
         assert drawn and max(drawn) >= 10, journal
@@ -128,10 +130,13 @@ pkgs.testers.runNixOSTest {
 
     with subtest("the component's key came out TRANSLATED on screen"):
         # The whole chain: component -> DisplayList -> i18n -> tokens -> wgpu ->
-        # pixel. The component sends `example-title`; in pt-BR that is
-        # "Vários teclados", and that is what the OCR has to read.
+        # pixel. The needle is a BODY row, never the title: the title
+        # (`example-title`) is the window's header, which the distro ships
+        # hidden — `Screen::heading` draws nothing at row 0 under
+        # `hide_header` — so a needle there asks for a row that is not drawn.
+        # A row of the list is drawn with the header shown or hidden, so the
+        # verdict does not hang on that default.
         w, h, x, y = window_box(sock, "br.ronoctua.example")
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         # THE WINDOW'S OWN RECTANGLE, asked of the compositor.
         #
         # Whoever decides where a window goes is the compositor (invariant 4),
@@ -140,17 +145,38 @@ pkgs.testers.runNixOSTest {
         # window in a column: half the crop became empty desk and
         # `tesseract --psm 6`, which wants one uniform block of text, read
         # nothing. `window_box` reads the rectangle instead — see the prelude.
-        machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
-            "-colorspace gray -negate -resize 200% /tmp/buffer.png"
-        )
-        read_back = machine.succeed(
-            "${pkgs.tesseract}/bin/tesseract /tmp/buffer.png stdout --psm 6 2>/dev/null"
-        ).strip()
-        print(f"OCR: {read_back!r}")
-        # pt-BR: the OCR needle is the VALUE of a text key on screen
-        # (`example-title`), not a message of this test.
-        assert "teclados" in read_back.lower(), (
+        #
+        # READ UNTIL IT SAYS IT, at most fifteen times one second apart, so a
+        # frame the compositor has not shown yet on a loaded machine cannot
+        # change the verdict. TWO needles joined by OR, both rows of the list:
+        # the row under the cursor's highlight band is the one tesseract may
+        # drop, and both are pt-BR only, so an English fallback still fails.
+        # pt-BR: the OCR needles are VALUES of text keys on screen
+        # (`example-item-six`, `example-item-four`), not messages of this test.
+        NEEDLES = ("madrugada", "anoitecer")
+        read_back = ""
+        for _ in range(15):
+            machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+            machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
+                "-colorspace gray -negate -resize 200% /tmp/buffer.png"
+            )
+            # DIAGNOSIS BEFORE THE OCR, the shape `modeline-vm` uses: `cores=1`
+            # says "uniform image, nothing drawn", which separates a wrong crop
+            # from an absent drawing — and from a tesseract that drifted on a
+            # rolling nixpkgs — in one run.
+            print("the example window: " + machine.succeed(
+                "${pkgs.imagemagick}/bin/magick /tmp/buffer.png "
+                "-format 'cores=%k mean=%[fx:mean]' info:"
+            ))
+            read_back = machine.succeed(
+                "${pkgs.tesseract}/bin/tesseract /tmp/buffer.png stdout --psm 6 2>/dev/null"
+            ).strip()
+            print(f"OCR: {read_back!r}")
+            if any(n in read_back.lower() for n in NEEDLES):
+                break
+            machine.sleep(1)
+        assert any(n in read_back.lower() for n in NEEDLES), (
             f"the key did not come out translated on screen; OCR read {read_back!r}"
         )
 
@@ -315,25 +341,53 @@ pkgs.testers.runNixOSTest {
             f"a device of zero bytes is in the list:\n{last}"
         )
 
-        w, h, x, y = compositor_geometry()
-        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/fmt.xwd")
-        machine.succeed(
-            f"${pkgs.imagemagick}/bin/magick /tmp/fmt.xwd -crop {w}x{h}+{x}+{y} +repage "
-            "-colorspace gray -negate -resize 200% /tmp/fmt.png"
-        )
-        read_back = machine.succeed(
-            "${pkgs.tesseract}/bin/tesseract /tmp/fmt.png stdout --psm 6 2>/dev/null"
-        ).strip()
-        print(f"OCR of the format buffer: {read_back!r}")
+        # THE FORMAT WINDOW'S OWN RECTANGLE, asked of the compositor, for the
+        # reason the example subtest gives: a crop of the whole output carries
+        # empty desk around this window, and `tesseract --psm 6` may read
+        # nothing at all from it. Both readings below use this rectangle.
+        w, h, x, y = window_box(sock, "br.ronoctua.format")
+
+        def nodes_on_screen(tag):
+            """The format window, read by OCR, with the diagnosis printed first."""
+            machine.succeed(f"${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/{tag}.xwd")
+            machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/{tag}.xwd -crop {w}x{h}+{x}+{y} "
+                f"+repage -colorspace gray -negate -resize 200% /tmp/{tag}.png"
+            )
+            # DIAGNOSIS BEFORE THE OCR, as in the example subtest: `cores=1`
+            # says "uniform image, nothing drawn".
+            print(f"the format window ({tag}): " + machine.succeed(
+                f"${pkgs.imagemagick}/bin/magick /tmp/{tag}.png "
+                "-format 'cores=%k mean=%[fx:mean]' info:"
+            ))
+            said = machine.succeed(
+                f"${pkgs.tesseract}/bin/tesseract /tmp/{tag}.png stdout --psm 6 2>/dev/null"
+            ).strip()
+            print(f"OCR {tag}: {said!r}")
+            return said
+
+        # READ UNTIL A DISK IS ON IT, at most fifteen times one second apart.
+        # The journal says the rack crossed, but the frame that carries it may
+        # not be on screen yet on a loaded machine, and that must not change
+        # the verdict.
+        read_back = ""
+        for _ in range(15):
+            read_back = nodes_on_screen("fmt")
+            if "/dev/" in read_back:
+                break
+            machine.sleep(1)
         lowered = read_back.lower()
 
         # AND WHAT ONLY THE PIXEL ANSWERS: that the window opened, the renderer
-        # drew, and the key the component sent came out translated. This is the
-        # shape of the defect that reached the owner's screen last time — a
-        # surface that was built, wired and tested, and drew nothing.
-        assert "formatar" in lowered, (
-            f"the title did not come out translated on screen: {read_back!r}"
-        )
+        # drew, and what the bus said reached it. This is the shape of the
+        # defect that reached the owner's screen last time — a surface that was
+        # built, wired and tested, and drew nothing.
+        #
+        # THE TITLE IS NOT ASKED FOR. `format-title` is the window's header,
+        # which the distro ships hidden (`Screen::heading` draws nothing at row
+        # 0 under `hide_header`), so it is not on the pixel at all. The
+        # translated key is asked of the body instead, on this same reading:
+        # the technical line (`format-tech-whole`) further down.
         assert "/dev/" in read_back, (
             "the buffer opened and drew, but no disk reached the pixel: "
             f"{read_back!r}"
@@ -352,22 +406,24 @@ pkgs.testers.runNixOSTest {
         # Moving the cursor swaps WHICH row is unreadable, so the union of two
         # readings covers both. It also proves the arrow reached the component
         # through the compositor, which nothing else here does.
-        def nodes_on_screen(tag):
-            machine.succeed(f"${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/{tag}.xwd")
-            machine.succeed(
-                f"${pkgs.imagemagick}/bin/magick /tmp/{tag}.xwd -crop {w}x{h}+{x}+{y} "
-                f"+repage -colorspace gray -negate -resize 200% /tmp/{tag}.png"
-            )
-            said = machine.succeed(
-                f"${pkgs.tesseract}/bin/tesseract /tmp/{tag}.png stdout --psm 6 2>/dev/null"
-            ).strip()
-            print(f"OCR {tag}: {said!r}")
-            return said
-
+        #
+        # READ UNTIL THE MOVE IS ON IT, at most fifteen times one second apart,
+        # like the first reading: the key is pressed ONCE, and on a loaded
+        # machine the frame that follows it may come later than any fixed
+        # sleep. The loop stops when what the assertions below ask of this
+        # reading is there; if it never is, they fail on the last frame read.
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Down")
-        machine.sleep(2)
-        moved = nodes_on_screen("fmt2")
-        both = read_back + "\n" + moved
+        moved = ""
+        both = read_back
+        for _ in range(15):
+            moved = nodes_on_screen("fmt2")
+            both = read_back + "\n" + moved
+            # pt-BR: the value of `format-tech-needed` on screen, as below.
+            if "montado pelo sistema" in moved.lower() and all(
+                node in both for node in ["/dev/vda", "/dev/vdb"]
+            ):
+                break
+            machine.sleep(1)
         for node in ["/dev/vda", "/dev/vdb"]:
             assert node in both, (
                 f"{node} did not appear in either reading — the row "

@@ -232,7 +232,7 @@ pkgs.testers.runNixOSTest {
             f"magick /tmp/screen.xwd -crop {crop} +repage "
             f"/tmp/{name}.png"
         )
-        machine.copy_from_vm(f"/tmp/{name}.png", "")
+        machine.copy_from_machine(f"/tmp/{name}.png", "")
         print(f"took {name}")
 
 
@@ -297,7 +297,7 @@ pkgs.testers.runNixOSTest {
             + _shlex.quote(_json.dumps({"ask": "look"}))
             + f" > /tmp/{name}.json"
         )
-        machine.copy_from_vm(f"/tmp/{name}.json", "")
+        machine.copy_from_machine(f"/tmp/{name}.json", "")
         print(f"took {name}.json, the player's state")
 
 
@@ -312,7 +312,7 @@ pkgs.testers.runNixOSTest {
             f"{_shlex.quote(_json.dumps(of))} /tmp/{name}.ppm {width} {height}"
         ))
         machine.succeed(f"magick /tmp/{name}.ppm /tmp/{name}.png")
-        machine.copy_from_vm(f"/tmp/{name}.png", "")
+        machine.copy_from_machine(f"/tmp/{name}.png", "")
         print(f"took {name}, {said['w']}x{said['h']}, the player's own frame")
         return said
 

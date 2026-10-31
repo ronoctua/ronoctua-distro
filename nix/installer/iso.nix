@@ -270,8 +270,9 @@ in
     ronoctua.belongingsCli
     ronoctua.personCli
     openssh
-    # The parts it carries, seeded into the machine's store
-    # (`ronoctua-parts seed`).
+    # What the parts need to arrive on the first boot, seeded into the
+    # machine's store (`ronoctua-parts seed`): every wanted part's
+    # derivations, so each one builds there, and any output this medium holds.
     ronoctua.partsCli
   ];
 

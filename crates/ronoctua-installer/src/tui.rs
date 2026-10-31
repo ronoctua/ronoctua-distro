@@ -913,6 +913,16 @@ impl State {
                     .map(model::Choice::line)
                     .unwrap_or_default(),
             ),
+            // THE LAYOUT'S OWN VARIANT: `euro` on the default `us`, "no
+            // variant" (first) on any other — by the layout already answered.
+            Some(Question::KeyboardVariant) => {
+                let variants = model::variants_of(&self.answers.keyboard);
+                let wanted = model::default_variant(&self.answers.keyboard);
+                variants
+                    .iter()
+                    .position(|c| c.name == wanted)
+                    .unwrap_or_default()
+            }
             Some(Question::ComposeKey) => at(
                 model::compose_options()
                     .iter()
@@ -931,8 +941,8 @@ impl State {
                 .as_ref()
                 .and_then(|c| self.networks.iter().position(|n| n == c))
                 .map_or(0, |i| i + 1),
-            // The rest already have the right answer first: no variant, the
-            // British locale, the machine's own disk.
+            // The rest already have the right answer first: the British
+            // locale, the machine's own disk.
             _ => 0,
         }
     }
@@ -1109,7 +1119,16 @@ impl State {
                                 o.starts_with(answered)
                             }
                     })
-                    .unwrap_or_else(|| self.default_choice())
+                    .unwrap_or_else(|| {
+                        // AN EMPTY ANSWER WHERE EMPTY IS A CHOICE — "no
+                        // variant", "no Compose key" — lands on it, the first
+                        // row of both lists, and not on the default the
+                        // person moved off (`euro`, Caps Lock): Enter there
+                        // would quietly take it back.
+                        let none = matches!(q, Question::KeyboardVariant | Question::ComposeKey)
+                            && self.answers.get(*q).is_empty();
+                        if none { 0 } else { self.default_choice() }
+                    })
             };
             // THE ACCESS IS ASKED AGAIN when its screen is shown again — when
             // there is a network to ask it over.
@@ -4053,26 +4072,55 @@ mod tests {
         }
     }
 
-    /// FAILS IF: the list of programs on a console of 71 × 24 ends in the
-    /// middle with nothing saying more follows, or the rows that say so do
-    /// not bring the rest into sight when clicked.
+    /// FAILS IF: the list of programs on the ISO's smallest console (71 ×
+    /// 24) ends in the middle with nothing saying more follows — or, on the
+    /// tallest console of 71 columns that cannot fit it, the row that says
+    /// so does not count what it hides, or the rows that say so do not bring
+    /// the rest into sight when clicked.
+    ///
+    /// WHERE IT PAGES IS FOUND, NOT WRITTEN: the ledger's list fits 71 × 24
+    /// since the seven Crafting Apps became one launcher (eleven programs),
+    /// and a console fixed by hand turns into a test of nothing the day the
+    /// list is shorter than it.
     #[test]
     fn the_checklist_says_what_it_does_not_show() {
         use crate::model::OFFERED;
         for language in ronoctua_i18n::LANGUAGES {
             let t = Texts::fresh(language).unwrap();
-            let area = Rect::new(0, 0, 71, 24);
             let mut e = with_disks();
             e.answers.language = language.to_owned();
             walk_to(&mut e, Question::LeftOut);
+            // ON THE ISO'S CONSOLE: every program in sight, or a row that
+            // says more follows (asked below, where it must page).
+            let rows = places(Rect::new(0, 0, 71, 24), &e, &t).list.unwrap();
+            if rows.below.is_none() {
+                assert_eq!(rows.offset, 0, "{language}: {rows:?}");
+                assert!(usize::from(rows.area.height) >= rows.count, "{rows:?}");
+                let shown = rendered(&e, &t, 71, 24);
+                for o in OFFERED {
+                    assert!(
+                        shown.contains(o.name),
+                        "{language}: {} is cut from 71 × 24 with nothing saying so:\n{shown}",
+                        o.name
+                    );
+                }
+            }
+            // WHERE IT CANNOT FIT: the tallest console of 71 columns that cuts it.
+            let height = (1..=24)
+                .rev()
+                .find(|&h| {
+                    places(Rect::new(0, 0, 71, h), &e, &t)
+                        .list
+                        .is_some_and(|r| r.below.is_some())
+                })
+                .expect("no console of 71 columns cuts the list: its paging is never drawn");
+            let area = Rect::new(0, 0, 71, height);
             let at = places(area, &e, &t);
             e.drawn(&at);
             let rows = at.list.unwrap();
-            let below = rows
-                .below
-                .expect("the list of programs fits 71 × 24, and proves nothing");
+            let below = rows.below.unwrap();
             let hidden = rows.count - rows.offset - usize::from(rows.area.height);
-            let shown = rendered(&e, &t, 71, 24);
+            let shown = rendered(&e, &t, 71, height);
             assert_eq!(
                 row_at(&shown, below.y),
                 t.t_args(
@@ -4087,7 +4135,7 @@ mod tests {
             e.drawn(&at);
             let rows = at.list.unwrap();
             assert!(rows.offset > 0 && rows.below.is_none(), "{rows:?}");
-            let shown = rendered(&e, &t, 71, 24);
+            let shown = rendered(&e, &t, 71, height);
             assert!(shown.contains(OFFERED[OFFERED.len() - 1].name), "{shown}");
             assert_eq!(
                 e.question_of(),
@@ -5212,6 +5260,41 @@ mod tests {
             2,
             "a language whose widths this test does not write out"
         );
+    }
+
+    /// FAILS IF: the variant list does not open on the system's own variant
+    /// (`euro`) under the default layout — Enter through the screens would
+    /// install a plain `us` beside the system's `us(euro)` —, opens on it
+    /// under a layout it is not a variant of, or a "no variant" answered and
+    /// gone back to shows the default under the cursor again, where Enter
+    /// would quietly take it back.
+    #[test]
+    fn the_variant_opens_on_the_layouts_own_and_none_stays_none() {
+        let listed = model::variants_of(model::DEFAULT_LAYOUT);
+        assert!(listed.len() > 1, "the build pointed at no base.lst");
+        let mut e = with_disks();
+        walk_to(&mut e, Question::KeyboardVariant);
+        assert_eq!(e.answers.keyboard, model::DEFAULT_LAYOUT);
+        assert_eq!(listed[e.choice].name, model::DEFAULT_VARIANT);
+        // "NO VARIANT", the first row, chosen.
+        e.choice = 0;
+        e.key(KeyCode::Enter);
+        settle(&mut e, &kind);
+        assert_eq!(e.question_of(), Some(Question::ComposeKey));
+        assert!(e.answers.keyboard_variant.is_empty());
+        // BACK TO IT: on "no variant", not on `euro`.
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::KeyboardVariant));
+        assert_eq!(e.choice, 0, "going back showed the default, not the answer");
+        // ANOTHER LAYOUT opens on "no variant": `euro` is `us`'s alone.
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Keyboard));
+        e.key(KeyCode::Down);
+        e.key(KeyCode::Enter);
+        settle(&mut e, &kind);
+        assert_eq!(e.question_of(), Some(Question::KeyboardVariant));
+        assert_ne!(e.answers.keyboard, model::DEFAULT_LAYOUT);
+        assert_eq!(e.choice, 0);
     }
 
     /// FAILS IF: the Compose question's help names a key in words, or not

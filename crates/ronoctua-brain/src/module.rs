@@ -185,8 +185,8 @@ pub struct Manifest {
     pub schedule: Option<Schedule>,
     /// Whether the distro ships it SWITCHED OFF — its row drawn and its switch
     /// at hand, but not running until the person turns it on. `false` for all
-    /// but the few whose work is a choice to make rather than inherit
-    /// (`journal-errors`, which reads the journal). Only the person's DEFAULT:
+    /// but the few whose work is a choice to make rather than inherit (one
+    /// that reads the person's journal, say). Only the person's DEFAULT:
     /// a saved entry, on or off, still wins over it (see [`Self::defaults`]).
     pub starts_off: bool,
     /// The units it starts, by name.

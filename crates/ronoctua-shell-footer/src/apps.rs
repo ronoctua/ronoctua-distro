@@ -545,11 +545,17 @@ mod tests {
         );
     }
 
-    /// FAILS IF: a `.step` — `model/step`, a `text/plain` by the database —
-    /// goes to the editor that declares `text/plain` while a list chose
-    /// OrcaSlicer for it; or a default naming a program that is not installed
-    /// is obeyed instead of skipped; or the old alias of a type is not read
-    /// as the type.
+    /// FAILS IF: a model that the database makes a `text/plain` goes to the
+    /// editor that declares `text/plain` while a list chose OrcaSlicer for it;
+    /// or a default naming a program that is not installed is obeyed instead
+    /// of skipped; or the old alias of a type is not read as the type.
+    ///
+    /// `model/obj` and not the `model/step` this was written for: the `.step`
+    /// was the defect under shared-mime-info 2.4, whose `model/step` was
+    /// invented here under `text/plain`. Upstream's own, since 2.5.1, has no
+    /// parent, so no editor reaches it by inheritance any more — and a test
+    /// on it would prove the list against nothing. A `.obj` is still a
+    /// `text/plain` upstream, which is the shape of the defect.
     #[test]
     fn a_default_opens_a_model_before_any_editor() {
         let mut editor = input_of("emacs", "Emacs", &[]);
@@ -563,23 +569,53 @@ mod tests {
 
         let none = ronoctua_apps::defaults::Defaults::default();
         // WITHOUT a list, the parent type answers — the defect.
-        assert_eq!(opener(&none, "model/step").as_deref(), Some("emacs"));
+        assert_eq!(opener(&none, "model/obj").as_deref(), Some("emacs"));
 
         let chosen = ronoctua_apps::defaults::Defaults::of_text(
             "[Default Applications]\n\
-             model/step=gone.desktop;OrcaSlicer.desktop;\n\
+             model/obj=gone.desktop;OrcaSlicer.desktop;\n\
              application/vnd.ms-3mfdocument=OrcaSlicer.desktop\n",
         );
-        assert_eq!(opener(&chosen, "model/step").as_deref(), Some("OrcaSlicer"));
+        assert_eq!(opener(&chosen, "model/obj").as_deref(), Some("OrcaSlicer"));
         assert_eq!(opener(&chosen, "model/3mf").as_deref(), Some("OrcaSlicer"));
         // A type no list names still goes by the declarations.
         assert_eq!(opener(&chosen, "text/plain").as_deref(), Some("emacs"));
 
         // A default that names only what is not installed is no answer.
         let gone = ronoctua_apps::defaults::Defaults::of_text(
-            "[Default Applications]\nmodel/step=gone.desktop\n",
+            "[Default Applications]\nmodel/obj=gone.desktop\n",
         );
-        assert_eq!(opener(&gone, "model/step").as_deref(), Some("emacs"));
+        assert_eq!(opener(&gone, "model/obj").as_deref(), Some("emacs"));
+    }
+
+    /// FAILS IF: an entry that declares a type under an old name (an alias)
+    /// stops being an exact declaration of it. OrcaSlicer's own entry names a
+    /// `.obj` only as `application/prs.wavefront-obj`, and with no list the
+    /// model went to the editor that sorts first, by `text/plain`.
+    #[test]
+    fn an_alias_in_an_entry_declares_the_type() {
+        let mut editor = input_of("emacs", "Emacs", &[]);
+        editor.mime_types = vec!["text/plain".into()];
+        let mut orca = input_of("com.orcaslicer.OrcaSlicer", "OrcaSlicer", &[]);
+        orca.mime_types = vec![
+            "model/stl".into(),
+            "application/prs.wavefront-obj".into(),
+            "application/x-amf".into(),
+        ];
+        let c = Arc::new(vec![editor, orca]);
+        let none = ronoctua_apps::defaults::Defaults::default();
+        let opener = |t: &str| crate::launch::opens_by(&c, &[], &none, t).map(|e| e.id.clone());
+        assert_eq!(
+            opener("model/obj").as_deref(),
+            Some("com.orcaslicer.OrcaSlicer")
+        );
+        // ASKED BY THE ALIAS, the same answer.
+        assert_eq!(
+            opener("application/prs.wavefront-obj").as_deref(),
+            Some("com.orcaslicer.OrcaSlicer")
+        );
+        // And text stays the editor's.
+        assert_eq!(opener("text/plain").as_deref(), Some("emacs"));
     }
 
     /// THE DEFECT: without folding the query, `calculo` does not find `Cálculo` — and

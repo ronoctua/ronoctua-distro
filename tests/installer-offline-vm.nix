@@ -12,10 +12,16 @@
 #
 #   1. `ronoctua-install --execute` ends well: every `nix` it runs is offline
 #      with no substituter, so anything the ISO did not carry would have
-#      stopped it (the build before the disk names what);
-#   2. the installed store holds no part (no Claude Code, no LibreOffice),
-#      the programs left out are not in its parts plan and one kept is,
-#      and the first boot's record and sealed passphrase are on `/persist`;
+#      stopped it (the build before the disk names what) — the lock too,
+#      which starts from the ISO tree's own: the installed flake keeps the
+#      template's rolling `nixpkgs` line, and its lock names the tree's
+#      nixpkgs revision, not a branch resolved on the day;
+#   2. the installed store holds no part's OUTPUT (Claude Code's, by the
+#      plan's own path) and nothing at all of a program left out
+#      (LibreOffice), while a part kept (Blender) has its derivation there,
+#      to build on the first boot; the programs left out are not in its
+#      parts plan and one kept is, and the first boot's record and sealed
+#      passphrase are on `/persist`;
 #   3. the second boot asks the disk's passphrase (typed on the serial line),
 #      reaches the person's session, has no failed system unit, and the
 #      belongings' first boot waits for the network instead of failing.
@@ -33,6 +39,8 @@
 let
   cfg = installer.config;
   iso = "${cfg.system.build.isoImage}/iso/${cfg.image.fileName}";
+  # The distro's tree the ISO carries, the one the machine's lock starts from.
+  tree = cfg.environment.variables.RONOCTUA_FLAKE_DIR;
   qemuCommon = import "${pkgs.path}/nixos/lib/qemu-common.nix" {
     inherit lib;
     inherit (pkgs) stdenv;
@@ -179,15 +187,40 @@ let
               live.send_console(f"cat > /tmp/answers <<'ANSWERS'\n{written}ANSWERS\n")
               run(live, "ronoctua-install --execute --answers /tmp/answers </dev/null >/tmp/install.log 2>&1"
                         " || { tail -n 60 /tmp/install.log; false; }", 5400)
-              parts = run(live, "ls /mnt/nix/store | grep -cE -- '-(claude-code|libreoffice)-[0-9]' || true")
-              assert parts.strip() == "0", f"a part is in the installed store: {parts!r}"
+              # THE LOCK STARTED FROM THE TREE'S OWN: the installed flake keeps
+              # the template's rolling line, and its lock names the nixpkgs the
+              # ISO's tree pinned — offline, no branch was resolved.
+              rolling = run(live, "grep -h 'inputs.nixpkgs.url' ${tree}/templates/machine/flake.nix /mnt/etc/nixos/flake.nix")
+              lines = [line.strip() for line in rolling.splitlines() if line.strip()]
+              assert len(lines) == 2 and lines[0] == lines[1], f"the installed flake does not roll as the template does: {lines}"
+              pinned = "jq -r '.nodes[.nodes[.root].inputs.nixpkgs].locked | .rev + \" \" + .narHash' "
+              tested = run(live, pinned + "${tree}/flake.lock").strip()
+              installed = run(live, pinned + "/mnt/etc/nixos/flake.lock").strip()
+              assert len(tested.split()[0]) == 40, f"the tree's nixpkgs is not locked to a revision: {tested!r}"
+              assert installed == tested, f"the machine's nixpkgs is {installed!r}, not the tree's {tested!r}"
               # THE PROGRAMS LEFT OUT ARE NOT WANTED, and one kept is: the
               # installed system's parts plan, read through its own profile
               # (the system was built in this live store, so its paths are here).
-              plan = run(live, "cat $(readlink -f /mnt/nix/var/nix/profiles/system-1-link)/etc/ronoctua/parts-plan.json")
+              plan_file = "$(readlink -f /mnt/nix/var/nix/profiles/system-1-link)/etc/ronoctua/parts-plan.json"
+              plan = run(live, f"cat {plan_file}")
               for gone in ("libreoffice", "vlc", "solidcraft"):
                   assert f'"{gone}"' not in plan, f"{gone} was left out and is in the plan"
               assert '"blender"' in plan, "blender was kept and is not in the plan"
+              # NO PART'S OUTPUT IS IN THE INSTALLED STORE, asked by the plan's
+              # own path and never by a name: the seed carries every wanted
+              # part's `.drv` graph, so `claude-code-<version>.drv` IS there.
+              claude = run(live, f"jq -r '.parts[\"claude-code\"].out' {plan_file}").strip()
+              assert claude.startswith("/nix/store/"), f"claude-code is no wanted part with an output: {claude!r}"
+              run(live, f"! nix-store --store 'local?root=/mnt' --check-validity {claude} 2>/dev/null")
+              # A PROGRAM LEFT OUT leaves nothing there, not even a derivation.
+              dropped = run(live, "ls /mnt/nix/store | grep -cE -- '-libreoffice-[0-9]' || true")
+              assert dropped.strip() == "0", f"libreoffice was left out and is in the installed store: {dropped!r}"
+              # AND A PART KEPT CAN BUILD on the first boot: its derivation is
+              # on the disk (without it, the first boot's realizer fails with
+              # "don't know how to build these paths").
+              blender = run(live, f"jq -r '.parts.blender.drv' {plan_file}").strip()
+              assert blender.endswith(".drv"), f"blender has no derivation in the plan: {blender!r}"
+              run(live, f"nix-store --store 'local?root=/mnt' --check-validity {blender}")
               left = run(live, "ls /mnt/persist/etc/ronoctua/first-boot")
               assert "record.json" in left and ".cred" in left, f"the first boot has nothing to finish: {left!r}"
               run(live, "grep -q '\"address\": \"git@belongings.invalid' /mnt/persist/etc/ronoctua/first-boot/record.json")

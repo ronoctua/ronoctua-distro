@@ -1,9 +1,10 @@
-# WHICH STORE NAMES ARE UNFREE, for `nix run .#release` (`nix/release.nix`):
-# what of the reference systems' closure may never go to the public cache.
-# That closure is the SUBSTRATE — what remains a Nix build. The apps are no
-# longer distro Nix builds: they self-update outside the generation, so there
-# is no public cache of apps for an unfree one to reach (the owner's amendment
-# of 2026-10-30, replacing 'nothing imperative').
+# WHICH STORE NAMES ARE UNFREE: what a person's PUBLIC binary cache may never
+# receive (`nix/modules/binary-cache.nix`, which asks this of the machine's
+# packages before a push). The parts — Chrome, VS Code, Claude Code (a store
+# part again, patched and pinned in `nix/claude-code.nix`), the Android SDK,
+# `uade`, `unrar` — are store builds a machine realizes and could push like
+# any other, so an unfree one there is redistribution: the question is the
+# licence, never the pin.
 #
 # NOT ONE PREDICATE: three questions, and a name any of them calls unfree is
 # unfree. The system's `allowUnfreePredicate` is not the only door an unfree

@@ -267,8 +267,8 @@ pub fn look_inside(ask: Ask) -> Looked {
     // having no still, would be read for a mebibyte to be told it
     // is not letters.
     //
-    // NOR IS A SHAPE, and three of them ARE text by the database's
-    // reckoning: `model/obj`, `model/x-off` and `model/step` all
+    // NOR IS A SHAPE, and some of them ARE text by the database's
+    // reckoning: `model/obj`, `model/iges` and `model/x-off` all
     // descend from `text/plain`, because they are. Without this
     // arm the owner's 4.3 MB `.obj` was read for a mebibyte,
     // highlighted, and then thrown away — `preview_fields` returns

@@ -81,6 +81,10 @@ pub enum Refusal {
     CannotTry,
     /// The Android session is not running.
     SessionDown,
+    /// An Android app the record holds and Android no longer lists: taken
+    /// out inside Android, so an update has nothing to move and does not put
+    /// it back.
+    NotInsideAndroid,
     /// The preferences file does not parse, and writing would replace it.
     WillNotParse,
     /// This order runs as root only (the Android image), or never as root.
@@ -111,6 +115,9 @@ pub enum Refusal {
     /// machine when it was removed, or another computer removed it). Why it
     /// was not removed NOW, and an installed row's trouble until then.
     LeavesAtNextApply,
+    /// The same, and the system that waits for the next restart already left
+    /// it out: it leaves at that restart.
+    LeavesAtNextRestart,
     /// Brought back HERE, and the decline names other computers only: it
     /// is theirs to bring back — or every computer's at once, asked first.
     DeclinedElsewhere,
@@ -122,7 +129,7 @@ pub enum Refusal {
 
 impl Refusal {
     /// Every one, for `software-words-are-total`.
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 47] = [
         Self::UnfreeNeedsConsent,
         Self::UnverifiedNeedsConsent,
         Self::BigNeedsConsent,
@@ -156,6 +163,7 @@ impl Refusal {
         Self::NoUpdateInfo,
         Self::CannotTry,
         Self::SessionDown,
+        Self::NotInsideAndroid,
         Self::WillNotParse,
         Self::WrongUser,
         Self::NotLet,
@@ -166,6 +174,7 @@ impl Refusal {
         Self::ApplyFailed,
         Self::MachineUnnamed,
         Self::LeavesAtNextApply,
+        Self::LeavesAtNextRestart,
         Self::DeclinedElsewhere,
         Self::ProvidedByAPart,
     ];
@@ -207,6 +216,7 @@ impl Refusal {
             Self::NoUpdateInfo => "no-update-info",
             Self::CannotTry => "cannot-try",
             Self::SessionDown => "session-down",
+            Self::NotInsideAndroid => "not-inside-android",
             Self::WillNotParse => "will-not-parse",
             Self::WrongUser => "wrong-user",
             Self::NotLet => "not-let",
@@ -217,6 +227,7 @@ impl Refusal {
             Self::ApplyFailed => "apply-failed",
             Self::MachineUnnamed => "machine-unnamed",
             Self::LeavesAtNextApply => "leaves-at-next-apply",
+            Self::LeavesAtNextRestart => "leaves-at-next-restart",
             Self::DeclinedElsewhere => "declined-elsewhere",
             Self::ProvidedByAPart => "provided-by-a-part",
         }

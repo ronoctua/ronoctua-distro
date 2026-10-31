@@ -24,8 +24,16 @@ WHAT IT REFUSES
 - a `prefer`, `claims` or `drop` row that no longer applies to the database it
   reads (a type gone, a glob no longer claimed, a tie upstream settled), and a
   `claims` row that would tie with upstream in silence;
+- an `ours` row on a name upstream already gives to any type (see
+  `ours_on_upstream_names`), and a name `ours` and `claims` give to two types;
 - a table that came out shorter than the floors below, which is how a parser
   that silently stopped understanding the format is caught.
+
+WHAT IT ADDS
+------------
+Besides the rows `mime-glyphs.nix` declares, the spec's implicit "every
+`text/*` is a `text/plain`" as rows of `SUBCLASS`, for the types upstream's
+`subclasses` file leaves it implicit on (see `implicit_text`).
 """
 
 import argparse
@@ -165,6 +173,78 @@ def read_generic(path: Path) -> list[tuple[str, str]]:
         if b:
             out.append((a.strip(), b.strip()))
     return out
+
+
+def reaches(parents: dict[str, list[str]], mime: str, ancestor: str) -> bool:
+    """Whether `mime` descends from `ancestor` — `mime::is_a`'s own walk:
+    breadth-first, eight rounds."""
+    edge, seen = [mime], {mime}
+    for _ in range(8):
+        ahead = []
+        for here in edge:
+            for up in parents.get(here, ()):
+                if up == ancestor:
+                    return True
+                if up not in seen:
+                    seen.add(up)
+                    ahead.append(up)
+        if not ahead:
+            return False
+        edge = ahead
+    return False
+
+
+def implicit_text(types: list[str], subclass: list[tuple[str, str]]) -> list[str]:
+    """The `text/*` types that need the row `(type, text/plain)`.
+
+    Those no row leads to `text/plain` yet — less the ones whose `text/*`
+    parent is among them, because that parent's row reaches them too
+    (`text/x-csh` through `text/x-shellscript`).
+    """
+    parents: dict[str, list[str]] = {}
+    for child, parent in subclass:
+        parents.setdefault(child, []).append(parent)
+    lacking = {
+        t
+        for t in types
+        if t.startswith("text/") and t != "text/plain" and not reaches(parents, t, "text/plain")
+    }
+    return sorted(t for t in lacking if not any(p in lacking for p in parents.get(t, ())))
+
+
+def ours_on_upstream_names(
+    ours: list[tuple[str, str]],
+    globs: list[tuple[int, str, str, bool]],
+    refuse,
+) -> None:
+    """Refuses an `ours` row on a name upstream already gives, at any weight.
+
+    An `ours` row joins the table at 50, AFTER upstream's rows, and has no
+    magic. So against an upstream claimant at 50 or more it never answers: a
+    tie is settled by the bytes and then by the first row of the table, which
+    is upstream's, and a higher weight wins outright — the row looks
+    deliberate and does nothing. Below 50 it does win, and hides upstream's
+    own answer for the name, which is the shape of upstream having named the
+    format under another spelling.
+
+    Both happened in silence before this was asked. `model/x-amf` tied with
+    upstream's `application/x-amf` (shared-mime-info 2.5.1) on `*.amf` and lost;
+    `text/x-typescript` tied on `*.ts` with the MPEG transport stream and the
+    Qt Linguist catalogue, and on `*.tsx` with the Tiled tileset, and never
+    answered at all — while upstream's `application/typescript` claimed
+    `*.ts` at 40.
+    """
+    for mime, pattern in ours:
+        upstream = sorted({(g[1], g[0]) for g in globs if g[2] == pattern})
+        if upstream:
+            named = ", ".join(f"`{m}` at weight {w}" for m, w in upstream)
+            refuse(
+                f"`ours` gives `{pattern}` to `{mime}`, which it invents, and upstream "
+                f"already gives that name to {named}. At 50 or more the invented row ties "
+                "or loses in silence; below, it hides upstream's own answer. If upstream "
+                "has a type for the format, use it (`exact` for its glyph, `claims` for a "
+                "name it gives too weakly); `ours` is for a name upstream does not give."
+            )
 
 
 def bytes_of(b: bytes) -> str:
@@ -311,7 +391,7 @@ def main() -> int:
         if ch is not None:
             of_exact[mime] = ch
             ours.append((mime, row["glob"]))
-            # ONE PAIR PER TYPE, not per glob: TypeScript has two globs.
+            # ONE PAIR PER TYPE, not per glob: a player family has many.
             if (mime, under) not in ours_under:
                 ours_under.append((mime, under))
 
@@ -373,14 +453,26 @@ def main() -> int:
             continue
         globs = [g for g in globs if not (g[1] == mime and g[2] == pattern)]
 
+    # --- an invented type on a name upstream already gives -----------------
+    #
+    # Asked after `prefer` and `drop`, so a name whose upstream claimant was
+    # removed on purpose is free again.
+    ours_on_upstream_names(ours, globs, refuse)
+
     # --- a name a type of the database answers here too --------------------
     #
     # Added at the database's own weight, after upstream's rows, like `ours`
-    # — but for a type that EXISTS. A row that would tie with another type
-    # must say so (`shares`), and say how the bytes tell the two apart
-    # (`content`): the tie is then settled by `mime::of_path`, which reads a
-    # tied name's head anyway. Every way the row could stop meaning what it
-    # says is refused.
+    # — but for a type that EXISTS. A row that would tie with other types
+    # must say so (`shares`, one type or a list of them), and say how the
+    # bytes tell them apart (`content`): the tie is then settled by
+    # `mime::of_path`, which reads a tied name's head anyway. Every way the
+    # row could stop meaning what it says is refused.
+    #
+    # The type may claim the name upstream already, BELOW the 50 the row is
+    # added at: `application/typescript` has `*.ts` at 40, under the MPEG
+    # transport stream and the Qt Linguist catalogue, so by name alone it
+    # never answers. The row joins it to the tie at the database's own
+    # default weight; at 50 or above it would add nothing, and is refused.
     claimed: list[tuple[str, str]] = []
     shared_content: list[tuple[str, str, list[str]]] = []
     for row in table.get("claims", []):
@@ -394,10 +486,14 @@ def main() -> int:
         if mime not in types:
             refuse(f"{where} names `{mime}`, which the database does not have.")
             continue
-        if any(g[1] == mime and g[2] == pattern for g in globs):
-            refuse(f"{where}: `{mime}` already claims it upstream, and the row does nothing.")
+        own = [g[0] for g in globs if g[1] == mime and g[2] == pattern]
+        if own and max(own) >= 50:
+            refuse(
+                f"{where}: `{mime}` already claims it upstream at weight {max(own)}, and the "
+                "row, added at 50, does nothing."
+            )
             continue
-        others = sorted({g[1] for g in globs if g[2] == pattern})
+        others = sorted({g[1] for g in globs if g[2] == pattern and g[1] != mime})
         if shares is None:
             if others:
                 refuse(
@@ -409,19 +505,29 @@ def main() -> int:
                 refuse(f"{where} has `content` and no `shares`: there is no tie to settle.")
                 continue
         else:
-            if shares not in types:
-                refuse(f"{where} shares with `{shares}`, which the database does not have.")
+            partners = [shares] if isinstance(shares, str) else shares
+            if (
+                not isinstance(partners, list)
+                or not partners
+                or not all(isinstance(p, str) for p in partners)
+            ):
+                refuse(f"{where} has a `shares` that is neither a type nor a list of types.")
                 continue
-            if others != [shares]:
+            absent = [p for p in partners if p not in types]
+            if absent:
+                refuse(f"{where} shares with {absent}, which the database does not have.")
+                continue
+            if others != sorted(set(partners)):
                 refuse(
-                    f"{where} says it shares with `{shares}`, and upstream's claimants are "
-                    f"{others}. Upstream changed and the tie is not the one written here."
+                    f"{where} says it shares with {sorted(set(partners))}, and upstream's "
+                    f"claimants are {others}. Upstream changed and the tie is not the one "
+                    "written here."
                 )
                 continue
-            weights = {g[0] for g in globs if g[2] == pattern}
+            weights = {g[0] for g in globs if g[2] == pattern and g[1] != mime}
             if weights != {50}:
                 refuse(
-                    f"{where}: `{shares}` claims it at weight {sorted(weights)}, not the "
+                    f"{where}: {others} claim it at weight {sorted(weights)}, not the "
                     "50 this row is added at — it would not tie."
                 )
                 continue
@@ -434,12 +540,27 @@ def main() -> int:
                 )
             ):
                 refuse(
-                    f"{where} shares with `{shares}` and has no `content` that could tell "
+                    f"{where} shares with {others} and has no `content` that could tell "
                     "them apart: a list of short printable ASCII markers."
                 )
                 continue
             shared_content.append((pattern, mime, content))
         claimed.append((mime, pattern))
+
+    # --- and no name is given twice HERE ------------------------------------
+    #
+    # Upstream's rows are compared above; ours are compared with each other
+    # here. Two of them on one name, for two types, are a tie the table's order
+    # would settle — the first written would win and nothing would say so.
+    given: dict[str, set[str]] = {}
+    for mime, pattern in ours + claimed:
+        given.setdefault(pattern, set()).add(mime)
+    for pattern, mimes in sorted(given.items()):
+        if len(mimes) > 1:
+            refuse(
+                f"`{pattern}` is given here to {sorted(mimes)} (`ours` and `claims`): they "
+                "would tie, and the first written would win in silence."
+            )
 
     floors = [
         ("globs", len(globs), FLOOR_GLOBS),
@@ -470,6 +591,39 @@ def main() -> int:
     # counts above are UPSTREAM's and our own additions must not mask a reader
     # that stopped understanding the file.
     subclass.extend(ours_under)
+    # AND THE SPEC'S OWN IMPLICIT RULE, written down as rows: "all `text/*`
+    # types are subclasses of `text/plain`". `update-mime-database` does not
+    # put it in `subclasses`, because every reader of the database is meant to
+    # apply it (xdgmime does, in `_xdg_mime_mime_type_subclass`). Until 2.4
+    # upstream also spelt it out on nearly every type, so leaving it implicit
+    # cost three exotic types; 2.5.1 stopped spelling it out where the rule
+    # already says it, and `text/x-shellscript` (whose only explicit parent is
+    # `application/x-executable`), the AWK and sed scripts, `text/x-csh` and
+    # `text/x-gradle` (no parent at all) stopped being text — the preview
+    # stopped showing a `.sh`. So the rule is a row like any other, here and in
+    # `types.json`, and `is_a` stays a walk over the table rather than growing
+    # a second answer written by hand. Only where no row already reaches
+    # `text/plain`, so the table gains no second path.
+    every = sorted(types | {m for m, _ in ours})
+    subclass.extend((t, "text/plain") for t in implicit_text(every, subclass))
+    # AND IT IS PROVED, not trusted: a cycle among the types that lacked the
+    # row would leave every one of them waiting on another and none of them
+    # text, and nothing would say so.
+    parents: dict[str, list[str]] = {}
+    for child, parent in subclass:
+        parents.setdefault(child, []).append(parent)
+    unreached = [
+        t
+        for t in every
+        if t.startswith("text/") and t != "text/plain" and not reaches(parents, t, "text/plain")
+    ]
+    if unreached:
+        print(
+            f"ERROR: {unreached} are `text/*` and still do not reach `text/plain` after the "
+            "spec's implicit rule was written down. The preview would not show them as text.",
+            file=sys.stderr,
+        )
+        return 1
 
     reach = 0
     for _, _, matches in magic:
@@ -608,7 +762,7 @@ def main() -> int:
     # version in two places, and the second one is the one that goes stale.
     # So this derivation stays the only reader, and publishes what it read.
     #
-    # `types` is the UNION with our own: `text/x-nix` is not upstream's, and a
+    # `types` is the UNION with our own: `text/x-zig` is not upstream's, and a
     # language that claims it must still pass. The `ours` block of
     # `assets/icons/mime-glyphs.nix` is where a type is invented, and it is the
     # only place.

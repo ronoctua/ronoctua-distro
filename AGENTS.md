@@ -48,17 +48,24 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    atualiza pelo **seu próprio updater**, fora da geração, gravando sob `$HOME`. Não há pin estável,
    reprodutibilidade nem cache público de app; o **boot-trial e o rollback de geração** permanecem
    como a rede que recupera um boot que não sobe. *(Emenda do dono, 2026-10-30; substitui "Nada
-   imperativo. Se não está no flake, não existe.", ela mesma uma emenda de 2026-10-05.)*
+   imperativo. Se não está no flake, não existe.", ela mesma uma emenda de 2026-10-05.)* *(Emenda do
+   dono, 2026-10-31: a atualização vale a partir do próximo boot.)*
 
    O modelo, por fonte:
-   - **O sistema inteiro rola no `nixos-unstable`**: o `nixpkgs` do flake segue essa branch e um timer
-     roda `nix flake update` + `ronoctua-machine apply` sozinho (espera rede não-tarifada e bateria
-     baixa, nunca pergunta). A máquina não segue mais "os pins que a distro testou"; rola por conta
-     própria, e o código próprio da distro ainda versiona pelo seu repositório.
-   - **Fast-movers na última do fornecedor** (mais novos que o nixpkgs): o Claude Code e o Codex pela
-     **PART do store** (empacotada, corrigida para NixOS e pinada em `nix/claude-code.nix`/`pkgs.codex`;
-     a versão sobe quando o pin sobe). O updater nativo sob `$HOME` foi revertido (emenda do dono,
-     2026-10-30): ele baixa um binário Linux genérico que o NixOS não roda sem `nix-ld`. Os
+   - **O sistema inteiro rola no `nixos-unstable`**: o flake da máquina segue essa branch (o próprio
+     input `nixpkgs`, que o da distro segue). O timer é a rotina semanal `system-update` do cérebro
+     (não há `.timer` do systemd): ela move a distro e o nixpkgs (`nix flake update ronoctua
+     nixpkgs`) e aplica **para o próximo boot** (`ronoctua-machine apply --next-boot`), sozinha —
+     espera a máquina livre, rede não-tarifada e o carregador (e, se a pessoa deixar rodar na
+     bateria, a carga no piso ou acima), nunca pergunta. O sistema novo vale a partir do próximo
+     reinício, que o ensaio de boot experimenta uma vez, com o rollback de geração por trás, e uma
+     notificação pede que a pessoa reinicie. Fora o nixpkgs, a máquina usa os pins que a distro
+     testou, e o código próprio da distro ainda versiona pelo seu repositório.
+   - **Fast-movers na última do fornecedor**: o Claude Code pela **PART do store** (empacotada,
+     corrigida para NixOS e pinada em `nix/claude-code.nix`, à frente do nixpkgs; a versão sobe
+     quando o pin sobe), e o Codex pelo `pkgs.codex` do nixpkgs, que rola com a máquina. O updater
+     nativo sob `$HOME` foi revertido (emenda do dono, 2026-10-30): ele baixa um binário Linux
+     genérico que o NixOS não roda sem `nix-ld`. Os
      Craft Apps pelo **Craft Launcher** (`storytold/craft-launcher`), que baixa e atualiza os crafts
      sozinho sob `$HOME`; o **SolidCraft** como AppImage que segue os releases de
      `tangency-labs/solidcraft`.
@@ -528,12 +535,12 @@ caminhos ao `ronoctua_llm::watched`.
 - Perigo é cor, não outro desenho. A modeline em repouso é muda: uma marca só existe quando diz algo.
 
 <!-- anchor: L11 -->
-- Exceção: as marcas das contas LLM (`brain:agent-accounts/claude.<n>`, `…/codex.<n>`) ficam na
-  modeline em repouso, uma por conta, o tom dizendo o uso. Declaram `resting = true`, e só as de
-  `assets/brain-resting-marks.nix` podem (cobra `resting-marks-are-the-approved-ones`); o núcleo
-  descarta uma `Tone::Quiet` sem `resting`. Uma marca tem até 9 instâncias (`instances = N`; cobra
-  `mark-instances-are-bounded`), cada uma `brain:<módulo>/<marca>.<n>`, e o clique entrega o número
-  ao comando de `MarkId::opening`.
+- Exceção: as marcas das contas LLM (`brain:agent-accounts/claude.<n>`,
+  `brain:agent-accounts/codex.<n>`) ficam na modeline em repouso, uma por conta, o tom dizendo o
+  uso. Declaram `resting = true`, e só as de `assets/brain-resting-marks.nix` podem (cobra
+  `resting-marks-are-the-approved-ones`); o núcleo descarta uma `Tone::Quiet` sem `resting`. Uma
+  marca tem até 9 instâncias (`instances = N`; cobra `mark-instances-are-bounded`), cada uma
+  `brain:<módulo>/<marca>.<n>`, e o clique entrega o número ao comando de `MarkId::opening`.
 - Módulos do brain da pessoa (`$XDG_CONFIG_HOME/ronoctua/brain-modules/<id>/`): o id é `my-` + palavra
   kebab, e `my`/`my-…` são só dela, prefixos de chave inclusive (cobra
   `brain-person-module-ids-are-prefixed`). Precisa só de `manifest.nix`, `module.rs` e um `.ftl` por

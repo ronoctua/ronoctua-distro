@@ -49,6 +49,10 @@ pub const REPO: &str = "https://f-droid.org/repo";
 pub const HOSTS: &[&str] = &["f-droid.org"];
 /// Its signed entry point.
 pub const ENTRY: &str = "https://f-droid.org/repo/entry.jar";
+/// The refusal word `upgrade android` ends with when f-droid.org is not let
+/// in the person's consent — the update's step reads it as news (`declines`):
+/// a consent the person took back is their choice, not a failure every week.
+pub const NOT_LET: &str = "fdroid-not-let";
 /// SHA-256 of the DER of the certificate that signs `entry.jar` — the one
 /// thing this chain trusts without asking the network.
 pub const SIGNER: &str = "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab";

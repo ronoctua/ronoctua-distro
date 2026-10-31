@@ -2,7 +2,7 @@
 #
 # WHAT THE DISTRO DOES, AND WHAT IT LEAVES ALONE
 # ----------------------------------------------
-# The package (`emacs30-pgtk`, as nixpkgs builds it, with one launcher's name
+# The package (`emacs-pgtk`, as nixpkgs builds it, with one launcher's name
 # rewritten: `emacsPkg`, below), the daemon (`services.emacs`, a user unit, so
 # `emacsclient` opens in a process that has already loaded everything), the
 # variable the file manager reaches `emacsclient` by, and the switch. Nothing

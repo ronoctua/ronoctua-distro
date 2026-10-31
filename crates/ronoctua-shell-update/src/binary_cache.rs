@@ -78,6 +78,13 @@ pub struct Places {
     pub netrc: PathBuf,
     /// What came of the last netrc the footer was asked for.
     pub verdict: Option<PathBuf>,
+    /// Where the system's own links and the store are: `/`, or the
+    /// camera's room — a system set for the next boot is read there
+    /// ([`Readings::waiting`]).
+    pub root: PathBuf,
+    /// The machine's record, which every system set for the next boot (and
+    /// every way back from one) rewrites: what a door watches for it.
+    pub machine_state: PathBuf,
 }
 
 impl Places {
@@ -88,6 +95,7 @@ impl Places {
             Some(room) => room.join(p.trim_start_matches('/')),
             None => PathBuf::from(p),
         };
+        let records = crate::update_window::record_places();
         Self {
             mirror: ronoctua_cachix::settings::mirror(),
             keys: ronoctua_cachix::token::dir(),
@@ -95,6 +103,8 @@ impl Places {
             system: machine(ronoctua_cachix::SYSTEM_FILE),
             netrc: machine(ronoctua_cachix::NETRC),
             verdict: ronoctua_xdg::runtime_file(VERDICT_FILE),
+            root: records.root,
+            machine_state: records.machine_state.join(ronoctua_person::names::STATE),
         }
     }
 
@@ -114,6 +124,7 @@ impl Places {
             Some(self.system.clone()),
             Some(self.netrc.clone()),
             self.verdict.clone(),
+            Some(self.machine_state.clone()),
         ]
         .iter()
         .map(|p| p.as_deref().and_then(mtime))
@@ -166,6 +177,9 @@ pub struct Readings {
     pub named: Named,
     /// The cache this machine was built with.
     pub applied: Option<BinaryCache>,
+    /// When a system waits for the next restart, the cache IT was built with
+    /// (`None` inside: it names none); `None` when nothing waits.
+    pub waiting: Option<Option<BinaryCache>>,
     /// The push token.
     pub token: TokenState,
     /// Whether root's netrc is there.
@@ -193,6 +207,15 @@ impl Readings {
             applied: ronoctua_cachix::system::System::read_at(&places.system)
                 .ok()
                 .map(|s| s.cache),
+            waiting: crate::update_window::waiting_system(&places.root).map(|top| {
+                let file = places
+                    .root
+                    .join(top.trim_start_matches('/'))
+                    .join(ronoctua_cachix::SYSTEM_FILE.trim_start_matches('/'));
+                ronoctua_cachix::system::System::read_at(&file)
+                    .ok()
+                    .map(|s| s.cache)
+            }),
             token,
             netrc: ronoctua_cachix::netrc::present(&places.netrc),
             last: places
@@ -854,7 +877,15 @@ fn value_of(
         Row::Machine => (
             texts.t(match (&r.named, r.applied.as_ref()) {
                 (Named::Cache(c), Some(a)) if c == a => key::BINARY_CACHE_MACHINE_IN_USE,
+                // THE SYSTEM THAT WAITS FOR THE RESTART already has it, or
+                // already left it: from that restart, not the next update.
+                (Named::Cache(c), _) if r.waiting.as_ref() == Some(&Some(c.clone())) => {
+                    key::BINARY_CACHE_MACHINE_NEXT_RESTART
+                }
                 (Named::Cache(_), _) => key::BINARY_CACHE_MACHINE_NEXT,
+                (Named::None, Some(_)) if r.waiting == Some(None) => {
+                    key::BINARY_CACHE_MACHINE_LEAVING_RESTART
+                }
                 (Named::None, Some(_)) => key::BINARY_CACHE_MACHINE_LEAVING,
                 // A COPY THAT DOES NOT READ says nothing of what comes next:
                 // what the machine uses is all that is known.
@@ -1180,6 +1211,78 @@ mod tests {
             name: "someone".to_owned(),
             public_key: PUBLIC_KEY.to_owned(),
             visibility,
+        }
+    }
+
+    /// FAILS IF: the machine's line says "from the next update" when the
+    /// system that waits for the restart already has the cache named, or
+    /// "until the next update" when it already left it — or says the
+    /// restart when no system waits, or one waits with another cache.
+    #[test]
+    fn the_machine_line_says_the_restart_a_waiting_system_brings() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let other = BinaryCache {
+            name: "another".to_owned(),
+            ..cache(Visibility::Public)
+        };
+        let named = Named::Cache(cache(Visibility::Public));
+        for (named, applied, waiting, k) in [
+            (
+                named.clone(),
+                None,
+                Some(Some(cache(Visibility::Public))),
+                key::BINARY_CACHE_MACHINE_NEXT_RESTART,
+            ),
+            (
+                named.clone(),
+                None,
+                Some(Some(other.clone())),
+                key::BINARY_CACHE_MACHINE_NEXT,
+            ),
+            (
+                named.clone(),
+                None,
+                Some(None),
+                key::BINARY_CACHE_MACHINE_NEXT,
+            ),
+            (named.clone(), None, None, key::BINARY_CACHE_MACHINE_NEXT),
+            (
+                named,
+                Some(cache(Visibility::Public)),
+                Some(None),
+                key::BINARY_CACHE_MACHINE_IN_USE,
+            ),
+            (
+                Named::None,
+                Some(other.clone()),
+                Some(None),
+                key::BINARY_CACHE_MACHINE_LEAVING_RESTART,
+            ),
+            (
+                Named::None,
+                Some(other.clone()),
+                Some(Some(other.clone())),
+                key::BINARY_CACHE_MACHINE_LEAVING,
+            ),
+            (
+                Named::None,
+                Some(other),
+                None,
+                key::BINARY_CACHE_MACHINE_LEAVING,
+            ),
+        ] {
+            let r = Readings {
+                named,
+                applied,
+                waiting,
+                ..Readings::default()
+            };
+            assert_eq!(
+                value_of(Row::Machine, &r, &zone, &texts).0,
+                texts.t(k),
+                "{r:?}"
+            );
         }
     }
 

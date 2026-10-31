@@ -12,6 +12,29 @@
 //!
 //! A last apply whose build could not fetch something lists it under
 //! `"missing"` ([`crate::frontier::Download`]); the key is absent otherwise.
+//! One that set a system up — switched to, or `"staged"` for the next boot —
+//! names it under `"toplevel"`; the key is absent otherwise.
+//!
+//! # Fields that joined format 1
+//!
+//! `missing`, `no-trial`, `toplevel` and the result `staged` came after the
+//! first records were written, and the format stayed 1: an absent key reads
+//! as it always did, and every record written without them reads back byte
+//! for byte. A reader older than one of them refuses a record that carries
+//! it as `shape`.
+//!
+//! Across machines, that reader is gone at each one's next update. On ONE
+//! machine it is not always: the boot trial's way back can land on a system
+//! built before the reader knew `staged` — the generation that first brought
+//! it was switched to live with a new kernel, its trial still pending, so
+//! the last good system predates it, and the next update set a system for
+//! the next boot that did not start. That older system's bless and apply
+//! refuse the record (`unreadable`): nothing judges the trial, and every
+//! update fails at the rebuild until `last-apply` is taken out of the
+//! machine's `state.json` by hand (or the file, which reads as a new record).
+//! Keeping format 1 with that window, writing `staged` only once the last
+//! good system reads it, or a new format is the owner's decision
+//! (`docs/ARCHITECTURE.md`, "O formato 1 tem uma janela em aberto").
 //!
 //! `"no-trial": "no-efi-variables"` joins them only while the system the last
 //! switch made has no boot trial ([`NoTrial`]); the key is absent otherwise.
@@ -150,6 +173,12 @@ pub enum ApplyResult {
     /// Refused before anything ran (a hold, the last good one would fall out
     /// of the boot menu, another run).
     Refused,
+    /// Built and set for the NEXT BOOT (`switch-to-configuration boot`):
+    /// nothing that runs was stopped or restarted, and the new system is
+    /// used from the next restart, the boot trial armed for it. Until then
+    /// the machine runs the system it ran, and [`LastApply::toplevel`] names
+    /// the one that waits.
+    Staged,
 }
 
 /// The last apply.
@@ -160,6 +189,13 @@ pub struct LastApply {
     pub at: Stamp,
     /// How.
     pub result: ApplyResult,
+    /// The system the apply set up — switched to, or set for the next boot
+    /// ([`ApplyResult::Staged`]); `None` (and absent from the file) for an
+    /// apply that set up none. What reads the system an update made — the
+    /// binary cache's push, the parts' plan of the next boot — reads it
+    /// from here, never from the system profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toplevel: Option<String>,
     /// The downloads its build could not fetch ([`crate::frontier`]): the
     /// system's, when the build failed, or the hardware's that waits for a
     /// network, when the machine was built without it again. Each is what
@@ -205,6 +241,17 @@ impl Document for MachineState {
         {
             return Err(Refusal::new(Why::Invalid, "/hold/rev", h.rev.as_str()));
         }
+        // THE SYSTEM AN APPLY SET UP is a store path: what reads it (the
+        // binary cache's push, the parts' plan) joins a file to it.
+        if let Some(top) = self.last_apply.as_ref().and_then(|a| a.toplevel.as_ref())
+            && !check::store_path(top)
+        {
+            return Err(Refusal::new(
+                Why::Invalid,
+                "/last-apply/toplevel",
+                top.as_str(),
+            ));
+        }
         // A DOWNLOAD NAMES TWO STORE PATHS that root hands to Nix (`accept`,
         // `import`): nothing else may stand where they are.
         for d in self.last_apply.iter().flat_map(|a| &a.missing) {
@@ -248,5 +295,49 @@ mod tests {
         }
         let unknown = plain.replace('}', r#","no-trial":"no-reason"}"#);
         assert!(serde_json::from_str::<MachineState>(&unknown).is_err());
+    }
+
+    /// FAILS IF: an apply set for the next boot does not read and write back
+    /// whole (`staged`, the system it set up), a last apply without a
+    /// toplevel gains the key when written, or a toplevel that is no store
+    /// path is taken in — the push and the parts join a file to it.
+    #[test]
+    fn a_staged_apply_names_its_system_and_reads_back() {
+        let top = "/nix/store/bcdefghijklmnopqrstuvwxyz0123456-nixos-system-noctua-26.11";
+        let staged = MachineState {
+            last_apply: Some(LastApply {
+                at: Stamp::parse("2026-10-30T12:00:00Z").unwrap(),
+                result: ApplyResult::Staged,
+                toplevel: Some(top.to_owned()),
+                missing: Vec::new(),
+            }),
+            ..MachineState::default()
+        };
+        let text = crate::to_json(&staged);
+        assert!(text.contains(r#""result": "staged""#), "{text}");
+        assert!(text.contains(&format!(r#""toplevel": "{top}""#)), "{text}");
+        assert_eq!(crate::parse::<MachineState>(text.as_bytes()), Ok(staged));
+
+        let plain = MachineState {
+            last_apply: Some(LastApply {
+                at: Stamp::parse("2026-10-30T12:00:00Z").unwrap(),
+                result: ApplyResult::Refused,
+                toplevel: None,
+                missing: Vec::new(),
+            }),
+            ..MachineState::default()
+        };
+        let text = crate::to_json(&plain);
+        assert!(!text.contains("toplevel"), "{text}");
+        assert_eq!(crate::parse::<MachineState>(text.as_bytes()), Ok(plain));
+
+        let elsewhere = text.replace(
+            r#""result": "refused""#,
+            r#""result": "staged", "toplevel": "/tmp/x""#,
+        );
+        assert_eq!(
+            crate::parse::<MachineState>(elsewhere.as_bytes()).map_err(|r| r.why),
+            Err(Why::Invalid)
+        );
     }
 }

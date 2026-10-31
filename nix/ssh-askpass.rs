@@ -209,18 +209,22 @@ fn main() -> ExitCode {
     // ssh ask, and WHICH ssh ask is read from OpenSSH's `SSH_ASKPASS_PROMPT`
     // (`confirm` for a yes/no) and the prompt's words (`ssh_kind`), so the bar
     // titles a passphrase a passphrase and a touch a touch — never one as the
-    // other. The footer titles the bar by this token (`sudo_bar::Kind`).
+    // other. The footer titles the bar by this token (`sudo_bar::Kind`); sudo's
+    // is `system-password` (`sudo_bar::SYSTEM_PASSWORD`, spelled again here),
+    // named by what is asked — only the sudo door names sudo.
     let is_sudo = args
         .first()
         .and_then(|a0| a0.rsplit('/').next())
         .is_some_and(|name| name.contains("sudo"));
     let kind = if is_sudo {
-        "sudo"
+        "system-password"
     } else {
         ssh_kind(&prompt, std::env::var("SSH_ASKPASS_PROMPT").as_deref() == Ok("confirm"))
     };
     // THE CONTEXT, base64, for sudo alone — `-` otherwise (no context, and the
-    // sentinel a `/proc` that gave nothing falls back to).
+    // sentinel a `/proc` that gave nothing falls back to). The footer leans on
+    // that (`sudo_bar::Kind::of`): a context under a token it does not know is
+    // the system password, asked by a helper older than its own words.
     let context = if is_sudo {
         sudo_context().map(|c| base64(c.as_bytes()))
     } else {

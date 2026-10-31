@@ -27,7 +27,8 @@
 //!   (`switch-to-configuration boot` writes the menu for it), and the lock
 //!   that system was built from goes back into the machine directory — so the
 //!   next apply builds what runs, and refuses to build the failed system
-//!   again (`did-not-boot`): only a NEW distro revision tries again.
+//!   again (`did-not-boot`): only a NEW system tries again, built after the
+//!   distro or `nixpkgs` moved.
 //! - No trial waiting: whatever booted and lasted is the last good one.
 
 use ronoctua_person::state::{MachineState, Trial, TrialOutcome};
@@ -36,8 +37,8 @@ use crate::argv::{self, Switch};
 use crate::loader::Loader;
 use crate::system::{self, needed};
 use crate::{
-    LAST_GOOD_LOCK, Machine, Refusal, Why, boot, boots, disk, must_be_root, run, say, take_lock,
-    trial,
+    LAST_GOOD_LOCK, Machine, Refusal, Why, boot, boots, disk, must_be_root, run, say, sleep,
+    take_lock, trial,
 };
 
 /// `bless`.
@@ -95,6 +96,11 @@ fn note_this_boot(m: &Machine, state: &MachineState, boot: &str, booted: &str) {
     let Some(t) = trial::pending(state) else {
         return;
     };
+    // A ONE-SHOT PUT ASIDE FOR A HIBERNATION: this boot did not try it, and
+    // the judgement puts it back ([`sleep::lost_resume`]).
+    if sleep::put_aside_for(m, &t) {
+        return;
+    }
     let armed = boots::armed(m, &t.toplevel).unwrap_or_else(|| boots::unknown(&t.toplevel));
     if !armed_here(m, &armed, &t, boot, booted) {
         boots::note(m, &armed, boot, booted);
@@ -102,8 +108,10 @@ fn note_this_boot(m: &Machine, state: &MachineState, boot: &str, booted: &str) {
 }
 
 /// Whether the trial `t` was armed in this boot: the record says so; or, with
-/// no record of the boot that armed it, the system that runs IS the trial and
-/// another one booted — it was switched to in this boot.
+/// no record of the boot that armed it, another system booted and either
+/// the system that runs IS the trial — it was switched to in this boot — or
+/// the loader still holds the one-shot that tries it ([`untried`]) — it was
+/// set for the next boot, and no boot has read it yet.
 fn armed_here(m: &Machine, armed: &boots::Armed, t: &Trial, boot: &str, booted: &str) -> bool {
     if boots::armed_in(armed, boot) {
         return true;
@@ -112,7 +120,26 @@ fn armed_here(m: &Machine, armed: &boots::Armed, t: &Trial, boot: &str, booted: 
         && !boot::tops_of(&m.system, &t.toplevel)
             .iter()
             .any(|top| top == booted)
-        && m.system.resolve(system::CURRENT).as_deref() == Some(t.toplevel.as_str())
+        && (m.system.resolve(system::CURRENT).as_deref() == Some(t.toplevel.as_str())
+            || untried(m, t))
+}
+
+/// Whether the loader still holds the one-shot that tries `t` — its entry,
+/// as the menu names it. Both loaders forget a one-shot the moment a boot
+/// reads it, so one still set has not been tried: a trial set for the next
+/// boot (`apply --next-boot`), judged in the boot that set it, whose record
+/// of that boot was lost, runs the system it ran before — and is not the
+/// trial that failed.
+fn untried(m: &Machine, t: &Trial) -> bool {
+    let Some(loader) = Loader::of(&m.system) else {
+        return false;
+    };
+    let Some(oneshot) = loader.oneshot().filter(|o| !o.is_empty()) else {
+        return false;
+    };
+    loader
+        .entries()
+        .is_some_and(|listed| boot::entry_of(&listed, &t.toplevel) == Some(oneshot.as_str()))
 }
 
 /// Judges the trial waiting, if there is one: `None` when none waits; the
@@ -142,6 +169,11 @@ pub(crate) fn settle(
             6,
             "the trial was armed during this boot: it has not been tried yet",
         );
+        return Ok(Some(TrialOutcome::Pending));
+    }
+    // ITS ONE-SHOT PUT ASIDE FOR A HIBERNATION never put back: no boot tried
+    // it, and it is armed again for the next ([`sleep`]).
+    if sleep::lost_resume(m, &t, &boot) {
         return Ok(Some(TrialOutcome::Pending));
     }
     let tried = boots::note(m, &armed, &boot, booted);
@@ -223,6 +255,7 @@ pub(crate) fn settle(
         TrialOutcome::Failed
     };
     boots::forget(m);
+    sleep::forget(m);
     Ok(Some(outcome))
 }
 

@@ -45,6 +45,11 @@ pub const TEMPLATE: &str = "RONOCTUA_MACHINE_TEMPLATE";
 /// Another address for the distro input, written into a migrated
 /// machine's `flake.nix` in place of the template's.
 pub const DISTRO: &str = "RONOCTUA_MACHINE_DISTRO";
+/// The distro's own `flake.lock`, which a migrated machine's lock starts
+/// from (`--reference-lock-file`): every input the template names besides
+/// the distro's — the `nixpkgs` the machine rolls — is the distro's tested
+/// pin, never a branch resolved on the day.
+pub const REFERENCE_LOCK: &str = "RONOCTUA_MACHINE_REFERENCE_LOCK";
 /// Where, inside a toplevel, the lock its machine flake was built from is
 /// (`etc/ronoctua/machine.lock`, put there by `nix/modules/machine.nix`).
 pub const SYSTEM_LOCK: &str = "RONOCTUA_MACHINE_SYSTEM_LOCK";
@@ -96,6 +101,7 @@ impl Env {
                 BLESS_WAIT,
                 TEMPLATE,
                 DISTRO,
+                REFERENCE_LOCK,
                 SYSTEM_LOCK,
                 SYSROOT,
                 NIX,
@@ -165,6 +171,8 @@ pub struct System {
     /// The distro input's address for a migrated machine, when not the
     /// template's.
     pub distro: Option<String>,
+    /// The distro's own lock, which a migrated machine's starts from.
+    pub reference_lock: Option<PathBuf>,
     /// Where, inside a toplevel, the lock it was built from is.
     pub system_lock: Option<String>,
     /// How long the bless waits for root's lock of the person's data, in
@@ -192,6 +200,7 @@ impl System {
             menu_limit: env.get(MENU_LIMIT).map(str::to_owned),
             template: env.path(TEMPLATE),
             distro: env.get(DISTRO).map(str::to_owned),
+            reference_lock: env.path(REFERENCE_LOCK),
             system_lock: env
                 .get(SYSTEM_LOCK)
                 .filter(|p| is_inside(p))

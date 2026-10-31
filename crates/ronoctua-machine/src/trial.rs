@@ -40,7 +40,7 @@ pub(crate) fn last_good_of(m: &Machine, toplevel: &str, listed: Option<&[Entry]>
         .map(str::to_owned)
         .or_else(|| {
             boot::generation_of_toplevel(&boot::generations(&m.system), toplevel)
-                .map(boot::entry_of_generation)
+                .map(|n| boot::entry_of_generation(&m.system, n))
         })
         .unwrap_or_else(|| "unknown".to_owned());
     LastGood {

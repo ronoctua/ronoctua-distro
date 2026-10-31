@@ -2,7 +2,7 @@
 # commands, the name and the sentence of every step of the sequence, the
 # closed words the sequence's table carries, and the view that watches a run.
 brain-task-system-update = Atualizar o sistema
-brain-task-system-update-does = Junta o que você declarou nas suas outras máquinas, adianta a distro, monta o sistema novo e troca para ele — o próximo boot o experimenta uma vez e volta sozinho para o último bom se ele não subir —, atualiza os seus programas e caches, recupera espaço no store e publica o que esta máquina fez. A troca reinicia os serviços cuja definição mudou; os programas já abertos continuam na versão com que começaram, e um kernel novo espera o próximo boot.
+brain-task-system-update-does = Junta o que você declarou nas suas outras máquinas, adianta a distro e o nixpkgs, monta o sistema novo e o deixa para o próximo reinício — nada do que roda agora é parado ou reiniciado; esse reinício experimenta o sistema novo uma vez e volta sozinho para o último bom se ele não subir —, atualiza os seus programas e caches, recupera espaço no store e publica o que esta máquina fez. Quando um sistema novo espera, a execução termina pedindo que você reinicie.
 
 # ITS COMMANDS. The whole sequence now, its rehearsal, and the two doors of
 # the view that watches it — the footer's region and a window.
@@ -21,11 +21,11 @@ cmd-system-update-watch = A atualização, numa janela
 # the SEQUENCE'S order, which is the declaration's: sorting these would put
 # back the second source the table exists to remove.
 system-update-step-flake-update = buscar as versões novas
-system-update-step-flake-update-does = nix flake update do input da distro, no flake desta máquina: leva a distro à versão publicada mais nova e não mexe em nada além do flake.lock — os outros inputs são os da própria versão, como ela foi testada. Precisa de rede; é pulado e diz isso enquanto a máquina está retida numa revisão, no ISO, cuja pasta da máquina é só leitura, e sempre que a reconstrução seria — na bateria abaixo do piso, ou com o disco quase cheio —, para que a pasta nunca nomeie uma distro que a máquina não montou.
+system-update-step-flake-update-does = nix flake update do input da distro e do nixpkgs, que esta máquina segue no nixos-unstable, no flake desta máquina: leva os dois ao mais novo e não mexe em nada além do flake.lock — todo outro input é o da própria versão, como ela foi testada. Precisa de rede; é pulado e diz isso enquanto a máquina está retida numa revisão, no ISO, cuja pasta da máquina é só leitura, e sempre que a reconstrução seria — na bateria abaixo do piso, ou com o disco quase cheio —, para que a pasta nunca nomeie um sistema que a máquina não montou.
 system-update-step-system-rebuild = reconstruir o sistema
-system-update-step-system-rebuild-does = ronoctua-machine apply: monta o sistema novo primeiro e só troca para o que montou — um build que falha deixa a máquina e a pasta dela como estavam. Depois da troca, o próximo boot experimenta o sistema novo uma vez e volta sozinho para o último bom se ele não subir. É pulado na bateria abaixo do piso, a não ser que você tenha dito sim, e com o disco quase cheio mesmo depois de coletar o lixo do store. Se falhar, a sequência para aqui.
+system-update-step-system-rebuild-does = ronoctua-machine apply --next-boot: monta o sistema novo primeiro e deixa só o que montou para o próximo reinício — nada do que roda agora é parado ou reiniciado, e um build que falha deixa a máquina e a pasta dela como estavam. Esse reinício experimenta o sistema novo uma vez e volta sozinho para o último bom se ele não subir. É pulado na bateria abaixo do piso, a não ser que você tenha dito sim, e com o disco quase cheio mesmo depois de coletar o lixo do store. Se falhar, a sequência para aqui.
 system-update-step-parts-plan = planejar as partes
-system-update-step-parts-plan-does = ronoctua-parts plan: as partes do sistema que acabou de ser aplicado — o que precisa de um download que nenhum cache tem, o que não é livre, o que só o perfil full leva — escritas nos registros delas, e as derivações delas guardadas da coleta logo abaixo. Cada parte chega sozinha, pela unidade dela, que a troca já iniciou; uma que não chega fica na versão anterior e não segura nada. Este passo nunca espera um download.
+system-update-step-parts-plan-does = ronoctua-parts plan --next: as partes do sistema que roda — o que precisa de um download que nenhum cache tem, o que não é livre, o que só o perfil full leva — escritas nos registros delas, e as derivações delas guardadas da coleta logo abaixo; e as derivações das partes do sistema novo, que só chegam depois do próximo reinício, guardadas também. Uma que não chega fica na versão anterior e não segura nada. Este passo nunca espera um download.
 system-update-step-flatpak-system = atualizar os Flatpaks do sistema
 system-update-step-flatpak-system-does = flatpak update --system: atualiza o que a instalação Flatpak da própria máquina tem — o remoto do Flathub, e o que a configuração declarar — e não instala nada. Os seus apps estão na sua instalação e andam na sua metade, mais abaixo. Sem essa instalação o passo é pulado e diz isso.
 system-update-step-android-images = atualizar a imagem do sistema Android
@@ -39,17 +39,17 @@ system-update-step-store-optimise-does = nix store optimise: arquivos iguais vir
 system-update-step-journal-vacuum = aparar o journal
 system-update-step-journal-vacuum-does = journalctl --vacuum-size=256M: joga fora o registro mais antigo, inclusive o desta atualização — que é a resposta para "por que o rebuild falhou?". Vem desligado.
 system-update-step-font-cache = refazer o cache de fontes
-system-update-step-font-cache-does = fc-cache -rf: refaz do zero e ignora as datas, porque um rebuild pode ter mudado as fontes e um cache velho com data nova é exatamente o caso que traz alguém aqui.
+system-update-step-font-cache-does = fc-cache -rf: refaz do zero e ignora as datas, para as fontes do sistema que roda — outro sistema pode ter outras fontes, e um cache velho com data nova é exatamente o caso que traz alguém aqui. As fontes do sistema novo entram no cache na primeira atualização depois do reinício.
 system-update-step-tldr-cache = atualizar as páginas do tldr
 system-update-step-tldr-cache-does = tldr --update, como você: a unidade semanal as baixa como `nobody`, e o cache vai parar numa pasta que ninguém lê. Precisa de rede; sem ela o passo é pulado, em vez de esperar o timeout e chamar isso de falha.
 system-update-step-nix-profile = atualizar os seus programas do Nix
-system-update-step-nix-profile-does = ronoctua-software upgrade nix: os programas do seu perfil do Nix, levados ao nixpkgs do qual o sistema acabou de ser reconstruído. Não instala nenhum, e os que você aceitou mesmo não sendo livres seguem com esse mesmo aceite. Sem perfil o passo é pulado e diz isso.
+system-update-step-nix-profile-does = ronoctua-software upgrade nix: os programas do seu perfil do Nix, levados ao nixpkgs do sistema que roda — o do sistema novo chega a eles na primeira atualização depois do reinício. Não instala nenhum, e os que você aceitou mesmo não sendo livres seguem com esse mesmo aceite. Sem perfil o passo é pulado e diz isso.
 system-update-step-flatpak-user = atualizar os seus Flatpaks
 system-update-step-flatpak-user-does = ronoctua-software upgrade flatpak: a sua instalação Flatpak — os apps e os runtimes que eles usam — e o catálogo do Flathub junto. Não instala nenhum. Sem essa instalação o passo é pulado e diz isso.
 system-update-step-appimages = atualizar os seus AppImages
 system-update-step-appimages-does = ronoctua-software upgrade appimage: cada AppImage em ~/Applications contra os lançamentos do lugar de onde ele veio. O arquivo novo substitui o velho de uma vez só, então um download que falha deixa o velho funcionando. Sem essa pasta o passo é pulado e diz isso.
 system-update-step-android-apps = atualizar os seus apps Android
-system-update-step-android-apps-does = ronoctua-software upgrade android: os apps dentro do Android que vieram do F-Droid, cada um conferido contra quem o assinou e a soma de verificação que o índice registra. Os que você instalou de dentro do Android são assunto do próprio Android.
+system-update-step-android-apps-does = ronoctua-software upgrade android: o índice assinado do F-Droid pedido de novo, e então cada app dentro do Android que veio dele levado à versão mais nova que o índice indica — cada um conferido contra quem o assinou e a soma de verificação que o índice registra. O Android é iniciado para isso e parado de novo; enquanto você o tem aberto, nada é trocado com você usando, e os apps esperam a próxima execução. Um app que você tirou de dentro do Android não volta, e os que você instalou de dentro do Android são assunto do próprio Android. Enquanto nenhum app Android tiver entrado por aqui, o passo é pulado e diz isso.
 system-update-step-rust-toolchains = atualizar os toolchains do Rust
 system-update-step-rust-toolchains-does = rustup update: atualiza os canais que já estão em ~/.rustup, e não instala nenhum. Aqui o Rust vem do flake, então essa pasta não existe e o passo é pulado dizendo isso — ele é para a máquina onde você pôs o rustup à mão.
 system-update-step-node-global = atualizar os pacotes globais do npm
@@ -124,7 +124,7 @@ system-update-verdict-pending = ainda vem
 system-update-step-person-fetch = trazer o que você declarou em outro lugar
 system-update-step-person-fetch-does = ronoctua-belongings plain pull: a parte em claro dos seus pertences — os programas que você declarou e recusou nas outras máquinas, os registros delas — buscada e mesclada à cópia desta máquina, sem senha e sem tocar na parte cifrada — e só o que a sua chave assinou: o resto fica retido, e a vista diz por quê. Um arquivo mudado aqui e em outra máquina fica como esta máquina o tem, e a vista diz isso. Sem repositório, ou sem rede, o passo é pulado e diz isso.
 system-update-step-person-pins = adiantar as fixações
-system-update-step-person-pins-does = ronoctua-software pins refresh: cada programa declarado que segue as próprias versões — um AppImage, um app Android do F-Droid — fixado na versão e no resumo que ele tem agora. Com a sua opção de segui-los ligada, e numa máquina que confia na sua chave de assinatura, também os apps da distro que seguem as próprias versões (os Crafting Apps), além das fixações que a distro testou — perguntando ao GitHub, que você permitiu, e baixando só uma versão que esta máquina aceitaria; com ela desligada, essas fixações saem e voltam as da distro.
+system-update-step-person-pins-does = ronoctua-software pins refresh: cada programa declarado que segue as próprias versões — um AppImage, um app Android do F-Droid — fixado na versão e no resumo que ele tem agora. Com a sua opção de segui-los ligada, e numa máquina que confia na sua chave de assinatura, também os apps da distro que seguem as próprias versões (o ArtCraft Launcher e o SolidCraft), além das fixações que a distro testou — perguntando ao GitHub, que você permitiu, e baixando só uma versão que esta máquina aceitaria; com ela desligada, essas fixações saem e voltam as da distro.
 system-update-step-person-sign = assinar o que você declarou
 system-update-step-person-sign-does = ronoctua-belongings sign: as suas declarações como estão agora — o que veio das outras máquinas, as fixações recém-adiantadas — assinadas nesta máquina com a sua chave, sem rede e sem pergunta, para que a máquina as aceite. Sem a sua identidade aberta (nenhuma senha digitada nesta sessão), o passo recusa e a máquina fica com as declarações que tinha até a próxima sincronização.
 system-update-step-person-stage = entregar as suas declarações à máquina
@@ -141,7 +141,7 @@ system-update-step-person-publish-does = ronoctua-belongings plain push: a parte
 system-update-needs-file = este arquivo não existe
 system-update-needs-power = a máquina está na bateria abaixo do piso, e ninguém disse sim a esta rodada
 system-update-needs-free-space = o disco está quase cheio, mesmo depois de coletar o lixo do store
-system-update-needs-not-held = a máquina está retida numa revisão: a distro fica onde está
+system-update-needs-not-held = a máquina está retida numa revisão: a distro e o nixpkgs ficam onde estão
 
 system-update-kind-gather = junta o que você declarou
 system-update-kind-migrate = migra a pasta da máquina
@@ -151,7 +151,7 @@ system-update-kind-publish = publica o que esta máquina fez
 system-update-declined-empty = Esta máquina ainda não sincronizou os pertences: não há chave para assinar, e a atualização segue.
 system-update-declined-no-passphrase = A sua identidade não está aberta nesta sessão: nada foi assinado aqui. O que as suas outras máquinas assinaram chega a esta assim mesmo; uma mudança feita aqui espera a próxima sincronização assiná-la.
 system-update-declined-busy = Outro programa da própria máquina aplicava uma mudança e segurava a cópia das suas declarações: esta atualização constrói as que ela tinha, e as suas chegam na próxima aplicação.
-system-update-declined-did-not-boot = Este é o sistema que não subiu quando foi experimentado: não há nada novo a aplicar até a distro andar, e o resto da atualização segue.
+system-update-declined-did-not-boot = Este é o sistema que não subiu quando foi experimentado: não há nada novo a aplicar até a distro ou o nixpkgs andarem, e o resto da atualização segue.
 system-update-declined-nothing-to-migrate = Esta máquina já tem o próprio flake: não havia o que migrar, e a atualização segue.
 system-update-declined-github-not-let = O GitHub não está permitido no seu consentimento: os apps da distro que seguem as próprias versões não foram olhados, e ficam nas versões que tinham; nenhuma fixação sua andou também. Ligar de novo a opção de segui-los permite.
 system-update-verdict-declined = nada novo
@@ -163,7 +163,9 @@ system-update-records-conflicts = { $count ->
         [one] Um arquivo dos seus pertences mudou aqui e em outra máquina, e ficou como esta máquina o tem. Abra com { $keys }.
        *[other] { $count } arquivos dos seus pertences mudaram aqui e em outra máquina, e ficaram como esta máquina os tem. Abra com { $keys }.
     }
-system-update-records-hold = Esta máquina está retida em { $rev } desde { $since }: a atualização deixa a distro onde está.
+system-update-records-hold = Esta máquina está retida em { $rev } desde { $since }: a atualização deixa a distro e o nixpkgs onde estão.
+system-update-records-staged = Um sistema novo está montado e espera o próximo reinício desta máquina: até lá ela roda o mesmo de antes, e esse reinício experimenta o novo uma vez.
+system-update-records-staged-unguarded = Um sistema novo está montado e espera o próximo reinício desta máquina: até lá ela roda o mesmo de antes, e esse reinício não tem volta além do menu de boot.
 
 # UMA RODADA À MÃO COM A BATERIA BAIXA pergunta antes, com o não primeiro;
 # uma agendada espera o carregador e não pergunta a ninguém.
@@ -184,8 +186,18 @@ echo-system-update-kept-waiting = Continua na fila, e começa sozinha quando nad
 
 # A LEVA DE 2026-10-11: o envio para o cache binário da pessoa, por último.
 system-update-step-binary-cache-push = enviar para o seu cache binário
-system-update-step-binary-cache-push-does = ronoctua-cachix push: o que esta máquina construiu, enviado para o seu próprio cache no Cachix — só depois de uma atualização que trocou a máquina, e só com o seu token. Um cache público recebe só as saídas da própria distro, nunca um caminho seu nem um programa não livre; um privado recebe o sistema; nenhum recebe o que o cache.nixos.org já serve. Sem cache nomeado, o passo é pulado. O ensaio diz o que iria, e não envia nada.
+system-update-step-binary-cache-push-does = ronoctua-cachix push: o que esta máquina construiu, enviado para o seu próprio cache no Cachix — só depois de uma atualização que montou um sistema novo para ela, e só com o seu token; um sistema deixado para o próximo reinício é o enviado, com o cache que ele nomeia. Um cache público recebe só as saídas da própria distro, nunca um caminho seu nem um programa não livre; um privado recebe o sistema; nenhum recebe o que o cache.nixos.org já serve. Sem cache nomeado, o passo é pulado. O ensaio diz o que iria, e não envia nada.
 system-update-declined-no-token = O seu cache binário não tem token de envio nesta máquina: nada foi enviado. Dê um a ele na seção de cache binário da atualização.
 system-update-declined-not-let = Um host que o envio alcança não está permitido no seu consentimento: nada foi enviado. Nomear o cache de novo os permite.
-system-update-declined-nothing-new = Nenhuma atualização trocou esta máquina desde o último envio: não há nada novo para enviar.
+system-update-declined-nothing-new = Nenhuma atualização montou um sistema novo para esta máquina desde o último envio: não há nada novo para enviar.
 system-update-declined-no-cache = Esta máquina não nomeia cache binário seu: não há para onde enviar.
+
+# THE RUN THAT SET A NEW SYSTEM FOR THE NEXT BOOT ends saying so, once —
+# promising the boot trial's way back only when one is armed.
+notif-system-update-restart-summary = Reinicie para usar o sistema novo
+notif-system-update-restart-body = A atualização montou um sistema novo e o deixou para o próximo reinício: nada do que roda agora foi parado. Até você reiniciar, esta máquina roda o mesmo de antes; esse reinício experimenta o novo uma vez, e volta sozinho para o último bom se ele não subir.
+notif-system-update-restart-unguarded-summary = Reinicie para usar o sistema novo
+notif-system-update-restart-unguarded-body = A atualização montou um sistema novo e o deixou para o próximo reinício: nada do que roda agora foi parado. Até você reiniciar, esta máquina roda o mesmo de antes; esse reinício não tem volta além do menu de boot: se o novo não subir, escolha lá o anterior.
+# THE 2026-10-30 WAVE: the Android apps that wait, and why.
+system-update-declined-android-in-use = O Android estava rodando: nenhum app dele foi trocado com você usando, e eles esperam a próxima execução.
+system-update-declined-fdroid-not-let = O F-Droid não está permitido no seu consentimento: os seus apps Android não foram olhados, e ficam nas versões que têm. Permitir de novo o f-droid.org deixa a próxima execução levá-los adiante.

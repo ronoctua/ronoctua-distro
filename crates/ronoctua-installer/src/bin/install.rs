@@ -488,11 +488,21 @@ fn from_vars(get: &dyn Fn(&str) -> Option<String>) -> Result<Answers> {
             continue;
         }
         let var = q.variable();
-        // THE DEFAULT ANSWERS HERE TOO, and from the same place the TUI reads.
-        let v = get(&var)
-            .filter(|s| !s.is_empty())
-            .or_else(|| q.default_answer().map(ToOwned::to_owned))
-            .unwrap_or_default();
+        // THE DEFAULT ANSWERS HERE TOO, and from the same place the TUI reads
+        // — given the answers so far, for the variant's is the layout's.
+        // `ALL_KEYS`'s order guarantees the layout has already been read.
+        //
+        // AN EMPTY VARIABLE IS AN ANSWER where empty is one (`optional`):
+        // the TUI's "no variant" and "no Compose key". Defaulted, plain `us`
+        // could not be installed without a terminal — the empty variant
+        // would come back `euro`.
+        let v = match get(&var) {
+            Some(given) if !given.is_empty() || q.optional() => given,
+            _ => q
+                .default_given(&r)
+                .map(ToOwned::to_owned)
+                .unwrap_or_default(),
+        };
         if let Err(e) = validate_it(q, &v, &languages, &layouts) {
             // A PROGRAM THIS INSTALLER DOES NOT OFFER is named: answers
             // written for another installer may carry one it listed, and
@@ -574,6 +584,50 @@ mod tests {
             assert!(read(bad).is_none(), "{bad:?}");
         }
         assert!(read(&[]).is_some_and(|l| !l.execute));
+    }
+
+    /// FAILS IF: without a terminal, an unset variant is not the default
+    /// layout's own (`us(euro)`, the system's), the default layout's variant
+    /// reaches another layout, or an EMPTY variant or Compose key — the
+    /// TUI's "none", a choice — comes back as the default.
+    #[test]
+    fn an_unset_answer_is_the_default_and_an_empty_one_is_none() {
+        use ronoctua_installer::model::{DEFAULT_COMPOSE, DEFAULT_LAYOUT, DEFAULT_VARIANT};
+        let answered = |extra: &[(Question, &str)]| {
+            let vars: HashMap<String, String> = [
+                (Question::Disk, "/dev/disk/by-id/a-disk"),
+                (Question::Hostname, "noctua-teste"),
+                (Question::Password, "fixture-password"),
+                (Question::Passphrase, "fixture-passphrase"),
+                (
+                    Question::BelongingsAddress,
+                    "git@example.org:someone/belongings.git",
+                ),
+                (Question::BelongingsAccess, "/run/keys/deploy"),
+                (
+                    Question::BelongingsPassphrase,
+                    "fixture-belongings-passphrase",
+                ),
+            ]
+            .iter()
+            .chain(extra)
+            .map(|(q, v)| (q.variable(), (*v).to_owned()))
+            .collect();
+            from_vars(&|n| vars.get(n).cloned()).expect("the answers were refused")
+        };
+        let r = answered(&[]);
+        assert_eq!(r.keyboard, DEFAULT_LAYOUT);
+        assert_eq!(r.keyboard_variant, DEFAULT_VARIANT);
+        assert_eq!(r.compose_key, DEFAULT_COMPOSE);
+        // ANOTHER LAYOUT, no variant named: none, never `br(euro)`.
+        let r = answered(&[(Question::Keyboard, "br")]);
+        assert_eq!(r.keyboard, "br");
+        assert!(r.keyboard_variant.is_empty(), "{}", r.keyboard_variant);
+        // EMPTY, SAID: plain `us`, and no Compose key.
+        let r = answered(&[(Question::KeyboardVariant, ""), (Question::ComposeKey, "")]);
+        assert_eq!(r.keyboard, DEFAULT_LAYOUT);
+        assert!(r.keyboard_variant.is_empty(), "{}", r.keyboard_variant);
+        assert!(r.compose_key.is_empty(), "{}", r.compose_key);
     }
 
     /// FAILS IF: the installer started again keeps an answer in its

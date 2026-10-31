@@ -26,11 +26,11 @@ pub const KINDS_KEPT: usize = 100;
 /// The most kinds ignored.
 pub const IGNORED_KEPT: usize = 200;
 
-/// The most trechos the person filters by, past the shipped ones; over it,
+/// The most snippets the person filters by, past the shipped ones; over it,
 /// the one of theirs added longest ago goes.
 pub const FILTERS_KEPT: usize = 50;
 
-/// The trechos a fresh install filters, each shipped ON — the person opts out
+/// The snippets a fresh install filters, each shipped ON — the person opts out
 /// of them the way they opt into the module (the manifest's `starts_off`): the
 /// row is on its page from the first boot, and a tap turns it off. `dbus-broker`
 /// writes `Ignoring duplicate name` at `err` once per name a service file
@@ -46,8 +46,8 @@ pub const MESSAGE_MOST: usize = 600;
 /// the end are the same kind.
 pub const TEMPLATE_MOST: usize = 240;
 
-/// How many entries of this boot it reads on its first start — the most of
-/// the past it asks the core's one pass for.
+/// The most of this boot's past it asks the core's one pass for — which runs
+/// on the brain's first start alone, and reaches it only if it is on then.
 pub const BACKFILL_MOST: usize = 200;
 
 /// What a digit or an id becomes in a template.
@@ -300,12 +300,12 @@ pub enum Origin {
     Custom,
 }
 
-/// A trecho the person filters the journal's errors by. A line whose
+/// A snippet the person filters the journal's errors by. A line whose
 /// `<who>: <message>` holds it — case folded, so `ERROR` and `error` are one —
 /// is counted here and never reaches the list or the mark.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Filter {
-    /// The trecho, as it was written or shipped.
+    /// The snippet, as it was written or shipped.
     pub text: String,
     /// It, case folded: the identity, and what a line is searched for.
     pub folded: String,
@@ -343,7 +343,7 @@ impl Filter {
         }
     }
 
-    /// Its id on the page: sixteen hexadecimal digits of the folded trecho
+    /// Its id on the page: sixteen hexadecimal digits of the folded snippet
     /// (FNV-1a), the same across runs — DATA, the row's id the page hands back.
     #[must_use]
     pub fn id(&self) -> String {
@@ -363,7 +363,7 @@ pub struct Book {
     pub groups: BTreeMap<Kind, Group>,
     /// What is ignored, by kind.
     pub ignored: BTreeMap<Kind, Ignored>,
-    /// What is filtered, by trecho: the shipped ones and the person's, each on
+    /// What is filtered, by snippet: the shipped ones and the person's, each on
     /// or off. Built from [`DEFAULTS`] and the person's file ([`Book::set_filters`]).
     pub filters: Vec<Filter>,
 }
@@ -385,7 +385,7 @@ impl Book {
     /// One entry heard at `at` (the journal's second).
     pub fn hear(&mut self, entry: &Entry, at: Moment) -> Heard {
         let kind = Kind::of(entry);
-        // A FILTER FIRST: a line a trecho holds is counted on the trecho and
+        // A FILTER FIRST: a line a snippet holds is counted on the snippet and
         // is never a kind — off the list and off the mark.
         let shown = line(&kind.who, &entry.message);
         let hay = shown.to_lowercase();
@@ -534,9 +534,9 @@ impl Book {
     }
 
     /// Rebuilds the filters from the shipped [`DEFAULTS`] and the person's
-    /// choices — each a trecho and whether it is off — keeping the count the
-    /// brain had for a trecho it still has. The person's choices are the base,
-    /// so a trecho they added or took out by hand stays; this sweeps nothing
+    /// choices — each a snippet and whether it is off — keeping the count the
+    /// brain had for a snippet it still has. The person's choices are the base,
+    /// so a snippet they added or took out by hand stays; this sweeps nothing
     /// ([`Book::apply_filters`] does, once the counts are back).
     pub fn set_filters(&mut self, choices: &[(String, bool)]) {
         let kept: Vec<(String, u64, String)> = self
@@ -566,8 +566,8 @@ impl Book {
         self.filters = out;
     }
 
-    /// Filters by a trecho from now on, and sweeps what was already heard. A
-    /// trecho already there is turned on if it was off. The oldest of the
+    /// Filters by a snippet from now on, and sweeps what was already heard. A
+    /// snippet already there is turned on if it was off. The oldest of the
     /// person's own goes once there are more than [`FILTERS_KEPT`] of them.
     pub fn filter(&mut self, text: &str) {
         let text = text.trim();
@@ -902,7 +902,7 @@ mod tests {
         assert_eq!(book.filters().len(), 1);
         assert!(!book.filters()[0].off);
         // A dbus line at err, on the system bus and on the person's — one kind
-        // each by `who`, both held by the one trecho, case folded.
+        // each by `who`, both held by the one snippet, case folded.
         let sys = entry(
             &[("_SYSTEMD_UNIT", "dbus-broker.service")],
             "Ignoring duplicate name 'org.freedesktop.UPower' in service file '/nix/store/x'",
@@ -915,8 +915,8 @@ mod tests {
         assert_eq!(book.hear(&usr, 20), Heard::Filtered);
         assert!(book.groups.is_empty(), "a filtered line became a kind");
         assert_eq!(book.unseen(), 0, "a filtered line marked the modeline");
-        assert_eq!(book.filters()[0].since, 2, "both buses, one trecho");
-        // A line the trecho does not hold is an error as ever.
+        assert_eq!(book.filters()[0].since, 2, "both buses, one snippet");
+        // A line the snippet does not hold is an error as ever.
         let other = entry(&[("_SYSTEMD_UNIT", "nginx.service")], "bind() failed");
         assert_eq!(book.hear(&other, 30), Heard::New);
         assert_eq!(book.unseen(), 1);
@@ -984,7 +984,7 @@ mod tests {
         );
         // THE CAP keeps the person's own bounded.
         for n in 0..=FILTERS_KEPT {
-            book.filter(&format!("trecho {n}"));
+            book.filter(&format!("snippet {n}"));
         }
         assert!(
             book.filters()

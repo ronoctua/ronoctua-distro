@@ -2642,14 +2642,17 @@ let
 
   # THE INSTALLER'S DEFAULTS ARE THE SYSTEM'S DEFAULTS.
   #
-  # `ronoctua-installer` carries `DEFAULT_LAYOUT` and `DEFAULT_COMPOSE` as Rust
-  # constants — it has to, because it runs from a TTY on the ISO with no flake
-  # to evaluate. That makes them a SECOND copy of `nix/keyboard-xkb.nix`, and
-  # the two agreeing has been a matter of whoever edited remembering the other.
+  # `ronoctua-installer` carries `DEFAULT_LAYOUT`, `DEFAULT_VARIANT` and
+  # `DEFAULT_COMPOSE` as Rust constants — it has to, because it runs from a TTY
+  # on the ISO with no flake to evaluate. That makes them a SECOND copy of
+  # `nix/keyboard-xkb.nix`, and the two agreeing has been a matter of whoever
+  # edited remembering the other.
   #
   # What divergence looks like: a machine installed by pressing Enter through
-  # the questions and a machine built by `nix build .#noctua` type differently.
-  # Nothing fails; the person just finds out the day they need an accent.
+  # the questions and the system's own default type differently. Nothing
+  # fails; the person just finds out the day they need an accent — or a `€`:
+  # with the layout alone agreeing (2026-10-30), Enter installed a plain `us`
+  # beside the system's `us(euro)`.
   #
   # AND `CAPS_TOGGLE`, what the system adds whatever the answer: the Compose
   # question's help names the keys of the default and of this option
@@ -2670,6 +2673,7 @@ let
           }
         }
         agree DEFAULT_LAYOUT "${keyboard.layout}"
+        agree DEFAULT_VARIANT "${keyboard.variant}"
         agree DEFAULT_COMPOSE "${keyboard.compose}"
         agree CAPS_TOGGLE "${lib.concatStringsSep "," keyboard.always}"
 
@@ -3675,6 +3679,13 @@ let
         # AND THE PASSWORDLESS WINDOW'S END: it runs `security-open admin`,
         # `LEADER s e e` on the administrator's section, where it ends.
         "security-until",
+        # AND THE BUILD SWITCH'S, one glyph in three states (the committed
+        # checkout's, the working tree's, and the switch under way): the left
+        # button runs `build-toggle`, `LEADER / b`, which refuses and says so
+        # while a switch is under way; the right one runs `build-open`,
+        # `LEADER / p`, the page. Each state asserted below by what its own
+        # branch runs, and each command by its binding.
+        "build-own", "build-reference", "build-switching",
     }
     if acted != agreed:
         gaps.append(
@@ -3799,6 +3810,14 @@ let
         ("software-trial", 'run_command("software-trials")'),
         ("software-android", 'run_command("software-android")'),
         ("resizer", 'run_command("dev-resizer")'),
+        # THE BUILD MARK, in each of its three states: the left button
+        # switches and the right one opens the page, as the drawer's pair.
+        ("build-own", '"build-toggle"'),
+        ("build-own", '"build-open"'),
+        ("build-reference", '"build-toggle"'),
+        ("build-reference", '"build-open"'),
+        ("build-switching", '"build-toggle"'),
+        ("build-switching", '"build-open"'),
     ):
         if needle not in branch(mark):
             gaps.append(f"clicking `{mark}` does not run {needle}")
@@ -3812,6 +3831,8 @@ let
         ("p p", "player-open"),
         ("i a", "software-android"),
         ("/ r", "dev-resizer"),
+        ("/ b", "build-toggle"),
+        ("/ p", "build-open"),
     ):
         if f'("{seq}", "{command}"' not in keymap:
             gaps.append(f"`{command}` has no key at LEADER {seq}")
@@ -8256,11 +8277,11 @@ let
 
   # AND THE PREFERENCE STILL PREFERS.
   #
-  # `prefer` settles `*.obj` between `model/obj` and `application/x-tgif` by
-  # REMOVING the loser's glob — so while it works, nothing in the table says it
-  # is there, and the day upstream drops the ambiguity the row would stop
-  # applying in silence. This breaks the row on purpose and watches the build
-  # refuse; see `nix/mimegen.nix`.
+  # `prefer` settles `*.obj` for `model/obj` over `application/x-tgif` and
+  # `application/x-coff` by REMOVING each loser's glob — so while it works,
+  # nothing in the table says it is there, and the day upstream drops the
+  # ambiguity the row would stop applying in silence. This breaks the rows on
+  # purpose and watches the build refuse; see `nix/mimegen.nix`.
   mime-preference-is-live = mkCheck "mime-preference-is-live" [ ] ''
     test -s ${mimeDb.preferenceFixture}/verdict
     cat ${mimeDb.preferenceFixture}/verdict
@@ -8274,9 +8295,12 @@ let
     cat ${mimeDb.dropFixture}/verdict
   '';
 
-  # AND A CLAIM THAT WOULD TIE IN SILENCE IS REFUSED, each way it can: a
-  # `shares` with nobody to share with, a weight that would not tie, a
-  # `content` with no tie to settle. Built broken in `nix/mimegen.nix`.
+  # AND A NAME THAT WOULD TIE IN SILENCE IS REFUSED, each way it can: a
+  # `shares` with nobody to share with or with part of the tie, a weight that
+  # would not tie, a `content` with no tie to settle, a claim upstream
+  # already makes, an `ours` type invented on a name upstream gives (the
+  # `*.amf` that lost to `application/x-amf`), a name given here twice.
+  # Built broken in `nix/mimegen.nix`.
   mime-claims-refuse = mkCheck "mime-claims-refuse" [ ] ''
     ${lib.concatMapStrings (f: ''
       test -s ${f}/verdict
@@ -15412,9 +15436,10 @@ let
       # comment is the audit: adding a line here is claiming somebody read the
       # rule and decided the door is the right width.
       AGREED = {
-          # OURS — nine modules, and every one of them names its units inside
-          # the same action. `rescue` returns `AUTH_SELF_KEEP` (it asks, once,
-          # and remembers); `keyboard`, `keys`, `memory`, `update`,
+          # OURS — the modules signed on the line below, and every one of them
+          # names its units inside the same action. `rescue` returns
+          # `AUTH_SELF_KEEP` (it asks, once, and remembers); `keyboard`,
+          # `keys`, `memory`, `update`,
           # `tor`, `syncthing` and `android` return `YES`, because nothing this
           # system does on its own may ask. `keys` is the one that names TWO
           # units — keyd and its replacement, which the mode switch trades —
@@ -15428,12 +15453,18 @@ let
           # `security` returns `YES` for `start` of ONE unit, the shields'
           # (`security-polkit-is-narrow`): it only ever tightens the firewall.
           #
+          # `vpn` (`nix/modules/vpn.nix`) returns `YES` for `start` of TWO
+          # units, the WireGuard register's install (the staged key sealed,
+          # the locations written) and its sync (the profiles regenerated),
+          # the one user (`vpn-rule-is-narrow`). It shipped unsigned for a
+          # while, and this count was the only thing that said so.
+          #
           # `files` IS NOT HERE ANY MORE, and must not come back: its
           # `AUTH_SELF_KEEP` rule could never ask anybody in a session with no
           # polkit agent, so its unit is started through the sudo door
           # (`files-root-is-narrow`).
           "org.freedesktop.systemd1.manage-units":
-              "ours: rescue, keyboard, keys, memory, update, tor, syncthing, android, security, person, machine, parts",
+              "ours: rescue, keyboard, keys, memory, update, tor, syncthing, android, security, vpn, person, machine, parts",
           # nix/modules/base.nix — the machine's own clock. THREE actions and
           # not four: `set-local-rtc` decides whether the hardware clock runs
           # in local time, nothing in this tree asks for it, and a fourth
@@ -15577,6 +15608,196 @@ let
           raise SystemExit(1)
 
       print(f"OK: {rules} rules, {len(found)} actions, all of them audited")
+      END
+    '';
+
+  # THE VPN REGISTER'S ONE POLKIT RULE, AND HOW WIDE IT IS.
+  #
+  # `nix run .#vpn-import` and the network view start
+  # `ronoctua-vpn-install.service` (the person's staged key sealed, the
+  # locations written) and `ronoctua-vpn-sync.service` (the profiles
+  # regenerated) with no polkit agent in the session, so the rule answers
+  # `YES` — and what buys the width back is measured on the MERGED rules and
+  # units of the real system (`nix/modules/vpn.nix`):
+  #
+  #   - two units and no third, each running a fixed line: the root helper's
+  #     `vpn-install` verb for the one user, then the sync; the sync with no
+  #     argument at all; the install with no start limit, since only a
+  #     gesture starts it (the sync keeps the default: its path unit and the
+  #     boot start it on their own);
+  #   - one rule, ONE `if` around ONE `return polkit.Result.YES;` and nothing
+  #     else (a second branch would grant whatever it tests, unread): YES,
+  #     `manage-units`, the verb `start`, those two units as one bracketed
+  #     group, the one user, nothing else tested — and no other rule names
+  #     either;
+  #   - the folder the person stages into is one path in all three places
+  #     that spell it — root's install verb (`ronoctua_security::vpn`), the
+  #     shell that stages (`ronoctua_network::vpn`) and the import script —
+  #     and the tmpfiles line makes it theirs and `0700`: the install verb
+  #     takes only that uid's files from it;
+  #   - every VPN unit the shell or the import names is one the rule lists
+  #     (a gesture the rule refused fails with nobody to ask), and the rule
+  #     lists none that nobody starts.
+  #
+  # The rule shipped without this check and without its name in the census
+  # (`polkit-rules-are-the-ones-we-know`), whose count was what said so.
+  vpn-rule-is-narrow =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      services = vm.systemd.services;
+      plain = v: builtins.unsafeDiscardStringContext (toString v);
+      user = vm.ronoctua.user;
+      facts = pkgs.writeText "vpn-rule-facts.json" (
+        builtins.toJSON {
+          rules = plain vm.security.polkit.extraConfig;
+          services = builtins.filter (lib.hasPrefix "ronoctua-vpn-") (builtins.attrNames services);
+          install = plain services.ronoctua-vpn-install.serviceConfig.ExecStart;
+          installPost = plain services.ronoctua-vpn-install.serviceConfig.ExecStartPost;
+          installStartLimit = services.ronoctua-vpn-install.unitConfig.StartLimitIntervalSec or null;
+          sync = plain services.ronoctua-vpn-sync.serviceConfig.ExecStart;
+          tmpfiles = builtins.filter (lib.hasInfix "ronoctua-vpn") vm.systemd.tmpfiles.rules;
+          inherit user;
+          group = vm.users.users.${user}.group;
+        }
+      );
+    in
+    mkCheck "vpn-rule-is-narrow" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+      exec(open("${shellPrelude}").read())
+
+      # PARSED: the evaluated system arrives as JSON — the merged polkit
+      # rules, the VPN's units, their command lines, the install's start
+      # limit and the tmpfiles lines.
+      # FILE-WIDE: each `STAGING_DIR` is a constant of a file read whole
+      # (root's crate, the network crate, the import script); the starters
+      # are every shell source (tests cut off) and the import script, each
+      # read whole for a unit's NAME — a string, so the strings stay
+      # (`uncommented`, `hashless`) and the comments go.
+      got = json.load(open("${facts}"))
+      crate = uncommented(pathlib.Path("${../crates/ronoctua-security/src/vpn.rs}").read_text())
+      network = uncommented(pathlib.Path("${../crates/ronoctua-network/src/vpn.rs}").read_text())
+      importer = hashless(pathlib.Path("${../nix/scripts/vpn-import.py}").read_text())
+      user = got["user"]
+      install, sync = "ronoctua-vpn-install.service", "ronoctua-vpn-sync.service"
+      units = {install, sync}
+      wrong = []
+
+      # 1. TWO UNITS AND NO THIRD, each running a fixed line.
+      if sorted(got["services"]) != sorted(u.removesuffix(".service") for u in units):
+          wrong.append(f"the system declares {sorted(got['services'])} for the VPN; {sorted(units)} are the units")
+      lines = {
+          "install": rf"/nix/store/[^ ]+/bin/ronoctua-security-root vpn-install {re.escape(user)}",
+          "installPost": rf"/nix/store/[^ ]+/bin/systemctl start --wait {re.escape(sync)}",
+          "sync": r"/nix/store/[^ ]+/bin/ronoctua-vpn-sync",
+      }
+      for unit, line in lines.items():
+          if not re.fullmatch(line, got[unit]):
+              wrong.append(f"the VPN's {unit} runs {got[unit]!r}; nothing in it may come from whoever starts it")
+      if got["installStartLimit"] != "0":
+          wrong.append(
+              f"the install's StartLimitIntervalSec is {got['installStartLimit']!r}; it may only be 0: "
+              "a start limit refuses the sixth register as start-limit-hit"
+          )
+
+      # 2. THE STAGING FOLDER IS THE PERSON'S, and one path wherever it is
+      # spelled: where root takes from, where the shell and the import stage.
+      def staging_of(text, pattern, what):
+          m = re.search(pattern, text)
+          return must(m and m.group(1), what)
+
+      spelled = {
+          "ronoctua_security::vpn::STAGING_DIR": staging_of(crate, r'const STAGING_DIR: &str = "([^"]+)";', "ronoctua_security::vpn::STAGING_DIR"),
+          "ronoctua_network::vpn::STAGING_DIR": staging_of(network, r'const STAGING_DIR: &str = "([^"]+)";', "ronoctua_network::vpn::STAGING_DIR"),
+          "vpn-import.py's STAGING_DIR": staging_of(importer, r'(?m)^STAGING_DIR = Path\("([^"]+)"\)\s*$', "vpn-import.py's STAGING_DIR"),
+      }
+      staging = spelled["ronoctua_security::vpn::STAGING_DIR"]
+      for where, path in spelled.items():
+          if path != staging:
+              wrong.append(f"{where} is {path}, and root's install verb takes from {staging}: what is staged there is never taken")
+      mine = rf"d {re.escape(staging)} 0700 {re.escape(user)} {re.escape(got['group'])} -"
+      if not any(re.fullmatch(mine, r) for r in got["tmpfiles"]):
+          wrong.append(f"no tmpfiles line makes {staging} the person's alone, 0700 (lines: {got['tmpfiles']})")
+
+      # 3. THE ONE RULE.
+      text = uncommented(got["rules"])
+      floor(len(text), 500, "characters of the merged polkit rules")
+      every = re.split(r"polkit\.addRule", text)[1:]
+      floor(len(every), 3, "rules in the merged polkit config")
+      ours = [r for r in every if install in r]
+      if len(ours) != 1:
+          wrong.append(f"{len(ours)} rules name {install}; there may be one")
+      for rule in ours:
+          if set(re.findall(r"polkit\.Result\.(\w+)", rule)) != {"YES"}:
+              wrong.append("the rule answers something other than YES")
+          if set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule)) != {"org.freedesktop.systemd1.manage-units"}:
+              wrong.append("the rule is about another action than manage-units")
+          named = set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule))
+          if named != units:
+              wrong.append(f"the rule names the units {sorted(named)}; it may name {sorted(units)}")
+          if set(re.findall(r'lookup\("verb"\)\s*==\s*"([^"]+)"', rule)) != {"start"}:
+              wrong.append("the rule allows another verb than `start`")
+          if set(re.findall(r'subject\.user\s*==\s*"([^"]+)"', rule)) != {user}:
+              wrong.append(f"the rule is for another person than {user}")
+          # ONE `if` AROUND ONE `return polkit.Result.YES;`, AND NOTHING ELSE:
+          # the sets above are the whole rule's, so a second branch with a
+          # wider test of its own would leave every one of them as it is. The
+          # rule is that one shape, start to end, and holds no other `if` or
+          # `return` — so the condition read below is the only one there is.
+          shape = re.fullmatch(
+              r"\(\s*function\s*\(\s*action\s*,\s*subject\s*\)\s*\{\s*"
+              r"if\s*\((.*)\)\s*\{\s*return\s+polkit\.Result\.YES\s*;\s*\}\s*"
+              r"\}\s*\)\s*;\s*",
+              rule,
+              re.S,
+          )
+          if not shape or len(re.findall(r"\b(?:if|return)\b", rule)) != 2:
+              wrong.append("the rule is more than one `if` around one `return polkit.Result.YES;`: another branch would grant what it tests, and nothing here reads it")
+              continue
+          # THE UNITS' ALTERNATIVES COME OFF AS ONE BRACKETED GROUP, and only
+          # as one: a `||` left anywhere else escapes the action, the verb and
+          # the user.
+          left = re.sub(
+              r'\(\s*(?:action\.lookup\("unit"\)\s*==\s*"[^"]+"\s*\|\|\s*)*'
+              r'action\.lookup\("unit"\)\s*==\s*"[^"]+"\s*\)',
+              "",
+              shape.group(1),
+          )
+          for known in (
+              r'action\.id\s*==\s*"[^"]+"',
+              r'action\.lookup\("verb"\)\s*==\s*"[^"]+"',
+              r'action\.lookup\("unit"\)\s*==\s*"[^"]+"',
+              r'subject\.user\s*==\s*"[^"]+"',
+          ):
+              left = re.sub(known, "", left)
+          leftover = re.sub(r"[\s()&]", "", left)
+          if leftover:
+              wrong.append(f"the condition tests something else, or an alternative outside the brackets: {leftover!r}")
+      for rule in every:
+          if rule not in ours and any(u in rule for u in units):
+              wrong.append("another rule names a unit of the VPN")
+
+      # 4. THE STARTERS: what the shell and the import name is what the rule
+      # lists, both ways.
+      UNIT = re.compile(r'"(ronoctua-vpn-[\w-]+\.service)"')
+      started, swept = set(UNIT.findall(importer)), 0
+      for f in shell_files("**/*.rs"):
+          swept += 1
+          started |= set(UNIT.findall(uncommented(outside_tests(f.read_text()))))
+      floor(swept, 100, "shell sources swept for a VPN unit")
+      floor(len(started), 2, "VPN units the shell and the import start")
+      for u in sorted(started - units):
+          wrong.append(f"{u} is started by the shell or the import, and the rule does not list it: the gesture would be refused")
+      for u in sorted(units - started):
+          wrong.append(f"the rule lists {u}, and nothing the person runs starts it: a door held open for nobody")
+
+      if wrong:
+          print("ERROR: the VPN's units or their rule are wider, or wired otherwise, than they may be:", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: two units, one rule of one branch ({sorted(units)}, start, {user}, YES), the install with no start limit, {staging} the person's and spelled alike in {len(spelled)} places, and {len(started)} unit(s) started by the shell and the import, all of them listed")
       END
     '';
 
@@ -18789,7 +19010,7 @@ let
             "model/gltf+json",
             "model/gltf-binary",
             "model/vnd.collada+xml",
-            "model/x-amf",
+            "application/x-amf",
             "model/step",
             "model/iges",
         ):
@@ -29302,9 +29523,18 @@ let
                if not s.startswith("-")]
       if verbs != ["start"]:
           wrong.append(f"`start_argv` asks systemctl for {verbs}, and the rule grants `start`")
+      # The one other verb is the person's own: `session_unit_stop_argv` stops
+      # the session's transient USER unit when it did not come up in time, in
+      # the person's own manager — `--user` first, so it never reaches a
+      # system unit, and no polkit rule is asked.
       for m in re.finditer(r"Call::new\(\s*systemctl\s*,", android):
           argv = shut_at(android, m.end()).strip()
-          if not re.match(r"(start_argv|is_active_argv)\(", argv):
+          if re.match(r"session_unit_stop_argv\(", argv):
+              words = [s for _, _, s in strings_of(must(
+                  body_of(android, "session_unit_stop_argv"), "`android::session_unit_stop_argv`"))]
+              if words[:2] != ["--user", "stop"]:
+                  wrong.append(f"`session_unit_stop_argv` asks systemctl for {words}, and may only stop a user unit")
+          elif not re.match(r"(start_argv|is_active_argv)\(", argv):
               wrong.append(f"systemctl is run with `{argv[:60]}`, past `start_argv`")
 
       # FILE-WIDE: WHAT THE SYSTEM GRANTS — the merged rules of the whole
@@ -30480,7 +30710,7 @@ let
   #   — the Nix manifest's elements, the Flatpak installation (`flatpak update`
   #   of an id that is not there fails), the AppImages' sidecars, Android's
   #   own record — and calls no installer, except that Android reinstalls, over
-  #   the old one, an app its record already holds.
+  #   the old one, an app its record holds and Android lists now.
   #
   # WHAT READING SOURCE CANNOT PIN: that `nix profile upgrade` and `flatpak
   # update` themselves add nothing. `flatpak update` may pull in a new runtime
@@ -36166,19 +36396,18 @@ let
   # `ronoctua-install --execute` against a real disk, with no network card,
   # is `installer-offline-vm` (`tests/installer-offline-vm.nix`, slow tier).
 
-  # A MODEL OPENS IN ORCASLICER — a `.stl`, a `.3mf`, and a `.step`, which the
-  # database makes a `text/plain` and which went to the editor.
+  # A MODEL OPENS IN ORCASLICER — a `.stl`, a `.3mf`, a `.step`, a `.obj` and
+  # a `.amf`; the `.obj`, which the database makes a `text/plain`, went to the
+  # editor (as the `.step` did under shared-mime-info 2.4).
   #
   # The whole way, with the pieces the machine has: the full system's own
   # `/etc/xdg/mimeapps.list`, OrcaSlicer's own entry out of the package the
   # system installs, an editor that declares `text/plain` beside it, and the
-  # shell's `opener` — the answer both file doors act on. Then the same files
-  # with the list taken away: the `.step` must reach the editor, or the first
-  # half would pass without the defaults being read at all. At evaluation,
-  # the full system names OrcaSlicer first for each of the three types (its
-  # entry declares two of them, which the run cannot tell from a default),
-  # and the reduced profile names no default for the models, since it has no
-  # OrcaSlicer.
+  # shell's `opener` — the answer both file doors act on. At evaluation, the
+  # full system names OrcaSlicer first for each of the five types (its entry
+  # declares all of them, `model/obj` by an alias, which the run cannot tell
+  # from a default), and the reduced profile names no default for the
+  # models, since it has no OrcaSlicer.
   models-open-in-orca =
     let
       full = self.nixosConfigurations.noctua;
@@ -36199,18 +36428,21 @@ let
       installed =
         full.config.ronoctua.parts.orca-slicer.wanted
         && full.config.ronoctua.parts.orca-slicer.package.outPath == orca.outPath;
-      minimalNames = lib.attrNames minimal.config.xdg.mime.defaultApplications;
-      modelsInMinimal = lib.filter (lib.hasPrefix "model/") minimalNames;
-      # EACH TYPE NAMED, by itself: OrcaSlicer's own entry declares `model/stl`
-      # and `model/3mf`, so the run below would send those two to it with no
-      # default at all — only this says the module names all three.
-      defaults = full.config.xdg.mime.defaultApplications;
-      orcaFirst = t: lib.take 1 (lib.toList (defaults.${t} or [ ])) == [ orcaEntry ];
-      unnamed = lib.filter (t: !orcaFirst t) [
+      models = [
         "model/stl"
         "model/3mf"
         "model/step"
+        "model/obj"
+        "application/x-amf"
       ];
+      minimalNames = lib.attrNames minimal.config.xdg.mime.defaultApplications;
+      modelsInMinimal = lib.filter (t: lib.hasPrefix "model/" t || lib.elem t models) minimalNames;
+      # EACH TYPE NAMED, by itself: OrcaSlicer's own entry declares every one
+      # of them, so the run below would send them to it with no default at
+      # all — only this says the module names all five.
+      defaults = full.config.xdg.mime.defaultApplications;
+      orcaFirst = t: lib.take 1 (lib.toList (defaults.${t} or [ ])) == [ orcaEntry ];
+      unnamed = lib.filter (t: !orcaFirst t) models;
     in
     assert lib.assertMsg installed "models-open-in-orca: the full profile does not install OrcaSlicer";
     assert lib.assertMsg (unnamed == [ ])
@@ -36233,10 +36465,12 @@ let
       # this copy is the line that fails.
       cp ${orca}/share/applications/${orcaEntry} "$root/share/applications/"
       # An editor by its entry (`plain-editor`, never the word the shell
-      # says for ITS editor), declaring the parent type the `.step` has.
+      # says for ITS editor), declaring the parent type the `.obj` has. Its
+      # name sorts before OrcaSlicer's, as Emacs's does.
       printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Editor' \
         'Exec=plain-editor %F' 'MimeType=text/plain;' > "$root/share/applications/plain-editor.desktop"
-      for f in part.stl plate.3mf bracket.step bracket.stp; do
+      models="part.stl plate.3mf bracket.step bracket.stp mesh.obj print.amf"
+      for f in $models; do
         : > "$root/models/$f"
       done
 
@@ -36247,29 +36481,30 @@ let
           RONOCTUA_TEXTS="$RONOCTUA_TEXTS" RONOCTUA_BRAIN_CATALOGUE="$RONOCTUA_BRAIN_CATALOGUE" \
           ${rust.bins.ronoctua-shell}/bin/ronoctua-shell opener \
           "$root/models/part.stl" "$root/models/plate.3mf" \
-          "$root/models/bracket.step" "$root/models/bracket.stp"
+          "$root/models/bracket.step" "$root/models/bracket.stp" \
+          "$root/models/mesh.obj" "$root/models/print.amf"
       }
 
       failed=0
       with=$(asked "$root/etc/xdg")
       echo "$with"
-      for f in part.stl plate.3mf bracket.step bracket.stp; do
+      for f in $models; do
         echo "$with" | grep -q -P "/$f\t${orcaId}$" || {
           echo "ERROR: $f does not open in OrcaSlicer with the system's defaults" >&2
           failed=1
         }
       done
 
-      # OrcaSlicer's own entry now claims model/stl, model/3mf AND model/step
-      # upstream (orca-slicer 2.4.2 on nixos-unstable; model/step was added to
-      # it, where before it named only stl and 3mf). So a `.step` no longer
-      # falls to a text/plain editor when no default is set — the old negative
-      # control cannot prove its point any more. The default is kept so
-      # OrcaSlicer wins deterministically over any other claimant, and the
-      # `with` run above is what proves all three reach it.
+      # OrcaSlicer's own entry now declares every one of the five (orca-slicer
+      # 2.4.2 on nixos-unstable; `model/step` was added to it, and `model/obj`
+      # is named by its alias), so no model falls to a text/plain editor
+      # when no default is set — the old negative control cannot prove its
+      # point any more. The default is kept so OrcaSlicer wins
+      # deterministically over any other claimant, and the `with` run above
+      # is what proves all five reach it.
 
       [ "$failed" = 0 ] || exit 1
-      echo "OK: .stl, .3mf, .step and .stp open in OrcaSlicer by the system's defaults"
+      echo "OK: .stl, .3mf, .step, .stp, .obj and .amf open in OrcaSlicer by the system's defaults"
     '';
 
   # A DOCUMENT OPENS IN ITS SUITE — Microsoft's formats (OOXML, the binary
@@ -42063,6 +42298,129 @@ let
       END
     '';
 
+  # ── anchor: L25 ──
+  # A NEW MACHINE STARTS ON THE NIXPKGS THE DISTRO TESTED.
+  #
+  # The template rolls `nixpkgs` on a BRANCH (`nixos-unstable`), and turning a
+  # branch into a revision asks GitHub. So the installer (offline, from the
+  # ISO's tree) and the migration (`ronoctua-machine migrate`) lock a new
+  # machine's flake with the distro tree's own `flake.lock` as the reference
+  # (`--reference-lock-file`): Nix keeps an input whose node there has the
+  # `original` the template's URL parses to, locks the distro input fresh, and
+  # asks no network for the rest. This holds the precondition the two lean on,
+  # in a second of evaluation instead of the slow tier's `installer-offline-vm`
+  # (the break of 7aeab90 went through every pure check): every input the
+  # template names besides the distro's is a NAME in the root's `inputs` of the
+  # distro's lock — never a follows, and never looked up as `nodes.<name>`,
+  # which today is another nixpkgs (a channel tarball an input of an input
+  # uses) —, the node it names has exactly that `original`, and its `locked`
+  # carries the `narHash` the ISO's store answers by. The rule is run first on
+  # planted locks it exists to refuse.
+  a-new-machine-starts-on-the-tested-nixpkgs =
+    let
+      template = import ../templates/machine/flake.nix;
+      # THE DISTRO INPUT, which both lockers lock fresh: the one the installer
+      # aims and the update moves (`DISTRO_INPUT` in `ronoctua-installer` and
+      # `ronoctua-machine`).
+      distro = "ronoctua";
+      facts = pkgs.writeText "new-machine-lock-facts.json" (
+        builtins.toJSON {
+          inherit distro;
+          names = builtins.attrNames template.inputs;
+          # What each other input's URL parses to — the `original` Nix wants
+          # to find in the reference before it keeps a node.
+          wanted = lib.mapAttrs (_: i: {
+            inherit (i) url;
+            parsed = builtins.parseFlakeRef i.url;
+          }) (removeAttrs template.inputs [ distro ]);
+        }
+      );
+    in
+    mkCheck "a-new-machine-starts-on-the-tested-nixpkgs" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import copy, json, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the distro's lock is JSON, Nix's own format, and the template's
+      # inputs come parsed by Nix (`builtins.parseFlakeRef`): nothing is searched.
+      f = json.load(open("${facts}"))
+      lock = json.load(open("${../flake.lock}"))
+
+
+      def wrong_of(lock, wanted):
+          """What keeps a template input from being kept off this lock."""
+          said = []
+          nodes = lock.get("nodes", {})
+          root = nodes.get(lock.get("root", ""), {}).get("inputs", {})
+          for name, w in sorted(wanted.items()):
+              entry = root.get(name)
+              if entry is None:
+                  said.append(f"the lock's root has no `{name}`: {w['url']} would be resolved, and a branch asks GitHub")
+                  continue
+              if not isinstance(entry, str):
+                  said.append(f"the lock's root `{name}` follows {entry}: there is no node of its own to keep")
+                  continue
+              node = nodes.get(entry, {})
+              if node.get("original") != w["parsed"]:
+                  said.append(f"the lock's root `{name}` is node `{entry}`, whose original {node.get('original')}"
+                              f" is not {w['url']} ({w['parsed']}): Nix would lock it again")
+              if not node.get("locked", {}).get("narHash"):
+                  said.append(f"node `{entry}` is locked with no narHash: an offline store cannot answer for it")
+          return said
+
+
+      if f["distro"] not in f["names"]:
+          print(f"ERROR: the template has no `{f['distro']}` input; this check no longer knows which"
+                " input the lockers lock fresh.", file=sys.stderr)
+          raise SystemExit(1)
+      wanted = f["wanted"]
+      floor(len(wanted), 1, "template inputs besides the distro's (the rolling nixpkgs is one)")
+
+      # THE RULE, ON LOCKS IT EXISTS TO REFUSE: each defect alone, on a copy of
+      # the real lock, for every input the template wants.
+      def planted(change):
+          p = copy.deepcopy(lock)
+          change(p, p["nodes"], p["nodes"][p["root"]]["inputs"])
+          return p
+
+      for name in wanted:
+          def follows(p, nodes, root):
+              root[name] = ["somewhere"]
+
+          def missing_but_named(p, nodes, root):
+              # THE WRONG-NODE TRAP: the root lacks it, a node of that NAME exists
+              # with the right original, and a lookup by name would take it.
+              node = copy.deepcopy(nodes[root[name]])
+              del root[name]
+              nodes[name] = node
+
+          def another_branch(p, nodes, root):
+              nodes[root[name]]["original"] = dict(nodes[root[name]]["original"], ref="nixos-00.00")
+
+          def unhashed(p, nodes, root):
+              nodes[root[name]]["locked"].pop("narHash", None)
+
+          for case in (follows, missing_but_named, another_branch, unhashed):
+              if not wrong_of(planted(case), {name: wanted[name]}):
+                  print(f"ERROR: the rule takes a planted lock it exists to refuse ({case.__name__},"
+                        f" `{name}`).", file=sys.stderr)
+                  raise SystemExit(1)
+
+      wrong = wrong_of(lock, wanted)
+      if wrong:
+          print("ERROR: a new machine's lock cannot start from the distro's own (flake.lock):",
+                file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("       The installer locks offline and would stop there; the migration would lock", file=sys.stderr)
+          print("       the newest branch instead of the tested pin.", file=sys.stderr)
+          raise SystemExit(1)
+      kept = ", ".join(f"{n} at {lock['nodes'][lock['nodes'][lock['root']]['inputs'][n]]['locked'].get('rev', '?')[:12]}"
+                       for n in sorted(wanted))
+      print(f"OK: a new machine's lock keeps {kept} off the distro's own; only `{f['distro']}` is locked fresh")
+      END
+    '';
+
   # THE ATTRIBUTE A MACHINE FLAKE BUILDS IS THE ONE EVERYTHING ASKS FOR.
   #
   # It used to be a sentence in two comments (`rescue-flake-target-exists`) and
@@ -45275,8 +45633,15 @@ let
       MACHINE = "${rust.machine}/bin/ronoctua-machine"
       SIZING = "${vm.config.ronoctua.machine.environment.RONOCTUA_BUILD_SIZING}"
       UNITS = "${vm.config.ronoctua.machine.environment.RONOCTUA_BUILD_UNITS}"
-      LOCK_A = '{"nodes":{"root":{"inputs":{"ronoctua":"r"}},"r":{"locked":{"rev":"' + "a" * 40 + '"}}},"root":"root","version":7}\n'
+      # A MACHINE FLAKE THAT ROLLS `nixpkgs` (the template's, 2026-10-30):
+      # LOCK_B moved the distro alone; LOCK_NIX_B moved `nixpkgs` with it.
+      LOCK_A = '{"nodes":{"root":{"inputs":{"ronoctua":"r","nixpkgs":"n"}},"r":{"locked":{"rev":"' + "a" * 40 + '"}},"n":{"locked":{"rev":"' + "1" * 40 + '"}}},"root":"root","version":7}\n'
       LOCK_B = LOCK_A.replace("a" * 40, "b" * 40)
+      LOCK_NIX_A = LOCK_A
+      LOCK_NIX_B = LOCK_NIX_A.replace("a" * 40, "b" * 40).replace("1" * 40, "2" * 40)
+      # A LOCK THAT NAMES NO `nixpkgs` AT ALL: whether it moved is not known.
+      LOCK_BARE_A = '{"nodes":{"root":{"inputs":{"ronoctua":"r"}},"r":{"locked":{"rev":"' + "a" * 40 + '"}}},"root":"root","version":7}\n'
+      LOCK_BARE_B = LOCK_BARE_A.replace("a" * 40, "b" * 40)
       FACTS = json.load(open("${facts}"))
       INSIDE = FACTS["inside"]
 
@@ -45342,7 +45707,8 @@ let
           path.write_text("#!" + PY + "\n" + "\n".join(l[indent:] for l in lines) + "\n")
           path.chmod(0o755)
 
-      def world(name, snapshot=True):
+      def world(name, snapshot=True, rolls=False, bare=False):
+          lock_a, lock_b = (LOCK_NIX_A, LOCK_NIX_B) if rolls else (LOCK_BARE_A, LOCK_BARE_B) if bare else (LOCK_A, LOCK_B)
           root = pathlib.Path(os.environ["TMPDIR"]) / name
           (root / "run").mkdir(parents=True)
           (root / "nix/var/nix/profiles").mkdir(parents=True)
@@ -45379,16 +45745,16 @@ let
           # THE UPDATE MOVED THE INPUT: the folder names B, the running
           # system was built from A — kept beside it, or carried by it.
           if snapshot:
-              (root / "state/applied.lock").write_text(LOCK_A)
+              (root / "state/applied.lock").write_text(lock_a)
           else:
               carried = tops["a"] / INSIDE
               carried.parent.mkdir(parents=True, exist_ok=True)
-              carried.write_text(LOCK_A)
-          (root / "machine/flake.lock").write_text(LOCK_B)
+              carried.write_text(lock_a)
+          (root / "machine/flake.lock").write_text(lock_b)
           (root / "build-result").write_text(str(tops["b"]))
           return root, tops
 
-      def apply(root):
+      def apply(root, *words):
           env = {
               "PATH": "/no-path",
               "FAKE_ROOT": str(root),
@@ -45407,7 +45773,7 @@ let
               "RONOCTUA_BUILD_UNITS": UNITS,
               "RONOCTUA_KEEP_UNITS": str(root / "bin/keep-units"),
           }
-          return subprocess.run([MACHINE, "apply"], env=env, capture_output=True, text=True)
+          return subprocess.run([MACHINE, "apply", *words], env=env, capture_output=True, text=True)
 
       def text(path):
           return path.read_text() if path.exists() else ""
@@ -45467,27 +45833,102 @@ let
       if text(root / "machine/flake.lock") != LOCK_A:
           wrong.append("with no snapshot, a failed build did not put back the lock the running system carries")
 
+      # 4. THE LOCK MOVED `nixpkgs` and the apply is a plain one — the
+      # software centre's, the rescue's, an update's whose apply never ran:
+      # the new system is set for the NEXT BOOT, never switched to live.
+      def staged(root, tops, how):
+          if text(root / "switched") != "b boot\n":
+              wrong.append(f"{how}: switched live, not for the next boot: {text(root / 'switched')!r}")
+          if os.path.realpath(root / "run/current-system") != str(tops["a"]):
+              wrong.append(f"{how}: the system that runs moved")
+          if os.path.realpath(root / "nix/var/nix/profiles/system") != str(tops["b"]):
+              wrong.append(f"{how}: the profile does not name the new system")
+          if (text(root / "efi-default"), text(root / "efi-oneshot")) != ("nixos-generation-1.conf", "nixos-generation-2.conf"):
+              wrong.append(f"{how}: the boot trial is not armed for the next boot")
+          record = json.loads(text(root / "state/state.json") or "{}")
+          last = record.get("last-apply") or {}
+          if last.get("result") != "staged" or last.get("toplevel") != "/" + str(tops["b"].relative_to(root)):
+              wrong.append(f"{how}: the record does not say staged, with the system that waits: {record}")
+          if (record.get("trial") or {}).get("outcome") != "pending":
+              wrong.append(f"{how}: the record holds no pending trial: {record}")
+
+      root, tops = world("nixpkgs-moved", rolls=True)
+      ran = apply(root)
+      print(ran.stderr, file=sys.stderr)
+      if ran.returncode != 0 or ran.stdout.strip().splitlines()[-1:] != ["set for the next boot; trial pending"]:
+          wrong.append(f"an apply across a moved nixpkgs answered {ran.returncode} {ran.stdout.strip()!r}")
+      staged(root, tops, "a plain apply across a moved nixpkgs")
+
+      # 5. THE UPDATE'S OWN APPLY (`--next-boot`), even with nixpkgs where it
+      # was.
+      root, tops = world("next-boot")
+      ran = apply(root, "--next-boot")
+      print(ran.stderr, file=sys.stderr)
+      if ran.returncode != 0:
+          wrong.append(f"the update's apply answered {ran.returncode} {ran.stdout.strip()!r}")
+      staged(root, tops, "the update's apply")
+
+      # 6. A LOCK THAT NAMES NO `nixpkgs`: an unknown is no proof that nothing
+      # moved, and a plain apply sets it for the next boot too.
+      root, tops = world("nixpkgs-unknown", bare=True)
+      ran = apply(root)
+      print(ran.stderr, file=sys.stderr)
+      if ran.returncode != 0:
+          wrong.append(f"an apply with no nixpkgs in its lock answered {ran.returncode} {ran.stdout.strip()!r}")
+      staged(root, tops, "a plain apply whose lock names no nixpkgs")
+
       if wrong:
           print("ERROR: an apply does not leave the machine directory describing the running system.", file=sys.stderr)
           for w in wrong:
               print("       " + w, file=sys.stderr)
           sys.exit(1)
-      print("OK: a failed build put the running lock back (kept, or carried by the system) and changed nothing; a good one kept its lock, switched and armed the trial")
+      print("OK: a failed build put the running lock back (kept, or carried by the system) and changed nothing; a good one kept its lock, switched and armed the trial; across a moved or unknown nixpkgs, and for the update, it was set for the next boot instead")
       END
     '';
 
-  # ONE RULE LETS THE PERSON APPLY THE MACHINE WITHOUT MOVING ITS INPUTS, and
-  # it is one millimetre wide — and the units around it are wired to happen.
+  # ONE RULE LETS THE PERSON APPLY THE MACHINE WITHOUT MOVING ITS INPUTS —
+  # and, through the build switch, apply the checkout they write. The rule's
+  # width in polkit's terms is measured here, and the units around it are
+  # wired to happen; what ONE of its units carries to root is not narrow, and
+  # this header says so (below) instead of calling the door narrow.
   #
   # `ronoctua-update-apply.service` is what the software centre starts after
   # a declaration, with no polkit agent in the session — so the rule answers
-  # `YES`, and what buys the width back is: one unit, verb `start`, the one
-  # user, a condition that tests nothing else. The unit takes no word from
+  # `YES`, and what bounds it is: named units, verb `start`, the one user, one
+  # `if` around one `return`, a condition that tests nothing else, and no
+  # start limit (only the person's orders start these units, and a limit
+  # refuses the sixth). The update's unit takes no word from
   # anybody: the update's own lock (`flock -n`, the same file the update's
   # root half holds, read from the update module's own sources), then
   # `ronoctua-machine apply`. The rescue's rebuild runs that same command
-  # line, lock included; the rescue's rollback disarms the boot trial; and NO
+  # line, lock included; the rescue's rollback is the machine's own verb; and NO
   # rule names the boot's bless, which only systemd starts.
+  #
+  # THE BUILD SWITCH'S TWO SHARE THE RULE (`nix/modules/machine.nix`: "the
+  # build switch's two join the update's apply in the one rule"): the
+  # modeline's glyph and `LEADER / b` start `ronoctua-build-switch-own` and
+  # `-reference`, which run that same apply after the checkout the machine's
+  # own flake names. So the rule lists exactly three units — the update's
+  # and the two the footer's `build_toggle` spells, no fourth and no pattern —
+  # their alternatives bracketed, and each of the two is held to the update's
+  # wiring: the same command line last, no argument, the machine's table, the
+  # update's folder for the lock, never restarted by the switch it runs. It
+  # was widened once with this check left behind, and the check said the
+  # rule named "other units"; now it names which.
+  #
+  # WHAT THE RULE DOES NOT BOUND IS WHAT THE BUILD SWITCH APPLIES. Nobody
+  # hands either unit an argument, but `-reference` builds and activates, AS
+  # ROOT, the checkout's WORKING TREE (`RONOCTUA_MACHINE_OVERRIDE_DIR`) — and
+  # the person who may start it is the person who writes that tree. On a
+  # machine whose flake names a local checkout, anything that runs as the
+  # person reaches root through it with no password. That is not the sudo
+  # door's rule (code that reaches root passes the password, as a brain
+  # module's `module.nix` does under L06); it waits on the owner's decision
+  # (`docs/PENDING.md`). `-own` builds the revision root's lock of the machine
+  # pins, read out of the person's repository, which root then trusts as git
+  # (`safe.directory`). Until the owner decides, this check holds the
+  # exposure to the one unit: `-reference` alone carries the override, and
+  # `-own` and the update's none.
   #
   # THE BLESS HANGS OFF THE TARGET THE BOOT REALLY REACHES: the system's
   # default unit, for the VM and for the reference machine alike (no
@@ -45503,11 +45944,22 @@ let
       services = vm.systemd.services;
       plain = v: builtins.unsafeDiscardStringContext (toString v);
       deadline = services.ronoctua-boot-trial-deadline;
+      # THE BUILD SWITCH'S UNITS, every one the system declares under the
+      # prefix — so a third is seen, not skipped. `start` KEEPS its context:
+      # the script is read whole below, as the unit runs it, and it cites
+      # nothing the machine's apply does not already build.
+      switches = lib.genAttrs (builtins.filter (lib.hasPrefix "ronoctua-build-switch-") (
+        builtins.attrNames services
+      )) (n: services.${n});
+      switchScripts = pkgs.writeText "build-switch-scripts.json" (
+        builtins.toJSON (lib.mapAttrs (_: s: s.serviceConfig.ExecStart) switches)
+      );
       facts = pkgs.writeText "update-apply-facts.json" (
         builtins.toJSON {
           rules = plain vm.security.polkit.extraConfig;
           apply = plain services.ronoctua-update-apply.serviceConfig.ExecStart;
           applyEnv = lib.mapAttrs (_: plain) services.ronoctua-update-apply.environment;
+          applyStartLimit = services.ronoctua-update-apply.unitConfig.StartLimitIntervalSec or null;
           rescue = plain services.ronoctua-rescue-rebuild.serviceConfig.ExecStart;
           rescueEnv = lib.mapAttrs (_: plain) services.ronoctua-rescue-rebuild.environment;
           rescueRun = services.ronoctua-rescue-rebuild.serviceConfig.RuntimeDirectory or null;
@@ -45535,26 +45987,38 @@ let
           table = lib.mapAttrs (_: plain) vm.ronoctua.machine.environment;
           user = vm.ronoctua.user;
           runDir = vm.ronoctua.machine.runDir;
+          # The rescue's rollback, as the unit runs it.
+          rollback = plain services."ronoctua-rescue-rollback@".serviceConfig.ExecStart;
+          machineDir = vm.ronoctua.machine.dir;
+          switches = lib.mapAttrs (_: s: {
+            env = lib.mapAttrs (_: plain) s.environment;
+            run = s.serviceConfig.RuntimeDirectory or null;
+            restarts = s.restartIfChanged;
+            startLimit = s.unitConfig.StartLimitIntervalSec or null;
+          }) switches;
         }
       );
-      # The rescue's rollback, as the unit runs it (read whole below).
-      rollback = lib.head (
-        lib.splitString " " services."ronoctua-rescue-rollback@".serviceConfig.ExecStart
-      );
+
     in
     mkCheck "update-apply-rule-is-narrow" [ pkgs.python3 ] ''
       python3 - <<'END'
       import json, pathlib, re, sys
       exec(open("${pyPrelude}").read())
+      exec(open("${shellPrelude}").read())
 
       # PARSED: the evaluated system arrives as JSON — the merged polkit
-      # rules, the units' command lines, wiring and environments; the
-      # rollback's script is read whole, as the unit runs it.
-      # FILE-WIDE: the crate's unit names are constants of a file read whole
-      # (strings kept); the update's lock is narrowed to the runner's own
-      # `lock = …` line and its folder to the module's `stateDir`.
+      # rules, the units' command lines (the rollback's among them), wiring
+      # and environments; the build switch's two scripts are read whole, as
+      # the units run them.
+      # FILE-WIDE: the crate's unit names and the override's variable are
+      # constants of files read whole (strings kept); the update's lock is
+      # narrowed to the runner's own `lock = …` line and its folder to the
+      # module's `stateDir`; the footer is narrowed to `build_toggle` and its
+      # `let instance = match`.
       got = json.load(open("${facts}"))
+      starts = json.load(open("${switchScripts}"))
       crate = uncommented(pathlib.Path("${../crates/ronoctua-machine/src/lib.rs}").read_text())
+      system = uncommented(pathlib.Path("${../crates/ronoctua-machine/src/system.rs}").read_text())
       runner = hashless(pathlib.Path("${../crates/ronoctua-brain/modules/system-update/gen-updates.py}").read_text())
       module = hashless(pathlib.Path("${../crates/ronoctua-brain/modules/system-update/module.nix}").read_text())
       floor(len(crate), 2000, "characters of ronoctua-machine's lib.rs")
@@ -45568,6 +46032,7 @@ let
 
       unit = const(crate, "UPDATE_APPLY_UNIT")
       bless_unit = const(crate, "BLESS_UNIT")
+      override = const(system, "MACHINE_OVERRIDE_DIR")
       user = got["user"]
 
       # 1. THE UPDATE'S LOCK IS THE ONE THE UPDATE HOLDS.
@@ -45589,12 +46054,12 @@ let
           wrong.append(f"the rescue's rebuild runs {got['rescue']!r}, not the update's lock and the machine's apply")
       if got["rescueRun"] != got["runDir"].rsplit("/", 1)[-1]:
           wrong.append(f"the rescue's rebuild does not make the update's folder for its lock ({got['rescueRun']!r})")
-      script = pathlib.Path("${rollback}").read_text()
-      back = script.find("--rollback")
-      disarm = script.find(f"{got['machinePackage']}/bin/ronoctua-machine disarm")
-      switch = script.find("switch-to-configuration")
-      if not (0 <= back < disarm < switch):
-          wrong.append("the rescue's rollback does not disarm the boot trial between the rollback and the switch")
+      # THE RESCUE'S ROLLBACK IS THE MACHINE'S OWN VERB, which chooses a way
+      # back that ran (the system that runs while another waits for the next
+      # boot) and disarms the trial it leaves — never `nix-env --rollback`
+      # onto a generation nobody booted.
+      if got["rollback"] != f"{got['machinePackage']}/bin/ronoctua-machine rollback %i":
+          wrong.append(f"the rescue's rollback runs {got['rollback']!r}, not <the machine's package>/bin/ronoctua-machine rollback %i")
       if not re.fullmatch(r"/nix/store/[^ ]+/bin/ronoctua-machine bless", got["bless"]):
           wrong.append(f"the boot's bless runs {got['bless']!r}")
       for name, env in (("the apply", got["applyEnv"]), ("the rescue's rebuild", got["rescueEnv"])):
@@ -45617,13 +46082,76 @@ let
           wrong.append("the bless runs again at every switch: a trial armed now would be judged before any boot")
       if any(got["restarts"]):
           wrong.append("a switch may restart the unit that runs it")
+      if got["applyStartLimit"] != "0":
+          wrong.append(f"{unit}'s StartLimitIntervalSec is {got['applyStartLimit']!r}; it may only be 0: a start limit refuses the sixth order as start-limit-hit")
+      if override in got["applyEnv"] or override in got["table"]:
+          wrong.append(f"{unit} is told {override}: the update's apply would build a tree somebody writes, not the machine's lock")
 
-      # 3. THE ONE RULE.
+      # 3. THE BUILD SWITCH'S TWO: the units the footer starts, and no third,
+      # each the update's apply after the checkout the machine's flake names.
+      footer = uncommented(outside_tests(shell_file("surface/mod.rs").read_text()))
+      toggle = must(body_of(footer, "build_toggle"), "the footer's `build_toggle`")
+      spelled = re.search(r'format!\("(ronoctua-build-switch-)\{instance\}(\.service)"\)', toggle)
+      picked = must(scope(toggle, r"let\s+instance\s*=\s*match\b"), "the footer's `let instance = match` in `build_toggle`")
+      instances = sorted(re.findall(r'=>\s*"([\w-]+)"', picked))
+      if not spelled or instances != ["own", "reference"]:
+          wrong.append(
+              f"the footer no longer starts ronoctua-build-switch-<own|reference>.service "
+              f"(instances {instances}); the rule's list is the footer's"
+          )
+      switch_units = {f"{spelled.group(1)}{i}{spelled.group(2)}" for i in instances} if spelled else set()
+      declared = sorted(got["switches"])
+      if declared != sorted(u.removesuffix(".service") for u in switch_units):
+          wrong.append(f"the system declares {declared} for the build switch; the footer starts {sorted(switch_units)}")
+      floor(len(declared), 2, "build switch units declared by the system")
+      for name in declared:
+          s, start = got["switches"][name], starts[name]
+          if not re.fullmatch(r"/nix/store/[^ ]+", start):
+              wrong.append(f"{name} runs {start!r}: a script of the store, with no argument, is all it may run")
+              continue
+          script = pathlib.Path(start).read_text()
+          said = [l.strip() for l in hashless(script).splitlines() if l.strip()]
+          if not said or said[-1] != "exec " + got["apply"]:
+              wrong.append(f"{name} ends {said[-1] if said else None!r}; it may end with the update's own command line")
+          # NO ARGUMENT: no positional one, and a `%i` would be an instance
+          # the rule cannot list. (No argument is not no word: `-reference`
+          # applies the tree the person writes — the header, and below.)
+          if re.search(r"\$\{?[0-9@*]", script) or "%i" in script or "%I" in script:
+              wrong.append(f"{name} reads an argument: whoever starts it would choose which checkout root applies")
+          # THE CHECKOUT, called with no argument, reads the machine's own
+          # flake — root's directory, never a path somebody hands it.
+          checkout = re.search(r'^dir=\$\((/nix/store/[^ )]+)\) \|\| exit 1$', "\n".join(said), re.M)
+          if not checkout:
+              wrong.append(f"{name} does not take the checkout from the machine's own flake first")
+          elif f'"{got["machineDir"]}/flake.nix"' not in pathlib.Path(checkout.group(1)).read_text():
+              wrong.append(f"{name}'s checkout is not read from {got['machineDir']}/flake.nix")
+          for k, v in got["table"].items():
+              if s["env"].get(k) != v:
+                  wrong.append(f"{name} is not told {k} as the machine's table says ({s['env'].get(k)!r})")
+          if s["run"] != got["runDir"].rsplit("/", 1)[-1]:
+              wrong.append(f"{name} does not make the update's folder for its lock ({s['run']!r})")
+          if s["restarts"]:
+              wrong.append(f"a switch may restart {name}, the unit that runs it")
+          if s["startLimit"] != "0":
+              wrong.append(f"{name}'s StartLimitIntervalSec is {s['startLimit']!r}; it may only be 0: a start limit refuses the sixth gesture as start-limit-hit")
+          # THE PERSON'S WORKING TREE REACHES ROOT THROUGH ONE UNIT, and the
+          # check knows which: `-reference` alone carries the override; `-own`
+          # builds what root's lock pins. A second unit carrying it would be a
+          # second door to root nobody decided on (the header).
+          carries = override in hashless(script) or override in s["env"]
+          if carries != name.endswith("-reference"):
+              wrong.append(
+                  f"{name} {'carries' if carries else 'does not carry'} {override}: the person's working tree "
+                  "may reach root through ronoctua-build-switch-reference alone, until the owner decides otherwise"
+              )
+
+      # 4. THE ONE RULE.
       text = uncommented(got["rules"])
       floor(len(text), 500, "characters of the merged polkit rules")
       every = re.split(r"polkit\.addRule", text)[1:]
       floor(len(every), 3, "rules in the merged polkit config")
       ours = [r for r in every if unit in r]
+      allowed = {unit} | switch_units
       if len(ours) != 1:
           wrong.append(f"{len(ours)} rules name {unit}; there may be one")
       for rule in ours:
@@ -45631,28 +46159,51 @@ let
               wrong.append("the rule answers something other than YES")
           if set(re.findall(r'action\.id\s*==\s*"([^"]+)"', rule)) != {"org.freedesktop.systemd1.manage-units"}:
               wrong.append("the rule is about another action")
-          if set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule)) != {unit}:
-              wrong.append(f"the rule names other units than {unit}")
+          named = set(re.findall(r'lookup\("unit"\)\s*==\s*"([^"]+)"', rule))
+          if named != allowed:
+              wrong.append(f"the rule names the units {sorted(named)}; it may name {sorted(allowed)}")
           if set(re.findall(r'lookup\("verb"\)\s*==\s*"([^"]+)"', rule)) != {"start"}:
               wrong.append("the rule allows another verb than `start`")
           if set(re.findall(r'subject\.user\s*==\s*"([^"]+)"', rule)) != {user}:
               wrong.append(f"the rule is for another person than {user}")
-          body = re.search(r"if\s*\((.*?)\)\s*\{", rule, re.S)
-          if not body:
-              wrong.append("the rule has no condition")
-          else:
-              left = body.group(1)
-              for known in (
-                  r'action\.id\s*==\s*"[^"]+"',
-                  r'action\.lookup\("verb"\)\s*==\s*"[^"]+"',
-                  r'action\.lookup\("unit"\)\s*==\s*"[^"]+"',
-                  r'subject\.user\s*==\s*"[^"]+"',
-              ):
-                  left = re.sub(known, "", left)
-              leftover = re.sub(r"[\s()&]", "", left)
-              if leftover:
-                  wrong.append(f"the condition tests something else as well: {leftover!r}")
-      # 4. NO RULE NAMES THE BLESS, nor the rebuild beyond the rescue's own.
+          # ONE `if` AROUND ONE `return polkit.Result.YES;`, AND NOTHING ELSE:
+          # the sets above are the whole rule's, so a second branch with a
+          # wider test of its own would leave every one of them as it is. The
+          # rule is that one shape, start to end, and holds no other `if` or
+          # `return` — so the condition read below is the only one there is.
+          shape = re.fullmatch(
+              r"\(\s*function\s*\(\s*action\s*,\s*subject\s*\)\s*\{\s*"
+              r"if\s*\((.*)\)\s*\{\s*return\s+polkit\.Result\.YES\s*;\s*\}\s*"
+              r"\}\s*\)\s*;\s*",
+              rule,
+              re.S,
+          )
+          if not shape or len(re.findall(r"\b(?:if|return)\b", rule)) != 2:
+              wrong.append("the rule is more than one `if` around one `return polkit.Result.YES;`: another branch would grant what it tests, and nothing here reads it")
+              continue
+          # THE UNITS' ALTERNATIVES COME OFF AS ONE BRACKETED GROUP, and only
+          # as one: a `||` left anywhere else is an alternative that escapes
+          # the action, the verb and the user.
+          left = re.sub(
+              r'\(\s*(?:action\.lookup\("unit"\)\s*==\s*"[^"]+"\s*\|\|\s*)*'
+              r'action\.lookup\("unit"\)\s*==\s*"[^"]+"\s*\)',
+              "",
+              shape.group(1),
+          )
+          for known in (
+              r'action\.id\s*==\s*"[^"]+"',
+              r'action\.lookup\("verb"\)\s*==\s*"[^"]+"',
+              r'action\.lookup\("unit"\)\s*==\s*"[^"]+"',
+              r'subject\.user\s*==\s*"[^"]+"',
+          ):
+              left = re.sub(known, "", left)
+          leftover = re.sub(r"[\s()&]", "", left)
+          if leftover:
+              wrong.append(f"the condition tests something else, or an alternative outside the brackets: {leftover!r}")
+      for rule in every:
+          if rule not in ours and any(u in rule for u in switch_units):
+              wrong.append("another rule names a unit of the build switch")
+      # 5. NO RULE NAMES THE BLESS, nor the rebuild beyond the rescue's own.
       if bless_unit in text or bless_unit.removesuffix(".service") in text:
           wrong.append(f"a polkit rule names {bless_unit}: only systemd starts it")
 
@@ -45661,7 +46212,7 @@ let
           for w in wrong:
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
-      print(f"OK: one rule ({unit}, start, {user}, YES); the unit and the rescue's rebuild take {update_lock} and run the machine's apply; the rollback disarms; the bless hangs off {[b['target'] for b in got['booted']]}; no rule for {bless_unit}")
+      print(f"OK: one rule of one branch ({sorted(allowed)}, start, {user}, YES), no start limit on its units; the unit, the build switch's two and the rescue's rebuild take {update_lock} and run the machine's apply; the person's working tree reaches root through ronoctua-build-switch-reference alone (the owner's decision, docs/PENDING.md); the rollback disarms; the bless hangs off {[b['target'] for b in got['booted']]}; no rule for {bless_unit}")
       END
     '';
 
@@ -45809,6 +46360,7 @@ let
   migrationVm = import ./migration-vm.nix {
     inherit pkgs lib;
     machineTool = rust.machine;
+    testedNixpkgs = inputs.nixpkgs;
   };
   # ── anchor: L06 ──
   # THE PERSON'S FILES, AS ROOT'S PROGRAM READS THEM.
@@ -53612,7 +54164,10 @@ let
   # ── anchor: L25 ──
   # THE INSTALLER REACHES NO NETWORK. Every `nix` of the plan runs offline
   # with no substituter and no registry, and no step asks the person's
-  # repository — those are the first boot's (`plan::tests`); the network
+  # repository — those are the first boot's (`plan::tests`); the machine's
+  # lock starts from the distro tree's own, so the template's rolling
+  # `nixpkgs` is never a branch to resolve (`plan::tests`, and the tree's
+  # side of it `a-new-machine-starts-on-the-tested-nixpkgs`); the network
   # question is not a gate, and with none the repository is never asked and
   # the passphrase is typed twice (`tui::tests`); offline, an address is
   # taken as typed (`reach::tests`). Run by name out of the harness the test
@@ -53623,12 +54178,13 @@ let
     exact = [
       "plan::tests::nothing_reaches_the_network"
       "plan::tests::the_system_is_built_before_the_disk_is_touched"
+      "plan::tests::the_lock_starts_from_the_distros_own"
       "tui::tests::the_network_is_not_a_gate"
       "tui::tests::with_no_network_the_repository_is_never_asked"
       "tui::tests::with_no_network_the_passphrase_is_typed_twice_and_long"
       "reach::tests::with_no_network_the_address_is_taken_as_typed"
     ];
-    expect = "test result: ok. 6 passed";
+    expect = "test result: ok. 7 passed";
   };
 
   # THE INSTALLER INSTALLS WITHOUT THE NETWORK. The real binary, every
@@ -55265,22 +55821,17 @@ let
     # VM test of the disk layout (section 7.2). Heavy: it brings up a VM with
     # KVM, partitions a real disk and mounts it. Exposed separately so it can be
     # run on its own during the work.
-    #
-    # SKIPPED ON nixos-unstable (2026-10-30, owner's call): disko's upstream
-    # `makeDiskoTest` reads `boot.initrd.systemd.enable`, which nixos-unstable
-    # removed on 2026-10-27 (scripted initrd gone), and disko has not adapted
-    # yet. This is upstream lag, not the distro's config, which is unchanged and
-    # builds. RE-ENABLE by restoring `import ./disko-vm.nix { inherit pkgs lib;
-    # inherit (inputs) disko; }` (and the `firmware = "bios"` variant) once a
-    # disko release stops referencing that option.
-    disko-vm = pkgs.runCommand "disko-vm-skipped-unstable" { } ''
-      echo "disko-vm skipped: disko's makeDiskoTest references the removed boot.initrd.systemd.enable (nixos-unstable, 2026-10-27); re-enable when disko adapts" >&2
-      touch $out
-    '';
-    disko-vm-bios = pkgs.runCommand "disko-vm-bios-skipped-unstable" { } ''
-      echo "disko-vm-bios skipped: same disko/nixos-unstable reason as disko-vm; re-enable when disko adapts" >&2
-      touch $out
-    '';
+    disko-vm = import ./disko-vm.nix {
+      inherit pkgs lib;
+      inherit (inputs) disko;
+    };
+    # The same layout on a machine that starts from BIOS: GRUB's partition,
+    # and GRUB booting the installed system (`nix/modules/boot-loader.nix`).
+    disko-vm-bios = import ./disko-vm.nix {
+      inherit pkgs lib;
+      inherit (inputs) disko;
+      firmware = "bios";
+    };
 
     # ===================================================================
     # MILESTONE 2 — NixOS base + the whole font and icon layer.
@@ -55676,6 +56227,9 @@ let
       network-tuned
       syncthing-tuned
       ;
+    # THE VPN REGISTER (`nix/modules/vpn.nix`): its one polkit rule, signed in
+    # `polkit-rules-are-the-ones-we-know`.
+    inherit vpn-rule-is-narrow;
     wifi-tpm-vm = wifiTpmVm;
     wifi-joins-vm = wifiJoinsVm;
     installer-joins-wifi-vm = installerJoinsWifiVm;
@@ -55814,6 +56368,7 @@ let
       iso-complete-carries-every-part
       installer-reaches-no-network
       installer-installs-without-network
+      a-new-machine-starts-on-the-tested-nixpkgs
       ;
     parts-are-isolated = partsVm;
     # ── anchor: L07 ──

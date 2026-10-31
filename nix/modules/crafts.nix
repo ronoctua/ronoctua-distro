@@ -1,21 +1,24 @@
-# The Crafting Apps — the switch of their group, and nothing else.
+# The crafts group — its switch, and nothing else.
 #
-# The apps themselves are lines of the table in `assets/distro-apps.nix`
-# (`source = "appimage"`, `group = "crafts"`): each is the release AppImage of
-# its GitHub repository, pinned in `assets/distro-pins.json` and wrapped at
-# build by the registry (`nix/modules/distro-apps.nix`). What no table line
-# can hold is the group's switch, which `profile.nix` turns on in the full
-# profile and a `host.nix` turns on anywhere — so this module declares it,
-# and the registry's `crafts` group reads it as the profile and the host set
-# it (`carried`). A person still declines any one of them by its id.
+# The group's programs are lines of the table in `assets/distro-apps.nix`
+# (`source = "appimage"`, `group = "crafts"`): since 2026-10-30 two of them,
+# the ArtCraft Launcher, which downloads and updates the Crafting Apps by
+# itself under the person's home and outside the generation, and SolidCraft.
+# Each is the release AppImage of its GitHub repository, pinned in
+# `assets/distro-pins.json`, wrapped at build by the registry
+# (`nix/modules/distro-apps.nix`) and a part. What no table line can hold is
+# the group's switch, which `profile.nix` turns on in the full profile and a
+# `host.nix` turns on anywhere — so this module declares it, and the
+# registry's `crafts` group reads it as the profile and the host set it
+# (`carried`). A person still declines either by its id.
 #
-# NO MIME DEFAULT: the apps are 0.x, and a default would send a person's
-# documents to a program still finding its feet. What opens a type is
-# `office.nix`'s and the other modules' business. And what the apps' own
-# entries CLAIM — photographs, films, sound, documents — never opens a file by
-# the catalogue's name order: each line of the table says `fallback = false`
-# (`files-open-by-choice` asks the built system). They stay in "open with",
-# and a default, the person's or the distro's, still reaches them.
+# NO MIME DEFAULT: nothing of the group is chosen to open a type. And what
+# their entries CLAIM never opens a file by the catalogue's name order: each
+# line of the table says `fallback = false` (`files-open-by-choice` asks the
+# built system). They stay in "open with", and a default, the person's or the
+# distro's, still reaches them. The crafts the launcher fetches are not the
+# distro's: it neither wraps them nor writes their launchers, and what they
+# claim has not been measured (`docs/PENDING.md`).
 { lib, ... }:
 
 {

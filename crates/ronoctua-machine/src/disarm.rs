@@ -1,6 +1,7 @@
-//! `disarm`: the system profile was rolled back by hand (the rescue
-//! console's rollback, `nix/modules/rescue.nix`), and the boot trial must
-//! not take the machine back to what it left.
+//! `disarm`: the system profile was rolled back by hand, and the boot trial
+//! must not take the machine back to what it left. The rescue console's
+//! rollback is [`crate::rollback`], which does this itself; the verb stays
+//! for a profile moved by anything else.
 //!
 //! A trial armed by an apply is two EFI variables: `LoaderEntryOneShot` on
 //! the new system and `LoaderEntryDefault` on the last good one. Both outlive
@@ -11,14 +12,14 @@
 //!
 //! - a trial the profile no longer names was LEFT by the person, and is
 //!   recorded `failed`: the next apply does not switch into it again
-//!   (`did-not-boot`) before the distro moves on (a trial the profile still
-//!   names keeps its way back, and nothing else is done);
+//!   (`did-not-boot`) before the distro or `nixpkgs` moves on (a trial the
+//!   profile still names keeps its way back, and nothing else is done);
 //! - both variables are unset: `loader.conf`, which the rollback wrote, is
 //!   the boot loader's choice again;
 //! - the machine directory gets back the lock of the system the profile now
 //!   names, when it is known, so a rebuild builds what the rollback chose.
 
-use ronoctua_person::state::{Trial, TrialOutcome};
+use ronoctua_person::state::{MachineState, Trial, TrialOutcome};
 
 use crate::loader::Loader;
 use crate::system;
@@ -27,13 +28,42 @@ use crate::{Machine, Refusal, boot, boots, disk, guard, say, trial};
 /// `disarm`.
 pub(crate) fn disarm(m: &Machine) -> Result<(), Refusal> {
     let _lock = guard(m)?;
-    let (p, s) = (&m.places, &m.system);
-    let mut state = disk::read_state(p)?;
+    let mut state = disk::read_state(&m.places)?;
+    match after_rollback(m, &mut state) {
+        Disarmed::KeptArmed => Ok(()),
+        Disarmed::Done { left } => {
+            if left {
+                disk::write_state(&m.places, &state)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// What [`after_rollback`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Disarmed {
+    /// The profile still names the system on trial: its way back stays, and
+    /// nothing else was done.
+    KeptArmed,
+    /// The variables are unset and the folder describes what the profile
+    /// names; `left` when a pending trial was recorded `failed`.
+    Done {
+        /// Whether the record changed.
+        left: bool,
+    },
+}
+
+/// What a profile moved by hand leaves to undo, root's lock held: the trial
+/// it left recorded `failed`, the boot loader's variables unset, and the
+/// lock of what the profile names put back in the folder.
+pub(crate) fn after_rollback(m: &Machine, state: &mut MachineState) -> Disarmed {
+    let s = &m.system;
 
     // THE TRIAL the profile no longer names was left; one it still names
     // keeps its way back.
     let profile = s.resolve(system::PROFILE);
-    let left = match trial::pending(&state) {
+    let left = match trial::pending(state) {
         Some(t) => {
             let named = profile
                 .as_deref()
@@ -43,7 +73,7 @@ pub(crate) fn disarm(m: &Machine) -> Result<(), Refusal> {
                     6,
                     "the profile still names the system on trial: its boot trial stays armed",
                 );
-                return Ok(());
+                return Disarmed::KeptArmed;
             }
             say(
                 4,
@@ -57,6 +87,7 @@ pub(crate) fn disarm(m: &Machine) -> Result<(), Refusal> {
                 ..t
             });
             boots::forget(m);
+            crate::sleep::forget(m);
             true
         }
         None => false,
@@ -82,7 +113,7 @@ pub(crate) fn disarm(m: &Machine) -> Result<(), Refusal> {
     // THE FOLDER describes what the profile names again.
     match profile
         .as_deref()
-        .and_then(|pr| trial::lock_for(m, &state, pr))
+        .and_then(|pr| trial::lock_for(m, state, pr))
     {
         Some(lock) => trial::put_back(m, &lock),
         None => say(
@@ -90,9 +121,6 @@ pub(crate) fn disarm(m: &Machine) -> Result<(), Refusal> {
             "the lock of the system the profile names is not known: the folder keeps its own",
         ),
     }
-    if left {
-        disk::write_state(p, &state)?;
-    }
     say(6, "disarmed: the next boot is the one the boot menu names");
-    Ok(())
+    Disarmed::Done { left }
 }

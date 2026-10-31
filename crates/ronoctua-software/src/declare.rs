@@ -585,11 +585,17 @@ fn forget(ctx: &Context, key: &AppKey, keep_data: bool, report: &mut dyn Report)
     }
     if was_applied {
         let rebuilt = stage::rebuild(ctx, report)?;
-        if rebuilt == stage::Rebuilt::Switched
-            && !keep_data
-            && let AppKey::Flatpak { id } = key
-        {
-            erase_flatpak_data(ctx, id);
+        if !keep_data && let AppKey::Flatpak { id } = key {
+            match rebuilt {
+                stage::Rebuilt::Switched => crate::flatpak::erase_data(ctx, id),
+                // THE SYSTEM THAT RUNS STILL HAS IT — the removal waits for
+                // the next boot, or for an update —: what it saved goes once
+                // the machine runs a system without it (the reconciler's
+                // ledger).
+                stage::Rebuilt::Staged | stage::Rebuilt::Busy => {
+                    crate::reconcile::erase_later(ctx, id)?;
+                }
+            }
         }
     }
     crate::reconcile::run(ctx, Some(source), report)?;
@@ -600,24 +606,6 @@ fn forget(ctx: &Context, key: &AppKey, keep_data: bool, report: &mut dyn Report)
         key: Some(key.clone()),
         ..Outcome::default()
     })
-}
-
-/// What a Flatpak saved (`~/.var/app/<id>`), once the app itself is gone —
-/// the second, danger-coloured answer of "remove for good".
-fn erase_flatpak_data(ctx: &Context, id: &str) {
-    if !crate::flatpak::valid_id(id)
-        || crate::flatpak::installed(ctx)
-            .iter()
-            .any(|i| i.key == AppKey::Flatpak { id: id.to_owned() })
-    {
-        return;
-    }
-    let dir = ctx.roots.home.join(".var/app").join(id);
-    if let Err(e) = std::fs::remove_dir_all(&dir)
-        && e.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(error = %e, dir = %dir.display(), "what the app saved was not erased");
-    }
 }
 
 /// Keep one of the distro's programs uninstalled, here or everywhere.
@@ -911,6 +899,115 @@ mod tests {
         );
         assert!(decl::read_declared(&ctx.roots).unwrap().apps.is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: removing a declared Flatpak for good, its data with it,
+    /// erases what it saved while the rebuild only set the system without
+    /// it for the NEXT BOOT (`staged`) — the system that runs still has the
+    /// app —, never erases it once the machine runs that system (the
+    /// reconciler's ledger keeps the request), or keeps it once the machine
+    /// switched.
+    #[test]
+    fn a_flatpaks_data_goes_only_with_a_switch() {
+        for (result, erased) in [("staged", false), ("switched", true)] {
+            let root = scratch(&format!("forget-flatpak-{result}"));
+            let (ctx, _log) = machine(&root);
+            let id = "flatpak:org.example.App";
+            decl::change_declared(&ctx.roots, |doc| {
+                decl::upsert(
+                    doc,
+                    ronoctua_person::declared::Entry::Flatpak(
+                        ronoctua_person::declared::FlatpakApp {
+                            id: id.into(),
+                            machines: None,
+                            edited_at: ronoctua_person::Stamp::parse("2026-10-30T12:00:00Z")
+                                .unwrap(),
+                            edited_on: "noctua".into(),
+                            app_id: "org.example.App".into(),
+                            origin: "flathub".into(),
+                        },
+                    ),
+                );
+                Ok(())
+            })
+            .unwrap();
+            let reports = &ctx.roots.system.reports;
+            std::fs::create_dir_all(reports).unwrap();
+            std::fs::write(
+                reports.join(ronoctua_person::names::PERSON_APPLIED),
+                format!(
+                    r#"{{"format":1,"machine":"noctua","distro-rev":"r","applied":["{id}"],"skipped":[],
+"declined":{{"honoured":[],"refused":[],"unknown":[],"still-present":[]}},"brain":{{"included":[],"awaiting-approval":[]}}}}"#
+                ),
+            )
+            .unwrap();
+            // WHAT THE REBUILD'S APPLY RECORDED, as `ronoctua-machine` would,
+            // and — set for the next boot — a profile that names a system
+            // the machine does not run yet.
+            let store = |name: &str| {
+                let top =
+                    format!("/nix/store/0123456789abcdfghijklmnpqrsvwxy{name}-nixos-system-{name}");
+                std::fs::create_dir_all(ctx.roots.system.root.join(top.trim_start_matches('/')))
+                    .unwrap();
+                top
+            };
+            let (a, b) = (store("a"), store("b"));
+            let link = |at: &str, to: &str| {
+                let at = ctx.roots.system.root.join(at);
+                std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                let _ = std::fs::remove_file(&at);
+                std::os::unix::fs::symlink(
+                    ctx.roots.system.root.join(to.trim_start_matches('/')),
+                    at,
+                )
+                .unwrap();
+            };
+            link("run/current-system", &a);
+            link(
+                "nix/var/nix/profiles/system",
+                if result == "staged" { &b } else { &a },
+            );
+            std::fs::create_dir_all(&ctx.roots.system.machine).unwrap();
+            std::fs::write(
+                ctx.roots.system.machine.join(ronoctua_person::names::STATE),
+                format!(
+                    r#"{{"format": 1, "last-good": null, "trial": null, "hold": null,
+                       "last-apply": {{"at": "2026-10-30T12:30:00Z", "result": "{result}", "toplevel": "{b}"}}}}"#
+                ),
+            )
+            .unwrap();
+            let saved = ctx.roots.home.join(".var/app/org.example.App");
+            std::fs::create_dir_all(&saved).unwrap();
+            run_on(
+                &ctx,
+                &Order::Forget {
+                    key: AppKey::Flatpak {
+                        id: "org.example.App".into(),
+                    },
+                    keep_data: false,
+                },
+                "noctua",
+                &crate::github::canned::Canned::new(Vec::new()),
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert_eq!(!saved.exists(), erased, "{result}");
+            if result == "staged" {
+                // KEPT FOR LATER, and erased once the machine runs the system
+                // without it (the restart), nothing waiting.
+                assert_eq!(
+                    crate::reconcile::ledger(&ctx.roots).erase,
+                    ["org.example.App"]
+                );
+                crate::reconcile::run(&ctx, None, &mut Vec::new()).unwrap();
+                assert!(saved.exists(), "the system that runs still has it");
+                link("run/current-system", &b);
+                crate::reconcile::run(&ctx, None, &mut Vec::new()).unwrap();
+                assert!(!saved.exists(), "the restart came: what it saved went");
+                assert!(crate::reconcile::ledger(&ctx.roots).erase.is_empty());
+            }
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 
     /// FAILS IF: an essential program of the distro can be declined, a

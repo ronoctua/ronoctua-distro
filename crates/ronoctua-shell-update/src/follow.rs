@@ -67,6 +67,13 @@ pub struct Places {
     pub applied: PathBuf,
     /// The parts' records, where a followed version's arrival is said.
     pub records: PathBuf,
+    /// Where the system's own links and the store are: `/`, or the
+    /// camera's room — a system set for the next boot is read there
+    /// ([`Readings::waiting`]).
+    pub root: PathBuf,
+    /// The machine's record, which every system set for the next boot (and
+    /// every way back from one) rewrites: what a door watches for it.
+    pub machine_state: PathBuf,
 }
 
 impl Places {
@@ -77,6 +84,7 @@ impl Places {
             Some(room) => room.join(p.trim_start_matches('/')),
             None => PathBuf::from(p),
         };
+        let at = crate::update_window::record_places();
         Self {
             mirror: ronoctua_xdg::state_dir().map(|d| {
                 d.join(ronoctua_person::names::MIRROR)
@@ -86,6 +94,8 @@ impl Places {
             registry: machine(REGISTRY),
             applied: machine(APPLIED),
             records: machine(ronoctua_parts::names::RECORDS),
+            root: at.root,
+            machine_state: at.machine_state.join(ronoctua_person::names::STATE),
         }
     }
 
@@ -100,6 +110,7 @@ impl Places {
             Some(self.registry.clone()),
             Some(self.applied.clone()),
             Some(self.records.clone()),
+            Some(self.machine_state.clone()),
         ]
         .iter()
         .map(|p| p.as_deref().and_then(mtime))
@@ -258,6 +269,10 @@ pub struct Readings {
     pub apps: Vec<App>,
     /// Whether this machine takes the person's signed-only data.
     pub taken: Taken,
+    /// When a system waits for the next restart, whether IT was built
+    /// following them (`None` inside without a report that says); `None`
+    /// when nothing waits.
+    pub waiting: Option<Option<bool>>,
 }
 
 impl Readings {
@@ -278,8 +293,20 @@ impl Readings {
             .ok()
             .and_then(|b| ronoctua_person::parse::<PersonApplied>(&b).ok())
             .map_or(Taken::Yes, |a| Taken::of(&a));
+        // THE SYSTEM THAT WAITS FOR THE RESTART, by its own report.
+        let waiting = crate::update_window::waiting_system(&places.root).map(|top| {
+            let file = places
+                .root
+                .join(top.trim_start_matches('/'))
+                .join(REGISTRY.trim_start_matches('/'));
+            std::fs::read(file)
+                .ok()
+                .and_then(|b| ronoctua_person::parse::<DistroApps>(&b).ok())
+                .and_then(|r| of_registry(&r).0)
+        });
         Self {
             taken,
+            waiting,
             copy: places.mirror.as_deref().map_or(Choice::Off, Choice::read),
             let_in: places
                 .config
@@ -600,7 +627,15 @@ fn label_and_value(
             };
             let value = held_back.unwrap_or(match (r.copy, r.machine) {
                 (Choice::On, Some(true)) => key::DISTRO_FOLLOW_MACHINE_IN_USE,
+                // THE SYSTEM THAT WAITS FOR THE RESTART already follows them,
+                // or already does not: from that restart, not the next update.
+                (Choice::On, _) if r.waiting == Some(Some(true)) => {
+                    key::DISTRO_FOLLOW_MACHINE_NEXT_RESTART
+                }
                 (Choice::On, _) => key::DISTRO_FOLLOW_MACHINE_NEXT,
+                (Choice::Off, Some(true)) if r.waiting == Some(Some(false)) => {
+                    key::DISTRO_FOLLOW_MACHINE_LEAVING_RESTART
+                }
                 (Choice::Off, Some(true)) => key::DISTRO_FOLLOW_MACHINE_LEAVING,
                 // A COPY THAT DOES NOT READ says nothing of what comes next:
                 // what the machine was built with is all that is known.
@@ -858,6 +893,7 @@ mod tests {
             copy: Choice::On,
             let_in: true,
             machine: Some(true),
+            waiting: None,
             apps: vec![
                 app(PinFrom::Followed, Arrival::Missing, None),
                 app(PinFrom::Followed, Arrival::OnItsWay, None),
@@ -906,6 +942,58 @@ mod tests {
         ] {
             r.taken = taken;
             assert_eq!(value(&r, Row::Machine), texts.t(k), "{taken:?}");
+        }
+        // A SYSTEM THAT WAITS FOR THE RESTART and already does what the copy
+        // says: from that restart, not the next update.
+        for (copy, machine, waiting, k) in [
+            (
+                Choice::On,
+                Some(false),
+                Some(Some(true)),
+                key::DISTRO_FOLLOW_MACHINE_NEXT_RESTART,
+            ),
+            (
+                Choice::On,
+                Some(false),
+                Some(Some(false)),
+                key::DISTRO_FOLLOW_MACHINE_NEXT,
+            ),
+            (
+                Choice::On,
+                Some(false),
+                None,
+                key::DISTRO_FOLLOW_MACHINE_NEXT,
+            ),
+            (
+                Choice::Off,
+                Some(true),
+                Some(Some(false)),
+                key::DISTRO_FOLLOW_MACHINE_LEAVING_RESTART,
+            ),
+            (
+                Choice::Off,
+                Some(true),
+                Some(None),
+                key::DISTRO_FOLLOW_MACHINE_LEAVING,
+            ),
+            (
+                Choice::Off,
+                Some(true),
+                None,
+                key::DISTRO_FOLLOW_MACHINE_LEAVING,
+            ),
+        ] {
+            let r = Readings {
+                copy,
+                machine,
+                waiting,
+                ..r.clone()
+            };
+            assert_eq!(
+                value(&r, Row::Machine),
+                texts.t(k),
+                "{copy:?} {machine:?} {waiting:?}"
+            );
         }
         // WHAT A REPORT SAYS of the signature.
         let mut applied: PersonApplied = ronoctua_person::parse(
@@ -967,6 +1055,8 @@ mod tests {
             registry: root.join("etc/distro-apps.json"),
             applied: root.join("etc/person-applied.json"),
             records: root.join("parts"),
+            root: root.join("sys"),
+            machine_state: root.join("state.json"),
         };
         let mirror = places.mirror.clone().unwrap();
         std::fs::create_dir_all(mirror.parent().unwrap()).unwrap();

@@ -389,9 +389,25 @@ impl Question {
             // The ledger's unmarked rows: what pressing Enter through the
             // list leaves out.
             Self::LeftOut => Some(DEFAULT_LEFT_OUT),
-            // The variant and the network default to empty, which `optional`
-            // already accepts — writing it here too would say the same thing twice.
+            // The network defaults to empty, which `optional` already accepts —
+            // writing it here too would say the same thing twice. The variant's
+            // default depends on the layout already answered, so it is
+            // [`Question::default_given`]'s, which both modes ask.
             _ => None,
+        }
+    }
+
+    /// The answer that comes already chosen, given the answers before it.
+    ///
+    /// [`Question::default_answer`], except for the variant, whose default
+    /// belongs to ONE layout: `euro` is a variant of `us` and of nothing else,
+    /// so it is offered only while the layout is [`DEFAULT_LAYOUT`] (see
+    /// [`default_variant`]). Any other layout opens on "no variant".
+    #[must_use]
+    pub fn default_given(self, r: &Answers) -> Option<&'static str> {
+        match self {
+            Self::KeyboardVariant => Some(default_variant(&r.keyboard)).filter(|v| !v.is_empty()),
+            _ => self.default_answer(),
         }
     }
 
@@ -403,9 +419,11 @@ impl Question {
     #[must_use]
     pub const fn optional(self) -> bool {
         // The variant and the Compose key join the network here, and for the same
-        // reason: empty is a CHOICE. `gb` with no variant is the right answer —
-        // both variants it has put a dead accent on level 1 — and a keyboard whose
-        // layout already carries the accents wants no Compose key stealing one.
+        // reason: empty is a CHOICE. The plain map is the right answer for most
+        // layouts (many variants put a dead accent on level 1), and a keyboard
+        // whose layout already carries the accents wants no Compose key stealing
+        // one. A default does not make it less of a choice: `us` opens on
+        // `euro`, and plain `us` is still an answer.
         //
         // The belongings are NOT here any more: the repository is mandatory
         // (owner, 2026-10-05), and none of its three answers may be blank.
@@ -715,10 +733,12 @@ pub fn layout_names() -> Vec<String> {
 /// by it is what keeps the list at the handful that apply instead of the two
 /// thousand that exist.
 ///
-/// "No variant" is FIRST, and it is not a courtesy: for `gb` it is the right
-/// answer, because both variants it has put a dead accent on level 1 — the key
-/// stops writing a backtick until you press space, which on a keyboard that
-/// types code all day is worse than the problem it solves.
+/// "No variant" is FIRST, and it is not a courtesy: for most layouts the plain
+/// map is the right answer. Many variants put a dead accent on level 1 (`gb`'s
+/// two, `us(intl)`) — the key stops writing a backtick until you press space,
+/// which on a keyboard that types code all day is worse than the problem it
+/// solves. The default layout's list opens on its own variant instead
+/// ([`default_variant`]), which moves no key.
 #[must_use]
 pub fn variants_of(layout: &str) -> Vec<Choice> {
     let prefix = format!("{layout}:");
@@ -885,8 +905,35 @@ pub const COMPOSE_HELP_KEYS: [(&str, &str); 3] = [
     ("capslock", KEY_CAPS_LOCK),
 ];
 
-/// The keyboard layout when nobody chooses another.
-pub const DEFAULT_LAYOUT: &str = "gb";
+/// The keyboard layout when nobody chooses another: the system's own
+/// (`nix/keyboard-xkb.nix`'s `layout`, `us` since the owner's 2026-10-27
+/// change — a UK peripheral's layout is a per-device setting, not the
+/// machine's). With [`DEFAULT_VARIANT`], [`DEFAULT_COMPOSE`] and
+/// [`CAPS_TOGGLE`] it is what a machine installed by pressing Enter types, and
+/// `installer-defaults-match-the-keyboard` holds all four to the Nix's: the
+/// layout alone agreeing still left that machine a plain `us` beside the
+/// system's `us(euro)`.
+pub const DEFAULT_LAYOUT: &str = "us";
+
+/// The variant of [`DEFAULT_LAYOUT`] when nobody chooses another: the
+/// system's own (`nix/keyboard-xkb.nix`'s `variant`). `euro` puts `€` on
+/// AltGr+5 and moves no key, so it costs nothing to whoever never types one.
+///
+/// It is a variant of `us` ALONE: offered on any other layout, xkb would be
+/// handed a map that does not exist. So it is the default only while the
+/// layout is the default one ([`default_variant`]).
+pub const DEFAULT_VARIANT: &str = "euro";
+
+/// The variant that comes already chosen for `layout`: [`DEFAULT_VARIANT`]
+/// on [`DEFAULT_LAYOUT`], and "no variant" on any other.
+#[must_use]
+pub fn default_variant(layout: &str) -> &'static str {
+    if layout == DEFAULT_LAYOUT {
+        DEFAULT_VARIANT
+    } else {
+        ""
+    }
+}
 
 /// The interface language when nobody chooses another.
 pub const DEFAULT_LANGUAGE: &str = ronoctua_i18n::DEFAULT;
@@ -1801,7 +1848,9 @@ mod tests {
     #[test]
     fn every_question_that_can_be_defaulted_has_a_default() {
         // The screen opens on an answer that works, and the terminal-less mode
-        // uses the same one. What has no default is what nobody can guess.
+        // uses the same one. What has no default is what nobody can guess —
+        // and the variant, whose default is the layout's
+        // (`the_default_variant_is_the_default_layouts_alone`).
         for q in Question::ALL_KEYS {
             let guessable = !matches!(
                 q,
@@ -1822,9 +1871,40 @@ mod tests {
                 guessable,
                 "{q:?} disagrees about having a default answer"
             );
+            // GIVEN THE ANSWERS, every other question's default is its own.
+            if q != Question::KeyboardVariant {
+                assert_eq!(q.default_given(&Answers::default()), q.default_answer());
+            }
         }
         assert_eq!(Question::ComposeKey.default_answer(), Some(DEFAULT_COMPOSE));
         assert_eq!(Question::Timezone.default_answer(), Some(DEFAULT_TIMEZONE));
+    }
+
+    /// FAILS IF: a machine installed by pressing Enter is a plain `us` beside
+    /// the system's `us(euro)` (the variant had no default), or `euro` is
+    /// offered on a layout it is not a variant of — `br(euro)` is a map xkb
+    /// does not have.
+    #[test]
+    fn the_default_variant_is_the_default_layouts_alone() {
+        let on = |layout: &str| {
+            Question::KeyboardVariant.default_given(&Answers {
+                keyboard: layout.to_owned(),
+                ..Answers::default()
+            })
+        };
+        assert_eq!(on(DEFAULT_LAYOUT), Some(DEFAULT_VARIANT));
+        assert_eq!(on("br"), None);
+        assert_eq!(on("gb"), None);
+        assert_eq!(on(""), None);
+        // AND IT IS A VARIANT OF THAT LAYOUT, by the list the screen shows —
+        // when the build pointed at one (`base.lst`).
+        let listed = variants_of(DEFAULT_LAYOUT);
+        if listed.len() > 1 {
+            assert!(
+                listed.iter().any(|c| c.name == DEFAULT_VARIANT),
+                "`{DEFAULT_VARIANT}` is not a variant of `{DEFAULT_LAYOUT}` in base.lst"
+            );
+        }
     }
 
     #[test]
