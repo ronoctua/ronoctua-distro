@@ -29247,6 +29247,147 @@ let
     echo "OK: the gate downloads what no cache has, before compiling"
   '';
 
+  # `callPackage` NEVER FILLS A DEFAULT.
+  #
+  # `pkgs.callPackage` hands a function every argument `pkgs` has a name for,
+  # the ones with a default included: what the call site leaves out is
+  # `pkgs.<name>`, and the default is never the value. nixos-unstable has a
+  # package called `what`, and `nix/gate.nix` had `what ? "gate"`. Handed the
+  # package, the gate ended as `.#most` does — without phase 5, saying "OK"
+  # while it did not close invariant 7 (2026-10-31). Its `units ? null`, and
+  # the `units ? { }` of `nix/kept-sources.nix`, were the same trap, set for
+  # the first call site that forgot them. Nothing failed: a package is a value
+  # like any other until something compares it with a string.
+  #
+  # So a function this tree hands `callPackage` by path declares no default
+  # under a name `pkgs` has. It is asked of THIS `pkgs`: a nixpkgs that grows a
+  # package of the same name turns it red the day the lock moves. The way out
+  # is a name of the function's own (`ends`, `unitIndex`), never a call site
+  # that remembers.
+  #
+  # Every Nix file of the tree is read for the call sites, and a path one
+  # names that is not there is refused: an interpolated path is a call this
+  # cannot follow, and a comment can name a file some other way.
+  callpackage-fills-no-default =
+    let
+      # The paths a Nix text hands `callPackage`, as written, a call broken
+      # across lines included.
+      calledIn =
+        text:
+        map builtins.head (
+          lib.filter builtins.isList (
+            builtins.split "callPackage[[:space:]]+([.]{1,2}/[^[:space:];{}()\"'`]*)" text
+          )
+        );
+      # The arguments `f` declares a default for that `names` has.
+      filled =
+        names: f:
+        let
+          formals = builtins.functionArgs f;
+        in
+        lib.filter (a: formals.${a} && names ? ${a}) (builtins.attrNames formals);
+
+      # THE CASE THAT FAILS, PLANTED: the gate's shape before the rename, read
+      # by the same two functions as the tree. Each planted call is written in
+      # two pieces, so the sweep of this file below does not read it as one.
+      plantedCalls = calledIn (
+        lib.concatStringsSep "\n" [
+          ("gateApp = pkgs.callPackage" + " ./nix/gate.nix {")
+          ("keep = pkgs.callPackage" + "\n    ../keep.nix { };")
+          ("icons = callPackage" + " ./icon-superpack;")
+          "# prose that says `callPackage` and names no file"
+        ]
+      );
+      plantedFilled =
+        filled
+          {
+            what = 1;
+            units = 1;
+            jq = 1;
+          }
+          (
+            {
+              what ? "gate",
+              units ? null,
+              ends ? "gate",
+              jq,
+              ...
+            }:
+            null
+          );
+      plantedWrong =
+        lib.optional (
+          plantedCalls != [
+            "./nix/gate.nix"
+            "../keep.nix"
+            "./icon-superpack"
+          ]
+        ) "the planted call sites read as ${builtins.toJSON plantedCalls}"
+        ++ lib.optional (
+          plantedFilled != [
+            "units"
+            "what"
+          ]
+        ) "the planted defaults read as ${builtins.toJSON plantedFilled}, not [\"units\",\"what\"]";
+
+      # AND THE TREE.
+      root = toString ../.;
+      relative = path: lib.removePrefix "${root}/" (toString path);
+      files = lib.filter (path: lib.hasSuffix ".nix" (toString path)) (
+        lib.filesystem.listFilesRecursive ../.
+      );
+      sites = lib.concatMap (
+        file:
+        map (called: {
+          inherit file called;
+          target = dirOf file + "/${called}";
+        }) (calledIn (builtins.readFile file))
+      ) files;
+      missing = lib.filter (site: !builtins.pathExists site.target) sites;
+      targets = lib.unique (map (site: site.target) (lib.subtractLists missing sites));
+      notFunctions = lib.filter (target: !builtins.isFunction (import target)) targets;
+      wrong = lib.concatMap (
+        target: map (a: "${relative target}: `${a} ? …`") (filled pkgs (import target))
+      ) (lib.subtractLists notFunctions targets);
+
+      say =
+        lines: lib.concatMapStringsSep "\n" (line: "echo ${lib.escapeShellArg "       ${line}"} >&2") lines;
+    in
+    mkCheck "callpackage-fills-no-default" [ ] ''
+      ${lib.optionalString (plantedWrong != [ ]) ''
+        echo "ERROR: the planted case no longer reads as it must:" >&2
+        ${say plantedWrong}
+        echo "      This check would pass over the tree without seeing it." >&2
+        exit 1
+      ''}
+      ${lib.optionalString (builtins.length targets < 60) ''
+        echo "ERROR: only ${toString (builtins.length targets)} files called through callPackage were found;" >&2
+        echo "      the sweep stopped reaching them." >&2
+        exit 1
+      ''}
+      ${lib.optionalString (missing != [ ]) ''
+        echo "ERROR: a call to callPackage names a path that is not there:" >&2
+        ${say (map (site: "${relative site.file}: ${site.called}") missing)}
+        echo "      An interpolated path is a call this check cannot follow; name the" >&2
+        echo "      file as written, or, in a comment, some other way." >&2
+        exit 1
+      ''}
+      ${lib.optionalString (notFunctions != [ ]) ''
+        echo "ERROR: callPackage is handed a file that is not a function:" >&2
+        ${say (map relative notFunctions)}
+        exit 1
+      ''}
+      ${lib.optionalString (wrong != [ ]) ''
+        echo "ERROR: a default that callPackage never uses:" >&2
+        ${say wrong}
+        echo "      pkgs has a package of that name, and callPackage hands it over" >&2
+        echo "      wherever a call leaves the argument out, so the default is never" >&2
+        echo "      the value. Give the argument a name pkgs does not have." >&2
+        exit 1
+      ''}
+      echo "OK: ${toString (builtins.length targets)} files called through callPackage, by ${toString (builtins.length sites)} call sites; no default of theirs is a name pkgs has"
+    '';
+
   the-explanation-has-its-own-register =
     mkCheck "the-explanation-has-its-own-register" [ pkgs.python3 ]
       ''
@@ -55523,6 +55664,7 @@ let
       mime-drop-is-live
       mime-claims-refuse
       gate-fetches-what-no-cache-has
+      callpackage-fills-no-default
       trap-calls-something-that-exists
       dev-exports-before-it-starts
       ;

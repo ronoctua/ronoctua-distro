@@ -284,7 +284,7 @@
             };
           # AND THE COMPILED UNITS of this checkout's tree: the release
           # graph's, and the loop's third-party ones the tests build on.
-          units = {
+          unitSets = {
             release = rust.release.keep;
             loop = rust.loop.keep;
           };
@@ -1187,12 +1187,10 @@
       # arithmetic and where its numbers were measured.
       gateApp = pkgs.callPackage ./nix/gate.nix {
         inherit system keepSources;
-        # SAID, and not left to the default: `pkgs` has a `what` of its own,
-        # and `callPackage` hands it over (`nix/gate.nix` refuses it).
-        what = "gate";
+        ends = "gate";
         prefetch = "${prefetchApp}/bin/ronoctua-prefetch";
         sizing = buildSizing;
-        units = rust.unitIndex;
+        unitIndex = rust.unitIndex;
         targets = builtins.attrNames self.checks.${system};
         alone = slowNames;
       };
@@ -1211,9 +1209,9 @@
       mostApp = pkgs.callPackage ./nix/gate.nix {
         inherit system keepSources;
         name = "ronoctua-most";
-        what = "targets";
+        ends = "targets";
         sizing = buildSizing;
-        units = rust.unitIndex;
+        unitIndex = rust.unitIndex;
         targets = lib.subtractLists slowNames (builtins.attrNames self.checks.${system});
         left = slowNames;
       };

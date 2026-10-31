@@ -72,7 +72,7 @@
 # With the Rust build in one derivation per unit (`nix/rust/units.nix`), a
 # library unit — ours or a third-party crate's — is one nothing installed
 # references, taken by the next collection, paid again by the next build.
-# The sets (`units`: `rust.release.keep`, the release graph's units, and
+# The sets (`unitSets`: `rust.release.keep`, the release graph's units, and
 # `rust.loop.keep`, the loop's third-party ones, which the test graph
 # shares) are rooted by `ronoctua-keep-units`
 # (`nix/keep-units.nix`) — only the members the store holds, so rooting
@@ -101,7 +101,7 @@
   downloads ? [ ],
   # The sets of compiled units to hold while they are the current ones, by
   # name (each with its members' `paths`), and what roots them.
-  units ? { },
+  unitSets ? { },
   keepUnits ? null,
   # How long a root no checkout refreshed is kept (`assets/cache.nix`'s
   # `oldCompilerDays`, passed by `flake.nix`: a set of units IS an old
@@ -123,10 +123,10 @@ let
   # Each set's members, as text: naming them builds nothing.
   unitFiles = lib.mapAttrs (
     name: set: writeText "ronoctua-kept-${name}-unit-paths" (lib.concatLines set.paths)
-  ) units;
+  ) unitSets;
 in
 assert lib.assertMsg (
-  units == { } || keepUnits != null
+  unitSets == { } || keepUnits != null
 ) "nix/kept-sources.nix: units to keep, and nothing to keep them with";
 writeShellApplication {
   name = "ronoctua-keep-sources";
@@ -156,7 +156,7 @@ writeShellApplication {
     if ! hold "$roots/sources-$(basename ${kept})" ${kept}; then
       echo "warning: could not root the flake's sources; a garbage collection may take them" >&2
     fi
-    ${lib.optionalString (units != { }) ''
+    ${lib.optionalString (unitSets != { }) ''
       # THE UNITS OF THIS CHECKOUT'S TREE, by the checkout's own name.
       checkout=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
       key=$(printf '%s' "$checkout" | sha256sum | cut -c1-12)

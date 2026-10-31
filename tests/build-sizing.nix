@@ -123,10 +123,10 @@ let
   );
   battery = pkgs.callPackage ../nix/gate.nix {
     inherit system sizing;
-    units = index;
+    unitIndex = index;
     classes = plantedClasses;
     name = "ronoctua-fake-battery";
-    what = "targets";
+    ends = "targets";
     targets = [ "one-check" ];
   };
 

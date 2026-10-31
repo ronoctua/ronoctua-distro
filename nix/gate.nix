@@ -119,7 +119,7 @@
   # stops at its targets.
   # Everything before that point is shared.
   name ? "ronoctua-gate",
-  what ? "gate",
+  ends ? "gate",
   # The checks this battery builds, by name.
   targets ? [ ],
   # Targets that each evaluate whole systems of their own (the milestones, the
@@ -133,7 +133,7 @@
   # EVERY UNIT OF THE RUST BUILD, as data (`rust.unitIndex`: `kind`, `drv`
   # and `deps` by id), or `null`: phase 1 builds them all, the test runs
   # last.
-  units ? null,
+  unitIndex ? null,
   # The class of each unit, by id, or `null`: the measured ones
   # (`nix/rust/unit-classes.json`). A check plants its own.
   classes ? null,
@@ -143,20 +143,15 @@
   keepSources ? null,
 }:
 
-# `callPackage` FILLS EVERY ARGUMENT `pkgs` HAS A NAME FOR, defaults included,
-# and nixos-unstable has a package called `what` (and one called `units`):
-# handed it, `what == "gate"` was false, and the gate ended as `most` does —
-# without phase 5, saying "OK" while it did not close invariant 7
-# (2026-10-31). A battery is one of the two by a string, or nothing builds.
-assert lib.assertMsg
-  (builtins.elem what [
-    "gate"
-    "targets"
-  ])
-  "nix/gate.nix: `what` is ${builtins.typeOf what}, not \"gate\" or \"targets\": callPackage filled it from pkgs; pass it";
-assert lib.assertMsg (
-  units == null || !(lib.isDerivation units)
-) "nix/gate.nix: `units` is a package (callPackage filled it from pkgs); pass rust.unitIndex";
+# A battery is one of the two by a string, or nothing builds. These were
+# `what` and `units`, and nixos-unstable has a package of each name, which
+# `callPackage` handed over in place of the defaults: the gate ended as `most`
+# does, without phase 5, saying "OK" while it did not close invariant 7
+# (2026-10-31). `callpackage-fills-no-default` keeps every such name out.
+assert lib.assertMsg (builtins.elem ends [
+  "gate"
+  "targets"
+]) "nix/gate.nix: `ends` is ${builtins.toJSON ends}, not \"gate\" or \"targets\"";
 
 let
   # NOTHING STARTS OVER A BUILD INSIDE THE TREE (`nix/tree-guard.nix`).
@@ -169,7 +164,7 @@ let
   # kept units are rooted with both (`keptUnits`, `nix/rust.nix`): rooted by
   # `out` alone, a collection took their `metrics` and this phase compiled
   # every kept unit again.
-  index = if units == null then { } else units;
+  index = if unitIndex == null then { } else unitIndex;
   unitPlan = sizing.unitPlan (
     {
       units = index;
@@ -298,7 +293,7 @@ let
   # any `''`, and the trap is written down in AGENTS.md. With the tail in a
   # binding, the two strings are siblings instead of nested.
   tail =
-    if what == "gate" then
+    if ends == "gate" then
       ''
         echo "== 5. the gate: what nix flake check asks of the rest of the flake, an evaluator per group =="
         if [ "$failures" -gt 0 ]; then
@@ -812,7 +807,7 @@ writeShellApplication {
 
   meta = {
     description =
-      if what == "gate" then
+      if ends == "gate" then
         "what nix flake check asks, sized by the machine's RAM"
       else
         "the checks that do not build an installation, sized by the RAM";
