@@ -36,8 +36,8 @@ pub fn flake(dir: &Path) -> String {
 }
 
 /// Rewrite a flake command so it builds the distro from a local CHECKOUT
-/// instead of the machine flake's own `ronoctua` input. The build switch's own
-/// direction needs this: that input is a user-owned `git+file` repo a root
+/// instead of the machine flake's own `ronoctua` input. The build switch's dev
+/// direction (`-reference`) needs this: that input is a user-owned `git+file` repo a root
 /// apply may not fetch, and it tracks a branch, so `--no-update-lock-file`
 /// would refuse the re-lock. `path:<checkout>` is neither — no git to own, no
 /// branch to re-resolve. The override is itself a lock change, so the lock is

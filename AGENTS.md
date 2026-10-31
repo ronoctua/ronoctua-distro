@@ -44,31 +44,32 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    posiciona é o compositor.
 5. **Sem lógica Nix reimplementada em Rust.**
 6. **A máquina se mantém na última versão sozinha.** O flake declara **quais** apps existem e **de
-   onde** vêm; o sistema segue o `nixos-unstable` e se reconstrói num timer, e cada *fast-mover* se
-   atualiza pelo **seu próprio updater**, fora da geração, gravando sob `$HOME`. Não há pin estável,
-   reprodutibilidade nem cache público de app; o **boot-trial e o rollback de geração** permanecem
-   como a rede que recupera um boot que não sobe. *(Emenda do dono, 2026-10-30; substitui "Nada
-   imperativo. Se não está no flake, não existe.", ela mesma uma emenda de 2026-10-05.)* *(Emenda do
-   dono, 2026-10-31: a atualização vale a partir do próximo boot.)*
+   onde** vêm; o sistema segue o `nixos-unstable` e se reconstrói sozinho toda semana, valendo a
+   partir do próximo boot, e o que tem updater próprio se atualiza por ele, fora da geração,
+   gravando sob `$HOME`. O nixpkgs não tem canal estável, e não há reprodutibilidade nem cache
+   público de app; o **boot-trial e o rollback de geração** permanecem como a rede que recupera um
+   boot que não sobe. *(Emenda do dono, 2026-10-30; substitui "Nada imperativo. Se não está no
+   flake, não existe.", ela mesma uma emenda de 2026-10-05.)* *(Emenda do dono, 2026-10-31: a
+   atualização vale a partir do próximo boot.)*
 
    O modelo, por fonte:
    - **O sistema inteiro rola no `nixos-unstable`**: o flake da máquina segue essa branch (o próprio
-     input `nixpkgs`, que o da distro segue). O timer é a rotina semanal `system-update` do cérebro
-     (não há `.timer` do systemd): ela move a distro e o nixpkgs (`nix flake update ronoctua
-     nixpkgs`) e aplica **para o próximo boot** (`ronoctua-machine apply --next-boot`), sozinha —
-     espera a máquina livre, rede não-tarifada e o carregador (e, se a pessoa deixar rodar na
-     bateria, a carga no piso ou acima), nunca pergunta. O sistema novo vale a partir do próximo
-     reinício, que o ensaio de boot experimenta uma vez, com o rollback de geração por trás, e uma
-     notificação pede que a pessoa reinicie. Fora o nixpkgs, a máquina usa os pins que a distro
-     testou, e o código próprio da distro ainda versiona pelo seu repositório.
-   - **Fast-movers na última do fornecedor**: o Claude Code pela **PART do store** (empacotada,
-     corrigida para NixOS e pinada em `nix/claude-code.nix`, à frente do nixpkgs; a versão sobe
-     quando o pin sobe), e o Codex pelo `pkgs.codex` do nixpkgs, que rola com a máquina. O updater
-     nativo sob `$HOME` foi revertido (emenda do dono, 2026-10-30): ele baixa um binário Linux
-     genérico que o NixOS não roda sem `nix-ld`. Os
-     Craft Apps pelo **Craft Launcher** (`storytold/craft-launcher`), que baixa e atualiza os crafts
-     sozinho sob `$HOME`; o **SolidCraft** como AppImage que segue os releases de
-     `tangency-labs/solidcraft`.
+     input `nixpkgs`, que o da distro segue). A rotina semanal `system-update` do cérebro (não há
+     `.timer` do systemd) move a distro e o nixpkgs (`nix flake update ronoctua nixpkgs`) e aplica
+     **para o próximo boot** (`ronoctua-machine apply --next-boot`), sozinha — espera a máquina
+     livre, rede não-tarifada e o carregador (e, se a pessoa deixar rodar na bateria, a carga no
+     piso ou acima), nunca pergunta. O sistema novo vale a partir do próximo reinício, que o ensaio
+     de boot experimenta uma vez, com o rollback de geração por trás, e uma notificação pede que a
+     pessoa reinicie. Fora o nixpkgs, a máquina usa os pins que a distro testou, e o código próprio
+     da distro ainda versiona pelo seu repositório.
+   - **À frente do nixpkgs, pela distro**: o Claude Code pela **PART do store** (empacotada,
+     corrigida para NixOS e pinada em `nix/claude-code.nix`; a versão sobe quando a distro move o
+     pin). O updater nativo sob `$HOME` foi revertido (emenda do dono, 2026-10-30): ele baixa um
+     binário Linux genérico que o NixOS não roda sem `nix-ld`. O **SolidCraft** é um AppImage de
+     `tangency-labs/solidcraft` que anda com o pin da distro e segue os releases se a pessoa ligar a
+     opção. O Codex vem do `pkgs.codex` e rola com o nixpkgs.
+   - **Com updater próprio, sob `$HOME`**: os Craft Apps pelo **Craft Launcher**
+     (`storytold/craft-launcher`), que baixa e atualiza os crafts sozinho.
    - **Flatpak e Android** se atualizam pelos próprios mecanismos (`update.auto.enable`; F-Droid).
 
    As superfícies imperativas que a segurança ainda guarda — cada uma dado, nunca código, e nunca no

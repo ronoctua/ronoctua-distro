@@ -823,7 +823,7 @@ struct Footer {
     /// Where the thread that waits on the build-switch apply says it ended —
     /// only on failure, since a switch that worked restarts the footer. `None`
     /// outside the event loop (tests).
-    build_switch_sender: Option<calloop::channel::Sender<bool>>,
+    build_switch_sender: Option<calloop::channel::Sender<crate::build_switch::Ended>>,
     /// The watch on the resizer's file, which is the broadcast: it is how a
     /// curtain's `Esc`, a drag and a footer started again all hear the cut.
     _resizer_watch: Option<ronoctua_files::notice::Notice>,
@@ -3512,12 +3512,12 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
 
     // THE BUILD SWITCH'S THREAD says when an apply ended — only on failure, as
     // a switch that worked restarts this footer (`build_toggle`).
-    let (build_switch_sender, build_switch_done) = channel::channel::<bool>();
+    let (build_switch_sender, build_switch_done) = channel::channel::<crate::build_switch::Ended>();
     state.build_switch_sender = Some(build_switch_sender);
     handle
         .insert_source(build_switch_done, |event, (), state: &mut Footer| {
-            if let channel::Event::Msg(ok) = event {
-                state.build_switch_done(ok);
+            if let channel::Event::Msg(ended) = event {
+                state.build_switch_done(ended);
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the build-switch channel: {e}"))?;
@@ -12552,6 +12552,14 @@ impl Footer {
     /// word back is heard mainly on failure, and clears the mark itself
     /// ([`Footer::build_switch_done`]). A machine with no checkout has nothing
     /// to switch to.
+    ///
+    /// THE TWO DIRECTIONS ARE STARTED TWO WAYS. `-own` applies the revision
+    /// root's lock of the machine pins, and the person starts it as the
+    /// update's apply is started (one narrow polkit rule, `--wait`). `-reference`
+    /// builds and activates, as root, the working tree any process of the
+    /// person's may write: it is asked through the sudo door, in the bar, like
+    /// every root gesture, and the door only queues it — the thread then
+    /// follows the unit to its end (`build_switch::follow`).
     fn build_toggle(&mut self) {
         // The `systemctl`, by path: a unit's `PATH` is minimal. See
         // `session_end::SYSTEMCTL`, the same reason.
@@ -12586,21 +12594,38 @@ impl Footer {
             crate::build_switch::Build::Reference => "reference",
         };
         let unit = format!("ronoctua-build-switch-{instance}.service");
-        // WAIT FOR THE APPLY, off the loop (`--wait` blocks until the oneshot
-        // ends). On success its switch-to-configuration restarts the footer, so
-        // this thread dies with the old process and the new footer comes up with
-        // `switching` clear — the flag resets itself. The word below is sent,
-        // and heard, only where the apply ended without that restart: a failure.
+        // THE WORKING TREE PASSES THE PASSWORD: its gesture, made here on the
+        // loop, runs on the thread.
+        let gesture = (target == crate::build_switch::Build::Reference)
+            .then(|| self.sudo_gate().gesture(crate::sudo::Asker::Build));
+        // WAIT FOR THE APPLY, off the loop. On success its
+        // switch-to-configuration restarts the footer, so this thread dies with
+        // the old process and the new footer comes up with `switching` clear —
+        // the flag resets itself. The word below is sent, and heard, only where
+        // the apply ended without that restart.
         std::thread::spawn(move || {
-            let ok = std::process::Command::new(SYSTEMCTL)
-                .args(["start", "--wait", &unit])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            let _ = sender.send(ok);
+            use crate::build_switch::Ended;
+            let ended = match gesture {
+                // `--wait` blocks until the oneshot ends.
+                None => {
+                    let ok = std::process::Command::new(SYSTEMCTL)
+                        .args(["start", "--wait", &unit])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    if ok { Ended::Built } else { Ended::Failed }
+                }
+                Some(mut gesture) => {
+                    let asked = ronoctua_security::verb::RootVerb::BuildSwitchReference;
+                    match gesture.run(asked.into(), &mut |_| {}) {
+                        Ok(()) => crate::build_switch::follow(SYSTEMCTL, &unit),
+                        Err(why) => Ended::Refused(why),
+                    }
+                }
+            };
+            let _ = sender.send(ended);
         });
         self.switching = Some(target);
         // A SYSTEM ALREADY WAITS FOR THE RESTART: the apply sets this one for
@@ -12620,26 +12645,33 @@ impl Footer {
 
     /// The build-switch apply ended WITHOUT restarting the footer. A switch
     /// that changed the running build would have taken the session down and
-    /// brought it up clear, so reaching here means one of two things, and both
+    /// brought it up clear, so reaching here means one of three things, and all
     /// now get a word — the glyph going quiet with no message was the whole of
     /// the owner's complaint:
-    ///   - it FAILED (`ok == false`): say so, the build is unchanged;
-    ///   - it SUCCEEDED with nothing to switch (`ok == true`): the built
+    ///   - it FAILED (`Ended::Failed`): say so, the build is unchanged;
+    ///   - it SUCCEEDED with nothing to switch (`Ended::Built`): the built
     ///     system is the one already running, which is the ordinary answer when
     ///     you are already on this build (a dev build whose checkout has not
     ///     moved). Say that, rather than leave the person wondering.
-    fn build_switch_done(&mut self, ok: bool) {
+    ///   - it was REFUSED before it began (the working tree's gesture,
+    ///     cancelled in the bar or refused by the door): say why.
+    fn build_switch_done(&mut self, ended: crate::build_switch::Ended) {
+        use crate::build_switch::Ended;
         let target = self.switching.take();
         // SET FOR THE NEXT RESTART — a system already waited, or `nixpkgs`
         // moved — is a third answer: the build that runs stays until then,
         // and the one that waits is what the switch made.
         self.build_state = crate::build_switch::read();
         let waits = target.is_some() && self.build_state.waiting == target;
-        let m = self.texts.t(match (ok, waits) {
-            (true, true) => crate::key::ECHO_BUILD_NEXT_RESTART,
-            (true, false) => crate::key::ECHO_BUILD_UNCHANGED,
-            (false, _) => crate::key::ECHO_BUILD_SWITCH_FAILED,
-        });
+        let m = match (ended, waits) {
+            (Ended::Refused(why), _) => self.texts.t_with(
+                crate::key::ECHO_BUILD_FAILED,
+                &[("why", &self.texts.t(crate::security_words::refusal(why)))],
+            ),
+            (Ended::Built, true) => self.texts.t(crate::key::ECHO_BUILD_NEXT_RESTART),
+            (Ended::Built, false) => self.texts.t(crate::key::ECHO_BUILD_UNCHANGED),
+            (Ended::Failed, _) => self.texts.t(crate::key::ECHO_BUILD_SWITCH_FAILED),
+        };
         self.echo_message(m);
         self.draw_and_paint();
     }

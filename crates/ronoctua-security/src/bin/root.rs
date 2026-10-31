@@ -209,6 +209,21 @@ fn root_verb(verb: RootVerb, person: Option<&Person>, tools: &Tools) -> Result<(
             ronoctua_cachix::netrc::remove(Path::new(ronoctua_cachix::NETRC))
                 .map_err(|w| refused(cachix_why(w)))
         }
+        // THE BUILD SWITCH'S DEV DIRECTION: the person's working tree, built
+        // and activated as root — so through this door, never a polkit rule.
+        // Start the one fixed unit and nothing else; `--no-block`, because the
+        // build takes minutes and the bar's turn would be held for all of
+        // them. The footer follows the unit to its end itself, reading it
+        // (`build_switch::follow`), which needs no right.
+        RootVerb::BuildSwitchReference => {
+            const BUILD_SWITCH_REFERENCE_UNIT: &str = "ronoctua-build-switch-reference.service";
+            named()?;
+            let systemctl = tools::given(tools.systemctl.as_ref())?;
+            run_program(
+                systemctl,
+                &["start", "--no-block", BUILD_SWITCH_REFERENCE_UNIT],
+            )
+        }
     }
 }
 

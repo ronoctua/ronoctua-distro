@@ -275,6 +275,111 @@ pub fn hostname_of(current_system_target: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_owned())
 }
 
+/// How a switch the footer started ended, as the thread that waited on it
+/// says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    /// The apply ended well — and, as a switch that changed the running
+    /// build restarts the footer, one heard here built what already ran, or
+    /// set it for the next restart.
+    Built,
+    /// The apply ended badly: the build is unchanged.
+    Failed,
+    /// The working tree's build never started: the sudo door refused it, or
+    /// the person cancelled in the bar.
+    Refused(ronoctua_security::Why),
+}
+
+/// What `systemctl show` says of a unit, as far as following one run of it
+/// to its end needs.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Seen {
+    /// `ActiveState`.
+    pub active: String,
+    /// Whether a job is installed for it (`Job` names one): from the moment
+    /// a start is queued until the run it started has ended.
+    pub job: bool,
+}
+
+impl Seen {
+    /// The properties to ask `systemctl show` for.
+    pub const PROPERTIES: [&str; 2] = ["ActiveState", "Job"];
+
+    /// What `systemctl show -p …` printed (`Key=value` lines). Pure.
+    #[must_use]
+    pub fn of(shown: &str) -> Self {
+        let mut seen = Self::default();
+        for line in shown.lines() {
+            match line.split_once('=') {
+                Some(("ActiveState", v)) => v.clone_into(&mut seen.active),
+                Some(("Job", v)) => seen.job = !v.is_empty() && v != "0",
+                _ => {}
+            }
+        }
+        seen
+    }
+
+    /// How the run the door queued ended — `None` while its job is installed
+    /// (queued, or the oneshot's start still running). A unit left `failed`
+    /// failed this run, or never ran it (the job went without starting it):
+    /// either way the build did not change. Anything else ended well — a
+    /// oneshot that did is `inactive`, and may be unloaded already. Pure.
+    #[must_use]
+    pub fn ended(&self) -> Option<Ended> {
+        if self.job
+            || matches!(
+                self.active.as_str(),
+                "activating" | "active" | "deactivating" | "reloading"
+            )
+        {
+            return None;
+        }
+        Some(if self.active == "failed" {
+            Ended::Failed
+        } else {
+            Ended::Built
+        })
+    }
+}
+
+/// What `systemctl show` says of `unit` now; `None` when it cannot say.
+#[must_use]
+pub fn seen(systemctl: &str, unit: &str) -> Option<Seen> {
+    let mut command = std::process::Command::new(systemctl);
+    command.arg("show");
+    for p in Seen::PROPERTIES {
+        command.args(["-p", p]);
+    }
+    let out = command
+        .arg(unit)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(Seen::of(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Waits, on the calling thread, for the run of `unit` the door queued to
+/// end.
+///
+/// A CLOCK, while the switch runs and no longer: the unit is root's, started
+/// through the sudo door, and the one way to be TOLD a system unit ended —
+/// `systemctl start --wait` — is the right to start it, which the person no
+/// longer has for this one. Reading its state needs no right.
+#[must_use]
+pub fn follow(systemctl: &str, unit: &str) -> Ended {
+    loop {
+        let Some(now) = seen(systemctl, unit) else {
+            return Ended::Failed;
+        };
+        if let Some(how) = now.ended() {
+            return how;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+}
+
 /// Read the running build's state from the filesystem — the lock's presence,
 /// the current system's hostname and the machine flake's checkout.
 #[must_use]
@@ -439,6 +544,33 @@ mod tests {
             waiting: None,
         };
         assert_eq!(reference.other_build(), Build::Own);
+    }
+
+    /// FAILS IF: following the working tree's build ends while its job is
+    /// queued or its run is under way, calls a unit left failed built, or a
+    /// run that ended well — `inactive`, perhaps unloaded — anything else.
+    #[test]
+    fn a_run_is_followed_to_its_end() {
+        let shown = |active: &str, job: &str| {
+            Seen::of(&format!(
+                "ActiveState={active}\nJob={job}\nInvocationID=aa\nResult=x\n"
+            ))
+        };
+        assert_eq!(
+            shown("failed", "17"),
+            Seen {
+                active: "failed".to_owned(),
+                job: true,
+            }
+        );
+        // QUEUED — over an earlier run's failure too —, THEN RUNNING.
+        assert_eq!(shown("inactive", "17").ended(), None);
+        assert_eq!(shown("failed", "17").ended(), None);
+        assert_eq!(shown("activating", "17").ended(), None);
+        assert_eq!(shown("activating", "").ended(), None);
+        // ENDED.
+        assert_eq!(shown("inactive", "").ended(), Some(Ended::Built));
+        assert_eq!(shown("failed", "").ended(), Some(Ended::Failed));
     }
 
     /// FAILS IF: with a dev build set for the next restart, the switch

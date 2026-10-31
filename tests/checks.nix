@@ -15495,14 +15495,15 @@ let
           # THE 2026-10-05 WAVE: a package that adds a rule names it here.
           # ── anchor: L05 ──
           # `machine` (`nix/modules/machine.nix`) signs `manage-units` above in
-          # ONE rule for THREE units, verb `start`, the one user, `YES`:
+          # ONE rule for TWO units, verb `start`, the one user, `YES`:
           # `ronoctua-update-apply.service` (the software centre applies a
           # declaration with nothing to ask), and the build switch's
-          # `ronoctua-build-switch-own.service` and
-          # `ronoctua-build-switch-reference.service` (the modeline's glyph and
-          # `LEADER / b` move between the machine's own build and a distro
-          # checkout's reference build) — all `update-apply-rule-is-narrow`. The
-          # boot's bless has NO rule: only systemd starts it.
+          # `ronoctua-build-switch-own.service` (the modeline's glyph and
+          # `LEADER / b` back to the committed build) — both
+          # `update-apply-rule-is-narrow`. The build switch's
+          # `ronoctua-build-switch-reference.service` (the working tree) has NO
+          # rule: only the sudo door starts it. Nor has the boot's bless: only
+          # systemd starts it.
           # ── anchor: L06 ──
           # `person` (`nix/modules/person-apply.nix`) signs `manage-units` above
           # for ONE unit, `ronoctua-person-apply.service`, verb `start`, the one
@@ -45909,31 +45910,34 @@ let
   # line, lock included; the rescue's rollback is the machine's own verb; and NO
   # rule names the boot's bless, which only systemd starts.
   #
-  # THE BUILD SWITCH'S TWO SHARE THE RULE (`nix/modules/machine.nix`: "the
-  # build switch's two join the update's apply in the one rule"): the
-  # modeline's glyph and `LEADER / b` start `ronoctua-build-switch-own` and
-  # `-reference`, which run that same apply after the checkout the machine's
-  # own flake names. So the rule lists exactly three units — the update's
-  # and the two the footer's `build_toggle` spells, no fourth and no pattern —
-  # their alternatives bracketed, and each of the two is held to the update's
-  # wiring: the same command line last, no argument, the machine's table, the
-  # update's folder for the lock, never restarted by the switch it runs. It
-  # was widened once with this check left behind, and the check said the
-  # rule named "other units"; now it names which.
+  # THE BUILD SWITCH'S TWO, STARTED TWO WAYS. The modeline's glyph and
+  # `LEADER / b` start `ronoctua-build-switch-own` and `-reference`, which run
+  # that same apply after the checkout the machine's own flake names; each is
+  # held to the update's wiring: the same command line last, no argument, the
+  # machine's table, the update's folder for the lock, never restarted by the
+  # switch it runs.
   #
-  # WHAT THE RULE DOES NOT BOUND IS WHAT THE BUILD SWITCH APPLIES. Nobody
-  # hands either unit an argument, but `-reference` builds and activates, AS
-  # ROOT, the checkout's WORKING TREE (`RONOCTUA_MACHINE_OVERRIDE_DIR`) — and
-  # the person who may start it is the person who writes that tree. On a
-  # machine whose flake names a local checkout, anything that runs as the
-  # person reaches root through it with no password. That is not the sudo
-  # door's rule (code that reaches root passes the password, as a brain
-  # module's `module.nix` does under L06); it waits on the owner's decision
-  # (`docs/PENDING.md`). `-own` builds the revision root's lock of the machine
-  # pins, read out of the person's repository, which root then trusts as git
-  # (`safe.directory`). Until the owner decides, this check holds the
-  # exposure to the one unit: `-reference` alone carries the override, and
-  # `-own` and the update's none.
+  # `-own` SHARES THE RULE: it applies the revision root's lock of the machine
+  # pins, as the update's apply does. So the rule lists exactly two units —
+  # the update's and `-own`, no third and no pattern — their alternatives
+  # bracketed. It was widened once with this check left behind, and the
+  # check said the rule named "other units"; now it names which.
+  #
+  # `-reference` IS THE SUDO DOOR'S (owner, 2026-10-31). It builds and
+  # activates, AS ROOT, the checkout's WORKING TREE
+  # (`RONOCTUA_MACHINE_OVERRIDE_DIR`), which any process of the person's may
+  # write: a polkit rule for it was root with no password for all of them.
+  # So no rule names it; the helper's `build-switch-reference` starts it and
+  # nothing else (`--no-block`, the build takes minutes and the bar's turn is
+  # not held for them), and the footer asks that verb through its gate, in
+  # the sudo bar, for the working tree alone — never `systemctl start` on it.
+  # `-reference` alone carries the override, and `-own` and the update's none.
+  #
+  # WHAT THIS CHECK DOES NOT BOUND: what the person COMMITS. On a machine
+  # whose flake names a local checkout the update locks the checkout's HEAD
+  # and builds it as root, started by the person with no password; and the
+  # person is a Nix trusted user. Both wait on the owner (`docs/PENDING.md`);
+  # this check holds the uncommitted tree alone.
   #
   # THE BLESS HANGS OFF THE TARGET THE BOOT REALLY REACHES: the system's
   # default unit, for the VM and for the reference machine alike (no
@@ -46147,8 +46151,30 @@ let
           if carries != name.endswith("-reference"):
               wrong.append(
                   f"{name} {'carries' if carries else 'does not carry'} {override}: the person's working tree "
-                  "may reach root through ronoctua-build-switch-reference alone, until the owner decides otherwise"
+                  "may reach root through ronoctua-build-switch-reference alone, which only the sudo door starts"
               )
+
+      # THE WORKING TREE GOES THROUGH THE DOOR: the footer makes the build
+      # switch's gesture for `-reference` alone and runs the helper's verb on
+      # it; the one `systemctl start` it runs itself is for the other.
+      reference_unit = next((u for u in switch_units if u.endswith("-reference.service")), None)
+      must(reference_unit, "the build switch's -reference unit")
+      if not re.search(r"Build::Reference\)\s*\.then\(\|\|\s*self\.sudo_gate\(\)\.gesture\(crate::sudo::Asker::Build\)\)", toggle):
+          wrong.append("build_toggle does not make the sudo bar's gesture for the working tree's build, and for it alone")
+      if "RootVerb::BuildSwitchReference" not in toggle or not re.search(r"\bgesture\.run\(", toggle):
+          wrong.append("build_toggle does not run the helper's build-switch-reference through the gesture")
+      if len(re.findall(r'"start"', toggle)) != 1 or '"--wait"' not in toggle:
+          wrong.append("build_toggle starts a unit more than once by itself: only -own is the footer's to start")
+      helper = uncommented(pathlib.Path("${../crates/ronoctua-security/src/bin/root.rs}").read_text())
+      arm = re.search(r"RootVerb::BuildSwitchReference\s*=>\s*\{(.*?)\n        \}", helper, re.S)
+      arm = must(arm and arm.group(1), "the helper's `BuildSwitchReference` arm")
+      started = re.search(r'const BUILD_SWITCH_REFERENCE_UNIT: &str = "([^"]+)";', arm)
+      if not started or started.group(1) != reference_unit:
+          wrong.append(f"the helper's build-switch-reference starts {started and started.group(1)!r}, not {reference_unit!r}")
+      if '&["start", "--no-block", BUILD_SWITCH_REFERENCE_UNIT]' not in re.sub(r"\s+", " ", arm).replace("[ ", "[").replace(", ]", "]"):
+          wrong.append("the helper's build-switch-reference does not `start --no-block` exactly its unit")
+      if len(re.findall(r'"[^"]*"', re.sub(r'const BUILD_SWITCH_REFERENCE_UNIT: &str = "[^"]*";', "", arm))) != 2:
+          wrong.append("the helper's build-switch-reference passes words beyond `start --no-block` and the unit")
 
       # 4. THE ONE RULE.
       text = uncommented(got["rules"])
@@ -46156,7 +46182,7 @@ let
       every = re.split(r"polkit\.addRule", text)[1:]
       floor(len(every), 3, "rules in the merged polkit config")
       ours = [r for r in every if unit in r]
-      allowed = {unit} | switch_units
+      allowed = {unit} | (switch_units - {reference_unit})
       if len(ours) != 1:
           wrong.append(f"{len(ours)} rules name {unit}; there may be one")
       for rule in ours:
@@ -46208,6 +46234,8 @@ let
       for rule in every:
           if rule not in ours and any(u in rule for u in switch_units):
               wrong.append("another rule names a unit of the build switch")
+          if reference_unit in rule or reference_unit.removesuffix(".service") in rule:
+              wrong.append(f"a polkit rule names {reference_unit}: the person's working tree would reach root with no password")
       # 5. NO RULE NAMES THE BLESS, nor the rebuild beyond the rescue's own.
       if bless_unit in text or bless_unit.removesuffix(".service") in text:
           wrong.append(f"a polkit rule names {bless_unit}: only systemd starts it")
@@ -46217,7 +46245,7 @@ let
           for w in wrong:
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
-      print(f"OK: one rule of one branch ({sorted(allowed)}, start, {user}, YES), no start limit on its units; the unit, the build switch's two and the rescue's rebuild take {update_lock} and run the machine's apply; the person's working tree reaches root through ronoctua-build-switch-reference alone (the owner's decision, docs/PENDING.md); the rollback disarms; the bless hangs off {[b['target'] for b in got['booted']]}; no rule for {bless_unit}")
+      print(f"OK: one rule of one branch ({sorted(allowed)}, start, {user}, YES), no start limit on its units; the unit, the build switch's two and the rescue's rebuild take {update_lock} and run the machine's apply; the uncommitted working tree reaches root through ronoctua-build-switch-reference alone, which no rule names and only the sudo door starts (what is committed is the update's, docs/PENDING.md); the rollback disarms; the bless hangs off {[b['target'] for b in got['booted']]}; no rule for {bless_unit}")
       END
     '';
 

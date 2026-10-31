@@ -40,17 +40,21 @@ pub enum Asker {
     /// The update's binary cache page (`LEADER s u c`): root's netrc for the
     /// person's private cache.
     Update,
+    /// The build switch (`LEADER / b`, the modeline's glyph): a build of the
+    /// distro checkout's working tree.
+    Build,
 }
 
 impl Asker {
     /// Every one — for the test that each has its words in every language.
     #[cfg(any(test, feature = "test-support"))]
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Security,
         Self::Files,
         Self::Stick,
         Self::Belongings,
         Self::Update,
+        Self::Build,
     ];
 
     /// Its name as the bar says it: the screen, or the screen's window.
@@ -66,6 +70,8 @@ impl Asker {
             (Self::Belongings, true) => key::SUDO_BAR_WHO_BELONGINGS_WINDOW,
             (Self::Update, false) => key::SUDO_BAR_WHO_UPDATE,
             (Self::Update, true) => key::SUDO_BAR_WHO_UPDATE_WINDOW,
+            (Self::Build, false) => key::SUDO_BAR_WHO_BUILD,
+            (Self::Build, true) => key::SUDO_BAR_WHO_BUILD_WINDOW,
         }
     }
 }
@@ -190,6 +196,7 @@ impl Deed {
                 texts.t_with(key::SUDO_BAR_DEED_CACHE_NETRC, &[("name", name)])
             }
             RootVerb::BinaryCacheNetrcRemove => texts.t(key::SUDO_BAR_DEED_CACHE_NETRC_REMOVE),
+            RootVerb::BuildSwitchReference => texts.t(key::SUDO_BAR_DEED_BUILD_REFERENCE),
         }
     }
 

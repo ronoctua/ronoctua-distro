@@ -1404,6 +1404,7 @@ mod tests {
                 name: "someone".to_owned(),
             },
             RootVerb::BinaryCacheNetrcRemove,
+            RootVerb::BuildSwitchReference,
         ];
         verbs.extend(RelaxSpan::ALL.map(|span| RootVerb::Relax { span }));
         verbs

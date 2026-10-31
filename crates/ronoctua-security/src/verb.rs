@@ -189,6 +189,14 @@ pub enum RootVerb {
     /// Remove root's netrc: the token went, or the cache is no longer
     /// private.
     BinaryCacheNetrcRemove,
+    /// Start the build switch's DEV direction
+    /// (`ronoctua-build-switch-reference.service`): build and switch to the
+    /// working tree of the distro checkout the machine's flake names. That
+    /// tree is the person's, and any of their processes may write it, so
+    /// building and activating it as root passes the password like every
+    /// other root gesture — never a polkit rule. Started and left to run: the
+    /// build takes minutes, and the bar and its turn are not held for them.
+    BuildSwitchReference,
 }
 
 impl RootVerb {
@@ -231,6 +239,7 @@ impl RootVerb {
                 return vec!["binary-cache-netrc".to_owned(), name.clone()];
             }
             Self::BinaryCacheNetrcRemove => vec!["binary-cache-netrc-remove"],
+            Self::BuildSwitchReference => vec!["build-switch-reference"],
             Self::PersonSignerPin { key } => {
                 return vec!["person-signer-pin".to_owned(), key.clone()];
             }
@@ -298,6 +307,7 @@ impl RootVerb {
                 }
             }
             ["binary-cache-netrc-remove"] => Self::BinaryCacheNetrcRemove,
+            ["build-switch-reference"] => Self::BuildSwitchReference,
             _ => return None,
         };
         Some(verb)
@@ -507,6 +517,7 @@ mod tests {
                 name: "someone-2".to_owned(),
             },
             RootVerb::BinaryCacheNetrcRemove,
+            RootVerb::BuildSwitchReference,
             RootVerb::PersonSignerPin {
                 key: format!(
                     "{}{}",
@@ -616,10 +627,12 @@ mod tests {
             ],
             &["binary-cache-netrc", "someone\nmachine evil.org"],
             &["binary-cache-netrc-remove", "someone"],
+            &["build-switch-reference", "/home/someone/elsewhere"],
         ] {
             assert_eq!(RootVerb::parse(&words(wrong)), None, "{wrong:?}");
         }
         assert!(RootVerb::BinaryCacheNetrcRemove.needs_a_person());
+        assert!(RootVerb::BuildSwitchReference.needs_a_person());
     }
 
     /// FAILS IF: a span is said to the helper in a word it reads back as

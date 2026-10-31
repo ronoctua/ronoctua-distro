@@ -145,30 +145,30 @@ reescrita do protocolo são coisas muito diferentes, e misturá-las esconde isso
 
 ## Funcionalidade especificada e ausente
 
-### 0.0000027. O interruptor de build dá root, sem senha, a quem roda como a pessoa · pequeno a médio, e é uma decisão do dono
+### 0.0000027. Uma máquina que segue um checkout local ainda dá root, sem senha, a quem roda como a pessoa · pequeno a médio cada, e é uma decisão do dono
 
-A regra polkit do `ronoctua-update-apply.service` (`nix/modules/machine.nix`) lista também as duas
-unidades do interruptor de build e devolve `YES` à pessoa, sem senha. O
-`ronoctua-build-switch-reference` constrói e ativa, como root, a ÁRVORE DE TRABALHO do checkout que o
-flake da máquina nomeia — e essa árvore é da pessoa. Numa máquina cujo flake nomeia um checkout
-local, qualquer processo que roda como ela (um navegador comprometido, um agente) edita a árvore e dá
-`systemctl start` na unidade: é root sem senha. Isso contraria a porta do sudo (código que alcança
-root passa pela senha, como o `module.nix` de um módulo do brain, L06), e nenhum invariante aprova a
-passagem. O `update-apply-rule-is-narrow` a diz e a segura numa unidade só (só o `-reference` leva o
-`RONOCTUA_MACHINE_OVERRIDE_DIR`), mas não a fecha.
+Desde 2026-10-31 a árvore NÃO COMMITADA passa pela porta do sudo (o `ronoctua-build-switch-reference`
+saiu da regra polkit; `docs/ARCHITECTURE.md`). Outros caminhos seguem abertos para qualquer processo
+que roda como a pessoa (um navegador comprometido, um agente):
 
-- **O gesto pela barra do sudo**: o `-reference` sai da regra `YES` e o glifo e `LEADER / b` o
-  iniciam por um verbo da porta do sudo (`sudo_bar.rs` → `ronoctua_security::authority`), que pede a
-  senha, a chave ou o dedo como os outros gestos de root. O `-own` pode ficar na regra: aplica a
-  revisão que o lock de root fixa.
-- **Ou uma exceção escrita**: o dono aprova a passagem no `AGENTS.md`, com a razão (uma máquina de
-  desenvolvimento) e o limite (só onde o flake nomeia um checkout local), e o check a cita.
-- **O `-own` lê o repositório da pessoa como git de root** (`safe.directory` só para esse checkout).
-  Antes de deixá-lo na regra, conferir que o fetcher do Nix não executa nada da configuração do
-  repositório (`core.fsmonitor`, hooks, filtros) ao ler a revisão travada.
-- acabou quando: nenhuma regra `YES` nomeia o `ronoctua-build-switch-reference` e o glifo o inicia
-  pela barra do sudo, ou o `AGENTS.md` traz a exceção aprovada pelo dono e o
-  `update-apply-rule-is-narrow` a cita
+- **O Nix trata a pessoa como confiável.** `nix.settings.trusted-users` (`nix/modules/base.nix`) a
+  lista ao lado de root, e o manual do Nix diz que isso equivale quase a root: ela importa no store o
+  que ninguém assinou e passa opções ao daemon. Nenhum documento diz por que ela está ali. Tirar pode
+  quebrar o que passa opções ao Nix ou envia ao cache binário da pessoa; isso tem de ser medido antes.
+- **O que ela commita chega a root.** Numa máquina cujo flake nomeia um checkout local, o
+  `ronoctua-update-system.service` (regra `YES` da pessoa, `module.nix` do `system-update`) e a rotina
+  semanal travam o `ronoctua` no `HEAD` do checkout e o constroem como root, para o próximo boot; um
+  `path:` local nem pede commit. O `-own` aplica esse mesmo lock. É o desenho de uma máquina de
+  desenvolvimento — seguir o próprio checkout —, e nenhum invariante o aprova por escrito.
+- O `incus-admin` do perfil `full` é root (L13, aprovado), e a janela sem senha é root pela escolha da
+  pessoa enquanto dura.
+
+- **Recomendação:** tirar a pessoa de `trusted-users` (o maior e o que nada justifica por escrito),
+  depois de achar o que precisa dele; e, numa máquina que segue um checkout local, fazer o lock do
+  `ronoctua` andar para o checkout só pela porta do sudo — ou escrever no `AGENTS.md` a exceção da
+  máquina de desenvolvimento, com o limite (só onde o flake nomeia um checkout local).
+- acabou quando: o dono decide os dois, e um check segura cada decisão (a pessoa fora de
+  `trusted-users`, ou a exceção escrita que o check cita).
 
 ### 0.0000028. A folga do disco — o que nem os testes nem as VMs escritas alcançam · pequeno cada
 
@@ -1626,13 +1626,13 @@ máquina tem o próprio flake", "A atualização deixa o sistema para o próximo
   distro chega lá.
   - acabou quando: o dono decide quem move o nixpkgs da distro e quando (o `.#release` antes do
     gate, como os pins dos AppImages, ou uma cadência escrita), e o `DEVELOPMENT.md` diz.
-- **Seguir as releases dos AppImages da distro vem desligado, e a emenda fala em segui-las.** O
-  código desliga por padrão (`distro_apps_follow_releases`, `ronoctua_person::options`); o inv. 6
-  diz que o SolidCraft é um AppImage "que segue os releases", o que o pin da distro já faz a cada
-  versão; e um comentário da tabela chegou a dizer que seguir virou o padrão.
+- **Seguir as releases dos AppImages da distro vem desligado.** O código desliga por padrão
+  (`distro_apps_follow_releases`, `ronoctua_person::options`), e o inv. 6 diz isso desde
+  2026-10-31: o SolidCraft anda com o pin da distro e segue os releases se a pessoa ligar a opção.
+  Fica a escolha de ligar por padrão, que o "na última versão" do inv. 6 sugere.
   - acabou quando: o dono decide — ligar por padrão (o código, os testes do `options.rs` e do
-    `follow.rs`, a página) ou deixar como escolha da pessoa — e o inv. 6, a tabela e o
-    `ARCHITECTURE.md` dizem o mesmo.
+    `follow.rs`, a página, e o inv. 6 dizendo o mesmo) ou deixar como escolha da pessoa, e este
+    item sai.
 - **O nix-flatpak fala com o Flathub sem `Pass`.** A atualização dos Flatpaks na ativação e no timer
   do nix-flatpak (`update.onActivation`, `update.auto.enable`) não passa pelo `ronoctua-consent`, e
   a regra "nada fala com a rede antes de a pessoa permitir o host" não foi emendada para ela. Se uma

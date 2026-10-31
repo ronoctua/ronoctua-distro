@@ -16694,20 +16694,49 @@ pode esperar e o que subiu já foi escrito. Os filhos nascem sem entrada padrão
 código próprio, em vez de construir a pasta enquanto a atualização reescreve o lock dela. O
 `update-apply-rule-is-narrow` lê o nome dessa trava nas fontes da atualização.
 
-**A regra polkit é de três unidades, e uma delas aplica o que a pessoa escreve.** A central inicia o
-`ronoctua-update-apply.service` sem ninguém olhando um pedido, e não há agente polkit na sessão: a
-regra devolve `YES` para a pessoa, verbo `start`, num `if` só, e a condição não testa mais nada. Ela
-lista também as duas unidades do interruptor de build, `ronoctua-build-switch-own` e `-reference`,
-que o glifo da modeline e `LEADER / b` iniciam: rodam a mesma linha do apply, com a mesma trava,
-depois de ler o checkout que o flake da máquina nomeia — por isso dividem a regra em vez de ganhar
-outra. Nenhuma das três tem teto de partidas (`startLimitIntervalSec = 0`): só um gesto da pessoa as
-inicia, e o teto padrão recusaria o sexto como `start-limit-hit`. O `-own` constrói a revisão que o
-lock de root fixa. O `-reference` constrói e ativa, como root, a ÁRVORE DE TRABALHO do checkout — e
-quem pode iniciá-lo é quem escreve essa árvore: numa máquina cujo flake nomeia um checkout local,
-qualquer processo que roda como a pessoa chega a root por ele, sem senha. Isso não é a regra da
-porta do sudo (código que alcança root passa pela senha, como o `module.nix` de um módulo do brain,
-L06) e espera a decisão do dono (`docs/PENDING.md`); até lá, o `update-apply-rule-is-narrow` segura
-essa passagem numa unidade só. O bless não tem regra: só o systemd o inicia.
+**A regra polkit é de duas unidades; a árvore de trabalho passa pela porta do sudo (2026-10-31).** A
+central inicia o `ronoctua-update-apply.service` sem ninguém olhando um pedido, e não há agente polkit
+na sessão: a regra devolve `YES` para a pessoa, verbo `start`, num `if` só, e a condição não testa
+mais nada. Ela lista também o `ronoctua-build-switch-own`, a volta do interruptor de build para o build
+commitado (o glifo da modeline e `LEADER / b`): roda a mesma linha do apply, com a mesma trava, e
+aplica o que o lock da máquina fixa, como a atualização — por isso divide a regra em vez de ganhar
+outra. Numa máquina cujo flake nomeia um checkout local, a atualização move esse lock para o `HEAD`
+do checkout (o `ronoctua-update-system` que a pessoa inicia sem senha, ou a rotina semanal), então o
+`-own` não dá nada que a atualização já não dê.
+Nenhuma das unidades tem teto de partidas (`startLimitIntervalSec = 0`): só um gesto da pessoa as
+inicia, e o teto padrão recusaria o sexto como `start-limit-hit`. O bless não tem regra: só o systemd o
+inicia.
+
+O `ronoctua-build-switch-reference` constrói e ativa, como root e na hora, a ÁRVORE DE TRABALHO do
+checkout, e qualquer processo que roda como a pessoa escreve essa árvore. Com ele na regra, um
+navegador comprometido ou um agente editava a árvore e chegava a root sem senha, ao vivo — o contrário
+da regra da porta do sudo (código que alcança root passa pela senha, como o `module.nix` de um módulo
+do brain, L06). Então nenhuma regra o nomeia: o rodapé pede o verbo
+`build-switch-reference` da porta do sudo na barra, como todo gesto de root, e o ajudante inicia essa
+unidade e nada mais. Com a janela sem senha aberta, a porta não pergunta nada (`sudo -n`), e o gesto
+custa o mesmo que antes. O ajudante a inicia com `--no-block`: o build leva minutos, e a barra e a vez
+dela não ficam presas esse tempo todo. Sem o direito de iniciá-la, o rodapé não pode esperar com
+`systemctl start --wait`; ele a acompanha lendo o `systemctl show` (`ActiveState`, `Job`) a cada dois
+segundos enquanto a troca dura — um relógio só enquanto preciso, porque ler o estado de uma unidade do
+sistema não pede direito nenhum e ser AVISADO do fim pede. Um job instalado vai do enfileiramento ao fim
+da execução, então "sem job, sem execução" é o fim, e `failed` é que não construiu. Um gesto cancelado
+ou recusado é dito com o motivo (`echo-build-failed`).
+
+Isso fecha UM caminho, o da árvore não commitada. Uma máquina assim ainda dá root sem senha a quem
+roda como a pessoa por outros: o que ela COMMITA chega a root pela atualização, como dito acima; ela
+está em `trusted-users` do Nix, que o próprio Nix diz ser quase o mesmo que root (importar no store o
+que não foi assinado, passar opções ao daemon); o `incus-admin` do perfil `full` é root (L13); e a
+janela sem senha, quando a pessoa a abre, é root por escolha dela. Quais desses fecham é decisão do
+dono (`docs/PENDING.md`).
+
+O `-own` e a atualização leem a revisão de dentro do repositório da pessoa como root (o
+`safe.directory` só desse checkout), e um repositório pode pedir ao git que rode programas: o
+`core.fsmonitor`, os hooks, os filtros `clean`/`smudge`/`process`. Conferido em 2026-10-31 com o Nix
+2.34.9: um repositório com tudo isso apontando para um marcador (que o git da própria pessoa dispara num
+`git status`) foi resolvido no `HEAD` (o `nix flake update ronoctua` da atualização), lido na revisão
+travada (o build do `-own`), limpo e sujo, por um `nix` de root — e nenhum marcador apareceu, nem
+arquivo de root ficou no repositório: o Nix lê pela libgit2, que não roda nada disso. A garantia é do
+Nix dessa versão; um Nix que passe a chamar o git de linha de comando nesse caminho a desfaz.
 
 **`hold` só retém a revisão que roda.** Um lock escrito com `--override-input` nomearia outra revisão
 por um tempo e voltaria na primeira avaliação que o comparasse com o endereço do `flake.nix` — uma

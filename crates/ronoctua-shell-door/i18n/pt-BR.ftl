@@ -296,6 +296,8 @@ sudo-bar-who-belongings = Os pertences
 sudo-bar-who-belongings-window = A janela dos pertences
 sudo-bar-who-update = A atualização
 sudo-bar-who-update-window = A janela da atualização
+sudo-bar-who-build = O interruptor de build
+sudo-bar-who-build-window = A janela do interruptor de build
 sudo-bar-deed-relax-minutes = abrir a janela sem senha por { $minutes ->
         [one] um minuto
        *[other] { $minutes } minutos
@@ -322,6 +324,7 @@ sudo-bar-deed-private-forget = esquecer a chave que abre o cofre /private
 sudo-bar-deed-private-passphrase = trocar a senha do cofre /private
 sudo-bar-deed-private-grow = aumentar o cofre /private ({ $size })
 sudo-bar-deed-stick = gravar o instalador num pendrive
+sudo-bar-deed-build-reference = construir e trocar para a sua árvore de trabalho da distro, como root
 sudo-bar-deed-approve = aprovar a parte root do seu módulo do brain { $id }
 sudo-bar-deed-keys = deixar { $count ->
         [one] uma chave de segurança responder

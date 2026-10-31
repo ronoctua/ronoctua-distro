@@ -36,8 +36,9 @@ let
   # the store. Read the way the glyph's Rust reads it
   # (`build_switch::checkout_of` — keep the two in step), off the one
   # uncommented line that carries both `ronoctua` and `url`. The build switch's
-  # two services share it: the reference direction builds it, the own direction
-  # overrides `ronoctua` with it. A machine whose input is a published distro
+  # two services share it: the reference direction overrides `ronoctua` with its
+  # working tree, the own direction lets root read it as git. A machine whose
+  # input is a published distro
   # has none, the script refuses, and the glyph is away there in the first place.
   distroCheckout = pkgs.writeShellScript "ronoctua-distro-checkout" ''
     set -eu
@@ -659,10 +660,11 @@ in
       # (2026-10-27), a plain `reboot` coming up broken. The fixture build is
       # for `nix run .#vm` alone, never a switch of the host.
       #
-      # TWO NAMED UNITS, not one templated by the directory: the polkit rule
-      # then names exactly the two the person may start, and no instance can
-      # smuggle an arbitrary flake to apply as root — the parts module's reason
-      # (`polkit-rules-are-the-ones-we-know`), applied here.
+      # TWO NAMED UNITS, not one templated by the directory: each is started
+      # one way, and no instance can smuggle an arbitrary flake to apply as
+      # root — the parts module's reason (`polkit-rules-are-the-ones-we-know`),
+      # applied here. `-own` is the polkit rule's below; `-reference` is the
+      # sudo door's (`build-switch-reference`), asked in the sudo bar.
       systemd.services.ronoctua-build-switch-own = {
         description = "Builds and switches to this machine's installed (committed) build";
         environment = cfg.environment;
@@ -675,11 +677,13 @@ in
           ExecStart = pkgs.writeShellScript "ronoctua-build-switch-own" ''
             set -eu
             dir=$(${distroCheckout}) || exit 1
-            # THE COMMITTED HEAD, not the working tree: NO override, so the
-            # machine flake's `git+file` input re-resolves to HEAD. Let root
-            # read the person's repo as git — git refuses another owner's repo
-            # without this, scoped to the one checkout (`HOME=/root` so the
-            # write and nix's read share `/root/.gitconfig`).
+            # A COMMITTED REVISION, not the working tree: NO override, so the
+            # apply builds the revision the machine's lock pins
+            # (`--no-update-lock-file`) — the checkout's HEAD as the update
+            # last locked it, never re-resolved here. Let root read the
+            # person's repo as git — git refuses another owner's repo without
+            # this, scoped to the one checkout (`HOME=/root` so the write and
+            # nix's read share `/root/.gitconfig`).
             export HOME=/root
             ${pkgs.git}/bin/git config --global --replace-all safe.directory "$dir"
             exec ${cfg.applyCommand}
@@ -696,6 +700,15 @@ in
       # block above). Keeps `RONOCTUA_MACHINE_DIR` (`/etc/nixos`, with host.nix)
       # and only overrides the distro input, so the hardware is kept and no git
       # is fetched as root. It NEVER builds the fixture reference machine.
+      #
+      # ONLY THE SUDO DOOR STARTS IT (owner, 2026-10-31): the tree is the
+      # person's, any of their processes may write it, and building and
+      # activating it as root, live, is root. So no polkit rule names it; the
+      # footer asks the door's verb `build-switch-reference` in the sudo bar,
+      # and the helper starts this unit and nothing else
+      # (`update-apply-rule-is-narrow`). That closes the one way the
+      # UNCOMMITTED tree reached root; what is committed still reaches it
+      # with no password (below, and `docs/PENDING.md`).
       systemd.services.ronoctua-build-switch-reference = {
         description = "Builds and switches to a dev build of the local checkout (working tree)";
         environment = cfg.environment;
@@ -724,21 +737,25 @@ in
       # centre starts the update's when nobody is looking at a prompt. The width
       # is bought back the way the update's rule buys it: named units, one verb,
       # one user, no argument (`update-apply-rule-is-narrow`). The build
-      # switch's two join the update's apply in the one rule.
+      # switch's `-own` joins the update's apply in the one rule: both apply
+      # what the machine's lock pins, and on a machine whose flake names a
+      # local checkout the update moves that lock to the checkout's HEAD —
+      # the person's own `ronoctua-update-system` start, or the weekly routine,
+      # with no password. So `-own` gives nothing the update does not: what
+      # the person COMMITS reaches root on such a machine, by its design, and
+      # whether it must pass the password too is the owner's open decision
+      # (`docs/PENDING.md`). Root reads that revision out of the person's
+      # repository, and Nix reads it without running anything the
+      # repository's own git configuration names — checked against Nix 2.34
+      # (`docs/ARCHITECTURE.md`).
       #
-      # WHAT THE WIDTH DOES NOT BUY BACK: `-reference` builds and activates,
-      # as root, the working tree the person writes, so anything that runs as
-      # the person reaches root through it with no password, on a machine whose
-      # flake names a local checkout. That is not the sudo door's rule (code
-      # that reaches root passes the password); it waits on the owner's
-      # decision (`docs/PENDING.md`), and the check says so instead of calling
-      # the door narrow.
+      # `-reference` IS NOT HERE: it builds the working tree the person
+      # writes, and only the sudo door starts it (above).
       security.polkit.extraConfig = ''
         polkit.addRule(function (action, subject) {
           if (action.id == "org.freedesktop.systemd1.manage-units" &&
               (action.lookup("unit") == "ronoctua-update-apply.service" ||
-               action.lookup("unit") == "ronoctua-build-switch-own.service" ||
-               action.lookup("unit") == "ronoctua-build-switch-reference.service") &&
+               action.lookup("unit") == "ronoctua-build-switch-own.service") &&
               action.lookup("verb") == "start" &&
               subject.user == "${user}") {
             return polkit.Result.YES;

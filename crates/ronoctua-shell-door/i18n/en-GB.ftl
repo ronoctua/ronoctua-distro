@@ -298,6 +298,8 @@ sudo-bar-who-belongings = The belongings
 sudo-bar-who-belongings-window = The belongings' window
 sudo-bar-who-update = The update
 sudo-bar-who-update-window = The update's window
+sudo-bar-who-build = The build switch
+sudo-bar-who-build-window = The build switch's window
 sudo-bar-deed-relax-minutes = open the passwordless window for { $minutes ->
         [one] one minute
        *[other] { $minutes } minutes
@@ -324,6 +326,7 @@ sudo-bar-deed-private-forget = forget the key that opens the /private vault
 sudo-bar-deed-private-passphrase = change the /private vault's passphrase
 sudo-bar-deed-private-grow = make the /private vault larger ({ $size })
 sudo-bar-deed-stick = write the installer to a stick
+sudo-bar-deed-build-reference = build and switch to your working tree of the distro, as root
 sudo-bar-deed-approve = approve the root part of your brain module { $id }
 sudo-bar-deed-keys = let { $count ->
         [one] one security key
