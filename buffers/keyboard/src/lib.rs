@@ -1191,6 +1191,7 @@ mod tests {
                 large: 2,
                 huge: 2,
             },
+            hide_header: false,
         }
     }
 

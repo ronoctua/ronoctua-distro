@@ -57,7 +57,7 @@ pub struct Reach {
     pub nix: PathBuf,
     /// The scratch folder.
     pub scratch: Scratch,
-    /// The distro's tree; `None`: the ISO said nothing.
+    /// The distro's tree, by its real path; `None`: the ISO said nothing.
     pub distro: Option<String>,
 }
 
@@ -151,6 +151,21 @@ impl Refused {
     }
 }
 
+/// `path`, its links resolved — or as given when it does not resolve, which
+/// the step that reads it then says.
+///
+/// THE ISO'S TREE IS A LINK into the store (`environment.etc`), and the
+/// unstable Nix refuses a path with a link in it: the lock step's
+/// `--reference-lock-file /etc/ronoctua/distro/flake.lock` failed with "path
+/// '/etc/ronoctua/distro' is a symlink". Every step names the tree by the
+/// store path it is.
+fn real_path(path: &str) -> String {
+    std::fs::canonicalize(path).map_or_else(
+        |_| path.to_owned(),
+        |real| real.to_string_lossy().into_owned(),
+    )
+}
+
 impl Reach {
     /// The world of this installer: the programs on `PATH`, the scratch
     /// folder at its place, and what the ISO said of the distro. A program
@@ -166,7 +181,8 @@ impl Reach {
             scratch: Scratch::installer(),
             distro: std::env::var(crate::release::FLAKE_DIR)
                 .ok()
-                .filter(|v| !v.is_empty()),
+                .filter(|v| !v.is_empty())
+                .map(|v| real_path(&v)),
         }
     }
 
@@ -559,6 +575,26 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: the distro's tree is named through the link the ISO puts in
+    /// `/etc` — the unstable Nix refuses a path with a link in it, and the
+    /// lock step failed on it —, or a tree that does not resolve is lost
+    /// instead of said by the step that reads it.
+    #[test]
+    fn the_tree_is_named_by_its_real_path() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-reach-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("store/tree")).unwrap();
+        std::os::unix::fs::symlink(dir.join("store/tree"), dir.join("link")).unwrap();
+        let real = std::fs::canonicalize(dir.join("store/tree")).unwrap();
+        assert_eq!(
+            real_path(&dir.join("link").to_string_lossy()),
+            real.to_string_lossy()
+        );
+        let gone = dir.join("gone").to_string_lossy().into_owned();
+        assert_eq!(real_path(&gone), gone);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A scratch folder of the test's own, and a fake CLI that answers like
     /// the belongings' one: it records its command line and environment and

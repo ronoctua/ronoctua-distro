@@ -1540,6 +1540,7 @@ mod tests {
             columns,
             lines,
             heights: heights(),
+            hide_header: false,
         }
     }
 

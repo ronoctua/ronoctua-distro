@@ -175,6 +175,12 @@ pkgs.testers.runNixOSTest {
         verdict, took = answer(KEY)
         print(f"{TRANSITION}: {verdict} in {took:.0f} s")
         print(machine.succeed("nmcli -f ACTIVE,BSSID,FREQ,SSID dev wifi list | grep -i yes || true"))
+        # WHY, when it did not join: what the installer said, what the radio
+        # heard, and what NetworkManager did with the profile.
+        if verdict != "on":
+            print(machine.get_tty_text("1"))
+            print(machine.succeed("nmcli -f BSSID,FREQ,SECURITY,SSID dev wifi list"))
+            print(machine.succeed("journalctl -u NetworkManager -n 60 --no-pager -o cat"))
         assert verdict == "on", verdict
         leave()
 

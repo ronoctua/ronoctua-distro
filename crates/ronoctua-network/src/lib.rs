@@ -527,8 +527,8 @@ pub const KEPT_BY_THE_AGENT: u32 = 1;
 /// not letting the radio in ([`follow`]).
 pub const JOIN_MOST_S: u64 = 90;
 
-/// No access point: NetworkManager chooses one the profile fits
-/// ([`Manager::radio_toward`] says why a join never names one).
+/// No access point: NetworkManager chooses one. A join with a password names
+/// one the profile fits instead ([`Manager::radio_toward`] says why).
 const ANY_ACCESS_POINT: zbus::zvariant::ObjectPath<'static> =
     zbus::zvariant::ObjectPath::from_static_str_unchecked("/");
 
@@ -879,6 +879,53 @@ pub fn sae_profile(heard: &[Heard]) -> bool {
         .iter()
         .any(|h| (h.wpa | h.rsn) & nm::AP_SEC_KEY_MGMT_PSK != 0);
     !takes_psk && heard.iter().any(|h| wpa3_only(h.rsn))
+}
+
+/// Whether an access point takes a join's profile: SAE for an `sae` one,
+/// PSK for a `wpa-psk` one. Pure.
+#[must_use]
+pub const fn fits(heard: Heard, sae: bool) -> bool {
+    let wants = if sae {
+        nm::AP_SEC_KEY_MGMT_SAE
+    } else {
+        nm::AP_SEC_KEY_MGMT_PSK
+    };
+    (heard.wpa | heard.rsn) & wants != 0
+}
+
+/// The strongest access point of `ssid` the radio at `device` lists that
+/// takes the join's profile ([`fits`]); `None` when none does, and the join
+/// leaves the choice to NetworkManager.
+fn fitting_access_point(
+    connection: &zbus::blocking::Connection,
+    device: &OwnedObjectPath,
+    ssid: &str,
+    sae: bool,
+) -> Option<OwnedObjectPath> {
+    let radio = nm::RadioProxyBlocking::builder(connection)
+        .path(device.clone())
+        .ok()?
+        .build()
+        .ok()?;
+    radio
+        .get_all_access_points()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|path| {
+            let p = nm::AccessPointProxyBlocking::builder(connection)
+                .path(path.clone())
+                .ok()?
+                .build()
+                .ok()?;
+            let heard = Heard {
+                wpa: p.wpa_flags().unwrap_or(0),
+                rsn: p.rsn_flags().unwrap_or(0),
+            };
+            (p.ssid().is_ok_and(|b| ssid_name(&b) == ssid) && fits(heard, sae))
+                .then(|| (p.strength().unwrap_or(0), path))
+        })
+        .max_by_key(|(strength, _)| *strength)
+        .map(|(_, path)| path)
 }
 
 /// Every access point of `ssid` the radio at `device` lists.
@@ -1698,10 +1745,13 @@ impl Manager {
         }
         let connection = wifi_settings(ssid, password, sae, KEPT_BY_THE_DAEMON);
         let signals = self.signals_of(&device);
+        let access_point = fitting_access_point(&self.connection, &device, ssid, sae);
         let (profile, active, _) = self.manager()?.add_and_activate_connection2(
             connection,
             &device.as_ref(),
-            &ANY_ACCESS_POINT,
+            &access_point
+                .as_ref()
+                .map_or(ANY_ACCESS_POINT, |a| a.as_ref()),
             HashMap::from([("persist", Value::from("memory"))]),
         )?;
         Ok(self.followed(Joining::of(profile, active, true), device, ssid, signals))
@@ -1845,20 +1895,24 @@ impl Manager {
     /// it first as often as not, and that radio is out of range of
     /// everything.
     ///
-    /// # The radio, and never an access point
+    /// # The access point the profile fits
     ///
-    /// A join names the radio and leaves the access point to NetworkManager
-    /// ([`ANY_ACCESS_POINT`]), as `nmcli connection up` and its own
-    /// autoconnect do: completing a new profile with none named, it takes the
-    /// first access point its compatibility test lets through
-    /// (`nm_wifi_aps_find_first_compatible`, which wants PSK for `wpa-psk`).
-    /// A join used to name the first access point of the name in the radio's
-    /// list, and a network is more than one: on a router on three bands, the
-    /// supplicant had listed the 6 GHz one first, which takes WPA3 alone.
-    /// NetworkManager refused that pair itself, before the radio tried a key
-    /// ("Access point does not support PSK but setting requires it", its
-    /// audit at `INFO`), and the installer said "check its password" of a
-    /// right one (an MT7922, 2026-10-25).
+    /// A network is more than one access point: on a router on three bands,
+    /// the 6 GHz one takes WPA3 alone. Completing a new `wpa-psk` profile
+    /// against it, NetworkManager refuses the pair itself, before the radio
+    /// tries a key ("Access point does not support PSK but setting requires
+    /// it", its audit at `INFO`), and the installer said "check its password"
+    /// of a right one (an MT7922, 2026-10-25). A join then named the first
+    /// access point of the name in the radio's list — that one. It named none
+    /// next ([`ANY_ACCESS_POINT`]), and NetworkManager took the first its
+    /// compatibility test let through, which wanted PSK for `wpa-psk`; the
+    /// unstable NetworkManager lets a WPA3-only one through for `wpa-psk`
+    /// (it hands the supplicant SAE as well) and refuses the same pair when
+    /// it completes the profile (`wifi-joins-vm`, 2026-10-31). So a join with
+    /// a password names the strongest access point of the name that TAKES
+    /// its profile ([`fitting_access_point`]: PSK for `wpa-psk`, SAE for
+    /// `sae`), and only one that fits none is left to NetworkManager. A saved
+    /// profile, complete, is brought up on any access point it fits.
     fn radio_toward(&self, ssid: &str) -> Result<(OwnedObjectPath, bool)> {
         let radios = self.devices_of_kind(nm::WIFI_KIND)?;
         if radios.is_empty() {
@@ -2543,6 +2597,24 @@ mod tests {
         // push every one of these onto `sae` and break what works today.
         let both = nm::AP_SEC_KEY_MGMT_PSK | nm::AP_SEC_KEY_MGMT_SAE;
         assert!(!wpa3_only(both), "the transition has to stay on wpa-psk");
+    }
+
+    /// FAILS IF: a `wpa-psk` join's access point may be one that takes WPA3
+    /// alone (the unstable NetworkManager refuses that pair), or an `sae`
+    /// one's one without SAE.
+    #[test]
+    fn an_access_point_fits_the_profile_it_takes() {
+        let (psk, sae) = (nm::AP_SEC_KEY_MGMT_PSK, nm::AP_SEC_KEY_MGMT_SAE);
+        let ap = |wpa, rsn| Heard { wpa, rsn };
+        // THE TWIN ON 6 GHz takes WPA3 alone: never a `wpa-psk` join's.
+        assert!(!fits(ap(0, sae), false));
+        assert!(fits(ap(0, sae), true));
+        // Transition takes both; WPA2 alone, and WPA1, `wpa-psk` only.
+        assert!(fits(ap(0, psk | sae), false) && fits(ap(0, psk | sae), true));
+        assert!(fits(ap(0, psk), false) && !fits(ap(0, psk), true));
+        assert!(fits(ap(psk, 0), false));
+        // An open one takes neither.
+        assert!(!fits(ap(0, 0), false) && !fits(ap(0, 0), true));
     }
 
     #[test]

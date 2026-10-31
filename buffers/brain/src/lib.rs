@@ -4951,6 +4951,7 @@ mod tests {
                 large: 2,
                 huge: 3,
             },
+            hide_header: false,
         }
     }
 

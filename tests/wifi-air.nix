@@ -7,7 +7,8 @@
 #
 # THE NETWORKS are the two a home router offers — WPA2, and WPA3 in
 # transition mode (both keys; its `wpa-psk` answered too) — and a third WPA2
-# one. Not WPA3 alone: on this air not even `nmcli` completes SAE.
+# one. Not WPA3 alone: on this air the 26.05 stack did not complete SAE even
+# from `nmcli` (the unstable one does, below).
 #
 # AND THE TRANSITION NETWORK ON A SECOND BAND, taking WPA3 alone — what a
 # router on three bands does on 6 GHz, where the standard requires it. A
@@ -17,7 +18,10 @@
 # one, and NetworkManager refused the `wpa-psk` profile there before the
 # radio tried a key ("Access point does not support PSK but setting
 # requires it"): the installer said "check its password" of a right one
-# (2026-10-25). It is joined by nobody on purpose; its DHCP is none.
+# (2026-10-25). The unstable stack completes SAE on this air, and
+# NetworkManager takes the twin for its wider band when a profile fits it —
+# so the twin hands out addresses as the router's other radio does
+# (2026-10-31: with none, a right join waited for an address that never came).
 { pkgs }:
 rec {
   # WPA2 and WPA3 in transition.
@@ -28,8 +32,13 @@ rec {
   guest = "ronoctua-air-guest";
   password = "a-test-passphrase";
 
-  # The transition network's WPA3-only twin, on 5 GHz.
-  twin = "02:00:00:00:01:00";
+  # The transition network's WPA3-only twin, on 5 GHz: the address of the
+  # radio it is on (`mac80211_hwsim` gives radio N `02:00:00:00:0N:00`).
+  # NEVER NetworkManager's radio's (`…:01:00`): the access point then owns
+  # the address of the station that asks it, and the unstable `hostapd`
+  # refuses that station before any key ("not allowed to authenticate",
+  # status 1) — a wrong password and a right one alike.
+  twin = "02:00:00:00:02:00";
 
   module = {
     boot.kernelModules = [ "mac80211_hwsim" ];
@@ -100,6 +109,7 @@ rec {
       "wlan0"
       "wlan0-1"
       "wlan0-2"
+      "wlan2"
     ];
     systemd.services.air-dhcp = {
       description = "DHCP on the test's access point";
@@ -113,11 +123,14 @@ rec {
         ip addr replace 192.168.50.1/24 dev wlan0
         ip addr replace 192.168.51.1/24 dev wlan0-1
         ip addr replace 192.168.52.1/24 dev wlan0-2
+        ip addr replace 192.168.53.1/24 dev wlan2
         exec ${pkgs.dnsmasq}/bin/dnsmasq --keep-in-foreground --bind-interfaces \
-          --interface=wlan0 --interface=wlan0-1 --interface=wlan0-2 --port=0 --no-resolv \
+          --interface=wlan0 --interface=wlan0-1 --interface=wlan0-2 --interface=wlan2 \
+          --port=0 --no-resolv \
           --dhcp-range=192.168.50.10,192.168.50.50 \
           --dhcp-range=192.168.51.10,192.168.51.50 \
           --dhcp-range=192.168.52.10,192.168.52.50 \
+          --dhcp-range=192.168.53.10,192.168.53.50 \
           --dhcp-leasefile=/run/air-dhcp.leases
       '';
     };

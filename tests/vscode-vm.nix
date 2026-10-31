@@ -918,7 +918,12 @@ pkgs.testers.runNixOSTest {
           for a in asked:
               print(f"  {a}")
           started = [[a for a in r.splitlines() if a] for r in ran if r.strip()]
-          return reached, {(h, p) for _, h, p, _ in asked}, started
+          # A QUERY BY NAME is asked as the path and each name it asked for
+          # (`queried`, the stand-in's): a newer VS Code asks its built-in's
+          # latest version that way, and a bare query says nothing of which.
+          queried = {(r["host"], r["path"].split("?")[0] + "#" + n)
+                     for r in requests for n in r.get("queried") or []}
+          return reached, {(h, p) for _, h, p, _ in asked} | queried, started
 
 
       # THE STAND-IN CANNOT SIGN: only here, so the update goes to its end.
@@ -934,7 +939,14 @@ pkgs.testers.runNixOSTest {
                      "github.gallery.vsassets.io", "github.gallerycdn.vsassets.io"}
       google = {"redirector.gvt1.com", "r1---sn-ronoctua.gvt1.com"}
       vendor = marketplace | {"main.vscode-cdn.net"}
-      copilot = ("marketplace.visualstudio.com", "/_apis/public/gallery/vscode/github/copilot-chat/latest")
+      # THE COPILOT CHAT QUESTION, either way VS Code asks it: the pinned
+      # 1.119 GETs its latest version, a newer one (nixos-unstable's) POSTs a
+      # query by its name (`heard_at_start` reads the names).
+      copilot_latest = ("marketplace.visualstudio.com", "/_apis/public/gallery/vscode/github/copilot-chat/latest")
+      copilot_query = ("marketplace.visualstudio.com", "/_apis/public/gallery/extensionquery#github.copilot-chat")
+
+      def asks_copilot(asked):
+          return copilot_latest in asked or copilot_query in asked
       rule = "--host-resolver-rules=MAP redirector.gvt1.com ~NOTFOUND"
 
       with subtest("at start-up, VS Code reaches its vendor, and never Google's dictionary"):
@@ -942,8 +954,8 @@ pkgs.testers.runNixOSTest {
           # THE DICTIONARY FIRST: without the rule, this is what fails.
           assert not reached & google, f"VS Code asked Google's dictionary: {sorted(reached & google)}"
           assert reached <= vendor, f"VS Code reached {sorted(reached - vendor)} too"
-          for wanted in (copilot,
-                         ("main.vscode-cdn.net", "/extensions/marketplace.json"),
+          assert asks_copilot(asked), f"the Copilot Chat question was not asked: {sorted(asked)}"
+          for wanted in (("main.vscode-cdn.net", "/extensions/marketplace.json"),
                          ("main.vscode-cdn.net", "/extensions/chat.json"),
                          ("main.vscode-cdn.net", "/core/stable.json")):
               assert wanted in asked, f"{wanted} was not asked: {sorted(asked)}"
@@ -951,22 +963,29 @@ pkgs.testers.runNixOSTest {
           # the rule: the newer Copilot Chat's package came.
           assert any("copilot-chat" in p and p.endswith("/Microsoft.VisualStudio.Services.VSIXPackage")
                      for _, p in asked), sorted(asked)
-          # AND THE RULE IS ON THE COMMAND LINE of the program that ran — the
-          # Electron that `code` starts, no child of it (`--type=`) and not
-          # the CLI's Node (`cli.js`).
+          # AND THE RULE REACHES WHERE CHROMIUM RESOLVES NAMES: the network
+          # service's command line, which Chromium gives only what the
+          # Electron that `code` starts was given. That main process is not
+          # always found by the folder it was started with — the 1.142 build
+          # runs under an FHS sandbox (`bwrap`) — so it is held to the rule
+          # where it is found, and the network service always.
+          # A CHILD'S COMMAND LINE IS ONE STRING: Chromium writes its process
+          # title over it, and `/proc/<pid>/cmdline` loses its separators —
+          # so the switch is looked for in the line, not among the words.
           for args in started:
               print(" ".join(args)[:400])
+          resolving = [" ".join(a) for a in started
+                       if "--utility-sub-type=network.mojom.NetworkService" in " ".join(a)]
+          assert resolving, "VS Code's network service was not found"
+          assert all(rule in line for line in resolving), resolving
           main = [a for a in started
                   if a[0].endswith("/lib/vscode/code")
                   and not any(x.startswith("--type=") or x.endswith("/cli.js") for x in a)]
-          assert main, "VS Code's main process was not found"
           assert all(rule in a for a in main), main
-          # WHERE CHROMIUM RESOLVES NAMES, said for the record.
-          print([rule in a for a in started if "--utility-sub-type=network.mojom.NetworkService" in a])
 
       with subtest("chat.disableAIFeatures does not stop the Copilot Chat question"):
           reached, asked, _ = heard_at_start("start-no-ai", {**unsigned, "chat.disableAIFeatures": True})
-          assert copilot in asked, sorted(asked)
+          assert asks_copilot(asked), sorted(asked)
           assert not reached & google, sorted(reached)
 
       with subtest("extensions.autoCheckUpdates off asks the Marketplace nothing"):

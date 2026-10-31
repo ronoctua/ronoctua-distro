@@ -9,7 +9,10 @@ for every one of them. It answers what the pinned 1.119 asks for an install
 - GET  marketplace.visualstudio.com /_apis/public/gallery/vscode/<p>/<n>/latest
        the extension as the gallery describes it, or 404;
 - POST marketplace.visualstudio.com /_apis/public/gallery/extensionquery
-       the query VS Code falls back to — by name, the same descriptions;
+       the query VS Code falls back to — by name, the same descriptions —,
+       and the one a newer VS Code asks for its built-in's latest version
+       instead of the GET above; the names it asks for are logged with it
+       (`queried`), so a measure says WHICH extension was asked;
 - GET  <p>.gallery.vsassets.io and <p>.gallerycdn.vsassets.io
        …/Microsoft.VisualStudio.Services.VSIXPackage — the VSIX itself, and
        …/Microsoft.VisualStudio.Code.Manifest — its package.json;
@@ -152,7 +155,8 @@ class Gallery(http.server.BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").split(":")[0].lower()
         with open(LOG, "a") as out:
             out.write(json.dumps({"method": self.command, "host": host,
-                                  "path": self.path, "code": code}) + "\n")
+                                  "path": self.path, "code": code,
+                                  "queried": getattr(self, "queried", [])}) + "\n")
 
     def end_headers(self):
         """Every answer may be read by the window that asked (CORS)."""
@@ -232,6 +236,7 @@ class Gallery(http.server.BaseHTTPRequestHandler):
             names = [c.get("value", "").lower()
                      for f in query.get("filters", []) for c in f.get("criteria", [])
                      if c.get("filterType") == 7]
+            self.queried = names
             found = [described(EXTENSIONS[n]) for n in names if n in EXTENSIONS]
             answer = {"results": [{
                 "extensions": found,
