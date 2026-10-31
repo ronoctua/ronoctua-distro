@@ -198,14 +198,6 @@ notif-action-software-trials = See the trials
 notif-action-software-android = Open Android
 echo-brain-no-action = No module of the brain offers that
 echo-brain-snoozed = Put off
-calc-shape-arithmetic = Arithmetic
-calc-shape-conversion = Conversion
-calc-shape-percentage = Percentage
-calc-shape-base = Number base
-calc-shape-roman = Roman numerals
-calc-shape-date = Date
-calc-shape-zone = Time zone
-calc-shape-currency = Currency
 # A PREFERENCE THAT COULD NOT BE SAVED is said, never only logged.
 echo-preference-not-written = { $file } could not be saved ({ $why }): what you changed lasts only until the footer restarts.
 
@@ -336,3 +328,6 @@ sudo-bar-deed-keys-off = stop your security keys answering the administrator
 sudo-bar-deed-signer-pin = pin your signing key on this machine
 sudo-bar-deed-cache-netrc = let this machine read your private binary cache { $name }
 sudo-bar-deed-cache-netrc-remove = take your private binary cache's login off this machine
+sudo-bar-deed-machine-hold = hold this machine on the distro revision it runs
+sudo-bar-deed-machine-unhold = let this machine follow the distro again
+sudo-bar-deed-machine-try-again = try again, at the next update, the system that did not start

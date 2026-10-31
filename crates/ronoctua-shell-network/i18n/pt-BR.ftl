@@ -20,14 +20,10 @@ group-network = rede
 # THE VIEW. States the list shows in place of rows when there is no row to
 # show — each says something different, and folding them into one generic
 # "no networks" would hide the difference between not finding and not looking.
-network-scanning = varrendo…
 network-empty = nenhuma rede ao alcance
 network-no-adapter = esta máquina não tem rádio Wi-Fi
 network-radio-off = rádio desligado
-network-wired = cabo
 network-saved = salva
-network-password = Senha de { $network }
-network-password-help = Guardada pelo NetworkManager, fora do repositório.
 # ECHOES — what the minibuffer says after the action.
 echo-network-joining = Conectando a { $network }…
 echo-network-connected = Conectado a { $network }
@@ -47,8 +43,6 @@ echo-network-unavailable = O NetworkManager não está respondendo
 network-remember = Guardar a senha de { $network } nesta máquina?
 network-remember-no = não, não guardar nada
 network-remember-yes = sim, selar no TPM
-# The list marker: tells "saved in NetworkManager" apart from "the password exists".
-network-no-tpm = no TPM
 echo-network-stored = Senha de { $network } selada no TPM
 echo-network-no-stored = Conectado. A senha não ficou guardada.
 echo-network-store-failed = Conectado, mas não consegui guardar a senha: { $reason }
@@ -183,7 +177,6 @@ network-tailscale-offline = off-line
 network-tailscale-exit = tudo sai por aqui
 network-tor-state = o serviço do Tor
 network-tor-ready = há um circuito
-network-tor-not-ready = sem circuito
 network-tor-bootstrap = subindo, { $percent }%
 network-tor-circuits = { $count ->
     [one] um circuito aberto
@@ -204,8 +197,6 @@ network-tor-start = ligar
 network-tor-stop = desligar
 network-tor-autostart = subir junto com a sessão
 network-tor-settings = ajustes
-network-tor-sheet = Tor
-network-tor-browser = abrir um navegador pelo Tor
 # O QUE O FLAKE FIXA. A linha é desenhada, é alcançável e recusa, dizendo de
 # onde vem o valor — a forma que a linha desabilitada do XFS já tem no
 # formatar. Editá-la seria uma tecla cujo efeito o torrc gerado desfaz antes de
@@ -220,12 +211,9 @@ network-tor-advanced-about = Estes mudam como o Tor monta circuitos. Os padrões
 ask-tor-setting = O valor novo — vazio limpa
 ask-tor-lines = Uma linha para acrescentar — vazio limpa todas
 network-tor-back = voltar
-network-tor-edit = mudar
 network-tor-more = mais
 network-tor-less = menos
-network-tor-drawer = a gaveta
 echo-tor-written = Os ajustes do Tor foram gravados
-echo-tor-refused = O Tor não aceitou: { $reason }
 echo-tor-not-running = gravado; o Tor vai ler quando subir
 network-fact-name = nome no tailnet
 network-fact-tailnet = nome do seu tailnet

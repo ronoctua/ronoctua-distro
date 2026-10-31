@@ -1,16 +1,28 @@
-//! The one module that knows `pw-dump`, `wpctl` and `pw-cat` exist.
+//! The one module that knows `pw-dump`, `wpctl`, `pw-cat` and `pw-metadata`
+//! exist.
 //!
-//! # Why three programs and not a library
+//! # Why programs and not a library
 //!
 //! The same measurement `ronoctua-bluetooth` waited on, and it still holds:
-//! `nix path-info -r` on the system's own toplevel finds all three in
-//! `sw/bin` already, because `services.pipewire` puts them there. Linking
-//! PipeWire's C API would be a second FFI boundary in this repository — and
-//! `nix/rust.nix` writes down what the first one costs — in exchange for
-//! nothing this view needs.
+//! `nix path-info -r` on the system's own toplevel finds them in `sw/bin`
+//! already, because `services.pipewire` puts them there. Linking PipeWire's C
+//! API would be a second FFI boundary in this repository — and `nix/rust.nix`
+//! writes down what the first one costs — in exchange for nothing this view
+//! needs.
 //!
-//! `pw-dump` and `pw-cat` READ, `wpctl` WRITES, and that is also the safety
-//! line: nothing here changes anything until a key is pressed.
+//! `pw-dump` and `pw-cat` READ, `wpctl` and `pw-metadata` WRITE, and that is
+//! also the safety line: nothing here changes anything until a key is pressed.
+//!
+//! # Why a second program writes
+//!
+//! Sending a program's sound to another device is not a `wpctl` verb: the
+//! pinned WirePlumber (0.5) moves a stream when the `default` metadata holds a
+//! `target.object` for it (`linking/find-defined-target.lua`, rescanned on
+//! that key by `linking/rescan.lua`), and `pw-metadata` is PipeWire's own way
+//! to write one. It writes ONE thing here ([`move_argv`]): `target.object` of
+//! a playing stream, set to the serial of a sink — out of a [`crate::Move`],
+//! which only a reading that listed both can make (`Snapshot::send`). The
+//! server checks the rest: it refuses a subject that is gone.
 //!
 //! # The trap
 //!
@@ -30,6 +42,10 @@ const WPCTL: Option<&str> = option_env!("RONOCTUA_WPCTL");
 
 /// Where `pw-cat` lives, baked at build time.
 const PW_CAT: Option<&str> = option_env!("RONOCTUA_PW_CAT");
+
+/// Where `pw-metadata` lives, baked at build time — the second program that
+/// writes (see the header).
+const PW_METADATA: Option<&str> = option_env!("RONOCTUA_PW_METADATA");
 
 /// Where `setpriv` lives, baked at build time.
 ///
@@ -70,6 +86,21 @@ impl std::fmt::Display for Refused {
 }
 
 impl std::error::Error for Refused {}
+
+/// Whether a program's sound runs now ([`crate::playing`], the lock
+/// screen's question): the graph read once, here, where the boundary's
+/// programs are named.
+///
+/// # Errors
+///
+/// As [`dump`], or what it printed is not JSON.
+pub(crate) fn playing() -> Result<bool> {
+    let dump = dump()?;
+    let mut g = crate::graph::Graph::fresh();
+    g.took_text(&dump)
+        .context("pw-dump printed something that is not JSON")?;
+    Ok(g.playing())
+}
 
 /// One whole `pw-dump`, as text.
 ///
@@ -306,8 +337,97 @@ pub fn argv(order: &Order) -> Option<Vec<String>> {
             device.to_string(),
             index.to_string(),
         ],
-        Order::Listen(_) => return None,
+        Order::Listen(_) | Order::Move(_) => return None,
     })
+}
+
+/// What `pw-metadata` is asked, for one move: in the `default` metadata, the
+/// stream's `target.object` is the sink's serial, typed `Spa:Id` — the same
+/// entry WirePlumber writes when it gives a program back its last device
+/// (`node/state-stream.lua`), so the move is also what it remembers for that
+/// program next time.
+///
+/// A SERIAL AND NOT A NAME: WirePlumber reads a name too, but its memory looks
+/// the device up by serial, and a name there would make it forget the device
+/// instead.
+#[must_use]
+pub fn move_argv(m: crate::Move) -> Vec<String> {
+    vec![
+        "--name".to_owned(),
+        "default".to_owned(),
+        m.stream().to_string(),
+        "target.object".to_owned(),
+        m.serial().to_string(),
+        "Spa:Id".to_owned(),
+    ]
+}
+
+/// Sends a playing stream to a device — [`move_argv`], run.
+///
+/// TWO THINGS IN ITS ENVIRONMENT. `PIPEWIRE_DEBUG=E`, because `pw-metadata`
+/// exits 0 when the server refuses: the refusal arrives as an error event
+/// that only its log prints, measured with the pinned 1.6. And `LC_ALL=C`,
+/// because that line carries `strerror` in the locale it runs in.
+///
+/// # Errors
+///
+/// When this build has no `pw-metadata`, the program cannot be run, or the
+/// answer says it did not happen ([`answer_of`]).
+fn send_away(m: crate::Move) -> Result<()> {
+    let program = PW_METADATA.context("this build has no pw-metadata")?;
+    let out = std::process::Command::new(program)
+        .args(move_argv(m))
+        .env("PIPEWIRE_DEBUG", "E")
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .with_context(|| format!("could not run {program}"))?;
+    answer_of(
+        out.status.success(),
+        &String::from_utf8_lossy(&out.stdout),
+        &String::from_utf8_lossy(&out.stderr),
+    )
+    .map_err(anyhow::Error::new)
+}
+
+/// What `pw-metadata`'s answer means, read off what it printed — pure, so the
+/// three ways it fails are tested with no server.
+///
+/// - It did not run to the end (it could not connect): not available.
+/// - The server refused (`set property error`, under `PIPEWIRE_DEBUG=E`):
+///   `res:-2` is a subject that is gone — the program stopped playing between
+///   the reading and the key —, anything else is a refusal.
+/// - It never said `set property:`: there was no `default` metadata to write
+///   to, so nothing was written — not available.
+fn answer_of(ran: bool, said: &str, complained: &str) -> Result<(), Refused> {
+    let words = |text: &str| text.trim().to_owned();
+    if !ran {
+        return Err(Refused {
+            why: Refusal::NotAvailable,
+            said: words(complained),
+        });
+    }
+    if let Some(line) = complained.lines().find(|l| l.contains("error")) {
+        // THE SERVER'S OWN WORDS are after the last `): `, and the error
+        // number before them is what decides — not the sentence.
+        let why = if line.contains("res:-2 ") {
+            Refusal::Gone
+        } else {
+            Refusal::Other
+        };
+        let said = line.rsplit_once("): ").map_or(line, |(_, w)| w);
+        return Err(Refused {
+            why,
+            said: words(said),
+        });
+    }
+    if !said.lines().any(|l| l.starts_with("set property:")) {
+        return Err(Refused {
+            why: Refusal::NotAvailable,
+            said: words(said),
+        });
+    }
+    Ok(())
 }
 
 /// Do one order.
@@ -317,6 +437,9 @@ pub fn argv(order: &Order) -> Option<Vec<String>> {
 /// When this build has no `wpctl`, or the program cannot be run, or it
 /// refuses — and then the error carries [`Refused`] with what it said.
 pub fn carry_out(order: &Order) -> Result<()> {
+    if let Order::Move(m) = order {
+        return send_away(*m);
+    }
     let Some(args) = argv(order) else {
         // The meter is not a `wpctl` order; `watch` handles it before this is
         // reached, and answering "done" here keeps that a fact rather than an
@@ -891,5 +1014,88 @@ mod tests {
         assert_eq!(why_of("Object '83' not found"), Refusal::Gone);
         assert_eq!(why_of("Invalid volume"), Refusal::Invalid);
         assert_eq!(why_of("something else entirely"), Refusal::Other);
+    }
+
+    /// A move out of a reading that lists both ends — the only way one is
+    /// made.
+    fn a_move(stream: u32, sink: u32, serial: u64) -> crate::Move {
+        let s = crate::Snapshot {
+            nodes: vec![
+                crate::Node {
+                    id: stream,
+                    kind: Some(crate::Kind::Playing),
+                    ..crate::Node::default()
+                },
+                crate::Node {
+                    id: sink,
+                    kind: Some(crate::Kind::Sink),
+                    serial: Some(serial),
+                    ..crate::Node::default()
+                },
+            ],
+            ..crate::Snapshot::default()
+        };
+        match s.send(stream, sink) {
+            Some(Order::Move(m)) => m,
+            other => panic!("no move: {other:?}"),
+        }
+    }
+
+    /// FAILS IF: a move writes anything but `target.object` of the STREAM, in
+    /// the `default` metadata, set to the sink's SERIAL typed `Spa:Id` — a
+    /// node id (handed on when the sink goes) or a name (which WirePlumber's
+    /// memory cannot look up) in its place, the sink as the subject, or a
+    /// metadata WirePlumber does not read.
+    #[test]
+    fn a_move_sets_the_streams_target_to_the_sinks_serial() {
+        let m = a_move(120, 70, 1070);
+        assert_eq!(
+            move_argv(m),
+            [
+                "--name",
+                "default",
+                "120",
+                "target.object",
+                "1070",
+                "Spa:Id"
+            ]
+        );
+        // AND `wpctl` IS NOT ASKED: a move has no verb there.
+        assert_eq!(argv(&Order::Move(m)), None);
+    }
+
+    /// FAILS IF: one of the ways `pw-metadata` 1.6 says a move did not happen
+    /// is read as done — the server's refusal, which exits 0 and is said only
+    /// in its log; no `default` metadata, which prints nothing; a server it
+    /// could not reach — or a move that happened is read as refused.
+    #[test]
+    fn what_pw_metadata_answers_is_read_as_it_is() {
+        // MEASURED with the pinned `pw-metadata`, on a subject that is gone.
+        let found = "Found \"default\" metadata 41\n\
+                     set property: id:120 key:target.object value:1070 type:Spa:Id\n";
+        let refused = "[E][20:04:32.933708] default      | [   pw-metadata.c:  147 \
+                       on_core_error()] error id:3 seq:5 res:-2 (No such file or directory): \
+                       set property error for id 120: No such file or directory\n";
+        assert!(answer_of(true, found, "").is_ok());
+        let gone = answer_of(true, found, refused).expect_err("the server refused");
+        assert_eq!(gone.why, Refusal::Gone);
+        assert_eq!(
+            gone.said,
+            "set property error for id 120: No such file or directory"
+        );
+        let other = refused.replace("res:-2 ", "res:-1 ");
+        assert_eq!(
+            answer_of(true, found, &other).map_err(|e| e.why),
+            Err(Refusal::Other)
+        );
+        assert_eq!(
+            answer_of(true, "", "").map_err(|e| e.why),
+            Err(Refusal::NotAvailable),
+            "no metadata named `default`: nothing was written"
+        );
+        assert_eq!(
+            answer_of(false, "", "can't connect: Host is down").map_err(|e| e.why),
+            Err(Refusal::NotAvailable)
+        );
     }
 }

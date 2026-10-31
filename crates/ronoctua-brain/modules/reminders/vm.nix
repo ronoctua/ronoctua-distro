@@ -46,7 +46,7 @@
         assert ["text", {"text": "the alarm of the VM"}] in alarm["args"], alarm["args"]
 
         # NOBODY ANSWERS FOR A MINUTE AND A HALF: it is still there.
-        machine.sleep(90)
+        machine.sleep(duration=datetime.timedelta(seconds=90))
         assert len(alarms()) == 1, "the alarm left by itself"
 
         said = brain({"ask": "dismiss", "module": "reminders", "notice": "due"})

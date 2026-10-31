@@ -49,6 +49,7 @@ pkgs.testers.runNixOSTest {
     ${xvfb.prelude}
 
     import re
+    from datetime import timedelta
 
 
     def journal():
@@ -62,7 +63,7 @@ pkgs.testers.runNixOSTest {
         )
 
 
-    def wait_for(pattern, timeout=60):
+    def wait_for(pattern, timeout=timedelta(minutes=1)):
         # A line of the footer's journal matching `pattern` — and the journal
         # printed when it never comes, so a failure says what happened instead.
         try:
@@ -107,8 +108,8 @@ pkgs.testers.runNixOSTest {
             "--setenv=RUST_LOG=ronoctua_shell=debug "
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
-        wait_for("footer layout resolved", timeout=90)
-        wait_for("control socket opened", timeout=30)
+        wait_for("footer layout resolved", timeout=timedelta(seconds=90))
+        wait_for("control socket opened", timeout=timedelta(seconds=30))
 
     with subtest("a check from the leader lives hidden, and its answer is seen"):
         command("security-check-email")
@@ -127,7 +128,7 @@ pkgs.testers.runNixOSTest {
         # AND THE CHECK'S THREAD came back — a refusal, the VM reaches no
         # host — through the region's own channel, and what came is drawn on
         # the page, which the hidden region asked for and was given.
-        wait_for('a hidden region shown.*region=security', timeout=120)
+        wait_for('a hidden region shown.*region=security', timeout=timedelta(minutes=2))
 
     with subtest("a run by hand with nothing to follow is said, and let go"):
         echoes = count("echo area")

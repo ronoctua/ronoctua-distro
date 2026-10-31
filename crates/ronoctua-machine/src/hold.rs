@@ -1,4 +1,4 @@
-//! `hold <rev>` and `unhold`: the machine stays on the distro revision it
+//! `hold [<rev>]` and `unhold`: the machine stays on the distro revision it
 //! runs, and the update's `flake-update` step leaves the input alone while
 //! the record says so.
 //!
@@ -9,14 +9,22 @@
 //! the one the running system was built from (the lock the profile's system
 //! carries or was kept for it, else the folder's), and the folder's lock is
 //! put back on it if it had moved.
+//!
+//! `hold` with no revision holds that one: what the update's page asks
+//! through the sudo door (`machine-hold`), whose helper hands the machine no
+//! word of the person's process — the revision is the machine's to read,
+//! never one a caller names.
 
 use ronoctua_person::state::Hold;
 
 use crate::{DISTRO_INPUT, Machine, Refusal, Why, disk, guard, is_rev, say, trial};
 
-/// `hold <rev>`.
-pub(crate) fn hold(m: &Machine, rev: &str) -> Result<(), Refusal> {
-    if !is_rev(rev) {
+/// `hold <rev>` — or, with no `rev`, `hold`: the revision that runs, held.
+/// The revision held, whole.
+pub(crate) fn hold(m: &Machine, rev: Option<&str>) -> Result<String, Refusal> {
+    if let Some(rev) = rev
+        && !is_rev(rev)
+    {
         say(
             3,
             &format!("{rev:?} is not a revision (7 to 64 lower-case hex digits)"),
@@ -46,7 +54,9 @@ pub(crate) fn hold(m: &Machine, rev: &str) -> Result<(), Refusal> {
         );
         return Err(Refusal::of(Why::Unreadable));
     };
-    if !locked.starts_with(rev) {
+    if let Some(rev) = rev
+        && !locked.starts_with(rev)
+    {
         say(
             3,
             &format!("this machine runs {locked}; only the revision it runs can be held (held)"),
@@ -58,10 +68,11 @@ pub(crate) fn hold(m: &Machine, rev: &str) -> Result<(), Refusal> {
         say(6, "the lock is put back on the revision that runs");
     }
     state.hold = Some(Hold {
-        rev: locked,
+        rev: locked.clone(),
         since: disk::now(),
     });
-    disk::write_state(p, &state)
+    disk::write_state(p, &state)?;
+    Ok(locked)
 }
 
 /// `unhold`.

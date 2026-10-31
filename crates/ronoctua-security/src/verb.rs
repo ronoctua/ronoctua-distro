@@ -197,6 +197,20 @@ pub enum RootVerb {
     /// other root gesture — never a polkit rule. Started and left to run: the
     /// build takes minutes, and the bar and its turn are not held for them.
     BuildSwitchReference,
+    // THE UPDATE PAGE'S GESTURES ON THE MACHINE (owner, 2026-10-31): each
+    // starts one fixed unit that runs a verb of `ronoctua-machine` with no
+    // word of the person's — the revision held is the one the machine reads
+    // as running, the system tried again the one its record says failed —
+    // and waits for it: the machine's reason for a refusal comes back as a
+    // progress word ([`Said::machine_refused`]) before the verdict.
+    /// Hold the machine on the distro revision it runs
+    /// (`ronoctua-machine hold`, no revision).
+    MachineHold,
+    /// Let go of the hold (`ronoctua-machine unhold`).
+    MachineUnhold,
+    /// Try again, at the next update, the system whose boot trial failed
+    /// (`ronoctua-machine try-again`).
+    MachineTryAgain,
 }
 
 impl RootVerb {
@@ -240,6 +254,9 @@ impl RootVerb {
             }
             Self::BinaryCacheNetrcRemove => vec!["binary-cache-netrc-remove"],
             Self::BuildSwitchReference => vec!["build-switch-reference"],
+            Self::MachineHold => vec!["machine-hold"],
+            Self::MachineUnhold => vec!["machine-unhold"],
+            Self::MachineTryAgain => vec!["machine-try-again"],
             Self::PersonSignerPin { key } => {
                 return vec!["person-signer-pin".to_owned(), key.clone()];
             }
@@ -308,6 +325,9 @@ impl RootVerb {
             }
             ["binary-cache-netrc-remove"] => Self::BinaryCacheNetrcRemove,
             ["build-switch-reference"] => Self::BuildSwitchReference,
+            ["machine-hold"] => Self::MachineHold,
+            ["machine-unhold"] => Self::MachineUnhold,
+            ["machine-try-again"] => Self::MachineTryAgain,
             _ => return None,
         };
         Some(verb)
@@ -474,7 +494,35 @@ impl Said {
     pub const fn is_verdict(&self) -> bool {
         !matches!(self, Self::Step(_))
     }
+
+    /// The progress word that carries a machine gesture's refusal, from what
+    /// `ronoctua-machine` printed on its standard output — its last line,
+    /// `refused <word>` — or `None` when it printed no refusal, or a word in
+    /// no grammar of the machine's (lower-case, digits and `-`). The machine's
+    /// own reason, said in the door that asked ([`Self::machine_refusal`]).
+    /// Pure.
+    #[must_use]
+    pub fn machine_refused(said: &str) -> Option<Self> {
+        let last = said.lines().rev().find(|l| !l.trim().is_empty())?;
+        // A LINE TRIMMED, so the word after `refused ` is never empty.
+        let word = last.trim_end().strip_prefix("refused ")?;
+        // ONE WORD THE STEP'S GRAMMAR CARRIES (lower-case, digits and `-`), or
+        // nothing: a line the door would pass over is no reason at all.
+        let step = format!("{MACHINE_REFUSED}{word}");
+        Self::parse(&format!("step {step}")).map(|_| Self::Step(step))
+    }
+
+    /// The machine's own word for why a gesture was refused, from a progress
+    /// word [`Self::machine_refused`] made; `None` for any other word. Pure.
+    #[must_use]
+    pub fn machine_refusal(step: &str) -> Option<&str> {
+        step.strip_prefix(MACHINE_REFUSED)
+            .filter(|word| !word.is_empty())
+    }
 }
+
+/// What a progress word that carries the machine's refusal starts with.
+const MACHINE_REFUSED: &str = "machine-refused-";
 
 #[cfg(test)]
 mod tests {
@@ -518,6 +566,9 @@ mod tests {
             },
             RootVerb::BinaryCacheNetrcRemove,
             RootVerb::BuildSwitchReference,
+            RootVerb::MachineHold,
+            RootVerb::MachineUnhold,
+            RootVerb::MachineTryAgain,
             RootVerb::PersonSignerPin {
                 key: format!(
                     "{}{}",
@@ -633,6 +684,59 @@ mod tests {
         }
         assert!(RootVerb::BinaryCacheNetrcRemove.needs_a_person());
         assert!(RootVerb::BuildSwitchReference.needs_a_person());
+        // THE MACHINE'S GESTURES TAKE NO WORD: the revision held and the
+        // system tried again are the machine's to read, never a caller's.
+        for wrong in [
+            &["machine-hold", "613862c"][..],
+            &["machine-hold", "--rev", "613862c"],
+            &["machine-unhold", "now"],
+            &["machine-try-again", "/nix/store/x-nixos-system"],
+        ] {
+            assert_eq!(RootVerb::parse(&words(wrong)), None, "{wrong:?}");
+        }
+        for verb in [
+            RootVerb::MachineHold,
+            RootVerb::MachineUnhold,
+            RootVerb::MachineTryAgain,
+        ] {
+            assert!(verb.needs_a_person(), "{verb:?}");
+            assert_eq!(verb.arguments().len(), 1, "{verb:?}");
+        }
+    }
+
+    /// FAILS IF: the machine's reason for refusing a gesture does not cross
+    /// the helper's lines as a progress word and back, a verdict that is no
+    /// refusal is taken for one, or a word outside the machine's grammar
+    /// rides along.
+    #[test]
+    fn the_machines_refusal_crosses_as_a_word() {
+        for (printed, word) in [
+            ("refused busy\n", "busy"),
+            ("refused did-not-boot", "did-not-boot"),
+            ("refused no-failed-trial\n\n", "no-failed-trial"),
+        ] {
+            let said = Said::machine_refused(printed).expect(printed);
+            let line = said.line();
+            let Some(Said::Step(step)) = Said::parse(&line) else {
+                panic!("{line:?} is no step");
+            };
+            assert_eq!(Said::machine_refusal(&step), Some(word), "{printed:?}");
+        }
+        let long = format!("refused {}", "x".repeat(60));
+        for printed in [
+            "",
+            "held at aaaaaaa",
+            "tried again at the next update",
+            "refused ",
+            "refused Busy",
+            "refused busy now",
+            "refused ../../etc",
+            long.as_str(),
+        ] {
+            assert_eq!(Said::machine_refused(printed), None, "{printed:?}");
+        }
+        assert_eq!(Said::machine_refusal("enroll-stage-passed"), None);
+        assert_eq!(Said::machine_refusal("machine-refused-"), None);
     }
 
     /// FAILS IF: a span is said to the helper in a word it reads back as

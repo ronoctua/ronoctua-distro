@@ -35,6 +35,8 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    | `zwp_virtual_keyboard_v1` | teclado na tela (2026-09-25) | `virtual_keys.rs` | `one-virtual-keyboard` |
    | `zwlr_virtual_pointer_v1` | gestos com as mãos (2026-09-25) | `virtual_pointer.rs` | `one-virtual-pointer` |
    | `wp_cursor_shape_v1` | a seta do ponteiro (2026-09-25) | `cursor_shape.rs` | `one-cursor-shape` |
+   | `ext-session-lock-v1` | a tela de bloqueio (2026-10-31) | `session_lock.rs` | `one-session-lock` |
+   | `ext-idle-notify-v1` | o bloqueio sozinho, depois de um tempo sem uso (2026-10-31) | `idle_notify.rs` | `one-idle-notify` |
 
    O `wp_cursor_shape_v1` existe porque uma superfície que não nomeia um cursor herda a última
    imagem do compositor (a de redimensionar a borda). Pede-se uma forma, e não uma imagem, porque
@@ -132,11 +134,12 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
     dock, ícone de desktop nem popup flutuante; tray, notificação e expansão são a mesma superfície
     crescendo, e a barra de alerta máximo (bateria fraca) toma o lugar da faixa enquanto existe. A
     barra do sudo (emenda do dono, 2026-10-11) é a mesma superfície crescendo acima da faixa e da
-    modeline, só enquanto um gesto de root é perguntado (`sudo_bar.rs`). Três exceções aprovadas: a
+    modeline, só enquanto um gesto de root é perguntado (`sudo_bar.rs`). Quatro exceções aprovadas: a
     sobreposição da captura (layer `overlay` até o arquivo ser escrito — `capture.rs`, 2026-09-26); as
     cortinas do redimensionador (`LEADER / r`, duas superfícies `overlay` enquanto ele está ligado —
-    `resizer.rs`, 2026-09-27); e a linha de vida, que ocupa o lugar do rodapé só enquanto ele está
-    morto.
+    `resizer.rs`, 2026-09-27); a linha de vida, que ocupa o lugar do rodapé só enquanto ele está
+    morto; e as superfícies do bloqueio de tela, que cobrem toda tela só enquanto a sessão está
+    bloqueada (`ext-session-lock-v1`, `session_lock.rs`, 2026-10-31).
 15. **Sem sombra e sem elevação.** Card e linha separatória são permitidos, e também colunas lado a
     lado, cada uma com as próprias seleções — uma seleção não precisa ocupar a linha inteira
     (`selection` e `rule` levam `column` e `columns`; `0` = até a borda). Preferir um layout limpo é
@@ -482,7 +485,8 @@ abre fica só no keyring do kernel pela sessão (marcador `runtime/unlocked`), e
 **Uma chave de segurança responde ao sudo, e só a ele**: `pam_u2f` sempre `sufficient`, só no serviço
 `sudo`, atrás de uma porta de terminal, `origin` fixo (`u2f::ORIGIN`), lista do root
 (`u2f::AUTHFILE`), nunca `nouserok`; só o verbo `u2f-keys` da porta a escreve (cobra
-`pam-u2f-is-only-sufficient`). O dedo segue o mesmo molde.
+`pam-u2f-is-only-sufficient`). O dedo segue o mesmo molde no sudo, e abre também a tela bloqueada,
+por um serviço só dele, o dedo sozinho (`ronoctua-unlock-finger`, 2026-10-31).
 
 <!-- anchor: L12 --> **`/private` não se toca num laço de eventos.** Suspenso ao dormir com algo em
 uso, quem o tocar espera no kernel até a senha retomá-lo. Listar/`stat`/vigiar pergunta antes
@@ -588,7 +592,11 @@ caminhos ao `ronoctua_llm::watched`.
   pela vista, que pode fechar antes do `RET`.
 - **Nada fala com a rede antes de a pessoa permitir o host.** Toda requisição leva um `Pass` que só o
   `ronoctua-consent` cunha (do `consent.json`); sem ele a porta desenha a linha de consentimento
-  (`consent_rows`). Uma fonte que a pessoa configurou é o próprio consentimento.
+  (`consent_rows`). Uma fonte que a pessoa configurou é o próprio consentimento. Exceção do dono
+  (2026-10-31): os atualizadores declarados do sistema não passam por ele — o Nix que constrói e o
+  nix-flatpak, que instala e atualiza os Flatpaks declarados, falam com os servidores deles sem
+  `Pass`, porque são a máquina se mantendo na última versão (inv. 6), não um programa nosso
+  pedindo um host.
 - Um evento do sistema é dito no minibuffer (`events.rs`); vira notificação só quando a linha está
   ocupada ou a fila tem quatro, e o corpo diz por quê (`notif-minibuffer-was-busy`).
 
@@ -599,12 +607,12 @@ caminhos ao `ronoctua_llm::watched`.
   (`keymap-no-collision` derruba o build). `LEADER :` alcança qualquer comando pelo nome.
 - **As teclas de um crate são dele** (um `bindings::Contribution` ao lado da vista), juntadas só pelo
   binário (`keymap::CONTRIBUTIONS`; cobra `every-contribution-is-assembled`).
-- Grupos da leader: `s` sistema (`s q` saídas, `s e` segurança, `s o`/`s x` containers/Incus, `s z`
-  instalador, `s v` pertences, `s r` rodapé), `w` janela/buffer (a mesma coisa, inv. 4), `m`
-  miscelânea (`m i` ícones, `m a` contas LLM), `c` clipboard, `d` acesso rápido (`LEADER SPC`
-  flutuando), `=` calculadora, `v` video-metrics, `/` desenvolvimento (`/ r` redimensiona, `/ c`
-  clona o repo), `,` o buffer em foco, `g` o relance (`world-glance`). Em buffer, `, r` é o acorde
-  `C-r`; letra sozinha é texto.
+- Grupos da leader: `s` sistema (`s q` saídas e o bloqueio de tela, `s e` segurança, `s o`/`s x`
+  containers/Incus, `s z` instalador, `s v` pertences, `s r` rodapé), `w` janela/buffer (a mesma
+  coisa, inv. 4), `m` miscelânea (`m i` ícones, `m a` contas LLM), `c` clipboard, `d` acesso rápido
+  (`LEADER SPC` flutuando), `=` calculadora, `v` video-metrics, `/` desenvolvimento (`/ r`
+  redimensiona, `/ c` clona o repo), `,` o buffer em foco, `g` o relance (`world-glance`). Em
+  buffer, `, r` é o acorde `C-r`; letra sozinha é texto.
 - **Três conjuntos**, e a LEADER repetida na raiz anda por eles (`LEADER`/`LEADER LEADER`/`LEADER
   LEADER LEADER` → padrão, janelas, árvore; `bindings::Set::next`). Um toque de `Ctrl`
   (`leader::Tap`) gira os modos das barras; `Alt` não escolhe, e botão/roda/dedo no meio fazem

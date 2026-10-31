@@ -124,6 +124,9 @@ cmd-workspace-previous = Espaço anterior
 cmd-workspace-move-next = Levar a janela para o próximo espaço
 cmd-workspace-move-previous = Levar a janela para o espaço anterior
 echo-capture-failed = A captura não pôde ser feita — o motivo está no log
+# THE LOCK SCREEN could not be started, or refused to lock (no password check
+# on this machine): the session is NOT locked, and the log says why.
+echo-lock-failed = A tela não foi bloqueada — o motivo está no log
 group-window = janela/buffer
 group-terminal = terminal
 group-workspace = workspace
@@ -421,7 +424,6 @@ notif-oom-orphan = Algo fora dos seus buffers foi fechado: { $cgroup }
 
 ## O keymap do buffer em foco
 
-which-buffer = Buffer em foco
 hint-state = Estado: { $state } — clique gira, Esc volta, Esc+setas escolhe
 which-state = Estado do buffer em foco
 
@@ -443,7 +445,6 @@ group-system = sistema
 cmd-rescue-open = Console de resgate
 cmd-apps-pin = Pôr o aplicativo na barra lateral do gerenciador
 files-sidebar-unwritable = não consegui salvar a barra lateral: { $why }
-group-geography = geografia
 # O `c` deixou de ser um comando e virou grupo: o clipboard captura o que se
 # copia, e a tela captura o que se vê.
 group-miscellaneous = diversos
@@ -563,7 +564,6 @@ cmd-brightness-down = Tela mais escura
 cmd-media-play = Tocar, ou pausar
 cmd-media-next = Próxima faixa
 cmd-media-previous = Faixa anterior
-hint-volume = { $device } a { $percent }% — som
 hint-volume-muted = { $device }, mudo — som
 hint-microphone = Algo está ouvindo — som
 sound-muted = mudo

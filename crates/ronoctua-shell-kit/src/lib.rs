@@ -57,6 +57,9 @@ pub mod key;
 pub mod keyboard;
 pub mod language;
 pub mod line;
+// WHETHER THE SCREEN LOCKS BY ITSELF (`lock.json`): the footer arms it, the
+// security centre offers it.
+pub mod lock_choice;
 // The pure half of the brain bridge — the daemon's records turned into the
 // WIT's — which `ronoctua-render-png` links without the footer's line.
 pub mod mind_wire;

@@ -1156,6 +1156,21 @@ pub const COMMANDS: &[ronoctua_cmd::Command] = &[
         id: crate::parts::MIRRORS,
         label: key::CMD_DISTRO_PARTS_MIRRORS,
     },
+    // THE MACHINE'S OWN GESTURES (`crate::machine_gesture`), which the
+    // records' rows ask: by name too, so the keyboard reaches them — each
+    // opens the view on its question, the no first.
+    ronoctua_cmd::Command {
+        id: crate::machine_gesture::TRY_AGAIN,
+        label: key::CMD_MACHINE_TRY_AGAIN,
+    },
+    ronoctua_cmd::Command {
+        id: crate::machine_gesture::HOLD,
+        label: key::CMD_MACHINE_HOLD,
+    },
+    ronoctua_cmd::Command {
+        id: crate::machine_gesture::LET_GO,
+        label: key::CMD_MACHINE_LET_GO,
+    },
 ];
 
 /// `LEADER s u` — THE UPDATE, a group under SYSTEM, beside the memory panel
@@ -1202,6 +1217,12 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
         crate::parts::IMPORT,
         crate::parts::EXPORT,
         crate::parts::MIRRORS,
+        // THE MACHINE'S OWN GESTURES (`crate::machine_gesture`): the records'
+        // rows ask them, and so does their name — a key of each would ask
+        // about a hold or a failed trial the page may not have.
+        crate::machine_gesture::TRY_AGAIN,
+        crate::machine_gesture::HOLD,
+        crate::machine_gesture::LET_GO,
     ],
     ..crate::bindings::Contribution::NONE
 };
@@ -1222,6 +1243,8 @@ pub enum Order {
     Follow,
     /// One of the parts' page's commands (`crate::parts`), by its id.
     Parts(&'static str),
+    /// A gesture of the machine's (`crate::machine_gesture`): its question.
+    Machine(crate::machine_gesture::Gesture),
 }
 
 /// Which of the update's commands an id is — the one question the footer asks
@@ -1243,7 +1266,7 @@ pub fn order_of(id: &str) -> Option<Order> {
         crate::parts::IMPORT => Some(Order::Parts(crate::parts::IMPORT)),
         crate::parts::EXPORT => Some(Order::Parts(crate::parts::EXPORT)),
         crate::parts::MIRRORS => Some(Order::Parts(crate::parts::MIRRORS)),
-        _ => None,
+        other => crate::machine_gesture::Gesture::of_command(other).map(Order::Machine),
     }
 }
 
@@ -1377,6 +1400,12 @@ pub enum Errand {
     /// What the parts' page asks of the door: a question on its line, a
     /// sentence, a gesture for the machine (`crate::parts::carry`).
     Parts(crate::parts::Errand),
+    /// A gesture of the machine's, said yes to on the page: asked again in
+    /// the sudo bar through the door's gate, and what came of it said in the
+    /// door (`crate::machine_gesture`).
+    Machine(crate::machine_gesture::Gesture),
+    /// A sentence of this crate's, said in the door.
+    Say(&'static str),
     /// The view closes.
     Close,
 }
@@ -1399,6 +1428,12 @@ pub enum Target {
     Page(usize),
     /// An answer of the binary cache page's grave question — `true` is yes.
     PageAnswer(bool),
+    /// A gesture of the machine's the records offer: a click asks it there,
+    /// under the hand — the no first (`crate::machine_gesture`).
+    Gesture(crate::machine_gesture::Gesture),
+    /// An answer to a gesture's question — `true` is yes: a click picks it,
+    /// and a click on the pick answers.
+    GestureAnswer(bool),
 }
 
 /// What a question of the view is about: what a run asked for BY HAND would
@@ -1472,6 +1507,12 @@ pub struct View {
     parts: Option<PartsPage>,
     /// The door's wake, for the file picker the parts' page brings up.
     wake: Waking,
+    /// The question about a gesture of the machine's, while it is asked —
+    /// drawn where the gesture's row was, under the hand that clicked it.
+    gesture: Option<crate::machine_gesture::Question>,
+    /// A gesture said yes to whose verdict has not come: its row takes no
+    /// click meanwhile.
+    gesture_asked: Option<crate::machine_gesture::Gesture>,
 }
 
 /// The parts' page as the view holds it: the page, what it read, where it
@@ -1588,6 +1629,8 @@ impl View {
             follow: None,
             parts: None,
             wake: Waking::default(),
+            gesture: None,
+            gesture_asked: None,
         }
     }
 
@@ -2261,6 +2304,64 @@ impl View {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // THE MACHINE'S OWN GESTURES (`crate::machine_gesture`)
+    // -----------------------------------------------------------------------
+
+    /// The question about a gesture of the machine's, while it is asked.
+    #[must_use]
+    pub const fn gesture_question(&self) -> Option<&crate::machine_gesture::Question> {
+        self.gesture.as_ref()
+    }
+
+    /// A gesture asked by its name (`LEADER :`): its question, the no first
+    /// — when the records offer it now; otherwise the sentence of why not.
+    pub fn ask_gesture(&mut self, what: crate::machine_gesture::Gesture) -> Errand {
+        if let Some(why) = self.why_not(what) {
+            return Errand::Say(why);
+        }
+        if self.asking.is_some() || self.gesture_asked.is_some() {
+            return Errand::Nothing;
+        }
+        self.gesture = Some(crate::machine_gesture::Question::of(what));
+        Errand::Moved
+    }
+
+    /// Why the records do not offer `what` now — `None` when they do.
+    fn why_not(&self, what: crate::machine_gesture::Gesture) -> Option<&'static str> {
+        use crate::machine_gesture::Gesture;
+        let r = &self.records;
+        match what {
+            Gesture::TryAgain if r.trial != Some(module::TrialOutcome::Failed) => {
+                Some(key::MACHINE_REFUSED_NO_FAILED_TRIAL)
+            }
+            Gesture::TryAgain if r.again => Some(key::MACHINE_SAID_TRY_AGAIN),
+            Gesture::Hold if r.hold.is_some() => Some(key::MACHINE_SAID_HELD_ALREADY),
+            Gesture::Hold if r.revision.is_none() => Some(key::MACHINE_SAID_NOTHING_TO_HOLD),
+            Gesture::LetGo if r.hold.is_none() => Some(key::MACHINE_SAID_NOT_HELD),
+            _ => None,
+        }
+    }
+
+    /// The gesture's question answered: it closes, and a yes asks the
+    /// machine — its row taking no click until the verdict comes.
+    fn gesture_answered(&mut self, yes: bool) -> Errand {
+        let Some(q) = self.gesture.take() else {
+            return Errand::Nothing;
+        };
+        if !yes {
+            return Errand::Moved;
+        }
+        self.gesture_asked = Some(q.what);
+        Errand::Machine(q.what)
+    }
+
+    /// What came of the gesture said yes to was heard: its row takes clicks
+    /// again (the records are read again when their files move).
+    pub const fn gesture_heard(&mut self) {
+        self.gesture_asked = None;
+    }
+
     /// The declared steps.
     #[must_use]
     pub const fn steps(&self) -> &'static [ronoctua_brain::Step] {
@@ -2433,6 +2534,22 @@ impl View {
                 return self.page_errand(e);
             }
         }
+        // A GESTURE'S QUESTION TAKES THE ARROWS, `RET` AND `Esc` while it is
+        // asked, as the run's does: "no" above, "yes" below, `Esc` the "no".
+        if let Some(q) = self.gesture.as_mut() {
+            match press {
+                Press::Up | Press::Down => {
+                    q.moved(press == Press::Down);
+                    return Errand::Moved;
+                }
+                Press::Enter => {
+                    let yes = q.yes();
+                    return self.gesture_answered(yes);
+                }
+                Press::Escape => return self.gesture_answered(false),
+                _ => {}
+            }
+        }
         // THE QUESTION TAKES THE ARROWS, `RET` AND `Esc` while it is asked:
         // two answers, "no" above and "yes" below, and `Esc` is the "no".
         if let Some(q) = self.asking.as_mut() {
@@ -2585,13 +2702,23 @@ impl View {
         // A LINE OF AIR between what the cursor's step is and what the
         // machine's records say: two subjects, and hierarchy is colour and
         // air, never size. Only when there is a record to say.
-        let records = record_sentences(&self.records, &self.belongings_keys, texts);
+        let records = self.record_sentences(texts);
         if !records.is_empty() && !out.is_empty() {
             out.push(line(String::new(), tokens::color::TEXT_SECONDARY, None));
         }
-        for (said, color, target) in records {
-            for wrapped in crate::chrome::note_lines(&said, room) {
-                out.push(line(wrapped, color, target));
+        for said in records {
+            // A SENTENCE IS WRAPPED WHOLE; an answer is one line, as the
+            // run's question draws its answers.
+            if said.whole {
+                for wrapped in crate::chrome::note_lines(&said.text, room) {
+                    out.push(line(wrapped, said.color, said.target));
+                }
+            } else {
+                out.push(line(
+                    layout::elide_end(&said.text, room),
+                    said.color,
+                    said.target,
+                ));
             }
         }
         out
@@ -2640,6 +2767,13 @@ impl View {
                 .position(|l| l.row == Some(cursor))
                 .unwrap_or(0);
             return head.len() + below;
+        }
+        if let Some(q) = self.gesture.as_ref()
+            && let Some(n) = head
+                .iter()
+                .position(|l| l.target == Some(Target::GestureAnswer(q.yes())))
+        {
+            return n;
         }
         if let Some(q) = self.asking
             && let Some(n) = head
@@ -2721,6 +2855,7 @@ impl View {
                 // while no question holds the cursor.
                 if at == self.cursor
                     && self.asking.is_none()
+                    && self.gesture.is_none()
                     && let Some(name) = pieces.last_mut()
                 {
                     name.color = crate::chrome::Kind::ListedFact.tones(true).0;
@@ -2831,79 +2966,227 @@ impl View {
                 }
                 None => Errand::Nothing,
             },
+            // A GESTURE OF THE MACHINE'S: the click asks it, where its row
+            // was — the no first, the cursor born there. Asking is not doing:
+            // the yes is the second click, on the pick, and the sudo bar's.
+            Target::Gesture(what) => {
+                if self.gesture.is_some() || self.asking.is_some() || self.gesture_asked.is_some() {
+                    return Errand::Nothing;
+                }
+                self.gesture = Some(crate::machine_gesture::Question::of(what));
+                Errand::Moved
+            }
+            Target::GestureAnswer(yes) => {
+                let Some(q) = self.gesture.as_mut() else {
+                    return Errand::Nothing;
+                };
+                if q.clicked(yes) {
+                    self.gesture_answered(yes)
+                } else {
+                    Errand::Moved
+                }
+            }
+        }
+    }
+
+    /// What the machine's records say, as sentences: the belongings'
+    /// conflicts (a click opens them), a new system that waits for the next
+    /// restart, the boot trial or why there is none, and a hold — each only
+    /// when it is there, in the colour of what it costs. And the gestures
+    /// they offer, where each one's sentence is: the failed trial's, tried
+    /// again at the next update (or the sentence that it is); the hold's,
+    /// which a click lets go; and, not held, the revision a hold would keep
+    /// — each a click that asks, or its question while it is asked.
+    fn record_sentences(&self, texts: &ronoctua_i18n::Texts) -> Vec<RecordLine> {
+        use crate::machine_gesture::Gesture;
+        let r = &self.records;
+        let note = |text: String, color, target| RecordLine {
+            text,
+            color,
+            target,
+            whole: true,
+        };
+        let mut out = Vec::new();
+        if r.conflicts > 0 {
+            out.push(note(
+                texts.t_args(
+                    module::key::SYSTEM_UPDATE_RECORDS_CONFLICTS,
+                    &[
+                        (
+                            "count",
+                            ronoctua_i18n::Arg::Number(
+                                i64::try_from(r.conflicts).unwrap_or(i64::MAX),
+                            ),
+                        ),
+                        ("keys", ronoctua_i18n::Arg::Text(&self.belongings_keys)),
+                    ],
+                ),
+                tokens::color::STATE_WARNING,
+                Some(Target::Belongings),
+            ));
+        }
+        // A SYSTEM SET FOR THE NEXT BOOT: the update did its work, and the
+        // machine uses it from the restart — said before the trial that guards
+        // that restart, and promising its way back only when one is armed.
+        if let Some(next) = &r.staged {
+            out.push(note(
+                texts.t(if next.guarded {
+                    module::key::SYSTEM_UPDATE_RECORDS_STAGED
+                } else {
+                    module::key::SYSTEM_UPDATE_RECORDS_STAGED_UNGUARDED
+                }),
+                tokens::color::STATE_WARNING,
+                None,
+            ));
+        }
+        if let Some(outcome) = r.trial {
+            let color = match outcome {
+                module::TrialOutcome::Failed => tokens::color::STATE_ERROR,
+                _ => tokens::color::TEXT_SECONDARY,
+            };
+            out.push(note(texts.t(trial_key(outcome)), color, None));
+            // THE SYSTEM THAT DID NOT START, tried again at the next update —
+            // asked here, or said to be, with the key that updates now.
+            if outcome == module::TrialOutcome::Failed {
+                if r.again {
+                    out.push(note(
+                        texts.t_with(
+                            key::MACHINE_TRY_AGAIN_ASKED,
+                            &[("keys", &view_key_of(START))],
+                        ),
+                        tokens::color::TEXT_SECONDARY,
+                        None,
+                    ));
+                } else {
+                    self.gesture_lines(
+                        Gesture::TryAgain,
+                        key::MACHINE_TRY_AGAIN_ROW,
+                        &[],
+                        texts,
+                        &mut out,
+                    );
+                }
+            }
+        }
+        if let Some(why) = r.no_trial {
+            out.push(note(
+                texts.t(no_trial_key(why)),
+                tokens::color::TEXT_SECONDARY,
+                None,
+            ));
+        }
+        if let Some(hold) = &r.hold {
+            // THE REVISION AS GIT ABBREVIATES IT, and the day it was held: the
+            // record's whole stamp is a machine's way of writing a date. The
+            // sentence is the let-go's control, with the row under it.
+            let rev: String = hold.rev.chars().take(REV_SHOWN).collect();
+            let since = hold.since.split('T').next().unwrap_or_default();
+            let lets_go = self
+                .gesture_takes(Gesture::LetGo)
+                .then_some(Target::Gesture(Gesture::LetGo));
+            out.push(note(
+                texts.t_with(
+                    module::key::SYSTEM_UPDATE_RECORDS_HOLD,
+                    &[("rev", &rev), ("since", since)],
+                ),
+                tokens::color::TEXT_SECONDARY,
+                lets_go,
+            ));
+            self.gesture_lines(
+                Gesture::LetGo,
+                key::MACHINE_LET_GO_ROW,
+                &[],
+                texts,
+                &mut out,
+            );
+        } else if let Some(rev) = &r.revision {
+            let rev: String = rev.chars().take(REV_SHOWN).collect();
+            self.gesture_lines(
+                Gesture::Hold,
+                key::MACHINE_HOLD_ROW,
+                &[("rev", &rev)],
+                texts,
+                &mut out,
+            );
+        }
+        out
+    }
+
+    /// Whether `what`'s row takes a click now: no question is asked — the
+    /// run's or a gesture's — and no gesture waits for its verdict.
+    fn gesture_takes(&self, what: crate::machine_gesture::Gesture) -> bool {
+        self.asking.is_none()
+            && self.gesture.is_none()
+            && self.gesture_asked.is_none()
+            && self.why_not(what).is_none()
+    }
+
+    /// A gesture's row, `row` said with `args` — or, while it is asked, its
+    /// question in its place: the sentence, then "no" and "yes", the cursor's
+    /// answer in the cursor's colour and the yes in the colour of what it
+    /// costs.
+    fn gesture_lines(
+        &self,
+        what: crate::machine_gesture::Gesture,
+        row: &'static str,
+        args: &[(&str, &str)],
+        texts: &ronoctua_i18n::Texts,
+        out: &mut Vec<RecordLine>,
+    ) {
+        let acts = crate::chrome::Kind::Setting.tones(false).0;
+        match self.gesture.as_ref().filter(|q| q.what == what) {
+            Some(q) => {
+                out.push(RecordLine {
+                    text: texts.t(what.question_key()),
+                    color: tokens::color::TEXT_PRIMARY,
+                    target: None,
+                    whole: true,
+                });
+                for yes in [false, true] {
+                    let color = if q.yes() == yes {
+                        tokens::color::TEXT_HERE_ACTS
+                    } else if yes {
+                        tokens::color::STATE_WARNING
+                    } else {
+                        acts
+                    };
+                    out.push(RecordLine {
+                        text: texts.t(what.answer_key(yes)),
+                        color,
+                        target: Some(Target::GestureAnswer(yes)),
+                        whole: false,
+                    });
+                }
+            }
+            None => out.push(RecordLine {
+                text: texts.t_with(row, args),
+                color: acts,
+                target: self.gesture_takes(what).then_some(Target::Gesture(what)),
+                whole: true,
+            }),
         }
     }
 }
 
-/// What the machine's records say, as sentences: the belongings' conflicts
-/// (a click opens them), a new system that waits for the next restart, the
-/// boot trial or why there is none, and a hold — each only when it is
-/// there, in the colour of what it costs.
-fn record_sentences(
-    r: &module::Records,
-    belongings_keys: &str,
-    texts: &ronoctua_i18n::Texts,
-) -> Vec<(String, tokens::Color, Option<Target>)> {
-    let mut out = Vec::new();
-    if r.conflicts > 0 {
-        out.push((
-            texts.t_args(
-                module::key::SYSTEM_UPDATE_RECORDS_CONFLICTS,
-                &[
-                    (
-                        "count",
-                        ronoctua_i18n::Arg::Number(i64::try_from(r.conflicts).unwrap_or(i64::MAX)),
-                    ),
-                    ("keys", ronoctua_i18n::Arg::Text(belongings_keys)),
-                ],
-            ),
-            tokens::color::STATE_WARNING,
-            Some(Target::Belongings),
-        ));
-    }
-    // A SYSTEM SET FOR THE NEXT BOOT: the update did its work, and the
-    // machine uses it from the restart — said before the trial that guards
-    // that restart, and promising its way back only when one is armed.
-    if let Some(next) = &r.staged {
-        out.push((
-            texts.t(if next.guarded {
-                module::key::SYSTEM_UPDATE_RECORDS_STAGED
-            } else {
-                module::key::SYSTEM_UPDATE_RECORDS_STAGED_UNGUARDED
-            }),
-            tokens::color::STATE_WARNING,
-            None,
-        ));
-    }
-    if let Some(outcome) = r.trial {
-        let color = match outcome {
-            module::TrialOutcome::Failed => tokens::color::STATE_ERROR,
-            _ => tokens::color::TEXT_SECONDARY,
-        };
-        out.push((texts.t(trial_key(outcome)), color, None));
-    }
-    if let Some(why) = r.no_trial {
-        out.push((
-            texts.t(no_trial_key(why)),
-            tokens::color::TEXT_SECONDARY,
-            None,
-        ));
-    }
-    if let Some(hold) = &r.hold {
-        // THE REVISION AS GIT ABBREVIATES IT, and the day it was held: the
-        // record's whole stamp is a machine's way of writing a date.
-        let rev: String = hold.rev.chars().take(REV_SHOWN).collect();
-        let since = hold.since.split('T').next().unwrap_or_default();
-        out.push((
-            texts.t_with(
-                module::key::SYSTEM_UPDATE_RECORDS_HOLD,
-                &[("rev", &rev), ("since", since)],
-            ),
-            tokens::color::TEXT_SECONDARY,
-            None,
-        ));
-    }
-    out
+/// One thing the machine's records say: a sentence wrapped whole, or a
+/// question's answer on a line of its own — with what a click on it takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordLine {
+    text: String,
+    color: tokens::Color,
+    target: Option<Target>,
+    /// A sentence, wrapped whole; otherwise one line, elided.
+    whole: bool,
+}
+
+/// The view's own key for `command` (`OF_THE_VIEW`), as a key is drawn —
+/// taught by a sentence, never written in one.
+fn view_key_of(command: &str) -> String {
+    OF_THE_VIEW
+        .iter()
+        .find(|(_, id)| *id == command)
+        .map(|(notation, _)| (*notation).to_owned())
+        .unwrap_or_default()
 }
 
 /// How many hex digits of a held revision are drawn — git's own short form.
@@ -2926,6 +3209,7 @@ pub fn refusal_key(word: &str) -> Option<&'static str> {
         Why::DidNotBoot => key::MACHINE_REFUSED_DID_NOT_BOOT,
         Why::LastGoodWouldFallOut => key::MACHINE_REFUSED_LAST_GOOD_WOULD_FALL_OUT,
         Why::Held => key::MACHINE_REFUSED_HELD,
+        Why::NoFailedTrial => key::MACHINE_REFUSED_NO_FAILED_TRIAL,
         Why::Unreadable => key::MACHINE_REFUSED_UNREADABLE,
         Why::Failed => key::MACHINE_REFUSED_FAILED,
     })
@@ -3186,8 +3470,10 @@ usage: ronoctua-shell photograph --door update-scene --scene <file> [options] [s
                            \"said\": \"<a line>\\n…\",
                            \"records\": {\"conflicts\": 2,
                              \"held\": [{\"id\": \"nix:hello\", \"why\": \"build-failed\"}],
-                             \"trial\": \"failed\", \"no-trial\": \"not-in-menu\",
-                             \"hold\": {\"rev\": \"<hex>\", \"since\": \"<stamp>\"}},
+                             \"trial\": \"failed\", \"again\": false,
+                             \"no-trial\": \"not-in-menu\",
+                             \"hold\": {\"rev\": \"<hex>\", \"since\": \"<stamp>\"},
+                             \"revision\": \"<hex>\"},
                            \"battery\": {\"discharging\": true, \"percent\": 20},
                            \"metered\": true,
                            \"keys\": \"SUPER s v\",
@@ -3359,9 +3645,14 @@ Steps — walked in the order they appear:
     struct Records {
         conflicts: usize,
         trial: Option<module::TrialOutcome>,
+        /// The failed trial's system is tried again at the next update.
+        again: bool,
         no_trial: Option<module::NoTrial>,
         staged: bool,
         hold: Option<Hold>,
+        /// The distro revision the machine directory's lock names: what a
+        /// hold would hold.
+        revision: Option<String>,
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -3526,6 +3817,8 @@ Steps — walked in the order they appear:
         let records = module::Records {
             conflicts: scene.records.conflicts,
             trial: scene.records.trial,
+            again: scene.records.again,
+            revision: scene.records.revision,
             no_trial: scene.records.no_trial,
             // THE SYSTEM THAT WAITS, as a scene says it: guarded unless the
             // scene says why no trial could be armed.
@@ -4174,8 +4467,12 @@ impl Content for UpdateWindow {
             // is the output's, below the table, so no column of these rows is
             // a bar's.
             // WHILE THE QUESTION ON BATTERY IS ASKED the cursor is on its
-            // answers, and no step wears the cursor's band.
-            let band = if row == self.open.view.cursor() && self.open.view.asking().is_none() {
+            // answers, and no step wears the cursor's band — nor while a
+            // gesture of the machine's is asked.
+            let band = if row == self.open.view.cursor()
+                && self.open.view.asking().is_none()
+                && self.open.view.gesture_question().is_none()
+            {
                 Some(tokens::color::SURFACE_SELECTION)
             } else {
                 canvas
@@ -4765,9 +5062,13 @@ mod tests {
         }
         // THE UPDATE'S THREE, the binary cache's five (its page's door, its
         // questions and root's netrc — whose password the sudo bar asks),
-        // the door of the page of the apps that follow their releases, and
-        // the parts' five (its door and its four questions).
-        assert_eq!(COMMANDS.len(), 14);
+        // the door of the page of the apps that follow their releases, the
+        // parts' five (its door and its four questions), and the machine's
+        // three gestures, which the records' rows ask.
+        assert_eq!(COMMANDS.len(), 17);
+        for what in crate::machine_gesture::Gesture::ALL {
+            assert_eq!(order_of(what.command()), Some(Order::Machine(what)));
+        }
         assert_eq!(order_of(crate::follow::OPEN), Some(Order::Follow));
         assert_eq!(
             order_of(crate::parts::OPEN),
@@ -5306,6 +5607,8 @@ mod tests {
         module::Records {
             conflicts: 2,
             trial: Some(module::TrialOutcome::Failed),
+            again: false,
+            revision: Some("613862c5a0ff".to_owned()),
             no_trial: Some(module::NoTrial::NotInMenu),
             staged: Some(module::NextBoot {
                 toplevel: "/nix/store/00000000000000000000000000000002-nixos-system-c".to_owned(),
@@ -5925,5 +6228,251 @@ mod tests {
             !w.open.view.page_open(),
             "the page's own `d` goes back to the steps"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // THE MACHINE'S OWN GESTURES (`crate::machine_gesture`)
+    // -----------------------------------------------------------------------
+
+    use crate::machine_gesture::Gesture;
+
+    /// What each record's head line takes, with its text.
+    fn takes(v: &View, t: &ronoctua_i18n::Texts) -> Vec<(String, Option<Target>)> {
+        v.top_lines(200, t)
+            .into_iter()
+            .map(|l| (l.text, l.target))
+            .collect()
+    }
+
+    /// A machine whose last trial failed, not held, on a revision.
+    fn failed_unheld() -> module::Records {
+        module::Records {
+            trial: Some(module::TrialOutcome::Failed),
+            revision: Some("613862c5a0ff613862c5a0ff".to_owned()),
+            ..module::Records::default()
+        }
+    }
+
+    /// FAILS IF: a gesture's row is drawn where the records do not offer it
+    /// — a try-again with no failed trial or once it was asked, a hold on a
+    /// machine with no revision or already held, a let-go of no hold — or
+    /// missing where they do; a row is drawn without the click it takes; the
+    /// hold's own sentence does not let go; or a row says a key, a revision
+    /// or a word that is not there, in either language.
+    #[test]
+    fn the_records_offer_each_gesture_where_its_sentence_is() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            let offered = |r: module::Records| {
+                let v = a_view().with_records(r, String::new());
+                let lines = takes(&v, &t);
+                for (text, _) in &lines {
+                    assert!(!text.contains('['), "{language}: {text}");
+                }
+                let mut gestures: Vec<Gesture> = lines
+                    .iter()
+                    .filter_map(|(_, target)| match target {
+                        Some(Target::Gesture(g)) => Some(*g),
+                        _ => None,
+                    })
+                    .collect();
+                gestures.dedup();
+                (gestures, lines)
+            };
+            // FAILED, NOT HELD: try it again, and hold the revision it has.
+            let (gestures, lines) = offered(failed_unheld());
+            assert_eq!(gestures, [Gesture::TryAgain, Gesture::Hold], "{language}");
+            let failed_at = lines
+                .iter()
+                .position(|(text, _)| *text == t.t(key::MACHINE_TRIAL_FAILED))
+                .expect("the failure is said");
+            assert_eq!(
+                lines[failed_at + 1].1,
+                Some(Target::Gesture(Gesture::TryAgain)),
+                "the try-again is not under the failure's sentence"
+            );
+            let hold = lines
+                .iter()
+                .find(|(_, target)| *target == Some(Target::Gesture(Gesture::Hold)))
+                .expect("a hold row");
+            assert!(
+                hold.0.contains("613862c ") || hold.0.contains("613862c:"),
+                "{}",
+                hold.0
+            );
+            assert!(
+                !hold.0.contains("613862c5"),
+                "the revision was not shortened"
+            );
+            // ASKED ALREADY: no row, the sentence that it is tried again, with
+            // the view's own key that updates now.
+            let (gestures, lines) = offered(module::Records {
+                again: true,
+                ..failed_unheld()
+            });
+            assert_eq!(gestures, [Gesture::Hold]);
+            let asked = t.t_with(key::MACHINE_TRY_AGAIN_ASKED, &[("keys", "u")]);
+            assert!(
+                lines
+                    .iter()
+                    .any(|(text, target)| *text == asked && target.is_none()),
+                "{language}: {lines:?}"
+            );
+            // HELD: the hold's sentence and the row under it let go; nothing
+            // offers to hold.
+            let (gestures, lines) = offered(module::Records {
+                trial: Some(module::TrialOutcome::Good),
+                hold: Some(module::HeldAt {
+                    rev: "613862c5a0ff".to_owned(),
+                    since: "2026-10-05T12:00:00Z".to_owned(),
+                }),
+                ..failed_unheld()
+            });
+            assert_eq!(gestures, [Gesture::LetGo]);
+            let letting_go = lines
+                .iter()
+                .filter(|(_, target)| *target == Some(Target::Gesture(Gesture::LetGo)))
+                .count();
+            assert!(
+                letting_go >= 2,
+                "{language}: the hold's sentence does not let go: {lines:?}"
+            );
+            // NO REVISION, NOTHING FAILED: nothing is offered at all.
+            let (gestures, _) = offered(module::Records::default());
+            assert!(gestures.is_empty(), "{gestures:?}");
+        }
+    }
+
+    /// FAILS IF: a click on a gesture's row does anything but ask, there —
+    /// its question with the `no` first and the cursor born on it; the
+    /// first click on an answer answers; another gesture takes a click
+    /// while one is asked or waits for its verdict; a key does not walk and
+    /// answer it as the run's question does; or the footer's region draws
+    /// another question than the window.
+    #[test]
+    fn a_gesture_asks_first_with_the_no_first_and_the_second_click_answers() {
+        let t = texts();
+        let mut v = a_view().with_records(failed_unheld(), String::new());
+        assert_eq!(v.clicked(Target::Gesture(Gesture::TryAgain)), Errand::Moved);
+        let lines = v.top_lines(200, &t);
+        let question = lines
+            .iter()
+            .position(|l| l.text == t.t(key::MACHINE_TRY_AGAIN_QUESTION))
+            .expect("the question is asked");
+        assert_eq!(
+            lines[question + 1].target,
+            Some(Target::GestureAnswer(false))
+        );
+        assert_eq!(
+            lines[question + 1].color,
+            tokens::color::TEXT_HERE_ACTS,
+            "the cursor is not born on no"
+        );
+        assert_eq!(
+            lines[question + 2].target,
+            Some(Target::GestureAnswer(true))
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| matches!(l.target, Some(Target::Gesture(_)))),
+            "another gesture takes a click while one is asked"
+        );
+        // THE FOOTER'S REGION ASKS THE SAME, its cursor on the answer — and no
+        // step wears the cursor meanwhile.
+        let rows = v.region_rows(0, usize::MAX, 200, &t);
+        let cursor = v.region_cursor(200, &t);
+        assert_eq!(rows[cursor].target, Some(Target::GestureAnswer(false)));
+        let accent = crate::chrome::Kind::ListedFact.tones(true).0;
+        assert!(
+            !rows
+                .iter()
+                .any(|r| matches!(r.target, Some(Target::Step(_)))
+                    && r.fields.iter().any(|f| f.color == accent)),
+            "a step wears the cursor while a gesture is asked"
+        );
+        // THE BORN CURSOR IS THE SCREEN'S: one click picks, the next says no.
+        assert_eq!(v.clicked(Target::GestureAnswer(false)), Errand::Moved);
+        assert!(v.gesture_question().is_some(), "the first click answered");
+        assert_eq!(v.clicked(Target::GestureAnswer(false)), Errand::Moved);
+        assert!(v.gesture_question().is_none(), "no did not close it");
+        // YES: picked, then answered — and the machine is asked.
+        assert_eq!(v.clicked(Target::Gesture(Gesture::TryAgain)), Errand::Moved);
+        assert_eq!(v.clicked(Target::GestureAnswer(true)), Errand::Moved);
+        assert_eq!(
+            v.clicked(Target::GestureAnswer(true)),
+            Errand::Machine(Gesture::TryAgain)
+        );
+        // WAITING FOR THE VERDICT, no row takes a click.
+        assert!(
+            !takes(&v, &t)
+                .iter()
+                .any(|(_, x)| matches!(x, Some(Target::Gesture(_)))),
+            "a row takes a click while the verdict is awaited"
+        );
+        assert_eq!(v.clicked(Target::Gesture(Gesture::Hold)), Errand::Nothing);
+        v.gesture_heard();
+        // BY KEY: down picks yes, `RET` answers; `Esc` is the no.
+        assert_eq!(v.clicked(Target::Gesture(Gesture::Hold)), Errand::Moved);
+        assert_eq!(v.key(Press::Down), Errand::Moved);
+        assert_eq!(v.key(Press::Enter), Errand::Machine(Gesture::Hold));
+        v.gesture_heard();
+        assert_eq!(v.ask_gesture(Gesture::Hold), Errand::Moved);
+        assert_eq!(v.key(Press::Escape), Errand::Moved);
+        assert!(v.gesture_question().is_none());
+        // BY NAME, only what the records offer — or why not.
+        assert_eq!(
+            v.ask_gesture(Gesture::LetGo),
+            Errand::Say(key::MACHINE_SAID_NOT_HELD)
+        );
+        let mut quiet = a_view();
+        assert_eq!(
+            quiet.ask_gesture(Gesture::TryAgain),
+            Errand::Say(key::MACHINE_REFUSED_NO_FAILED_TRIAL)
+        );
+        assert_eq!(
+            quiet.ask_gesture(Gesture::Hold),
+            Errand::Say(key::MACHINE_SAID_NOTHING_TO_HOLD)
+        );
+    }
+
+    /// FAILS IF: the window does not take a gesture's row where it draws it,
+    /// or a photograph's yes reaches root instead of being kept.
+    #[test]
+    fn a_photographs_gesture_is_asked_where_it_is_drawn_and_reaches_nothing() {
+        let mut w = photographed(&[], "");
+        w.open.view = w
+            .open
+            .view
+            .clone()
+            .with_records(failed_unheld(), String::new());
+        let mut ui = Ui::for_tests(texts());
+        ui.lines = 40;
+        w.measure(&ui);
+        let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let at = |w: &UpdateWindow, ui: &Ui, wanted: Target| {
+            (0..ui.lines)
+                .map(|line| (f64::from(line) + 0.5) * line_px)
+                .find(|y| w.target_at(ui, 40.0, *y) == Some(wanted))
+                .expect("the row is taken where it is drawn")
+        };
+        let y = at(&w, &ui, Target::Gesture(Gesture::TryAgain));
+        let errand = w
+            .open
+            .view
+            .clicked(w.target_at(&ui, 40.0, y).expect("a target"));
+        w.apply(&mut ui, errand);
+        for _ in 0..2 {
+            let y = at(&w, &ui, Target::GestureAnswer(true));
+            let errand = w
+                .open
+                .view
+                .clicked(w.target_at(&ui, 40.0, y).expect("a target"));
+            w.apply(&mut ui, errand);
+        }
+        let kept = w.would_have();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert!(kept[0].contains(Gesture::TryAgain.word()), "{kept:?}");
+        assert!(ui.orders().is_empty(), "the footer was told");
     }
 }

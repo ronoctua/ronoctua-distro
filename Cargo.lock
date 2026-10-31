@@ -4656,6 +4656,7 @@ dependencies = [
  "ronoctua-shell-kit",
  "ronoctua-shell-lifeline",
  "ronoctua-shell-locale",
+ "ronoctua-shell-lock",
  "ronoctua-shell-manual",
  "ronoctua-shell-network",
  "ronoctua-shell-notifications",
@@ -5394,6 +5395,27 @@ dependencies = [
  "serde_json",
  "smithay-client-toolkit",
  "tracing",
+]
+
+[[package]]
+name = "ronoctua-shell-lock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ronoctua-cmd",
+ "ronoctua-consent",
+ "ronoctua-i18n",
+ "ronoctua-keymap",
+ "ronoctua-pam",
+ "ronoctua-render",
+ "ronoctua-security",
+ "ronoctua-shell-door",
+ "ronoctua-shell-kit",
+ "ronoctua-tokens",
+ "smithay-client-toolkit",
+ "tracing",
+ "wayland-client",
+ "zeroize",
 ]
 
 [[package]]

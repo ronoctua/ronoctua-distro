@@ -147,16 +147,6 @@ atlas-absent = os dados do mundo não estão nesta máquina
 # four places, of which this is the one a person actually reads. See
 # `LICENSE-DATA.txt` for the other three.
 atlas-credits = lugares do GeoNames (CC BY 4.0) · fronteiras do Natural Earth (domínio público) · ruas dos colaboradores do OpenStreetMap (ODbL)
-atlas-heading = Dados do mundo
-atlas-baseline = fronteiras e lugares
-atlas-present = nesta máquina
-atlas-offered = ruas, por região
-atlas-not-yet = não está nesta máquina
-atlas-not-yet-said = baixar as ruas de uma região ainda não está pronto — faltam o seletor, a fila e o leitor
-atlas-open = abrir
-atlas-previous = anterior
-atlas-next = próximo
-atlas-back = voltar
 files-explain-globe = arraste para girar, a roda para aproximar
 files-explain-globe-dot = onde este arquivo diz que foi feito — Enter enquadra
 files-explain-globe-address = { $value } — aperte para abrir esta coordenada no mapa do navegador.

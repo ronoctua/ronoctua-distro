@@ -10,8 +10,6 @@
 ## Installer — the interface
 
 echo-argument-refused = { $command } does not take “{ $argument }”
-globe-address-near = near { $place }, about { $km } km away
-globe-behind = this place is on the far side of the globe
 # =====================================================================
 # THE PLAYER — `LEADER p`, the column on the right, the modeline's mark
 # =====================================================================
@@ -311,7 +309,6 @@ player-lane-start-refused = “{ $said }” is not a time: m:ss, h:mm:ss, second
 player-lane-until = Plays until
 player-lane-until-end = its end
 player-lane-until-too-soon = It has to stop after it begins in its file ({ $from }).
-player-lane-until-back = It plays to its end again.
 player-lane-title = Name
 player-lane-over = Over the picture
 player-lane-over-none = no picture plays
@@ -851,7 +848,6 @@ about-text-area-discard = Leave the text; if it changed and was not kept, you ar
 ask-text-area-discard = Throw away what was written and not kept?
 text-area-no = No, go on writing
 text-area-yes = Yes, throw it away
-about-text-area = A text of several lines, typed and changed here.
 text-area-not-kept = Nothing keeps this text here yet; it stays open as written.
 player-channels-education = Education
 player-channels-space = Space

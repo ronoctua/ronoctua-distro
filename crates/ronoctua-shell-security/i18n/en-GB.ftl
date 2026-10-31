@@ -144,8 +144,6 @@ security-device-firmware-updates-count = { $count ->
   }
 security-device-firmware-note = Read only: firmware is not installed from here.
 security-device-updates = Automatic updates
-security-device-lock = Screen lock
-security-device-lock-none = none: this system has no lock screen
 security-device-autologin = Starting the machine
 security-device-autologin-gate = the disk's passphrase is the only gate
 security-privacy-mac = Hardware address on { $name }
@@ -361,3 +359,19 @@ security-quantum-why-f-droid = F-Droid signs its index with RSA: a forgery, not 
 security-quantum-why-nix-cache = The binary cache's signatures are ed25519: a forgery needs a quantum computer at the moment of the attack.
 security-quantum-why-secure-boot = Secure Boot's keys are RSA-2048: the firmware verifies nothing else.
 security-quantum-why-not-built = This build did not say which version it ships.
+
+## THE LOCK SCREEN (2026-10-31): locking now, and locking by itself.
+
+security-heading-lock = Screen lock
+security-lock-now = Lock now
+security-lock-by-itself = Lock by itself
+security-lock-after = After
+security-lock-minutes = { $minutes ->
+        [one] one minute without use
+       *[other] { $minutes } minutes without use
+    }
+security-lock-note = It waits while sound plays or a video is shown, and opens with the account's password, or with a finger where a reader has one enrolled.
+security-lock-refused = The lock's file has a value this machine does not take: the screen does not lock by itself until a wait is chosen again.
+security-about-lock-by-itself = Turns locking by itself on or off; the footer arms it at once.
+security-about-lock-after = The next wait without use before the screen locks by itself; Left and Right walk the waits.
+echo-security-lock-not-written = The lock's choice could not be written in your folder.

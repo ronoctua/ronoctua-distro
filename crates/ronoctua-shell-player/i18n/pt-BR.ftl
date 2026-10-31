@@ -10,8 +10,6 @@
 ## Installer — the interface
 
 echo-argument-refused = { $command } não aceita “{ $argument }”
-globe-address-near = perto de { $place }, a cerca de { $km } km
-globe-behind = este lugar está do outro lado do globo
 # =====================================================================
 # O PLAYER — `LEADER p`, a coluna à direita, a marca na modeline
 # =====================================================================
@@ -309,7 +307,6 @@ player-lane-start-refused = “{ $said }” não é um tempo: m:ss, h:mm:ss, seg
 player-lane-until = Toca até
 player-lane-until-end = o fim
 player-lane-until-too-soon = Ela tem de parar depois de onde começa no arquivo ({ $from }).
-player-lane-until-back = Ela volta a tocar até o fim.
 player-lane-title = Nome
 player-lane-over = Sobre a imagem
 player-lane-over-none = nenhuma imagem toca
@@ -846,7 +843,6 @@ about-text-area-discard = Sair do texto; se ele mudou e não foi guardado, você
 ask-text-area-discard = Jogar fora o que foi escrito e não foi guardado?
 text-area-no = Não, continuar escrevendo
 text-area-yes = Sim, jogar fora
-about-text-area = Um texto de várias linhas, digitado e mudado aqui.
 text-area-not-kept = Nada guarda este texto aqui ainda; ele continua aberto como foi escrito.
 player-channels-education = Educação
 player-channels-space = Espaço

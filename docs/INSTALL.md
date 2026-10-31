@@ -96,7 +96,7 @@ primeiro boot.
 | disco de destino | será apagado por inteiro |
 | instalação | `full` ou `minimal` — veja a seção abaixo |
 | programas opcionais | só na `full`: os programas pesados, cada um marcado ou não. O desmarcado fica de fora desta máquina — veja a seção abaixo |
-| layout do teclado | o nome do xkb: `br`, `us`, `gb`. É onde você vai digitar a frase-secreta |
+| layout do teclado | o nome do xkb: `br`, `us`, `gb`. É onde você vai digitar a frase-secreta: o console passa a usá-lo assim que você responde, e o pedido da frase-secreta no boot também |
 | variante do teclado | `abnt2`, `nodeadkeys`, ou nenhuma. No `us`, o padrão é `euro`, que põe o `€` no AltGr+5 e não move tecla |
 | tecla de acentos | qual tecla compõe acentos. O padrão é o `Caps Lock` — e os dois Shifts juntos passam a ser o Caps Lock |
 | locale do sistema | data, número, papel e unidades. O padrão é `en_GB.UTF-8`, que é métrico |

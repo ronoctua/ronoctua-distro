@@ -141,8 +141,10 @@ unsafe extern "C" {
 
 /// What the conversation answers with, and what PAM told it on the way.
 pub(crate) struct Answering<'a> {
-    /// The secret's bytes, without a NUL (the caller refused one inside).
-    pub(crate) secret: &'a [u8],
+    /// The secret's bytes, without a NUL (the caller refused one inside) —
+    /// `None` for a transaction nothing was typed for (the finger's,
+    /// `crate::verify_finger`), where a hidden prompt is refused.
+    pub(crate) secret: Option<&'a [u8]>,
     /// The `PAM_ERROR_MSG` and `PAM_TEXT_INFO` lines, for a log.
     pub(crate) told: Vec<String>,
 }
@@ -248,7 +250,13 @@ pub(crate) unsafe extern "C" fn converse(
         let message = unsafe { &*message };
         match message.msg_style {
             PAM_PROMPT_ECHO_OFF => {
-                let copy = malloc_copy(answering.secret);
+                // A TRANSACTION WITH NO SECRET — the finger's — answers no
+                // hidden prompt: it asks for something nobody typed, and
+                // guessing would be answering a question nobody asked.
+                let Some(secret) = answering.secret else {
+                    return refuse();
+                };
+                let copy = malloc_copy(secret);
                 if copy.is_null() {
                     // SAFETY: as above.
                     unsafe { drop_replies(replies, count) };
@@ -339,11 +347,17 @@ pub(crate) struct Ended {
 
 /// One whole transaction: start under `service` for `user`, authenticate,
 /// check the account, end. `Ok` only when both said `PAM_SUCCESS`. Blocks
-/// (PAM sleeps after a wrong password).
+/// (PAM sleeps after a wrong password; a finger's module waits for a touch).
 ///
 /// `PAM_SILENT`, and `PAM_DISALLOW_NULL_AUTHTOK`: an account with an empty
-/// password is never let through by an empty answer.
-pub(crate) fn verify_with_pam(service: &CStr, user: &CStr, secret: &[u8]) -> Result<(), Ended> {
+/// password is never let through by an empty answer. `secret` is `None` for
+/// a transaction nothing was typed for — the finger's — and then no hidden
+/// prompt is answered at all.
+pub(crate) fn verify_with_pam(
+    service: &CStr,
+    user: &CStr,
+    secret: Option<&[u8]>,
+) -> Result<(), Ended> {
     let mut answering = Answering {
         secret,
         told: Vec::new(),
@@ -417,7 +431,7 @@ mod tests {
     /// answered (read, then zeroed and freed) and what it was told.
     fn converse_over(
         messages: &[(c_int, &CStr)],
-        secret: &[u8],
+        secret: Option<&[u8]>,
     ) -> (c_int, Vec<Option<Vec<u8>>>, Vec<String>) {
         let (_owned, pointers) = ask(messages);
         let mut answering = Answering {
@@ -459,7 +473,7 @@ mod tests {
     #[test]
     fn a_hidden_prompt_is_answered_with_a_copy_of_the_secret() {
         let (code, answers, told) =
-            converse_over(&[(PAM_PROMPT_ECHO_OFF, c"Password: ")], b"s3cr3t");
+            converse_over(&[(PAM_PROMPT_ECHO_OFF, c"Password: ")], Some(b"s3cr3t"));
         assert_eq!(code, PAM_SUCCESS);
         assert_eq!(answers, [Some(b"s3cr3t".to_vec())]);
         assert!(told.is_empty());
@@ -473,7 +487,7 @@ mod tests {
                 (PAM_PROMPT_ECHO_OFF, c"Password: "),
                 (PAM_ERROR_MSG, c"Authentication token is locked"),
             ],
-            b"pw",
+            Some(b"pw"),
         );
         assert_eq!(code, PAM_SUCCESS);
         assert_eq!(answers, [None, Some(b"pw".to_vec()), None]);
@@ -496,19 +510,47 @@ mod tests {
                 (PAM_PROMPT_ECHO_OFF, c"Password: "),
                 (PAM_PROMPT_ECHO_ON, c"login: "),
             ],
-            b"pw",
+            Some(b"pw"),
         );
         assert_eq!(code, PAM_CONV_ERR);
         assert!(answers.is_empty());
-        let (code, _, _) = converse_over(&[(99, c"binary")], b"pw");
+        let (code, _, _) = converse_over(&[(99, c"binary")], Some(b"pw"));
         assert_eq!(code, PAM_CONV_ERR, "an unknown style is refused too");
+    }
+
+    #[test]
+    fn a_transaction_with_no_secret_answers_no_hidden_prompt() {
+        // THE FINGER'S: its module only tells (touch the reader, no match),
+        // and a hidden prompt in it asks for something nobody typed.
+        let (code, answers, told) = converse_over(
+            &[
+                (PAM_TEXT_INFO, c"Place your finger on the reader"),
+                (PAM_ERROR_MSG, c"Failed to match fingerprint"),
+            ],
+            None,
+        );
+        assert_eq!(code, PAM_SUCCESS);
+        assert_eq!(answers, [None, None]);
+        assert_eq!(
+            told,
+            [
+                "Place your finger on the reader",
+                "Failed to match fingerprint"
+            ]
+        );
+        let (code, answers, _) = converse_over(&[(PAM_PROMPT_ECHO_OFF, c"Password: ")], None);
+        assert_eq!(
+            code, PAM_CONV_ERR,
+            "a hidden prompt with no secret is refused"
+        );
+        assert!(answers.is_empty());
     }
 
     #[test]
     fn a_malformed_call_is_refused() {
         let mut replies: *mut PamResponse = std::ptr::null_mut();
         let mut answering = Answering {
-            secret: b"x",
+            secret: Some(b"x"),
             told: Vec::new(),
         };
         let app = (&raw mut answering).cast::<c_void>();

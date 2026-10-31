@@ -114,6 +114,7 @@ pkgs.testers.runNixOSTest {
     ${xvfb.prelude}
     import json
     import shlex
+    from datetime import timedelta
 
     run_dir = "/run/user/0"
 
@@ -154,7 +155,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(timeout):
             if test(last_layout()):
                 return
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         raise AssertionError("the footer never settled; its last layout:\n" + last_layout()[-3000:])
 
 
@@ -184,13 +185,13 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=90
+            "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=timedelta(seconds=90)
         )
         # A JOURNAL THE BRAIN COULD NOT READ is said in its log, and every
         # subtest below would then wait for nothing.
-        machine.sleep(5)
+        machine.sleep(duration=timedelta(seconds=5))
         assert "the journal is not being followed" not in footer_journal(), footer_journal()[-3000:]
-        machine.wait_until_succeeds(f"test -S {run_dir}/ronoctua-brain.sock", timeout=60)
+        machine.wait_until_succeeds(f"test -S {run_dir}/ronoctua-brain.sock", timeout=timedelta(minutes=1))
         rows = {t["id"] for t in mind()["tasks"]}
         for wanted in ${
           builtins.toJSON (

@@ -120,7 +120,24 @@ in
           defaultText = lib.literalMD "the chosen accent key, plus `nix/keyboard-xkb.nix`";
           description = "xkb `options`, complete. Default: derived from `compose`.";
         };
-        console = field "console" base.console;
+        # THE CONSOLE'S KEYBOARD: the same answer, as xkb writes it (`us(euro)`,
+        # `br`), compiled for the console by `nix/console-keymaps.nix` and
+        # loaded by `nix/modules/console.nix` — on every console, and in the
+        # initrd, where the disk's passphrase is typed. DERIVED from this
+        # machine's layout and variant, never the file's: it was the file's
+        # `kbd` name, and every machine's console stayed on the default's map
+        # whatever its session typed. The installer writes the line anyway
+        # (`host.nix`), so the file says what the console uses.
+        console = lib.mkOption {
+          type = lib.types.str;
+          default = base.notation config.ronoctua.keyboard.layout config.ronoctua.keyboard.variant;
+          defaultText = lib.literalMD "`layout(variant)`, this machine's own answer";
+          description = ''
+            The console's keyboard: an xkb layout with its variant in
+            parentheses (`br(abnt2)`), compiled into a `kbd` map. Not a `kbd`
+            keymap's name. Default: `layout` and `variant`.
+          '';
+        };
       };
 
     # THE DEV OPTIONS ARE DECLARED HERE, not in nix/modules/dev.nix.
@@ -396,10 +413,15 @@ in
         "flakes"
       ];
       auto-optimise-store = true;
-      trusted-users = [
-        "root"
-        cfg.user
-      ];
+      # NO `trusted-users`: NixOS's own, root alone (the owner's decision,
+      # 2026-10-31). A trusted user may put in the store what nobody signed
+      # and change the daemon's security settings — nearly root, the Nix
+      # manual says — and nothing the distro runs as the person needs it: the
+      # sized builds pass only `--max-jobs`, `--cores`, `--keep-going` and
+      # `--fallback`, the ISO sweep deletes dead paths, the kept sources root
+      # indirectly, the push to the person's cache only reads, and the
+      # substituters are the system's (`binary-cache.nix`). Measured as a user
+      # outside the list. Held by `nix-trusts-only-root`.
     };
     # No `nix.gc` timer: `nix/modules/store.nix` says why, and what does the
     # collecting instead (Nix's own floor, and the update's weekly step).

@@ -67,3 +67,12 @@ audio-port-internal-mic = Built-in microphone
 audio-port-microphone = Microphone
 audio-port-line-in = Line in
 audio-port-line-out = Line out
+# Where a playing program's sound goes, and sending it to another device.
+audio-sound-goes-to = Sound goes to
+audio-plays-nowhere = no device for now
+audio-sent-where-nothing-is = The device it was sent to is not here.
+audio-stays-put = This program asks not to be moved.
+audio-send-back = previous device
+audio-send-on = next device
+about-audio-send-back = Send this program's sound to the previous device in the list.
+about-audio-send-on = Send this program's sound to the next device in the list.

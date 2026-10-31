@@ -212,6 +212,7 @@ pkgs.testers.runNixOSTest {
     import json
     import shlex
     import time
+    from datetime import timedelta
 
     user = "${user}"
     password = "${password}"
@@ -327,7 +328,7 @@ pkgs.testers.runNixOSTest {
         peer.fail(knock)
         machine.wait_until_succeeds(
             "journalctl -k --no-pager | grep 'ronoctua-refused: ' | grep -q 'DPT=8080'",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
 
     with subtest("a wrong password opens nothing"):
@@ -367,7 +368,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("nft list table inet ronoctua | grep -q r-web")
         peer.succeed(knock)
         machine.succeed("systemctl restart nftables.service")
-        machine.wait_until_succeeds("nft list table inet ronoctua | grep -q r-web", timeout=30)
+        machine.wait_until_succeeds("nft list table inet ronoctua | grep -q r-web", timeout=timedelta(seconds=30))
         peer.succeed(knock)
 
     with subtest("the window opens through the door, and sudo -n works while it lasts"):
@@ -470,7 +471,7 @@ pkgs.testers.runNixOSTest {
         machine.fail(as_user("sudo -n true"))
 
     with subtest("a finger is enrolled through the door, touch by touch"):
-        machine.wait_until_succeeds("fprintd-list root 2>&1 | grep -qi 'virtual'", timeout=30)
+        machine.wait_until_succeeds("fprintd-list root 2>&1 | grep -qi 'virtual'", timeout=timedelta(seconds=30))
         status, said = while_scanning(
             door("finger-enroll right-index-finger"), "/tmp/enrolment"
         )
@@ -576,7 +577,7 @@ pkgs.testers.runNixOSTest {
         machine.fail("systemctl is-active fwupd-refresh.timer")
         machine.wait_until_succeeds(
             "busctl --system get-property org.freedesktop.fwupd / org.freedesktop.fwupd HostSecurityId",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
 
     roamer.wait_for_unit("NetworkManager.service")
@@ -593,14 +594,14 @@ pkgs.testers.runNixOSTest {
 
     with subtest("the dispatcher hands a link to the helper, and the networks of before are home"):
         roamer.succeed("nmcli connection up before")
-        roamer.wait_until_succeeds("grep -q dummy0 /run/ronoctua-security/links.json", timeout=60)
+        roamer.wait_until_succeeds("grep -q dummy0 /run/ronoctua-security/links.json", timeout=timedelta(minutes=1))
         # NetworkManager's first answer placed every connection it had then.
-        roamer.wait_until_succeeds("test -e /var/lib/ronoctua-security/networks-migrated", timeout=60)
+        roamer.wait_until_succeeds("test -e /var/lib/ronoctua-security/networks-migrated", timeout=timedelta(minutes=1))
         kept = json.loads(roamer.succeed("cat /var/lib/ronoctua-security/firewall.json"))
         assert kept["networks"].get(uuid_of("before")) == "home", kept
         roamer.wait_until_succeeds(
             "test \"$(jq -r '.profiles.dummy0' /run/ronoctua-security/firewall.status)\" = home",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         roamer.fail("nft list set inet ronoctua public | grep -q dummy0")
 
@@ -610,14 +611,14 @@ pkgs.testers.runNixOSTest {
             "ipv4.method manual ipv4.addresses 10.62.0.1/24 ipv6.method disabled"
         )
         roamer.succeed("nmcli connection up after")
-        roamer.wait_until_succeeds("nft list set inet ronoctua public | grep -q dummy1", timeout=60)
+        roamer.wait_until_succeeds("nft list set inet ronoctua public | grep -q dummy1", timeout=timedelta(minutes=1))
         status = roamer_status()
         assert status["profiles"].get("dummy1") == "public", status
         assert uuid_of("after") in status["unplaced"], status
         kept = json.loads(roamer.succeed("cat /var/lib/ronoctua-security/firewall.json"))
         assert uuid_of("after") not in kept["networks"], "placed once, never again"
         roamer.succeed("nmcli connection down after")
-        roamer.wait_until_fails("nft list set inet ronoctua public | grep -q dummy1", timeout=60)
+        roamer.wait_until_fails("nft list set inet ronoctua public | grep -q dummy1", timeout=timedelta(minutes=1))
         roamer.fail("grep -q dummy1 /run/ronoctua-security/links.json")
 
     with subtest("a network this machine serves is asked of NetworkManager, and is never public"):

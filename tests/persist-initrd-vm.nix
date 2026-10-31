@@ -62,11 +62,13 @@ pkgs.testers.runNixOSTest {
     };
 
   testScript = ''
+    from datetime import timedelta
+
     def seeded():
         return machine.succeed("journalctl -b --no-pager -u ronoctua-persist-seed.service")
 
     machine.start()
-    machine.wait_for_unit("multi-user.target", timeout=300)
+    machine.wait_for_unit("multi-user.target", timeout=timedelta(minutes=5))
 
     with subtest("the first boot binds both, the one the initrd mounts included"):
         machine.succeed("mountpoint -q /var/lib/nixos")
@@ -80,7 +82,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("rm -rf /persist/var/lib/nixos")
         machine.shutdown()
         machine.start()
-        machine.wait_for_unit("multi-user.target", timeout=300)
+        machine.wait_for_unit("multi-user.target", timeout=timedelta(minutes=5))
         machine.succeed("mountpoint -q /var/lib/nixos")
         machine.succeed("grep -qx installed /persist/var/lib/nixos/marker")
         machine.succeed("grep -qx installed /var/lib/nixos/marker")
@@ -92,7 +94,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("echo kept > /var/lib/nixos/marker")
         machine.shutdown()
         machine.start()
-        machine.wait_for_unit("multi-user.target", timeout=300)
+        machine.wait_for_unit("multi-user.target", timeout=timedelta(minutes=5))
         machine.succeed("grep -qx kept /var/lib/nixos/marker")
         log = seeded()
         assert "seeded into /persist" not in log, log

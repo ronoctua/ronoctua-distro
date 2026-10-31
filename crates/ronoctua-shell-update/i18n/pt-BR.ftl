@@ -24,9 +24,10 @@ machine-refused-nothing-to-migrate = Esta máquina já tem o próprio flake: nã
 machine-refused-build-failed = O sistema novo não foi construído. Nada mudou: a máquina roda o que rodava, e a pasta dela volta a dizer isso. Um download que ele não conseguiu baixar aparece na página das partes, com os jeitos de trazê-lo.
 machine-refused-switch-failed = A troca para o sistema novo falhou. A próxima partida o tenta uma vez, e volta ao último sistema bom se ele não subir.
 machine-refused-next-boot-failed = Não deu para deixar o sistema novo para o próximo reinício. Nada do que roda mudou; o menu de boot pode não listar o sistema novo, e o próximo reinício pode subir o que esta máquina roda.
-machine-refused-did-not-boot = Este é o sistema que não subiu quando foi tentado, ou que foi desfeito. A máquina fica no que roda até chegar uma revisão mais nova da distro.
+machine-refused-did-not-boot = Este é o sistema que não subiu quando foi tentado, ou que foi desfeito. A máquina fica no que roda até chegar uma revisão mais nova da distro, ou até você pedir nesta página para tentá-lo de novo.
 machine-refused-last-good-would-fall-out = Mais um sistema tiraria o último bom do menu de boot. Reinicie antes, para o sistema em teste ser confirmado.
 machine-refused-held = A máquina está retida numa revisão diferente da que a pasta dela nomeia: nada foi construído.
+machine-refused-no-failed-trial = Nenhum sistema falhou no ensaio de boot desta máquina agora: não há o que tentar de novo.
 machine-refused-unreadable = Um arquivo da pasta da máquina não pode ser lido.
 machine-refused-failed = Um programa de que a máquina precisava falhou; o diário diz qual.
 
@@ -42,6 +43,32 @@ machine-trial-boot-identical = O sistema novo sobe exatamente como o último bom
 machine-no-trial-no-efi-variables = As variáveis de boot desta máquina não podem ser escritas: o sistema novo não tem volta além do menu de boot.
 machine-no-trial-not-in-menu = O menu de boot não nomeia o sistema novo ou o último bom de um jeito que o teste possa usar: o sistema novo não tem volta além do menu de boot.
 machine-no-trial-no-last-good = Ainda não se sabe de nenhum sistema que tenha subido bem nesta máquina: o sistema novo não tem volta além do menu de boot.
+
+## The machine's own gestures on the update's page: the system that did not start, tried again at the next update; the machine held on its distro revision, and let go. Each is asked on the page, the no first, then in the sudo bar.
+
+machine-try-again-row = Tentar de novo na próxima atualização.
+machine-try-again-asked = Ele é tentado de novo na próxima atualização, com a volta armada; { $keys } atualiza agora.
+machine-try-again-question = Tentar de novo, na próxima atualização, o sistema que não subiu? Se ele não subir desta vez também, a máquina volta sozinha ao último sistema bom.
+machine-try-again-no = não, deixar assim
+machine-try-again-yes = sim, tentar de novo
+machine-hold-row = Reter esta máquina em { $rev }: as atualizações param de mover a distro e o nixpkgs.
+machine-hold-question = Reter esta máquina na revisão da distro que ela tem? As atualizações param de mover a distro e o nixpkgs até você soltar.
+machine-hold-no = não, continuar seguindo a distro
+machine-hold-yes = sim, reter
+machine-let-go-row = Soltar: a próxima atualização volta a mover a distro e o nixpkgs.
+machine-let-go-question = Soltar a retenção? A próxima atualização volta a mover a distro e o nixpkgs.
+machine-let-go-no = não, continuar retida
+machine-let-go-yes = sim, soltar
+machine-said-asked = Pedido na barra do sudo, acima da modeline, se o sudo precisar de você.
+machine-said-try-again = O sistema que não subiu é tentado de novo na próxima atualização.
+machine-said-hold = Esta máquina está retida na revisão da distro dela: as atualizações deixam a distro e o nixpkgs onde estão.
+machine-said-let-go = Esta máquina volta a seguir a distro a partir da próxima atualização.
+machine-said-held-already = Esta máquina já está retida: a linha da retenção a solta.
+machine-said-not-held = Esta máquina não está retida.
+machine-said-nothing-to-hold = Esta máquina não tem flake próprio, então não há revisão para reter.
+cmd-machine-try-again = Tenta de novo, na próxima atualização, o sistema cujo ensaio de boot falhou — pedido pelo sudo
+cmd-machine-hold = Retém esta máquina na revisão da distro dela, e as atualizações param de mover a distro e o nixpkgs — pedido pelo sudo
+cmd-machine-let-go = Solta a retenção da máquina, e a próxima atualização volta a mover a distro e o nixpkgs — pedido pelo sudo
 # O CACHE BINÁRIO DA PESSOA — uma página da vista da atualização (`c`, `LEADER s u c`),
 # nas duas portas, e o que a instalação e o netrc do root dizem dele.
 binary-cache-open = cache binário

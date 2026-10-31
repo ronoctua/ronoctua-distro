@@ -77,6 +77,7 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     import re
     import time
+    from datetime import timedelta
 
     TEXTS = open("${../crates/ronoctua-installer/i18n/en-GB.ftl}").read()
 
@@ -100,16 +101,16 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("air-dhcp.service")
     machine.wait_for_unit("NetworkManager.service")
     for ssid in (WPA2, TRANSITION):
-        machine.wait_until_succeeds(f"nmcli -t -f SSID dev wifi list --rescan yes | grep -qx {ssid}", timeout=90)
+        machine.wait_until_succeeds(f"nmcli -t -f SSID dev wifi list --rescan yes | grep -qx {ssid}", timeout=timedelta(seconds=90))
     # THE TWIN IN VIEW before any join: the case the laptop met.
-    machine.wait_until_succeeds(f"nmcli -f BSSID dev wifi list --rescan yes | grep -qi {TWIN}", timeout=90)
+    machine.wait_until_succeeds(f"nmcli -f BSSID dev wifi list --rescan yes | grep -qi {TWIN}", timeout=timedelta(seconds=90))
     print(machine.succeed("nmcli -f BSSID,FREQ,SECURITY,SSID dev wifi list"))
     machine.wait_until_tty_matches("1", "root@")
 
     def start():
         machine.send_chars("clear; cp /etc/installer-answers /root/answers; ronoctua-install --answers /root/answers\n")
         machine.wait_until_tty_matches("1", NONE)
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
     def leave():
         machine.send_key("ctrl-c")
@@ -186,8 +187,8 @@ pkgs.testers.runNixOSTest {
 
     with subtest("a network joined before the installer is said, and the question opens on it"):
         machine.succeed("nmcli -t -f UUID connection show | xargs -r -n1 nmcli connection delete uuid")
-        machine.wait_until_succeeds(f"nmcli -t -f SSID dev wifi list --rescan yes | grep -qx {WPA2}", timeout=90)
-        machine.wait_until_succeeds(f"nmcli dev wifi connect {WPA2} password {KEY} ifname wlan1", timeout=180)
+        machine.wait_until_succeeds(f"nmcli -t -f SSID dev wifi list --rescan yes | grep -qx {WPA2}", timeout=timedelta(seconds=90))
+        machine.wait_until_succeeds(f"nmcli dev wifi connect {WPA2} password {KEY} ifname wlan1", timeout=timedelta(minutes=3))
         start()
         machine.wait_until_tty_matches("1", CONNECTED)
         row = next(l for l in machine.get_tty_text("1").splitlines() if CONNECTED in l)

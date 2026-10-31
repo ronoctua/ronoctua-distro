@@ -73,6 +73,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     start_all()
     for m in (small, large):
         m.wait_for_unit("multi-user.target")
@@ -108,7 +110,7 @@ pkgs.testers.runNixOSTest {
             "--unit=stand-in --quiet -- ${pkgs.coreutils}/bin/sleep infinity"
         )
         m.wait_until_succeeds(
-            "systemctl --user --machine=noctua@ is-active stand-in.service", timeout=30
+            "systemctl --user --machine=noctua@ is-active stand-in.service", timeout=timedelta(seconds=30)
         )
 
     with subtest("the desktop's protection reaches the end of the chain"):
@@ -167,13 +169,13 @@ pkgs.testers.runNixOSTest {
         # subtest passes having proved nothing — which is exactly what happened
         # the first time this test ran, in half a second.
         large.wait_until_succeeds(
-            "systemctl --user --machine=noctua@ is-active hog.service", timeout=30
+            "systemctl --user --machine=noctua@ is-active hog.service", timeout=timedelta(seconds=30)
         )
 
         # `ManagedOOMMemoryPressureDurationSec` is 15 s, so the answer cannot
         # arrive before that. The margin is for oomd's poll interval.
         large.wait_until_fails(
-            "systemctl --user --machine=noctua@ is-active hog.service", timeout=180
+            "systemctl --user --machine=noctua@ is-active hog.service", timeout=timedelta(minutes=3)
         )
 
         # THE ASSERTION THIS FILE EXISTS FOR: not "it came back", but "it was

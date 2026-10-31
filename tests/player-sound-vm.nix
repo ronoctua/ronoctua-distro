@@ -20,6 +20,12 @@
 # and the engine reads the graph (`pw-dump --monitor`, a child of its own)
 # only while a door holds the outputs open or a lane has one chosen
 # (`engine/sinks.rs`): a player at rest reads nothing.
+#
+# AND THE SOUND VIEW'S MOVE, which only a server can prove too: a playing
+# program sent to the other sink by the `target.object` `ronoctua-audio`
+# writes (`pw-metadata`, with the arguments and environment `pipewire.rs`
+# gives it) plays there by the server's own links, and back; and a program
+# that ended is refused in the log alone, with status 0.
 {
   pkgs,
   lib,
@@ -91,6 +97,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
+    from datetime import timedelta
 
     def player(what):
         return json.loads(machine.succeed(
@@ -113,7 +120,7 @@ pkgs.testers.runNixOSTest {
     # starts it (and WirePlumber with it).
     machine.wait_for_unit("pipewire.socket")
     machine.wait_until_succeeds(
-        "PIPEWIRE_RUNTIME_DIR=/run/pipewire pw-dump | grep -q ronoctua-test-sink", timeout=60
+        "PIPEWIRE_RUNTIME_DIR=/run/pipewire pw-dump | grep -q ronoctua-test-sink", timeout=timedelta(minutes=1)
     )
 
     with subtest("the player starts, on the sound server"):
@@ -124,7 +131,7 @@ pkgs.testers.runNixOSTest {
             "--setenv=RUST_LOG=ronoctua_player=debug ${setenv} "
             "${player}/bin/ronoctua-player"
         )
-        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=30)
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=timedelta(seconds=30))
 
     with subtest("two films played together are two sound streams"):
         said = player({"ask": "put", "what": ["${media}/film.mp4"], "replace": True})
@@ -132,7 +139,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(30):
             if output_streams():
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert len(output_streams()) == 1, output_streams()
         # THE SECOND FILM, with no track chosen: its picture AND its sound.
         said = player({"ask": "add-lane", "source": "${media}/subbed.mkv", "kind": "video"})
@@ -145,7 +152,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(30):
             if len(output_streams()) == 2:
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         streams = output_streams()
         print(json.dumps([s["info"]["props"] for s in streams], indent=1))
         assert len(streams) == 2, f"the second film is not heard: {len(streams)} stream(s)"
@@ -171,7 +178,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(timeout):
             if what() == want:
                 return
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert what() == want, f"{what.__name__} stayed {not want}: {player_processes()}"
 
     def stream_targets():
@@ -206,7 +213,7 @@ pkgs.testers.runNixOSTest {
             listed = [s["device"] for s in player({"ask": "look"}).get("sinks", [])]
             if "ronoctua-test-sink-two" in listed:
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert {"ronoctua-test-sink", "ronoctua-test-sink-two"} <= set(listed), listed
         machine.succeed("systemctl stop holder")
         wait_for(reading_the_graph, False)
@@ -220,7 +227,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(30):
             if "ronoctua-test-sink-two" in stream_targets():
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert "ronoctua-test-sink-two" in stream_targets(), stream_targets()
         # A LANE WITH ITS OWN OUTPUT keeps the graph read: it has to hear the
         # output go away.
@@ -228,6 +235,66 @@ pkgs.testers.runNixOSTest {
         said = player({"ask": "lane", "lane": sound, "change": {"what": "sink"}})
         assert said["say"] == "done", said
         wait_for(reading_the_graph, False)
+
+    # THE SOUND VIEW'S MOVE, against the pinned PipeWire and WirePlumber: what
+    # `ronoctua-audio` runs to send a playing program to another device
+    # (`pipewire::move_argv`, in the environment `send_away` gives it), and
+    # what it reads back — the LINKS, as `graph.rs` reads them.
+    def moved_stream():
+        """The id of the program this subtest plays, the outputs by name with
+        their serials, and the names of the sinks its links reach."""
+        dump = json.loads(machine.succeed("PIPEWIRE_RUNTIME_DIR=/run/pipewire pw-dump"))
+        props = {o["id"]: (o.get("info") or {}).get("props", {}) for o in dump
+                 if o.get("type") == "PipeWire:Interface:Node"}
+        stream = next((i for i, p in props.items()
+                       if p.get("media.class") == "Stream/Output/Audio"
+                       and p.get("node.name") == "pw-cat"), None)
+        serials = {p.get("node.name"): p.get("object.serial") for p in props.values()
+                   if p.get("media.class") == "Audio/Sink"}
+        reached = {props.get(o["info"].get("input-node-id"), {}).get("node.name") for o in dump
+                   if o.get("type") == "PipeWire:Interface:Link"
+                   and (o.get("info") or {}).get("output-node-id") == stream}
+        return stream, serials, reached
+
+    def sent(stream, serial):
+        return machine.succeed(
+            "PIPEWIRE_RUNTIME_DIR=/run/pipewire PIPEWIRE_DEBUG=E LC_ALL=C "
+            f"pw-metadata --name default {stream} target.object {serial} Spa:Id 2>&1"
+        )
+
+    def reaches(name):
+        for _ in range(30):
+            if moved_stream()[2] == {name}:
+                return
+            machine.sleep(duration=timedelta(seconds=1))
+        assert moved_stream()[2] == {name}, moved_stream()
+
+    with subtest("a program sent to the other output by its target.object plays there"):
+        machine.succeed(
+            "systemd-run --unit=moved --setenv=PIPEWIRE_RUNTIME_DIR=/run/pipewire "
+            "pw-cat --playback --raw --format s16 --rate 48000 --channels 2 /dev/zero"
+        )
+        reaches("ronoctua-test-sink")
+        stream, serials, _ = moved_stream()
+        said = sent(stream, serials["ronoctua-test-sink-two"])
+        assert "set property:" in said and "error" not in said, said
+        reaches("ronoctua-test-sink-two")
+        # AND BACK, the same way: a second move is not a first one's echo.
+        said = sent(stream, serials["ronoctua-test-sink"])
+        assert "set property:" in said and "error" not in said, said
+        reaches("ronoctua-test-sink")
+
+    with subtest("a program that ended is refused by the server, and only in its log"):
+        machine.succeed("systemctl stop moved")
+        for _ in range(30):
+            if moved_stream()[0] is None:
+                break
+            machine.sleep(duration=timedelta(seconds=1))
+        assert moved_stream()[0] is None, moved_stream()
+        # THE STATUS IS 0 (`succeed`): the refusal is the log's `res:-2`,
+        # which is what `pipewire::answer_of` reads as a program gone.
+        said = sent(stream, serials["ronoctua-test-sink-two"])
+        assert "set property error" in said and "res:-2 " in said, said
 
     with subtest("nothing panicked"):
         journal = machine.succeed("journalctl -u player --no-pager")

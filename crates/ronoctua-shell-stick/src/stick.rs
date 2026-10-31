@@ -41,6 +41,16 @@
 //! sentence: a stick being written, a write waiting for its image. A writer
 //! left waiting with no job to feed it (the queue restarted) is told to stop,
 //! and the person to choose again.
+//!
+//! AND BEFORE ALL OF THAT, THE PREPARATION ([`armed_in`]). Between the sudo
+//! door starting the writer and the queue taking the job, the writer waits
+//! with no job armed — which is exactly what the rule above stops. A second
+//! `yes` in the other door at that instant stopped the FIRST write's writer,
+//! and the first then failed saying the writer did not run. So a `yes` takes
+//! `ronoctua_stick::staging::Preparing` first — a file made with
+//! `create_new`, before the machine is read or the password asked — and lets
+//! it go once the queue holds the job: the second `yes` meanwhile is told
+//! another write is being prepared, and touches nothing.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -379,12 +389,24 @@ pub enum Busy {
     Stopped,
     /// The queue does not answer, so nothing could feed a writer.
     QueueDown,
+    /// Another `yes` — in this door or the other — is being prepared: its
+    /// password is being asked, or its job handed to the queue.
+    Preparing,
+    /// The staging folder would not take the preparation's file.
+    Unprepared,
 }
 
 impl Busy {
     /// Every one — for the test that each has its sentence in every language.
     #[cfg(test)]
-    pub const ALL: [Self; 4] = [Self::Writing, Self::Waiting, Self::Stopped, Self::QueueDown];
+    pub const ALL: [Self; 6] = [
+        Self::Writing,
+        Self::Waiting,
+        Self::Stopped,
+        Self::QueueDown,
+        Self::Preparing,
+        Self::Unprepared,
+    ];
 
     /// Its sentence.
     #[must_use]
@@ -395,6 +417,8 @@ impl Busy {
             Self::Waiting => key::STICK_BUSY_WAITING,
             Self::Stopped => key::STICK_BUSY_STOPPED,
             Self::QueueDown => key::TRANSFERS_OFFLINE,
+            Self::Preparing => key::STICK_BUSY_PREPARING,
+            Self::Unprepared => key::STICK_BUSY_UNPREPARED,
         }
     }
 }
@@ -585,30 +609,64 @@ impl Feed {
     /// BEFORE anything is asked.
     pub fn arm(&self, armed: Armed, mut gesture: crate::sudo::Gesture) {
         self.raise("arm", move || {
-            if let Some(busy) = busy() {
-                return Came::Busy(busy);
-            }
-            let staging = Path::new(ronoctua_stick::STAGING);
-            // THE FOLDER EMPTIED BEFORE THE WRITER STARTS, so it waits for
-            // THIS write's `ready` — and only now, with no write under way.
-            ronoctua_stick::staging::clear(staging);
-            match gesture.run(
-                ronoctua_security::verb::RootVerb::StickWrite.into(),
-                &mut |_| {},
-            ) {
-                Ok(()) => match queue(&armed.release, Some(&armed.target)) {
-                    Ok(()) => Came::Queued(true),
-                    Err(e) => {
-                        // THE WRITER RUNS AND NOTHING WILL FEED IT: told now,
-                        // and not after its twelve hours of waiting.
-                        tracing::warn!(error = %e, "the queue did not take the stick's write");
-                        let _ = ronoctua_stick::staging::cancel_for(staging, Some(Why::Failed));
-                        Came::Queued(false)
-                    }
+            armed_in(
+                Path::new(ronoctua_stick::STAGING),
+                busy,
+                move || {
+                    gesture.run(
+                        ronoctua_security::verb::RootVerb::StickWrite.into(),
+                        &mut |_| {},
+                    )
                 },
-                Err(why) => Came::Door(why),
-            }
+                || queue(&armed.release, Some(&armed.target)),
+            )
         });
+    }
+}
+
+/// One `yes`, from its preparation to the queue — the arm thread's work,
+/// with what reads and asks the machine handed in: `busy` ([`busy`]),
+/// `start` (the sudo door starting the writer) and `queue` ([`queue`]).
+///
+/// THE PREPARATION IS TAKEN FIRST, before `busy` reads the machine and
+/// before `start` asks the password, and held until the queue holds the job
+/// or nothing was started — see the module's "One write at a time". A
+/// second `yes` meanwhile is [`Busy::Preparing`], and reads, asks and stops
+/// nothing.
+fn armed_in(
+    staging: &Path,
+    busy: impl FnOnce() -> Option<Busy>,
+    start: impl FnOnce() -> Result<(), ronoctua_security::Why>,
+    queue: impl FnOnce() -> anyhow::Result<()>,
+) -> Came {
+    let _preparing = match ronoctua_stick::staging::Preparing::take(staging) {
+        Ok(p) => p,
+        Err(ronoctua_stick::staging::NotPrepared::Another) => {
+            return Came::Busy(Busy::Preparing);
+        }
+        Err(ronoctua_stick::staging::NotPrepared::Failed(e)) => {
+            tracing::warn!(error = %e, "the stick's write could not be prepared");
+            return Came::Busy(Busy::Unprepared);
+        }
+    };
+    if let Some(busy) = busy() {
+        return Came::Busy(busy);
+    }
+    // THE FOLDER EMPTIED BEFORE THE WRITER STARTS, so it waits for THIS
+    // write's `ready` — and only now, with no write under way.
+    ronoctua_stick::staging::clear(staging);
+    match start() {
+        Ok(()) => match queue() {
+            Ok(()) => Came::Queued(true),
+            Err(e) => {
+                // THE WRITER RUNS AND NOTHING WILL FEED IT: told now, and not
+                // after its twelve hours of waiting.
+                tracing::warn!(error = %e, "the queue did not take the stick's write");
+                let _ = ronoctua_stick::staging::cancel_for(staging, Some(Why::Failed));
+                Came::Queued(false)
+            }
+        },
+        Err(why) => Came::Door(why),
     }
 }
 
@@ -1894,6 +1952,86 @@ mod tests {
             v.heard(&mut r, Came::Busy(Busy::Writing), &zone(), WIDTH, &t),
             Errand::Speak(crate::key::STICK_BUSY_WRITING)
         );
+    }
+
+    /// FAILS IF: two `yes` at the same instant, one in each door, break the
+    /// first write — the second reading, between the first's writer
+    /// starting and its job reaching the queue, "a writer waiting for
+    /// nobody", and telling it to stop — instead of being refused with a
+    /// sentence before it reads, asks or stops anything; or the preparation
+    /// outlives the first `yes`, refusing every one after it.
+    #[test]
+    fn a_second_yes_while_one_is_prepared_is_refused_and_breaks_nothing() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("ronoctua-stick-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut second = None;
+        let mut stopped = false;
+        let first = armed_in(
+            &dir,
+            || None,
+            || {
+                // THE OTHER DOOR'S `yes`, AT THIS INSTANT: the first's
+                // writer is starting and its job is not queued yet — what
+                // the machine would read as a writer nobody feeds.
+                second = Some(armed_in(
+                    &dir,
+                    || {
+                        stopped = true;
+                        Some(Busy::Stopped)
+                    },
+                    || panic!("the second yes asked the password"),
+                    || panic!("the second yes queued a job"),
+                ));
+                Ok(())
+            },
+            || Ok(()),
+        );
+        assert!(matches!(first, Came::Queued(true)), "{first:?}");
+        assert!(
+            matches!(second, Some(Came::Busy(Busy::Preparing))),
+            "{second:?}"
+        );
+        assert!(
+            !stopped,
+            "the second yes read the machine and stopped the writer"
+        );
+        assert!(
+            !dir.join(ronoctua_stick::staging::CANCEL_FILE).exists(),
+            "the first write was given up"
+        );
+        // AND ONCE THE QUEUE HOLDS THE JOB, the next `yes` is the machine's
+        // to answer — the preparation went with the first.
+        let third = armed_in(
+            &dir,
+            || Some(Busy::Waiting),
+            || panic!("asked over an armed write"),
+            || panic!("queued over an armed write"),
+        );
+        assert!(matches!(third, Came::Busy(Busy::Waiting)), "{third:?}");
+        // AND A REFUSED PASSWORD LETS IT GO TOO.
+        let refused = armed_in(
+            &dir,
+            || None,
+            || Err(ronoctua_security::Why::NotAllowed),
+            || panic!("queued with no writer"),
+        );
+        assert!(matches!(refused, Came::Door(_)), "{refused:?}");
+        assert!(
+            !dir.join(ronoctua_stick::staging::PREPARING_FILE).exists(),
+            "the preparation outlived its yes"
+        );
+        // THE REFUSAL IS SAID, in both doors' one path.
+        let t = texts("en-GB");
+        let mut r = readings();
+        let mut v = View::on(None);
+        assert_eq!(
+            v.heard(&mut r, Came::Busy(Busy::Preparing), &zone(), WIDTH, &t),
+            Errand::Speak(crate::key::STICK_BUSY_PREPARING)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// THE QUESTION KEEPS THE RELEASE IT WAS ASKED WITH: `r` is neither

@@ -78,6 +78,7 @@ pkgs.testers.runNixOSTest {
       ${xvfb.prelude}
 
       import re
+      from datetime import timedelta
 
       def as_user(command):
           """Run `command` in the user's own manager — an ACTIVE session's process."""
@@ -131,7 +132,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               "systemctl --machine=${nodes.machine.ronoctua.user}@ --user is-system-running --wait "
               "| grep -E 'running|degraded' > /dev/null",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           # A `sleep` inhibitor from the USER'S manager: the same place the footer
           # runs from. `busctl` holds the fd for the length of the call, which is
@@ -161,7 +162,7 @@ pkgs.testers.runNixOSTest {
           # active and have nothing to apply — and the "once" below counts an
           # apply. Start the machine on power-saver.
           machine.succeed("powerprofilesctl set power-saver")
-          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = power-saver ]", timeout=30)
+          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = power-saver ]", timeout=timedelta(seconds=30))
           machine.succeed("mkdir -p /root/.config/ronoctua")
           machine.succeed(
               "printf '%s' '{\"quiet\":true}' > /root/.config/ronoctua/brain.json"
@@ -180,11 +181,11 @@ pkgs.testers.runNixOSTest {
           )
           machine.wait_until_succeeds(
               "journalctl -u footer --no-pager | grep 'the chosen power profile is not offered here' > /dev/null",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           journal = footer_journal()
           assert journal.count("applying the chosen power profile") == 1, "the default was applied more than once, or never"
-          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = balanced ]", timeout=30)
+          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = balanced ]", timeout=timedelta(seconds=30))
           # NO BATTERY, NO SEGMENT — and no profile mark either, because
           # `balanced` is the top this machine offers. The mark WAS there while
           # the machine sat on power-saver (the first frame, and the echo's
@@ -195,14 +196,14 @@ pkgs.testers.runNixOSTest {
               i = j.rfind("footer layout resolved")
               return j[i:] if i >= 0 else ""
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep 'id=\"profile\"' > /dev/null", timeout=60
+              "journalctl -u footer --no-pager | grep 'id=\"profile\"' > /dev/null", timeout=timedelta(minutes=1)
           )
           settled = ""
           for _ in range(30):
               settled = last_layout()
               if settled and 'id="profile"' not in settled:
                   break
-              machine.sleep(1)
+              machine.sleep(duration=timedelta(seconds=1))
           journal = footer_journal()
           assert 'id="battery"' not in journal, "a battery segment on a machine with no battery"
           assert settled and 'id="profile"' not in settled, (
@@ -222,9 +223,9 @@ pkgs.testers.runNixOSTest {
               "--setenv=RUST_LOG=ronoctua_shell=debug,ronoctua_power=debug "
               "${ronoctua-shell}/bin/ronoctua-shell"
           )
-          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = power-saver ]", timeout=60)
+          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = power-saver ]", timeout=timedelta(minutes=1))
           machine.wait_until_succeeds(
-              "journalctl -u footer-saver --no-pager | grep 'id=\"profile\"' > /dev/null", timeout=60
+              "journalctl -u footer-saver --no-pager | grep 'id=\"profile\"' > /dev/null", timeout=timedelta(minutes=1)
           )
           journal = machine.succeed("journalctl -u footer-saver --no-pager")
           assert "not offered" not in journal, "power-saver is offered; nothing to fall back from"
@@ -236,9 +237,9 @@ pkgs.testers.runNixOSTest {
           # BY PATH: the user manager's PATH is minimal, and a bare name fails
           # at EXEC — the trap AGENTS.md records for every spawn in a unit.
           as_user("${pkgs.power-profiles-daemon}/bin/powerprofilesctl set balanced")
-          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = balanced ]", timeout=30)
+          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = balanced ]", timeout=timedelta(seconds=30))
           as_user("${pkgs.power-profiles-daemon}/bin/powerprofilesctl set power-saver")
-          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = power-saver ]", timeout=30)
+          machine.wait_until_succeeds("[ \"$(powerprofilesctl get)\" = power-saver ]", timeout=timedelta(seconds=30))
 
       with subtest("the critical action UPower reports is a word the view can speak"):
           # The module asks for Hibernate; a VM without a resume device is

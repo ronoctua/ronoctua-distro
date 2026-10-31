@@ -2406,14 +2406,12 @@ let
         exit 1; }
     fi
 
-    # And the CONSOLE's keymap, which is another database (kbd, not xkb). The
-    # installer runs on a TTY: a wrong name here gives a US keyboard at the moment
-    # of typing the disk's passphrase.
-    test -e ${pkgs.kbd}/share/keymaps/i386/qwerty/${keyboard.console}.map.gz || {
-      echo "ERROR: the console keymap \`${keyboard.console}\` does not exist in kbd." >&2
-      exit 1; }
+    # The CONSOLE's map is not another name to check: it is compiled from this
+    # same layout and variant (`nix/console-keymaps.nix`). That every answer
+    # has one, and that the machine's map of the default is the installer's,
+    # is `console-keymaps-cover-the-answers`.
 
-    echo "OK: layout $layout, option $optionName, console ${keyboard.console}"
+    echo "OK: layout $layout, option $optionName"
   '';
 
   # AND THE OPTIONS DO WHAT THEIR NAMES PROMISE — the keymap, compiled.
@@ -9805,8 +9803,12 @@ let
     swept = 0
     wrong = []
 
+    # AND `pw-metadata`, the second program that WRITES (2026-10-31, the
+    # owner's): it sets one stream's `target.object`, which is how a program
+    # is sent to another device — `wpctl` has no verb for it.
     NAMES = ("pw-dump", "wpctl", "pw-cat", "RONOCTUA_PW_DUMP", "RONOCTUA_WPCTL",
-             "RONOCTUA_PW_CAT", "pw-play", "RONOCTUA_PW_PLAY")
+             "RONOCTUA_PW_CAT", "pw-play", "RONOCTUA_PW_PLAY", "pw-metadata",
+             "RONOCTUA_PW_METADATA")
 
     for f in sorted(crates.rglob("*.rs")):
         if f == boundary:
@@ -9841,7 +9843,7 @@ let
     else:
         body = uncommented(boundary.read_text())
         floor(len(body), 1000, "characters of pipewire.rs")
-        for name in ("pw-dump", "wpctl", "pw-cat"):
+        for name in ("pw-dump", "wpctl", "pw-cat", "pw-metadata"):
             if name not in body:
                 wrong.append(f"the boundary no longer names `{name}` — has it moved?")
         opens = body.count('"--record"')
@@ -13545,7 +13547,7 @@ let
     # AND WHAT THE TWO `means` FUNCTIONS CAN ANSWER — see the header.
     # BY NAME, and by braces. The two were written out as the head of a regex
     # that then ran to the next `\n    }`, which a nested block closes early.
-    MEANS = [("files.rs", "strong_meaning"), ("notifications.rs", "means")]
+    MEANS = [("files.rs", "strong_meaning"), ("notifications.rs", "means"), ("audio.rs", "meaning")]
     answered = 0
     for name, head in MEANS:
         body = uncommented(shell_source(name))
@@ -29268,6 +29270,44 @@ let
   # Every Nix file of the tree is read for the call sites, and a path one
   # names that is not there is refused: an interpolated path is a call this
   # cannot follow, and a comment can name a file some other way.
+  # THE NIX DAEMON TRUSTS ROOT ALONE (the owner's decision, 2026-10-31).
+  #
+  # A trusted user may put in the store what nobody signed and change the
+  # daemon's security settings — nearly root, as the Nix manual says — and
+  # nothing the distro runs as the person needs it (`nix/modules/base.nix`
+  # says what was measured). Asked of every system the flake INSTALLS — the
+  # reference machines and the VM —, as a set: NixOS's own default is root,
+  # and a line that hands the person the daemon again is refused. The
+  # installer's live media are left out on purpose: their `nixos` user is
+  # trusted by NixOS's installation-device profile, which also gives it sudo
+  # with no password; the media install as root and are never a machine.
+  nix-trusts-only-root =
+    let
+      systems = lib.filterAttrs (name: _: !(lib.hasPrefix "installer" name)) self.nixosConfigurations;
+      wrong = lib.concatLists (
+        lib.mapAttrsToList (
+          name: s:
+          let
+            users = s.config.nix.settings.trusted-users or [ ];
+          in
+          lib.optional (lib.unique users != [ "root" ]) "${name}: ${builtins.toJSON users}"
+        ) systems
+      );
+    in
+    mkCheck "nix-trusts-only-root" [ ] ''
+      ${lib.optionalString (builtins.length (builtins.attrNames systems) < 3) ''
+        echo "ERROR: only ${toString (builtins.length (builtins.attrNames systems))} systems in the flake: this check reads too few" >&2
+        exit 1
+      ''}
+      ${lib.optionalString (wrong != [ ]) ''
+        echo "ERROR: a system's Nix daemon trusts more than root:" >&2
+        ${lib.concatMapStringsSep "\n" (line: "echo ${lib.escapeShellArg "       ${line}"} >&2") wrong}
+        echo "      A trusted user is nearly root, and nothing of the distro needs one." >&2
+        exit 1
+      ''}
+      echo "OK: the ${toString (builtins.length (builtins.attrNames systems))} systems' Nix daemons trust root alone"
+    '';
+
   callpackage-fills-no-default =
     let
       # The paths a Nix text hands `callPackage`, as written, a call broken
@@ -29387,6 +29427,113 @@ let
       ''}
       echo "OK: ${toString (builtins.length targets)} files called through callPackage, by ${toString (builtins.length sites)} call sites; no default of theirs is a name pkgs has"
     '';
+
+  # A WRAPPER HANDS A PROGRAM WHAT IT IS KEYED TO WITH `--set`, NEVER
+  # `--set-default`.
+  #
+  # The palettes, the texts and the brain's catalogue (`rust.keyed`) are a
+  # build's own: a program compiled with other colour roles, other key names
+  # or other modules refuses them at its start. A login session exports the
+  # three too, and keeps the value it logged in with — so a wrapper that only
+  # DEFAULTS them lets the session's older value through after a switch, and
+  # the leader goes down until the next login (`keyed`, `nix/rust.nix`).
+  # Asked of the wrappers as they are written: the shell's two bundles (the
+  # system's and `.#dev`'s), which carry all three, and the programs that
+  # paint under a wrapper of their own, which carry at least the palettes.
+  # The predicate is asked of a planted script first, so a reading that
+  # stopped seeing the flag is refused rather than taken for a clean tree.
+  wrappers-set-what-is-keyed =
+    let
+      keyed = builtins.attrNames rust.keyed;
+      defaultsIn = script: lib.filter (k: lib.hasInfix "--set-default ${k} " script) keyed;
+      setsIn = script: lib.filter (k: lib.hasInfix "--set ${k} " script) keyed;
+      planted = "wrapProgram $out/bin/x --inherit-argv0 --set-default RONOCTUA_THEMES /a --set RONOCTUA_TEXTS /b ";
+      plantedRight =
+        defaultsIn planted == [ "RONOCTUA_THEMES" ] && setsIn planted == [ "RONOCTUA_TEXTS" ];
+      bundles = {
+        inherit (rust) shell loopShell;
+      };
+      painters = {
+        inherit (rust) installer rescue player;
+      };
+      scriptOf = drv: drv.drvAttrs.buildCommand;
+      defaulted = lib.concatLists (
+        lib.mapAttrsToList (name: drv: map (k: "${name}: --set-default ${k}") (defaultsIn (scriptOf drv))) (
+          bundles // painters
+        )
+      );
+      bundlesShort = lib.concatLists (
+        lib.mapAttrsToList (
+          name: drv: map (k: "${name}: no --set ${k}") (lib.subtractLists (setsIn (scriptOf drv)) keyed)
+        ) bundles
+      );
+      paintersShort = lib.mapAttrsToList (name: _: "${name}: no --set RONOCTUA_THEMES") (
+        lib.filterAttrs (_: drv: !(lib.elem "RONOCTUA_THEMES" (setsIn (scriptOf drv)))) painters
+      );
+      wrong = defaulted ++ bundlesShort ++ paintersShort;
+      say =
+        lines: lib.concatMapStringsSep "\n" (line: "echo ${lib.escapeShellArg "       ${line}"} >&2") lines;
+    in
+    mkCheck "wrappers-set-what-is-keyed" [ ] ''
+      ${lib.optionalString (!plantedRight || builtins.length keyed < 3) ''
+        echo "ERROR: the planted wrapper no longer reads as it must, or rust.keyed lost its names:" >&2
+        echo "       this check would pass over the wrappers without seeing them." >&2
+        exit 1
+      ''}
+      ${lib.optionalString (wrong != [ ]) ''
+        echo "ERROR: a wrapper does not hand a program what it is keyed to with --set:" >&2
+        ${say wrong}
+        echo "      A session's older value would win after a switch, and the program" >&2
+        echo "      would refuse it at its start. See \`keyed\` in nix/rust.nix." >&2
+        exit 1
+      ''}
+      echo "OK: ${toString (builtins.length keyed)} keyed names, --set by the two bundles; the ${toString (builtins.length (builtins.attrNames painters))} painters --set their palettes; no wrapper defaults one"
+    '';
+
+  # THE KEYMAP IS INSTALLED BEFORE ANY DOOR.
+  #
+  # Every door teaches its keys from the keymap the binary installs
+  # (`bindings::install(keymap::build)`), the one place that names every
+  # crate's contribution. A door that ran before it would ask
+  # `bindings::taught` of a process with no keymap, and every taught key would
+  # come out EMPTY — on every hint line, with nothing failing but one line in
+  # the journal. So in the binary's `main` the install stands at the top
+  # level, unconditional, before the match that dispatches the subcommands.
+  the-keymap-is-installed-at-start = mkCheck "the-keymap-is-installed-at-start" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    main = code_of(pathlib.Path("${self}/crates/ronoctua-shell/src/main.rs").read_text())
+    body = must(body_of(main, "main"), "the shell binary's `fn main`")
+    floor(len(body), 2000, "characters of the shell binary's `fn main`")
+
+    def depth(at):
+        return body[:at].count("{") - body[:at].count("}")
+
+    installs = [m.start() for m in re.finditer(r"\bbindings::install\s*\(\s*keymap::build\s*\)", body)]
+    dispatch = re.search(r"\bmatch\s+subcommand\.as_deref\(\)", body)
+    wrong = []
+    if dispatch is None:
+        wrong.append("the match that dispatches the subcommands is gone from `main`: this check reads nothing")
+    elif not installs:
+        wrong.append("`main` does not install the keymap (`bindings::install(keymap::build)`)")
+    else:
+        first = installs[0]
+        if first > dispatch.start():
+            wrong.append("the keymap is installed after the match that dispatches the subcommands")
+        if depth(first) != depth(dispatch.start()):
+            wrong.append("the keymap is installed inside a block of `main`, not at its top level: "
+                         "some subcommand would run without it")
+    if wrong:
+        print("ERROR: a door could run before the keymap is installed.", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        print("       Every key it teaches would come out empty, in silence.", file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: the binary installs the keymap at the top of `main`, before it dispatches a subcommand")
+    END
+  '';
 
   the-explanation-has-its-own-register =
     mkCheck "the-explanation-has-its-own-register" [ pkgs.python3 ]
@@ -35972,9 +36119,12 @@ let
       listed = listed.group(1)
 
       wrong = []
+      # AND THE LOCK SCREEN'S OWN (2026-10-31, the owner's): the finger alone,
+      # opening the person's own session and never root — its stack is held by
+      # `the-lock-finger-is-the-finger-alone` (`tests/lock-screen-checks.nix`).
       asking = sorted(n for n, t in services.items() if "pam_fprintd.so" in t)
-      if asking != ["sudo"]:
-          wrong.append(f"pam_fprintd is in {asking}, and may be in sudo only")
+      if asking != ["ronoctua-unlock-finger", "sudo"]:
+          wrong.append(f"pam_fprintd is in {asking}, and may be in sudo and the lock screen's finger only")
 
       auth = [
           l.split("#", 1)[0].split()
@@ -36023,7 +36173,7 @@ let
           print("       A finger answers sudo in a terminal for a listed user, and nothing", file=sys.stderr)
           print("       else — never the login, never polkit, never the door's sudo -S.", file=sys.stderr)
           raise SystemExit(1)
-      print(f"OK: {len(services)} services, pam_fprintd in sudo only, behind the list, the terminal and its cue")
+      print(f"OK: {len(services)} services, pam_fprintd in sudo (behind the list, the terminal and its cue) and the lock's finger only")
       END
     '';
 
@@ -43195,6 +43345,22 @@ let
       built = (machineLib.machine { dir = fixture; }).config;
       hashOf = id: import ../nix/person-hash.nix (fixture + "/person/brain/${id}");
       approved = (builtins.fromJSON (builtins.readFile (fixture + "/local/approved.json"))).modules;
+      # THE BRAIN'S LOADER, told which folders it may read — the machine's
+      # included ones, or every one. The two waiting modules' manifests
+      # `throw`: reading them at all is what is caught.
+      onlyIds = (machineLib.approvals fixture).includedIds;
+      loader =
+        only:
+        import ../nix/brain-modules.nix {
+          inherit lib languages;
+          modulesDir = ../crates/ronoctua-brain/tests/person-none;
+          personModulesDir = fixture + "/person/brain";
+          personModulesOnly = only;
+        };
+      readsIncluded = builtins.tryEval (
+        builtins.deepSeq (loader onlyIds).personRefused (loader onlyIds).personIds
+      );
+      readsEvery = builtins.tryEval (builtins.deepSeq (loader null).personRefused true);
       facts = pkgs.writeText "person-approval-facts.json" (
         builtins.toJSON {
           etc = builtins.filter (lib.hasPrefix "ronoctua-fixture-") (
@@ -43210,6 +43376,9 @@ let
           ] hashOf;
           sibling = builtins.pathExists (fixture + "/person/brain/my-common/helper.nix");
           approved = lib.mapAttrs (_: a: a.hash) approved;
+          inherit onlyIds;
+          readIncluded = if readsIncluded.success then readsIncluded.value else null;
+          everyReached = !readsEvery.success;
         }
       );
     in
@@ -43235,6 +43404,18 @@ let
       waiting = {a["id"]: a["hash"] for a in f["brain"]["awaiting-approval"]}
       if waiting != {"my-edited": f["hashes"]["my-edited"], "my-unapproved": f["hashes"]["my-unapproved"]}:
           wrong.append(f"the modules awaiting approval: {waiting}")
+      # A MODULE WAITING FOR ITS APPROVAL IS NEVER EVALUATED BY ROOT, not its
+      # manifest either (the owner's decision, 2026-10-31): the loader is told
+      # the included folders alone, and reads them without reaching the two
+      # whose manifests `throw` — which reading every folder does reach.
+      if sorted(f["onlyIds"]) != expected:
+          wrong.append(f"the folders the loader may read: {f['onlyIds']}")
+      if f["readIncluded"] is None:
+          wrong.append("the loader told the included folders evaluated a manifest no approval covers")
+      elif set(f["readIncluded"]) & {"my-edited", "my-unapproved"}:
+          wrong.append(f"the loader read a waiting module: {f['readIncluded']}")
+      if not f["everyReached"]:
+          wrong.append("reading every folder did not reach the waiting modules' manifests: the check proves nothing")
       if wrong:
           print("ERROR: a module that reaches root is imported without an approval of what it is.",
                 file=sys.stderr)
@@ -43242,7 +43423,7 @@ let
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
       print("OK: approved → imported, from its own folder alone; unapproved and edited after "
-            "approval → waiting, by their hashes")
+            "approval → waiting, by their hashes, and never evaluated — not even their manifests")
       END
     '';
 
@@ -47580,6 +47761,16 @@ let
   # through the sudo door only at the hash `nix/person-hash.nix` computes,
   # and root's lock held by the update. (A broken declared entry failing
   # alone, as a part, is `parts-are-isolated`.)
+  # A DISTRO APPIMAGE FOLLOWING ITS RELEASES, END TO END (2026-10-31): a fake
+  # GitHub, a tiny AppImage in three releases, the real step, signature and
+  # applier, and the part built at the followed version — or held, with why.
+  distroAppsFollowVm = import ./distro-apps-follow-vm.nix {
+    inherit pkgs lib;
+    partsTool = rust.parts;
+    person = rust.person;
+    software = rust.software;
+    testPq = rust.bins.ronoctua-test-pq;
+  };
   personVm = import ./person-vm.nix {
     inherit pkgs lib;
     person = rust.person;
@@ -52504,6 +52695,27 @@ let
       nix = pkgs.writeShellScript "stand-in-nix" ''
         echo "nix $*" >>"$CALLS"
         case "$1" in
+          # `nix flake update nixpkgs`, in the checkout it runs in: nothing
+          # moves, the input moves to `$FAKE_NIXPKGS_REV` of
+          # `$FAKE_NIXPKGS_TIME`, the update fails, or it writes beside the
+          # lock.
+          flake)
+            case "''${FAKE_NIXPKGS:-}" in
+              moved)
+                ${pkgs.gnused}/bin/sed -i \
+                  -e "s/\"rev\": \"[0-9a-f]*\"/\"rev\": \"$FAKE_NIXPKGS_REV\"/" \
+                  -e "s/\"lastModified\": [0-9]*/\"lastModified\": $FAKE_NIXPKGS_TIME/" flake.lock
+                echo "• Updated input 'nixpkgs'"
+                ;;
+              fail)
+                echo "error: unable to download 'https://github.com/NixOS/nixpkgs/archive/nixos-unstable.tar.gz'"
+                exit 1
+                ;;
+              beside)
+                echo x >>flake.nix
+                ;;
+            esac
+            ;;
           build)
             mkdir -p "$FAKE_STORE/noctua" "$FAKE_STORE/minimal" "$FAKE_STORE/iso/iso"
             head -c 3000 /dev/zero >"$FAKE_STORE/iso/iso/ronoctua-distro-26.05.check-x86_64.iso"
@@ -52536,6 +52748,10 @@ let
             echo "other: unchanged (2.0)"
             echo '{ "demo": "1.1" }' >"$1/assets/distro-pins.json"
             echo "Wrote assets/distro-pins.json: \`git diff assets/distro-pins.json\` shows what moved."
+            ;;
+          two)
+            echo "demo: 1.1 -> 1.2"
+            echo '{ "demo": "1.2" }' >"$1/assets/distro-pins.json"
             ;;
           fail)
             echo "distro-pins: demo: the latest release has 2 assets matching \`*.AppImage\`"
@@ -52633,9 +52849,29 @@ let
         git clone --quiet git@github.com:ronoctua/ronoctua-distro.git other 2>/dev/null
         cd work
         echo '{ }' >flake.nix
+        cat >flake.lock <<'END'
+        {
+          "nodes": {
+            "nixpkgs": {
+              "locked": {
+                "lastModified": 1700000000,
+                "rev": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "type": "github"
+              }
+            },
+            "root": {
+              "inputs": {
+                "nixpkgs": "nixpkgs"
+              }
+            }
+          },
+          "root": "root",
+          "version": 7
+        }
+        END
         mkdir assets
         echo '{ "demo": "1.0" }' >assets/distro-pins.json
-        git add flake.nix assets/distro-pins.json
+        git add flake.nix flake.lock assets/distro-pins.json
         git commit --quiet -m one
         git push --quiet origin main
         release=${release}/bin/ronoctua-release
@@ -52669,7 +52905,7 @@ let
             cat "$said" >&2
             failed=1
           fi
-          if grep -q -e '^gh release \(create\|upload\|edit\)' -e '^nix' "$CALLS"; then
+          if grep -q -e '^gh release \(create\|upload\|edit\)' -e '^nix build' "$CALLS"; then
             echo "ERROR: $what: refused after it had started:" >&2
             cat "$CALLS" >&2
             failed=1
@@ -52742,6 +52978,18 @@ let
         [ $((SECONDS - started)) -lt 20 ] || { echo "ERROR: a move that did not end held the release" >&2; failed=1; }
         FAKE_MOVE=beside refused "a move that wrote beside the pins" "changed more than assets/distro-pins.json"
         git checkout --quiet -- flake.nix assets/distro-pins.json
+        # AND NIXPKGS, moved with the pins (the owner's decision, 2026-10-31):
+        # an update that fails, or writes beside the lock, is refused before
+        # anything is built, committed or pushed — the lock as it was.
+        FAKE_NIXPKGS=fail refused "a move of nixpkgs that failed" "the distro's nixpkgs could not be moved"
+        grep -qx "nix flake update nixpkgs" "$CALLS" ||
+          { echo "ERROR: the release did not move nixpkgs in the checkout" >&2; cat "$CALLS" >&2; failed=1; }
+        [ -z "$(git status --porcelain)" ] ||
+          { echo "ERROR: a move of nixpkgs that failed left the checkout changed" >&2; git status --short >&2; failed=1; }
+        grep -q -e 'nix run .#release -- --keep-pins' "$said" ||
+          { echo "ERROR: a move of nixpkgs that failed did not say --keep-pins" >&2; cat "$said" >&2; failed=1; }
+        FAKE_NIXPKGS=beside refused "a move of nixpkgs that wrote beside the lock" "changed more than flake.lock"
+        git checkout --quiet -- flake.nix flake.lock
 
         # THE DRY RUN: everything that costs nothing, and nothing else.
         : >"$CALLS"
@@ -52764,8 +53012,9 @@ let
           failed=1
         fi
         grep -qx "    Demo (demo): 1.0 pinned, 1.1 released" "$said" &&
-          grep -qx "  a release moves them first: one commit of assets/distro-pins.json, pushed to main" "$said" ||
-          { echo "ERROR: the dry run did not say the pins behind, and that a release moves them" >&2; cat "$said" >&2; failed=1; }
+          grep -qx "the distro's nixpkgs: aaaaaaa (2023-11-14)" "$said" &&
+          grep -qx "  a release moves them first: one commit of assets/distro-pins.json and" "$said" ||
+          { echo "ERROR: the dry run did not say the pins behind, the nixpkgs, and that a release moves them" >&2; cat "$said" >&2; failed=1; }
         # `--keep-pins` SAYS THEM, and moves none.
         : >"$CALLS"
         if ! "$release" --dry-run --keep-pins >"$said" 2>&1; then
@@ -52774,7 +53023,7 @@ let
           failed=1
         fi
         grep -qx "    Demo (demo): 1.0 pinned, 1.1 released" "$said" &&
-          grep -qx "  this release goes on with the pins it has (--keep-pins)" "$said" ||
+          grep -qx "  this release goes on with the pins and nixpkgs it has (--keep-pins)" "$said" ||
           { echo "ERROR: --keep-pins did not say the pins behind, and that it goes on with them" >&2; cat "$said" >&2; failed=1; }
         if grep -q '^move ' "$CALLS"; then
           echo "ERROR: --keep-pins moved the pins" >&2
@@ -52946,8 +53195,45 @@ let
           { echo "ERROR: the draft is not the pins' commit's" >&2; cat "$CALLS" >&2; failed=1; }
         [ -z "$(git status --porcelain)" ] || { echo "ERROR: the checkout is not clean after the pins' commit" >&2; failed=1; }
 
+        # NIXPKGS THAT MOVED: one commit of the lock, before the gate — and,
+        # with a pin, one commit of both.
+        git commit --quiet --allow-empty -m six
+        git push --quiet origin main
+        sixth=$(git rev-parse HEAD)
+        : >"$CALLS"
+        FAKE_NIXPKGS=moved FAKE_NIXPKGS_REV=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb FAKE_NIXPKGS_TIME=1700086400 \
+          "$release" >"$said" 2>&1 || { echo "ERROR: the release whose nixpkgs moved failed:" >&2; cat "$said" >&2; failed=1; }
+        moved=$(git rev-parse HEAD)
+        [ "$(git rev-parse "$moved^")" = "$sixth" ] && [ "$(git diff --name-only "$sixth" "$moved")" = flake.lock ] ||
+          { echo "ERROR: the nixpkgs that moved is not one commit of flake.lock on top of main" >&2; git log --stat -2 >&2; failed=1; }
+        [ "$(git log -1 --format=%s "$moved")" = "flake: nixpkgs moves to the newest nixos-unstable" ] &&
+          git log -1 --format=%b "$moved" | grep -qx "nixpkgs: aaaaaaa (2023-11-14) -> bbbbbbb (2023-11-15)" ||
+          { echo "ERROR: the nixpkgs' commit does not say what moved" >&2; git log -1 "$moved" >&2; failed=1; }
+        nix_at=$(grep -nx "nix flake update nixpkgs" "$CALLS" | head -1 | cut -d: -f1)
+        gate_at=$(grep -nx gate "$CALLS" | head -1 | cut -d: -f1)
+        [ -n "$nix_at" ] && [ -n "$gate_at" ] && [ "$nix_at" -lt "$gate_at" ] ||
+          { echo "ERROR: nixpkgs was not moved before the gate" >&2; cat "$CALLS" >&2; failed=1; }
+        grep -qx "gate on $moved with main at $moved" "$CALLS" ||
+          { echo "ERROR: the gate did not test the nixpkgs' commit, with origin's main at it" >&2; cat "$CALLS" >&2; failed=1; }
+        [ "$(at_release)" = "$moved" ] || { echo "ERROR: what was released is not the nixpkgs' commit" >&2; failed=1; }
+        git commit --quiet --allow-empty -m seven
+        git push --quiet origin main
+        seventh=$(git rev-parse HEAD)
+        : >"$CALLS"
+        FAKE_MOVE=two FAKE_NIXPKGS=moved FAKE_NIXPKGS_REV=cccccccccccccccccccccccccccccccccccccccc FAKE_NIXPKGS_TIME=1700172800 \
+          "$release" >"$said" 2>&1 || { echo "ERROR: the release whose pins and nixpkgs moved failed:" >&2; cat "$said" >&2; failed=1; }
+        moved=$(git rev-parse HEAD)
+        [ "$(git rev-parse "$moved^")" = "$seventh" ] &&
+          [ "$(git diff --name-only "$seventh" "$moved" | tr '\n' ' ')" = "assets/distro-pins.json flake.lock " ] ||
+          { echo "ERROR: the pins and nixpkgs that moved are not one commit of the two files" >&2; git log --stat -2 >&2; failed=1; }
+        [ "$(git log -1 --format=%s "$moved")" = "release: nixpkgs and demo move to their latest" ] &&
+          git log -1 --format=%b "$moved" | grep -qx "demo: 1.1 -> 1.2" &&
+          git log -1 --format=%b "$moved" | grep -qx "nixpkgs: bbbbbbb (2023-11-15) -> ccccccc (2023-11-16)" ||
+          { echo "ERROR: the commit of the pins and nixpkgs does not say what moved" >&2; git log -1 "$moved" >&2; failed=1; }
+        [ -z "$(git status --porcelain)" ] || { echo "ERROR: the checkout is not clean after the nixpkgs' commit" >&2; failed=1; }
+
         [ "$failed" = 0 ] || exit 1
-        echo "OK: twenty refusals before anything was built, committed or pushed, three of them a move of the pins that failed, did not end or wrote beside them; the dry run and --keep-pins say the pins behind, move none and stop for nothing; a release moves the pins before the gate — nothing moved is no commit, and what moved is one signed commit of the pins on main, which the gate tests and the release publishes; a release, published or refused, leaves no assets in the cache, nor an earlier run's; a release drafts, moves release forward, publishes and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
+        echo "OK: twenty refusals before anything was built, committed or pushed, three of them a move of the pins that failed, did not end or wrote beside them; the dry run and --keep-pins say the pins behind, move none and stop for nothing; a release moves the pins and nixpkgs before the gate — nothing moved is no commit, and what moved is one signed commit of the pins and the lock on main, which the gate tests and the release publishes; a move of nixpkgs that fails or writes beside the lock is refused, the lock as it was; a release, published or refused, leaves no assets in the cache, nor an earlier run's; a release drafts, moves release forward, publishes and pushes no cache; a draft that is there is filled again; a rollback goes only to a published release and makes it the latest; a signed tag reaches the origin only after release moved"
       '';
 
   # OLD ISOs LEAVE THE STORE, AND NOTHING ELSE DOES (`nix/iso-sweep.nix`).
@@ -53692,6 +53978,7 @@ let
         stateDir = "state";
         profiles = "profiles";
         booted = "booted-system";
+        current = "current-system";
         menuLimit = "5";
         nixEnv = "${nixEnv}";
       };
@@ -53741,17 +54028,25 @@ let
         [ "$(cat "$CALLS")" = "$(printf 'machine migrate\nmachine apply')" ] ||
           fail "adopt-machine ran $(cat "$CALLS"), not migrate then apply"
 
-        # APPLY HERE: five generations, the fifth the profile and the boot.
+        # APPLY HERE: five generations, the fifth the profile, the boot and
+        # what runs — all of one nixpkgs but `moved`, and `blank`, whose
+        # nixpkgs cannot be read.
         switch=${switch}/bin/ronoctua-apply-here-switch
         mkdir profiles state
-        for n in 1 2 3 4 5 new; do
+        for n in 1 2 3 4 5 new moved blank; do
           mkdir -p "sys/$n/bin"
           printf '#!/bin/sh\necho "switch %s $1" >>"$CALLS"\n' "$n" >"sys/$n/bin/switch-to-configuration"
           chmod +x "sys/$n/bin/switch-to-configuration"
+          echo "26.11.20261027.aaaaaaa (Zokor)" >"sys/$n/nixos-version"
         done
+        echo "26.11.20261031.bbbbbbb (Zokor)" >sys/moved/nixos-version
+        rm sys/blank/nixos-version
+        mkdir -p sys/5/specialisation/quiet
+        cp sys/5/nixos-version sys/5/specialisation/quiet/nixos-version
         for n in 1 2 3 4 5; do ln -s "$PWD/sys/$n" "profiles/system-$n-link"; done
         ln -s system-5-link profiles/system
         ln -s "$PWD/sys/5" booted-system
+        ln -s "$PWD/sys/5" current-system
         record() {
           printf '{"format": 1, "last-good": {"toplevel": "%s"}, "trial": %s}\n' "$PWD/sys/$1" "$2" >state/state.json
         }
@@ -53795,8 +54090,32 @@ let
           fail "the switch with room did $(cat "$CALLS"), not the profile and then the switch"
         [ -d run ] && [ "$(stat -c %a run/system.lock)" = 600 ] || fail "the lock's folder was not made, or the lock is not private"
 
+        # NOW, OR FOR THE NEXT BOOT (the owner's decision, 2026-10-31):
+        # nothing that runs is switched across two nixpkgs, nor while the
+        # profile names a system that does not run; a nixpkgs that cannot be
+        # read is no proof that nothing moved. A specialisation of the
+        # profile's system runs it.
+        for_the_next_boot() {
+          local what=$1 system=$2 sentence=$3
+          : >"$CALLS"
+          "$switch" "sys/$system" "$PWD" >"$said" 2>&1 || fail "$what: $(cat "$said")"
+          grep -qx "switch $system boot" "$CALLS" && ! grep -q "^switch $system switch" "$CALLS" ||
+            fail "$what: not set for the next boot: $(cat "$CALLS")"
+          grep -q -e "$sentence" "$said" || fail "$what: not said ('$sentence'): $(cat "$said")"
+          grep -q "is set for the next boot: reboot to run it" "$said" || fail "$what: the reboot not asked for: $(cat "$said")"
+        }
+        for_the_next_boot "a system of another nixpkgs" moved "nixpkgs moved (26.11.20261027.aaaaaaa (Zokor) -> 26.11.20261031.bbbbbbb (Zokor))"
+        for_the_next_boot "a system whose nixpkgs cannot be read" blank "cannot be read"
+        ln -sfn system-4-link profiles/system
+        for_the_next_boot "a system while the profile names one that does not run" new "does not run yet"
+        ln -sfn system-5-link profiles/system
+        ln -sfn "$PWD/sys/5/specialisation/quiet" current-system
+        : >"$CALLS"
+        "$switch" sys/new "$PWD" >"$said" 2>&1 || fail "a switch from a specialisation: $(cat "$said")"
+        grep -qx "switch new switch" "$CALLS" || fail "a specialisation of the profile's system was taken for another system: $(cat "$CALLS")"
+
         [ "$failed" = 0 ] || exit 1
-        echo "OK: adopt-machine applies only after a migration that said it finished; apply-here switches only under the update's lock, with no trial waiting and the last good system kept in the boot menu"
+        echo "OK: adopt-machine applies only after a migration that said it finished; apply-here switches only under the update's lock, with no trial waiting and the last good system kept in the boot menu, and never live across two nixpkgs or past a system set for the next boot"
       '';
   # ── anchor: L17 ──
   # THE INSTALLER STICK WRITES ONLY A STICK — both halves of the rule, run as
@@ -55664,7 +55983,10 @@ let
       mime-drop-is-live
       mime-claims-refuse
       gate-fetches-what-no-cache-has
+      nix-trusts-only-root
       callpackage-fills-no-default
+      wrappers-set-what-is-keyed
+      the-keymap-is-installed-at-start
       trap-calls-something-that-exists
       dev-exports-before-it-starts
       ;
@@ -56546,6 +56868,7 @@ let
       a-new-machine-starts-on-the-tested-nixpkgs
       ;
     parts-are-isolated = partsVm;
+    distro-apps-follow-a-release-vm = distroAppsFollowVm;
     # ── anchor: L07 ──
     inherit
       a-store-keeps-the-rest-of-a-broken-file
@@ -56749,7 +57072,7 @@ let
       declined-list-is-drawn
       forget-explains-itself
       ;
-    declare-installs-now-and-records = declareVm;
+    declare-installs-now-and-records-vm = declareVm;
     # ── anchor: L19 ──
     # ── anchor: L20 ──
     inherit
@@ -56922,6 +57245,106 @@ let
           ;
       })
       the-trust-crates-stand-where-the-design-says
+      ;
+
+    # THE UPDATE PAGE'S GESTURES ON THE MACHINE (2026-10-31): hold, let go and
+    # try again pass the sudo door alone. `tests/update-gestures-checks.nix`.
+    inherit
+      (import ./update-gestures-checks.nix {
+        inherit
+          pkgs
+          lib
+          self
+          mkCheck
+          pyPrelude
+          shellPrelude
+          ;
+      })
+      machine-gestures-pass-the-sudo-door
+      ;
+
+    # THE LOCK SCREEN (2026-10-31): the two protocols the owner approved, each
+    # in one file; the lock that outlives the footer; the finger alone.
+    # `tests/lock-screen-checks.nix`.
+    inherit
+      (import ./lock-screen-checks.nix {
+        inherit
+          pkgs
+          lib
+          self
+          mkCheck
+          pyPrelude
+          shellPrelude
+          scroll
+          rust
+          fonts
+          ;
+      })
+      one-session-lock
+      one-idle-notify
+      the-lock-outlives-the-footer
+      the-lock-finger-is-the-finger-alone
+      lock-screen-vm
+      ;
+
+    # THE CONSOLE TYPES THE SESSION'S KEYBOARD (2026-10-31): the installer's
+    # maps, and each machine's console and initrd. `tests/console-keymap-checks.nix`.
+    inherit
+      (import ./console-keymap-checks.nix {
+        inherit
+          pkgs
+          lib
+          self
+          mkCheck
+          machineLib
+          consoleModule
+          ;
+        ronoctua = {
+          inherit
+            fonts
+            fontconfigConf
+            iconSuperpack
+            themes
+            themed
+            defaultTheme
+            cursors
+            ;
+        };
+      })
+      console-keymaps-cover-the-answers
+      console-keymap-is-the-answers
+      console-keymap-vm
+      ;
+
+    # A PROGRAM SENT TO ANOTHER SOUND DEVICE (2026-10-31): the boundary's second
+    # writing program sets one thing. `tests/audio-move-checks.nix`.
+    inherit
+      (import ./audio-move-checks.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          ;
+      })
+      audio-move-writes-one-thing
+      ;
+
+    # EVERY TEXT KEY IS SAID (2026-10-31): a sentence nobody can show does not
+    # sit in the texts. `tests/text-keys-checks.nix`.
+    inherit
+      (import ./text-keys-checks.nix {
+        inherit
+          pkgs
+          lib
+          mkCheck
+          pyPrelude
+          rust
+          brainCatalogue
+          languages
+          ;
+        inherit (self.packages.${system}) iconset;
+      })
+      every-key-is-said
       ;
 
     # THE FILE MANAGER IN A CRATE OF ITS OWN (the 2026-10-12 wave, lane R5h):

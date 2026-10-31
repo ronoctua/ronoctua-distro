@@ -781,6 +781,46 @@ in
       };
     };
 
+    # THE LOCK SCREEN (2026-10-31): `ronoctua-shell lock`, holding the
+    # compositor's lock (`ext-session-lock-v1`) until the person's password or
+    # finger opens it. A unit of its own, and not the footer's child, so the
+    # footer dying — or a `switch` restarting it — never opens a locked
+    # session. The footer starts it (`LEADER s q l`, or the idle watcher when
+    # the person turned the automatic lock on); starting it while it runs is
+    # nothing, which is what a second key or a second idle wants.
+    #
+    # A LOCK THAT DIES IS STARTED AGAIN: the compositor keeps the session locked
+    # with nobody to open it, and the next lock takes it over. No start limit,
+    # for the footer's reason — with one, a few crashes would leave the person
+    # at a locked screen nothing answers. But a lock that REFUSED to lock
+    # (no password's stack to open it with, no lock in the compositor) ends
+    # with 78 and is not started again: the refusal would only repeat.
+    #
+    # NEVER RESTARTED BY A `switch`: a restart is a stop — the lock abandoned,
+    # every screen the compositor's red — and a start. The new definition is
+    # taken by the next lock.
+    systemd.user.services.ronoctua-lock = {
+      description = "ronoctua — the screen's lock";
+      environment = {
+        # THE THEME, because this process is not the footer's child and
+        # inherits nothing from it — the lifeline's two, for its reason.
+        RONOCTUA_THEME = config.ronoctua.theme;
+        RONOCTUA_THEMES = "${ronoctua.themed}";
+      };
+      after = [ "graphical-session.target" ];
+      partOf = [ "graphical-session.target" ];
+      startLimitIntervalSec = 0;
+      restartIfChanged = false;
+      serviceConfig = {
+        ExecStart = "${ronoctua.shell}/bin/ronoctua-shell lock";
+        Restart = "on-failure";
+        RestartSec = 1;
+        RestartPreventExitStatus = 78;
+        Slice = "session.slice";
+        OOMPolicy = "stop";
+      };
+    };
+
     # -----------------------------------------------------------------
     # The compositor's config.
     #

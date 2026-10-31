@@ -1346,6 +1346,19 @@ impl State {
             } else {
                 Ok(())
             }
+        })
+        // A KEYBOARD THE CONSOLE HAS NO MAP OF is refused on its screen:
+        // the console loads the answer the moment it is given
+        // (`crate::keymap`, `collect`), and the passwords that follow are
+        // typed on it — another map in its place would be the old defect,
+        // in silence. The layout is loaded with its own variant until the
+        // variant is answered.
+        .and_then(|()| match q {
+            Question::Keyboard => crate::keymap::map_of(&v, model::default_variant(&v)).map(drop),
+            Question::KeyboardVariant => {
+                crate::keymap::map_of(&self.answers.keyboard, &v).map(drop)
+            }
+            _ => Ok(()),
         });
         if let Err(e) = checked {
             self.error = Some(e.key());
@@ -1433,6 +1446,16 @@ impl State {
                     },
                     key::INST_CHECKING,
                 );
+            }
+            // ANOTHER LAYOUT TAKES ITS OWN VARIANT, the one its list opens
+            // on: the variant answered was the old layout's, and the pair
+            // is what the console loads at once.
+            Question::Keyboard => {
+                if self.answers.keyboard != v {
+                    self.answers.keyboard_variant = model::default_variant(&v).to_owned();
+                }
+                self.answers.set(q, v);
+                self.follow(n);
             }
             // THE MACHINE IS SAID BEFORE ANY QUESTION IS ABOUT IT, and in
             // the language just chosen: a stop, when there is one.
@@ -3138,6 +3161,11 @@ pub fn collect(
     // language first: they are reloaded the moment the first answer exists.
     let mut chosen: Option<Texts> = None;
     let mut showing = String::new();
+    // AND THE CONSOLE FOLLOWS THE KEYBOARD ANSWERED: its map is loaded the
+    // moment the answer exists — answered on its screen, or carried by
+    // answers handed on — so the passwords after it are typed on it. Only
+    // on the kernel's console (`crate::keymap`).
+    let mut keys = crate::keymap::Console::of_term();
     loop {
         if let Some(asked) = e.asked.take() {
             let (tx, reach) = (tx.clone(), reach.clone());
@@ -3148,6 +3176,11 @@ pub fn collect(
         }
         while let Ok((serial, done)) = rx.try_recv() {
             e.arrived(serial, done);
+        }
+        if let Some(keys) = keys.as_mut()
+            && let Err(said) = keys.follow(&e.answers.keyboard, &e.answers.keyboard_variant)
+        {
+            e.error = Some(said);
         }
         if e.answers.language != showing && !e.answers.language.is_empty() {
             if let Some(t) = Texts::fresh(&e.answers.language) {
@@ -5295,6 +5328,70 @@ mod tests {
         assert_eq!(e.question_of(), Some(Question::KeyboardVariant));
         assert_ne!(e.answers.keyboard, model::DEFAULT_LAYOUT);
         assert_eq!(e.choice, 0);
+    }
+
+    /// FAILS IF: a keyboard the console has no map of — xkeyboard-config's
+    /// `custom`, whose symbols file does not exist — is taken on its screen
+    /// instead of refused there, saying so; or another layout keeps the
+    /// variant answered for the one before (`us(euro)` becoming `gb(euro)`,
+    /// a pair with no map, which the console would be handed at once); or
+    /// the same layout answered again loses the variant answered for it.
+    #[test]
+    fn the_keyboard_answered_is_one_the_console_has_a_map_of() {
+        let layouts = model::available_layouts();
+        let at = |name: &str| {
+            layouts
+                .iter()
+                .position(|c| c.name == name)
+                .unwrap_or_else(|| panic!("base.lst has no `{name}`"))
+        };
+        // THE GUARD: `custom` is offered and has no map, and `gb` has one —
+        // or the refusal below would prove nothing.
+        assert!(crate::keymap::map_of("custom", "").is_err());
+        assert!(
+            crate::keymap::map_of("gb", "").is_ok(),
+            "the build pointed at no maps"
+        );
+        let mut e = with_disks();
+        walk_to(&mut e, Question::KeyboardVariant);
+        assert_eq!(e.answers.keyboard, model::DEFAULT_LAYOUT);
+        e.key(KeyCode::Enter);
+        settle(&mut e, &kind);
+        assert_eq!(e.answers.keyboard_variant, model::DEFAULT_VARIANT);
+        e.key(KeyCode::Esc);
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Keyboard));
+        // NO MAP: refused here, and nothing answered.
+        e.choice = at("custom");
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::Keyboard));
+        assert_eq!(e.error, Some(key::INST_INVALID_CONSOLE_KEYMAP));
+        assert_eq!(e.answers.keyboard, model::DEFAULT_LAYOUT);
+        // ANOTHER LAYOUT, its own variant: the pair the console loads.
+        e.choice = at("gb");
+        e.key(KeyCode::Enter);
+        assert_eq!(e.question_of(), Some(Question::KeyboardVariant));
+        assert_eq!(e.answers.keyboard, "gb");
+        assert!(
+            e.answers.keyboard_variant.is_empty(),
+            "{}",
+            e.answers.keyboard_variant
+        );
+        assert!(crate::keymap::map_of(&e.answers.keyboard, &e.answers.keyboard_variant).is_ok());
+        // ITS VARIANT, and the same layout answered again keeps it.
+        let extd = model::variants_of("gb")
+            .iter()
+            .position(|c| c.name == "extd")
+            .expect("gb has no `extd`");
+        e.choice = extd;
+        e.key(KeyCode::Enter);
+        assert_eq!(e.answers.keyboard_variant, "extd");
+        e.key(KeyCode::Esc);
+        e.key(KeyCode::Esc);
+        assert_eq!(e.question_of(), Some(Question::Keyboard));
+        assert_eq!(e.choice, at("gb"));
+        e.key(KeyCode::Enter);
+        assert_eq!(e.answers.keyboard_variant, "extd");
     }
 
     /// FAILS IF: the Compose question's help names a key in words, or not

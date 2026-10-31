@@ -80,6 +80,8 @@ pkgs.testers.runNixOSTest {
   testScript =
     { nodes, ... }:
     ''
+      from datetime import timedelta
+
       ${xvfb.prelude}
 
       user = "${nodes.machine.ronoctua.user}"
@@ -154,12 +156,12 @@ pkgs.testers.runNixOSTest {
           # names the symptom and not the cause. `wait_for_unit` fails in
           # seconds and with Tor's own words in the journal.
           try:
-              machine.wait_for_unit("tor.service", timeout=120)
+              machine.wait_for_unit("tor.service", timeout=timedelta(minutes=2))
           except Exception:
               print(machine.succeed("systemctl status tor.service --no-pager -l || true"))
               print(machine.succeed("journalctl -u tor --no-pager | tail -40 || true"))
               raise
-          machine.wait_for_file("/run/tor/control", timeout=120)
+          machine.wait_for_file("/run/tor/control", timeout=timedelta(minutes=2))
           # THE COOKIE IS THE WHOLE OF THE AUTHENTICATION, and the owner reads
           # it by being in the group — not by a rule of ours.
           groups = machine.succeed(f"groups {user}")
@@ -252,16 +254,16 @@ pkgs.testers.runNixOSTest {
               "${ronoctua-shell}/bin/ronoctua-shell"
           )
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=60
+              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=timedelta(minutes=1)
           )
           # AFTER THE TUNNEL THREAD HAS ASKED AT LEAST ONCE. It polls every
           # ten seconds and the first reading is immediate, but reading the
           # journal before it lands would pass on a footer that simply had not
           # looked yet — which is a test that cannot fail.
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=60
+              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=timedelta(minutes=1)
           )
-          machine.sleep(12)
+          machine.sleep(duration=timedelta(seconds=12))
           journal = machine.succeed("journalctl --no-pager -u footer")
           for mark in ("tailscale", "tor", "vpn", "airplane"):
               assert f'id="{mark}"' not in journal, f"a mark with nothing behind it: {mark}"
@@ -276,7 +278,7 @@ pkgs.testers.runNixOSTest {
           )
           machine.wait_until_succeeds(
               "journalctl -u footer --no-pager | grep -E 'layout resolved width=[0-9]+ height=[0-9]{3}' > /dev/null",
-              timeout=30,
+              timeout=timedelta(seconds=30),
           )
           # THE REGION GREW PAST THE FOOTER'S OWN TWO LINES, and the number
           # is measured rather than assumed: the resting height is two lines

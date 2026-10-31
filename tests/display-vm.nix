@@ -130,6 +130,8 @@ pkgs.testers.runNixOSTest {
   testScript =
     { nodes, ... }:
     ''
+      from datetime import timedelta
+
       ${xvfb.prelude}
 
       def press_key(name):
@@ -141,7 +143,7 @@ pkgs.testers.runNixOSTest {
           `leader-vm.nix` carries the same pair for the same reason.
           """
           machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {name}")
-          machine.sleep(1)
+          machine.sleep(duration=timedelta(seconds=1))
 
       machine.start()
       machine.wait_for_unit("multi-user.target")
@@ -255,7 +257,7 @@ pkgs.testers.runNixOSTest {
           )
           machine.wait_until_succeeds(
               "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           # THE CONTROL SOCKET IS `$XDG_RUNTIME_DIR/ronoctua-<display>.sock`, so
           # both variables are needed: without them the command has nowhere to
@@ -291,7 +293,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               "test $(journalctl -u footer --no-pager | grep 'layout resolved' "
               f"| grep -o 'height=[0-9]*' | cut -d= -f2 | sort -n | tail -1) -ge {resting * 3}",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           print(f"the footer rests at {resting} px and grew to {max(heights())}")
           # AND THE READING GOT THROUGH. `ronoctua_display` is at debug on this
@@ -326,7 +328,7 @@ pkgs.testers.runNixOSTest {
           press_key("Return")
 
           fragment = "/root/.config/ronoctua/scroll-display.conf"
-          machine.wait_until_succeeds(f"test -f {fragment}", timeout=60)
+          machine.wait_until_succeeds(f"test -f {fragment}", timeout=timedelta(minutes=1))
           written = machine.succeed(f"cat {fragment}")
           print(written)
           # THE CONNECTOR THE COMPOSITOR REPORTED, which is the header's claim and was
@@ -377,7 +379,7 @@ pkgs.testers.runNixOSTest {
           sock = socket_of("compositor")
           since = len(machine.succeed("journalctl -u compositor --no-pager").splitlines())
           machine.succeed(f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg reload")
-          machine.sleep(2)
+          machine.sleep(duration=timedelta(seconds=2))
           fresh = "\n".join(
               machine.succeed("journalctl -u compositor --no-pager").splitlines()[since:]
           )
@@ -427,13 +429,13 @@ pkgs.testers.runNixOSTest {
           press_key("Right")
           # THE PREVIEW REACHED THE COMPOSITOR. Without this the assertion
           # below passes because nothing ever changed in the first place.
-          machine.sleep(2)
+          machine.sleep(duration=timedelta(seconds=2))
           previewed = scale_of_output()
           assert previewed != was, (
               f"the preview never reached the compositor: still {was}"
           )
 
-          machine.sleep(20)
+          machine.sleep(duration=timedelta(seconds=20))
           after = machine.succeed(f"cat {fragment}")
           assert after == before, (
               "a change nobody kept was written to the file:\n"
@@ -505,7 +507,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree "
               "| grep 'br.ronoctua.display' > /dev/null",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           windows = machine.succeed(
               f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree"
@@ -527,7 +529,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               "journalctl -u screens-window --no-pager "
               "| grep 'the screens window drew' > /dev/null",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           w = machine.succeed("journalctl -u screens-window --no-pager")
           # AND THE SENTENCES IT WOULD CARRY IF IT HAD NOT. `no graphics
@@ -560,7 +562,7 @@ pkgs.testers.runNixOSTest {
           # answers: `PATIENCE` is fifteen seconds, and the door's own thread
           # is what has to notice.
           press_key("Right")
-          machine.sleep(20)
+          machine.sleep(duration=timedelta(seconds=20))
           after = machine.succeed(f"cat {fragment}")
           assert after == before, (
               "a change nobody kept was written to the file:\n"

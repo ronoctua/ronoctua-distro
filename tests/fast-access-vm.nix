@@ -105,6 +105,7 @@ pkgs.testers.runNixOSTest {
     ${xvfb.prelude}
 
     import json
+    from datetime import timedelta
 
     HOME = "${home}"
     PLANTED = f"{HOME}/planted"
@@ -159,7 +160,7 @@ pkgs.testers.runNixOSTest {
         try:
             machine.wait_until_succeeds(
                 f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree | grep -F '\"{app_id}\"' > /dev/null",
-                timeout=90,
+                timeout=timedelta(seconds=90),
             )
         except Exception:
             print(machine.execute(f"journalctl -u {unit} --no-pager")[1])
@@ -174,7 +175,7 @@ pkgs.testers.runNixOSTest {
             said = read()
             if all(w in said for w in words):
                 return said
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         print(machine.execute(f"journalctl -u {unit} --no-pager")[1])
         raise AssertionError(f"the screen never said {words}; OCR read {said!r}")
 
@@ -191,7 +192,7 @@ pkgs.testers.runNixOSTest {
     def wait_said(unit, text, times):
         machine.wait_until_succeeds(
             f"test $(journalctl -u {unit} --no-pager | grep -cF '{text}') -ge {times}",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
 
 
@@ -207,7 +208,7 @@ pkgs.testers.runNixOSTest {
 
     def key(*keys):
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key " + " ".join(keys))
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
 
     def type_words(words):
@@ -229,7 +230,7 @@ pkgs.testers.runNixOSTest {
         try:
             machine.wait_until_succeeds(
                 f"${index}/bin/ronoctua-index query --dir {INDEX} harvest | grep -F harvest-report.txt",
-                timeout=180,
+                timeout=timedelta(minutes=3),
             )
         except Exception:
             print(machine.execute("journalctl _SYSTEMD_USER_UNIT=ronoctua-index.service --no-pager")[1])
@@ -258,7 +259,7 @@ pkgs.testers.runNixOSTest {
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
-            timeout=90,
+            timeout=timedelta(seconds=90),
         )
         focus_compositor()
         # THE POINTER OUT OF THE REGION'S WAY: the line under it would explain
@@ -307,7 +308,7 @@ pkgs.testers.runNixOSTest {
         print(f"OCR: {said!r}")
         pid = floated["pid"]
         key("Escape")
-        machine.wait_until_fails(f"kill -0 {pid}", timeout=30)
+        machine.wait_until_fails(f"kill -0 {pid}", timeout=timedelta(seconds=30))
 
     with subtest("the window opens tiled, and finds a name and what a file says"):
         door("search", "harvest")
@@ -327,7 +328,7 @@ pkgs.testers.runNixOSTest {
     with subtest("Esc closes the window, and its process with it"):
         pid = windows_by_app_id(sock)[TILED]["pid"]
         key("Escape")
-        machine.wait_until_fails(f"kill -0 {pid}", timeout=30)
+        machine.wait_until_fails(f"kill -0 {pid}", timeout=timedelta(seconds=30))
 
     with subtest("a window kept ready comes back, the same process"):
         machine.succeed(
@@ -341,10 +342,10 @@ pkgs.testers.runNixOSTest {
         # PUT AWAY: out of the tree, alive, and listening.
         machine.wait_until_fails(
             f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree | grep -F '\"{TILED}\"'",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         machine.succeed(f"kill -0 {pid}")
-        machine.wait_until_succeeds(f"test -S {SOCKET}", timeout=30)
+        machine.wait_until_succeeds(f"test -S {SOCKET}", timeout=timedelta(seconds=30))
         # THE NEXT DOOR HANDS IT THE WORDS AND ENDS.
         machine.succeed(
             "HOME=/root XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "

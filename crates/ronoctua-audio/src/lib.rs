@@ -11,11 +11,12 @@
 //!
 //! # What is here and what is not
 //!
-//! [`pipewire`] is the only module that knows `pw-dump`, `wpctl` and `pw-cat`
-//! exist. [`graph`] is a pure merge over `serde_json::Value`. [`meter`] owns
-//! the one child that opens a microphone. Everything in THIS file is a pure
-//! function over plain structs, so the rules are tested with no daemon
-//! running — which is what a build sandbox is.
+//! [`pipewire`] is the only module that knows `pw-dump`, `wpctl`, `pw-cat`
+//! and `pw-metadata` exist. [`graph`] is a pure merge over
+//! `serde_json::Value`. [`meter`] owns the one child that opens a microphone.
+//! Everything in THIS file is a pure function over plain structs, so the
+//! rules are tested with no daemon running — which is what a build sandbox
+//! is.
 //!
 //! # The number PipeWire keeps is not the number a person reads
 //!
@@ -358,6 +359,41 @@ pub struct Node {
     /// `ronoctua-bluetooth` matches on, and PipeWire has never heard of a
     /// BlueZ object path.
     pub address: Option<String>,
+    /// `object.serial` — what a `target.object` names a device by
+    /// ([`Snapshot::send`]). The `id` is handed to the next object the moment
+    /// this one goes; the serial never is, which is why WirePlumber itself
+    /// remembers a program's device by it.
+    pub serial: Option<u64>,
+    /// Where a playing stream's sound goes, and where it was sent; nothing
+    /// for any other node.
+    pub way: Way,
+}
+
+/// Where a playing stream's sound goes ([`Node::way`]) — read off the graph,
+/// never off what was asked: the two differ whenever the device a program
+/// was sent to has gone.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Way {
+    /// The node its sound reaches NOW: the input end of the stream's first
+    /// link. `None` while it is linked to nothing.
+    pub now: Option<u32>,
+    /// What `target.object` in the `default` metadata names for it — written
+    /// by [`Order::Move`], by WirePlumber giving a program back the device it
+    /// had last time, or by any other client. `None` when nothing was asked.
+    pub asked: Option<Asked>,
+    /// `node.dont-move`: the program asked never to be moved, and WirePlumber
+    /// does not read a `target.object` for it.
+    pub fixed: bool,
+}
+
+/// What a `target.object` names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    /// A node's serial — what WirePlumber, the Pulse server and
+    /// [`Order::Move`] write.
+    Serial(u64),
+    /// A node's name — what a person may write by hand.
+    Name(String),
 }
 
 /// Which node the machine reaches for when nobody says otherwise.
@@ -496,6 +532,119 @@ impl Snapshot {
             n.kind == Some(Kind::Recording) && n.app.as_deref() != Some(pipewire::OWN_STREAM)
         })
     }
+
+    /// The devices a playing stream may be sent to: every sink the graph
+    /// lists with a serial — the only thing a `target.object` written here
+    /// ever names — in PipeWire's own order.
+    #[must_use]
+    pub fn outputs(&self) -> Vec<&Node> {
+        self.of(Kind::Sink)
+            .into_iter()
+            .filter(|n| n.serial.is_some())
+            .collect()
+    }
+
+    /// The node a stream's sound reaches now, when the graph lists it.
+    #[must_use]
+    pub fn plays_on(&self, stream: &Node) -> Option<&Node> {
+        let to = stream.way.now?;
+        self.nodes.iter().find(|n| n.id == to)
+    }
+
+    /// Whether the device a stream was SENT to is not in the graph — it went,
+    /// and WirePlumber put the sound somewhere else (or nowhere). `false`
+    /// when nothing was asked: a program that was never sent anywhere has no
+    /// device to lose.
+    #[must_use]
+    pub fn sent_where_nothing_is(&self, stream: &Node) -> bool {
+        match &stream.way.asked {
+            None => false,
+            Some(Asked::Serial(s)) => !self.nodes.iter().any(|n| n.serial == Some(*s)),
+            Some(Asked::Name(name)) => !self.nodes.iter().any(|n| &n.name == name),
+        }
+    }
+
+    /// The device after (or before) the one a playing stream reaches now, in
+    /// the ring of [`Snapshot::outputs`] — `None` when there is nowhere else
+    /// to send it, or the program asked never to be moved.
+    ///
+    /// A stream linked to nothing, or to something that is not one of the
+    /// outputs, starts the ring at its first device (its last, backwards):
+    /// every device is somewhere else.
+    #[must_use]
+    pub fn next_output(&self, stream: u32, forward: bool) -> Option<&Node> {
+        let playing = self.playing_stream(stream)?;
+        let ring = self.outputs();
+        match ring.iter().position(|n| Some(n.id) == playing.way.now) {
+            Some(_) if ring.len() < 2 => None,
+            Some(at) => {
+                let step = if forward { 1 } else { ring.len() - 1 };
+                ring.get((at + step) % ring.len()).copied()
+            }
+            None if forward => ring.first().copied(),
+            None => ring.last().copied(),
+        }
+    }
+
+    /// The order that sends a playing stream to a sink — `None` unless the
+    /// graph lists `stream` as a program playing that may be moved and `sink`
+    /// as a device with a serial. The ONLY way a [`Move`] is made, so the
+    /// boundary never writes a `target.object` the graph did not list.
+    #[must_use]
+    pub fn send(&self, stream: u32, sink: u32) -> Option<Order> {
+        self.playing_stream(stream)?;
+        let serial = self
+            .nodes
+            .iter()
+            .find(|n| n.id == sink && n.kind == Some(Kind::Sink))?
+            .serial?;
+        Some(Order::Move(Move {
+            stream,
+            sink,
+            serial,
+        }))
+    }
+
+    /// A program playing that may be moved, by id.
+    fn playing_stream(&self, stream: u32) -> Option<&Node> {
+        self.nodes
+            .iter()
+            .find(|n| n.id == stream && n.kind == Some(Kind::Playing) && !n.way.fixed)
+    }
+}
+
+/// A playing stream sent to a device: which stream, which sink, and the
+/// sink's serial — what `target.object` is set to.
+///
+/// The fields are private and [`Snapshot::send`] is the one place that makes
+/// one, out of a reading that listed both ends. That is the bound on the
+/// second program that writes to the graph (`pipewire::move_argv`): it sets
+/// `target.object` of a playing stream, to a device node, and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Move {
+    stream: u32,
+    sink: u32,
+    serial: u64,
+}
+
+impl Move {
+    /// The stream's node id — the metadata's subject.
+    #[must_use]
+    pub const fn stream(self) -> u32 {
+        self.stream
+    }
+
+    /// The sink's node id.
+    #[must_use]
+    pub const fn sink(self) -> u32 {
+        self.sink
+    }
+
+    /// The sink's `object.serial` — the value written.
+    #[must_use]
+    pub const fn serial(self) -> u64 {
+        self.serial
+    }
 }
 
 /// What kind of output a sink is ([`Snapshot::output_kind`]).
@@ -509,6 +658,17 @@ pub enum OutputKind {
     Bluetooth,
     /// Anything else: HDMI, a line out, a USB interface, a port not named.
     Other,
+}
+
+/// WHETHER AN APPLICATION IS PLAYING SOUND NOW — one `pw-dump`, read
+/// ([`graph::Graph::playing`]). Blocks for the program's run: a thread.
+///
+/// # Errors
+///
+/// No `pw-dump` in this build, a program that refused, or what it printed is
+/// not JSON.
+pub fn playing() -> Result<bool> {
+    pipewire::playing()
 }
 
 /// The volume a person reads, out of the amplitude PipeWire keeps.
@@ -580,6 +740,10 @@ pub enum Order {
     /// `None` is the only way the microphone closes, and the view sends it on
     /// leaving the row, on closing and on losing the keyboard.
     Listen(Option<u32>),
+    /// Send a playing program's sound to another device — made only by
+    /// [`Snapshot::send`], carried out by `pw-metadata` and not `wpctl`
+    /// (`pipewire::move_argv`).
+    Move(Move),
 }
 
 /// Why an order did not happen.
@@ -993,6 +1157,7 @@ mod tests {
                     muted: false,
                     app: None,
                     address: None,
+                    ..Node::default()
                 },
                 Node {
                     id: 61,
@@ -1004,6 +1169,7 @@ mod tests {
                     muted: true,
                     app: None,
                     address: None,
+                    ..Node::default()
                 },
                 Node {
                     id: 99,
@@ -1112,5 +1278,114 @@ mod tests {
         assert!(g.default_of(Kind::Sink).is_none());
         // And the mark does not light for a device that is not there.
         assert!(!g.is_silent());
+    }
+
+    /// Two sinks with serials, a sink with none, a program playing on the
+    /// first and a program recording.
+    fn a_graph_playing() -> Snapshot {
+        let mut g = a_graph();
+        g.nodes[0].serial = Some(1060);
+        // THE MICROPHONE HAS A SERIAL TOO: only its kind keeps a program
+        // from being sent to it.
+        g.nodes[1].serial = Some(1061);
+        g.nodes.push(Node {
+            id: 70,
+            kind: Some(Kind::Sink),
+            name: "headphones".to_owned(),
+            serial: Some(1070),
+            ..Node::default()
+        });
+        g.nodes.push(Node {
+            id: 71,
+            kind: Some(Kind::Sink),
+            name: "a sink with no serial".to_owned(),
+            ..Node::default()
+        });
+        g.nodes.push(Node {
+            id: 120,
+            kind: Some(Kind::Playing),
+            app: Some("a player".to_owned()),
+            way: Way {
+                now: Some(60),
+                ..Way::default()
+            },
+            ..Node::default()
+        });
+        g.nodes.push(Node {
+            id: 121,
+            kind: Some(Kind::Recording),
+            ..Node::default()
+        });
+        g
+    }
+
+    /// FAILS IF: a move can be made of anything but a program playing and a
+    /// device the graph lists with a serial — a recording, a device moved
+    /// onto a device, a sink with no serial, a node that is not there, or a
+    /// program that asked never to be moved.
+    #[test]
+    fn a_move_is_made_only_of_what_the_graph_listed() {
+        let mut g = a_graph_playing();
+        let Some(Order::Move(m)) = g.send(120, 70) else {
+            panic!(
+                "a playing program and a listed device: {:?}",
+                g.send(120, 70)
+            );
+        };
+        assert_eq!((m.stream(), m.sink(), m.serial()), (120, 70, 1070));
+        assert_eq!(g.send(121, 70), None, "a recording is not sent to a sink");
+        assert_eq!(g.send(60, 70), None, "a device is not a stream");
+        assert_eq!(g.send(120, 61), None, "a microphone is not an output");
+        assert_eq!(g.send(120, 71), None, "a sink with no serial");
+        assert_eq!(g.send(120, 999), None, "a sink that is gone");
+        assert_eq!(g.send(999, 70), None, "a stream that ended");
+        g.nodes[5].way.fixed = true;
+        assert_eq!(g.send(120, 70), None, "a program that asked to stay");
+        assert_eq!(g.next_output(120, true), None);
+    }
+
+    /// FAILS IF: the ring of outputs skips the device after the one the
+    /// sound reaches now, offers one with no serial, wraps the wrong way, or
+    /// offers nothing to a program linked to nothing.
+    #[test]
+    fn the_outputs_turn_from_where_the_sound_is_now() {
+        let mut g = a_graph_playing();
+        let ids = |v: Vec<&Node>| v.iter().map(|n| n.id).collect::<Vec<_>>();
+        assert_eq!(ids(g.outputs()), vec![60, 70], "no serial, no output");
+        assert_eq!(g.next_output(120, true).map(|n| n.id), Some(70));
+        assert_eq!(g.next_output(120, false).map(|n| n.id), Some(70));
+        g.nodes[5].way.now = Some(70);
+        assert_eq!(g.next_output(120, true).map(|n| n.id), Some(60));
+        // LINKED TO NOTHING: every device is somewhere else.
+        g.nodes[5].way.now = None;
+        assert_eq!(g.next_output(120, true).map(|n| n.id), Some(60));
+        assert_eq!(g.next_output(120, false).map(|n| n.id), Some(70));
+        // ONE DEVICE, AND THE SOUND IS ON IT: nowhere else to go.
+        g.nodes.retain(|n| n.id != 70);
+        g.nodes[4].way.now = Some(60);
+        assert_eq!(g.next_output(120, true), None);
+        assert_eq!(g.next_output(121, true), None, "a recording has no outputs");
+    }
+
+    /// FAILS IF: a program sent to a device that went does not read as sent
+    /// where nothing is — the row would say nothing while the sound plays
+    /// somewhere the person did not choose — or one never sent anywhere, or
+    /// sent to a device that is there, does.
+    #[test]
+    fn a_program_sent_to_a_device_that_went_says_so() {
+        let mut g = a_graph_playing();
+        assert!(!g.sent_where_nothing_is(&g.nodes[5]), "never sent");
+        assert_eq!(g.plays_on(&g.nodes[5]).map(|n| n.id), Some(60));
+        g.nodes[5].way.asked = Some(Asked::Serial(1070));
+        assert!(!g.sent_where_nothing_is(&g.nodes[5]), "the device is there");
+        g.nodes[5].way.asked = Some(Asked::Serial(4242));
+        assert!(g.sent_where_nothing_is(&g.nodes[5]));
+        g.nodes[5].way.asked = Some(Asked::Name("headphones".to_owned()));
+        assert!(!g.sent_where_nothing_is(&g.nodes[5]), "by name, and there");
+        g.nodes[5].way.asked = Some(Asked::Name("gone".to_owned()));
+        assert!(g.sent_where_nothing_is(&g.nodes[5]));
+        // LINKED TO A NODE THAT IS NOT IN THE READING: nowhere to name.
+        g.nodes[5].way.now = Some(4242);
+        assert_eq!(g.plays_on(&g.nodes[5]), None);
     }
 }

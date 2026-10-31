@@ -45,7 +45,7 @@
 // module below it and is no part of this crate's API.
 use ronoctua_shell_door::{
     brainlink, capture_wire, carry, clipboard, clipboard_wire, column, cursor_shape, door, launch,
-    pasting, photo, queue, region, right_column, room, sections, sudo, tags,
+    pasting, photo, queue, region, right_column, room, sections, session_lock, sudo, tags,
 };
 use ronoctua_shell_kit::{
     actions, aim, band, bars, bindings, chrome, clipboard_copy, daemon, desk, echo, fields, fold,
@@ -85,6 +85,9 @@ pub mod events;
 // THE CAMERA'S HANDS: what a pose means, and the command each runs.
 pub mod gestures;
 mod hidden;
+// THE TIME WITHOUT USE: the one file that names the compositor's idle
+// notifications, which arm the automatic lock.
+mod idle_notify;
 pub mod key;
 mod keys_link;
 // THE CHROME KIOSK (`LEADER m b`): the pairs and the modeline's adapter, and

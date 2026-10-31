@@ -58,6 +58,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
 
@@ -91,7 +93,7 @@ pkgs.testers.runNixOSTest {
                 "footer layout resolved",
             ]:
                 machine.wait_until_succeeds(
-                    f"journalctl -u footer --no-pager | grep '{marker}' > /dev/null", timeout=60
+                    f"journalctl -u footer --no-pager | grep '{marker}' > /dev/null", timeout=timedelta(minutes=1)
                 )
         except Exception:
             print("--- the footer's journal ---")
@@ -144,18 +146,18 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u hung --no-pager | grep 'pets systemd' > /dev/null", timeout=60
+            "journalctl -u hung --no-pager | grep 'pets systemd' > /dev/null", timeout=timedelta(minutes=1)
         )
         # ALIVE PAST TWO INTERVALS while the loop turns: the pings arrive.
-        machine.sleep(14)
+        machine.sleep(duration=timedelta(seconds=14))
         machine.succeed("systemctl is-active hung")
         machine.fail("test -e /run/lifeline-raised")
         machine.succeed("systemctl kill -s STOP hung")
         machine.wait_until_succeeds(
-            "systemctl show -p Result --value hung | grep -x watchdog", timeout=60
+            "systemctl show -p Result --value hung | grep -x watchdog", timeout=timedelta(minutes=1)
         )
         # AND THE FAILURE RAISES WHAT `OnFailure=` NAMES — the lifeline, on
         # the real footer unit.
-        machine.wait_until_succeeds("test -e /run/lifeline-raised", timeout=30)
+        machine.wait_until_succeeds("test -e /run/lifeline-raised", timeout=timedelta(seconds=30))
   '';
 }

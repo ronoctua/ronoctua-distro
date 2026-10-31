@@ -20,8 +20,9 @@
 #      plan's own path) and nothing at all of a program left out
 #      (LibreOffice), while a part kept (Blender) has its derivation there,
 #      to build on the first boot; the programs left out are not in its
-#      parts plan and one kept is, and the first boot's record and sealed
-#      passphrase are on `/persist`;
+#      parts plan and one kept is, the first boot's record and sealed
+#      passphrase are on `/persist`, and `host.nix` names the console's map
+#      of the keyboard answered (`pt`), which the installed console loads;
 #   3. the second boot asks the disk's passphrase (typed on the serial line),
 #      reaches the person's session, has no failed system unit, and the
 #      belongings' first boot waits for the network instead of failing.
@@ -225,6 +226,15 @@ let
               assert "record.json" in left and ".cred" in left, f"the first boot has nothing to finish: {left!r}"
               run(live, "grep -q '\"address\": \"git@belongings.invalid' /mnt/persist/etc/ronoctua/first-boot/record.json")
               run(live, "! grep -rqs offline-belongings-passphrase /mnt/persist /mnt/home /mnt/etc/nixos")
+              # THE CONSOLE'S KEYBOARD IS THE ANSWER'S: `host.nix` names it,
+              # and the installed system's console loads the map compiled
+              # from it, built here with no network (its initrd names the
+              # same map: `console-keymap-is-the-answers`).
+              run(live, "grep -qxF '  ronoctua.keyboard.console = \"pt\";' /mnt/etc/nixos/host.nix")
+              system = "$(readlink -f /mnt/nix/var/nix/profiles/system-1-link)"
+              keymap = run(live, f"sed -n 's/^KEYMAP=//p' {system}/etc/vconsole.conf").strip()
+              assert keymap.endswith("-console-keymap-pt"), f"the installed console's map is {keymap!r}"
+              run(live, f"nix-store --store 'local?root=/mnt' --check-validity {keymap}")
               live.send_console("poweroff\n")
               live.wait_for_shutdown()
           finally:

@@ -4,10 +4,9 @@
 brain-task-system-update = Atualizar o sistema
 brain-task-system-update-does = Junta o que você declarou nas suas outras máquinas, adianta a distro e o nixpkgs, monta o sistema novo e o deixa para o próximo reinício — nada do que roda agora é parado ou reiniciado; esse reinício experimenta o sistema novo uma vez e volta sozinho para o último bom se ele não subir —, atualiza os seus programas e caches, recupera espaço no store e publica o que esta máquina fez. Quando um sistema novo espera, a execução termina pedindo que você reinicie.
 
-# ITS COMMANDS. The whole sequence now, its rehearsal, and the two doors of
-# the view that watches it — the footer's region and a window.
+# ITS COMMANDS. The whole sequence now, and the two doors of the view that
+# watches it — the footer's region and a window.
 cmd-system-update = Atualizar o sistema
-cmd-system-update-rehearsal = Ensaiar a atualização
 cmd-system-update-open = A atualização, no rodapé
 cmd-system-update-watch = A atualização, numa janela
 
@@ -73,19 +72,6 @@ system-update-needs-directory = esta pasta não existe
 system-update-needs-writable-file = este arquivo não existe, ou não dá para escrever nele
 system-update-needs-network = o NetworkManager diz que esta máquina não está conectada
 
-# WHAT A FAILURE DOES TO THE REST OF THE SEQUENCE. Two answers and no third:
-# this runs from a unit, and there is nobody to ask.
-system-update-on-failure-stop = se falhar, a sequência para aqui
-system-update-on-failure-carry-on = se falhar, a sequência segue para o próximo passo
-
-# THE FIVE CLASSES A STEP CAN BE. They decide the order laws.
-system-update-kind-move-inputs = move os inputs pinados
-system-update-kind-apply-configuration = aplica a configuração
-system-update-kind-upgrade-software = atualiza programas que você mesmo instalou
-system-update-kind-refresh-cache = refaz um cache
-system-update-kind-realize-parts = realiza as partes
-system-update-kind-reclaim-space = recupera espaço em disco
-
 # THE VIEW THAT WATCHES A RUN, in both doors: its keys and what each says under
 # the pointer, `update now` (the key the view teaches for the whole sequence),
 # what starting said, and the word beside each step.
@@ -142,11 +128,6 @@ system-update-needs-file = este arquivo não existe
 system-update-needs-power = a máquina está na bateria abaixo do piso, e ninguém disse sim a esta rodada
 system-update-needs-free-space = o disco está quase cheio, mesmo depois de coletar o lixo do store
 system-update-needs-not-held = a máquina está retida numa revisão: a distro e o nixpkgs ficam onde estão
-
-system-update-kind-gather = junta o que você declarou
-system-update-kind-migrate = migra a pasta da máquina
-system-update-kind-reconcile-declared = traz o que está declarado
-system-update-kind-publish = publica o que esta máquina fez
 
 system-update-declined-empty = Esta máquina ainda não sincronizou os pertences: não há chave para assinar, e a atualização segue.
 system-update-declined-no-passphrase = A sua identidade não está aberta nesta sessão: nada foi assinado aqui. O que as suas outras máquinas assinaram chega a esta assim mesmo; uma mudança feita aqui espera a próxima sincronização assiná-la.

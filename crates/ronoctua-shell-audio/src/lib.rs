@@ -12,7 +12,7 @@
 
 // THE KIT AND THE DOOR, by the names the modules already use
 // (`crate::chrome::…`, `crate::door::…`).
-use ronoctua_shell_door::{door, region};
+use ronoctua_shell_door::{door, photo, region};
 use ronoctua_shell_kit::{bindings, chrome, echo, fields, sizes};
 // AND PIPEWIRE'S REFUSALS, which the footer says too: a crate under both.
 use ronoctua_shell_audio_words::audio_words;
@@ -26,6 +26,13 @@ pub mod key;
 pub const DOORS: &[ronoctua_shell_kit::doors::Door] = &[ronoctua_shell_kit::doors::Door {
     name: "audio",
     run: sound_door,
+}];
+
+/// THE SOUND VIEW'S WINDOW'S CAMERA (`photograph --door audio --scene
+/// <file>`), over a planted graph.
+pub const CAMERAS: &[ronoctua_shell_door::photo::Camera] = &[ronoctua_shell_door::photo::Camera {
+    door: "audio",
+    take: audio_window::camera,
 }];
 
 /// `ronoctua-shell audio` — the sound view in a window of its own.

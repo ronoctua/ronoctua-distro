@@ -677,6 +677,191 @@ pub mod fragment {
     }
 }
 
+/// The pluggable transports: which program speaks which word of the ring.
+///
+/// # Why the ring's word is not the line
+///
+/// `ClientTransportPlugin obfs4` is not a torrc line Tor runs anything for:
+/// the directive is `<transports> exec <program>`, and without the `exec` an
+/// obfs4 bridge is a `Bridge` line no program ever speaks. The view turns a
+/// ring of WORDS — `none`, `obfs4`, `snowflake`, `meek_lite` — and this is
+/// where a word becomes the line, with the program's store path; and where
+/// the line read back becomes the word again, so the ring turns from what
+/// the file says.
+///
+/// # Where the programs come from
+///
+/// `nix/modules/tor.nix` installs them and names them to the session and to
+/// the footer's unit ([`OBFS4_VARIABLE`], [`SNOWFLAKE_VARIABLE`]), only where
+/// Tor is on — so a machine without Tor carries neither, and a store path
+/// moving rebuilds nothing. A word whose program is not named is REFUSED
+/// ([`Missing`]), never written as a bare word: that would be a torrc Tor
+/// will not read, or a bridge that silently never connects.
+pub mod transport {
+    use std::path::{Path, PathBuf};
+
+    use super::fragment::Lines;
+
+    /// The torrc option the ring writes.
+    pub const KEY: &str = "ClientTransportPlugin";
+
+    /// The ring's word that writes no line at all.
+    pub const NONE: &str = "none";
+
+    /// What names `lyrebird`, the program that speaks obfs4 and meek_lite.
+    pub const OBFS4_VARIABLE: &str = "RONOCTUA_TOR_OBFS4";
+
+    /// What names snowflake's client.
+    pub const SNOWFLAKE_VARIABLE: &str = "RONOCTUA_TOR_SNOWFLAKE";
+
+    /// One program that speaks transports.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Program {
+        /// `lyrebird`, the maintained obfs4 fork: obfs4, meek_lite and
+        /// scramblesuit from one binary.
+        Lyrebird,
+        /// Snowflake's client.
+        Snowflake,
+    }
+
+    impl Program {
+        /// The program that speaks `word`, or `None` for a word this system
+        /// has no program for.
+        #[must_use]
+        pub fn of(word: &str) -> Option<Self> {
+            match word {
+                "obfs4" | "meek_lite" | "scramblesuit" => Some(Self::Lyrebird),
+                "snowflake" => Some(Self::Snowflake),
+                _ => None,
+            }
+        }
+
+        /// The variable that names it.
+        #[must_use]
+        pub const fn variable(self) -> &'static str {
+            match self {
+                Self::Lyrebird => OBFS4_VARIABLE,
+                Self::Snowflake => SNOWFLAKE_VARIABLE,
+            }
+        }
+    }
+
+    /// Where each program is, as this process was told.
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    pub struct Programs {
+        /// `lyrebird`, when named.
+        pub lyrebird: Option<PathBuf>,
+        /// Snowflake's client, when named.
+        pub snowflake: Option<PathBuf>,
+    }
+
+    impl Programs {
+        /// What the environment names — an empty value is no name.
+        #[must_use]
+        pub fn from_env() -> Self {
+            let named = |variable: &str| {
+                std::env::var_os(variable)
+                    .filter(|v| !v.is_empty())
+                    .map(PathBuf::from)
+            };
+            Self {
+                lyrebird: named(OBFS4_VARIABLE),
+                snowflake: named(SNOWFLAKE_VARIABLE),
+            }
+        }
+
+        /// Where `program` is, when it was named.
+        #[must_use]
+        pub fn path(&self, program: Program) -> Option<&Path> {
+            match program {
+                Program::Lyrebird => self.lyrebird.as_deref(),
+                Program::Snowflake => self.snowflake.as_deref(),
+            }
+        }
+    }
+
+    /// A transport the ring chose and no program here speaks.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Missing {
+        /// The word, as the ring holds it.
+        pub transport: String,
+        /// The variable that would have named its program; `None` when the
+        /// word is no transport this system knows.
+        pub variable: Option<&'static str>,
+    }
+
+    impl std::fmt::Display for Missing {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.variable {
+                Some(v) => write!(
+                    f,
+                    "no program for the `{}` transport: {v} is not set",
+                    self.transport
+                ),
+                None => write!(
+                    f,
+                    "`{}` is not a transport this system knows",
+                    self.transport
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Missing {}
+
+    /// The lines as torrc takes them: the ring's word becomes
+    /// `<word> exec <program>`, and `none` becomes no line.
+    ///
+    /// # Errors
+    ///
+    /// [`Missing`] for a word whose program was not named, or a word that is
+    /// no transport — refused whole, so nothing half-configured is written.
+    pub fn for_torrc(lines: &Lines, programs: &Programs) -> Result<Lines, Missing> {
+        let mut out = lines.clone();
+        let Some(words) = out.remove(KEY) else {
+            return Ok(out);
+        };
+        let mut written = Vec::new();
+        for word in words {
+            let word = word.trim();
+            if word.is_empty() || word == NONE {
+                continue;
+            }
+            let program = Program::of(word).ok_or_else(|| Missing {
+                transport: word.to_owned(),
+                variable: None,
+            })?;
+            let path = programs.path(program).ok_or_else(|| Missing {
+                transport: word.to_owned(),
+                variable: Some(program.variable()),
+            })?;
+            written.push(format!("{word} exec {}", path.display()));
+        }
+        if !written.is_empty() {
+            out.insert(KEY.to_owned(), written);
+        }
+        Ok(out)
+    }
+
+    /// The lines as the ring reads them: `obfs4 exec /nix/store/…` is the
+    /// word `obfs4` again. A line written by hand with a list of transports
+    /// reads as its first.
+    #[must_use]
+    pub fn for_ring(mut lines: Lines) -> Lines {
+        if let Some(values) = lines.get_mut(KEY) {
+            for value in values.iter_mut() {
+                let word = value
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .next()
+                    .unwrap_or("")
+                    .to_owned();
+                *value = word;
+            }
+        }
+        lines
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,6 +1087,84 @@ mod tests {
             .collect();
         assert_eq!(left, vec![FRAGMENT.to_owned()], "a draft was left behind");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// FAILS IF: the ring's word reaches torrc without the program that
+    /// speaks it — `ClientTransportPlugin obfs4`, an obfs4 bridge no program
+    /// is ever run for — or `none` is written as a line Tor refuses, or the
+    /// line read back is not the word the ring turns from.
+    #[test]
+    fn a_transport_is_written_with_the_program_that_speaks_it() {
+        use transport::{KEY, Programs};
+        let programs = Programs {
+            lyrebird: Some("/nix/store/x-obfs4/bin/lyrebird".into()),
+            snowflake: Some("/nix/store/y-snowflake/bin/client".into()),
+        };
+        let mut lines = fragment::Lines::new();
+        lines.insert("UseBridges".to_owned(), vec!["1".to_owned()]);
+        for (word, line) in [
+            ("obfs4", "obfs4 exec /nix/store/x-obfs4/bin/lyrebird"),
+            (
+                "meek_lite",
+                "meek_lite exec /nix/store/x-obfs4/bin/lyrebird",
+            ),
+            (
+                "snowflake",
+                "snowflake exec /nix/store/y-snowflake/bin/client",
+            ),
+        ] {
+            lines.insert(KEY.to_owned(), vec![word.to_owned()]);
+            let torrc = transport::for_torrc(&lines, &programs).unwrap();
+            assert_eq!(torrc[KEY], vec![line.to_owned()], "{word}");
+            assert_eq!(torrc["UseBridges"], vec!["1".to_owned()], "{word}");
+            let text = fragment::render(&torrc).unwrap();
+            assert!(text.contains(&format!("\n{KEY} {line}\n")), "{text}");
+            // AND IT READS BACK AS THE WORD, so the ring turns from it.
+            assert_eq!(transport::for_ring(torrc), lines, "{word}");
+        }
+        // `none` IS NO LINE: `ClientTransportPlugin none` is a torrc Tor
+        // refuses to start with.
+        lines.insert(KEY.to_owned(), vec![transport::NONE.to_owned()]);
+        let torrc = transport::for_torrc(&lines, &programs).unwrap();
+        assert!(!torrc.contains_key(KEY), "{torrc:?}");
+        // A LINE WRITTEN BY HAND with a list reads as its first word.
+        let mut by_hand = fragment::Lines::new();
+        by_hand.insert(
+            KEY.to_owned(),
+            vec!["obfs4,meek_lite exec /usr/bin/lyrebird".to_owned()],
+        );
+        assert_eq!(transport::for_ring(by_hand)[KEY], vec!["obfs4".to_owned()]);
+    }
+
+    /// FAILS IF: a transport whose program this process was not told of is
+    /// written anyway — as the bare word, or with a guessed path — instead
+    /// of refused, naming what is missing.
+    #[test]
+    fn a_transport_with_no_program_is_refused_and_not_written_bare() {
+        use transport::{KEY, Programs};
+        let mut lines = fragment::Lines::new();
+        lines.insert(KEY.to_owned(), vec!["snowflake".to_owned()]);
+        let only_lyrebird = Programs {
+            lyrebird: Some("/nix/store/x-obfs4/bin/lyrebird".into()),
+            snowflake: None,
+        };
+        let missing = transport::for_torrc(&lines, &only_lyrebird).unwrap_err();
+        assert_eq!(missing.transport, "snowflake");
+        assert_eq!(missing.variable, Some(transport::SNOWFLAKE_VARIABLE));
+        assert!(
+            missing.to_string().contains(transport::SNOWFLAKE_VARIABLE),
+            "{missing}"
+        );
+        // A WORD THAT IS NO TRANSPORT — a file edited by hand — is refused
+        // too, and says so.
+        lines.insert(KEY.to_owned(), vec!["carrier-pigeon".to_owned()]);
+        let missing = transport::for_torrc(&lines, &only_lyrebird).unwrap_err();
+        assert_eq!(missing.variable, None);
+        // AND obfs4 IS LYREBIRD'S, named by the variable the module sets.
+        assert_eq!(
+            transport::Program::of("obfs4").map(transport::Program::variable),
+            Some(transport::OBFS4_VARIABLE)
+        );
     }
 
     #[test]

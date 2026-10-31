@@ -71,12 +71,14 @@ let
     # person's.
     uninstallUnmanaged = false;
     # AUTO-UPDATE FROM HERE (owner amendment 2026-10-30, "the machine keeps
-    # itself on the latest"): nix-flatpak updates the person's Flatpaks on its
-    # own timer and on each activation — the app layer keeping itself current
-    # outside the generation. The update sequence's `flatpak-system` /
-    # `flatpak-user` steps still run with every update, scheduled or by hand.
-    # This traffic reaches Flathub with no `Pass` from `ronoctua-consent`
-    # (`docs/PENDING.md`).
+    # itself on the latest"): nix-flatpak installs and updates the DECLARED
+    # Flatpaks — the dark extension, the distro's, `declaredFlatpaks` — on its
+    # own timer and on each activation (`--or-update` on its installs; it
+    # updates nothing it did not declare). The person's other Flatpaks are the
+    # update sequence's `flatpak-system` / `flatpak-user` steps, with every
+    # update, scheduled or by hand. This traffic reaches Flathub with no
+    # `Pass` from `ronoctua-consent`: a declared updater of the system is the
+    # owner's written exception to the consent rule (AGENTS.md, 2026-10-31).
     update.onActivation = true;
     update.auto.enable = true;
   };

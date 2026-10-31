@@ -58,6 +58,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
 
@@ -82,7 +84,7 @@ pkgs.testers.runNixOSTest {
             seen = footer_height()
             if seen > floor:
                 return seen
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         return seen
 
     def footer_height():
@@ -114,7 +116,7 @@ pkgs.testers.runNixOSTest {
             seen_now = footer_height()
             if seen_now == expected:
                 return seen_now
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         raise AssertionError(
             f"the footer is {seen_now} px, expected {expected} "
             f"(after {attempts}s)"
@@ -150,7 +152,7 @@ pkgs.testers.runNixOSTest {
             f"${pkgs.libnotify}/bin/notify-send -u {urgency} "
             f"-a testes '{summary}' '{body}'"
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
 
     def control(command):
@@ -163,7 +165,7 @@ pkgs.testers.runNixOSTest {
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             f"${ronoctua-shell}/bin/ronoctua-shell command {command}"
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
 
     machine.start()
@@ -182,7 +184,7 @@ pkgs.testers.runNixOSTest {
             "${pkgs.dbus}/bin/dbus-daemon --session --nofork "
             "--address=unix:path=/run/user/0/bus"
         )
-        machine.wait_until_succeeds("test -S /run/user/0/bus", timeout=30)
+        machine.wait_until_succeeds("test -S /run/user/0/bus", timeout=timedelta(seconds=30))
 
         machine.succeed(
             "systemd-run --unit=footer ${xvfb.env} "
@@ -199,13 +201,13 @@ pkgs.testers.runNixOSTest {
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'the notification daemon is on the bus' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         # THE PAINTING, and not only the daemon: measuring the height before the
         # first `configure` gives zero pixels, with no error at all.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null",
-            timeout=90,
+            timeout=timedelta(seconds=90),
         )
         wait_for_height(FOOTER)
 
@@ -222,7 +224,7 @@ pkgs.testers.runNixOSTest {
         # text starts with a PUA glyph, and `body= 2` does not match
         # `body=<glyph>2`.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'pending=2' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'pending=2' > /dev/null", timeout=timedelta(seconds=30)
         )
 
     with subtest("the band appears ABOVE the modeline, on the SAME surface"):
@@ -241,7 +243,7 @@ pkgs.testers.runNixOSTest {
         # A brief notification is ONE line above the pair. The log says which,
         # and the height is what proves it reached the screen.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'band=1' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'band=1' > /dev/null", timeout=timedelta(seconds=30)
         )
         wait_for_height(WITH_ONE, attempts=5)
 
@@ -264,7 +266,7 @@ pkgs.testers.runNixOSTest {
         # three, and the third is the row of actions — this one has none, and a
         # band with an empty line is a band lying about its size.
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'band=2 loud=true' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'band=2 loud=true' > /dev/null", timeout=timedelta(seconds=30)
         )
         wait_for_height(WITH_TWO, attempts=5)
         # `long` is 20 s. Well past it, the band is gone and the pair is back.
@@ -292,7 +294,7 @@ pkgs.testers.runNixOSTest {
             "${pkgs.libnotify}/bin/notify-send -a testes "
             "--hint=string:tags:memory-killed 'something closed' 'for lack of memory'"
         )
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         decided = machine.succeed(
             "journalctl -u footer --no-pager | grep 'notification decided' | tail -1"
         ).strip()
@@ -323,7 +325,7 @@ pkgs.testers.runNixOSTest {
             "--hint=string:image-path:file:///root/an-image.png "
             "'with an image' 'through the hint'"
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         got = machine.succeed(
             "journalctl -u footer --no-pager | grep 'notification received' | tail -1"
         ).strip()
@@ -365,7 +367,7 @@ pkgs.testers.runNixOSTest {
         # FIFTEEN DAYS ON DISK, and this is the half a VM can prove: the file is
         # written where the footer says it is, and a fresh process reads it.
         machine.wait_until_succeeds(
-            "test -s /root/.local/state/ronoctua/notifications.json", timeout=30
+            "test -s /root/.local/state/ronoctua/notifications.json", timeout=timedelta(seconds=30)
         )
         before = machine.succeed(
             "${pkgs.jq}/bin/jq 'length' /root/.local/state/ronoctua/notifications.json"
@@ -374,7 +376,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("systemctl restart footer")
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'notification history read' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         after = machine.succeed(
             "journalctl -u footer --no-pager | grep 'notification history read' | tail -1"

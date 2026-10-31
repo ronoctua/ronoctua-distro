@@ -40,6 +40,7 @@ pub const CONTRIBUTIONS: &[&Contribution] = &[
     &ronoctua_shell_icons::icons::KEYS,
     &ronoctua_shell_incus::incus::KEYS,
     &ronoctua_shell_locale::locale::KEYS,
+    &ronoctua_shell_lock::lock::KEYS,
     &ronoctua_shell_manual::manual::KEYS,
     &ronoctua_shell_network::network::KEYS,
     &ronoctua_shell_notifications::notifications::KEYS,
@@ -1117,6 +1118,7 @@ mod tests {
             // THE CAPTURE IS OURS. The compositor takes none, so the shell
             // runs `grim` and builds the name — see `capture_the_screen`.
             "screen-capture",
+            "lock-screen",
             "monitor-btop",
             "rescue-open",
             "monitor-bottom",

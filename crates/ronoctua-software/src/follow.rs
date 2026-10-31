@@ -10,9 +10,10 @@
 //! person's `software/distro-pins.json` ([`ronoctua_person::distro_pins`]) —
 //! signed with their plain part and staged to root like the rest. The
 //! machine's registry builds a followed pin only while the option is on and
-//! it is newer than the distro's; root's verification holds one that does
-//! not build. With the option OFF the file goes ([`forget`]), and the
-//! machine builds the distro's pins at once anyway.
+//! it is newer than the distro's, as the AppImage's part: one that does not
+//! build is a part that does not arrive, and keeps the version before. With
+//! the option OFF the file goes ([`forget`]), and the machine builds the
+//! distro's pins at once anyway.
 //!
 //! # Where the table comes from
 //!
@@ -151,6 +152,51 @@ pub struct Looked {
     /// This machine trusts no signing key of the person's: it would never
     /// take a followed pin, and nothing was asked.
     pub no_signer: bool,
+    /// The AppImages whose newest release was NOT followed, each with why —
+    /// GitHub not answering, a tag that moves, a release the rule refuses,
+    /// a download that is not its digest. `pins refresh` says each one: the
+    /// CLI has no log of its own, and the update's journal keeps the step's
+    /// standard output (`gen-updates.py`, `run_and_record`).
+    pub not_followed: Vec<NotFollowed>,
+}
+
+/// A newest release one look did not follow, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotFollowed {
+    /// The table's id.
+    pub id: String,
+    /// The release, as GitHub tags it — empty when GitHub was not asked.
+    pub tag: String,
+    /// Why, in English: a refusal's word and its trouble, or the rule's.
+    pub why: String,
+}
+
+impl NotFollowed {
+    /// The line `pins refresh` says for it. Pure.
+    #[must_use]
+    pub fn line(&self) -> String {
+        if self.tag.is_empty() {
+            format!(
+                "{}: the newest release was not asked: {}",
+                self.id, self.why
+            )
+        } else {
+            format!(
+                "{}: the release {} was not followed: {}",
+                self.id, self.tag, self.why
+            )
+        }
+    }
+}
+
+/// A [`NotFollowed`] of `id`. Pure.
+#[cfg(feature = "net")]
+fn not_followed(id: &str, tag: &str, why: String) -> NotFollowed {
+    NotFollowed {
+        id: id.to_owned(),
+        tag: tag.to_owned(),
+        why,
+    }
 }
 
 /// The hash a release is judged with before its bytes are fetched: an SRI
@@ -398,6 +444,9 @@ pub fn look_with(
             Ok(a) => a,
             Err(e) => {
                 tracing::warn!(error = %e, app = app.id, "the newest release was not asked");
+                looked
+                    .not_followed
+                    .push(not_followed(&app.id, "", e.to_string()));
                 continue;
             }
         };
@@ -408,6 +457,11 @@ pub fn look_with(
                 tag = latest.tag,
                 "the newest release's tag moves"
             );
+            looked.not_followed.push(not_followed(
+                &app.id,
+                &latest.tag,
+                "its tag has no number, and moves under the same name".to_owned(),
+            ));
             continue;
         }
         let current = at.doc.pin(&app.id);
@@ -440,6 +494,11 @@ pub fn look_with(
                 url = judged.url,
                 "the newest release is not one this machine builds"
             );
+            looked.not_followed.push(not_followed(
+                &app.id,
+                &latest.tag,
+                format!("the rule `{}` refuses it", fault.id()),
+            ));
             continue;
         }
         let pin = match pin_of(&image.key, version, &latest, at.stamp.clone(), report) {
@@ -452,6 +511,9 @@ pub fn look_with(
             },
             Err(e) => {
                 tracing::warn!(error = %e, app = app.id, "the newest release was not pinned");
+                looked
+                    .not_followed
+                    .push(not_followed(&app.id, &latest.tag, e.to_string()));
                 continue;
             }
         };
@@ -462,6 +524,11 @@ pub fn look_with(
                 url = pin.url,
                 "the newest release is not one this machine builds"
             );
+            looked.not_followed.push(not_followed(
+                &app.id,
+                &latest.tag,
+                format!("the rule `{}` refuses it", fault.id()),
+            ));
             continue;
         }
         // THE SAME BYTES at the same address: nothing moved.
@@ -716,6 +783,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&not_let);
+    }
+
+    /// FAILS IF: a newer release a look leaves behind — a download that is
+    /// not its digest, a tag that moves, a release the rule refuses, GitHub
+    /// not answering — is left behind in silence. The CLI has no log of its
+    /// own (its `tracing` goes nowhere), and only the lines `pins refresh`
+    /// prints reach the update's journal: measured in
+    /// `tests/distro-apps-follow-vm.nix`, where a release whose bytes were
+    /// not its digest was skipped and the step said nothing.
+    #[test]
+    fn a_release_left_behind_says_why() {
+        let dir = scratch("left-behind");
+        let registry = DistroApps {
+            format: 1,
+            apps: vec![
+                app("spoiltcraft", "0.8.0", true),
+                app("movingcraft", "0.8.0", true),
+                app("tildecraft", "0.8.0", true),
+                // GitHub has no answer for it.
+                app("silentcraft", "0.8.0", true),
+            ],
+            followed: ronoctua_person::reports::FollowedReport::default(),
+        };
+        let net = github(&[
+            latest("spoiltcraft", "v0.9.0"),
+            latest("movingcraft", "nightly"),
+            latest("tildecraft", "2.0~rc"),
+        ]);
+        let all = |_: &str| true;
+        let at = LookAt {
+            registry: &registry,
+            doc: &DistroPins::default(),
+            cache: &dir,
+            allows: &all,
+            now: 1_000,
+            stamp: Stamp::parse("2026-10-31T12:00:00Z").unwrap(),
+            missed: &|_, _| false,
+        };
+        let looked = look_with(&at, &net, &mut Vec::new(), &mut |_, _, _, _, _| {
+            Err(Failure {
+                refusal: Some(Refusal::Integrity),
+                trouble: "error: hash mismatch in file downloaded from 'https://github.com/x'"
+                    .into(),
+            })
+        });
+        assert!(looked.changes.is_empty(), "{looked:?}");
+        let said: Vec<String> = looked.not_followed.iter().map(NotFollowed::line).collect();
+        let of = |id: &str| {
+            said.iter()
+                .find(|l| l.starts_with(&format!("{id}: ")))
+                .unwrap_or_else(|| panic!("{id} was left behind in silence: {said:?}"))
+        };
+        assert!(
+            of("spoiltcraft").contains("v0.9.0 was not followed: integrity")
+                && of("spoiltcraft").contains("hash mismatch"),
+            "{said:?}"
+        );
+        assert!(of("movingcraft").contains("nightly"), "{said:?}");
+        assert!(of("tildecraft").contains("the rule `"), "{said:?}");
+        assert!(
+            of("silentcraft").contains("the newest release was not asked: offline"),
+            "{said:?}"
+        );
+        assert_eq!(said.len(), 4, "{said:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FAILS IF: a machine that trusts no signing key of the person's —

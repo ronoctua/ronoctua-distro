@@ -110,6 +110,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
+    from datetime import timedelta
 
     def player(m, what):
         said = m.succeed(f"python3 ${client} '{json.dumps(what)}'")
@@ -125,17 +126,17 @@ pkgs.testers.runNixOSTest {
         m.succeed(
             f"systemd-run --unit=tailscaled python3 ${localApi} {me} {me_ip} {peer} {peer_ip}"
         )
-        m.wait_until_succeeds("test -S /run/tailscale/tailscaled.sock", timeout=30)
+        m.wait_until_succeeds("test -S /run/tailscale/tailscaled.sock", timeout=timedelta(seconds=30))
         m.succeed(
             "systemd-run --unit=player --setenv=XDG_RUNTIME_DIR=/run/user/0 "
             "--setenv=HOME=/root --setenv=RUST_LOG=ronoctua_player=debug "
             "${player}/bin/ronoctua-player"
         )
-        m.wait_until_succeeds("test -S /run/user/0/ronoctua-player.sock", timeout=30)
+        m.wait_until_succeeds("test -S /run/user/0/ronoctua-player.sock", timeout=timedelta(seconds=30))
 
     with subtest("each daemon listens on its tailnet address, and only there"):
-        host.wait_until_succeeds("ss -ltn | grep -q '100.64.0.1:45517'", timeout=30)
-        guest.wait_until_succeeds("ss -ltn | grep -q '100.64.0.2:45517'", timeout=30)
+        host.wait_until_succeeds("ss -ltn | grep -q '100.64.0.1:45517'", timeout=timedelta(seconds=30))
+        guest.wait_until_succeeds("ss -ltn | grep -q '100.64.0.2:45517'", timeout=timedelta(seconds=30))
         listening = host.succeed("ss -ltn | grep ':45517' || true")
         assert "0.0.0.0:45517" not in listening and "*:45517" not in listening, listening
 
@@ -143,7 +144,7 @@ pkgs.testers.runNixOSTest {
         said = player(host, {"ask": "put", "what": ["${media}/film.mp4"], "replace": True})
         assert said["say"] == "done", said
         player(host, {"ask": "invite"})
-        host.sleep(1)
+        host.sleep(duration=timedelta(seconds=1))
         code = player(host, {"ask": "look"})["invite"]
         assert code and len(code) == 6 and code.isdigit(), code
 
@@ -152,33 +153,33 @@ pkgs.testers.runNixOSTest {
         said = player(guest, {"ask": "pair-with", "to": "host", "code": wrong})
         assert said["say"] == "refused", f"a wrong code paired: {said}"
         player(host, {"ask": "invite"})
-        host.sleep(1)
+        host.sleep(duration=timedelta(seconds=1))
         code = player(host, {"ask": "look"})["invite"]
         said = player(guest, {"ask": "pair-with", "to": "host", "code": code})
         assert said["say"] == "done", said
         guest.wait_until_succeeds(
             "python3 ${client} '{\"ask\": \"look\"}' | grep -q '\"hosts\":\\[\"host\"'",
-            timeout=20,
+            timeout=timedelta(seconds=20),
         )
         host.wait_until_succeeds(
             "python3 ${client} '{\"ask\": \"look\"}' | grep -q '\"guests\":\\[\"guest\"'",
-            timeout=20,
+            timeout=timedelta(seconds=20),
         )
 
     with subtest("the guest joins, plays the host's lanes over HTTP, and keeps in step"):
         # THE GUEST'S OWN QUEUE, paused, which joining must never touch.
         said = player(guest, {"ask": "put", "what": ["${media}/film.mp4"], "replace": True})
         assert said["say"] == "done", said
-        guest.sleep(1)
+        guest.sleep(duration=timedelta(seconds=1))
         player(guest, {"ask": "pause"})
-        guest.sleep(1)
+        guest.sleep(duration=timedelta(seconds=1))
         own_queue = player(guest, {"ask": "queue"})
         own_current = player(guest, {"ask": "look"})["current"]
         said = player(guest, {"ask": "join", "host": "host", "role": "both"})
         assert said["say"] == "done", said
         # THE SETTLE WINDOW is four seconds after a load; past it the follower
         # is only nudged, and what it says of itself is the drift.
-        guest.sleep(10)
+        guest.sleep(duration=timedelta(seconds=10))
         # A FILM WITH A SOUND follows as a sound, nudged at two percent
         # (sync::NUDGE_SOUND): what the settle window leaves, up to 120 ms
         # (sync::SETTLE_MS), takes up to four more seconds to come under a
@@ -190,7 +191,7 @@ pkgs.testers.runNixOSTest {
             caught.append(j["drift_ms"])
             if abs(caught[-1]) < 80:
                 break
-            guest.sleep(1)
+            guest.sleep(duration=timedelta(seconds=1))
         print(f"the guest's drift while it catches up, ms: {caught}")
         assert abs(caught[-1]) < 80, f"never came in step: {caught}"
         drifts = []
@@ -199,7 +200,7 @@ pkgs.testers.runNixOSTest {
             j = s["joined"]
             assert j and j["host"] == "host", s
             drifts.append(j["drift_ms"])
-            guest.sleep(1)
+            guest.sleep(duration=timedelta(seconds=1))
         print(f"the guest's drift, ms: {drifts}")
         s = player(guest, {"ask": "look"})
         # WHAT PLAYS IS THE HOST'S LANES — its film's picture and its sound,
@@ -243,7 +244,7 @@ pkgs.testers.runNixOSTest {
             "python3 ${client} '{\"ask\": \"look\"}' | python3 -c "
             "'import json,sys; s=json.load(sys.stdin); "
             "sys.exit(0 if [l[\"kind\"] for l in s[\"lanes\"]] == [\"video\"] else 1)'",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         s = player(guest, {"ask": "look"})
         assert s["joined"]["role"] == "screen", s["joined"]
@@ -253,7 +254,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("leaving gives the guest its own player back"):
         player(guest, {"ask": "leave"})
-        guest.sleep(2)
+        guest.sleep(duration=timedelta(seconds=2))
         s = player(guest, {"ask": "look"})
         assert s["joined"] is None, s
         # THE GUEST'S QUEUE IS AS IT WAS, and its own leaf is current again.

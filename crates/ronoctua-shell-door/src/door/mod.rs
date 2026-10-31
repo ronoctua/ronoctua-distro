@@ -208,6 +208,9 @@ pub struct Ui {
     /// asked by a view whose followed tail was in sight when data arrived
     /// ([`crate::region::Doorway::follow_if_seen`]).
     pub(crate) follow_owed: bool,
+    /// The session is to be opened again at the end of the turn — asked by
+    /// a door that holds the lock ([`Ui::unlock`]).
+    unlock_owed: bool,
 }
 
 /// A program a window starts — see [`Ui::launch`] and [`Ui::launch_entry`].
@@ -290,6 +293,20 @@ impl Ui {
     /// Asks for a frame. It is drawn when the event queue empties.
     pub const fn ask_paint(&mut self) {
         self.owed = true;
+    }
+
+    /// OPENS THE SESSION AGAIN, at the end of the turn, and ends the door —
+    /// for a door that holds the lock ([`crate::session_lock`]); on any
+    /// other it only ends the door.
+    pub const fn unlock(&mut self) {
+        self.unlock_owed = true;
+    }
+
+    /// Whether [`Ui::unlock`] was asked and not yet carried out — what a test
+    /// reads of a lock that let the person in.
+    #[must_use]
+    pub const fn unlocking(&self) -> bool {
+        self.unlock_owed
     }
 
     /// Whether a frame may be drawn — a buffer committed — now: the surface
@@ -596,6 +613,7 @@ impl Ui {
             wake: None,
             detached: true,
             follow_owed: false,
+            unlock_owed: false,
         };
         ui.recount();
         Ok(ui)
@@ -1249,6 +1267,10 @@ pub enum Shell {
     /// nothing is drawn to it (`Ui::may_draw`), no pointer or key reaches it,
     /// and the process and everything it keeps stay alive behind it.
     Parked(wl_surface::WlSurface, std::rc::Rc<LayerShell>),
+    /// THE SESSION LOCKED: the door's surface is the lock's on one screen,
+    /// and every other screen is covered — the one shape a door takes over
+    /// the whole session (invariant 14's lock, `crate::session_lock`).
+    Locked(Box<crate::session_lock::Locked>),
 }
 
 impl Shell {
@@ -1259,6 +1281,7 @@ impl Shell {
             Self::Window { window, .. } => window.wl_surface(),
             Self::Layer(l, _) => l.wl_surface(),
             Self::Parked(surface, _) => surface,
+            Self::Locked(l) => l.surface(),
         }
     }
 }
@@ -1522,6 +1545,19 @@ pub trait Content: Sized + 'static {
         Closed::Quit
     }
 
+    /// The compositor said the session is locked — for a door that holds
+    /// the lock ([`crate::session_lock`]).
+    fn screens_locked(&mut self, ui: &mut Ui) {
+        let _ = ui;
+    }
+
+    /// The compositor ended the lock this door holds — `was_locked` when it
+    /// had said `locked`, and not when it never locked (another lock holds
+    /// the session). The door ends after this.
+    fn lock_ended(&mut self, ui: &mut Ui, was_locked: bool) {
+        let _ = (ui, was_locked);
+    }
+
     /// The keys the header teaches.
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         let _ = ui;
@@ -1765,9 +1801,9 @@ pub struct Door<C: Content> {
     /// `get_keyboard_with_repeat`, and that wants a `LoopHandle`.
     pub handle: calloop::LoopHandle<'static, Self>,
     registry: RegistryState,
-    outputs: OutputState,
+    pub(crate) outputs: OutputState,
     seats: SeatState,
-    _compositor: CompositorState,
+    pub(crate) _compositor: CompositorState,
     /// How the window appears.
     pub shell: Shell,
     keyboards: crate::seats::Seats<Modifiers, wl_keyboard::WlKeyboard>,
@@ -1981,6 +2017,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             wake: Some(wiring.wake()),
             detached: false,
             follow_owed: false,
+            unlock_owed: false,
         },
         content,
         handle,
@@ -2232,7 +2269,7 @@ impl<C: Content> Door<C> {
     pub fn layer_shell(&self) -> Option<std::rc::Rc<LayerShell>> {
         match &self.shell {
             Shell::Layer(_, shell) | Shell::Parked(_, shell) => Some(shell.clone()),
-            Shell::Window { .. } => None,
+            Shell::Window { .. } | Shell::Locked(_) => None,
         }
     }
 
@@ -2272,6 +2309,22 @@ impl<C: Content> Door<C> {
     /// destroyed surface may never be told its pointer left, and a button, a
     /// drag or a modifier held across it would still be held on the new one.
     pub fn reopen(&mut self, shell: Shell) {
+        let left = self.forget_the_surface(shell.wl_surface().clone());
+        let old = std::mem::replace(&mut self.shell, shell);
+        if let Shell::Parked(bare, _) = old
+            && &bare != self.shell.wl_surface()
+        {
+            bare.destroy();
+        }
+        self.surface_taken(left);
+    }
+
+    /// WHAT THE OLD SURFACE HELD, let go, and `surface` the door's from now
+    /// on — the first half of [`Door::reopen`], and the whole of a locked
+    /// door moving to another screen (`crate::session_lock`), whose shape
+    /// stays. The GPU goes FIRST: it draws through the old surface's pointer.
+    /// Answers whether the surface was on a screen.
+    pub(crate) fn forget_the_surface(&mut self, surface: wl_surface::WlSurface) -> bool {
         self.here = Hand::default();
         self.mods = Modifiers::default();
         self.selection = None;
@@ -2283,17 +2336,17 @@ impl<C: Content> Door<C> {
         self.quads = None;
         self.text = None;
         self.gpu = None;
-        self.ui.surface = shell.wl_surface().clone();
+        self.ui.surface = surface;
         // A NEW SURFACE IS ON NO SCREEN until it is told it entered one —
         // and the window is told that moved, as every other change of
         // `ui.screens` is (`Content::screens_changed`).
-        let left = self.ui.screens.left_every_screen();
-        let old = std::mem::replace(&mut self.shell, shell);
-        if let Shell::Parked(bare, _) = old
-            && &bare != self.shell.wl_surface()
-        {
-            bare.destroy();
-        }
+        self.ui.screens.left_every_screen()
+    }
+
+    /// The second half: the new surface starts from scale one, unsized and
+    /// unconfigured, and the window hears it left its screens (`left`, what
+    /// [`Door::forget_the_surface`] answered).
+    pub(crate) fn surface_taken(&mut self, left: bool) {
         self.ui.scale = 1;
         self.scale_told = 1;
         self.ui.width = 0;
@@ -2401,6 +2454,14 @@ impl<C: Content> Door<C> {
     /// Draws the owed frame, if one is owed — and starts what the turn asked
     /// of the door's threads: a paste, an order for the footer.
     fn settle(&mut self) {
+        // THE LOCK'S SCREENS, as the screens are now, and the session opened
+        // again when the door asked — before anything else of the turn: the
+        // door ends with it (`crate::session_lock`).
+        self.place_the_lock();
+        if std::mem::take(&mut self.ui.unlock_owed) {
+            self.open_the_session();
+            return;
+        }
         // THE LIST FOLLOWS THE CURSOR when a view asked it to — a followed
         // tail that was in sight when data arrived (`Doorway::follow_if_seen`).
         if std::mem::take(&mut self.ui.follow_owed) {

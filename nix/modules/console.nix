@@ -2,6 +2,16 @@
 # boots on, with no line of error in the journal — the ISO's and every
 # machine's (`flake.nix` gives both this module).
 #
+# # The keyboard is the session's answer
+#
+# Compiled for the console from the same xkb layout and variant
+# (`nix/console-keymaps.nix`): a machine's `ronoctua.keyboard.console`, which
+# its `host.nix` carries, and on the ISO — which declares no such option — the
+# distro's default, the answer the installer's keyboard question opens on (the
+# installer loads the map of the answer given from then on). `earlySetup`
+# takes the map into the initrd, where the disk's passphrase is typed: a map
+# the session does not type is a passphrase the person cannot type twice.
+#
 # # Why the font is not just `console.font`
 #
 # `systemd-vconsole-setup` runs `setfont`, and `setfont` writes `ERROR` to the
@@ -43,6 +53,7 @@
 { tool }:
 {
   config,
+  options,
   lib,
   pkgs,
   ronoctua,
@@ -51,6 +62,13 @@
 
 let
   fonts = ronoctua.fonts;
+  keymaps = import ../console-keymaps.nix { inherit pkgs; };
+  # THE ANSWER: the machine's, or the default where nothing declares one.
+  answer =
+    if options ? ronoctua.keyboard.console then
+      config.ronoctua.keyboard.console
+    else
+      (import ../keyboard-xkb.nix).console;
   program = "${tool}/bin/ronoctua-console-font";
   # `-` BEFORE THE LOAD: a switch restarts the setup when the console's
   # configuration changes, and a font the console refused there would fail
@@ -73,6 +91,9 @@ in
   console = {
     earlySetup = true;
     font = fonts.consoleFontVga;
+    # A FILE, not a `kbd` name: NixOS writes its path into `vconsole.conf`
+    # and takes it into the initrd's store (`boot.initrd.systemd.storePaths`).
+    keyMap = lib.mkDefault (keymaps.one answer);
   };
 
   boot.kernelParams = [ "fbcon=nodefer" ];

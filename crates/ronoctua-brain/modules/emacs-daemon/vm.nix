@@ -63,7 +63,7 @@ in
             """Asks the watch to look now, waits for that look, and returns
             the notices it left."""
             asked = mind()["now"]
-            machine.sleep(1)
+            machine.sleep(duration=datetime.timedelta(seconds=1))
             said = brain({"ask": "run", "task": "emacs-daemon", "rehearsal": False})
             assert said.get("say") not in ("refused", "declined"), f"the run was refused: {said}"
 
@@ -79,7 +79,7 @@ in
 
         machine.wait_for_unit("user@1000.service")
         machine.wait_until_succeeds(
-            f"systemctl --user --machine={person}@ is-active emacs.service", timeout=120
+            f"systemctl --user --machine={person}@ is-active emacs.service", timeout=datetime.timedelta(minutes=2)
         )
 
         # THE DAEMON AND ITS CLIENT: all in hand, nothing to say.
@@ -93,7 +93,7 @@ in
         # A SECOND EMACS, which loaded a configuration of its own: the daemon
         # is seen up, and the other copy for what it is.
         as_person("emacs-daemon-vm-standalone", f"{bin}/emacs -nw /home/{person}/other.txt")
-        machine.sleep(5)
+        machine.sleep(duration=datetime.timedelta(seconds=5))
         assert says() == ["not-the-client"], "a second Emacs beside the daemon was not told"
 
         # THE DAEMON GONE, the second Emacs still open: the line with the button.
@@ -102,7 +102,7 @@ in
 
         # NO EMACS AT ALL is no problem, and the machine is left as it was.
         machine.succeed(f"systemctl --user --machine={person}@ stop emacs-daemon-vm-standalone")
-        machine.sleep(2)
+        machine.sleep(duration=datetime.timedelta(seconds=2))
         assert says() == [], "a machine with no Emacs made the watch speak"
   '';
 }

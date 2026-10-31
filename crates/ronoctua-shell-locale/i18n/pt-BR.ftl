@@ -8,25 +8,15 @@
 # sentences are read at run time (`RONOCTUA_TEXTS`), so editing one compiles nothing.
 
 locale-heading-language = Interface
-locale-speaking = em uso
 locale-from-file = Você escolheu este idioma; ele fica no language.json.
 locale-from-system = Este é o idioma da máquina, vindo da configuração do sistema.
 locale-from-default = Ninguém escolheu; este é o primeiro idioma declarado.
 locale-heading-time = Relógio e data
-locale-clock-24h = Relógio de 24 horas
-locale-clock-12h = Relógio de 12 horas
-locale-order-ymd = Ano primeiro
-locale-order-dmy = Dia primeiro
-locale-order-mdy = Mês primeiro
-locale-heading-machine = Decidido pelo sistema
 locale-zone-unknown = desconhecido
 locale-zone-is-declared = O fuso é declarado na configuração do sistema; mudá-lo é um rebuild.
 locale-decimal = Separador decimal
-locale-decimal-is-the-languages = O separador é do idioma, e acompanha ele.
 locale-measurement = Medidas
-locale-metric = Métrico
 locale-not-written = A escolha não pôde ser gravada no disco.
-locale-measurement-is-declared = Métrico seja qual for o idioma, e isso é decisão, não padrão.
 cmd-locale-open = Idioma e região, no rodapé
 cmd-locale-window = Idioma e região, em janela
 cmd-locale-up = Linha anterior
@@ -153,7 +143,6 @@ locale-units-metric = Métrico — °C
 locale-units-imperial = Imperial — °F
 locale-drop-place = Remover este lugar
 locale-add-place = Acrescentar um lugar
-locale-add-place-how = um fuso, como Europe/Lisbon
 ask-locale-where = Latitude e longitude, dois números
 locale-no-such-zone = Não existe fuso com esse nome.
 locale-not-a-coordinate = Isso não é uma latitude e uma longitude.

@@ -69,6 +69,12 @@ impl Graph {
             // carried an `info` — the core does not — is not a removal.
             if o.get("info").is_some_and(Value::is_null) {
                 self.objects.remove(&id);
+                // AND ITS METADATA GOES WITH IT, as the server's does
+                // (`module-metadata`: a removed global's properties are
+                // cleared) — which `pw-dump` never prints. Kept, a
+                // `target.object` of a stream that ended would be read as the
+                // next stream's, because the id is handed on.
+                self.forget_subject(id);
                 continue;
             }
             match self.objects.get_mut(&id) {
@@ -123,7 +129,72 @@ impl Graph {
                 _ => {}
             }
         }
+        self.took_ways(&mut out.nodes);
         out
+    }
+
+    /// Where each playing stream goes ([`crate::Way`]), once every node is
+    /// known: the input end of its first LINK — the server's routing, which
+    /// is what the sound does, and not a property of the stream, which is
+    /// what somebody asked — and the `target.object` the `default` metadata
+    /// holds for it.
+    fn took_ways(&self, nodes: &mut [Node]) {
+        let mut asked: BTreeMap<u32, crate::Asked> = BTreeMap::new();
+        for o in self.objects.values() {
+            if o.get("type").and_then(Value::as_str) == Some("PipeWire:Interface:Metadata") {
+                took_targets(o, &mut asked);
+            }
+        }
+        for n in nodes.iter_mut().filter(|n| n.kind == Some(Kind::Playing)) {
+            let stream = n.id;
+            // THE FIRST LINK, by id: a stream has one per channel, all to the
+            // same node.
+            n.way.now = self.objects.values().find_map(|o| {
+                if o.get("type").and_then(Value::as_str) != Some("PipeWire:Interface:Link") {
+                    return None;
+                }
+                let info = o.get("info")?;
+                let end = |key: &str| {
+                    info.get(key)
+                        .and_then(Value::as_u64)
+                        .and_then(|n| u32::try_from(n).ok())
+                };
+                (end("output-node-id")? == stream).then(|| end("input-node-id"))?
+            });
+            n.way.asked = asked.remove(&stream);
+        }
+    }
+
+    /// Drops every metadata entry about `subject` — see [`Graph::took`].
+    fn forget_subject(&mut self, subject: u32) {
+        for o in self.objects.values_mut() {
+            if let Some(entries) = o.get_mut("metadata").and_then(Value::as_array_mut) {
+                entries.retain(|e| {
+                    e.get("subject").and_then(Value::as_u64) != Some(u64::from(subject))
+                });
+            }
+        }
+    }
+
+    /// WHETHER AN APPLICATION IS PLAYING SOUND NOW: a playing stream
+    /// (`Stream/Output/Audio`) whose node RUNS — the state PipeWire gives a
+    /// node that is moving samples. A stream held open and paused is
+    /// `idle` or `suspended`, and is not playing: the lock screen's idle
+    /// watcher asks this so music keeps a machine unlocked and a paused
+    /// player does not.
+    #[must_use]
+    pub fn playing(&self) -> bool {
+        self.objects.values().any(|o| {
+            o.get("type").and_then(Value::as_str) == Some("PipeWire:Interface:Node")
+                && props(o)
+                    .and_then(|p| word(p, "media.class"))
+                    .and_then(Kind::of)
+                    == Some(Kind::Playing)
+                && o.get("info")
+                    .and_then(|i| i.get("state"))
+                    .and_then(Value::as_str)
+                    == Some("running")
+        })
     }
 
     /// One whole reading out of one `pw-dump` run.
@@ -266,7 +337,25 @@ fn node_of(o: &Value) -> Option<Node> {
         muted,
         app: word(p, "application.name").map(str::to_owned),
         address: word(p, "api.bluez5.address").map(str::to_owned),
+        serial: p.get("object.serial").and_then(Value::as_u64),
+        way: crate::Way {
+            fixed: yes(p.get("node.dont-move")),
+            ..crate::Way::default()
+        },
     })
+}
+
+/// Whether a property says yes, in any of the three ways it arrives:
+/// `pw-dump` prints `true` as a boolean and `1` as a number, and a property
+/// set by hand may be the string — WirePlumber's own `parseBool` takes
+/// `true` and `1`.
+fn yes(v: Option<&Value>) -> bool {
+    match v {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_u64() == Some(1),
+        Some(Value::String(s)) => s == "true" || s == "1",
+        _ => false,
+    }
 }
 
 /// The volume and the mute of one node.
@@ -388,6 +477,48 @@ fn route_of(v: &Value) -> Option<Route> {
             })
             .unwrap_or_default(),
     })
+}
+
+/// The `target.object` of every subject, out of the `default` metadata
+/// object.
+///
+/// `pw-dump` prints a value that reads as an integer AS one: a serial is a
+/// number, a name is a string, and `-1` — WirePlumber's "link it nowhere" —
+/// is neither a serial nor a name, so it is not a device asked for.
+fn took_targets(o: &Value, out: &mut BTreeMap<u32, crate::Asked>) {
+    let is_the_one = o
+        .get("props")
+        .and_then(|p| p.get("metadata.name"))
+        .and_then(Value::as_str)
+        == Some("default");
+    if !is_the_one {
+        return;
+    }
+    let Some(entries) = o.get("metadata").and_then(Value::as_array) else {
+        return;
+    };
+    for e in entries {
+        if e.get("key").and_then(Value::as_str) != Some("target.object") {
+            continue;
+        }
+        let Some(subject) = e
+            .get("subject")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+        else {
+            continue;
+        };
+        let asked = match e.get("value") {
+            Some(Value::Number(n)) => n.as_u64().map(crate::Asked::Serial),
+            Some(Value::String(s)) if !s.is_empty() && s != "-1" => {
+                Some(crate::Asked::Name(s.clone()))
+            }
+            _ => None,
+        };
+        if let Some(asked) = asked {
+            out.insert(subject, asked);
+        }
+    }
 }
 
 /// The four defaults, out of the `default` metadata object.
@@ -680,5 +811,196 @@ mod tests {
         ])
         .snapshot();
         assert_eq!(s.nodes.len(), 1);
+    }
+
+    /// FAILS IF: a paused stream reads as playing, a device as an
+    /// application, or a running stream as silence — what keeps music from
+    /// being locked, and a paused player from keeping the screen unlocked.
+    #[test]
+    fn only_a_running_stream_is_playing() {
+        let stream = |state: &str, class: &str| {
+            serde_json::json!([{
+                "id": 40,
+                "type": "PipeWire:Interface:Node",
+                "info": {
+                    "state": state,
+                    "props": {"node.name": "player", "media.class": class}
+                }
+            }])
+        };
+        let mut g = Graph::fresh();
+        g.took(&stream("running", "Stream/Output/Audio"));
+        assert!(g.playing(), "a running stream plays");
+        let mut g = Graph::fresh();
+        g.took(&stream("idle", "Stream/Output/Audio"));
+        assert!(!g.playing(), "a paused one does not");
+        let mut g = Graph::fresh();
+        g.took(&stream("running", "Audio/Sink"));
+        assert!(
+            !g.playing(),
+            "a device running is not an application playing"
+        );
+        let mut g = Graph::fresh();
+        g.took(&stream("running", "Stream/Input/Audio"));
+        assert!(!g.playing(), "a recording is not sound played");
+        assert!(!Graph::fresh().playing());
+    }
+
+    /// Two sinks with serials and a program playing on the first, by two
+    /// links — one per channel — in the shape `pw-dump` 1.6 prints them.
+    const PLAYING: &str = r#"[
+      { "id": 60, "type": "PipeWire:Interface:Node",
+        "info": { "props": { "media.class": "Audio/Sink", "node.name": "speaker",
+                             "object.serial": 1060 } } },
+      { "id": 70, "type": "PipeWire:Interface:Node",
+        "info": { "props": { "media.class": "Audio/Sink", "node.name": "headphones",
+                             "object.serial": 1070 } } },
+      { "id": 120, "type": "PipeWire:Interface:Node",
+        "info": { "state": "running",
+                  "props": { "media.class": "Stream/Output/Audio", "node.name": "player",
+                             "application.name": "a player", "object.serial": 1120 } } },
+      { "id": 130, "type": "PipeWire:Interface:Link",
+        "info": { "output-node-id": 120, "output-port-id": 121,
+                  "input-node-id": 60, "input-port-id": 61, "state": "active" } },
+      { "id": 131, "type": "PipeWire:Interface:Link",
+        "info": { "output-node-id": 120, "output-port-id": 122,
+                  "input-node-id": 60, "input-port-id": 62, "state": "active" } }
+    ]"#;
+
+    /// FAILS IF: where a program's sound goes stops being read off the
+    /// LINKS — a move would not show until the view was reopened — or a
+    /// serial, which is what a move names a device by, is not read.
+    #[test]
+    fn a_stream_plays_where_its_links_go() {
+        let mut g = graph_of(&[PLAYING]);
+        let s = g.snapshot();
+        let stream = s.nodes.iter().find(|n| n.id == 120).expect("the stream");
+        assert_eq!(stream.way.now, Some(60));
+        assert_eq!(s.plays_on(stream).map(|n| n.name.as_str()), Some("speaker"));
+        assert_eq!(
+            s.outputs().iter().map(|n| n.serial).collect::<Vec<_>>(),
+            [Some(1060), Some(1070)]
+        );
+        // MOVED: the old links go (`info: null`) and new ones come.
+        g.took_text(
+            r#"[{ "id": 130, "info": null }, { "id": 131, "info": null },
+          { "id": 132, "type": "PipeWire:Interface:Link",
+            "info": { "output-node-id": 120, "input-node-id": 70, "state": "active" } }]"#,
+        )
+        .expect("the fixture is JSON");
+        let s = g.snapshot();
+        let stream = s.nodes.iter().find(|n| n.id == 120).expect("the stream");
+        assert_eq!(
+            stream.way.now,
+            Some(70),
+            "the row would still say the old device"
+        );
+        // UNLINKED: nowhere, and not the last place it was.
+        g.took_text(r#"[{ "id": 132, "info": null }]"#)
+            .expect("the fixture is JSON");
+        let s = g.snapshot();
+        assert_eq!(
+            s.nodes.iter().find(|n| n.id == 120).map(|n| n.way.now),
+            Some(None)
+        );
+        // A DEVICE'S OWN LINKS are not a way: only a playing stream has one.
+        assert!(
+            s.nodes
+                .iter()
+                .filter(|n| n.kind == Some(Kind::Sink))
+                .all(|n| n.way.now.is_none())
+        );
+    }
+
+    /// FAILS IF: what a program was sent to stops being read out of the
+    /// `default` metadata — by serial and by name, `-1` not taken for a
+    /// device — or an entry outlives the stream it was about, and the next
+    /// stream given the same id reads as sent somewhere it never was.
+    #[test]
+    fn what_a_stream_was_sent_to_is_read_and_goes_with_it() {
+        let asked = r#"[{ "id": 40, "type": "PipeWire:Interface:Metadata",
+          "props": { "metadata.name": "default" },
+          "metadata": [
+            { "subject": 120, "key": "target.object", "type": "Spa:Id", "value": 1070 },
+            { "subject": 0, "key": "default.audio.sink", "type": "Spa:String:JSON",
+              "value": { "name": "speaker" } }
+          ] }]"#;
+        let mut g = graph_of(&[PLAYING, asked]);
+        let s = g.snapshot();
+        let stream = s.nodes.iter().find(|n| n.id == 120).expect("the stream");
+        assert_eq!(stream.way.asked, Some(crate::Asked::Serial(1070)));
+        assert!(!s.sent_where_nothing_is(stream));
+        assert_eq!(
+            s.defaults.sink.as_deref(),
+            Some("speaker"),
+            "the defaults still read"
+        );
+
+        // BY NAME, and `-1`, which names nothing.
+        let by_name = r#"[{ "id": 40, "type": "PipeWire:Interface:Metadata",
+          "props": { "metadata.name": "default" },
+          "metadata": [{ "subject": 120, "key": "target.object", "value": "headphones" }] }]"#;
+        g.took_text(by_name).expect("the fixture is JSON");
+        let s = g.snapshot();
+        assert_eq!(
+            s.nodes
+                .iter()
+                .find(|n| n.id == 120)
+                .and_then(|n| n.way.asked.clone()),
+            Some(crate::Asked::Name("headphones".to_owned()))
+        );
+        let nowhere = r#"[{ "id": 40, "type": "PipeWire:Interface:Metadata",
+          "props": { "metadata.name": "default" },
+          "metadata": [{ "subject": 120, "key": "target.object", "value": -1 }] }]"#;
+        g.took_text(nowhere).expect("the fixture is JSON");
+        assert_eq!(
+            g.snapshot()
+                .nodes
+                .iter()
+                .find(|n| n.id == 120)
+                .map(|n| n.way.asked.clone()),
+            Some(None)
+        );
+
+        // THE STREAM ENDS, and a new one is given its id.
+        g.took_text(by_name).expect("the fixture is JSON");
+        g.took_text(r#"[{ "id": 120, "info": null }]"#)
+            .expect("the fixture is JSON");
+        g.took_text(r#"[{ "id": 120, "type": "PipeWire:Interface:Node",
+          "info": { "props": { "media.class": "Stream/Output/Audio", "node.name": "another" } } }]"#)
+            .expect("the fixture is JSON");
+        let s = g.snapshot();
+        assert_eq!(
+            s.nodes
+                .iter()
+                .find(|n| n.id == 120)
+                .map(|n| n.way.asked.clone()),
+            Some(None),
+            "the ended stream's target was read as the new one's"
+        );
+        assert_eq!(
+            s.defaults.sink.as_deref(),
+            Some("speaker"),
+            "and only its entries went"
+        );
+    }
+
+    /// FAILS IF: a program that asked never to be moved is offered a device,
+    /// in any of the three ways the property arrives.
+    #[test]
+    fn a_stream_that_asked_to_stay_is_fixed() {
+        for said in ["true", "1", r#""true""#, r#""1""#] {
+            let one = format!(
+                r#"[{{ "id": 120, "type": "PipeWire:Interface:Node",
+                  "info": {{ "props": {{ "media.class": "Stream/Output/Audio",
+                                        "node.name": "p", "node.dont-move": {said} }} }} }}]"#
+            );
+            let s = graph_of(&[PLAYING, &one]).snapshot();
+            let stream = s.nodes.iter().find(|n| n.id == 120).expect("the stream");
+            assert!(stream.way.fixed, "{said}");
+            assert_eq!(s.send(120, 70), None, "{said}");
+        }
+        let s = graph_of(&[PLAYING]).snapshot();
+        assert!(s.send(120, 70).is_some(), "and one that did not is moved");
     }
 }

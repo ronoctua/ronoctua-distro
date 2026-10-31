@@ -62,6 +62,32 @@ let
   # `/etc` (and so under its toplevel's `etc/`): `ronoctua-machine` reads it
   # there to put the folder back on the system that runs.
   systemLock = "ronoctua/machine.lock";
+  # ONE OF THE UPDATE PAGE'S GESTURES ON THE MACHINE (owner, 2026-10-31): a
+  # unit that runs one verb of the machine's — `hold` with no revision,
+  # `unhold`, `try-again` —, with no word of anybody's and the machine's
+  # table, started only by the sudo door's helper (`machine-hold`,
+  # `machine-unhold`, `machine-try-again`), which waits for it. What the
+  # machine prints on its standard output is its one verdict line, and it
+  # goes to a file of root's in the update's folder (`<unit>.said`) that the
+  # helper reads to say why a refusal was refused; every step goes to the
+  # journal. No polkit rule names it: the gesture passes the password.
+  machineGesture = verb: description: {
+    inherit description;
+    environment = cfg.environment;
+    # NO START LIMIT: only the person's gesture starts it, and it never
+    # restarts by itself.
+    startLimitIntervalSec = 0;
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "${tool} ${verb}";
+      StandardOutput = "truncate:${cfg.runDir}/ronoctua-machine-${verb}.service.said";
+      StandardError = "journal";
+      RuntimeDirectory = baseNameOf cfg.runDir;
+      RuntimeDirectoryPreserve = "yes";
+    };
+    restartIfChanged = false;
+    stopIfChanged = false;
+  };
 in
 {
   options.ronoctua.machine = {
@@ -731,6 +757,12 @@ in
         restartIfChanged = false;
         stopIfChanged = false;
       };
+
+      # THE UPDATE PAGE'S GESTURES ON THE MACHINE (`machineGesture`, above):
+      # each unit named by its verb, the name the helper starts.
+      systemd.services.ronoctua-machine-hold = machineGesture "hold" "Holds the machine on the distro revision it runs";
+      systemd.services.ronoctua-machine-unhold = machineGesture "unhold" "Lets go of the machine's hold on a distro revision";
+      systemd.services.ronoctua-machine-try-again = machineGesture "try-again" "Lets the next update try again the system whose boot trial failed";
 
       # WHO MAY START THEM: the person, verb `start`, these units and no other,
       # `YES` — there is no polkit agent in this session, and the software

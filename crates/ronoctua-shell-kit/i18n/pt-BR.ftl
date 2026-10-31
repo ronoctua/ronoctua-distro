@@ -11,7 +11,6 @@
 
 cmd-buffer-next = Próximo buffer
 cmd-buffer-switch = Trocar de buffer
-cmd-file-save = Salvar arquivo
 cmd-buffer-close = Fechar buffer
 cmd-buffer-terminal = Abrir terminal
 cmd-session-quit = Encerrar sessão
@@ -161,8 +160,6 @@ files-column-group = grupo
 files-column-size = tamanho
 files-column-modified = modificado
 files-explain-owner = { $who } é o dono; clicar troca
-cmd-atlas-open = dados do mundo
-cmd-atlas-window = dados do mundo numa janela
 transfers-pause = segurar ou soltar esta transferência
 cmd-transfers-pause = segurar ou soltar
 # A TELA EM SI.

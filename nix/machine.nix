@@ -246,6 +246,13 @@ in
         in
         {
           included = map (m: m.folder) (builtins.filter (m: m.included) every);
+          # WHAT THE BRAIN'S LOADER MAY READ (`withPersonModules`' `only`): the
+          # included folders alone. A folder whose NixOS half waits for an
+          # approval is never evaluated by root — not its manifest either, which
+          # a pure evaluation could still fill with a file of the machine's
+          # source and carry into a derivation (the owner's decision,
+          # 2026-10-31; `person-root-module-needs-approval`).
+          includedIds = map (m: m.id) (builtins.filter (m: m.included) every);
           awaiting = map (m: { inherit (m) id hash; }) (builtins.filter (m: !m.included) every);
           rootModules = map (m: m.rootModule) (builtins.filter (m: m.included && m.rootHalf) every);
         };

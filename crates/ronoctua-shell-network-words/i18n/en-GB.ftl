@@ -67,6 +67,7 @@ tunnel-refused-no-daemon = its daemon is not running
 tunnel-refused-authority = its socket is not this session's to use
 tunnel-refused-unit = its service would not start or stop
 tunnel-refused-not-written = the file could not be written
+tunnel-refused-no-transport = this machine has no program for that bridge transport, so nothing was written
 tunnel-refused-config = Tor would not read its configuration
 tunnel-refused-daemon = the daemon said no
 tunnel-refused-other = it did not work

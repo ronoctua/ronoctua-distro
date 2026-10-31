@@ -56,6 +56,9 @@ pub struct Places {
     pub systemctl: PathBuf,
     /// The directory whose torrc fragment this system owns.
     pub fragment: PathBuf,
+    /// The pluggable transports' programs, as the environment names them
+    /// (`nix/modules/tor.nix`): what a bridge's transport is run with.
+    pub transports: tor::transport::Programs,
 }
 
 impl Default for Places {
@@ -66,6 +69,7 @@ impl Default for Places {
             cookie: PathBuf::from(tor::COOKIE),
             systemctl: PathBuf::from(tor::SYSTEMCTL),
             fragment: PathBuf::from(tor::FRAGMENT_DIR),
+            transports: tor::transport::Programs::from_env(),
         }
     }
 }
@@ -129,7 +133,9 @@ pub fn look(places: &Places) -> Scene {
         tor: tor::look(&places.tor, &places.cookie),
         standing: tor::standing(&places.systemctl),
         autostart: prefs::read().autostart,
-        settings: tor::fragment::read(&places.fragment),
+        // THE RING'S WORDS, not the lines: `obfs4 exec /nix/store/…` is read
+        // as `obfs4`, which is what the transport's ring turns from.
+        settings: tor::transport::for_ring(tor::fragment::read(&places.fragment)),
     }
 }
 
@@ -185,6 +191,9 @@ pub enum Refusal {
     UnitFailed,
     /// A file of ours could not be written.
     NotWritten,
+    /// A bridge's transport has no program on this machine, so its line was
+    /// not written.
+    NoTransport,
     /// Tor would not take its configuration — a line it could not read.
     ConfigRefused,
     /// The daemon answered no.
@@ -421,7 +430,15 @@ where
 /// see [`Order::Configure`]. It is also skipped when the control socket will
 /// not open, which is the same situation from one step further away.
 fn configure(places: &Places, lines: &tor::fragment::Lines) -> anyhow::Result<()> {
-    tor::fragment::write(&places.fragment, lines).map_err(|e| {
+    // THE TRANSPORT'S WORD BECOMES ITS PROGRAM'S LINE, or nothing is written:
+    // a bare `ClientTransportPlugin obfs4` is a bridge no program speaks.
+    let torrc = tor::transport::for_torrc(lines, &places.transports).map_err(|e| {
+        anyhow::Error::from(Said {
+            why: Refusal::NoTransport,
+            words: e.to_string(),
+        })
+    })?;
+    tor::fragment::write(&places.fragment, &torrc).map_err(|e| {
         anyhow::Error::from(Said {
             why: Refusal::NotWritten,
             words: format!("{e:#}"),
@@ -449,6 +466,7 @@ mod tests {
             cookie: PathBuf::from("/nonexistent/cookie"),
             systemctl: PathBuf::from("/nonexistent/systemctl"),
             fragment: PathBuf::from("/nonexistent/fragment"),
+            transports: tor::transport::Programs::default(),
         }
     }
 
@@ -535,6 +553,58 @@ mod tests {
         assert_eq!(configure(&places, &lines).ok(), Some(()));
         // AND IT READS BACK AS WHAT WENT IN.
         assert_eq!(tor::fragment::read(&dir), lines);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// FAILS IF: a bridge's transport is written as the ring's bare word
+    /// (`ClientTransportPlugin obfs4`, which runs no program), or written at
+    /// all when this process was not told where its program is — instead of
+    /// a refusal by name that leaves the file as it was — or the line read
+    /// back is not the word the ring turns from.
+    #[test]
+    fn a_bridge_transport_is_written_with_its_program_or_refused() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-tor-pt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lyrebird = dir.join("lyrebird");
+        let told = Places {
+            fragment: dir.clone(),
+            transports: tor::transport::Programs {
+                lyrebird: Some(lyrebird.clone()),
+                snowflake: None,
+            },
+            ..nowhere()
+        };
+        let mut lines = tor::fragment::Lines::new();
+        lines.insert("UseBridges".to_owned(), vec!["1".to_owned()]);
+        lines.insert(tor::transport::KEY.to_owned(), vec!["obfs4".to_owned()]);
+        assert_eq!(configure(&told, &lines).ok(), Some(()));
+        let written = std::fs::read_to_string(tor::fragment::path(&dir)).unwrap();
+        assert!(
+            written.contains(&format!(
+                "\nClientTransportPlugin obfs4 exec {}\n",
+                lyrebird.display()
+            )),
+            "{written}"
+        );
+        // READ AS THE VIEW READS IT, the line is the ring's word again.
+        assert_eq!(look(&told).settings, lines);
+
+        // AND A TRANSPORT WITH NO PROGRAM IS REFUSED BY NAME, the file left
+        // as it was.
+        lines.insert(tor::transport::KEY.to_owned(), vec!["snowflake".to_owned()]);
+        let e = configure(&told, &lines).unwrap_err();
+        let r = refused_of(&e, Refusal::Other);
+        assert_eq!(r.why, Refusal::NoTransport, "{}", r.words);
+        assert!(
+            r.words.contains(tor::transport::SNOWFLAKE_VARIABLE),
+            "{}",
+            r.words
+        );
+        assert_eq!(
+            std::fs::read_to_string(tor::fragment::path(&dir)).unwrap(),
+            written,
+            "a refused transport changed the file"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

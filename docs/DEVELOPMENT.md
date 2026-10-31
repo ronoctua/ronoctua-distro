@@ -218,7 +218,8 @@ sobre um histórico vazio dela, que teclas e cliques enchem), a do video-metrics
 (`--door containers`, com um podman de mentira que responde o que foi gravado), a dos pertences
 (`--door belongings --places <pasta>`, sobre uma cópia da máquina plantada nela), a do pendrive
 (`--door stick --scene <arquivo>`), a central de programas (`--door software --room <pasta>`), a do
-Incus (`--door incus --scene <arquivo>`), a das contas LLM (`--door agents --places <pasta>`), a da
+Incus (`--door incus --scene <arquivo>`), a das contas LLM (`--door agents --places <pasta>`), a do som (`--door audio --scene <arquivo>`,
+sobre o que o `pw-dump` imprime), a da
 atualização sobre uma cena inteira (`--door update-scene --scene <arquivo>`), e quatro sobre uma
 cena dada inteira (cada câmera na tabela `CAMERAS` do crate da porta): a das telas
 (`--door display --screens one|two|stacked|dark`), a do clipboard
@@ -230,10 +231,10 @@ cena dada inteira (cada câmera na tabela `CAMERAS` do crate da porta): a das te
 `--entry` dão as telas e o histórico, `--notification` põe um aviso na faixa, e os passos são
 `--leader`, `--key` e `--command`), tirada por
 `ronoctua-shell photograph`; toda porta que lê o resto da linha diz as opções dela em
-`photograph --door <porta> --help`. No rodapé, as vistas do Incus, da segurança e do pendrive leem a
-cena que uma variável nomeia, no formato da câmera da janela delas, nunca a desta máquina
-(`RONOCTUA_PHOTOGRAPH_INCUS_SCENE`, `RONOCTUA_PHOTOGRAPH_SECURITY_SCENE` e
-`RONOCTUA_PHOTOGRAPH_STICK_SCENE`). A porta é a de produção, desligada, e o quadro sai da mesma
+`photograph --door <porta> --help`. No rodapé, as vistas do Incus, da segurança, do pendrive e do som
+leem a cena que uma variável nomeia, no formato da câmera da janela delas, nunca a desta máquina
+(`RONOCTUA_PHOTOGRAPH_INCUS_SCENE`, `RONOCTUA_PHOTOGRAPH_SECURITY_SCENE`,
+`RONOCTUA_PHOTOGRAPH_STICK_SCENE` e `RONOCTUA_PHOTOGRAPH_AUDIO_SCENE`). A porta é a de produção, desligada, e o quadro sai da mesma
 função com que ela se desenha na tela (`door::compose`); a comparação pixel a
 pixel com a porta numa tela ainda está no `docs/PENDING.md`. O player dela não age fora da porta: o
 que um clique faria sai impresso (`asked the player: …`, `would have …`), e a resposta do daemon é o
@@ -503,7 +504,7 @@ outro sistema, confira um a um:
 | disco | dezenas de GB livres | o diretório de build do cargo (`nix/cargo-dirs.nix`, fora da árvore) passa de 70 GB com os perfis `loop` e `release`; o store cresce a cada bateria |
 | KVM | `/dev/kvm` legível e gravável por você | os testes de VM e o `.#vm` sem aceleração emulam cada instrução |
 | `system-features` | `kvm nixos-test big-parallel benchmark` no `nix.conf` do daemon | um teste de VM pede `kvm` e `nixos-test`; sem eles o Nix recusa construí-lo |
-| `trusted-users` | o seu usuário, como na distro (`nix/modules/base.nix`) | de quem não é confiável o daemon ignora, com um aviso, os ajustes restritos de um `--option` (os substituters, o sandbox), e recusa um caminho sem assinatura trazido de outra máquina (`nix copy`) |
+| `trusted-users` | só root, como na distro (`nix/modules/base.nix`) | nada do trabalho pede ao daemon um ajuste restrito: as baterias e o `.#sized-build` passam só `--max-jobs`, `--cores`, `--keep-going` e `--fallback`, que o daemon aceita de qualquer usuário; um usuário confiável é quase root |
 | rede | na primeira avaliação | os inputs do flake e as fontes (~1,4 GB comprimidos, assets do Release `fonts-v1`); depois, só o que muda |
 
 **Uma máquina que só constrói** pode dar mais memória ao daemon: na distro, o `nix-daemon` tem
@@ -525,13 +526,13 @@ As máquinas seguem a branch `release`, e só o `nix run .#release` a move — p
 gate. Ele roda na `main` limpa e igual à `origin/main`, e recusa antes de qualquer custo o que não
 estiver assim (o login do `gh` também).
 
-**O nixpkgs não anda com a release.** Cada máquina rola o próprio no `nixos-unstable` (o `follows`
-do template; a atualização semanal o move junto com a distro), e o gate prova a distro com o nixpkgs
-do `flake.lock` desta árvore, que nada move sozinho: nem o `.#release` nem o `.#distro-pins` rodam
-`nix flake update`, e quem o move é o dono, à mão (`docs/PENDING.md`). Numa máquina, um build que
-falha devolve o lock e um sistema que não sobe volta ao último bom; uma regressão que sobe — no
-`nixos-unstable` o `pkgs.lyrebird` passou a ser outro programa, e o transporte do Tor é o
-`pkgs.obfs4` — chega à pessoa, e só o gate a pega, quando o nixpkgs desta árvore chega lá.
+**O nixpkgs anda com a release** (decisão do dono, 2026-10-31). Cada máquina rola o próprio no
+`nixos-unstable` toda semana, e um gate que provasse a distro com um nixpkgs que só a mão move
+testaria um mais velho que o das máquinas — foi assim que o `pkgs.lyrebird` virar outro programa
+passou por ele. Por isso o `.#release`, antes do gate, move os pins dos AppImages (`.#distro-pins`) e
+o nixpkgs do `flake.lock` (`nix flake update nixpkgs`), e o que andou vira UM commit assinado dos dois
+arquivos, empurrado para a `main`: é ele que o gate testa e a release publica. O `--keep-pins`
+publica com os dois como estão.
 
 ```
 nix run .#release -- --dry-run          confere tudo que é de graça e diz o que faria
@@ -542,7 +543,7 @@ nix run .#release -- --rollback-to <rev>    a release volta a uma versão public
 
 A distro não tem cache binário: nada é enviado a cache nenhum. O trabalho fica em
 `~/.cache/ronoctua-distro/release/<tag>`; rodar de novo depois de uma falha retoma: o rascunho do
-GitHub recebe os assets de novo. Ele nunca faz commit.
+GitHub recebe os assets de novo. O único commit que ele faz é o dos pins e do nixpkgs.
 
 **O ISO completo nunca é publicado.** O `nix run .#iso-complete` constrói o mesmo instalador com
 TODA parte das duas máquinas de referência a bordo — os programas do perfil completo, os não livres
@@ -555,7 +556,9 @@ folga no `/nix`; é para instalar as máquinas da própria pessoa sem rede, nunc
 
 Para ver o checkout na própria máquina sem publicar, `nix run .#apply-here` (`-- --dry-run` só mede):
 constrói o flake da máquina com o checkout no lugar do input e troca para ele, sem tocar o lock; a
-próxima atualização volta à `release`. O nixpkgs é o da máquina (o `follows` do flake dela vale aqui
+próxima atualização volta à `release`. Quando o sistema novo vem de outro nixpkgs que o que roda, ou
+um sistema já espera o próximo boot, ele não troca ao vivo: deixa o sistema para o próximo boot, como
+toda atualização (nada que roda é trocado através de dois nixpkgs). O nixpkgs é o da máquina (o `follows` do flake dela vale aqui
 também), não o do lock do checkout. A troca recusa enquanto a atualização roda, enquanto um ensaio
 de boot espera ser julgado e quando a geração nova tiraria do menu de boot a última que deu certo.
 

@@ -17,11 +17,13 @@ boot, e é ele que move a pasta.
 
 ## Um evento, e não uma marca
 
-Não há o que a pessoa fazer: a máquina já voltou, e a próxima atualização só tenta de novo quando a
-distro ou o nixpkgs que a máquina rola andarem e montarem outro sistema (o bless devolveu à pasta o
-lock do último bom, e o `apply` recusa construir de novo o sistema que falhou, `did-not-boot`). Uma
-marca na modeline diria uma coisa que não pede gesto, e a modeline em repouso é muda (inv. 14). Um
-evento é uma linha no minibuffer, que vira notificação quando a linha está ocupada.
+Não há o que a pessoa fazer agora: a máquina já voltou, e a próxima atualização só tenta de novo
+quando a distro ou o nixpkgs que a máquina rola andarem e montarem outro sistema (o bless devolveu à
+pasta o lock do último bom, e o `apply` recusa construir de novo o sistema que falhou,
+`did-not-boot`) — ou quando a pessoa pede, na página da atualização, para tentar de novo o que falhou
+por acaso (`ronoctua-machine try-again`, 2026-10-31). Esse gesto é da página, que diz o ensaio que
+falhou; uma marca na modeline diria uma coisa que não pede gesto ali, e a modeline em repouso é muda
+(inv. 14). Um evento é uma linha no minibuffer, que vira notificação quando a linha está ocupada.
 
 ## Uma vez por ensaio
 
@@ -29,3 +31,9 @@ O registro continua dizendo `failed` até o próximo `apply` armar outro ensaio,
 de novo a cada login. Então o que foi dito fica guardado na pasta de estado do módulo (o toplevel
 do ensaio que falhou): uma falha é dita na primeira vez que é vista — no bless, ou no login
 seguinte, se ninguém estava logado — e nunca mais. Um ensaio só pendente não é notícia.
+
+E um registro que se lê e não diz ensaio falho esquece o que foi dito. O toplevel não basta para
+dizer "outro ensaio": o sistema que a pessoa pediu para tentar de novo é o mesmo, armado de novo, e
+se ele falhar outra vez a máquina volta outra vez sozinha — sem isso, essa segunda falha passaria
+calada, porque o toplevel guardado é o dela. Um registro que não se lê não esquece nada: não diz
+nem que falhou nem que não.

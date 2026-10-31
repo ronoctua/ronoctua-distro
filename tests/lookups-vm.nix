@@ -126,6 +126,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json, re
+    from datetime import timedelta
 
     def player(what):
         return json.loads(machine.succeed(
@@ -150,7 +151,7 @@ pkgs.testers.runNixOSTest {
             d = [d for d in player({"ask": "look"}).get("desks", []) if d["kind"] == kind]
             if d and d[0]["generation"] > generation_before and not d[0].get("busy"):
                 return player({"ask": "desk", "kind": kind})
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         raise AssertionError(f"the {kind} desk never settled: {player({'ask': 'look'}).get('desks')}")
 
     def generation(kind):
@@ -177,7 +178,7 @@ pkgs.testers.runNixOSTest {
             "--setenv=HOME=/root --setenv=RUST_LOG=ronoctua_player=debug ${setenv} "
             "${player}/bin/ronoctua-player"
         )
-        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=30)
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=timedelta(seconds=30))
 
     with subtest("one suggestion is several requests to MusicBrainz, a second apart at least"):
         said = player({"ask": "put", "what": ["/root/films/tone.flac"], "replace": True})
@@ -228,13 +229,13 @@ pkgs.testers.runNixOSTest {
         before = generation("subtitles")
         said = player({"ask": "take", "desk": "subtitles", "candidate": found[0]["id"]})
         assert said["say"] == "done", said
-        machine.wait_until_succeeds("ls /root/films | grep -q '^film\\.en\\.srt$'", timeout=60)
+        machine.wait_until_succeeds("ls /root/films | grep -q '^film\\.en\\.srt$'", timeout=timedelta(minutes=1))
         assert "Words from the network" in machine.succeed("cat /root/films/film.en.srt")
         for _ in range(30):
             lanes = player({"ask": "look"})["lanes"]
             if any(l["kind"] == "subtitle" and l["source"].endswith("film.en.srt") for l in lanes):
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert any(l["kind"] == "subtitle" and l["source"].endswith("film.en.srt") for l in lanes), (
             f"the saved subtitle did not become a lane of the film: {lanes}"
         )

@@ -27,6 +27,7 @@ use ronoctua_shell_update_words::update_mark;
 pub mod binary_cache;
 pub mod follow;
 pub mod key;
+pub mod machine_gesture;
 pub mod parts;
 pub mod update_region;
 pub mod update_window;

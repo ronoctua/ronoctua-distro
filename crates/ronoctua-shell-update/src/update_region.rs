@@ -42,6 +42,9 @@ pub enum Back {
     Netrc(binary_cache::Came),
     /// What came of a gesture of the parts' page (`crate::parts::carry`).
     Parts(crate::parts::Came),
+    /// What came of a gesture of the machine's, asked through the door's
+    /// sudo gate (`crate::machine_gesture`).
+    Machine(crate::machine_gesture::Came),
 }
 
 /// Where a key or a click of a door reaches past it.
@@ -82,6 +85,8 @@ pub struct Open {
     netrc_waiting: bool,
     /// Gestures of the parts' page carried out, whose verdict has not come.
     parts_waiting: usize,
+    /// Gestures of the machine's asked, whose verdict has not come.
+    machine_waiting: usize,
 }
 
 impl std::fmt::Debug for Open {
@@ -122,6 +127,7 @@ impl Open {
             inbox: wake.map(Inbox::new),
             netrc_waiting: false,
             parts_waiting: 0,
+            machine_waiting: 0,
         }
     }
 
@@ -153,10 +159,14 @@ impl Open {
     }
 
     /// Whether it still follows something with its page closed: a run it
-    /// asked of the brain, root's netrc, or a gesture of the parts' page.
+    /// asked of the brain, root's netrc, a gesture of the parts' page, or one
+    /// of the machine's.
     #[must_use]
     pub const fn lingers(&self) -> bool {
-        self.followed.is_some() || self.netrc_waiting || self.parts_waiting > 0
+        self.followed.is_some()
+            || self.netrc_waiting
+            || self.parts_waiting > 0
+            || self.machine_waiting > 0
     }
 
     /// What the paging keys and arrows asked are what a photograph kept.
@@ -198,6 +208,16 @@ impl Open {
                     let said = crate::parts::said_of(&came, way.texts());
                     way.say(said, crate::echo::Echo::Long);
                     self.view.parts_reread();
+                    way.repaint();
+                }
+                // WHAT CAME OF A GESTURE OF THE MACHINE'S, said in this door:
+                // done, the door's refusal, or the machine's own sentence.
+                // The records are read again on the beat, their files moved.
+                Back::Machine(came) => {
+                    self.machine_waiting = self.machine_waiting.saturating_sub(1);
+                    self.view.gesture_heard();
+                    let said = crate::machine_gesture::said(&came, way.texts());
+                    way.say(said, crate::echo::Echo::Long);
                     way.repaint();
                 }
             }
@@ -266,6 +286,44 @@ impl Open {
         binary_cache::door(places, gesture, move |came| {
             let _ = post.send(Back::Netrc(came));
         });
+    }
+
+    /// A gesture of the machine's, said yes to on the page, asked in the sudo
+    /// bar through this door's gate (`sudo -n` first: an open window or
+    /// sudo's timestamp asks nothing) on a NAMED thread — the helper waits
+    /// for the machine's unit — whose verdict comes back to this door. A
+    /// photograph's door asks nothing.
+    pub fn ask_the_machine(
+        &mut self,
+        what: crate::machine_gesture::Gesture,
+        way: &mut dyn Doorway,
+    ) {
+        let Some(post) = self.post().filter(|_| self.reach == Reach::Machine) else {
+            self.view.gesture_heard();
+            return;
+        };
+        let gesture = way.sudo().gesture(crate::sudo::Asker::Update);
+        let born = std::thread::Builder::new()
+            .name("machine-gesture".to_owned())
+            .spawn(move || {
+                let came = crate::machine_gesture::run(what, gesture);
+                let _ = post.send(Back::Machine(came));
+            });
+        match born {
+            Ok(_) => {
+                self.machine_waiting += 1;
+                let said = way.texts().t(crate::key::MACHINE_SAID_ASKED);
+                way.say(said, crate::echo::Echo::Long);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "could not start the machine gesture's thread");
+                self.view.gesture_heard();
+                let said = way.texts().t(crate::security_words::refusal(
+                    ronoctua_security::Why::Unstartable,
+                ));
+                way.say(said, crate::echo::Echo::Long);
+            }
+        }
     }
 
     /// A gesture of the parts' page carried out on a NAMED thread — a
@@ -380,6 +438,19 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
         Errand::Cache(e) => cache_errand(e, open, way),
         Errand::Follow(e) => follow_errand(e, open, way),
         Errand::Parts(e) => parts_errand(e, open, way),
+        // A GESTURE OF THE MACHINE'S, said yes to: asked again in the sudo bar,
+        // and what came of it said here when it comes.
+        Errand::Machine(what) => match &mut open.reach {
+            Reach::Machine => open.ask_the_machine(what, way),
+            Reach::Kept(asked) => {
+                asked.push(format!("would have asked root {}", what.word()));
+                open.view.gesture_heard();
+            }
+        },
+        Errand::Say(k) => {
+            let said = way.texts().t(k);
+            way.say(said, crate::echo::Echo::Long);
+        }
         Errand::Close => way.close(),
     }
     way.repaint();
@@ -682,6 +753,13 @@ impl Region for UpdateRegion {
                 };
                 self.errand(errand, way);
             }
+            // A GESTURE OF THE MACHINE'S, by its name: the page, on its
+            // question — the no first — or why the records do not offer it.
+            Order::Machine(what) => {
+                self.shown_on_the_step(way);
+                let errand = self.open.view.ask_gesture(what);
+                self.errand(errand, way);
+            }
             // ROOT'S NETRC, by its name: a root gesture, asked in the sudo
             // bar above the footer.
             Order::Cache(binary_cache::NETRC) => {
@@ -803,7 +881,9 @@ fn closed(command: &str, _: Option<&str>, way: &mut dyn Doorway) -> Closed {
             Closed::Taken
         }
         Some(Order::Start | Order::Cache(binary_cache::NETRC)) => Closed::Behind,
-        Some(Order::Open | Order::Cache(_) | Order::Follow | Order::Parts(_)) => Closed::Opens,
+        Some(
+            Order::Open | Order::Cache(_) | Order::Follow | Order::Parts(_) | Order::Machine(_),
+        ) => Closed::Opens,
     }
 }
 
@@ -994,6 +1074,86 @@ mod tests {
             w.owed
         );
         assert!(!r.lingers());
+    }
+
+    /// FAILS IF: a gesture of the machine's said yes to does not go through
+    /// the door's gate as the helper's own wordless verb, the door lets the
+    /// update go before what came of it is said there — done, or the
+    /// machine's own sentence for a refusal — or a photograph's reaches
+    /// root instead of keeping what it would have asked.
+    #[test]
+    fn a_machine_gesture_is_asked_through_the_gate_and_said_in_the_door() {
+        use crate::machine_gesture::{Came, Gesture};
+        use std::sync::{Arc, Mutex};
+        let texts = Rc::new(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
+        let says = |w: &crate::region::Recorder, key: &str| {
+            let wanted = texts.t(key);
+            w.owed
+                .iter()
+                .any(|e| matches!(e, Effect::Say(said, _) if *said == wanted))
+        };
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut w = crate::region::Recorder::new(
+            Rc::clone(&texts),
+            100,
+            false,
+            crate::sudo::Gate::fake(Arc::clone(&log), Ok(())),
+            crate::wake::Wake::new(|| {}),
+        );
+        let mut open = Open::new(
+            View::of(
+                module::steps(),
+                crate::update_window::Verdicts::of(&[]),
+                Vec::new(),
+            ),
+            Reach::Machine,
+            Some(crate::wake::Wake::new(|| {})),
+        );
+        carry_out(Errand::Machine(Gesture::Hold), &mut open, &mut w);
+        assert!(says(&w, crate::key::MACHINE_SAID_ASKED), "{:?}", w.owed);
+        // THE VERDICT, waited for in a bounded regime: the gate's thread.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut heard = way();
+        while open.lingers() && std::time::Instant::now() < until {
+            heard = way();
+            open.woken(&mut heard);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!open.lingers(), "the gesture's verdict never came");
+        assert!(
+            says(&heard, crate::key::MACHINE_SAID_HOLD),
+            "{:?}",
+            heard.owed
+        );
+        assert_eq!(
+            *log.lock().expect("log"),
+            vec![(
+                crate::sudo::Asker::Update,
+                ronoctua_security::verb::RootVerb::MachineHold
+            )]
+        );
+        // THE MACHINE'S REFUSAL is the machine's sentence, in the door.
+        let post = open.post().expect("an inbox");
+        open.machine_waiting = 1;
+        assert!(post.send(Back::Machine(Came::Refused("busy".to_owned()))));
+        let mut heard = way();
+        open.woken(&mut heard);
+        assert!(
+            says(&heard, crate::key::MACHINE_REFUSED_BUSY),
+            "{:?}",
+            heard.owed
+        );
+        assert!(!open.lingers());
+        // A PHOTOGRAPH'S keeps what it would have asked.
+        let mut r = region();
+        carry_out(Errand::Machine(Gesture::TryAgain), &mut r.open, &mut way());
+        let kept = r.open.would_have();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert!(kept[0].contains(Gesture::TryAgain.word()), "{kept:?}");
+        // AND BY NAME, the closed update opens on the question.
+        for what in Gesture::ALL {
+            assert_eq!(closed(what.command(), None, &mut way()), Closed::Opens);
+        }
     }
 
     /// The update turned to the binary cache's page over a public cache with

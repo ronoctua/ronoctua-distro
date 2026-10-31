@@ -111,6 +111,7 @@ pkgs.testers.runNixOSTest {
     in
     ''
       import json
+      from datetime import timedelta
 
       user = "${user}"
       uid = "${uid}"
@@ -133,7 +134,7 @@ pkgs.testers.runNixOSTest {
           # which `is-enabled` counts as success — the link is the question).
           machine.fail("test -e /etc/systemd/system/sockets.target.wants/podman.socket")
           machine.fail("systemctl is-active podman.socket")
-          machine.wait_until_succeeds(f"test -S {run_dir}/podman/podman.sock", timeout=60)
+          machine.wait_until_succeeds(f"test -S {run_dir}/podman/podman.sock", timeout=timedelta(minutes=1))
 
       with subtest("DOCKER_HOST and RONOCTUA_PODMAN reach shells and user units"):
           wanted = f"unix://{run_dir}/podman/podman.sock"
@@ -157,7 +158,7 @@ pkgs.testers.runNixOSTest {
               "podman run -d --network none --name probe localhost/ronoctua-probe:1"
           ).strip()
           assert len(cid) == 64, cid
-          machine.wait_until_succeeds(f"test -d {run_dir}/crun/{cid}", timeout=30)
+          machine.wait_until_succeeds(f"test -d {run_dir}/crun/{cid}", timeout=timedelta(seconds=30))
           running = as_person(f"ls {run_dir}/crun").split()
           assert running == [cid], f"crun lists {running}, wanted exactly the one container"
 
@@ -176,7 +177,7 @@ pkgs.testers.runNixOSTest {
               "--setenv=RONOCTUA_JOURNALCTL=${pkgs.systemd}/bin/journalctl "
               "${ronoctua.brain}/bin/ronoctua-brain"
           )
-          machine.wait_until_succeeds(f"test -S {run_dir}/ronoctua-brain.sock", timeout=60)
+          machine.wait_until_succeeds(f"test -S {run_dir}/ronoctua-brain.sock", timeout=timedelta(minutes=1))
 
           def mark():
               mind = json.loads(as_person("${ronoctua.brain}/bin/ronoctua-brain look"))
@@ -191,7 +192,7 @@ pkgs.testers.runNixOSTest {
                   m = mark()
                   if (m["count"] if m else None) == n:
                       return m
-                  machine.sleep(1)
+                  machine.sleep(duration=timedelta(seconds=1))
               raise AssertionError(f"the containers mark never said {n}: {mark()}")
 
           # THE ONE ALREADY RUNNING, counted when the watch starts.
@@ -236,7 +237,7 @@ pkgs.testers.runNixOSTest {
 
       with subtest("stopping it takes crun's folder away"):
           as_person("podman stop -t 0 probe")
-          machine.wait_until_succeeds(f"test ! -e {run_dir}/crun/{cid}", timeout=30)
+          machine.wait_until_succeeds(f"test ! -e {run_dir}/crun/{cid}", timeout=timedelta(seconds=30))
           as_person("podman rm probe")
           # …AND THE MARK WITH IT: at rest, none (invariant 14).
           counts(None)

@@ -52,7 +52,6 @@ atuin-enter = change
 atuin-more = more
 atuin-less = less
 atuin-back = back
-atuin-drawer = the drawer
 cmd-atuin-open = Shell history
 cmd-atuin-window = Shell history in a window
 cmd-atuin-sync = Sync the shell history now

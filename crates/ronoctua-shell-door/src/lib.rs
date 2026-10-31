@@ -69,5 +69,8 @@ pub mod room;
 // Sections`): the layout, the pointer, the bands and the pictures, by what
 // each answer is.
 pub mod sections;
+// THE SESSION LOCKED: the one file that names the compositor's lock, and the
+// shape a door takes while it holds one (`door::Shell::Locked`).
+pub mod session_lock;
 pub mod sudo;
 pub mod tags;

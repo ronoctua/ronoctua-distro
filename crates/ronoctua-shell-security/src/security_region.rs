@@ -384,6 +384,20 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
         Errand::Sniff(path) => open.start(Job::Sniff(path)),
         // THE CLIPBOARD, off the loop, for the file picker over the page.
         Errand::Paste => way.paste(),
+        // THE LOCK'S CHOICE, written whole through the store; the footer
+        // watches the file and arms it, and the page reads it again.
+        Errand::LockChoice(choice) => {
+            match ronoctua_shell_kit::lock_choice::store().write(&choice) {
+                Ok(()) => open.refresh(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "lock.json could not be written");
+                    way.say(
+                        way.texts().t(crate::key::ECHO_SECURITY_LOCK_NOT_WRITTEN),
+                        crate::echo::Echo::Long,
+                    );
+                }
+            }
+        }
     }
     way.repaint();
 }

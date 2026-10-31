@@ -122,6 +122,7 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     ${xvfb.prelude}
     import re
+    from datetime import timedelta
 
 
     def manager(args):
@@ -182,8 +183,8 @@ pkgs.testers.runNixOSTest {
         "${scroll}/bin/scroll -c ${configX11}"
     )
     try:
-        machine.wait_until_succeeds(f"test -S {run_dir}/wayland-1", timeout=90)
-        machine.wait_until_succeeds(f"test -S {sock}", timeout=60)
+        machine.wait_until_succeeds(f"test -S {run_dir}/wayland-1", timeout=timedelta(seconds=90))
+        machine.wait_until_succeeds(f"test -S {sock}", timeout=timedelta(minutes=1))
     except Exception:
         print(machine.execute(f"journalctl --no-pager _UID={uid} | tail -80")[1])
         raise
@@ -195,7 +196,7 @@ pkgs.testers.runNixOSTest {
             machine.wait_until_succeeds(
                 "systemctl --user --machine=person@ show-environment"
                 " | grep -x 'DISPLAY=:[0-9]*' > /dev/null",
-                timeout=60,
+                timeout=timedelta(minutes=1),
             )
         except Exception:
             print(manager("show-environment"))
@@ -216,7 +217,7 @@ pkgs.testers.runNixOSTest {
         # subtest fails for another reason.
         x_socket = f"/tmp/.X11-unix/X{display[1:]}"
         try:
-            machine.wait_until_succeeds(f"test -S {x_socket}", timeout=90)
+            machine.wait_until_succeeds(f"test -S {x_socket}", timeout=timedelta(seconds=90))
         except Exception:
             print(machine.execute(f"journalctl --no-pager _UID={uid} | tail -80")[1])
             raise
@@ -250,7 +251,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree"
             f" | grep '\"instance\": \"{label}\"' > /dev/null",
-            timeout=90,
+            timeout=timedelta(seconds=90),
         )
 
 

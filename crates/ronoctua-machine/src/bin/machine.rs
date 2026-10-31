@@ -7,8 +7,9 @@
 //! ronoctua-machine rollback switch|boot
 //! ronoctua-machine disarm
 //! ronoctua-machine hibernate pre|post
-//! ronoctua-machine hold <rev>
+//! ronoctua-machine hold [<rev>]
 //! ronoctua-machine unhold
+//! ronoctua-machine try-again
 //! ronoctua-machine keep-sources
 //! ronoctua-machine update-distro
 //! ```
@@ -33,8 +34,9 @@ const USAGE: &str = "usage: ronoctua-machine migrate\n\
 \x20      ronoctua-machine rollback switch|boot\n\
 \x20      ronoctua-machine disarm\n\
 \x20      ronoctua-machine hibernate pre|post\n\
-\x20      ronoctua-machine hold <rev>      (7 to 64 lower-case hex digits)\n\
+\x20      ronoctua-machine hold [<rev>]    (7 to 64 lower-case hex digits)\n\
 \x20      ronoctua-machine unhold\n\
+\x20      ronoctua-machine try-again\n\
 \x20      ronoctua-machine keep-sources\n\
 \x20      ronoctua-machine update-distro\n\
 \n\
@@ -54,8 +56,11 @@ disarm    after the system profile was rolled back by hand: the trial it left\n\
 \x20         is not tried again, and the boot menu alone names the next boot\n\
 hibernate around a hibernation (the system-sleep hook): pre puts the boot\n\
 \x20         trial's one-shot aside, post puts it back after the resume\n\
-hold      stay on the distro revision this machine runs\n\
+hold      stay on the distro revision this machine runs (the one named, which\n\
+\x20         must be it; with none, the one it runs)\n\
 unhold    stop holding\n\
+try-again the system whose boot trial failed is built and tried once more by\n\
+\x20         the next update that builds it, instead of refused (did-not-boot)\n\
 keep-sources  root the sources the machine's flake was evaluated from (the flake,\n\
 \x20         the distro, every input) that the store holds, so an update fetches\n\
 \x20         none of them again unchanged; the apply does it after every build\n\

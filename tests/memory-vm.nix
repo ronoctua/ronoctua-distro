@@ -59,6 +59,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
 
@@ -81,7 +83,7 @@ pkgs.testers.runNixOSTest {
         try:
             machine.wait_until_succeeds(
                 "journalctl -u panel --no-pager | grep 'component rendered' > /dev/null",
-                timeout=60,
+                timeout=timedelta(minutes=1),
             )
         except Exception:
             print(machine.execute("journalctl -u panel --no-pager")[1])
@@ -98,7 +100,7 @@ pkgs.testers.runNixOSTest {
         # The clock ticks once a second; the first survey does not wait for it.
         machine.wait_until_succeeds(
             "journalctl -u panel --no-pager | grep 'buffer drawn on the xdg_toplevel' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
 
         # THE PANEL'S OWN RECTANGLE, read from the compositor's tree — cropping
@@ -135,7 +137,7 @@ pkgs.testers.runNixOSTest {
             low = read_back.lower()
             if "ram" in low and ("gib" in low or "mib" in low):
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
 
         # The key that came out translated…
         assert "ram" in read_back.lower(), (

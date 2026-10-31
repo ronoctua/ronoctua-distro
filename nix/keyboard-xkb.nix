@@ -62,9 +62,15 @@
 # the terminal arrives already composed. It is not an assumption — it is in
 # `init_compose`, in the `smithay-client-toolkit` the `Cargo.lock` pins.
 #
-# The TTY is the exception, and it is another database entirely (`kbd`, below):
-# there Caps Lock is still Caps Lock. The console is where the installer asks
-# for the disk's passphrase, and a passphrase needs no accent.
+# THE CONSOLE TYPES THE SAME LAYOUT, and it is another database entirely:
+# the kernel's console takes a `kbd` keymap, never xkb. So the console's map is
+# COMPILED from this layout and variant (`ckbcomp`, `nix/console-keymaps.nix`),
+# and named by them in xkb's own notation — `us(euro)` (`notation`, below).
+# The options are not compiled in: on the console Caps Lock is still Caps Lock
+# and there is no Compose, and no password needs one. What matters there is
+# that every key gives the session's character, because the console is where
+# the installer asks for the Wi-Fi's password, the user's and the disk's
+# passphrase, and where the initrd asks for the passphrase again.
 let
   # WHAT THE PERSON CHOOSES — the installer's seventh question, whose default
   # this is. Empty is a valid answer: a `br(abnt2)` carries the accents on its
@@ -77,20 +83,32 @@ let
   # key would silently lose the Caps Lock toggle along with it — the answer to a
   # question taking away something nobody was asked about.
   always = [ "shift:both_capslock" ];
-in
-{
-  inherit compose always;
-
   layout = "us";
   # The `euro` variant adds `€` on AltGr and no dead keys; `us(intl)`, which
   # would put dead accents on level 1, is rejected above.
   variant = "euro";
+  # A LAYOUT WITH ITS VARIANT, as xkb writes the pair: `us(euro)`, and the
+  # layout alone when there is no variant. It names the console's map of an
+  # answer (`nix/console-keymaps.nix`), and it is the line the installer
+  # writes in `host.nix` (`ronoctua.keyboard.console`); the installer's Rust
+  # spells it the same way (`crates/ronoctua-installer/src/keymap.rs`), and
+  # `console-keymap-is-the-answers` builds the machine its `host.nix` describes.
+  notation = layout: variant: if variant == "" then layout else "${layout}(${variant})";
+in
+{
+  inherit
+    compose
+    always
+    layout
+    variant
+    notation
+    ;
   # What xkb actually receives. `nix/modules/base.nix` builds the same string
   # from the option the installer fills in — the two agree because both come
   # from the two lists above.
   options = builtins.concatStringsSep "," ((if compose == "" then [ ] else [ compose ]) ++ always);
-  # The TTY console uses a `kbd` keymap, and not xkb. `us` is this layout's
-  # name over there; the console has no Compose and no `euro` variant, and the
-  # disk's passphrase needs neither.
-  console = "us";
+  # The console's keyboard: this layout and variant, compiled for `kbd`
+  # (`nix/console-keymaps.nix`). It is the ISO's, until the installer is
+  # answered; a machine's follows its own answer (`nix/modules/base.nix`).
+  console = notation layout variant;
 }

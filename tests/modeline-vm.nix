@@ -85,6 +85,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
+    from datetime import timedelta
     ${xvfb.prelude}
 
 
@@ -149,7 +150,7 @@ pkgs.testers.runNixOSTest {
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
 
         # Without SCROLLSOCK the daemon degrades instead of failing — correct
@@ -185,7 +186,7 @@ pkgs.testers.runNixOSTest {
         try:
             machine.wait_until_succeeds(
                 "journalctl -u footer --no-pager | grep 'text=ronoctua-teste' > /dev/null",
-                timeout=60,
+                timeout=timedelta(minutes=1),
             )
         except Exception:
             # The decisive question: did the COMPOSITOR see the window? If it
@@ -315,13 +316,13 @@ pkgs.testers.runNixOSTest {
         # grew above them.
         y = y0 + h - 2 * LINE + LINE / 2
         machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove {int(x)} {int(y)} click {button}")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
 
     def settles(what, want, why, seconds=20):
         for _ in range(seconds):
             if what() == want:
                 return
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert what() == want, f"{why}: {what()!r}, not {want!r}"
 
     with subtest("the player's pair is on the modeline while something plays"):
@@ -330,7 +331,7 @@ pkgs.testers.runNixOSTest {
             "systemd-run --unit=player --setenv=XDG_RUNTIME_DIR=/run/user/0 "
             "--setenv=HOME=/root ${setenv} ${player}/bin/ronoctua-player"
         )
-        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=30)
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=timedelta(seconds=30))
         said = player({"ask": "put", "what": ["${media}/tone.flac", "${media}/film.mp4"], "replace": True})
         assert said["say"] == "done", said
         # READ AS `last_layout` READS IT — the colours stripped, every field in
@@ -386,7 +387,7 @@ pkgs.testers.runNixOSTest {
         # mode to show, and with nothing unread there is no bell.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | tail -20 | grep 'segments=0' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
   '';
 }

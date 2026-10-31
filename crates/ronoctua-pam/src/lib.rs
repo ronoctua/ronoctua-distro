@@ -3,8 +3,9 @@
 //!
 //! # What it is for
 //!
-//! The player's adult catalogue opens only after the person types the
-//! password of their system account: [`verify`] asks PAM, under the fixed
+//! The lock screen opens the session again, and the player's adult catalogue
+//! opens, only after the person types the password of their system account:
+//! [`verify`] asks PAM, under the fixed
 //! service [`SERVICE`] (declared in NixOS by `nix/modules/unlock.nix` as
 //! `security.pam.services.ronoctua-unlock`: `pam_unix` through the setuid
 //! `unix_chkpwd`, a delay after a failure, and nothing else that could answer
@@ -27,9 +28,19 @@
 //! file is looked for first, and its absence is [`Refusal::NoService`], said
 //! in a sentence (the `.#dev` loop on a host that never declared it).
 //!
+//! # The finger
+//!
+//! The lock screen (`ronoctua-shell lock`) also lets the person in by a
+//! fingerprint: [`verify_finger`] runs a transaction with NO secret under the
+//! second fixed service, [`FINGER_SERVICE`] (`pam_fprintd` alone, declared by
+//! the same module), which waits for a touch on the reader. Its conversation
+//! answers no hidden prompt — nothing was typed for it — and keeps what the
+//! module says for a log; the reader's words are translated and never read.
+//!
 //! # Blocks
 //!
-//! PAM sleeps after a wrong password (`failDelay`): call it on a thread.
+//! PAM sleeps after a wrong password (`failDelay`), and the finger's module
+//! waits for a touch: call both on a thread.
 
 mod ffi;
 
@@ -41,6 +52,11 @@ use ronoctua_consent::keys::Secret;
 /// The PAM service every check runs under. Fixed: a caller cannot pick
 /// another stack (`pam-service-is-declared` compares it with NixOS).
 pub const SERVICE: &str = "ronoctua-unlock";
+
+/// The PAM service a FINGER is checked under — `pam_fprintd` and nothing
+/// else, declared beside [`SERVICE`] on a machine with fprintd
+/// (`nix/modules/unlock.nix`). Fixed, as [`SERVICE`] is.
+pub const FINGER_SERVICE: &str = "ronoctua-unlock-finger";
 
 /// Where Linux-PAM looks for a service's stack first, and where NixOS writes
 /// every one.
@@ -106,10 +122,57 @@ pub fn verify_saying(user: &str, secret: &Secret) -> Result<(), Told> {
     verify_in(Path::new(CONFIG_DIR), user, secret)
 }
 
+/// Whether this machine declares the password's stack ([`SERVICE`]) — what
+/// a lock asks BEFORE it locks: a session locked with no way to check the
+/// password is a session nobody can open again.
+#[must_use]
+pub fn declared() -> bool {
+    declared_in(Path::new(CONFIG_DIR), SERVICE)
+}
+
+/// Whether `user` is at the fingerprint reader now: a transaction with NO
+/// secret under [`FINGER_SERVICE`] (authentication, then account
+/// management), which waits for a touch. Blocks — for as long as the reader
+/// waits: a thread.
+///
+/// # Errors
+///
+/// [`Refusal::Wrong`] (no match, or the reader stopped waiting — the module
+/// says which in words that are translated, and so never read),
+/// [`Refusal::NoService`] (no finger's stack on this machine), and
+/// [`Refusal::Unavailable`].
+pub fn verify_finger(user: &str) -> Result<(), Told> {
+    finger_in(Path::new(CONFIG_DIR), user)
+}
+
+/// [`verify_finger`], with the service looked for in `config_dir`.
+fn finger_in(config_dir: &Path, user: &str) -> Result<(), Told> {
+    if !declared_in(config_dir, FINGER_SERVICE) {
+        return Err(Told {
+            refusal: Refusal::NoService,
+            said: format!("{} is not there", config_dir.join(FINGER_SERVICE).display()),
+        });
+    }
+    let Ok(user) = CString::new(user) else {
+        return Err(Told {
+            refusal: Refusal::Wrong,
+            said: "a NUL in the user".to_owned(),
+        });
+    };
+    let service = CString::new(FINGER_SERVICE).map_err(|_| Told {
+        refusal: Refusal::Unavailable,
+        said: "the service's name".to_owned(),
+    })?;
+    ffi::verify_with_pam(&service, &user, None).map_err(|ended| Told {
+        refusal: refusal_of(ended.step, ended.code),
+        said: ended.words,
+    })
+}
+
 /// [`verify_saying`], with the service looked for in `config_dir` — the test's
 /// way to say "there is no service" without a machine that lacks one.
 fn verify_in(config_dir: &Path, user: &str, secret: &Secret) -> Result<(), Told> {
-    if !declared_in(config_dir) {
+    if !declared_in(config_dir, SERVICE) {
         return Err(Told {
             refusal: Refusal::NoService,
             said: format!("{} is not there", config_dir.join(SERVICE).display()),
@@ -127,15 +190,15 @@ fn verify_in(config_dir: &Path, user: &str, secret: &Secret) -> Result<(), Told>
         refusal: Refusal::Unavailable,
         said: "the service's name".to_owned(),
     })?;
-    ffi::verify_with_pam(&service, &user, secret.expose().as_bytes()).map_err(|ended| Told {
+    ffi::verify_with_pam(&service, &user, Some(secret.expose().as_bytes())).map_err(|ended| Told {
         refusal: refusal_of(ended.step, ended.code),
         said: ended.words,
     })
 }
 
-/// Whether the stack [`SERVICE`] names is declared in `config_dir`.
-fn declared_in(config_dir: &Path) -> bool {
-    config_dir.join(SERVICE).is_file()
+/// Whether the stack `service` names is declared in `config_dir`.
+fn declared_in(config_dir: &Path, service: &str) -> bool {
+    config_dir.join(service).is_file()
 }
 
 /// Which refusal a PAM status is, by the call it came from. Pure.
@@ -208,6 +271,19 @@ mod tests {
                 .refusal,
             Refusal::NoService
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_missing_finger_service_is_said_and_pam_is_never_asked() {
+        let dir = scratch("finger-absent");
+        // THE PASSWORD'S STACK ALONE is no finger's: a machine with no reader
+        // declares only the first.
+        std::fs::write(dir.join(SERVICE), "auth required pam_deny.so\n").unwrap();
+        let told = finger_in(&dir, "someone").unwrap_err();
+        assert_eq!(told.refusal, Refusal::NoService);
+        assert!(told.said.contains(FINGER_SERVICE), "{}", told.said);
+        assert_eq!(FINGER_SERVICE, "ronoctua-unlock-finger");
         let _ = std::fs::remove_dir_all(dir);
     }
 

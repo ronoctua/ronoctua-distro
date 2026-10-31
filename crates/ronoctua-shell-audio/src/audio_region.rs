@@ -19,6 +19,13 @@
 //! asks for it after a key, after a click, after a reading moved the cursor,
 //! and closes it when the view closes — through the line it asks PipeWire
 //! through, the footer's here and the window's own there.
+//!
+//! # What a photograph's footer reads
+//!
+//! The graph its camera's environment names ([`SCENE_VARIABLE`], the window
+//! camera's `--scene`: what `pw-dump` prints), read by the boundary's own
+//! merge ([`planted`]) — and only that: the footer's own threads read no sound
+//! server in a photograph's room, and their empty reading is not news.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -30,6 +37,31 @@ use ronoctua_audio::{Handle, Order, Snapshot};
 
 /// The region's id, as the footer ranks it (`surface::PRECEDENCE`).
 pub const ID: &str = "audio";
+
+/// The variable a photograph of the FOOTER names its sound scene with — a
+/// file holding what `pw-dump` prints, read only by a footer that is a
+/// photograph's (`Doorway::photographing`).
+pub const SCENE_VARIABLE: &str = "RONOCTUA_PHOTOGRAPH_AUDIO_SCENE";
+
+/// A planted reading — both doors' cameras: the graph a file holds, as
+/// `pw-dump` prints it, read by the boundary's own merge
+/// (`ronoctua_audio::graph::Graph::once`), so a photograph draws what the
+/// monitor would have made of the same output.
+///
+/// # Errors
+///
+/// A file that does not read, or is not JSON.
+pub fn planted(file: &std::path::Path) -> anyhow::Result<Snapshot> {
+    use anyhow::Context as _;
+    let text = std::fs::read_to_string(file)
+        .with_context(|| format!("the sound scene {} does not read", file.display()))?;
+    ronoctua_audio::graph::Graph::once(&text).with_context(|| {
+        format!(
+            "the sound scene {} is not a dump of the graph",
+            file.display()
+        )
+    })
+}
 
 /// The view's region, as the binary registers it (`regions.rs`).
 pub const ENTRY: Entry = Entry {
@@ -76,7 +108,22 @@ fn open(_: &str, _: Option<&str>, way: &mut dyn Doorway) -> Box<dyn Region> {
 fn opened(way: &mut dyn Doorway) -> Sound {
     let prefs = region::kept::<Cell<Preferences>>(way)
         .map_or_else(|| ronoctua_audio::prefs::store().read(), |p| p.get());
-    let snapshot = region::kept::<Snapshot>(way);
+    // A PHOTOGRAPH'S FOOTER draws the scene it was handed; one that does not
+    // read is the server not answering ON THE PICTURE, the reason in the log —
+    // never an empty graph that would pass for a machine with no sound.
+    let scene = way
+        .photographing()
+        .then(|| std::env::var_os(SCENE_VARIABLE))
+        .flatten();
+    let snapshot = match &scene {
+        Some(file) => planted(std::path::Path::new(file))
+            .map_err(
+                |e| tracing::error!(error = %format!("{e:#}"), "the footer camera's sound scene"),
+            )
+            .ok()
+            .map(Rc::new),
+        None => region::kept::<Snapshot>(way),
+    };
     let mut view = View::fresh(prefs);
     view.settle_in(snapshot.as_deref(), way.columns(), way.texts());
     let mut meter = Meter::default();
@@ -85,6 +132,7 @@ fn opened(way: &mut dyn Doorway) -> Sound {
         view,
         snapshot,
         meter,
+        planted: scene.is_some(),
     }
 }
 
@@ -95,6 +143,9 @@ struct Sound {
     /// The footer's last reading — the same `Rc` the footer holds.
     snapshot: Option<Rc<Snapshot>>,
     meter: Meter,
+    /// Whether the reading is a photograph's scene, which the footer's own
+    /// readings do not replace.
+    planted: bool,
 }
 
 impl Sound {
@@ -210,6 +261,9 @@ impl Region for Sound {
     /// microphone, or the settings changed in the other door.
     fn heard(&mut self, news: &dyn std::any::Any, way: &mut dyn Doorway) {
         if let Some(fresh) = news.downcast_ref::<Rc<Snapshot>>() {
+            if self.planted {
+                return;
+            }
             self.snapshot = Some(Rc::clone(fresh));
             self.view
                 .settle_in(self.snapshot.as_deref(), way.columns(), way.texts());
@@ -541,6 +595,49 @@ mod tests {
         assert_eq!(way.owed, vec![region::Effect::Repaint]);
         way.owed.clear();
         Region::heard(&mut sound, &(), &mut way);
+        assert!(way.owed.is_empty(), "{:?}", way.owed);
+    }
+
+    /// FAILS IF: a photograph's scene is not read by the boundary's own merge
+    /// — links, serials and all — a file that does not read passes for an
+    /// empty machine, or a photograph's footer lets its own threads' reading
+    /// (which, in the camera's room, is of no server) replace the scene.
+    #[test]
+    fn a_photographs_scene_is_the_graph_it_draws() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-sound-scene-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch folder");
+        let file = dir.join("scene.json");
+        std::fs::write(
+            &file,
+            r#"[{ "id": 60, "type": "PipeWire:Interface:Node",
+                  "info": { "props": { "media.class": "Audio/Sink", "node.name": "speaker",
+                                       "object.serial": 1060 } } },
+                { "id": 120, "type": "PipeWire:Interface:Node",
+                  "info": { "props": { "media.class": "Stream/Output/Audio", "node.name": "p" } } },
+                { "id": 130, "type": "PipeWire:Interface:Link",
+                  "info": { "output-node-id": 120, "input-node-id": 60 } }]"#,
+        )
+        .expect("a scene");
+        let s = planted(&file).expect("the scene reads");
+        assert_eq!(s.outputs().len(), 1);
+        assert_eq!(
+            s.nodes.iter().find(|n| n.id == 120).and_then(|n| n.way.now),
+            Some(60)
+        );
+        assert!(planted(&dir.join("absent.json")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut way = footer(vec![Rc::new(Cell::new(Preferences::default()))]);
+        let mut sound = opened(&mut way);
+        sound.snapshot = Some(Rc::new(s));
+        sound.planted = true;
+        way.owed.clear();
+        Region::heard(&mut sound, &Rc::new(Snapshot::default()), &mut way);
+        assert_eq!(
+            sound.snapshot.as_ref().map(|s| s.nodes.len()),
+            Some(2),
+            "the scene was replaced"
+        );
         assert!(way.owed.is_empty(), "{:?}", way.owed);
     }
 

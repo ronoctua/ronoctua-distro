@@ -30,6 +30,18 @@
 //! row it does the thing a person means by pointing at a device: play through
 //! this one. The bar comes from `chrome::meter`, which is the one bar in the
 //! system.
+//!
+//! # Where a program plays, and sending it elsewhere
+//!
+//! Under the PLAYING program the cursor is on, one more row says where its
+//! sound goes now — read off the graph's links, so a move shows when it has
+//! happened and not when it was asked — and turns like the card's profile:
+//! `←`/`→` send it to the previous or next device the graph lists, and `RET`
+//! (a second click) to the next. One row at a time, under the cursor, as the
+//! microphone's level is: the section stays as long as the list of programs,
+//! and no two rows of the view say the same label. A device that went is
+//! said under it (`Snapshot::sent_where_nothing_is`), and a program that
+//! asked never to be moved is drawn refusing, with the reason.
 
 use crate::fields::{Field, Hit as FilesHit, Ink};
 use crate::sizes::BAR_CELLS;
@@ -121,6 +133,10 @@ pub enum Spot {
     Port(Direction),
     /// One of this view's own settings.
     Knob(Knob),
+    /// Where the playing program the cursor is on sends its sound — the row
+    /// under it, which belongs to it as the level row belongs to its
+    /// microphone.
+    Output,
 }
 
 /// The settings this view keeps of its own.
@@ -149,6 +165,8 @@ pub enum Target {
     Port(u32, Direction),
     /// One of this view's settings.
     Knob(Knob),
+    /// The ring of devices a playing program may be sent to — the stream.
+    Output(u32),
 }
 
 impl Target {
@@ -350,7 +368,7 @@ impl View {
             .filter(|(_, _, w)| w.shown(target))
             .map(|(k, id, w)| (*k, *id, !matches!(w, Where::Anywhere)))
             .collect();
-        crate::chrome::hint_of_marked(&here, |_| None, texts)
+        crate::chrome::hint_of_marked(&here, |id| meaning(target, id), texts)
     }
 
     /// Put the cursor on a row, if that row is one.
@@ -432,6 +450,9 @@ impl View {
             // THE LEVEL ROW BELONGS TO THE SOURCE ABOVE IT, so standing on it
             // keeps the card that source hangs off.
             Spot::Level => self.listening,
+            // AND THE OUTPUT ROW TO THE PROGRAM ABOVE IT: standing on it keeps
+            // the row there.
+            Spot::Output => self.on_a_node,
             _ => self.on_a_node,
         };
         let rows = self.rows(snap, columns, texts);
@@ -541,6 +562,15 @@ impl View {
                 self.turn(knob, press == Press::More);
                 Errand::Keep(self.prefs)
             }
+            // THE NEXT DEVICE THE GRAPH LISTS, and the order is made by the
+            // reading itself (`Snapshot::send`): nothing else can name a
+            // device to send a program to.
+            (Press::Less | Press::More, Target::Output(stream)) => snap
+                .and_then(|s| {
+                    let sink = s.next_output(stream, press == Press::More)?;
+                    s.send(stream, sink.id)
+                })
+                .map_or(Errand::Nothing, Errand::Order),
             // RET ON A DEVICE IS "PLAY THROUGH THIS ONE", because RET is what
             // a CLICK becomes and pointing at a device is how a person says
             // which one they mean.
@@ -553,11 +583,10 @@ impl View {
                 self.turn(knob, true);
                 Errand::Keep(self.prefs)
             }
-            (Press::Enter, Target::Profile(_, _) | Target::Port(_, _)) => {
+            (Press::Enter, Target::Profile(_, _) | Target::Port(_, _) | Target::Output(_)) => {
                 self.key(Press::More, snap, columns, texts)
             }
-            // A stream has no "default": what a program plays through is the
-            // program's business, and PipeWire has no key for it here.
+            // A stream has no "default": where it plays is the row under it.
             (Press::Enter | Press::Default, Target::Stream(_, _)) => Errand::Nothing,
             // AN INFORMATIVE ROW COPIES ITSELF, the rule every view of this
             // shape keeps.
@@ -736,10 +765,37 @@ impl View {
                     Spot::Stream(n.id),
                     false,
                 );
+                if kind == Kind::Playing && self.on_a_node == Some(n.id) {
+                    Self::output(b, s, n);
+                }
             }
         }
         if !any {
             b.note(crate::key::AUDIO_NOTHING_RUNS);
+        }
+    }
+
+    /// Where a playing program's sound goes, under its row — and why it
+    /// cannot be sent anywhere, or that the device it was sent to went.
+    fn output(b: &mut Builder<'_>, s: &Snapshot, stream: &ronoctua_audio::Node) {
+        // WHERE IT PLAYS NOW, in the graph's words for the device: a stream
+        // linked to nothing says so, and one linked to something the reading
+        // does not list is not given a name it does not have.
+        let now = s.plays_on(stream).map_or_else(
+            || b.texts.t(crate::key::AUDIO_PLAYS_NOWHERE),
+            |d| d.description.clone(),
+        );
+        b.pair(
+            b.texts.t(crate::key::AUDIO_SOUND_GOES_TO),
+            now,
+            Target::Output(stream.id),
+            Spot::Output,
+            s.next_output(stream.id, true).is_none(),
+        );
+        if stream.way.fixed {
+            b.note(crate::key::AUDIO_STAYS_PUT);
+        } else if s.sent_where_nothing_is(stream) {
+            b.note(crate::key::AUDIO_SENT_WHERE_NOTHING_IS);
         }
     }
 
@@ -893,6 +949,20 @@ pub fn pressed(notation: &str) -> Option<Press> {
         .iter()
         .find(|(k, _, _)| *k == notation)
         .and_then(|(_, id, _)| press_of(id))
+}
+
+/// What a key of [`OF_THE_VIEW`] says it does on the row under the cursor,
+/// when that is not what the table's own id says — the hint line's `means`.
+///
+/// On the ring of devices a playing program may be sent to, `←`, `→` and
+/// `RET` send it to the previous or the next device: "quieter" and "louder"
+/// there would teach a volume the row does not have.
+fn meaning(target: Target, id: &str) -> Option<&'static str> {
+    match (target, id) {
+        (Target::Output(_), "audio-less") => Some("audio-send-back"),
+        (Target::Output(_), "audio-more" | "audio-enter") => Some("audio-send-on"),
+        _ => None,
+    }
 }
 
 /// The sentence a socket with nothing in it answers with.
@@ -1130,6 +1200,8 @@ fn node(id: u32, kind: Kind, name: &str, volume: u8) -> ronoctua_audio::Node {
         muted: false,
         app: None,
         address: None,
+        serial: None,
+        way: ronoctua_audio::Way::default(),
     }
 }
 
@@ -1190,6 +1262,37 @@ pub(crate) fn a_machine() -> Snapshot {
             configured_source: None,
         },
     }
+}
+
+/// [`a_machine`] with a second output and a program playing on the first —
+/// both outputs with the serial a move names them by.
+#[cfg(test)]
+pub(crate) fn a_machine_playing() -> Snapshot {
+    let mut s = a_machine();
+    s.nodes[0].serial = Some(1060);
+    s.nodes.push(ronoctua_audio::Node {
+        id: 70,
+        kind: Some(Kind::Sink),
+        name: "Headphones".to_owned(),
+        description: "Headphones".to_owned(),
+        volume: 50,
+        serial: Some(1070),
+        ..ronoctua_audio::Node::default()
+    });
+    s.nodes.push(ronoctua_audio::Node {
+        id: 120,
+        kind: Some(Kind::Playing),
+        name: "a player".to_owned(),
+        description: "a song".to_owned(),
+        app: Some("a player".to_owned()),
+        volume: 80,
+        way: ronoctua_audio::Way {
+            now: Some(60),
+            ..ronoctua_audio::Way::default()
+        },
+        ..ronoctua_audio::Node::default()
+    });
+    s
 }
 
 #[cfg(test)]
@@ -1611,6 +1714,209 @@ mod tests {
         // always read them.
         assert_eq!(read("S-<down>"), Some(Press::Down));
         assert_eq!(read("C-RET"), Some(Press::Enter));
+    }
+
+    /// The value the row with `spot` draws, and whether it refuses.
+    fn value_at(v: &View, s: &Snapshot, spot: Spot) -> Option<(String, bool)> {
+        v.rows(Some(s), DECIDING_WIDTH, &texts())
+            .into_iter()
+            .find(|r| r.spot == spot)
+            .map(|r| {
+                (
+                    r.fields.last().map(|f| f.text.clone()).unwrap_or_default(),
+                    r.disabled,
+                )
+            })
+    }
+
+    /// Walks a view over `s` down to `spot`.
+    fn walked_to(s: &Snapshot, spot: Spot) -> View {
+        let t = texts();
+        let mut v = View::fresh(Preferences::default());
+        v.settle_in(Some(s), DECIDING_WIDTH, &t);
+        for _ in 0..200 {
+            if v.rows(Some(s), DECIDING_WIDTH, &t)
+                .get(v.cursor())
+                .is_some_and(|r| r.spot == spot)
+            {
+                return v;
+            }
+            v.key(Press::Down, Some(s), DECIDING_WIDTH, &t);
+        }
+        panic!("never reached {spot:?}");
+    }
+
+    /// FAILS IF: the row saying where a playing program's sound goes is not
+    /// under that program while the cursor is on it — or stays under it when
+    /// the cursor leaves — or says something other than the device its links
+    /// reach, or the cursor cannot stand on it.
+    #[test]
+    fn a_playing_program_says_where_it_plays_under_it() {
+        let s = a_machine_playing();
+        let t = texts();
+        let mut v = walked_to(&s, Spot::Stream(120));
+        let rows = v.rows(Some(&s), DECIDING_WIDTH, &t);
+        let at = rows
+            .iter()
+            .position(|r| r.spot == Spot::Stream(120))
+            .expect("the program");
+        assert_eq!(rows[at + 1].spot, Spot::Output, "the row is under it");
+        assert_eq!(
+            value_at(&v, &s, Spot::Output),
+            Some(("Speaker".to_owned(), false))
+        );
+        v.key(Press::Down, Some(&s), DECIDING_WIDTH, &t);
+        assert_eq!(
+            v.rows(Some(&s), DECIDING_WIDTH, &t)[v.cursor()].spot,
+            Spot::Output
+        );
+        // ON ANOTHER NODE, the row goes with the cursor; on the settings
+        // below it stays, as the card's section does, and nothing shifts.
+        v.key(Press::Down, Some(&s), DECIDING_WIDTH, &t);
+        assert!(value_at(&v, &s, Spot::Output).is_some());
+        v.key(Press::Up, Some(&s), DECIDING_WIDTH, &t);
+        v.key(Press::Up, Some(&s), DECIDING_WIDTH, &t);
+        v.key(Press::Up, Some(&s), DECIDING_WIDTH, &t);
+        assert_eq!(
+            v.rows(Some(&s), DECIDING_WIDTH, &t)[v.cursor()].spot,
+            Spot::Source(62)
+        );
+        assert_eq!(value_at(&v, &s, Spot::Output), None);
+    }
+
+    /// FAILS IF: a key on the row does anything but send the program to the
+    /// next (or previous) device the graph lists, through the order the
+    /// reading makes — `RET` and a second click included, which is how the
+    /// pointer reaches it — or the hint teaches a volume there.
+    #[test]
+    fn the_output_row_sends_the_program_to_the_next_device() {
+        let s = a_machine_playing();
+        let t = texts();
+        let mut v = walked_to(&s, Spot::Output);
+        let to_the_headphones = Errand::Order(s.send(120, 70).expect("a move"));
+        assert_eq!(
+            v.key(Press::More, Some(&s), DECIDING_WIDTH, &t),
+            to_the_headphones
+        );
+        assert_eq!(
+            v.key(Press::Less, Some(&s), DECIDING_WIDTH, &t),
+            to_the_headphones
+        );
+        assert_eq!(
+            v.key(Press::Enter, Some(&s), DECIDING_WIDTH, &t),
+            to_the_headphones
+        );
+        // `m` AND `d` are a device's, not this row's.
+        assert_eq!(
+            v.key(Press::Mute, Some(&s), DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
+        assert_eq!(
+            v.key(Press::Default, Some(&s), DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
+        // THE POINTER: the first click on the row selects, the second is RET.
+        let mut v = walked_to(&s, Spot::Stream(120));
+        let rows = v.rows(Some(&s), DECIDING_WIDTH, &t);
+        let at = rows
+            .iter()
+            .position(|r| r.spot == Spot::Output)
+            .expect("the row");
+        assert!(
+            !v.clicked(at, &rows, Some(&s), DECIDING_WIDTH, &t),
+            "the first click selects"
+        );
+        let rows = v.rows(Some(&s), DECIDING_WIDTH, &t);
+        assert!(
+            v.clicked(at, &rows, Some(&s), DECIDING_WIDTH, &t),
+            "the second acts"
+        );
+        assert_eq!(
+            v.key(Press::Enter, Some(&s), DECIDING_WIDTH, &t),
+            to_the_headphones
+        );
+        // THE HINT says devices, and every word it says is a text.
+        let said: String = v
+            .hint(Some(&s), DECIDING_WIDTH, &t)
+            .iter()
+            .map(|p| p.text.clone())
+            .collect();
+        assert!(said.contains(&t.t(crate::key::AUDIO_SEND_ON)), "{said}");
+        assert!(!said.contains(&t.t(crate::key::AUDIO_MORE)), "{said}");
+        for id in ["audio-less", "audio-more", "audio-enter"] {
+            let means = meaning(Target::Output(120), id).expect("a meaning");
+            for language in ["en-GB", "pt-BR"] {
+                let t = ronoctua_i18n::Texts::fresh(language).expect(language);
+                assert!(
+                    t.has(means) && t.has(&format!("about-{means}")),
+                    "{language}: {means}"
+                );
+            }
+        }
+        assert_eq!(meaning(Target::Stream(120, 80), "audio-more"), None);
+    }
+
+    /// FAILS IF: what happens to the program or the device is not what the
+    /// row says — moved, linked to nothing, sent to a device that went, a
+    /// program that asked to stay, the only device left, the program gone —
+    /// or any of it panics.
+    #[test]
+    fn the_output_row_says_what_became_of_the_program() {
+        let t = texts();
+        let mut s = a_machine_playing();
+        let v = walked_to(&s, Spot::Output);
+        let said = |v: &View, s: &Snapshot| -> Vec<String> {
+            v.rows(Some(s), DECIDING_WIDTH, &t)
+                .iter()
+                .filter_map(|r| r.fields.first().map(|f| f.text.clone()))
+                .collect()
+        };
+        // MOVED: the links say the headphones now.
+        s.nodes[4].way.now = Some(70);
+        assert_eq!(
+            value_at(&v, &s, Spot::Output),
+            Some(("Headphones".to_owned(), false))
+        );
+        // LINKED TO NOTHING.
+        s.nodes[4].way.now = None;
+        assert_eq!(
+            value_at(&v, &s, Spot::Output),
+            Some((t.t(crate::key::AUDIO_PLAYS_NOWHERE), false))
+        );
+        // SENT TO A DEVICE THAT WENT: the sound is back on the speaker, and
+        // the row says why.
+        s.nodes[4].way.now = Some(60);
+        s.nodes[4].way.asked = Some(ronoctua_audio::Asked::Serial(4242));
+        assert!(said(&v, &s).contains(&t.t(crate::key::AUDIO_SENT_WHERE_NOTHING_IS)));
+        // ONLY ONE DEVICE, AND IT PLAYS THERE: nowhere else, drawn refusing.
+        let mut one = s.clone();
+        one.nodes.retain(|n| n.id != 70);
+        assert_eq!(
+            value_at(&v, &one, Spot::Output).map(|(_, off)| off),
+            Some(true)
+        );
+        let mut v1 = walked_to(&one, Spot::Output);
+        assert_eq!(
+            v1.key(Press::Enter, Some(&one), DECIDING_WIDTH, &t),
+            Errand::Nothing
+        );
+        // A PROGRAM THAT ASKED TO STAY: refusing, and the reason under it.
+        s.nodes[4].way.fixed = true;
+        assert_eq!(
+            value_at(&v, &s, Spot::Output).map(|(_, off)| off),
+            Some(true)
+        );
+        assert!(said(&v, &s).contains(&t.t(crate::key::AUDIO_STAYS_PUT)));
+        // THE PROGRAM ENDS while the cursor is on its row.
+        let mut v = walked_to(&a_machine_playing(), Spot::Output);
+        let mut ended = a_machine_playing();
+        ended.nodes.retain(|n| n.id != 120);
+        v.settle_in(Some(&ended), DECIDING_WIDTH, &t);
+        let rows = v.rows(Some(&ended), DECIDING_WIDTH, &t);
+        assert!(!rows.iter().any(|r| r.spot == Spot::Output));
+        assert!(rows.get(v.cursor()).is_some_and(|r| !r.heading));
+        // AND A KEY WHERE IT LANDED is that row's, with no panic on the way.
+        let _ = v.key(Press::More, Some(&ended), DECIDING_WIDTH, &t);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# Declaring a program on a BOOTED machine, offline: `declare-installs-now-and-records`.
+# Declaring a program on a BOOTED machine, offline: `declare-installs-now-and-records-vm`.
 #
 # WHAT ONLY THE VM PROVES
 # -----------------------

@@ -988,7 +988,6 @@ mod tests {
                     "{language}: {id} explains nothing"
                 );
             }
-            assert!(t.has(crate::key::ABOUT_TEXT_AREA), "{language}");
         }
     }
 

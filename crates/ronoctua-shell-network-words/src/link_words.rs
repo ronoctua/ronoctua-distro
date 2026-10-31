@@ -35,6 +35,7 @@ pub fn tunnel_refused(r: &ronoctua_tunnel::Refused, texts: &ronoctua_i18n::Texts
         Refusal::NotAuthorized => key::TUNNEL_REFUSED_AUTHORITY,
         Refusal::UnitFailed => key::TUNNEL_REFUSED_UNIT,
         Refusal::NotWritten => key::TUNNEL_REFUSED_NOT_WRITTEN,
+        Refusal::NoTransport => key::TUNNEL_REFUSED_NO_TRANSPORT,
         Refusal::ConfigRefused => key::TUNNEL_REFUSED_CONFIG,
         Refusal::DaemonRefused => key::TUNNEL_REFUSED_DAEMON,
         Refusal::Other => key::TUNNEL_REFUSED_OTHER,
@@ -248,6 +249,19 @@ mod tests {
             &t,
         );
         assert!(!unit.contains("Job"), "{unit}");
+        // A TRANSPORT WITH NO PROGRAM is its own sentence, not the variable.
+        let transport = tunnel_refused(
+            &ronoctua_tunnel::Refused {
+                why: ronoctua_tunnel::Refusal::NoTransport,
+                line: None,
+                words: "RONOCTUA_TOR_SNOWFLAKE is not set".to_owned(),
+            },
+            &t,
+        );
+        assert!(
+            !transport.contains("RONOCTUA") && transport != unit,
+            "{transport}"
+        );
     }
 
     /// FAILS IF: the connection a tunnel's mark names comes back as another

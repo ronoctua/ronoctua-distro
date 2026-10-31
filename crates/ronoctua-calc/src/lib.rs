@@ -293,8 +293,7 @@ pub struct Refusal {
     pub why: Why,
 }
 
-/// What kind of question [`quick`] recognised — what the fast-access card
-/// is titled with (`calc-shape-<id>`).
+/// What kind of question [`quick`] recognised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Shape {
     /// Plain arithmetic: `2+2`.
@@ -915,7 +914,7 @@ mod engine {
     /// EVERY CLOSED SET THAT BECOMES WORDS HAS THEM, in every language: a
     /// refusal without a sentence would be drawn as its key.
     #[test]
-    fn every_refusal_category_shape_and_unit_has_words() {
+    fn every_refusal_category_and_unit_has_words() {
         let mut keys: Vec<String> = Why::ALL
             .iter()
             .map(|w| format!("calc-why-{}", w.id()))
@@ -925,7 +924,6 @@ mod engine {
                 .iter()
                 .map(|w| format!("calc-rates-why-{}", w.id())),
         );
-        keys.extend(Shape::ALL.iter().map(|s| format!("calc-shape-{}", s.id())));
         keys.extend(
             units::Category::ALL
                 .iter()

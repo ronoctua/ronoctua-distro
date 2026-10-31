@@ -13,6 +13,7 @@
   ronoctua.keyboard.layout = "us";
   ronoctua.keyboard.variant = "euro";
   ronoctua.keyboard.compose = "compose:caps";
+  ronoctua.keyboard.console = "us(euro)";
   ronoctua.facterReport = ./facter.json;
   # No resume offset (a swapfile smaller than the RAM, or one not measured):
   # this machine does not hibernate.

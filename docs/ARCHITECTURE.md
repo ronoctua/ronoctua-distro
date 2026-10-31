@@ -3639,7 +3639,8 @@ E há um check para o nome: **o xkb não recusa um layout que não conhece**, el
 sintoma seria o teclado inteiro digitando outra coisa sem uma linha de erro — a mesma classe do
 fallback silencioso, e a mais cara delas, porque o jeito de investigar é digitando. O
 `keyboard-layout-exists` confere layout, variante e **cada** opção contra o registro do
-`xkeyboard-config` que a sessão vai usar, e o keymap do console contra o banco do `kbd`, que é outro.
+`xkeyboard-config` que a sessão vai usar. O mapa do console não é outro nome a conferir: é compilado
+do mesmo layout e variante (seção do instalador, "O console digita o teclado respondido").
 
 E existir não basta: **opção que o xkb não conhece ele IGNORA, com status zero** — medido, com
 `compose:naoexiste` compilando limpo e só uma linha em `stderr`. Por isso o
@@ -9168,7 +9169,11 @@ desliga é a página do cérebro, ou `ronoctua.brain.modules.<id>.enable`, que l
   `incremental/`. O fingerprint sai PRIMEIRO: o cargo reconstrói a unidade sem fingerprint, e uma
   remoção interrompida nunca deixa um fingerprint abonando saída que sumiu.
 - **`store-garbage`**: `nix-store --gc --max-freed <meta − livre>`, pelo daemon, como a pessoa — só
-  lixo, até a meta e não além, para o próximo build não baixar de novo o que acabou de sair.
+  lixo, até a meta e não além, para o próximo build não baixar de novo o que acabou de sair. O disco
+  é MEDIDO depois de cada coleta (com o `syncfs` antes) e o Nix é perguntado de novo pelo que ainda
+  falta: o `--max-freed` é a conta do Nix, e ele conta como liberado o que o disco não devolve (um
+  caminho morto numa camada só de leitura: 263,8 MiB "liberados", nada no `df`). Para quando o disco
+  chega à meta, quando uma coleta não deu nada ao disco, ou em `MOST_COLLECTIONS`.
 
 **O que sai primeiro.** Com `noatime`, a idade de um arquivo é a da escrita: uma dependência
 compilada há um ano e ligada em todo build desde então parece ter um ano, e levá-la a recompila —
@@ -9486,6 +9491,62 @@ O `host.nix` gerado **não leva segredo**: descreve a máquina e vai para backup
 escrito **antes** do `nixos-install` — com `mutableUsers = false` o ativador o lê durante a
 instalação, e depois seria tarde.
 
+#### O console digita o teclado respondido (2026-10-31)
+
+O instalador perguntava o layout e não o dava ao console. O console do ISO ficava no mapa `kbd` fixo
+de `nix/keyboard-xkb.nix` (`uk` até 2026-10-27, `us` desde então), e nada rodava `loadkeys` com a
+resposta: a senha do Wi-Fi, a do usuário e a frase-secreta do disco eram digitadas nesse mapa. E o
+`host.nix` escrevia `layout`, `variant` e `compose`, mas não `ronoctua.keyboard.console`: o console da
+máquina instalada, e o prompt do LUKS no initrd, ficavam no mapa padrão em toda máquina, enquanto a
+sessão usava o layout escolhido. Uma senha com `@ # " \ | ~` digitada num teclado US era gravada com
+outros caracteres do que a sessão digita (visto num Z16: `|` saía `~` até um `loadkeys us`).
+
+**O mapa do console é compilado da mesma resposta xkb, e não é um segundo nome.** O `kbd` é outro
+banco, com outros nomes (`uk` onde o xkb diz `gb`), e a maioria das respostas xkb nem tem mapa `kbd`
+(`us(euro)`): uma tabela xkb→kbd à mão seria uma segunda verdade. O `ckbcomp` (do console-setup, o que
+o `console.useXkbConfig` do NixOS roda) compila o mapa do mesmo xkeyboard-config que a sessão lê
+(`nix/console-keymaps.nix`). As opções não entram: no console o Caps Lock continua Caps Lock, e
+nenhuma senha precisa de Compose. A resposta é escrita como o xkb escreve o par, `us(euro)`, ou o
+layout sozinho (`notation` em `nix/keyboard-xkb.nix`, `keymap::name` no Rust).
+
+**O ISO leva o mapa de cada resposta que oferece**, compilado na construção: cada layout do
+`base.lst`, puro e com cada variante — ~600 arquivos, 70 MiB descomprimidos e poucos MiB no squashfs,
+porque são as mesmas linhas repetidas. O ISO não tem compilador xkb, e trazê-lo (perl, console-setup)
+para carregar um arquivo seria pior do que levar os arquivos. O instalador carrega o mapa **no momento
+em que a resposta existe** (`crates/ronoctua-installer/src/keymap.rs`), como o texto segue o idioma:
+respondida na tela do layout (com a variante do próprio layout até a variante ser respondida) ou
+trazida nas respostas repassadas (`--answers`). Síncrono: a próxima tecla lida já cai no mapa novo. Só
+no console do kernel (`TERM=linux`); num terminal de sessão ou por SSH, quem digita é o teclado
+daquele terminal.
+
+**Resposta sem mapa é recusada, nunca trocada por outra.** O `ckbcomp` cai calado: uma variante que o
+layout não tem vira o layout puro, com status zero (medido: `-layout us -variant bogus` dá o mapa do
+`us`). Então o mapa de uma máquina recusa a resposta que o `base.lst` não oferece, os dois recusam um
+mapa cujo compilador disse que não achou o que pediram, e todo mapa é relido pelo `loadkeys -b` antes
+de ser guardado. O `custom` do xkeyboard-config (o lugar do layout próprio de alguém, sem arquivo de
+símbolos) não tem mapa: o build o lista em `left-out.txt`, e o instalador recusa a resposta na tela
+dela (`Invalid::NoConsoleKeymap`) — e o modo sem terminal, antes de tocar o disco, inclusive uma
+variante que o layout não tem, que antes chegava ao `host.nix` sem conferência. Trocar de layout leva
+a variante do novo: a respondida era do anterior, e o par seria um mapa que não existe.
+
+**O `host.nix` leva a linha** (`ronoctua.keyboard.console = "us(euro)";`), e a máquina compila o mesmo
+par para o console e para o initrd (`nix/modules/console.nix`: um arquivo no `console.keyMap`, que o
+NixOS escreve no `vconsole.conf` e o `earlySetup` leva ao initrd). O padrão da opção é DERIVADO do
+`layout` e do `variant` da máquina, não do arquivo: uma máquina instalada antes, cujo `host.nix` não
+tem a linha, também passa a digitar no console o que a sessão digita. Um nome `kbd` ali (`uk`) é
+recusado no build com a frase que diz o que a opção espera. A instalação sem rede compila o mapa do
+alvo com o que a cola leva (`nix/installer/offline.nix`): as sondas com outros teclados põem no ISO o
+`ckbcomp` e o que ele lê.
+
+O que prova: os testes do crate (qual mapa para qual resposta; resposta sem mapa recusada, na tela e
+sem terminal; a linha do `host.nix`); `console-keymaps-cover-the-answers` (um mapa por resposta
+oferecida, contra o `base.lst` lido de novo, e as recusas recusam); `console-keymap-is-the-answers` (o
+console e o initrd de duas máquinas avaliadas guardam o mapa do instalador para a resposta delas); o
+`installer-console-vm` (o UK trazido nas respostas e depois o `us` escolhido na tela, cada um digitado
+no nome da máquina com as teclas em que os dois mapas discordam); e o `console-keymap-vm` (uma máquina
+UK com raiz LUKS: a frase-secreta com `" @ # ~` digitada no TECLADO no prompt do initrd só abre o
+disco se o prompt lê o mapa UK).
+
 #### Duas instalações, e por que é uma OPÇÃO e não um segundo sistema
 
 `ronoctua.profile` vale `full` ou `minimal`, e a diferença é **~37 GiB contra ~12,5** (~35,5 na `full`
@@ -9612,6 +9673,11 @@ anda, o stdenv e o toolchain de baixo de todo programa que só a distro compila 
 atualização os compila na máquina — as unidades guardadas só poupam o que o nixpkgs parado deixou
 igual —, a menos que o cache binário da pessoa já os tenha. Quanto isso custa por semana não foi
 medido (`docs/PENDING.md`).
+
+**E a semente leva os programas, não as unidades compiladas** (as bibliotecas têm `allowSubstitutes =
+false`): a primeira atualização depois de instalar que muda o código de um crate compila tudo o que
+está abaixo dos programas que mudaram. Levar o `rust.release.keep` (~1,95 GiB) pouparia isso ao preço
+do ISO, e o dono decidiu que não (2026-10-31).
 
 #### O ISO carregava 2,94 GiB que não eram dele
 
@@ -10259,6 +10325,16 @@ segundos e manda a cena inteira. Numa máquina sem os dois, a pergunta é um `co
 usuário. `tor-polkit-is-narrow` lê a regra instalada e a constante do crate e compara nos DOIS
 sentidos; e o Tor não sobe no boot, porque quem não pediu Tor não está usando Tor.
 
+**O transporte de uma ponte é uma palavra no anel e um programa no torrc**
+(`ronoctua_tunnel::tor::transport`). O anel escrevia `ClientTransportPlugin obfs4`, sem `exec`: uma
+ponte obfs4 para a qual o Tor nunca rodava programa nenhum (e `none` era uma linha que o Tor recusa).
+Agora a palavra vira `<transporte> exec <programa>` na escrita, e a linha volta a ser a palavra na
+leitura; `none` não escreve linha, e o nada escrito gira como `none`. O caminho do `lyrebird` e do
+cliente do snowflake chega em tempo de execução (`RONOCTUA_TOR_OBFS4`, `RONOCTUA_TOR_SNOWFLAKE`, do
+`nix/modules/tor.nix`, só com o Tor ligado), não assado no shell, que senão carregaria os dois
+programas com o Tor desligado; sem o caminho, a escrita é recusada com nome
+(`Refusal::NoTransport`) e o arquivo fica como estava.
+
 ### `/proc`, ICMP e o que se pode saber sem privilégio
 
 **`ronoctua-memory::net` é a fronteira do `/proc/net`** — a mesma regra que faz o `ronoctua-scroll` o
@@ -10521,6 +10597,57 @@ a região ocupada — senão ficaria em tela nenhuma até o agente desistir.
 duas vezes por ano carrega uma frase inteira (`Row::description`); o rodapé a põe na linha de
 mensagem, e a janela na linha 0 do cabeçalho (`door::list::header_about`), abaixo da pergunta e da
 mensagem e acima dos atalhos — a mesma ordem.
+
+---
+
+### Som — mandar um programa para outro aparelho, e o segundo programa que escreve no grafo
+
+**A fronteira com o PipeWire escrevia por um programa só, e essa era a linha de segurança.** O
+`pw-dump` e o `pw-cat` LEEM, o `wpctl` escrevia, e nada mudava até uma tecla. Mandar o som de um
+programa do alto-falante para o fone não é verbo do `wpctl`: no WirePlumber pinado (0.5.18) um fluxo
+muda de aparelho quando o metadado `default` tem um `target.object` para ele
+(`linking/find-defined-target.lua`, reescaneado nessa chave pelo `linking/rescan.lua` enquanto
+`linking.allow-moving-streams` vale, que é o padrão). Em 2026-10-31 o dono decidiu que a função
+entra, e com ela o segundo programa que escreve: o `pw-metadata` do mesmo PipeWire (1.6.9), achado
+pelo caminho no store (`RONOCTUA_PW_METADATA`, `nix/rust.nix`) como os outros três — o fecho não
+ganha nada. Continua no `pipewire.rs` e em mais lugar nenhum (`one-pipewire-boundary`).
+
+**O que limita o segundo é o que ele escreve, e é uma coisa só.** `pipewire::move_argv` é a única
+linha de comando dele: no metadado `default`, o `target.object` de um fluxo que TOCA, igual ao
+`object.serial` de um aparelho de saída, com o tipo `Spa:Id`. Ela sai de um `Move`, de campos
+privados, que só `Snapshot::send` faz — de uma leitura que listou o fluxo como programa tocando (que
+não pediu `node.dont-move`) e o destino como `Audio/Sink` com serial. Nada mais passa por ele: nem
+`target.node`, nem outro metadado, nem apagar. O servidor confere o resto e recusa um sujeito que
+já não existe (o programa parou entre a leitura e a tecla).
+
+**O serial, e não o id nem o nome.** O id passa ao próximo objeto quando o aparelho some; o nome o
+WirePlumber lê, mas a memória dele (`node/state-stream.lua`) procura o aparelho pelo serial, e com o
+nome esqueceria. Com o serial, mandar é a mesma entrada que o próprio WirePlumber escreve ao devolver
+a um programa o último aparelho dele: mandado para o fone, o programa volta ao fone da próxima vez, e
+fica lá quando o padrão muda — é o que "mandar" quer dizer.
+
+**A recusa do servidor não está no código de saída.** Medido no `pw-metadata` pinado: um sujeito
+inexistente sai com 0, e a recusa (`set property error … res:-2`) é um evento que só o log imprime.
+Por isso ele roda com `PIPEWIRE_DEBUG=E` (o log de erros no stderr) e `LC_ALL=C` (o `strerror`
+daquela linha), e `pipewire::answer_of` lê a resposta: `res:-2` é o programa que acabou, outra
+recusa é recusa, e sem `set property:` não havia metadado `default` em que escrever.
+
+**Onde o som está é o grafo, não o pedido.** A linha diz o aparelho que os LINKS do fluxo alcançam
+agora (`Way::now`, lido do `pw-dump --monitor`), então uma mudança aparece quando aconteceu. O pedido
+é outro fato (`Way::asked`, o `target.object` lido de volta): quando o aparelho para onde o programa
+foi mandado some, o WirePlumber devolve o som ao padrão, e a vista diz as duas coisas — onde toca, e
+que o aparelho escolhido não está aqui. O `pw-dump` não imprime a entrada que o servidor apaga quando
+um objeto some, então o grafo apaga junto (`Graph::forget_subject`): senão o pedido de um programa
+que acabou seria lido como o do próximo a ganhar o mesmo id.
+
+**Na vista, uma linha sob o programa em que o cursor está** (`O som vai para`), que gira como o perfil
+da placa: `←`/`→` mandam para o aparelho anterior ou o seguinte da lista, `RET` (o segundo clique)
+para o seguinte, nas duas portas, porque a linha é da vista. Uma de cada vez, como o nível do
+microfone: a seção continua do tamanho da lista de programas, e dois rótulos da vista não dizem o
+mesmo. Um programa que pediu para não ser movido aparece recusando, com o motivo embaixo. As duas
+portas se fotografam sobre um grafo plantado, o que o `pw-dump` imprime (`--door audio --scene
+<arquivo>`; no rodapé, `RONOCTUA_PHOTOGRAPH_AUDIO_SCENE`), e o `player-sound-vm` prova, com dois
+sinks nulos, que essa linha de comando move um fluxo e que o grafo diz para onde.
 
 ---
 
@@ -12191,11 +12318,14 @@ travas e uma escolha. As travas: `uninstallUnmanaged = false` (senão toda insta
 sumiria na próxima ativação), e o remoto flathub vem de um `.flatpakrepo` VENDORIZADO
 (`assets/flatpak/`), para declará-lo sem rede. A escolha (emenda do dono ao inv. 6, 2026-10-30): a
 atualização LIGADA, na ativação e no timer do próprio nix-flatpak (`update.onActivation`,
-`update.auto.enable`) — os Flatpaks andam sozinhos, fora da geração, e os passos `flatpak-system` e
-`flatpak-user` da sequência continuam rodando em toda atualização. Esse tráfego vai ao Flathub sem
-`Pass` do `ronoctua-consent`, e a regra do consentimento não foi emendada para ele
-(`docs/PENDING.md`); se uma ativação sem rede ainda passa inteira com a atualização na ativação não
-foi conferido de novo. `ronoctua.software.declaredFlatpaks` vira `services.flatpak.packages` do HM —
+`update.auto.enable`). Ela alcança só os Flatpaks DECLARADOS (o `--or-update` das instalações do
+script gerado: a extensão escura, os da distro, os `declaredFlatpaks`); os outros da pessoa andam pelos
+passos `flatpak-system` e `flatpak-user` da sequência, em toda atualização. Esse tráfego vai ao
+Flathub sem `Pass` do `ronoctua-consent`, e é uma exceção escrita da regra do consentimento
+(`AGENTS.md`, decisão do dono de 2026-10-31): um atualizador declarado do sistema é a máquina se
+mantendo na última versão, como o Nix que constrói, e não um programa nosso pedindo um host. Sem
+rede, a ativação passa inteira: o `software-vm` sobe sem rede e confere que a unidade do sistema do
+nix-flatpak termina sem falha. `ronoctua.software.declaredFlatpaks` vira `services.flatpak.packages` do HM —
 uma linha à mão no `host.nix`; a central declara no `declared.json` da pessoa (seção L18). **Tirar
 um id dessa lista DESINSTALA o app** na próxima ativação (lido no script gerado do nix-flatpak); o
 que a pessoa instalou à mão continua protegido. Um app declarado aparece na lista como do flake e
@@ -12407,6 +12537,12 @@ no sistema completo: 42 downloads direto da origem (npm, GitHub, rust-lang, Goog
 não é livre e o que só o perfil full leva é uma **parte**: declarada no flake
 (`ronoctua.parts.<id>`, `nix/modules/parts.nix`), nunca no fecho do sistema, realizada sozinha pelo
 root e guardada num perfil Nix próprio.
+
+**As partes ficam, e não crescem** (decisão do dono, 2026-10-31). Com a máquina rolando o
+`nixos-unstable` toda semana, as partes pareceram um segundo caminho de atualização, e aposentá-las
+foi proposto; seria trazer de volta a instalação que cai inteira por um download. Elas ficam como
+estão, e nenhum programa a mais vira parte: o Rust e o toolchain do devshell, o Common Lisp, o Emacs
+e o yt-dlp continuam na base.
 
 **Um perfil por parte, alcançado por um caminho estável.** O sistema nomeia a parte só por
 `/nix/var/nix/profiles/ronoctua/parts/<id>/v<interface>`, que pode ainda não existir; quem lê pergunta
@@ -14797,7 +14933,9 @@ e `pam_succeed_if tty =~ /dev/*` (o `sudo -S` da porta não tem tty). Cadastrar 
 porta — acrescentar uma credencial exige a que já existe —, e o helper, como root, fala com o fprintd
 (`Claim`, `EnrollStart`, cada `EnrollStatus` virando uma linha `step`, `Release`), desistindo depois de
 60 s sem toque. Listar leitores e dedos roda como a pessoa. `pam-fingerprint-is-gated` lê o texto de
-TODOS os serviços PAM do sistema avaliado.
+TODOS os serviços PAM do sistema avaliado. Desde 2026-10-31 um segundo serviço liga o dedo: o da tela
+de bloqueio (`ronoctua-unlock-finger`), o dedo sozinho, que abre a sessão da própria pessoa e não vale
+como root — a seção "A tela de bloqueio".
 
 **Firmware só lido.** O fwupd entra para dizer o nível HSI e as atualizações conhecidas; instalar
 firmware fica de fora por decisão do dono — não está entre os auto-updaters que o invariante 6
@@ -14911,6 +15049,113 @@ o oferece), e só um gesto novo o traria.
 `scans.json` a cada décimo do arquivo (não a cada batida, que vai só para a fila), e um cancelamento é
 escrito pela fila, que mata o grupo do filho: o que ainda estava sendo enviado volta a "nunca visto,
 não enviado" (`virustotal::cancelled`), e o que já foi enviado fica pendente.
+
+### A tela de bloqueio — `LEADER s q l`, e quem bloqueia é o compositor (2026-10-31)
+
+O dono pediu, nesta ordem: uma tela de bloqueio; que ela NÃO bloqueie sozinha por padrão; um atalho
+que bloqueia; uma opção que bloqueia sozinha depois de um tempo sem uso, e que não bloqueia enquanto
+toca mídia; e que ela abra com o dedo além da senha da conta. As peças estão em `ronoctua-shell-lock`
+(a tela), `ronoctua_shell_door::session_lock` (o protocolo e a forma que a porta toma), o
+`idle_notify.rs` e o `surface/locking.rs` do rodapé (o tempo sem uso e o início), o `lock_choice` do
+kit (a escolha da pessoa), a seção "Bloqueio de tela" da central de segurança e
+`nix/modules/unlock.nix` (as duas pilhas PAM).
+
+**O bloqueio é o do compositor, e não uma camada por cima.** Uma superfície de layer-shell desenhada
+sobre tudo é um quadro, não um bloqueio: um clique que ela deixa passar chega à janela, um atalho do
+compositor chega também, e um rodapé que morre deixa tudo ao alcance. `ext-session-lock-v1` é a
+palavra do próprio compositor: a partir do `locked` ele esconde toda superfície que não seja do
+bloqueio, dá a entrada só a elas, e mantém a sessão bloqueada se o processo que segura o bloqueio
+morrer. Lido na fonte pinada do Scroll (`sway/lock.c`): o bloqueio abandonado pinta toda tela de
+vermelho e é TOMADO por um novo (`Replacing abandoned lock`), e o global é dos privilegiados, que um
+cliente sem contexto de segurança — o nosso — alcança. É a exceção do dono ao invariante 3 (um
+arquivo, `session_lock.rs`, cobrado por `one-session-lock`) e ao 14: as superfícies do bloqueio
+cobrem toda tela só enquanto a sessão está bloqueada.
+
+**Um processo e uma unidade próprios.** `ronoctua-shell lock` roda na unidade de usuário
+`ronoctua-lock.service` (`nix/modules/scroll.nix`, ao lado da linha de vida), e não como filho do
+rodapé: o rodapé morrer, ou ser reiniciado por um `switch`, nunca abre uma sessão bloqueada. Um
+bloqueio que morre volta (`Restart=on-failure`, sem limite de partidas, pelo motivo do rodapé: com
+limite, umas quedas deixariam uma tela bloqueada que nada responde) e o novo toma a sessão. Um que
+RECUSOU bloquear — sem a pilha da senha na máquina, sem o nome da conta, sem o protocolo no
+compositor — sai com 78 e não volta (`RestartPreventExitStatus=`): a recusa só se repetiria. E o
+`switch` não reinicia a unidade (`restartIfChanged = false`): parar é abandonar. Pedir a unidade
+ativa de novo não faz nada, que é o que uma segunda tecla ou um segundo tempo sem uso querem. Onde não
+há unidade — o laço `.#dev`, que NUNCA pode bloquear a sessão de verdade, e a máquina de um teste — o
+bloqueio é filho do rodapé, e o rodapé levanta outro se ele morrer depois de bloquear (até cinco por
+minuto). `the-lock-outlives-the-footer` cobra a unidade avaliada contra as constantes do Rust.
+
+**Uma porta, todas as telas.** O bloqueio é UM objeto, e toda superfície mostrada tem de ser feita
+por ele — por isso um processo só, ao contrário das cortinas do redimensionador. A superfície da porta
+vira a do bloqueio na tela que tinha o foco (perguntada ao compositor antes de bloquear; a primeira,
+se ele não diz), e desenha ali como qualquer porta: o teclado, a repetição e o compose, todo ponteiro,
+a escala. Toda OUTRA tela recebe uma superfície do bloqueio lisa, na cor do chrome, pintada em memória
+compartilhada (`wl_shm`, do núcleo do Wayland): tela que o bloqueio deixa nua o compositor enche com
+uma cor dele. Tecla digitada com o teclado numa tela lisa é da porta do mesmo jeito; ponteiro numa
+delas só ganha a seta. E a superfície da porta é mapeada PRIMEIRO com a mesma cor lisa: o compositor
+dá o teclado à primeira superfície do bloqueio que mapeia, e uma GPU que falhasse deixaria a
+superfície sem buffer e o teclado com ninguém — uma sessão bloqueada para sempre. Com a cor lisa, a
+senha ainda é digitada, numa tela de uma cor só. A tela da senha desconectada: a porta passa para
+outra, numa superfície nova, como uma coluna muda de tela (`Door::forget_the_surface`).
+
+**Abrir é `unlock_and_destroy` e uma ida e volta ANTES de sair.** O compositor lê o fim da conexão
+antes dos pedidos que ainda estão no soquete; um processo que sai logo depois de pedir o desbloqueio
+deixaria o bloqueio abandonado e toda tela vermelha. `one-session-lock` cobra a ordem.
+
+**O que a tela mostra: as duas linhas do rodapé sobre a mesa vazia.** Este sistema não tem tela além
+do conteúdo e do rodapé, e o bloqueio fica nisso: toda tela na cor do chrome (a página do rodapé), e
+embaixo da tela com o foco a modeline (bloqueada, de quem, o leitor de digitais) e o minibuffer
+perguntando a senha como toda pergunta do sistema é feita (`line::Line`, mascarada, `ESC` e `RET`
+clicáveis). O que o bloqueio diz — conferindo, senha errada — é uma linha acima delas, e a frase do
+atalho sob o ponteiro, acima dessa. `ESC` apaga o que foi digitado, nunca o bloqueio.
+
+**A senha, pelo PAM, numa thread.** O serviço `ronoctua-unlock` (só `pam_unix`, três segundos depois
+de uma errada) passou a existir em toda máquina: seguia o interruptor do player, e uma máquina sem
+player teria um bloqueio sem chave. O bloqueio ainda confere a pilha ANTES de bloquear
+(`ronoctua_pam::declared`): uma máquina que a perdeu não bloqueia, nunca fica sem como abrir. O que se
+digita vive na linha até o `RET`, vai num `Secret` para a thread, e a linha é zerada a cada resposta,
+a cada `ESC` e quando a porta acaba; nunca vai ao log, a um argumento ou a um soquete.
+
+**O dedo, numa thread que corre junto com a senha.** Quem responder primeiro abre. É `pam_fprintd`
+num serviço SÓ DELE, `ronoctua-unlock-finger` (`ronoctua_pam::FINGER_SERVICE`): o dedo sozinho,
+`sufficient`, e o `pam_deny` da pilha — nada mais responde ali (`the-lock-finger-is-the-finger-alone`).
+Não as portas do sudo (a lista `fingerprint-sudo` e o terminal): aquelas dizem quando um dedo vale
+como ROOT, e aqui ele abre a sessão da própria pessoa, o que o dono aprovou. O dedo só é oferecido
+onde há um leitor e um dedo cadastrado para a conta (`fprint::reader`/`enrolled`, perguntados como a
+pessoa); sem isso a tela não diz nada de dedo. O leitor desiste depois do prazo dele, e não é posto a
+esperar de novo sozinho — um leitor esperando para sempre numa sala vazia —, mas a uma tecla, a um
+clique ou ao `C-f`, que é alguém ali. Sem leitor numa VM, as regras do dedo são testadas no crate.
+
+**Bloquear sozinha: desligado por padrão, e um valor desconhecido é recusado.** A escolha é
+`lock.json` (`{ "automatic": true, "minutes": 10 }`), escrita pela central de segurança (as duas
+portas, as mesmas linhas, seção "Bloqueio de tela") e vigiada pelo rodapé, que arma o que ela diz. A
+espera é uma de um anel fechado (1, 2, 5, 10, 15, 30, 60 minutos). Um arquivo que não lê inteiro — um
+`7`, uma palavra no lugar de número, um JSON quebrado — NÃO bloqueia sozinho, e a central diz isso:
+ler `7` como dez seria bloquear numa hora que ninguém escolheu. O arquivo fica como estava, e o razão
+do store diz o valor. A linha "Bloqueio de tela: nenhum" que a seção "Esta máquina" trazia saiu: a seção
+"Bloqueio de tela" diz o que há.
+
+**O tempo sem uso é contado pelo compositor.** Só ele vê toda tecla e todo movimento de todo assento,
+o teclado virtual e as mãos inclusive. `ext-idle-notify-v1`: uma notificação por assento com a espera
+escolhida, `idled` e `resumed`, por evento e nunca por relógio; exceção do dono ao invariante 3 (um
+arquivo, `idle_notify.rs`, `one-idle-notify`). Bloqueia quando TODO assento parou: cursores
+independentes são alguém na máquina. O pedido é `get_idle_notification`, que respeita os inibidores
+de ociosidade — um player de vídeo ou um navegador passando vídeo segura um, e o assento nunca para —
+e nunca `get_input_idle_notification`, que os ignora. Os assentos que o compositor já tinha quando o rodapé subiu são vigiados
+desde a partida: o toolkit só chama `new_seat` para um assento anunciado depois, e sem isso o
+bloqueio sozinho não tinha assento nenhum para esperar — o `lock-screen-vm` pegou.
+
+**E a música também segura.** Som não segura inibidor nenhum. Quando todo assento parou, o rodapé
+pergunta fora do laço se um stream está tocando agora (`ronoctua_audio::playing`: um
+`Stream/Output/Audio` cujo nó está `running`; um player pausado não segura); tocando, não bloqueia, e
+as esperas recomeçam de agora — o próximo tempo sem uso é uma espera inteira depois, perguntado de
+novo. Um PipeWire que não responde BLOQUEIA, e o log diz: o bloqueio sozinho é a guarda que a pessoa
+ligou, e um som que não se pode perguntar não é motivo para deixar a máquina aberta. Um PipeWire
+que não responde em dez segundos conta como um que não pôde ser perguntado.
+
+**O que só a VM prova** (`lock-screen-vm`): o comando, pelo rodapé, toma o bloqueio do compositor;
+uma janela (`wev`) não ouve tecla nenhuma enquanto ele está de pé; a senha errada é recusada com a
+frase na tela (lida por OCR); a certa abre e a janela volta a ouvir; e, com `lock.json` pedindo um
+minuto, a tela bloqueia sozinha sem ninguém mexer.
 
 ### Containers: a vista (`LEADER s o`) e o módulo do brain
 
@@ -16457,13 +16702,12 @@ mantém de fora com o motivo (`kept-back`), ficando com a cópia que tinha. Ning
 escreve, então dois espelhos se juntam sem pergunta: o pin mais recente de cada id ganha, e uma
 remoção (a distro alcançou) vence um pin que andou (`merge_distro_pins`).
 
-**A versão seguida é programa da pessoa.** Os bytes de um pin seguido são o download da própria
+**A versão seguida é download da pessoa.** Os bytes de um pin seguido são o download da própria
 pessoa: qualquer processo dela pode pôr no store um arquivo com o nome e o hash que quiser, e um
-caminho fixo é só nome e hash — o build o acharia e nunca baixaria. Então o build de um pin seguido
-vai para o perfil DELA (o `home.packages` do Home Manager, pelo `ronoctua.person`, como os AppImages
-que ela declara), com o lançador rodando `/etc/profiles/per-user/<pessoa>/bin/…` e a
-`X-Ronoctua-Fallback=false` da tabela, e o pin da distro do mesmo id sai do `systemPackages`: nunca os
-dois, um programa e um lançador de cada nome. O L03 vale: nada da pessoa entra no sistema.
+caminho fixo é só nome e hash — o build o acharia e nunca baixaria. Então um pin seguido nunca entra
+no fecho do sistema nem num cache público: é o pin com que a PARTE daquele app é construída (abaixo,
+"O pin seguido é o da parte do app"), e o lançador roda o programa pela vista das partes, com a
+`X-Ronoctua-Fallback=false` da tabela. O L03 vale: nada da pessoa entra no sistema.
 
 Quem segue é o `ronoctua-software pins refresh` (o passo `person-pins`, que já buscava os pins da
 pessoa), lendo a tabela do relatório do sistema (`distro-apps.json`, que diz de cada AppImage a chave,
@@ -16475,7 +16719,10 @@ por hora que o GitHub responde sem conta). A release é julgada pela regra — e
 com um hash de mentira — ANTES do download, e só a que pode passar é baixada (`nix store
 prefetch-file` com o `digest` do GitHub como `--expected-hash`), sob O MESMO nome de store que o
 builder da distro usa (`<chave>-<versão>.AppImage`, `nix/distro-downloads.nix`). Tag sem dígito nunca
-vira pin. Sem os dois hosts permitidos nada é perguntado: se nenhum pin da pessoa andou, o passo
+vira pin. Cada release mais nova que fica para trás — o GitHub que não responde, a tag que se move, a
+regra que recusa, os bytes que não são o `digest` — é uma linha do passo antes da última, com o porquê
+(`follow::NotFollowed`): o CLI não tem log próprio (o `tracing` dele não vai a lugar nenhum), e o
+diário da atualização guarda o que o passo imprime. Sem os dois hosts permitidos nada é perguntado: se nenhum pin da pessoa andou, o passo
 termina `refused github-not-let`, que a sequência lê como notícia (`declines`); se os dela andaram, o
 passo diz o que andou e uma linha diz que os da distro não foram olhados. Com a opção desligada o
 arquivo sai, e a máquina deixa de construir os seguidos assim que o root recebe as opções assinadas
@@ -16512,7 +16759,19 @@ das partes, o único lugar em que a sessão acha uma parte.
 O `distro-apps-follow-when-on-and-newer` planta a tabela, as opções e os pins em máquinas
 avaliadas: ligado, o mais novo é o pin da parte e não está em perfil nenhum; mais velho, igual ou
 ultrapassado pela distro não; todo lançador de parte roda pela vista; cada forma ruim é recusada pela
-sua regra; desligado, nada.
+sua regra; desligado, nada. E o caminho inteiro roda numa VM (`distro-apps-follow-a-release-vm`,
+`tests/distro-apps-follow-vm.nix`), contra um GitHub do teste por HTTPS e um AppImage minúsculo de
+verdade em três releases: a parte da distro chega pelo download do build; ligada a opção, o passo
+`person-pins` pergunta a release, julga, baixa com o `prefetch-file` sob o nome do builder, conferindo
+o `digest`, e escreve o pin; a pessoa assina, o `person-stage` entrega e o root aplica sob a chave
+fixada; o registro e as partes, avaliados da pasta da máquina, constroem a parte na release seguida
+com os bytes que o passo baixou (o build não baixa nada, e o servidor conta um download só), e a
+pessoa roda a versão nova pela vista, com a anterior guardada como volta. Uma release cujos bytes não
+são o `digest` nunca vira pin, e o passo diz por quê; uma cujo asset está quebrado é assinada e
+aplicada, a parte não constrói, fica na versão que chegou antes, e o registro dela diz por quê. O
+sistema inteiro não é construído ali — na VM só o registro e as partes são avaliados, porque a distro
+não se constrói offline —, e a assinatura é a do `ronoctua-test-pq`, no formato do
+`ronoctua-belongings sign`, que pede o repositório da pessoa (o teste diz o que faz as vezes de quê).
 
 
 <!-- anchor: L05 -->
@@ -16646,6 +16905,24 @@ central de programas) trocaria para ele de novo e o próximo reinício falharia 
 Uma revisão NOVA da distro, ou do nixpkgs que a máquina rola, constrói outro sistema (o `apply`
 compara o toplevel), e esse é tentado.
 
+**E é tentado de novo quando a pessoa pede (2026-10-31).** Um ensaio pode falhar por acaso — a luz
+que cai durante o boot que o tenta —, e o sistema que não subiu ficava recusado até a distro ou o
+nixpkgs andarem. A página da atualização oferece, só quando o registro diz que o último ensaio
+falhou, tentá-lo de novo na próxima atualização (`ronoctua-machine try-again`). Esquecer a recusa
+não é esquecer a falha: o rollback do resgate ainda pula essa geração, a página ainda diz que ela
+não subiu — e o `state.json` não pode dizer mais nada, porque o resultado de um ensaio é um conjunto
+fechado e cada parte do registro recusa campo desconhecido no leitor da primeira release, onde a
+volta de um ensaio pode cair (veja "O `state.json` só diz o que um leitor mais velho lê", abaixo).
+Então o registro continua `failed`, e uma nota ao lado (`trial-again.json`, da máquina e não
+publicada, como as do boot que armou) nomeia o toplevel pedido. O `apply` que constrói exatamente
+esse toplevel, com o registro ainda dizendo que foi ESSE que falhou, o põe no perfil e arma o ensaio
+de novo, com volta; todo `apply` que põe um sistema no perfil gasta a nota (o ensaio do registro
+passa a ser o do sistema novo), e uma nova falha é recusada de novo até a pessoa pedir de novo. Uma
+nota sobre um ensaio já substituído não perdoa nada, e a página não a diz. Um sistema mais velho,
+bootado no meio, não abre a nota e recusa como antes: o pedido espera um sistema que o conheça. E o
+`boot-fallback` esquece o que disse quando o registro, legível, não diz ensaio falho: o toplevel não
+distingue o ensaio repetido do primeiro, e a segunda falha passaria calada.
+
 **O ensaio que falhou é dito, uma vez.** Quando o sistema novo não subiu, a máquina já voltou
 sozinha — e ninguém estava olhando: o boot que falhou foi um pânico, e o que voltou parece qualquer
 outro. O módulo do cérebro `boot-fallback` escuta a pasta do registro e diz isso no minibuffer, uma
@@ -16690,7 +16967,7 @@ um reinício. Um último bom que o menu já não lista não é perdido por nada,
 aparagem das gerações (`ronoctua-system-generations --machine-state`) guarda também o último bom e o
 ensaio, lidos do registro (`generations-keep-the-boot-trial`).
 
-**As travas.** O `apply`, o `bless`, o `disarm`, o `hold` e a `migrate` tomam a trava de root dos
+**As travas.** O `apply`, o `bless`, o `disarm`, o `hold`, o `try-again` e a `migrate` tomam a trava de root dos
 dados da pessoa (`ronoctua_person::root::Lock`, L06): um build lê esses dados, e um `apply` no meio
 trocaria a árvore debaixo dele. Sob o `ronoctua-person hold`
 da atualização ela chega na entrada padrão, já tomada; sozinho, ele a toma, espera um pouco e diz
@@ -16731,11 +17008,14 @@ da execução, então "sem job, sem execução" é o fim, e `failed` é que não
 ou recusado é dito com o motivo (`echo-build-failed`).
 
 Isso fecha UM caminho, o da árvore não commitada. Uma máquina assim ainda dá root sem senha a quem
-roda como a pessoa por outros: o que ela COMMITA chega a root pela atualização, como dito acima; ela
-está em `trusted-users` do Nix, que o próprio Nix diz ser quase o mesmo que root (importar no store o
-que não foi assinado, passar opções ao daemon); o `incus-admin` do perfil `full` é root (L13); e a
-janela sem senha, quando a pessoa a abre, é root por escolha dela. Quais desses fecham é decisão do
-dono (`docs/PENDING.md`).
+roda como a pessoa por outro: o que ela COMMITA chega a root pela atualização, como dito acima
+(`docs/PENDING.md`); e o `incus-admin` do perfil `full` é root (L13). Ela não está mais em
+`trusted-users` do Nix (decisão do dono, 2026-10-31): um usuário confiável é quase root — importa no
+store o que não foi assinado, muda os ajustes de segurança do daemon —, e nada que a distro roda como
+a pessoa pedia isso. As baterias e o `.#sized-build` passam só `--max-jobs`, `--cores`, `--keep-going`
+e `--fallback`, que o daemon aceita de qualquer um; o `iso-sweep` apaga caminhos mortos, o
+`kept-sources` cria raízes indiretas, o envio ao cache da pessoa só lê, e os substituters são do
+sistema. Medido como um usuário fora da lista; o `nix-trusts-only-root` segura a lista.
 
 O `-own` e a atualização leem a revisão de dentro do repositório da pessoa como root (o
 `safe.directory` só desse checkout), e um repositório pode pedir ao git que rode programas: o
@@ -16751,7 +17031,34 @@ por um tempo e voltaria na primeira avaliação que o comparasse com o endereço
 retenção que não retém. Então a revisão pedida tem de ser a do sistema em execução (o lock guardado,
 senão o da pasta), e a pasta volta a ela se tinha andado. O `apply` de uma máquina retida cujo lock
 nomeia outra revisão recusa (`held`); o passo `flake-update` da atualização é que não move os
-inputs (nem a distro nem o nixpkgs) enquanto o registro disser `hold`.
+inputs (nem a distro nem o nixpkgs) enquanto o registro disser `hold`. `hold` sem revisão retém
+essa, a que roda — o gesto da página, abaixo.
+
+**Reter, soltar e tentar de novo pela página, pela porta do sudo (2026-10-31).** Antes, reter era
+`sudo ronoctua-machine hold <rev>` num terminal. Os três gestos são de root (o registro e a pasta da
+máquina são dele, e reter muda o que a atualização faz), então passam pela porta do sudo, como todo
+gesto de root: os verbos `machine-hold`, `machine-unhold` e `machine-try-again` do ajudante, que não
+levam palavra nenhuma. A revisão retida é a que a máquina lê como a que roda (`hold` sem argumento) e
+o sistema tentado de novo é o que o registro diz que falhou: nada do que o processo da pessoa diz
+chega a root, que só escolhe QUAL gesto — o motivo de o `build-switch-reference` ser sem argumento
+também. O ajudante inicia uma unidade fixa por verbo (`ronoctua-machine-hold`, `-unhold`,
+`-try-again`: a linha da máquina com a tabela dela, nenhuma regra polkit) e ESPERA por ela: o verbo
+leva segundos, ou diz `busy` depois de meio minuto, quando uma atualização segura a trava dos dados da
+pessoa. A razão de uma recusa é da máquina — `refused <palavra>`, a única linha da saída padrão dela:
+a unidade a manda para um arquivo de root na pasta da atualização (`StandardOutput=truncate:…/
+<unidade>.said`, os passos seguem para o diário), que o ajudante apaga antes de iniciar (uma unidade
+que nem rodou não deixa veredito velho) e lê depois, dizendo a palavra como progresso (`step
+machine-refused-<palavra>`, `Said::machine_refused`) antes do seu `refused failed`. A porta que
+perguntou diz a frase da máquina (`refusal_key`); uma palavra que a máquina não diz vira o `failed` da
+porta, nunca um motivo inventado. Na página, cada gesto mora onde mora a frase dele: sob o ensaio que
+falhou, "tentar de novo na próxima atualização" (e, pedido, a frase de que ele é tentado, com a
+tecla que atualiza agora); a frase da retenção é ela mesma o controle que solta, com a linha de
+soltar embaixo; sem retenção, a linha que retém nomeia a revisão que o lock da pasta da máquina diz
+(`ronoctua_machine::distro_revision`), e uma máquina sem flake próprio não a desenha. Um clique
+PERGUNTA, ali mesmo, sob a mão: a frase, o `não` primeiro com o cursor nascido nele (`aim::Aim`, o
+primeiro clique só escolhe), o `sim` — e o sim é perguntado de novo na barra do sudo, se o sudo
+quiser a pessoa. Os três também são comandos pelo nome (`machine-try-again`, `machine-hold`,
+`machine-let-go`), que abrem a página na pergunta, ou dizem por que o registro não a oferece.
 
 **A migração só troca o layout se o novo constrói, e nunca renomeia a pasta.** Com a raiz apagada a
 cada boot, a pasta da máquina é uma montagem bind do `/persist`, e um ponto de montagem não se renomeia;
@@ -16769,8 +17076,10 @@ adoção a partir de um checkout); sem ele vale o do template.
 
 **A atualização deixa o sistema para o próximo boot (2026-10-30).** A máquina segue o
 `nixos-unstable`, e no dia em que ela passou a rolar a troca ao vivo do 26.05 para ele reiniciou a
-máquina do dono; a causa não foi registrada, e nenhuma VM prova uma troca ao vivo entre dois nixpkgs
-(`docs/PENDING.md`) — é por isso que a atualização não troca nada sob a sessão. Então o `apply` da
+máquina do dono; a causa não foi registrada, e nenhuma VM prova uma troca ao vivo entre dois nixpkgs.
+O dono decidiu (2026-10-31) que ela **nunca acontece**: nada que roda é trocado através de dois
+nixpkgs, por nenhum caminho — a atualização, a troca de build, a central de programas e o
+`.#apply-here`. Então o `apply` da
 atualização é `apply --next-boot`: constrói, põe o sistema no
 perfil e roda `switch-to-configuration boot` — nada do que roda é parado ou reiniciado —, o registro
 diz `staged` e nomeia o sistema que espera (`last-apply.toplevel`, os dois no `last-apply.json` ao
@@ -19285,7 +19594,11 @@ também, não tomado por "sem ensaio". Não arma ensaio de boot: um sistema do c
 escolhe no menu se ele não subir — e por isso o menu tem de continuar tendo a volta. A geração que
 empurraria a última boa para fora do menu é recusada, com a mesma conta do `ronoctua-machine apply`
 (`last-good-would-fall-out`, `release.py menu-room`), e a última boa é a do registro ou, antes de
-qualquer bênção, o sistema que deu boot.
+qualquer bênção, o sistema que deu boot. E ele segue a regra do `apply` sobre o agora: um sistema do
+checkout feito de outro nixpkgs que o que roda (o `nixos-version` dos dois: a versão, o dia e a
+revisão do nixpkgs), ou feito enquanto o perfil nomeia um sistema que não roda, é deixado para o
+próximo boot (`switch-to-configuration boot`) e não trocado ao vivo; um `nixos-version` que não se lê
+também, porque não prova que nada andou.
 
 <!-- anchor: L17 -->
 
@@ -19391,6 +19704,12 @@ durante um download acha a imagem conferida no cache quando chega a vez dela; e 
 número (`Request::nonce`) que a unidade copia em cada resposta sobre ele — o trabalho só lê as
 respostas do próprio pedido, e o `Done` de outra gravação nunca vira o dele. Uma unidade esperando
 sem trabalho nenhum para alimentá-la (a fila reiniciou) é mandada parar, e a pessoa escolhe de novo.
+E antes de tudo isso o "sim" toma a PREPARAÇÃO (`ronoctua_stick::staging::Preparing`, o arquivo
+`preparing` na pasta de preparo, feito com `create_new` e com o PID de quem o tem), antes de ler a
+máquina e de pedir a senha, e a solta quando a fila tem o trabalho: entre a porta do sudo subir a
+unidade e a fila aceitar o trabalho, a unidade espera sem trabalho armado, e um segundo "sim" na
+outra porta nesse instante a mandava parar e a primeira gravação falhava dizendo que o gravador não
+rodava. Agora esse segundo "sim" ouve que outra gravação está sendo preparada e não toca em nada.
 
 **A última resposta é sempre final, e diz por quê.** Uma resposta parada em "gravando" faria toda
 vista recusar uma gravação nova até reiniciar a máquina; então o `ExecStopPost` da unidade

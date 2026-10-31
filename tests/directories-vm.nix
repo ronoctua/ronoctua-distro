@@ -110,6 +110,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json, re
+    from datetime import timedelta
 
     def player(what):
         return json.loads(machine.succeed(
@@ -129,7 +130,7 @@ pkgs.testers.runNixOSTest {
     def let_hosts(names):
         consent = {"hosts": {h: True for h in names}}
         machine.succeed(f"printf '%s' '{json.dumps(consent)}' > /root/.config/ronoctua/consent.json")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
 
     def generation(kind):
         d = [d for d in player({"ask": "look"}).get("desks", []) if d["kind"] == kind]
@@ -140,7 +141,7 @@ pkgs.testers.runNixOSTest {
             d = [d for d in player({"ask": "look"}).get("desks", []) if d["kind"] == kind]
             if d and d[0]["generation"] > before and not d[0].get("busy"):
                 return player({"ask": "desk", "kind": kind})
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         raise AssertionError(f"the {kind} desk never settled: {player({'ask': 'look'}).get('desks')}")
 
     def station(live=True):
@@ -163,7 +164,7 @@ pkgs.testers.runNixOSTest {
             "--setenv=HOME=/root --setenv=RUST_LOG=ronoctua_player=debug ${setenv} "
             "${player}/bin/ronoctua-player"
         )
-        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=30)
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=timedelta(seconds=30))
 
     with subtest("nothing is asked of a directory the person did not let"):
         for query in ({"what": "radio", "list": "countries"}, {"what": "tv", "list": "countries"}):
@@ -180,8 +181,8 @@ pkgs.testers.runNixOSTest {
         # AND A STATION PLAYED while the radio is not let: no click.
         said = player({"ask": "put", "what": [station()], "replace": True})
         assert said["say"] == "done", said
-        hosts.wait_until_succeeds("grep -q tone.flac /var/log/nginx/stream.log", timeout=60)
-        machine.sleep(5)
+        hosts.wait_until_succeeds("grep -q tone.flac /var/log/nginx/stream.log", timeout=timedelta(minutes=1))
+        machine.sleep(duration=timedelta(seconds=5))
         assert asked() == [], f"a directory was asked before it was let: {asked()}"
         player({"ask": "stop"})
 
@@ -210,20 +211,20 @@ pkgs.testers.runNixOSTest {
         said = player({"ask": "put", "what": [station()], "replace": True})
         assert said["say"] == "done", said
         hosts.wait_until_succeeds(
-            f"test $(grep -c tone.flac /var/log/nginx/stream.log) -gt {streamed_before}", timeout=60
+            f"test $(grep -c tone.flac /var/log/nginx/stream.log) -gt {streamed_before}", timeout=timedelta(minutes=1)
         )
         for _ in range(30):
             if clicks():
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert len(clicks()) == 1, f"one start, {len(clicks())} clicks"
         sound = asked("stream")[streamed_before][0]
         assert clicks()[0][0] >= sound, f"the click ({clicks()[0][0]}) came before the sound ({sound})"
-        machine.sleep(5)
+        machine.sleep(duration=timedelta(seconds=5))
         assert len(clicks()) == 1, f"one start, and the click came again: {clicks()}"
 
     with subtest("what played is kept among the recent, and a star is kept by the daemon"):
-        machine.wait_until_succeeds("grep -q ${uuid} /root/.local/state/ronoctua/player-recent.json", timeout=30)
+        machine.wait_until_succeeds("grep -q ${uuid} /root/.local/state/ronoctua/player-recent.json", timeout=timedelta(seconds=30))
         said = player({"ask": "favourite", "kind": "radio", "id": "${uuid}", "on": True})
         assert said["say"] == "done", said
         kept = json.loads(machine.succeed("cat /root/.config/ronoctua/player-favourites.json"))
@@ -241,9 +242,9 @@ pkgs.testers.runNixOSTest {
         said = player({"ask": "put", "what": [station()], "replace": True})
         assert said["say"] == "done", said
         hosts.wait_until_succeeds(
-            f"test $(grep -c tone.flac /var/log/nginx/stream.log) -gt {streamed_before}", timeout=60
+            f"test $(grep -c tone.flac /var/log/nginx/stream.log) -gt {streamed_before}", timeout=timedelta(minutes=1)
         )
-        machine.sleep(5)
+        machine.sleep(duration=timedelta(seconds=5))
         assert len(clicks()) == before, f"a click while the radio is not let: {clicks()}"
 
     with subtest("nothing panicked"):

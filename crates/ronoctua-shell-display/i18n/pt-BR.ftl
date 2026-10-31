@@ -38,7 +38,6 @@ display-heading-screens = Telas
 display-heading-every = Todas elas
 display-heading-picture = A imagem
 display-heading-light = A luz
-display-heading-session = A sessão
 display-heading-arrangement = Onde elas ficam
 display-heading-forgetting = Esquecer os ajustes desta tela?
 display-heading-keeping = Fica assim?
@@ -59,7 +58,6 @@ display-text-size = Tamanho do texto
 # espera. Diz o que foi MEDIDO — ver docs/PENDING.md — e nunca promete um
 # aplicativo que ninguém observou.
 display-text-reaches = o shell e as janelas dele seguem na hora; aplicativos GTK e Qt seguem conforme redesenham
-display-text-reopens = { $names } ficam no tamanho antigo até reabrir
 display-fact-connector = Soquete
 display-fact-filed = Os ajustes dela seguem
 display-fact-size = Tela
@@ -74,10 +72,8 @@ display-turn = Giro
 display-place = Posição
 display-vary = Taxa variável
 display-brightness = Brilho
-display-first = Abre com o foco aqui
 display-vary-cannot = o hardware não consegue
 display-vary-always = sempre
-display-vary-on-demand = só quando uma janela pede
 display-light-is-roots = o arquivo é do root — a regra que o abre não rodou aqui
 display-light-on-its-buttons = O brilho deste monitor está nos botões dele.
 display-turn-and-picture = { $set } (a imagem está { $picture })

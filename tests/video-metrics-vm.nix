@@ -206,6 +206,7 @@ pkgs.testers.runNixOSTest {
     in
     ''
       import json, time
+      from datetime import timedelta
 
       user = "${user}"
       uid = "${uid}"
@@ -273,7 +274,7 @@ pkgs.testers.runNixOSTest {
           )
           as_person("systemctl --user start ronoctua-brain.service")
           machine.wait_until_succeeds(
-              f"su - {user} -c 'XDG_RUNTIME_DIR={run_dir} {brain} look' >/dev/null", timeout=60
+              f"su - {user} -c 'XDG_RUNTIME_DIR={run_dir} {brain} look' >/dev/null", timeout=timedelta(minutes=1)
           )
           assert "video-metrics" in [t["id"] for t in mind()["tasks"]]
           as_person(f"{brain} run video-metrics")
@@ -284,7 +285,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               f"su - {user} -c 'XDG_RUNTIME_DIR={run_dir} systemctl --user is-active "
               "ronoctua-video-metrics-scan.service || true' | grep -qx activating",
-              timeout=240,
+              timeout=timedelta(minutes=4),
           )
           marks = [m for m in mind()["marks"] if m["module"] == "video-metrics"]
           assert [m["what"]["id"]["name"] for m in marks] == ["scanning"], marks
@@ -304,7 +305,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               f"su - {user} -c 'XDG_RUNTIME_DIR={run_dir} {brain} look' "
               "| jq -e '.tasks[] | select(.id == \"video-metrics\") | .last.kind == \"done\"'",
-              timeout=120,
+              timeout=timedelta(minutes=2),
           )
           m = mind()
           assert not [x for x in m["marks"] if x["module"] == "video-metrics"], m["marks"]
@@ -342,7 +343,7 @@ pkgs.testers.runNixOSTest {
           )
           as_person("systemctl --user start ronoctua-brain.service")
           machine.wait_until_succeeds(
-              f"su - {user} -c 'XDG_RUNTIME_DIR={run_dir} {brain} look' >/dev/null", timeout=60
+              f"su - {user} -c 'XDG_RUNTIME_DIR={run_dir} {brain} look' >/dev/null", timeout=timedelta(minutes=1)
           )
           marks = [m for m in mind()["marks"] if m["module"] == "video-metrics"]
           assert marks == [], f"a killed scan's report marked the modeline: {marks}"

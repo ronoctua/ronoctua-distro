@@ -24,7 +24,12 @@
 #      exactly — the slots hold the tokens, and the theme is the one a fresh
 #      machine shows;
 #   4. leaving gives the console its own palette back, and a cleared line is
-#      blank (the console erases with position 32).
+#      blank (the console erases with position 32);
+#   5. what is typed after the keyboard is answered comes out on its map: the
+#      UK answer carried in the answers handed on (`--answers`), and then `us`
+#      chosen on its screen, each typed on the machine's name with the keys
+#      the two maps disagree on (`" @ # ~` against `@ " \ |`); and the
+#      `host.nix` the installer writes names the console's map of the answer.
 {
   pkgs,
   ronoctua,
@@ -64,6 +69,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${builtins.readFile ./console-cells.py}
 
     themes, theme = "${ronoctua.themed}", "${ronoctua.defaultTheme}"
@@ -97,7 +104,7 @@ pkgs.testers.runNixOSTest {
     with subtest("the cursor's row is a band and a colour, the question its own tone"):
         uefi.send_chars("clear; ronoctua-install\n")
         uefi.wait_until_tty_matches("1", "Esc")
-        uefi.sleep(2)
+        uefi.sleep(duration=timedelta(seconds=2))
         uefi.screenshot("installer")
         grid = cells(uefi, 1, glyphs)
         for line in grid[:6]:
@@ -116,7 +123,7 @@ pkgs.testers.runNixOSTest {
 
         # THE CURSOR FOLLOWS THE KEY: a band drawn once is not a cursor.
         uefi.send_key("down")
-        uefi.sleep(1)
+        uefi.sleep(duration=timedelta(seconds=1))
         moved = cells(uefi, 1, glyphs)
         now = [y for y in options if moved[y][0][2] != ground]
         assert now == [here + 1], f"down moved the band from {here} to {now}"
@@ -133,10 +140,10 @@ pkgs.testers.runNixOSTest {
 
     with subtest("leaving gives the console its own palette back"):
         uefi.send_key("ctrl-c")
-        uefi.sleep(1)
+        uefi.sleep(duration=timedelta(seconds=1))
         uefi.send_chars("clear; echo palette-back\n")
         uefi.wait_until_tty_matches("1", "palette-back")
-        uefi.sleep(1)
+        uefi.sleep(duration=timedelta(seconds=1))
         shot = screen_dump(uefi)
         inks = {
             pixel(shot, x, y)
@@ -153,5 +160,80 @@ pkgs.testers.runNixOSTest {
             for y in range(height)
         }
         assert row == {"000000"}, f"a cleared row shows {sorted(row)}"
+
+    # THE KEYS the UK and the US maps disagree on (QEMU's names are a US
+    # keyboard's positions), between two letters both type alike.
+    PROBE = ["k", "x", "shift-2", "shift-apostrophe", "backslash", "shift-backslash", "k", "x"]
+    UK, US = 'kx"@#~kx', 'kx@"\\|kx'
+
+    def screen_of(m):
+        return "\n".join(text_of(line) for line in cells(m, 1, glyphs))
+
+    def shows(m, wanted, seconds=30):
+        for _ in range(seconds):
+            text = screen_of(m)
+            if wanted in text:
+                return text
+            m.sleep(duration=timedelta(seconds=1))
+        raise Exception(f"{wanted!r} never came on the console:\n{text}")
+
+    def typed_on_the_name(m):
+        shows(m, "Machine name")
+        for k in PROBE:
+            m.send_key(k)
+
+    # THE LIST'S ORDER is base.lst's, the file the installer reads.
+    layouts, section = [], None
+    for line in open("${pkgs.xkeyboard_config}/share/X11/xkb/rules/base.lst", encoding="utf-8"):
+        if line.startswith("!"):
+            section = line.split()[1]
+        elif section == "layout" and line.strip():
+            layouts.append(line.split()[0])
+
+    with subtest("the console types the keyboard answered, from the moment it is answered"):
+        # ANSWERS HANDED ON: the UK keyboard, resumed at the machine's name.
+        uefi.succeed(
+            "printf '%s\\n' RONOCTUA_INST_LANGUAGE=en-GB RONOCTUA_INST_KEYBOARD=gb"
+            " RONOCTUA_INST_KEYBOARD_VARIANT= RONOCTUA_INST_RESUME=inst-hostname > /tmp/answers"
+        )
+        uefi.send_chars("clear; ronoctua-install --answers /tmp/answers\n")
+        # No TPM here: the rehearsal's stop first, and its second row goes on.
+        shows(uefi, "See the rest of the preview")
+        uefi.send_key("down")
+        uefi.send_key("ret")
+        typed_on_the_name(uefi)
+        shows(uefi, UK)
+
+        # BACK TO THE LAYOUT, and `us` chosen on its screen: the variant,
+        # the accent key, the formats and the zone go by as they open.
+        for _ in range(5):
+            uefi.send_key("esc")
+        shows(uefi, "Keyboard layout")
+        moves = layouts.index("us") - layouts.index("gb")
+        for _ in range(abs(moves)):
+            uefi.send_key("down" if moves > 0 else "up")
+        uefi.sleep(duration=timedelta(seconds=1))
+        grid = cells(uefi, 1, glyphs)
+        ground = grid[0][-1][2]
+        banded = [text_of(line).strip() for line in grid if line[0][2] != ground]
+        assert any(t.startswith("us ") for t in banded), f"the cursor is not on us: {banded}"
+        uefi.send_key("ret")
+        shows(uefi, "Layout variant")
+        for _ in range(4):
+            uefi.send_key("ret")
+        typed_on_the_name(uefi)
+        shows(uefi, US)
+        uefi.send_key("ctrl-c")
+
+    with subtest("the host.nix the installer writes names the console's map of the answer"):
+        said = uefi.succeed(
+            "RONOCTUA_INST_DISK=/dev/disk/by-id/not-a-disk RONOCTUA_INST_HOSTNAME=noctua-console"
+            " RONOCTUA_INST_PASSWORD=console-password RONOCTUA_INST_PASSPHRASE=console-passphrase"
+            " RONOCTUA_INST_BELONGINGS=git@example.org:someone/belongings.git"
+            " RONOCTUA_INST_BELONGINGS_ACCESS=/run/keys/deploy"
+            " RONOCTUA_INST_BELONGINGS_PASSPHRASE=console-belongings-passphrase"
+            " RONOCTUA_INST_KEYBOARD=gb ronoctua-install </dev/null"
+        )
+        assert '  ronoctua.keyboard.console = "gb";' in said, said
   '';
 }

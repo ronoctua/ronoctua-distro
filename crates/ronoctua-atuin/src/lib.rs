@@ -119,6 +119,13 @@ pub enum Order {
     },
     /// Turn the modeline's mark.
     Mark(prefs::Mark),
+    /// Fetch the encryption key, to be shown once — answered as
+    /// [`Event::Key`].
+    ///
+    /// AN ORDER, ON THE THREAD, because `atuin key` is a process: the door
+    /// ran it on its own loop, and a door's loop is the whole door — its
+    /// keys, its frames and, for the footer, the desktop.
+    ShowKey,
 }
 
 /// What a door hears back.
@@ -143,6 +150,15 @@ pub struct Hand {
 }
 
 impl Hand {
+    /// A hand whose orders arrive on the receiver given back, with no thread
+    /// and no `atuin` behind it — for a door's tests only.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn listening() -> (Self, mpsc::Receiver<Order>) {
+        let (orders, inbox) = mpsc::channel();
+        (Self { orders }, inbox)
+    }
+
     /// Asks for something.
     pub fn send(&self, order: Order) {
         if self.orders.send(order).is_err() {
@@ -303,6 +319,8 @@ fn carry_out<F: Fn(Event)>(order: &Order, on_event: &F) -> Result<()> {
         Order::Mark(mark) => {
             prefs::write(&prefs::Preferences { mark: *mark }).map_err(|e| anyhow::anyhow!("{e}"))
         }
+        // THE KEY GOES BACK AS ITS OWN EVENT, which both doors hand the view.
+        Order::ShowKey => cli::key().map(|key| on_event(Event::Key(key))),
     }
     .inspect(|()| {
         if matches!(order, Order::LogOut) {

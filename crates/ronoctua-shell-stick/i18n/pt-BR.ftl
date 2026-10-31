@@ -88,5 +88,7 @@ stick-not-let-host = { $host } não está permitido: permita o GitHub nesta vist
 stick-busy-writing = Um pendrive está sendo gravado agora. Espere ele terminar (a última gravação, abaixo) antes de gravar outro.
 stick-busy-waiting = Uma gravação já espera a imagem dela baixar. Desista dela na fila para escolher outro drive.
 stick-busy-stopped = Um gravador ainda esperava uma imagem que ninguém baixava; ele foi mandado parar. Escolha o drive de novo daqui a pouco.
+stick-busy-preparing = Outra gravação está sendo preparada: a pergunta ou a senha dela ainda está aberta. Responda ou espere ela começar antes de gravar outra.
+stick-busy-unprepared = A gravação não pôde ser preparada: a pasta em que ela é preparada não aceitou um arquivo. Nada foi iniciado.
 stick-no-writer = Esta máquina não tem o gravador de pendrive instalado.
 stick-no-cache = Não há pasta de cache para baixar a imagem.

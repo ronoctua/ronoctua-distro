@@ -106,7 +106,7 @@ impl History {
     /// What the view asked for, carried out through the footer's thread.
     fn carried(&mut self, errand: Errand, way: &mut dyn Doorway) {
         let hand = region::kept::<Hand>(way);
-        carry_out(errand, &mut self.view, hand.as_deref(), way);
+        carry_out(errand, hand.as_deref(), way);
     }
 }
 
@@ -235,29 +235,24 @@ impl Region for History {
 }
 
 /// CARRIES OUT WHAT THE VIEW ASKED FOR, in either door — the footer's region
-/// and the window — each with its view and the line it asks Atuin through
-/// (`hand`: the footer's own thread, or the window's).
+/// and the window — each with the line it asks Atuin through (`hand`: the
+/// footer's own thread, or the window's). What comes back — the key
+/// included — arrives on that thread's events, which each door hands its
+/// view.
 ///
 /// One handler, so the two doors cannot do one errand two ways: what is said
 /// is said in the door it was asked in, for as long as its class says.
-pub fn carry_out(errand: Errand, view: &mut View, hand: Option<&Hand>, way: &mut dyn Doorway) {
+pub fn carry_out(errand: Errand, hand: Option<&Hand>, way: &mut dyn Doorway) {
     match errand {
         Errand::Nothing => {}
         Errand::Close => way.close(),
         Errand::Order(order) => ask(order, hand, way),
-        // THE KEY IS FETCHED HERE, because `atuin key` is a process and the
-        // door's loop is one thread — but it is a single short call, not a
-        // wait on a socket.
-        Errand::ShowKey => match ronoctua_atuin::cli::key() {
-            Ok(key) => view.took_the_key(key),
-            Err(e) => {
-                let said = way.texts().t_with(
-                    crate::key::ECHO_ATUIN_REFUSED,
-                    &[("reason", &e.to_string())],
-                );
-                way.say(said, crate::echo::Echo::Normal);
-            }
-        },
+        // THE KEY IS FETCHED ON ATUIN'S THREAD, never here: `atuin key` is a
+        // process, and the door's loop is the whole door — nothing may block
+        // it. The key comes back as `Event::Key`, which the footer tells the
+        // region (`heard`) and the window hands the view; a refusal as the
+        // order's `Done`, said by `history_words::said_when_done` in both.
+        Errand::ShowKey => ask(Order::ShowKey, hand, way),
         // ON THIS DOOR'S LINE — the footer's minibuffer, the window's own —
         // hidden when the view says so, which also keeps the answer out of
         // the log; the answer comes back to `answered`.
@@ -339,15 +334,43 @@ mod tests {
     /// in the window's alike.
     #[test]
     fn a_question_is_asked_alike_in_both_doors() {
-        let mut view = View::fresh();
         let mut way = footer(Vec::new());
-        carry_out(Errand::Ask(Question::PASSWORD), &mut view, None, &mut way);
+        carry_out(Errand::Ask(Question::PASSWORD), None, &mut way);
         assert!(matches!(
             way.owed.first(),
             Some(region::Effect::Ask(line)) if line.id == Question::PASSWORD.id && line.secret
         ));
         let mut ui = crate::door::Ui::for_tests(texts());
-        carry_out(Errand::Order(Order::Sync), &mut view, None, &mut ui);
+        carry_out(Errand::Order(Order::Sync), None, &mut ui);
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(texts().t(crate::key::ATUIN_ABSENT).as_str())
+        );
+    }
+
+    /// FAILS IF: showing the key runs `atuin key` on the door's own loop —
+    /// a process the door would wait for, its keys and frames with it —
+    /// instead of sending the order to Atuin's thread, in either door; or a
+    /// door with no Atuin says anything but that it is not installed.
+    #[test]
+    fn the_key_is_asked_of_atuins_thread_in_both_doors() {
+        let (hand, orders) = Hand::listening();
+        let mut way = footer(Vec::new());
+        carry_out(Errand::ShowKey, Some(&hand), &mut way);
+        assert_eq!(orders.try_recv().ok(), Some(Order::ShowKey));
+        assert!(
+            !way.owed
+                .iter()
+                .any(|e| matches!(e, region::Effect::Say(..))),
+            "{:?}",
+            way.owed
+        );
+        let mut ui = crate::door::Ui::for_tests(texts());
+        carry_out(Errand::ShowKey, Some(&hand), &mut ui);
+        assert_eq!(orders.try_recv().ok(), Some(Order::ShowKey));
+        assert!(ui.message.is_none(), "{:?}", ui.message);
+        // NO ATUIN, NO PROCESS: the door says so.
+        carry_out(Errand::ShowKey, None, &mut ui);
         assert_eq!(
             ui.message.as_deref(),
             Some(texts().t(crate::key::ATUIN_ABSENT).as_str())

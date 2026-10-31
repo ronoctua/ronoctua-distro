@@ -4,10 +4,9 @@
 brain-task-system-update = Update the system
 brain-task-system-update-does = Gathers what you declared on your other machines, moves the distro and nixpkgs forward, builds the new system and sets it for the next restart — nothing that runs now is stopped or restarted; that restart tries the new system once and comes back to the last good one by itself if it does not start —, updates your own programs and caches, reclaims store space, and publishes what this machine did. When a new system waits, the run ends telling you to restart.
 
-# ITS COMMANDS. The whole sequence now, its rehearsal, and the two doors of
-# the view that watches it — the footer's region and a window.
+# ITS COMMANDS. The whole sequence now, and the two doors of the view that
+# watches it — the footer's region and a window.
 cmd-system-update = Update the system
-cmd-system-update-rehearsal = Rehearse the update
 cmd-system-update-open = The update, in the footer
 cmd-system-update-watch = The update, in a window
 
@@ -73,19 +72,6 @@ system-update-needs-directory = this directory does not exist
 system-update-needs-writable-file = this file does not exist, or cannot be written to
 system-update-needs-network = NetworkManager says this machine is not connected
 
-# WHAT A FAILURE DOES TO THE REST OF THE SEQUENCE. Two answers and no third:
-# this runs from a unit, and there is nobody to ask.
-system-update-on-failure-stop = if it fails, the sequence stops here
-system-update-on-failure-carry-on = if it fails, the sequence carries on to the next step
-
-# THE FIVE CLASSES A STEP CAN BE. They decide the order laws.
-system-update-kind-move-inputs = moves the pinned inputs
-system-update-kind-apply-configuration = applies the configuration
-system-update-kind-upgrade-software = updates programs you installed yourself
-system-update-kind-refresh-cache = refreshes a cache
-system-update-kind-realize-parts = realizes the parts
-system-update-kind-reclaim-space = reclaims disk space
-
 # THE VIEW THAT WATCHES A RUN, in both doors: its keys and what each says under
 # the pointer, `update now` (the key the view teaches for the whole sequence),
 # what starting said, and the word beside each step.
@@ -142,11 +128,6 @@ system-update-needs-file = this file does not exist
 system-update-needs-power = the machine is on battery below the floor, and nobody said yes to this run
 system-update-needs-free-space = the disk is nearly full, even after collecting the store's garbage
 system-update-needs-not-held = the machine is held at a revision: the distro and nixpkgs stay where they are
-
-system-update-kind-gather = gathers what you declared
-system-update-kind-migrate = migrates the machine's folder
-system-update-kind-reconcile-declared = brings in what is declared
-system-update-kind-publish = publishes what this machine did
 
 system-update-declined-empty = This machine has not synced its belongings yet: there is no key to sign with, and the update goes on.
 system-update-declined-no-passphrase = Your identity is not open in this session: nothing was signed here. What your other machines signed still reaches this one; a change made here waits until your next sync signs it.

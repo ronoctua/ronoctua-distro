@@ -54,7 +54,8 @@
 //! would ([`crate::bless`]): it must not arm a new trial against a last good
 //! system that is not the last one, nor build again the system that did not
 //! boot. That one is refused (`did-not-boot`) until the distro or `nixpkgs`
-//! moves and another system is built.
+//! moves and another system is built — or the person asks to try it again
+//! (`try-again`), once ([`crate::again`]).
 
 use ronoctua_person::frontier::Download;
 use ronoctua_person::state::{ApplyResult, LastApply, MachineState, TrialOutcome};
@@ -64,8 +65,8 @@ use crate::build::{Built, Unbuilt};
 use crate::loader::Loader;
 use crate::system::{self, needed};
 use crate::{
-    APPLIED_LOCK, Applied, Applying, DISTRO_INPUT, Machine, NIXPKGS_INPUT, Refusal, Why, bless,
-    boot, boots, build, disk, dry, guard, mirror, run, say, trial,
+    APPLIED_LOCK, Applied, Applying, DISTRO_INPUT, Machine, NIXPKGS_INPUT, Refusal, Why, again,
+    bless, boot, boots, build, disk, dry, guard, mirror, run, say, trial,
 };
 
 /// The attribute the machine flake builds, or a refusal.
@@ -439,15 +440,26 @@ fn switch_to(
     // THE SYSTEM THAT DID NOT BOOT is not tried again: the next update would
     // switch into it, and the next restart fail the same way. A newer distro
     // revision, or a `nixpkgs` the machine rolled on, builds another system,
-    // and that one is tried.
+    // and that one is tried — and so is this one, once, when the person asked
+    // (`try-again`: a trial that failed by chance, [`again`]).
+    let asked_again = again::forgiven(m, state, toplevel);
+    if asked_again {
+        say(
+            6,
+            "this is the system that did not start when it was tried, and it was asked to be tried \
+             again: it is",
+        );
+    }
     if let Some(t) = &state.trial
         && t.outcome == TrialOutcome::Failed
         && t.toplevel == toplevel
+        && !asked_again
     {
         say(
             3,
             "this is the system that did not start when it was tried (or was rolled back): it is \
-             not tried again before the distro or nixpkgs moves on (did-not-boot)",
+             not tried again before the distro or nixpkgs moves on, or it is asked to be \
+             (did-not-boot)",
         );
         return Err(refuse(
             m,
@@ -525,6 +537,10 @@ fn switch_to(
         ));
     }
     locks.adopt(m);
+    // A REQUEST TO TRY AGAIN IS SPENT: a system is set up, and the record's
+    // trial is about to be its own — a retry that fails again is refused
+    // again until the person asks again.
+    again::spent(m);
 
     // THE SWITCH. 4 is "switched, and some units it started failed": the
     // new system runs, and that is not a failed apply. FOR THE NEXT BOOT

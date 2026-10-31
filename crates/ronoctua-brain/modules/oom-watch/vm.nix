@@ -33,12 +33,12 @@
         )
         machine.wait_until_succeeds(
             "journalctl -k --no-pager | grep 'Memory cgroup out of memory: Killed process' > /dev/null",
-            timeout=120,
+            timeout=timedelta(minutes=2),
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'notification decided' "
             "| grep 'catalogue=\"oom-watch-killed\"' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         # WHAT DIED AND WHERE: the kernel's line and the unit's, as one.
         said = footer_journal()
@@ -46,7 +46,7 @@
         # ONCE: the two lines of the kill, and the few seconds a cursor
         # re-reads, are one notification — waited for past the pairing's
         # patience before it is counted.
-        machine.sleep(10)
+        machine.sleep(duration=timedelta(seconds=10))
         decided = [
             l for l in footer_journal().splitlines()
             if "notification decided" in l and 'catalogue="oom-watch-killed"' in l
@@ -66,21 +66,21 @@
             "-- ${pkgs.coreutils}/bin/tail /dev/zero"
         )
         machine.wait_until_succeeds(
-            "systemctl --user --machine=noctua@ is-active hog.service", timeout=30
+            "systemctl --user --machine=noctua@ is-active hog.service", timeout=timedelta(seconds=30)
         )
         machine.wait_until_fails(
-            "systemctl --user --machine=noctua@ is-active hog.service", timeout=180
+            "systemctl --user --machine=noctua@ is-active hog.service", timeout=timedelta(minutes=3)
         )
         # THE BRAIN TOLD IT, with oomd's own measure: oomd's line was heard
         # (the follower reads it at `notice`) and joined to the unit's.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'closed for lack of memory' "
             "| grep 'what=hog.service' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         # PAST THE PAIRING'S PATIENCE and the bus's arrival, whichever came
         # first, before anything is counted.
-        machine.sleep(10)
+        machine.sleep(duration=timedelta(seconds=10))
         said = footer_journal()[before:]
         told = [l for l in said.splitlines() if "closed for lack of memory" in l and "what=hog.service" in l]
         assert len(told) == 1, "one kill told " + str(len(told)) + " times:\n" + "\n".join(told)

@@ -17,6 +17,9 @@
 //!   a download that did not finish), and the unit carries that reason into
 //!   its answer, so the view says what happened instead of "given up".
 //!
+//! And one the unit never reads: [`PREPARING_FILE`], the lock between the
+//! two doors ([`Preparing`]).
+//!
 //! The answer comes back in [`crate::PROGRESS_FILE`], which is ROOT's, in a
 //! folder that is root's (`0755`): a file root writes into a folder the
 //! person owns is a symlink away from any file on the machine.
@@ -46,6 +49,10 @@ pub const READY_FILE: &str = "ready";
 
 /// The person gave the write up.
 pub const CANCEL_FILE: &str = "cancel";
+
+/// A door is preparing a write: held from before the password is asked
+/// until the queue took the job ([`Preparing`]).
+pub const PREPARING_FILE: &str = "preparing";
 
 /// The most bytes of a request.
 pub const REQUEST_MOST_BYTES: u64 = 64 << 10;
@@ -126,6 +133,105 @@ pub fn cancel_reason(staging: &Path, owner: u32) -> Option<Why> {
 pub fn clear(staging: &Path) {
     for name in [READY_FILE, CANCEL_FILE, REQUEST_FILE] {
         let _ = std::fs::remove_file(staging.join(name));
+    }
+}
+
+/// A write being prepared by THIS process — the lock between the two doors.
+///
+/// # Why there is one
+///
+/// Between the sudo door starting the writer and the queue taking the job,
+/// the writer waits with no job armed. A second `yes` in the other door at
+/// that instant read exactly that — "a writer waiting for nobody" — and told
+/// it to stop, and the first write then failed saying its writer did not
+/// run. So a `yes` takes this FIRST, before the machine is read and before
+/// the password is asked, and lets it go once the queue holds the job (or
+/// nothing was started): a second `yes` meanwhile finds it and is refused
+/// with a sentence, and breaks nothing.
+///
+/// Created with `create_new`, so two takers cannot both have it; holding the
+/// taker's PID, so a door that died holding it — a crash during the password
+/// — does not refuse every write until the next boot.
+#[derive(Debug)]
+pub struct Preparing {
+    path: std::path::PathBuf,
+}
+
+/// Why a [`Preparing`] was not taken.
+#[derive(Debug)]
+pub enum NotPrepared {
+    /// Another door is preparing a write.
+    Another,
+    /// The folder would not take the file.
+    Failed(std::io::Error),
+}
+
+impl Preparing {
+    /// Takes the preparation in `staging`, or says who has it.
+    ///
+    /// # Errors
+    ///
+    /// [`NotPrepared::Another`] while a living process holds it;
+    /// [`NotPrepared::Failed`] when the file could not be made.
+    pub fn take(staging: &Path) -> Result<Self, NotPrepared> {
+        let path = staging.join(PREPARING_FILE);
+        // TWICE AT MOST: once, and once more after a dead holder's file was
+        // taken away. A file that is back by then is a living taker's.
+        for _ in 0..2 {
+            let made = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc_nofollow())
+                .open(&path);
+            match made {
+                Ok(mut f) => {
+                    let mine = Self { path };
+                    f.write_all(std::process::id().to_string().as_bytes())
+                        .map_err(NotPrepared::Failed)?;
+                    return Ok(mine);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if held(&path) {
+                        return Err(NotPrepared::Another);
+                    }
+                    let _ = std::fs::remove_file(&path);
+                }
+                Err(e) => return Err(NotPrepared::Failed(e)),
+            }
+        }
+        Err(NotPrepared::Another)
+    }
+}
+
+impl Drop for Preparing {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Whether the preparation at `path` is held by a living process: its PID
+/// answers a signal 0. A file with no PID yet is a taker between its
+/// `create_new` and its write — held, unless it is older than [`GRACE`],
+/// which no such moment is.
+fn held(path: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    let pid = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| t.trim().parse::<i32>().ok())
+        .and_then(rustix::process::Pid::from_raw);
+    match pid {
+        Some(pid) => !matches!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        ),
+        None => meta
+            .modified()
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_none_or(|age| age < GRACE),
     }
 }
 
@@ -466,6 +572,50 @@ mod tests {
         stage(&dir, &request()).unwrap();
         let later = SystemTime::now() + GRACE + Duration::from_secs(5);
         assert!(!fresh(&dir, READY_FILE, me, later));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a second preparation is given while one is held — the two
+    /// doors' `yes` at one instant — or one is not let go with its holder,
+    /// or a dead holder's file refuses every write after it.
+    #[test]
+    fn a_preparation_is_held_by_one_and_goes_with_it() {
+        let dir = scratch("preparing");
+        let first = Preparing::take(&dir).expect("the first takes it");
+        assert!(matches!(Preparing::take(&dir), Err(NotPrepared::Another)));
+        let mode = std::fs::metadata(dir.join(PREPARING_FILE)).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // NOT EMPTIED WITH THE REST: `clear` runs while it is held.
+        clear(&dir);
+        assert!(dir.join(PREPARING_FILE).exists(), "clear took the lock");
+        drop(first);
+        assert!(
+            !dir.join(PREPARING_FILE).exists(),
+            "the lock outlived its holder"
+        );
+        let again = Preparing::take(&dir).expect("taken again once let go");
+        drop(again);
+        // A DEAD HOLDER'S, left by a crash: no process has a PID above the
+        // kernel's ceiling, so this one is certainly gone.
+        std::fs::write(dir.join(PREPARING_FILE), i32::MAX.to_string()).unwrap();
+        let taken = Preparing::take(&dir).expect("a dead holder's lock is taken over");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(PREPARING_FILE)).unwrap(),
+            std::process::id().to_string()
+        );
+        drop(taken);
+        // ONE WITH NO PID YET is a taker between its two steps — held, until
+        // it is older than any such moment.
+        std::fs::write(dir.join(PREPARING_FILE), b"").unwrap();
+        assert!(matches!(Preparing::take(&dir), Err(NotPrepared::Another)));
+        let long_ago = SystemTime::now() - GRACE - Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(dir.join(PREPARING_FILE))
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        assert!(Preparing::take(&dir).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -312,6 +312,7 @@ pkgs.testers.runNixOSTest {
       ${xvfb.prelude}
       import json
       import shlex
+      from datetime import timedelta
 
       user = "${machine.ronoctua.user}"
       home = "${machine.users.users.${machine.ronoctua.user}.home}"
@@ -379,7 +380,7 @@ pkgs.testers.runNixOSTest {
       def settled(want):
           machine.wait_until_succeeds(
               f"python3 -c 'import json,sys; sys.exit(json.load(open(\"{list}\"))[\"extensions\"] != {json.dumps(want)})'",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
 
 
@@ -416,7 +417,7 @@ pkgs.testers.runNixOSTest {
       machine.wait_until_succeeds(
           "test -x /nix/var/nix/profiles/ronoctua/parts/vscode/v1/bin/code"
           " && test -e /var/lib/ronoctua-parts/view/bin/code",
-          timeout=300,
+          timeout=timedelta(minutes=5),
       )
 
       with subtest("the policy is the machine's, where the pinned build reads it"):
@@ -441,7 +442,7 @@ pkgs.testers.runNixOSTest {
 
       with subtest("the record waits on a folder that is not there, and does not fail"):
           machine.wait_until_succeeds(
-              f"systemctl --user --machine={user}@ is-active ronoctua-vscode-record.path", timeout=120
+              f"systemctl --user --machine={user}@ is-active ronoctua-vscode-record.path", timeout=timedelta(minutes=2)
           )
           machine.fail(f"test -e {home}/.vscode")
           said = manager("show ronoctua-vscode-record.service -p Result -p ActiveState")
@@ -450,14 +451,14 @@ pkgs.testers.runNixOSTest {
 
       with subtest("a manifest written in place records the person's list, Marketplace ids only"):
           write_manifest([entry("Golang.go"), entry("ms-python.python"), entry("local.hand-made", "vsix")])
-          machine.wait_until_succeeds(f"test -e {list}", timeout=60)
+          machine.wait_until_succeeds(f"test -e {list}", timeout=timedelta(minutes=1))
           settled(["golang.go", "ms-python.python"])
 
       with subtest("another machine's id stays; one it took out stays out; an uninstall here leaves"):
           # ANOTHER MACHINE'S LIST LANDS: `far.away` added there, `ms-python`
           # taken out there — though this machine still has it.
           write_list(["far.away", "golang.go"])
-          machine.sleep(3)
+          machine.sleep(duration=timedelta(seconds=3))
           settled(["far.away", "golang.go"])
           write_manifest([entry("ms-python.python")])
           settled(["far.away"])
@@ -537,7 +538,7 @@ pkgs.testers.runNixOSTest {
                   logged("/root/code-on")
                   + " | grep 'PolicyConfiguration#changed' | grep 'telemetry.telemetryLevel'"
                   " | grep off > /dev/null",
-                  timeout=180,
+                  timeout=timedelta(minutes=3),
               )
           except Exception:
               print(main_log("/root/code-on"))
@@ -547,7 +548,7 @@ pkgs.testers.runNixOSTest {
       with subtest("its window is the compositor's own"):
           machine.wait_until_succeeds(
               f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree | grep '\"app_id\"' > /dev/null",
-              timeout=120,
+              timeout=timedelta(minutes=2),
           )
           windows = windows_by_app_id(sock)
           print(f"the windows: {windows}")
@@ -566,38 +567,38 @@ pkgs.testers.runNixOSTest {
           cw, ch, cx, cy = compositor_geometry()
           # THE EDITOR'S AREA FIRST: 1.119 opens with its chat's input in
           # focus, which takes the keys (measured: the query landed there).
-          machine.sleep(10)
+          machine.sleep(duration=timedelta(seconds=10))
           machine.succeed(
               f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove {cx + x + w // 4} {cy + y + h // 3} click 1"
           )
-          machine.sleep(2)
+          machine.sleep(duration=timedelta(seconds=2))
           machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key --clearmodifiers ctrl+comma")
-          machine.sleep(8)
+          machine.sleep(duration=timedelta(seconds=8))
           machine.succeed(
               "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool type --delay 50 telemetry.telemetryLevel"
           )
-          machine.sleep(5)
+          machine.sleep(duration=timedelta(seconds=5))
           machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
           machine.succeed(
               f"magick /tmp/screen.xwd -crop {w}x{h}+{cx + x}+{cy + y} +repage /tmp/settings.png"
           )
           machine.copy_from_machine("/tmp/settings.png", "")
           machine.succeed("systemctl stop code-on")
-          machine.wait_until_fails("pgrep -f 'user-data-dir /root/code-o[n]'", timeout=60)
+          machine.wait_until_fails("pgrep -f 'user-data-dir /root/code-o[n]'", timeout=timedelta(minutes=1))
 
       with subtest("without the file, the same start says nothing of the kind"):
           machine.succeed("mv /etc/vscode/policy.json /root/policy.aside")
           start_code("code-off", "/root/code-off")
           machine.wait_until_succeeds(
               logged("/root/code-off") + " | grep 'PolicyConfiguration#initialize' > /dev/null",
-              timeout=180,
+              timeout=timedelta(minutes=3),
           )
-          machine.sleep(10)
+          machine.sleep(duration=timedelta(seconds=10))
           log = main_log("/root/code-off")
           changed = [l for l in log.splitlines() if "PolicyConfiguration#changed" in l]
           assert not any("telemetry.telemetryLevel" in l for l in changed), changed
           machine.succeed("systemctl stop code-off")
-          machine.wait_until_fails("pgrep -f 'user-data-dir /root/code-of[f]'", timeout=60)
+          machine.wait_until_fails("pgrep -f 'user-data-dir /root/code-of[f]'", timeout=timedelta(minutes=1))
           machine.succeed("mv /root/policy.aside /etc/vscode/policy.json")
 
       # A RUST PROJECT, which rust-analyzer starts its server for.
@@ -654,7 +655,7 @@ pkgs.testers.runNixOSTest {
               machine.wait_until_succeeds(
                   "find /root/code-plain/logs -path '*rust-lang.rust-analyzer*' -name '*.log'"
                   " -exec cat {} + 2>/dev/null | grep 'Failed to execute' > /dev/null",
-                  timeout=180,
+                  timeout=timedelta(minutes=3),
               )
           finally:
               print(extension_log("/root/code-plain")[-3000:])
@@ -662,17 +663,17 @@ pkgs.testers.runNixOSTest {
           print(f"the plain package's server: {running!r}")
           assert "server/rust-analyzer" not in running, "the plain package started the server"
           machine.succeed("systemctl stop code-plain")
-          machine.wait_until_fails("pgrep -f 'user-data-dir /root/code-plai[n]'", timeout=60)
+          machine.wait_until_fails("pgrep -f 'user-data-dir /root/code-plai[n]'", timeout=timedelta(minutes=1))
 
       with subtest("in the FHS environment, it runs"):
           start_code("code-fhs", "/root/code-fhs", code, opened)
           try:
-              machine.wait_until_succeeds("pgrep -f 'server/rust-analyze[r]' > /dev/null", timeout=180)
+              machine.wait_until_succeeds("pgrep -f 'server/rust-analyze[r]' > /dev/null", timeout=timedelta(minutes=3))
           finally:
               print(extension_log("/root/code-fhs")[-3000:])
           print(machine.succeed("pgrep -af 'server/rust-analyze[r]'"))
           machine.succeed("systemctl stop code-fhs")
-          machine.wait_until_fails("pgrep -f 'user-data-dir /root/code-fh[s]'", timeout=60)
+          machine.wait_until_fails("pgrep -f 'user-data-dir /root/code-fh[s]'", timeout=timedelta(minutes=1))
 
       # ── THE PERSON'S OWN VS CODE, AS THEIR SESSION STARTS IT ──────────────
       #
@@ -689,7 +690,7 @@ pkgs.testers.runNixOSTest {
           f"systemd-run --user --machine={user}@ --unit=person-xvfb "
           "${pkgs.xorg-server}/bin/Xvfb :98 -screen 0 1280x800x24 -nolisten tcp"
       )
-      machine.wait_until_succeeds("test -S /tmp/.X11-unix/X98", timeout=60)
+      machine.wait_until_succeeds("test -S /tmp/.X11-unix/X98", timeout=timedelta(minutes=1))
 
 
       def start_as_person(unit, data, extra="", program=code, setenv=""):
@@ -704,7 +705,7 @@ pkgs.testers.runNixOSTest {
 
       def stop_as_person(unit, data):
           machine.execute(f"systemctl --user --machine={user}@ stop {unit}")
-          machine.wait_until_fails(f"pgrep -f 'user-data-dir.{data[:-1]}[{data[-1]}]'", timeout=60)
+          machine.wait_until_fails(f"pgrep -f 'user-data-dir.{data[:-1]}[{data[-1]}]'", timeout=timedelta(minutes=1))
 
 
       def servers():
@@ -739,7 +740,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               f"find {data}/logs -path '*rust-lang.rust-analyzer*' -name '*.log' -exec cat {{}} + 2>/dev/null"
               " | grep -E 'Bootstrap error|Using server binary' > /dev/null",
-              timeout=300,
+              timeout=timedelta(minutes=5),
           )
           return extension_log(data)
 
@@ -748,7 +749,7 @@ pkgs.testers.runNixOSTest {
           """The pid of the rust-analyzer server that runs `program`."""
           machine.wait_until_succeeds(
               f"for p in $(pgrep -f 'rust-analyze[r]'); do readlink /proc/$p/exe; done | grep -x '{program}'",
-              timeout=120,
+              timeout=timedelta(minutes=2),
           )
           return next(pid for pid, exe in servers() if exe == program)
 
@@ -803,7 +804,7 @@ pkgs.testers.runNixOSTest {
           machine.execute("pkill -f 'rust-analyze[r]'")
           machine.wait_until_fails(
               f"for p in $(pgrep -f 'rust-analyze[r]'); do readlink /proc/$p/exe; done | grep -x '{patched}'",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           machine.succeed(f"rm -rf {data} && nix-store --delete {patched}")
 
@@ -812,7 +813,7 @@ pkgs.testers.runNixOSTest {
       # the output), VS Code's and Google's, and writes down every TLS
       # greeting.
       machine.succeed("systemctl start vscode-dns")
-      machine.wait_until_succeeds("journalctl -u vscode-dns | grep -i started > /dev/null", timeout=30)
+      machine.wait_until_succeeds("journalctl -u vscode-dns | grep -i started > /dev/null", timeout=timedelta(seconds=30))
 
 
       def heard(since):
@@ -857,7 +858,7 @@ pkgs.testers.runNixOSTest {
           assert "Using server binary at rust-analyzer" in said, said[-3000:]
           machine.wait_until_succeeds(
               f"for p in $(pgrep -f 'rust-analyze[r]'); do readlink /proc/$p/exe; done | grep -x '{toolchains}'",
-              timeout=120,
+              timeout=timedelta(minutes=2),
           )
           print(f"servers: {servers()}")
           machine.fail(f"test -e {data}/{storage}/rust-analyzer")
@@ -870,7 +871,7 @@ pkgs.testers.runNixOSTest {
           # `verifySignature` off (the stand-in cannot sign; the header).
           data = f"{home}/.config/Code"
           start_as_person("code-default", data)
-          machine.wait_until_succeeds(f"grep -qi 'github.copilot-chat' {manifest}", timeout=240)
+          machine.wait_until_succeeds(f"grep -qi 'github.copilot-chat' {manifest}", timeout=timedelta(minutes=4))
           stop_as_person("code-default", data)
           entries = json.loads(machine.succeed(f"cat {manifest}"))
           updated = [e for e in entries if e["identifier"]["id"].lower() == "github.copilot-chat"]
@@ -887,7 +888,7 @@ pkgs.testers.runNixOSTest {
       a_python_file = f"--disable-workspace-trust {home}/hello.py"
 
 
-      def heard_at_start(unit, settings, extra="", seconds=50):
+      def heard_at_start(unit, settings, extra="", alone=timedelta(seconds=50)):
           """A fresh profile of the person's, no extension of theirs, started
           and left alone: every host it reached, and every request."""
           data = f"{home}/{unit}"
@@ -899,12 +900,12 @@ pkgs.testers.runNixOSTest {
           try:
               machine.wait_until_succeeds(
                   f"find {data}/logs -name main.log -exec cat {{}} + 2>/dev/null | grep 'PolicyConfiguration#initialize' > /dev/null",
-                  timeout=180,
+                  timeout=timedelta(minutes=3),
               )
           except Exception:
               print(unit_log(unit))
               raise
-          machine.sleep(seconds)
+          machine.sleep(duration=alone)
           reached, requests = heard(since)
           # WHAT EACH OF ITS PROCESSES WAS STARTED WITH, read while they run.
           ran = machine.succeed(
@@ -950,7 +951,7 @@ pkgs.testers.runNixOSTest {
       rule = "--host-resolver-rules=MAP redirector.gvt1.com ~NOTFOUND"
 
       with subtest("at start-up, VS Code reaches its vendor, and never Google's dictionary"):
-          reached, asked, started = heard_at_start("start-shipped", unsigned, seconds=60)
+          reached, asked, started = heard_at_start("start-shipped", unsigned, alone=timedelta(minutes=1))
           # THE DICTIONARY FIRST: without the rule, this is what fails.
           assert not reached & google, f"VS Code asked Google's dictionary: {sorted(reached & google)}"
           assert reached <= vendor, f"VS Code reached {sorted(reached - vendor)} too"

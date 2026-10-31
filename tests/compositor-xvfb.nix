@@ -203,7 +203,14 @@ rec {
   # a footer that never drew. The footer prints `footer layout resolved
   # width=… height=…` on every relayout, so the last one is the height on
   # screen; nothing new is computed.
+  #
+  # `_datetime` — the driver takes its durations as `timedelta`s, and the
+  # scripts that splice this in import `timedelta` themselves: a second
+  # import of the same name is a lint error (`F811`) in every one of them, so
+  # this prelude imports the module under a name of its own.
   prelude = ''
+    import datetime as _datetime
+
     # WHICH COMPOSITOR IS RUNNING, set by `start_compositor` and read by
     # `windows_now`. `None` until then, so asking before one is up fails with
     # a name rather than with a path made of the word "None".
@@ -240,7 +247,7 @@ rec {
             "systemd-run --unit=xvfb "
             "${pkgs.xorg-server}/bin/Xvfb :99 -screen 0 ${toString width}x${toString height}x24"
         )
-        machine.wait_until_succeeds("test -S /tmp/.X11-unix/X99", timeout=60)
+        machine.wait_until_succeeds("test -S /tmp/.X11-unix/X99", timeout=_datetime.timedelta(minutes=1))
 
 
     def stop_compositor(unit):
@@ -251,7 +258,7 @@ rec {
         the cleanup is so the next one can reuse the same display name.
         """
         machine.succeed(f"systemctl stop {unit}")
-        machine.wait_until_fails(f"systemctl is-active {unit}", timeout=30)
+        machine.wait_until_fails(f"systemctl is-active {unit}", timeout=_datetime.timedelta(seconds=30))
         machine.succeed("rm -f /run/user/0/wayland-* /run/user/0/scroll-ipc.*.sock")
 
 
@@ -291,7 +298,7 @@ rec {
             f"{package}/bin/scroll -c {config}"
         )
         try:
-            machine.wait_until_succeeds(f"test -S /run/user/0/{display}", timeout=90)
+            machine.wait_until_succeeds(f"test -S /run/user/0/{display}", timeout=_datetime.timedelta(seconds=90))
         except Exception:
             print(machine.execute("journalctl -u xvfb --no-pager")[1])
             print(machine.execute(f"journalctl -u {unit} --no-pager")[1])

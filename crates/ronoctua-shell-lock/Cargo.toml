@@ -1,0 +1,50 @@
+[package]
+name = "ronoctua-shell-lock"
+description = "The lock screen: the session locked through the compositor, opened by the account's password or a finger."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# THE LOCK SCREEN (2026-10-31): a door that holds the compositor's lock
+# (`ronoctua_shell_door::session_lock`), asks the account's password on the
+# screen that had the focus and lets a finger in beside it. Its own process —
+# `ronoctua-shell lock`, a unit of the session — so a footer that dies leaves
+# the session locked. It stands on the kit and the door, and nothing of the
+# footer, which holds the idle watcher and starts it.
+[dependencies]
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
+ronoctua-shell-door = { path = "../ronoctua-shell-door" }
+
+ronoctua-tokens = { path = "../ronoctua-tokens" }
+ronoctua-render = { path = "../ronoctua-render" }
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+ronoctua-i18n = { path = "../ronoctua-i18n" }
+# THE ONE BOUNDARY WITH PAM: the password, and the finger.
+ronoctua-pam = { path = "../ronoctua-pam" }
+# The typed password, held as a `Secret` (zeroed when dropped).
+ronoctua-consent = { path = "../ronoctua-consent" }
+# Whether there is a reader and a finger enrolled on it (`fprint`), as the
+# person — the finger is offered only then.
+ronoctua-security = { path = "../ronoctua-security" }
+# The line the password is typed into, wiped when answered, let go or dropped.
+zeroize.workspace = true
+
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The door's and the kit's guards hold in these tests too (`test-support`).
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
+ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR"]

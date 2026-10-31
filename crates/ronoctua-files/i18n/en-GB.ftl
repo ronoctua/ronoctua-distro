@@ -184,10 +184,6 @@ sidebar-eject = eject safely
 sidebar-information = information
 sidebar-unpin = take off the sidebar
 sidebar-format = format
-sidebar-fact-node = device
-sidebar-fact-kind = filesystem
-sidebar-fact-size = size
-sidebar-fact-drive = drive
 # EACH ACTION'S SECOND REGISTER — what it DOES, for somebody who already knows.
 #
 # The label is for whoever is looking for a verb ("delete for good"); this line

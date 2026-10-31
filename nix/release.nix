@@ -122,6 +122,7 @@ let
         coreutils
         gnugrep
         findutils
+        jq
       ];
       text = ''
         repository=${lib.escapeShellArg repository}
@@ -138,17 +139,19 @@ let
 
         Publishes the distro from this checkout, which must be `main`, clean and
         equal to `origin/main`. First it moves the distro's pins to their latest
-        releases (`nix run .#distro-pins`) and, when one moved, commits
-        assets/distro-pins.json alone — signed as this checkout signs — and pushes
-        main: that commit is what it releases, and the only one it ever makes. Then
+        releases (`nix run .#distro-pins`) and its nixpkgs to the newest
+        nixos-unstable (`nix flake update nixpkgs`) and, when one moved, commits
+        assets/distro-pins.json and flake.lock alone — signed as this checkout
+        signs — and pushes main: that commit is what it releases, and the only one
+        it ever makes. Then
         it runs the gate, builds the two reference systems and the ISO (which carries
         its seed), moves `release` forward (only forward), and publishes the ISO as a
         GitHub release with SHA256SUMS.
 
           --dry-run          check everything that costs nothing, say which pins are
                              behind and what would happen; move, build and publish nothing
-          --keep-pins        release with the pins as they are: say which are behind,
-                             and move none
+          --keep-pins        release with the pins and nixpkgs as they are: say which
+                             pins are behind, and move nothing
           --sign             also put the checksums in a signed tag (git tag -s: the
                              signing key is asked for)
           --rollback-to REV  move `release` back to REV, the commit of an earlier
@@ -331,6 +334,13 @@ let
             echo "  $line"
           done <<<"$1"
         }
+        # The nixpkgs the checkout's lock holds: its revision and its day.
+        nixpkgs_of() {
+          jq -er '.nodes[.nodes[.root].inputs.nixpkgs].locked
+            | "\(.rev[0:7]) (\(.lastModified | strftime("%Y-%m-%d")))"' flake.lock
+        }
+        locked=$(nixpkgs_of) ||
+          refuse "flake.lock does not say which nixpkgs it locks" "nothing was changed"
 
         # THE DISTRO'S PINS, MOVED FIRST (the owner's decision, 2026-10-25):
         # every release passes through the pins' update, so what it publishes
@@ -354,10 +364,12 @@ let
             124) echo "  (no answer within $limit s: they were not compared)" ;;
             *) echo "  (they could not be compared: see above)" ;;
           esac
+          echo "the distro's nixpkgs: $locked"
           if [ "$keep" = 1 ]; then
-            echo "  this release goes on with the pins it has (--keep-pins)"
+            echo "  this release goes on with the pins and nixpkgs it has (--keep-pins)"
           else
-            echo "  a release moves them first: one commit of assets/distro-pins.json, pushed to main"
+            echo "  a release moves them first: one commit of assets/distro-pins.json and"
+            echo "  flake.lock, pushed to main"
           fi
         else
           echo "the distro's pins, moved to their latest releases:"
@@ -378,34 +390,95 @@ let
             refuse "$why" "nothing was committed, built or published" "''${left[@]}" \
               "run it again, or release with the pins as they are: nix run .#release -- --keep-pins"
           fi
-          if [ -z "$moved" ]; then
-            echo "  nothing moved"
-          else
-            [ "$moved" = " M assets/distro-pins.json" ] ||
+          case "$moved" in
+            "") echo "  nothing moved" ;;
+            " M assets/distro-pins.json") ;;
+            *)
               refuse "moving the pins changed more than assets/distro-pins.json" \
                 "$(printf '%s\n' "$moved" | head -5)" "nothing was committed, built or published"
-            # THE MESSAGE: what moved, in the tool's own lines.
-            lines=$(grep -e ' -> ' -e ': pinned ' -e ': dropped ' <<<"$said" || true)
-            count=$(grep -c . <<<"$lines" || true)
-            case "$count" in
-              0) subject="distro-pins: the pins are written again in the tool's shape" ;;
-              1) subject="distro-pins: ''${lines%%:*} moves to its latest release" ;;
-              *) subject="distro-pins: $count of the distro's apps move to their latest releases" ;;
-            esac
+              ;;
+          esac
+          # What moved, in the tool's own lines.
+          lines=$(grep -e ' -> ' -e ': pinned ' -e ': dropped ' <<<"$said" || true)
+          count=$(grep -c . <<<"$lines" || true)
+
+          # AND THE DISTRO'S NIXPKGS (the owner's decision, 2026-10-31). Every
+          # machine moves its own nixpkgs each week (invariant 6), so a lock that
+          # only a hand moved left the gate testing an older nixpkgs than the
+          # machines build — which is how `pkgs.lyrebird` turning into another
+          # program got past it. The release moves it as it moves the pins, in
+          # the same commit, before the gate: what is published is what passed
+          # on the nixpkgs a new machine starts on.
+          echo "the distro's nixpkgs, moved to the newest nixos-unstable:"
+          status=0
+          said=$(timeout "$limit" "$nix" flake update nixpkgs 2>&1) || status=$?
+          if [ "$status" != 0 ]; then
+            indented "$said"
+            why="the distro's nixpkgs could not be moved (see above)"
+            if [ "$status" = 124 ]; then
+              why="the distro's nixpkgs did not move within $limit s"
+            fi
+            git checkout --quiet -- flake.lock
+            refuse "$why" "nothing was committed, built or published" \
+              "run it again, or release with the pins and nixpkgs as they are: nix run .#release -- --keep-pins"
+          fi
+          now=$(nixpkgs_of) ||
+            refuse "flake.lock does not say which nixpkgs it locks after the update" \
+              "nothing was committed, built or published"
+          nixpkgs=""
+          if [ "$now" = "$locked" ]; then
+            echo "  nothing moved ($now)"
+          else
+            nixpkgs="nixpkgs: $locked -> $now"
+            echo "  $nixpkgs"
+          fi
+          moved=$(git status --porcelain=v1 --untracked-files=all)
+          case "$moved" in
+            "" | " M assets/distro-pins.json" | " M flake.lock") ;;
+            " M assets/distro-pins.json"$'\n'" M flake.lock") ;;
+            *)
+              refuse "moving nixpkgs changed more than flake.lock" \
+                "$(printf '%s\n' "$moved" | head -5)" "nothing was committed, built or published"
+              ;;
+          esac
+
+          if [ -n "$moved" ]; then
+            # THE MESSAGE: what moved, in the tools' own lines.
+            if [ -z "$nixpkgs" ]; then
+              case "$count" in
+                0) subject="distro-pins: the pins are written again in the tool's shape" ;;
+                1) subject="distro-pins: ''${lines%%:*} moves to its latest release" ;;
+                *) subject="distro-pins: $count of the distro's apps move to their latest releases" ;;
+              esac
+            elif ! grep -q 'assets/distro-pins.json' <<<"$moved"; then
+              subject="flake: nixpkgs moves to the newest nixos-unstable"
+            else
+              case "$count" in
+                0) subject="release: nixpkgs moves, and the pins are written again in the tool's shape" ;;
+                1) subject="release: nixpkgs and ''${lines%%:*} move to their latest" ;;
+                *) subject="release: nixpkgs and $count of the distro's apps move to their latest" ;;
+              esac
+            fi
             message=$(mktemp)
             {
               echo "$subject"
               echo
-              echo "Moved by nix run .#release before its gate (nix run .#distro-pins)."
-              if [ "$count" != 0 ]; then
+              echo "Moved by nix run .#release before its gate (nix run .#distro-pins,"
+              echo "nix flake update nixpkgs)."
+              if [ "$count" != 0 ] || [ -n "$nixpkgs" ]; then
                 echo
-                printf '%s\n' "$lines"
+                if [ "$count" != 0 ]; then
+                  printf '%s\n' "$lines"
+                fi
+                if [ -n "$nixpkgs" ]; then
+                  echo "$nixpkgs"
+                fi
               fi
             } >"$message"
-            if ! git commit --quiet --file "$message" -- assets/distro-pins.json; then
+            if ! git commit --quiet --file "$message" -- assets/distro-pins.json flake.lock; then
               rm -f "$message"
-              refuse "the pins moved, and their commit was not made" \
-                "assets/distro-pins.json holds them, uncommitted: commit and push it, and run the release again" \
+              refuse "the pins or nixpkgs moved, and their commit was not made" \
+                "assets/distro-pins.json and flake.lock hold them, uncommitted: commit and push them, and run the release again" \
                 "nothing was built or published"
             fi
             rm -f "$message"
@@ -741,10 +814,12 @@ rec {
       usage: nix run .#apply-here [-- --dry-run] [-- --attr NAME]
 
       Builds this machine (${machineDir}) with this checkout in place of the distro
-      input, and switches to it. The machine directory and its lock are not
-      touched: the next update goes back to the release. Asks for sudo to switch,
-      and switches only while the update is not running, no boot trial waits, and
-      the last good system stays in the boot menu.
+      input, and switches to it — or sets it for the next boot, when it was built
+      from another nixpkgs than the running system or a system already waits for
+      the next boot. The machine directory and its lock are not touched: the next
+      update goes back to the release. Asks for sudo, and goes ahead only while the
+      update is not running, no boot trial waits, and the last good system stays
+      in the boot menu.
 
         --dry-run    say what would be built and downloaded, and stop
         --attr NAME  the machine flake's attribute (the person's name; default: you)
@@ -829,6 +904,7 @@ rec {
     inherit (machine) stateDir;
     profiles = "/nix/var/nix/profiles";
     booted = "/run/booted-system";
+    current = "/run/current-system";
     menuLimit = machine.environment.RONOCTUA_MACHINE_MENU_LIMIT;
     nixEnv = lib.getExe' nix "nix-env";
   };
@@ -842,6 +918,7 @@ rec {
       stateDir,
       profiles,
       booted,
+      current,
       menuLimit,
       nixEnv,
     }:
@@ -908,16 +985,56 @@ rec {
             "Let the update apply the release once (its boot, blessed, is a newer last good system), then run this again."
         fi
 
+        # NOW, OR FOR THE NEXT BOOT (the owner's decision, 2026-10-31). Nothing
+        # that runs is switched across two nixpkgs — the live switch from
+        # 26.05 to nixos-unstable restarted the owner's machine on 2026-10-30
+        # — nor while the profile names a system set for the next boot: then
+        # this one is set for the next boot too, as `ronoctua-machine apply`
+        # does (`switches_now`). A system's nixpkgs is its `nixos-version`
+        # (the release, the day and the revision of the nixpkgs it was built
+        # from); one that cannot be read is no proof that nothing moved.
+        running=$(readlink -f ${quoted current})
+        named=$(readlink -f "$profile" 2>/dev/null || true)
+        runs_named() {
+          local special
+          if [ "$named" = "$running" ]; then
+            return 0
+          fi
+          for special in "$named"/specialisation/*; do
+            if [ -e "$special" ] && [ "$(readlink -f "$special")" = "$running" ]; then
+              return 0
+            fi
+          done
+          return 1
+        }
+        how=switch
+        if [ -n "$named" ] && ! runs_named; then
+          echo "the system profile names a system that does not run yet: this one is set for the next boot too"
+          how=boot
+        else
+          was=$(cat "$running/nixos-version" 2>/dev/null || true)
+          now=$(cat "$system/nixos-version" 2>/dev/null || true)
+          if [ -z "$was" ] || [ -z "$now" ]; then
+            echo "the nixpkgs one of the two systems was built from cannot be read: this one is set for the next boot"
+            how=boot
+          elif [ "$was" != "$now" ]; then
+            echo "nixpkgs moved ($was -> $now): this one is set for the next boot, and nothing that runs is switched across it"
+            how=boot
+          fi
+        fi
+
         # THE PROFILE, then the switch. 4 is "switched, and some units it
         # started failed": the new system runs.
         ${quoted nixEnv} --profile "$profile" --set "$system" ||
           refuse "the system profile did not take $system" "nothing was switched"
         status=0
-        "$system/bin/switch-to-configuration" switch || status=$?
-        case "$status" in
-          0) echo "switched to the checkout ($top)" ;;
-          4) echo "switched to the checkout ($top), and some units failed: see systemctl --failed" ;;
-          *) refuse "the switch failed ($status)" "the profile names the new system; the running one is unchanged" ;;
+        "$system/bin/switch-to-configuration" "$how" || status=$?
+        case "$how:$status" in
+          switch:0) echo "switched to the checkout ($top)" ;;
+          switch:4) echo "switched to the checkout ($top), and some units failed: see systemctl --failed" ;;
+          boot:0) echo "the checkout ($top) is set for the next boot: reboot to run it" ;;
+          switch:*) refuse "the switch failed ($status)" "the profile names the new system; the running one is unchanged" ;;
+          *) refuse "the boot loader did not take the new system ($status)" "the profile names it; the running one is unchanged" ;;
         esac
         exit "$status"
       '';

@@ -947,7 +947,9 @@ pub fn main() -> ExitCode {
 /// do not read here. A host following asks that is not let ends the run
 /// `refused github-not-let` — news, which the update's step says — unless
 /// the person's own pins moved: the run then says what moved, and a line
-/// says the distro's were not looked at.
+/// says the distro's were not looked at. Every newer release of theirs it
+/// did not follow is a line before the last, with why
+/// ([`crate::follow::NotFollowed`]).
 fn pins_refresh(ctx: &Context, report: &mut dyn Report) -> ExitCode {
     let host = crate::declaration::host_of(&crate::declaration::this_host());
     let mut not_let = false;
@@ -966,6 +968,11 @@ fn pins_refresh(ctx: &Context, report: &mut dyn Report) -> ExitCode {
             println!(
                 "this machine trusts no signing key of yours: the distro's apps that follow their releases were not looked at"
             );
+        }
+        // EACH NEWER RELEASE LEFT BEHIND, said with why: this program has no
+        // log of its own, and the update's journal keeps what a step prints.
+        for passed in &looked.not_followed {
+            println!("{}", passed.line());
         }
         let moved = if ctx.rehearse {
             (newer.len() + looked.changes.len()) as u64

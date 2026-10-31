@@ -72,6 +72,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
     # EVERYTHING THE VIEW RUNS, RUNS AS THE OWNER. Root would pass the polkit
@@ -173,7 +175,7 @@ pkgs.testers.runNixOSTest {
                 machine.wait_until_succeeds(
                     "journalctl -u syncthing-window --no-pager | "
                     f"grep '{marker}' > /dev/null",
-                    timeout=90,
+                    timeout=timedelta(seconds=90),
                 )
         except Exception:
             print("--- the window's journal ---")

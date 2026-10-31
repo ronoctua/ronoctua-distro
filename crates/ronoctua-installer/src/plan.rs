@@ -676,6 +676,17 @@ pub fn host_nix(r: &Answers) -> String {
     // question replaced the whole string, and whoever chose a Compose key other
     // than the default silently lost a key they were never asked about.
     let _ = writeln!(s, "  ronoctua.keyboard.compose = \"{}\";", r.compose_key);
+    // THE CONSOLE'S KEYBOARD, the same answer as xkb writes it (`us(euro)`):
+    // the map the installer loaded for the passwords, compiled again for the
+    // machine's console and for the initrd's prompt, where the disk's
+    // passphrase is typed (`nix/modules/console.nix`). It is what the module
+    // derives from the two lines above anyway — written so the file says
+    // what the console uses, and the line to edit to give it another.
+    let _ = writeln!(
+        s,
+        "  ronoctua.keyboard.console = \"{}\";",
+        crate::keymap::name(&r.keyboard, &r.keyboard_variant)
+    );
     // THE HARDWARE REPORT, by RELATIVE path.
     //
     // The `nixos-facter` step writes it next to this file, and both end up in
@@ -1899,6 +1910,26 @@ mod tests {
         assert!(!host_nix(&r).contains("ronoctua.firmware"));
         r.bios = true;
         assert!(host_nix(&r).contains("  ronoctua.firmware = \"bios\";\n"));
+    }
+
+    /// FAILS IF: `host.nix` does not carry the console's keyboard, or
+    /// carries another answer's than the session's layout and variant — the
+    /// default's (`us(euro)`), the plain layout for a variant, or a variant
+    /// in parentheses for none.
+    #[test]
+    fn the_host_nix_gives_the_console_the_sessions_keyboard() {
+        let mut r = answers();
+        let line = |s: &str| format!("  ronoctua.keyboard.console = \"{s}\";\n");
+        assert!(
+            host_nix(&r).contains(&line("br(abnt2)")),
+            "{}",
+            host_nix(&r)
+        );
+        r.keyboard = "gb".into();
+        r.keyboard_variant = String::new();
+        let s = host_nix(&r);
+        assert!(s.contains(&line("gb")), "{s}");
+        assert_eq!(s.matches("ronoctua.keyboard.console").count(), 1, "{s}");
     }
 
     #[test]

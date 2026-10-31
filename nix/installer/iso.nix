@@ -214,10 +214,11 @@ in
   };
 
   # The TTY is where the installer lives. Its font — PSF2 generated from the
-  # real file, the Linux console does not consume TTF — is
-  # `nix/modules/console.nix`'s, as on every machine; the layout is the
-  # distro's default until the installer asks.
-  console.keyMap = lib.mkDefault (import ../keyboard-xkb.nix).console;
+  # real file, the Linux console does not consume TTF — and its keyboard map
+  # are `nix/modules/console.nix`'s, as on every machine: the map is the
+  # distro's default answer until the installer is answered, and from then on
+  # the answer's, loaded the moment it is given
+  # (`crates/ronoctua-installer/src/keymap.rs`).
 
   i18n = {
     defaultLocale = "pt_BR.UTF-8";

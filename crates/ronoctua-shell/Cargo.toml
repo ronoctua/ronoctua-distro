@@ -46,6 +46,7 @@ ronoctua-shell-icons = { path = "../ronoctua-shell-icons" }
 ronoctua-shell-incus = { path = "../ronoctua-shell-incus" }
 ronoctua-shell-lifeline = { path = "../ronoctua-shell-lifeline" }
 ronoctua-shell-locale = { path = "../ronoctua-shell-locale" }
+ronoctua-shell-lock = { path = "../ronoctua-shell-lock" }
 ronoctua-shell-manual = { path = "../ronoctua-shell-manual" }
 ronoctua-shell-network = { path = "../ronoctua-shell-network" }
 ronoctua-shell-notifications = { path = "../ronoctua-shell-notifications" }

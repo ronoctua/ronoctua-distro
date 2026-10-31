@@ -65,6 +65,7 @@ pkgs.testers.runNixOSTest {
     { nodes, ... }:
     ''
       import json, shlex
+      from datetime import timedelta
 
       user = "${nodes.machine.ronoctua.user}"
       staged = "/run/ronoctua-stick/staged"
@@ -147,7 +148,7 @@ pkgs.testers.runNixOSTest {
                   f"runuser -u {user} -- sh -c 'umask 077; printf %s {shlex.quote(reason)} > {staged}/cancel'"
               )
           machine.wait_until_fails(
-              "systemctl is-active --quiet ronoctua-stick-write.service", timeout=120
+              "systemctl is-active --quiet ronoctua-stick-write.service", timeout=timedelta(minutes=2)
           )
           return json.loads(machine.succeed("cat /run/ronoctua-stick/progress.json"))
 

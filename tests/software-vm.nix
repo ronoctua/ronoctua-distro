@@ -352,6 +352,7 @@ pkgs.testers.runNixOSTest {
       import json
       import re
       import shlex
+      from datetime import timedelta
 
       user = "${nodes.machine.ronoctua.user}"
       home = f"/home/{user}"
@@ -434,7 +435,7 @@ pkgs.testers.runNixOSTest {
           for _ in range(timeout):
               if what():
                   return True
-              machine.sleep(1)
+              machine.sleep(duration=timedelta(seconds=1))
           return what()
 
 
@@ -497,7 +498,7 @@ pkgs.testers.runNixOSTest {
               if job is not None and job.get("stage") in ("done", "failed", "cancelled"):
                   print(json.dumps(job, indent=1))
                   return job
-              machine.sleep(1)
+              machine.sleep(duration=timedelta(seconds=1))
           raise AssertionError(f"the order {label} did not end in {timeout} s")
 
 
@@ -522,18 +523,42 @@ pkgs.testers.runNixOSTest {
       machine.start()
       machine.wait_for_unit("multi-user.target")
       # THE STAND-IN CHROME ARRIVES, seeded, in the session's view.
-      machine.wait_until_succeeds(f"test -x {STABLE_CHROME}", timeout=300)
+      machine.wait_until_succeeds(f"test -x {STABLE_CHROME}", timeout=timedelta(minutes=5))
       machine.wait_for_unit("xvfb.service")
       uid = machine.succeed(f"id -u {user}").strip()
       runtime = f"/run/user/{uid}"
 
+      # WITH NO NETWORK, A SYSTEM WITH FLATPAK ACTIVATES WHOLE. nix-flatpak
+      # updates its declared Flatpaks on each activation (`update.onActivation`,
+      # `nix/modules/flatpak.nix`); its system unit runs at every boot, after
+      # the network it asks for — which this machine never gets. It must end,
+      # once, with success: a failure would leave the system `degraded`, and a
+      # degraded system makes the person's half of nix-flatpak skip in silence.
+      with subtest("with no network, nix-flatpak's system unit ends with success"):
+          unit = "flatpak-managed-install.service"
+          machine.wait_until_succeeds(
+              f"[ \"$(systemctl show -p ExecMainExitTimestampMonotonic --value {unit})\" != 0 ] && "
+              f"[ \"$(systemctl show -p ActiveState --value {unit})\" != activating ] || "
+              f"[ \"$(systemctl show -p NRestarts --value {unit})\" -ge 1 ]",
+              timeout=timedelta(minutes=5),
+          )
+          facts = machine.succeed(
+              f"systemctl show -p Result -p ExecMainStatus -p NRestarts -p ActiveState {unit}"
+          )
+          print(facts)
+          for wanted in ("Result=success", "ExecMainStatus=0", "NRestarts=0", "ActiveState=inactive"):
+              assert wanted in facts.split("\n"), (
+                  f"nix-flatpak's system unit did not end once with success offline: {facts}"
+                  + machine.succeed(f"journalctl -b -u {unit} --no-pager -o cat | tail -20")
+              )
+
       with subtest("the login brings the session up: compositor, footer and queue"):
           try:
               machine.wait_until_succeeds(
-                  f"systemctl --machine={user}@ --user is-active {FOOTER}", timeout=300
+                  f"systemctl --machine={user}@ --user is-active {FOOTER}", timeout=timedelta(minutes=5)
               )
               machine.wait_until_succeeds(
-                  f"systemctl --machine={user}@ --user is-active {QUEUE}", timeout=60
+                  f"systemctl --machine={user}@ --user is-active {QUEUE}", timeout=timedelta(minutes=1)
               )
               # `grep > /dev/null` and never `grep -q`: `-q` leaves on the first
               # match, the writer takes SIGPIPE, and `pipefail` fails the line
@@ -542,7 +567,7 @@ pkgs.testers.runNixOSTest {
                   machine.wait_until_succeeds(
                       f"journalctl -a -o cat _SYSTEMD_USER_UNIT={FOOTER} "
                       f"| grep '{said}' > /dev/null",
-                      timeout=120,
+                      timeout=timedelta(minutes=2),
                   )
           except Exception:
               diagnose()
@@ -613,7 +638,7 @@ pkgs.testers.runNixOSTest {
           as_user("/run/current-system/sw/bin/nix profile add ${firstProbe}")
           launch("ronoctua-probe-first.desktop")
           # THE BARE NAME RAN: resolved through the footer's own PATH.
-          machine.wait_until_succeeds(f"test -s {home}/ronoctua-probe-first.ran", timeout=60)
+          machine.wait_until_succeeds(f"test -s {home}/ronoctua-probe-first.ran", timeout=timedelta(minutes=1))
           first = resolved()
 
           # THE SECOND GENERATION, the case the stamp is for.
@@ -629,7 +654,7 @@ pkgs.testers.runNixOSTest {
           assert first[1] == second[1], f"the modification time moved: {first} -> {second}"
           assert first[0] != second[0], f"the profile still resolves to {first[0]}"
           launch("ronoctua-probe-second.desktop")
-          machine.wait_until_succeeds(f"test -s {home}/ronoctua-probe-second.ran", timeout=60)
+          machine.wait_until_succeeds(f"test -s {home}/ronoctua-probe-second.ran", timeout=timedelta(minutes=1))
           assert count(RESCANNING) > rescans, (
               "the launcher found the program without noticing the profile move"
           )
@@ -665,7 +690,7 @@ pkgs.testers.runNixOSTest {
           assert fields["StartupWMClass"].startswith("chrome-mail.example.org"), fields
           assert is_png(fields["Icon"]), fields
           open_listed("ronoctua-web-probe-mail.desktop")
-          machine.wait_until_succeeds(f"grep '^end$' {home}/chrome-argv.log > /dev/null", timeout=60)
+          machine.wait_until_succeeds(f"grep '^end$' {home}/chrome-argv.log > /dev/null", timeout=timedelta(minutes=1))
           said = machine.succeed(f"cat {home}/chrome-argv.log").splitlines()
           print(said)
           argv0 = [line.split("=", 1)[1] for line in said if line.startswith("argv0=")]
@@ -728,7 +753,7 @@ pkgs.testers.runNixOSTest {
 
           open_listed(f"ronoctua-appimage-{key}.desktop")
           try:
-              machine.wait_until_succeeds(f"test -s {home}/probe-appimage.ran", timeout=180)
+              machine.wait_until_succeeds(f"test -s {home}/probe-appimage.ran", timeout=timedelta(minutes=3))
           except Exception:
               print(machine.execute(f"journalctl --no-pager -a -o cat _UID={uid} | tail -60")[1])
               raise

@@ -45,6 +45,7 @@ pkgs.testers.runNixOSTest {
     ${xvfb.prelude}
 
     import json
+    from datetime import timedelta
 
     SOCK = "/run/user/0/scroll-ipc.0.compositor.sock"
     CUT = "/run/user/0/ronoctua-resizer.json"
@@ -81,7 +82,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             f"SCROLLSOCK={SOCK} ${scroll}/bin/scrollmsg -t get_workspaces "
             "| grep -q '\"width\": 1600'",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         whole = workspace_rect()
         print(f"the whole screen: {whole}")
@@ -94,18 +95,18 @@ pkgs.testers.runNixOSTest {
             "--setenv=RUST_LOG=ronoctua_shell=info "
             "${ronoctua-shell}/bin/ronoctua-shell resizer"
         )
-        machine.wait_until_succeeds(f"test -s {CUT} && test -s {KEEPER}", timeout=60)
+        machine.wait_until_succeeds(f"test -s {CUT} && test -s {KEEPER}", timeout=timedelta(minutes=1))
         # A CURTAIN IS THE KEEPER'S OWN PROGRAM, started by its path
         # (`current_exe`): the wrapped binary, `.ronoctua-shell-wrapped` — so
         # it is counted by its word, not by the wrapper's name.
         machine.wait_until_succeeds(
-            "test $(pgrep -fc '[r]esizer-curtain (right|bottom)$') -eq 2", timeout=60
+            "test $(pgrep -fc '[r]esizer-curtain (right|bottom)$') -eq 2", timeout=timedelta(minutes=1)
         )
         c = cut()
         machine.wait_until_succeeds(
             f"SCROLLSOCK={SOCK} ${scroll}/bin/scrollmsg -t get_workspaces "
             f"| grep -q '\"width\": {c['width_px']}'",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         room = workspace_rect()
         assert room == (c["width_px"], c["height_px"]), (
@@ -129,22 +130,22 @@ pkgs.testers.runNixOSTest {
             ready = cut()
             if ready != c:
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert (ready["width_px"], ready["height_px"]) in [
             (1024, 768), (1280, 720), (1366, 768), (1440, 900), (1600, 900), (1920, 1080),
         ], f"`p` landed on {ready}, which is no ready size"
         machine.wait_until_succeeds(
             f"SCROLLSOCK={SOCK} ${scroll}/bin/scrollmsg -t get_workspaces "
             f"| grep -q '\"width\": {ready['width_px']}'",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
 
     with subtest("Esc gives the screen back whole, and the files go"):
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        machine.wait_until_fails(f"test -e {CUT}", timeout=30)
-        machine.wait_until_fails(f"test -e {KEEPER}", timeout=30)
+        machine.wait_until_fails(f"test -e {CUT}", timeout=timedelta(seconds=30))
+        machine.wait_until_fails(f"test -e {KEEPER}", timeout=timedelta(seconds=30))
         machine.wait_until_succeeds(
-            "test $(pgrep -fc '[r]esizer-curtain (right|bottom)$') -eq 0", timeout=30
+            "test $(pgrep -fc '[r]esizer-curtain (right|bottom)$') -eq 0", timeout=timedelta(seconds=30)
         )
         assert workspace_rect() == whole, "the screen did not come back whole"
 
@@ -160,7 +161,7 @@ pkgs.testers.runNixOSTest {
             f"--setenv=SCROLLSOCK={SOCK} --setenv=SWAYSOCK={SOCK} "
             "${ronoctua-shell}/bin/ronoctua-shell resizer"
         )
-        machine.wait_until_succeeds(f"test -s {CUT}", timeout=60)
+        machine.wait_until_succeeds(f"test -s {CUT}", timeout=timedelta(minutes=1))
         again = cut()
         assert (again["width_px"], again["height_px"]) == (
             ready["width_px"],

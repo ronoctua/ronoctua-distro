@@ -67,6 +67,7 @@ tunnel-refused-no-daemon = o daemon dele não está rodando
 tunnel-refused-authority = o socket dele não é desta sessão
 tunnel-refused-unit = o serviço dele não quis subir nem descer
 tunnel-refused-not-written = o arquivo não pôde ser gravado
+tunnel-refused-no-transport = esta máquina não tem o programa desse transporte de ponte, então nada foi gravado
 tunnel-refused-config = o Tor não leu a configuração
 tunnel-refused-daemon = o daemon disse não
 tunnel-refused-other = não funcionou

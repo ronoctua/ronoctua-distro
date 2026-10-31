@@ -62,6 +62,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
 
@@ -84,7 +86,7 @@ pkgs.testers.runNixOSTest {
         try:
             machine.wait_until_succeeds(
                 "journalctl -u buffer --no-pager | grep 'component rendered' > /dev/null",
-                timeout=60,
+                timeout=timedelta(minutes=1),
             )
         except Exception:
             print(machine.execute("journalctl -u buffer --no-pager")[1])
@@ -122,7 +124,7 @@ pkgs.testers.runNixOSTest {
     with subtest("the buffer drew in the window"):
         machine.wait_until_succeeds(
             "journalctl -u buffer --no-pager | grep 'buffer drawn on the xdg_toplevel' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         journal = machine.succeed("journalctl -u buffer --no-pager")
         for bad in ["drawing the frame failed", "preparing the text failed", "panicked"]:
@@ -175,7 +177,7 @@ pkgs.testers.runNixOSTest {
             print(f"OCR: {read_back!r}")
             if any(n in read_back.lower() for n in NEEDLES):
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert any(n in read_back.lower() for n in NEEDLES), (
             f"the key did not come out translated on screen; OCR read {read_back!r}"
         )
@@ -201,18 +203,18 @@ pkgs.testers.runNixOSTest {
         )
         machine.wait_until_succeeds(
             "journalctl -u icons --no-pager | grep 'icons: the tables arrived' > /dev/null",
-            timeout=90,
+            timeout=timedelta(seconds=90),
         )
 
         # With no WM on Xvfb nobody has input focus, and the key would be lost.
         focus_compositor()
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         # `RET` opens the page of the glyph under the cursor, whose cursor
         # starts on its size; `↓` is the first copy format — the glyph's NAME —
         # and `RET` there copies it.
         for key in ("Return", "Down", "Return"):
             machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {key}")
-            machine.sleep(2)
+            machine.sleep(duration=timedelta(seconds=2))
 
         def pasted_now():
             return machine.succeed(
@@ -224,7 +226,7 @@ pkgs.testers.runNixOSTest {
             machine.wait_until_succeeds(
                 "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
                 "${pkgs.wl-clipboard}/bin/wl-paste --no-newline | grep -q -- '-'",
-                timeout=30,
+                timeout=timedelta(seconds=30),
             )
         except Exception:
             print(machine.execute("journalctl -u icons --no-pager | tail -40")[1])
@@ -245,9 +247,9 @@ pkgs.testers.runNixOSTest {
         # read the clipboard and handed the text to the view's search
         # (`icons::View::pasted`, which its unit tests follow from there).
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key Escape")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+v")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
 
         journal = machine.succeed("journalctl -u icons --no-pager")
         assert "icons: the clipboard went into the search" in journal and pasted in journal, (
@@ -270,7 +272,7 @@ pkgs.testers.runNixOSTest {
         # is the shape of the defect that reached the owner's screen last time.
         machine.succeed("systemctl stop icons || true")
         machine.succeed("systemctl stop buffer || true")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
         machine.succeed(
             "systemd-run --unit=format ${xvfb.env} "
@@ -282,16 +284,16 @@ pkgs.testers.runNixOSTest {
         )
         machine.wait_until_succeeds(
             "journalctl -u format --no-pager | grep 'buffer drawn on the xdg_toplevel' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         # The rack has to have crossed. Before it does, the screen legitimately
         # says it has nothing — so waiting for the DRAW alone would measure the
         # empty state and pass.
         machine.wait_until_succeeds(
             "journalctl -u format --no-pager | grep 'input=Rack' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
 
         journal = machine.succeed("journalctl -u format --no-pager")
         # THE THIRD NEEDLE WAS `sem udisks2`, WHICH EXISTS NOWHERE. It was
@@ -375,7 +377,7 @@ pkgs.testers.runNixOSTest {
             read_back = nodes_on_screen("fmt")
             if "/dev/" in read_back:
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         lowered = read_back.lower()
 
         # AND WHAT ONLY THE PIXEL ANSWERS: that the window opened, the renderer
@@ -423,7 +425,7 @@ pkgs.testers.runNixOSTest {
                 node in both for node in ["/dev/vda", "/dev/vdb"]
             ):
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         for node in ["/dev/vda", "/dev/vdb"]:
             assert node in both, (
                 f"{node} did not appear in either reading — the row "

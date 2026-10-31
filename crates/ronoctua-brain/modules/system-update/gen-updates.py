@@ -1135,18 +1135,17 @@ def emit_keys(steps: list[dict], task: str) -> str:
     """Every key both languages owe.
 
     Per step: its name and the one line saying what it does. Plus the closed
-    vocabularies the table itself defines — a skipped step has to be able to say
-    WHICH precondition failed, and that sentence belongs to the KIND.
+    vocabularies the view says — a skipped step has to be able to say WHICH
+    precondition failed, and that sentence belongs to the KIND; a declined
+    step, why. Not the failure policies and the classes: the table defines
+    them and no view draws them, and a sentence nobody can show is not owed
+    (`every-key-is-said`).
     """
     keys = set()
     for s in steps:
         keys.update(step_keys(task, s["id"]))
     for kind in NEEDS:
         keys.add(f"{task}-needs-{kind}")
-    for policy in ON_FAILURE:
-        keys.add(f"{task}-on-failure-{policy}")
-    for does in DOES:
-        keys.add(f"{task}-kind-{does}")
     for word in declined_words(steps):
         keys.add(f"{task}-declined-{word}")
     return "\n".join(sorted(keys)) + "\n"

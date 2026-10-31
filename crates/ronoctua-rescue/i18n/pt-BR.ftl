@@ -41,7 +41,6 @@ rescue-poweroff = Desligar a máquina
 ## Rescue console — what it says
 
 rescue-keys = ↑↓ escolhe · Enter roda · Tab troca de seção · Esc sai
-rescue-running = rodando…
 rescue-ran = pronto
 rescue-failed = falhou
 rescue-confirm = A mesma tecla de novo confirma; Esc cancela.
@@ -49,8 +48,4 @@ rescue-needs-password = pede a sua senha
 rescue-read-only = leitura
 rescue-generated-by = Gerado por { $source }. Editar aqui some no próximo rebuild.
 rescue-no-windows = O compositor não respondeu — ou não há janela nenhuma.
-rescue-empty = nada a mostrar
 rescue-back = Sair do terminal devolve esta tela.
-rescue-generation = geração { $number }
-rescue-door-console = console
-rescue-door-window = janela

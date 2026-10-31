@@ -27,6 +27,14 @@
 //!    filesystem is back at the goal rather than emptying the store, so the
 //!    next build does not download what was just thrown away.
 //!
+//!    THE DISK IS MEASURED AFTER EACH COLLECTION, and Nix is asked again for
+//!    what is still missing. `--max-freed` is Nix's own count, and Nix counts
+//!    as freed what the disk does not get back — a dead path on a read-only
+//!    layer was 263.8 MiB "freed" and nothing in `df` — so one collection
+//!    trusted that arithmetic and stopped short. It asks until the disk is at
+//!    the goal, or a collection gave the disk nothing, and never more than
+//!    [`MOST_COLLECTIONS`] times.
+//!
 //! The goal is a share of each filesystem and never more than a size
 //! (`diskGoalCapGiB`): ten per cent of eight terabytes is not a disk that is
 //! short.
@@ -72,6 +80,12 @@ const SECONDS_IN_A_DAY: u64 = 24 * 60 * 60;
 
 /// A gibibyte, for the goal's cap.
 const GIB: u64 = 1024 * 1024 * 1024;
+
+/// The most collections one relief asks for. Every one after the first is
+/// asked only because the disk got back less than Nix counted; the bound is
+/// for a disk that creeps up by a few bytes each time from somebody else's
+/// work, which would otherwise be asked about for ever.
+const MOST_COLLECTIONS: usize = 5;
 
 /// What the command line said.
 #[derive(Debug)]
@@ -287,38 +301,107 @@ fn store_garbage(told: &Told) -> StepSheet {
         return step;
     }
 
-    // ONLY GARBAGE, AND ONLY AS MUCH AS IS MISSING. `--max-freed` stops the
-    // collection there; what the person's Nix relies on is a root, and a root
-    // is never garbage.
-    match Command::new(nix_store)
-        .args(collect(Act::Execute, wanted))
-        .stdin(Stdio::null())
-        .output()
-    {
-        Ok(out) if out.status.success() => {
-            let after = room(store).map_or(free, |(_, f)| f);
-            println!(
-                "store-garbage: asked for {}; {} free before, {} after (goal {}) — {}",
-                in_units(wanted),
-                in_units(free),
-                in_units(after),
-                in_units(goal),
-                last_line(&out.stdout)
-            );
-        }
-        Ok(out) => {
-            step.ok = false;
-            step.trouble = last_line(&out.stderr);
-            println!("store-garbage: nix-store refused: {}", step.trouble);
-        }
-        Err(e) => {
-            step.ok = false;
-            step.trouble = e.to_string();
-            println!("store-garbage: could not run {}: {e}", nix_store.display());
-        }
+    // ONLY GARBAGE, AND ONLY AS MUCH AS IS MISSING — as the DISK says, after
+    // each collection: see the header. What the person's Nix relies on is a
+    // root, and a root is never garbage.
+    let collected = collect_to_the_goal(nix_store, goal, free, || {
+        // COMMITTED FIRST, or btrfs counts what was freed as still taken.
+        commit(store);
+        room(store).map(|(_, f)| f)
+    });
+    if let Some(trouble) = collected.trouble {
+        step.ok = false;
+        step.trouble = trouble;
+    } else if collected.free < goal {
+        println!(
+            "store-garbage: {} free after {} collections, short of the goal of {}: {}",
+            in_units(collected.free),
+            collected.asked.len(),
+            in_units(goal),
+            if collected.asked.len() < MOST_COLLECTIONS {
+                "the last one gave the disk nothing more"
+            } else {
+                "no more are asked for in one relief"
+            }
+        );
     }
     step.seconds = seconds(clock);
     step
+}
+
+/// How the collections of [`collect_to_the_goal`] ended.
+#[derive(Debug, PartialEq, Eq)]
+struct Collected {
+    /// What each collection was asked to free, in order.
+    asked: Vec<u64>,
+    /// The bytes free after the last one, as the disk said.
+    free: u64,
+    /// What went wrong, when something did: `nix-store` refused, would not
+    /// run, or the disk could not be measured.
+    trouble: Option<String>,
+}
+
+/// Asks the store for garbage until the disk is at `goal` bytes free — the
+/// disk as `measure` reads it after each collection, NOT Nix's own count of
+/// what it freed — or a collection gave the disk nothing more, or
+/// [`MOST_COLLECTIONS`] were asked.
+fn collect_to_the_goal(
+    nix_store: &Path,
+    goal: u64,
+    free: u64,
+    mut measure: impl FnMut() -> Option<u64>,
+) -> Collected {
+    let mut collected = Collected {
+        asked: Vec::new(),
+        free,
+        trouble: None,
+    };
+    while collected.asked.len() < MOST_COLLECTIONS {
+        let Some(wanted) = goal.checked_sub(collected.free).filter(|w| *w > 0) else {
+            break;
+        };
+        collected.asked.push(wanted);
+        let said = match Command::new(nix_store)
+            .args(collect(Act::Execute, wanted))
+            .stdin(Stdio::null())
+            .output()
+        {
+            Ok(out) if out.status.success() => last_line(&out.stdout),
+            Ok(out) => {
+                let trouble = last_line(&out.stderr);
+                println!("store-garbage: nix-store refused: {trouble}");
+                collected.trouble = Some(trouble);
+                break;
+            }
+            Err(e) => {
+                println!("store-garbage: could not run {}: {e}", nix_store.display());
+                collected.trouble = Some(e.to_string());
+                break;
+            }
+        };
+        let Some(after) = measure() else {
+            let trouble = "could not measure the store's filesystem after a collection".to_owned();
+            println!("store-garbage: {trouble}");
+            collected.trouble = Some(trouble);
+            break;
+        };
+        println!(
+            "store-garbage: collection {} asked for {}; {} free before, {} after (goal {}) — {said}",
+            collected.asked.len(),
+            in_units(wanted),
+            in_units(collected.free),
+            in_units(after),
+            in_units(goal)
+        );
+        // NOTHING MORE ON THE DISK is the end, whatever Nix said it freed:
+        // asking again would only be told the same.
+        let gained = after > collected.free;
+        collected.free = after;
+        if !gained {
+            break;
+        }
+    }
+    collected
 }
 
 /// The goal on a filesystem of `total` bytes: `goal_percent` of it, and never
@@ -644,6 +727,108 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A `nix-store` of the test's own making, in `dir`: every call is a line
+    /// of `calls` holding its arguments, and every collection SAYS it freed
+    /// 263.80 MiB — what the disk got back is the test's to plant.
+    ///
+    /// Written by a `/bin/sh` child, never by this process: a file open for
+    /// writing when another test's thread forks stays with that child until
+    /// its `exec`, and running it then is `ETXTBSY` at random.
+    fn lying_nix_store(dir: &Path) -> (PathBuf, PathBuf) {
+        std::fs::create_dir_all(dir).unwrap();
+        let program = dir.join("nix-store");
+        let calls = dir.join("calls");
+        let body = format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\necho \"deleting '/nix/store/x-dead'\"\necho '1 store paths deleted, 263.80 MiB freed'\n",
+            calls.display()
+        );
+        let status = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "printf '%s' \"$2\" > \"$1\" && chmod 755 \"$1\"",
+                "sh",
+            ])
+            .arg(&program)
+            .arg(body)
+            .status()
+            .unwrap();
+        assert!(status.success(), "{}", program.display());
+        (program, calls)
+    }
+
+    /// How many collections the lying `nix-store` was asked for, and with
+    /// what.
+    fn calls_of(calls: &Path) -> Vec<String> {
+        std::fs::read_to_string(calls)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// FAILS IF: one collection is trusted — Nix says it freed what was
+    /// asked, the disk got back less (a dead path on a read-only layer is
+    /// counted and never returned), and the relief stops short of the goal
+    /// instead of measuring the disk and asking for what is still missing.
+    #[test]
+    fn a_collection_nix_overcounts_is_followed_by_another_for_what_is_missing() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-relief-lie-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (program, calls) = lying_nix_store(&dir);
+        // 100 free, a goal of 150. The first collection is asked for 50 and
+        // the disk gets 20 of them back; the second, for the 30 still
+        // missing, gets all 30.
+        let disk = [120, 150];
+        let collected = collect_to_the_goal(&program, 150, 100, || {
+            disk.get(calls_of(&calls).len() - 1).copied()
+        });
+        assert_eq!(collected.trouble, None);
+        assert_eq!(collected.asked, [50, 30], "{collected:?}");
+        assert_eq!(collected.free, 150);
+        assert_eq!(
+            calls_of(&calls),
+            ["--gc --max-freed 50", "--gc --max-freed 30"],
+            "the store was not asked for what the disk still missed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a collection that gave the disk nothing is asked again — the
+    /// same dead path counted for ever — or a disk that keeps creeping up is
+    /// asked about past the bound.
+    #[test]
+    fn the_collections_end_when_the_disk_gains_nothing_and_at_their_bound() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-relief-end-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (program, calls) = lying_nix_store(&dir);
+        // NOTHING MORE: 20 back from the first, nothing from the second.
+        let disk = [120, 120];
+        let collected = collect_to_the_goal(&program, 150, 100, || {
+            disk.get(calls_of(&calls).len() - 1).copied()
+        });
+        assert_eq!(collected.asked, [50, 30], "{collected:?}");
+        assert_eq!((collected.free, collected.trouble), (120, None));
+        // A DISK THAT CREEPS UP a byte a time is asked at most the bound.
+        std::fs::remove_file(&calls).unwrap();
+        let collected = collect_to_the_goal(&program, 150, 100, || {
+            Some(100 + calls_of(&calls).len() as u64)
+        });
+        assert_eq!(collected.asked.len(), MOST_COLLECTIONS, "{collected:?}");
+        assert_eq!(calls_of(&calls).len(), MOST_COLLECTIONS);
+        // AT THE GOAL ALREADY, nothing is asked at all.
+        std::fs::remove_file(&calls).unwrap();
+        let collected = collect_to_the_goal(&program, 150, 150, || Some(150));
+        assert!(collected.asked.is_empty() && calls_of(&calls).is_empty());
+        // AND A STORE THAT REFUSES, or a disk that cannot be measured, ends
+        // it with the reason.
+        let collected = collect_to_the_goal(&dir.join("absent"), 150, 100, || Some(150));
+        assert!(collected.trouble.is_some(), "{collected:?}");
+        let collected = collect_to_the_goal(&program, 150, 100, || None);
+        assert_eq!(collected.asked.len(), 1);
+        assert!(collected.trouble.is_some(), "{collected:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

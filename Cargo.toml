@@ -129,6 +129,9 @@ members = [
   "crates/ronoctua-shell-work",
   "crates/ronoctua-shell-inspect",
   "crates/ronoctua-shell-lifeline",
+  # THE LOCK SCREEN (2026-10-31): a leaf on the kit and the door, holding the
+  # compositor's lock; the footer starts it and names none of it.
+  "crates/ronoctua-shell-lock",
   "crates/ronoctua-shell-overlays",
   "crates/ronoctua-shell-terminal",
   # AND THE FEATURES, one crate each: the belongings, the security centre,

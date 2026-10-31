@@ -20,14 +20,10 @@ group-network = network
 # THE VIEW. States the list shows in place of rows when there is no row to
 # show — each says something different, and folding them into one generic
 # "no networks" would hide the difference between not finding and not looking.
-network-scanning = scanning…
 network-empty = no networks in range
 network-no-adapter = this machine has no Wi-Fi radio
 network-radio-off = radio off
-network-wired = wired
 network-saved = saved
-network-password = Password for { $network }
-network-password-help = Kept by NetworkManager, outside the repository.
 # ECHOES — what the minibuffer says after the action.
 echo-network-joining = Connecting to { $network }…
 echo-network-connected = Connected to { $network }
@@ -47,8 +43,6 @@ echo-network-unavailable = NetworkManager is not responding
 network-remember = Keep the password of { $network } on this machine?
 network-remember-no = no, store nothing
 network-remember-yes = yes, seal it in the TPM
-# The list marker: tells "saved in NetworkManager" apart from "the password exists".
-network-no-tpm = in TPM
 echo-network-stored = Password for { $network } sealed in the TPM
 echo-network-no-stored = Connected. The password was not stored.
 echo-network-store-failed = Connected, but I could not store the password: { $reason }
@@ -183,7 +177,6 @@ network-tailscale-offline = offline
 network-tailscale-exit = everything goes through here
 network-tor-state = the Tor service
 network-tor-ready = a circuit is up
-network-tor-not-ready = no circuit
 network-tor-bootstrap = starting, { $percent }%
 network-tor-circuits = { $count ->
     [one] one circuit open
@@ -204,8 +197,6 @@ network-tor-start = start it
 network-tor-stop = stop it
 network-tor-autostart = start it with the session
 network-tor-settings = settings
-network-tor-sheet = Tor
-network-tor-browser = open a browser through Tor
 # WHAT THE FLAKE OWNS. The row is drawn and reachable and it refuses, saying
 # where the value comes from — the shape the format buffer's disabled XFS row
 # already has. Editing it would be a key whose effect the generated torrc
@@ -220,12 +211,9 @@ network-tor-advanced-about = These change how Tor builds circuits. The defaults 
 ask-tor-setting = The new value — empty clears it
 ask-tor-lines = One line to add — empty clears them all
 network-tor-back = back
-network-tor-edit = change
 network-tor-more = more
 network-tor-less = less
-network-tor-drawer = the drawer
 echo-tor-written = Tor's settings are written
-echo-tor-refused = Tor would not take that: { $reason }
 echo-tor-not-running = written; Tor will read it when it starts
 network-fact-name = name on the tailnet
 network-fact-tailnet = your tailnet's name

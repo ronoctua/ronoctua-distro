@@ -37,7 +37,7 @@
                 group = planted()
                 if group is not None and test(group):
                     return group
-                machine.sleep(1)
+                machine.sleep(duration=timedelta(seconds=1))
             kept = machine.succeed(
                 "cat /root/.local/state/ronoctua/brain/journal-errors/errors.json 2>/dev/null || echo '{}'"
             )
@@ -62,7 +62,7 @@
         # WHAT THE MACHINE WRITES AT `err` from the moment it is on may mark
         # the modeline before anything is planted: seen first, so the mark
         # below is the planted line's.
-        machine.sleep(5)
+        machine.sleep(duration=timedelta(seconds=5))
         control("brain-act journal-errors seen-all")
         settled(lambda layout: layout and mark not in layout)
 
@@ -112,7 +112,7 @@
             f = filtered()
             if f is not None and f.get("since", 0) >= 1:
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         else:
             raise AssertionError("the shipped filter never caught the planted line")
 

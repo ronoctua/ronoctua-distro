@@ -77,6 +77,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
     # `bytes()` and never `b\'\'`: inside a Nix `\'\'…\'\'` fence, ANY `\'\'` closes
@@ -129,7 +131,7 @@ pkgs.testers.runNixOSTest {
 
     def press_key(item_name):
         machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {item_name}")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
 
     import json
@@ -183,7 +185,7 @@ pkgs.testers.runNixOSTest {
             if before is not None and now["stage"] == "paused" and now["done"] == before["done"]:
                 return now
             before = now
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         raise AssertionError(f"the hold never held: {before}")
 
 
@@ -201,7 +203,7 @@ pkgs.testers.runNixOSTest {
         )
         machine.wait_until_succeeds(
             "journalctl -u queue --no-pager | grep 'transfer queue opened' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         # The pace is in the kernel, or the subtests below race again in
         # silence: systemd skips a setting the cgroup cannot take.
@@ -228,7 +230,7 @@ pkgs.testers.runNixOSTest {
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
-            timeout=90,
+            timeout=timedelta(seconds=90),
         )
         focus_compositor()
 
@@ -255,7 +257,7 @@ pkgs.testers.runNixOSTest {
         try:
             machine.wait_until_succeeds(
                 "journalctl -u footer --no-pager | grep 'segment id=\"transfer\"' > /dev/null",
-                timeout=60,
+                timeout=timedelta(minutes=1),
             )
         except Exception:
             print(machine.execute("journalctl -u footer --no-pager | tail -40")[1])
@@ -284,7 +286,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(180):
             if row(job)["stage"] == "done":
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         else:
             raise AssertionError(f"the first job never ended: {row(job)}")
         cold()
@@ -298,7 +300,7 @@ pkgs.testers.runNixOSTest {
         holding = second["id"]
         tell('{"ask":"pause","id":%d}' % holding)
         held = held_still(holding)
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         again = row(holding)
         assert again["done"] == held["done"] and again["stage"] == "paused", (
             f"the pause did not hold: {held} -> {again}"
@@ -319,7 +321,7 @@ pkgs.testers.runNixOSTest {
             "${pkgs.python3}/bin/python3 /tmp/ask.py "
             """'{"ask":"list"}' read """
             "| grep cancelled > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         left = machine.succeed("ls -A /root/destination-pause").strip()
         assert left == "", f"a piece was left at the destination: {left}"
@@ -336,13 +338,13 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=timedelta(seconds=30)
         )
         press_key("t")
         try:
             journal = machine.wait_until_succeeds(
                 "journalctl -u footer --no-pager | grep 'transfers panel opened'",
-                timeout=30,
+                timeout=timedelta(seconds=30),
             )
         except Exception:
             print(machine.execute("journalctl -u footer --no-pager | tail -40")[1])
@@ -401,7 +403,7 @@ pkgs.testers.runNixOSTest {
             "$(stat -c %s /root/source/large.bin) ]"
         )
         machine.succeed("systemctl stop queue")
-        machine.wait_until_fails("systemctl is-active queue", timeout=30)
+        machine.wait_until_fails("systemctl is-active queue", timeout=timedelta(seconds=30))
         print(machine.succeed("journalctl -u queue --no-pager | tail -5"))
         machine.succeed("journalctl -u queue --no-pager | grep 'told to stop' > /dev/null")
         left = machine.succeed("ls -A /root/destination-stop").strip()

@@ -224,6 +224,7 @@ pkgs.testers.runNixOSTest {
       import re
       import shlex
       import time
+      from datetime import timedelta
 
       user = "${nodes.machine.ronoctua.user}"
       home = f"/home/{user}"
@@ -341,7 +342,7 @@ pkgs.testers.runNixOSTest {
       machine.wait_for_unit("kiosk-pages.service")
       machine.wait_for_unit("ronoctua-browser-extension.service")
       # CHROME ARRIVES, seeded, and the session's view holds its program.
-      machine.wait_until_succeeds(f"test -x {CHROME}", timeout=300)
+      machine.wait_until_succeeds(f"test -x {CHROME}", timeout=timedelta(minutes=5))
       uid = machine.succeed(f"id -u {user}").strip()
       runtime = f"/run/user/{uid}"
       ID = machine.succeed("cat /var/lib/ronoctua-browser/id").strip()
@@ -349,15 +350,15 @@ pkgs.testers.runNixOSTest {
       with subtest("the login brings the session up: compositor, footer and queue"):
           try:
               machine.wait_until_succeeds(
-                  f"systemctl --machine={user}@ --user is-active {FOOTER}", timeout=300
+                  f"systemctl --machine={user}@ --user is-active {FOOTER}", timeout=timedelta(minutes=5)
               )
               machine.wait_until_succeeds(
-                  f"systemctl --machine={user}@ --user is-active {QUEUE}", timeout=60
+                  f"systemctl --machine={user}@ --user is-active {QUEUE}", timeout=timedelta(minutes=1)
               )
               machine.wait_until_succeeds(
                   f"journalctl -a -o cat _SYSTEMD_USER_UNIT={FOOTER} "
                   "| grep 'control socket opened' > /dev/null",
-                  timeout=120,
+                  timeout=timedelta(minutes=2),
               )
           except Exception:
               diagnose()
@@ -420,7 +421,7 @@ pkgs.testers.runNixOSTest {
               f"systemd-run --unit=kiosk-watch --setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
               f"${pkgs.bash}/bin/bash -c '{MSG} -t subscribe -m \"[\\\"window\\\"]\" > /tmp/windows.log'"
           )
-          machine.wait_until_succeeds("test -e /tmp/windows.log", timeout=30)
+          machine.wait_until_succeeds("test -e /tmp/windows.log", timeout=timedelta(seconds=30))
           command(f"kiosk-open {PAGES}/a.html")
 
           def titles():
@@ -487,7 +488,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               f"test $(journalctl -a -o cat _SYSTEMD_USER_UNIT={FOOTER} "
               f"| grep -c 'control socket opened') -gt {opened}",
-              timeout=120,
+              timeout=timedelta(minutes=2),
           )
           assert host_pids() == hosts_before, "the host did not survive the footer's restart"
           # [B, A, C] with C in front: the previous one is A.

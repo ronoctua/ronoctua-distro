@@ -84,6 +84,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import os as _os
+    from datetime import timedelta
 
     ${xvfb.prelude}
 
@@ -119,7 +120,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(f"systemd-run --unit={unit} {SESSION} {command}")
 
 
-    def session_run(command, timeout=900):
+    def session_run(command, timeout=timedelta(minutes=15)):
         """Run `command` to its end inside the session, and return its output."""
         return machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 "
@@ -144,7 +145,7 @@ pkgs.testers.runNixOSTest {
         "${pkgs.dbus}/bin/dbus-daemon --session --nofork "
         "--address=unix:path=/run/user/0/bus"
     )
-    machine.wait_until_succeeds("test -S /run/user/0/bus", timeout=30)
+    machine.wait_until_succeeds("test -S /run/user/0/bus", timeout=timedelta(seconds=30))
 
     _scene = _os.environ.get("RONOCTUA_SHOT_SCENE")
     assert _scene, "no scene: run `nix run .#shot -- --apps <scene.py>`"

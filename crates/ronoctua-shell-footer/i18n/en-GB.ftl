@@ -124,6 +124,9 @@ cmd-workspace-previous = Previous workspace
 cmd-workspace-move-next = Move window to next workspace
 cmd-workspace-move-previous = Move window to previous workspace
 echo-capture-failed = The capture could not be taken — the reason is in the log
+# THE LOCK SCREEN could not be started, or refused to lock (no password check
+# on this machine): the session is NOT locked, and the log says why.
+echo-lock-failed = The screen was not locked — the reason is in the log
 group-window = window/buffer
 group-terminal = terminal
 group-workspace = workspace
@@ -422,7 +425,6 @@ notif-oom-orphan = Something outside your buffers was closed: { $cgroup }
 
 ## The focused buffer's keymap
 
-which-buffer = Focused buffer
 hint-state = State: { $state } — click cycles, Esc returns, Esc+arrows chooses
 which-state = State of the focused buffer
 
@@ -444,7 +446,6 @@ group-system = system
 cmd-rescue-open = Rescue console
 cmd-apps-pin = Put the application on the file manager's sidebar
 files-sidebar-unwritable = could not save the sidebar: { $why }
-group-geography = geography
 # `c` stopped being a command and became a group: the clipboard captures what
 # you copy, and the screen captures what you see.
 group-miscellaneous = miscellaneous
@@ -563,7 +564,6 @@ cmd-brightness-down = Dimmer screen
 cmd-media-play = Play, or hold
 cmd-media-next = Next track
 cmd-media-previous = Previous track
-hint-volume = { $device } at { $percent }% — sound
 hint-volume-muted = { $device }, silent — sound
 hint-microphone = Something is listening — sound
 sound-muted = silent

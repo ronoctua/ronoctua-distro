@@ -2073,6 +2073,94 @@ fn the_system_that_did_not_boot_is_not_tried_again() {
     assert_eq!(w.outcome(), Some(TrialOutcome::Pending));
 }
 
+/// FAILS IF: `try-again` writes a request with no failed trial to try, or
+/// changes the record's failure; the next update does not build and try the
+/// system that did not start once it was asked to, or tries it with no way
+/// back; the request outlives the apply that used it (a retry that fails
+/// again would be tried for ever); or a request about another system lets
+/// this one through.
+#[test]
+fn a_failed_trial_is_tried_again_once_when_asked() {
+    let w = World::new("again");
+    let a = w.m.system.resolve(system::BOOTED).unwrap();
+    let request = w.m.places.state.join(crate::AGAIN);
+    // NOTHING FAILED: there is nothing to try again, and nothing is written.
+    assert_eq!(w.m.try_again().unwrap_err().why, Why::NoFailedTrial);
+    assert!(!request.exists());
+    std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();
+    let b = w.toplevel("b", "quiet b");
+    w.builds(&b);
+    w.m.apply(Applying::NextBoot).unwrap();
+    w.reboot(&a);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Failed);
+    assert!(!crate::asked_again(&w.m.places, &w.state()));
+    // A REQUEST ABOUT ANOTHER SYSTEM forgives nothing, and is said by nobody.
+    std::fs::write(
+        &request,
+        r#"{"toplevel": "/nix/store/00000000000000000000000000000001-nixos-system-c", "asked-at": "2026-10-31T00:00:00Z"}"#,
+    )
+    .unwrap();
+    assert!(!crate::asked_again(&w.m.places, &w.state()));
+    std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();
+    assert_eq!(
+        w.m.apply(Applying::NextBoot).unwrap_err().why,
+        Why::DidNotBoot
+    );
+    // ASKED: the record still says the trial failed, and the page says the
+    // system is tried again.
+    w.m.try_again().unwrap();
+    assert_eq!(w.outcome(), Some(TrialOutcome::Failed));
+    assert!(crate::asked_again(&w.m.places, &w.state()));
+    // THE NEXT UPDATE builds it, sets it for the next boot and arms its
+    // trial — the way back is armed again.
+    std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();
+    let applied = w.m.apply(Applying::NextBoot).unwrap();
+    assert_eq!(applied.result, ApplyResult::Staged);
+    assert_eq!(w.outcome(), Some(TrialOutcome::Pending));
+    assert_eq!(w.profile().as_deref(), Some(b.as_str()));
+    let (default, oneshot) = (w.read("efi-default"), w.read("efi-oneshot"));
+    assert!(
+        !default.is_empty() && !oneshot.is_empty() && default != oneshot,
+        "no way back armed: default {default:?}, one-shot {oneshot:?}"
+    );
+    assert!(!request.exists(), "the request is spent");
+    assert!(!crate::asked_again(&w.m.places, &w.state()));
+    // IT FAILS AGAIN: refused again, until the person asks again.
+    w.reboot(&a);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Failed);
+    std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();
+    assert_eq!(
+        w.m.apply(Applying::NextBoot).unwrap_err().why,
+        Why::DidNotBoot
+    );
+    assert_eq!(w.lock(), LOCK_A, "the folder is put back");
+}
+
+/// FAILS IF: `hold` with no revision holds anything but the revision the
+/// machine runs, leaves the folder's lock past it, holds nothing at all, or
+/// holds when nothing names a revision of the distro.
+#[test]
+fn hold_with_no_revision_holds_the_one_that_runs() {
+    let w = World::new("hold-running");
+    std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();
+    assert_eq!(w.m.hold_running().unwrap(), "a".repeat(40));
+    assert_eq!(w.state().hold.unwrap().rev, "a".repeat(40));
+    assert_eq!(w.lock(), LOCK_A, "the lock is put back on what runs");
+    // HELD: the update's lock moved, and nothing is built.
+    std::fs::write(w.m.places.dir.join("flake.lock"), LOCK_B).unwrap();
+    let b = w.toplevel("b", "quiet b");
+    w.builds(&b);
+    assert_eq!(w.m.apply(Applying::Now).unwrap_err().why, Why::Held);
+    assert_eq!(w.read("built"), "", "nothing was built");
+    w.m.unhold().unwrap();
+    assert_eq!(w.state().hold, None);
+    // NOTHING NAMES A REVISION: refused, and nothing is held.
+    w.forget_applied_lock();
+    std::fs::remove_file(w.m.places.dir.join("flake.lock")).unwrap();
+    assert_eq!(w.m.hold_running().unwrap_err().why, Why::Unreadable);
+    assert_eq!(w.state().hold, None);
+}
+
 /// FAILS IF: an apply that runs before this boot's bless (an update started
 /// at once) does not first judge a trial the earlier boot tried — and so
 /// switches into the system that did not boot.

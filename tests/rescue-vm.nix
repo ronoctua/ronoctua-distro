@@ -70,6 +70,8 @@ pkgs.testers.runNixOSTest {
   testScript =
     { nodes, ... }:
     ''
+      from datetime import timedelta
+
       ${builtins.readFile ./console-cells.py}
 
       user_name = "${nodes.machine.ronoctua.user}"
@@ -108,7 +110,7 @@ pkgs.testers.runNixOSTest {
           # key below evdev would be testing the kernel and not our system.
           machine.succeed("systemctl start ctrl-alt-del.target")
           machine.wait_until_succeeds(
-              "systemctl is-active --quiet ronoctua-rescue.service", timeout=30
+              "systemctl is-active --quiet ronoctua-rescue.service", timeout=timedelta(seconds=30)
           )
 
           after = machine.succeed("cat /proc/sys/kernel/random/boot_id").strip()
@@ -133,7 +135,7 @@ pkgs.testers.runNixOSTest {
           # in both languages, so the assertion does not depend on which locale
           # the VM happened to boot with.
           machine.wait_until_succeeds(
-              "tr -d '\\0' < /dev/vcs8 | grep Terminal > /dev/null", timeout=30
+              "tr -d '\\0' < /dev/vcs8 | grep Terminal > /dev/null", timeout=timedelta(seconds=30)
           )
           screen = machine.succeed("tr -d '\\0' < /dev/vcs8")
           print(screen)
@@ -195,6 +197,6 @@ pkgs.testers.runNixOSTest {
 
       with subtest("leaving gives the screen back to where it came from"):
           machine.succeed("systemctl stop ronoctua-rescue.service")
-          machine.wait_until_succeeds("test $(fgconsole) != 8", timeout=30)
+          machine.wait_until_succeeds("test $(fgconsole) != 8", timeout=timedelta(seconds=30))
     '';
 }

@@ -31,7 +31,10 @@
 //!   tried again, and the EFI variables are unset.
 //! - `hibernate pre | post`: the trial's one-shot put aside for a
 //!   hibernation, and back after the resume ([`sleep`]).
-//! - `hold <rev>` / `unhold`.
+//! - `hold [<rev>]` / `unhold`: the machine stays on the distro revision it
+//!   runs, or follows the distro again; `hold` alone holds that revision.
+//! - `try-again`: the system whose boot trial failed is built and tried once
+//!   more at the next apply that builds it ([`again`]).
 //!
 //! # Who runs what
 //!
@@ -65,6 +68,7 @@
 
 #![forbid(unsafe_code)]
 
+mod again;
 pub mod aim;
 mod apply;
 pub mod argv;
@@ -92,6 +96,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub use again::{AGAIN, asked as asked_again};
 pub use next::{NextBoot, next_boot};
 pub use ronoctua_person::state::{
     ApplyResult, Hold, LastApply, LastGood, MachineState, NoTrial, Trial, TrialOutcome,
@@ -163,6 +168,8 @@ pub enum Why {
     LastGoodWouldFallOut,
     /// The machine is held at a revision, and the lock names another.
     Held,
+    /// No system failed its boot trial: there is nothing to try again.
+    NoFailedTrial,
     /// A file of the machine directory does not read.
     Unreadable,
     /// A program failed.
@@ -171,7 +178,7 @@ pub enum Why {
 
 impl Why {
     /// Every one.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::NotRoot,
         Self::Busy,
         Self::NothingToMigrate,
@@ -181,6 +188,7 @@ impl Why {
         Self::DidNotBoot,
         Self::LastGoodWouldFallOut,
         Self::Held,
+        Self::NoFailedTrial,
         Self::Unreadable,
         Self::Failed,
     ];
@@ -198,6 +206,7 @@ impl Why {
             Self::DidNotBoot => "did-not-boot",
             Self::LastGoodWouldFallOut => "last-good-would-fall-out",
             Self::Held => "held",
+            Self::NoFailedTrial => "no-failed-trial",
             Self::Unreadable => "unreadable",
             Self::Failed => "failed",
         }
@@ -304,8 +313,15 @@ pub enum Verb {
         /// The revision (hex).
         rev: String,
     },
+    /// Hold the distro at the revision that runs — `hold` with no word, what
+    /// the update's page asks through the sudo door: the machine reads the
+    /// revision, nobody names it.
+    HoldRunning,
     /// Stop holding.
     Unhold,
+    /// Build and try once more the system whose boot trial failed, at the
+    /// next apply that builds it ([`again`]).
+    TryAgain,
     /// Root the sources the machine's flake was evaluated from.
     KeepSources,
     /// The distro and `nixpkgs` inputs moved forward — an aimed machine put
@@ -337,7 +353,9 @@ impl Verb {
                 if *resumed { "post" } else { "pre" }.to_owned(),
             ],
             Self::Hold { rev } => vec!["hold".to_owned(), rev.clone()],
+            Self::HoldRunning => vec!["hold".to_owned()],
             Self::Unhold => vec!["unhold".to_owned()],
+            Self::TryAgain => vec!["try-again".to_owned()],
             Self::KeepSources => vec!["keep-sources".to_owned()],
             Self::UpdateDistro => vec!["update-distro".to_owned()],
         }
@@ -366,7 +384,9 @@ impl Verb {
             ["hold", rev] if is_rev(rev) => Some(Self::Hold {
                 rev: (*rev).to_owned(),
             }),
+            ["hold"] => Some(Self::HoldRunning),
             ["unhold"] => Some(Self::Unhold),
+            ["try-again"] => Some(Self::TryAgain),
             ["keep-sources"] => Some(Self::KeepSources),
             ["update-distro"] => Some(Self::UpdateDistro),
             _ => None,
@@ -488,8 +508,12 @@ impl Machine {
             Verb::Rollback { now } => self.rollback(*now),
             Verb::Disarm => self.disarm().map(|()| "disarmed".to_owned()),
             Verb::Hibernate { resumed } => sleep::hibernate(self, *resumed),
-            Verb::Hold { rev } => self.hold(rev).map(|()| format!("held at {rev}")),
+            Verb::Hold { rev } => self.hold(rev).map(|held| format!("held at {held}")),
+            Verb::HoldRunning => self.hold_running().map(|held| format!("held at {held}")),
             Verb::Unhold => self.unhold().map(|()| "not held".to_owned()),
+            Verb::TryAgain => self
+                .try_again()
+                .map(|()| "tried again at the next update".to_owned()),
             Verb::UpdateDistro => aim::update_distro(self),
             Verb::KeepSources => self.keep_sources().map(|kept| {
                 if kept {
@@ -556,14 +580,24 @@ impl Machine {
         disarm::disarm(self)
     }
 
-    /// `hold <rev>`.
+    /// `hold <rev>`: the revision held, whole.
     ///
     /// # Errors
     ///
     /// [`Why::NotRoot`], [`Why::Busy`], [`Why::Held`] (the lock names
     /// another revision), [`Why::Unreadable`], [`Why::Failed`].
-    pub fn hold(&self, rev: &str) -> Result<(), Refusal> {
-        hold::hold(self, rev)
+    pub fn hold(&self, rev: &str) -> Result<String, Refusal> {
+        hold::hold(self, Some(rev))
+    }
+
+    /// `hold`: the revision that runs, held — whole.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::NotRoot`], [`Why::Busy`], [`Why::Unreadable`] (no lock names
+    /// a revision of the distro), [`Why::Failed`].
+    pub fn hold_running(&self) -> Result<String, Refusal> {
+        hold::hold(self, None)
     }
 
     /// `unhold`.
@@ -573,6 +607,16 @@ impl Machine {
     /// [`Why::NotRoot`], [`Why::Busy`], [`Why::Unreadable`], [`Why::Failed`].
     pub fn unhold(&self) -> Result<(), Refusal> {
         hold::unhold(self)
+    }
+
+    /// `try-again`.
+    ///
+    /// # Errors
+    ///
+    /// [`Why::NotRoot`], [`Why::Busy`], [`Why::NoFailedTrial`],
+    /// [`Why::Unreadable`], [`Why::Failed`].
+    pub fn try_again(&self) -> Result<(), Refusal> {
+        again::try_again(self)
     }
 
     /// `keep-sources`: roots the sources the machine's flake was evaluated
@@ -700,7 +744,7 @@ pub fn disarm(places: &Places) -> Result<(), Refusal> {
 /// # Errors
 ///
 /// See [`Machine::hold`].
-pub fn hold(places: &Places, rev: &str) -> Result<(), Refusal> {
+pub fn hold(places: &Places, rev: &str) -> Result<String, Refusal> {
     Machine::from_env(places.clone()).hold(rev)
 }
 
@@ -729,6 +773,16 @@ pub fn keep_sources(places: &Places) -> Result<bool, Refusal> {
 /// [`Why::Unreadable`].
 pub fn state(places: &Places) -> Result<MachineState, Refusal> {
     disk::read_state(places)
+}
+
+/// The distro revision the machine directory's lock names — the one a hold
+/// holds, the folder describing the system the profile names — or `None`
+/// with no lock, or one that names none (a machine with no flake of its
+/// own: the VM's, a test's). What the update's page offers to hold.
+#[must_use]
+pub fn distro_revision(places: &Places) -> Option<String> {
+    let lock = std::fs::read(places.dir.join("flake.lock")).ok()?;
+    disk::locked_rev(&lock, DISTRO_INPUT)
 }
 
 /// Root, and root's lock of the person's data — what every verb that may
@@ -799,7 +853,9 @@ mod verbs {
             Verb::Hold {
                 rev: "613862c".to_owned(),
             },
+            Verb::HoldRunning,
             Verb::Unhold,
+            Verb::TryAgain,
             Verb::KeepSources,
             Verb::UpdateDistro,
         ] {
@@ -808,6 +864,9 @@ mod verbs {
         for bad in [
             &["hold", "HEAD"][..],
             &["hold", "abc"],
+            &["hold", "613862c", "613862c"],
+            &["try-again", "/nix/store/x"],
+            &["unhold", "613862c"],
             &["apply", "--force"],
             &["apply", "--next-boot", "--rehearse"],
             &["apply", "--rehearse", "--next-boot"],

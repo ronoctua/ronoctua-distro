@@ -130,6 +130,9 @@ macro_rules! held_by_the_footer {
 mod host;
 mod kiosk;
 mod lan;
+// THE LOCK SCREEN, from the footer's side: starting it, and the automatic
+// lock the person's choice arms (`crate::idle_notify`).
+mod locking;
 // THE FOOTER'S OWN DEALINGS WITH THE PERSON'S PROGRAMS, view or no view:
 // the modeline's marks, the ends of the queue's jobs, what was installed.
 mod programs;
@@ -809,6 +812,11 @@ struct Footer {
     capture_sender: Option<calloop::channel::Sender<crate::capture_wire::Outcome>>,
     /// Is the capture overlay up?
     capturing: bool,
+    /// THE TIME WITHOUT USE, every seat's (`crate::idle_notify`): what locks
+    /// the screen by itself when the person chose it.
+    idle: crate::idle_notify::Idle,
+    /// The lock screen this footer starts, and its threads (`locking`).
+    locking: locking::Locking,
     /// THE SCREEN RESIZER (`LEADER / r`), while it is on: the cut its file
     /// says — the room everything is laid out in (`resizer`, the overlay's).
     resizer: Option<crate::room::State>,
@@ -2901,6 +2909,8 @@ fn assemble(
         paste_sender: None,
         capture_sender: None,
         capturing: false,
+        idle: crate::idle_notify::Idle::bind(globals, qh),
+        locking: locking::Locking::default(),
         resizer: None,
         build_state: crate::build_switch::read(),
         switching: None,
@@ -3476,6 +3486,10 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the capture channel: {e}"))?;
+
+    // THE LOCK SCREEN: what starts it, and the automatic lock armed by the
+    // person's choice, watched.
+    state.hang_the_lock(&handle)?;
 
     // THE SCREEN RESIZER: how its keeper ended, and its file. The keeper is
     // another process (`resizer`) and outlives a footer started again, so
@@ -6387,7 +6401,10 @@ impl SeatHandler for Footer {
         &mut self.seats
     }
 
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+    /// EVERY SEAT IS WATCHED for the time without use (`crate::idle_notify`).
+    fn new_seat(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        self.idle.seat_came(&seat, qh);
+    }
 
     fn new_capability(
         &mut self,
@@ -6487,7 +6504,9 @@ impl SeatHandler for Footer {
         }
     }
 
-    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        self.idle.seat_went(&seat);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -8677,6 +8696,9 @@ impl Footer {
             // `screenshots-land-in-a-declared-directory` check reads BOTH
             // ends so the two cannot drift.
             "screen-capture" => self.capture_the_screen(),
+            // THE LOCK SCREEN, a process of its own (`locking`): the session
+            // stays locked whatever becomes of this footer.
+            "lock-screen" => self.lock_the_screen(),
             "monitor-btop" => self.open_monitor(BTOP_PATH, "RONOCTUA_BTOP"),
             "monitor-bottom" => self.open_monitor(BOTTOM_PATH, "RONOCTUA_BOTTOM"),
             // The glyph browser, in an `xdg_toplevel` of its own. The

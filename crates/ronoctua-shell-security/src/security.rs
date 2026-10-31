@@ -114,6 +114,10 @@ pub const CHECK_EMAIL: &str = "security-check-email";
 /// file manager's "Check with VirusTotal" with the path as its argument.
 pub const CHECK_FILE: &str = "security-check-file";
 
+/// The lock screen's command (`LEADER s q l`, the lock's crate's): the row
+/// "lock now" runs it, through the footer.
+pub const LOCK_SCREEN: &str = "lock-screen";
+
 /// "Treat as home" for the network that just came up — what the watch's
 /// event offers on the minibuffer's line ([`home_errand`]).
 pub const HOME: &str = "security-home";
@@ -336,16 +340,19 @@ pub enum Section {
     // ── anchor: L22 ──
     /// The security keys that answer sudo (the sudo bar's package).
     Keys,
+    /// The lock screen: locking now, and locking by itself (2026-10-31).
+    Lock,
 }
 
 impl Section {
     /// All, in the page's order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Now,
         Self::Firewall,
         Self::Admin,
         Self::Finger,
         Self::Keys,
+        Self::Lock,
         Self::Private,
         Self::Encrypt,
         Self::Device,
@@ -371,6 +378,7 @@ impl Section {
             Self::Encrypt => "encrypt",
             Self::Quantum => "quantum",
             Self::Keys => "keys",
+            Self::Lock => "lock",
         }
     }
 
@@ -395,6 +403,7 @@ impl Section {
             Self::Encrypt => key::SECURITY_HEADING_ENCRYPT,
             Self::Quantum => key::SECURITY_HEADING_QUANTUM,
             Self::Keys => key::SECURITY_HEADING_KEYS,
+            Self::Lock => key::SECURITY_HEADING_LOCK,
         }
     }
 }
@@ -552,6 +561,12 @@ pub struct Scene {
     pub quantum: ronoctua_security::quantum::Facts,
     /// The person's own recipient, for "for you" (`crate::seal::mine`).
     pub mine: crate::seal::Mine,
+    /// Whether the screen locks by itself, and after how long
+    /// (`lock.json`, the footer's to arm).
+    pub lock: ronoctua_shell_kit::lock_choice::Choice,
+    /// `lock.json` did not read whole: it does not lock by itself until a
+    /// wait is chosen again — said on the page, never guessed.
+    pub lock_refused: bool,
 }
 
 /// The variable a photograph of the FOOTER names its security scene with —
@@ -681,6 +696,13 @@ impl Scene {
             crate::seal::Mine::NoBelongings => ronoctua_security::quantum::Belongings::None,
         };
         self.quantum.tls = tls_heard();
+        // THE LOCK'S CHOICE, which the other door can have moved.
+        {
+            use ronoctua_shell_kit::lock_choice::{Armed, armed_by, store};
+            let reading = store().reading();
+            self.lock_refused = armed_by(&reading) == Armed::Refused;
+            self.lock = reading.value;
+        }
         self.read = true;
     }
 
@@ -1236,6 +1258,9 @@ pub enum Errand {
     Sniff(PathBuf),
     /// Read the clipboard for the file picker ([`View::picker_pasted`]).
     Paste,
+    /// Write the lock's choice (`lock.json`): the footer, which watches the
+    /// file, arms it.
+    LockChoice(ronoctua_shell_kit::lock_choice::Choice),
 }
 
 /// What a question on the page is about.
@@ -1335,6 +1360,10 @@ pub enum Act {
     SealMode(crate::seal::Mode),
     /// A row of the file picker, while it is up.
     Pick(crate::file_picker::Target),
+    /// The screen locks by itself, or it stops.
+    LockByItself,
+    /// The next wait before it does (`Left`/`Right` walk the ring).
+    LockAfter,
 }
 
 impl Act {
@@ -1391,6 +1420,8 @@ impl Act {
             Self::Seal(crate::seal::Pick::Folder) => key::SECURITY_ABOUT_SEAL_FOLDER,
             Self::Seal(crate::seal::Pick::Open) => key::SECURITY_ABOUT_SEAL_OPEN,
             Self::SealMode(_) => key::SECURITY_ABOUT_SEAL_MODE,
+            Self::LockByItself => key::SECURITY_ABOUT_LOCK_BY_ITSELF,
+            Self::LockAfter => key::SECURITY_ABOUT_LOCK_AFTER,
             _ => key::SECURITY_ABOUT_SHOW,
         }
     }
@@ -1901,6 +1932,7 @@ impl View {
             self.finger(&mut b, scene);
         }
         self.keys(&mut b, scene);
+        lock(&mut b, scene);
         self.private(&mut b, scene);
         encrypt(&mut b, scene);
         device(&mut b, scene);
@@ -2723,6 +2755,9 @@ impl View {
                 }
                 Errand::Close
             }
+            Press::Left | Press::Right if under == Some(Act::LockAfter) => {
+                Errand::LockChoice(scene.lock.stepped(p == Press::Right))
+            }
             Press::Left | Press::Right => {
                 if under == Some(Act::Enrol) {
                     self.finger_at = if p == Press::Right {
@@ -2920,6 +2955,8 @@ impl View {
             // THE PICKER'S `RET` is its own, and reaches it above.
             Act::Pick(_) => Errand::Nothing,
             Act::Command(id) => Errand::Command(id),
+            Act::LockByItself => Errand::LockChoice(scene.lock.toggled()),
+            Act::LockAfter => Errand::LockChoice(scene.lock.stepped(true)),
             Act::Url(url) => Errand::Url(url.to_owned()),
             Act::Answer(yes) => {
                 let confirm = self.confirm.take();
@@ -4170,6 +4207,47 @@ impl View {
 }
 
 /// The sections of facts, which keep no view state.
+/// THE LOCK SCREEN: locking now, whether the screen locks by itself, and
+/// after how long. The footer arms what the file says; a file it refused is
+/// said here, in the warning's colour, and nothing locks by itself until a
+/// wait is chosen again.
+fn lock(b: &mut Lines<'_>, scene: &Scene) {
+    b.heading(Section::Lock);
+    b.pair(
+        &b.t(key::SECURITY_LOCK_NOW),
+        "",
+        Some(Act::Command(LOCK_SCREEN)),
+        None,
+    );
+    let by_itself = scene.lock.automatic && !scene.lock_refused;
+    b.pair(
+        &b.t(key::SECURITY_LOCK_BY_ITSELF),
+        &b.t(if by_itself {
+            key::SECURITY_ON
+        } else {
+            key::SECURITY_OFF
+        }),
+        Some(Act::LockByItself),
+        None,
+    );
+    b.pair(
+        &b.t(key::SECURITY_LOCK_AFTER),
+        &b.texts.t_args(
+            key::SECURITY_LOCK_MINUTES,
+            &[("minutes", Arg::Number(i64::from(scene.lock.minutes)))],
+        ),
+        Some(Act::LockAfter),
+        None,
+    );
+    if scene.lock_refused {
+        b.line(
+            &b.t(key::SECURITY_LOCK_REFUSED),
+            tokens::color::STATE_WARNING,
+        );
+    }
+    b.note(&b.t(key::SECURITY_LOCK_NOTE));
+}
+
 fn device(b: &mut Lines<'_>, scene: &Scene) {
     b.heading(Section::Device);
     let unknown = b.t(key::SECURITY_UNKNOWN);
@@ -4226,12 +4304,6 @@ fn device(b: &mut Lines<'_>, scene: &Scene) {
         &b.t(key::SECURITY_DEVICE_UPDATES),
         "",
         Some(Act::Command("update-open")),
-        None,
-    );
-    b.pair(
-        &b.t(key::SECURITY_DEVICE_LOCK),
-        &b.t(key::SECURITY_DEVICE_LOCK_NONE),
-        None,
         None,
     );
     b.pair(
@@ -4756,10 +4828,15 @@ pub fn watches(
     if let Some(keys) = ronoctua_lookup::keys::dir() {
         dirs.push(keys);
     }
-    dirs.into_iter()
+    let mut watched: Vec<ronoctua_files::notice::Notice> = dirs
+        .into_iter()
         .filter(|d| d.is_dir())
         .filter_map(|d| ronoctua_files::notice::Notice::watching(Some(&d), stir.clone()).ok())
-        .collect()
+        .collect();
+    // AND THE LOCK'S CHOICE, the one file of the person's configuration this
+    // page shows: the other door writes it too.
+    watched.extend(ronoctua_shell_kit::lock_choice::watch(stir));
+    watched
 }
 
 /// Keeps VirusTotal's key, and says how it went.

@@ -165,6 +165,7 @@ pkgs.testers.runNixOSTest {
     import json as _json
     import os as _os
     import shlex as _shlex
+    from datetime import timedelta
 
     # The default theme's palette, `key -> 0xRRGGBBAA`.
     TOKENS = _json.load(open("${palette}"))
@@ -204,7 +205,7 @@ pkgs.testers.runNixOSTest {
             f"${pkgs.libnotify}/bin/notify-send -u {level} "
             f"-a {app} '{summary}' '{body}'"
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
 
     def control(command):
@@ -212,7 +213,7 @@ pkgs.testers.runNixOSTest {
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             f"${ronoctua-shell}/bin/ronoctua-shell command {command}"
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
 
     def shot(name, lines=None):
@@ -272,7 +273,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "XDG_RUNTIME_DIR=/run/user/0 ${pkgs.python3}/bin/python3 ${playerClient} "
             + _shlex.quote(_json.dumps({"ask": "look"})),
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
 
 
@@ -445,7 +446,7 @@ pkgs.testers.runNixOSTest {
         "${pkgs.dbus}/bin/dbus-daemon --session --nofork "
         "--address=unix:path=/run/user/0/bus"
     )
-    machine.wait_until_succeeds("test -S /run/user/0/bus", timeout=30)
+    machine.wait_until_succeeds("test -S /run/user/0/bus", timeout=timedelta(seconds=30))
     machine.succeed(
         "systemd-run --unit=footer ${xvfb.env} "
         "--setenv=WAYLAND_DISPLAY=wayland-1 "
@@ -497,7 +498,7 @@ pkgs.testers.runNixOSTest {
     )
     machine.wait_until_succeeds(
         "journalctl -u footer --no-pager | grep -q 'footer layout resolved'",
-        timeout=90,
+        timeout=timedelta(seconds=90),
     )
 
 

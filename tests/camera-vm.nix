@@ -364,6 +364,7 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     import json
     import re
+    from datetime import timedelta
     ${xvfb.prelude}
 
     def studio(what):
@@ -421,7 +422,7 @@ pkgs.testers.runNixOSTest {
     # with the monitors on, the first open lands well inside it (the last
     # subtest asserts exactly that), so an empty window with them off is an
     # answer and not an early look.
-    WINDOW = 10
+    WINDOW = timedelta(seconds=10)
 
     def as_person(command):
         # In the person's manager, as a session's program runs. By path: the
@@ -466,13 +467,13 @@ pkgs.testers.runNixOSTest {
         # activated, and WirePlumber is wanted by it.
         machine.succeed(f"systemctl --machine={person}@ --user {verb} pipewire.service wireplumber.service")
         machine.wait_until_succeeds(
-            f"systemctl --machine={person}@ --user is-active wireplumber.service", timeout=60
+            f"systemctl --machine={person}@ --user is-active wireplumber.service", timeout=timedelta(minutes=1)
         )
         machine.wait_until_succeeds(
             f"systemd-run --machine={person}@ --user --pipe --wait --quiet /run/current-system/sw/bin/wpctl status",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
-        machine.sleep(WINDOW)
+        machine.sleep(duration=WINDOW)
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
@@ -485,11 +486,11 @@ pkgs.testers.runNixOSTest {
 
     with subtest("nothing opens a camera at login"):
         # The person, from the seat's login and not from a name written here.
-        machine.wait_until_succeeds("loginctl list-users --no-legend | grep -q .", timeout=120)
+        machine.wait_until_succeeds("loginctl list-users --no-legend | grep -q .", timeout=timedelta(minutes=2))
         person = machine.succeed("loginctl list-users --no-legend | awk 'NR == 1 { print $2 }'").strip()
         machine.wait_until_succeeds(
             f"systemctl --machine={person}@ --user is-system-running --wait | grep -E 'running|degraded'",
-            timeout=120,
+            timeout=timedelta(minutes=2),
         )
         machine.succeed("udevadm settle")
         # THE LOGIN: what opened a node between the watch and a settled seat.
@@ -550,7 +551,7 @@ pkgs.testers.runNixOSTest {
             "--format '%w' -o /tmp/opens /dev/video10 /dev/video42"
         )
         machine.wait_until_succeeds(
-            "journalctl -u opens --no-pager | grep -q 'Watches established'", timeout=30
+            "journalctl -u opens --no-pager | grep -q 'Watches established'", timeout=timedelta(seconds=30)
         )
         machine.succeed(
             "systemd-run --unit=studio --setenv=XDG_RUNTIME_DIR=/run/user/0 "
@@ -558,7 +559,7 @@ pkgs.testers.runNixOSTest {
             "--setenv=RONOCTUA_FFMPEG=${pkgs.ffmpeg-full}/bin/ffmpeg "
             "${studio}/bin/ronoctua-studio"
         )
-        machine.wait_until_succeeds("ls /run/user/0 | grep -q studio", timeout=30)
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q studio", timeout=timedelta(seconds=30))
         start_xvfb()
         start_compositor("compositor", "${scroll}")
         sock = socket_of("compositor")
@@ -569,21 +570,21 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep -q 'footer layout resolved'", timeout=60
+            "journalctl -u footer --no-pager | grep -q 'footer layout resolved'", timeout=timedelta(minutes=1)
         )
         # The footer watches the studio, and the studio is asked for its
         # state: neither is asked for a camera.
         state = studio({"ask": "look"})
         assert state["cameras"] == [], f"an idle studio read the cameras: {state['cameras']}"
         # Both read every camera within a second of starting, before.
-        machine.sleep(3)
+        machine.sleep(duration=timedelta(seconds=3))
         assert opened() == "", f"a camera was opened with nobody asking: {opened()}"
         # THE GESTURE: the camera's settings, which show the cameras.
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             f"SCROLLSOCK={sock} ${ronoctua-shell}/bin/ronoctua-shell command camera-settings-open"
         )
-        machine.wait_until_succeeds("grep -q /dev/video10 /tmp/opens", timeout=30)
+        machine.wait_until_succeeds("grep -q /dev/video10 /tmp/opens", timeout=timedelta(seconds=30))
         machine.succeed("systemctl stop footer")
 
     with subtest("at rest the studio holds nothing, and reads no camera"):
@@ -602,7 +603,7 @@ pkgs.testers.runNixOSTest {
     with subtest("an effect changes the pixels, live"):
         said = studio({"ask": "effect-turn", "by": 1})
         assert said["say"] == "done", said
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         grey = json.loads(machine.succeed("XDG_RUNTIME_DIR=/run/user/0 python3 ${client} frame"))
         print(grey)
         assert grey["chroma"] < before["chroma"] / 4, f"the grey effect left the colour: {grey}"
@@ -611,13 +612,13 @@ pkgs.testers.runNixOSTest {
     with subtest("a recording, and a scene switched under it keeps the encoder"):
         said = studio({"ask": "record", "on": True})
         assert said["say"] == "done", said
-        machine.wait_until_succeeds("pgrep -f 'ffmpeg.*matroska' >/dev/null", timeout=20)
+        machine.wait_until_succeeds("pgrep -f 'ffmpeg.*matroska' >/dev/null", timeout=timedelta(seconds=20))
         encoder = machine.succeed("pgrep -f 'ffmpeg.*matroska' | head -1").strip()
         # The source opens beside the encoder, not before it: waited for.
         for _ in range(20):
             if readers():
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert readers(), "recording, and nobody holds the camera"
         # WITH A CAMERA IN USE the studio reads them: it sees the webcam, and
         # sees ours as not a camera. The watch's first reading is its own
@@ -625,7 +626,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(20):
             if any(c["card"] == "Webcam" for c in studio({"ask": "look"})["cameras"]):
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         state = studio({"ask": "look"})
         print(state)
         cards = [c["card"] for c in state["cameras"]]
@@ -638,20 +639,20 @@ pkgs.testers.runNixOSTest {
         # A photo while recording: the same program, one frame of it.
         said = studio({"ask": "photo"})
         assert said["say"] == "done", said
-        machine.wait_until_succeeds("ls /root/out/*.png", timeout=20)
+        machine.wait_until_succeeds("ls /root/out/*.png", timeout=timedelta(seconds=20))
         machine.succeed("${pkgs.imagemagick}/bin/identify /root/out/*.png")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         # The scene with the camera over a colour, then back: the program
         # changes, the encoder does not.
         for scene in ["screen-and-camera", "camera"]:
             said = studio({"ask": "scene", "name": scene})
             print(scene, said)
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         after = machine.succeed("pgrep -f 'ffmpeg.*matroska' | head -1").strip()
         assert after == encoder, f"switching scenes restarted the encoder ({encoder} -> {after})"
         said = studio({"ask": "record", "on": False})
         assert said["say"] == "done", said
-        machine.wait_until_succeeds("ls /root/out/*.mkv", timeout=30)
+        machine.wait_until_succeeds("ls /root/out/*.mkv", timeout=timedelta(seconds=30))
         probe = machine.succeed(
             "${pkgs.ffmpeg-full}/bin/ffprobe -v error -show_entries stream=codec_type,codec_name "
             "-show_entries format=duration -of json /root/out/*.mkv"
@@ -675,7 +676,7 @@ pkgs.testers.runNixOSTest {
                 # frame arrives the program is an empty, black canvas.
                 "timeout 10 v4l2-ctl -d /dev/video42 --stream-mmap --stream-count=30 "
                 "--stream-to=/tmp/raw && test -s /tmp/raw",
-                timeout=60,
+                timeout=timedelta(minutes=1),
             )
         except Exception:
             print(machine.execute("journalctl -u studio --no-pager | tail -40")[1])
@@ -706,7 +707,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(12):
             if mean > 0.1:
                 break
-            machine.sleep(5)
+            machine.sleep(duration=timedelta(seconds=5))
             machine.succeed(
                 "timeout 10 v4l2-ctl -d /dev/video42 --stream-mmap --stream-count=30 "
                 "--stream-to=/tmp/raw && test -s /tmp/raw"
@@ -722,7 +723,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell camera"
         )
         await_windows(sock, 1, timeout=60)
-        machine.sleep(3)
+        machine.sleep(duration=timedelta(seconds=3))
         w, h, x, y = compositor_geometry()
         machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
         machine.succeed(
@@ -740,7 +741,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(20):
             if readers() == []:
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert readers() == [], f"nobody is watching, and the camera is still held: {readers()}"
         journal = machine.succeed("journalctl -u studio --no-pager")
         assert "panicked" not in journal, journal

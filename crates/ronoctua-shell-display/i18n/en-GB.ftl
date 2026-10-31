@@ -38,7 +38,6 @@ display-heading-screens = Screens
 display-heading-every = All of them
 display-heading-picture = The picture
 display-heading-light = The light
-display-heading-session = The session
 display-heading-arrangement = Where they sit
 display-heading-forgetting = Forget this screen's settings?
 display-heading-keeping = Keeping this?
@@ -59,7 +58,6 @@ display-text-size = Size of the text
 # waits. It names what was MEASURED — see docs/PENDING.md — and never promises
 # an application nobody watched.
 display-text-reaches = the shell and its windows follow at once; GTK and Qt applications follow as they redraw
-display-text-reopens = { $names } keep their size until reopened
 display-fact-connector = Socket
 display-fact-filed = Its settings follow
 display-fact-size = Screen
@@ -74,10 +72,8 @@ display-turn = Turn
 display-place = Place
 display-vary = Varying refresh
 display-brightness = Brightness
-display-first = Opens focused here
 display-vary-cannot = the hardware cannot
 display-vary-always = always
-display-vary-on-demand = only when a window asks
 display-light-is-roots = the file belongs to root — the rule that opens it has not run here
 display-light-on-its-buttons = This monitor's brightness is on its own buttons.
 display-turn-and-picture = { $set } (the picture is { $picture })

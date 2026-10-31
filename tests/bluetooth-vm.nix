@@ -83,6 +83,7 @@ pkgs.testers.runNixOSTest {
       ${xvfb.prelude}
 
       import re
+      from datetime import timedelta
 
       def as_user_may_fail(command):
           """Run `command` in the user's own manager — an ordinary session —
@@ -126,7 +127,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               "systemctl --machine=${nodes.machine.ronoctua.user}@ --user is-system-running --wait "
               "| grep -E 'running|degraded' > /dev/null",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           # THE WHOLE SECURITY STORY, on the running bus, and readable even
           # here: with no controller, `bluetooth.service` is skipped by its own
@@ -189,7 +190,7 @@ pkgs.testers.runNixOSTest {
               "${ronoctua-shell}/bin/ronoctua-shell"
           )
           machine.wait_until_succeeds(
-              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=60
+              "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null", timeout=timedelta(minutes=1)
           )
           journal = footer_journal()
           for mark in ("bt-1", "bt-2", "bt-3", "bt-4"):
@@ -206,7 +207,7 @@ pkgs.testers.runNixOSTest {
           # itself would have been satisfied by subtest 4's own.
           machine.wait_until_succeeds(
               "journalctl -u footer --no-pager | grep -E 'layout resolved width=[0-9]+ height=[0-9]{3}' > /dev/null",
-              timeout=30,
+              timeout=timedelta(seconds=30),
           )
           journal = footer_journal()
           heights = [int(h) for h in re.findall(r"layout resolved width=\d+ height=(\d+)", journal)]

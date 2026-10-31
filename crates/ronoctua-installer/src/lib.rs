@@ -9,7 +9,8 @@
 //!   Testable without a TUI, without a disk, without the network and without
 //!   root, and it is where the milestone's criteria live.
 //! - [`tui`] reads and draws, [`reach`] asks the world what the questions
-//!   check ([`job`]), and [`executor`] runs. None of them decides anything:
+//!   check ([`job`]), [`keymap`] gives the console the keyboard answered,
+//!   and [`executor`] runs. None of them decides anything:
 //!   the TUI's state is testable without a terminal, the jobs without a
 //!   network, and the executor's pure functions without a disk.
 //!
@@ -29,6 +30,7 @@ pub mod first_boot;
 pub mod gate;
 pub mod job;
 pub mod key;
+pub mod keymap;
 pub mod model;
 pub mod plan;
 pub mod platform;

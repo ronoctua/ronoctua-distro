@@ -196,14 +196,6 @@ notif-action-software-trials = Ver as experiências
 notif-action-software-android = Abrir o Android
 echo-brain-no-action = Nenhum módulo do cérebro oferece isso
 echo-brain-snoozed = Adiado
-calc-shape-arithmetic = Aritmética
-calc-shape-conversion = Conversão
-calc-shape-percentage = Porcentagem
-calc-shape-base = Base numérica
-calc-shape-roman = Números romanos
-calc-shape-date = Data
-calc-shape-zone = Fuso horário
-calc-shape-currency = Moeda
 # A PREFERENCE THAT COULD NOT BE SAVED is said, never only logged.
 echo-preference-not-written = Não foi possível gravar { $file } ({ $why }): o que você mudou vale só até o rodapé reiniciar.
 
@@ -334,3 +326,6 @@ sudo-bar-deed-keys-off = parar de deixar suas chaves de segurança responderem a
 sudo-bar-deed-signer-pin = fixar a sua chave de assinatura nesta máquina
 sudo-bar-deed-cache-netrc = deixar esta máquina ler o seu cache binário privado { $name }
 sudo-bar-deed-cache-netrc-remove = tirar desta máquina o acesso ao seu cache binário privado
+sudo-bar-deed-machine-hold = reter esta máquina na revisão da distro que ela roda
+sudo-bar-deed-machine-unhold = deixar esta máquina seguir a distro de novo
+sudo-bar-deed-machine-try-again = tentar de novo, na próxima atualização, o sistema que não subiu

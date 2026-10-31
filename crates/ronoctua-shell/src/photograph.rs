@@ -33,8 +33,8 @@ usage: ronoctua-shell photograph [options] [steps]
                         video-metrics, security, containers, belongings,
                         stick, software, incus, agents, fast-access,
                         network, bluetooth, locale, camera-settings,
-                        display, clipboard, curtain, lifeline or footer
-                        (default: window);
+                        display, clipboard, curtain, lifeline, lock or
+                        footer (default: window);
                         footer-settings is the footer's own settings in
                         their window (`LEADER s r w`), no player's door;
                         update is the update's window (`LEADER s u w`), over
@@ -63,7 +63,7 @@ usage: ronoctua-shell photograph [options] [steps]
 ";
 
 /// Every door's word, as a door that is none of them is refused with.
-const NAMED: &str = "window, column, footer-settings, update, update-scene, files, git, icons, calc, video-metrics, security, containers, belongings, stick, software, incus, agents, fast-access, network, bluetooth, locale, camera-settings, display, clipboard, curtain, lifeline and footer";
+const NAMED: &str = "window, column, footer-settings, update, update-scene, files, git, icons, calc, video-metrics, security, containers, belongings, stick, software, incus, agents, fast-access, network, bluetooth, locale, camera-settings, display, clipboard, curtain, lifeline, lock and footer";
 
 /// THE DOORS THAT ARE NOT THE PLAYER'S, as the player's camera reads them.
 const OTHER_DOORS: OtherDoors = OtherDoors {
@@ -121,6 +121,7 @@ pub fn run(words: &[String]) -> Result<()> {
 const CAMERAS: &[&[Camera]] = &[
     OWN,
     ronoctua_shell_agents::CAMERAS,
+    ronoctua_shell_audio::CAMERAS,
     ronoctua_shell_belongings::CAMERAS,
     ronoctua_shell_bluetooth::CAMERAS,
     ronoctua_shell_camera::CAMERAS,
@@ -133,6 +134,7 @@ const CAMERAS: &[&[Camera]] = &[
     ronoctua_shell_incus::CAMERAS,
     ronoctua_shell_lifeline::CAMERAS,
     ronoctua_shell_locale::CAMERAS,
+    ronoctua_shell_lock::CAMERAS,
     ronoctua_shell_network::CAMERAS,
     ronoctua_shell_overlays::CAMERAS,
     ronoctua_shell_security::CAMERAS,

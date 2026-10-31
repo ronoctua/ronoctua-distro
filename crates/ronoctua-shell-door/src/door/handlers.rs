@@ -34,7 +34,7 @@ use wayland_client::{
 impl<C: Content> Door<C> {
     /// A size from the compositor: kept as ASKED, then made what the buffer
     /// can show — see [`crate::hidpi`].
-    fn configured(&mut self, width: Option<u32>, height: Option<u32>) {
+    pub(crate) fn configured(&mut self, width: Option<u32>, height: Option<u32>) {
         // FROM NOW ON A FRAME MAY GO OUT: the toolkit acked this configure
         // before calling here, so the commit a frame makes comes after the
         // ack (`Ui::may_draw`).
@@ -391,6 +391,20 @@ impl<C: Content> PointerHandler for Door<C> {
         for serial in crate::cursor_shape::enters(events) {
             self.shapes.entered(self.pointers.seat_of(pointer), serial);
         }
+        // A LOCKED SCREEN THAT IS NOT THE DOOR'S answers nothing but the
+        // arrow above: its events are about a surface the door does not draw
+        // (`crate::session_lock`).
+        let theirs: Vec<PointerEvent>;
+        let events = if matches!(self.shell, super::Shell::Locked(_)) {
+            theirs = events
+                .iter()
+                .filter(|e| e.surface == self.ui.surface)
+                .cloned()
+                .collect();
+            &theirs[..]
+        } else {
+            events
+        };
         self.pointers.switch_to(pointer, &mut self.here);
         self.pointer_frame_here(events);
         // THE LOOK UNDER THE HAND, asked after the window has seen the frame:
@@ -414,10 +428,14 @@ impl<C: Content> TouchHandler for Door<C> {
         _: &wl_touch::WlTouch,
         _: u32,
         _: u32,
-        _: wl_surface::WlSurface,
+        surface: wl_surface::WlSurface,
         id: i32,
         position: (f64, f64),
     ) {
+        // A FINGER ON A LOCKED SCREEN THAT IS NOT THE DOOR'S touches nothing.
+        if matches!(self.shell, super::Shell::Locked(_)) && surface != self.ui.surface {
+            return;
+        }
         let (landing, outs) = self.fingers.down(id, position);
         self.finger_did(&outs);
         self.arm_long_press(id, landing);

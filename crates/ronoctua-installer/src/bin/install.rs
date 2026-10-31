@@ -503,7 +503,19 @@ fn from_vars(get: &dyn Fn(&str) -> Option<String>) -> Result<Answers> {
                 .map(ToOwned::to_owned)
                 .unwrap_or_default(),
         };
-        if let Err(e) = validate_it(q, &v, &languages, &layouts) {
+        // THE CONSOLE'S MAP OF THE KEYBOARD, once the pair is known (the
+        // variant is read right after its layout): `host.nix` names it, and
+        // the machine compiles it for its console and its initrd. An answer
+        // with none — or a variant the layout does not have — stops here,
+        // before anything is touched, and not in `nixos-install`.
+        let checked = validate_it(q, &v, &languages, &layouts).and_then(|()| {
+            if q == Question::KeyboardVariant {
+                ronoctua_installer::keymap::map_of(&r.keyboard, &v).map(drop)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(e) = checked {
             // A PROGRAM THIS INSTALLER DOES NOT OFFER is named: answers
             // written for another installer may carry one it listed, and
             // nobody is here to choose again — so nothing is touched.
@@ -628,6 +640,59 @@ mod tests {
         assert_eq!(r.keyboard, DEFAULT_LAYOUT);
         assert!(r.keyboard_variant.is_empty(), "{}", r.keyboard_variant);
         assert!(r.compose_key.is_empty(), "{}", r.compose_key);
+    }
+
+    /// FAILS IF: without a terminal, a keyboard the console has no map of —
+    /// xkeyboard-config's `custom`, or a variant its layout does not have,
+    /// which xkb and `ckbcomp` both take for the plain layout in silence —
+    /// is taken instead of refused, or the refusal does not name the
+    /// variant's question; or one with a map is refused.
+    #[test]
+    fn without_a_terminal_a_keyboard_with_no_console_map_is_refused() {
+        let given = |extra: &[(Question, &str)]| {
+            let vars: HashMap<String, String> = [
+                (Question::Disk, "/dev/disk/by-id/a-disk"),
+                (Question::Hostname, "noctua-teste"),
+                (Question::Password, "fixture-password"),
+                (Question::Passphrase, "fixture-passphrase"),
+                (
+                    Question::BelongingsAddress,
+                    "git@example.org:someone/belongings.git",
+                ),
+                (Question::BelongingsAccess, "/run/keys/deploy"),
+                (
+                    Question::BelongingsPassphrase,
+                    "fixture-belongings-passphrase",
+                ),
+            ]
+            .iter()
+            .chain(extra)
+            .map(|(q, v)| (q.variable(), (*v).to_owned()))
+            .collect();
+            from_vars(&|n| vars.get(n).cloned())
+        };
+        // THE GUARD: the maps this test runs with are there, or every answer
+        // would be refused and the refusals below would prove nothing.
+        let kept = given(&[(Question::Keyboard, "gb"), (Question::KeyboardVariant, "")])
+            .expect("a keyboard with a console map was refused");
+        assert_eq!(
+            ronoctua_installer::keymap::name(&kept.keyboard, &kept.keyboard_variant),
+            "gb"
+        );
+        for (layout, variant) in [("custom", ""), ("us", "bogus"), ("gb", "abnt2")] {
+            let refused = given(&[
+                (Question::Keyboard, layout),
+                (Question::KeyboardVariant, variant),
+            ])
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| panic!("{layout}({variant}) was taken"));
+            assert!(
+                refused.contains("console has no map")
+                    && refused.contains(&Question::KeyboardVariant.variable()),
+                "{refused}"
+            );
+        }
     }
 
     /// FAILS IF: the installer started again keeps an answer in its

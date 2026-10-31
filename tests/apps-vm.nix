@@ -73,12 +73,14 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
 
     def press_key(item_name):
         machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {item_name}")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
 
     def leader():
@@ -147,13 +149,13 @@ pkgs.testers.runNixOSTest {
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
-            timeout=90,
+            timeout=timedelta(seconds=90),
         )
         # THE SWEEP IS THE STARTUP ONE, and the log carries the count and the
         # time. If it only happened on opening, this line would not exist yet.
         journal = machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'application catalogue scanned'",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         print(journal.strip())
         assert "apps=1" in journal, (
@@ -165,11 +167,11 @@ pkgs.testers.runNixOSTest {
     with subtest("`LEADER a` opens with the list ALREADY READY"):
         leader()
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=timedelta(seconds=30)
         )
         press_key("a")
         journal = machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'finder opened'", timeout=30
+            "journalctl -u footer --no-pager | grep 'finder opened'", timeout=timedelta(seconds=30)
         )
         print(journal.strip())
         assert "apps=1" in journal, (
@@ -227,10 +229,10 @@ pkgs.testers.runNixOSTest {
         prior = leaders_in_log()
         press_key("Return")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'opening the application' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'opening the application' > /dev/null", timeout=timedelta(seconds=30)
         )
         machine.wait_until_succeeds(
-            "pgrep -f '${sleepPattern}' >/dev/null", timeout=30
+            "pgrep -f '${sleepPattern}' >/dev/null", timeout=timedelta(seconds=30)
         )
 
     with subtest("AND THE FOOTER GOES ON ANSWERING — the finding"):
@@ -243,7 +245,7 @@ pkgs.testers.runNixOSTest {
         leader()
         machine.wait_until_succeeds(
             f"test $(journalctl -u footer --no-pager | grep -c 'leader active') -gt {prior}",
-            timeout=20,
+            timeout=timedelta(seconds=20),
         )
         machine.succeed("pgrep -f '${sleepPattern}' >/dev/null")
         print("the footer answered with the application still open")

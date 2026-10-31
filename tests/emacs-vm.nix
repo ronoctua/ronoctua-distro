@@ -227,7 +227,7 @@ pkgs.testers.runNixOSTest {
       def daemon():
           """`(pid, restarts)` of the daemon, once systemd says it is active."""
           machine.wait_until_succeeds(
-              f"systemctl --user --machine={user}@ is-active {daemon_unit}", timeout=120
+              f"systemctl --user --machine={user}@ is-active {daemon_unit}", timeout=datetime.timedelta(minutes=2)
           )
           f = facts(daemon_unit)
           return int(f["MainPID"]), int(f["NRestarts"])
@@ -279,13 +279,13 @@ pkgs.testers.runNixOSTest {
               "--setenv=XDG_SESSION_TYPE=wayland --setenv=PATH=${pkgs.bash}/bin "
               "${scroll}/bin/scroll -c ${session}"
           )
-          machine.wait_until_succeeds(f"test -S {run_dir}/wayland-1", timeout=90)
-          machine.wait_until_succeeds(f"test -S {sock}", timeout=60)
+          machine.wait_until_succeeds(f"test -S {run_dir}/wayland-1", timeout=datetime.timedelta(seconds=90))
+          machine.wait_until_succeeds(f"test -S {sock}", timeout=datetime.timedelta(minutes=1))
           # THE SESSION'S LINE RAN: the display is in the manager.
           machine.wait_until_succeeds(
               f"systemctl --user --machine={user}@ show-environment"
               " | grep -x WAYLAND_DISPLAY=wayland-1 > /dev/null",
-              timeout=60,
+              timeout=datetime.timedelta(minutes=1),
           )
           return unit, sock
 
@@ -301,7 +301,7 @@ pkgs.testers.runNixOSTest {
       def end_session(unit):
           manager(f"stop {unit}")
           machine.wait_until_fails(
-              f"systemctl --user --machine={user}@ is-active {unit}", timeout=30
+              f"systemctl --user --machine={user}@ is-active {unit}", timeout=datetime.timedelta(seconds=30)
           )
 
 
@@ -338,8 +338,8 @@ pkgs.testers.runNixOSTest {
               "--setenv=XDG_SESSION_TYPE=wayland --setenv=PATH=${pkgs.bash}/bin "
               "${scroll}/bin/scroll -c ${nestedSession}"
           )
-          machine.wait_until_succeeds(f"test -s {said}", timeout=90)
-          machine.wait_until_succeeds(f"test -S {sock}", timeout=60)
+          machine.wait_until_succeeds(f"test -s {said}", timeout=datetime.timedelta(seconds=90))
+          machine.wait_until_succeeds(f"test -S {sock}", timeout=datetime.timedelta(minutes=1))
           display, x_display = (machine.succeed(f"cat {said}").split() + [""])[:2]
           assert display and display != "wayland-1", f"the nested compositor took `{display}`"
           return unit, sock, display, x_display
@@ -353,7 +353,7 @@ pkgs.testers.runNixOSTest {
                   mine = [w for w in windows(sock) if w.get("pid") == pid]
                   if mine:
                       return name, mine[0]
-              machine.sleep(1)
+              machine.sleep(duration=datetime.timedelta(seconds=1))
           raise AssertionError(f"no window of pid {pid} in {sorted(places)} after {timeout}s")
 
 
@@ -368,7 +368,7 @@ pkgs.testers.runNixOSTest {
               mine = [w for w in windows(sock) if w.get("pid") == pid]
               if mine:
                   return mine[0]
-              machine.sleep(1)
+              machine.sleep(duration=datetime.timedelta(seconds=1))
           raise AssertionError(
               f"no window of pid {pid} after {timeout}s; the compositor has: "
               + json.dumps([(w.get("pid"), w.get("app_id"), w.get("shell")) for w in windows(sock)])
@@ -418,7 +418,7 @@ pkgs.testers.runNixOSTest {
 
       def fate(before, since):
           """What a session's end did to the daemon: `died` and what was said."""
-          machine.sleep(5)
+          machine.sleep(duration=datetime.timedelta(seconds=5))
           after = daemon()
           said = machine.succeed(
               f"journalctl --no-pager --since=@{since} "
@@ -489,7 +489,7 @@ pkgs.testers.runNixOSTest {
           )
           machine.wait_until_succeeds(
               f"systemctl --user --machine={user}@ show tty -p SubState | grep -x SubState=exited > /dev/null",
-              timeout=30,
+              timeout=datetime.timedelta(seconds=30),
           )
           f = facts("tty")
           assert f["ExecMainStatus"] == "0", f"the terminal client did not end cleanly: {f}"
@@ -503,7 +503,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               f"systemctl --user --machine={user}@ show-environment"
               " | grep -x 'DISPLAY=:[0-9]*' > /dev/null",
-              timeout=60,
+              timeout=datetime.timedelta(minutes=1),
           )
           session_x = session_display()
           before = daemon()
@@ -523,7 +523,7 @@ pkgs.testers.runNixOSTest {
           )
           machine.wait_until_succeeds(
               f"systemctl --user --machine={user}@ show gui1 -p SubState | grep -x SubState=exited > /dev/null",
-              timeout=30,
+              timeout=datetime.timedelta(seconds=30),
           )
           assert daemon() == before, "the daemon did not outlive its frame"
           assert not [f for f in frames() if f.startswith("pgtk ")], frames()
@@ -547,7 +547,7 @@ pkgs.testers.runNixOSTest {
 
       with subtest("a session the daemon never drew on ends without it"):
           session, sock = start_session(3)
-          machine.sleep(5)
+          machine.sleep(duration=datetime.timedelta(seconds=5))
           before, since = daemon(), now()
           end_session(session)
           assert not fate(before, since), (
@@ -639,7 +639,7 @@ pkgs.testers.runNixOSTest {
               assert said == "t", f"the edit did not take: {said}"
               cursor = journal_cursor()
               machine.succeed(f"systemctl stop user@{uid}.service")
-              machine.wait_until_fails(f"systemctl is-active user@{uid}.service", timeout=60)
+              machine.wait_until_fails(f"systemctl is-active user@{uid}.service", timeout=datetime.timedelta(minutes=1))
               autosave = machine.execute(f"cat '/home/{user}/#{name}#'")[1].strip()
               ran = machine.execute(f"test -e {hook}")[0] == 0
               journal = machine.succeed(
@@ -687,10 +687,10 @@ pkgs.testers.runNixOSTest {
           # THE REAL FOOTER, up on the compositor with its control socket.
           manager(f"start {footer_unit}")
           try:
-              machine.wait_until_succeeds(f"test -S {run_dir}/ronoctua-wayland-1.sock", timeout=120)
+              machine.wait_until_succeeds(f"test -S {run_dir}/ronoctua-wayland-1.sock", timeout=datetime.timedelta(minutes=2))
               machine.wait_until_succeeds(
                   f"journalctl --no-pager _UID={uid} | grep 'layer-shell surface created' > /dev/null",
-                  timeout=120,
+                  timeout=datetime.timedelta(minutes=2),
               )
           except Exception:
               print(machine.execute(f"journalctl --no-pager _UID={uid} | tail -80")[1])
@@ -704,14 +704,14 @@ pkgs.testers.runNixOSTest {
               f"{shell} command session-quit"
           )
           machine.wait_until_fails(
-              f"systemctl --user --machine={user}@ is-active {session}", timeout=60
+              f"systemctl --user --machine={user}@ is-active {session}", timeout=datetime.timedelta(minutes=1)
           )
           autosave = machine.execute(f"cat '/home/{user}/#{name}#'")[1].strip()
           ran = machine.execute(f"test -e {hook}")[0] == 0
           # A FRESH DAEMON, which never drew on the compositor that went:
           # still up after it, and not brought back by a death (a restart
           # asked for is no `NRestarts`).
-          machine.sleep(5)
+          machine.sleep(duration=datetime.timedelta(seconds=5))
           after = daemon()
           # The footer's log is `tracing`'s, which colours its field names.
           journal = re.sub(r"\x1b\[[0-9;]*m", "", machine.succeed(

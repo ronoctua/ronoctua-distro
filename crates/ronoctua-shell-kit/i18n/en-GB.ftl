@@ -11,7 +11,6 @@
 
 cmd-buffer-next = Next buffer
 cmd-buffer-switch = Switch buffer
-cmd-file-save = Save file
 cmd-buffer-close = Close buffer
 cmd-buffer-terminal = Open terminal
 cmd-session-quit = Quit session
@@ -166,8 +165,6 @@ files-column-group = group
 files-column-size = size
 files-column-modified = modified
 files-explain-owner = { $who } owns it; clicking changes that
-cmd-atlas-open = world data
-cmd-atlas-window = world data in a window
 transfers-pause = hold or release this transfer
 cmd-transfers-pause = hold or let go
 # THE PAGE ITSELF.

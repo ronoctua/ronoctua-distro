@@ -7,13 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# THE THREE PROGRAMS ENTER `pipewire.rs` AND NOWHERE ELSE. `graph.rs` is a pure
+# THE PROGRAMS ENTER `pipewire.rs` AND NOWHERE ELSE. `graph.rs` is a pure
 # merge over `serde_json::Value`, and `lib.rs` is pure over plain structs — so
 # every rule in this crate is testable with no PipeWire running, which is what
 # a build sandbox and a laptop with the daemon stopped both are.
 #
-# The closure gains NOTHING: `pw-dump`, `pw-cat` and `wpctl` come out of the
-# same two packages `nix/rust.nix` already names for the Bluetooth profile.
+# The closure gains NOTHING: `pw-dump`, `pw-cat`, `pw-metadata` and `wpctl`
+# come out of the same two packages `nix/rust.nix` already names for the
+# Bluetooth profile.
 #
 # NO `[[bin]]`: nothing here is a daemon. The footer raises the threads, the
 # same way it raises the power ones.
@@ -30,4 +31,4 @@ workspace = true
 
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
-env = ["RONOCTUA_AUDIO_NAMES_RS", "RONOCTUA_PW_CAT", "RONOCTUA_PW_DUMP", "RONOCTUA_SETPRIV", "RONOCTUA_WPCTL"]
+env = ["RONOCTUA_AUDIO_NAMES_RS", "RONOCTUA_PW_CAT", "RONOCTUA_PW_DUMP", "RONOCTUA_PW_METADATA", "RONOCTUA_SETPRIV", "RONOCTUA_WPCTL"]

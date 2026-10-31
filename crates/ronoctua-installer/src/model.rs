@@ -467,6 +467,10 @@ pub enum Invalid {
     UnknownLanguage,
     /// The layout is not in xkeyboard-config.
     UnknownLayout,
+    /// The console has no map of this keyboard (`crate::keymap`): the
+    /// passwords are typed on the console, and another map is never loaded
+    /// in its place.
+    NoConsoleKeymap,
     /// A Wi-Fi password too short for WPA.
     WifiPasswordTooShort,
     /// A profile that is neither of the two.
@@ -495,6 +499,7 @@ impl Invalid {
             Self::InvalidDisk => key::INST_INVALID_DISK,
             Self::UnknownLanguage => key::INST_INVALID_LANGUAGE,
             Self::UnknownLayout => key::INST_INVALID_LAYOUT,
+            Self::NoConsoleKeymap => key::INST_INVALID_CONSOLE_KEYMAP,
             Self::WifiPasswordTooShort => key::INST_WIFI_PASSWORD_SHORT,
             Self::UnknownProfile => key::INST_INVALID_PROFILE,
             Self::Belongings(why) => crate::access::invalid_key(*why),
@@ -546,6 +551,10 @@ impl std::fmt::Display for Invalid {
             Self::UnknownProfile => "the installation is `full` or `minimal`",
             Self::UnknownLanguage => "the language is not available",
             Self::UnknownLayout => "the keyboard layout does not exist in xkeyboard-config",
+            Self::NoConsoleKeymap => {
+                "the console has no map of this keyboard (layout and variant): the passwords are \
+                 typed on it, so another is never loaded in its place"
+            }
             Self::WifiPasswordTooShort => "a WPA network password is at least 8 characters",
             Self::Belongings(why) => {
                 use ronoctua_belongings::prefs::Invalid as Why;

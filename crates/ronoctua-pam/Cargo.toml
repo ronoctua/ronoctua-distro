@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-pam"
-description = "The one boundary with PAM: the person's system password checked against the declared ronoctua-unlock service."
+description = "The one boundary with PAM: the person's system password checked against the declared ronoctua-unlock service, and a finger against ronoctua-unlock-finger."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

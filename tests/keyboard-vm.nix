@@ -81,6 +81,8 @@ pkgs.testers.runNixOSTest {
   testScript =
     { nodes, ... }:
     ''
+      from datetime import timedelta
+
       user_name = "${nodes.machine.ronoctua.user}"
 
       machine.start()
@@ -238,7 +240,7 @@ pkgs.testers.runNixOSTest {
           machine.wait_until_succeeds(
               "test $(journalctl -u keyd --no-pager | grep -c 'DEVICE: match') "
               f"-gt {int(prior.strip() or 0)}",
-              timeout=30,
+              timeout=timedelta(seconds=30),
           )
     '';
 }

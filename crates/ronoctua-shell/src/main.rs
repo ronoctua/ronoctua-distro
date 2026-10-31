@@ -86,6 +86,7 @@ const DOORS: &[&[Door]] = &[
     ronoctua_shell_incus::DOORS,
     ronoctua_shell_lifeline::DOORS,
     ronoctua_shell_locale::DOORS,
+    ronoctua_shell_lock::DOORS,
     ronoctua_shell_manual::DOORS,
     ronoctua_shell_network::DOORS,
     ronoctua_shell_notifications::DOORS,

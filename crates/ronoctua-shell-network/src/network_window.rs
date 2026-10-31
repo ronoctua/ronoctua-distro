@@ -1153,11 +1153,10 @@ mod tests {
                 crate::door::keys::event_of(ronoctua_keymap::Key::parse(notation).unwrap());
             w.typed(ui, &event, mods);
         };
-        // FROM NOTHING WRITTEN, the first turn lands on the ring's first word
-        // — `none`, which is also what nothing written reads as — and the
-        // second on the next one.
+        // FROM NOTHING WRITTEN, which reads as the ring's first word —
+        // `none` — the first turn lands on the next one: `none` writes no
+        // line, so turning onto it from nothing would turn nothing.
         let before = value(&w, &ui);
-        press(&mut w, &mut ui, "S-<right>");
         press(&mut w, &mut ui, "S-<right>");
         let turned = value(&w, &ui);
         assert_ne!(turned, before, "S-<right> did not turn the setting");

@@ -391,12 +391,12 @@ let
     RONOCTUA_TOR_SOCKS = "${torFacts.socks.address}:${toString torFacts.socks.port}";
     RONOCTUA_TOR_FRAGMENT = torFacts.fragmentDirectory;
     # THE TWO BRIDGES' PROGRAMS ARE NOT HERE. `RONOCTUA_TOR_OBFS4` (lyrebird)
-    # and `RONOCTUA_TOR_SNOWFLAKE` were, and no crate read either: the view's
-    # `ClientTransportPlugin` ring writes the transport's word and no `exec`
-    # path. A value nothing reads is a reason for a unit to rebuild when it
-    # moves, so they left when every crate began declaring what it reads
-    # (`[package.metadata.ronoctua]`); `nix/modules/tor.nix` still installs
-    # both programs.
+    # and `RONOCTUA_TOR_SNOWFLAKE` were, and no crate read either. They are
+    # read now, AT RUN TIME (`ronoctua_tunnel::tor::transport`, which writes
+    # `ClientTransportPlugin <transport> exec <program>`), and set by
+    # `nix/modules/tor.nix`, which installs both: baked here, they would put
+    # both programs in every shell's closure, Tor on or off, and rebuild every
+    # unit above the tunnel when either moved.
     # The URL opener, for Syncthing's interface (`LEADER s s a`).
     # A store path, and not the name: inside a systemd unit PATH is
     # minimal and the failure would show up far from the cause.
@@ -446,6 +446,11 @@ let
     # `crates/ronoctua-audio/src/meter.rs` for why that guard is a value with
     # a `Drop` and not a flag.
     RONOCTUA_PW_CAT = "${pipewire}/bin/pw-cat";
+    # `pw-metadata` IS HOW A PROGRAM IS SENT TO ANOTHER DEVICE, and the fourth
+    # program out of the same package — the closure gains nothing again. It
+    # sets `target.object` of a playing stream and nothing else
+    # (`crates/ronoctua-audio/src/pipewire.rs`, `move_argv`).
+    RONOCTUA_PW_METADATA = "${pipewire}/bin/pw-metadata";
     # `RONOCTUA_EMACSCLIENT` IS NOT SET HERE, and its absence is the point —
     # the same point `RONOCTUA_ICONS` makes below, learned twice.
     #
@@ -521,6 +526,14 @@ let
     # ISO, where there is no current-system yet. Falling back to that path would
     # give an empty list, and validation would refuse everything.
     RONOCTUA_XKB_BASE_LST = "${xkeyboard_config}/share/X11/xkb/rules/base.lst";
+    # THE CONSOLE'S MAP OF EVERY ANSWER ON THAT LIST, and what loads one. The
+    # installer loads the map of the keyboard answered the moment it is
+    # answered, so the passwords after it are typed on the session's layout
+    # (`crates/ronoctua-installer/src/keymap.rs`). Compiled from the same
+    # xkeyboard-config by `nix/console-keymaps.nix`; baked for the list's
+    # reason — the ISO has no environment to read them from.
+    RONOCTUA_CONSOLE_KEYMAPS = "${(import ./console-keymaps.nix { inherit pkgs; }).every}";
+    RONOCTUA_LOADKEYS = "${pkgs.kbd}/bin/loadkeys";
     # THE LOCALE LIST, from glibc's own `SUPPORTED`, for the same reason and by
     # the same route: the installer offers what the system can generate, and a
     # list written by hand here would refuse a locale glibc supports.

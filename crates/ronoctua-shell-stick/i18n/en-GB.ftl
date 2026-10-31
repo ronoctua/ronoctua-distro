@@ -88,5 +88,7 @@ stick-not-let-host = { $host } is not allowed: allow GitHub in this view first.
 stick-busy-writing = A stick is being written now. Wait for it to finish (the last write, below) before writing another.
 stick-busy-waiting = A write is already waiting for its image to download. Give it up in the queue to choose another drive.
 stick-busy-stopped = A writer was still waiting for an image nobody was downloading; it was told to stop. Choose the drive again in a moment.
+stick-busy-preparing = Another write is being prepared: its question or its password is still open. Answer it, or wait for it to start, before writing another.
+stick-busy-unprepared = The write could not be prepared: the folder it is staged in would not take a file. Nothing was started.
 stick-no-writer = This machine has no stick writer installed.
 stick-no-cache = There is no cache folder to download the image into.

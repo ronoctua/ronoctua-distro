@@ -146,6 +146,7 @@ pkgs.testers.runNixOSTest {
     in
     ''
       import json, shlex
+      from datetime import timedelta
 
       user = "${user}"
       cli = "${cli}"
@@ -208,11 +209,11 @@ pkgs.testers.runNixOSTest {
           listed = f"su - {user} -c {shlex.quote(f'{cli} list web --format json')}"
           machine.wait_until_succeeds(
               listed + " | jq -e '.[0].status == \"Running\"'",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           machine.wait_until_succeeds(
               listed + " | jq -e '[.[0].state.network.eth0.addresses[] | select(.family == \"inet\")] | length == 1'",
-              timeout=90,
+              timeout=timedelta(seconds=90),
           )
           as_person(f"{cli} snapshot create web before-upgrade")
 
@@ -266,7 +267,7 @@ pkgs.testers.runNixOSTest {
           snapshot = shlex.quote(f"{cli} snapshot create web probe-$(date +%s%N)")
           machine.wait_until_succeeds(
               f"su - {user} -c {snapshot} && sleep 1 && grep -q instance-snapshot-created /tmp/fixtures/events.jsonl",
-              timeout=60,
+              timeout=timedelta(minutes=1),
           )
           events = [json.loads(line) for line in machine.succeed("cat /tmp/fixtures/events.jsonl").splitlines() if line.strip()]
           life = next(e for e in events if e["type"] == "lifecycle" and e["metadata"]["action"] == "instance-snapshot-created")

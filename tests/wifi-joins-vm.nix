@@ -72,6 +72,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     TRANSITION, WPA2, GUEST, KEY = "${air.transition}", "${air.wpa2}", "${air.guest}", "${air.password}"
 
     def harness(tests, name):
@@ -93,7 +95,7 @@ pkgs.testers.runNixOSTest {
     def on(ssid):
         machine.wait_until_succeeds(
             f"nmcli -t -f GENERAL.STATE,GENERAL.CONNECTION device show wlan1 | tr '\\n' ' ' | grep -q '^GENERAL.STATE:100 .*GENERAL.CONNECTION:{ssid} *$'",
-            timeout=120,
+            timeout=timedelta(minutes=2),
         )
 
     def profiles():
@@ -103,7 +105,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_for_unit("air-dhcp.service")
         machine.wait_for_unit("ronoctua-network-agent.service")
         for ssid in (TRANSITION, WPA2, GUEST):
-            machine.wait_until_succeeds(f"nmcli -t -f SSID dev wifi list --rescan yes | grep -qx {ssid}", timeout=90)
+            machine.wait_until_succeeds(f"nmcli -t -f SSID dev wifi list --rescan yes | grep -qx {ssid}", timeout=timedelta(seconds=90))
 
     machine.start()
     boot()
@@ -117,7 +119,7 @@ pkgs.testers.runNixOSTest {
         on(TRANSITION)
         # FORGOTTEN, it takes its blob: the profile left its password to the agent.
         machine.succeed(f"nmcli connection delete id {TRANSITION}")
-        machine.wait_until_fails(f"test -e {blob(TRANSITION)}", timeout=30)
+        machine.wait_until_fails(f"test -e {blob(TRANSITION)}", timeout=timedelta(seconds=30))
 
     with subtest("the footer joins in memory, and keeping it seals through the agent"):
         run("${networkTests}", "ronoctua_network", "on_the_air::the_footer_joins_then_remembers", WPA2, "noctua")
@@ -151,7 +153,7 @@ pkgs.testers.runNixOSTest {
         machine.start()
         boot()
         machine.wait_until_succeeds(
-            "nmcli -t -f GENERAL.STATE device show wlan1 | grep -q '^GENERAL.STATE:100 '", timeout=120
+            "nmcli -t -f GENERAL.STATE device show wlan1 | grep -q '^GENERAL.STATE:100 '", timeout=timedelta(minutes=2)
         )
         after = profiles()
         print("\n".join(after))

@@ -23,6 +23,12 @@ publish.workspace = true
 # leave every other byte alone — which a parse-and-reserialise would not do. It
 # is the torrc fragment's shape, one file over.
 
+[features]
+default = [ ]
+# A HAND WITH NO THREAD BEHIND IT (`Hand::listening`), for `[dev-dependencies]`
+# ONLY: a door's test reads the orders it sends instead of running `atuin`.
+test-support = [ ]
+
 [dependencies]
 anyhow.workspace = true
 tracing.workspace = true

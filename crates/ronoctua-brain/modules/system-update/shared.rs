@@ -132,10 +132,18 @@ pub struct Records {
     pub conflicts: usize,
     /// The boot trial, when one was armed.
     pub trial: Option<TrialOutcome>,
+    /// The system whose trial failed is tried again at the next update: the
+    /// person asked (`ronoctua-machine try-again`), and the request still
+    /// names it ([`ronoctua_machine::asked_again`]).
+    pub again: bool,
     /// Why the last apply armed no trial.
     pub no_trial: Option<NoTrial>,
     /// The revision the machine is held at.
     pub hold: Option<HeldAt>,
+    /// The distro revision the machine directory's lock names — what a hold
+    /// holds ([`ronoctua_machine::distro_revision`]); `None` on a machine
+    /// with no flake of its own, which has nothing to hold.
+    pub revision: Option<String>,
     /// A new system that waits for the next restart ([`next_boot`]): it is
     /// used from then.
     pub staged: Option<NextBoot>,
@@ -172,7 +180,10 @@ impl RecordPlaces {
     /// them again only when one moved.
     #[must_use]
     pub fn files(&self) -> Vec<PathBuf> {
-        let mut out = vec![self.machine_state.join(ronoctua_person::names::STATE)];
+        let mut out = vec![
+            self.machine_state.join(ronoctua_person::names::STATE),
+            self.machine_state.join(ronoctua_machine::AGAIN),
+        ];
         if let Some(b) = &self.belongings {
             out.extend([b.last(), b.prefs()]);
         }
@@ -190,18 +201,22 @@ impl Records {
     /// The records under `at`.
     #[must_use]
     pub fn read_at(at: &RecordPlaces) -> Self {
-        let state = ronoctua_machine::state(&ronoctua_machine::Places {
+        let places = ronoctua_machine::Places {
             dir: at.machine_dir.clone(),
             state: at.machine_state.clone(),
             run: PathBuf::new(),
-        })
-        .ok();
+        };
+        let state = ronoctua_machine::state(&places).ok();
         Self {
             conflicts: at.belongings.as_ref().map_or(0, plain_conflicts),
             trial: state
                 .as_ref()
                 .and_then(|s| s.trial.as_ref())
                 .map(|t| t.outcome),
+            again: state
+                .as_ref()
+                .is_some_and(|s| ronoctua_machine::asked_again(&places, s)),
+            revision: ronoctua_machine::distro_revision(&places),
             no_trial: state.as_ref().and_then(|s| s.no_trial),
             staged: next_boot(&at.root, state.as_ref()),
             hold: state.and_then(|s| s.hold).map(|h| HeldAt {
@@ -470,6 +485,45 @@ mod tests {
             })
         );
         assert_eq!(r.conflicts, 1);
+        assert!(!r.again, "nobody asked to try the failed system again");
+
+        // ASKED TO TRY IT AGAIN: said while the request names the trial the
+        // record says failed, and only then.
+        let request = machine_state.join(ronoctua_machine::AGAIN);
+        let asked = |top: &str| {
+            std::fs::write(
+                &request,
+                format!(r#"{{"toplevel": "{top}", "asked-at": "2026-10-31T00:00:00Z"}}"#),
+            )
+            .expect("request");
+            Records::read_at(&at).again
+        };
+        assert!(asked(
+            "/nix/store/00000000000000000000000000000001-nixos-system-b"
+        ));
+        assert!(!asked(
+            "/nix/store/00000000000000000000000000000002-nixos-system-c"
+        ));
+        std::fs::remove_file(&request).expect("rm");
+        assert!(
+            at.files().contains(&request),
+            "a door does not read again when the request comes"
+        );
+        // WHAT A HOLD HOLDS is the revision the machine directory's lock
+        // names — and nothing, on a machine with no lock.
+        assert_eq!(r.revision, None);
+        std::fs::create_dir_all(&at.machine_dir).expect("mkdir");
+        std::fs::write(
+            at.machine_dir.join("flake.lock"),
+            r#"{"nodes": {"root": {"inputs": {"ronoctua": "ronoctua"}},
+                "ronoctua": {"locked": {"rev": "613862c5a0ff613862c5a0ff613862c5a0ff6138"}}},
+                "root": "root", "version": 7}"#,
+        )
+        .expect("lock");
+        assert_eq!(
+            Records::read_at(&at).revision.as_deref(),
+            Some("613862c5a0ff613862c5a0ff613862c5a0ff6138")
+        );
 
         assert_eq!(r.staged, None, "nothing applied: nothing waits");
 

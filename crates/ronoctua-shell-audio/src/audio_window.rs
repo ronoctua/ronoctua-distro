@@ -91,6 +91,35 @@ pub fn host_it() -> Result<()> {
     })
 }
 
+/// `ronoctua-shell photograph --door audio --scene <file>`: this window over
+/// a planted graph — the file holds what `pw-dump` prints
+/// ([`crate::audio_region::planted`]) — with no sound server behind it, on the
+/// settings a fresh view keeps, walked and drawn (`crate::photo::planted`).
+/// What a key would ask PipeWire is refused on the picture, as with no server.
+pub fn camera(rest: &[String]) -> ! {
+    crate::photo::planted::taken(
+        rest,
+        "audio",
+        "<a file: the graph, as its dump prints it>",
+        |asked| {
+            let snapshot = crate::audio_region::planted(std::path::Path::new(&asked.scene))?;
+            let texts = ronoctua_i18n::Texts::fresh(&asked.language).ok_or_else(|| {
+                anyhow::anyhow!("the language `{}` does not exist", asked.language)
+            })?;
+            let mut view = crate::audio::View::fresh(ronoctua_audio::prefs::Preferences::default());
+            view.settle_in(Some(&snapshot), asked.columns, &texts);
+            let window = AudioWindow {
+                view,
+                snapshot: Some(snapshot),
+                audio: None,
+                meter: crate::audio_region::Meter::default(),
+                _watch: None,
+            };
+            crate::photo::planted::shoot(asked, window, None)
+        },
+    )
+}
+
 /// The window: the view, and what it reads.
 struct AudioWindow {
     view: crate::audio::View,

@@ -111,6 +111,7 @@ pkgs.testers.runNixOSTest {
     import math
     import re
     import time
+    from datetime import timedelta
     ${xvfb.prelude}
 
     COLUMN = json.loads('${builtins.toJSON columnTokens}')
@@ -130,14 +131,14 @@ pkgs.testers.runNixOSTest {
     def plays(name):
         said = player({"ask": "put", "what": [f"${media}/{name}"], "replace": True})
         assert said["say"] == "done", f"{name}: {said}"
-        machine.sleep(3)
+        machine.sleep(duration=timedelta(seconds=3))
         a = player({"ask": "look"})
         # IT MOVES WITHIN A REGIME, never within two seconds: a film decoded
         # in software on a machine busy with a battery moved 0.07 s in two
         # (measured, 2026-10-24). A player that does not play never moves in
         # the whole minute.
         for _ in range(60):
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
             b = player({"ask": "look"})
             assert not b["troubles"], f"{name}: {b['troubles']}"
             if b["position"] > a["position"] + 0.5:
@@ -164,7 +165,7 @@ pkgs.testers.runNixOSTest {
             "--setenv=RONOCTUA_AMBIENCE=${media}/ambience "
             "${player}/bin/ronoctua-player"
         )
-        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=30)
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=timedelta(seconds=30))
 
     with subtest("every family plays, and each through the decoder its table names"):
         film = plays("film.mp4")
@@ -201,11 +202,11 @@ pkgs.testers.runNixOSTest {
     with subtest("a decoder's stream seeks, forward and back"):
         plays("tune.sid")
         player({"ask": "seek", "seconds": 40, "relative": False})
-        machine.sleep(6)
+        machine.sleep(duration=timedelta(seconds=6))
         at = player({"ask": "look"})["position"]
         assert at > 39, f"a forward seek into a SID landed at {at}"
         player({"ask": "seek", "seconds": 5, "relative": False})
-        machine.sleep(4)
+        machine.sleep(duration=timedelta(seconds=4))
         at = player({"ask": "look"})["position"]
         assert 4 < at < 20, f"a backward seek into a SID landed at {at}"
 
@@ -227,7 +228,7 @@ pkgs.testers.runNixOSTest {
         lane = next(l for l in s["lanes"] if l["kind"] == "subtitle")
         said = player({"ask": "track", "lane": lane["id"], "track": subs[0]["id"]})
         assert said["say"] == "done", said
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         s = player({"ask": "look"})
         now = [t for t in s["sources"][0]["tracks"] if t["kind"] == "sub"]
         assert now and now[0]["selected"], now
@@ -252,7 +253,7 @@ pkgs.testers.runNixOSTest {
                      [x["id"] for x in s["lanes"] if x["kind"] == "subtitle"]]
             if len(words) == 2 and all(w["status"]["status"] == "playing" for w in words):
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert len(words) == 2 and all(w["status"]["status"] == "playing" for w in words), words
         # THE COLOURS THE SCRIPT WAS WRITTEN WITH, lane by lane — the tokens'
         # (`engine::subtitles`, whose own test says so) — as `&H00BBGGRR`.
@@ -291,7 +292,7 @@ pkgs.testers.runNixOSTest {
         # between: a byte that differs is a second decode.
         plays("film.mp4")
         player({"ask": "pause"})
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         same = machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 python3 ${client} twice null"
         ).strip()
@@ -303,7 +304,7 @@ pkgs.testers.runNixOSTest {
         # opened then stayed black until something changed. The owner found
         # it on a cover: black in the column until a click paused the song.
         player({"ask": "pause"})
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         f = json.loads(machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 python3 ${client} frame null 1"
         ))
@@ -320,7 +321,7 @@ pkgs.testers.runNixOSTest {
         after = player({"ask": "queue"})["entries"][0]
         assert after["id"] == before["id"] and after["kind"] == "set", (before, after)
         assert after["lanes"] == 4, after
-        machine.sleep(6)
+        machine.sleep(duration=timedelta(seconds=6))
         # HELD, AND NOT ONE READING. A picture 40 ms or more out
         # (`sync::STILL_MS`) is nudged back at a few per cent of the speed,
         # and the position it reports moves a frame (33 ms) at a time, so a
@@ -337,7 +338,7 @@ pkgs.testers.runNixOSTest {
             near = near + 1 if abs(other["drift_ms"]) < 60 else 0
             if near == 3 or time.time() > deadline:
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         master = [l["lane"] for l in s["lane_states"] if l["master"]]
         assert other["status"]["status"] == "playing", other
         assert master == [2], f"the film's sound does not keep the time: {s['lane_states']}"
@@ -386,10 +387,10 @@ pkgs.testers.runNixOSTest {
         # saved" (the queue read back fingerprints as it was written).
         machine.succeed("systemctl kill -s KILL player")
         machine.wait_until_succeeds(
-            "systemctl show -p ActiveState --value player | grep -qvx active", timeout=15
+            "systemctl show -p ActiveState --value player | grep -qvx active", timeout=timedelta(seconds=15)
         )
         machine.succeed("systemctl reset-failed player || true")
-        machine.wait_until_fails("systemctl cat player", timeout=15)
+        machine.wait_until_fails("systemctl cat player", timeout=timedelta(seconds=15))
         # THE DEAD DAEMON'S SOCKET, by its whole name: a KILL leaves it on the
         # disk, and the wait below would otherwise be answered by it — then
         # the first ask is refused by nobody listening.
@@ -401,7 +402,7 @@ pkgs.testers.runNixOSTest {
             "--setenv=RONOCTUA_AMBIENCE=${media}/ambience "
             "${player}/bin/ronoctua-player"
         )
-        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=30)
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=timedelta(seconds=30))
         kept = player({"ask": "look"})["queue_file"]
         assert kept == {"kept": "same", "path": "/root/queues/Sunday.rqueue", "name": "Sunday"}, kept
         # THE FILE CHANGED ON THE DISK since: saving over it is asked, and
@@ -449,7 +450,7 @@ pkgs.testers.runNixOSTest {
         assert s["position"] < 2 and sound["status"]["status"] == "pending", (s["position"], sound)
         assert not sound["master"], "a sound that has not begun keeps the time"
         for _ in range(30):
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
             s = player({"ask": "look"})
             sound = next(l for l in s["lane_states"] if l["lane"] == 2)
             if sound["status"]["status"] == "playing":
@@ -469,7 +470,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(
             f"busctl {bus} call {name} /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlayPause"
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         assert player({"ask": "look"})["playing"] is False
         player({"ask": "play"})
 
@@ -478,11 +479,11 @@ pkgs.testers.runNixOSTest {
         players = machine.succeed(f"{bus} playerctl -l")
         assert "ronoctua" in players, players
         machine.succeed(f"{bus} playerctl -p ronoctua pause")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         assert player({"ask": "look"})["playing"] is False
         assert "Paused" in machine.succeed(f"{bus} playerctl -p ronoctua status")
         machine.succeed(f"{bus} playerctl -p ronoctua play")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         assert player({"ask": "look"})["playing"] is True
 
     with subtest("MPRIS: the queue is the track list, and it can be edited"):
@@ -499,7 +500,7 @@ pkgs.testers.runNixOSTest {
         types = prop("org.mpris.MediaPlayer2", "SupportedMimeTypes")
         assert types and not any("*" in t for t in types), types
         player({"ask": "put", "what": ["${media}/tone.flac", "${media}/tune.rad"], "replace": True})
-        machine.sleep(3)
+        machine.sleep(duration=timedelta(seconds=3))
         tracks = prop("org.mpris.MediaPlayer2.TrackList", "Tracks")
         assert len(tracks) == 2, tracks
         # A TRACK'S ID IS ITS ENTRY'S, the one the queue's outline names.
@@ -514,7 +515,7 @@ pkgs.testers.runNixOSTest {
             "org.mpris.MediaPlayer2.TrackList AddTrack sob "
             "file://${media}/film.mp4 /org/mpris/MediaPlayer2/TrackList/NoTrack false"
         )
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         entries = player({"ask": "queue"})["entries"]
         assert len(entries) == 3 and entries[0]["name"]["location"].endswith("film.mp4"), entries
         # THE IDS FROM THE LIST ITSELF, never a place written here: the one
@@ -533,7 +534,7 @@ pkgs.testers.runNixOSTest {
             f"busctl {bus} call {name} /org/mpris/MediaPlayer2 "
             f"org.mpris.MediaPlayer2.TrackList RemoveTrack o {tracks[0]}"
         )
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         assert prop("org.mpris.MediaPlayer2.TrackList", "Tracks") == tracks[1:]
 
     with subtest("the column narrows the windows, and only them"):
@@ -546,7 +547,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell player"
         )
         await_windows(sock, 1, timeout=60)
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         out_w, _, _, _ = compositor_geometry()
         before = window_box(sock, "br.ronoctua.player")
         def widths():
@@ -560,7 +561,7 @@ pkgs.testers.runNixOSTest {
         # repaints the window every frame and hid the defect in this test —
         # it passed with a fix that did nothing.
         player({"ask": "pause"})
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         told_before = widths()
         # THE COMPOSITOR'S SOCKET TOO, as the footer hands it to the column it
         # raises in a session: the column tells the windows their new room
@@ -571,8 +572,8 @@ pkgs.testers.runNixOSTest {
             f"--setenv=SCROLLSOCK={sock} --setenv=SWAYSOCK={sock} "
             "${ronoctua-shell}/bin/ronoctua-shell column player"
         )
-        machine.wait_until_succeeds("ls /run/user/0 | grep -q column-player.pid", timeout=30)
-        machine.sleep(3)
+        machine.wait_until_succeeds("ls /run/user/0 | grep -q column-player.pid", timeout=timedelta(seconds=30))
+        machine.sleep(duration=timedelta(seconds=3))
         after = window_box(sock, "br.ronoctua.player")
         print(f"output {out_w}, window before {before}, after {after}")
         assert after[2] + after[0] < before[2] + before[0], (
@@ -621,7 +622,7 @@ pkgs.testers.runNixOSTest {
                 f"{msg} -t get_workspaces | python3 -c "
                 f"'import json,sys; w=[w for w in json.load(sys.stdin) if w[\"name\"]==\"{name}\"][0]; "
                 f"sys.exit(0 if w[\"rect\"][\"width\"]=={width} else 1)'",
-                timeout=30,
+                timeout=timedelta(seconds=30),
             )
         except Exception:
             raise AssertionError(f"{why}: workspace {name} has {room(name)}, not {width} wide")
@@ -637,7 +638,7 @@ pkgs.testers.runNixOSTest {
         # and a window opened there has the whole screen — and is TOLD so.
         machine.succeed(f"{msg} workspace 2")
         machine.wait_until_succeeds(
-            "journalctl -u column -o cat | grep -q 'the column is parked'", timeout=30
+            "journalctl -u column -o cat | grep -q 'the column is parked'", timeout=timedelta(seconds=30)
         )
         room_is("2", out_w, "a parked column still carves its zone")
         machine.succeed(
@@ -645,8 +646,8 @@ pkgs.testers.runNixOSTest {
             "--setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
             "${ronoctua-shell}/bin/ronoctua-shell player"
         )
-        machine.wait_until_succeeds("journalctl -u window2 -o cat | grep -q configured", timeout=60)
-        machine.sleep(2)
+        machine.wait_until_succeeds("journalctl -u window2 -o cat | grep -q configured", timeout=timedelta(minutes=1))
+        machine.sleep(duration=timedelta(seconds=2))
         wide = configured_of("window2")
         print(f"on workspace 2 the window was configured at {wide}, the one on 1 at {narrow}")
         assert wide and wide[-1] > narrow, (
@@ -658,10 +659,10 @@ pkgs.testers.runNixOSTest {
         # SHOWN AGAIN, said by the column — the room alone could be the one
         # workspace 1 kept from before, if nothing arranged it while hidden.
         machine.wait_until_succeeds(
-            "journalctl -u column -o cat | grep -q 'the column is shown'", timeout=30
+            "journalctl -u column -o cat | grep -q 'the column is shown'", timeout=timedelta(seconds=30)
         )
         room_is("1", out_w - medium, "the column did not come back")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         again = configured_of("window")
         print(f"back on workspace 1 the window was configured at {again}")
         assert again[-1] == narrow, f"the window was not told the column came back: {again}"
@@ -700,10 +701,10 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell column player --on 2"
         )
         machine.wait_until_succeeds(
-            "test \"$(cut -d' ' -f3- /run/user/0/ronoctua-column-player.pid)\" = 2", timeout=30
+            "test \"$(cut -d' ' -f3- /run/user/0/ronoctua-column-player.pid)\" = 2", timeout=timedelta(seconds=30)
         )
         # ONE PLAYER'S COLUMN: the one on workspace 1 is gone, not copied.
-        machine.wait_until_fails(f"kill -0 {old}", timeout=30)
+        machine.wait_until_fails(f"kill -0 {old}", timeout=timedelta(seconds=30))
         room_is("2", out_w - column_width("medium", out_w), "the moved column")
         # FROM HERE ON, what the window on workspace 1 is told: the configures
         # before the switch belong to the sizes above.
@@ -717,14 +718,14 @@ pkgs.testers.runNixOSTest {
         # gives the width back. A window never told stays at `narrow` until
         # the next click anywhere, the defect `settle_the_windows` exists for.
         machine.wait_until_succeeds(
-            "journalctl -u column-moved -o cat | grep -q 'the column is parked'", timeout=30
+            "journalctl -u column-moved -o cat | grep -q 'the column is parked'", timeout=timedelta(seconds=30)
         )
         widened = []
         for _ in range(30):
             widened = configured_of("window")[told:]
             if widened and widened[-1] > narrow:
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         print(f"after the park the window on workspace 1 was configured at {widened}, not {narrow}")
         assert widened and widened[-1] > narrow, (
             f"the window on workspace 1 was not told the room the parked column gave back: "
@@ -749,7 +750,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(f"systemd-run --unit=pip {env} ${ronoctua-shell}/bin/ronoctua-shell player pip")
         await_windows(sock, 2, timeout=60)
         # THE SLOT, which is what lets the column's button close it again.
-        machine.wait_until_succeeds("grep -q ' pip' /run/user/0/ronoctua-player-stage.pid", timeout=30)
+        machine.wait_until_succeeds("grep -q ' pip' /run/user/0/ronoctua-player-stage.pid", timeout=timedelta(seconds=30))
         pid = int(machine.succeed("systemctl show -p MainPID --value pip").strip())
         msg = f"SCROLLSOCK={sock} SWAYSOCK={sock} ${scroll}/bin/scrollmsg"
         space = next(
@@ -788,7 +789,7 @@ pkgs.testers.runNixOSTest {
                     space["y"] + space["height"] - r["height"] - title - air)
             if floating and box == want:
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         print(f"room {space}, the small window {box}, floating {floating}, wanted {want}")
         assert floating, "the small window is in the layout, not floating"
         assert box == want, f"the small window is at {box}, not {want}"
@@ -810,7 +811,7 @@ pkgs.testers.runNixOSTest {
         said = player({"ask": "ambient", "id": "wind", "on": True})
         assert said.get("trouble") == "no-such-sound", said
         # MORE THAN TWICE ITS THREE SECONDS: it went round, and plays on.
-        machine.sleep(7)
+        machine.sleep(duration=timedelta(seconds=7))
         tone = player({"ask": "look"})["ambience"]["sounds"][0]
         assert tone["on"] and tone["rounds"] >= 2, f"the loop did not go round: {tone}"
         # WHAT THE QUEUE IS TOLD never reaches it: a stop, and a PlayPause over
@@ -819,15 +820,15 @@ pkgs.testers.runNixOSTest {
         machine.succeed(
             f"busctl {bus} call {name} /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlayPause"
         )
-        machine.sleep(4)
+        machine.sleep(duration=timedelta(seconds=4))
         a = player({"ask": "look"})["ambience"]
         assert a["sounds"][0]["on"] and not a["paused"], a
         assert a["sounds"][0]["rounds"] > tone["rounds"], f"it stopped going round: {a}"
         # ITS OWN TOGGLE holds it: the rounds stop where they were.
         assert player({"ask": "ambient-toggle"})["say"] == "done"
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         held = player({"ask": "look"})["ambience"]
-        machine.sleep(4)
+        machine.sleep(duration=timedelta(seconds=4))
         still = player({"ask": "look"})["ambience"]
         assert held["paused"] and still["sounds"][0]["rounds"] == held["sounds"][0]["rounds"], (held, still)
         # SILENCE turns every sound off, and each keeps its volume.
@@ -1089,7 +1090,7 @@ pkgs.testers.runNixOSTest {
         def press(*keys):
             for k in keys:
                 machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {k}")
-                machine.sleep(1)
+                machine.sleep(duration=timedelta(seconds=1))
 
         said = player({"ask": "put", "what": ["${media}/tone.flac", "${media}/film.mp4"], "replace": True})
         assert said["say"] == "done", said
@@ -1112,7 +1113,7 @@ pkgs.testers.runNixOSTest {
         await_windows(sock, 1, timeout=60)
         # With no WM on Xvfb nobody has input focus, and the key would be lost.
         focus_compositor()
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
 
         # CHANGED SINCE ITS FILE — the mark appears — and `C-s` in the window
         # saves it again: the mark goes.
@@ -1163,7 +1164,7 @@ pkgs.testers.runNixOSTest {
         for _ in range(30):
             if any(l["kind"] == "video" for l in player({"ask": "look"})["lanes"]):
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         for name in ("green", "blue"):
             said = player({"ask": "add-lane", "source": f"${colours}/{name}.mp4", "kind": "video"})
             assert said["say"] == "done", said
@@ -1188,16 +1189,16 @@ pkgs.testers.runNixOSTest {
         await_windows(sock, 1, timeout=60)
         door = int(machine.succeed("systemctl show -p MainPID --value every-door").strip())
         # The door knows the screens by name once the compositor has told it.
-        machine.sleep(3)
+        machine.sleep(duration=timedelta(seconds=3))
         window = focus_compositor(0)
         machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key --window {window} shift+m")
         await_windows(sock, 3, timeout=60)
         said = machine.succeed("journalctl -u every-door --no-pager -o cat | tail -n 20")
         print(said)
         machine.succeed("systemctl kill --kill-whom=main every-door")
-        machine.wait_until_fails(f"kill -0 {door}", timeout=30)
+        machine.wait_until_fails(f"kill -0 {door}", timeout=timedelta(seconds=30))
         await_windows(sock, 2, timeout=30)
-        machine.sleep(4)
+        machine.sleep(duration=timedelta(seconds=4))
 
         def placed():
             """Each window's output, box and pid, from the tree."""
@@ -1256,13 +1257,13 @@ pkgs.testers.runNixOSTest {
         print(heard)
         assert heard["last"] == "farewell", heard
         # THE SOCKET GOES FIRST, so nothing asks a player that is leaving.
-        machine.wait_until_fails("ls /run/user/0 | grep -q player.sock", timeout=10)
+        machine.wait_until_fails("ls /run/user/0 | grep -q player.sock", timeout=timedelta(seconds=10))
         # AND THE PROCESS LEAVES WITH SUCCESS — by `_exit`, never through the C
         # library's exit handlers with libmpv's threads alive: a crash there
         # is a failed unit, and the installed one's `Restart=on-failure` would
         # bring the player back showing the queue it had just closed.
         machine.wait_until_succeeds(
-            "systemctl show -p ActiveState --value player | grep -qx inactive", timeout=15
+            "systemctl show -p ActiveState --value player | grep -qx inactive", timeout=timedelta(seconds=15)
         )
         result = machine.succeed("systemctl show -p Result --value player").strip()
         assert result == "success", f"the player left with {result}"

@@ -144,8 +144,6 @@ security-device-firmware-updates-count = { $count ->
   }
 security-device-firmware-note = Só leitura: firmware não é instalado daqui.
 security-device-updates = Atualizações automáticas
-security-device-lock = Bloqueio de tela
-security-device-lock-none = nenhum: este sistema não tem tela de bloqueio
 security-device-autologin = A partida da máquina
 security-device-autologin-gate = a senha do disco é a única porta
 security-privacy-mac = Endereço de hardware em { $name }
@@ -361,3 +359,19 @@ security-quantum-why-f-droid = O F-Droid assina o índice com RSA: o que um comp
 security-quantum-why-nix-cache = As assinaturas do cache binário são ed25519: uma falsificação precisa de um computador quântico no momento do ataque.
 security-quantum-why-secure-boot = As chaves do Secure Boot são RSA-2048: o firmware não verifica outra coisa.
 security-quantum-why-not-built = Esta compilação não disse qual versão entrega.
+
+## THE LOCK SCREEN (2026-10-31): locking now, and locking by itself.
+
+security-heading-lock = Bloqueio de tela
+security-lock-now = Bloquear agora
+security-lock-by-itself = Bloquear sozinha
+security-lock-after = Depois de
+security-lock-minutes = { $minutes ->
+        [one] um minuto sem uso
+       *[other] { $minutes } minutos sem uso
+    }
+security-lock-note = Ela espera enquanto toca um som ou passa um vídeo, e abre com a senha da conta, ou com um dedo onde um leitor tiver um cadastrado.
+security-lock-refused = O arquivo do bloqueio tem um valor que esta máquina não aceita: a tela não bloqueia sozinha até que uma espera seja escolhida de novo.
+security-about-lock-by-itself = Liga ou desliga o bloqueio sozinho; o rodapé o arma na hora.
+security-about-lock-after = A próxima espera sem uso antes de a tela bloquear sozinha; esquerda e direita andam pelas esperas.
+echo-security-lock-not-written = A escolha do bloqueio não pôde ser gravada na sua pasta.

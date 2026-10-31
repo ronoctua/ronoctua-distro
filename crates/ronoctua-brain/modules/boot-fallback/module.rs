@@ -17,7 +17,10 @@
 //! and the brain starts again at every login. So what was told is kept under
 //! the module's state directory (the failed trial's toplevel): a failure is
 //! told the first time it is seen — at the bless, or at the next login when
-//! nobody was logged in — and never again.
+//! nobody was logged in — and never again. A record that reads and says no
+//! trial failed forgets it: the next trial armed may be the same system,
+//! tried again because the person asked (`ronoctua-machine try-again`), and
+//! its failure is news too.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -55,18 +58,20 @@ impl BootTrial {
         }
     }
 
-    /// The toplevel of the trial the record says failed, if one did.
-    fn failed(&self) -> Option<String> {
+    /// What the record says of the last trial: the toplevel of the one
+    /// that failed, if one did — `Err` for a record that does not read,
+    /// which says nothing either way.
+    fn failed(&self) -> Result<Option<String>, ()> {
         let places = Places {
             dir: PathBuf::new(),
             state: self.record.clone(),
             run: PathBuf::new(),
         };
-        let state = ronoctua_machine::state(&places).ok()?;
-        state
+        let state = ronoctua_machine::state(&places).map_err(|_| ())?;
+        Ok(state
             .trial
             .filter(|t| t.outcome == TrialOutcome::Failed)
-            .map(|t| t.toplevel)
+            .map(|t| t.toplevel))
     }
 
     /// Reads the record, and tells a failure nobody was told of.
@@ -78,13 +83,23 @@ impl BootTrial {
 
     /// [`Self::look`], with the file that remembers what was told.
     fn tell_once(&self, ctx: &Ctx, file: Option<PathBuf>) {
-        let Some(failed) = self.failed() else {
-            return;
-        };
         let mut told = self
             .told
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let failed = match self.failed() {
+            Err(()) => return,
+            Ok(Some(failed)) => failed,
+            // NO TRIAL FAILED NOW: what was told goes, so the next failure is
+            // news — the same system's too, armed again (`try-again`).
+            Ok(None) => {
+                *told = Some(String::new());
+                if let Some(file) = &file {
+                    let _ = std::fs::remove_file(file);
+                }
+                return;
+            }
+        };
         if told.is_none() {
             *told = file
                 .as_ref()
@@ -219,6 +234,45 @@ mod tests {
             &c2,
         );
         assert_eq!(kept2.events().len(), 1);
+
+        // THE SAME SYSTEM, TRIED AGAIN (the person asked) and failing again,
+        // is news again — in this process and across a login — once the
+        // record said its new trial was pending; a record that does not read
+        // forgets nothing.
+        let failed_c = PENDING
+            .replace("pending", "failed")
+            .replace("0001-nixos-system-b", "0002-nixos-system-c");
+        let hear = |w: &BootTrial, c: &Ctx| {
+            w.heard(
+                Heard::Path {
+                    source: 0,
+                    path: &record,
+                },
+                c,
+            );
+        };
+        std::fs::write(&record, b"{").unwrap();
+        hear(&again, &c2);
+        std::fs::write(&record, &failed_c).unwrap();
+        hear(&again, &c2);
+        assert_eq!(
+            kept2.events().len(),
+            1,
+            "an unreadable record forgot the failure"
+        );
+        std::fs::write(&record, failed_c.replace("failed", "pending")).unwrap();
+        hear(&again, &c2);
+        std::fs::write(&record, &failed_c).unwrap();
+        hear(&again, &c2);
+        assert_eq!(
+            kept2.events().len(),
+            2,
+            "the retried system's failure was not told"
+        );
+        let after = BootTrial::reading(dir.join("record"));
+        let (c3, kept3) = ctx(&dir);
+        after.started(0, &c3);
+        assert!(kept3.events().is_empty(), "told twice across logins");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

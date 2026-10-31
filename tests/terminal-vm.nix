@@ -92,6 +92,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
 
@@ -114,7 +116,7 @@ pkgs.testers.runNixOSTest {
         try:
             machine.wait_until_succeeds(
                 "journalctl -u term --no-pager | grep 'terminal opened' > /dev/null",
-                timeout=60,
+                timeout=timedelta(minutes=1),
             )
         except Exception:
             print(machine.execute("journalctl -u term --no-pager")[1])
@@ -135,7 +137,7 @@ pkgs.testers.runNixOSTest {
     with subtest("the terminal drew"):
         machine.wait_until_succeeds(
             "journalctl -u term --no-pager | grep 'terminal drawn on the xdg_toplevel' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         journal = machine.succeed("journalctl -u term --no-pager")
         for bad in ["drawing the frame failed", "preparing the text failed", "panicked"]:
@@ -218,7 +220,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree "
             "| grep br.ronoctua.monitor > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         open_now = windows_by_app_id(sock)
         print(json.dumps(open_now, indent=1))
@@ -261,7 +263,7 @@ pkgs.testers.runNixOSTest {
             machine.wait_until_succeeds(
                 f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree "
                 "| grep br.ronoctua.rescue > /dev/null",
-                timeout=60,
+                timeout=timedelta(minutes=1),
             )
         except Exception:
             print(machine.execute("journalctl -u ronoctua-rescue --no-pager")[1])
@@ -272,7 +274,7 @@ pkgs.testers.runNixOSTest {
         )
         # AND IT IS STILL THERE. A console that draws once and dies is
         # indistinguishable from one that works, in a screenshot.
-        machine.sleep(5)
+        machine.sleep(duration=timedelta(seconds=5))
         assert "br.ronoctua.rescue" in windows_by_app_id(sock), (
             "the rescue's window went away: the program inside it died.\n"
             + machine.execute("journalctl -u ronoctua-rescue --no-pager")[1]
@@ -283,7 +285,7 @@ pkgs.testers.runNixOSTest {
         # a window still there is a btop still running — which is what proves
         # the terminal gave it what a TUI needs. Without `TERM`, ncurses dies at
         # once; without a UTF-8 locale, btop does.
-        machine.sleep(8)
+        machine.sleep(duration=timedelta(seconds=8))
         still = windows_by_app_id(sock)
         assert "br.ronoctua.monitor" in still, (
             "the monitor's window went away: the program inside it died.\n"
@@ -310,7 +312,7 @@ pkgs.testers.runNixOSTest {
             machine.wait_until_succeeds(
                 f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree "
                 "| grep br.ronoctua.calc > /dev/null",
-                timeout=60,
+                timeout=timedelta(minutes=1),
             )
         except Exception:
             print(machine.execute("journalctl -u calc --no-pager")[1])

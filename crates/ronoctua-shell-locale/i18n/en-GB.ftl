@@ -8,25 +8,15 @@
 # sentences are read at run time (`RONOCTUA_TEXTS`), so editing one compiles nothing.
 
 locale-heading-language = Interface
-locale-speaking = in use
 locale-from-file = You chose this language; it is kept in language.json.
 locale-from-system = This is the machine's language, from the system configuration.
 locale-from-default = Nobody has chosen; this is the first declared language.
 locale-heading-time = Clock and date
-locale-clock-24h = 24-hour clock
-locale-clock-12h = 12-hour clock
-locale-order-ymd = Year first
-locale-order-dmy = Day first
-locale-order-mdy = Month first
-locale-heading-machine = Decided by the system
 locale-zone-unknown = not known
 locale-zone-is-declared = The zone is declared in the system configuration; changing it is a rebuild.
 locale-decimal = Decimal separator
-locale-decimal-is-the-languages = The separator belongs to the language, and follows it.
 locale-measurement = Measurement
-locale-metric = Metric
 locale-not-written = The choice could not be written to disk.
-locale-measurement-is-declared = Metric whatever the language, and that is a decision rather than a default.
 cmd-locale-open = Language and region, in the footer
 cmd-locale-window = Language and region, in a window
 cmd-locale-up = Previous row
@@ -154,7 +144,6 @@ locale-units-metric = Metric — °C
 locale-units-imperial = Imperial — °F
 locale-drop-place = Remove this place
 locale-add-place = Add a place
-locale-add-place-how = a zone, such as Europe/Lisbon
 ask-locale-where = Latitude and longitude, as two numbers
 locale-no-such-zone = There is no zone by that name.
 locale-not-a-coordinate = That is not a latitude and a longitude.

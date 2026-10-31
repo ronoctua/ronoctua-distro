@@ -120,7 +120,6 @@ studio-scene-screen = Screen
 studio-scene-screen-and-camera = Screen and camera
 studio-not-running = The camera studio is not answering.
 studio-photo-saved = Photo saved: { $file }
-studio-recording-saved = Recording saved: { $file }
 studio-countdown = { $seconds }
 studio-recording-for = Recording { $time }
 studio-streaming-for = Live { $time }

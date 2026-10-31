@@ -40,6 +40,19 @@ use ronoctua_security::{Refusal, Why};
 /// The file manager's privileged unit, which keeps its own hardening.
 const FILES_ROOT_UNIT: &str = "ronoctua-files-root.service";
 
+/// The machine's units the update's page asks for (`nix/modules/machine.nix`),
+/// each running one verb of `ronoctua-machine` with no word of anybody's.
+const MACHINE_HOLD_UNIT: &str = "ronoctua-machine-hold.service";
+/// See [`MACHINE_HOLD_UNIT`].
+const MACHINE_UNHOLD_UNIT: &str = "ronoctua-machine-unhold.service";
+/// See [`MACHINE_HOLD_UNIT`].
+const MACHINE_TRY_AGAIN_UNIT: &str = "ronoctua-machine-try-again.service";
+
+/// Where each of those units leaves what the machine printed on its standard
+/// output — its verdict line —, as `<unit>.said`: the update's own folder
+/// under `/run`, root's (`StandardOutput=truncate:` in the module).
+const MACHINE_SAID_DIR: &str = "/run/ronoctua-update";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("print") {
@@ -224,7 +237,50 @@ fn root_verb(verb: RootVerb, person: Option<&Person>, tools: &Tools) -> Result<(
                 &["start", "--no-block", BUILD_SWITCH_REFERENCE_UNIT],
             )
         }
+        // THE UPDATE PAGE'S GESTURES ON THE MACHINE: hold the revision that
+        // runs, let go, try again the system whose boot trial failed. One
+        // fixed unit each, started and WAITED for — the verb takes seconds,
+        // or says `busy` after root's lock of the person's data waited half a
+        // minute — and nothing the person's process said reaches it: the
+        // revision held and the system tried again are the machine's to read.
+        RootVerb::MachineHold => {
+            named()?;
+            machine_gesture(tools::given(tools.systemctl.as_ref())?, MACHINE_HOLD_UNIT)
+        }
+        RootVerb::MachineUnhold => {
+            named()?;
+            machine_gesture(tools::given(tools.systemctl.as_ref())?, MACHINE_UNHOLD_UNIT)
+        }
+        RootVerb::MachineTryAgain => {
+            named()?;
+            machine_gesture(
+                tools::given(tools.systemctl.as_ref())?,
+                MACHINE_TRY_AGAIN_UNIT,
+            )
+        }
     }
+}
+
+/// Starts the machine's `unit` and waits for it; when it fails, the reason
+/// the machine printed (`refused <word>`, its standard output in
+/// `<unit>.said`) is said first as a progress word, so the door that asked
+/// says the machine's own sentence. The file is taken away before the start
+/// — a unit that never ran must not leave an older verdict to be read — and
+/// after.
+fn machine_gesture(systemctl: &Path, unit: &str) -> Result<(), Refusal> {
+    let said = Path::new(MACHINE_SAID_DIR).join(format!("{unit}.said"));
+    let _ = std::fs::remove_file(&said);
+    let started = run_program(systemctl, &["start", unit]);
+    if started.is_err()
+        && let Some(why) = std::fs::read_to_string(&said)
+            .ok()
+            .as_deref()
+            .and_then(Said::machine_refused)
+    {
+        say(&why);
+    }
+    let _ = std::fs::remove_file(&said);
+    started
 }
 
 /// What the cache's refusal is, in the door's closed set: what was staged

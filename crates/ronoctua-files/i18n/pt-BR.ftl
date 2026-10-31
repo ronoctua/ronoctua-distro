@@ -182,10 +182,6 @@ sidebar-eject = ejetar com segurança
 sidebar-information = informações
 sidebar-unpin = tirar da barra lateral
 sidebar-format = formatar
-sidebar-fact-node = dispositivo
-sidebar-fact-kind = sistema de arquivos
-sidebar-fact-size = tamanho
-sidebar-fact-drive = disco
 # O SEGUNDO REGISTRO DE CADA AÇÃO — o que ela FAZ, para quem já sabe o que quer.
 #
 # O rótulo é para quem procura um verbo ("apagar de vez"); esta linha é para

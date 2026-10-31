@@ -35,6 +35,8 @@ tracing.workspace = true
 # The door's and the kit's guards hold in these tests too (`test-support`).
 ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
 ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+# A Hand whose orders a test reads, with no `atuin` run (`Hand::listening`).
+ronoctua-atuin = { path = "../ronoctua-atuin", features = [ "test-support" ] }
 
 [lints]
 workspace = true

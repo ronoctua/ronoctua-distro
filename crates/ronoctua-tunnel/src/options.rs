@@ -122,7 +122,17 @@ impl Setting {
         match self.kind {
             Kind::Switch => Some(TRUTH.of(!self.is_on(lines)).to_owned()),
             Kind::Ring(ring) => {
-                let now = self.one(lines).unwrap_or("");
+                // NOTHING WRITTEN IS THE WORD THAT READS AS NOTHING — the
+                // transport's `none`, which writes no line ([`Self::word`]
+                // already draws the absence as it). Turned from `""`, the
+                // ring would land on `none` again and again: the file read
+                // back after each write holds no line for it.
+                let now = self.one(lines).unwrap_or_else(|| {
+                    ring.iter()
+                        .copied()
+                        .find(|w| ronoctua_options::word_key(w) == ronoctua_options::word_key(""))
+                        .unwrap_or("")
+                });
                 Some(ronoctua_options::turn(ring, now, forwards).to_owned())
             }
             Kind::Number { least, most, .. } => {
@@ -284,6 +294,24 @@ mod tests {
         // THE UNDERSCORE BECOMES A HYPHEN, the same way the generator did it.
         // A key with an underscore in it is one `gen-i18n.py` never matches.
         assert_eq!(transport.word(&lines).unwrap(), "tor-word-meek-lite");
+    }
+
+    /// FAILS IF: the transport's ring, turned from nothing written, lands on
+    /// `none` — which writes no line, so the file read back is nothing again
+    /// and every turn lands on `none` for ever.
+    #[test]
+    fn a_ring_turns_from_nothing_written_as_from_none() {
+        let transport = by_id("bridge-transport").expect("bridge-transport");
+        let Kind::Ring(ring) = transport.kind else {
+            panic!("bridge-transport stopped being a ring");
+        };
+        assert_eq!(ring.first(), Some(&crate::tor::transport::NONE));
+        let nothing = Lines::new();
+        assert_eq!(transport.turned(&nothing, true).as_deref(), Some(ring[1]));
+        assert_eq!(
+            transport.turned(&nothing, false).as_deref(),
+            ring.last().copied()
+        );
     }
 
     #[test]

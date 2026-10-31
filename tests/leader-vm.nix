@@ -68,6 +68,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
 
@@ -113,7 +115,7 @@ pkgs.testers.runNixOSTest {
             seen = footer_height()
             if seen > floor:
                 return seen
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         return seen
 
     def footer_height():
@@ -155,7 +157,7 @@ pkgs.testers.runNixOSTest {
             seen_now = footer_height()
             if seen_now == expected:
                 return seen_now
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         raise AssertionError(
             f"the footer is {seen_now} px, expected {expected} "
             f"(after {attempts}s)"
@@ -177,7 +179,7 @@ pkgs.testers.runNixOSTest {
 
     def press_key(item_name):
         machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {item_name}")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
 
     def last_keyboard_ask(unit="footer"):
@@ -265,11 +267,11 @@ pkgs.testers.runNixOSTest {
         # surface that had not received a `configure` yet: zero pixels, with no error.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'footer layout resolved' > /dev/null",
-            timeout=90,
+            timeout=timedelta(seconds=90),
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         at_rest = wait_for_height(FOOTER)
         print(f"height at rest: {at_rest} px")
@@ -305,7 +307,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=timedelta(seconds=30)
         )
 
         expanded = footer_height_above(FOOTER)
@@ -404,7 +406,7 @@ pkgs.testers.runNixOSTest {
             )
             machine.wait_until_succeeds(
                 f"test $(journalctl -u footer --no-pager | grep -c 'set switched') -gt {switched}",
-                timeout=30,
+                timeout=timedelta(seconds=30),
             )
         press_key("n")
         journal = machine.succeed("journalctl -u footer --no-pager")
@@ -457,7 +459,7 @@ pkgs.testers.runNixOSTest {
         # combination does not exist" from "the key did not arrive".
         press_key("z")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'echo area' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'echo area' > /dev/null", timeout=timedelta(seconds=30)
         )
         journal = machine.succeed("journalctl -u footer --no-pager")
         echo_line = [l for l in journal.splitlines() if "echo area" in l][-1]
@@ -474,7 +476,7 @@ pkgs.testers.runNixOSTest {
     with subtest("Esc goes back to rest, two lines tall"):
         press_key("Escape")
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'leader closed' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader closed' > /dev/null", timeout=timedelta(seconds=30)
         )
         # And it gives the keyboard back: without this no buffer would receive a key
         # again, and the system would go mute after the first leader.
@@ -517,7 +519,7 @@ pkgs.testers.runNixOSTest {
         press_key("shift+semicolon")  # the finder: the longest list in the system
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'command=\"mx-open\"' > /dev/null",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         _, h, _, _ = compositor_geometry()
         with_mx = footer_height_above(FOOTER)
@@ -553,13 +555,13 @@ pkgs.testers.runNixOSTest {
             "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
             f"{xv + wv // 2} {yv + hv - footer_band // 2}"
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
         prior = offset()
         for _ in range(3):
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 5")
-            machine.sleep(1)
-        machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
+        machine.sleep(duration=timedelta(seconds=1))
         after = offset()
         assert after > prior, (
             f"the wheel down did not scroll the region: offset {prior} -> {after}"
@@ -569,8 +571,8 @@ pkgs.testers.runNixOSTest {
         # ways would give the same error in half the cases.
         for _ in range(3):
             machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool click 4")
-            machine.sleep(1)
-        machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
+        machine.sleep(duration=timedelta(seconds=1))
         came_back = offset()
         assert came_back < after, (
             f"the wheel up did not come back: offset {after} -> {came_back}"
@@ -583,7 +585,7 @@ pkgs.testers.runNixOSTest {
             "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool mousemove "
             f"{xv + wv - 5} {yv + 5}"
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
         press_key("Escape")
         wait_for_height(FOOTER)
@@ -614,7 +616,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=timedelta(seconds=30)
         )
         # ONCE, because the leader alone runs the footer's door of a group
         # that has two (the three sets, `leader::Set`): `.` is the manager's
@@ -646,7 +648,7 @@ pkgs.testers.runNixOSTest {
         def type_and_settle(word):
             for letter in word:
                 press_key(letter)
-            machine.sleep(2)
+            machine.sleep(duration=timedelta(seconds=2))
 
         # THE FIRST ONE IS WHAT THE `Esc` BELOW CLEARS, and it has to be here:
         # `Esc` on an empty query closes the view, and then every height read
@@ -722,7 +724,7 @@ pkgs.testers.runNixOSTest {
         # region at its ceiling, so the height does not answer.
         before = expansion_text()
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+i")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         after = expansion_text()
         print(f"OCR before the C-i: {before!r}\nOCR after: {after!r}")
         # THE FLIP, and not a direction: whether the facts start on is the
@@ -736,7 +738,7 @@ pkgs.testers.runNixOSTest {
         )
         # AND THE PANEL COMES BACK, so what follows sees the view it opened.
         machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+i")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         assert the_facts_are_drawn(expansion_text()) == was_there, (
             "a second `C-i` did not turn the facts back"
         )
@@ -754,7 +756,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=timedelta(seconds=30)
         )
         # `m i`: the icons app's group has its two doors (`m i i`, `m i w`), so
         # in the set a leader starts in it FOLDS into one key — the footer's
@@ -765,7 +767,7 @@ pkgs.testers.runNixOSTest {
         # quotes, and `command=icons-open` matches nothing.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'command=\"icons-open\"' > /dev/null",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         # THE VIEW HOLDS THE KEYBOARD — it types a search — and its `Esc`, with
         # nothing typed, closes it and gives the keyboard back to the buffers.
@@ -774,13 +776,13 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager "
             "| grep 'the footer asked for a geometry' | tail -1 | grep -q 'keyboard=Exclusive'",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         press_key("Escape")
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager "
             "| grep 'the footer asked for a geometry' | tail -1 | grep -q 'keyboard=None'",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
 
     with subtest("the command really OPENS the icons app's window"):
@@ -822,7 +824,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager "
             "| grep 'command through the control socket command=memory-open' > /dev/null",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         try:
             await_windows(sock, 2, timeout=90)
@@ -847,7 +849,7 @@ pkgs.testers.runNixOSTest {
         # to assert something this one is already set up for.
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'id=\"state\"' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         journal = machine.succeed("journalctl -u footer --no-pager")
         state = [l for l in journal.splitlines() if 'id="state"' in l]
@@ -886,7 +888,7 @@ pkgs.testers.runNixOSTest {
             for _ in range(30):
                 if journal_now().count("leader active") > before:
                     return
-                machine.sleep(1)
+                machine.sleep(duration=timedelta(seconds=1))
             raise AssertionError("the leader did not open:\n" + journal_now()[-2000:])
 
         def leader_again():
@@ -898,7 +900,7 @@ pkgs.testers.runNixOSTest {
             for _ in range(30):
                 if journal_now().count("set switched") > before:
                     return
-                machine.sleep(1)
+                machine.sleep(duration=timedelta(seconds=1))
             raise AssertionError("the leader again switched no set:\n" + journal_now()[-2000:])
 
         focus_compositor()
@@ -911,7 +913,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "test $(journalctl -u footer --no-pager | grep -c 'command=\"network-open\"') "
             f"-gt {opened}",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         assert "br.ronoctua.network" not in windows_by_app_id(sock), (
             "`LEADER s n` opened the network's WINDOW; the leader alone is the footer's door"
@@ -924,7 +926,7 @@ pkgs.testers.runNixOSTest {
         leader_again()
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'set switched.*LEADER LEADER-' > /dev/null",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         # AND `Alt` TAPPED THERE CHOOSES NO SET: no set switch is logged for
         # it. It is `LEADER Alt` now — the focused window's shortcuts
@@ -934,7 +936,7 @@ pkgs.testers.runNixOSTest {
         # again before `s n` is pressed there.
         switched = journal_now().count("set switched")
         press_key("Alt_L")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         assert journal_now().count("set switched") == switched, (
             "a tap of Alt switched the leader's set"
         )
@@ -945,7 +947,7 @@ pkgs.testers.runNixOSTest {
         press_key("n")
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'command=\"network-window\"' > /dev/null",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         try:
             await_windows(sock, windows + 1, timeout=90)
@@ -975,7 +977,7 @@ pkgs.testers.runNixOSTest {
         press_key("n")
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'LEADER LEADER LEADER s n-' > /dev/null",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         # A NEW `leader closed`, COUNTED: steps 1 and 2 and every subtest
         # before this one already logged the line, and a grep for it passed
@@ -984,7 +986,7 @@ pkgs.testers.runNixOSTest {
         press_key("Escape")
         machine.wait_until_succeeds(
             f"test $(journalctl -u footer --no-pager | grep -c 'leader closed') -gt {closed}",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
 
     with subtest("with the Alt HELD the sequence goes on working"):
@@ -1017,7 +1019,7 @@ pkgs.testers.runNixOSTest {
             )
             machine.wait_until_succeeds(
                 f"test $(journalctl -u footer --no-pager | grep -c 'leader active') -gt {before}",
-                timeout=30,
+                timeout=timedelta(seconds=30),
             )
 
         def back_at_rest():
@@ -1028,7 +1030,7 @@ pkgs.testers.runNixOSTest {
             press_key("Escape")
             machine.wait_until_succeeds(
                 f"test $(journalctl -u footer --no-pager | grep -c 'leader closed') -gt {closed}",
-                timeout=30,
+                timeout=timedelta(seconds=30),
             )
 
         machine.succeed("journalctl --rotate && journalctl --vacuum-time=1s")
@@ -1058,7 +1060,7 @@ pkgs.testers.runNixOSTest {
             # In the `finally` on purpose: an Alt stuck in Xvfb would spoil
             # every subtest that comes afterwards.
             xdo("keyup", "alt")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         said = said_now()
         assert said.count("set switched") == switched, (
             "the held Alt, let go at the root, switched the leader's set:\n\n" + said
@@ -1067,7 +1069,7 @@ pkgs.testers.runNixOSTest {
         press_key("s")
         machine.wait_until_succeeds(
             f"test $(journalctl -u footer --no-pager | grep -c 'LEADER s-') -gt {opened_s}",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         back_at_rest()
 
@@ -1083,7 +1085,7 @@ pkgs.testers.runNixOSTest {
         try:
             the_leader_opens()
             xdo("key", "s")
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         finally:
             xdo("keyup", "alt")
 
@@ -1145,7 +1147,7 @@ pkgs.testers.runNixOSTest {
                 seen = rect_height()
                 if seen == expected:
                     return seen
-                machine.sleep(1)
+                machine.sleep(duration=timedelta(seconds=1))
             raise AssertionError(f"the workspace is {seen} px tall, expected {expected}")
 
         def leaders():
@@ -1177,14 +1179,14 @@ pkgs.testers.runNixOSTest {
         # THE POINTER AWAY FROM THE BOTTOM EDGE, or the bars would come up
         # under it the moment they are hidden.
         xdo("mousemove", str(x0 + w0 - 5), str(y0 + 5))
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         # AT REST FIRST, asserted: `visible` below is the zone of the two bars
         # ALONE, and a leader left open by a subtest above — its list's rows
         # in the zone — made every height after it wrong by that list.
         for _ in range(10):
             if last_keyboard_ask() == "None":
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert last_keyboard_ask() == "None", (
             "the hidden subtest starts with the footer holding the keyboard:\n"
             + machine.succeed("journalctl -u footer --no-pager")[-2000:]
@@ -1192,7 +1194,7 @@ pkgs.testers.runNixOSTest {
         # AND THE ZONE SETTLED: two reads a second apart that agree.
         visible = rect_height()
         for _ in range(10):
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
             again = rect_height()
             if again == visible:
                 break
@@ -1206,13 +1208,13 @@ pkgs.testers.runNixOSTest {
         shell("leader")
         machine.wait_until_succeeds(
             f"test $(journalctl -u footer --no-pager | grep -c 'leader active') -gt {before}",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         cycled = machine.succeed("journalctl -u footer --no-pager").count("the bars cycled")
         press_key("Control_L")
         machine.wait_until_succeeds(
             f"test $(journalctl -u footer --no-pager | grep -c 'the bars cycled') -gt {cycled}",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         assert "mode=Some(Push)" in [
             l for l in machine.succeed("journalctl -u footer --no-pager").splitlines()
@@ -1233,27 +1235,27 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader && sleep 0.5 && "
             "DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key g"
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         quick = heights()[asked:]
         assert quick and max(quick) <= 3 * LINE, (
             f"a quick sequence laid the list out: heights {quick}, line {LINE}"
         )
         assert rect_height() == bare, "a quick sequence moved the zone"
-        machine.sleep(7)
+        machine.sleep(duration=timedelta(seconds=7))
 
         # 3. STILL, the list comes after the wait — and it lies over the
         #    windows: the zone does not move.
         asked = len(heights())
         shell("leader")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         assert all(h <= 2 * LINE for h in heights()[asked:]), (
             f"the list was laid out before the hand stopped: {heights()[asked:]}"
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'after the hand stopped' > /dev/null",
-            timeout=10,
+            timeout=timedelta(seconds=10),
         )
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         shown = heights()[asked:]
         assert max(shown) > 3 * LINE, f"the list never came: {shown}"
         assert rect_height() == bare, "the leader's list pushed the windows"
@@ -1262,7 +1264,7 @@ pkgs.testers.runNixOSTest {
         # 4. A FOOTER APP PUSHES, with the bars still hidden, and `Esc` gives
         #    the zone back.
         shell("command", "notif-open")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         pushed = rect_height()
         assert pushed < bare, f"an app did not push: {pushed} px against {bare} px"
         press_key("Escape")
@@ -1279,17 +1281,17 @@ pkgs.testers.runNixOSTest {
         # 6. COVER: the edge brings the bars up OVER the windows — the footer
         #    asks for the two lines, and the zone does not move.
         shell("command", "footer-hide-cover")
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
         assert rect_height() == bare, "cover reserved a zone"
         asked = len(heights())
         xdo("mousemove", str(x0 + 40), str(y0 + h0 - 1))
         for _ in range(10):
             if any(h >= FOOTER for h in heights()[asked:]):
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         else:
             raise AssertionError(f"the edge did not bring the bars up in cover: {heights()[asked:]}")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
         assert rect_height() == bare, "the edge pushed in cover"
         steady(bare)
         xdo("mousemove", str(x0 + w0 - 5), str(y0 + 5))

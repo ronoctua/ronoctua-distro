@@ -226,13 +226,14 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
+    from datetime import timedelta
 
 
     def record(part):
         return json.loads(machine.succeed(f"cat /var/lib/ronoctua-parts/parts/{part}.json"))
 
 
-    def wait_phase(part, phase, timeout=600):
+    def wait_phase(part, phase, timeout=timedelta(minutes=10)):
         machine.wait_until_succeeds(
             f"jq -e '.phase == \"{phase}\"' /var/lib/ronoctua-parts/parts/{part}.json",
             timeout=timeout,
@@ -274,7 +275,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "jq -e '.attempts >= 1 and .\"last-failure\".why == \"build-failed\"' "
             "/var/lib/ronoctua-parts/parts/b.json",
-            timeout=600,
+            timeout=timedelta(minutes=10),
         )
         assert run_as_person("a") == "a 1"
         assert run_as_person("c") == "c 1"
@@ -296,7 +297,7 @@ pkgs.testers.runNixOSTest {
         machine.fail("test -e /var/lib/ronoctua-parts/view/lib")
         # The failed part waits to be tried again — a timer armed for its
         # due time, never a unit left failed (a switch would count it).
-        machine.wait_until_succeeds("systemctl is-active ronoctua-parts-retry.timer", timeout=120)
+        machine.wait_until_succeeds("systemctl is-active ronoctua-parts-retry.timer", timeout=timedelta(minutes=2))
         machine.fail("systemctl is-failed ronoctua-part@b.service")
 
     with subtest("a part of the person's is evaluated alone, and a broken one fails only itself"):
@@ -306,7 +307,7 @@ pkgs.testers.runNixOSTest {
             machine.wait_until_succeeds(
                 "jq -e '.attempts >= 1 and .\"last-failure\".why == \"eval-failed\"' "
                 f"/var/lib/ronoctua-parts/parts/{part}.json",
-                timeout=600,
+                timeout=timedelta(minutes=10),
             )
             assert record(part)["wanted"] is None, record(part)
             machine.fail(f"systemctl is-failed ronoctua-part@{part}.service")
@@ -323,7 +324,7 @@ pkgs.testers.runNixOSTest {
     with subtest("the person tries a part again, and only the parts' units"):
         server.succeed("cp ${served}/later/${file "b" "1"} /srv/")
         machine.succeed("su noctua -c 'systemctl start ronoctua-part@b.service'")
-        wait_phase("b", "here", timeout=300)
+        wait_phase("b", "here", timeout=timedelta(minutes=5))
         assert run_as_person("b") == "b 1"
         machine.fail("su noctua -c 'systemctl start systemd-tmpfiles-clean.service'")
 
@@ -333,7 +334,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "jq -e '.wanted.out == \"${plain a2.outPath}\" and .attempts >= 1' "
             "/var/lib/ronoctua-parts/parts/a.json",
-            timeout=600,
+            timeout=timedelta(minutes=10),
         )
         a = record("a")
         assert a["current"]["out"] == "${plain a1.outPath}", a
@@ -341,7 +342,7 @@ pkgs.testers.runNixOSTest {
 
         server.succeed("cp ${served}/later/${file "a" "2"} /srv/")
         machine.succeed("su noctua -c 'systemctl start ronoctua-part@a.service'")
-        wait_phase("a", "here", timeout=300)
+        wait_phase("a", "here", timeout=timedelta(minutes=5))
         a = record("a")
         assert a["current"]["out"] == "${plain a2.outPath}", a
         assert a["previous"]["out"] == "${plain a1.outPath}", a
@@ -356,7 +357,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(
             "jq -e '.missing | map(.name) | index(\"test-part-d-1-download\") != null' "
             "/var/lib/ronoctua-parts/parts/d.json",
-            timeout=300,
+            timeout=timedelta(minutes=5),
         )
         missing = record("d")["missing"]
         assert missing[0]["urls"] == ["http://server/${file "d" "1"}"], missing
@@ -377,13 +378,13 @@ pkgs.testers.runNixOSTest {
         )
         machine.succeed("su noctua -c 'systemctl start ronoctua-parts-accept.service'")
         machine.succeed(f"test -e {missing[0]['out']}")
-        wait_phase("d", "here", timeout=300)
+        wait_phase("d", "here", timeout=timedelta(minutes=5))
         assert run_as_person("d") == "d 1"
 
     with subtest("a stick carries a download, and nothing built"):
         wait_phase("e", "arriving")
         machine.wait_until_succeeds(
-            "jq -e '.missing | length == 1' /var/lib/ronoctua-parts/parts/e.json", timeout=300
+            "jq -e '.missing | length == 1' /var/lib/ronoctua-parts/parts/e.json", timeout=timedelta(minutes=5)
         )
         out = record("e")["missing"][0]["out"]
         # ANOTHER MACHINE'S STICK, made here: the download fetched once while
@@ -406,7 +407,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(f"test -e {out}")
         said = json.loads(machine.succeed("cat /var/lib/ronoctua-parts/stick.json"))
         assert said["verb"] == "import" and said["outcome"] == {"kind": "done", "count": 1}, said
-        wait_phase("e", "here", timeout=300)
+        wait_phase("e", "here", timeout=timedelta(minutes=5))
         assert run_as_person("e") == "e 1"
         # A FOLDER OFF A REMOVABLE MEDIUM is refused, and the refusal said for
         # the page — root goes nowhere else the person names.
@@ -435,7 +436,7 @@ pkgs.testers.runNixOSTest {
         assert said["verb"] == "export" and said["outcome"]["kind"] == "done", said
 
     with subtest("a part at a new interface is reached at its new path"):
-        wait_phase("c", "here", timeout=300)
+        wait_phase("c", "here", timeout=timedelta(minutes=5))
         assert record("c")["current"]["interface"] == 2
         machine.succeed("test -x /nix/var/nix/profiles/ronoctua/parts/c/v2/bin/c")
         # The old interface stays, for a rollback to find.

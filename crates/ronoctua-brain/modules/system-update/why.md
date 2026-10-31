@@ -288,6 +288,14 @@ Uma frase clicável que quebra em várias linhas é UM controle: o ponteiro sobr
 todas, nas duas portas (no rodapé, `Region::control_of` da região da atualização, que acende por
 linha).
 
+Os registros também oferecem os gestos da máquina, cada um onde mora a frase dele (2026-10-31): sob
+o ensaio que falhou, tentá-lo de novo na próxima atualização (ou, pedido, a frase de que ele é
+tentado, com a tecla que atualiza agora); a frase da retenção solta; e, sem retenção, uma linha que
+retém a revisão que a pasta da máquina nomeia (`Records::revision`; nenhuma sem flake próprio). Um
+clique pergunta ali, o `não` primeiro, e o sim vai à barra do sudo; o porquê de cada um, e da nota
+que o `try-again` deixa ao lado do registro (`Records::again`, que a vista também relê pelo mtime),
+está no `docs/ARCHITECTURE.md` ("A vida da máquina").
+
 ## As duas portas e a marca
 
 `update_window.rs`, no crate `ronoctua-shell-update`, é a vista que olha uma execução nas duas portas

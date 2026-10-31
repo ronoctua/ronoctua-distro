@@ -37,8 +37,9 @@ pub enum Asker {
     Stick,
     /// The belongings (`LEADER s v`).
     Belongings,
-    /// The update's binary cache page (`LEADER s u c`): root's netrc for the
-    /// person's private cache.
+    /// The update (`LEADER s u`): root's netrc for the person's private
+    /// cache (its binary cache page), and the machine's hold and the system
+    /// tried again (its records).
     Update,
     /// The build switch (`LEADER / b`, the modeline's glyph): a build of the
     /// distro checkout's working tree.
@@ -197,6 +198,9 @@ impl Deed {
             }
             RootVerb::BinaryCacheNetrcRemove => texts.t(key::SUDO_BAR_DEED_CACHE_NETRC_REMOVE),
             RootVerb::BuildSwitchReference => texts.t(key::SUDO_BAR_DEED_BUILD_REFERENCE),
+            RootVerb::MachineHold => texts.t(key::SUDO_BAR_DEED_MACHINE_HOLD),
+            RootVerb::MachineUnhold => texts.t(key::SUDO_BAR_DEED_MACHINE_UNHOLD),
+            RootVerb::MachineTryAgain => texts.t(key::SUDO_BAR_DEED_MACHINE_TRY_AGAIN),
         }
     }
 

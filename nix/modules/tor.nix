@@ -65,8 +65,8 @@
 # would send every connection this machine makes through Tor, which is a
 # decision about the machine and not about a window — and the failure mode is
 # a laptop that quietly cannot reach anything on its own network. What this
-# module offers instead is a SOCKS address the view NAMES, and which
-# `network-tor-browser` points a browser at.
+# module offers instead is a SOCKS address the view NAMES, for a program the
+# person points at it.
 {
   config,
   lib,
@@ -81,6 +81,13 @@ let
   # reads the same file and bakes both into the shell, which is what stops the
   # screen naming a port nothing listens on.
   facts = import ../tor.nix;
+  # THE PLUGGABLE TRANSPORTS' PROGRAMS, by the names
+  # `ronoctua_tunnel::tor::transport` reads (`OBFS4_VARIABLE`,
+  # `SNOWFLAKE_VARIABLE`).
+  transports = {
+    RONOCTUA_TOR_OBFS4 = "${pkgs.obfs4}/bin/lyrebird";
+    RONOCTUA_TOR_SNOWFLAKE = "${pkgs.snowflake}/bin/client";
+  };
 in
 {
   options.ronoctua.tor = {
@@ -182,17 +189,25 @@ in
     # They are PACKAGES here and lines in the fragment there: the nixpkgs
     # option for `ClientTransportPlugin` is a single submodule, and torrc takes
     # several — obfs4 and snowflake at once is the ordinary case, since which
-    # one gets through is not known in advance. The view writes both lines and
-    # reads these paths out of the environment, the way every other external
-    # program in this tree is found.
+    # one gets through is not known in advance. The view writes the line for
+    # the transport its ring stands on, `<transport> exec <program>`, with the
+    # program's store path read out of the environment below
+    # (`ronoctua_tunnel::tor::transport`) — a bare `ClientTransportPlugin
+    # obfs4` was a bridge no program ever spoke. Tor's chroot binds the store,
+    # so the path is there for it.
     # `pkgs.obfs4` ships the `lyrebird` binary (the maintained obfs4 fork). On
     # nixos-unstable the top-level `pkgs.lyrebird` attribute was taken over by
     # an unrelated "Voice Changer" GUI app, so the transport is named `obfs4`
-    # here now; the binary the view finds on PATH is still `lyrebird`.
+    # here now; the binary is still `lyrebird`, and snowflake's is `client`.
     environment.systemPackages = [
       pkgs.obfs4
       pkgs.snowflake
     ];
+    # AT RUN TIME AND HERE, not baked into the shell (`nix/rust.nix`): a
+    # machine with Tor off carries neither program, and a new obfs4 rebuilds
+    # no unit. The footer's unit for its own thread, the session for a window.
+    environment.sessionVariables = transports;
+    systemd.user.services.ronoctua-footer.environment = transports;
 
     # THE DIRECTORY THE TORRC INCLUDES.
     #

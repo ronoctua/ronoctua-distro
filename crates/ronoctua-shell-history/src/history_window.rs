@@ -153,7 +153,7 @@ impl HistoryWindow {
     /// region carries out too (`history_region::carry_out`), with this
     /// window's own thread.
     fn apply(&mut self, ui: &mut Ui, errand: crate::history::Errand) {
-        crate::history_region::carry_out(errand, &mut self.view, self.atuin.as_ref(), ui);
+        crate::history_region::carry_out(errand, self.atuin.as_ref(), ui);
     }
 
     /// What one press means — from the keyboard, or `RET` from a second

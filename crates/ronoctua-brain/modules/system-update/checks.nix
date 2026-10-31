@@ -504,7 +504,7 @@ in
     #
     # The generator emits the exact list of keys the table implies — a name
     # and a sentence for every step, and the closed vocabularies for the
-    # preconditions, the failure policies and the kinds. A step added without
+    # preconditions and the declined runs. A step added without
     # them would draw a bracketed key on the brain's page (invariant 8). The
     # list is DERIVED, so it cannot go stale the way a hand-written one does.
     system-update-has-text = mkCheck "system-update-has-text" [ pkgs.python3 ] ''

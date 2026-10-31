@@ -116,6 +116,8 @@ pkgs.testers.runNixOSTest {
   testScript =
     { nodes, ... }:
     ''
+      from datetime import timedelta
+
       user = "${nodes.machine.ronoctua.user}"
 
 
@@ -133,10 +135,10 @@ pkgs.testers.runNixOSTest {
       # THE COMPOSITOR COMES UP AS THE PERSON'S, on the Xvfb screen — the login
       # shell starts `scroll-session.target`, which pulls the compositor in.
       machine.wait_until_succeeds(
-          f"systemctl --machine={user}@ --user is-active scroll.service", timeout=240
+          f"systemctl --machine={user}@ --user is-active scroll.service", timeout=timedelta(minutes=4)
       )
       machine.wait_until_succeeds(
-          f"systemctl --machine={user}@ --user is-active scroll-session.target", timeout=60
+          f"systemctl --machine={user}@ --user is-active scroll-session.target", timeout=timedelta(minutes=1)
       )
 
       before = scroll_pid()
@@ -178,12 +180,12 @@ pkgs.testers.runNixOSTest {
           )
       )
       machine.wait_until_succeeds(
-          f"systemctl --machine={user}@ --user is-active scroll.service", timeout=120
+          f"systemctl --machine={user}@ --user is-active scroll.service", timeout=timedelta(minutes=2)
       )
       # Let the restart settle onto a real new process, not the 0 of the gap.
       machine.wait_until_succeeds(
           f'test "$(systemctl --machine={user}@ --user show scroll.service -p MainPID --value)" != "0"',
-          timeout=60,
+          timeout=timedelta(minutes=1),
       )
       control = scroll_pid()
       assert control != before, (

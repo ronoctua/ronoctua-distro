@@ -354,7 +354,7 @@ usage: ronoctua-shell photograph --door security [options] [steps]
 
   --state <file.json>   the scene the page draws (`security::Scene`, JSON)
                                                        (default: an empty one)
-  --section <word>      now, firewall, admin, finger, keys, private,
+  --section <word>      now, firewall, admin, finger, keys, lock, private,
                         encrypt, device, quantum, privacy, online or
                         suggest: the cursor starts there
   --out <file>          where to write                 (default: security.png)

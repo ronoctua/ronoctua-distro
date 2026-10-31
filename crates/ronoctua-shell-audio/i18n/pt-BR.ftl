@@ -67,3 +67,12 @@ audio-port-internal-mic = Microfone interno
 audio-port-microphone = Microfone
 audio-port-line-in = Entrada de linha
 audio-port-line-out = Saída de linha
+# Where a playing program's sound goes, and sending it to another device.
+audio-sound-goes-to = O som vai para
+audio-plays-nowhere = nenhum aparelho por ora
+audio-sent-where-nothing-is = O aparelho para onde foi mandado não está aqui.
+audio-stays-put = Este programa pede para não ser movido.
+audio-send-back = aparelho anterior
+audio-send-on = próximo aparelho
+about-audio-send-back = Manda o som deste programa para o aparelho anterior da lista.
+about-audio-send-on = Manda o som deste programa para o próximo aparelho da lista.

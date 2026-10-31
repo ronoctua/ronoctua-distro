@@ -147,16 +147,6 @@ atlas-absent = the world data is not on this machine
 # four places, of which this is the one a person actually reads. See
 # `LICENSE-DATA.txt` for the other three.
 atlas-credits = places from GeoNames (CC BY 4.0) · borders from Natural Earth (public domain) · streets from OpenStreetMap contributors (ODbL)
-atlas-heading = World data
-atlas-baseline = borders and places
-atlas-present = on this machine
-atlas-offered = streets, by region
-atlas-not-yet = not on this machine
-atlas-not-yet-said = downloading a region's streets is not built yet — the picker, the queue and the reader are what is left
-atlas-open = open
-atlas-previous = previous
-atlas-next = next
-atlas-back = back
 files-explain-globe = drag to turn it, the wheel to come closer
 files-explain-globe-dot = where this file says it was made — Enter frames it
 files-explain-globe-address = { $value } — press to open this coordinate in the browser's map.

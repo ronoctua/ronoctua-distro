@@ -1405,6 +1405,9 @@ mod tests {
             },
             RootVerb::BinaryCacheNetrcRemove,
             RootVerb::BuildSwitchReference,
+            RootVerb::MachineHold,
+            RootVerb::MachineUnhold,
+            RootVerb::MachineTryAgain,
         ];
         verbs.extend(RelaxSpan::ALL.map(|span| RootVerb::Relax { span }));
         verbs

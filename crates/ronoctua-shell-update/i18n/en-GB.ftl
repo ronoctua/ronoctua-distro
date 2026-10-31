@@ -24,9 +24,10 @@ machine-refused-nothing-to-migrate = This machine already has its own flake: the
 machine-refused-build-failed = The new system did not build. Nothing changed: the machine runs what it ran, and its folder says so again. A download it could not fetch is named on the parts' page, with the ways to bring it in.
 machine-refused-switch-failed = The switch to the new system failed. The next start tries it once, and comes back to the last good system if it does not start.
 machine-refused-next-boot-failed = Setting the new system for the next restart failed. Nothing that runs changed; the boot menu may not list the new system, and the next restart may start the one this machine runs.
-machine-refused-did-not-boot = This is the system that did not start when it was tried, or that was rolled back. The machine stays on the one it runs until a newer revision of the distro arrives.
+machine-refused-did-not-boot = This is the system that did not start when it was tried, or that was rolled back. The machine stays on the one it runs until a newer revision of the distro arrives, or you ask on this page to try it again.
 machine-refused-last-good-would-fall-out = One more system would push the last good one out of the boot menu. Restart first, so the system on trial can be confirmed.
 machine-refused-held = The machine is held at another revision than the one its folder names: nothing was built.
+machine-refused-no-failed-trial = No system failed its boot trial on this machine now: there is nothing to try again.
 machine-refused-unreadable = A file of the machine's folder cannot be read.
 machine-refused-failed = A program the machine needed failed; the journal says which.
 
@@ -42,6 +43,32 @@ machine-trial-boot-identical = The new system starts exactly like the last good 
 machine-no-trial-no-efi-variables = This machine's boot variables cannot be written, so the new system has no way back but the boot menu.
 machine-no-trial-not-in-menu = The boot menu does not name the new system or the last good one in a way the trial can use, so the new system has no way back but the boot menu.
 machine-no-trial-no-last-good = No system is known to have started well on this machine yet, so the new system has no way back but the boot menu.
+
+## The machine's own gestures on the update's page: the system that did not start, tried again at the next update; the machine held on its distro revision, and let go. Each is asked on the page, the no first, then in the sudo bar.
+
+machine-try-again-row = Try it again at the next update.
+machine-try-again-asked = It is tried again at the next update, with its way back armed; { $keys } updates now.
+machine-try-again-question = Try the system that did not start again, at the next update? If it does not start this time either, the machine comes back to the last good one by itself.
+machine-try-again-no = no, leave it
+machine-try-again-yes = yes, try it again
+machine-hold-row = Hold this machine on { $rev }: updates stop moving the distro and nixpkgs.
+machine-hold-question = Hold this machine on the distro revision it has? Updates stop moving the distro and nixpkgs until you let go.
+machine-hold-no = no, keep following the distro
+machine-hold-yes = yes, hold it
+machine-let-go-row = Let go: the next update moves the distro and nixpkgs again.
+machine-let-go-question = Let go of the hold? The next update moves the distro and nixpkgs again.
+machine-let-go-no = no, keep it held
+machine-let-go-yes = yes, let go
+machine-said-asked = Asked for in the sudo bar, above the modeline, if sudo wants you.
+machine-said-try-again = The system that did not start is tried again at the next update.
+machine-said-hold = This machine is held on its distro revision: updates leave the distro and nixpkgs where they are.
+machine-said-let-go = This machine follows the distro again from the next update.
+machine-said-held-already = This machine is held already: the hold's line lets it go.
+machine-said-not-held = This machine is not held.
+machine-said-nothing-to-hold = This machine has no flake of its own, so there is no revision to hold.
+cmd-machine-try-again = Tries again, at the next update, the system whose boot trial failed — asked through sudo
+cmd-machine-hold = Holds this machine on its distro revision, so updates stop moving the distro and nixpkgs — asked through sudo
+cmd-machine-let-go = Lets go of the machine's hold, so the next update moves the distro and nixpkgs again — asked through sudo
 # THE PERSON'S BINARY CACHE — a page of the update's view (`c`, `LEADER s u c`),
 # in both doors, and what the installation and root's netrc say of it.
 binary-cache-open = binary cache

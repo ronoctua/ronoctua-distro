@@ -29,7 +29,9 @@ pub fn said_when_done(
     match order {
         Order::Sync => Some(texts.t(crate::key::ECHO_ATUIN_SYNCED)),
         Order::LogOut => Some(texts.t(crate::key::ECHO_ATUIN_LOGGED_OUT)),
-        Order::LogIn { .. } | Order::Set { .. } | Order::Mark(_) => None,
+        // THE KEY IS ITS ROWS: it arrives as its own event and the view
+        // draws it.
+        Order::LogIn { .. } | Order::Set { .. } | Order::Mark(_) | Order::ShowKey => None,
     }
 }
 
@@ -66,5 +68,11 @@ mod tests {
         )
         .expect("a refusal is a sentence");
         assert!(refused.contains("no room"), "{refused}");
+        // THE KEY, fetched on the thread: its rows say it, and a refusal is
+        // the sentence the door used to say itself.
+        assert_eq!(said_when_done(&Order::ShowKey, None, &t), None);
+        let refused = said_when_done(&Order::ShowKey, Some("not logged in"), &t)
+            .expect("a refusal is a sentence");
+        assert!(refused.contains("not logged in"), "{refused}");
     }
 }

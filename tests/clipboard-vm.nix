@@ -48,6 +48,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     ${xvfb.prelude}
 
 
@@ -57,12 +59,12 @@ pkgs.testers.runNixOSTest {
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             f"${pkgs.wl-clipboard}/bin/wl-copy {body}"
         )
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
 
 
     def press_key(item_name):
         machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key {item_name}")
-        machine.sleep(1)
+        machine.sleep(duration=timedelta(seconds=1))
 
 
     machine.start()
@@ -83,7 +85,7 @@ pkgs.testers.runNixOSTest {
         )
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
-            timeout=90,
+            timeout=timedelta(seconds=90),
         )
         focus_compositor()
 
@@ -98,7 +100,7 @@ pkgs.testers.runNixOSTest {
                 "journalctl -u footer --no-pager "
                 "| grep -c 'new entry in the clipboard history' "
                 "| grep -E '^[2-9]' > /dev/null",
-                timeout=30,
+                timeout=timedelta(seconds=30),
             )
         except Exception:
             print(machine.execute("journalctl -u footer --no-pager | tail -40")[1])
@@ -110,7 +112,7 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=timedelta(seconds=30)
         )
         # `c` IS A LEAF, not a prefix. It was the other way round for one
         # delivery, and the screen capture has lived under `m s` since — the
@@ -125,7 +127,7 @@ pkgs.testers.runNixOSTest {
         # and nothing was ever recopied.
         press_key("c")
         journal = machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'clipboard opened'", timeout=30
+            "journalctl -u footer --no-pager | grep 'clipboard opened'", timeout=timedelta(seconds=30)
         )
         print(journal.strip())
         assert "inputs=2" in journal, (
@@ -173,7 +175,7 @@ pkgs.testers.runNixOSTest {
             print(f"OCR: {read_back!r}")
             if "copied" in read_back.lower():
                 break
-            machine.sleep(1)
+            machine.sleep(duration=timedelta(seconds=1))
         assert "copied" in read_back.lower(), (
             f"the copied content is not on screen; OCR read {read_back!r}"
         )
@@ -186,7 +188,7 @@ pkgs.testers.runNixOSTest {
         press_key("Return")
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'recopied from the history' > /dev/null",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         pasted = machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
@@ -205,7 +207,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("systemctl restart footer")
         machine.wait_until_succeeds(
             "journalctl -u footer --no-pager | grep 'control socket opened' > /dev/null",
-            timeout=60,
+            timeout=timedelta(minutes=1),
         )
         focus_compositor()
 
@@ -217,14 +219,14 @@ pkgs.testers.runNixOSTest {
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             "${pkgs.wl-clipboard}/bin/wl-copy --type image/png < /tmp/vermelho.png"
         )
-        machine.sleep(2)
+        machine.sleep(duration=timedelta(seconds=2))
 
         machine.succeed(
             "XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=wayland-1 "
             "${ronoctua-shell}/bin/ronoctua-shell leader"
         )
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=30
+            "journalctl -u footer --no-pager | grep 'leader active' > /dev/null", timeout=timedelta(seconds=30)
         )
         # `c` IS A LEAF, not a prefix. It was the other way round for one
         # delivery, and the screen capture has lived under `m s` since — the
@@ -241,7 +243,7 @@ pkgs.testers.runNixOSTest {
 
         try:
             journal = machine.wait_until_succeeds(
-                "journalctl -u footer --no-pager | grep 'preview decoded'", timeout=30
+                "journalctl -u footer --no-pager | grep 'preview decoded'", timeout=timedelta(seconds=30)
             )
         except Exception:
             print(machine.execute("journalctl -u footer --no-pager | tail -30")[1])

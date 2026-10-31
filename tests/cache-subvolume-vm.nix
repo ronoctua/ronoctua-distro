@@ -60,6 +60,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
+
     cache = "/home/alice/.cache"
     moving = cache + ".subvolume-in-progress"
     unit = "ronoctua-cache-subvolume-alice.service"
@@ -100,7 +102,7 @@ pkgs.testers.runNixOSTest {
         said = machine.wait_until_succeeds(
             f"journalctl _SYSTEMD_INVOCATION_ID=$(systemctl show -p InvocationID --value {unit}) "
             "--no-pager -o cat | grep .",
-            timeout=30,
+            timeout=timedelta(seconds=30),
         )
         assert "next boot" in said, said
         assert not is_subvolume(cache), "a cache was converted under a running machine"
