@@ -143,6 +143,21 @@
   keepSources ? null,
 }:
 
+# `callPackage` FILLS EVERY ARGUMENT `pkgs` HAS A NAME FOR, defaults included,
+# and nixos-unstable has a package called `what` (and one called `units`):
+# handed it, `what == "gate"` was false, and the gate ended as `most` does —
+# without phase 5, saying "OK" while it did not close invariant 7
+# (2026-10-31). A battery is one of the two by a string, or nothing builds.
+assert lib.assertMsg
+  (builtins.elem what [
+    "gate"
+    "targets"
+  ])
+  "nix/gate.nix: `what` is ${builtins.typeOf what}, not \"gate\" or \"targets\": callPackage filled it from pkgs; pass it";
+assert lib.assertMsg (
+  units == null || !(lib.isDerivation units)
+) "nix/gate.nix: `units` is a package (callPackage filled it from pkgs); pass rust.unitIndex";
+
 let
   # NOTHING STARTS OVER A BUILD INSIDE THE TREE (`nix/tree-guard.nix`).
   treeGuard = callPackage ./tree-guard.nix { };

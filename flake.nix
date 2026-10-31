@@ -1187,6 +1187,9 @@
       # arithmetic and where its numbers were measured.
       gateApp = pkgs.callPackage ./nix/gate.nix {
         inherit system keepSources;
+        # SAID, and not left to the default: `pkgs` has a `what` of its own,
+        # and `callPackage` hands it over (`nix/gate.nix` refuses it).
+        what = "gate";
         prefetch = "${prefetchApp}/bin/ronoctua-prefetch";
         sizing = buildSizing;
         units = rust.unitIndex;
