@@ -494,8 +494,14 @@ pkgs.testers.runNixOSTest {
           assert witness() == before, (before, witness())
           assert machine.succeed("readlink -f /nix/var/nix/profiles/system").strip() == STAGED
           s = state()
-          assert s["last-apply"]["result"] == "staged", s
-          assert s["last-apply"]["toplevel"] == STAGED, s
+          # STATE.JSON SAYS ONLY WHAT AN OLDER READER READS (`switched`, no
+          # system named); the apply whole is beside it.
+          assert s["last-apply"]["result"] == "switched", s
+          assert "toplevel" not in s["last-apply"], s
+          whole = json.loads(machine.succeed("cat /var/lib/ronoctua-machine/last-apply.json"))
+          assert whole["last-apply"]["result"] == "staged", whole
+          assert whole["last-apply"]["toplevel"] == STAGED, whole
+          assert whole["last-apply"]["at"] == s["last-apply"]["at"], (whole, s)
           # A REAL TRIAL, though it boots like the last good one.
           assert s["trial"] == {"toplevel": STAGED, "outcome": "pending"}, s
           assert f"init={STAGED}/init" in boots(oneshot()), oneshot()

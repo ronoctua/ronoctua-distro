@@ -303,7 +303,8 @@ impl Readings {
             .map_or_else(Mirrors::default, Mirrors::read);
         let state = std::fs::read(&places.state)
             .ok()
-            .and_then(|b| ronoctua_person::parse::<ronoctua_person::state::MachineState>(&b).ok());
+            .and_then(|b| ronoctua_person::parse::<ronoctua_person::state::MachineState>(&b).ok())
+            .map(|s| s.completed(&places.state));
         r.system = System::of(state.as_ref().and_then(|s| s.last_apply.as_ref()), |out| {
             Path::new(out).exists()
         });
@@ -1331,7 +1332,7 @@ fn hand_in(id: &str, download: &str, from: &Path, places: &Places) -> Came {
         std::fs::read(&places.state)
             .ok()
             .and_then(|b| ronoctua_person::parse::<ronoctua_person::state::MachineState>(&b).ok())
-            .and_then(|s| s.last_apply)
+            .and_then(|s| s.completed(&places.state).last_apply)
             .is_none_or(|a| {
                 a.missing
                     .iter()

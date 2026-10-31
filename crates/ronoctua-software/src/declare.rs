@@ -968,12 +968,28 @@ mod tests {
                 if result == "staged" { &b } else { &a },
             );
             std::fs::create_dir_all(&ctx.roots.system.machine).unwrap();
-            std::fs::write(
-                ctx.roots.system.machine.join(ronoctua_person::names::STATE),
+            // AS THE MACHINE WRITES IT: `state.json` told for an older
+            // reader, the apply whole beside it.
+            let record: ronoctua_person::state::MachineState = ronoctua_person::parse(
                 format!(
                     r#"{{"format": 1, "last-good": null, "trial": null, "hold": null,
                        "last-apply": {{"at": "2026-10-30T12:30:00Z", "result": "{result}", "toplevel": "{b}"}}}}"#
-                ),
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            let (told, whole) = record.split();
+            std::fs::write(
+                ctx.roots.system.machine.join(ronoctua_person::names::STATE),
+                ronoctua_person::to_json(&told),
+            )
+            .unwrap();
+            std::fs::write(
+                ctx.roots
+                    .system
+                    .machine
+                    .join(ronoctua_person::names::LAST_APPLY),
+                ronoctua_person::to_json(&whole.unwrap()),
             )
             .unwrap();
             let saved = ctx.roots.home.join(".var/app/org.example.App");

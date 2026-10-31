@@ -1639,10 +1639,6 @@ máquina tem o próprio flake", "A atualização deixa o sistema para o próximo
   ativação sem rede ainda passa inteira com a atualização na ativação também não foi conferido.
   - acabou quando: o dono decide se esse tráfego é uma exceção escrita da regra do consentimento ou
     passa por ela, e uma VM sem rede ativa um sistema com Flatpak.
-- **A janela do formato 1 para o `staged`**, descrita no `ARCHITECTURE.md` ("O formato 1 tem uma
-  janela em aberto"), espera a escolha do dono.
-  - acabou quando: o dono escolhe entre manter o formato 1, só escrever `staged` quando o último bom
-    já o lê, ou subir o formato, e um teste do `ronoctua-person` prende a escolha.
 
 <!-- anchor: L20 -->
 

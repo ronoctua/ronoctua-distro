@@ -16736,8 +16736,8 @@ máquina do dono; a causa não foi registrada, e nenhuma VM prova uma troca ao v
 (`docs/PENDING.md`) — é por isso que a atualização não troca nada sob a sessão. Então o `apply` da
 atualização é `apply --next-boot`: constrói, põe o sistema no
 perfil e roda `switch-to-configuration boot` — nada do que roda é parado ou reiniciado —, o registro
-diz `staged` e nomeia o sistema que espera (`last-apply.toplevel`, um campo que entrou no formato 1
-como `missing` e `no-trial` entraram), e o ensaio de boot é armado de verdade, nunca `boot-identical`,
+diz `staged` e nomeia o sistema que espera (`last-apply.toplevel`, os dois no `last-apply.json` ao
+lado do `state.json`, veja abaixo), e o ensaio de boot é armado de verdade, nunca `boot-identical`,
 porque nada rodou o userland novo. Qualquer outro `apply` faz o mesmo, sem pedir, em dois casos: o
 perfil nomeia um sistema que não roda (um sistema deixado para o próximo boot continua para o próximo
 boot — trocar para ele ao vivo seria o salto que isto evita), ou o lock da pasta não prova que o
@@ -16781,14 +16781,33 @@ por esse reinício, e a máquina hiberna sozinha com a bateria no fim. O gancho 
 bom, cujo kernel roda) e o devolve depois; uma máquina que não voltou pela retomada acha a nota
 (`trial-asleep.json`) no bless seguinte, e o ensaio é armado de novo em vez de julgado.
 
-**O formato 1 tem uma janela em aberto (decisão do dono).** Um leitor anterior a `staged`/`toplevel`
-recusa o registro (`unreadable`). Entre máquinas isso passa na atualização de cada uma; NUMA máquina, a
-volta do ensaio pode cair num sistema anterior ao leitor — a geração que o trouxe foi trocada ao vivo
-com kernel novo, o ensaio dela ficou pendente, e o último bom é anterior a ela —, e ali o bless e o
-apply recusam o registro: ninguém julga o ensaio e toda atualização falha no rebuild até alguém tirar
-o `last-apply` do `/var/lib/ronoctua-machine/state.json` (ou o arquivo inteiro, que se lê como um
-registro novo). Manter o formato 1, só escrever `staged` quando o último bom já o lê, ou subir o
-formato é escolha do dono.
+**O `state.json` só diz o que um leitor mais velho lê (2026-10-31).** O formato ficou 1 enquanto o
+último apply aprendia coisas — os downloads que faltaram (`missing`, 2026-10-25), o resultado `staged` e
+o `toplevel` do sistema posto (2026-10-30) —, e um leitor anterior a uma delas recusa o registro que a
+tenha (`deny_unknown_fields`, o conjunto fechado de resultados). NUMA máquina esse leitor não some na
+atualização: a volta do ensaio pode cair num sistema anterior a ele — a geração que trouxe o leitor
+novo foi trocada ao vivo com kernel novo, o ensaio dela ficou pendente, e o último bom é anterior a
+ela. Ali o bless e o apply recusariam o registro, ninguém julgaria o ensaio e toda atualização falharia
+no rebuild até alguém editar o arquivo à mão. Subir o formato não resolve (o leitor velho recusa o
+formato novo do mesmo jeito), e só escrever `staged` quando o último bom já o lê deixaria sem ele
+justamente a primeira atualização depois da que trouxe o leitor (sem o aviso de reiniciar, o cache
+empurrando o sistema que roda em vez do que espera). Então o registro é escrito em dois arquivos
+(`MachineState::split`, só pelo `ronoctua-machine`): o `state.json` diz só o que o leitor da primeira
+release publicada (`v2026.10.21-4d366d8`) lê — o último apply é `at` e `result`, e um apply deixado
+para o próximo boot vira `switched`, o mais perto que esse leitor conhece (um sistema construído e
+posto) —, e o apply inteiro vai para o `last-apply.json` ao lado, que nenhum leitor velho abre. Quem lê
+hoje (o `ronoctua-machine`, o envio ao cache, a central de programas, a página das partes, o
+`ronoctua-parts`) o junta de volta (`MachineState::completed`) só quando ele é do MESMO apply que o
+`state.json` guarda: o sistema velho, depois da volta, escreve o próprio apply só no `state.json`, e aí
+o arquivo ao lado é de outro apply e não é acreditado. Um arquivo ao lado que não se lê (o de um
+escritor mais novo) vale o mesmo — o registro é o que o leitor velho veria, nunca uma recusa — e não é
+apagado: pode ser do apply que o `state.json` ainda guarda, e o sistema novo, bootado de novo, o lê
+inteiro; é o que deixa a próxima mudança do apply seguir o mesmo caminho. O ao lado é escrito ANTES e
+tirado DEPOIS do `state.json`, para quem lê entre os dois ver um par de applies diferentes, nunca o
+apply novo dito pela metade. A cópia publicada nos pertences (`ronoctua-person record`) é a do
+`state.json`, que toda máquina da pessoa lê; nada a lê como configuração. Fica de fora uma entrada de
+GRUB no último bom (um título com espaços), que o leitor de 2026-10-21, anterior ao GRUB, recusa: ele
+nunca armou um ensaio numa máquina BIOS.
 
 **Uma entrada do menu é lida pelo que diz, não pelo nome.** O builder do systemd-boot do
 `nixos-unstable` nomeia cada entrada pelo SHA-256 do próprio texto (`nixos-<sha256>.conf`), não mais

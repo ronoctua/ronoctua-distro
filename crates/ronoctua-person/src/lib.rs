@@ -109,6 +109,10 @@ pub mod names {
     pub const DECLARED_ANDROID: &str = "declared-android.json";
     /// Under `/var/lib/ronoctua-machine/`, written by `ronoctua-machine`.
     pub const STATE: &str = "state.json";
+    /// Beside [`STATE`], written by `ronoctua-machine`: the last apply whole,
+    /// while `state.json` cannot tell it to an older reader
+    /// ([`crate::state::Whole`]).
+    pub const LAST_APPLY: &str = "last-apply.json";
     /// Under the machine directory, root only: the person's signing key this
     /// machine trusts, and what the last apply made of the signature
     /// ([`crate::local::Signer`]).

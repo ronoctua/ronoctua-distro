@@ -211,11 +211,13 @@ pub fn staged_system(state: &MachineState) -> Option<&str> {
         .filter(|t| crate::system::is_store_path(t))
 }
 
-/// The machine's record, if it reads.
+/// The machine's record, if it reads, its last apply whole
+/// ([`MachineState::completed`]).
 fn machine_state(places: &Places) -> Option<MachineState> {
     std::fs::read(&places.machine_state)
         .ok()
         .and_then(|b| ronoctua_person::parse::<MachineState>(&b).ok())
+        .map(|s| s.completed(&places.machine_state))
 }
 
 /// One push — or, `rehearse`, what one would carry, pushing nothing and
@@ -891,13 +893,24 @@ mod tests {
             ),
         )
         .unwrap();
-        std::fs::write(
-            &b.places.machine_state,
+        // AS THE MACHINE WRITES IT: `state.json` told for an older reader
+        // (`switched`, no system), the apply whole beside it.
+        let record: MachineState = ronoctua_person::parse(
             format!(
                 r#"{{"format": 1, "last-good": null, "trial": null, "hold": null,
                    "last-apply": {{"at": "{}", "result": "staged", "toplevel": "{staged}"}}}}"#,
                 Stamp::from_unix_s(50)
-            ),
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let (told, whole) = record.split();
+        std::fs::write(&b.places.machine_state, ronoctua_person::to_json(&told)).unwrap();
+        std::fs::write(
+            b.places
+                .machine_state
+                .with_file_name(ronoctua_person::names::LAST_APPLY),
+            ronoctua_person::to_json(&whole.unwrap()),
         )
         .unwrap();
         let (r, _) = b.run(false, 100);

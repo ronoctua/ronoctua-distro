@@ -10,34 +10,40 @@
 //!  "last-apply": {"at": "2026-10-05T12:00:00Z", "result": "switched"}}
 //! ```
 //!
-//! A last apply whose build could not fetch something lists it under
-//! `"missing"` ([`crate::frontier::Download`]); the key is absent otherwise.
-//! One that set a system up — switched to, or `"staged"` for the next boot —
-//! names it under `"toplevel"`; the key is absent otherwise.
-//!
-//! # Fields that joined format 1
-//!
-//! `missing`, `no-trial`, `toplevel` and the result `staged` came after the
-//! first records were written, and the format stayed 1: an absent key reads
-//! as it always did, and every record written without them reads back byte
-//! for byte. A reader older than one of them refuses a record that carries
-//! it as `shape`.
-//!
-//! Across machines, that reader is gone at each one's next update. On ONE
-//! machine it is not always: the boot trial's way back can land on a system
-//! built before the reader knew `staged` — the generation that first brought
-//! it was switched to live with a new kernel, its trial still pending, so
-//! the last good system predates it, and the next update set a system for
-//! the next boot that did not start. That older system's bless and apply
-//! refuse the record (`unreadable`): nothing judges the trial, and every
-//! update fails at the rebuild until `last-apply` is taken out of the
-//! machine's `state.json` by hand (or the file, which reads as a new record).
-//! Keeping format 1 with that window, writing `staged` only once the last
-//! good system reads it, or a new format is the owner's decision
-//! (`docs/ARCHITECTURE.md`, "O formato 1 tem uma janela em aberto").
-//!
 //! `"no-trial": "no-efi-variables"` joins them only while the system the last
 //! switch made has no boot trial ([`NoTrial`]); the key is absent otherwise.
+//!
+//! # What `state.json` does not say: `last-apply.json` beside it
+//!
+//! The format stayed 1 while the last apply learnt more: the downloads a
+//! build could not fetch (`missing`, 2026-10-25), the result `staged` and
+//! the `toplevel` of the system an apply set up (2026-10-30). A reader
+//! written before one of them refuses a record that carries it (`shape`:
+//! `deny_unknown_fields` and a closed set of results).
+//!
+//! That reader is not gone from a machine at its next update: the boot
+//! trial's way back can land on a system built before it — the generation
+//! that brought the newer reader was switched to live with a new kernel,
+//! its trial still pending, so the last good system predates it, and the
+//! next update set a system for the next boot that did not start. Had
+//! `state.json` said `staged`, that older system's bless and apply would
+//! refuse the record: nothing would judge the trial, and every update would
+//! fail at the rebuild until someone edited the file by hand.
+//!
+//! So `state.json` only ever says what the reader of the first published
+//! release (`v2026.10.21-4d366d8`) reads ([`MachineState::split`]): its last
+//! apply is `at` and `result` alone — an apply set for the next boot is
+//! `switched`, the nearest result that reader knows (a system built and set
+//! up). The last apply whole goes to `last-apply.json` beside it
+//! ([`crate::names::LAST_APPLY`], [`Whole`]), which no older reader opens,
+//! and a reader of today puts it back ([`MachineState::joined`]) only when
+//! it is the apply `state.json` holds — an older system that wrote its own
+//! apply since left a file beside that is of another apply, and
+//! `state.json` is believed. A file beside that does not read (a newer
+//! writer's) is believed the same way: the record is what an older reader
+//! sees, never a refusal.
+
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -177,7 +183,7 @@ pub enum ApplyResult {
     /// nothing that runs was stopped or restarted, and the new system is
     /// used from the next restart, the boot trial armed for it. Until then
     /// the machine runs the system it ran, and [`LastApply::toplevel`] names
-    /// the one that waits.
+    /// the one that waits. Never in `state.json` ([`MachineState::split`]).
     Staged,
 }
 
@@ -192,17 +198,141 @@ pub struct LastApply {
     /// The system the apply set up — switched to, or set for the next boot
     /// ([`ApplyResult::Staged`]); `None` (and absent from the file) for an
     /// apply that set up none. What reads the system an update made — the
-    /// binary cache's push, the parts' plan of the next boot — reads it
-    /// from here, never from the system profile.
+    /// binary cache's push — reads it from here, never from the system
+    /// profile. Never in `state.json` ([`MachineState::split`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toplevel: Option<String>,
     /// The downloads its build could not fetch ([`crate::frontier`]): the
     /// system's, when the build failed, or the hardware's that waits for a
     /// network, when the machine was built without it again. Each is what
     /// the update's page offers to hand in or bring on a stick. Empty (and
-    /// absent from the file) when nothing was missing.
+    /// absent from the file) when nothing was missing. Never in
+    /// `state.json` ([`MachineState::split`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<crate::frontier::Download>,
+}
+
+impl LastApply {
+    /// Whether the reader of the first published release reads it as it
+    /// is: it carries no `staged`, no `toplevel` and no `missing`.
+    #[must_use]
+    pub fn older_reads_it(&self) -> bool {
+        self.result != ApplyResult::Staged && self.toplevel.is_none() && self.missing.is_empty()
+    }
+
+    /// It as `state.json` tells the reader of the first published release:
+    /// when and how, a system set for the next boot being a system set up
+    /// (`switched`); which system, and what was missing, left out.
+    #[must_use]
+    pub fn for_older(&self) -> Self {
+        Self {
+            at: self.at.clone(),
+            result: match self.result {
+                ApplyResult::Staged => ApplyResult::Switched,
+                other => other,
+            },
+            toplevel: None,
+            missing: Vec::new(),
+        }
+    }
+
+    /// Every value checked, at `/last-apply`.
+    fn validate(&self) -> Result<(), Refusal> {
+        // THE SYSTEM AN APPLY SET UP is a store path: what reads it (the
+        // binary cache's push) joins a file to it.
+        if let Some(top) = &self.toplevel
+            && !check::store_path(top)
+        {
+            return Err(Refusal::new(
+                Why::Invalid,
+                "/last-apply/toplevel",
+                top.as_str(),
+            ));
+        }
+        // A DOWNLOAD NAMES TWO STORE PATHS that root hands to Nix (`accept`,
+        // `import`): nothing else may stand where they are.
+        for d in &self.missing {
+            for (at, path) in [("drv", &d.drv), ("out", &d.out)] {
+                if !check::store_path(path) {
+                    return Err(Refusal::new(
+                        Why::Invalid,
+                        format!("/last-apply/missing/{at}"),
+                        path.as_str(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The last apply whole, in `last-apply.json` beside `state.json`
+/// ([`crate::names::LAST_APPLY`]) — written only while `state.json` cannot
+/// tell it to an older reader ([`MachineState::split`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Whole {
+    /// Always [`crate::FORMAT`].
+    pub format: u32,
+    /// The apply.
+    pub last_apply: LastApply,
+}
+
+impl Document for Whole {
+    fn format(&self) -> u32 {
+        self.format
+    }
+
+    fn validate(&self) -> Result<(), Refusal> {
+        self.last_apply.validate()
+    }
+}
+
+impl MachineState {
+    /// The record as it is written: what `state.json` holds, which every
+    /// reader of format 1 reads, and — while its last apply carries what an
+    /// older reader refuses ([`LastApply::older_reads_it`]) — that apply
+    /// whole, for `last-apply.json` beside it. Pure.
+    #[must_use]
+    pub fn split(&self) -> (Self, Option<Whole>) {
+        match &self.last_apply {
+            Some(a) if !a.older_reads_it() => (
+                Self {
+                    last_apply: Some(a.for_older()),
+                    ..self.clone()
+                },
+                Some(Whole {
+                    format: crate::FORMAT,
+                    last_apply: a.clone(),
+                }),
+            ),
+            _ => (self.clone(), None),
+        }
+    }
+
+    /// The record `state.json` held, its last apply put back whole from
+    /// `beside` (`last-apply.json`'s bytes) when that is the same apply —
+    /// the one `state.json` tells as [`LastApply::for_older`]. Otherwise,
+    /// and when `beside` does not read, the record as `state.json` says it.
+    /// Pure.
+    #[must_use]
+    pub fn joined(mut self, beside: Option<&[u8]>) -> Self {
+        if let Some(whole) = beside.and_then(|b| crate::parse::<Whole>(b).ok())
+            && self.last_apply.as_ref() == Some(&whole.last_apply.for_older())
+        {
+            self.last_apply = Some(whole.last_apply);
+        }
+        self
+    }
+
+    /// [`Self::joined`] with the `last-apply.json` beside `file`, the
+    /// `state.json` this record was read from — what every reader of the
+    /// machine's record does after [`crate::parse`].
+    #[must_use]
+    pub fn completed(self, file: &Path) -> Self {
+        let beside = std::fs::read(file.with_file_name(crate::names::LAST_APPLY)).ok();
+        self.joined(beside.as_deref())
+    }
 }
 
 impl Document for MachineState {
@@ -241,31 +371,7 @@ impl Document for MachineState {
         {
             return Err(Refusal::new(Why::Invalid, "/hold/rev", h.rev.as_str()));
         }
-        // THE SYSTEM AN APPLY SET UP is a store path: what reads it (the
-        // binary cache's push, the parts' plan) joins a file to it.
-        if let Some(top) = self.last_apply.as_ref().and_then(|a| a.toplevel.as_ref())
-            && !check::store_path(top)
-        {
-            return Err(Refusal::new(
-                Why::Invalid,
-                "/last-apply/toplevel",
-                top.as_str(),
-            ));
-        }
-        // A DOWNLOAD NAMES TWO STORE PATHS that root hands to Nix (`accept`,
-        // `import`): nothing else may stand where they are.
-        for d in self.last_apply.iter().flat_map(|a| &a.missing) {
-            for (at, path) in [("drv", &d.drv), ("out", &d.out)] {
-                if !check::store_path(path) {
-                    return Err(Refusal::new(
-                        Why::Invalid,
-                        format!("/last-apply/missing/{at}"),
-                        path.as_str(),
-                    ));
-                }
-            }
-        }
-        Ok(())
+        self.last_apply.as_ref().map_or(Ok(()), LastApply::validate)
     }
 }
 
@@ -339,5 +445,117 @@ mod tests {
             crate::parse::<MachineState>(elsewhere.as_bytes()).map_err(|r| r.why),
             Err(Why::Invalid)
         );
+    }
+
+    const TOP: &str = "/nix/store/bcdefghijklmnopqrstuvwxyz0123456-nixos-system-noctua-26.11";
+
+    fn applied(at: &str, result: ApplyResult, toplevel: Option<&str>) -> MachineState {
+        MachineState {
+            last_apply: Some(LastApply {
+                at: Stamp::parse(at).unwrap(),
+                result,
+                toplevel: toplevel.map(str::to_owned),
+                missing: Vec::new(),
+            }),
+            ..MachineState::default()
+        }
+    }
+
+    fn a_download() -> crate::frontier::Download {
+        crate::frontier::Download {
+            drv: "/nix/store/dddddddddddddddddddddddddddddddd-crate-x-0.1.0.tar.gz.drv".to_owned(),
+            out: "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-crate-x-0.1.0.tar.gz".to_owned(),
+            name: "crate-x-0.1.0.tar.gz".to_owned(),
+            hash: "sha256-AAECAw==".to_owned(),
+            mode: crate::frontier::Mode::Flat,
+            urls: vec!["https://static.crates.io/crates/x/x-0.1.0.crate".to_owned()],
+        }
+    }
+
+    const EVERY_RESULT: [ApplyResult; 7] = [
+        ApplyResult::Switched,
+        ApplyResult::SwitchedWithFailures,
+        ApplyResult::BuildFailed,
+        ApplyResult::SwitchFailed,
+        ApplyResult::Rehearsed,
+        ApplyResult::Refused,
+        ApplyResult::Staged,
+    ];
+
+    /// FAILS IF: `state.json` is ever written with a key or a result that the
+    /// reader of the first published release (v2026.10.21-4d366d8, older
+    /// than `missing`, `staged` and `toplevel` — one a boot trial's way back
+    /// can land on) refuses; if what it cannot say is not beside it, whole;
+    /// or if the two do not read back as the record that was split.
+    #[test]
+    fn state_json_says_only_what_an_older_reader_reads() {
+        // That reader's last apply: these keys, these results, and
+        // `deny_unknown_fields` and a closed enum around them.
+        let keys = ["at", "result"];
+        let results = [
+            "switched",
+            "switched-with-failures",
+            "build-failed",
+            "switch-failed",
+            "rehearsed",
+            "refused",
+        ];
+        let cases = EVERY_RESULT.into_iter().flat_map(|r| {
+            [None, Some(TOP)]
+                .into_iter()
+                .flat_map(move |t| [(r, t, false), (r, t, true)])
+        });
+        for (result, toplevel, missing) in cases {
+            let mut state = applied("2026-10-30T12:00:00Z", result, toplevel);
+            if missing {
+                state.last_apply.as_mut().unwrap().missing = vec![a_download()];
+            }
+            let (told, whole) = state.split();
+            let text = crate::to_json(&told);
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let last = value["last-apply"].as_object().unwrap();
+            assert!(last.keys().all(|k| keys.contains(&k.as_str())), "{text}");
+            assert!(
+                results.contains(&last["result"].as_str().unwrap()),
+                "{text}"
+            );
+            let needs = result == ApplyResult::Staged || toplevel.is_some() || missing;
+            assert_eq!(whole.is_some(), needs, "{result:?} {toplevel:?} {missing}");
+            let beside = whole.map(|w| crate::to_json(&w));
+            let read = crate::parse::<MachineState>(text.as_bytes()).unwrap();
+            assert_eq!(read.joined(beside.as_deref().map(str::as_bytes)), state);
+        }
+    }
+
+    /// FAILS IF: `last-apply.json` overrides a `state.json` an older writer
+    /// rewrote with its own apply since, a file beside that does not read
+    /// (a newer writer's) makes the record refused instead of read as
+    /// `state.json` says it, or a record written whole into `state.json`
+    /// (before the split) does not read as it is.
+    #[test]
+    fn last_apply_json_is_believed_only_for_its_own_apply() {
+        let staged = applied("2026-10-30T12:00:00Z", ApplyResult::Staged, Some(TOP));
+        let (_, whole) = staged.split();
+        let beside = crate::to_json(&whole.unwrap());
+
+        let since = applied("2026-11-02T08:00:00Z", ApplyResult::Switched, None);
+        assert_eq!(since.clone().joined(Some(beside.as_bytes())), since);
+        let none = MachineState::default();
+        assert_eq!(none.clone().joined(Some(beside.as_bytes())), none);
+
+        let (told, _) = staged.split();
+        for unread in [
+            "{",
+            r#"{"format": 2, "last-apply": {}}"#,
+            r#"{"format": 1, "last-apply": {"at": "2026-10-30T12:00:00Z", "result": "staged", "more": 1}}"#,
+        ] {
+            assert_eq!(told.clone().joined(Some(unread.as_bytes())), told);
+        }
+        assert_eq!(told.clone().joined(None), told);
+
+        let written_whole = crate::to_json(&staged);
+        let read = crate::parse::<MachineState>(written_whole.as_bytes()).unwrap();
+        assert_eq!(read.clone().joined(Some(beside.as_bytes())), staged);
+        assert_eq!(read.joined(None), staged);
     }
 }

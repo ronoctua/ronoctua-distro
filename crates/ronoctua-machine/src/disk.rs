@@ -30,14 +30,18 @@ pub(crate) fn compact(stamp: &Stamp) -> String {
         .collect()
 }
 
-/// The machine's record; the default record when there is none yet.
+/// The machine's record, its last apply whole from `last-apply.json` when
+/// that is the apply `state.json` holds ([`MachineState::completed`]); the
+/// default record when there is none yet.
 pub(crate) fn read_state(places: &Places) -> Result<MachineState, Refusal> {
     let file = places.state_file();
     match std::fs::read(&file) {
-        Ok(bytes) => ronoctua_person::parse(&bytes).map_err(|r| {
-            say(3, &format!("{} does not read: {r}", file.display()));
-            Refusal::of(Why::Unreadable)
-        }),
+        Ok(bytes) => ronoctua_person::parse::<MachineState>(&bytes)
+            .map(|state| state.completed(&file))
+            .map_err(|r| {
+                say(3, &format!("{} does not read: {r}", file.display()));
+                Refusal::of(Why::Unreadable)
+            }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(MachineState::default()),
         Err(e) => {
             say(3, &format!("{}: {e}", file.display()));
@@ -48,11 +52,37 @@ pub(crate) fn read_state(places: &Places) -> Result<MachineState, Refusal> {
 
 /// Writes the machine's record — `0644`: the person's half publishes a copy
 /// of it, and the update's view reads it.
+///
+/// `state.json` gets only what the first published release reads, and the
+/// last apply whole goes to `last-apply.json` beside it while `state.json`
+/// cannot say it ([`MachineState::split`]): a boot trial's way back can land
+/// on a system whose bless and apply would refuse `staged`. The file beside
+/// is written FIRST and taken away LAST, so a reader between the two sees it
+/// with the `state.json` of another apply, which it does not believe —
+/// never `state.json`'s new apply told short of what it was.
+///
+/// A file beside that this does not read is left: a newer system wrote it,
+/// and when it is that system's apply that `state.json` still holds — this
+/// one blessed or held without applying — the newer system, booted again,
+/// reads it whole. One that reads is of another apply (this one would have
+/// joined it), and goes.
 pub(crate) fn write_state(places: &Places, state: &MachineState) -> Result<(), Refusal> {
     std::fs::create_dir_all(&places.state).map_err(|e| failed(&places.state, &e))?;
     let file = places.state_file();
-    write_atomically(&file, ronoctua_person::to_json(state).as_bytes(), 0o644)
-        .map_err(|e| failed(&file, &e))
+    let beside = file.with_file_name(ronoctua_person::names::LAST_APPLY);
+    let (told, whole) = state.split();
+    if let Some(whole) = &whole {
+        write_atomically(&beside, ronoctua_person::to_json(whole).as_bytes(), 0o644)
+            .map_err(|e| failed(&beside, &e))?;
+    }
+    write_atomically(&file, ronoctua_person::to_json(&told).as_bytes(), 0o644)
+        .map_err(|e| failed(&file, &e))?;
+    let ours = std::fs::read(&beside)
+        .is_ok_and(|b| ronoctua_person::parse::<ronoctua_person::state::Whole>(&b).is_ok());
+    if whole.is_none() && ours {
+        std::fs::remove_file(&beside).map_err(|e| failed(&beside, &e))?;
+    }
+    Ok(())
 }
 
 /// `bytes` into `path`, by a sibling written whole, flushed and renamed.

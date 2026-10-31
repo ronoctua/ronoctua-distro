@@ -476,11 +476,15 @@ pub enum Rebuilt {
     Busy,
 }
 
-/// The machine's record (`state.json`), when it reads.
+/// The machine's record (`state.json`), when it reads, its last apply whole
+/// (`MachineState::completed`).
 #[must_use]
 pub fn machine_state(machine: &Path) -> Option<ronoctua_person::state::MachineState> {
-    let bytes = std::fs::read(machine.join(names::STATE)).ok()?;
-    ronoctua_person::parse(&bytes).ok()
+    let file = machine.join(names::STATE);
+    let bytes = std::fs::read(&file).ok()?;
+    ronoctua_person::parse::<ronoctua_person::state::MachineState>(&bytes)
+        .ok()
+        .map(|s| s.completed(&file))
 }
 
 /// What a finished `ronoctua-update-apply.service` says: its main process's

@@ -186,7 +186,8 @@ systemd ao lado seria um segundo relógio que não sabe nada disso.
 
 E a execução NÃO ATIVA NADA. O rebuild é `ronoctua-machine apply --next-boot`: constrói, põe o
 sistema novo no perfil e roda `switch-to-configuration boot` — nenhuma unidade que roda é parada ou
-reiniciada, o registro diz `staged` (com o sistema que espera, `last-apply.toplevel`) e o ensaio de
+reiniciada, o registro diz `staged` (com o sistema que espera, `last-apply.toplevel`, no
+`last-apply.json` ao lado do `state.json`, que só diz o que um leitor mais velho lê) e o ensaio de
 boot é armado de verdade, nunca `boot-identical`: nada rodou o userland novo. No dia em que a máquina
 passou a seguir o `nixos-unstable` (2026-10-30), a troca ao vivo do 26.05 para ele reiniciou a
 máquina do dono, e a causa não foi registrada (`docs/PENDING.md`). O argumento é FIXO no

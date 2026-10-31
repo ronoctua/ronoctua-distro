@@ -8,7 +8,7 @@ use crate::distro_pins::DistroPins;
 use crate::local::{Approved, Signer};
 use crate::options::Options;
 use crate::reports::{DeclaredAndroid, DistroApps, PersonApplied};
-use crate::state::MachineState;
+use crate::state::{MachineState, Whole};
 use crate::{Document, Why, parse, to_json};
 
 fn round_trips<T: Document + std::fmt::Debug>(name: &str, text: &str) {
@@ -40,6 +40,10 @@ fn every_good_fixture_reads_and_writes_back_byte_for_byte() {
         include_str!("../fixtures/good/declared-android.json"),
     );
     round_trips::<MachineState>("state", include_str!("../fixtures/good/state.json"));
+    round_trips::<Whole>(
+        "last-apply",
+        include_str!("../fixtures/good/last-apply.json"),
+    );
     round_trips::<Options>("options", include_str!("../fixtures/good/options.json"));
     round_trips::<Signer>("signer", include_str!("../fixtures/good/signer.json"));
     round_trips::<Choice>("choice", include_str!("../fixtures/good/choice.json"));

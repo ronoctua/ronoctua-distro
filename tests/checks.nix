@@ -45847,8 +45847,13 @@ let
               wrong.append(f"{how}: the boot trial is not armed for the next boot")
           record = json.loads(text(root / "state/state.json") or "{}")
           last = record.get("last-apply") or {}
-          if last.get("result") != "staged" or last.get("toplevel") != "/" + str(tops["b"].relative_to(root)):
-              wrong.append(f"{how}: the record does not say staged, with the system that waits: {record}")
+          # `state.json` says only what a reader older than `staged` reads;
+          # the apply whole is beside it.
+          if last.get("result") != "switched" or "toplevel" in last:
+              wrong.append(f"{how}: state.json says what an older reader refuses: {record}")
+          whole = (json.loads(text(root / "state/last-apply.json") or "{}").get("last-apply")) or {}
+          if whole.get("result") != "staged" or whole.get("toplevel") != "/" + str(tops["b"].relative_to(root)) or whole.get("at") != last.get("at"):
+              wrong.append(f"{how}: last-apply.json does not say staged, with the system that waits: {whole}")
           if (record.get("trial") or {}).get("outcome") != "pending":
               wrong.append(f"{how}: the record holds no pending trial: {record}")
 

@@ -642,6 +642,55 @@ fn an_apply_for_the_next_boot_activates_nothing_and_arms_a_real_trial() {
     assert_eq!(w.state().last_good.unwrap().toplevel, b);
 }
 
+/// FAILS IF: `state.json` says `staged` or names the system an apply set up
+/// — a boot trial's way back can land on a system whose bless and apply
+/// refuse both —, the apply is not whole in `last-apply.json` beside it, or
+/// an older system's own apply, written into `state.json` alone since, is not
+/// what the record then says; or the file beside outlives the apply it is of.
+#[test]
+fn state_json_stays_readable_by_an_older_system() {
+    let w = World::new("older-reads");
+    let b = w.toplevel("b", "quiet b");
+    w.builds(&b);
+    w.m.apply(Applying::NextBoot).unwrap();
+    let told: serde_json::Value =
+        serde_json::from_str(&w.snapshot(ronoctua_person::names::STATE)).unwrap();
+    assert_eq!(told["last-apply"]["result"], "switched", "{told}");
+    assert!(told["last-apply"].get("toplevel").is_none(), "{told}");
+    let whole: serde_json::Value =
+        serde_json::from_str(&w.snapshot(ronoctua_person::names::LAST_APPLY)).unwrap();
+    assert_eq!(whole["last-apply"]["result"], "staged", "{whole}");
+    assert_eq!(whole["last-apply"]["toplevel"], b.as_str(), "{whole}");
+    let last = w.state().last_apply.unwrap();
+    assert_eq!(
+        (last.result, last.toplevel.as_deref()),
+        (ApplyResult::Staged, Some(b.as_str()))
+    );
+
+    // AN OLDER SYSTEM, after the way back, rewrites `state.json` alone.
+    let mut older = told;
+    older["last-apply"] =
+        serde_json::json!({"at": "2026-11-02T08:00:00Z", "result": "build-failed"});
+    std::fs::write(w.m.places.state_file(), older.to_string()).unwrap();
+    let last = w.state().last_apply.unwrap();
+    assert_eq!(
+        (last.result, last.toplevel),
+        (ApplyResult::BuildFailed, None)
+    );
+
+    // A RECORD THAT NEEDS NOTHING BESIDE IT takes the file away.
+    let beside = w.m.places.state.join(ronoctua_person::names::LAST_APPLY);
+    w.set_state(&w.state());
+    assert!(!beside.exists());
+
+    // BUT NOT A NEWER SYSTEM'S, which this does not read: it may be of the
+    // very apply `state.json` holds, and that system reads it again.
+    let newer = r#"{"format": 2, "last-apply": {"at": "2026-11-02T08:00:00Z"}}"#;
+    std::fs::write(&beside, newer).unwrap();
+    w.set_state(&w.state());
+    assert_eq!(std::fs::read_to_string(&beside).unwrap(), newer);
+}
+
 /// FAILS IF: a system set for the next boot is switched to live by the next
 /// apply that is not the update's — the software centre's, the rescue's —
 /// which would take, under the session, the very jump the update set aside.

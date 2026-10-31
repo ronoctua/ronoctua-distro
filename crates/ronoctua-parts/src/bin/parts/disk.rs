@@ -65,7 +65,8 @@ pub fn system_missing() -> Result<Vec<ronoctua_person::frontier::Download>, Stri
         .unwrap_or_default())
 }
 
-/// The machine's record (`ronoctua-machine`'s `state.json`).
+/// The machine's record (`ronoctua-machine`'s `state.json`), its last apply
+/// whole (`MachineState::completed`).
 ///
 /// # Errors
 ///
@@ -74,6 +75,7 @@ pub fn machine_state() -> Result<ronoctua_person::state::MachineState, String> {
     let path = Path::new(ronoctua_machine::STATE_DIR).join(ronoctua_person::names::STATE);
     let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     ronoctua_person::parse::<ronoctua_person::state::MachineState>(&bytes)
+        .map(|s| s.completed(&path))
         .map_err(|r| format!("{}: {r}", path.display()))
 }
 

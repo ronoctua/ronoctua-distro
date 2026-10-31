@@ -609,6 +609,7 @@ fn read(kind: &str, file: &str) -> Option<ExitCode> {
         "distro-apps" => one::<reports::DistroApps>,
         "declared-android" => one::<reports::DeclaredAndroid>,
         "state" => one::<state::MachineState>,
+        "last-apply" => one::<state::Whole>,
         "verdict" => one::<tree::Verdict>,
         "request" => one::<approve::Request>,
         "approve-verdict" => one::<approve::Verdict>,

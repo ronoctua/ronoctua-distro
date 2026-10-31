@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "last-apply": {
+    "at": "2026-10-30T12:00:00Z",
+    "result": "staged",
+    "toplevel": "/nix/store/bcdefghijklmnopqrstuvwxyz0123456-nixos-system-noctua-26.11"
+  }
+}
