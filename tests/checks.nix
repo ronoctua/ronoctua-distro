@@ -46257,9 +46257,9 @@ let
   #
   # WHAT THIS CHECK DOES NOT BOUND: what the person COMMITS. On a machine
   # whose flake names a local checkout the update locks the checkout's HEAD
-  # and builds it as root, started by the person with no password; and the
-  # person is a Nix trusted user. Both wait on the owner (`docs/PENDING.md`);
-  # this check holds the uncommitted tree alone.
+  # and builds it as root, started by the person with no password. That waits
+  # on the owner (`docs/PENDING.md`); this check holds the uncommitted tree
+  # alone.
   #
   # THE BLESS HANGS OFF THE TARGET THE BOOT REALLY REACHES: the system's
   # default unit, for the VM and for the reference machine alike (no

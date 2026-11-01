@@ -8,11 +8,6 @@ histórico: item riscado ou marcado como pronto é recusado por um check (`docs-
 Escreva para quem não acompanhou o trabalho: o nome da coisa como a pessoa a vê, o que falta e o
 critério de pronto, em poucas linhas.
 
-## Decidido em 2026-10-31, em andamento
-
-O dono aprovou cada um; sai daqui quando estiver feito e verde.
-
-
 ## Esperando uma decisão do dono
 
 ### Os limites da vista da rede
@@ -160,7 +155,7 @@ resto. Faltam fotos, com asserção, de:
 - **O rodapé transparente**: nos modos ocultos, o véu e a borda em repouso mostram a janela por baixo
   (o driver aceita `PreMultiplied`?), sem a frase `echo-footer-opaque`.
 - **Os crafts do ArtCraft Launcher**: rodam fora de um ambiente FHS? que lançador escrevem, que tipos
-  tomam? E a licença e o tamanho do launcher no `profile.nix`.
+  tomam? E o tamanho do launcher no `profile.nix`.
 - **O custo semanal de rolar o nixpkgs**: uma atualização depois de o nixpkgs andar, sem cache
   binário, cabe nos `runawayMinutes = 120`?
 - **O LED da câmera no login**: o `v4l_id` do udev abre cada câmera; acende a luz?
