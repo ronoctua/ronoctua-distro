@@ -15,8 +15,9 @@ cmd-lock-screen = Bloquear a tela
 # account's name — data, as a filename is.
 lock-locked = Bloqueada
 lock-account = sessão de { $user }
-# THE MINIBUFFER'S QUESTION.
+# THE MINIBUFFER'S QUESTION, and what its `Esc` does here: the question stays.
 ask-lock-password = Senha
+about-lock-clear = Apaga o que foi digitado; a tela continua bloqueada e a senha é pedida de novo.
 # WHAT THE LOCK SAYS above the two lines: the password with PAM, and the
 # three refusals (`ronoctua_pam::Refusal`).
 lock-checking = Conferindo a senha…

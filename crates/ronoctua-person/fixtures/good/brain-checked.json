@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "modules": {
+    "my-reminders": {
+      "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+      "evaluates": true,
+      "detail": ""
+    },
+    "my-unfinished": {
+      "hash": "sha256-B0kH36juYUoMfqZqwYxNdYjvM6dDAuwd3F+JidgOA+Y=",
+      "evaluates": false,
+      "detail": "error: undefined variable 'nothing'"
+    }
+  }
+}

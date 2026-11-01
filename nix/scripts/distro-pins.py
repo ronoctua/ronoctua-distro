@@ -15,8 +15,15 @@ Run from the root of a checkout. What moves:
 - an AppImage that FOLLOWS a GitHub repository (`follows.github` in
   `assets/distro-apps.nix`): its latest release's one asset matching
   `assetPattern`, hashed by `nix store prefetch-file`;
-- an Android app from F-Droid (`from = "f-droid"`): the version F-Droid
-  suggests, its apk hashed the same way.
+- an Android app from F-Droid (`from = "f-droid"`): the version F-Droid's
+  SIGNED index offers, by the hash the index signs. `entry.jar` and the index
+  it names are downloaded here and checked by `ronoctua-fdroid-pins` (the
+  wrapper gives its path in `RONOCTUA_FDROID_PINS`): the jar against the
+  signing certificate pinned in the distro, the index against the jar, and
+  each pin the file holds against the index — one that claims the signed
+  version code with another address or hash is refused, never kept or
+  replaced in silence. The apk is then downloaded under the build's name,
+  and bytes that are not the signed hash are refused too.
 
 What does not move: an entry that follows nothing (`follows = null`, `from =
 "direct"`) keeps the pin written by hand, and one without a pin is refused
@@ -47,6 +54,15 @@ FORMAT = 1
 # GitHub refuses a request without one. Not the distro's name: that is
 # defined in one place (invariant 16), and a tool's own name says enough.
 USER_AGENT = "distro-pins"
+# F-DROID'S SIGNED ENTRY POINT, and the program that checks it and the index
+# it names (`ronoctua_software::pins::signed`): the RSA of the signature is
+# `aws-lc-rs`'s, the one provider of the distro's primitives, and never a
+# second implementation here.
+FDROID_REPO = "https://f-droid.org/repo"
+FDROID_ENTRY = f"{FDROID_REPO}/entry.jar"
+FDROID_VERIFIER = "RONOCTUA_FDROID_PINS"
+# The most `entry.jar` may be (`fdroid::ENTRY_MOST`; it is 2.5 KiB).
+FDROID_ENTRY_MOST = 1 << 20
 
 
 class Refusal(Exception):
@@ -111,7 +127,9 @@ def latest_appimage(id_, follows, ask):
 
 def latest_apk(id_, package, ask):
     """The version F-Droid suggests of a package: its apk's address, its
-    name and its code."""
+    name and its code — from F-Droid's JSON API, which nobody signs, so only
+    `--stale` asks it (it says, and writes nothing); a pin is taken from the
+    signed index alone (`signed_apk`)."""
     info = ask.fdroid(package)
     code = info.get("suggestedVersionCode")
     if not isinstance(code, int) or code <= 0:
@@ -123,12 +141,51 @@ def latest_apk(id_, package, ask):
     ]
     if not names or not names[0]:
         raise Refusal(f"{id_}: F-Droid lists no name for version {code} of {package}")
-    return f"https://f-droid.org/repo/{package}_{code}.apk", names[0], code
+    return f"{FDROID_REPO}/{package}_{code}.apk", names[0], code
+
+
+def signed_apk(id_, entry, old, answered, ask):
+    """The pin of an F-Droid apk, from what `ronoctua-fdroid-pins` answered
+    of F-Droid's signed index (`answered`: the pin's standing and the signed
+    pin), and a note — or the refusal that says why there is none.
+
+    `same` keeps the pin and downloads nothing; `new` and `moves` take the
+    signed pin, its apk downloaded under the build's name and refused unless
+    its bytes are the signed hash; `disagrees` — the pin claims the version
+    code the index signs, with another address or hash — is refused, and so
+    is a package the index does not list."""
+    package = entry["package"]
+    standing = (answered or {}).get("standing")
+    signed = (answered or {}).get("signed")
+    if standing == "unlisted":
+        raise Refusal(f"{id_}: F-Droid's signed index lists no {package}")
+    if standing not in ("new", "same", "moves", "disagrees") or not signed or (standing == "new") != (old is None):
+        raise Refusal(f"{id_}: ronoctua-fdroid-pins answered {package} with {answered!r}")
+    if standing == "disagrees":
+        raise Refusal(
+            f"{id_}: its pin of version code {old.get('version-code')} disagrees with F-Droid's "
+            f"signed index ({old.get('url')} {old.get('hash')} pinned; {signed['url']} "
+            f"{signed['hash']} signed), and is refused: take it out of {PINS} and run "
+            f"`nix run .#distro-pins` to pin what the index signs"
+        )
+    if standing == "same":
+        return old, f"{id_}: unchanged ({old.get('version')}), as F-Droid's signed index says"
+    code = signed["version-code"]
+    got = ask.hash(signed["url"], file_name_of(entry, code))
+    if got != signed["hash"]:
+        raise Refusal(
+            f"{id_}: {signed['url']} served {got}, and F-Droid's signed index says {signed['hash']}"
+        )
+    pin = {"url": signed["url"], "hash": signed["hash"], "version": signed["version"], "version-code": code}
+    if old is None:
+        return pin, f"{id_}: pinned {signed['version']}"
+    return pin, f"{id_}: {old.get('version')} -> {signed['version']}"
 
 
 def plan(table, pins, ask):
     """The next pins, and a note for every entry. Pure: every question that
-    needs the network is `ask`'s (`github_latest`, `fdroid`, `hash`, `now`).
+    needs the network is `ask`'s (`github_latest`, `fdroid_pins`, `hash`,
+    `now`).
 
     `table` is the `apps` of `assets/distro-apps.nix`; `pins` is the current
     `assets/distro-pins.json`. A hash is asked only for an address that is
@@ -140,6 +197,16 @@ def plan(table, pins, ask):
     old_android = pins.get("android", {})
     new = {"format": FORMAT, "appimage": {}, "android": {}}
     notes = []
+
+    # F-DROID'S SIGNED INDEX, asked ONCE for every entry that follows it, with
+    # the pin each holds (`ask.fdroid_pins`) — and not at all when none does.
+    from_fdroid = [
+        id_ for id_ in sorted(table) if table[id_].get("source") == "android" and table[id_].get("from") == "f-droid"
+    ]
+    packages = [table[id_].get("package") for id_ in from_fdroid]
+    if len(set(packages)) != len(packages):
+        raise Refusal(f"two Android entries follow the same F-Droid package: {', '.join(sorted(map(str, packages)))}")
+    signed = ask.fdroid_pins({table[id_]["package"]: old_android.get(id_) for id_ in from_fdroid}) if from_fdroid else {}
 
     for id_ in sorted(table):
         entry = table[id_]
@@ -182,22 +249,8 @@ def plan(table, pins, ask):
                 new["android"][id_] = old
                 notes.append(f"{id_}: kept (a direct address)")
                 continue
-            url, name, code = latest_apk(id_, entry["package"], ask)
-            if old is not None and old.get("url") == url and old.get("version-code") == code:
-                new["android"][id_] = old
-                notes.append(f"{id_}: unchanged ({old.get('version')})")
-                continue
-            new["android"][id_] = {
-                "url": url,
-                "hash": ask.hash(url, file_name_of(entry, code)),
-                "version": name,
-                "version-code": code,
-            }
-            notes.append(
-                f"{id_}: pinned {name}"
-                if old is None
-                else f"{id_}: {old.get('version')} -> {name}"
-            )
+            new["android"][id_], note = signed_apk(id_, entry, old, signed.get(entry["package"]), ask)
+            notes.append(note)
 
     for kind, old in (("appimage", old_appimage), ("android", old_android)):
         for id_ in sorted(set(old) - set(new[kind])):
@@ -406,6 +459,47 @@ class Ask:
 
     def fdroid(self, package):
         return self._get(f"https://f-droid.org/api/v1/packages/{package}")
+
+    def _download(self, url, path, most):
+        """`url` into `path`, refused past `most` bytes."""
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        done = 0
+        with urllib.request.urlopen(request, timeout=self.timeout_s) as answer, open(path, "wb") as out:
+            while chunk := answer.read(1 << 20):
+                done += len(chunk)
+                if done > most:
+                    raise Refusal(f"{url} is larger than the {most} bytes F-Droid's signed entry allows")
+                out.write(chunk)
+
+    def _verified(self, verifier, args):
+        """What `ronoctua-fdroid-pins` answers, or its refusal as one."""
+        done = subprocess.run([verifier, *args], capture_output=True, text=True)
+        if done.returncode != 0:
+            said = done.stderr.strip() or f"it ended with {done.returncode}"
+            raise Refusal(f"F-Droid's signed index was refused: {said}")
+        return json.loads(done.stdout)
+
+    def fdroid_pins(self, pinned):
+        """What F-Droid's SIGNED index says of each package of `pinned` (the
+        pin the distro holds of it, or `None`): `{package: {"standing",
+        "signed"}}`. `entry.jar` is downloaded and verified first, then the
+        index it names, and the verifier answers from both."""
+        verifier = os.environ.get(FDROID_VERIFIER)
+        if not verifier:
+            raise Refusal(
+                f"F-Droid's signed index cannot be checked: {FDROID_VERIFIER} names no verifier "
+                f"(run the tool as `nix run .#distro-pins`)"
+            )
+        with tempfile.TemporaryDirectory(prefix="distro-pins-fdroid.") as room:
+            jar = os.path.join(room, "entry.jar")
+            self._download(FDROID_ENTRY, jar, FDROID_ENTRY_MOST)
+            index = self._verified(verifier, ["entry", jar])["index"]
+            raw = os.path.join(room, "index-v2.json")
+            self._download(f"{FDROID_REPO}{index['name']}", raw, index["size"])
+            asked = os.path.join(room, "pinned.json")
+            with open(asked, "w") as f:
+                json.dump(pinned, f)
+            return self._verified(verifier, ["pins", jar, raw, asked])["apps"]
 
     def hash(self, url, name):
         out = subprocess.run(

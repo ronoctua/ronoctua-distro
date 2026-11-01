@@ -26,9 +26,23 @@ rec {
   # The format of the person's files (`ronoctua_person::FORMAT`).
   format = 1;
 
-  # The field of `options.json` that turns following on
-  # (`ronoctua_person::options::Options::distro_apps_follow_releases`).
-  option = "distro-apps-follow-releases";
+  # The field of `options.json` that turns following OFF — on by default
+  # (`ronoctua_person::options::Options::follows_releases`): `true` is the
+  # person's off; absent is the default.
+  offOption = "distro-apps-keep-tested-pins";
+
+  # WHETHER ROOT'S COPY OF THE OPTIONS SAYS TO FOLLOW: yes without one (the
+  # default, and a machine without the person's data has no followed pins
+  # either), no for another format (whose fields are not known here), and
+  # otherwise unless the person's off is there.
+  followsIn =
+    options:
+    if options == null then
+      true
+    else
+      builtins.isAttrs options
+      && (options.format or null) == format
+      && (options.${offOption} or false) != true;
 
   isText = builtins.isString;
   isSlug = s: isText s && builtins.match "[a-z0-9][a-z0-9-]{0,63}" s != null;

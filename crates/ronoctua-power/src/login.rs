@@ -7,7 +7,9 @@
 //! may ask an agent. There is no agent in this session (`nix/modules/disks.nix`
 //! says why at length), so `true` would be a call that waits for an answer
 //! nobody can give. With `false`, a refusal comes back at once and has a name
-//! — the `auth.no_user_interaction` udisks gets, spelled logind's way.
+//! — the `auth.no_user_interaction` udisks gets, spelled logind's way. The one
+//! exception brings its own agent: the rescue console's restart and power-off
+//! (`crate::leave_asking`).
 //!
 //! # The properties are not proxied
 //!

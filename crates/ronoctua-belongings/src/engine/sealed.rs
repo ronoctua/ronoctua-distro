@@ -260,6 +260,49 @@ impl Engine<'_> {
         Store::new(&repo, ring, kept::CHUNK_SIZES).get_bytes(&blob.chunks)
     }
 
+    /// WHAT THE REPOSITORY HOLDS THAT NO MACHINE MAY TAKE, by path, with the
+    /// reason ([`crate::sift::debris_of`]), opened in memory wiped when it
+    /// is dropped: every link (its text is a few bytes), and every file small
+    /// enough to be a deploy key that this machine's base does not know as
+    /// it is — one it synced as it is was judged by its walk, which reads the
+    /// copy here. A blob that does not open is left to the plan.
+    pub(super) fn debris(
+        &self,
+        ring: &Keyring,
+        index: &Index,
+        base: Option<&crate::status::Last>,
+    ) -> std::collections::BTreeMap<String, &'static str> {
+        // A BUILD FROM BEFORE THE RULES, in a test, reads nothing for it.
+        #[cfg(test)]
+        if crate::sift::old_sync::now() {
+            return std::collections::BTreeMap::new();
+        }
+        let known = |b: &Blob| {
+            base.and_then(|l| l.entries.get(&b.path))
+                .is_some_and(|k| k.side().same_as(&b.side))
+        };
+        index
+            .entries
+            .iter()
+            .filter(|b| match b.side.kind {
+                Kind::Link => true,
+                Kind::File => {
+                    b.side.size_bytes > 0
+                        && b.side.size_bytes <= crate::sift::DEPLOY_KEY_MOST_BYTES
+                        && !known(b)
+                }
+            })
+            .filter_map(|b| {
+                let at = self.places.resolve(&b.path)?;
+                let bytes = zeroize::Zeroizing::new(self.read_blob(ring, b).ok()?);
+                Some((
+                    b.path.clone(),
+                    crate::sift::debris_of(b.side.kind, &at, &bytes)?,
+                ))
+            })
+            .collect()
+    }
+
     /// Opens what the repository has for `blob` into `to`.
     fn open_blob(
         &self,

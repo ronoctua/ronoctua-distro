@@ -212,10 +212,19 @@ fn open(command: &str, _argument: Option<&str>, way: &mut dyn Doorway) -> Box<dy
     } else {
         Pane::Happened
     };
-    Box::new(Manager {
-        view: View::fresh().in_zone(zone).reopened(pane),
-        shown: false,
-    })
+    let mut view = View::fresh().in_zone(zone).reopened(pane);
+    // THE FOOTER'S BOOK CAME FROM A READ OF ITS OWN: the file is judged again
+    // as the manager opens, and whenever the lists move under it.
+    view.read_in_part(judged());
+    Box::new(Manager { view, shown: false })
+}
+
+/// What of the person's `notifications.json` did not read, when part of it
+/// did not.
+fn judged() -> Option<crate::partly_read::PartlyRead> {
+    ronoctua_notify::store::Where::of_env()
+        .preferences_store()
+        .and_then(|store| crate::partly_read::judged(&store))
 }
 
 impl Manager {
@@ -563,6 +572,7 @@ impl Region for Manager {
     /// follow itself, after the ask — `carry`).
     fn heard(&mut self, news: &dyn std::any::Any, way: &mut dyn Doorway) {
         if let Some(settle) = news.downcast_ref::<Settle>() {
+            self.view.read_in_part(judged());
             self.settle(settle.follow, way);
             way.repaint();
         }
@@ -617,6 +627,23 @@ impl Region for Manager {
                 crate::chrome::divider_lit(x, f.y_of(easel.area.first), f.bottom())
             } else {
                 crate::chrome::divider(x, f.y_of(easel.area.first), f.bottom())
+            });
+        }
+        // STACKED, THE SAME MARK ACROSS: a rule in the line of air between
+        // the halves, lit while the facts have the keyboard. From row 0, as
+        // the bars count.
+        let stacked =
+            lists_of(&easel.lent).and_then(|(lists, _)| self.view.stacked_rule(&lists, columns));
+        if let Some((row, lit)) = stacked {
+            let line = easel.area.first + u16::try_from(row).unwrap_or(u16::MAX);
+            let rule = crate::chrome::rule(f.width, f.y_of(line) + f.line() / 2.0);
+            easel.under.push(if lit {
+                ronoctua_render::quad::Quad {
+                    color: tokens::color::STATE_ACCENT,
+                    ..rule
+                }
+            } else {
+                rule
             });
         }
         for b in self.bars(&easel.area, &easel.lent) {
@@ -1197,8 +1224,8 @@ mod tests {
                     let lit =
                         row.takes && first.lit(n, Some(cell), &seen) != crate::region::Lit::Nothing;
                     // AND WHICH HALF HAS THE KEYBOARD: a click there gives it
-                    // — which the lit divider says side by side, and the
-                    // arrows' next turn stacked.
+                    // — which the lit divider says side by side, and the lit
+                    // rule between the halves stacked.
                     let (mut m, mut w) = open();
                     let before = (
                         crate::region::seen(&m, &w.owed, &seen),
@@ -1216,5 +1243,92 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// FAILS IF: stacked, an open record does not say which half has the
+    /// keyboard — no rule in the line of air between the halves, or one that
+    /// does not light the moment a click gives the facts the keyboard, or
+    /// stays lit once `TAB` gives it back — or side by side, where the
+    /// divider says it, a rule is drawn across as well.
+    #[test]
+    fn stacked_the_rule_between_the_halves_says_where_the_keyboard_is() {
+        let t = texts();
+        let queue = three_records();
+        let book = Book::distro();
+        // EVERY RULE ACROSS THE REGION the paint drew, by its colour.
+        let rules = |m: &Manager, columns: u16| -> Vec<tokens::Color> {
+            let (mut under, mut over, mut spans) = (Vec::new(), Vec::new(), Vec::new());
+            let mut bars = crate::bars::Drawn::default();
+            let mut pictures = Vec::new();
+            let width =
+                tokens::metrics::cell_width(tokens::text::size()) * f32::from(columns) + 0.5;
+            let mut easel = RegionEasel {
+                area: Area {
+                    width,
+                    bottom: 2000.0,
+                    first: 2,
+                    lines: 40,
+                    columns,
+                },
+                texts: &t,
+                offset: 0,
+                under: &mut under,
+                over: &mut over,
+                spans: &mut spans,
+                bars: &mut bars,
+                lent: Lent::of(vec![&queue, &book]),
+                lit: &[],
+                pictures: &mut pictures,
+                placed: &[],
+                screen: crate::region::Screen {
+                    connector: None,
+                    key: "screen-0".to_owned(),
+                    scale: 1,
+                },
+                hand: None,
+            };
+            m.paint(&mut easel);
+            under
+                .iter()
+                .filter(|q| {
+                    q.x <= 0.0
+                        && q.width >= width - 1.0
+                        && q.height <= f32::from(tokens::space::RULE_THICKNESS)
+                })
+                .map(|q| q.color)
+                .collect()
+        };
+        let columns = 60;
+        let (mut m, mut w) = reached(&t, columns, (&queue, &book), Pane::Happened, &["RET"]);
+        assert!(m.view.is_open(), "no record opened");
+        assert_eq!(
+            rules(&m, columns),
+            vec![tokens::color::RULE_DEFAULT],
+            "stacked, the keyboard on the message: one quiet rule between the halves"
+        );
+        let row = {
+            let lent = w.lent();
+            let (lists, _) = lists_of(&lent).expect("the lists");
+            let [said, facts] = m.view.places(&lists, columns).expect("an open record");
+            assert_eq!(facts.row, said.row + said.room + 1, "not stacked");
+            facts.row
+        };
+        m.clicked_at(row, Some(4), &mut w);
+        assert!(
+            m.view.facts_have_the_keyboard(),
+            "the click gave the facts nothing"
+        );
+        assert_eq!(
+            rules(&m, columns),
+            vec![tokens::color::STATE_ACCENT],
+            "the click gave the facts the keyboard and the rule did not light"
+        );
+        let _ = m.key(ronoctua_keymap::Key::parse("TAB").expect("a key"), &mut w);
+        assert!(!m.view.facts_have_the_keyboard());
+        assert_eq!(rules(&m, columns), vec![tokens::color::RULE_DEFAULT]);
+        // SIDE BY SIDE THE DIVIDER SAYS IT, and nothing runs across.
+        let (m, _) = reached(&t, 200, (&queue, &book), Pane::Happened, &["RET"]);
+        assert!(m.view.is_open());
+        assert!(rules(&m, 200).is_empty(), "a rule across, side by side");
     }
 }

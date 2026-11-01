@@ -119,6 +119,14 @@ fn read_choice(dir: &Path) -> Result<Option<String>, String> {
     Ok(reading.value.language)
 }
 
+/// What the file owes the person: the places of it that did not read — the
+/// language a newer machine named, most often (`partly_read`) — for the view
+/// that shows whose answer the language is.
+#[must_use]
+pub fn read_in_part() -> Option<crate::partly_read::PartlyRead> {
+    crate::partly_read::judged(&store_at(&home()?))
+}
+
 /// `pt_BR.UTF-8` -> `pt-BR`, the way `ronoctua_i18n::Texts::from_env` does it.
 ///
 /// Written here as well because the two ask different questions: that one

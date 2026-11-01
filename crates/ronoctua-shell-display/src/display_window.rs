@@ -230,7 +230,14 @@ impl crate::photo::scenes::Scene for Camera {
     fn shoot(self, ui: Ui, asked: &crate::photo::scenes::Asked) -> anyhow::Result<()> {
         let mut snapshot = crate::photo::scene(&self.screens)?;
         snapshot.settings_failed = self.settings == "failed";
-        snapshot.settings_repaired = self.settings == "repaired";
+        if self.settings == "repaired" {
+            // A NEWER MACHINE'S WORD for one screen's turn, the place a
+            // repair most often is.
+            snapshot.settings_repairs = vec![ronoctua_shell_kit::partly_read::planted(
+                "/screens/eDP-1/transform",
+                ronoctua_shell_kit::partly_read::Why::UnknownVariant,
+            )];
+        }
         let window = photographed(snapshot);
         crate::photo::scenes::walked(crate::door::Detached::new(ui, window), asked)
     }

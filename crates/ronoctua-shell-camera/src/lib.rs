@@ -17,7 +17,7 @@
 use ronoctua_shell_camera_words::studio_words;
 use ronoctua_shell_door::{door, file_picker, floating, photo, region};
 use ronoctua_shell_kit::{
-    bindings, chrome, echo, fields, ipc, line, sizes, text_select, wake, wheel,
+    bindings, chrome, echo, fields, ipc, line, partly_read, sizes, text_select, wake, wheel,
 };
 // What only the tests name: the doorway they build.
 #[cfg(test)]

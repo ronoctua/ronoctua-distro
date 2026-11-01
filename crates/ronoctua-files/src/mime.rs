@@ -193,9 +193,9 @@ pub fn claims(mime: &str, name: &str) -> bool {
 /// kept by the file
 /// (device, inode, modification time, size; [`settled`]), because a listing
 /// asks again at every reread, on the loop that draws it. Under `/private`
-/// nothing is read unless the vault is open (`ronoctua_private::may_touch`):
-/// a suspended vault freezes whoever touches it, and the name's first answer
-/// is given instead.
+/// nothing is read unless the vault is open, and then on a thread the caller
+/// waits for an instant (`listing::Guard`): a suspended vault freezes
+/// whoever touches it, and the name's first answer is given instead.
 ///
 /// # A tie made on purpose
 ///
@@ -208,6 +208,16 @@ pub fn claims(mime: &str, name: &str) -> bool {
 /// upstream's type, which is the first of the tie.
 #[must_use]
 pub fn of_path(path: &Path, kind: Kind, read_content: bool) -> &'static str {
+    of_path_by(path, kind, read_content, &crate::listing::Here)
+}
+
+/// [`of_path`], each read of the file's bytes through `guard`.
+fn of_path_by(
+    path: &Path,
+    kind: Kind,
+    read_content: bool,
+    guard: &impl crate::listing::Guard,
+) -> &'static str {
     match kind {
         Kind::Directory => return DIRECTORY,
         Kind::Symlink => return SYMLINK,
@@ -221,15 +231,24 @@ pub fn of_path(path: &Path, kind: Kind, read_content: bool) -> &'static str {
         if found.sure {
             return found.mime;
         }
-        return settled(path, &name, found.mime, &ronoctua_private::may_touch);
+        return settled(path, &name, found.mime, guard);
     }
     if !read_content {
         return UNKNOWN;
     }
-    read_head(path)
+    head_by(path, guard)
         .as_deref()
         .and_then(by_content)
         .unwrap_or(UNKNOWN)
+}
+
+/// The first bytes of `path`, read through `guard`: here outside `/private`;
+/// inside, only while the vault is open, and then on a thread the caller
+/// waits for an instant ([`crate::listing::VAULT_PATIENCE`]) — the facts
+/// panel asks on the loop that draws, and a vault suspended under the read
+/// would hold that loop until the passphrase resumed it.
+fn head_by(path: &Path, guard: &impl crate::listing::Guard) -> Option<Vec<u8>> {
+    guard.read(path, |at| read_head(&at)).ok().flatten()
 }
 
 /// A file whose tied name its bytes settled, as the kernel knows it.
@@ -258,17 +277,25 @@ fn kept() -> &'static Mutex<Settled> {
 /// its extension, and the extension is what the person typed. Then a tie made
 /// on purpose ([`SHARED_CONTENT`]), then `first`, the name's own answer.
 ///
-/// `may_touch` is `ronoctua_private::may_touch`, handed in so a test can say
-/// "the vault is closed" without one.
+/// `guard` stands between the file and the `/private` vault
+/// ([`crate::listing::Guard`]): the file's `stat` and its bytes are touched
+/// only while the vault is open, and then on a thread waited for an
+/// instant — this machine's ([`crate::listing::Here`]), or a vault a test
+/// planted.
 fn settled(
     path: &Path,
     name: &str,
     first: &'static str,
-    may_touch: &dyn Fn(&Path) -> bool,
+    guard: &impl crate::listing::Guard,
 ) -> &'static str {
-    if !may_touch(path) {
-        return first;
-    }
+    let name = name.to_owned();
+    guard
+        .read(path, move |at| settle(&at, &name, first))
+        .unwrap_or(first)
+}
+
+/// [`settled`], touching the file here — on the guard's thread.
+fn settle(path: &Path, name: &str, first: &'static str) -> &'static str {
     let Ok(meta) = std::fs::metadata(path) else {
         return first;
     };
@@ -328,13 +355,27 @@ fn shared_by_content(name: &str, head: &[u8]) -> Option<&'static str> {
 /// This is what the info panel shows, and the one place where a name that LIES
 /// gets caught: a `.txt` holding a PNG is a real thing, and the listing's fast
 /// path would keep calling it text forever.
+///
+/// THE VAULT IS ASKED FIRST, as a listing asks it ([`head_by`]): the panel
+/// asks this on the loop that draws, about a file that may be inside
+/// `/private` — locked, or suspended at sleep while in use — long after the
+/// listing that showed it was read.
 #[must_use]
 pub fn examined(path: &Path, kind: Kind) -> (&'static str, Option<&'static str>) {
-    let named = of_path(path, kind, false);
+    examined_by(path, kind, &crate::listing::Here)
+}
+
+/// [`examined`], each read of the file through `guard`.
+fn examined_by(
+    path: &Path,
+    kind: Kind,
+    guard: &impl crate::listing::Guard,
+) -> (&'static str, Option<&'static str>) {
+    let named = of_path_by(path, kind, false, guard);
     if !matches!(kind, Kind::File) {
         return (named, None);
     }
-    let sniffed = read_head(path).as_deref().and_then(by_content);
+    let sniffed = head_by(path, guard).as_deref().and_then(by_content);
     (named, sniffed)
 }
 
@@ -981,17 +1022,131 @@ mod tests {
         std::fs::write(&lisp, b"__kernel void k(void) {}\n/* a longer kernel */\n").expect("write");
         assert_eq!(of_path(&lisp, Kind::File, false), "text/x-opencl-csrc");
         // AND A VAULT THAT MAY NOT BE TOUCHED is not read: the name's answer.
-        let vaulted = dir.join("vaulted.cl");
+        let _one = crate::listing::VAULT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (vault, status) = vault_under(&dir);
+        let guard = crate::listing::Planted {
+            mount_point: &vault,
+            status_file: &status,
+            patience: std::time::Duration::from_secs(5),
+        };
+        let vaulted = vault.join("vaulted.cl");
         std::fs::write(&vaulted, b"(in-package #:vaulted)\n").expect("write");
+        say_state(&status, ronoctua_private::State::Locked);
         assert_eq!(
-            settled(&vaulted, "vaulted.cl", "text/x-opencl-csrc", &|_| false),
+            settled(&vaulted, "vaulted.cl", "text/x-opencl-csrc", &guard),
             "text/x-opencl-csrc"
         );
+        say_state(&status, ronoctua_private::State::Open);
         assert_eq!(
-            settled(&vaulted, "vaulted.cl", "text/x-opencl-csrc", &|_| true),
+            settled(&vaulted, "vaulted.cl", "text/x-opencl-csrc", &guard),
             "text/x-common-lisp"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `/private` vault planted under `root`: its mount point, made, and
+    /// the status file that will say its state.
+    fn vault_under(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let mount = root.join("private");
+        std::fs::create_dir_all(&mount).expect("the vault");
+        (mount, root.join("status.json"))
+    }
+
+    /// The planted vault's status file says `state`.
+    fn say_state(status: &Path, state: ronoctua_private::State) {
+        let written = ronoctua_private::Status {
+            state,
+            ..ronoctua_private::Status::absent()
+        };
+        std::fs::write(status, serde_json::to_vec(&written).expect("a status"))
+            .expect("write the status");
+    }
+
+    /// FAILS IF: what the facts panel asks of a file inside the `/private`
+    /// vault — its type by name and by its bytes ([`examined`]) — touches
+    /// the file while the vault is locked or suspended, or touches it on the
+    /// thread that asked while it is open: a read the vault holds (a pipe
+    /// here, which holds whoever opens it as a suspended vault does) must let
+    /// the asking loop go within its patience, and the vault answers again
+    /// once it let go. A file outside the vault is read as before.
+    #[test]
+    fn the_facts_panel_never_touches_the_vault_on_the_loop() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let _one = crate::listing::VAULT_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = std::env::temp_dir().join(format!("ronoctua-mime-vault-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (vault, status) = vault_under(&root);
+        // A PICTURE NAMED AS TEXT: its bytes say so when it is read, and the
+        // name alone answers when it is not.
+        let png: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+        let notes = vault.join("notes.txt");
+        std::fs::write(&notes, png).expect("write");
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, png).expect("write");
+        let held = vault.join("held.txt");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &held,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .expect("a pipe");
+        let guard = crate::listing::Planted {
+            mount_point: &vault,
+            status_file: &status,
+            patience: Duration::from_millis(50),
+        };
+        let asked = |path: &Path| examined_by(path, Kind::File, &guard);
+        assert_eq!(asked(&outside), ("text/plain", Some("image/png")));
+        for shut in [
+            ronoctua_private::State::Locked,
+            ronoctua_private::State::SuspendedInUse,
+        ] {
+            say_state(&status, shut);
+            assert_eq!(asked(&notes), ("text/plain", None), "{shut:?}: read");
+            // NOT EVEN OPENED: the pipe would hold this thread for ever.
+            assert_eq!(asked(&held), ("text/plain", None), "{shut:?}: opened");
+        }
+        say_state(&status, ronoctua_private::State::Open);
+        assert_eq!(asked(&notes), ("text/plain", Some("image/png")));
+        // HELD UNDER THE READ: the asking thread is let go — on a thread of
+        // its own, so a read made here would fail the wait, not hang it.
+        let (said, heard) = mpsc::channel();
+        let (mount, file) = (vault.clone(), status.clone());
+        let pipe = held.clone();
+        std::thread::spawn(move || {
+            let guard = crate::listing::Planted {
+                mount_point: &mount,
+                status_file: &file,
+                patience: Duration::from_millis(50),
+            };
+            let _ = said.send(examined_by(&pipe, Kind::File, &guard));
+        });
+        let answer = heard
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the panel's read of the vault held the thread that asked");
+        assert_eq!(answer, ("text/plain", None));
+        // WHILE IT IS HELD, the vault is not touched again.
+        assert_eq!(asked(&notes), ("text/plain", None), "touched while held");
+        // THE VAULT LETS GO (a writer comes, and goes): it answers again.
+        drop(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&held)
+                .expect("the pipe's other end"),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while asked(&notes).1.is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(asked(&notes), ("text/plain", Some("image/png")));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// FAILS IF: `claims` starts answering for a type that has no glob for the

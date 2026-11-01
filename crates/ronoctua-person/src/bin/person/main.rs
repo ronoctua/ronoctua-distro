@@ -3,6 +3,7 @@
 //! ```text
 //! ronoctua-person apply --staged DIR --machine DIR --owner USER [--verdict FILE] [--lock FILE]
 //! ronoctua-person approve --request DIR --pin FILE --machine DIR --owner USER [--verdict FILE] [--lock FILE]
+//! ronoctua-person check-brain [--machine DIR] [--lock FILE]
 //! ronoctua-person pin --pin FILE [--owner USER] [--machine DIR] [--lock FILE]
 //! ronoctua-person hold [--lock FILE] [--patient] -- PROGRAM [ARG…]
 //! ronoctua-person request-approval ID HASH [--into DIR]
@@ -18,6 +19,12 @@
 //!   the staged request and root's pin of what the door was given consumed,
 //!   held to each other, and approved only at the hash
 //!   `nix/person-hash.nix` (`RONOCTUA_PERSON_HASH`) computes now.
+//! - `check-brain` (what `apply` and `approve` run after them, and a check):
+//!   each brain module of the person's the machine would compile evaluated
+//!   alone, in a `nix eval` of its own (`RONOCTUA_NIX`, and
+//!   `RONOCTUA_PERSON_BRAIN_CHECK`), and what it came to written in
+//!   `local/brain-checked.json` — so a manifest that does not parse or
+//!   aborts stops one process, and the machine leaves that folder out.
 //! - `pin` (the unit the sudo door's `person-signer-pin` starts, and the
 //!   installer): the person's signing key, read from the FILE given (root's
 //!   own, or the `--owner`'s, consumed as it is read), pinned in
@@ -53,6 +60,7 @@
 
 mod apply;
 mod approve;
+mod brain;
 mod disk;
 mod nix;
 mod pin;
@@ -78,6 +86,8 @@ const NIX: &str = "RONOCTUA_NIX";
 const MACHINE_STATE: &str = "RONOCTUA_MACHINE_STATE";
 /// `nix/person-hash.nix`, by store path.
 const PERSON_HASH: &str = "RONOCTUA_PERSON_HASH";
+/// `nix/person-brain-check.nix` at the top of its bundle, by store path.
+const BRAIN_CHECK: &str = "RONOCTUA_PERSON_BRAIN_CHECK";
 /// Where the person stages a request when `--into` is not given.
 const APPROVE_DIR: &str = root::APPROVE;
 
@@ -92,18 +102,19 @@ fn main() -> ExitCode {
     }
 }
 
-/// A command line that is not one of the seven.
+/// A command line that is not one of the eight.
 struct Usage;
 
 fn usage() -> &'static str {
     "usage: ronoctua-person apply --staged DIR --machine DIR --owner USER [--verdict FILE] [--lock FILE]\n\
      \x20      ronoctua-person approve --request DIR --pin FILE --machine DIR --owner USER [--verdict FILE] [--lock FILE]\n\
+     \x20      ronoctua-person check-brain [--machine DIR] [--lock FILE]\n\
      \x20      ronoctua-person pin --pin FILE [--owner USER] [--machine DIR] [--lock FILE]\n\
      \x20      ronoctua-person hold [--lock FILE] [--patient] -- PROGRAM [ARG...]\n\
      \x20      ronoctua-person request-approval ID HASH [--into DIR]\n\
      \x20      ronoctua-person read KIND FILE\n\
      \x20      ronoctua-person record [--state DIR] [--into DIR] [--host NAME] [--rehearse]\n\
-     KIND: declared declined approved options person-applied distro-apps\n\
+     KIND: declared declined approved brain-checked options person-applied distro-apps\n\
      \x20     declared-android state verdict request approve-verdict signer choice\n\
      \x20     distro-pins"
 }
@@ -218,6 +229,30 @@ fn program(variable: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{variable} does not name a program by its path"))
 }
 
+/// Each brain module of the machine's copy evaluated alone, the caller
+/// holding root's lock — said to the journal, and nothing else: with no
+/// tools named (the installer), or a check that failed, the machine leaves
+/// out what it cannot vouch for, and says so in its report.
+fn check_brain(machine: &str) {
+    match brain::tools_here(NIX, BRAIN_CHECK) {
+        None => eprintln!("<5>the person's brain modules were not evaluated: no tools named"),
+        Some(tools) => match brain::check(machine, &tools) {
+            Ok(done) => said_of_brain(&done),
+            Err(e) => eprintln!("<4>the person's brain modules were not evaluated: {e}"),
+        },
+    }
+}
+
+/// What a check of the brain modules found, to the journal.
+fn said_of_brain(done: &brain::Done) {
+    for id in &done.evaluated {
+        eprintln!("<6>the brain module {id} was evaluated alone");
+    }
+    for (id, said) in &done.refused {
+        eprintln!("<4>the brain module {id} does not evaluate, and is left out: {said}");
+    }
+}
+
 /// Says a refusal: the journal's detail, and the verdict line.
 fn refused(word: &str, detail: &str) -> ExitCode {
     eprintln!("<3>{detail}");
@@ -271,6 +306,17 @@ fn run(args: &[String]) -> Result<ExitCode, Usage> {
             };
             let verdict = Verdict::of(at, nonce, done.clone());
             let written = wrote(l.flags.get("verdict"), &verdict);
+            // EACH BRAIN MODULE NOW IN THE MACHINE'S COPY, EVALUATED ALONE,
+            // still under the lock — whatever the apply came to but a
+            // refusal: what it says goes to the journal, and never changes
+            // what the apply did.
+            if lock.is_ok()
+                && done
+                    .as_ref()
+                    .is_ok_and(|d| !matches!(d.outcome, Outcome::Refused))
+            {
+                check_brain(&machine);
+            }
             drop(lock);
             match done {
                 Ok(done) => {
@@ -393,6 +439,11 @@ fn run(args: &[String]) -> Result<ExitCode, Usage> {
                 ),
             };
             let written = wrote(l.flags.get("verdict"), &verdict);
+            // THE MODULE JUST LET IN, EVALUATED ALONE before any build reads
+            // it — under the lock, and never changing what the approval was.
+            if result.is_ok() {
+                check_brain(&machine);
+            }
             drop(lock);
             match result {
                 Ok(_) if written => {
@@ -405,6 +456,33 @@ fn run(args: &[String]) -> Result<ExitCode, Usage> {
                     "the approval was recorded, and its verdict was not written",
                 ),
                 Err(f) => refused(f.denied.id(), &f.detail),
+            }
+        }
+        // EACH BRAIN MODULE OF THE PERSON'S, EVALUATED ALONE, under root's
+        // lock: what `apply` and `approve` run after them, by itself.
+        "check-brain" => {
+            let l = line(rest, &["--machine", "--lock"])?;
+            if !l.words.is_empty() {
+                return Err(Usage);
+            }
+            let machine = l.machine()?;
+            let Some(tools) = brain::tools_here(NIX, BRAIN_CHECK) else {
+                return Ok(refused(
+                    "no-tools",
+                    &format!("{NIX} and {BRAIN_CHECK} must name programs by their paths"),
+                ));
+            };
+            let _lock = match take_lock(l.lock()) {
+                Ok(lock) => lock,
+                Err(e) => return Ok(refused(lock_refused(&e, l.lock()).why.id(), &e.to_string())),
+            };
+            match brain::check(&machine, &tools) {
+                Ok(done) => {
+                    said_of_brain(&done);
+                    println!("checked {}", done.evaluated.len());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => refused("unchecked", &e),
             }
         }
         "pin" => {
@@ -604,6 +682,7 @@ fn read(kind: &str, file: &str) -> Option<ExitCode> {
         "declared" => one::<declared::Declared>,
         "declined" => one::<declined::Declined>,
         "approved" => one::<local::Approved>,
+        "brain-checked" => one::<local::BrainChecked>,
         "options" => one::<options::Options>,
         "person-applied" => one::<reports::PersonApplied>,
         "distro-apps" => one::<reports::DistroApps>,

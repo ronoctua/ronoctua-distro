@@ -88,7 +88,8 @@ use crate::leader::{Effect, Leader, Order};
 use crate::tags::{
     BATTERY_CHARGED, BATTERY_CRITICAL, BATTERY_LOW, BLUETOOTH_BATTERY_LOW, BLUETOOTH_PAIRING,
     MEMORY_KILLED, SCREEN_CAPTURED, SOFTWARE_ANDROID_READY, SOFTWARE_FAILED, SOFTWARE_INSTALLED,
-    SOFTWARE_REMOVED, SOFTWARE_TRIAL_ENDED, SOFTWARE_UPDATED, SOFTWARE_WEB_CREATED,
+    SOFTWARE_REMOVAL_WAITS, SOFTWARE_REMOVED, SOFTWARE_TRIAL_ENDED, SOFTWARE_UPDATED,
+    SOFTWARE_WEB_CREATED,
 };
 use crate::wheel::{LINES_PER_DETENT, wheel_arrived, wheel_lines};
 
@@ -2549,6 +2550,7 @@ const fn software_tag(ended: crate::programs_words::Ended) -> &'static str {
         Ended::Installed => SOFTWARE_INSTALLED,
         Ended::WebCreated => SOFTWARE_WEB_CREATED,
         Ended::Removed => SOFTWARE_REMOVED,
+        Ended::RemovalWaits => SOFTWARE_REMOVAL_WAITS,
         Ended::Updated => SOFTWARE_UPDATED,
         Ended::AndroidReady => SOFTWARE_ANDROID_READY,
         Ended::Failed => SOFTWARE_FAILED,
@@ -12442,10 +12444,18 @@ impl Footer {
             self.put_the_keyboard_away();
             return;
         }
+        let (prefs, partly) = ronoctua_shell_kit::partly_read::read(&crate::osk::store());
         self.osk = Some(crate::osk::Board::new(
-            crate::osk::store().read(),
+            prefs,
             crate::osk::machine_language(),
         ));
+        // A PART OF `osk.json` NOT READ: the settings face is keys, with no
+        // line for a sentence, so the keyboard says it as it comes out — its
+        // keys show the repair in that place, and the file keeps its word.
+        if let Some(partly) = partly {
+            let m = partly.said(&self.texts);
+            self.echo_message(m);
+        }
         if self.osk_keys.is_none() && !self.osk_said_nothing {
             self.osk_said_nothing = true;
             let m = self.texts.t(crate::key::ECHO_OSK_TYPES_NOTHING);

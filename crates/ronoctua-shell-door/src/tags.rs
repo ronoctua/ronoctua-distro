@@ -71,6 +71,10 @@ pub const SOFTWARE_WEB_CREATED: &str = "software-web-created";
 /// See [`SOFTWARE_INSTALLED`].
 pub const SOFTWARE_REMOVED: &str = "software-removed";
 
+/// See [`SOFTWARE_INSTALLED`]: a removal for good the machine has not
+/// carried out yet.
+pub const SOFTWARE_REMOVAL_WAITS: &str = "software-removal-waits";
+
 /// See [`SOFTWARE_INSTALLED`].
 pub const SOFTWARE_UPDATED: &str = "software-updated";
 

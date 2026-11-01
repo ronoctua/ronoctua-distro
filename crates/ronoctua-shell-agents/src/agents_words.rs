@@ -39,6 +39,35 @@ pub fn refused(why: Why, texts: &ronoctua_i18n::Texts) -> String {
     texts.t(refusal_key(why))
 }
 
+/// The same refusal as a CLAUSE, for after a sentence's colon ("The usage
+/// endpoint was not read: the login expired; …").
+///
+/// WRITTEN IN EACH LANGUAGE, and not the sentence with its first letter
+/// lowered here: whether a clause after a colon takes a small letter is the
+/// language's to say, and a word that starts one may be a name that keeps
+/// its capital in any position.
+#[must_use]
+pub const fn clause_key(why: Why) -> &'static str {
+    match why {
+        Why::NotLet => key::AGENTS_CLAUSE_NOT_LET,
+        Why::Expired => key::AGENTS_CLAUSE_EXPIRED,
+        Why::NoCredentials => key::AGENTS_CLAUSE_NO_CREDENTIALS,
+        Why::Unreadable => key::AGENTS_CLAUSE_UNREADABLE,
+        Why::Offline => key::AGENTS_CLAUSE_OFFLINE,
+        Why::Unknown => key::AGENTS_CLAUSE_UNKNOWN,
+        Why::Invalid => key::AGENTS_CLAUSE_INVALID,
+        Why::NotInstalled => key::AGENTS_CLAUSE_NOT_INSTALLED,
+        Why::Arriving => key::AGENTS_CLAUSE_ARRIVING,
+        Why::Failed => key::AGENTS_CLAUSE_FAILED,
+    }
+}
+
+/// A refusal said after a colon ([`clause_key`]).
+#[must_use]
+pub fn clause(why: Why, texts: &ronoctua_i18n::Texts) -> String {
+    texts.t(clause_key(why))
+}
+
 /// An agent, by its name.
 #[must_use]
 pub const fn agent_key(kind: Kind) -> &'static str {
@@ -123,6 +152,7 @@ mod tests {
         let sets: Vec<&str> = Why::ALL
             .into_iter()
             .map(refusal_key)
+            .chain(Why::ALL.into_iter().map(clause_key))
             .chain(Kind::ALL.into_iter().map(agent_key))
             .chain(Kind::ALL.into_iter().map(adding_key))
             .chain(
@@ -136,6 +166,25 @@ mod tests {
             for k in &sets {
                 let said = texts.t(k);
                 assert!(!said.is_empty() && said != *k, "{language}: {k}");
+            }
+        }
+    }
+
+    /// FAILS IF: a refusal said after a colon starts with a capital in a
+    /// language of this system — `não foi lido: O login venceu` — where both
+    /// write a clause there with a small letter.
+    #[test]
+    fn a_refusal_after_a_colon_starts_small() {
+        for language in ronoctua_i18n::LANGUAGES {
+            let texts = ronoctua_i18n::Texts::fresh(language).expect("the language");
+            for why in Why::ALL {
+                let said = clause(why, &texts);
+                assert!(
+                    said.chars().next().is_some_and(char::is_lowercase),
+                    "{language}: {why:?} reads `{said}` after a colon"
+                );
+                let framed = texts.t_with(key::AGENTS_ENDPOINT_REFUSED, &[("why", &said)]);
+                assert!(framed.ends_with(&said), "{language}: {framed}");
             }
         }
     }

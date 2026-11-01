@@ -3980,6 +3980,11 @@ impl View {
                 b.note(key::SOFTWARE_WEB_NO_ADDRESS)
             }
             None => b.note(key::SOFTWARE_ASKING),
+            // THE COLLECTION BEFORE THE SUPERPACK'S PART ARRIVED: on its way,
+            // and never an empty shelf that reads as "no icon by that name".
+            Some(Err(Refusal::PartArriving)) if shelf == Shelf::Collection => {
+                b.note(key::SOFTWARE_NOTE_ICONS_ARRIVING);
+            }
             Some(Err(why)) => b.said(b.texts.t(words::refusal_key(why)), tokens::color::TEXT_DIM),
             Some(Ok(list)) if list.is_empty() => b.note(key::SOFTWARE_NOTE_NO_ICONS),
             Some(Ok(list)) => {
@@ -4149,6 +4154,11 @@ impl View {
         use crate::key;
         let p = &r.prefs;
         b.heading(key::SOFTWARE_HEADING_SOURCES);
+        // A PART OF THE FILE NOT READ: the choices below show the repair in
+        // that place, and the file keeps what it says.
+        if let Some(partly) = &r.prefs_unread {
+            b.said(partly.said(b.texts), tokens::color::TEXT_DIM);
+        }
         b.ring(
             key::SOFTWARE_ONLINE,
             on_off(p.online, b.texts),
@@ -4602,8 +4612,11 @@ fn installed_sheet(b: &mut Builder<'_>, i: &Installed, r: &Readings) {
         Origin::Mine => {
             // KEEP IT: declared, the update keeps it and the person's other
             // computers get it — the one click "make it permanent" was a
-            // line to copy for.
+            // line to copy for. Where the declaration would refuse it (a
+            // file with no download to pin), the row says why instead of
+            // offering what only the queue would refuse.
             if i.key.source().is_some() {
+                let refused = i.undeclarable.map(|why| b.texts.t(words::refusal_key(why)));
                 b.deed(
                     key::SOFTWARE_DECLARED_ROW_KEEP,
                     b.texts.t(key::SOFTWARE_DECLARED_KEEP_VALUE),
@@ -4613,7 +4626,7 @@ fn installed_sheet(b: &mut Builder<'_>, i: &Installed, r: &Readings) {
                         consent: Consent::default(),
                         machines: None,
                     },
-                    None,
+                    refused,
                 );
             }
             b.deed_at(

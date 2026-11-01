@@ -53,11 +53,12 @@ pub fn host_it() -> Result<()> {
         w.handle
             .insert_source(wish_changed, |event, (), door: &mut Door<AudioWindow>| {
                 if let channel::Event::Msg(()) = event {
-                    let fresh = ronoctua_audio::prefs::store().read();
+                    let (fresh, partly) = crate::partly_read::read(&ronoctua_audio::prefs::store());
+                    door.content.view.read_in_part(partly);
                     if fresh != door.content.view.preferences() {
                         door.content.view.took_preferences(fresh);
-                        door.ui.ask_paint();
                     }
+                    door.ui.ask_paint();
                 }
             })
             .map_err(|e| anyhow::anyhow!("could not hang the audio.json watch: {e}"))?;
@@ -81,8 +82,11 @@ pub fn host_it() -> Result<()> {
             })
             .map_err(|e| anyhow::anyhow!("could not hang the audio channel: {e}"))?;
 
+        let (prefs, partly) = crate::partly_read::read(&ronoctua_audio::prefs::store());
+        let mut view = crate::audio::View::fresh(prefs);
+        view.read_in_part(partly);
         Ok(AudioWindow {
-            view: crate::audio::View::fresh(ronoctua_audio::prefs::store().read()),
+            view,
             snapshot: None,
             audio,
             meter: crate::audio_region::Meter::default(),
@@ -106,7 +110,11 @@ pub fn camera(rest: &[String]) -> ! {
             let texts = ronoctua_i18n::Texts::fresh(&asked.language).ok_or_else(|| {
                 anyhow::anyhow!("the language `{}` does not exist", asked.language)
             })?;
-            let mut view = crate::audio::View::fresh(ronoctua_audio::prefs::Preferences::default());
+            // THE SETTINGS `--settings` HANDS IT, or the defaults: a value
+            // of them that does not read is drawn with the line it is owed.
+            let (prefs, partly) = asked.settings(ronoctua_audio::prefs::FILE);
+            let mut view = crate::audio::View::fresh(prefs);
+            view.read_in_part(partly);
             view.settle_in(Some(&snapshot), asked.columns, &texts);
             let window = AudioWindow {
                 view,

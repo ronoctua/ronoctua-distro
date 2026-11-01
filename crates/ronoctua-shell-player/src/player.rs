@@ -1648,6 +1648,10 @@ pub struct View {
     /// The preferences are read from this machine's file — a door on a
     /// screen; a photograph's and a test's view keeps what it was given.
     reads_prefs: bool,
+    /// What of `player.json` and `consent.json` did not read, when part of
+    /// either did not — read with them, said on the page that shows them
+    /// (`partly_read`).
+    pub prefs_unread: PrefsUnread,
     /// A TEXT OF SEVERAL LINES being edited over the page, in either door
     /// ([`View::edit_text`]): every key is its (`Press::Text`), and the page
     /// draws it until it is left (`crate::text_area`).
@@ -2318,6 +2322,27 @@ pub fn moved(outline: &Outline, id: EntryId, forward: bool) -> Option<Ask> {
     Some(Ask::Move { id, after, into })
 }
 
+/// What of the two files the preferences are read from did not read, when
+/// part of either did not.
+#[derive(Debug, Clone, Default)]
+pub struct PrefsUnread {
+    /// `player.json`.
+    pub player: Option<crate::partly_read::PartlyRead>,
+    /// `consent.json`, whose hosts the Internet page lets and withdraws.
+    pub consent: Option<crate::partly_read::PartlyRead>,
+}
+
+impl PrefsUnread {
+    /// The two files judged as they are now — beside the read of them that
+    /// says nothing (`ronoctua_player::prefs::read`).
+    fn judged() -> Self {
+        Self {
+            player: crate::partly_read::judged(&ronoctua_player::prefs::store()),
+            consent: crate::partly_read::judged(&ronoctua_consent::store()),
+        }
+    }
+}
+
 impl View {
     /// A view on the home, with the cursor on the first row that does
     /// something.
@@ -2331,6 +2356,7 @@ impl View {
             directories: crate::player_directory::Directories::of_this_machine(),
             plugs: crate::player_seam::plugs(true),
             reads_prefs: true,
+            prefs_unread: PrefsUnread::judged(),
             ..Self::with_prefs(ronoctua_player::prefs::read())
         }
     }
@@ -2450,6 +2476,7 @@ impl View {
             globe: crate::player_globe::Seen::default(),
             prefs_on_disk: crate::player_internet::Watched::default(),
             reads_prefs: false,
+            prefs_unread: PrefsUnread::default(),
             editing: None,
             picture_fold: None,
             translator_let: false,
@@ -2496,6 +2523,7 @@ impl View {
         };
         if read {
             self.prefs = ronoctua_player::prefs::read();
+            self.prefs_unread = PrefsUnread::judged();
             self.translator_let = crate::player_translator::let_now(&self.prefs);
             self.words_kept = crate::player_translator::kept_keys();
         }

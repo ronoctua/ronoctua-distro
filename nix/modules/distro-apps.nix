@@ -62,12 +62,14 @@
 #
 # # The AppImages the person follows past the distro's pins
 #
-# The owner's decision (2026-10-20): the person may let the routine update
-# move the AppImages whose table entry follows a GitHub repository (today
-# the ArtCraft Launcher and SolidCraft) past the release the gate tested. Their option
-# (`distro-apps-follow-releases` in `options.json`) and their followed pins
-# (`software/distro-pins.json`) are the person's signed data, root's
-# validated copy (`ronoctua.person.options`, `ronoctua.person.distroPins`).
+# The owner's decisions (2026-10-20, 2026-11-01): the routine update moves
+# the AppImages whose table entry follows a GitHub repository (today the
+# ArtCraft Launcher and SolidCraft) past the release the gate tested — ON by
+# default, unless the person turned it off (`distro-apps-keep-tested-pins` in
+# `options.json`, `nix/distro-pins.nix`'s `followsIn`). Their options and
+# their followed pins (`software/distro-pins.json`) are the person's signed
+# data, root's validated copy (`ronoctua.person.options`,
+# `ronoctua.person.distroPins`).
 # A followed pin is built ONLY while the option is on and it is newer than
 # the distro's (`builtins.compareVersions`) — when the owner moves the
 # distro's pins past it, the distro's wins again. IT IS THE APPIMAGE'S PART
@@ -104,6 +106,10 @@ let
   # THE ONE SHAPE of an apk's part and of its line for the reconciler, the
   # person's declared apps' too.
   androidApps = import ../declared-apps/android.nix { inherit pkgs; };
+  # THE ONE NIX ARITHMETIC of a web app's window class and of the addresses
+  # it holds for, the person's declared web apps' (`web-app-ids-agree` holds
+  # it to the Rust's).
+  webApps = import ../declared-apps/web.nix { inherit lib pkgs; };
   # THE ONE JUDGE of a followed pin, shared with the check that holds it and
   # the Rust one to one table (`distro-apps-follow-when-on-and-newer`).
   follow = import ../distro-pins.nix;
@@ -394,7 +400,8 @@ let
             the software centre says of a program whose launcher entry is not
             on the machine — one declined before it was ever installed, which
             would otherwise be named by its id. Data, like a `.desktop`'s
-            `Name=`, never a text key.
+            `Name=`, never a text key. A Flatpak or an Android app has no
+            field that gives it, and `problems` refuses one without it.
           '';
         };
       };
@@ -653,8 +660,12 @@ let
   # A WEB APP is a launcher entry in the shape the software view writes for
   # the person's (`crates/ronoctua-software/src/web.rs`): `web-open <slug>`
   # by the stable path, the address in `X-Ronoctua-Web-Url` and never in
-  # `Exec`. No `StartupWMClass`: that is Chromium's arithmetic, which lives
-  # in one place (`web::app_id`), and a second copy here would drift.
+  # `Exec`, and its window class — Chromium's id for the address and the
+  # profile, how the modeline names the window — worked out by the person's
+  # declared web apps' arithmetic (`webApps.appId`), which
+  # `web-app-ids-agree` holds to `web::app_id`. An address that arithmetic
+  # does not hold for is refused in `problems`, never written with a class
+  # the window will not have.
   webOf =
     w:
     pkgs.writeTextDir "share/applications/ronoctua-web-${w.slug}.desktop" ''
@@ -666,6 +677,7 @@ let
       TryExec=${(import ../parts-names.nix).viewBin "google-chrome-stable"}
       Terminal=false
       StartupNotify=true
+      StartupWMClass=${webApps.appId w.url w.profile}
       Categories=${w.category};
       X-Ronoctua-Web-Url=${w.url}
       X-Ronoctua-Web-Profile=${w.profile}
@@ -744,6 +756,7 @@ let
     ];
     flatpak = [
       "appId"
+      "name"
       "origin"
     ];
     appimage = [
@@ -761,13 +774,20 @@ let
     ];
     android = [
       "package"
+      "name"
       "from"
       "image"
     ];
   };
-  # What a table line of each source cannot do without.
+  # What a table line of each source cannot do without — a `name` in every
+  # one: the name the software centre says of a program whose launcher entry
+  # is not on the machine (one declined before it was ever installed), which
+  # a Flatpak's or an apk's line would otherwise lack.
   tableNeeds = {
-    flatpak = [ "appId" ];
+    flatpak = [
+      "appId"
+      "name"
+    ];
     appimage = [
       "key"
       "name"
@@ -779,6 +799,7 @@ let
     ];
     android = [
       "package"
+      "name"
       "from"
     ];
   };
@@ -902,8 +923,8 @@ let
   # The pins the person follows past the distro's
   # ---------------------------------------------------------------------
   # ROOT'S VALIDATED COPIES, read as JSON: the person's options and their
-  # followed pins. Absent options, another format, a switch that is not
-  # `true`: nothing is followed.
+  # followed pins. Following is ON unless the options say the person's off
+  # (`follow.followsIn`); options of another format follow nothing.
   readJson =
     path:
     if path == null || !(builtins.pathExists path) then
@@ -911,10 +932,7 @@ let
     else
       builtins.fromJSON (builtins.readFile path);
   personOptions = readJson (config.ronoctua.person.options or null);
-  followOn =
-    builtins.isAttrs personOptions
-    && (personOptions.format or null) == follow.format
-    && (personOptions.${follow.option} or false) == true;
+  followOn = follow.followsIn personOptions;
   followedDoc = if followOn then readJson (config.ronoctua.person.distroPins or null) else null;
   followedFormatKnown = followedDoc == null || (followedDoc.format or null) == follow.format;
   followed = follow.read {
@@ -980,6 +998,7 @@ let
       };
     in
     {
+      inherit (t) name;
       group = t.group or "base";
       essential = t.essential or null;
       formerly = t.formerly or [ ];
@@ -1039,7 +1058,15 @@ let
             ++ lib.optional (!isLine a.name) "${at}.name is empty or spans lines"
             ++ lib.optional (!isWeb a.url) "${at}.url is not an http(s) address"
             ++ lib.optional (!isLine a.profile) "${at}.profile is empty or spans lines"
-            ++ lib.optional (builtins.match "[A-Za-z]+" a.category == null) "${at}.category is not a category";
+            ++ lib.optional (builtins.match "[A-Za-z]+" a.category == null) "${at}.category is not a category"
+            # ITS WINDOW CLASS (`webOf`) is worked out only for an address no
+            # browser rewrites and a profile of printable ASCII.
+            ++ lib.optional (
+              isWeb a.url && webApps.urlProblem a.url != null
+            ) "${at}: ${webApps.urlProblem a.url}, so its window class (StartupWMClass) cannot be worked out"
+            ++
+              lib.optional (isLine a.profile && !(webApps.isProfile a.profile))
+                "${at}.profile is not a Chrome profile's folder, so its window class (StartupWMClass) cannot be worked out";
           android =
             lib.optional (
               builtins.match "[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+" a.package == null
@@ -1073,6 +1100,17 @@ let
     ++ (
       if n == 1 then
         sourceProblems id e
+        # A FLATPAK'S OR AN APK'S NAME comes from no field of its source, as
+        # an AppImage's and a web app's do: the entry carries it, or the
+        # centre would name a program declined before it was installed by
+        # its id.
+        ++ lib.optional (
+          e.name == null
+          && builtins.elem (sourceOf id e) [
+            "flatpak"
+            "android"
+          ]
+        ) "ronoctua.apps.${id} has no `name`: a Flatpak or an Android app carries the program's name"
       else
         [
           "ronoctua.apps.${id}: an entry comes from exactly one source (`package`, `flatpak`, `appimage`, `web` or `android`), and this one names ${toString n}"

@@ -610,6 +610,10 @@ pub struct View {
     /// reaches the view lets it go — while a line asks, every key is the
     /// line's, in both doors.
     asking: Option<Asking>,
+    /// What of `notifications.json` did not read, when part of it did not —
+    /// said on the message line while the catalogue, which shows the file's
+    /// filters, is on screen (`partly_read`; [`View::note`]).
+    unread: Option<crate::partly_read::PartlyRead>,
 }
 
 /// Which of two lists side by side (or stacked): an open record's message
@@ -1062,6 +1066,14 @@ impl View {
     #[must_use]
     pub fn fresh() -> Self {
         Self::default()
+    }
+
+    /// What the read of `notifications.json` owes the person — the places of
+    /// it that did not read, or `None` (`partly_read`). Whether that changed.
+    pub fn read_in_part(&mut self, partly: Option<crate::partly_read::PartlyRead>) -> bool {
+        let moved = self.unread != partly;
+        self.unread = partly;
+        moved
     }
 
     /// Keeps the cursor on a row that EXISTS.
@@ -1657,6 +1669,13 @@ impl View {
         if let Some(said) = self.draft_note(texts) {
             return Some(said);
         }
+        // AND WHAT OF THE FILE DID NOT READ, under the catalogue that shows
+        // its filters: a filter it could not take is not in the list, and
+        // the file keeps it.
+        if let (Some(partly), Pane::Catalogue, Level::List) = (&self.unread, self.pane, &self.level)
+        {
+            return Some(partly.said(texts));
+        }
         let Level::Sheet(knob) = self.level else {
             return None;
         };
@@ -1976,6 +1995,21 @@ impl View {
             _ => self.pane == Pane::Suppressed,
         };
         side_by_side.then(|| (split_at(columns).saturating_sub(1), lit))
+    }
+
+    /// Where the RULE between an open record's two halves goes when they are
+    /// STACKED — the drawn row of the line of air between them — and whether
+    /// it is lit: lit while the facts have the keyboard, the mark
+    /// [`Self::divider`] makes side by side. Stacked there was no divider and
+    /// no title, and a click that gave the facts the keyboard changed nothing
+    /// on screen until the next arrow scrolled them.
+    #[must_use]
+    pub fn stacked_rule(&self, lists: &Lists<'_>, columns: u16) -> Option<(usize, bool)> {
+        if !matches!(self.level, Level::Open { .. }) || facts_beside(columns) {
+            return None;
+        }
+        let [_, facts] = self.places(lists, columns)?;
+        Some((facts.row.checked_sub(1)?, self.open_facts))
     }
 
     /// The cells a hover band may cover on drawn row `row` under cell

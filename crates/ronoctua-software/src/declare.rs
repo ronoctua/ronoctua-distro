@@ -46,7 +46,7 @@ use crate::declaration::{self as decl, Edit};
 use crate::order::{AndroidImage, Consent, Order};
 use crate::progress::{Phase, Report};
 use crate::stage::{self, Published};
-use crate::{AppKey, Context, Done, Failure, Outcome, Refusal, Source};
+use crate::{AppKey, Context, Done, Failure, Outcome, Refusal, Source, Waits};
 
 /// Run one of the declaration's orders on this machine.
 ///
@@ -263,6 +263,7 @@ fn declare(
         desktop_ids,
         amount: None,
         rehearsed: false,
+        waits: None,
     })
 }
 
@@ -544,15 +545,17 @@ fn forget(ctx: &Context, key: &AppKey, keep_data: bool, report: &mut dyn Report)
         .map_err(|why| decl::unreadable(decl::File::Declared, why))?
         .entry(&id)
         .is_some();
-    if was_declared {
-        change_and_apply(ctx, report, |ctx| {
+    let applied = if was_declared {
+        Some(change_and_apply(ctx, report, |ctx| {
             decl::change_declared(&ctx.roots, |doc| {
                 decl::without(doc, &id);
                 Ok(())
             })
             .map(|_| ())
-        })?;
-    }
+        })?)
+    } else {
+        None
+    };
     // THE COPY BY HAND, when there is one — a Flatpak nix-flatpak installed
     // is the declared copy, and the rebuild takes it.
     {
@@ -583,7 +586,7 @@ fn forget(ctx: &Context, key: &AppKey, keep_data: bool, report: &mut dyn Report)
             crate::cli::module(ctx, crate::cli::Route::Source(source), &remove, report)?;
         }
     }
-    if was_applied {
+    let rebuilt = if was_applied {
         let rebuilt = stage::rebuild(ctx, report)?;
         if !keep_data && let AppKey::Flatpak { id } = key {
             match rebuilt {
@@ -597,15 +600,34 @@ fn forget(ctx: &Context, key: &AppKey, keep_data: bool, report: &mut dyn Report)
                 }
             }
         }
-    }
+        Some(rebuilt)
+    } else {
+        None
+    };
     crate::reconcile::run(ctx, Some(source), report)?;
     if was_declared {
         publish(ctx, report);
     }
     Ok(Outcome {
         key: Some(key.clone()),
+        waits: waits_of(applied, rebuilt),
         ..Outcome::default()
     })
+}
+
+/// What a removal for good still waits for, from what root's applier and
+/// the rebuild came to: the update holding the machine at either (the copy
+/// root has, or the system built from it, still names the program — the
+/// machine takes the change at its next update), else a system set for the
+/// next boot. `None` when the machine carried it out. Pure.
+fn waits_of(applied: Option<stage::Applied>, rebuilt: Option<stage::Rebuilt>) -> Option<Waits> {
+    if applied == Some(stage::Applied::Busy) || rebuilt == Some(stage::Rebuilt::Busy) {
+        Some(Waits::Update)
+    } else if rebuilt == Some(stage::Rebuilt::Staged) {
+        Some(Waits::Restart)
+    } else {
+        None
+    }
 }
 
 /// Keep one of the distro's programs uninstalled, here or everywhere.
@@ -994,7 +1016,7 @@ mod tests {
             .unwrap();
             let saved = ctx.roots.home.join(".var/app/org.example.App");
             std::fs::create_dir_all(&saved).unwrap();
-            run_on(
+            let done = run_on(
                 &ctx,
                 &Order::Forget {
                     key: AppKey::Flatpak {
@@ -1008,6 +1030,12 @@ mod tests {
             )
             .unwrap();
             assert_eq!(!saved.exists(), erased, "{result}");
+            // AND ITS END SAYS SO: set for the next boot is not removed yet.
+            assert_eq!(
+                done.waits,
+                (result == "staged").then_some(Waits::Restart),
+                "{result}"
+            );
             if result == "staged" {
                 // KEPT FOR LATER, and erased once the machine runs the system
                 // without it (the restart), nothing waiting.
@@ -1024,6 +1052,98 @@ mod tests {
             }
             let _ = std::fs::remove_dir_all(&root);
         }
+    }
+
+    /// FAILS IF: a removal for good the update held — at root's applier or
+    /// at the rebuild, whatever the other did — or one set for the next
+    /// boot is said to wait for nothing, or one carried out is said to wait.
+    #[test]
+    fn a_removal_waits_for_what_held_it() {
+        use stage::{Applied as A, Rebuilt as R};
+        for (applied, rebuilt, waits) in [
+            (None, None, None),
+            (Some(A::Applied), None, None),
+            (Some(A::Unchanged), Some(R::Switched), None),
+            (Some(A::Busy), None, Some(Waits::Update)),
+            (Some(A::Busy), Some(R::Switched), Some(Waits::Update)),
+            (Some(A::Busy), Some(R::Staged), Some(Waits::Update)),
+            (Some(A::Applied), Some(R::Busy), Some(Waits::Update)),
+            (None, Some(R::Busy), Some(Waits::Update)),
+            (Some(A::Applied), Some(R::Staged), Some(Waits::Restart)),
+        ] {
+            assert_eq!(waits_of(applied, rebuilt), waits, "{applied:?} {rebuilt:?}");
+        }
+    }
+
+    /// FAILS IF: removing a declared program for good while the update holds
+    /// the machine (the rebuild answers `busy`) ends as done, with nothing
+    /// said of the update it waits for — the notification would call it
+    /// removed, and the system still carries it.
+    #[test]
+    fn a_removal_the_update_held_says_so() {
+        let root = scratch("forget-busy");
+        let (ctx, log) = machine(&root);
+        let unit = ronoctua_machine::UPDATE_APPLY_UNIT;
+        crate::write_executable(
+            ctx.tools.systemctl.as_ref().unwrap(),
+            &format!(
+                "#!/bin/sh\n\
+                 echo \"systemctl $*\" >> {log}\n\
+                 case \"$*\" in\n\
+                 *ronoctua-person-apply.service) n=$(cat {staged}/nonce); \
+                   printf '{{\"format\":1,\"at\":\"2026-10-05T12:00:00Z\",\"nonce\":\"%s\",\"outcome\":\"applied\",\"refused\":null,\"ignored\":[],\"left-out\":[]}}' \"$n\" > {verdict} ;;\n\
+                 'show --property=ExecMainStatus --value {unit}') echo {busy} ;;\n\
+                 *{unit}) exit 1 ;;\n\
+                 esac\n",
+                log = log.display(),
+                staged = ctx.roots.system.staged().display(),
+                verdict = ctx.roots.system.verdict().display(),
+                busy = stage::UPDATE_BUSY,
+            ),
+        );
+        let key = AppKey::Nix {
+            attr: "hello".into(),
+        };
+        run_on(
+            &ctx,
+            &Order::Declare {
+                key: key.clone(),
+                consent: Consent::default(),
+                machines: None,
+            },
+            "noctua",
+            &crate::github::canned::Canned::new(Vec::new()),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        // THE SYSTEM CARRIES IT: the last apply built it in.
+        let reports = &ctx.roots.system.reports;
+        std::fs::create_dir_all(reports).unwrap();
+        std::fs::write(
+            reports.join(ronoctua_person::names::PERSON_APPLIED),
+            r#"{"format":1,"machine":"noctua","distro-rev":"r","applied":["nix:hello"],"skipped":[],
+"declined":{"honoured":[],"refused":[],"unknown":[],"still-present":[]},"brain":{"included":[],"awaiting-approval":[]}}"#,
+        )
+        .unwrap();
+        let done = run_on(
+            &ctx,
+            &Order::Forget {
+                key,
+                keep_data: true,
+            },
+            "noctua",
+            &crate::github::canned::Canned::new(Vec::new()),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains(&format!("start --no-ask-password {unit}")),
+            "{calls}"
+        );
+        assert_eq!(done.waits, Some(Waits::Update));
+        assert!(decl::read_declared(&ctx.roots).unwrap().apps.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// FAILS IF: an essential program of the distro can be declined, a

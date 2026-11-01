@@ -147,7 +147,7 @@ pub fn scene(name: &str) -> Result<ronoctua_display::Snapshot> {
         screens,
         compositor: true,
         settings_failed: false,
-        settings_repaired: false,
+        settings_repairs: Vec::new(),
     })
 }
 
@@ -757,9 +757,15 @@ pub mod planted {
 usage: ronoctua-shell photograph --door {door}
          --scene <scene> [--out file.png] [--columns N] [--lines N]
          [--language en-GB|pt-BR] [--theme id] [--scale N] [--list]
+         [--settings folder]
          [--key notation]... [--type text]... [--hover column,line]...
 
-scenes: {door} {scenes}"
+scenes: {door} {scenes}
+
+--settings names a folder holding the door's own preference files under
+their own names, read as the person's are: a value that does not read is
+repaired, and the door says which (default: the defaults). A door that
+keeps no file of its own refuses it."
         )
     }
 
@@ -797,6 +803,39 @@ scenes: {door} {scenes}"
         pub list: bool,
         /// The walk.
         pub steps: Vec<Step>,
+        /// The folder `--settings` named: the door's own preference files,
+        /// in place of the defaults ([`Asked::settings`]).
+        pub settings: Option<std::path::PathBuf>,
+        /// Whether the door read them — a folder given to a door that keeps
+        /// no file of its own is refused ([`shoot`]), never ignored.
+        settings_read: std::cell::Cell<bool>,
+    }
+
+    impl Asked {
+        /// The door's own preference file `file`, as the `--settings` folder
+        /// holds it — read as the person's is, leniently, through the kit
+        /// (`partly_read::read`): a value that does not read is repaired, and
+        /// the door owes its line. The defaults, owing nothing, without the
+        /// word. The folder is under no root of this process, so no ledger
+        /// of this machine's is written.
+        #[must_use]
+        pub fn settings<T>(
+            &self,
+            file: &'static str,
+        ) -> (T, Option<ronoctua_shell_kit::partly_read::PartlyRead>)
+        where
+            T: serde::Serialize + serde::de::DeserializeOwned + Default,
+        {
+            self.settings_read.set(true);
+            self.settings.as_ref().map_or_else(
+                || (T::default(), None),
+                |dir| {
+                    ronoctua_shell_kit::partly_read::read(
+                        &ronoctua_store::Store::at(Some(dir.clone()), file).with_roots(None, None),
+                    )
+                },
+            )
+        }
     }
 
     /// `ronoctua-shell photograph --door <door> …`, to its end: the rest of
@@ -859,6 +898,8 @@ scenes: {door} {scenes}"
             scale: 1,
             list: false,
             steps: Vec::new(),
+            settings: None,
+            settings_read: std::cell::Cell::new(false),
         };
         let mut words = words.iter();
         while let Some(flag) = words.next() {
@@ -875,6 +916,15 @@ scenes: {door} {scenes}"
                 }
                 "--door" => me.door = value()?,
                 "--scene" => me.scene = value()?,
+                "--settings" => {
+                    let dir = std::path::PathBuf::from(value()?);
+                    ensure!(
+                        dir.is_dir(),
+                        "`--settings {}` is not a folder",
+                        dir.display()
+                    );
+                    me.settings = Some(dir);
+                }
                 "--out" | "-o" => me.out = std::path::PathBuf::from(value()?),
                 "--columns" => me.columns = number("--columns", &value()?, 1000)?,
                 "--lines" => me.lines = number("--lines", &value()?, 1000)?,
@@ -932,6 +982,11 @@ scenes: {door} {scenes}"
         content: C,
         line: Option<crate::line::Line>,
     ) -> Result<()> {
+        ensure!(
+            asked.settings.is_none() || asked.settings_read.get(),
+            "`--door {}` keeps no preference file of its own: `--settings` would change nothing",
+            asked.door
+        );
         let texts = ronoctua_i18n::Texts::fresh(&asked.language)
             .with_context(|| format!("the language `{}` does not exist", asked.language))?;
         let ui = Ui::detached(texts, (1, 1), i32::from(asked.scale))?;

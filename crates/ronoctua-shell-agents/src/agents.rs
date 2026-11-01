@@ -220,6 +220,11 @@ pub struct Readings {
     pub accounts: Vec<Seen>,
     /// The lines the bars change colour at — the brain module's.
     pub lines: agent_accounts::Lines,
+    /// What of `llm-accounts.json` and of the lines' file did not read, when
+    /// part of either did not — each said in its own section (`partly_read`).
+    pub accounts_unread: Option<crate::partly_read::PartlyRead>,
+    /// The lines' file's, likewise.
+    pub lines_unread: Option<crate::partly_read::PartlyRead>,
     /// Whether the person let the usage endpoint's host be asked.
     pub let_usage: bool,
     /// The home, to show a folder under it as `~/…`.
@@ -683,6 +688,12 @@ pub fn read(zone: &ronoctua_files::when::Zone) -> Readings {
         let_usage: ronoctua_consent::allows(usage::HOST),
         home,
         now_s: now_s(),
+        // THE TWO FILES JUDGED beside the reads that say nothing: what of
+        // each did not read, when part of it did not.
+        accounts_unread: crate::partly_read::judged(&Accounts::store()),
+        lines_unread: crate::partly_read::judged(&agent_accounts::lines_store(
+            agent_accounts::lines_file().and_then(|f| f.parent().map(std::path::Path::to_path_buf)),
+        )),
         ..Readings::default()
     };
     let Some(list) = Accounts::store().parsed() else {
@@ -889,7 +900,7 @@ pub fn refreshed_said(
     match first {
         Some((id, why)) => texts.t_with(
             key::AGENTS_REFRESHED_BUT,
-            &[("id", id), ("why", &words::refused(why, texts))],
+            &[("id", id), ("why", &words::clause(why, texts))],
         ),
         None => texts.t(key::AGENTS_REFRESHED),
     }
@@ -1034,6 +1045,11 @@ pub struct Row {
     /// What a key does here — `None` on a title, a sentence, the rest of a
     /// wrapped label: the cursor skips it.
     pub target: Option<Target>,
+    /// The line CONTINUES the row above it: the rest of its label or value,
+    /// wrapped (`chrome::aligned_pair`). The cursor skips it, but it is a
+    /// line of that row's control — it lights with it, and a click on it
+    /// takes the same thing ([`View::control_of`]).
+    pub continues: bool,
 }
 
 impl Row {
@@ -1043,13 +1059,13 @@ impl Row {
         self.target.is_none()
     }
 
-    /// Whether a click takes it — a row the cursor stands on — and so
-    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
-    /// and click (the region's `Row::takes`, the window's `Content::takes`,
-    /// [`View::clicked`]).
+    /// Whether a click takes it — a row the cursor stands on, or a line
+    /// that continues one — and so whether a resting pointer lights it: ONE
+    /// ANSWER for both doors' light and click (the region's `Row::takes`,
+    /// the window's `Content::takes`, [`View::clicked`]).
     #[must_use]
     pub const fn takes(&self) -> bool {
-        !self.heading()
+        !self.heading() || self.continues
     }
 }
 
@@ -1116,6 +1132,7 @@ impl Builder<'_> {
             self.out.push(Row {
                 fields: crate::chrome::AIR,
                 target: None,
+                continues: false,
             });
         }
         self.out.push(Row {
@@ -1126,6 +1143,7 @@ impl Builder<'_> {
                 self.room,
             )],
             target: None,
+            continues: false,
         });
         let pairs: Vec<(u16, u16, u16)> = entries
             .iter()
@@ -1159,6 +1177,7 @@ impl Builder<'_> {
                         self.out.push(Row {
                             fields,
                             target: (n == 0).then(|| target.clone()),
+                            continues: n > 0,
                         });
                     }
                 }
@@ -1172,12 +1191,14 @@ impl Builder<'_> {
                                 self.room,
                             )],
                             target: None,
+                            continues: false,
                         });
                     }
                 }
                 Entry::Air => self.out.push(Row {
                     fields: crate::chrome::AIR,
                     target: None,
+                    continues: false,
                 }),
             }
         }
@@ -1780,10 +1801,25 @@ impl View {
         crate::chrome::hint_of_marked(&here, |_| None, texts)
     }
 
+    /// The row whose control row `n` is a line of: the first line of a pair
+    /// wrapped over several ([`Row::continues`]), which light together and
+    /// take one click (`Region::control_of`, `Content::controls`) — and `n`
+    /// itself for every other row.
+    #[must_use]
+    pub fn control_of(n: usize, rows: &[Row]) -> usize {
+        let mut first = n;
+        while first > 0 && rows.get(first).is_some_and(|r| r.continues) {
+            first -= 1;
+        }
+        first
+    }
+
     /// Puts the cursor where a click landed. Answers whether the cursor was
     /// ALREADY on that row: that is the second click, which the door turns
-    /// into `RET` (invariant 19).
+    /// into `RET` (invariant 19). A click on a line that continues a row is
+    /// a click on that row ([`Self::control_of`]).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        let n = Self::control_of(n, rows);
         let Some(target) = rows
             .get(n)
             .filter(|r| r.takes())
@@ -1800,10 +1836,14 @@ impl View {
         again
     }
 
-    /// The sentence the pointer resting on row `n` reads.
+    /// The sentence the pointer resting on row `n` reads — on any line of
+    /// its control, the control's.
     #[must_use]
     pub fn about(rows: &[Row], n: usize, texts: &ronoctua_i18n::Texts) -> Option<String> {
-        rows.get(n)?.target.as_ref()?.about(texts)
+        rows.get(Self::control_of(n, rows))?
+            .target
+            .as_ref()?
+            .about(texts)
     }
 
     /// Puts the cursor back on the row it was aimed at — found by what it
@@ -1880,6 +1920,11 @@ impl View {
                 vec![note(texts.t(key::AGENTS_NONE))],
             );
         }
+        // A PART OF THE LIST NOT READ: an account it could not take is not
+        // among the sections below, and the file keeps it.
+        if let Some(partly) = &r.accounts_unread {
+            b.section(&b.t(key::AGENTS_HEADING), vec![note(partly.said(texts))]);
+        }
         for (n, s) in r.accounts.iter().enumerate() {
             account_section(&mut b, r, s, n + 1, zone);
         }
@@ -1917,6 +1962,7 @@ impl View {
             b.out.push(Row {
                 fields: vec![piece(b.left, t.t(k), color, b.room)],
                 target: Some(Target::Answer(yes)),
+                continues: false,
             });
         }
     }
@@ -2376,7 +2422,7 @@ fn source_note(
     Some(match (asked, refused) {
         (_, Some(why)) => t.t_with(
             key::AGENTS_ENDPOINT_REFUSED,
-            &[("why", &words::refused(why, t))],
+            &[("why", &words::clause(why, t))],
         ),
         (Some((at, None)), None) => t.t_with(
             key::AGENTS_FROM_ENDPOINT,
@@ -2459,6 +2505,14 @@ fn lines_section(b: &mut Builder<'_>, r: &Readings) {
         },
         note(t.t(key::AGENTS_LINES_NOTE)),
     ];
+    // A PART OF THE LINES' FILE NOT READ: the two rows show the distro's
+    // lines in that place, and the file keeps what it says.
+    let e = r
+        .lines_unread
+        .iter()
+        .map(|partly| note(partly.said(t)))
+        .chain(e)
+        .collect();
     b.section(&t.t(key::AGENTS_HEADING_LINES), e);
 }
 
@@ -2625,6 +2679,8 @@ mod tests {
                 seen("codex-1", Agent::Codex, "Home", true),
             ],
             lines: agent_accounts::Lines::default(),
+            accounts_unread: None,
+            lines_unread: None,
             let_usage: false,
             home: Some(PathBuf::from("/home/p")),
             now_s: NOW,
@@ -3330,5 +3386,46 @@ mod tests {
             assert!(said.contains(part), "{said}");
         }
         assert_eq!(day_text("not a day", &t), "not a day");
+    }
+
+    /// FAILS IF: a row wrapped over several lines in a narrow door lights
+    /// and takes the click on its first line only — a line it continues
+    /// onto takes nothing, says nothing under the pointer, or a click there
+    /// lands anywhere but on the row.
+    #[test]
+    fn a_wrapped_row_is_one_control() {
+        let t = texts("pt-BR");
+        let r = readings();
+        let mut v = View::default();
+        let rows = v.rows(&r, &zone(), 30, &t);
+        let (first, cont) = rows
+            .windows(2)
+            .enumerate()
+            .find_map(|(n, w)| (w[0].target.is_some() && w[1].continues).then_some((n, n + 1)))
+            .unwrap_or_else(|| panic!("no row wrapped at 30:\n{}", drawn(&rows)));
+        assert!(
+            rows[cont].takes(),
+            "the line it continues onto takes nothing"
+        );
+        assert!(rows[cont].heading(), "the cursor stops on a continued line");
+        assert_eq!(View::control_of(cont, &rows), first);
+        assert_eq!(
+            View::about(&rows, cont, &t),
+            View::about(&rows, first, &t),
+            "the continued line says another sentence"
+        );
+        // THE FIRST CLICK ON THE CONTINUED LINE SELECTS THE ROW, the second
+        // is its `RET` — from a cursor somewhere else.
+        let other = rows
+            .iter()
+            .position(|row| row.target.is_some())
+            .filter(|n| *n != first)
+            .or_else(|| rows.iter().rposition(|row| row.target.is_some()))
+            .expect("another row that acts");
+        assert_ne!(other, first);
+        assert!(!v.clicked(other, &rows));
+        assert!(!v.clicked(cont, &rows), "the first click was the `RET`");
+        assert_eq!(v.cursor(), first, "the click landed off the row");
+        assert!(v.clicked(cont, &rows), "the second click was not the `RET`");
     }
 }

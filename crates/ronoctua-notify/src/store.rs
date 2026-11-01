@@ -61,6 +61,13 @@ impl Where {
         }
     }
 
+    /// The person's filters' store, where there is somewhere to read — what
+    /// the view that shows them judges for the places that did not read.
+    #[must_use]
+    pub fn preferences_store(&self) -> Option<ronoctua_store::Store<Preferences>> {
+        self.config.as_deref().map(preferences_at)
+    }
+
     /// The person's filters, or the distro's when there is nowhere to read.
     #[must_use]
     pub fn preferences(&self) -> Preferences {

@@ -117,11 +117,15 @@ export PATH
 # General environment
 # -----------------------------------------------------------------------------
 
-# The editor, first that exists. `emacsclient` comes first because the daemon
-# is up: it opens in the already-loaded process instead of paying the whole
-# startup again.
-if command -v emacsclient >/dev/null 2>&1; then
-    export EDITOR="emacsclient -t -a ''"
+# The editor, first that exists. Emacs comes first because its daemon is up:
+# it opens in the already-loaded process instead of paying the whole startup
+# again. ONE EMACS, THE UNIT'S: `$RONOCTUA_EMACS_EDITOR` is the client
+# `nix/modules/emacs.nix` makes, by its store path — it starts the daemon's
+# unit when it is down and then reaches it, never starting a second Emacs
+# beside it (`emacsclient -a ''` did). The program alone, with no word after
+# it: not every program that runs `$EDITOR` splits it.
+if [ -n "${RONOCTUA_EMACS_EDITOR-}" ] && [ -x "$RONOCTUA_EMACS_EDITOR" ]; then
+    export EDITOR="$RONOCTUA_EMACS_EDITOR"
 elif command -v nano >/dev/null 2>&1; then
     export EDITOR="nano"
 elif command -v vi >/dev/null 2>&1; then
@@ -242,11 +246,23 @@ alias glg='git log --stat'
 #
 #   e   in the terminal itself (`-t`), the everyday one
 #   et  a graphical frame (`-c`), for when a window is wanted
-# Both carry `-a ''`: if no daemon is up, start one instead of failing.
-
-if command -v emacsclient >/dev/null 2>&1; then
-    alias e="emacsclient -t -a ''"
-    alias et="emacsclient -c -n -a ''"
+#
+# ONE EMACS, THE UNIT'S (the owner's decision, 2026-11-01): both are the
+# client `$EDITOR` is (`$RONOCTUA_EMACS_EDITOR`, `nix/modules/emacs.nix`),
+# which starts the daemon's unit when it is down and then reaches it —
+# never `emacsclient -a ''`, which started a second Emacs beside the unit's,
+# outside it, on the same files. The logic lives in that program, once.
+# Functions and not aliases, spelt `function e` because zsh expands an alias
+# where `e()` is written — a shell that sourced the old `alias e=` would
+# refuse the definition — and the alias itself goes first.
+if [ -n "${RONOCTUA_EMACS_EDITOR-}" ] && [ -x "$RONOCTUA_EMACS_EDITOR" ]; then
+    unalias e et 2>/dev/null
+    function e {
+        "$RONOCTUA_EMACS_EDITOR" "$@"
+    }
+    function et {
+        "$RONOCTUA_EMACS_EDITOR" -c -n "$@"
+    }
 fi
 
 # THE THREE LISPS' REPLs READ A LINE WITH NOTHING: no history, no arrow

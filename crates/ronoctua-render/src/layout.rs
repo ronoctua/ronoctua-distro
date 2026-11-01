@@ -364,6 +364,15 @@ pub fn wrap(text: &str, width: u16, ceiling: usize) -> Vec<String> {
                         // only answer that neither loops nor drops it.
                         break;
                     }
+                    // AND A PATH IS CUT AFTER ITS LAST SEPARATOR ON THE LINE:
+                    // cut at the cell, `…/software/history.jso` and `n` read
+                    // as a file that is not there. The separator stays at the
+                    // end of the line, so the line says the name goes on; one
+                    // at the very start (`/abc…`) is no place to cut.
+                    let piece = match piece.rfind('/') {
+                        Some(at) if at > 0 => &piece[..=at],
+                        _ => piece,
+                    };
                     rest = &rest[piece.len()..];
                     out.push(piece.to_owned());
                 }
@@ -1057,6 +1066,29 @@ mod tests {
         for l in &out {
             assert!(width(l) <= 8, "{l} is wider than the line");
         }
+    }
+
+    /// FAILS IF: a path with no space in it is cut in the middle of a name
+    /// while a separator on the line could have taken the cut.
+    #[test]
+    fn a_path_is_cut_after_a_separator() {
+        let out = wrap(
+            "kept: /home/me/state/ronoctua/software/history.json",
+            20,
+            99,
+        );
+        assert_eq!(
+            out,
+            vec![
+                "kept:",
+                "/home/me/state/",
+                "ronoctua/software/",
+                "history.json"
+            ]
+        );
+        // A NAME LONGER THAN THE LINE is still cut at the cell: no separator
+        // can take it.
+        assert_eq!(wrap("/a/abcdefghij", 6, 99), vec!["/a/", "abcdef", "ghij"]);
     }
 
     #[test]

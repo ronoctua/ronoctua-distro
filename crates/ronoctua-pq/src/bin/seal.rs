@@ -17,6 +17,9 @@
 //! - Opening "with the key" opens the belongings' `key.age` with the
 //!   passphrase in memory and opens the file with the identity inside: the
 //!   identity is never written anywhere, and `key.age` is never removed.
+//!   Opening with the identity the SESSION keeps is `open` with a `0600`
+//!   file the queue had the belongings' program lend for the run; a job
+//!   still saying `open-kept` is refused, as this program reads no keyring.
 //! - New encryption is post-quantum: a job seals only when it names an
 //!   `age1pq1…` recipient, and one with classical `age1…` keys alone is
 //!   refused (`corrupt`), never sealed classically. A classical key is read
@@ -229,6 +232,11 @@ fn regular(path: &Path) -> Result<File, Refusal> {
 
 fn run(job: &Job) -> Result<u64, Refusal> {
     let failed = Refusal::of(Why::Failed);
+    // THE SESSION'S IDENTITY IS LENT BY THE QUEUE, never read here: a job
+    // that still says `open-kept` came without it, and nothing is made.
+    if matches!(job.action, Action::OpenKept {}) {
+        return Err(failed);
+    }
     // FOLLOWING A LINK, as the file manager offers a link into a folder as a
     // folder: what is sealed is what the person sees when they enter it — a
     // folder or a file, and nothing else (a device, a pipe, a socket).
@@ -326,6 +334,8 @@ fn run(job: &Job) -> Result<u64, Refusal> {
                     &mut progress,
                 )
             }
+            // Refused before anything was made (above).
+            Action::OpenKept {} => Err(failed),
         })();
         match sealed {
             Ok(n) => from.finish().map(|()| n),
@@ -547,6 +557,25 @@ mod tests {
             .why,
             Why::Failed
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: an open "with the session's identity" handed to the sealer
+    /// itself — the queue lends the identity and hands `open` — is run, or
+    /// makes anything: this program reads no keyring.
+    #[test]
+    fn an_open_with_the_session_s_identity_is_the_queue_s_to_lend() {
+        let dir = place("kept");
+        let sealed = dir.join("a.age");
+        std::fs::write(&sealed, b"age-encryption.org/v1\n").unwrap();
+        let into = dir.join("a");
+        assert_eq!(
+            run(&job(Action::OpenKept {}, &sealed, &into))
+                .unwrap_err()
+                .why,
+            Why::Failed
+        );
+        assert!(!into.exists(), "a refused open made its output");
         let _ = std::fs::remove_dir_all(dir);
     }
 

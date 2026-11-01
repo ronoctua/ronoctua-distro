@@ -3,20 +3,21 @@
 //!
 //! # What it offers
 //!
-//! The owner's decision (2026-10-20): the person may let the routine update
-//! move the distro's AppImages whose table entry follows a repository (the
-//! Crafting Apps) past the versions the distro tested. The choice is theirs,
-//! OFF until they turn it on here, and it travels signed with their options
-//! (`distro-apps-follow-releases`, `ronoctua_person::options`) to every
-//! machine of theirs. `f` turns the view to this page and back, in the
+//! The owner's decisions (2026-10-20, 2026-11-01): the routine update moves
+//! the distro's AppImages whose table entry follows a repository (the
+//! ArtCraft Launcher, SolidCraft) past the versions the distro tested. It is
+//! ON by default; the person may turn it off here, and an off stays off. The
+//! choice travels signed with their options
+//! (`ronoctua_person::options::Options::follows_releases`) to every machine
+//! of theirs. `f` turns the view to this page and back, in the
 //! footer's region (`LEADER s u u`, or straight here with `LEADER s u f`) and
 //! in the window (`LEADER s u w`), with the same rows and the same keys.
 //!
 //! # The rows
 //!
-//! The switch (`RET` turns it), the hosts following asks — turning it on lets
-//! them in the person's consent, as every download asks first
-//! (`ronoctua_person::distro_pins::HOSTS`) — what this machine was built
+//! The switch (`RET` turns it), the hosts following asks — as the machine's
+//! own update, like Nix, so no consent is asked for them
+//! (`ronoctua_consent::Updater::DistroAppImages`) — what this machine was built
 //! with (a change reaches it at the next update — and only signed: a machine
 //! that trusts no key of the person's, or has not got their signature yet,
 //! says so, from `person-applied.json`), and each AppImage that follows its
@@ -29,7 +30,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::key;
-use ronoctua_person::distro_pins::{Fault, HOSTS};
+use ronoctua_person::distro_pins::Fault;
 use ronoctua_person::options::Options;
 use ronoctua_person::reports::{DistroApps, PersonApplied, PinFrom};
 use ronoctua_person::tree::TreeWhy;
@@ -40,6 +41,9 @@ use crate::binary_cache::{PageLine, TopLine};
 
 /// The command that opens the update's view on this page (`LEADER s u f`).
 pub const OPEN: &str = "distro-follow-open";
+
+/// The declared updater following asks as: its hosts are the page's.
+const UPDATER: ronoctua_consent::Updater = ronoctua_consent::Updater::DistroAppImages;
 
 /// The registry's report on this machine (`nix/modules/distro-apps.nix`
 /// writes it; `ronoctua_person::names::DISTRO_APPS` under `/etc/ronoctua`).
@@ -59,8 +63,6 @@ const APPLIED: &str = "/etc/ronoctua/person-applied.json";
 pub struct Places {
     /// The person's copy of their options.
     pub mirror: Option<PathBuf>,
-    /// The person's config root, whose `consent.json` lets the hosts.
-    pub config: Option<PathBuf>,
     /// The registry's report.
     pub registry: PathBuf,
     /// The person's report: what root made of their signature.
@@ -90,7 +92,6 @@ impl Places {
                 d.join(ronoctua_person::names::MIRROR)
                     .join(ronoctua_person::names::OPTIONS)
             }),
-            config: ronoctua_xdg::config_dir(),
             registry: machine(REGISTRY),
             applied: machine(APPLIED),
             records: machine(ronoctua_parts::names::RECORDS),
@@ -106,7 +107,6 @@ impl Places {
         let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
         [
             self.mirror.clone(),
-            self.config.as_ref().map(|c| c.join(ronoctua_consent::FILE)),
             Some(self.registry.clone()),
             Some(self.applied.clone()),
             Some(self.records.clone()),
@@ -121,11 +121,11 @@ impl Places {
 /// What the person's copy of their options says of following.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Choice {
-    /// Off — or no file yet.
+    /// On — the default: no file yet, or one that never said.
     #[default]
-    Off,
-    /// On.
     On,
+    /// Off: the person turned it off.
+    Off,
     /// The file is there and does not read.
     Unreadable,
     /// The file is of a newer format than this machine reads.
@@ -137,10 +137,10 @@ impl Choice {
     #[must_use]
     pub fn read(path: &Path) -> Self {
         match std::fs::read(path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::Off,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::On,
             Err(_) => Self::Unreadable,
             Ok(bytes) => match ronoctua_person::parse::<Options>(&bytes) {
-                Ok(o) if o.distro_apps_follow_releases => Self::On,
+                Ok(o) if o.follows_releases() => Self::On,
                 Ok(_) => Self::Off,
                 Err(r) if r.why == PersonWhy::Newer => Self::Newer,
                 Err(_) => Self::Unreadable,
@@ -260,8 +260,6 @@ impl Taken {
 pub struct Readings {
     /// What the person's copy says.
     pub copy: Choice,
-    /// Whether every host following asks is let.
-    pub let_in: bool,
     /// Whether this machine was built following them — `None` without a
     /// report that says (none, or a build before the option).
     pub machine: Option<bool>,
@@ -307,11 +305,7 @@ impl Readings {
         Self {
             taken,
             waiting,
-            copy: places.mirror.as_deref().map_or(Choice::Off, Choice::read),
-            let_in: places
-                .config
-                .as_deref()
-                .is_some_and(|c| HOSTS.iter().all(|h| ronoctua_consent::allows_under(c, h))),
+            copy: places.mirror.as_deref().map_or(Choice::On, Choice::read),
             machine,
             apps,
         }
@@ -586,7 +580,7 @@ impl Page {
 }
 
 /// A row's label and value, and the colour of a state it says (a refusal,
-/// a hold, hosts not let while following), when it says one.
+/// a hold), when it says one.
 fn label_and_value(
     row: Row,
     r: &Readings,
@@ -604,16 +598,16 @@ fn label_and_value(
             (texts.t(key::DISTRO_FOLLOW_ROW_FOLLOW), texts.t(value), tint)
         }
         Row::Hosts => {
-            let hosts = HOSTS.join(", ");
-            let (value, tint) = match (r.let_in, r.on()) {
-                (true, _) => (key::DISTRO_FOLLOW_HOSTS_LET, None),
-                (false, true) => (key::DISTRO_FOLLOW_HOSTS_NOT_LET, warning),
-                (false, false) => (key::DISTRO_FOLLOW_HOSTS_NOT_LET, None),
+            let hosts = UPDATER.hosts().join(", ");
+            let value = if r.on() {
+                key::DISTRO_FOLLOW_HOSTS_ASKED
+            } else {
+                key::DISTRO_FOLLOW_HOSTS_UNASKED
             };
             (
                 texts.t(key::DISTRO_FOLLOW_ROW_HOSTS),
                 texts.t_with(value, &[("hosts", hosts.as_str())]),
-                tint,
+                None,
             )
         }
         Row::Machine => {
@@ -739,7 +733,7 @@ pub fn turn(path: &Path, on: bool) -> Result<(), Unchanged> {
             }
         })?,
     };
-    options.distro_apps_follow_releases = on;
+    options.set_following(on);
     options.validate().map_err(|_| Unchanged::Unreadable)?;
     let (Some(dir), Some(file)) = (path.parent(), path.file_name().and_then(|f| f.to_str())) else {
         return Err(Unchanged::Unwritable);
@@ -749,9 +743,9 @@ pub fn turn(path: &Path, on: bool) -> Result<(), Unchanged> {
         .map_err(|_| Unchanged::Unwritable)
 }
 
-/// Carries out a turn of the switch: the person's copy of their options,
-/// and — turning it on, which is the person's gesture — their consent for
-/// the hosts following asks. Answers the sentence the door says.
+/// Carries out a turn of the switch: the person's copy of their options —
+/// no consent is asked, following is the machine's own update. Answers the
+/// sentence the door says.
 #[must_use]
 pub fn apply(on: bool, places: &Places, texts: &ronoctua_i18n::Texts) -> String {
     let Some(mirror) = places.mirror.as_deref() else {
@@ -764,19 +758,10 @@ pub fn apply(on: bool, places: &Places, texts: &ronoctua_i18n::Texts) -> String 
             Unchanged::Unwritable => key::DISTRO_FOLLOW_WHY_UNWRITABLE,
         });
     }
-    if !on {
-        return texts.t(key::DISTRO_FOLLOW_SAID_OFF);
-    }
-    // TURNING IT ON IS THE CONSENT for the hosts following asks, recorded
-    // like any other.
-    let kept = places
-        .config
-        .as_deref()
-        .is_some_and(|c| ronoctua_consent::let_hosts_under(c, &HOSTS, true).is_ok());
-    texts.t(if kept {
+    texts.t(if on {
         key::DISTRO_FOLLOW_SAID_ON
     } else {
-        key::DISTRO_FOLLOW_SAID_NOT_LET
+        key::DISTRO_FOLLOW_SAID_OFF
     })
 }
 
@@ -891,7 +876,6 @@ mod tests {
         };
         let mut r = Readings {
             copy: Choice::On,
-            let_in: true,
             machine: Some(true),
             waiting: None,
             apps: vec![
@@ -1020,16 +1004,18 @@ mod tests {
         assert_eq!(Taken::of(&applied), Taken::Unreadable);
     }
 
-    /// FAILS IF: `RET` on the switch does not turn it, turns it on a copy
-    /// that does not read, a fact row acts, or a click acts before it has
-    /// put the cursor there.
+    /// FAILS IF: following is not what a page with nothing read yet says,
+    /// `RET` on the switch does not turn it, turns it on a copy that does
+    /// not read, a fact row acts, or a click acts before it has put the
+    /// cursor there.
     #[test]
     fn the_switch_turns_and_a_strange_copy_says_why() {
         let mut r = Readings::default();
+        assert_eq!(r.copy, Choice::On, "following is the default");
         let mut p = Page::default();
-        assert_eq!(p.press(Press::Enter, &r), Errand::Turn(true));
-        r.copy = Choice::On;
         assert_eq!(p.press(Press::Enter, &r), Errand::Turn(false));
+        r.copy = Choice::Off;
+        assert_eq!(p.press(Press::Enter, &r), Errand::Turn(true));
         r.copy = Choice::Newer;
         assert_eq!(
             p.press(Press::Enter, &r),
@@ -1043,15 +1029,15 @@ mod tests {
         assert_eq!(p.press(Press::Escape, &r), Errand::Close);
     }
 
-    /// FAILS IF: turning following on loses the person's other options,
-    /// does not let both hosts, or a copy of a newer format is rewritten;
-    /// or turning it off leaves the switch written.
+    /// FAILS IF: a copy that never said is not following, turning it off
+    /// does not hold — written as the person's off — or loses their other
+    /// options, turning it on again leaves the off written, a turn asks for
+    /// a consent, or a copy of a newer format is rewritten.
     #[test]
-    fn turning_it_on_lets_the_hosts_and_keeps_the_other_options() {
+    fn turning_it_off_holds_and_keeps_the_other_options() {
         let root = scratch("turn");
         let places = Places {
             mirror: Some(root.join("state/person/options.json")),
-            config: Some(root.join("config")),
             registry: root.join("etc/distro-apps.json"),
             applied: root.join("etc/person-applied.json"),
             records: root.join("parts"),
@@ -1066,30 +1052,54 @@ mod tests {
         )
         .unwrap();
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
-        assert_eq!(
-            apply(true, &places, &texts),
-            texts.t(key::DISTRO_FOLLOW_SAID_ON)
-        );
-        let r = Readings::read(&places);
-        assert_eq!((r.copy, r.let_in), (Choice::On, true));
-        let text = std::fs::read_to_string(&mirror).unwrap();
-        assert!(text.contains(".ssh/id.pub"), "{text}");
+        assert_eq!(Readings::read(&places).copy, Choice::On, "the default");
         assert_eq!(
             apply(false, &places, &texts),
             texts.t(key::DISTRO_FOLLOW_SAID_OFF)
         );
-        assert_eq!(Choice::read(&mirror), Choice::Off);
+        assert_eq!(Readings::read(&places).copy, Choice::Off);
+        let text = std::fs::read_to_string(&mirror).unwrap();
+        assert!(text.contains(".ssh/id.pub"), "{text}");
         assert!(
-            !std::fs::read_to_string(&mirror)
-                .unwrap()
-                .contains("distro-apps-follow-releases")
+            text.contains("\"distro-apps-keep-tested-pins\": true"),
+            "{text}"
+        );
+        assert_eq!(
+            apply(true, &places, &texts),
+            texts.t(key::DISTRO_FOLLOW_SAID_ON)
+        );
+        assert_eq!(Choice::read(&mirror), Choice::On);
+        let text = std::fs::read_to_string(&mirror).unwrap();
+        assert!(text.contains(".ssh/id.pub"), "{text}");
+        assert!(!text.contains("keep-tested-pins"), "{text}");
+        // NO CONSENT: nothing but the copy was written.
+        let written: Vec<_> = walk(&root);
+        assert_eq!(
+            written,
+            std::slice::from_ref(&mirror),
+            "a turn wrote {written:?}"
         );
         std::fs::write(&mirror, "{\"format\": 9}").unwrap();
         assert_eq!(
-            apply(true, &places, &texts),
+            apply(false, &places, &texts),
             texts.t(key::DISTRO_FOLLOW_WHY_NEWER)
         );
         assert_eq!(std::fs::read_to_string(&mirror).unwrap(), "{\"format\": 9}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Every file under `dir`, sorted.
+    fn walk(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                found.extend(walk(&path));
+            } else {
+                found.push(path);
+            }
+        }
+        found.sort();
+        found
     }
 }

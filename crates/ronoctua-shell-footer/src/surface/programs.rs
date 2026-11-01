@@ -82,11 +82,7 @@ impl Footer {
                 ));
                 continue;
             }
-            let why = if end == crate::programs_words::Ended::Failed {
-                crate::programs_words::failure_said(job, &self.texts)
-            } else {
-                String::new()
-            };
+            let why = crate::programs_words::said_why(end, job, &self.texts);
             self.software_notice(
                 software_tag(end),
                 crate::programs_words::ended_keys(end),

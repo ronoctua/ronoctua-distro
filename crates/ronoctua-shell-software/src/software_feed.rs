@@ -308,27 +308,27 @@ impl Feed {
         let shelving = Arc::clone(&self.shelving);
         let post = self.poster();
         spawn("ronoctua-software-icons", move || {
-            let answer =
-                match shelf {
-                    // THE SITE'S SHELF IS THE PAGE'S OWN READ (`Want::Site`), and
-                    // the file shelf has no candidates — it is where a person
-                    // brings one. Neither is fetched here.
-                    Shelf::Site | Shelf::File => return,
-                    Shelf::Dashboard => ronoctua_software::icons::from_dashboard_in(
-                        &ctx.roots.ours_cache(),
-                        &query,
-                        CANDIDATES,
-                        Some(dark),
-                    ),
-                    Shelf::Collection => ctx.tools.icon_names.as_deref().map_or(
-                        Err(Refusal::SourceAbsent),
-                        |names| {
-                            Ok(ronoctua_software::icons::from_collection(
-                                names, &query, CANDIDATES,
-                            ))
-                        },
-                    ),
-                };
+            let answer = match shelf {
+                // THE SITE'S SHELF IS THE PAGE'S OWN READ (`Want::Site`), and
+                // the file shelf has no candidates — it is where a person
+                // brings one. Neither is fetched here.
+                Shelf::Site | Shelf::File => return,
+                Shelf::Dashboard => ronoctua_software::icons::from_dashboard_in(
+                    &ctx.roots.ours_cache(),
+                    &query,
+                    CANDIDATES,
+                    Some(dark),
+                ),
+                // BEFORE THE SUPERPACK'S PART ARRIVED, its names are not
+                // there: said as arriving, never an empty shelf.
+                Shelf::Collection => ctx
+                    .tools
+                    .icon_names
+                    .as_deref()
+                    .map_or(Err(Refusal::SourceAbsent), |names| {
+                        ronoctua_software::icons::collection(names, &query, CANDIDATES)
+                    }),
+            };
             if shelving.load(Ordering::SeqCst) == generation {
                 post(Arrival::Candidates { generation, answer });
             }
@@ -805,6 +805,9 @@ pub struct Readings {
     pub snapshot: Option<Snapshot>,
     /// The person's choices, as the file says NOW.
     pub prefs: Preferences,
+    /// What of `software.json` did not read, when part of it did not: said
+    /// over the choices that show the repair (`partly_read`).
+    pub prefs_unread: Option<ronoctua_shell_kit::partly_read::PartlyRead>,
     /// The search.
     pub search: Search,
     /// The latest details, and whose.
@@ -842,6 +845,10 @@ pub struct Readings {
     /// identity (`keep::signing_asks`), so the change goes signed.
     /// `None` (a test, a photograph with no belongings) never asks.
     pub belongings: Option<ronoctua_belongings::places::Places>,
+    /// Where a door with no feed — a photograph's — reads the distro's
+    /// collection of icon names, answering the shelf in place as the feed
+    /// would (`want_in_place`). `None` answers nothing there.
+    pub icon_names: Option<PathBuf>,
 }
 
 impl Readings {
@@ -853,6 +860,24 @@ impl Readings {
             taught,
             consents: ronoctua_consent::store().read(),
             ..Self::default()
+        }
+    }
+
+    /// What a door with no feed answers itself: the distro's collection,
+    /// from [`Readings::icon_names`] — the same answer the feed's thread
+    /// gives, a file read and nothing asked of the machine. Every other want
+    /// stays unanswered there.
+    pub fn want_in_place(&mut self, want: Want) {
+        if let (Want::Icons { shelf, query }, Some(names)) = (want, self.icon_names.as_deref())
+            && shelf == Shelf::Collection
+        {
+            let answer = ronoctua_software::icons::collection(names, &query, CANDIDATES);
+            self.candidates = Some(Shelved {
+                generation: 0,
+                shelf,
+                query,
+                answer: Some(answer),
+            });
         }
     }
 
@@ -1352,6 +1377,7 @@ mod tests {
                 origin: ronoctua_software::state::Origin::Mine,
                 icon: None,
                 trouble: None,
+                undeclarable: None,
             }],
             ..Snapshot::default()
         })));

@@ -47,8 +47,8 @@
   # directory's `person/brain/`, a store path.
   dir,
   # The folders to read, by id, or `null` for every one: the machine leaves
-  # out the ones it does not include, and the update's isolated verification
-  # the ones that do not even evaluate (`personModulesOnly`).
+  # out the ones it does not include, and the ones root's check found do not
+  # even evaluate (`personModulesOnly`).
   only ? null,
   # The flake's `distroModulesFor`: the distro's NixOS modules for a `rust`.
   distroModulesFor,

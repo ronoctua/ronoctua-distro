@@ -234,15 +234,17 @@ pub struct Snapshot {
     /// is followed by a fresh reading, and a setting that did not take shows
     /// as a setting that did not take.
     pub settings_failed: bool,
-    /// Whether PART of `display.json` did not read — a value a newer
-    /// machine wrote, a typo — and the store read the rest with that value
-    /// repaired (`ronoctua_store::Reading::part_not_read`).
+    /// What of `display.json` did not read when PART of it did not — a
+    /// value a newer machine wrote, a typo — and the store read the rest
+    /// with those values repaired (`ronoctua_store::Reading::part_not_read`);
+    /// empty when it read whole, or not at all.
     ///
     /// The list then shows the repair in that place — a screen's default
     /// transform — while the file keeps what it says, and an order still
     /// writes: the store puts the value back. Shown without a word, the
-    /// screen would look as if the file said what it does not.
-    pub settings_repaired: bool,
+    /// screen would look as if the file said what it does not, so the view
+    /// says which places did not read (`partly_read`, in the shell's kit).
+    pub settings_repairs: Vec<ronoctua_store::Repair>,
 }
 
 impl Snapshot {
@@ -713,8 +715,9 @@ struct Eyes {
     previewed: BTreeSet<String>,
     /// Whether the last read of `display.json` fell back to the default.
     settings_failed: bool,
-    /// Whether the last read of `display.json` repaired a value of it.
-    settings_repaired: bool,
+    /// What the last read of `display.json` repaired of it, when it read
+    /// in part.
+    settings_repairs: Vec<ronoctua_store::Repair>,
     /// Whether the size of the text in `self.prefs` is one an order of ours
     /// just set, rather than one read from the file.
     ///
@@ -868,7 +871,7 @@ impl Eyes {
             monitors: BTreeMap::new(),
             previewed: BTreeSet::new(),
             settings_failed: false,
-            settings_repaired: false,
+            settings_repairs: Vec::new(),
             wrote_the_text: false,
             wrote_the_screens: BTreeMap::new(),
         }
@@ -898,7 +901,11 @@ impl Eyes {
         // word about the one place that is not what the file says.
         let reading = prefs::store().reading();
         self.settings_failed = reading.lost_everything();
-        self.settings_repaired = reading.part_not_read();
+        self.settings_repairs = if reading.part_not_read() {
+            reading.repairs.clone()
+        } else {
+            Vec::new()
+        };
         self.prefs = reading.value;
         let wiring = connector::read(&self.places);
 
@@ -956,7 +963,7 @@ impl Eyes {
             focused,
             compositor,
             settings_failed: self.settings_failed,
-            settings_repaired: self.settings_repaired,
+            settings_repairs: self.settings_repairs.clone(),
         }
     }
 
@@ -1413,7 +1420,7 @@ mod tests {
             focused: None,
             compositor: true,
             settings_failed: false,
-            settings_repaired: false,
+            settings_repairs: Vec::new(),
         };
         assert_eq!(one.focused_screen().map(|s| s.at.as_str()), Some("eDP-1"));
         // With two, guessing would dim the wrong one.

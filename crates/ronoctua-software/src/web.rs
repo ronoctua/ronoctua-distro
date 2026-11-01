@@ -157,6 +157,10 @@ pub fn installed(roots: &Roots) -> Vec<Installed> {
             origin: Origin::Mine,
             icon: app.icon_file.clone().map(|path| Picture::File { path }),
             trouble: canonical_url(&app.url).err(),
+            // A DECLARATION pins the address as `canonical_url` gives it
+            // (`declare::entry_of`), so an address it refuses is refused there
+            // too, with the same sentence.
+            undeclarable: canonical_url(&app.url).err(),
             name: app.name,
         })
         .collect()
@@ -606,6 +610,7 @@ fn write(
         desktop_ids: vec![desktop_id(&slug)],
         amount: None,
         rehearsed: ctx.rehearse,
+        waits: None,
     };
     if ctx.rehearse {
         let entry = Entry {
@@ -731,6 +736,7 @@ fn remove(ctx: &Context, slug: &str, report: &mut dyn Report) -> Done {
         desktop_ids: Vec::new(),
         amount: None,
         rehearsed: ctx.rehearse,
+        waits: None,
     };
     if ctx.rehearse {
         let _ = writeln!(

@@ -132,6 +132,32 @@ impl Region for AgentsRegion {
         View::about(&rows, row, seen.texts)
     }
 
+    /// A PAIR WRAPPED OVER SEVERAL LINES IS ONE CONTROL: every line of it
+    /// lights with the one under the pointer, and a click on any takes the
+    /// first (`View::control_of`).
+    fn control_of(&self, row: usize, seen: &Seen<'_>) -> usize {
+        View::control_of(row, &self.open.rows(seen.columns, seen.texts))
+    }
+
+    /// The rows laid out once, each with its control (`Told::control`):
+    /// asked row by row, [`Self::control_of`] lays them out again for each.
+    fn told(&self, seen: &Seen<'_>, skip: usize, take: usize) -> Vec<crate::region::Told> {
+        let rows = self.open.rows(seen.columns, seen.texts);
+        rows.iter()
+            .enumerate()
+            .skip(skip)
+            .take(take)
+            .map(|(n, r)| crate::region::Told {
+                row: Row {
+                    takes: r.takes(),
+                    fields: r.fields.clone(),
+                },
+                control: Some(View::control_of(n, &rows)),
+                ..crate::region::Told::default()
+            })
+            .collect()
+    }
+
     /// Read by the whole notation through the reader the window calls too
     /// (`agents::press_of_key`).
     fn key(&mut self, key: ronoctua_keymap::Key, way: &mut dyn Doorway) -> Taken {
@@ -328,8 +354,8 @@ mod tests {
     }
 
     /// FAILS IF: a resting pointer lights a row of the footer's region a
-    /// click takes nothing on — a title, a sentence, the rest of a wrapped
-    /// label — or leaves unlit one it takes. THE LIGHT IS THE CLICK: every
+    /// click takes nothing on — a title, a sentence — or leaves unlit one it
+    /// takes, the rest of a wrapped label among them. THE LIGHT IS THE CLICK: every
     /// row clicked once, on a view of its own, and lit exactly where
     /// something happened.
     #[test]

@@ -68,7 +68,7 @@ echo-build-to-own = Building the installed (committed) version — it will rebui
 echo-build-to-reference = Building your working tree (dev) — it will rebuild and restart
 echo-build-to-own-next-restart = Building the installed (committed) version — a new system already waits for the restart, so this one is set for the next restart too
 echo-build-to-reference-next-restart = Building your working tree (dev) — a new system already waits for the restart, so this one is set for the next restart too
-echo-build-failed = The build switch could not start: { $why }
+echo-build-failed = The build switch could not start. { $why }
 # What the build glyph says on the message line while the pointer rests on it.
 hint-build-own = The installed, committed build — click to build & run your working tree (dev)
 hint-build-reference = A dev build of your working tree — click to go back to the installed, committed build

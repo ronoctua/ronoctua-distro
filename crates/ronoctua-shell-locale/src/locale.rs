@@ -425,6 +425,18 @@ pub struct View {
     /// Whose answer the language is — it is what tells "the machine is in
     /// English" from "you chose English".
     from: Option<crate::language::Source>,
+    /// What of each file this view shows did not read, when part of it did
+    /// not — `language.json`, `locale.json` and the glance's `world.json`,
+    /// each said in its own section (`partly_read`), read with the file.
+    unread: Unread,
+}
+
+/// The places of the view's three files that did not read, by file.
+#[derive(Debug, Clone, Default)]
+struct Unread {
+    language: Option<ronoctua_shell_kit::partly_read::PartlyRead>,
+    choice: Option<ronoctua_shell_kit::partly_read::PartlyRead>,
+    glance: Option<ronoctua_shell_kit::partly_read::PartlyRead>,
 }
 
 impl View {
@@ -432,11 +444,19 @@ impl View {
     #[must_use]
     pub fn fresh() -> Self {
         let (speaking, from) = crate::language::resolve();
+        let (choice, choice_unread) = prefs::read_in_part();
+        let (glance, glance_unread) =
+            ronoctua_shell_kit::partly_read::read(&ronoctua_world::prefs::store());
         let mut me = Self {
             cursor: 0,
-            choice: prefs::read(),
+            choice,
             speaking,
-            glance: ronoctua_world::prefs::store().read(),
+            glance,
+            unread: Unread {
+                language: crate::language::read_in_part(),
+                choice: choice_unread,
+                glance: glance_unread,
+            },
             world: ronoctua_world::store::store().read(),
             machine: machine_clock(),
             machine_zone: zone_named(&machine_clock().zone),
@@ -501,8 +521,16 @@ impl View {
         let (speaking, from) = crate::language::resolve();
         self.speaking = speaking;
         self.from = Some(from);
-        self.choice = prefs::read();
-        self.glance = ronoctua_world::prefs::store().read();
+        let (choice, choice_unread) = prefs::read_in_part();
+        let (glance, glance_unread) =
+            ronoctua_shell_kit::partly_read::read(&ronoctua_world::prefs::store());
+        self.choice = choice;
+        self.glance = glance;
+        self.unread = Unread {
+            language: crate::language::read_in_part(),
+            choice: choice_unread,
+            glance: glance_unread,
+        };
         self.world = ronoctua_world::store::store().read();
         // THE ROWS MAY HAVE CHANGED SHAPE — a place added or removed by the
         // other door — so the cursor is brought back inside them.
@@ -591,12 +619,20 @@ impl View {
                 crate::language::Source::Default => key::LOCALE_FROM_DEFAULT,
             });
         }
+        // A FILE READ ONLY IN PART says which places, in the section that
+        // shows it: what is drawn there is the repair, not the file.
+        if let Some(partly) = &self.unread.language {
+            b.sentence(partly.said(texts));
+        }
 
         // 2. THE CLOCK AND THE DATE — one row each, and the value is a LIVE
         //    sample. A person choosing a shape is asking "what will this look
         //    like", and the name of the shape does not answer that.
         b.heading(key::LOCALE_HEADING_TIME);
         b.note(key::LOCALE_TIME_DOES);
+        if let Some(partly) = &self.unread.choice {
+            b.sentence(partly.said(texts));
+        }
         b.pair(
             texts.t(key::LOCALE_CLOCK),
             crate::chrome::clock_text(now, zone, self.choice.clock, texts),
@@ -667,6 +703,9 @@ impl View {
                 &crate::bindings::taught("world-glance", None).unwrap_or_default(),
             )],
         );
+        if let Some(partly) = &self.unread.glance {
+            b.sentence(partly.said(texts));
+        }
         let places = self.glance.places();
         if places.is_empty() {
             b.note_with(
@@ -1109,6 +1148,7 @@ impl View {
             machine_zone: ronoctua_files::when::Zone::utc(),
             watched: Some(Watched::Set(true)),
             from: Some(crate::language::Source::Default),
+            unread: Unread::default(),
         };
         me.settle();
         me

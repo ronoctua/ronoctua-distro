@@ -155,7 +155,6 @@ belongings-passphrases-differ = The two new passphrases differ, so nothing was c
 belongings-first-passphrases-differ = The two passphrases differ, so nothing was sent.
 belongings-queued = Sent to the queue: { $what }.
 belongings-reason-draft = a draft, or a running program's number
-belongings-repair-why-unknown-variant = a word this machine does not know — most often a newer machine's
 belongings-outcome-compacted = The history was compacted: { $before } became { $after } here. The host may keep the old copies until its own cleanup.
 belongings-outcome-nothing-to-compact = There was nothing to compact: every version in the history is from the last { $days ->
         [one] day
@@ -296,7 +295,7 @@ about-belongings-answer-yes = Does what the question says
 belongings-offers = Offered by the last sync
 belongings-offer-turning = Turning it on…
 belongings-offer-taken = Turned on.
-belongings-offer-refused = Not turned on: { $why }
+belongings-offer-refused = Not turned on. { $why }
 about-belongings-offer-no = Leaves it off: it is offered again only when the key changes on another machine
 about-belongings-offer-yes = Turns it on, on this machine
 about-belongings-offer-no-extensions = Leaves them out: offered again only when your list changes on another machine, and the page keeps a row that installs them
@@ -354,3 +353,21 @@ belongings-field-only-two = A field takes this machine's value or the repository
 about-belongings-field = Decides this field on its own: its two values are the rows below
 about-belongings-field-ours = Keeps this machine's value of this field
 about-belongings-field-theirs = Takes the repository's value of this field
+# A group of the listing too large to draw whole, folded into one row.
+belongings-group-folded = folded
+belongings-group-open = open
+about-belongings-fold = Shows every file of this group, or folds them into this row again
+# A folder that left this machine whole: its leaving waits for the person.
+belongings-gone-files = { $n ->
+    [one] gone from this machine, with its one file
+   *[other] gone from this machine, with its { $n } files
+    }
+belongings-gone-question = { $folder } left this machine whole. Delete it on every machine too? Each sets its own copy aside, and the repository loses it. Or bring it back here from the repository.
+belongings-gone-no = No: bring it back here
+belongings-gone-yes = Yes: delete it on every machine
+about-belongings-gone-no = Writes the repository's copy back here when you apply, and leaves the other machines as they are
+about-belongings-gone-yes = Deletes it in the repository and on every other machine when you apply, each setting its copy aside
+# What an old sync left in the repository that no machine may take.
+belongings-dropped = { $name }: { $reason } — taken out of the repository, and never written here.
+# An addition of the person's on a predefined target's path.
+belongings-added-on-target = This place is also { $target }: it stays your own addition — its files travel as you added them — and it does not become the target by itself.

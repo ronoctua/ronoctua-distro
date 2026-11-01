@@ -116,6 +116,14 @@ impl Reading {
             })
         });
         let (keeping, kept) = mpsc::channel();
+        // THE PREFERENCES CAME WITH THE CONTEXT, read without a word: the
+        // file is judged again for the places of it that did not read.
+        let mut readings = readings;
+        if let Some(c) = &context {
+            readings.prefs_unread = ronoctua_shell_kit::partly_read::judged(
+                &ronoctua_software::prefs::store(&c.roots.config),
+            );
+        }
         Self {
             readings,
             feed,
@@ -174,8 +182,9 @@ impl Reading {
     /// Asks the feed, when there is one — with no threads nothing is asked,
     /// and the next opening reads again.
     pub fn want(&mut self, want: Want) {
-        if let Some(feed) = self.feed.as_ref() {
-            self.readings.want(feed, want);
+        match self.feed.as_ref() {
+            Some(feed) => self.readings.want(feed, want),
+            None => self.readings.want_in_place(want),
         }
     }
 
@@ -263,8 +272,11 @@ impl Reading {
         let Some(config) = self.feed.as_ref().map(|f| f.roots().config.clone()) else {
             return false;
         };
-        let fresh = ronoctua_software::prefs::read(&config);
-        self.took_preferences(fresh)
+        let (fresh, partly) =
+            ronoctua_shell_kit::partly_read::read(&ronoctua_software::prefs::store(&config));
+        let said = self.readings.prefs_unread != partly;
+        self.readings.prefs_unread = partly;
+        self.took_preferences(fresh) || said
     }
 
     // ─── what a person does, in either door ─────────────────────────────────

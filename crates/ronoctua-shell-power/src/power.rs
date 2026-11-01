@@ -148,6 +148,21 @@ pub struct View {
     armed: Option<Action>,
     /// A pair the arrows moved and `RET` has not written yet.
     pending: Option<(Option<u8>, u8)>,
+    /// What of `power.json` did not read, when part of it did not: said
+    /// over the profiles, where the one chosen is shown (`partly_read`).
+    partly: Option<crate::partly_read::PartlyRead>,
+}
+
+/// What the read of `power.json` in its folder owes the person — the places
+/// of it that did not read, or `None` — what both doors hand the view
+/// whenever they read the choice again ([`View::read_in_part`]).
+#[must_use]
+pub fn unread() -> Option<crate::partly_read::PartlyRead> {
+    let dir = ronoctua_power::prefs::home()?;
+    crate::partly_read::PartlyRead::of_repairs(
+        ronoctua_power::prefs::FILE,
+        &ronoctua_power::prefs::repaired_in(&dir),
+    )
 }
 
 /// Five-cell step for the arrows on a threshold: nobody tunes 61 against 62.
@@ -206,6 +221,14 @@ impl View {
             v.cursor = i;
         }
         v
+    }
+
+    /// What the read of `power.json` owes the person ([`unread`]); both doors
+    /// hand it whenever they read the choice again. Whether that changed.
+    pub fn read_in_part(&mut self, partly: Option<crate::partly_read::PartlyRead>) -> bool {
+        let moved = self.partly != partly;
+        self.partly = partly;
+        moved
     }
 
     /// Arms an action — `LEADER q s` opens the view already asking.
@@ -521,6 +544,11 @@ impl View {
 
         // 3. THE PROFILE.
         b.heading(key::POWER_HEADING_PROFILE);
+        // A PART OF THE FILE NOT READ: the profile wanted below is the
+        // floor's, not the file's word, and the file keeps it.
+        if let Some(partly) = &self.partly {
+            b.sentence(partly.said(texts));
+        }
         match snap.and_then(|s| s.profiles.as_ref()) {
             None => b.note(key::POWER_NO_DAEMON),
             Some(p) => {

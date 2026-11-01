@@ -4,7 +4,7 @@
 //! {"format": 1, "ssh-signing": null,
 //!  "binary-cache": {"name": "someone", "public-key": "someone.cachix.org-1:…=",
 //!                   "visibility": "public"},
-//!  "distro-apps-follow-releases": true,
+//!  "distro-apps-keep-tested-pins": true,
 //!  "download-mirrors": ["https://tarballs.example.org"]}
 //! ```
 //!
@@ -31,17 +31,29 @@
 //! takes and the other refuses would be a cache the screen accepts and the
 //! machine ignores, or the reverse.
 //!
-//! # The distro's apps may follow their releases
+//! # The distro's apps follow their releases, unless the person said not
 //!
-//! `distro-apps-follow-releases` (owner's decision, 2026-10-20): OFF unless
-//! the person turned it on, on the update's page. On, the routine update
-//! follows each distro AppImage whose table entry follows a GitHub
-//! repository (the Crafting Apps) past the pin the distro tested, into the
-//! person's own `software/distro-pins.json` ([`crate::distro_pins`]); off,
-//! that file goes at the next update and the machine builds the distro's
-//! pins at once. Written only while ON: an older machine, whose reader
-//! refuses a field it does not know, meets it only once the person turns it
-//! on.
+//! ON BY DEFAULT (owner's decision, 2026-11-01; 2026-10-20 it was off unless
+//! turned on): the routine update follows each distro AppImage whose table
+//! entry follows a GitHub repository (the ArtCraft Launcher, SolidCraft) past
+//! the pin the distro tested, into the person's own
+//! `software/distro-pins.json` ([`crate::distro_pins`]). The person may turn
+//! it off on the update's page, and then that file goes at the next update
+//! and the machine builds the distro's pins at once — [`Options::follows_releases`]
+//! is the one answer.
+//!
+//! WHY A NEW FIELD SAYS "OFF". The switch of 2026-10-20,
+//! `distro-apps-follow-releases`, was written only while on, so a file
+//! without it is both "never chosen" and "turned off": nothing tells them
+//! apart, and under the new default both would read as on. So the person's
+//! "off" is a field of its own, `distro-apps-keep-tested-pins`, which no
+//! file before it carries: absent is the default (on), and `true` is an off
+//! that stays off. An older file's `true` in the old field is the new
+//! default anyway. Each is written only while `true`: an older machine,
+//! whose reader refuses a field it does not know, meets the new one only
+//! once the person turns following off. The old field is kept as it was
+//! read and set by a turn of the switch, so an older machine of theirs,
+//! which reads only it, hears the same choice.
 //!
 //! # Mirrors for the machine's downloads
 //!
@@ -72,11 +84,17 @@ pub struct Options {
     /// written before it existed, which reads as none.
     #[serde(default)]
     pub binary_cache: Option<BinaryCache>,
-    /// Whether the distro's AppImages that follow their releases follow them
-    /// with the routine update, past the distro's pins. Absent — off — in a
-    /// file written before it existed, and never written while off.
+    /// The switch of 2026-10-20, when following was off unless turned on —
+    /// what an older machine reads: `true` is the default now. Kept as read,
+    /// set by [`Options::set_following`], and never written while off. Ask
+    /// [`Options::follows_releases`], never this.
     #[serde(default, skip_serializing_if = "is_off")]
     pub distro_apps_follow_releases: bool,
+    /// The person turned following off: the distro's AppImages stay on the
+    /// pins the distro tested. Absent — following, the default — in a file
+    /// written before it existed, and never written while following.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub distro_apps_keep_tested_pins: bool,
     /// The mirrors the person named for the machine's downloads, in the
     /// order they are asked. Absent — none — in a file written before it
     /// existed, and never written while empty.
@@ -136,8 +154,27 @@ impl Default for Options {
             ssh_signing: None,
             binary_cache: None,
             distro_apps_follow_releases: false,
+            distro_apps_keep_tested_pins: false,
             download_mirrors: Vec::new(),
         }
+    }
+}
+
+impl Options {
+    /// Whether the distro's AppImages that follow their releases follow them
+    /// with the routine update, past the distro's pins: yes, unless the
+    /// person turned it off. Pure.
+    #[must_use]
+    pub const fn follows_releases(&self) -> bool {
+        !self.distro_apps_keep_tested_pins
+    }
+
+    /// Following turned `on` or off — the person's gesture: the field that
+    /// says it, and the older switch, so an older machine of theirs hears
+    /// the same choice.
+    pub const fn set_following(&mut self, on: bool) {
+        self.distro_apps_keep_tested_pins = !on;
+        self.distro_apps_follow_releases = on;
     }
 }
 
@@ -315,28 +352,65 @@ impl Document for Options {
 mod tests {
     use super::*;
 
-    /// FAILS IF: the switch is written while off — an older machine would
-    /// refuse a file it reads today — is not written while on, or does not
-    /// read back.
+    /// FAILS IF: following is not the default — in a new file, in one that
+    /// never said, in an older one that said on —, the person's "off" does
+    /// not read back as off (an older file's silence must not be taken for
+    /// it, nor the new field's for "on"), the off is written where nothing
+    /// was turned — an older machine would refuse a file it reads today —, a
+    /// turn of the switch does not tell an older machine the same, or a
+    /// value that is not a switch is taken.
     #[test]
-    fn following_is_written_only_while_on() {
-        let off = crate::to_json(&Options::default());
-        assert!(!off.contains("distro-apps-follow-releases"), "{off}");
-        let on = Options {
-            distro_apps_follow_releases: true,
-            ..Options::default()
-        };
-        let text = crate::to_json(&on);
+    fn following_is_on_unless_the_person_turned_it_off() {
+        let fresh = Options::default();
+        assert!(fresh.follows_releases());
+        let text = crate::to_json(&fresh);
+        assert!(!text.contains("distro-apps-"), "{text}");
+        for older in [
+            r#"{"format": 1, "ssh-signing": null}"#,
+            r#"{"format": 1, "ssh-signing": null, "distro-apps-follow-releases": true}"#,
+        ] {
+            let o: Options = crate::parse(older.as_bytes()).unwrap();
+            assert!(o.follows_releases(), "{older}");
+            assert_eq!(
+                crate::to_json(&o).contains("follow-releases"),
+                older.contains("follow-releases"),
+                "{older}: not kept as read"
+            );
+        }
+        let mut off = Options::default();
+        off.set_following(false);
+        assert!(!off.follows_releases());
+        let text = crate::to_json(&off);
         assert!(
-            text.contains("\"distro-apps-follow-releases\": true"),
+            text.contains("\"distro-apps-keep-tested-pins\": true"),
             "{text}"
         );
-        assert_eq!(crate::parse::<Options>(text.as_bytes()).unwrap(), on);
-        let refused = crate::parse::<Options>(
-            br#"{"format": 1, "ssh-signing": null, "distro-apps-follow-releases": "yes"}"#,
+        assert!(
+            !text.contains("follow-releases"),
+            "an older machine would follow: {text}"
+        );
+        assert_eq!(crate::parse::<Options>(text.as_bytes()).unwrap(), off);
+        let mut on = off;
+        on.set_following(true);
+        assert!(on.follows_releases());
+        let text = crate::to_json(&on);
+        assert!(!text.contains("keep-tested-pins"), "{text}");
+        assert!(
+            text.contains("\"distro-apps-follow-releases\": true"),
+            "an older machine would not follow: {text}"
+        );
+        // THE NEWER ANSWER DECIDES a file that says both.
+        let both: Options = crate::parse(
+            br#"{"format": 1, "ssh-signing": null, "distro-apps-follow-releases": true, "distro-apps-keep-tested-pins": true}"#,
         )
-        .unwrap_err();
-        assert_eq!(refused.why, Why::Shape);
+        .unwrap();
+        assert!(!both.follows_releases());
+        for bad in [
+            &br#"{"format": 1, "ssh-signing": null, "distro-apps-follow-releases": "yes"}"#[..],
+            br#"{"format": 1, "ssh-signing": null, "distro-apps-keep-tested-pins": 1}"#,
+        ] {
+            assert_eq!(crate::parse::<Options>(bad).unwrap_err().why, Why::Shape);
+        }
     }
 
     /// FAILS IF: the mirrors are written while there are none — an older
@@ -433,8 +507,8 @@ mod tests {
         let old: Options = crate::parse(br#"{"format": 1, "ssh-signing": null}"#).unwrap();
         assert_eq!(old.binary_cache, None);
         assert!(
-            !old.distro_apps_follow_releases,
-            "an older file follows nothing"
+            old.follows_releases(),
+            "an older file that never said follows, the default"
         );
         let cache = BinaryCache {
             name: "someone".to_owned(),

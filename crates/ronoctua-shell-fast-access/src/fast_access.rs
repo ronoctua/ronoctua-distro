@@ -1043,6 +1043,9 @@ pub struct View {
     pub play_in: Option<PlayIn>,
     /// What the person chose.
     pub settings: Settings,
+    /// What of `fast-access.json` did not read, when part of it did not:
+    /// said over the settings' rows (`partly_read`).
+    pub settings_unread: Option<crate::partly_read::PartlyRead>,
     /// The icon tables, once read.
     pub icons: Option<Arc<ronoctua_iconset::Set>>,
     /// Why there are none.
@@ -1094,6 +1097,7 @@ impl View {
             wide: false,
             play_in: None,
             settings,
+            settings_unread: None,
             icons: None,
             icons_refused: false,
             grammar: None,

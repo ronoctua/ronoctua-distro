@@ -803,6 +803,10 @@ pub struct Row {
     pub target: Target,
     /// The cursor skips it.
     pub heading: bool,
+    /// It goes on the row above it — a value wrapped onto the next line
+    /// (`Col::pair`): one control with it, lit and clicked whole
+    /// ([`View::hover_spans`], [`View::clicked`]).
+    pub continued: bool,
 }
 
 /// A stretch of a drawn line and what it is.
@@ -818,6 +822,8 @@ pub struct Zone {
     pub row: usize,
     /// What it is.
     pub target: Target,
+    /// Its row goes on the row above it ([`Row::continued`]).
+    pub continued: bool,
 }
 
 /// One drawn line.
@@ -1215,7 +1221,46 @@ impl<'a> Col<'a> {
             fields,
             target,
             heading,
+            continued: false,
         });
+    }
+
+    /// A label and its value, in the tones of `kind` — on one line where the
+    /// value fits (`chrome::field_pair`), and WRAPPED in its own column where
+    /// it does not (`chrome::aligned_pair`): the lines after the first carry
+    /// the rest of it, skipped by the cursor and one control with the first.
+    ///
+    /// # Why it wraps rather than cuts
+    ///
+    /// Because three columns near 110 cells leave the detail some twenty-four
+    /// cells of value, and a value cut there said half of itself: `500
+    /// processes, from a p…`, `created and started by the qu…`. The columns
+    /// beside it have no width to give — the list's values sit at the same
+    /// floor — so the value takes lines instead.
+    fn pair(
+        &mut self,
+        label: &str,
+        value: &str,
+        how: (crate::chrome::Kind, bool, Option<tokens::Color>),
+        target: Target,
+    ) {
+        let (kind, focused, tint) = how;
+        let one = crate::chrome::field_pair(0, self.room, label, value, kind, focused);
+        let column = one.last().map_or(0, |f| f.at);
+        let cut = !value.is_empty() && one.last().is_none_or(|f| f.text != value);
+        if !cut || column == 0 {
+            self.push(crate::chrome::tinted(one, tint, focused), target, false);
+            return;
+        }
+        let lines = crate::chrome::aligned_pair(0, column, self.room, label, value, kind, focused);
+        for (n, fields) in lines.into_iter().enumerate() {
+            self.rows.push(Row {
+                fields: crate::chrome::tinted_value(fields, column, tint, focused),
+                target: target.clone(),
+                heading: n > 0,
+                continued: n > 0,
+            });
+        }
     }
 
     /// A section title — air before it, never before the first.
@@ -1240,63 +1285,43 @@ impl<'a> Col<'a> {
 
     /// A fact: `RET` copies its value.
     fn fact(&mut self, label: &str, value: &str, focused: bool, tint: Option<tokens::Color>) {
-        let fields = crate::chrome::field_pair(
-            0,
-            self.room,
+        self.pair(
             label,
             value,
-            crate::chrome::Kind::Fact,
-            focused,
-        );
-        self.push(
-            crate::chrome::tinted(fields, tint, focused),
+            (crate::chrome::Kind::Fact, focused, tint),
             Target::Copy(value.to_owned()),
-            false,
         );
     }
 
     /// A fact whose `RET` copies something else than its value — a volume's
     /// name, beside its type.
     fn fact_copying(&mut self, label: &str, value: &str, copy: &str, focused: bool) {
-        let fields = crate::chrome::field_pair(
-            0,
-            self.room,
+        self.pair(
             label,
             value,
-            crate::chrome::Kind::Fact,
-            focused,
-        );
-        self.push(
-            crate::chrome::tinted(fields, None, focused),
+            (crate::chrome::Kind::Fact, focused, None),
             Target::Copy(copy.to_owned()),
-            false,
         );
     }
 
     /// A row that acts: its label, and its value in the tones of a setting.
     fn acting(&mut self, label: &str, value: &str, focused: bool, target: Target) {
-        let fields = crate::chrome::field_pair(
-            0,
-            self.room,
+        self.pair(
             label,
             value,
-            crate::chrome::Kind::Setting,
-            focused,
+            (crate::chrome::Kind::Setting, focused, None),
+            target,
         );
-        self.push(fields, target, false);
     }
 
     /// A row drawn refusing: reachable, so it can say why, and inert.
     fn refusing(&mut self, label: &str, value: &str, focused: bool, target: Target) {
-        let fields = crate::chrome::field_pair(
-            0,
-            self.room,
+        self.pair(
             label,
             value,
-            crate::chrome::Kind::Disabled,
-            focused,
+            (crate::chrome::Kind::Disabled, focused, None),
+            target,
         );
-        self.push(fields, target, false);
     }
 
     /// The consent row (`consent_rows`): the hosts to let, then what for —
@@ -1733,6 +1758,7 @@ impl View {
                     fields,
                     target: Target::Kind(kind),
                     heading: false,
+                    continued: false,
                 }
             })
             .collect()
@@ -1877,22 +1903,35 @@ impl View {
         for (key, name, value, tint) in items {
             let on = picked.as_deref() == Some(key.as_str());
             let (label_tone, value_tone) = crate::chrome::Kind::ListedSetting.tones(on);
-            let mut fields = vec![piece(
+            let mut lines = vec![vec![piece(
                 0,
                 layout::elide_end(&name, column.saturating_sub(2).max(1)),
                 label_tone,
-            )];
+            )]];
+            // THE VALUE WRAPS IN ITS COLUMN, as the detail's does (`Col::pair`):
+            // near 110 cells it read `running · 10.218.…`. Its lines after the
+            // first go on the item's row, lit and clicked with it.
             if !value.is_empty() {
-                fields.push(piece(
-                    column,
-                    layout::elide_end(&value, room.saturating_sub(column)),
-                    value_tone,
-                ));
+                let parts = crate::chrome::note_lines(&value, room.saturating_sub(column).max(1));
+                for (n, part) in parts.into_iter().enumerate() {
+                    if n > 0 {
+                        lines.push(Vec::new());
+                    }
+                    if let Some(line) = lines.get_mut(n) {
+                        line.push(piece(column, part, value_tone));
+                    }
+                }
             }
             // THE ROW CHOSEN keeps its accent while the keyboard is in
             // another column: each column keeps its own selection.
-            let fields = crate::chrome::tinted(fields, tint, on && focused_list);
-            col.push(fields, Target::Item(key), false);
+            for (n, fields) in lines.into_iter().enumerate() {
+                col.rows.push(Row {
+                    fields: crate::chrome::tinted_value(fields, column, tint, on && focused_list),
+                    target: Target::Item(key.clone()),
+                    heading: n > 0,
+                    continued: n > 0,
+                });
+            }
         }
         if empty {
             col.note(
@@ -1960,6 +1999,7 @@ impl View {
                 pane: Pane::Detail,
                 row: usize::MAX,
                 target: Target::Tab(tab),
+                continued: false,
             });
         }
         out
@@ -2583,6 +2623,7 @@ impl View {
                     pane,
                     row,
                     target: r.target.clone(),
+                    continued: r.continued,
                 });
             };
             if let Some(k) = kinds.get(i) {
@@ -2621,6 +2662,7 @@ impl View {
                 pane,
                 row,
                 target: r.target.clone(),
+                continued: r.continued,
             }],
         };
         if self.open && self.detail_shown(r, Layout::Stacked) {
@@ -2686,6 +2728,7 @@ impl View {
                 pane: Pane::Kinds,
                 row: kind.index(),
                 target: Target::Kind(kind),
+                continued: false,
             });
             // THREE CELLS between two kinds: each is a glyph, a word and a
             // number, and two would read as one run.
@@ -3011,8 +3054,7 @@ impl View {
         let mut out = Vec::new();
         for (n, l) in lines.iter().enumerate() {
             for o in &l.zones {
-                if o.pane == Pane::Detail && o.target == z.target && (first..=last).contains(&o.row)
-                {
+                if o.pane == z.pane && o.target == z.target && (first..=last).contains(&o.row) {
                     out.push((n, o.from, o.to));
                 }
             }
@@ -3039,7 +3081,7 @@ impl View {
             .position(|l| {
                 l.zones
                     .iter()
-                    .any(|o| o.pane == Pane::Detail && o.target == z.target && o.row == first)
+                    .any(|o| o.pane == z.pane && o.target == z.target && o.row == first)
             })
             .unwrap_or(line)
     }
@@ -3048,25 +3090,30 @@ impl View {
     /// with, among `lines`: the consent's row, drawn over several lines, is
     /// one control — its lines share the target and follow one another, a
     /// click on any of them takes the first ([`View::clicked`]) and a pointer
-    /// on any lights them all ([`View::hover_spans`]). Every other zone is a
-    /// control of its own row — two facts side by side that copy the same
-    /// value are two rows. ONE ANSWER for the click and the light.
+    /// on any lights them all ([`View::hover_spans`]). So is a value wrapped
+    /// over several lines, in the detail or the list (`Col::pair`,
+    /// `list_rows`): its lines after the first go on it ([`Row::continued`]).
+    /// Every other zone is a control of its own row — two facts side by side
+    /// that copy the same value are two rows. ONE ANSWER for the click and
+    /// the light.
     fn control_rows(lines: &[Line], z: &Zone) -> (usize, usize) {
-        if z.pane != Pane::Detail || !matches!(z.target, Target::Consent(_)) {
-            return (z.row, z.row);
-        }
+        let consent = z.pane == Pane::Detail && matches!(z.target, Target::Consent(_));
+        // WHETHER ROW `row` IS DRAWN WITH THIS TARGET, and goes on the row
+        // above it: every line of a consent's row does; a wrapped value's
+        // lines after the first say so.
         let drawn = |row: usize| {
             lines
                 .iter()
                 .flat_map(|l| l.zones.iter())
-                .any(|o| o.pane == Pane::Detail && o.row == row && o.target == z.target)
+                .find(|o| o.pane == z.pane && o.row == row && o.target == z.target)
         };
+        let goes_on = |row: usize| drawn(row).is_some_and(|o| consent || o.continued);
         let mut first = z.row;
-        while first > 0 && drawn(first - 1) {
+        while first > 0 && goes_on(first) && drawn(first - 1).is_some() {
             first -= 1;
         }
         let mut last = z.row;
-        while last < usize::MAX && drawn(last + 1) {
+        while last < usize::MAX && goes_on(last + 1) {
             last += 1;
         }
         (first, last)
@@ -5019,6 +5066,80 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    /// FAILS IF: near 110 columns, in three panes, a detail's value longer
+    /// than its room is cut instead of wrapped — or its lines after the first
+    /// are not one control with the first: lit together, and a click on any
+    /// of them taking the row it goes on.
+    #[test]
+    fn a_long_value_of_the_detail_wraps_and_stays_one_control() {
+        let (t, r) = (texts(), readings());
+        let columns = 110;
+        let mut v = View::fresh();
+        v.key(Press::Right, &r, columns, Layout::Panes, &t);
+        let lines = v.lines(&r, columns, Layout::Panes, 60, &t);
+        let image = "Debian trixie amd64 (20261004_05:24)";
+        let target = Target::Copy(image.to_owned());
+        let on: Vec<(usize, &Zone)> = lines
+            .iter()
+            .enumerate()
+            .flat_map(|(n, l)| l.zones.iter().map(move |z| (n, z)))
+            .filter(|(_, z)| z.pane == Pane::Detail && z.target == target)
+            .collect();
+        assert!(
+            on.len() > 1,
+            "the image's value fits on one line: no case to look at"
+        );
+        assert!(
+            !on[0].1.continued && on[1..].iter().all(|(_, z)| z.continued),
+            "only the lines after the first go on it"
+        );
+        // EVERY LETTER OF IT IS DRAWN, in its own column.
+        let column = lines[on[0].0]
+            .fields
+            .iter()
+            .filter(|f| f.at >= on[0].1.from)
+            .map(|f| f.at)
+            .max()
+            .unwrap_or(0);
+        let drawn: Vec<&str> = on
+            .iter()
+            .flat_map(|(n, _)| lines[*n].fields.iter().filter(|f| f.at == column))
+            .map(|f| f.text.as_str())
+            .collect();
+        assert_eq!(flat(&drawn.join(" ")), image, "the value is cut");
+        // ONE CONTROL: the pointer on its last line lights every line, and a
+        // click there takes the row the value starts on.
+        let (last, z) = on[on.len() - 1];
+        let lit = View::hover_spans(&lines, last, z.from);
+        assert_eq!(lit.len(), on.len(), "{lit:?}");
+        v.clicked(&lines, last, Some(z.from), Layout::Panes, &r);
+        assert_eq!((v.focus, v.at), (Pane::Detail, on[0].1.row));
+        // AND THE LIST'S VALUE the same way: `running · 10.218.42.5` beside
+        // its name is one item over two lines, lit whole.
+        let item = Target::Item("web".to_owned());
+        let listed: Vec<(usize, &Zone)> = lines
+            .iter()
+            .enumerate()
+            .flat_map(|(n, l)| l.zones.iter().map(move |z| (n, z)))
+            .filter(|(_, z)| z.pane == Pane::List && z.target == item)
+            .collect();
+        assert!(listed.len() > 1, "the item's value fits on one line here");
+        let (last, z) = listed[listed.len() - 1];
+        assert_eq!(View::hover_spans(&lines, last, z.from).len(), listed.len());
+        let words: String = listed
+            .iter()
+            .flat_map(|(n, _)| {
+                lines[*n]
+                    .fields
+                    .iter()
+                    .filter(|f| f.at > z.from && f.at < z.to)
+            })
+            .map(|f| f.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(flat(&words).ends_with("10.218.42.5"), "{words}");
     }
 
     /// FAILS IF: two rows of one detail say the same label — two addresses,

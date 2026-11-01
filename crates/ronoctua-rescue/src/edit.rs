@@ -15,9 +15,11 @@
 //!
 //! The file belongs to root and this application runs as the person. Saving
 //! writes the new text to [`STAGED`] — a directory systemd creates for this
-//! user — and asks a oneshot to install it. The unit VALIDATES before
-//! installing: a `host.nix` that does not parse is a machine that will not
-//! rebuild, and finding that out at the next boot is finding it out too late.
+//! user — and asks a oneshot to install it, over the bus and with the screen
+//! handed to polkit's agent, as every row that asks ([`crate::bus`]). The
+//! unit VALIDATES before installing: a `host.nix` that does not parse is a
+//! machine that will not rebuild, and finding that out at the next boot is
+//! finding it out too late.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -47,6 +49,17 @@ pub const STAGED: &str = "/run/ronoctua-rescue/staged";
 /// The unit that validates and installs it.
 pub const INSTALLER_UNIT: &str = "ronoctua-rescue-host.service";
 
+/// What a key asked of the editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pressed {
+    /// Go on editing.
+    Stay,
+    /// Save: stage the text and have it installed.
+    Save,
+    /// Leave the editor.
+    Leave,
+}
+
 /// A file open for editing.
 struct Sheet {
     lines: Vec<String>,
@@ -75,17 +88,13 @@ impl Sheet {
         out
     }
 
-    /// Applies one key. `false` means the person asked to leave.
-    fn key(&mut self, code: KeyCode, control: bool) -> bool {
+    /// Applies one key.
+    fn key(&mut self, code: KeyCode, control: bool) -> Pressed {
         if control && matches!(code, KeyCode::Char('s')) {
-            self.said = match save_it(&self.text()) {
-                Ok(()) => String::from("ok"),
-                Err(e) => e,
-            };
-            return true;
+            return Pressed::Save;
         }
         match code {
-            KeyCode::Esc => return false,
+            KeyCode::Esc => return Pressed::Leave,
             KeyCode::Up => self.line = self.line.saturating_sub(1),
             KeyCode::Down => self.line = (self.line + 1).min(self.lines.len() - 1),
             KeyCode::Left => self.column = self.column.saturating_sub(1),
@@ -108,7 +117,7 @@ impl Sheet {
             _ => {}
         }
         self.column = self.column.min(self.lines[self.line].chars().count());
-        true
+        Pressed::Stay
     }
 
     /// The cursor, in bytes — a column is in CHARACTERS, and a `host.nix` with
@@ -187,8 +196,38 @@ pub fn edit_it(path: &Path, texts: &Texts) {
         if kind != KeyEventKind::Press {
             continue;
         }
-        if !sheet.key(code, modifiers.contains(KeyModifiers::CONTROL)) {
-            break;
+        match sheet.key(code, modifiers.contains(KeyModifiers::CONTROL)) {
+            Pressed::Stay => {}
+            Pressed::Leave => break,
+            Pressed::Save => {
+                // THE SCREEN TO polkit's agent while the unit is asked for,
+                // and the editor's back after it.
+                let _ = disable_raw_mode();
+                let _ = crossterm::execute!(term.backend_mut(), LeaveAlternateScreen);
+                if console.is_some() {
+                    let _ = write!(term.backend_mut(), "{}", Console::RESET);
+                    let _ = term.backend_mut().flush();
+                }
+                println!("{}", texts.t(key::RESCUE_EDIT_HOST));
+                let agent = crate::action::agent();
+                let outcome = save_it(&sheet.text());
+                drop(agent);
+                if let crate::action::Outcome::Failed(why) = &outcome
+                    && !why.trim().is_empty()
+                {
+                    crate::tui::say_it_whole(why, texts);
+                }
+                sheet.said = crate::tui::said_of(&outcome, texts);
+                if enable_raw_mode().is_err() {
+                    return;
+                }
+                let _ = crossterm::execute!(term.backend_mut(), EnterAlternateScreen);
+                if let Some(c) = &console {
+                    let _ = write!(term.backend_mut(), "{}", c.palette());
+                    let _ = term.backend_mut().flush();
+                }
+                let _ = term.clear();
+            }
         }
     }
 
@@ -245,25 +284,24 @@ fn draw(f: &mut ratatui::Frame, sheet: &Sheet, path: &Path, texts: &Texts) {
     ));
 }
 
-/// Stages the text and asks the unit to install it.
-fn save_it(text: &str) -> Result<(), String> {
+/// Stages the text and asks the unit to install it — a question polkit may
+/// answer only by asking the person, whose terminal its agent has.
+fn save_it(text: &str) -> crate::action::Outcome {
     let staged = Path::new(STAGED);
-    if let Some(parent) = staged.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let written = staged
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(staged, text));
+    if let Err(e) = written {
+        return crate::action::Outcome::Failed(e.to_string());
     }
-    std::fs::write(staged, text).map_err(|e| e.to_string())?;
-    let Some(systemctl) = option_env!("RONOCTUA_SYSTEMCTL") else {
-        return Err(String::from("RONOCTUA_SYSTEMCTL"));
-    };
-    let out = std::process::Command::new(systemctl)
-        .args(["start", INSTALLER_UNIT])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
-    }
+    crate::action::run_it(
+        crate::Run::System {
+            verb: "start",
+            units: &[INSTALLER_UNIT],
+        },
+        true,
+    )
 }
 
 /// A token, as this terminal wants it — sRGB, never linear.
@@ -297,12 +335,12 @@ mod tests {
         let mut s = Sheet::of("# configuração\n");
         s.line = 0;
         s.column = s.lines[0].chars().count();
-        assert!(s.key(KeyCode::Char('!'), false));
+        assert_eq!(s.key(KeyCode::Char('!'), false), Pressed::Stay);
         // pt-BR: a multibyte character is the subject — the cut has to land
         // between characters and not between bytes.
         assert_eq!(s.lines[0], "# configuração!");
-        assert!(s.key(KeyCode::Backspace, false));
-        assert!(s.key(KeyCode::Backspace, false));
+        assert_eq!(s.key(KeyCode::Backspace, false), Pressed::Stay);
+        assert_eq!(s.key(KeyCode::Backspace, false), Pressed::Stay);
         assert_eq!(s.lines[0], "# configuraçã");
     }
 
@@ -310,9 +348,9 @@ mod tests {
     fn enter_splits_and_backspace_joins() {
         let mut s = Sheet::of("ab\n");
         s.column = 1;
-        assert!(s.key(KeyCode::Enter, false));
+        assert_eq!(s.key(KeyCode::Enter, false), Pressed::Stay);
         assert_eq!(s.lines, vec!["a".to_owned(), "b".to_owned()]);
-        assert!(s.key(KeyCode::Backspace, false));
+        assert_eq!(s.key(KeyCode::Backspace, false), Pressed::Stay);
         assert_eq!(s.lines, vec!["ab".to_owned()]);
         assert_eq!(s.column, 1);
     }
@@ -329,8 +367,10 @@ mod tests {
     #[test]
     fn escape_leaves_and_nothing_else_does() {
         let mut s = Sheet::of("x\n");
-        assert!(s.key(KeyCode::Char('y'), false));
-        assert!(s.key(KeyCode::Down, false));
-        assert!(!s.key(KeyCode::Esc, false));
+        assert_eq!(s.key(KeyCode::Char('y'), false), Pressed::Stay);
+        assert_eq!(s.key(KeyCode::Down, false), Pressed::Stay);
+        assert_eq!(s.key(KeyCode::Esc, false), Pressed::Leave);
+        // And saving is the editor's caller's: it hands the screen over.
+        assert_eq!(s.key(KeyCode::Char('s'), true), Pressed::Save);
     }
 }

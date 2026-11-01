@@ -135,7 +135,7 @@ fn ready<'a>(places: &'a Places, prefs: &'a Belongings) -> Result<Engine<'a>, Re
 fn conflicts_of(done: &Done) -> u32 {
     match done {
         Done::Synced(_) => 0,
-        Done::Waiting(plan) => u32::try_from(plan.conflicts.len()).unwrap_or(u32::MAX),
+        Done::Waiting(plan) => u32::try_from(plan.questions()).unwrap_or(u32::MAX),
     }
 }
 // ── anchor: L09 ──
@@ -150,7 +150,9 @@ pub use restore::{
 // IDENTITY KEPT FOR THE SESSION.
 mod targets;
 use unlock::Opening;
-pub use unlock::{forget_everywhere, forget_everywhere_under, forget_here, forget_here_under};
+pub use unlock::{
+    forget_everywhere, forget_everywhere_under, forget_here, forget_here_under, lend, lend_under,
+};
 
 pub use merging::hunks_only;
 
@@ -589,7 +591,7 @@ impl<'a> Engine<'a> {
                 self.places,
                 self.now_s,
                 Outcome::Waiting {
-                    conflicts: u32::try_from(plan.conflicts.len()).unwrap_or(u32::MAX),
+                    conflicts: u32::try_from(plan.questions()).unwrap_or(u32::MAX),
                 },
             ),
             Ok(Done::Synced(outcome)) => {
@@ -715,7 +717,12 @@ impl<'a> Engine<'a> {
             &crate::scope::Scope::for_sync(self.prefs, &roots, &looked),
             self.places,
         );
-        let mut plan = crate::merge::plan(base.as_ref(), &found, &index, self.prefs);
+        // WHAT AN OLD SYNC LEFT THAT NO MACHINE MAY TAKE — a link into the
+        // system's store, another machine's deploy key — read before the
+        // plan: never pulled, and out of the repository with this sync.
+        let debris = self.debris(&ring, &index, base.as_ref());
+        let mut plan =
+            crate::merge::plan_dropping(base.as_ref(), &found, &index, self.prefs, &debris);
         plan.remote_commit = Some(head);
         plan.made_s = self.now_s;
         // WHAT BOTH SIDES CHANGED AND A MERGE CAN JOIN leaves the conflicts
@@ -1330,6 +1337,8 @@ impl<'a> Engine<'a> {
             // does, at once), and the page reads the ledger itself.
             repaired: self.places.repaired(),
             budget,
+            // WHAT AN OLD SYNC LEFT, out of the repository now.
+            dropped: plan.debris.clone().into_iter().collect(),
         }))
     }
 
@@ -1607,7 +1616,7 @@ pub fn order(op: Op, places: &Places, beat: &mut dyn FnMut(Beat)) -> Result<u32,
     };
     let waiting = |done: Done| match done {
         Done::Synced(_) => 0,
-        Done::Waiting(plan) => u32::try_from(plan.conflicts.len()).unwrap_or(u32::MAX),
+        Done::Waiting(plan) => u32::try_from(plan.questions()).unwrap_or(u32::MAX),
     };
     match op {
         Op::Prepare => engine.prepare(beat).map(waiting),
@@ -1655,7 +1664,16 @@ pub fn keygen(places: &Places) -> Result<bool, Refusal> {
     make_private_dir(&places.keys()).map_err(|_| Refusal::of(Why::Failed))?;
     let _ = std::fs::remove_file(places.deploy_public());
     let ran = std::process::Command::new(program)
-        .args(["-q", "-t", "ed25519", "-N", "", "-C", AUTHOR_NAME, "-f"])
+        .args([
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-C",
+            crate::sift::DEPLOY_COMMENT,
+            "-f",
+        ])
         .arg(&key)
         .stdin(std::process::Stdio::null())
         .output()

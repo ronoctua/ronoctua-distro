@@ -68,8 +68,7 @@ pub fn host_it(opening: Page) -> Result<()> {
             .map_err(|e| anyhow::anyhow!("could not hang the video-metrics channel: {e}"))?;
         // THE KEYS A SENTENCE TEACHES come from the leader's own trees: this
         // window is a process of its own, and asks the tables the footer walks.
-        let readings =
-            readings_for(crate::bindings::keys("transfers-open", None).unwrap_or_default());
+        let readings = readings_for(crate::video_metrics::transfers_keys());
         let sender = std::sync::Mutex::new(wake);
         let feed = Feed::start(ronoctua_video_metrics::default_path(), move || {
             if let Ok(s) = sender.lock() {

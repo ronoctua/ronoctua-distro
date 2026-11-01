@@ -267,7 +267,6 @@ transfers-work-belongings = belongings
 about-consent-allow = Lets the sites the row names be asked — what pressing the row does. It is kept in consent.json, for every app.
 clipboard-act-stale = The history changed before that key arrived, so nothing was done: look again and press it again.
 about-line-offer = Takes the first answer offered for what is typed.
-belongings-repair-part-not-read = Part of { $file } cannot be read here: it stays in the file as written, and this machine goes on without it.
 transfers-work-incus-launch = create an instance
 transfers-work-incus-image-copy = copy an image
 transfers-work-incus-export = export an instance

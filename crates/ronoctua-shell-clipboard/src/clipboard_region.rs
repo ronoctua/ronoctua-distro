@@ -123,6 +123,13 @@ impl Clip {
         generation: u64,
     ) {
         let moved = generation != self.generation || !self.heard;
+        // THE SYNC'S READING CAME FROM THE FOOTER'S READ: the file is judged
+        // again here, in this door's process, whenever the reading moved.
+        if sync != self.sync || !self.heard {
+            self.view.read_in_part(crate::partly_read::judged(
+                &ronoctua_clipcascade::prefs::store(),
+            ));
+        }
         self.queue = queue;
         self.sync = sync;
         self.generation = generation;

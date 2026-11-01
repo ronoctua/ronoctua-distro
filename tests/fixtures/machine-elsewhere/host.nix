@@ -12,7 +12,9 @@
   ronoctua.theme = "frost";
   ronoctua.locale = "pt_BR.UTF-8";
   ronoctua.keyboard.layout = "br";
-  ronoctua.keyboard.variant = "abnt2";
+  # `br` IS the ABNT2 keyboard: xkb lists no `abnt2` variant of it (that
+  # name is a model), and the console maps are compiled from what it lists.
+  ronoctua.keyboard.variant = "";
   ronoctua.keyboard.compose = "compose:ralt";
   ronoctua.facterReport = ./facter.json;
   ronoctua.swapSize = "16G";

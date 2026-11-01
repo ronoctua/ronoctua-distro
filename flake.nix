@@ -665,6 +665,8 @@
           inputs
           distroModules
           system
+          # A machine whose person wrote brain modules compiles them.
+          withPersonModules
           ;
       };
 
@@ -744,8 +746,7 @@
       # that folder (`dir`, the machine directory's `person/brain/`) and of
       # the folders to read (`only`, the included ones), for `lib.machine`,
       # whose modules are `(withPersonModules { dir; only; }).machineModules
-      # <approved ids>` and whose report lists `.refused`. See
-      # `nix/person-brain.nix`.
+      # <approved ids>`. See `nix/person-brain.nix`.
       withPersonModules =
         {
           dir,
@@ -788,7 +789,12 @@
         gate = "${gateApp}/bin/ronoctua-gate";
         machineDir = (import ./nix/machine.nix).machineDir;
         machine = self.nixosConfigurations.noctua.config.ronoctua.machine;
+        inherit fdroidPins;
       };
+      # THE CHECK OF F-DROID'S SIGNED INDEX that `nix run .#distro-pins` asks
+      # (`ronoctua_software::pins::signed`): an apk is pinned by what the
+      # index signs, the RSA `aws-lc-rs`'s and never the tool's own.
+      fdroidPins = "${rust.bins.ronoctua-fdroid-pins}/bin/ronoctua-fdroid-pins";
 
       rust = pkgs.callPackage ./nix/rust.nix {
         inherit (inputs) crane;
@@ -1552,9 +1558,10 @@
               # a package manager's, never a desktop's. `nix/modules/software.nix`
               # wraps it with this machine's tools.
               software = rust.software;
-              # Its search index and the superpack's names — run-time DATA,
-              # passed like the models above and never compiled in.
-              inherit softwareIndex iconNames;
+              # Its search index — run-time DATA, passed like the models above
+              # and never compiled in. (The superpack's names are not: they
+              # arrive with its part, `ronoctua.icons.names`.)
+              inherit softwareIndex;
               # The segmentation model its background effects run.
               inherit segmentModel;
               # And the hands', which the gestures read.
@@ -1903,9 +1910,6 @@
                   # live medium, that is the difference between a finished
                   # installation and the OOM killer.
                   softwareIndex
-                  # And the superpack's names, for the same reason as the
-                  # superpack: nothing but this repository makes them.
-                  iconNames
                   # THE AMBIENT SOUNDS' LOOPS (42 MiB): cut from the originals
                   # and measured through mpv by this repository alone. Their
                   # originals travel too, as the input they are (below).
@@ -2883,6 +2887,7 @@
         distro-pins =
           mkScriptApp "ronoctua-distro-pins" "moves the pins of the distro's own AppImages and Android apps"
             ''
+              export RONOCTUA_FDROID_PINS=${fdroidPins}
               exec ${pkgs.python3}/bin/python3 ${./nix/scripts/distro-pins.py} "$@"
             '';
         # ── anchor: L05 ──

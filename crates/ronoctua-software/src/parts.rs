@@ -62,3 +62,13 @@ pub fn misses(roots: &Roots, id: &str, url: &str) -> bool {
 pub fn failure(roots: &Roots, id: &str) -> Option<String> {
     record(roots, id)?.last_failure.map(|f| f.detail)
 }
+
+/// The reason the system gives an entry it leaves out, and what Nix said,
+/// when the part `id` was held with one (`ronoctua_parts::record::Why::
+/// skipped`): its entry's own build refused it — said as the system says an
+/// entry it skips, never as one on its way.
+#[must_use]
+pub fn left_out(roots: &Roots, id: &str) -> Option<(ronoctua_person::reports::SkipWhy, String)> {
+    let failed = record(roots, id)?.last_failure?;
+    Some((failed.why.skipped()?, failed.detail))
+}

@@ -117,5 +117,8 @@
     "assets/belongings.nix" = [ "agent-accounts" ];
     "assets/brain-resting-marks.nix" = [ "agent-accounts" ];
     "crates/ronoctua-shell-agents/src/agents.rs" = "*";
+    # The check that every view says what of its file it did not read names
+    # the accounts' lines file, which this module keeps.
+    "tests/partly-read-checks.nix" = [ "agent-accounts" ];
   };
 }

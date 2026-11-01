@@ -125,11 +125,15 @@ pub enum Refusal {
     /// would only be shadowed (the first id in order wins the view), so it is
     /// refused rather than installed to sit there, redundant and invisible.
     ProvidedByAPart,
+    /// What it needs is a part of the system still on its way: it arrives by
+    /// itself after the installation (the icon superpack, whose names the
+    /// distro's collection searches).
+    PartArriving,
 }
 
 impl Refusal {
     /// Every one, for `software-words-are-total`.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 48] = [
         Self::UnfreeNeedsConsent,
         Self::UnverifiedNeedsConsent,
         Self::BigNeedsConsent,
@@ -177,6 +181,7 @@ impl Refusal {
         Self::LeavesAtNextRestart,
         Self::DeclinedElsewhere,
         Self::ProvidedByAPart,
+        Self::PartArriving,
     ];
 
     /// The stem of its text key (`software-refusal-<word>`).
@@ -230,6 +235,7 @@ impl Refusal {
             Self::LeavesAtNextRestart => "leaves-at-next-restart",
             Self::DeclinedElsewhere => "declined-elsewhere",
             Self::ProvidedByAPart => "provided-by-a-part",
+            Self::PartArriving => "part-arriving",
         }
     }
 }

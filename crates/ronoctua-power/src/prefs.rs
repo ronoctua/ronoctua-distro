@@ -79,6 +79,19 @@ fn refused(w: &Written) -> Vec<ronoctua_store::Refused> {
     }
 }
 
+/// What a read of `power.json` in `dir` repaired when it read only in part —
+/// the profile a newer machine named, most often — for the view that shows
+/// the choice; empty when it read whole, or not at all.
+#[must_use]
+pub fn repaired_in(dir: &Path) -> Vec<ronoctua_store::Repair> {
+    let reading = store_at(dir).reading();
+    if reading.part_not_read() {
+        reading.repairs
+    } else {
+        Vec::new()
+    }
+}
+
 /// The file's one field, looked up — `power.json` in `dir`.
 ///
 /// # Errors

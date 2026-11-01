@@ -4130,7 +4130,7 @@ deu: essa linha só existe com o cabeçalho ABERTO e uma tecla sob o ponteiro (`
 então o nome sumiria sempre que ela fecha — e a busca, posta no cabeçalho junto das abas, empurrava
 os atalhos para fora da linha numa largura comum. A linha da busca é uma linha da vista, mas é a
 única, e diz, no registro da explicação, o que um controle da vista sob o ponteiro faz (a marca
-de filtro; no rodapé, as abas). Fica para o dono confirmar.
+de filtro; no rodapé, as abas).
 
 Numa GRADE a célula sob o ponteiro acende sozinha, nunca uma faixa de linha, e a célula do cursor
 veste `surface.selection` — a exceção do gerenciador de arquivos estendida a toda grade (emenda do
@@ -4567,7 +4567,7 @@ tipo do upstream, que é o primeiro do empate. Um kernel OpenCL não escreve nen
 OpenCL. Um arquivo de nome empatado é lido UMA vez: a resposta fica guardada pelo arquivo
 (dispositivo, inode, data de modificação e tamanho; no máximo `mimeTieEntries`, de
 `assets/cache.nix`), porque a listagem pergunta de novo a cada releitura, no laço que desenha — e
-debaixo do `/private` nada é lido com o cofre fechado ou suspenso (`ronoctua_private::may_touch`):
+debaixo do `/private` nada é lido com o cofre fechado ou suspenso (o guarda da listagem):
 vale a primeira resposta do nome. E o bloco `drop` tira do `text/x-common-lisp` o `*.fasl`, que é a Lisp COMPILADA: a prévia
 mostraria bytes de um carregador como texto colorido. As três recusam ficar velhas — o tipo que some,
 o glob que o upstream deixa de dar, o empate que deixa de ser empate, a linha sem `shares` que
@@ -10090,9 +10090,8 @@ está lá vira frase no cabeçalho. A leader roda o mesmo comando sem argumento,
 logind diz. E os dois interruptores são lidos de
 `ListInhibitors`, nunca da memória: reiniciar o rodapé solta o fd, e a linha tem de dizer.
 
-**Nada pergunta**, pela mesma razão do udisks: não há agente polkit na sessão. Toda chamada ao logind
-vai com `false` no `interactive`, e o check `power-never-asks` lê o crate e recusa `true`, `pkexec`,
-`sudo` e `systemd-run`. Nenhuma regra polkit nossa (`power-adds-no-polkit-rule-of-its-own`): dormir,
+**Nada pergunta**, pela mesma razão do udisks: não há agente polkit na sessão. Toda chamada do rodapé
+ao logind vai com `false` no `interactive` (`power-never-asks`). Nenhuma regra polkit nossa (`power-adds-no-polkit-rule-of-its-own`): dormir,
 hibernar, reiniciar, desligar e inibir são `allow_active: yes` no logind 260, e `switch-profile` no
 PPD 0.30. A única coisa que o upstream não entrega é o sysfs: `charge_control_start_threshold` e
 `charge_control_end_threshold` são `root:root 0644`, e `GROUP=`/`MODE=` de udev só alcançam nós de
@@ -16199,7 +16198,7 @@ distro e o nixpkgs.
 **A máquina usa os pins que o gate testou, menos o nixpkgs, que ela rola** (emenda do dono ao inv.
 6, 2026-10-30). O flake da máquina tem o próprio input `nixpkgs` (`nixos-unstable`) e aponta o da
 distro para ele (`inputs.ronoctua.inputs.nixpkgs.follows`), e o passo `flake-update` da atualização
-move os dois (`ronoctua-machine update-distro`: `nix flake update ronoctua nixpkgs`). Todo OUTRO
+move os dois (`ronoctua-machine update-distro`; só o nixpkgs se o flake nomeia um checkout local). Todo OUTRO
 input continua o do lock da distro: ao travar ou atualizar o input `ronoctua`, o Nix copia os inputs
 dela do `flake.lock` dela, e o `lib.machine` compara cada input que a distro recebeu com o `narHash`
 que esse lock dá e recusa com o caminho que difere, deixando passar só um caminho que termina em
@@ -16521,7 +16520,8 @@ grupo `crafts`: o Craft Launcher e o SolidCraft), nas formas das declarações d
 ficam em `assets/distro-pins.json`. O que é declarado à
 mão e o que a ferramenta escreve moram em arquivos separados, como `flake.nix` e `flake.lock`: o
 `nix run .#distro-pins` move só o que segue uma fonte (a release mais nova de um repositório do
-GitHub, a versão que o F-Droid sugere), mantém o pin escrito à mão do que não segue nada, recusa uma
+GitHub, a versão que o índice assinado do F-Droid oferece), mantém o pin escrito à mão do que não
+segue nada, recusa uma
 release com tag sem número (`continuous` serve bytes novos sob o mesmo nome — o defeito que o
 `downloads-are-pinned` recusa) e não faz commit: quem commita é o `.#release`, que a roda antes do
 gate de cada versão (abaixo, "Os pins andam antes de cada versão"), ou o dono, à mão — o pin é o que
@@ -16538,9 +16538,8 @@ tabela diz `fallback = false`; `Name=` é o da tabela, `Exec=` é o caminho est�
 código de campo que a imagem pediu, e as ações ficam para trás (cada uma nomeia um programa de
 dentro da imagem, que nenhum caminho de fora alcança). O ícone é o `.DirIcon`, seguido só enquanto
 fica dentro da imagem e só quando É um PNG ou um SVG. O id é `ronoctua-appimage-<chave>.desktop`, o
-mesmo que o da pessoa teria. O web app é um lançador no formato que a central escreve, sem
-`StartupWMClass`: aquela conta é do Chromium e mora uma vez, em `web::app_id`. O app Android é um
-apk numa parte de dados com o id da tabela, entregue ao reconciliador por
+mesmo que o da pessoa teria. O web app é um lançador no formato que a central escreve. O app
+Android é um apk numa parte de dados com o id da tabela, entregue ao reconciliador por
 `ronoctua.distroApps.android`, que o módulo das declarações da pessoa lista no
 `declared-android.json` com `from` = `distro`.
 
@@ -16679,16 +16678,13 @@ cobra os dois nomes). Os arquivos ficam presos pela raiz das fontes guardadas (`
 ~0,95 GB): uma release que o upstream apaga não volta. E o `downloads-are-pinned` lê o
 `assets/distro-pins.json` também.
 
-**Os AppImages da distro podem seguir as próprias releases (decisão do dono, 2026-10-20).** O pin da
-distro continua o que o gate testou, e só o dono o move; o que mudou é que a pessoa pode deixar a
-atualização de rotina levar, NAS MÁQUINAS DELA, cada AppImage da tabela que segue um repositório
-(`follows.github` — hoje o Craft Launcher e o SolidCraft) até a release mais nova. A escolha é dela,
-desligada por padrão, e viaja assinada com as opções (`distro-apps-follow-releases` no
-`options.json`, escrito só enquanto ligado: uma máquina cuja distro é mais velha, cujo leitor recusa
-campo desconhecido, recusa o arquivo de opções até a distro dela andar — a página diz isso). Liga-se
-na vista da atualização, nas duas portas (`f`, `LEADER s u f`,
-`ronoctua-shell-update/src/follow.rs`): ligar é o gesto que permite
-`api.github.com` e `github.com` no `consent.json`; a página diz os dois hosts, o que esta máquina
+**Os AppImages da distro seguem as próprias releases (decisão do dono, 2026-10-20).** O pin da
+distro continua o que o gate testou, e só o dono o move; o que mudou é que a atualização de rotina
+leva, NAS MÁQUINAS DA PESSOA, cada AppImage da tabela que segue um repositório
+(`follows.github` — hoje o Craft Launcher e o SolidCraft) até a release mais nova. Ligada por padrão
+desde 2026-11-01; desligar é da pessoa e viaja assinado com as opções (o motivo do campo novo, no
+`ronoctua_person::options`). Muda-se na vista da atualização, nas duas portas (`f`, `LEADER s u f`,
+`ronoctua-shell-update/src/follow.rs`); a página diz os dois hosts, o que esta máquina
 construiu e, por app, a versão, de quem é o pin e — na própria linha, para as duas portas dizerem ao
 lado do cursor — por que uma mais nova não está em uso (espera a verificação, foi retida e por quê,
 foi recusada e por qual regra). Os pins seguidos são DADO da pessoa
@@ -16721,10 +16717,8 @@ prefetch-file` com o `digest` do GitHub como `--expected-hash`), sob O MESMO nom
 builder da distro usa (`<chave>-<versão>.AppImage`, `nix/distro-downloads.nix`). Tag sem dígito nunca
 vira pin. Cada release mais nova que fica para trás — o GitHub que não responde, a tag que se move, a
 regra que recusa, os bytes que não são o `digest` — é uma linha do passo antes da última, com o porquê
-(`follow::NotFollowed`): o CLI não tem log próprio (o `tracing` dele não vai a lugar nenhum), e o
-diário da atualização guarda o que o passo imprime. Sem os dois hosts permitidos nada é perguntado: se nenhum pin da pessoa andou, o passo
-termina `refused github-not-let`, que a sequência lê como notícia (`declines`); se os dela andaram, o
-passo diz o que andou e uma linha diz que os da distro não foram olhados. Com a opção desligada o
+(`follow::NotFollowed`). Os dois hosts são perguntados sem consentimento, como atualizador declarado
+(`ronoctua_consent::Updater`, a exceção do `AGENTS.md`). Com a opção desligada o
 arquivo sai, e a máquina deixa de construir os seguidos assim que o root recebe as opções assinadas
 que dizem isso. O passo só pede a pasta do espelho: quem não declarou nada também pode seguir.
 
@@ -16985,9 +16979,7 @@ na sessão: a regra devolve `YES` para a pessoa, verbo `start`, num `if` só, e 
 mais nada. Ela lista também o `ronoctua-build-switch-own`, a volta do interruptor de build para o build
 commitado (o glifo da modeline e `LEADER / b`): roda a mesma linha do apply, com a mesma trava, e
 aplica o que o lock da máquina fixa, como a atualização — por isso divide a regra em vez de ganhar
-outra. Numa máquina cujo flake nomeia um checkout local, a atualização move esse lock para o `HEAD`
-do checkout (o `ronoctua-update-system` que a pessoa inicia sem senha, ou a rotina semanal), então o
-`-own` não dá nada que a atualização já não dê.
+outra. Numa máquina cujo flake nomeia um checkout local, só a porta do sudo move esse lock.
 Nenhuma das unidades tem teto de partidas (`startLimitIntervalSec = 0`): só um gesto da pessoa as
 inicia, e o teto padrão recusaria o sexto como `start-limit-hit`. O bless não tem regra: só o systemd o
 inicia.
@@ -17007,9 +16999,8 @@ sistema não pede direito nenhum e ser AVISADO do fim pede. Um job instalado vai
 da execução, então "sem job, sem execução" é o fim, e `failed` é que não construiu. Um gesto cancelado
 ou recusado é dito com o motivo (`echo-build-failed`).
 
-Isso fecha UM caminho, o da árvore não commitada. Uma máquina assim ainda dá root sem senha a quem
-roda como a pessoa por outro: o que ela COMMITA chega a root pela atualização, como dito acima
-(`docs/PENDING.md`); e o `incus-admin` do perfil `full` é root (L13). Ela não está mais em
+Uma máquina assim ainda dá root sem senha a quem roda como a pessoa: o `incus-admin` do perfil
+`full` é root (L13). Ela não está mais em
 `trusted-users` do Nix (decisão do dono, 2026-10-31): um usuário confiável é quase root — importa no
 store o que não foi assinado, muda os ajustes de segurança do daemon —, e nada que a distro roda como
 a pessoa pedia isso. As baterias e o `.#sized-build` passam só `--max-jobs`, `--cores`, `--keep-going`
@@ -17021,7 +17012,7 @@ O `-own` e a atualização leem a revisão de dentro do repositório da pessoa c
 `safe.directory` só desse checkout), e um repositório pode pedir ao git que rode programas: o
 `core.fsmonitor`, os hooks, os filtros `clean`/`smudge`/`process`. Conferido em 2026-10-31 com o Nix
 2.34.9: um repositório com tudo isso apontando para um marcador (que o git da própria pessoa dispara num
-`git status`) foi resolvido no `HEAD` (o `nix flake update ronoctua` da atualização), lido na revisão
+`git status`) foi resolvido no `HEAD` (um `nix flake update ronoctua`), lido na revisão
 travada (o build do `-own`), limpo e sujo, por um `nix` de root — e nenhum marcador apareceu, nem
 arquivo de root ficou no repositório: o Nix lê pela libgit2, que não roda nada disso. A garantia é do
 Nix dessa versão; um Nix que passe a chamar o git de linha de comando nesse caminho a desfaz.
@@ -17396,14 +17387,10 @@ ele se perde.
   configuração seria mentir, e escrever por cima não adiantaria) e os lembretes (um lembrete
   consertado para fora é um lembrete que não toca). Os dois continuam "ilegíveis", com a frase de
   sempre.
-- **Quem dizia "não lê" diz agora "uma parte não lê".** Uma vista que dizia a recusa quando o
-  `parsed` dava `None` ficaria muda diante de um arquivo consertado: mostraria o conserto como se
-  fosse o que o arquivo diz, e a razão ainda não tem tela. `Reading::part_not_read` separa os dois
-  casos, e a tela de telas, a dos ponteiros e a `modeline` (o rodapé ao subir, a vigia dele e a
-  janela de ajustes, as duas portas) dizem `belongings-repair-part-not-read`: a parte fica no
-  arquivo como está escrita e esta máquina segue sem ela — verdade nas três, porque a escrita
-  devolve o valor. O rodapé subindo e a vigia julgam os mesmos bytes do mesmo jeito
-  (`adapt::Unread`, `adapt::at_start`): um conteúdo nunca se comporta de dois jeitos.
+- **Quem dizia "não lê" diz agora "uma parte não lê".** `Reading::part_not_read` separa os dois
+  casos, e a vista de cada arquivo diz a linha do `partly_read` do kit (cobra
+  `a-view-says-what-it-did-not-read`). O rodapé subindo e a vigia julgam os mesmos bytes do mesmo
+  jeito (`adapt::Unread`).
 
 Duas leituras continuam recusando, por decisão: o escolhedor de tema (`read_whole`) não escreve
 sobre um `theme.json` com conserto — ele escreve as cinco respostas a cada seta, e a prévia é uma
@@ -17447,10 +17434,9 @@ O que é separado vai para `Found::never` com o motivo, e o merge deixa esse cam
 ele, porque um link do Home Manager pode ser de uma PASTA, e um arquivo que outra máquina guarda
 lá dentro seria escrito através do link — em paz dos dois lados, como o ilegível: não apaga a cópia
 do repositório para as outras máquinas (outra máquina pode ter um arquivo de verdade ali) nem a
-puxa por cima do link que o sistema fez. A exceção é a chave de acesso: se o repositório já a tem
-(empurrada antes desta regra), a máquina que a reconhece a tira de lá (`Step::Unkeep`), e as
-outras apagam a cópia que puxaram. Deixada lá, toda outra máquina continuaria puxando a chave
-desta para o próprio `~/.ssh`. Os dois motivos novos têm frase (`belongings-reason-*`), e os
+puxa por cima do link que o sistema fez. A exceção é o que nenhuma máquina recebe — a chave de
+acesso de qualquer máquina e um link para o store: se o repositório já o tem (empurrado antes desta
+regra), sai de lá (`Step::Unkeep`) e ninguém o escreve. Os motivos têm frase (`belongings-reason-*`), e os
 quatro porquês da razão também (`belongings-repair-why-*`), para a vista que as mostra.
 
 `Synced.repaired` diz o que a razão tem, sem resposta e ainda válido, quando o sync termina: um
@@ -18122,7 +18108,7 @@ TODO alvo (o `Belongings::keep` grava justamente uma adição no caminho do alvo
 não guardava nada) e, com uma máquina na a88e849 no mesmo repositório, fazia a máquina nova apagar
 do próprio disco os arquivos do Emacs: ela os marcava como do alvo, e a saída deles com a raiz,
 tirada na outra, parecia uma exclusão. Voltou ao que era. O que o alvo pula continua pulado sob
-qualquer adição, como sempre; o resto da sobreposição está no `docs/PENDING.md`.
+qualquer adição, como sempre.
 
 **O arquivo de um alvo não sai com uma adição por cima dele.** Tirar uma adição que cobre um alvo —
 a casa inteira, ou uma feita no caminho dele — tira do repositório os arquivos da adição, nunca os
@@ -18560,9 +18546,9 @@ gera — tokens de glifo, eventos, comandos e prefixos de texto que se sobrepõe
 recusaria no build. A ordem é a do nome: de duas pastas que colidem, a primeira carrega, em toda
 máquina igual. A pasta da distro continua recusada inteira: é do desenvolvedor, antes de qualquer
 build. O que a avaliação nem consegue pegar (um manifesto que não faz parse, um erro de tipo) para
-quem o lê; por isso `personProblemsOf.<id>` lê uma pasta só, para a verificação isolada da
-atualização avaliar uma de cada vez, e `personModulesOnly` (o `only` do `withPersonModules`) deixa
-de fora, sem ler, as que ela não aprovou e as que a máquina não inclui. Algumas armadilhas de tipo
+quem o lê; por isso o root avalia cada pasta sozinha, num processo próprio (`ronoctua-person
+check-brain`, `local/brain-checked.json`), e `personModulesOnly` (o `only` do `withPersonModules`)
+deixa de fora, sem ler, as que não avaliaram e as que a máquina não inclui. Algumas armadilhas de tipo
 viraram frase (`glyph` que não é texto, `tags` que não é lista, função ou caminho no manifesto da
 pessoa), porque um erro que o `tryEval` não pega derruba a máquina do mesmo jeito. O build lê uma
 cópia com só as pastas que carregaram (`personModulesDir`): o `build.rs` compara a pasta com a tabela,
@@ -20601,9 +20587,9 @@ a pasta do estado e a modeline relê. É a marca que a decisão de 2026-10-11 pe
   (prefixo, alfabeto, 1216 bytes de chave e o checksum Bech32) ANTES de ir para a fila: uma chave
   cortada é dita na hora, e não descoberta pela fila depois que a pessoa saiu.
 - **Abrir: o cabeçalho escolhe a pergunta.** O `sniff` lê o começo do arquivo numa thread (um `.age`
-  num pendrive, ou num cofre suspenso, não é do laço). Senha: a senha. PQ: a senha dos pertences, e o
-  `key.age` é aberto DENTRO do `ronoctua-seal` (`Action::OpenWithKey`), em memória, nunca escrito —
-  só a identidade pós-quântica abre. Não é o `Keyring` dos pertences porque nem a porta nem a fila
+  num pendrive, ou num cofre suspenso, não é do laço). Senha: a senha. PQ: a identidade que a sessão
+  guarda, ou a senha dos pertences, que abre o `key.age` DENTRO do `ronoctua-seal`
+  (`Action::OpenWithKey`), em memória. Não é o `Keyring` dos pertences porque nem a porta nem a fila
   ligam o `age`. O `key.age` nunca está entre os `secrets()` do trabalho, que a fila apaga no fim.
   Clássico: recusado com frase, sem perguntar a senha (a chave da pessoa é só pós-quântica, e a
   pergunta só terminaria em "chave errada"). Misto: recusado com frase.

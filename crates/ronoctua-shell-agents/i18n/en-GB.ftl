@@ -128,3 +128,15 @@ agents-refused-invalid = That is not a name, a folder or an account this can tak
 agents-refused-not-installed = The agent is not installed on this machine; it comes with the development profile's agents.
 agents-refused-arriving = The agent is on its way: it arrives after the installation, on its own, and the parts' page says how it is doing.
 agents-refused-failed = It could not be done; the system log says why.
+# THE SAME REFUSALS AS A CLAUSE, said after a sentence's colon
+# (`agents-endpoint-refused`, `agents-refreshed-but`): a small letter there.
+agents-clause-not-let = the usage endpoint has not been allowed yet; allow it first.
+agents-clause-expired = the login expired; Claude Code renews it the next time it runs, or log in again.
+agents-clause-no-credentials = the account has never been logged in.
+agents-clause-unreadable = a file of the accounts does not read; nothing was written over it.
+agents-clause-offline = the network did not answer.
+agents-clause-unknown = there is no such account any more.
+agents-clause-invalid = that is not a name, a folder or an account this can take.
+agents-clause-not-installed = the agent is not installed on this machine; it comes with the development profile's agents.
+agents-clause-arriving = the agent is on its way; it arrives after the installation, on its own, and the parts' page says how it is doing.
+agents-clause-failed = it could not be done; the system log says why.

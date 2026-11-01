@@ -1127,6 +1127,7 @@ mod tests {
             desktop_ids: vec!["org.gimp.GIMP.desktop".into()],
             amount: None,
             rehearsed: false,
+            waits: None,
         });
         j
     }

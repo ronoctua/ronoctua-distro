@@ -1433,6 +1433,13 @@ pub enum Target {
     /// Sign this machine's plain part now (the passphrase asked when the
     /// session does not keep the identity).
     Sign,
+    /// A group of the listing too large to draw whole, by what it is
+    /// ([`fold_id`]): `RET` opens it, and folds it again.
+    Fold(String),
+    /// A folder that left this machine whole, and the answer this row gives:
+    /// "no" brings it back here, "yes" deletes it on every machine — every
+    /// path of it decided alike ([`Conflict::gone`]).
+    Gone(String, bool),
 }
 
 /// What `RET` does to a file of the listing.
@@ -1542,6 +1549,9 @@ impl Target {
             Self::Answer(false) => key::ABOUT_BELONGINGS_ANSWER_NO,
             Self::Answer(true) => key::ABOUT_BELONGINGS_ANSWER_YES,
             Self::SshAddress(_) => key::ABOUT_BELONGINGS_USE_SSH,
+            Self::Fold(_) => key::ABOUT_BELONGINGS_FOLD,
+            Self::Gone(_, false) => key::ABOUT_BELONGINGS_GONE_NO,
+            Self::Gone(_, true) => key::ABOUT_BELONGINGS_GONE_YES,
             _ => return None,
         }))
     }
@@ -1555,6 +1565,11 @@ pub struct Row {
     /// What a key does here — `None` on a title, a sentence, the rest of a
     /// wrapped label: the cursor skips it.
     pub target: Option<Target>,
+    /// The line CONTINUES the row above it: the rest of its label or value,
+    /// wrapped (`chrome::aligned_pair`). The cursor skips it, but it is a
+    /// line of that row's control — it lights with it, and a click on it
+    /// takes the same thing ([`View::control_of`]).
+    pub continues: bool,
 }
 
 impl Row {
@@ -1564,13 +1579,13 @@ impl Row {
         self.target.is_none()
     }
 
-    /// Whether a click takes it — a row the cursor stands on — and so
-    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
-    /// and click (the region's `Row::takes`, the window's `Content::takes`,
-    /// [`View::clicked`]).
+    /// Whether a click takes it — a row the cursor stands on, or a line
+    /// that continues one — and so whether a resting pointer lights it: ONE
+    /// ANSWER for both doors' light and click (the region's `Row::takes`,
+    /// the window's `Content::takes`, [`View::clicked`]).
     #[must_use]
     pub const fn takes(&self) -> bool {
-        !self.heading()
+        !self.heading() || self.continues
     }
 }
 
@@ -1617,6 +1632,8 @@ struct Builder<'a> {
     left: u16,
     room: u16,
     texts: &'a ronoctua_i18n::Texts,
+    /// The large groups of the listing this door opened ([`View::opened`]).
+    opened: &'a BTreeSet<String>,
 }
 
 impl Builder<'_> {
@@ -1630,6 +1647,7 @@ impl Builder<'_> {
             self.out.push(Row {
                 fields: crate::chrome::AIR,
                 target: None,
+                continues: false,
             });
         }
         self.out.push(Row {
@@ -1640,6 +1658,7 @@ impl Builder<'_> {
                 self.room,
             )],
             target: None,
+            continues: false,
         });
         let pairs: Vec<(u16, u16, u16)> = entries
             .iter()
@@ -1709,6 +1728,7 @@ impl Builder<'_> {
                         self.out.push(Row {
                             fields: crate::chrome::tinted_value(fields, column, tint, focused),
                             target: (n == 0).then(|| target.clone()),
+                            continues: n > 0,
                         });
                     }
                 }
@@ -1717,12 +1737,14 @@ impl Builder<'_> {
                 Entry::Air => self.out.push(Row {
                     fields: crate::chrome::AIR,
                     target: None,
+                    continues: false,
                 }),
                 Entry::Note(text, colour) => {
                     for line in crate::chrome::note_lines(&text, self.room) {
                         self.out.push(Row {
                             fields: vec![piece(self.left, line, colour, self.room)],
                             target: None,
+                            continues: false,
                         });
                     }
                 }
@@ -1737,6 +1759,7 @@ impl Builder<'_> {
                                 room,
                             )],
                             target: None,
+                            continues: false,
                         });
                     }
                 }
@@ -1754,6 +1777,7 @@ impl Builder<'_> {
                         self.out.push(Row {
                             fields,
                             target: Some(target),
+                            continues: false,
                         });
                     }
                 }
@@ -2083,6 +2107,10 @@ pub struct View {
     /// The row the cursor is on, by what it is — kept across a rebuild, so a
     /// list that changes under it does not move it to another row.
     aim: Option<Target>,
+    /// The groups of the listing too large to draw whole that the person
+    /// opened, by what they are ([`Target::Fold`]) — this door's, as its
+    /// cursor is.
+    opened: BTreeSet<String>,
 }
 
 impl View {
@@ -2102,7 +2130,7 @@ impl View {
         if let Some(n) = rows.iter().position(|row| {
             matches!(
                 row.target,
-                Some(Target::Offer(_, false) | Target::LeaveIt(_))
+                Some(Target::Offer(_, false) | Target::LeaveIt(_) | Target::Gone(_, false))
             )
         }) {
             me.cursor = n;
@@ -2170,10 +2198,25 @@ impl View {
         crate::chrome::hint_of_marked(&here, |_| None, texts)
     }
 
+    /// The row whose control row `n` is a line of: the first line of a pair
+    /// wrapped over several ([`Row::continues`]), which light together and
+    /// take one click (`Region::control_of`, `Content::controls`) — and `n`
+    /// itself for every other row.
+    #[must_use]
+    pub fn control_of(n: usize, rows: &[Row]) -> usize {
+        let mut first = n;
+        while first > 0 && rows.get(first).is_some_and(|r| r.continues) {
+            first -= 1;
+        }
+        first
+    }
+
     /// Puts the cursor where a click landed. Answers whether the cursor was
     /// ALREADY on that row: that is the second click, which the door turns
-    /// into `RET` (invariant 19).
+    /// into `RET` (invariant 19). A click on a line that continues a row is
+    /// a click on that row ([`Self::control_of`]).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        let n = Self::control_of(n, rows);
         let Some(target) = rows
             .get(n)
             .filter(|r| r.takes())
@@ -2187,10 +2230,14 @@ impl View {
         again
     }
 
-    /// The sentence the pointer resting on row `n` reads.
+    /// The sentence the pointer resting on row `n` reads — on any line of
+    /// its control, the control's.
     #[must_use]
     pub fn about(rows: &[Row], n: usize, texts: &ronoctua_i18n::Texts) -> Option<String> {
-        rows.get(n)?.target.as_ref()?.about(texts)
+        rows.get(Self::control_of(n, rows))?
+            .target
+            .as_ref()?
+            .about(texts)
     }
 
     /// Puts the cursor back on the row it was aimed at — found by what it is,
@@ -2247,6 +2294,7 @@ impl View {
             left,
             room,
             texts,
+            opened: &self.opened,
         };
         if let Mode::Diff(path, lines) = &self.mode {
             diff_page(&mut b, r, path, lines);
@@ -2606,6 +2654,34 @@ impl View {
                 }
                 self.ask(Ask::Sign, r)
             }
+            // A LARGE GROUP opens, and folds again: this door's own, as its
+            // cursor is, and the cursor stays on the row.
+            Target::Fold(id) => {
+                if !self.opened.remove(&id) {
+                    self.opened.insert(id);
+                }
+                Errand::Nothing
+            }
+            // A FOLDER THAT LEFT WHOLE, answered for every path of it at
+            // once: written as decisions, which "Apply" carries out.
+            Target::Gone(root, yes) => {
+                let Some(plan) = r.plan.as_ref() else {
+                    return Errand::Say(texts.t(key::BELONGINGS_NOTHING_PREPARED));
+                };
+                let d = if yes {
+                    Decision::KeepLocal
+                } else {
+                    Decision::TakeRemote
+                };
+                let mut decided = r.decided();
+                decided.extend(
+                    plan.conflicts
+                        .iter()
+                        .filter(|c| c.gone.as_deref() == Some(root.as_str()))
+                        .map(|c| (c.path.clone(), d)),
+                );
+                write_decisions(r, &decided, texts)
+            }
         }
     }
 
@@ -2724,7 +2800,7 @@ impl View {
         }
         let decided = r.decided();
         if !plan.conflicts.iter().all(|c| r.settled(c)) {
-            let left = plan.conflicts.iter().filter(|c| !r.settled(c)).count();
+            let left = plan.questions().saturating_sub(settled_questions(r, plan));
             return Errand::Say(texts.t_args(
                 key::BELONGINGS_UNDECIDED_LEFT,
                 &[(
@@ -3361,9 +3437,24 @@ fn status_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::when
             large,
             unreadable,
             unwritten,
+            dropped,
             ..
         } = &s.outcome
         {
+            // WHAT AN OLD SYNC LEFT IN THE REPOSITORY that no machine may
+            // take: a line each, with why, and that it is out now.
+            for (path, why) in dropped {
+                e.push(Entry::Note(
+                    t.t_with(
+                        key::BELONGINGS_DROPPED,
+                        &[
+                            ("name", &shown_path(path, r.places.as_ref(), false)),
+                            ("reason", &t.t(&words::reason_key(why))),
+                        ],
+                    ),
+                    tokens::color::STATE_WARNING,
+                ));
+            }
             for (path, bytes) in large {
                 e.push(Entry::Note(
                     t.t_with(
@@ -3404,18 +3495,56 @@ fn count(n: usize) -> ronoctua_i18n::Arg<'static> {
     ronoctua_i18n::Arg::Number(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
+/// How many of `plan`'s questions ([`Plan::questions`]) are answered: each
+/// conflict settled, and each folder that left whole once every path of it
+/// is.
+fn settled_questions(r: &Readings, plan: &Plan) -> usize {
+    let alone = plan
+        .conflicts
+        .iter()
+        .filter(|c| c.gone.is_none() && r.settled(c))
+        .count();
+    let folders = plan
+        .gone()
+        .into_keys()
+        .filter(|root| gone_answer(r, plan, root).is_some())
+        .count();
+    alone + folders
+}
+
+/// What the person answered of the folder `root` that left whole: `true`
+/// for "delete it on every machine" (each of its paths "keep this
+/// machine's"), `false` for "bring it back" (each "take the repository's"),
+/// `None` while its paths are not all answered alike.
+fn gone_answer(r: &Readings, plan: &Plan, root: &str) -> Option<bool> {
+    let mut answers = plan
+        .conflicts
+        .iter()
+        .filter(|c| c.gone.as_deref() == Some(root))
+        .map(|c| r.decision_of(c));
+    let first = answers.next()??;
+    if answers.any(|d| d != Some(first)) {
+        return None;
+    }
+    match first {
+        Decision::KeepLocal => Some(true),
+        Decision::TakeRemote => Some(false),
+        _ => None,
+    }
+}
+
 /// Sync: now, or — while a sync waits — apply and drop.
 fn sync_section(b: &mut Builder<'_>, r: &Readings) {
     let t = b.texts;
     let mut e = Vec::new();
     match r.plan.as_ref() {
         Some(plan) => {
-            let done = plan.conflicts.iter().filter(|c| r.settled(c)).count();
+            let done = settled_questions(r, plan);
             e.push(pair(
                 t.t(key::BELONGINGS_APPLY),
                 t.t_args(
                     key::BELONGINGS_DECIDED_OF,
-                    &[("n", count(done)), ("of", count(plan.conflicts.len()))],
+                    &[("n", count(done)), ("of", count(plan.questions()))],
                 ),
                 Target::Apply,
                 true,
@@ -3483,7 +3612,51 @@ fn conflicts_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::w
             true,
         ),
     ];
-    for c in &plan.conflicts {
+    // A FOLDER THAT LEFT WHOLE is one question, however many files it held,
+    // asked first: its "no" — bring it back — drawn first, since its "yes"
+    // deletes it on every machine.
+    let places = r.places.as_ref();
+    for (root, n) in plan.gone() {
+        e.push(Entry::Air);
+        let folder = shown_path(root, places, true);
+        let answer = gone_answer(r, plan, root);
+        let value = t.t_args(key::BELONGINGS_GONE_FILES, &[("n", count(n))]);
+        e.push(if answer.is_some() {
+            pair(
+                folder.clone(),
+                value,
+                Target::Fact(format!("gone:{root}")),
+                false,
+            )
+        } else {
+            tinted(
+                folder.clone(),
+                value,
+                Target::Fact(format!("gone:{root}")),
+                false,
+                tokens::color::STATE_WARNING,
+            )
+        });
+        e.push(note(
+            t.t_with(key::BELONGINGS_GONE_QUESTION, &[("folder", &folder)]),
+        ));
+        for yes in [false, true] {
+            e.push(indented(
+                t.t(if yes {
+                    key::BELONGINGS_GONE_YES
+                } else {
+                    key::BELONGINGS_GONE_NO
+                }),
+                if answer == Some(yes) {
+                    t.t(key::BELONGINGS_CHOSEN)
+                } else {
+                    String::new()
+                },
+                Target::Gone(root.to_owned(), yes),
+            ));
+        }
+    }
+    for c in plan.conflicts.iter().filter(|c| c.gone.is_none()) {
         // AIR BETWEEN TWO CONFLICTS: each is a path, its two sides and its
         // decisions, read as one.
         e.push(Entry::Air);
@@ -3604,10 +3777,7 @@ fn conflicts_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::w
         }
     }
     b.section(
-        &t.t_args(
-            key::BELONGINGS_CONFLICTS,
-            &[("n", count(plan.conflicts.len()))],
-        ),
+        &t.t_args(key::BELONGINGS_CONFLICTS, &[("n", count(plan.questions()))]),
         e,
     );
 }
@@ -3783,8 +3953,52 @@ fn listing_section(b: &mut Builder<'_>, r: &Readings) {
         e.push(note(t.t(key::BELONGINGS_COUNTING)));
     }
     let rows = count.formatted(places, t);
+    let opened = b.opened;
     let files = |e: &mut Vec<Entry>, origin: &Origin| {
-        e.extend(count.of_origin(origin).iter().map(|n| rows[*n].entry()));
+        let of = count.of_origin(origin);
+        // A GROUP TALLER THAN THE FOOTER'S WHOLE REGION
+        // (`space.expansion.maxLines`, the most the view is given there)
+        // would push every other row of the page out of it — a folder of
+        // thousands of files is thousands of rows. It folds into ONE row,
+        // its files and their weight, which `RET` or a second click opens
+        // and folds again; one of its files that a sync must say something
+        // about tints it.
+        if of.len() <= usize::from(tokens::space::EXPANSION_MAXLINES) {
+            e.extend(of.iter().map(|n| rows[*n].entry()));
+            return;
+        }
+        let id = fold_id(origin);
+        let open = opened.contains(&id);
+        let bytes: u64 = of
+            .iter()
+            .map(|n| &count.items[*n])
+            .filter(|item| item.here.travels())
+            .map(|item| item.size_bytes)
+            .sum();
+        e.push(Entry::Pair {
+            label: t.t_args(
+                key::BELONGINGS_FILES_WEIGH,
+                &[
+                    ("n", self::count(of.len())),
+                    ("size", ronoctua_i18n::Arg::Text(&bytes_text(bytes, t))),
+                ],
+            ),
+            value: t.t(if open {
+                key::BELONGINGS_GROUP_OPEN
+            } else {
+                key::BELONGINGS_GROUP_FOLDED
+            }),
+            kind: crate::chrome::Kind::of(true),
+            target: Target::Fold(id),
+            tint: of
+                .iter()
+                .any(|n| rows[*n].tint.is_some())
+                .then_some(tokens::color::STATE_WARNING),
+            indent: tokens::space::VIEW_NESTCELLS,
+        });
+        if open {
+            e.extend(of.iter().map(|n| rows[*n].entry()));
+        }
     };
 
     // THE RULES OF THE TABLE: each tree and file, with its reason — or
@@ -3890,6 +4104,7 @@ fn listing_section(b: &mut Builder<'_>, r: &Readings) {
             Target::Kept(extra.clone()),
             true,
         ));
+        e.extend(on_a_target(extra, t));
         files(&mut e, &Origin::Added(extra.clone()));
     }
     for root in r
@@ -3904,6 +4119,7 @@ fn listing_section(b: &mut Builder<'_>, r: &Readings) {
             Target::Kept(root.clone()),
             true,
         ));
+        e.extend(on_a_target(root, t));
         files(&mut e, &Origin::AddedElsewhere(root.clone()));
     }
     // WHAT THE PERSON TOOK OUT that no rule, target or file row says.
@@ -4129,6 +4345,31 @@ fn group_root(item: &Item) -> &str {
     }
 }
 
+/// What a group of the listing is, for its fold ([`Target::Fold`]): its
+/// origin, said whole — two groups never share one.
+fn fold_id(origin: &Origin) -> String {
+    match origin {
+        Origin::Rule(path) => format!("rule:{path}"),
+        Origin::Target(id) => format!("target:{id}"),
+        Origin::Added(root) => format!("added:{root}"),
+        Origin::AddedElsewhere(root) => format!("elsewhere:{root}"),
+        Origin::Plain(path) => format!("plain:{path}"),
+    }
+}
+
+/// THE PERSON'S ADDITION ON A TARGET'S PATH — at it or under it, made by
+/// hand before the target existed or on another machine — said under its
+/// row: it stays an addition, whose files travel as the person added them,
+/// and nothing turns it into the target without them (the owner's decision,
+/// 2026-11-01). `None` for an addition no target keeps.
+fn on_a_target(path: &str, t: &ronoctua_i18n::Texts) -> Option<Entry> {
+    let target = kept::target_of(path)?;
+    Some(note(t.t_with(
+        key::BELONGINGS_ADDED_ON_TARGET,
+        &[("target", &t.t(&words::target_key(target.id)))],
+    )))
+}
+
 /// The paths of the target `id`.
 fn target_paths(id: &str) -> &'static [&'static str] {
     kept::target_by_id(id).map_or(&[], |t| t.paths)
@@ -4320,6 +4561,7 @@ fn question_page(b: &mut Builder<'_>, q: Question) {
         b.out.push(Row {
             fields: vec![piece(b.left, t.t(k), color, b.room)],
             target: Some(Target::Answer(yes)),
+            continues: false,
         });
     }
 }
@@ -6141,6 +6383,7 @@ mod tests {
             offers,
             repaired: vec![],
             budget,
+            dropped: vec![],
         }
     }
 
@@ -6449,6 +6692,322 @@ mod tests {
                 .excluded
                 .contains(&"config/theme.json".to_owned())
         );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// How many files fold a group: one more than the footer's region holds.
+    const FOLDS: usize = tokens::space::EXPANSION_MAXLINES as usize + 1;
+
+    /// FAILS IF: a group of the listing taller than the footer's region —
+    /// a folder the person added with more files than the region has lines
+    /// — is drawn file by file instead of as ONE row with its count and
+    /// weight, in every language; or `RET` on that row does not open it,
+    /// every file on its row, and fold it again with the cursor kept; or a
+    /// group that fits folds; or a file a sync must say something about
+    /// leaves the folded row untinted.
+    #[test]
+    fn a_large_group_folds_into_one_row_and_opens_again() {
+        let places = scratch("fold");
+        ready(&places);
+        store_of(&places)
+            .write(&Belongings {
+                extra: vec!["home/notes".into(), "home/small".into()],
+                ..store_of(&places).read()
+            })
+            .expect("prefs");
+        for n in 0..FOLDS {
+            put(&places, &format!("home/notes/{n:03}.md"), b"12345");
+        }
+        put(&places, "home/small/one.md", b"1");
+        let fold = Target::Fold("added:home/notes".into());
+        let a_file = Target::File("home/notes/000.md".into(), FileAct::StopKeeping);
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let r = counted(&places, 1_700_000_500);
+            let v = View::fresh(&r, &zone(), 100, &t);
+            let rows = v.rows(&r, &zone(), 100, &t);
+            let row = drawn(std::slice::from_ref(row_of(&rows, &fold)));
+            let weighs = t.t_args(
+                key::BELONGINGS_FILES_WEIGH,
+                &[
+                    ("n", count(FOLDS)),
+                    (
+                        "size",
+                        ronoctua_i18n::Arg::Text(&bytes_text(5 * FOLDS as u64, &t)),
+                    ),
+                ],
+            );
+            assert!(row.contains(&weighs), "{language}: {row}");
+            assert!(
+                row.contains(&t.t(key::BELONGINGS_GROUP_FOLDED)),
+                "{language}: {row}"
+            );
+            assert!(
+                !rows.iter().any(|r| r.target.as_ref() == Some(&a_file)),
+                "{language}: a folded group drew its files"
+            );
+            row_of(
+                &rows,
+                &Target::File("home/small/one.md".into(), FileAct::StopKeeping),
+            );
+            assert!(
+                !rows
+                    .iter()
+                    .any(|r| r.target == Some(Target::Fold("added:home/small".into()))),
+                "{language}: a group that fits folded"
+            );
+            let at = rows
+                .iter()
+                .position(|r| r.target.as_ref() == Some(&fold))
+                .expect("the fold");
+            assert_eq!(
+                View::about(&rows, at, &t),
+                Some(t.t(key::ABOUT_BELONGINGS_FOLD)),
+                "{language}"
+            );
+        }
+        let tinted = |rows: &[Row]| {
+            row_of(rows, &fold)
+                .fields
+                .iter()
+                .any(|f| f.color == tokens::color::STATE_WARNING)
+        };
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        let v = View::fresh(&r, &zone(), 100, &t);
+        assert!(
+            !tinted(&v.rows(&r, &zone(), 100, &t)),
+            "nothing troubles it"
+        );
+        // ONE FILE OF IT DELETED HERE since the last sync — what the sync
+        // will say — tints the folded row.
+        let mut last = Last::read(&places.last()).expect("last");
+        last.entries.insert(
+            "home/notes/gone.md".into(),
+            ronoctua_belongings::status::Known {
+                sha256: "x".into(),
+                size_bytes: 3,
+                mode: 0o644,
+                added: true,
+                ..ronoctua_belongings::status::Known::default()
+            },
+        );
+        last.roots.insert("home/notes".into());
+        ronoctua_belongings::secret::write_private(
+            &places.last(),
+            &serde_json::to_vec(&last).expect("last"),
+        )
+        .expect("last written");
+        let r = counted(&places, 1_700_000_500);
+        let v = View::fresh(&r, &zone(), 100, &t);
+        assert!(
+            tinted(&v.rows(&r, &zone(), 100, &t)),
+            "the folded row hides a deletion the sync will carry"
+        );
+        // AS IT WAS, for what follows.
+        last.entries.clear();
+        ronoctua_belongings::secret::write_private(
+            &places.last(),
+            &serde_json::to_vec(&last).expect("last"),
+        )
+        .expect("last written");
+        // `RET` OPENS IT, every file on its row, the cursor on the fold; and
+        // `RET` again folds it.
+        let t = texts("en-GB");
+        let r = counted(&places, 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        stand_on(&mut v, &r, &fold, &t);
+        assert_eq!(v.press(Press::Enter, &r, &zone(), 100, &t), Errand::Nothing);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        assert_eq!(rows[v.cursor()].target.as_ref(), Some(&fold));
+        assert!(
+            drawn(std::slice::from_ref(row_of(&rows, &fold)))
+                .contains(&t.t(key::BELONGINGS_GROUP_OPEN))
+        );
+        for n in 0..FOLDS {
+            row_of(
+                &rows,
+                &Target::File(format!("home/notes/{n:03}.md"), FileAct::StopKeeping),
+            );
+        }
+        v.press(Press::Enter, &r, &zone(), 100, &t);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        assert!(!rows.iter().any(|r| r.target.as_ref() == Some(&a_file)));
+        assert_eq!(rows[v.cursor()].target.as_ref(), Some(&fold));
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// The plan of a sync that found `home/notes` gone whole (two files),
+    /// and one other conflict.
+    fn a_folder_gone(places: &Places) {
+        let gone = |path: &str| Conflict {
+            path: path.into(),
+            local: None,
+            remote: Some(side(3)),
+            machine: "laptop".into(),
+            added_by_person: true,
+            gone: Some("home/notes".into()),
+            ..Conflict::default()
+        };
+        let plan = Plan {
+            remote_commit: Some("abc".into()),
+            conflicts: vec![
+                Conflict {
+                    path: "config/theme.json".into(),
+                    local: Some(side(40)),
+                    remote: Some(side(42)),
+                    machine: "laptop".into(),
+                    ..Conflict::default()
+                },
+                gone("home/notes/a.md"),
+                gone("home/notes/deep/b.md"),
+            ],
+            ..Plan::default()
+        };
+        ronoctua_belongings::secret::write_private(
+            &places.plan(),
+            &serde_json::to_vec(&plan).expect("plan"),
+        )
+        .expect("plan written");
+    }
+
+    /// FAILS IF: a folder that left this machine whole is not ONE question
+    /// in every language — its count, the question, "no" (bring it back)
+    /// drawn before "yes" (delete it on every machine) and the cursor born
+    /// on "no" — or an answer does not decide every path of it alike; or the
+    /// bulk "keep this machine's" answers it; or apply goes ahead while it is
+    /// unanswered.
+    #[test]
+    fn a_folder_that_left_whole_is_asked_once_no_first() {
+        let places = scratch("left-whole");
+        ready(&places);
+        a_folder_gone(&places);
+        let no = Target::Gone("home/notes".into(), false);
+        let yes = Target::Gone("home/notes".into(), true);
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let r = Readings::read(Some(places.clone()), 1_700_000_500);
+            let v = View::fresh(&r, &zone(), 100, &t);
+            let rows = v.rows(&r, &zone(), 100, &t);
+            assert_eq!(rows[v.cursor()].target.as_ref(), Some(&no), "{language}");
+            let text = drawn(&rows).replace(" | ", " ");
+            for k in [key::BELONGINGS_GONE_NO, key::BELONGINGS_GONE_YES] {
+                assert!(text.contains(&t.t(k)), "{language}: no {k}: {text}");
+            }
+            assert!(
+                text.contains(&t.t_args(key::BELONGINGS_GONE_FILES, &[("n", count(2))])),
+                "{language}: {text}"
+            );
+            assert!(
+                text.contains(&t.t_args(key::BELONGINGS_CONFLICTS, &[("n", count(2))])),
+                "{language}: the folder is not one question: {text}"
+            );
+            let at = |target: &Target| rows.iter().position(|r| r.target.as_ref() == Some(target));
+            assert!(at(&no) < at(&yes), "{language}: yes before no");
+            assert!(
+                !rows
+                    .iter()
+                    .any(|r| r.target == Some(Target::Conflict("home/notes/a.md".into()))),
+                "{language}: a path of the folder is asked alone"
+            );
+            assert!(!text.contains('['), "{language}: a raw key: {text}");
+        }
+        let t = texts("en-GB");
+        // THE BULK "keep this machine's" leaves the folder unanswered, and
+        // apply waits for it.
+        let r = Readings::read(Some(places.clone()), 1_700_000_500);
+        let mut v = View::fresh(&r, &zone(), 100, &t);
+        v.command("belongings-all-local", &r, &zone(), 100, &t);
+        let r = Readings::read(Some(places.clone()), 1_700_000_500);
+        assert!(!r.decisions.contains_key("home/notes/a.md"));
+        assert_eq!(
+            v.command("belongings-apply", &r, &zone(), 100, &t),
+            Errand::Say(t.t_args(key::BELONGINGS_UNDECIDED_LEFT, &[("n", count(1))]))
+        );
+        // "NO" decides every path of it: the repository's side.
+        stand_on(&mut v, &r, &no, &t);
+        v.press(Press::Enter, &r, &zone(), 100, &t);
+        let r = Readings::read(Some(places.clone()), 1_700_000_500);
+        for path in ["home/notes/a.md", "home/notes/deep/b.md"] {
+            assert_eq!(r.decisions.get(path), Some(&Decision::TakeRemote), "{path}");
+        }
+        // "YES": this machine's — gone — for every path of it.
+        stand_on(&mut v, &r, &yes, &t);
+        v.press(Press::Enter, &r, &zone(), 100, &t);
+        let r = Readings::read(Some(places.clone()), 1_700_000_500);
+        for path in ["home/notes/a.md", "home/notes/deep/b.md"] {
+            assert_eq!(r.decisions.get(path), Some(&Decision::KeepLocal), "{path}");
+        }
+        assert_eq!(
+            v.command("belongings-apply", &r, &zone(), 100, &t),
+            Errand::Queue(Op::Apply)
+        );
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: what the last sync took out of the repository for what it
+    /// was — a link into the system's store, another machine's deploy key —
+    /// is not said, path and reason, in every language; or an addition on a
+    /// target's path is not said to stay an addition.
+    #[test]
+    fn what_a_sync_dropped_and_an_addition_on_a_target_are_said() {
+        let places = scratch("dropped");
+        ready(&places);
+        store_of(&places)
+            .write(&Belongings {
+                extra: vec!["home/.config/emacs".into()],
+                ..store_of(&places).read()
+            })
+            .expect("prefs");
+        let mut outcome = synced(vec![], None);
+        if let Outcome::Synced { dropped, .. } = &mut outcome {
+            dropped.push((
+                "home/.ssh/deploy-of-laptop".into(),
+                ronoctua_belongings::sift::ACCESS_ELSEWHERE.into(),
+            ));
+            dropped.push((
+                "home/.config/app/settings.json".into(),
+                ronoctua_belongings::sift::SYSTEM_MANAGED.into(),
+            ));
+        }
+        status(&places, outcome);
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let r = Readings::read(Some(places.clone()), 1_700_000_500);
+            let v = View::fresh(&r, &zone(), 100, &t);
+            let text = drawn(&v.rows(&r, &zone(), 100, &t)).replace(" | ", " ");
+            for (path, why) in [
+                (
+                    "home/.ssh/deploy-of-laptop",
+                    ronoctua_belongings::sift::ACCESS_ELSEWHERE,
+                ),
+                (
+                    "home/.config/app/settings.json",
+                    ronoctua_belongings::sift::SYSTEM_MANAGED,
+                ),
+            ] {
+                let said = t.t_with(
+                    key::BELONGINGS_DROPPED,
+                    &[
+                        ("name", &shown_path(path, Some(&places), false)),
+                        ("reason", &t.t(&words::reason_key(why))),
+                    ],
+                );
+                let flat: String = said.split_whitespace().collect::<Vec<_>>().join(" ");
+                let drawn_flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                assert!(drawn_flat.contains(&flat), "{language}: {said}: {text}");
+            }
+            let on = t.t_with(
+                key::BELONGINGS_ADDED_ON_TARGET,
+                &[("target", &t.t(&words::target_key("emacs")))],
+            );
+            let words_of = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                words_of(&text).contains(&words_of(&on)),
+                "{language}: {text}"
+            );
+            assert!(!text.contains('['), "{language}: a raw key: {text}");
+        }
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 
@@ -7852,6 +8411,49 @@ mod tests {
         let second = next();
         counting.came(&mut r, second);
         assert!(inbox.take().is_empty());
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
+    /// FAILS IF: a row wrapped over several lines in a narrow door lights
+    /// and takes the click on its first line only — a line it continues
+    /// onto takes nothing, says nothing under the pointer, or a click there
+    /// lands anywhere but on the row.
+    #[test]
+    fn a_wrapped_row_is_one_control() {
+        let places = scratch("wrapped");
+        let r = Readings::read(Some(places.clone()), 1_700_000_000);
+        let t = texts("pt-BR");
+        let mut v = View::fresh(&r, &zone(), 30, &t);
+        let rows = v.rows(&r, &zone(), 30, &t);
+        let (first, cont) = rows
+            .windows(2)
+            .enumerate()
+            .find_map(|(n, w)| (w[0].target.is_some() && w[1].continues).then_some((n, n + 1)))
+            .unwrap_or_else(|| panic!("no row wrapped at 30: {}", drawn(&rows)));
+        assert!(
+            rows[cont].takes(),
+            "the line it continues onto takes nothing"
+        );
+        assert!(rows[cont].heading(), "the cursor stops on a continued line");
+        assert_eq!(View::control_of(cont, &rows), first);
+        assert_eq!(
+            View::about(&rows, cont, &t),
+            View::about(&rows, first, &t),
+            "the continued line says another sentence"
+        );
+        // THE FIRST CLICK ON THE CONTINUED LINE SELECTS THE ROW, the second
+        // is its `RET` — from a cursor somewhere else.
+        let other = rows
+            .iter()
+            .position(|row| row.target.is_some())
+            .filter(|n| *n != first)
+            .or_else(|| rows.iter().rposition(|row| row.target.is_some()))
+            .expect("another row that acts");
+        assert_ne!(other, first);
+        assert!(!v.clicked(other, &rows) || v.cursor() == other);
+        assert!(!v.clicked(cont, &rows), "the first click was the `RET`");
+        assert_eq!(v.cursor(), first, "the click landed off the row");
+        assert!(v.clicked(cont, &rows), "the second click was not the `RET`");
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 }

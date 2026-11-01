@@ -39,6 +39,9 @@
   # where its record lives. Read only by the two programs that change this
   # machine, so evaluating the release alone does not evaluate a system.
   machine,
+  # The program that checks F-Droid's signed index for the distro's apk
+  # pins (`ronoctua-fdroid-pins`), which moving the pins asks.
+  fdroidPins,
 }:
 
 let
@@ -93,6 +96,7 @@ let
     runtimeInputs = [ nix ];
     text = ''
       export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
+      export RONOCTUA_FDROID_PINS=${fdroidPins}
       exec ${python3}/bin/python3 ${./scripts/distro-pins.py} --root "$1"
     '';
   };

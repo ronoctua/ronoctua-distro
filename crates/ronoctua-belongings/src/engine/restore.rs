@@ -80,6 +80,10 @@ pub const PROBE_BRANCH: &str = "ronoctua-belongings-probe";
 pub const SIGNER_OUT: &str = crate::plain::SIGNER_FILE;
 
 /// What `init` did.
+///
+/// A run's whole outcome beside a number: one is made per `init`, and
+/// boxing it would move the bytes and not save them.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Initialized {
     /// The repository was empty: the first sync made it, and this is how it
@@ -201,11 +205,16 @@ impl Engine<'_> {
         let stamp = self.places.replaced().join(stamp_of(self.now_s));
         // A TARGET NO MACHINE KEEPS any more is not brought to a new one.
         let dropped: BTreeSet<String> = index.dropped.keys().cloned().collect();
+        // NOR WHAT AN OLD SYNC LEFT THAT NO MACHINE MAY TAKE (a link into
+        // the system's store, another machine's deploy key): never written
+        // here, and the first sync takes it out of the repository.
+        let debris = self.debris(&ring, &index, None);
         let wanted: Vec<_> = index
             .entries
             .iter()
             .filter(|b| kept::kept_here(&b.path, self.prefs, under_a_root(&roots, &b.path)))
             .filter(|b| !kept::dropped_everywhere(&b.path, &dropped))
+            .filter(|b| !debris.contains_key(&b.path))
             .collect();
         let total = wanted.len() as u64;
         let mut pulled = 0u32;
@@ -315,6 +324,10 @@ impl Engine<'_> {
             offers: self.offers_after(&brought),
             repaired: Vec::new(),
             budget: None,
+            dropped: debris
+                .into_iter()
+                .map(|(path, why)| (path, why.to_owned()))
+                .collect(),
         })
     }
 

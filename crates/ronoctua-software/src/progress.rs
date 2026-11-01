@@ -253,6 +253,7 @@ mod tests {
                 desktop_ids: vec!["org.x.Y.desktop".into()],
                 amount: None,
                 rehearsed: false,
+                waits: None,
             }),
             Beat::Failed(Failure {
                 refusal: Some(Refusal::Offline),

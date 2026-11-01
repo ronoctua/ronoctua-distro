@@ -473,6 +473,20 @@ consent-allow = allow
 consent-unkept-no-home = There is no home folder to keep the permission to ask { $hosts } in.
 consent-unkept-unparseable = The permission file (consent.json) does not parse; it was left as it is, and { $hosts } was not let.
 consent-unkept-unwritable = The permission to ask { $hosts } could not be written.
+# A PERSON'S FILE READ ONLY IN PART (`partly_read.rs`), the one line every
+# view of one says: the places not read, each with why (the reasons are the
+# belongings' list of repairs' too), joined two at a time.
+partly-read = Part of { $file } cannot be read here: { $places }. What it says there stays in the file as written, and this machine goes on without it.
+partly-read-place = { $place } ({ $why })
+partly-read-then = { $first }; { $next }
+partly-read-more = { $n ->
+        [one] one more place
+       *[other] { $n } more places
+    }
+belongings-repair-why-unknown-variant = a word this machine does not know — most often a newer machine's
+belongings-repair-why-wrong-type = a value of the wrong kind
+belongings-repair-why-missing = a value that was not there
+belongings-repair-why-invalid = a value that is not allowed
 # What the modeline names the search's windows (`br.ronoctua.fast-access`,
 # and the one over everything).
 mode-fast-access = search

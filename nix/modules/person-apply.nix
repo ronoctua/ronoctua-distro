@@ -75,11 +75,24 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 
 let
   user = config.ronoctua.user;
+  # EACH BRAIN MODULE OF THE PERSON'S, EVALUATED ALONE: the bundle root's
+  # `nix eval` runs, one process per folder, before any evaluation of the
+  # machine reads it (`nix/person-brain-check.nix`) — after an apply swapped
+  # the person's data in, and after an approval let a NixOS half in.
+  brainCheck = pkgs.callPackage ../person-brain-check-bundle.nix { };
+  # What both units hand it: the machine's own Nix, which knows this store,
+  # through the daemon (the store is read-only in here), and the bundle.
+  checksBrain = {
+    RONOCTUA_NIX = "${config.nix.package}/bin/nix";
+    RONOCTUA_PERSON_BRAIN_CHECK = "${brainCheck}/check.nix";
+    NIX_REMOTE = "daemon";
+  };
   group = config.users.users.${user}.group;
   dir = config.ronoctua.machine.dir;
   tool = "${config.ronoctua.person.tool}/bin/ronoctua-person";
@@ -145,11 +158,19 @@ in
       # itself — systemd's default of five starts in ten seconds refused a
       # sixth gesture as `start-limit-hit`.
       startLimitIntervalSec = 0;
+      # AND EACH BRAIN MODULE IT SWAPPED IN, EVALUATED ALONE (`check-brain`):
+      # a throwaway home in the unit's runtime folder, which Nix's cache
+      # follows (`snapshots-skip-the-store`).
+      environment = checksBrain // {
+        HOME = "/run/ronoctua-person-apply";
+      };
       serviceConfig = hardening // {
         Type = "oneshot";
         ExecStart = "${tool} apply --staged ${staged} --machine ${dir} --owner ${user} --verdict ${verdict}";
-        # A walk of a few megabytes, after at most `LOCK_WAIT_S` for the lock.
-        TimeoutStartSec = "2min";
+        # A walk of a few megabytes, after at most `LOCK_WAIT_S` for the
+        # lock, and one `nix eval` of each brain module that changed.
+        TimeoutStartSec = "5min";
+        RuntimeDirectory = "ronoctua-person-apply";
         # Reading files the person owns (0600 under 0700) is what the one
         # capability is for; writing the machine directory needs none.
         CapabilityBoundingSet = [ "CAP_DAC_READ_SEARCH" ];
@@ -164,13 +185,11 @@ in
 
     systemd.services.${lib.removeSuffix ".service" approveUnit} = {
       description = "Approves a person brain module's root part at the hash it has now";
-      environment = {
-        # The machine's own Nix, which is the one that knows this store, and
-        # the one implementation of the hash — both by store path.
-        RONOCTUA_NIX = "${config.nix.package}/bin/nix";
+      # The machine's own Nix, through the daemon (the store is read-only in
+      # here), the bundle that evaluates the module it approves alone, and
+      # the one implementation of the hash — each by store path.
+      environment = checksBrain // {
         RONOCTUA_PERSON_HASH = "${../person-hash.nix}";
-        # Through the daemon: the store is read-only in here.
-        NIX_REMOTE = "daemon";
         # A throwaway home in the unit's own runtime folder; Nix's cache
         # follows it (`$HOME/.cache`), so no XDG_CACHE_HOME is pointed
         # anywhere (`snapshots-skip-the-store`).

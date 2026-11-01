@@ -214,16 +214,27 @@ impl Content for FooterSettingsWindow {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
 
-    /// A click takes the first line of a setting, and only that row lights
+    /// A click takes a setting, every line of it, and only those rows light
     /// under the pointer — the view's one answer
     /// ([`crate::footer_settings::Row::takes`]), which the footer's door
-    /// gives too: never a title, the air before it, the rest of a wrapped
-    /// label or a note.
+    /// gives too: never a title, the air before it or a note.
     fn takes(&self, ui: &Ui) -> Vec<bool> {
         self.view_rows(ui)
             .iter()
             .map(crate::footer_settings::Row::takes)
             .collect()
+    }
+
+    /// A setting wrapped over several lines is one control: its lines light
+    /// together, as in the footer (`View::control_of`, the row a click on
+    /// any of them lands on).
+    fn controls(&self, ui: &Ui) -> Option<Vec<usize>> {
+        let rows = self.view_rows(ui);
+        Some(
+            (0..rows.len())
+                .map(|n| crate::footer_settings::View::control_of(n, &rows))
+                .collect(),
+        )
     }
 
     fn cursor(&self) -> Option<usize> {
@@ -253,8 +264,8 @@ mod tests {
     use super::*;
 
     /// FAILS IF: the window's resting pointer lights a row a click takes
-    /// nothing on — a title, the air before it, the rest of a wrapped label,
-    /// a note — or leaves unlit one it takes. THE LIGHT IS THE CLICK: every
+    /// nothing on — a title, the air before it, a note — or leaves unlit one
+    /// it takes, the rest of a wrapped label among them. THE LIGHT IS THE CLICK: every
     /// row clicked once, on a window of its own over a file of its own,
     /// and lit exactly where something happened. The footer's door lights
     /// by the same answer (`footer_settings::Row::takes`).
@@ -277,7 +288,9 @@ mod tests {
             let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
             (FooterSettingsWindow::over(store), Ui::for_tests(texts))
         };
-        let held = crate::door::held_to_the_click(fresh, crate::door::seen);
+        let held = crate::door::held_to_the_control(fresh, crate::door::seen, |w, ui, row| {
+            crate::footer_settings::View::control_of(row, &w.view_rows(ui))
+        });
         let _ = std::fs::remove_dir_all(&root);
         assert!(
             held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),

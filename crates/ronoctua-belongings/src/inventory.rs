@@ -484,7 +484,8 @@ fn modified_s(meta: &std::fs::Metadata) -> i64 {
 
 /// Why a path the rules keep is never kept for what it IS — the walk's
 /// `crate::sift`: a link into the system's store; the deploy key, its public
-/// half or the token, by inode or by bytes.
+/// half or the token, by inode or by bytes; another machine's deploy key, by
+/// its own words.
 fn never_for_what_it_is(
     at: &Path,
     meta: &std::fs::Metadata,
@@ -495,7 +496,11 @@ fn never_for_what_it_is(
         let target = std::fs::read_link(at).ok()?;
         return sift::into_the_store(at, &target).then_some(sift::SYSTEM_MANAGED);
     }
-    access.is(at, meta).then_some(sift::ACCESS)
+    if access.is(at, meta) {
+        return Some(sift::ACCESS);
+    }
+    (meta.is_file() && sift::reads_as_a_deploy_key(at, meta.len()))
+        .then_some(sift::ACCESS_ELSEWHERE)
 }
 
 /// The access files of this machine, as the listing compares against them —

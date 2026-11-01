@@ -2,129 +2,59 @@
 
 Cada item diz o que falta, por que importa e como saber que acabou. **Ao concluir um item, apague-o**;
 se ele mudou como o sistema funciona, o porquê vai para o `docs/ARCHITECTURE.md`. Uma decisão tomada
-— o que a distro deliberadamente não faz — também vai para lá, e não fica aqui. Esta lista não guarda
-histórico: item riscado ou marcado como pronto é recusado por um check (`docs-exist`).
+— o que a distro deliberadamente não faz — só é apagada daqui, sem registro em lugar nenhum. Esta
+lista não guarda histórico: item riscado ou marcado como pronto é recusado por um check (`docs-exist`).
 
 Escreva para quem não acompanhou o trabalho: o nome da coisa como a pessoa a vê, o que falta e o
 critério de pronto, em poucas linhas.
 
 ## Esperando uma decisão do dono
 
-### Os limites da vista da rede
-
-Três coisas que a vista da rede deliberadamente não faz; falta o dono dizer se o limite fica (e o
-item sai daqui) ou se vira tarefa.
-
-- Um emoji num rótulo come uma célula de ar; uma prateleira mais alta que a região não ganha
-  barra, e uma meio fora da tela não se arrasta.
-
-### Uma máquina que segue um checkout local roda como root o que é commitado nele
-
-Numa máquina cujo flake nomeia um checkout local (a de desenvolvimento), a rotina semanal e o
-`ronoctua-update-system.service`, que a pessoa inicia sem senha, travam o `ronoctua` no `HEAD` do
-checkout e o constroem como root para o próximo boot: qualquer processo da pessoa que faça um commit
-ali chega a root. Uma máquina instalada pelo ISO segue o GitHub e não tem isso. Pedir a senha
-contradiria o "nunca pergunta" do inv. 6.
-
-- acabou quando: o dono decide; a proposta é escrever a exceção da máquina de desenvolvimento no
-  `AGENTS.md` (só onde o flake nomeia um checkout local), com um check que a cite.
-
-### Seguir as releases dos AppImages da distro vem desligado
-
-O ArtCraft Launcher e o SolidCraft andam com o pin que o gate testou, e o pin só sobe num `.#release`.
-A opção da pessoa (`distro-apps-follow-releases`) faz a atualização da máquina seguir as releases do
-fabricante: o pin seguido vira o pin da parte do app. O "na última versão" do inv. 6 sugere ligá-la
-por padrão. O caminho inteiro roda numa VM desde 2026-10-31 (`distro-apps-follow-a-release-vm`: um
-GitHub de mentira, a release seguida chegando à parte, e uma que não baixa ou não constrói retida com
-o motivo).
-
-- acabou quando: o dono decide o padrão — ligado (o código, os testes do `options.rs` e do
-  `follow.rs`, a página e o inv. 6 dizendo o mesmo) ou escolha da pessoa —, e este item sai.
-
-### Decisões pequenas
-
-- **Player**: uma faixa tem uma saída de som, e a mesma trilha como segunda faixa é recusada; uma
-  frase no cabeçalho de uma coluna estreita é cortada (a gaveta a mostra inteira); no canto, as
-  imagens pequenas ficam sobre a primeira, com um anel.
-- **Lembretes**: a faixa oferece só o primeiro adiamento (5 min); os de 10 e 60 estão na página.
-- **Gerenciador de arquivos**: o ar com marcas toma o clique (larga as marcas) e não acende.
-- **Ícones**: o nome do ícone aparece numa linha da busca, e não na linha de explicação do cabeçalho
-  como o desenho aprovado pedia (o porquê no `ARCHITECTURE.md`); o dono confirma ou diz onde ele mora.
-- **Emacs nos pertences**: uma pasta raiz que some inteira espera pela pessoa? o `e` do shell passa
-  pela unidade? uma adição feita à mão no caminho de um alvo vira o alvo? Hoje a página só diz o que
-  acontece.
-- **Pertences**: uma pasta acrescentada com milhares de arquivos vira milhares de linhas; dobrar um
-  grupo grande?
-- **Store leniente**: a parte que um arquivo de preferência não leu aparece nos pertences; a própria
-  vista (som, câmera, Syncthing…) também deve dizer?
-- **Brain**: as metades compartilhadas dos módulos fazem E/S na biblioteca que o rodapé linka; passar
-  a dado do fio muda o que a janela mostra com o brain parado.
-- **Perfil de release**: a variante escolhida foi medida com o shell num crate só; medir de novo e
-  decidir se a regra do perfil julga também o tamanho do programa (163,7 MB).
+- **Uma credencial com PIN não sobe a barra do sudo**: o gesto espera até o prazo do sudo. O
+  `pam_u2f` pede o PIN com uma frase fixa ("Please enter the PIN:"), e a porta do sudo só reconhece as
+  três frases dela (`sudo-door-reads-its-own-sentinels`). A saída menor: a porta reconhecer essa frase
+  como quarta, com um check que a prenda aos bytes do `pam_u2f` instalado, e a barra pedir o PIN como
+  pede a senha. Muda a regra das três frases, por isso espera o dono.
+- **Numa máquina com Secure Boot (lanzaboote), o rollback não dura**: o `loader.conf` do lanzaboote
+  diz `default nixos-*`, que é sempre a geração mais nova, e o reboot volta para a que foi desfeita.
+  Nenhuma máquina liga o lanzaboote hoje. A proposta: o rollback cria uma geração nova, cópia da
+  anterior, como a volta da consagração já faz (muda o "nenhuma é criada" do `rollback.rs`).
 
 ## Funcionalidade que falta
 
-- **Módulos do brain da pessoa nunca chegam a uma máquina.** Eles viajam nos pertences, mas o
-  `lib.machine` (`nix/machine.nix`) não usa o `withPersonModules`, e a aprovação de um módulo com
-  metade NixOS não tem tela (só `ronoctua-person request-approval` e a porta do sudo num terminal).
-  - acabou quando: a máquina compila um módulo `my-…` aprovado, e as duas portas de uma vista mostram
-    o módulo à espera com o hash e o aprovam por clique.
+- **Quatro arquivos de preferência lidos pela metade não avisam na própria vista** (os outros 26
+  avisam): `keyboards.json` (desenhado por um buffer WASM: falta um campo no protocolo),
+  `brain.json` (o conserto teria de viajar no `Mind`), `index.json` (a página de um módulo do brain
+  não leva argumentos) e `files-sidebar.json` (a barra lateral não tem linha para frase).
+
 - **Câmeras MIPI (Intel IPU) e só multiplanar**: não aparecem ou não gravam; a ponte seria o
   libcamera pelo PipeWire, hoje desligado por causa da luz. Médio.
 - **Um Flatpak que lê câmera pelo portal não vê nenhuma**, e nada diz por quê.
 - **F-Droid**: a ficha de um app não tem descrição longa nem permissões (o catálogo compacto só guarda
-  nome e resumo); o pin de um apk não é conferido contra o índice assinado.
-- **Registro da distro**: Flatpak e app Android da distro não levam `name`, e o web app da distro não
-  diz a classe da janela (`StartupWMClass`). Nenhum dos três existe na tabela hoje.
+  nome e resumo).
 - **O crate `age` com o `mlkem768x25519`**: o X-Wing e a estrofe são nossos (`ronoctua-pq`) até uma
   versão do `age` trazê-los; então o nosso sai e o `pq-age-interop` passa com o do crate.
-- **`/private`**: um arquivo do cofre fora da listagem (os fatos do painel) ainda é tocado no laço; o
-  cofre suspenso não volta pela chave FIDO2 (falta o plugin de token no `cryptsetup`); sem marca na
-  modeline enquanto aberto.
-- **Abrir um arquivo cifrado "para você" pede a senha** mesmo com a sessão destravada.
-- **Uma credencial com PIN não sobe a barra do sudo**: o gesto espera até o prazo do sudo.
-- **O `ronoctua-software` não instala um assinante do `tracing`**: o que um verbo dele loga (o motivo de
-  pular uma release, de recusar um pin) não chega a lugar nenhum. O caminho de seguir as releases já
-  diz os seus motivos numa linha cada (`follow::NotFollowed`); os outros verbos, não.
-- **O detalhe de uma parte que falhou é a saída inteira do Nix**, que começa pela lista do que seria
-  construído antes do erro de verdade.
+- **`/private`**: o cofre suspenso não volta pela chave FIDO2 (falta o plugin de token no
+  `cryptsetup`); sem marca na modeline enquanto aberto.
 - **O instalador com `--answers`**: um teclado sem mapa de console é recusado uma vez só, e a tela da
   BIOS ou do TPM pode apagá-lo; o console fica no mapa padrão naquela sessão (a máquina instalada
   continua protegida: o build do mapa falha antes de tocar o disco).
 - **A tela de bloqueio**: a cor lisa das outras telas não segue um tema trocado com a sessão
-  trancada; e a frase do `Esc` sob o ponteiro é a da linha compartilhada ("larga a pergunta"), onde
-  ali ele só apaga o que foi digitado.
-- **Programas declarados**: "manter em todos os seus computadores" é oferecido para o que veio de um
-  arquivo e só é recusado na fila; mudar só o ícone de um web app aparece pela metade até a
-  atualização; a trava da declaração não é a mesma dos pertences; a notificação de um "remover de
-  vez" que a atualização segurou diz "removido".
-- **A atualização não diz a razão do aplicador** (`not-signed`, `rolled-back`, `too-large`…): só o
-  diário.
-- **A verificação da atualização segura como `eval-failed`** a entrada que o consumidor só pularia com
-  motivo, e o relatório diz `held` em vez do motivo.
-- **Pertences**: a chave de implantação de outra máquina que chegou por um sync antigo não é
-  reconhecida; um link para o `/nix/store` empurrado antes da regra ainda é puxado.
+  trancada.
+- **Programas declarados**: mudar só o ícone de um web app aparece pela metade até a atualização; a
+  trava da declaração não é a mesma dos pertences.
 - **O vigia do journal** toma por folha a palavra do systemd sobre uma unidade de gerente delegado
   que não seja `user@<uid>.service` (um contêiner, um serviço com `Delegate=`): uma morte dentro dele
   pode ser atribuída à unidade de fora.
 - **Git e arquivos compactados**: pôr um membro numa pasta de dentro do arquivo é recusado; o
   `render-png` não desenha uma fila.
-- **Defeitos pequenos de tela**: o Incus em três painéis perto de 110 colunas corta valores; um
-  caminho sem espaço quebra no meio do nome; a recusa embutida começa com maiúscula depois de
-  dois-pontos; empilhado, a metade de um registro aberto que tem o teclado não se vê; no Bluetooth,
-  um dispositivo sem `wake` nem som desenha ajustes que nada alcança; no acesso rápido, a recusa de
-  uma playlist remota some e todo clique move o foco; a frase de uma linha quebrada acende só na
-  primeira linha na segurança, nos agentes, nos pertences e nos ajustes do rodapé; a frase de
-  download do catálogo de vídeos ensina `t` onde as outras dizem `SUPER t`.
-
 - **As partes: o que ficou.** As partes ficam (decisão do dono, 2026-10-31, `docs/ARCHITECTURE.md`),
   e nenhum programa a mais vira parte. Do plano de 2026-10-23 sobra:
-  - os checks `every-download-has-an-owner`, `parts-hold-no-plugin`, `parts-do-not-collide`,
-    `parts-build`, o lado Rust do `part-paths-are-read-as-arriving` e o `parts-absent-vm`;
+  - os checks `every-download-has-an-owner`, `parts-hold-no-plugin`, `parts-do-not-collide` e o lado
+    Rust do `part-paths-are-read-as-arriving`;
   - a página das partes não nomeia o hardware que espera a primeira rede, não mostra a restauração do
     primeiro boot e não distingue as partes da pessoa das da distro; um hardware sem sonda falha no
-    `build-first`; o `wide` do `nix/modules/person.nix` sobrou;
-  - o ISO completo (`.#iso-complete`, ~25 GB) nunca foi construído nem instalado.
+    `build-first`; o `wide` do `nix/modules/person.nix` sobrou.
 
 ## O que só uma máquina de verdade, uma foto ou um servidor provam
 
@@ -201,8 +131,6 @@ resto. Faltam fotos, com asserção, de:
 
 - **A coluna em duas telas** (cada tela a do seu espaço; a que some a estaciona), e o roteamento do
   player e o "mostrar em cada tela" com duas saídas.
-- **O rollback pelo resgate** (arma um ensaio, desfaz, sobe no de volta), e um ensaio com Secure Boot
-  (lanzaboote) armado e consagrado.
 - **Pertences por SSH e por token** contra um servidor git, a fila de ponta a ponta, e a restauração
   da home no primeiro boot com rede.
 - **A primeira atualização de uma máquina instalada pelo ISO** contra o release no ar, e a recusa de
@@ -249,12 +177,12 @@ Nada disso muda o que a pessoa vê; faça quando mexer na área.
   lembretes ainda é texto compilado; o `mimeDb` lê o `icons.json` inteiro; um glifo desenhado por
   vários tokens mostra um só no navegador de ícones; um glifo de módulo da pessoa que a fonte não tem
   só é recusado no build.
+- **O perfil de release** foi medido com o shell num crate só: medir de novo (`.#profile-bench`) e
+  decidir se a regra do perfil julga também o tamanho do programa (163,7 MB).
 - **O custo por quadro do gerenciador** com o ponteiro sobre uma pasta grande (~83 µs a mais), e o
   `.#bench` imprimindo casas suficientes para a regra de 3% morder.
 - **`ronoctua_lookup::keys::write_private_file`** guarda as máquinas pareadas e mora no crate das
   buscas: é do `ronoctua-store`.
-- **Os passos que o brain desenha e os que a unidade da atualização escreve no relatório**: um check
-  que compare os ids dos dois lados.
 - **Checks oferecidos**, cada um com o que pega:
   - `bench-reads-the-renderers-field` (o campo que o `nix/bench-frames.nix` procura é o que o
     renderizador registra);
@@ -265,6 +193,4 @@ Nada disso muda o que a pessoa vê; faça quando mexer na área.
   - o vigia do `.#dev` de pé depois de cada ramo de recarga;
   - `brain-daemon-halves-reexport`;
   - o `chrome-icons-match-the-text` estendido aos glifos do catálogo do brain;
-  - o `our-crates-are-built-unit-by-unit` reconhecendo a vendorização pelo conteúdo do `Cargo.lock`;
-  - o AppImage hostil plantado (`Exec=` de outro programa, `.DirIcon` apontando para `/etc/passwd`)
-    como check do `appimage-desktop.py`.
+  - o `our-crates-are-built-unit-by-unit` reconhecendo a vendorização pelo conteúdo do `Cargo.lock`.

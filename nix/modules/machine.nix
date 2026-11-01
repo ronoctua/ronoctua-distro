@@ -216,11 +216,19 @@ in
         # module caps every loader at the count the trim keeps; the loader's
         # own limit is read first, so a machine that imports this module
         # alone (a test) still has one.
+        # lanzaboote's, on a host that imports it (Secure Boot), in place of
+        # systemd-boot's — `null` is no limit of its own.
         RONOCTUA_MACHINE_MENU_LIMIT = toString (
           if config.boot.loader.systemd-boot.enable then
             config.boot.loader.systemd-boot.configurationLimit
           else if config.boot.loader.grub.enable then
             config.boot.loader.grub.configurationLimit
+          else if
+            config.boot ? lanzaboote
+            && config.boot.lanzaboote.enable
+            && config.boot.lanzaboote.configurationLimit != null
+          then
+            config.boot.lanzaboote.configurationLimit
           else
             config.ronoctua.store.systemGenerations
         );
@@ -667,8 +675,9 @@ in
       # `facter.json`) — the hardware is kept either way. They differ ONLY in
       # which state of the checkout feeds the `ronoctua` input:
       #
-      #   - THE INSTALLED DIRECTION (`-own`) builds the checkout's COMMITTED
-      #     HEAD (`git+file`, NO override): the stable system, what a plain
+      #   - THE INSTALLED DIRECTION (`-own`) builds the COMMITTED revision the
+      #     machine's lock pins (`git+file`, NO override) — the one root last
+      #     locked through the sudo door: the stable system, what a plain
       #     `nixos-rebuild` would make, and the one gesture BACK from a dev
       #     build. Root reads the person's repo as git, which git refuses as
       #     another owner's without `safe.directory` — set here, scoped to that
@@ -705,8 +714,9 @@ in
             dir=$(${distroCheckout}) || exit 1
             # A COMMITTED REVISION, not the working tree: NO override, so the
             # apply builds the revision the machine's lock pins
-            # (`--no-update-lock-file`) — the checkout's HEAD as the update
-            # last locked it, never re-resolved here. Let root read the
+            # (`--no-update-lock-file`) — as root last locked it through the
+            # sudo door (the update never moves it on such a machine), never
+            # re-resolved here. Let root read the
             # person's repo as git — git refuses another owner's repo without
             # this, scoped to the one checkout (`HOME=/root` so the write and
             # nix's read share `/root/.gitconfig`).
@@ -733,8 +743,9 @@ in
       # footer asks the door's verb `build-switch-reference` in the sudo bar,
       # and the helper starts this unit and nothing else
       # (`update-apply-rule-is-narrow`). That closes the one way the
-      # UNCOMMITTED tree reached root; what is committed still reaches it
-      # with no password (below, and `docs/PENDING.md`).
+      # UNCOMMITTED tree reached root; what is committed reaches it only
+      # through the sudo door too (the update moves `nixpkgs` alone on such
+      # a machine, below).
       systemd.services.ronoctua-build-switch-reference = {
         description = "Builds and switches to a dev build of the local checkout (working tree)";
         environment = cfg.environment;
@@ -770,14 +781,14 @@ in
       # is bought back the way the update's rule buys it: named units, one verb,
       # one user, no argument (`update-apply-rule-is-narrow`). The build
       # switch's `-own` joins the update's apply in the one rule: both apply
-      # what the machine's lock pins, and on a machine whose flake names a
-      # local checkout the update moves that lock to the checkout's HEAD —
-      # the person's own `ronoctua-update-system` start, or the weekly routine,
-      # with no password. So `-own` gives nothing the update does not: what
-      # the person COMMITS reaches root on such a machine, by its design, and
-      # whether it must pass the password too is the owner's open decision
-      # (`docs/PENDING.md`). Root reads that revision out of the person's
-      # repository, and Nix reads it without running anything the
+      # what the machine's lock pins, as it is (`--no-update-lock-file`). On
+      # a machine whose flake names a local checkout no gesture without the
+      # password moves that lock: the update — the weekly routine, the
+      # person's own `ronoctua-update-system` start — moves `nixpkgs` alone
+      # there (owner, 2026-11-01; `ronoctua_machine::aim`). So what the
+      # person COMMITS reaches root only through the sudo door (`.#apply-here`,
+      # a root `nix flake update`). Root reads the locked revision out of the
+      # person's repository, and Nix reads it without running anything the
       # repository's own git configuration names — checked against Nix 2.34
       # (`docs/ARCHITECTURE.md`).
       #

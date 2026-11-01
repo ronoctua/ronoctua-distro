@@ -170,6 +170,10 @@ pub enum Why {
     Held,
     /// No system failed its boot trial: there is nothing to try again.
     NoFailedTrial,
+    /// The update would have locked the distro input at another revision
+    /// of a local checkout (a `flake.nix` that names one its lock does not):
+    /// the lock was put back, and only the sudo door moves it.
+    CheckoutMoved,
     /// A file of the machine directory does not read.
     Unreadable,
     /// A program failed.
@@ -178,7 +182,7 @@ pub enum Why {
 
 impl Why {
     /// Every one.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::NotRoot,
         Self::Busy,
         Self::NothingToMigrate,
@@ -189,6 +193,7 @@ impl Why {
         Self::LastGoodWouldFallOut,
         Self::Held,
         Self::NoFailedTrial,
+        Self::CheckoutMoved,
         Self::Unreadable,
         Self::Failed,
     ];
@@ -207,6 +212,7 @@ impl Why {
             Self::LastGoodWouldFallOut => "last-good-would-fall-out",
             Self::Held => "held",
             Self::NoFailedTrial => "no-failed-trial",
+            Self::CheckoutMoved => "checkout-moved",
             Self::Unreadable => "unreadable",
             Self::Failed => "failed",
         }
@@ -783,6 +789,15 @@ pub fn state(places: &Places) -> Result<MachineState, Refusal> {
 pub fn distro_revision(places: &Places) -> Option<String> {
     let lock = std::fs::read(places.dir.join("flake.lock")).ok()?;
     disk::locked_rev(&lock, DISTRO_INPUT)
+}
+
+/// Whether the machine directory's lock names a LOCAL checkout of the
+/// distro ([`aim::follows_a_checkout`]): the update then moves `nixpkgs`
+/// alone, and what is committed there reaches the system only through the
+/// sudo door. `false` with no lock. What the update's page says of it.
+#[must_use]
+pub fn follows_a_checkout(places: &Places) -> bool {
+    std::fs::read(places.dir.join("flake.lock")).is_ok_and(|lock| aim::follows_a_checkout(&lock))
 }
 
 /// Root, and root's lock of the person's data — what every verb that may

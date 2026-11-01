@@ -600,7 +600,9 @@ fn switch_to(
 
 /// `apply --rehearse`: the machine directory copied under the run folder,
 /// the distro and `nixpkgs` inputs moved THERE (as the update would, unless
-/// held), and the build only measured. Nothing of the machine changes.
+/// held — `nixpkgs` alone where the lock names a local checkout,
+/// [`crate::aim::move_inputs`]), and the build only measured. Nothing of
+/// the machine changes.
 pub(crate) fn rehearse(m: &Machine) -> Result<Applied, Refusal> {
     let _lock = guard(m)?;
     let (p, s) = (&m.places, &m.system);
@@ -614,11 +616,10 @@ pub(crate) fn rehearse(m: &Machine) -> Result<Applied, Refusal> {
         .map_err(|e| disk::failed(&p.dir, &e))?;
     let measured = (|| {
         if state.hold.is_none() {
-            if run::status(&nix, &argv::update_distro(&copy))? != Some(0) {
+            if crate::aim::move_inputs(&nix, &copy).is_err() {
                 say(
                     4,
-                    "the distro and nixpkgs inputs did not move (no network?): measured with the \
-                     lock as it is",
+                    "the inputs did not move (no network?): measured with the lock as it is",
                 );
             }
         } else {

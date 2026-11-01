@@ -471,6 +471,20 @@ consent-allow = permitir
 consent-unkept-no-home = Não há pasta pessoal onde guardar a permissão para perguntar a { $hosts }.
 consent-unkept-unparseable = O arquivo das permissões (consent.json) não se lê; ficou como estava, e { $hosts } não foi permitido.
 consent-unkept-unwritable = A permissão para perguntar a { $hosts } não pôde ser gravada.
+# A PERSON'S FILE READ ONLY IN PART (`partly_read.rs`), the one line every
+# view of one says: the places not read, each with why (the reasons are the
+# belongings' list of repairs' too), joined two at a time.
+partly-read = Parte do { $file } não se lê aqui: { $places }. O que ele diz ali continua no arquivo como está escrito, e esta máquina segue sem isso.
+partly-read-place = { $place } ({ $why })
+partly-read-then = { $first }; { $next }
+partly-read-more = { $n ->
+        [one] mais um lugar
+       *[other] mais { $n } lugares
+    }
+belongings-repair-why-unknown-variant = uma palavra que esta máquina não conhece — quase sempre de uma máquina mais nova
+belongings-repair-why-wrong-type = um valor do tipo errado
+belongings-repair-why-missing = um valor que faltava
+belongings-repair-why-invalid = um valor que não é permitido
 # What the modeline names the search's windows (`br.ronoctua.fast-access`,
 # and the one over everything).
 mode-fast-access = busca

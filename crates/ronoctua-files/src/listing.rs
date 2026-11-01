@@ -274,6 +274,63 @@ pub const VAULT_PATIENCE: std::time::Duration = std::time::Duration::from_millis
 /// refused at once instead of stranding a second thread beside it.
 static STRANDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// The tests that may strand a read share [`STRANDED`] — the listing's and
+/// the type's (`mime`): one at a time.
+#[cfg(test)]
+pub(crate) static VAULT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// What stands between a read of a file and the `/private` vault: the
+/// listing's guard ([`guarded`]) for THIS machine's vault ([`Here`]), or a
+/// test's planted one — what reads a file's own bytes outside a listing
+/// (its type, for the facts panel: `mime`) goes through it too.
+pub(crate) trait Guard {
+    /// `read` of `path`, as [`guarded`] runs one.
+    fn read<T: Send + 'static>(
+        &self,
+        path: &Path,
+        read: impl FnOnce(PathBuf) -> T + Send + 'static,
+    ) -> std::result::Result<T, Withheld>;
+}
+
+/// This machine's vault.
+pub(crate) struct Here;
+
+impl Guard for Here {
+    fn read<T: Send + 'static>(
+        &self,
+        path: &Path,
+        read: impl FnOnce(PathBuf) -> T + Send + 'static,
+    ) -> std::result::Result<T, Withheld> {
+        guarded(path, read)
+    }
+}
+
+/// A vault a test planted: its mount point, its status file and the
+/// patience a read inside it is waited for.
+#[cfg(test)]
+pub(crate) struct Planted<'a> {
+    pub mount_point: &'a Path,
+    pub status_file: &'a Path,
+    pub patience: std::time::Duration,
+}
+
+#[cfg(test)]
+impl Guard for Planted<'_> {
+    fn read<T: Send + 'static>(
+        &self,
+        path: &Path,
+        read: impl FnOnce(PathBuf) -> T + Send + 'static,
+    ) -> std::result::Result<T, Withheld> {
+        guarded_by(
+            path,
+            self.mount_point,
+            self.status_file,
+            self.patience,
+            read,
+        )
+    }
+}
+
 /// Runs `read` on `dir` — the vault's guard every listing goes through.
 ///
 /// Outside `/private` (once links are followed: `ronoctua_private::inside`,
@@ -571,9 +628,6 @@ mod tests {
     /// FAILS IF: a folder of a vault that is not open is read (through a
     /// link too), an open one's is not, or a refusal stops being a
     /// [`Withheld`] the door can word.
-    /// The two tests below share [`STRANDED`]: one at a time.
-    static VAULT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn the_vault_is_read_only_while_it_is_open() {
         let _one = VAULT_TESTS

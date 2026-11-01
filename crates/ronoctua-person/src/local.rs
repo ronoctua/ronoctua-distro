@@ -1,5 +1,5 @@
-//! `local/approved.json` and `local/signer.json` — what only root writes,
-//! under the machine directory, and never syncs.
+//! `local/approved.json`, `local/brain-checked.json` and `local/signer.json`
+//! — what only root writes, under the machine directory, and never syncs.
 //!
 //! ```json
 //! {"format": 1, "modules": {"my-reminders": {"hash": "sha256-…", "approved-at": "2026-10-05T12:00:00Z"}}}
@@ -70,6 +70,84 @@ impl Document for Approved {
                     Why::Invalid,
                     format!("{at}/hash"),
                     a.hash.as_str(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `local/brain-checked.json`: each of the person's brain modules a machine
+/// would compile, evaluated ALONE, in a process of its own, before any
+/// evaluation of the machine reads it (`ronoctua-person check-brain`, which
+/// `apply` and `approve` run too; `nix/person-brain-verify.nix`).
+///
+/// A manifest that does not parse, aborts or recurses for ever is an error
+/// `tryEval` cannot catch: read by the machine's evaluation, it would stop
+/// the whole of it — the person's data breaking the machine's update. So
+/// `lib.machine` compiles a folder only when this file says it evaluated at
+/// the hash it has now (`nix/person-hash.nix`), and reports the others as
+/// refused, with what Nix said. A folder whose NixOS half waits for an
+/// approval is never evaluated, here or there.
+///
+/// ```json
+/// {"format": 1, "modules": {"my-tea": {"hash": "sha256-…", "evaluates": true, "detail": ""}}}
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct BrainChecked {
+    /// Always [`crate::FORMAT`].
+    pub format: u32,
+    /// By person module id (`my-…`).
+    pub modules: BTreeMap<String, Checked>,
+}
+
+impl Default for BrainChecked {
+    fn default() -> Self {
+        Self {
+            format: crate::FORMAT,
+            modules: BTreeMap::new(),
+        }
+    }
+}
+
+/// What evaluating one folder alone came to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Checked {
+    /// The folder's hash when it was evaluated (`nix/person-hash.nix`): the
+    /// verdict holds for that content only.
+    pub hash: String,
+    /// Whether it evaluated.
+    pub evaluates: bool,
+    /// What Nix said when it did not, English and the machine's own words;
+    /// empty when it did.
+    pub detail: String,
+}
+
+impl Document for BrainChecked {
+    fn format(&self) -> u32 {
+        self.format
+    }
+
+    fn validate(&self) -> Result<(), Refusal> {
+        for (id, c) in &self.modules {
+            let at = format!("/modules/{id}");
+            if !check::person_module(id) {
+                return Err(Refusal::new(Why::Invalid, at, id.as_str()));
+            }
+            if !check::token(&c.hash) {
+                return Err(Refusal::new(
+                    Why::Invalid,
+                    format!("{at}/hash"),
+                    c.hash.as_str(),
+                ));
+            }
+            if c.evaluates != c.detail.is_empty() {
+                return Err(Refusal::new(
+                    Why::Invalid,
+                    format!("{at}/detail"),
+                    "a detail goes with a folder that did not evaluate, and only with it",
                 ));
             }
         }

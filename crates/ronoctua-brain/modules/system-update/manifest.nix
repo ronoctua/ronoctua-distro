@@ -23,7 +23,7 @@
     # WHAT IT READS, through the crates that own each: whether the way out is
     # metered (NetworkManager) and how charged the battery is (`/sys`), which
     # a scheduled run waits on; and, for the view, the machine's record (the
-    # boot trial, a hold), what the verification held, and the plain part's
+    # boot trial, a hold), whether its lock follows a local checkout, and the plain part's
     # conflicts — of the repository the person names now, read through the
     # store that keeps `belongings.json`. It starts units through the core's
     # own `systemd`, and runs nothing itself.
@@ -75,6 +75,22 @@
     {
       inherit restart;
       restart-unguarded = restart;
+      # AND ROOT'S APPLIER REFUSED THE PERSON'S DECLARATIONS (`person-stage`
+      # recorded `failed-<word>`): the run built the ones the machine had,
+      # and the notification says the applier's reason as a sentence — the
+      # journal is not where a person learns that their signature is
+      # missing.
+      declarations-refused = {
+        notification = {
+          show = "full";
+          life = "long";
+          loud = false;
+          level = 50;
+          icon = "warning";
+          tags = [ "system" ];
+          actions = [ ];
+        };
+      };
     };
 
   # FOUR UNITS, all declared by `module.nix` under these names.

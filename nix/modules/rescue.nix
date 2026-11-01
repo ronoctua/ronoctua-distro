@@ -223,6 +223,12 @@ in
         Type = "oneshot";
         ExecStart = "${rollback} %i";
       };
+      # The switch it runs must not stop or restart the unit running it. The
+      # system it goes back to is another revision's, and so is this unit's
+      # definition there: the switch stopped it, and killed itself with it,
+      # halfway (`tests/rescue-rollback-vm.nix`).
+      restartIfChanged = false;
+      stopIfChanged = false;
     };
 
     # THE REBUILD IS THE MACHINE'S APPLY (`ronoctua-machine apply`): built

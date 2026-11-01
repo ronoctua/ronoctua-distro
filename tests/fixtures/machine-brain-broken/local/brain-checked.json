@@ -1,0 +1,25 @@
+{
+  "format": 1,
+  "modules": {
+    "my-aborts": {
+      "hash": "sha256-PnIVQ07r2CLwMC2pRkUrYN8Zev854zMNn+FxMRUIh8I=",
+      "evaluates": false,
+      "detail": "error: evaluation aborted with the following error message: 'a person's manifest that aborts'"
+    },
+    "my-fine": {
+      "hash": "sha256-f5WRkgV3glh5SWhkZYXip4rOom+GN7WTW9R5Eho11Gg=",
+      "evaluates": true,
+      "detail": ""
+    },
+    "my-incomplete": {
+      "hash": "sha256-6JheRQDjnWhbRK/cEghm39tZBlCSUqIMWT/+dNcQS80=",
+      "evaluates": true,
+      "detail": ""
+    },
+    "my-unparsed": {
+      "hash": "sha256-I5P6XkcuY+6wobo4M1ltC5XvIhV3OwpTlg59sGj/Z2M=",
+      "evaluates": false,
+      "detail": "error: undefined variable 'aNameNothingBinds'"
+    }
+  }
+}

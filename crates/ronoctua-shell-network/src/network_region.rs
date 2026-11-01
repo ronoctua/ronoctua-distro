@@ -1263,6 +1263,9 @@ impl crate::region::Region for NetworkRegion {
     /// doors — and a click on its answers is the first-selects, second-acts
     /// of every row.
     fn rows(&self, seen: &Seen<'_>) -> Vec<crate::region::Row> {
+        // THE ROOM FIRST: under a low ceiling no shelf is taller than the
+        // region (`View::shelf_lines`), so each can be whole and get its bar.
+        self.view.room_is(usize::from(seen.lines));
         self.rows_at(seen.columns, seen.texts)
             .into_iter()
             .map(|r| crate::region::Row {
@@ -1484,6 +1487,7 @@ impl crate::region::Region for NetworkRegion {
     /// The lists inside the list: Wi-Fi, the remembered, the ports, the
     /// neighbours and the peers, each a band with a bar of its own.
     fn shelves(&self, seen: &Seen<'_>) -> Vec<crate::region::Shelf> {
+        self.view.room_is(usize::from(seen.lines));
         let rows = self.rows_at(seen.columns, seen.texts);
         self.view
             .shelves(&rows)
@@ -1953,6 +1957,57 @@ mod tests {
         let (_, said) = named(10, "kettle");
         with_kept(|k| k.back())(said);
         assert_eq!(rang(&second_rang), 1, "a closed view was woken");
+    }
+
+    /// FAILS IF: under a ceiling lower than `space.shelf.lines` the footer's
+    /// region tells a band taller than its lines — one never wholly on
+    /// screen, which `Footer::hosted_shelf_bands` gives no bar.
+    #[test]
+    fn under_a_low_ceiling_every_shelf_fits_the_region() {
+        let t = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        let zone = Default::default();
+        let lines = crate::network::SHELF_LINES - 2;
+        let seen = Seen {
+            texts: &t,
+            columns: 80,
+            lines: u16::try_from(lines).unwrap_or(u16::MAX),
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let networks: Vec<ronoctua_network::Network> = (0..12)
+            .map(|i| ronoctua_network::Network {
+                ssid: format!("net {i}"),
+                signal: 90,
+                band: ronoctua_network::Band::Ghz5,
+                secured: true,
+                wpa3_only: false,
+                saved: false,
+                active_one: false,
+                max_rate_kbps: 0,
+            })
+            .collect();
+        with_kept(|k| k.wire = Some(Wire::planted(machine(), networks)));
+        let r = NetworkRegion {
+            view: View::fresh(),
+            net: machine(),
+            tunnels: ronoctua_tunnel::Scene::default(),
+            hand: None,
+            join: None,
+            opened: true,
+        };
+        let shelves = r.shelves(&seen);
+        assert!(
+            shelves.iter().any(|b| b.total > b.lines),
+            "no shelf holds more than it shows: {shelves:?}"
+        );
+        for b in &shelves {
+            assert!(
+                b.lines <= lines,
+                "a band of {} lines in {lines}: {b:?}",
+                b.lines
+            );
+        }
     }
 
     /// FAILS IF: a resting pointer lights a row of the footer's region a

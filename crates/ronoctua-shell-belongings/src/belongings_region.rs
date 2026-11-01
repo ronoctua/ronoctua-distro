@@ -432,6 +432,13 @@ impl Region for BelongingsRegion {
         View::about(&self.rows_at(seen), row, seen.texts)
     }
 
+    /// A PAIR WRAPPED OVER SEVERAL LINES IS ONE CONTROL: every line of it
+    /// lights with the one under the pointer, and a click on any takes the
+    /// first (`View::control_of`, the rows the frame laid out).
+    fn control_of(&self, row: usize, seen: &Seen<'_>) -> usize {
+        View::control_of(row, &self.rows_at(seen))
+    }
+
     /// Read by the whole notation through the reader the window calls too
     /// (`belongings::press_of_key`).
     fn key(&mut self, key: ronoctua_keymap::Key, way: &mut dyn Doorway) -> Taken {
@@ -717,8 +724,8 @@ mod tests {
     }
 
     /// FAILS IF: a resting pointer lights a row of the footer's region a
-    /// click takes nothing on — a title, a sentence, the rest of a wrapped
-    /// label — or leaves unlit one it takes. THE LIGHT IS THE CLICK: every
+    /// click takes nothing on — a title, a sentence — or leaves unlit one it
+    /// takes, the rest of a wrapped label among them. THE LIGHT IS THE CLICK: every
     /// row clicked once, on a view of its own over files laid again for it
     /// (a click writes them: a setting, a host let), and lit exactly where
     /// something happened.

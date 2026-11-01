@@ -130,6 +130,14 @@ pub struct Conflict {
     /// a text that clash — and then the two merged decisions are offered.
     /// `None`: no merge (binary, no base kept, a target that says choose).
     pub merge: Option<Merging>,
+    /// The FOLDER this path left with, when the folder left whole: a root
+    /// of what is kept (a target's path, a folder the person added) that
+    /// this machine had files in and has none in now. Its leaving is never
+    /// taken by itself — every machine would delete its copy — so each of
+    /// its paths is a conflict with no suggestion, asked once for the whole
+    /// folder: "no" brings it back here ([`Decision::TakeRemote`]), "yes"
+    /// deletes it on every machine ([`Decision::KeepLocal`]).
+    pub gone: Option<String>,
 }
 
 /// Everything a sync will do.
@@ -147,6 +155,11 @@ pub struct Plan {
     pub entries: Vec<Entry>,
     /// The paths the person decides.
     pub conflicts: Vec<Conflict>,
+    /// What the repository held that no machine may take, by path, with the
+    /// reason (`crate::sift::debris_of`): left there by a sync from before a
+    /// rule, never written here, and taken out of the repository by this
+    /// sync.
+    pub debris: BTreeMap<String, String>,
 }
 
 /// What the person decided for a conflict.
@@ -202,8 +215,11 @@ impl Decision {
     pub fn allowed(self, conflict: &Conflict) -> bool {
         match self {
             Self::KeepLocal | Self::TakeRemote => true,
+            // NEVER FOR A FOLDER THAT LEFT WHOLE: there is no side here to
+            // keep beside the repository's.
             Self::KeepBoth => {
                 conflict.added_by_person
+                    && conflict.gone.is_none()
                     && !crate::places::covers(crate::places::Root::Config.word(), &conflict.path)
             }
             // ── anchor: L09 ──
@@ -374,14 +390,35 @@ impl Plan {
 
     /// Every conflict decided alike, where it may be: the bulk "all: keep
     /// this machine's" and "all: take the repository's". `KeepBoth` is not a
-    /// bulk decision: it is only for some.
+    /// bulk decision: it is only for some. And "keep this machine's" in bulk
+    /// never answers a folder that left whole ([`Conflict::gone`]): that
+    /// deletes it on every machine, and is asked of the folder itself.
     #[must_use]
     pub fn all(&self, decision: Decision) -> Decisions {
         self.conflicts
             .iter()
             .filter(|c| decision.allowed(c))
+            .filter(|c| c.gone.is_none() || decision != Decision::KeepLocal)
             .map(|c| (c.path.clone(), decision))
             .collect()
+    }
+
+    /// The folders that left whole ([`Conflict::gone`]), each with how many
+    /// of its paths wait on it, in order.
+    #[must_use]
+    pub fn gone(&self) -> BTreeMap<&str, usize> {
+        let mut out = BTreeMap::new();
+        for root in self.conflicts.iter().filter_map(|c| c.gone.as_deref()) {
+            *out.entry(root).or_insert(0) += 1;
+        }
+        out
+    }
+
+    /// How many questions the person answers: every conflict, but a folder
+    /// that left whole is one, however many paths it held.
+    #[must_use]
+    pub fn questions(&self) -> usize {
+        self.conflicts.iter().filter(|c| c.gone.is_none()).count() + self.gone().len()
     }
 }
 
@@ -453,6 +490,37 @@ mod tests {
         assert!(Decision::KeepBoth.allowed(&conflict("state/x/notes.md", true)));
         assert!(plan.decided(&plan.all(Decision::KeepLocal)));
         assert!(plan.decided(&plan.all(Decision::TakeRemote)));
+    }
+
+    /// FAILS IF: a folder that left whole is more than one question, "keep
+    /// this machine's" in bulk answers it (that deletes it on every machine),
+    /// "take the repository's" in bulk leaves it unanswered, or it may keep
+    /// both sides.
+    #[test]
+    fn a_folder_that_left_whole_is_one_question_bulk_never_deletes() {
+        let gone = |path: &str| Conflict {
+            gone: Some("home/notes".to_owned()),
+            local: None,
+            ..conflict(path, true)
+        };
+        let plan = Plan {
+            conflicts: vec![
+                conflict("config/theme.json", false),
+                gone("home/notes/a.md"),
+                gone("home/notes/deep/b.md"),
+            ],
+            ..Plan::default()
+        };
+        assert_eq!(plan.questions(), 2);
+        assert_eq!(
+            plan.gone().into_iter().collect::<Vec<_>>(),
+            [("home/notes", 2)]
+        );
+        let local = plan.all(Decision::KeepLocal);
+        assert_eq!(local.keys().collect::<Vec<_>>(), ["config/theme.json"]);
+        assert!(!plan.decided(&local), "the bulk deleted a whole folder");
+        assert!(plan.decided(&plan.all(Decision::TakeRemote)));
+        assert!(!Decision::KeepBoth.allowed(&plan.conflicts[1]));
     }
 
     /// FAILS IF: a merged decision is offered where no merge reached the
@@ -540,10 +608,19 @@ mod tests {
                 path: "config/a.json".to_owned(),
                 step: Step::Pull,
             }],
-            conflicts: vec![Conflict {
-                suggested: Some(Decision::TakeRemote),
-                ..conflict("config/b.json", false)
-            }],
+            conflicts: vec![
+                Conflict {
+                    suggested: Some(Decision::TakeRemote),
+                    ..conflict("config/b.json", false)
+                },
+                Conflict {
+                    gone: Some("home/notes".to_owned()),
+                    ..conflict("home/notes/a.md", true)
+                },
+            ],
+            debris: [("home/.ssh/old".to_owned(), "access-elsewhere".to_owned())]
+                .into_iter()
+                .collect(),
         };
         let text = serde_json::to_string(&plan).unwrap();
         assert_eq!(serde_json::from_str::<Plan>(&text).unwrap(), plan);

@@ -578,6 +578,7 @@ pub fn run(ctx: &Context, only: Option<Source>, report: &mut dyn Report) -> Done
         desktop_ids: Vec::new(),
         amount: Some(changed),
         rehearsed: ctx.rehearse,
+        waits: None,
     })
 }
 

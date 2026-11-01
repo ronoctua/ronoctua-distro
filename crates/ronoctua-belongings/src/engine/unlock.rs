@@ -202,4 +202,63 @@ pub(super) fn forget(places: &Places, beat: &mut dyn FnMut(Beat)) -> Result<u32,
     Ok(0)
 }
 
+/// LENDS the identity this session keeps for the repository the settings of
+/// `places` name: its line alone — never the signing key kept beside it —
+/// into `out`, created new and `0600` (`ronoctua-belongings lend --out
+/// <file>`). The queue asks it for one seal that opens a file sealed "to
+/// myself" with no question, into a file of the queue's own folder, which
+/// it removes when that job ends. Nothing of it is printed.
+///
+/// # Errors
+///
+/// [`Why::NoPassphrase`] when nothing is kept for the repository — the
+/// kernel let it go, the person keeps none, there is no repository —: the
+/// door then asks the passphrase. [`Why::Failed`] when `out` is there
+/// already or could not be written (nothing is left behind).
+pub fn lend_under(
+    places: &Places,
+    vault: &dyn crate::unlock::Vault,
+    out: &Path,
+) -> Result<(), Refusal> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let none = Refusal::of(Why::NoPassphrase);
+    let prefs = super::read_prefs(places);
+    if !prefs.has_repository() || !prefs.keep_unlocked {
+        return Err(none);
+    }
+    let kept = vault.take(&description(&prefs.repository)).ok_or(none)?;
+    let identity = kept
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with(ronoctua_pq::IDENTITY_PREFIX))
+        .ok_or(none)?;
+    let mut line = zeroize::Zeroizing::new(Vec::with_capacity(identity.len() + 1));
+    line.extend_from_slice(identity.as_bytes());
+    line.push(b'\n');
+    // BORN PRIVATE AND NEW: the mode on the creation, and never written
+    // over a file that is there (a link included — `O_EXCL` follows none).
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(out)
+        .map_err(|_| Refusal::of(Why::Failed))?;
+    if file.write_all(&line).is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(out);
+        return Err(Refusal::of(Why::Failed));
+    }
+    Ok(())
+}
+
+/// [`lend_under`] the kernel's keyring.
+///
+/// # Errors
+///
+/// As [`lend_under`].
+pub fn lend(places: &Places, out: &Path) -> Result<(), Refusal> {
+    lend_under(places, &crate::unlock::Kernel::USER, out)
+}
+
 // ── anchor: L10 ──

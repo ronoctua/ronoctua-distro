@@ -180,6 +180,7 @@ pub const fn refusal_key(why: Refusal) -> &'static str {
         Refusal::LeavesAtNextRestart => key::SOFTWARE_DECLARED_REFUSAL_LEAVES_AT_NEXT_RESTART,
         Refusal::DeclinedElsewhere => key::SOFTWARE_DECLARED_REFUSAL_DECLINED_ELSEWHERE,
         Refusal::ProvidedByAPart => key::SOFTWARE_REFUSAL_PROVIDED_BY_A_PART,
+        Refusal::PartArriving => key::SOFTWARE_REFUSAL_PART_ARRIVING,
     }
 }
 

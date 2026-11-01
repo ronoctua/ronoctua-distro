@@ -19,11 +19,24 @@
 //!
 //! The walk sets each one aside in [`crate::walk::Found::never`] with its
 //! reason, so the page that lists what is kept can say why.
+//!
+//! # What an old sync left behind
+//!
+//! Both rules came after machines had synced, and what those pushed is in
+//! the repository still. A machine knows ITS deploy key by inode and bytes,
+//! never another machine's: so a deploy key is also known by what it says of
+//! itself — every one this system ever made carries the comment
+//! [`DEPLOY_COMMENT`] ([`is_a_deploy_key`], reason [`ACCESS_ELSEWHERE`]). And
+//! a link the repository holds is known by its text, which the sync reads
+//! before it plans ([`debris_of`]). Neither is ever written on a machine, and
+//! the sync that finds one takes it out of the repository, saying so.
 
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Component, Path, PathBuf};
 
 use crate::places::Places;
+use crate::plan::Kind;
 
 /// The system's store, where the links the system makes point.
 pub const STORE: &str = "/nix/store";
@@ -35,8 +48,172 @@ pub const SYSTEM_MANAGED: &str = "system-managed";
 /// (`belongings-reason-access`, the table's own reason for the access files).
 pub const ACCESS: &str = "access";
 
+/// ANOTHER MACHINE'S access to the repository — a deploy key it made, known
+/// by its own words ([`is_a_deploy_key`]), that an old sync carried here
+/// (`belongings-reason-access-elsewhere`).
+pub const ACCESS_ELSEWHERE: &str = "access-elsewhere";
+
 /// Every reason this module gives — each a sentence in every language.
-pub const REASONS: [&str; 2] = [SYSTEM_MANAGED, ACCESS];
+pub const REASONS: [&str; 3] = [SYSTEM_MANAGED, ACCESS, ACCESS_ELSEWHERE];
+
+/// The comment every deploy key of the belongings carries, on every machine
+/// and since the first build (`ssh-keygen -C`, `engine::keygen`): how one is
+/// known by its bytes on a machine that did not make it.
+pub const DEPLOY_COMMENT: &str = "ronoctua-belongings";
+
+/// The most bytes either half of a deploy key takes. An ed25519 key with
+/// [`DEPLOY_COMMENT`] is 411 bytes and its public half 101; anything larger
+/// is never read to ask, so the walk and the sync read only small files.
+pub const DEPLOY_KEY_MOST_BYTES: u64 = 1024;
+
+/// The armour of an OpenSSH private key — in pieces, or the repository's
+/// secret scan takes this file for a key.
+const PRIVATE_BEGIN: &str = concat!("-----BEGIN OPENSSH ", "PRIVATE", " KEY-----");
+/// See [`PRIVATE_BEGIN`].
+const PRIVATE_END: &str = concat!("-----END OPENSSH ", "PRIVATE", " KEY-----");
+/// The key type every deploy key is (`ssh-keygen -t ed25519`).
+pub const DEPLOY_TYPE: &str = "ssh-ed25519";
+
+/// Whether `bytes` are either half of a deploy key of the belongings — made
+/// on this machine or on any other: an unencrypted OpenSSH ed25519 private
+/// key whose comment, inside it, is [`DEPLOY_COMMENT`], or the public line
+/// that ends with it. A person's own key never says that. Pure.
+#[must_use]
+pub fn is_a_deploy_key(bytes: &[u8]) -> bool {
+    if bytes.len() as u64 > DEPLOY_KEY_MOST_BYTES {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let text = text.trim();
+    if let Some(body) = text
+        .strip_prefix(PRIVATE_BEGIN)
+        .and_then(|rest| rest.strip_suffix(PRIVATE_END))
+    {
+        let armoured: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        return base64_decoded(&armoured)
+            .map(zeroize::Zeroizing::new)
+            .is_some_and(|key| private_comment(&key) == Some(DEPLOY_COMMENT.as_bytes()));
+    }
+    // THE PUBLIC HALF: one line, `<type> <base64> <comment>`.
+    let mut words = text.split_ascii_whitespace();
+    matches!(
+        (words.next(), words.next(), words.next(), words.next()),
+        (Some(DEPLOY_TYPE), Some(blob), Some(DEPLOY_COMMENT), None)
+            if base64_decoded(blob).is_some_and(|b| ssh_string(&b, 0).map(|(s, _)| s)
+                == Some(DEPLOY_TYPE.as_bytes()))
+    )
+}
+
+/// The comment inside an unencrypted OpenSSH ed25519 private key
+/// (`openssh-key-v1`: cipher `none`, one key, then the private section's
+/// two check words, the key type, the public and private halves and the
+/// comment); `None` for anything else — an encrypted key hides its comment,
+/// and no deploy key is encrypted. Pure.
+fn private_comment(key: &[u8]) -> Option<&[u8]> {
+    let mut at = key.strip_prefix(b"openssh-key-v1\0".as_slice())?;
+    let mut next = || {
+        let (word, rest) = ssh_string(at, 0)?;
+        at = rest;
+        Some(word)
+    };
+    if next()? != b"none" {
+        return None;
+    }
+    let _kdf = next()?;
+    let _kdf_options = next()?;
+    let (count, rest) = at.split_first_chunk::<4>()?;
+    if u32::from_be_bytes(*count) != 1 {
+        return None;
+    }
+    let (_public, rest) = ssh_string(rest, 0)?;
+    let (private, _) = ssh_string(rest, 0)?;
+    // THE PRIVATE SECTION: two check words, then the key.
+    let (_, inside) = private.split_at_checked(8)?;
+    let (kind, inside) = ssh_string(inside, 0)?;
+    if kind != DEPLOY_TYPE.as_bytes() {
+        return None;
+    }
+    let (_public, inside) = ssh_string(inside, 0)?;
+    let (_secret, inside) = ssh_string(inside, 0)?;
+    ssh_string(inside, 0).map(|(comment, _)| comment)
+}
+
+/// One SSH wire string of `bytes` at `from`: a big-endian `u32` length and
+/// that many bytes; the string and what follows it. Pure.
+fn ssh_string(bytes: &[u8], from: usize) -> Option<(&[u8], &[u8])> {
+    let (length, rest) = bytes.get(from..)?.split_first_chunk::<4>()?;
+    let length = usize::try_from(u32::from_be_bytes(*length)).ok()?;
+    rest.split_at_checked(length)
+}
+
+/// Standard base64 (`=` padding) decoded; `None` for anything that is not.
+/// Pure.
+fn base64_decoded(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| -> Option<u32> {
+        Some(u32::from(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        }))
+    };
+    let bytes = text.trim_end_matches('=').as_bytes();
+    if !text.len().is_multiple_of(4) || text.len() - bytes.len() > 2 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for group in bytes.chunks(4) {
+        let mut word = 0u32;
+        for (n, c) in group.iter().enumerate() {
+            word |= value(*c)? << (18 - 6 * n);
+        }
+        let [_, a, b, c] = word.to_be_bytes();
+        out.extend_from_slice(&[a, b, c][..group.len().saturating_sub(1)]);
+    }
+    Some(out)
+}
+
+/// What a path of the REPOSITORY is that no machine may take, by what it
+/// holds — `bytes`, the text of a link or the content of a file, opened by
+/// the sync before it plans: a link into [`STORE`] ([`SYSTEM_MANAGED`]) or
+/// a deploy key ([`ACCESS_ELSEWHERE`]). `at` is where the path is on this
+/// machine, for a link written relative to its folder. Pure.
+#[must_use]
+pub fn debris_of(kind: Kind, at: &Path, bytes: &[u8]) -> Option<&'static str> {
+    match kind {
+        Kind::Link => {
+            let target = Path::new(std::ffi::OsStr::from_bytes(bytes));
+            into_the_store(at, target).then_some(SYSTEM_MANAGED)
+        }
+        Kind::File => is_a_deploy_key(bytes).then_some(ACCESS_ELSEWHERE),
+    }
+}
+
+/// Whether the file at `at`, `size` bytes long, is a deploy key — read into
+/// memory wiped when it is dropped (it is a private key when it is one), and
+/// only when it is small enough to be one.
+#[must_use]
+pub fn reads_as_a_deploy_key(at: &Path, size: u64) -> bool {
+    use std::io::Read as _;
+    if size == 0 || size > DEPLOY_KEY_MOST_BYTES {
+        return false;
+    }
+    let Ok(file) = std::fs::File::open(at) else {
+        return false;
+    };
+    // THE ROOM IS THE MOST AND ONE BYTE, so the read that finds the end grows
+    // nothing (a grown buffer would leave its first copy behind, unwiped).
+    let room = usize::try_from(DEPLOY_KEY_MOST_BYTES).unwrap_or(usize::MAX) + 1;
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(room));
+    file.take(DEPLOY_KEY_MOST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_ok()
+        && is_a_deploy_key(&bytes)
+}
 
 /// Whether a link whose text is `target`, sitting at `at`, points into the
 /// system's store — an absolute target, or a relative one resolved against
@@ -120,25 +297,124 @@ pub fn reason(at: &Path, access: &Access) -> Option<&'static str> {
 }
 
 /// Moves out of `found.files` every path that [`reason`] (or a copy of an
-/// access file, by its hash) says is never kept, into `found.never`.
+/// access file, by its hash, or another machine's deploy key, by its words)
+/// says is never kept, into `found.never`.
 #[cfg(feature = "crypt")]
 pub fn sift(places: &Places, found: &mut crate::walk::Found) {
+    #[cfg(test)]
+    if old_sync::now() {
+        return;
+    }
     let access = Access::of(places);
     let refused: Vec<(String, &'static str)> = found
         .files
         .iter()
         .filter_map(|(logical, side)| {
             let at = places.resolve(logical)?;
-            let why = reason(&at, &access).or_else(|| {
-                (side.kind == crate::plan::Kind::File && access.has_the_content(&side.sha256))
-                    .then_some(ACCESS)
-            })?;
+            let file = side.kind == crate::plan::Kind::File;
+            let why = reason(&at, &access)
+                .or_else(|| (file && access.has_the_content(&side.sha256)).then_some(ACCESS))
+                .or_else(|| {
+                    (file && reads_as_a_deploy_key(&at, side.size_bytes))
+                        .then_some(ACCESS_ELSEWHERE)
+                })?;
             Some((logical.clone(), why))
         })
         .collect();
     for (logical, why) in refused {
         found.files.remove(&logical);
         found.never.insert(logical, why);
+    }
+}
+
+/// WHAT AN OLD SYNC LEFT, for a test: while [`old_sync::during`] holds,
+/// the walk of this thread sifts nothing — a build from before the rules,
+/// whose push is what the repository still holds — and the keys a machine
+/// makes ([`old_sync::a_key`]).
+#[cfg(test)]
+pub mod old_sync {
+    thread_local! {
+        static ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Whether this thread's walk is an old build's.
+    pub fn now() -> bool {
+        ON.with(std::cell::Cell::get)
+    }
+
+    /// Runs `f` as a build from before the rule.
+    pub fn during<T>(f: impl FnOnce() -> T) -> T {
+        ON.with(|on| on.set(true));
+        let out = f();
+        ON.with(|on| on.set(false));
+        out
+    }
+
+    /// Standard base64, padded — the test's own, to build a key's armour.
+    fn base64(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for group in bytes.chunks(3) {
+            let mut word = [0u8; 3];
+            word[..group.len()].copy_from_slice(group);
+            let n = u32::from_be_bytes([0, word[0], word[1], word[2]]);
+            for k in 0..4 {
+                if k <= group.len() {
+                    out.push(char::from(ALPHABET[((n >> (18 - 6 * k)) & 63) as usize]));
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    fn wire(bytes: &[u8]) -> Vec<u8> {
+        let mut out = u32::try_from(bytes.len()).unwrap().to_be_bytes().to_vec();
+        out.extend_from_slice(bytes);
+        out
+    }
+
+    /// An ed25519 key as `ssh-keygen -N ''` writes it — the two halves'
+    /// bytes, `kind` its type and `comment` its comment: what a machine's
+    /// `belongings-keys/deploy` and `deploy.pub` hold. Made here, never a
+    /// key that opens anything.
+    pub fn a_key(kind: &str, comment: &str, cipher: &str) -> (Vec<u8>, Vec<u8>) {
+        let public: Vec<u8> = [wire(kind.as_bytes()), wire(&[7u8; 32])].concat();
+        let mut private = [
+            vec![1, 2, 3, 4, 1, 2, 3, 4],
+            wire(kind.as_bytes()),
+            wire(&[7u8; 32]),
+            wire(&[9u8; 64]),
+            wire(comment.as_bytes()),
+        ]
+        .concat();
+        let mut pad = 1u8;
+        while private.len() % 8 != 0 {
+            private.push(pad);
+            pad += 1;
+        }
+        let blob = [
+            b"openssh-key-v1\0".to_vec(),
+            wire(cipher.as_bytes()),
+            wire(b"none"),
+            wire(b""),
+            1u32.to_be_bytes().to_vec(),
+            wire(&public),
+            wire(&private),
+        ]
+        .concat();
+        let armoured = base64(&blob);
+        let mut text = format!("{}\n", super::PRIVATE_BEGIN);
+        for line in armoured.as_bytes().chunks(70) {
+            text.push_str(std::str::from_utf8(line).unwrap());
+            text.push('\n');
+        }
+        text.push_str(super::PRIVATE_END);
+        text.push('\n');
+        let line = format!("{kind} {} {comment}\n", base64(&public));
+        (text.into_bytes(), line.into_bytes())
     }
 }
 
@@ -160,6 +436,61 @@ mod tests {
         assert!(!into_the_store(at, Path::new("settings.real")));
         assert!(!into_the_store(at, Path::new("/nix/storefront/x")));
         assert!(!into_the_store(at, Path::new("/home/me/notes")));
+    }
+
+    /// FAILS IF: either half of a deploy key — this machine's or another's,
+    /// told by the comment every one carries — is not known by its bytes;
+    /// or the person's own key (another comment, another type, encrypted),
+    /// a text that only mentions the comment, or a broken armour is taken
+    /// for one.
+    #[test]
+    fn a_deploy_key_is_known_by_its_own_words() {
+        let (private, public) = old_sync::a_key(DEPLOY_TYPE, DEPLOY_COMMENT, "none");
+        assert_eq!(private.len(), 411, "not the size ssh-keygen writes");
+        assert_eq!(public.len(), 101, "not the size ssh-keygen writes");
+        assert!(is_a_deploy_key(&private), "the private half");
+        assert!(is_a_deploy_key(&public), "the public half");
+        for (what, (private, public)) in [
+            (
+                "the person's key",
+                old_sync::a_key(DEPLOY_TYPE, "me@laptop", "none"),
+            ),
+            (
+                "another type",
+                old_sync::a_key("ssh-rsa", DEPLOY_COMMENT, "none"),
+            ),
+            (
+                "an encrypted key",
+                old_sync::a_key(DEPLOY_TYPE, DEPLOY_COMMENT, "aes256-ctr"),
+            ),
+        ] {
+            assert!(!is_a_deploy_key(&private), "{what}, private");
+            if what == "the person's key" {
+                assert!(!is_a_deploy_key(&public), "{what}, public");
+            }
+        }
+        let mentions = format!("# {DEPLOY_COMMENT} keys live in ~/.config\n");
+        assert!(!is_a_deploy_key(mentions.as_bytes()));
+        let wrong_blob = format!("{DEPLOY_TYPE} QUFBQQ== {DEPLOY_COMMENT}\n");
+        assert!(!is_a_deploy_key(wrong_blob.as_bytes()));
+        let mut broken = private.clone();
+        broken[60] = b'*';
+        assert!(!is_a_deploy_key(&broken), "a broken armour");
+        let cut = &private[..200];
+        assert!(!is_a_deploy_key(cut), "half an armour");
+        // AND BY WHAT IT HOLDS, as the sync reads the repository's copy.
+        let at = Path::new("/home/me/.ssh/belongings");
+        assert_eq!(debris_of(Kind::File, at, &private), Some(ACCESS_ELSEWHERE));
+        assert_eq!(debris_of(Kind::File, at, b"Host *\n"), None);
+        assert_eq!(
+            debris_of(Kind::Link, at, b"/nix/store/abc-home-manager-files/x"),
+            Some(SYSTEM_MANAGED)
+        );
+        assert_eq!(
+            debris_of(Kind::Link, at, b"../../../nix/store/abc-x"),
+            Some(SYSTEM_MANAGED)
+        );
+        assert_eq!(debris_of(Kind::Link, at, b"id_ed25519"), None);
     }
 
     #[cfg(feature = "crypt")]
@@ -354,6 +685,55 @@ mod tests {
                 step("home/.ssh/id_ed25519"),
                 Some(crate::plan::Step::Push),
                 "the person's own key stopped travelling"
+            );
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        /// FAILS IF: ANOTHER machine's deploy key — both halves, carried
+        /// into `~/.ssh` by an old sync, neither this machine's file nor a
+        /// copy of it — is walked as kept; or the person's own key there,
+        /// alike in every way but its comment, stops travelling; or the
+        /// repository's copy stays in it.
+        #[test]
+        fn another_machines_deploy_key_never_travels() {
+            let root = scratch("access-elsewhere");
+            let p = Places::under(&root);
+            std::fs::create_dir_all(p.home.join(".ssh")).unwrap();
+            let (theirs_private, theirs_public) =
+                super::super::old_sync::a_key(DEPLOY_TYPE, DEPLOY_COMMENT, "none");
+            let (mine, _) = super::super::old_sync::a_key(DEPLOY_TYPE, "me@laptop", "none");
+            std::fs::write(p.home.join(".ssh/deploy-of-laptop"), &theirs_private).unwrap();
+            std::fs::write(p.home.join(".ssh/deploy-of-laptop.pub"), &theirs_public).unwrap();
+            std::fs::write(p.home.join(".ssh/id_ed25519"), &mine).unwrap();
+            let prefs = Belongings::default();
+            let none = BTreeSet::new();
+            let found = walk(&crate::scope::Scope::for_sync(&prefs, &none, &none), &p);
+            assert!(
+                found.files.contains_key("home/.ssh/id_ed25519"),
+                "the person's own key stopped travelling"
+            );
+            for name in ["deploy-of-laptop", "deploy-of-laptop.pub"] {
+                let logical = format!("home/.ssh/{name}");
+                assert!(!found.files.contains_key(&logical), "{logical} travels");
+                assert_eq!(
+                    found.never.get(&logical),
+                    Some(&ACCESS_ELSEWHERE),
+                    "{logical}"
+                );
+            }
+            let mut remote = crate::merge::Index::fresh();
+            remote.entries.push(theirs(
+                "home/.ssh/deploy-of-laptop",
+                crate::plan::Kind::File,
+            ));
+            let plan = crate::merge::plan(None, &found, &remote, &prefs);
+            assert!(
+                plan.entries
+                    .iter()
+                    .any(|e| e.path == "home/.ssh/deploy-of-laptop"
+                        && e.step == crate::plan::Step::Unkeep),
+                "the other machine's key stays in the repository: {:?}",
+                plan.entries
             );
             let _ = std::fs::remove_dir_all(root);
         }

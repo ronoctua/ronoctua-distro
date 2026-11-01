@@ -101,6 +101,11 @@ pub struct Scene {
     /// thread already reads three things per beat and this is a fourth small
     /// file.
     pub autostart: bool,
+    /// What of `tor.json` the read repaired when it read only in part — a
+    /// newer machine's word, a typo — the rest read; empty when it read
+    /// whole, or not at all. The sheet says which places (`partly_read`, in
+    /// the shell's kit): the switch shows the repair, the file keeps its word.
+    pub prefs_repairs: Vec<ronoctua_store::Repair>,
     /// The torrc fragment this system owns, as it is on disk.
     ///
     /// Read rather than remembered: the file is what survives a reboot and
@@ -128,11 +133,17 @@ impl Scene {
 /// Reads everything, once.
 #[must_use]
 pub fn look(places: &Places) -> Scene {
+    let reading = prefs::store().reading();
     Scene {
         tailscale: tailscale::look(&places.tailscale),
         tor: tor::look(&places.tor, &places.cookie),
         standing: tor::standing(&places.systemctl),
-        autostart: prefs::read().autostart,
+        prefs_repairs: if reading.part_not_read() {
+            reading.repairs
+        } else {
+            Vec::new()
+        },
+        autostart: reading.value.autostart,
         // THE RING'S WORDS, not the lines: `obfs4 exec /nix/store/…` is read
         // as `obfs4`, which is what the transport's ring turns from.
         settings: tor::transport::for_ring(tor::fragment::read(&places.fragment)),

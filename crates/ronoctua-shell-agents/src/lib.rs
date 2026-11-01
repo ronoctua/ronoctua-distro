@@ -15,7 +15,9 @@
 // THE KIT AND THE DOOR, by the names these modules already use
 // (`crate::chrome::…`, `crate::door::…`).
 use ronoctua_shell_door::{brainlink, door, photo, region};
-use ronoctua_shell_kit::{bindings, chrome, consent_rows, echo, fields, line, sizes, wake, when};
+use ronoctua_shell_kit::{
+    bindings, chrome, consent_rows, echo, fields, line, partly_read, sizes, wake, when,
+};
 // The tests reach the sudo bar's gate.
 #[cfg(test)]
 use ronoctua_shell_door::sudo;

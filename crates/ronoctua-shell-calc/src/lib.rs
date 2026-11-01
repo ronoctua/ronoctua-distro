@@ -17,8 +17,8 @@
 // (`crate::chrome::…`, `crate::door::…`).
 use ronoctua_shell_door::{door, floating, region};
 use ronoctua_shell_kit::{
-    bars, bindings, chrome, consent_rows, daemon, echo, fields, line, text_select, wake, wheel,
-    when,
+    bars, bindings, chrome, consent_rows, daemon, echo, fields, line, partly_read, text_select,
+    wake, wheel, when,
 };
 
 pub mod calc;

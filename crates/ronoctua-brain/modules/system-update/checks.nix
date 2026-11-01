@@ -6,6 +6,7 @@
   pkgs,
   lib,
   self,
+  rust,
   pyPrelude,
   texts,
   languages,
@@ -460,7 +461,9 @@ in
         # AND THE DISTRO'S INPUT AND nixpkgs: the machine rolls on
         # nixos-unstable now (owner amendment 2026-10-30), so the update moves
         # BOTH through `ronoctua-machine update-distro` — `DISTRO_INPUT` (the
-        # input it also judges a hold by and moves in its rehearsal) and
+        # input it also judges a hold by and moves in its rehearsal; never
+        # where the lock names a local checkout, which
+        # `system-update-leaves-a-checkout-to-the-sudo-door` holds) and
         # `nixpkgs` — and both are the template's two inputs. Renamed on one
         # side, the update would move an input no machine flake has.
         moves = facts["moves"]
@@ -1261,6 +1264,10 @@ in
           ("a rehearsal that installs", changed(rehearsing[0], rehearse=["install", "--check"]), "installs"),
           ("a rehearsal of a unit", changed(units[0], rehearse=["--dry-run"]), "go with a program"),
           ("refusals that are no words", changed(applies[0], declines=["Did Not Boot"]), "distinct kebab-case refusal words"),
+          # WHOSE REASONS A REFUSAL IS (2026-11-01): a vocabulary the view
+          # knows, of a program of the store's.
+          ("refusals in a vocabulary nobody speaks", changed(applies[0], refuses="the-compiler"), "`refuses = 'the-compiler'`"),
+          ("refusals of a unit", changed(units[0], refuses="machine"), "it goes with `package` + `program` only"),
           ("a lock moved on a battery the rebuild waits for", needs_dropped(moves[0], "power"), "`move-inputs` without the rebuild's `power`"),
           ("a lock moved on a disk the rebuild waits for", needs_dropped(moves[0], "free-space"), "`move-inputs` without the rebuild's `free-space`"),
           # THE PARTS (2026-10-23): one plan, root's, after the rebuild and
@@ -1504,6 +1511,125 @@ in
           END
         '';
 
+    # THE PAGE DRAWS THE STEPS THE UNIT REPORTS, compared both ways (owner,
+    # 2026-11-01). The update's page draws one row per step of the table the
+    # brain reads (`updates.rs`, through `shared.rs`'s `steps()`) and reads
+    # each row's verdict by id from the two reports the runners write: a
+    # step the page draws and the unit never reports stays "still to come"
+    # for ever, and one the unit reports and the page never draws is a
+    # verdict nobody sees. So both halves are RUN whole, in the world of
+    # stand-ins — a run and a rehearsal —, and the ids of their reports are
+    # the table's, no more and no fewer. And the same comparison over the
+    # runners with one step's call taken out, and with a line of a step no
+    # table has put in, refuses each, naming it. No id is written here
+    # (`…-has-one-list`): both sides are read.
+    system-update-reports-the-steps-it-draws =
+      mkCheck "system-update-reports-the-steps-it-draws"
+        [
+          pkgs.python3
+          pkgs.bash
+          pkgs.coreutils
+        ]
+        ''
+          python3 - <<'END'
+          import os, pathlib, re, shutil, subprocess, sys
+          exec(open("${pyPrelude}").read())
+
+          # PARSED: the table the page draws is read for its ids, and both
+          # generated halves are RUN — their reports read back as lines.
+          # FILE-WIDE: the plants edit the generated scripts by whole lines; the
+          # table's ids are its module-level rows.
+          table = uncommented(pathlib.Path("${sequence.table}/updates.rs").read_text())
+          floor(len(table), 500, "characters of the generated table")
+          drawn = set(re.findall(r'^\s+id: "([a-z0-9-]+)",$', table, re.M))
+          floor(len(drawn), 10, "ids the page draws")
+          PERSON = pathlib.Path("${fixtureRunners}/bin/ronoctua-update")
+          ROOT = pathlib.Path("${fixtureRunners}/libexec/ronoctua-update-system")
+          person_script, root_script = PERSON.read_text(), ROOT.read_text()
+          floor(len(person_script), 1000, "characters of the person's half")
+          floor(len(root_script), 1000, "characters of the root half")
+
+          def reported(name, person, root, *args):
+              """The ids both reports carry after a run of these two halves."""
+              home = pathlib.Path(name).resolve()
+              if home.exists():
+                  shutil.rmtree(home)
+              for d in ("config/ronoctua", "state/ronoctua/person/software", "runtime", "data",
+                        "cache", "work", "halves"):
+                  (home / d).mkdir(parents=True)
+              (home / "config/ronoctua/belongings.json").write_text("{}\n")
+              (home / "state/ronoctua/person/software/declared.json").write_text('{"format": 1, "apps": []}\n')
+              halves = []
+              for leaf, text in (("person", person), ("root", root)):
+                  path = home / "halves" / leaf
+                  path.write_text(text)
+                  path.chmod(0o755)
+                  halves.append(path)
+              log = home / "calls.log"
+              env = {
+                  "PATH": os.environ["PATH"],
+                  "HOME": str(home),
+                  "XDG_CONFIG_HOME": str(home / "config"),
+                  "XDG_STATE_HOME": str(home / "state"),
+                  "XDG_RUNTIME_DIR": str(home / "runtime"),
+                  "XDG_DATA_HOME": str(home / "data"),
+                  "XDG_CACHE_HOME": str(home / "cache"),
+                  "FIXTURE_LOG": str(log),
+                  "FIXTURE_ROOT_HALF": str(halves[1]),
+                  "FIXTURE_ONLINE": "1",
+              }
+              r = subprocess.run([str(halves[0]), *args], cwd=home / "work", env=env,
+                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+              if r.returncode != 0:
+                  sys.exit(f"ERROR: {name}: the run did not go through (exit {r.returncode}):\n{r.stdout}{r.stderr}")
+              ids = set()
+              for report in (home / "runtime/ronoctua-update/user.report", home / "work/state/system.report"):
+                  for line in (report.read_text() if report.exists() else "").splitlines():
+                      columns = line.split("\t")
+                      if len(columns) == 3:
+                          ids.add(columns[0])
+              return ids
+
+          def disagreements(ids):
+              """What the page draws and the unit does not report, and the other way."""
+              return ([f"the page draws `{i}`, and the unit never reports it" for i in sorted(drawn - ids)]
+                      + [f"the unit reports `{i}`, and the page never draws it" for i in sorted(ids - drawn)])
+
+          wrong = []
+          for what, args in (("a run", ["--execute"]), ("a rehearsal", [])):
+              said = disagreements(reported(what.replace(" ", "-"), person_script, root_script, *args))
+              wrong += [f"{what}: {s}" for s in said]
+
+          # THE PLANTS: one step's call taken out of the person's half — the first
+          # call of the sequence's own, unindented —, and a line of a step no table
+          # has written by the root half before it ends.
+          calls = [l for l in person_script.splitlines() if re.fullmatch(r"step_\w+ \|\| true", l)]
+          if not calls:
+              sys.exit("ERROR: the person's half calls no step that carries on: nothing to take out")
+          dropped = calls[0].split()[0].removeprefix("step_").replace("_", "-")
+          lines = person_script.splitlines()
+          lines.remove(calls[0])
+          said = disagreements(reported("dropped", "\n".join(lines) + "\n", root_script, "--execute"))
+          if not any(f"`{dropped}`" in s for s in said):
+              wrong.append(f"a step whose call was taken out ({dropped}) is not refused: {said}")
+          FOREIGN = "a-step-no-table-has"
+          lines = root_script.splitlines()
+          at = max(i for i, l in enumerate(lines) if l == "exit 0")
+          lines.insert(at, f"record {FOREIGN} ran 0")
+          said = disagreements(reported("foreign", person_script, "\n".join(lines) + "\n", "--execute"))
+          if not any(f"`{FOREIGN}`" in s for s in said):
+              wrong.append(f"a report of a step no table has is not refused: {said}")
+
+          if wrong:
+              print("ERROR: the update's page and its reports do not name the same steps.", file=sys.stderr)
+              for w in wrong:
+                  print("       " + w, file=sys.stderr)
+              raise SystemExit(1)
+          print(f"OK: a run and a rehearsal report the {len(drawn)} steps the page draws, no more and no fewer; "
+                "a call taken out and a step no table has are each refused by name")
+          END
+        '';
+
     # THE LOCK MOVES ONLY FOR A REBUILD THAT CAN BE TRIED — the step that
     # moves the inputs and the rebuild, lifted out of the root half with the
     # helpers they call and RUN one after the other, as the half runs them,
@@ -1697,6 +1823,33 @@ in
                 "found after collecting, and never while held — and a rehearsal collects and moves nothing")
           END
         '';
+
+    # A MACHINE THAT FOLLOWS A LOCAL CHECKOUT NEVER HAS ITS DISTRO MOVED BY
+    # THE UPDATE (owner, 2026-11-01; inv. 6). The update runs as root with
+    # no password — the weekly routine, the person's own start of its root
+    # half —, and any process of the person's may commit in a checkout: so
+    # where the machine's lock names one, `ronoctua-machine update-distro`
+    # moves `nixpkgs` alone, and what is committed comes in only through
+    # the sudo door. The tests drive the real verb against a stand-in `nix`
+    # whose update moves the inputs it is NAMED: a lock planted on GitHub
+    # moves the distro and nixpkgs; one planted on a checkout (`git+file:`,
+    # a bare `path:`) moves nixpkgs alone, in the run and in its rehearsal;
+    # and a move that leaves the distro at another revision of a checkout —
+    # a `flake.nix` that names one its lock does not, which Nix locks
+    # afresh whatever was named — is put back byte for byte and refused
+    # (`checkout-moved`).
+    system-update-leaves-a-checkout-to-the-sudo-door = rust.testsOf {
+      name = "${id}-leaves-a-checkout-to-the-sudo-door";
+      crate = "ronoctua-machine";
+      exact = [
+        "aim::tests::a_checkout_is_a_source_on_this_disk_outside_the_store"
+        "tests::an_installed_machine_moves_the_distro_and_nixpkgs"
+        "tests::a_local_checkout_is_never_moved_by_the_update"
+        "tests::a_checkout_the_lock_did_not_name_is_put_back"
+        "tests::a_rehearsal_on_a_checkout_moves_nixpkgs_alone"
+      ];
+      expect = "test result: ok. 5 passed";
+    };
 
     # A SCHEDULED RUN WAITS FOR THE CHARGER, AND NOTHING EVER ASKS (the
     # design's `update-never-asks`, beside `system-update-never-asks`, which

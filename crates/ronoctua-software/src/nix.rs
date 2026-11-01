@@ -413,6 +413,7 @@ pub fn installed_of(manifest: &Manifest, rows: &BTreeMap<String, Row>) -> Vec<In
                 origin: Origin::Mine,
                 icon,
                 trouble: None,
+                undeclarable: None,
             }
         })
         .collect()
@@ -758,6 +759,7 @@ pub fn install(ctx: &Context, attr: &str, consent: Consent, report: &mut dyn Rep
         desktop_ids,
         amount: None,
         rehearsed: false,
+        waits: None,
     })
 }
 
@@ -878,6 +880,7 @@ fn upgrade(ctx: &Context, only: Option<&str>, report: &mut dyn Report) -> Done {
         desktop_ids: Vec::new(),
         amount: Some(moved as u64),
         rehearsed: false,
+        waits: None,
     })
 }
 

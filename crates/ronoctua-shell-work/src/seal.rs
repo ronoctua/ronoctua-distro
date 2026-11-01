@@ -10,7 +10,9 @@
 //! `age1pq1…` key, pasted, its checksum checked before anything is queued).
 //! A `.age` is opened by what its header says ([`opening`]): a passphrase,
 //! or the belongings' key — `key.age` opened with the belongings' passphrase
-//! inside `ronoctua-seal`, in memory, never on a disk.
+//! inside `ronoctua-seal`, in memory, never on a disk. While the session
+//! keeps the identity that passphrase opened ([`session_keeps`]), nothing is
+//! asked: the queue has the belongings lend it for the run.
 //!
 //! Every one is a `Work::Seal` on the transfer queue, whose child is
 //! `ronoctua-seal`: neither door links `age` (`transfers-never-link-age`).
@@ -182,6 +184,28 @@ pub fn mine_in(places: &ronoctua_belongings::places::Places) -> Mine {
         .map_or(Mine::NotSynced, Mine::Ready)
 }
 
+/// Whether this session keeps the person's identity — what opens a file
+/// sealed "for you" with no question. The belongings' marker
+/// (`runtime/unlocked`), which a door reads instead of the kernel's keyring;
+/// when it lies, the queue's refusal asks the passphrase ([`refused`]).
+#[must_use]
+pub fn session_keeps() -> bool {
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    ronoctua_belongings::places::Places::from_env().is_some_and(|p| session_keeps_in(&p, now_s))
+}
+
+/// [`session_keeps`], under `places`, at `now_s`.
+#[must_use]
+pub fn session_keeps_in(places: &ronoctua_belongings::places::Places, now_s: i64) -> bool {
+    std::fs::read_to_string(places.prefs())
+        .ok()
+        .and_then(|t| ronoctua_belongings::prefs::Belongings::from_file(&t))
+        .filter(|b| b.has_repository() && b.keep_unlocked)
+        .is_some_and(|b| ronoctua_belongings::unlock::kept_for(places, &b.repository, now_s))
+}
+
 /// The belongings' sealed key, when this machine has one.
 #[must_use]
 pub fn key_file() -> Option<PathBuf> {
@@ -283,6 +307,7 @@ pub const fn why_key(why: ronoctua_pq::Why) -> &'static str {
         Why::Corrupt => key::SEAL_REFUSED_CORRUPT,
         Why::Mixed => key::SEAL_REFUSED_MIXED,
         Why::Failed => key::SEAL_REFUSED_FAILED,
+        Why::NotKept => key::SEAL_REFUSED_NOT_KEPT,
     }
 }
 
@@ -529,13 +554,28 @@ pub fn sniffed(path: PathBuf, kind: Option<Kind>) -> Next {
             secret: true,
             wanting: Wanting::Open(path, Opening::Passphrase),
         },
-        Ok(Opening::Key) if key_file().is_some() => Next::Ask {
+        // THE SESSION KEEPS THE IDENTITY: it opens the file, and nothing is
+        // asked.
+        Ok(Opening::Key | Opening::Kept) if session_keeps() => Next::Do(SealDoing::Open {
+            path,
+            with: With::Kept,
+        }),
+        Ok(Opening::Key | Opening::Kept) => the_key_asked(path),
+        Err(refusal) => Next::Say(refusal.said(&path)),
+    }
+}
+
+/// The belongings' passphrase asked, for the key it opens — or why there is
+/// no key here to ask it for.
+fn the_key_asked(path: PathBuf) -> Next {
+    if key_file().is_some() {
+        Next::Ask {
             id: KEY_PASSPHRASE,
             secret: true,
             wanting: Wanting::Open(path, Opening::Key),
-        },
-        Ok(Opening::Key) => Next::Say(Refusal::NoKey.said(&path)),
-        Err(refusal) => Next::Say(refusal.said(&path)),
+        }
+    } else {
+        Next::Say(Refusal::NoKey.said(&path))
     }
 }
 
@@ -554,6 +594,13 @@ pub fn refused(path: PathBuf, opening: Option<Opening>, why: ronoctua_pq::Why) -
             secret: true,
             wanting: Wanting::Open(path, Opening::Key),
         },
+        // THE SESSION'S IDENTITY WAS NOT THERE (the kernel let it go before
+        // the marker said so), or is not the one the file is sealed to
+        // (another machine made the key again since): the passphrase opens
+        // the key that is — asked as the first question, never as "wrong".
+        (ronoctua_pq::Why::NotKept | ronoctua_pq::Why::WrongKey, Some(Opening::Kept)) => {
+            the_key_asked(path)
+        }
         _ => Next::Say(Explanation {
             key: why_key(why),
             args: vec![("name", name_of(&path))],
@@ -569,6 +616,7 @@ pub const fn opening_of(job: &ronoctua_pq::Job) -> Option<Opening> {
         ronoctua_pq::Action::OpenWithKey { .. } | ronoctua_pq::Action::Open { .. } => {
             Some(Opening::Key)
         }
+        ronoctua_pq::Action::OpenKept {} => Some(Opening::Kept),
         ronoctua_pq::Action::SealTo { .. } | ronoctua_pq::Action::SealPassphrase { .. } => None,
     }
 }
@@ -819,6 +867,8 @@ fn jobs_of(doing: &SealDoing) -> Vec<(PathBuf, Made)> {
                     ),
                     None => Err(Refusal::NoKey),
                 },
+                // NOTHING CROSSES: the queue has the belongings lend it.
+                With::Kept => job_of(path, |_| ronoctua_pq::Action::OpenKept {}, None, false),
             };
             vec![(path.clone(), made)]
         }
@@ -1081,6 +1131,80 @@ mod tests {
         std::fs::write(places.recipient(), "age1pq1notakey\n").unwrap();
         assert_eq!(mine_in(&places), Mine::NotSynced, "a bad key was taken");
         assert_eq!(key_file_in(&places), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// FAILS IF: a file sealed "for you" asks the passphrase while the
+    /// session keeps the identity, or opens with no question while it does
+    /// not (a marker of another repository, an expired one, a person who
+    /// keeps none) — or the job carries anything for the identity, or a
+    /// session whose identity was gone after all is told "wrong" instead of
+    /// asked the passphrase as the first question.
+    #[test]
+    fn a_file_for_you_opens_with_the_session_s_identity() {
+        let root = place("kept");
+        let places = ronoctua_belongings::places::Places::under(&root);
+        let repository = "git@example.org:me/b.git";
+        let mut prefs = ronoctua_belongings::prefs::Belongings::with_repository(repository);
+        std::fs::create_dir_all(places.prefs().parent().unwrap()).unwrap();
+        std::fs::write(places.prefs(), prefs.to_file()).unwrap();
+        assert!(!session_keeps_in(&places, 10), "no marker");
+        let mark = |repository: &str, until_s: i64| {
+            ronoctua_belongings::unlock::Marker {
+                format: ronoctua_belongings::unlock::MARKER_FORMAT,
+                repository: ronoctua_belongings::unlock::repository_tag(repository),
+                until_s,
+            }
+            .write(&places)
+            .unwrap();
+        };
+        mark("git@example.org:someone/else.git", 100);
+        assert!(!session_keeps_in(&places, 10), "another repository's");
+        mark(repository, 100);
+        assert!(session_keeps_in(&places, 10));
+        assert!(!session_keeps_in(&places, 100), "an expired marker");
+        prefs.keep_unlocked = false;
+        std::fs::write(places.prefs(), prefs.to_file()).unwrap();
+        assert!(!session_keeps_in(&places, 10), "a person who keeps none");
+
+        // THE JOB CARRIES NOTHING, and is the queue's to lend for.
+        let path = PathBuf::from("/home/p/a.age");
+        let made = jobs_of(&SealDoing::Open {
+            path: path.clone(),
+            with: With::Kept,
+        });
+        let [(from, Ok((Work::Seal { job, .. }, written)))] = made.as_slice() else {
+            panic!("not one seal job: {} made", made.len());
+        };
+        assert_eq!(from, &path);
+        assert_eq!(job.action, ronoctua_pq::Action::OpenKept {});
+        assert_eq!(written.0, None, "a secret was written for it");
+        assert_eq!(opening_of(job), Some(Opening::Kept));
+
+        // THE IDENTITY WAS GONE, or is not the file's: the passphrase, as
+        // the first question (or why there is no key here to ask it for).
+        for why in [ronoctua_pq::Why::NotKept, ronoctua_pq::Why::WrongKey] {
+            match refused(path.clone(), Some(Opening::Kept), why) {
+                Next::Ask {
+                    id,
+                    secret,
+                    wanting,
+                } => {
+                    assert_eq!(id, KEY_PASSPHRASE, "{why:?}");
+                    assert!(secret);
+                    assert_eq!(wanting, Wanting::Open(path.clone(), Opening::Key));
+                }
+                Next::Say(e) => assert_eq!(e.key, key::SEAL_REFUSAL_NO_KEY, "{why:?}"),
+                other => panic!("{why:?}: {other:?}"),
+            }
+        }
+        assert!(matches!(
+            refused(path, Some(Opening::Kept), ronoctua_pq::Why::Corrupt),
+            Next::Say(Explanation {
+                key: key::SEAL_REFUSED_CORRUPT,
+                ..
+            })
+        ));
         let _ = std::fs::remove_dir_all(root);
     }
 

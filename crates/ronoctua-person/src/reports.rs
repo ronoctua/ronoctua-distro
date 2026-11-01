@@ -163,6 +163,40 @@ pub struct BrainReport {
     pub included: Vec<String>,
     /// With a root part that waits for an approval.
     pub awaiting_approval: Vec<Awaiting>,
+    /// Left out though nothing waits for the person: a folder that did not
+    /// evaluate alone, one not evaluated alone yet at what it is now, one
+    /// that cannot be hashed, or one the brain's loader refuses — each with
+    /// why. Absent in a report from before it was written.
+    #[serde(default)]
+    pub refused: Vec<BrainRefused>,
+}
+
+/// A module of the person's left out, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct BrainRefused {
+    /// The module id (`my-…`).
+    pub id: String,
+    /// Why.
+    pub why: BrainWhy,
+    /// What was found, English and the machine's own words — Nix's last
+    /// line, the loader's sentences; empty when the reason says it all.
+    pub detail: String,
+}
+
+/// Why a module of the person's was left out of a machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BrainWhy {
+    /// Evaluated alone, it did not evaluate (`local/brain-checked.json`).
+    DoesNotEvaluate,
+    /// It has not been evaluated alone at what it is now: the next apply,
+    /// or approval, does it.
+    Unchecked,
+    /// `nix/person-hash.nix` refuses it (a link, a name it cannot write).
+    Unhashable,
+    /// It evaluates, and the brain's loader refuses it, with its sentences.
+    NotAModule,
 }
 
 /// A module waiting for its approval.
@@ -210,6 +244,15 @@ impl Document for PersonApplied {
                     Why::Invalid,
                     format!("/brain/awaiting-approval/{i}/id"),
                     a.id.as_str(),
+                ));
+            }
+        }
+        for (i, r) in self.brain.refused.iter().enumerate() {
+            if !check::person_module(&r.id) {
+                return Err(Refusal::new(
+                    Why::Invalid,
+                    format!("/brain/refused/{i}/id"),
+                    r.id.as_str(),
                 ));
             }
         }

@@ -68,7 +68,7 @@ echo-build-to-own = Construindo a versão instalada (commitada) — vai reconstr
 echo-build-to-reference = Construindo a sua árvore de trabalho (dev) — vai reconstruir e reiniciar
 echo-build-to-own-next-restart = Construindo a versão instalada (commitada) — um sistema novo já espera o reinício, então esta também fica para o próximo reinício
 echo-build-to-reference-next-restart = Construindo a sua árvore de trabalho (dev) — um sistema novo já espera o reinício, então esta também fica para o próximo reinício
-echo-build-failed = Não foi possível iniciar a troca de build: { $why }
+echo-build-failed = Não foi possível iniciar a troca de build. { $why }
 # O que o glifo de build diz na linha de mensagem enquanto o ponteiro repousa nele.
 hint-build-own = O build instalado (commitado) — clique para construir e rodar a sua árvore de trabalho (dev)
 hint-build-reference = Um build de dev da sua árvore de trabalho — clique para voltar ao build instalado (commitado)

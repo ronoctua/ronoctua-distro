@@ -12,7 +12,9 @@
 //! the distro's apps that follow their releases ([`follow`]): the person's
 //! option to let the routine update move them past the distro's pins. And
 //! the machine's parts ([`parts`]): what arrives after the installation, and
-//! the ways the person brings in a download that keeps failing.
+//! the ways the person brings in a download that keeps failing. And the
+//! person's brain modules that wait for an approval ([`approval`]), approved
+//! from the records.
 
 #![deny(unsafe_code)]
 
@@ -24,6 +26,7 @@ use ronoctua_shell_kit::{bindings, chrome, echo, fields, line, security_words, w
 // THE MARK THE FOOTER DRAWS while a run is under way: a leaf under both.
 use ronoctua_shell_update_words::update_mark;
 
+pub mod approval;
 pub mod binary_cache;
 pub mod follow;
 pub mod key;

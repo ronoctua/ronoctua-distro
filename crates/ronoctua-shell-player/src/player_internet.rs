@@ -273,6 +273,14 @@ impl View {
         use crate::key;
         use ronoctua_player::prefs;
         b.note(key::PLAYER_ABOUT_INTERNET);
+        // A PART OF EITHER FILE NOT READ: the rows below show the repair in
+        // that place, and the file keeps what it says.
+        for partly in [&self.prefs_unread.player, &self.prefs_unread.consent]
+            .into_iter()
+            .flatten()
+        {
+            b.told(&partly.said(b.texts));
+        }
         b.heading(key::PLAYER_HEADING_ON_THEIR_OWN);
         // THE HOST IN THE LABEL, and the answer alone in the value: the row a
         // person taps to consent NAMES who is asked, and a label is never cut

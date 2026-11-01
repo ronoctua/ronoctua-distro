@@ -11,6 +11,7 @@
 //! plain --repository <url> --keys <dir> --out <dir> [--user <name>] [--passphrase <file> --signer <file> [--decline <file>]] [--json]
 //! take --home <dir> --runtime <dir> --path <logical> --out <file> [--repository <url> [--user <name>]] [--json]
 //! sign [--json]                                         this machine's plain part signed here, no network
+//! lend --out <file> [--json]                            the identity this session keeps, into a new 0600 file
 //! forget [--everywhere] [--progress]                    this instance's kept identity; every one's
 //! ```
 //!
@@ -65,6 +66,8 @@ const USAGE: &str = "usage: ronoctua-belongings <prepare|apply|abandon|keygen|re
        ronoctua-belongings plain --repository <url> --keys <dir> --out <dir> [--user <name>] [--passphrase <file> --signer <file> [--decline <file>]] [--json]
        ronoctua-belongings take --home <dir> --runtime <dir> --path <logical> --out <file> [--repository <url> [--user <name>]] [--json]
        ronoctua-belongings sign [--json]
+       ronoctua-belongings lend --out <file> [--json]
+lend writes the identity this session keeps into <file>, created new and 0600 (the queue's, to open a file sealed for you); it prints nothing of it.
 take writes ONE file of the sealed part at <file>, 0600 (the installer's, before nixos-install).
 plain --decline <file> (the installer's choice for one machine: the programs left out, and those kept) says it in the repository's declined.json, signs it with the key the passphrase opens and pushes it before copying.
 With --home and no --repository, <home>/.config/ronoctua/belongings.json must name the repository.
@@ -228,6 +231,7 @@ fn main() -> ExitCode {
         ["sign"] if !line.progress && line.only(&[]) => sign(&line),
         ["probe"] if line.value("--address").is_some() => probe(&line),
         ["take"] => take(&line),
+        ["lend"] if !line.progress && line.only(&["--out"]) => lend(&line),
         [word] => match Op::of_word(word) {
             Some(op) => order(op, &line),
             None => usage(),
@@ -439,6 +443,25 @@ fn take(line: &Line) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(r) => refused("take", r.why, line.json),
+    }
+}
+
+/// `lend --out <file>`: the identity this session keeps, into `<file>`
+/// created new and `0600` — what the queue asks before it opens a file
+/// sealed "for you" with no question. Nothing of it is printed; `refused
+/// no-passphrase` (on stderr, and as JSON with `--json`) when nothing is
+/// kept, and the door asks the passphrase.
+fn lend(line: &Line) -> ExitCode {
+    let Some(out) = line.path("--out") else {
+        return usage();
+    };
+    let places = match places_of(line) {
+        Ok(places) => places,
+        Err(code) => return code,
+    };
+    match engine::lend(&places, &out) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(r) => refused("lend", r.why, line.json),
     }
 }
 

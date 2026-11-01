@@ -7567,17 +7567,14 @@ impl View {
     /// read their light off it; the four questions below are this, read for
     /// one answer.
     ///
-    /// # The air takes and lights nothing
+    /// # The air lights while it takes
     ///
-    /// The one place the light and the click part, and on purpose. With marks
-    /// up, a click on the listing's air puts them down (`Hit::Air`, `C-A`'s own
-    /// code) — and a band there would be a band on no row. A hover band says
-    /// which LINE OF A LIST the pointer is on, and the air is what is left of
-    /// the listing where there is none: past the last entry, past the last
-    /// cell of a shelf, and the sentence of an empty folder, which is drawn on
-    /// a line no entry has. Pressing the blank of a listing to let go of a
-    /// selection is the gesture every listing has, and none of them lights
-    /// the blank.
+    /// With marks up, a click on the listing's air puts them down (`Hit::Air`,
+    /// `C-A`'s own code), so the line of air under the pointer lights like a
+    /// row: what the pointer lights is what the click takes (invariant 19,
+    /// the owner's decision of 2026-11-01). With no marks up the air takes
+    /// nothing and lights nothing. Over a grid there is still no band — the
+    /// air past a grid's last cell is on the line of cells beside it.
     #[must_use]
     pub fn lit_at(
         &self,
@@ -7604,7 +7601,7 @@ impl View {
         // the band, the field's accent and the click are one answer.
         let Some(taken) = self
             .hit_in(sec, inside, chrome.len(), cell)
-            .filter(|t| t.hit != Hit::Air && self.takes(t))
+            .filter(|t| self.takes(t))
         else {
             return crate::sections::LitAt::default();
         };
@@ -7623,7 +7620,8 @@ impl View {
         //
         // A LINE WITH NOTHING ON IT IS NOT A ROW. Past the last entry the
         // listing pads with empty rows and the sidebar with its gaps; lighting
-        // those would promise a click on nothing.
+        // those would promise a click on nothing — but the listing's AIR with
+        // marks up takes the click that puts them down, and lights for it.
         //
         // AND NEVER OVER A PICTURE. The band says which ROW OF A LIST the
         // pointer is on, and the globe is not a list — the same sentence
@@ -7631,10 +7629,11 @@ impl View {
         // lines carry a field so the pointer can NAME them; that is a different
         // question from whether to stripe them.
         let band = (sec.grid.is_none()
-            && sec
-                .content
-                .get(inside)
-                .is_some_and(|r| !r.fields.is_empty())
+            && (taken.hit == Hit::Air
+                || sec
+                    .content
+                    .get(inside)
+                    .is_some_and(|r| !r.fields.is_empty()))
             && !(matches!(sec.pane, Pane::Info) && inside < sec.above))
             .then_some(here);
         // THE ACCENT'S LINE, wider than the band's: a grid, a picture and the
@@ -7661,7 +7660,7 @@ impl View {
     /// anything. The ONE predicate both doors' light reads: the band
     /// ([`View::band_row`]), the field's accent and, in a grid, the cell's
     /// name ([`View::grid_lit_at`]). See [`View::lit_at`] for the air, which
-    /// a click takes and nothing lights.
+    /// takes and lights only while marks are up.
     #[must_use]
     pub fn takes_at(&self, width: u16, room: usize, line: usize, cell: u16) -> bool {
         self.lit_at(width, room, line, cell).taken.is_some()
@@ -20095,9 +20094,9 @@ mod tests {
             );
         }
 
-        // AND THE ONE PLACE THE TWO PART, ON PURPOSE: with marks up, the air
-        // takes a click — it puts them down — and lights nothing, because a
-        // band there would be a band on no row (`View::lit_at`).
+        // AND WITH MARKS UP THE AIR TAKES A CLICK — it puts them down — and
+        // lights for it, its own line's band (`View::lit_at`); with none up
+        // it neither takes nor lights (the sweep above, with no marks).
         let mut v = planted(dir.as_path());
         v.key(of_view("C-a"));
         let cell = v.panes(width).listing_from() + 1;
@@ -20107,16 +20106,23 @@ mod tests {
             Some(Hit::Air),
             "the fixture's last line is not the listing's air"
         );
-        assert!(!v.takes_at(width, room, air, cell), "the air lit");
+        assert!(
+            v.takes_at(width, room, air, cell),
+            "the air with marks up is dark"
+        );
         assert_eq!(
             v.band_row(width, room, air, cell),
-            None,
-            "the air grew a band"
+            Some((Pane::Listing, air)),
+            "the air with marks up has no band of its own line"
         );
         assert_ne!(
             v.click(usize::MAX, &Hit::Air, ronoctua_keymap::Mods::default()),
             Step::Nothing,
             "the air did not put the marks down"
+        );
+        assert!(
+            !v.takes_at(width, room, air, cell),
+            "the air still lights with the marks down"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -20539,9 +20545,7 @@ mod tests {
                         "{shape}, line {line}, cell {cell}: the light laid the column out {} times",
                         v.layouts_made()
                     );
-                    let taken = v
-                        .hit(width, room, line, cell, &b)
-                        .filter(|t| t.hit != Hit::Air && v.takes(t));
+                    let taken = v.hit(width, room, line, cell, &b).filter(|t| v.takes(t));
                     assert_eq!(
                         lit.taken, taken,
                         "{shape}, line {line}, cell {cell}: the light takes another target"

@@ -440,9 +440,15 @@ let
       # Measured in the build, from `system.path` (`personApplied`).
       still-present = [ ];
     };
+    # WHAT THE BRAIN REALLY COMPILED: the folders `lib.machine` let the
+    # loader read, but the ones the loader itself refused — those are said
+    # among the refused, with its sentences.
     brain = {
-      included = map baseNameOf cfg.brainModules;
+      included = builtins.filter (id: !(builtins.elem id (map (r: r.id) cfg.brainRefused))) (
+        map baseNameOf cfg.brainModules
+      );
       awaiting-approval = cfg.awaitingApproval;
+      refused = cfg.brainRefused;
     };
     inherit signature;
   };
@@ -494,6 +500,7 @@ let
         out["brain"] = {
             "included": report["brain"]["included"],
             "awaiting-approval": [{"id": a["id"], "hash": a["hash"]} for a in report["brain"]["awaiting-approval"]],
+            "refused": [{k: r[k] for k in ("id", "why", "detail")} for r in report["brain"]["refused"]],
         }
         sig = report["signature"]
         refused = sig["refused"]
@@ -566,6 +573,20 @@ in
         The person's content-addressed icons (`software/icons/<sha256>.png`)
         a web app or an AppImage names; a file whose hash is not its name is
         not used.
+      '';
+    };
+
+    brainRefused = lib.mkOption {
+      type = lib.types.listOf (lib.types.attrsOf lib.types.str);
+      default = [ ];
+      description = ''
+        The person's brain modules nothing waits for that this machine left
+        out, each `{ id; why; detail; }`: not evaluated alone at what they
+        are now (`unchecked`), not evaluating alone (`does-not-evaluate`,
+        with what Nix said), not hashable (`unhashable`) — from
+        `lib.machine`'s approvals — or refused by the brain's loader
+        (`not-a-module`, with its sentences). The report says them, so the
+        person learns why a module of theirs is not running.
       '';
     };
 

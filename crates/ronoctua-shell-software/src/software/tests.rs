@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::programs_words::{
-    ANDROID_MARK, Ended, TRIAL_MARK, ended_keys, ended_of, failure_said, segments,
+    ANDROID_MARK, Ended, TRIAL_MARK, ended_keys, ended_of, failure_said, said_why, segments,
 };
 use crate::software_feed::{Arrival, DarkReading, Permits, Taught};
 use ronoctua_software::found::{Batch, Picture};
@@ -55,6 +55,7 @@ fn installed(key: AppKey, name: &str) -> Installed {
         origin: Origin::Mine,
         icon: None,
         trouble: None,
+        undeclarable: None,
     }
 }
 
@@ -1340,6 +1341,51 @@ fn keeping_a_program_declares_it_in_one_press() {
     );
 }
 
+/// A PROGRAM NO DECLARATION CAN KEEP is not offered to every computer: an
+/// AppImage from a file has no download to pin, and its sheet says so on
+/// the row itself — the refusal's sentence as its value, said whole by the
+/// press, and nothing queued. The same program from its releases is
+/// offered.
+///
+/// FAILS IF: the row of an undeclarable program acts or vanishes, does not
+/// carry the refusal's sentence, queues a declaration when pressed, or the
+/// row of a declarable one refuses.
+#[test]
+fn a_program_from_a_file_is_not_offered_to_every_computer() {
+    let local = AppKey::AppImage {
+        key: "obsidian".into(),
+    };
+    let mut snap = full();
+    for i in &mut snap.installed {
+        if i.key == local {
+            i.undeclarable = Some(Refusal::NothingToPin);
+        }
+    }
+    let refusing = readings(Some(snap));
+    let mut v = open(Opening::Home, &refusing);
+    v.level = Level::Sheet(local);
+    v.at = Spot::Deed("declare-for-me");
+    let sentence = en().t(words::refusal_key(Refusal::NothingToPin));
+    let keep_of = |r: &Readings, v: &View| {
+        rows_of(v, r, &en())
+            .into_iter()
+            .find(|x| x.spot == Spot::Deed("declare-for-me"))
+            .expect("the row is there")
+    };
+    let keep = keep_of(&refusing, &v);
+    assert!(
+        keep.disabled,
+        "an AppImage from a file is offered to every computer"
+    );
+    assert_eq!(keep.said.as_deref(), Some(sentence.as_str()));
+    assert_eq!(
+        press(&mut v, Press::Enter, &refusing),
+        Errand::Say(sentence)
+    );
+    let offering = readings(Some(full()));
+    assert!(!keep_of(&offering, &v).disabled);
+}
+
 /// FAILS IF: a change of the declaration made while the session keeps no
 /// identity goes to the queue unsigned instead of asking the belongings'
 /// passphrase first; the passphrase is not written where `sign` reads it,
@@ -1648,6 +1694,66 @@ fn an_icon_is_picked_from_a_shelf_and_the_editor_comes_back() {
         said.contains(&en().t(crate::key::SOFTWARE_ICON_CLIPBOARD)),
         "{said}"
     );
+}
+
+/// FAILS IF: before the icon superpack's part arrived, the distro's
+/// collection draws an empty shelf — "no icon by that name" — instead of
+/// saying its icons are on their way, in some language; or once they are
+/// here, the shelf still says so instead of offering them. Through the same
+/// answer a photograph's door gives itself (`want_in_place`).
+#[test]
+fn the_collection_says_its_icons_are_arriving_before_the_superpack() {
+    let mut r = readings(Some(full()));
+    let dir = std::env::temp_dir().join(format!(
+        "ronoctua-shell-software-arriving-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    // THE PART'S STABLE PATH, before the part: nothing there.
+    let names = dir.join("parts/icon-superpack/v1/share/doc/noctua-icons/names");
+    r.icon_names = Some(names.clone());
+    let (mut v, _) = View::fresh(Opening::WebNew("github.com".into()), &r, &en());
+    v.at = Spot::Ring("icon");
+    let mut errand = press(&mut v, Press::Enter, &r);
+    for _ in 0..Shelf::ALL.len() {
+        if v.level == Level::Icons(Shelf::Collection) {
+            break;
+        }
+        errand = press(&mut v, Press::NextSource, &r);
+    }
+    assert_eq!(v.level, Level::Icons(Shelf::Collection));
+    let Errand::Feed(want) = errand else {
+        panic!("the collection asks for its names: {errand:?}");
+    };
+    r.want_in_place(want.clone());
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    for t in every_language() {
+        let said = words(&drawn(&rows_of(&v, &r, &t)));
+        assert!(
+            said.contains(&words(&t.t(crate::key::SOFTWARE_NOTE_ICONS_ARRIVING))),
+            "{}: {said}",
+            t.language()
+        );
+        assert!(!said.contains(&words(&t.t(crate::key::SOFTWARE_NOTE_NO_ICONS))));
+    }
+    // AND ONCE THE PART IS HERE, its names answer.
+    std::fs::create_dir_all(names.parent().unwrap()).unwrap();
+    std::fs::write(&names, "github.com\n").unwrap();
+    r.want_in_place(want);
+    let choice = IconChoice::Collection {
+        name: "github.com".into(),
+    };
+    let rows = rows_of(&v, &r, &en());
+    assert!(
+        rows.iter()
+            .any(|x| x.target == Target::Candidate(choice.clone())),
+        "{}",
+        drawn(&rows)
+    );
+    assert!(
+        !words(&drawn(&rows)).contains(&words(&en().t(crate::key::SOFTWARE_NOTE_ICONS_ARRIVING)))
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -2530,6 +2636,56 @@ fn an_end_is_a_notification_only_when_it_is_worth_one() {
         path: "/tmp".into(),
     };
     assert_eq!(ended_of(&copy), None);
+}
+
+/// A REMOVAL FOR GOOD THE MACHINE HAS NOT CARRIED OUT is not called
+/// removed: held by the update, or waiting for the restart, it raises its
+/// own notification, whose body says what it waits for — in every language.
+///
+/// FAILS IF: a removal for good whose outcome waits is said as removed, one
+/// carried out is not, a plain removal is said to wait, or the body of one
+/// that waits is empty or the same for the update and the restart.
+#[test]
+fn a_removal_that_waits_is_not_called_removed() {
+    use ronoctua_software::{Outcome, Waits};
+    use ronoctua_transfers::Stage;
+    let ended = |order: Order, waits: Option<Waits>| {
+        let mut j = job(order, Stage::Done);
+        j.outcome = Some(Outcome {
+            key: Some(gimp_flatpak()),
+            waits,
+            ..Outcome::default()
+        });
+        j
+    };
+    let forget = || Order::Forget {
+        key: gimp_flatpak(),
+        keep_data: true,
+    };
+    assert_eq!(ended_of(&ended(forget(), None)), Some(Ended::Removed));
+    let remove = Order::Remove {
+        key: gimp_flatpak(),
+        keep_data: true,
+    };
+    assert_eq!(
+        ended_of(&ended(remove, Some(Waits::Update))),
+        Some(Ended::Removed)
+    );
+    for language in ronoctua_i18n::LANGUAGES {
+        let t = texts(language);
+        let removed = t.t_with(ended_keys(Ended::Removed).0, &[("app", "GIMP")]);
+        let mut said = Vec::new();
+        for waits in [Waits::Update, Waits::Restart] {
+            let j = ended(forget(), Some(waits));
+            assert_eq!(ended_of(&j), Some(Ended::RemovalWaits), "{waits:?}");
+            let (summary, _) = ended_keys(Ended::RemovalWaits);
+            assert_ne!(t.t_with(summary, &[("app", "GIMP")]), removed);
+            let why = said_why(Ended::RemovalWaits, &j, &t);
+            assert!(!why.is_empty(), "{waits:?} in {language}");
+            said.push(why);
+        }
+        assert_ne!(said[0], said[1], "{language}");
+    }
 }
 
 #[test]

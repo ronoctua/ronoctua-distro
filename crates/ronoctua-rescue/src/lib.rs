@@ -40,6 +40,7 @@
 #![forbid(unsafe_code)]
 
 pub mod action;
+pub mod bus;
 pub mod edit;
 pub mod key;
 pub mod tui;
@@ -89,7 +90,8 @@ pub enum Run {
         /// The units, in the order systemd should get them.
         units: &'static [&'static str],
     },
-    /// `systemctl <verb> <units…>` — the system's, and polkit decides.
+    /// The system's units, `verb` (`StartUnit`, `RestartUnit`) asked of
+    /// systemd by this process over the bus ([`bus`]) — and polkit decides.
     System {
         /// `restart` or `start`.
         verb: &'static str,
@@ -103,12 +105,12 @@ pub enum Run {
     Own(Own),
 }
 
-/// Leaving the machine.
+/// Leaving the machine, asked of logind (`ronoctua_power::leave_asking`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Power {
-    /// `systemctl reboot`.
+    /// `Reboot`.
     Reboot,
-    /// `systemctl poweroff`.
+    /// `PowerOff`.
     Off,
 }
 

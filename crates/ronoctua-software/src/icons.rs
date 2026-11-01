@@ -395,6 +395,25 @@ fn metadata(cache: &Path) -> Result<Vec<u8>, Refusal> {
     kept.ok_or(Refusal::Offline)
 }
 
+/// The distro's collection matching a query — or, before the icon superpack
+/// arrived, why it has nothing to look in.
+///
+/// The names come with the superpack, a PART of the system
+/// (`ronoctua.icons.names`): a stable path that names nothing until the
+/// part arrived after the installation. That is said
+/// ([`Refusal::PartArriving`]), never an empty list that reads as "no icon
+/// by that name". Reads a file: call it on a thread.
+///
+/// # Errors
+///
+/// [`Refusal::PartArriving`] while `names` is not there.
+pub fn collection(names: &Path, query: &str, limit: usize) -> Result<Vec<Candidate>, Refusal> {
+    if !names.is_file() {
+        return Err(Refusal::PartArriving);
+    }
+    Ok(from_collection(names, query, limit))
+}
+
 /// The distro's collection (the icon superpack's names) matching a query.
 ///
 /// `names` is the file the build writes with every name the superpack
@@ -1277,6 +1296,27 @@ mod tests {
             "a name with a separator is never offered"
         );
         assert!(from_collection(&dir.join("absent"), "firefox", 5).is_empty());
+    }
+
+    /// FAILS IF: before the superpack's part arrived, the collection answers
+    /// an empty list — which the screen draws as "no icon by that name" —
+    /// instead of saying it is on its way; or a collection that is here says
+    /// it is arriving.
+    #[test]
+    fn a_collection_still_arriving_says_so() {
+        let dir = scratch("arriving");
+        // THE PART'S STABLE PATH, before the part: a link to nothing yet.
+        let names = dir.join("parts/icon-superpack/v1/share/doc/noctua-icons/names");
+        for query in ["firefox", ""] {
+            assert_eq!(
+                collection(&names, query, 5).map(|c| c.len()),
+                Err(Refusal::PartArriving)
+            );
+        }
+        std::fs::create_dir_all(names.parent().unwrap()).unwrap();
+        std::fs::write(&names, "firefox\n").unwrap();
+        assert_eq!(collection(&names, "firefox", 5).map(|c| c.len()), Ok(1));
+        assert_eq!(collection(&names, "gimp", 5).map(|c| c.len()), Ok(0));
     }
 
     #[test]

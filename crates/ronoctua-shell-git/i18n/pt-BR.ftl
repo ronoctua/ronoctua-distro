@@ -82,7 +82,7 @@ files-git-blame-gone = O arquivo não está mais na árvore de trabalho, então 
 files-git-nothing-to-copy = Não há commit sob o cursor.
 files-git-no-version = Não há versão anterior deste arquivo para abrir.
 files-git-kept = Aberto { $path } como { $id } o tem — uma cópia que não pode ser mudada.
-files-git-keep-failed = A cópia não pôde ser feita: { $why }
+files-git-keep-failed = A cópia não pôde ser feita. { $why }
 files-git-keep-why-disk = O disco não a aceitou: está cheio, ou o cache não pode ser escrito ali.
 # As teclas do navegador: a palavra que a linha de atalhos mostra, e o que o
 # ponteiro parado sobre ela ouve.

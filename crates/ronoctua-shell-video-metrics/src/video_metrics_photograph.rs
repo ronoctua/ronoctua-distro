@@ -326,7 +326,7 @@ pub fn run(words: &[String]) -> Result<()> {
     let copy = dir.join(ronoctua_video_metrics::FILE);
     std::fs::copy(&asked.catalog, &copy)
         .with_context(|| format!("could not copy `{}`", asked.catalog.display()))?;
-    let keys = crate::bindings::keys("transfers-open", None).unwrap_or_default();
+    let keys = crate::video_metrics::transfers_keys();
     let ui = Ui::detached(texts, (1, 1), i32::from(asked.scale))?;
     let window = VideoMetricsWindow::detached(copy, asked.open.clone(), keys);
     let mut d = Detached::new(ui, window);

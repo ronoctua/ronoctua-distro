@@ -121,8 +121,12 @@ fn closed(command: &str, argument: Option<&str>, way: &mut dyn Doorway) -> Close
 /// profile; the command that opened it is handed to it next, and aims it
 /// (the thresholds, an armed action).
 fn open(_: &str, _: Option<&str>, way: &mut dyn Doorway) -> Box<dyn Region> {
+    let mut view = View::fresh();
+    // THE FOOTER'S WISH CAME FROM A READ OF ITS OWN: the file is judged
+    // again as the view opens, for the places of it that did not read.
+    view.read_in_part(crate::power::unread());
     Box::new(Power {
-        view: View::fresh(),
+        view,
         snapshot: region::kept::<Snapshot>(way),
         wish: wish_of(way),
     })
@@ -373,8 +377,13 @@ impl Region for Power {
             way.rows_changed();
         } else if news.is::<Profile>() {
             // THE "(your choice)" MARK moves with the file — it is read from
-            // the shared wish at the next frame, and no row comes or goes.
-            way.repaint();
+            // the shared wish at the next frame — and so does what of the
+            // file did not read, whose lines come or go only when it moved.
+            if self.view.read_in_part(crate::power::unread()) {
+                way.rows_changed();
+            } else {
+                way.repaint();
+            }
         }
     }
 }

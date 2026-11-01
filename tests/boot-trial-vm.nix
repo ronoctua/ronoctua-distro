@@ -133,25 +133,8 @@ let
       kernel = pkgs.writeText "not-a-kernel" "no boot loader starts this\n";
     };
 
-  # THE STAND-IN FOR THE BUILD: `nix build … --out-link OUT` links OUT to the
-  # system the test names in `RONOCTUA_TEST_BUILDS` (the apply hands its
-  # environment down); `nix-env` beside it is the machine's own.
-  fakeNix =
-    nix:
-    pkgs.runCommand "nix-that-builds-what-the-test-says" { } ''
-      mkdir -p $out/bin
-      ln -s ${nix}/bin/nix-env $out/bin/nix-env
-      cat > $out/bin/nix <<'EOF'
-      #!${pkgs.runtimeShell}
-      out="" prev=""
-      for a in "$@"; do
-        if [ "$prev" = --out-link ]; then out=$a; fi
-        prev=$a
-      done
-      exec ${pkgs.coreutils}/bin/ln -sfn "$RONOCTUA_TEST_BUILDS" "$out"
-      EOF
-      chmod +x $out/bin/nix
-    '';
+  # THE STAND-IN FOR THE BUILD (`tests/boot-trial-stand-in.nix`).
+  fakeNix = import ./boot-trial-stand-in.nix { inherit pkgs; };
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-boot-trial" + lib.optionalString (firmware == "bios") "-bios";

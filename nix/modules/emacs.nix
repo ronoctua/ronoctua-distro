@@ -148,6 +148,36 @@ let
     fi
     exit 0
   '';
+
+  # ONE EMACS, THE UNIT'S (the owner's decision, 2026-11-01): the client the
+  # shell's `$EDITOR`, `e` and `et` run (`assets/shell/shellrc.sh`, by the
+  # store path `RONOCTUA_EMACS_EDITOR` names). It starts the daemon's unit
+  # first — `systemctl --user start` waits for the daemon to be ready, and
+  # does nothing when it runs — so an editor asked for while the unit is
+  # down (a `git commit`) still opens; then it reaches that daemon with
+  # `-a false`, never `-a ''`, which would start a second Emacs beside the
+  # unit's, outside it, on the same files and with no folder made first
+  # (`emacsHome`). A unit that cannot start is said, and the client tries the
+  # daemon as it is: failing there is failing with Emacs's own sentence.
+  #
+  # The terminal (`-t`) unless a frame is asked (`-c`, the shell's `et`):
+  # `$EDITOR` is this program alone, with no word after it, because not
+  # every program that runs `$EDITOR` splits it. The unit by the name its
+  # option gives it: spelt out, the name is the one a brain module watches
+  # (`brain-modules-are-sealed`).
+  emacsEditor = pkgs.writeShellApplication {
+    name = "ronoctua-emacs-editor";
+    text = ''
+      case "''${1-}" in
+        -c | --create-frame) ;;
+        *) set -- -t "$@" ;;
+      esac
+      if ! ${config.systemd.package}/bin/systemctl --user start ${config.systemd.user.services.emacs.name}; then
+        echo "ronoctua-emacs-editor: the Emacs daemon's unit did not start; trying the daemon as it is" >&2
+      fi
+      exec ${emacsPkg}/bin/emacsclient -a false "$@"
+    '';
+  };
 in
 {
   # The registry this module writes the editor's entry into (see
@@ -207,6 +237,11 @@ in
       systemd.user.services.ronoctua-footer.environment.RONOCTUA_EMACSCLIENT =
         "${emacsPkg}/bin/emacsclient";
 
+      # THE SHELL'S EDITOR (`emacsEditor`), by its store path: `shellrc.sh`
+      # is a file of the home and names no store path itself. Off with the
+      # switch, and the shell falls back to `nano`.
+      environment.sessionVariables.RONOCTUA_EMACS_EDITOR = "${emacsEditor}/bin/ronoctua-emacs-editor";
+
       # THE FOLDER FIRST (`emacsHome`), in the environment the daemon starts
       # in — the same `set-environment` its `ExecStart` sources, so both see
       # the same `XDG_CONFIG_HOME`. By store path: a user unit's `PATH` is
@@ -261,7 +296,7 @@ in
         # the one that does not use the daemon says so in its name
         # (`emacsPkg`, above).
         install = false;
-        defaultEditor = false; # `$EDITOR` is set by assets/shell/shellrc.sh
+        defaultEditor = false; # `$EDITOR` is set by assets/shell/shellrc.sh, to `emacsEditor`
         startWithGraphical = false; # a terminal Emacs must work without a session
       };
     })

@@ -64,14 +64,8 @@ pub fn keep_in(dir: &Path, text: &str) -> Result<PathBuf> {
         bail!("a password is one line of at most {MOST_BYTES} bytes");
     }
     make(dir)?;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
     for _ in 0..16 {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!("{PREFIX}{}-{nanos}-{n}", std::process::id()));
+        let path = named_in(dir);
         // `create_new` AND THE MODE ON THE CREATION: private from its first
         // byte, and never written into a file somebody else made first.
         let opened = std::fs::OpenOptions::new()
@@ -94,6 +88,34 @@ pub fn keep_in(dir: &Path, text: &str) -> Result<PathBuf> {
         return Ok(path);
     }
     bail!("no free name for a secret in {}", dir.display())
+}
+
+/// A name of ours in `dir`, new to this process: the pid, the time and a
+/// count — which [`is_ours`] knows, and [`forget`] removes.
+fn named_in(dir: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!("{PREFIX}{}-{nanos}-{n}", std::process::id()))
+}
+
+/// A name of ours in `dir` that nothing has made yet — for a secret another
+/// program of the person's writes ITSELF, `create_new` with the mode on the
+/// creation (the identity the belongings lend for one seal): it refuses a
+/// name somebody made in between, and [`forget`] removes what it wrote.
+///
+/// # Errors
+///
+/// The folder could not be made private, or no name was free.
+pub fn unmade_in(dir: &Path) -> Result<PathBuf> {
+    make(dir)?;
+    (0..16)
+        .map(|_| named_in(dir))
+        .find(|p| p.symlink_metadata().is_err())
+        .with_context(|| format!("no free name for a secret in {}", dir.display()))
 }
 
 /// Makes the folder `0700`, or tightens one that was there.

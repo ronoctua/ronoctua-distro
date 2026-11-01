@@ -20,7 +20,7 @@ cmd-system-update-watch = A atualização, numa janela
 # the SEQUENCE'S order, which is the declaration's: sorting these would put
 # back the second source the table exists to remove.
 system-update-step-flake-update = buscar as versões novas
-system-update-step-flake-update-does = nix flake update do input da distro e do nixpkgs, que esta máquina segue no nixos-unstable, no flake desta máquina: leva os dois ao mais novo e não mexe em nada além do flake.lock — todo outro input é o da própria versão, como ela foi testada. Precisa de rede; é pulado e diz isso enquanto a máquina está retida numa revisão, no ISO, cuja pasta da máquina é só leitura, e sempre que a reconstrução seria — na bateria abaixo do piso, ou com o disco quase cheio —, para que a pasta nunca nomeie um sistema que a máquina não montou.
+system-update-step-flake-update-does = nix flake update do input da distro e do nixpkgs, que esta máquina segue no nixos-unstable, no flake desta máquina: leva os dois ao mais novo e não mexe em nada além do flake.lock — todo outro input é o da própria versão, como ela foi testada. Numa máquina cujo flake segue um checkout local da distro, move só o nixpkgs: o que for commitado ali só entra pela porta do sudo. Precisa de rede; é pulado e diz isso enquanto a máquina está retida numa revisão, no ISO, cuja pasta da máquina é só leitura, e sempre que a reconstrução seria — na bateria abaixo do piso, ou com o disco quase cheio —, para que a pasta nunca nomeie um sistema que a máquina não montou.
 system-update-step-system-rebuild = reconstruir o sistema
 system-update-step-system-rebuild-does = ronoctua-machine apply --next-boot: monta o sistema novo primeiro e deixa só o que montou para o próximo reinício — nada do que roda agora é parado ou reiniciado, e um build que falha deixa a máquina e a pasta dela como estavam. Esse reinício experimenta o sistema novo uma vez e volta sozinho para o último bom se ele não subir. É pulado na bateria abaixo do piso, a não ser que você tenha dito sim, e com o disco quase cheio mesmo depois de coletar o lixo do store. Se falhar, a sequência para aqui.
 system-update-step-parts-plan = planejar as partes
@@ -134,7 +134,6 @@ system-update-declined-no-passphrase = A sua identidade não está aberta nesta 
 system-update-declined-busy = Outro programa da própria máquina aplicava uma mudança e segurava a cópia das suas declarações: esta atualização constrói as que ela tinha, e as suas chegam na próxima aplicação.
 system-update-declined-did-not-boot = Este é o sistema que não subiu quando foi experimentado: não há nada novo a aplicar até a distro ou o nixpkgs andarem, e o resto da atualização segue.
 system-update-declined-nothing-to-migrate = Esta máquina já tem o próprio flake: não havia o que migrar, e a atualização segue.
-system-update-declined-github-not-let = O GitHub não está permitido no seu consentimento: os apps da distro que seguem as próprias versões não foram olhados, e ficam nas versões que tinham; nenhuma fixação sua andou também. Ligar de novo a opção de segui-los permite.
 system-update-verdict-declined = nada novo
 
 # O QUE OS REGISTROS DA MÁQUINA DIZEM, acima dos passos, nas duas portas — só
@@ -147,6 +146,7 @@ system-update-records-conflicts = { $count ->
 system-update-records-hold = Esta máquina está retida em { $rev } desde { $since }: a atualização deixa a distro e o nixpkgs onde estão.
 system-update-records-staged = Um sistema novo está montado e espera o próximo reinício desta máquina: até lá ela roda o mesmo de antes, e esse reinício experimenta o novo uma vez.
 system-update-records-staged-unguarded = Um sistema novo está montado e espera o próximo reinício desta máquina: até lá ela roda o mesmo de antes, e esse reinício não tem volta além do menu de boot.
+system-update-records-checkout = O flake desta máquina segue um checkout local da distro: a atualização move só o nixpkgs, e o que for commitado ali só chega ao sistema pela porta do sudo.
 
 # UMA RODADA À MÃO COM A BATERIA BAIXA pergunta antes, com o não primeiro;
 # uma agendada espera o carregador e não pergunta a ninguém.
@@ -179,6 +179,34 @@ notif-system-update-restart-summary = Reinicie para usar o sistema novo
 notif-system-update-restart-body = A atualização montou um sistema novo e o deixou para o próximo reinício: nada do que roda agora foi parado. Até você reiniciar, esta máquina roda o mesmo de antes; esse reinício experimenta o novo uma vez, e volta sozinho para o último bom se ele não subir.
 notif-system-update-restart-unguarded-summary = Reinicie para usar o sistema novo
 notif-system-update-restart-unguarded-body = A atualização montou um sistema novo e o deixou para o próximo reinício: nada do que roda agora foi parado. Até você reiniciar, esta máquina roda o mesmo de antes; esse reinício não tem volta além do menu de boot: se o novo não subir, escolha lá o anterior.
+
+# ROOT'S APPLIER REFUSED YOUR DECLARATIONS: its reason, as a sentence — on the
+# step under the cursor, in both doors, and in the run's notification.
+notif-system-update-declarations-refused-summary = Suas declarações não chegaram a esta máquina
+notif-system-update-declarations-refused-body = O aplicador da máquina as recusou: { $why } Esta atualização montou as que a máquina já tinha.
+system-update-applier-refused-unknown = O motivo não é um que esta versão saiba dizer; o diário o tem.
+system-update-applier-refused-nothing-staged = Nada foi preparado: não havia declaração para tomar.
+system-update-applier-refused-link = Há um link simbólico entre suas declarações, e a máquina não toma nenhuma delas.
+system-update-applier-refused-hard-link = Um arquivo das suas declarações tem um segundo nome (um hard link), e a máquina não toma nenhuma delas.
+system-update-applier-refused-special = Há um pipe, um socket ou um dispositivo entre suas declarações, e a máquina não toma nenhuma delas.
+system-update-applier-refused-misplaced = Um arquivo está onde cabe uma pasta entre suas declarações, ou uma pasta onde cabe um arquivo.
+system-update-applier-refused-not-owned = Algo entre suas declarações não é seu, e a máquina não toma nenhuma delas.
+system-update-applier-refused-writable = Algo entre suas declarações pode ser escrito por outra pessoa, e a máquina não toma nenhuma delas.
+system-update-applier-refused-bad-name = Um nome entre suas declarações não é texto simples.
+system-update-applier-refused-not-a-module = Uma pasta entre seus módulos do cérebro não se chama my- e uma palavra.
+system-update-applier-refused-too-large = Um arquivo das suas declarações, ou todas elas juntas, é maior do que a máquina toma.
+system-update-applier-refused-too-many = Suas declarações têm mais entradas, ícones, módulos ou arquivos do que a máquina toma.
+system-update-applier-refused-too-deep = Suas declarações descem mais pastas do que a máquina toma.
+system-update-applier-refused-not-png = Um ícone entre suas declarações não é um PNG.
+system-update-applier-refused-missing-icon = Uma entrada das suas declarações nomeia um ícone que elas não trazem.
+system-update-applier-refused-unreadable = Algo entre suas declarações não pôde ser lido.
+system-update-applier-refused-unwritable = A pasta da máquina não pôde ser escrita, ou não é só de root.
+system-update-applier-refused-restaged = Suas declarações foram preparadas de novo enquanto a máquina as lia: a próxima execução as toma.
+system-update-applier-refused-not-a-nonce = A marca que distingue um preparo do seguinte não se lê.
+system-update-applier-refused-not-signed = Suas declarações não trazem assinatura, e esta máquina só toma o que a sua chave assinou.
+system-update-applier-refused-bad-signature = A assinatura das suas declarações não é a da chave em que esta máquina confia para você.
+system-update-applier-refused-rolled-back = Estas declarações são mais velhas que as últimas que esta máquina tomou, e uma cópia assinada mais velha não é tomada de novo.
+system-update-applier-refused-bad-key = A chave em que esta máquina confia para você não se lê como uma.
 # THE 2026-10-30 WAVE: the Android apps that wait, and why.
 system-update-declined-android-in-use = O Android estava rodando: nenhum app dele foi trocado com você usando, e eles esperam a próxima execução.
 system-update-declined-fdroid-not-let = O F-Droid não está permitido no seu consentimento: os seus apps Android não foram olhados, e ficam nas versões que têm. Permitir de novo o f-droid.org deixa a próxima execução levá-los adiante.

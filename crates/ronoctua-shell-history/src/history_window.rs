@@ -70,11 +70,10 @@ pub fn host_it() -> Result<()> {
                     // reopened. Only the MARK is taken: the rest of the
                     // snapshot is the thread's, and a door that rebuilt it
                     // from a file would be a second reading.
-                    let fresh = ronoctua_atuin::prefs::read().mark;
-                    if fresh != door.content.snapshot.mark {
-                        door.content.snapshot.mark = fresh;
-                        door.ui.ask_paint();
-                    }
+                    let (fresh, partly) = crate::partly_read::read(&ronoctua_atuin::prefs::store());
+                    door.content.view.read_in_part(partly);
+                    door.content.snapshot.mark = fresh.mark;
+                    door.ui.ask_paint();
                 }
             })
             .map_err(|e| anyhow::anyhow!("could not hang the atuin.json watch: {e}"))?;
@@ -100,8 +99,10 @@ pub fn host_it() -> Result<()> {
             })
             .map_err(|e| anyhow::anyhow!("could not hang the atuin channel: {e}"))?;
 
+        let mut view = crate::history::View::fresh();
+        view.read_in_part(crate::partly_read::judged(&ronoctua_atuin::prefs::store()));
         Ok(HistoryWindow {
-            view: crate::history::View::fresh(),
+            view,
             // WHAT THE FILES SAY, before the thread has said anything.
             // `default()` has `present: false`, so the window opened on "atuin
             // is not installed" and replaced it a moment later — a sentence

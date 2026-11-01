@@ -215,9 +215,9 @@ impl<T> Reading<T> {
     }
 
     /// Whether PART of the file did not read — a value repaired, the rest
-    /// kept. What a view that shows the file owes a sentence about while no
-    /// screen lists the ledger: what it shows in that place is not what the
-    /// file says (the file keeps it, [`Store::write`]).
+    /// kept. What the view that shows the file owes a sentence about (the
+    /// shell kit's `partly_read`): what it shows in that place is not what
+    /// the file says (the file keeps it, [`Store::write`]).
     #[must_use]
     pub fn part_not_read(&self) -> bool {
         !self.repairs.is_empty() && !self.lost_everything()
@@ -332,6 +332,13 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Default> Store<T> {
     #[must_use]
     pub fn path(&self) -> Option<PathBuf> {
         self.dir.as_ref().map(|d| d.join(self.file))
+    }
+
+    /// Its file's name under its folder (`audio.json`) — what a sentence
+    /// about the file names, a store that keeps nothing included.
+    #[must_use]
+    pub const fn file(&self) -> &'static str {
+        self.file
     }
 
     /// Its logical path (`config/theme.json`) and its ledger's folder, when it

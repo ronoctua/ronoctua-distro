@@ -650,6 +650,10 @@ pub mod camera {
       --scale <n>           physical px per logical         (default: 1)
       --list                prints the frame instead of drawing it
 
+    RONOCTUA_ICON_NAMES, when set, is where the web app's icon shelf of the
+    distro's collection reads its names, in both doors; a path that names
+    nothing draws the collection still on its way.
+
     Steps — walked in the order they appear:
 
       --key <notation>      a key, as the keymap writes it: <down>, RET, C-d
@@ -837,9 +841,18 @@ pub mod camera {
             crate::software_feed::Taught::of_this_leader(),
         );
         r.snapshot = Some(ronoctua_software::state::read_with(&ctx, host));
+        // THE ROOM'S OWN FILE, judged as the person's is: a value of it that
+        // does not read is drawn with the line it is owed.
+        r.prefs_unread = ronoctua_shell_kit::partly_read::judged(&ronoctua_software::prefs::store(
+            &ctx.roots.config,
+        ));
         r.zone = ronoctua_files::when::Zone::utc();
         r.now = now;
         r.home = Some(ctx.roots.home);
+        // THE COLLECTION'S NAMES where the environment says, as the machine's
+        // feed reads them — a path that names nothing is the superpack's part
+        // still on its way. Unset, the shelf stays asking.
+        r.icon_names = ronoctua_software::Tools::from_env().icon_names;
         Ok(r)
     }
 

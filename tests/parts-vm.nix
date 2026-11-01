@@ -22,7 +22,8 @@
 #      machine flake (`personParts`), and alone: the good entry arrives, and
 #      one whose evaluation throws, one that ABORTS — which no `tryEval`
 #      catches — and one its build refuses each fail only themselves, said
-#      as `eval-failed`.
+#      as `eval-failed` — the refused one with the system's own reason for an
+#      entry it leaves out (`refused-by-meta`).
 #
 # THE PARTS ARE SMALL ON PURPOSE: a download (a fixed-output derivation that
 # runs curl against the server) and a script around it, built in the VM with
@@ -303,16 +304,19 @@ pkgs.testers.runNixOSTest {
     with subtest("a part of the person's is evaluated alone, and a broken one fails only itself"):
         wait_phase("person-good", "here")
         assert run_as_person("person-good") == "person-good 1"
-        for part in ("person-throws", "person-aborts", "person-refused"):
+        # THE ONE ITS BUILD REFUSES is held with the system's own reason —
+        # the one an entry it leaves out has —, never as `eval-failed`.
+        for part, why in (("person-throws", "eval-failed"), ("person-aborts", "eval-failed"),
+                          ("person-refused", "refused-by-meta")):
             machine.wait_until_succeeds(
-                "jq -e '.attempts >= 1 and .\"last-failure\".why == \"eval-failed\"' "
+                f"jq -e '.attempts >= 1 and .\"last-failure\".why == \"{why}\"' "
                 f"/var/lib/ronoctua-parts/parts/{part}.json",
                 timeout=timedelta(minutes=10),
             )
             assert record(part)["wanted"] is None, record(part)
             machine.fail(f"systemctl is-failed ronoctua-part@{part}.service")
         refused = record("person-refused")["last-failure"]["detail"]
-        assert refused == "refused-by-meta: `x` is unfree, and its declaration carries no consent", refused
+        assert refused == "`x` is unfree, and its declaration carries no consent", refused
         assert "abort" in record("person-aborts")["last-failure"]["detail"], record("person-aborts")
         # What it evaluated is kept: the planner, run again, does not ask
         # the entry again while its declaration stays the same.

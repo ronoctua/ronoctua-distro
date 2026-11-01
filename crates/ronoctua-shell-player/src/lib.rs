@@ -30,8 +30,8 @@
 use ronoctua_shell_door::{column, door, file_picker, launch, region, right_column};
 use ronoctua_shell_inspect::{globe, tag_words};
 use ronoctua_shell_kit::{
-    bars, bindings, chrome, daemon, echo, fields, foreign, line, security_words, sizes,
-    text_select, wake, watchdog, wheel, when,
+    bars, bindings, chrome, daemon, echo, fields, foreign, line, partly_read, security_words,
+    sizes, text_select, wake, watchdog, wheel, when,
 };
 // The tests hand a root gesture to a fake gate.
 #[cfg(test)]

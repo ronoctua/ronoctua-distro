@@ -125,6 +125,9 @@ fn opened(way: &mut dyn Doorway) -> Sound {
         None => region::kept::<Snapshot>(way),
     };
     let mut view = View::fresh(prefs);
+    // THE FOOTER'S COPY CAME FROM A READ OF ITS OWN: the file is judged again
+    // as the view opens, for the places of it that did not read.
+    view.read_in_part(crate::partly_read::judged(&ronoctua_audio::prefs::store()));
     view.settle_in(snapshot.as_deref(), way.columns(), way.texts());
     let mut meter = Meter::default();
     meter.follow_the_microphone(&view, region::kept::<Handle>(way).as_deref());
@@ -284,6 +287,8 @@ impl Region for Sound {
             }
         } else if let Some(prefs) = news.downcast_ref::<Preferences>() {
             self.view.took_preferences(*prefs);
+            self.view
+                .read_in_part(crate::partly_read::judged(&ronoctua_audio::prefs::store()));
             way.repaint();
         }
     }

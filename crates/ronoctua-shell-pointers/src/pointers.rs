@@ -474,13 +474,12 @@ fn cursors(b: &mut Builder<'_>, s: &Snapshot) {
         b.note(crate::key::POINTERS_SETTINGS_FAILED);
     }
     // A PART OF THE FILE REPAIRED: the choices below show the repair in that
-    // place, and the file keeps what it says.
-    if s.settings_repaired {
-        let said = b.texts.t_with(
-            crate::key::BELONGINGS_REPAIR_PART_NOT_READ,
-            &[("file", ronoctua_pointers::prefs::FILE)],
-        );
-        b.note_said(&said);
+    // place, and the file keeps what it says — the places, said.
+    if let Some(partly) = ronoctua_shell_kit::partly_read::PartlyRead::of_repairs(
+        ronoctua_pointers::prefs::FILE,
+        &s.settings_repairs,
+    ) {
+        b.note_said(&partly.said(b.texts));
     }
     b.pair(
         b.texts.t(crate::key::POINTERS_TOGETHER),
@@ -1265,7 +1264,7 @@ pub(crate) fn a_laptop() -> Snapshot {
         prefs,
         plan,
         settings_failed: false,
-        settings_repaired: false,
+        settings_repairs: Vec::new(),
         connected: true,
         keyboards: Vec::new(),
     }
@@ -1316,19 +1315,23 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        let part = t.t_with(
-            crate::key::BELONGINGS_REPAIR_PART_NOT_READ,
-            &[("file", ronoctua_pointers::prefs::FILE)],
-        );
+        use ronoctua_shell_kit::partly_read::{PartlyRead, Why, planted};
+        let repairs = vec![planted("/size", Why::WrongType)];
+        let part = PartlyRead::of_repairs(ronoctua_pointers::prefs::FILE, &repairs)
+            .expect("a part")
+            .said(&t);
         let failed = t.t(crate::key::POINTERS_SETTINGS_FAILED);
         let mut s = a_laptop();
         assert!(
-            !words(&s).contains(&part),
+            !words(&s).contains("/size"),
             "a file read whole is warned about"
         );
-        s.settings_repaired = true;
+        s.settings_repairs = repairs;
         let said = words(&s);
-        assert!(said.contains(&part), "the repair is not said: {said}");
+        assert!(
+            said.contains(ronoctua_pointers::prefs::FILE) && said.contains("/size"),
+            "the repair is not said: {said}\n{part}"
+        );
         assert!(!said.contains(&failed), "the rest of the file was read");
     }
 

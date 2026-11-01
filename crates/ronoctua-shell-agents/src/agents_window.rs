@@ -202,6 +202,18 @@ impl Content for AgentsWindow {
             .collect()
     }
 
+    /// A pair wrapped over several lines is one control: its lines light
+    /// together, as in the footer (`View::control_of`, the row a click on
+    /// any of them lands on).
+    fn controls(&self, ui: &Ui) -> Option<Vec<usize>> {
+        let rows = self.view_rows(ui);
+        Some(
+            (0..rows.len())
+                .map(|n| crate::agents::View::control_of(n, &rows))
+                .collect(),
+        )
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.open.view.cursor())
     }
@@ -313,7 +325,9 @@ mod tests {
     /// happened. The footer's region has its own.
     #[test]
     fn the_windows_pointer_lights_what_the_click_takes() {
-        let held = crate::door::held_to_the_click(a_window, crate::door::seen);
+        let held = crate::door::held_to_the_control(a_window, crate::door::seen, |w, ui, row| {
+            crate::agents::View::control_of(row, &w.view_rows(ui))
+        });
         assert!(
             held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
             "no row lit, or every row lit: {held:?}"

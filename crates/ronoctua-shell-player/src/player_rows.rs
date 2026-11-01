@@ -772,6 +772,13 @@ impl Builder<'_> {
         }
     }
 
+    /// A sentence already in words, in a note's tone — wrapped, never cut.
+    pub fn told(&mut self, said: &str) {
+        for line in crate::chrome::note_lines(said, self.room) {
+            self.inert(vec![Self::piece(self.left, line, tokens::color::TEXT_DIM)]);
+        }
+    }
+
     /// A sentence already in words that WARNS — a trouble, a refusal —
     /// wrapped, and never cut.
     pub fn warning(&mut self, said: &str) {

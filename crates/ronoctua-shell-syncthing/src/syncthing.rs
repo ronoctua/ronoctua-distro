@@ -479,6 +479,9 @@ pub struct View {
     open: Vec<&'static str>,
     /// This view's own preference.
     prefs: Preferences,
+    /// What of `syncthing.json` did not read, when part of it did not: said
+    /// over the row that shows the repair (`partly_read`).
+    partly: Option<crate::partly_read::PartlyRead>,
     /// What a line is open for, if anything.
     asking: Option<Ask>,
     /// Whether anybody has moved the cursor yet.
@@ -499,6 +502,7 @@ impl View {
             level: Level::List,
             open: Vec::new(),
             prefs,
+            partly: None,
             asking: None,
             moved: false,
             picking: None,
@@ -637,6 +641,13 @@ impl View {
     /// Take the preference back off disk.
     pub const fn took_preferences(&mut self, prefs: Preferences) {
         self.prefs = prefs;
+    }
+
+    /// What the read of `syncthing.json` owes the person — the places of it
+    /// that did not read, or `None` (`partly_read`); both doors hand it on
+    /// every read of the file.
+    pub fn read_in_part(&mut self, partly: Option<crate::partly_read::PartlyRead>) {
+        self.partly = partly;
     }
 
     /// What was typed on a line, under the line's id, as an order — one call
@@ -1318,6 +1329,11 @@ impl View {
             "interface",
             !s.service.is_up(),
         );
+        // A PART OF OUR FILE NOT READ: the row below shows the repair in that
+        // place, and the file keeps what it says.
+        if let Some(partly) = &self.partly {
+            b.said(partly.said(b.texts), tokens::color::TEXT_DIM, Spot::Nothing);
+        }
         // OURS, AND THE ONLY ONE. Everything above belongs to Syncthing and is
         // kept by Syncthing; this is a decision it has no opinion about.
         b.pair(

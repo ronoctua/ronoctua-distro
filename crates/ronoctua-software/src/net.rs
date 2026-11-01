@@ -133,9 +133,77 @@ pub trait Fetch: Sync {
     ) -> Result<(), Failure>;
 }
 
-/// The network itself. Every call reaches a host: call it on a thread.
+/// The network itself, on the PERSON's passes. Every call reaches a host:
+/// call it on a thread.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Net;
+
+/// The network a declared system updater asks ([`Asker::Updater`]): the
+/// same requests as [`Net`], each on the updater's pass for its first host
+/// and never on the person's consent. Only [`crate::follow`] builds one.
+#[derive(Debug, Clone, Copy)]
+pub struct UpdaterNet(pub ronoctua_consent::Updater);
+
+impl Fetch for UpdaterNet {
+    fn get(&self, url: &str, headers: &[(&str, &str)], most: u64) -> Result<Got, Failure> {
+        request_as(Asker::Updater(self.0), url, None, headers, most)
+    }
+
+    fn post_json(&self, url: &str, body: &str, most: u64) -> Result<Got, Failure> {
+        request_as(Asker::Updater(self.0), url, Some(body), &[], most)
+    }
+
+    fn download(
+        &self,
+        url: &str,
+        most: u64,
+        to: &Path,
+        heard: &mut dyn FnMut(u64, Option<u64>) -> bool,
+    ) -> Result<(), Failure> {
+        // ITS OWN HOST FIRST: nothing goes to a host the updater does not ask.
+        Asker::Updater(self.0).pass(url)?;
+        download(url, to, None, most, heard).map(drop)
+    }
+}
+
+/// Whose word lets the first host of a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asker {
+    /// The person's, in their `consent.json`: every request of this crate
+    /// but the declared updater's.
+    Person,
+    /// A system updater the distro declares (`ronoctua_consent::Updater`):
+    /// the machine keeping itself at the newest version, which asks only its
+    /// own hosts, and asks no consent (the owner's exception, `AGENTS.md`).
+    Updater(ronoctua_consent::Updater),
+}
+
+impl Asker {
+    /// THE PASS for the first host of `url` (after the web's upgrade),
+    /// minted at the moment of asking.
+    ///
+    /// # Errors
+    ///
+    /// The address's refusal ([`transport_of`]), and [`Refusal::NotLet`] for
+    /// a host the person did not let — or that is not one of the updater's
+    /// own: nothing is sent.
+    pub fn pass(self, url: &str) -> Result<ronoctua_consent::Pass, Failure> {
+        let first = first_hop(url)?;
+        let host = first.host_str().unwrap_or_default();
+        match self {
+            Self::Person => ronoctua_consent::pass(host).map_err(|_| Failure {
+                refusal: Some(Refusal::NotLet),
+                trouble: format!("{host} was not let in consent.json"),
+            }),
+            Self::Updater(updater) => {
+                ronoctua_consent::pass_for_updater(updater, host).map_err(|_| Failure {
+                    refusal: Some(Refusal::NotLet),
+                    trouble: format!("{host} is not a host the {updater:?} updater asks"),
+                })
+            }
+        }
+    }
+}
 
 impl Fetch for Net {
     fn get(&self, url: &str, headers: &[(&str, &str)], most: u64) -> Result<Got, Failure> {
@@ -258,12 +326,7 @@ pub fn answered(got: Got) -> Result<Got, Failure> {
 /// The address's refusal ([`transport_of`]), and [`Refusal::NotLet`] when
 /// the host was not let — nothing is sent.
 pub fn pass_for(url: &str) -> Result<ronoctua_consent::Pass, Failure> {
-    let first = first_hop(url)?;
-    let host = first.host_str().unwrap_or_default();
-    ronoctua_consent::pass(host).map_err(|_| Failure {
-        refusal: Some(Refusal::NotLet),
-        trouble: format!("{host} was not let in consent.json"),
-    })
+    Asker::Person.pass(url)
 }
 
 /// THE request: a GET (`post` `None`) or a JSON POST of `post`, carrying
@@ -291,6 +354,21 @@ pub fn request(
     extra: &[(&str, &str)],
     most: u64,
 ) -> Result<Got, Failure> {
+    request_as(Asker::Person, url, post, extra, most)
+}
+
+/// [`request`], on `asker`'s pass for the first host.
+///
+/// # Errors
+///
+/// As [`request`].
+fn request_as(
+    asker: Asker,
+    url: &str,
+    post: Option<&str>,
+    extra: &[(&str, &str)],
+    most: u64,
+) -> Result<Got, Failure> {
     let mut ask = web::Ask::get(url, USER_AGENT)
         .with_headers(extra)
         .most(most)
@@ -298,9 +376,9 @@ pub fn request(
     if let Some(body) = post {
         ask = ask.posting(body);
     }
-    // ON THE PERSON'S PASS for the first host: its headers and its body go
+    // ON THE ASKER'S PASS for the first host: its headers and its body go
     // to that host alone, and the redirects are the host's answer.
-    let pass = pass_for(url)?;
+    let pass = asker.pass(url)?;
     let got = web::request_let(&pass, &ask)?;
     Ok(Got {
         url: got.url,
@@ -930,6 +1008,43 @@ mod tests {
             Refusal::NotLet,
             "a page off the pass named a file"
         );
+    }
+
+    /// FAILS IF: the declared updater's network waits for the person's
+    /// consent for its own hosts, or reaches any other host on its pass —
+    /// asked or downloaded —, refused before any socket (`NotLet`, never
+    /// `Offline`).
+    #[test]
+    fn the_declared_updater_asks_its_own_hosts_only() {
+        let updater = ronoctua_consent::Updater::DistroAppImages;
+        for url in [
+            "https://api.github.com/repos/a/b/releases/latest",
+            "https://github.com/a/b/releases/download/v1/b-1.AppImage",
+        ] {
+            let pass = Asker::Updater(updater)
+                .pass(url)
+                .unwrap_or_else(|f| panic!("{url}: {f}"));
+            assert!(first_host_is(&pass, url), "{url}");
+        }
+        let net = UpdaterNet(updater);
+        let refused = net
+            .get("https://never-let.invalid/feed.json", &[], 1 << 10)
+            .expect_err("another host was asked");
+        assert_eq!(
+            refused.refusal,
+            Some(Refusal::NotLet),
+            "{}",
+            refused.trouble
+        );
+        let to =
+            std::env::temp_dir().join(format!("ronoctua-software-updater-{}", std::process::id()));
+        let refused = net
+            .download("https://never-let.invalid/x", 1 << 10, &to, &mut |_, _| {
+                true
+            })
+            .expect_err("another host's file was downloaded");
+        assert_eq!(refused.refusal, Some(Refusal::NotLet));
+        assert!(!to.exists());
     }
 
     fn url(s: &str) -> Url {

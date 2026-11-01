@@ -37,6 +37,12 @@ ronoctua-memory = { path = "../ronoctua-memory" }
 # `Consumer`, which is what `ronoctua-memory` speaks. It is the WIT mirror in
 # plain Rust — no wasm toolchain comes with it.
 ronoctua-protocol = { path = "../ronoctua-protocol" }
+# THE SYSTEM BUS, asked by this process itself: polkit's agent answers for the
+# process that asks, and a `systemctl` of its own is another process
+# (`src/bus.rs`). Restarting and powering off are logind's, whose one
+# boundary is `ronoctua-power`.
+zbus.workspace = true
+ronoctua-power = { path = "../ronoctua-power" }
 anyhow.workspace = true
 ratatui = { version = "0.29", default-features = false, features = [ "crossterm" ] }
 crossterm = "0.28"

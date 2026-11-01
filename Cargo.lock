@@ -4565,10 +4565,12 @@ dependencies = [
  "ronoctua-compositor",
  "ronoctua-i18n",
  "ronoctua-memory",
+ "ronoctua-power",
  "ronoctua-protocol",
  "ronoctua-scroll",
  "ronoctua-tokens",
  "ronoctua-vt",
+ "zbus",
 ]
 
 [[package]]
@@ -5906,6 +5908,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+ "tracing-subscriber",
  "url",
 ]
 

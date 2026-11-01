@@ -57,19 +57,21 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    O modelo, por fonte:
    - **O sistema inteiro rola no `nixos-unstable`**: o flake da máquina segue essa branch (o próprio
      input `nixpkgs`, que o da distro segue). A rotina semanal `system-update` do cérebro (não há
-     `.timer` do systemd) move a distro e o nixpkgs (`nix flake update ronoctua nixpkgs`) e aplica
-     **para o próximo boot** (`ronoctua-machine apply --next-boot`), sozinha — espera a máquina
-     livre, rede não-tarifada e o carregador (e, se a pessoa deixar rodar na bateria, a carga no
-     piso ou acima), nunca pergunta. O sistema novo vale a partir do próximo reinício, que o ensaio
-     de boot experimenta uma vez, com o rollback de geração por trás, e uma notificação pede que a
-     pessoa reinicie. Fora o nixpkgs, a máquina usa os pins que a distro testou, e o código próprio
-     da distro ainda versiona pelo seu repositório.
+     `.timer` do systemd) move a distro e o nixpkgs (`nix flake update ronoctua nixpkgs`; numa
+     máquina cujo flake nomeia um checkout local, só o nixpkgs, e o checkout entra só pela porta do
+     sudo — emenda do dono, 2026-11-01) e aplica **para o próximo boot** (`ronoctua-machine apply
+     --next-boot`), sozinha — espera a máquina livre, rede não-tarifada e o carregador (e, se a
+     pessoa deixar rodar na bateria, a carga no piso ou acima), nunca pergunta. O sistema novo vale
+     a partir do próximo reinício, que o ensaio de boot experimenta uma vez, com o rollback de
+     geração por trás, e uma notificação pede que a pessoa reinicie. Fora o nixpkgs, a máquina usa
+     os pins que a distro testou, e o código próprio da distro ainda versiona pelo seu repositório.
    - **À frente do nixpkgs, pela distro**: o Claude Code pela **PART do store** (empacotada,
      corrigida para NixOS e pinada em `nix/claude-code.nix`; a versão sobe quando a distro move o
      pin). O updater nativo sob `$HOME` foi revertido (emenda do dono, 2026-10-30): ele baixa um
      binário Linux genérico que o NixOS não roda sem `nix-ld`. O **SolidCraft** é um AppImage de
-     `tangency-labs/solidcraft` que anda com o pin da distro e segue os releases se a pessoa ligar a
-     opção. O Codex vem do `pkgs.codex` e rola com o nixpkgs.
+     `tangency-labs/solidcraft` que segue os releases por padrão, além do pin que a distro testou; a
+     pessoa pode desligar isso, e então ele anda com o pin da distro *(emenda do dono, 2026-11-01)*.
+     O Codex vem do `pkgs.codex` e rola com o nixpkgs.
    - **Com updater próprio, sob `$HOME`**: os Craft Apps pelo **Craft Launcher**
      (`storytold/craft-launcher`), que baixa e atualiza os crafts sozinho.
    - **Flatpak e Android** se atualizam pelos próprios mecanismos (`update.auto.enable`; F-Droid).
@@ -201,7 +203,7 @@ interruptor do grupo. Id publicado entra no livro-razão de `assets/distro-apps.
 ```
 nix run .#release            publica: pins movidos (seu único commit), gate, release (só para frente), ISO
 nix run .#fetch-iso          baixa o ISO da versão, confere cada parte e o inteiro, junta
-nix run .#iso-sweep          apaga os ISOs que nada enraíza, menos o mais novo de cada nome
+nix run .#iso-sweep -- sweep apaga os ISOs que nada enraíza, menos o mais novo de cada nome
 nix run .#adopt-machine      máquina do layout antigo → flake próprio (migrate + apply, com sudo)
 nix run .#apply-here         a máquina com o checkout no lugar do input; o lock fica como estava
 ```
@@ -596,7 +598,11 @@ caminhos ao `ronoctua_llm::watched`.
   (2026-10-31): os atualizadores declarados do sistema não passam por ele — o Nix que constrói e o
   nix-flatpak, que instala e atualiza os Flatpaks declarados, falam com os servidores deles sem
   `Pass`, porque são a máquina se mantendo na última versão (inv. 6), não um programa nosso
-  pedindo um host.
+  pedindo um host. E (2026-11-01) o seguir dos AppImages da distro (`ronoctua-software pins
+  refresh`), que pergunta ao `api.github.com` e baixa do `github.com` — os dois hosts que o Nix já
+  pergunta para mover o nixpkgs —: vai num `Pass` de atualizador declarado
+  (`ronoctua_consent::Updater`), cunhado só para esses hosts e pedido só por esse caminho (cobra
+  `network-asks-with-a-pass`).
 - Um evento do sistema é dito no minibuffer (`events.rs`); vira notificação só quando a linha está
   ocupada ou a fila tem quatro, e o corpo diz por quê (`notif-minibuffer-was-busy`).
 
@@ -716,7 +722,7 @@ caminhos ao `ronoctua_llm::watched`.
   enraíza. Todo app que constrói ISO (`.#iso`, `.#release`, `.#gate`, `.#most`, `.#sized-build`) sai
   pelo `nix/iso-sweep.nix`, que apaga os ISOs sem raiz e guarda o mais novo de cada nome; guardar um
   ISO é dar-lhe raiz (`--out-link`). Nunca `nix build` solto nem `nix-collect-garbage` geral (leva o
-  que as baterias reaproveitam); à mão, `nix run .#iso-sweep` (cobra `iso-sweep-keeps-what-it-must`).
+  que as baterias reaproveitam); à mão, `nix run .#iso-sweep -- sweep` (cobra `iso-sweep-keeps-what-it-must`).
 - **O Nix pula sem aviso um `!include` que não consegue ler**: um piso em arquivo `0600`, ou ausente,
   é uma máquina sem piso (cobra `store-has-a-floor`).
 - **Interruptor que não interrompe**: um `mkIf` desligado não garante que o pacote saiu (pode entrar

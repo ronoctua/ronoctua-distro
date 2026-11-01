@@ -58,6 +58,39 @@ fn program() -> Option<std::path::PathBuf> {
         })
 }
 
+/// Has the belongings' CLI lend the identity this session keeps into `into`
+/// (`lend --out <file>`, which makes it new and `0600`): for a seal that
+/// opens a file sealed "to myself" with no question ([`crate::seal`]). Says
+/// whether it did — nothing kept, no CLI and a CLI that failed are all "no",
+/// and the door asks the passphrase. The CLI's words are not kept: it says
+/// only why, and the identity is the file's alone.
+pub fn lend(into: &std::path::Path) -> bool {
+    program().is_some_and(|program| lend_with(&program, into))
+}
+
+/// [`lend`], with `program` — what a test hands a stand-in.
+pub(crate) fn lend_with(program: &std::path::Path, into: &std::path::Path) -> bool {
+    let ran = std::process::Command::new(program)
+        .arg("lend")
+        .arg("--out")
+        .arg(into)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    match ran {
+        Ok(status) if status.success() => into.is_file(),
+        Ok(status) => {
+            tracing::info!(%status, "the session keeps no identity to lend: the passphrase is asked");
+            false
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "could not run the belongings program to lend the identity");
+            false
+        }
+    }
+}
+
 /// The command line, program first. Pure, and tested as data.
 #[must_use]
 pub fn command_line(program: &str, op: Op) -> Vec<String> {

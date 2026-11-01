@@ -397,6 +397,17 @@ pub fn status_in(ctx: &Context, places: &Places) -> Android {
     }
 }
 
+/// Why declaring the app `package` would be refused: one that came from a
+/// file (its `recorded` line says so), and one F-Droid's kept catalogue does
+/// not have, have no download to pin — the two refusals
+/// `crate::declare`'s entry and [`crate::pins::android`] make, and nothing
+/// else of them.
+#[must_use]
+pub fn undeclarable(roots: &Roots, package: &str, recorded: Option<&Recorded>) -> Option<Refusal> {
+    let from_a_file = recorded.is_some_and(|r| r.source == Came::File);
+    (from_a_file || crate::fdroid::app(roots, package).is_none()).then_some(Refusal::NothingToPin)
+}
+
 /// The apps inside Android (from `waydroid app list` while a session runs,
 /// from our record otherwise).
 #[must_use]
@@ -422,6 +433,7 @@ pub fn installed(ctx: &Context, android: &Android) -> Vec<Installed> {
             origin: crate::state::Origin::Mine,
             icon: icon.exists().then_some(Picture::File { path: icon }),
             trouble,
+            undeclarable: undeclarable(&ctx.roots, package, mine),
         }
     };
     if android.session
@@ -1020,7 +1032,7 @@ fn upgrade(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::progress::Beat;
 
@@ -1613,6 +1625,46 @@ mod tests {
             );
         }
 
+        /// FAILS IF: the screen offers to keep on every computer an app the
+        /// declaration refuses — one from a file, or one F-Droid's kept
+        /// catalogue does not have — or says it cannot be kept when the
+        /// catalogue pins it: the row and the pin answer by one rule.
+        #[test]
+        fn only_an_app_the_catalogue_pins_is_offered_to_every_computer() {
+            let fake = Fake::new("declarable", true, true);
+            let apk = zip_of(&[("AndroidManifest.xml", b"x"), ("classes.dex", b"dex")]);
+            let app = catalogue_with(&fake, &apk, &[]);
+            let elsewhere = "org.example.elsewhere";
+            listing(&fake, &[&app.package, elsewhere]);
+            let rows = || installed(&fake.ctx, &status_in(&fake.ctx, &fake.places));
+            let of = |rows: &[Installed], package: &str| {
+                rows.iter()
+                    .find(|i| {
+                        i.key
+                            == AppKey::Android {
+                                package: package.into(),
+                            }
+                    })
+                    .map(|i| i.undeclarable)
+            };
+            // FROM THE CATALOGUE: pinned, and offered.
+            recorded_at_three(&fake, &app.package, Came::Fdroid);
+            let now = rows();
+            assert_eq!(of(&now, &app.package), Some(None));
+            assert!(crate::pins::android(&fake.ctx.roots, &app.package).is_ok());
+            // ANOTHER STORE'S, inside Android: refused, as its pin is.
+            assert_eq!(of(&now, elsewhere), Some(Some(Refusal::NothingToPin)));
+            assert_eq!(
+                crate::pins::android(&fake.ctx.roots, elsewhere)
+                    .unwrap_err()
+                    .refusal,
+                Some(Refusal::NothingToPin)
+            );
+            // FROM A FILE, though the catalogue has the package: refused.
+            recorded_at_three(&fake, &app.package, Came::File);
+            assert_eq!(of(&rows(), &app.package), Some(Some(Refusal::NothingToPin)));
+        }
+
         #[test]
         fn a_tampered_apk_and_an_arm_only_one_are_refused() {
             let fake = Fake::new("fdroid-bad", true, true);
@@ -1878,8 +1930,9 @@ mod tests {
         }
     }
 
-    /// A stored zip of `members`, enough for `ronoctua_zip::members`.
-    pub(super) fn zip_of(members: &[(&str, &[u8])]) -> Vec<u8> {
+    /// A stored zip of `members`, enough for `ronoctua_zip::members` (an apk
+    /// here, a planted `entry.jar` in `pins`).
+    pub(crate) fn zip_of(members: &[(&str, &[u8])]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut central = Vec::new();
         for (name, data) in members {

@@ -1822,6 +1822,48 @@ pub fn pressed(
     Vec::new()
 }
 
+/// Whether a press on `target` of the detail in `area` takes something —
+/// and so whether it brings the keys here (`fast_access_rows::pressed`). A
+/// row, an answer, a bar and a cell whose field answers a press
+/// (`field_press`) do; a cell no field there answers, and the icon's stage
+/// and bar, which a press here does nothing with, do not. Every click used
+/// to bring the keys, and one that took nothing took them off the results.
+#[must_use]
+pub fn takes(view: &View, area: Area, target: Target, texts: &ronoctua_i18n::Texts) -> bool {
+    match target {
+        Target::Row(_)
+        | Target::Answer(_)
+        | Target::Bar
+        | Target::FileBar(..)
+        | Target::Icon(crate::icons_page::Target::Row(_)) => true,
+        Target::Icon(_) => false,
+        Target::Cell(line, column) => cell_press(view, area, line, column, texts).is_some(),
+    }
+}
+
+/// What a press on cell `column` of line `line` of a file's panels takes, by
+/// the walk its band lights by (`field_stretch`) and the one answer of what a
+/// field takes (`field_press`) — `None`: nothing.
+fn cell_press(
+    view: &View,
+    area: Area,
+    line: u16,
+    column: u16,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<FieldPress> {
+    let p = view.detail.panel.as_ref()?;
+    let (preview, facts, pre, info) = file_sections(p, area, true, texts);
+    let at = area.top + line;
+    [(&preview, pre.top), (&facts, info.top)]
+        .into_iter()
+        .find_map(|(s, top)| {
+            let fields = &s.content.get(usize::from(at.checked_sub(top)?))?.fields;
+            crate::fields::lit_field(fields, column).map(|k| fields[k].hit.clone())
+        })
+        .as_ref()
+        .and_then(field_press)
+}
+
 /// A press on a cell of a file's panels: what `field_press` says it takes —
 /// a fact's change, a permission's bit, the film's transport — through the
 /// panel's own code where it has one.
@@ -1832,20 +1874,10 @@ fn file_pressed(
     column: u16,
     texts: &ronoctua_i18n::Texts,
 ) -> Vec<Errand> {
-    let Some(p) = view.detail.panel.as_ref() else {
+    let Some(press) = cell_press(view, area, line, column, texts) else {
         return Vec::new();
     };
-    let (preview, facts, pre, info) = file_sections(p, area, true, texts);
-    let at = area.top + line;
-    // THE FIELD UNDER THE PRESS, by the walk its band lights by
-    // (`field_stretch`), and what a press on it takes (`field_press`).
-    let found = [(&preview, pre.top), (&facts, info.top)]
-        .into_iter()
-        .find_map(|(s, top)| {
-            let fields = &s.content.get(usize::from(at.checked_sub(top)?))?.fields;
-            crate::fields::lit_field(fields, column).map(|k| fields[k].hit.clone())
-        });
-    let Some(press) = found.as_ref().and_then(field_press) else {
+    let Some(p) = view.detail.panel.as_ref() else {
         return Vec::new();
     };
     let path = p.path.clone();
@@ -1878,11 +1910,16 @@ fn file_pressed(
             });
             Vec::new()
         }
+        // AND WHAT THE PANEL SAYS IS SAID — a playlist's remote entry says
+        // why it does not play, as the file manager's door says it; dropped
+        // here, the entry lit and its click said nothing.
         FieldPress::Panel(hit) => {
-            if let Some(p) = view.detail.panel.as_mut() {
-                let _ = p.panel.click(&hit);
+            match view.detail.panel.as_mut().and_then(|p| p.panel.click(&hit)) {
+                Some(crate::report::Step::Say(why)) => {
+                    vec![Errand::Say(texts.t_with(why.key, &why.borrowed()))]
+                }
+                _ => Vec::new(),
             }
-            Vec::new()
         }
     }
 }
@@ -2107,7 +2144,8 @@ mod tests {
     /// something where nothing lit: the group, a directory's size, a special
     /// bit, the cell of air after a field; in either door, which both draw
     /// and press through these (`the-pointer-lights-what-the-click-takes`,
-    /// invariant 19).
+    /// invariant 19). Or a press from the results brings the keys here where
+    /// it took nothing, or leaves them there where it took something.
     #[test]
     fn a_files_field_lights_exactly_where_a_press_takes_something() {
         use crate::fast_access::{Filled, Focus, Ground, Section, SectionId, Settings};
@@ -2237,7 +2275,9 @@ mod tests {
                         && y < q.y + q.height
                 });
                 // TAKEN: the press asked something, or changed what is drawn.
+                // PRESSED FROM THE RESULTS, so it shows whether the keys came.
                 let on = on_at(&view, line, column);
+                view.focus = Focus::Results;
                 let errands = crate::fast_access_rows::pressed(
                     &mut view,
                     On::Detail(t),
@@ -2246,6 +2286,8 @@ mod tests {
                     &g,
                     &texts,
                 );
+                let came = view.focus == Focus::Detail;
+                view.focus = Focus::Detail;
                 let acted = !errands.is_empty()
                     || view.detail.confirm.is_some()
                     || view.detail.asking.is_some()
@@ -2253,6 +2295,11 @@ mod tests {
                 assert_eq!(
                     lit, acted,
                     "column {column}, line {line}, on {on:?}: lit {lit}, a press took {acted}"
+                );
+                // AND THE KEYS CAME WITH A PRESS THAT TOOK SOMETHING, only.
+                assert_eq!(
+                    came, acted,
+                    "column {column}, line {line}, on {on:?}: the keys came {came}, a press took {acted}"
                 );
                 if let Some(h) = on {
                     if acted {
@@ -2287,6 +2334,111 @@ mod tests {
         assert!(
             dark_on.iter().any(|h| matches!(h, H::Amend(_, D::Mode))),
             "the permissions' label was never under the pointer: {dark_on:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a press on a playlist's remote entry in a file's detail says
+    /// nothing — the panel's refusal dropped while the entry lit — or says
+    /// it without naming which entry (`inspection::Panel::play_entry`, the
+    /// file manager's own sentence).
+    #[test]
+    fn a_remote_entrys_refusal_is_said() {
+        use crate::fast_access::{Filled, Focus, Ground, Section, SectionId, Settings};
+        use crate::fast_access_rows::Target as On;
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-fast-access-list-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a folder");
+        let remote = "https://example.invalid/two.mp3";
+        let list = dir.join("a.m3u");
+        std::fs::write(&list, format!("one.mp3\n{remote}\n")).expect("a playlist");
+        let texts = std::rc::Rc::new(ronoctua_i18n::Texts::fresh("en-GB").expect("the language"));
+        let zone = ronoctua_files::when::Zone::utc();
+        let mut view = View::new(Settings::default(), &texts);
+        view.set_text("a.m3u");
+        view.with_sections(vec![Section {
+            id: SectionId::Files,
+            filled: Filled::Hits(vec![Hit {
+                id: format!("file:{}", list.display()),
+                title: "a.m3u".to_owned(),
+                note: None,
+                what: What::File {
+                    path: list,
+                    folder: false,
+                    content: false,
+                    mime: Some("audio/x-mpegurl".to_owned()),
+                    size_bytes: None,
+                    mtime_s: None,
+                },
+            }]),
+        }]);
+        let whole = Area {
+            left: 1,
+            top: 2,
+            columns: 150,
+            lines: 44,
+            right_px: Area::x_of(151),
+            bottom_px: Area::y_of(46),
+        };
+        let frame = |view: &View| {
+            let mut d = Drawing::default();
+            crate::fast_access_rows::draw(view, whole, true, &[], &texts, &mut d);
+            d
+        };
+        view.settle_detail(&texts, &zone);
+        let _ = frame(&view);
+        let ask = view
+            .detail
+            .panel
+            .as_mut()
+            .and_then(|p| {
+                p.panel
+                    .wants_look(u32::from(tokens::space::FILES_PANELPIXELS))
+            })
+            .expect("the panel asks");
+        let looked = crate::inspection::look(ask);
+        let p = view.detail.panel.as_mut().expect("a panel");
+        let _ = p
+            .panel
+            .heard(crate::inspection::Heard::Looked(Box::new(looked)));
+        view.focus = Focus::Detail;
+        let _ = frame(&view);
+        let g = Ground {
+            catalogue: std::sync::Arc::default(),
+            commands: Vec::new(),
+            zone: zone.clone(),
+            zoneinfo: None,
+            queue_keys: String::new(),
+        };
+        // THE REMOTE ENTRY'S CELL, by the walk a press makes.
+        let d = Lay::of(&view, whole, &texts).detail.expect("a detail");
+        let p = view.detail.panel.as_ref().expect("a panel");
+        let (preview, facts, pre, info) = file_sections(p, d, true, &texts);
+        let cell = [(&preview, pre.top), (&facts, info.top)]
+            .into_iter()
+            .find_map(|(s, top)| {
+                s.content.iter().enumerate().find_map(|(i, row)| {
+                    let f = row
+                        .fields
+                        .iter()
+                        .find(|f| f.hit == crate::fields::Hit::Track(1))?;
+                    Some((top + u16::try_from(i).ok()?, f.at))
+                })
+            })
+            .expect("the remote entry is drawn");
+        let (x, y) = (
+            Area::x_of(cell.1) + Area::cell() / 2.0,
+            Area::y_of(cell.0) + Area::line() / 2.0,
+        );
+        let lay = Lay::of(&view, whole, &texts);
+        let t = lay.target_at(&view, x, y, &texts).expect("a target");
+        assert!(matches!(t, On::Detail(Target::Cell(..))), "{t:?}");
+        let errands = crate::fast_access_rows::pressed(&mut view, t, whole, (x, y), &g, &texts);
+        assert!(
+            errands
+                .iter()
+                .any(|e| matches!(e, Errand::Say(text) if text.contains(remote))),
+            "the refusal was not said: {errands:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

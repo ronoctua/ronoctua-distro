@@ -126,7 +126,8 @@ A sequência agora tem três tempos, e o gerador recusa qualquer outra ordem
 2. **A metade root** migra (`migrate`, antes de mover os inputs: o lock do layout velho não é o do
    flake da máquina; e `stop`, porque tudo depois fala o layout novo), move a distro e o nixpkgs
    (`nix flake update ronoctua nixpkgs`: a máquina segue o `nixos-unstable`, e todo outro input é o
-   pin testado da release; pulado e dito enquanto a máquina está retida — `not-held`) e aplica com o
+   pin testado da release; pulado e dito enquanto a máquina está retida — `not-held`; numa máquina
+   cujo flake nomeia um checkout local, só o nixpkgs — a seção abaixo) e aplica com o
    `ronoctua-machine apply --next-boot` — construir primeiro, deixar só o que construiu para o
    próximo boot, e armar o ensaio de boot (a seção "Para o próximo boot", abaixo). Um programa que a pessoa declarou não entra no rebuild: é uma
    parte dela, que o realizador avalia sozinha depois da troca, e a que não avalia ou não constrói
@@ -151,6 +152,17 @@ A sequência agora tem três tempos, e o gerador recusa qualquer outra ordem
    para ela inteira, sem verificação, naquela bateria ou naquele disco. O
    `system-update-moves-the-lock-only-for-a-rebuild` roda os dois passos juntos sobre uma pasta
    plantada e compara o lock byte a byte.
+
+   **Um checkout local só entra pela porta do sudo (emenda do dono ao inv. 6, 2026-11-01).** A
+   metade root roda sem senha — a rotina semanal, ou a pessoa iniciando-a —, e qualquer processo da
+   pessoa pode commitar num checkout. Onde o lock da máquina nomeia um (`git+file:`, um `path:` fora
+   do store: a máquina de desenvolvimento), mover a distro construiria como root o último commit.
+   Então o `update-distro` move só o nixpkgs ali, e um movimento que deixaria a distro noutra revisão
+   de um checkout (um `flake.nix` que nomeia um que o lock não nomeia, que o Nix trava de novo seja
+   qual for o input pedido) volta byte a byte e é recusado (`checkout-moved`). O commit entra pelo
+   `.#apply-here` ou por um `nix flake update ronoctua` de root, e a página diz isso numa linha. O
+   `system-update-leaves-a-checkout-to-the-sudo-door` roda o verbo de verdade sobre um lock do
+   GitHub e um de checkout plantados.
 3. **A pessoa termina**: reconcilia o declarado (`reconcile-declared`, depois do rebuild, para
    trazer o que o sistema NOVO declara) e publica por último (`publish`): o registro da máquina
    (`ronoctua-person record` copia o `state.json`, validado e na forma canônica, para
@@ -173,8 +185,13 @@ A sequência agora tem três tempos, e o gerador recusa qualquer outra ordem
 a sequência segue): `did-not-boot` (o sistema cujo ensaio falhou não é tentado de novo até a distro
 ou o nixpkgs andarem), `nothing-to-migrate` e as quatro do envio ao cache. Qualquer outra é falha
 que GUARDA a palavra (`failed-<palavra>`), e a
-vista diz a frase da máquina para ela, em vez de só "falhou". Uma última linha que não é recusa, ou
-uma palavra que não é kebab, é `failed` puro: nunca uma palavra inventada.
+vista diz a frase dela, em vez de só "falhou", no vocabulário que o passo declara (`refuses`): o da
+máquina (`ronoctua-machine`) ou o do aplicador de root das declarações da pessoa (o `person-stage`:
+`not-signed`, `rolled-back`, `too-large`…). Um passo sem vocabulário só diz que falhou: a palavra de
+outro programa não é a da máquina. A recusa do aplicador também vira notificação no fim da execução
+(`declarations-refused`), com a frase dele: antes, só o diário a dizia. A folha que o cérebro lê leva a
+palavra de cada passo (`verdict`) para isso. Uma última linha que não é recusa, ou uma palavra que
+não é kebab, é `failed` puro: nunca uma palavra inventada.
 
 ## Para o próximo boot, nunca sob a sessão (2026-10-30)
 
@@ -278,10 +295,10 @@ hotspot durasse, sem perguntar a ninguém.
 Acima dos passos, nas duas portas, e só o que diz alguma coisa, separado do segundo registro por uma
 linha de ar: quantos arquivos dos pertences ficaram em conflito no último pull (do repositório que a
 pessoa nomeia AGORA — a base de outro é a de uma primeira vez), com as teclas que os abrem (um clique
-na linha abre `LEADER s v` no rodapé, ou a janela dos pertences a partir da janela); cada programa
-declarado que a verificação segurou, com o motivo; o ensaio de boot e o porquê de não haver um, nas
-palavras da máquina (`machine-trial-…`, `machine-no-trial-…`); e a retenção, com a revisão curta e o
-dia. Cada registro é lido pelo crate que o escreve (`ronoctua-machine`, `ronoctua-person`,
+na linha abre `LEADER s v` no rodapé, ou a janela dos pertences a partir da janela); o ensaio de
+boot e o porquê de não haver um, nas palavras da máquina (`machine-trial-…`, `machine-no-trial-…`);
+a retenção, com a revisão curta e o dia; e, numa máquina cujo flake segue um checkout local, que a
+atualização move só o nixpkgs. Cada registro é lido pelo crate que o escreve (`ronoctua-machine`, `ronoctua-person`,
 `ronoctua-belongings`), e a vista os relê quando o mtime de um deles anda, como já relia os
 relatórios. Um arquivo ausente é uma resposta vazia; um que não lê não diz nada, em vez de inventar.
 Uma frase clicável que quebra em várias linhas é UM controle: o ponteiro sobre qualquer uma acende

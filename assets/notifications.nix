@@ -610,6 +610,29 @@
       actions = [ ];
     };
 
+    # REMOVED FOR GOOD, AND NOT YET: the update held the machine, or the
+    # system without it waits for the restart. `full`, because the body is
+    # what it waits for — a summary alone would leave "removed?" unanswered.
+    software-removal-waits = {
+      when = [
+        {
+          field = "tag";
+          is = "software-removal-waits";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 30;
+      icon = "software";
+      tags = [
+        "software-removal-waits"
+        "software"
+      ];
+      actions = [ ];
+    };
+
     # UPDATED, with the way to the rest of the updates.
     software-updated = {
       when = [

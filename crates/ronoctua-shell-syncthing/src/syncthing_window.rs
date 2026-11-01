@@ -55,11 +55,13 @@ pub fn host_it() -> Result<()> {
                 wish_changed,
                 |event, (), door: &mut Door<SyncthingWindow>| {
                     if let channel::Event::Msg(()) = event {
-                        let fresh = ronoctua_syncthing::prefs::store().read();
+                        let (fresh, partly) =
+                            crate::partly_read::read(&ronoctua_syncthing::prefs::store());
+                        door.content.view.read_in_part(partly);
                         if fresh != door.content.view.preferences() {
                             door.content.view.took_preferences(fresh);
-                            door.ui.ask_paint();
                         }
+                        door.ui.ask_paint();
                     }
                 },
             )
@@ -82,7 +84,9 @@ pub fn host_it() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("could not hang the syncthing channel: {e}"))?;
 
         // THE FILE PICKER'S FOLDER, watched through the door's wake.
-        let mut view = crate::syncthing::View::fresh(ronoctua_syncthing::prefs::store().read());
+        let (prefs, partly) = crate::partly_read::read(&ronoctua_syncthing::prefs::store());
+        let mut view = crate::syncthing::View::fresh(prefs);
+        view.read_in_part(partly);
         view.watch_with(w.wake());
         Ok(SyncthingWindow {
             view,

@@ -13,6 +13,14 @@ checked against its hash by Nix), else the AppImage's `.DirIcon`, else the
 file its `Icon=` names at the top of the image. A link is followed only while it
 stays inside the unpacked image.
 
+What is read of the image is bounded as the software centre bounds an AppImage
+it installs by hand (`crates/ronoctua-software/src/appimage.rs`): the head of
+the `.desktop` (`DESKTOP_MOST`) and a picture no larger than `ICON_MOST` —
+an image is free to carry a sparse terabyte under either name. A value is cut
+at every character any reader takes for the end of a line, so each line
+written is one line to every reader. `appimage-desktop-refuses-a-hostile-image`
+plants each of these.
+
 The entry is `ronoctua-appimage-<key>.desktop`, the id the software centre
 gives an AppImage it installs by hand, and it carries `X-Ronoctua-Declared` so
 the centre can tell the declared copy from an imperative one.
@@ -32,12 +40,23 @@ KEPT = re.compile(
 )
 # The field codes an `Exec=` may pass on: one file or URL, or several.
 FIELD_CODES = ("%f", "%F", "%u", "%U")
-# What a value may not carry into a line of ours.
-CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# What a value may not carry into a line of ours: the C0 and C1 controls and
+# the two Unicode separators — every character `str.splitlines` breaks at.
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+# The most of the image's `.desktop` that is read, and the largest picture
+# taken: `appimage.rs`'s `DESKTOP_MOST` and `ICON_MOST`.
+DESKTOP_MOST = 64 << 10
+ICON_MOST = 4 << 20
 
 
 def clean(value: str) -> str:
     return CONTROL.sub("", value).strip()
+
+
+def head_of(path: pathlib.Path, most: int) -> bytes:
+    """At most `most` bytes from the start of `path`, never the whole file."""
+    with path.open("rb") as f:
+        return f.read(most)
 
 
 def first_group(text: str) -> dict[str, str]:
@@ -76,8 +95,11 @@ def inside(root: pathlib.Path, path: pathlib.Path) -> pathlib.Path | None:
 
 
 def kind_of(path: pathlib.Path) -> str | None:
-    """`png` or `svg`, by what the file IS and not by its name."""
-    head = path.read_bytes()[:512]
+    """`png` or `svg`, by what the file IS and not by its name — and `None`
+    for a picture larger than `ICON_MOST`."""
+    if path.stat().st_size > ICON_MOST:
+        return None
+    head = head_of(path, 512)
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
     if b"<svg" in head:
@@ -112,7 +134,11 @@ def main() -> int:
 
     root = args.contents
     entries = sorted(p for p in root.glob("*.desktop") if inside(root, p) is not None)
-    fields = first_group(entries[0].read_text(encoding="utf-8", errors="replace")) if entries else {}
+    fields = (
+        first_group(head_of(entries[0], DESKTOP_MOST).decode("utf-8", errors="replace"))
+        if entries
+        else {}
+    )
 
     lines = ["[Desktop Entry]", "Type=Application"]
     if not fields.get("Name"):

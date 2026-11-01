@@ -111,6 +111,63 @@ pub fn declined_key(word: &str) -> Option<&'static str> {
     declared::declined_key(word)
 }
 
+/// Whose reasons a step's refusal (`failed-<word>` in its report) is said
+/// in, as `steps.nix` declares it (`refuses`).
+pub use declared::Refuses;
+
+/// Whose reasons the refusals of the step `id` are, read off the table —
+/// `None` for a step whose program's words this distro does not know, and
+/// for an id the table does not have.
+#[must_use]
+pub fn refuses(id: &str) -> Option<Refuses> {
+    declared::STEPS.iter().find(|s| s.id == id)?.refuses
+}
+
+/// The sentence of root's applier of the person's declarations for a
+/// staging it refused with `word` ([`ronoctua_person::tree::TreeWhy`]) —
+/// `None` for a word that is not one of its refusals of a staging: a file
+/// it keeps back refuses nothing, and `busy` is news the step declares.
+#[must_use]
+pub fn applier_refusal_key(word: &str) -> Option<&'static str> {
+    use super::key;
+    use ronoctua_person::tree::TreeWhy;
+    Some(match TreeWhy::of_id(word)? {
+        TreeWhy::NothingStaged => key::SYSTEM_UPDATE_APPLIER_REFUSED_NOTHING_STAGED,
+        TreeWhy::Link => key::SYSTEM_UPDATE_APPLIER_REFUSED_LINK,
+        TreeWhy::HardLink => key::SYSTEM_UPDATE_APPLIER_REFUSED_HARD_LINK,
+        TreeWhy::Special => key::SYSTEM_UPDATE_APPLIER_REFUSED_SPECIAL,
+        TreeWhy::Misplaced => key::SYSTEM_UPDATE_APPLIER_REFUSED_MISPLACED,
+        TreeWhy::NotOwned => key::SYSTEM_UPDATE_APPLIER_REFUSED_NOT_OWNED,
+        TreeWhy::Writable => key::SYSTEM_UPDATE_APPLIER_REFUSED_WRITABLE,
+        TreeWhy::BadName => key::SYSTEM_UPDATE_APPLIER_REFUSED_BAD_NAME,
+        TreeWhy::NotAModule => key::SYSTEM_UPDATE_APPLIER_REFUSED_NOT_A_MODULE,
+        TreeWhy::TooLarge => key::SYSTEM_UPDATE_APPLIER_REFUSED_TOO_LARGE,
+        TreeWhy::TooMany => key::SYSTEM_UPDATE_APPLIER_REFUSED_TOO_MANY,
+        TreeWhy::TooDeep => key::SYSTEM_UPDATE_APPLIER_REFUSED_TOO_DEEP,
+        TreeWhy::NotPng => key::SYSTEM_UPDATE_APPLIER_REFUSED_NOT_PNG,
+        TreeWhy::MissingIcon => key::SYSTEM_UPDATE_APPLIER_REFUSED_MISSING_ICON,
+        TreeWhy::Unreadable => key::SYSTEM_UPDATE_APPLIER_REFUSED_UNREADABLE,
+        TreeWhy::Unwritable => key::SYSTEM_UPDATE_APPLIER_REFUSED_UNWRITABLE,
+        TreeWhy::Restaged => key::SYSTEM_UPDATE_APPLIER_REFUSED_RESTAGED,
+        TreeWhy::NotANonce => key::SYSTEM_UPDATE_APPLIER_REFUSED_NOT_A_NONCE,
+        TreeWhy::NotSigned => key::SYSTEM_UPDATE_APPLIER_REFUSED_NOT_SIGNED,
+        TreeWhy::BadSignature => key::SYSTEM_UPDATE_APPLIER_REFUSED_BAD_SIGNATURE,
+        TreeWhy::RolledBack => key::SYSTEM_UPDATE_APPLIER_REFUSED_ROLLED_BACK,
+        TreeWhy::BadKey => key::SYSTEM_UPDATE_APPLIER_REFUSED_BAD_KEY,
+        TreeWhy::Busy | TreeWhy::NotAsSigned | TreeWhy::NoKeyPinned | TreeWhy::Document(_) => {
+            return None;
+        }
+    })
+}
+
+/// The applier's sentence for `word` as a notification says it: its own,
+/// or that the reason is not one this version names — a notification's
+/// sentence has every value it names.
+#[must_use]
+pub fn applier_refusal_said(word: &str) -> &'static str {
+    applier_refusal_key(word).unwrap_or(super::key::SYSTEM_UPDATE_APPLIER_REFUSED_UNKNOWN)
+}
+
 /// The revision the machine is held at, and since when.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeldAt {
@@ -147,6 +204,11 @@ pub struct Records {
     /// A new system that waits for the next restart ([`next_boot`]): it is
     /// used from then.
     pub staged: Option<NextBoot>,
+    /// The machine directory's lock names a LOCAL checkout of the distro
+    /// ([`ronoctua_machine::follows_a_checkout`]): the update moves
+    /// `nixpkgs` alone, and what is committed there reaches the system only
+    /// through the sudo door.
+    pub checkout: bool,
 }
 
 /// Where the records are — parameters, so a test and a photograph read
@@ -183,6 +245,9 @@ impl RecordPlaces {
         let mut out = vec![
             self.machine_state.join(ronoctua_person::names::STATE),
             self.machine_state.join(ronoctua_machine::AGAIN),
+            // The lock: the revision a hold would keep, and whether it
+            // names a local checkout.
+            self.machine_dir.join("flake.lock"),
         ];
         if let Some(b) = &self.belongings {
             out.extend([b.last(), b.prefs()]);
@@ -217,6 +282,7 @@ impl Records {
                 .as_ref()
                 .is_some_and(|s| ronoctua_machine::asked_again(&places, s)),
             revision: ronoctua_machine::distro_revision(&places),
+            checkout: ronoctua_machine::follows_a_checkout(&places),
             no_trial: state.as_ref().and_then(|s| s.no_trial),
             staged: next_boot(&at.root, state.as_ref()),
             hold: state.and_then(|s| s.hold).map(|h| HeldAt {
@@ -432,6 +498,49 @@ mod tests {
         assert_eq!(declined_key("a-word-no-program-writes"), None);
     }
 
+    /// FAILS IF: a reason root's applier refuses a staging with has no
+    /// sentence of the update's own, or a file it keeps back or its `busy`
+    /// (news the step declares) is given one; or the table's vocabulary of a
+    /// step is not the one its program speaks — the machine's program's
+    /// refusals the machine's, one step's the applier's.
+    #[test]
+    fn the_appliers_reasons_are_the_updates_sentences() {
+        use ronoctua_person::tree::TreeWhy;
+        for why in TreeWhy::ALL {
+            let refuses_a_staging = !why.keeps_back() && why != TreeWhy::Busy;
+            assert_eq!(
+                applier_refusal_key(why.id()).is_some(),
+                refuses_a_staging,
+                "{}",
+                why.id()
+            );
+        }
+        assert_eq!(applier_refusal_key("a-word-the-applier-never-says"), None);
+        assert_eq!(
+            applier_refusal_said("a-word-the-applier-never-says"),
+            super::super::key::SYSTEM_UPDATE_APPLIER_REFUSED_UNKNOWN
+        );
+        let mut appliers = 0;
+        for s in declared::STEPS {
+            assert_eq!(refuses(s.id), s.refuses, "{}", s.id);
+            let machines = s.command.first() == Some(&"ronoctua-machine");
+            match s.refuses {
+                Some(Refuses::Machine) => assert!(machines, "{}", s.id),
+                Some(Refuses::Applier) => appliers += 1,
+                None => assert!(
+                    !machines,
+                    "{}: the machine's program, and no vocabulary",
+                    s.id
+                ),
+            }
+        }
+        assert_eq!(
+            appliers, 1,
+            "one step hands the declarations to root's applier"
+        );
+        assert_eq!(refuses("an-id-the-table-does-not-have"), None);
+    }
+
     /// THE RECORDS ARE READ THROUGH THE CRATES THAT WRITE THEM: the boot
     /// trial and the hold from the machine's record, the conflicts of the
     /// CURRENT repository from the belongings' last plain run — and an
@@ -524,6 +633,20 @@ mod tests {
             Records::read_at(&at).revision.as_deref(),
             Some("613862c5a0ff613862c5a0ff613862c5a0ff6138")
         );
+        // A LOCK THAT NAMES A LOCAL CHECKOUT is said: the update moves
+        // nixpkgs alone there. One that names none says nothing.
+        assert!(!Records::read_at(&at).checkout);
+        std::fs::write(
+            at.machine_dir.join("flake.lock"),
+            r#"{"nodes": {"root": {"inputs": {"ronoctua": "ronoctua"}},
+                "ronoctua": {"locked": {"rev": "613862c5a0ff613862c5a0ff613862c5a0ff6138",
+                    "type": "git", "url": "file:///home/person/src/distro"},
+                  "original": {"type": "git", "url": "file:///home/person/src/distro"}}},
+                "root": "root", "version": 7}"#,
+        )
+        .expect("lock");
+        assert!(Records::read_at(&at).checkout);
+        assert!(at.files().contains(&at.machine_dir.join("flake.lock")));
 
         assert_eq!(r.staged, None, "nothing applied: nothing waits");
 

@@ -2,7 +2,7 @@
   "format": 1,
   "modules": {
     "my-approved": {
-      "hash": "sha256-IK0O5vSgz6lDwEtGCUZ6BonVgwzKoZZC2SI6iYUVKoU=",
+      "hash": "sha256-bsxxoKoBi/zTX82E9vCaao7mCkH4nLxO3mU4EoeSeO8=",
       "approved-at": "2026-10-05T12:00:00Z"
     },
     "my-edited": {
@@ -10,7 +10,7 @@
       "approved-at": "2026-10-05T12:00:00Z"
     },
     "my-reaching": {
-      "hash": "sha256-jgvxnTyATGoYyLvOdx+VD3EjmMoGE7tZN2AHHYHcpqo=",
+      "hash": "sha256-wwzQZmY0xjJLBULl0Qa03dZUJ29EUONb5pXbs2B97lA=",
       "approved-at": "2026-10-05T12:00:00Z"
     }
   }

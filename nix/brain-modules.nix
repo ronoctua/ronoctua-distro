@@ -71,8 +71,8 @@
   personModulesDir ? null,
   # The person's folders to READ, by id, or `null` for every one. The machine
   # leaves out a folder it does not include (one whose NixOS half waits for
-  # an approval), and the update's isolated verification one whose manifest
-  # does not even evaluate: an error Nix cannot catch, read here, would stop
+  # an approval), and one whose manifest root's check found does not even
+  # evaluate (`local/brain-checked.json`): an error Nix cannot catch, read here, would stop
   # the whole machine's evaluation.
   personModulesOnly ? null,
   # The marks the owner approved to be drawn at rest, `<module>/<mark>`. A
@@ -874,9 +874,9 @@ let
   # another module generates — is LEFT OUT and said (`personRefused`, by id,
   # in sentences), and the rest load. What the evaluation cannot catch at all
   # (a manifest that does not parse) is left out before it is read: the
-  # update's isolated verification reads each folder alone
-  # (`personProblemsOf.<id>`) and the machine hands the ones that answered
-  # as `personModulesOnly`.
+  # root's check reads each folder alone, in a process of its own
+  # (`personVerdictOf.<id>`, `ronoctua-person check-brain`), and the machine
+  # hands the ones that evaluated as `personModulesOnly`.
   # ---------------------------------------------------------------------
   personFolders = foldersOf personModulesDir;
   personAsked =
@@ -888,6 +888,21 @@ let
   # EACH FOLDER'S OWN PROBLEMS, one attribute per folder and lazy: asking for
   # one reads that folder alone, never its neighbours.
   personProblemsOf = lib.genAttrs personFolders (id: (read "person" personModulesDir id).problems);
+
+  # AND EACH FOLDER READ ALL THE WAY DOWN, alone: its problems, or — with
+  # none — the module it is, forced whole (`deepSeq`), so whatever a build's
+  # evaluation would force of it is forced here. What root's verification
+  # evaluates of one folder, in a process of its own
+  # (`nix/person-brain-check.nix`, `ronoctua-person check-brain`): a manifest
+  # that does not parse, aborts or recurses for ever stops that process
+  # alone, and the machine leaves the folder out.
+  personVerdictOf = lib.genAttrs personFolders (
+    id:
+    let
+      r = read "person" personModulesDir id;
+    in
+    if r.problems != [ ] then r.problems else builtins.deepSeq (removeAttrs r.module [ "dir" ]) [ ]
+  );
 
   # THE NAMES A MODULE GENERATES, by kind — the ones `refuseTwice` below
   # refuses twice, and its text prefixes, which `gen-i18n.py` refuses when
@@ -1155,12 +1170,27 @@ let
   # THE DISTRO'S HALVES, which `nix/modules/brain.nix` imports.
   nixosModules = map (m: gate m.id m.dir (m.dir + "/module.nix")) distroEvery;
   # AND THE PERSON'S, by id: a person's `module.nix` reaches root, so the
-  # machine imports one only once it is approved through the sudo door.
+  # machine imports one only once it is approved through the sudo door —
+  # and FROM A COPY OF ITS OWN FOLDER, alone in the store. In place, beside
+  # its siblings, a `builtins.readFile ../my-common/run.sh` would reach a
+  # folder no approval covers, and the gate sees imports, never a read. The
+  # copy is the one `nix/machine.nix` hashes for the approval: the same
+  # folder under the same name is the same store path
+  # (`person-root-module-needs-approval`).
   personNixosModules = listToAttrs (
-    map (m: {
-      name = m.id;
-      value = gateAs "person" m.id m.dir (m.dir + "/module.nix");
-    }) (filter (m: m.hasNixos) personEvery)
+    map (
+      m:
+      let
+        isolated = builtins.path {
+          path = m.dir;
+          name = "person-brain-${m.id}";
+        };
+      in
+      {
+        name = m.id;
+        value = gateAs "person" m.id isolated (isolated + "/module.nix");
+      }
+    ) (filter (m: m.hasNixos) personEvery)
   );
 
   # ---------------------------------------------------------------------
@@ -1289,6 +1319,7 @@ builtins.deepSeq (attrNames glyphs ++ attrNames eventTags ++ attrNames commands)
     personIds
     personRefused
     personProblemsOf
+    personVerdictOf
     personNixosModules
     personPrefix
     personIdMost

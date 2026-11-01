@@ -45,6 +45,9 @@ pub enum Back {
     /// What came of a gesture of the machine's, asked through the door's
     /// sudo gate (`crate::machine_gesture`).
     Machine(crate::machine_gesture::Came),
+    /// What came of an approval of a brain module of the person's, asked
+    /// through the door's sudo gate (`crate::approval`).
+    Approve(crate::approval::Came),
 }
 
 /// Where a key or a click of a door reaches past it.
@@ -87,6 +90,8 @@ pub struct Open {
     parts_waiting: usize,
     /// Gestures of the machine's asked, whose verdict has not come.
     machine_waiting: usize,
+    /// Approvals asked, whose verdict has not come.
+    approve_waiting: usize,
 }
 
 impl std::fmt::Debug for Open {
@@ -128,6 +133,7 @@ impl Open {
             netrc_waiting: false,
             parts_waiting: 0,
             machine_waiting: 0,
+            approve_waiting: 0,
         }
     }
 
@@ -159,14 +165,15 @@ impl Open {
     }
 
     /// Whether it still follows something with its page closed: a run it
-    /// asked of the brain, root's netrc, a gesture of the parts' page, or one
-    /// of the machine's.
+    /// asked of the brain, root's netrc, a gesture of the parts' page, one
+    /// of the machine's, or an approval.
     #[must_use]
     pub const fn lingers(&self) -> bool {
         self.followed.is_some()
             || self.netrc_waiting
             || self.parts_waiting > 0
             || self.machine_waiting > 0
+            || self.approve_waiting > 0
     }
 
     /// What the paging keys and arrows asked are what a photograph kept.
@@ -217,6 +224,16 @@ impl Open {
                     self.machine_waiting = self.machine_waiting.saturating_sub(1);
                     self.view.gesture_heard();
                     let said = crate::machine_gesture::said(&came, way.texts());
+                    way.say(said, crate::echo::Echo::Long);
+                    way.repaint();
+                }
+                // WHAT CAME OF AN APPROVAL, said in this door: approved, the
+                // door's refusal, or root's own reason. The records are read
+                // again now: an approval recorded moved root's file.
+                Back::Approve(came) => {
+                    self.approve_waiting = self.approve_waiting.saturating_sub(1);
+                    self.view.approval_heard();
+                    let said = crate::approval::said(&came, way.texts());
                     way.say(said, crate::echo::Echo::Long);
                     way.repaint();
                 }
@@ -318,6 +335,45 @@ impl Open {
             Err(e) => {
                 tracing::error!(error = %e, "could not start the machine gesture's thread");
                 self.view.gesture_heard();
+                let said = way.texts().t(crate::security_words::refusal(
+                    ronoctua_security::Why::Unstartable,
+                ));
+                way.say(said, crate::echo::Echo::Long);
+            }
+        }
+    }
+
+    /// A brain module of the person's said yes to on the page: its request
+    /// staged and asked in the sudo bar through this door's gate (`sudo -n`
+    /// first: an open window or sudo's timestamp asks nothing) on a NAMED
+    /// thread — root's unit asks Nix for the hash — whose verdict comes back
+    /// to this door. A photograph's door asks nothing.
+    pub fn ask_to_approve(&mut self, what: crate::approval::Waiting, way: &mut dyn Doorway) {
+        let Some(post) = self.post().filter(|_| self.reach == Reach::Machine) else {
+            self.view.approval_heard();
+            return;
+        };
+        let gesture = way.sudo().gesture(crate::sudo::Asker::Update);
+        let places = self
+            .view
+            .approval_places()
+            .cloned()
+            .unwrap_or_else(crate::approval::Places::here);
+        let born = std::thread::Builder::new()
+            .name("approval".to_owned())
+            .spawn(move || {
+                let came = crate::approval::run(&what, &places, gesture);
+                let _ = post.send(Back::Approve(came));
+            });
+        match born {
+            Ok(_) => {
+                self.approve_waiting += 1;
+                let said = way.texts().t(crate::key::MACHINE_SAID_ASKED);
+                way.say(said, crate::echo::Echo::Long);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "could not start the approval's thread");
+                self.view.approval_heard();
                 let said = way.texts().t(crate::security_words::refusal(
                     ronoctua_security::Why::Unstartable,
                 ));
@@ -447,6 +503,18 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
                 open.view.gesture_heard();
             }
         },
+        // A BRAIN MODULE OF THE PERSON'S, said yes to: its request staged and
+        // asked again in the sudo bar, and what came of it said here.
+        Errand::Approve(what) => match &mut open.reach {
+            Reach::Machine => open.ask_to_approve(what, way),
+            Reach::Kept(asked) => {
+                asked.push(format!(
+                    "would have asked root to approve {} at {}",
+                    what.id, what.hash
+                ));
+                open.view.approval_heard();
+            }
+        },
         Errand::Say(k) => {
             let said = way.texts().t(k);
             way.say(said, crate::echo::Echo::Long);
@@ -505,7 +573,7 @@ fn cache_errand(e: binary_cache::Errand, open: &mut Open, way: &mut dyn Doorway)
 
 /// What the page of the apps that follow their releases asked of the door:
 /// a sentence, or a turn of the switch — the person's copy of their options
-/// and, turning it on, their consent for GitHub — said on the door's line.
+/// — said on the door's line.
 fn follow_errand(e: crate::follow::Errand, open: &mut Open, way: &mut dyn Doorway) {
     use crate::follow::Errand as Page;
     match e {
@@ -760,6 +828,14 @@ impl Region for UpdateRegion {
                 let errand = self.open.view.ask_gesture(what);
                 self.errand(errand, way);
             }
+            // A BRAIN MODULE OF THE PERSON'S THAT WAITS, by the name: the
+            // page, on its question — the one the argument names, or the
+            // first — or the sentence that none waits.
+            Order::Approve => {
+                self.shown_on_the_step(way);
+                let errand = self.open.view.ask_approval(argument);
+                self.errand(errand, way);
+            }
             // ROOT'S NETRC, by its name: a root gesture, asked in the sudo
             // bar above the footer.
             Order::Cache(binary_cache::NETRC) => {
@@ -882,7 +958,12 @@ fn closed(command: &str, _: Option<&str>, way: &mut dyn Doorway) -> Closed {
         }
         Some(Order::Start | Order::Cache(binary_cache::NETRC)) => Closed::Behind,
         Some(
-            Order::Open | Order::Cache(_) | Order::Follow | Order::Parts(_) | Order::Machine(_),
+            Order::Open
+            | Order::Cache(_)
+            | Order::Follow
+            | Order::Parts(_)
+            | Order::Machine(_)
+            | Order::Approve,
         ) => Closed::Opens,
     }
 }
@@ -1154,6 +1235,121 @@ mod tests {
         for what in Gesture::ALL {
             assert_eq!(closed(what.command(), None, &mut way()), Closed::Opens);
         }
+    }
+
+    /// FAILS IF: an approval said yes to is not staged in the person's
+    /// approval folder and asked through the door's gate as the helper's
+    /// `person-module-approve` with the module and the hash shown; the door
+    /// lets the update go before what came of it is said there; root's own
+    /// reason is not what is said of a refusal; or a photograph's reaches
+    /// root instead of keeping what it would have asked.
+    #[test]
+    fn an_approval_is_staged_asked_through_the_gate_and_said_in_the_door() {
+        use std::sync::{Arc, Mutex};
+        let texts = Rc::new(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
+        let room =
+            std::env::temp_dir().join(format!("ronoctua-approve-door-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&room);
+        std::fs::create_dir_all(room.join("approve")).expect("a room");
+        let places = crate::approval::Places {
+            applied: room.join("person-applied.json"),
+            approved: room.join("approved.json"),
+            verdict: room.join("approve-verdict.json"),
+            requests: room.join("approve"),
+        };
+        let tea = crate::approval::Waiting {
+            id: "my-tea".to_owned(),
+            hash: "sha256-tea".to_owned(),
+        };
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut w = crate::region::Recorder::new(
+            Rc::clone(&texts),
+            100,
+            false,
+            crate::sudo::Gate::fake(Arc::clone(&log), Ok(())),
+            crate::wake::Wake::new(|| {}),
+        );
+        let view = View::of(
+            module::steps(),
+            crate::update_window::Verdicts::of(&[]),
+            Vec::new(),
+        )
+        .with_approval_places(places.clone());
+        let mut open = Open::new(view, Reach::Machine, Some(crate::wake::Wake::new(|| {})));
+        carry_out(Errand::Approve(tea.clone()), &mut open, &mut w);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut heard = way();
+        while open.lingers() && std::time::Instant::now() < until {
+            heard = way();
+            open.woken(&mut heard);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!open.lingers(), "the approval's verdict never came");
+        let said = texts.t_with(
+            crate::key::MACHINE_APPROVE_SAID_APPROVED,
+            &[("id", "my-tea")],
+        );
+        assert!(
+            heard
+                .owed
+                .iter()
+                .any(|e| matches!(e, Effect::Say(s, _) if *s == said)),
+            "{:?}",
+            heard.owed
+        );
+        assert_eq!(
+            *log.lock().expect("log"),
+            vec![(
+                crate::sudo::Asker::Update,
+                ronoctua_security::verb::RootVerb::PersonModuleApprove {
+                    id: "my-tea".to_owned(),
+                    hash: "sha256-tea".to_owned(),
+                }
+            )]
+        );
+        let staged: ronoctua_person::approve::Request = ronoctua_person::parse(
+            &std::fs::read(places.requests.join(ronoctua_person::approve::REQUEST))
+                .expect("the request was staged in the room"),
+        )
+        .expect("a request");
+        assert_eq!(
+            staged,
+            ronoctua_person::approve::Request::new("my-tea", "sha256-tea")
+        );
+        // ROOT'S REASON, in the door.
+        let post = open.post().expect("an inbox");
+        open.approve_waiting = 1;
+        assert!(post.send(Back::Approve(crate::approval::Came::Refused(
+            "my-tea".to_owned(),
+            ronoctua_person::approve::Denied::Changed
+        ))));
+        let mut heard = way();
+        open.woken(&mut heard);
+        let said = texts.t_with(
+            crate::key::MACHINE_APPROVE_SAID_CHANGED,
+            &[("id", "my-tea")],
+        );
+        assert!(
+            heard
+                .owed
+                .iter()
+                .any(|e| matches!(e, Effect::Say(s, _) if *s == said)),
+            "{:?}",
+            heard.owed
+        );
+        assert!(!open.lingers());
+        let _ = std::fs::remove_dir_all(&room);
+        // A PHOTOGRAPH'S keeps what it would have asked.
+        let mut r = region();
+        carry_out(Errand::Approve(tea), &mut r.open, &mut way());
+        let kept = r.open.would_have();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert!(kept[0].contains("my-tea"), "{kept:?}");
+        // AND BY NAME, the closed update opens on the question.
+        assert_eq!(
+            closed(crate::approval::APPROVE, None, &mut way()),
+            Closed::Opens
+        );
     }
 
     /// The update turned to the binary cache's page over a public cache with

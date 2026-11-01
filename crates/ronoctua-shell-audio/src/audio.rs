@@ -283,6 +283,9 @@ pub struct View {
     level: u8,
     /// This view's own settings.
     prefs: Preferences,
+    /// What of `audio.json` did not read, when part of it did not: said
+    /// under the settings, which show the repair in its place.
+    partly: Option<crate::partly_read::PartlyRead>,
     /// Whether anybody has moved the cursor yet.
     ///
     /// It is what keeps "land on something that acts" a rule about ARRIVING
@@ -308,8 +311,16 @@ impl View {
             on_a_node: None,
             level: 0,
             prefs,
+            partly: None,
             moved: false,
         }
+    }
+
+    /// What the read of `audio.json` owes the person — the places of it that
+    /// did not read, or `None` (`partly_read`); both doors hand it on every
+    /// read of the file.
+    pub fn read_in_part(&mut self, partly: Option<crate::partly_read::PartlyRead>) {
+        self.partly = partly;
     }
 
     /// Which row the cursor is on.
@@ -867,6 +878,11 @@ impl View {
     /// This view's own settings.
     fn settings(&self, b: &mut Builder<'_>) {
         b.heading(crate::key::AUDIO_HEADING_SETTINGS);
+        // A PART OF THE FILE NOT READ: the settings below show the repair in
+        // that place, and the file keeps what it says.
+        if let Some(partly) = &self.partly {
+            b.aside(partly.said(b.texts));
+        }
         b.pair(
             b.texts.t(crate::key::AUDIO_SETTING_STEP),
             b.texts.t_with(
@@ -1310,6 +1326,38 @@ mod tests {
         let t = texts();
         v.settle_in(Some(&s), DECIDING_WIDTH, &t);
         v
+    }
+
+    /// FAILS IF: a part of `audio.json` that did not read is drawn as if the
+    /// file said it, with no word — or the word stays once the file reads
+    /// whole again.
+    #[test]
+    fn a_part_of_the_file_not_read_is_said_over_the_settings() {
+        use crate::partly_read::{PartlyRead, Why, planted};
+        let (s, t) = (a_machine(), texts());
+        let words = |v: &View| {
+            v.rows(Some(&s), 300, &t)
+                .iter()
+                .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let mut v = view();
+        assert!(
+            !words(&v).contains("/step"),
+            "a file read whole is warned about"
+        );
+        v.read_in_part(PartlyRead::of_repairs(
+            ronoctua_audio::prefs::FILE,
+            &[planted("/step", Why::WrongType)],
+        ));
+        let said = words(&v);
+        assert!(
+            said.contains(ronoctua_audio::prefs::FILE) && said.contains("/step"),
+            "the part not read is not said: {said}"
+        );
+        v.read_in_part(None);
+        assert!(!words(&v).contains("/step"), "the word outlived the repair");
     }
 
     /// Walk the cursor down until the row carries `spot`.

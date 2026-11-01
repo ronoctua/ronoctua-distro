@@ -36,6 +36,20 @@
 //! root added again elsewhere, under a path this machine took out long ago,
 //! is left to the machines that keep it.
 //!
+//! # A folder that left whole
+//!
+//! A deletion travels by itself — but not a whole kept folder's (a target's
+//! path, a folder a person added) that this machine held files in and holds
+//! none of now: each of its paths waits for the person, asked once for the
+//! folder, "no" (bring it back) first (`hold_what_left_whole`).
+//!
+//! # What no machine may take
+//!
+//! What a sync from before a rule left in the repository — a link into the
+//! system's store, a deploy key — is read by the sync before it plans
+//! (`crate::sift::debris_of`): [`plan_dropping`] never pulls it, and takes
+//! it out of the repository.
+//!
 //! # What cannot be read
 //!
 //! A path this machine cannot read — or that lies in a folder it cannot read
@@ -268,8 +282,12 @@ pub fn plan(base: Option<&Last>, local: &Found, remote: &Index, prefs: &Belongin
             // the others then delete the copy they took. Left there, every
             // other machine would keep pulling this machine's key into its
             // own `~/.ssh`.
-            if *why == crate::sift::ACCESS && theirs.contains_key(path) {
+            // And ANOTHER MACHINE'S, known by its own words: the same.
+            if matches!(*why, crate::sift::ACCESS | crate::sift::ACCESS_ELSEWHERE)
+                && theirs.contains_key(path)
+            {
                 out.entries.push(entry(path, Step::Unkeep));
+                out.debris.insert(path.to_owned(), (*why).to_owned());
             }
             // A LINK THE SYSTEM MADE is neither deleted from the repository
             // (another machine may keep a real file there) nor pulled over.
@@ -332,6 +350,7 @@ pub fn plan(base: Option<&Last>, local: &Found, remote: &Index, prefs: &Belongin
             theirs: None,
             held: None,
             merge: None,
+            gone: None,
         };
         let Some(_) = base else {
             // A FIRST SYNC: nothing is deleted, and what differs starts as
@@ -372,7 +391,115 @@ pub fn plan(base: Option<&Last>, local: &Found, remote: &Index, prefs: &Belongin
         };
         out.entries.push(entry(path, step));
     }
+    if let Some(known) = known {
+        hold_what_left_whole(&mut out, known, local, &theirs, &after, remote);
+    }
     out
+}
+
+/// THE PLAN WITHOUT WHAT NO MACHINE MAY TAKE: `debris`, the paths of the
+/// repository [`crate::sift::debris_of`] named (a link into the system's
+/// store, a deploy key) with their reasons, as the sync read them before it
+/// planned. The plan is made as if the repository did not hold them — none
+/// is pulled, deleted here or asked — and each then leaves the repository,
+/// unless this machine keeps a file of its own at that path, which goes
+/// over it. Pure.
+#[must_use]
+pub fn plan_dropping(
+    base: Option<&Last>,
+    local: &Found,
+    remote: &Index,
+    prefs: &Belongings,
+    debris: &BTreeMap<String, &'static str>,
+) -> Plan {
+    if debris.is_empty() {
+        return plan(base, local, remote, prefs);
+    }
+    let mut kept = remote.clone();
+    kept.entries.retain(|b| !debris.contains_key(&b.path));
+    let mut out = plan(base, local, &kept, prefs);
+    for (path, why) in debris {
+        out.entries.retain(|e| &e.path != path);
+        out.conflicts.retain(|c| &c.path != path);
+        let step = if local.files.contains_key(path) {
+            Step::Push
+        } else {
+            Step::Unkeep
+        };
+        out.entries.push(entry(path, step));
+        out.debris.insert(path.clone(), (*why).to_owned());
+    }
+    out
+}
+
+/// THE FOLDERS THAT LEFT WHOLE: a root of what is kept — a target's path, a
+/// folder a person added — that this machine's base had files in and that
+/// holds none here now (nothing unreadable or set aside in it either). Its
+/// files' leaving would delete them on every machine; so each path of it
+/// the plan would delete in the repository, and each it already asks about
+/// with nothing here, becomes a conflict with no suggestion, marked with the
+/// folder (`Conflict::gone`): the person answers the folder once. The
+/// outermost folder that left takes the paths under it. Pure.
+fn hold_what_left_whole(
+    out: &mut Plan,
+    known: &BTreeMap<String, crate::status::Known>,
+    local: &Found,
+    theirs: &BTreeMap<&str, &Blob>,
+    after: &BTreeSet<String>,
+    remote: &Index,
+) {
+    let mut roots: Vec<&str> = after
+        .iter()
+        .map(String::as_str)
+        .chain(
+            crate::scope::targets()
+                .iter()
+                .flat_map(|t| t.paths.iter().copied()),
+        )
+        .collect();
+    roots.sort_by_key(|r| (r.len(), *r));
+    roots.dedup();
+    let touched = |root: &str, path: &str| covers(root, path) || covers(path, root);
+    let left: Vec<&str> = roots
+        .into_iter()
+        .filter(|root| known.keys().any(|p| p != root && covers(root, p)))
+        .filter(|root| !local.files.keys().any(|p| covers(root, p)))
+        .filter(|root| !local.unreadable.iter().any(|u| touched(root, u)))
+        .filter(|root| !local.never.keys().any(|n| touched(root, n)))
+        .collect();
+    if left.is_empty() {
+        return;
+    }
+    let of = |path: &str| left.iter().copied().find(|root| covers(root, path));
+    for c in &mut out.conflicts {
+        if c.local.is_none()
+            && let Some(root) = of(&c.path)
+        {
+            c.gone = Some(root.to_owned());
+        }
+    }
+    let (held, moved): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut out.entries)
+        .into_iter()
+        .partition(|e| e.step == Step::DeleteRemote && of(&e.path).is_some());
+    out.entries = moved;
+    for e in held {
+        let r = theirs.get(e.path.as_str()).copied();
+        out.conflicts.push(Conflict {
+            path: e.path.clone(),
+            local: None,
+            remote: r.map(|r| r.side.clone()),
+            machine: r.map_or_else(|| remote.last_machine(), |r| r.machine.clone()),
+            text: false,
+            added_by_person: under_a_root(after, &e.path)
+                || known.get(&e.path).is_some_and(|k| k.added),
+            suggested: None,
+            theirs: None,
+            held: None,
+            merge: None,
+            gone: of(&e.path).map(str::to_owned),
+        });
+    }
+    out.conflicts.sort_by(|a, b| a.path.cmp(&b.path));
 }
 
 fn entry(path: &str, step: Step) -> Entry {
@@ -599,6 +726,194 @@ mod tests {
 
     fn notes_root() -> BTreeSet<String> {
         ["home/notes".to_owned()].into_iter().collect()
+    }
+
+    /// FAILS IF: a folder that left this machine whole — one the person
+    /// added, a target's folder — is deleted in the repository (and so on
+    /// every machine) without the person, or is asked otherwise than once
+    /// per folder with no suggestion; or a file deleted from a folder that
+    /// still holds others, a target that is a file, a folder that cannot be
+    /// read, or a first sync is held for it.
+    #[test]
+    fn a_folder_that_left_whole_waits_for_the_person() {
+        let notes = ["home/notes/a.md", "home/notes/deep/b.md"];
+        let emacs = ["home/.config/emacs/init.el", "home/.config/emacs/lisp/x.el"];
+        let all: Vec<&str> = notes
+            .iter()
+            .chain(&emacs)
+            .copied()
+            .chain([
+                "home/.gitconfig",
+                "home/projects/kept.md",
+                "home/projects/gone.md",
+            ])
+            .collect();
+        let base = Last {
+            entries: all
+                .iter()
+                .map(|p| {
+                    let added = p.starts_with("home/notes") || p.starts_with("home/projects");
+                    (
+                        (*p).to_owned(),
+                        Known {
+                            added,
+                            ..known("s")
+                        },
+                    )
+                })
+                .collect(),
+            roots: ["home/notes", "home/projects"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            ..Last::default()
+        };
+        let remote = Index {
+            entries: all
+                .iter()
+                .map(|p| {
+                    if *p == "home/.config/emacs/lisp/x.el" {
+                        // CHANGED THERE, deleted here: asked already, now
+                        // as part of its folder.
+                        blob(p, "z")
+                    } else {
+                        blob(p, "s")
+                    }
+                })
+                .collect(),
+            roots: base.roots.clone(),
+            ..Index::fresh()
+        };
+        let prefs = Belongings {
+            extra: vec!["home/notes".to_owned(), "home/projects".to_owned()],
+            ..Belongings::default()
+        };
+        // THIS MACHINE: the notes and the Emacs folder gone whole, the
+        // `.gitconfig` (a target that is a file) gone, one project of two
+        // gone.
+        let mut local = Found::default();
+        local
+            .files
+            .insert("home/projects/kept.md".to_owned(), side("s"));
+        let planned = plan(Some(&base), &local, &remote, &prefs);
+        for path in notes.iter().chain(&emacs) {
+            assert_eq!(step_of(&planned, path), None, "{path} moved by itself");
+            let c = planned
+                .conflicts
+                .iter()
+                .find(|c| c.path == *path)
+                .unwrap_or_else(|| panic!("{path} is not asked: {planned:?}"));
+            assert!(c.local.is_none() && c.suggested.is_none(), "{c:?}");
+        }
+        let gone = planned.gone();
+        assert_eq!(
+            gone.into_iter().collect::<Vec<_>>(),
+            [("home/.config/emacs", 2), ("home/notes", 2)]
+        );
+        assert_eq!(planned.questions(), 2);
+        assert_eq!(
+            step_of(&planned, "home/.gitconfig"),
+            Some(Step::DeleteRemote),
+            "a file is a deletion, not a folder that left"
+        );
+        assert_eq!(
+            step_of(&planned, "home/projects/gone.md"),
+            Some(Step::DeleteRemote),
+            "a file deleted from a folder that still holds others was asked"
+        );
+        // A FOLDER THIS MACHINE CANNOT READ is not one that left.
+        let mut unread = local.clone();
+        unread.unreadable.insert("home/notes/deep".to_owned());
+        let planned = plan(Some(&base), &unread, &remote, &prefs);
+        assert!(!planned.gone().contains_key("home/notes"));
+        assert_eq!(step_of(&planned, "home/notes/deep/b.md"), None);
+        // A FIRST SYNC deletes nothing, and asks nothing of a folder.
+        let planned = plan(None, &local, &remote, &prefs);
+        assert!(planned.gone().is_empty());
+        // ONE FILE BACK in the folder, and its other file's deletion travels
+        // as any deletion does.
+        let mut one = local.clone();
+        one.files.insert("home/notes/a.md".to_owned(), side("s"));
+        let planned = plan(Some(&base), &one, &remote, &prefs);
+        assert!(!planned.gone().contains_key("home/notes"));
+        assert_eq!(
+            step_of(&planned, "home/notes/deep/b.md"),
+            Some(Step::DeleteRemote)
+        );
+    }
+
+    /// FAILS IF: what the repository holds that no machine may take — a link
+    /// into the system's store, another machine's deploy key — is pulled,
+    /// deleted here or asked about, or stays in the repository; or a file
+    /// this machine keeps at that path stops going over it.
+    #[test]
+    fn what_no_machine_may_take_leaves_the_repository() {
+        let link = "home/.config/app/settings.json";
+        let key = "home/.ssh/deploy-of-laptop";
+        let mine = "home/.ssh/config";
+        let remote = Index {
+            entries: vec![
+                Blob {
+                    side: Side {
+                        kind: Kind::Link,
+                        ..side("l")
+                    },
+                    ..blob(link, "l")
+                },
+                blob(key, "k"),
+                blob(mine, "m"),
+            ],
+            ..Index::fresh()
+        };
+        let debris: BTreeMap<String, &'static str> = [
+            (link.to_owned(), crate::sift::SYSTEM_MANAGED),
+            (key.to_owned(), crate::sift::ACCESS_ELSEWHERE),
+        ]
+        .into_iter()
+        .collect();
+        let prefs = Belongings {
+            extra: vec!["home/.config/app".to_owned()],
+            ..Belongings::default()
+        };
+        // A NEW MACHINE: neither is pulled; both leave; the rest is pulled.
+        let planned = plan_dropping(None, &Found::default(), &remote, &prefs, &debris);
+        assert_eq!(step_of(&planned, link), Some(Step::Unkeep));
+        assert_eq!(step_of(&planned, key), Some(Step::Unkeep));
+        assert_eq!(step_of(&planned, mine), Some(Step::Pull));
+        assert!(planned.conflicts.is_empty(), "{planned:?}");
+        assert_eq!(planned.debris.len(), 2);
+        // A MACHINE THAT TOOK THEM IN AN OLD SYNC: its base names them, its
+        // disk has them set aside (what the walk sifts) — nothing deleted
+        // here, and they leave.
+        let base = Last {
+            entries: [link, key, mine]
+                .into_iter()
+                .map(|p| (p.to_owned(), known(if p == mine { "m" } else { "x" })))
+                .collect(),
+            ..Last::default()
+        };
+        let mut local = Found::default();
+        local.files.insert(mine.to_owned(), side("m"));
+        local
+            .never
+            .insert(link.to_owned(), crate::sift::SYSTEM_MANAGED);
+        local
+            .never
+            .insert(key.to_owned(), crate::sift::ACCESS_ELSEWHERE);
+        let planned = plan_dropping(Some(&base), &local, &remote, &prefs, &debris);
+        assert_eq!(step_of(&planned, link), Some(Step::Unkeep));
+        assert_eq!(step_of(&planned, key), Some(Step::Unkeep));
+        assert_eq!(step_of(&planned, mine), Some(Step::Same));
+        // A FILE OF THIS MACHINE'S at the path goes over it.
+        let mut own = Found::default();
+        own.files.insert(key.to_owned(), side("n"));
+        let planned = plan_dropping(None, &own, &remote, &prefs, &debris);
+        assert_eq!(step_of(&planned, key), Some(Step::Push));
+        // AND WITH NOTHING TO DROP, the plan is the plain one.
+        assert_eq!(
+            plan_dropping(None, &own, &remote, &prefs, &BTreeMap::new()),
+            plan(None, &own, &remote, &prefs)
+        );
     }
 
     /// FAILS IF: a path a predefined target of an older build kept — the

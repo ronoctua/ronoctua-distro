@@ -265,7 +265,6 @@ transfers-work-belongings = pertences
 about-consent-allow = Deixa perguntar aos sites que a linha nomeia — o mesmo que pressionar a linha. Fica guardado no consent.json, para todo app.
 clipboard-act-stale = O histórico mudou antes de a tecla chegar, e nada foi feito: confira e aperte de novo.
 about-line-offer = Toma a primeira resposta oferecida para o que foi digitado.
-belongings-repair-part-not-read = Parte do { $file } não se lê aqui: ela continua no arquivo como está escrita, e esta máquina segue sem ela.
 transfers-work-incus-launch = criar uma instância
 transfers-work-incus-image-copy = copiar uma imagem
 transfers-work-incus-export = exportar uma instância

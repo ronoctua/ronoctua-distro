@@ -18,7 +18,8 @@
 // THE FOUNDATION, by the names these modules already use (`crate::chrome::…`).
 use ronoctua_shell_door::{door, region};
 use ronoctua_shell_kit::{
-    actions, band, bars, bindings, chrome, desk, echo, fields, foreign, line, text_select, wheel,
+    actions, band, bars, bindings, chrome, desk, echo, fields, foreign, line, partly_read,
+    text_select, wheel,
 };
 // What only the tests name: the doorway they build.
 #[cfg(test)]

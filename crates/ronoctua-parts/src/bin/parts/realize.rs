@@ -55,7 +55,9 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
                         crate::plan::root_one(id, &target.drv);
                         target
                     }
-                    Err(said) => return Ok(not_evaluated(id, &entry.fingerprint, &said)),
+                    Err((why, said)) => {
+                        return Ok(not_evaluated(id, &entry.fingerprint, why, &said));
+                    }
                 },
             }
         }
@@ -175,11 +177,12 @@ pub fn run(args: &[String]) -> Result<u8, Usage> {
     }
 }
 
-/// The record of a part of the person's whose declaration did not evaluate
-/// — `said`, Nix's words or its build's refusal —, a counted try: tried
-/// again ever later, and by the person's "try now". The exit code to end
-/// with.
-fn not_evaluated(id: &str, fingerprint: &str, said: &str) -> u8 {
+/// The record of a part of the person's whose declaration gave no target —
+/// `why`: it did not evaluate (`said`, Nix's words), or its build refused
+/// it with the reason the system gives an entry it leaves out (the
+/// consumer's own, never `eval-failed`) —, a counted try: tried again ever
+/// later, and by the person's "try now". The exit code to end with.
+fn not_evaluated(id: &str, fingerprint: &str, why: Why, said: &str) -> u8 {
     let Ok(_lock) = Lock::take(LOCK_WAIT) else {
         println!("refused busy");
         return exit::BUSY;
@@ -187,20 +190,26 @@ fn not_evaluated(id: &str, fingerprint: &str, said: &str) -> u8 {
     let record = disk::read_record(id)
         .unwrap_or_else(|_| Record::new(id))
         .planned_entry(fingerprint)
-        .failed(Why::EvalFailed, said, disk::now(), true);
+        .failed(why, said, disk::now(), true);
     if let Err(e) = disk::write_record(&record) {
         say(3, &format!("{id}: {e}"));
     }
+    let what = if why.skipped().is_some() {
+        "the system leaves its declaration out"
+    } else {
+        "its declaration did not evaluate"
+    };
     say(
         3,
         &format!(
-            "{id}: its declaration did not evaluate: {said} ({} tries)",
+            "{id}: {what} ({}): {said} ({} tries)",
+            why.id(),
             record.attempts
         ),
     );
     drop(_lock);
     crate::retry::arm();
-    println!("failed {}", Why::EvalFailed.id());
+    println!("failed {}", why.id());
     exit::FAILED
 }
 

@@ -142,6 +142,14 @@ stdenvNoCC.mkDerivation {
       fi
     '') sources}
 
+    # --- names -----------------------------------------------------------
+    # EVERY NAME IT ANSWERS TO, for the web apps' icon search in the distro's
+    # collection (`RONOCTUA_ICON_NAMES`): in the theme's own output, so the
+    # names arrive with the part and a system's build never builds the theme
+    # to read them (`parts-build`).
+    python3 ${./names.py} $out/share/doc/noctua-icons/manifest.json \
+      $out/share/doc/noctua-icons/names
+
     runHook postInstall
   '';
 

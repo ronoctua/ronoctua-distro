@@ -347,10 +347,26 @@ pub struct Snapshot {
     pub camera_prefs: ronoctua_camera::prefs::Preferences,
     /// `studio.json`.
     pub prefs: Preferences,
+    /// What of each of the person's files this view shows did not read, when
+    /// part of it did not — `camera.json`, `studio.json` and the studio's
+    /// `scenes.json` — each said in its own section (`partly_read`).
+    pub unread: Unread,
     /// The daemon's state, when it answered.
     pub state: Option<State>,
     /// Whether a stream key is set.
     pub key_set: bool,
+}
+
+/// The places of the view's files that did not read, by file.
+#[derive(Debug, Clone, Default)]
+pub struct Unread {
+    /// `camera.json`.
+    pub cameras: Option<crate::partly_read::PartlyRead>,
+    /// `studio.json`.
+    pub studio: Option<crate::partly_read::PartlyRead>,
+    /// The studio's `scenes.json`, which its daemon reads: judged here as
+    /// the view reads the other two.
+    pub scenes: Option<crate::partly_read::PartlyRead>,
 }
 
 impl Snapshot {
@@ -360,11 +376,19 @@ impl Snapshot {
     /// is — never a ring of one folder's.
     #[must_use]
     pub fn read(cameras: Option<Vec<Camera>>, state: Option<State>) -> Self {
+        let (camera_prefs, cameras_unread) =
+            crate::partly_read::read(&ronoctua_camera::prefs::store());
+        let (studio, studio_unread) = crate::partly_read::read(&prefs::store());
         Self {
             reading: cameras.is_none(),
             cameras: cameras.unwrap_or_default(),
-            camera_prefs: ronoctua_camera::prefs::store().read(),
-            prefs: prefs::store().read(),
+            camera_prefs,
+            prefs: studio,
+            unread: Unread {
+                cameras: cameras_unread,
+                studio: studio_unread,
+                scenes: crate::partly_read::judged(&prefs::book()),
+            },
             state,
             key_set: prefs::has_stream_key(),
         }
@@ -1206,6 +1230,10 @@ impl View {
         let state = snap.state.as_ref();
         b.heading(key::CAMERA_HEADING_VIRTUAL);
         b.note(key::CAMERA_ABOUT_VIRTUAL);
+        // AND OF `studio.json`, whose rows begin here.
+        if let Some(partly) = &snap.unread.studio {
+            b.told(&partly.said(texts));
+        }
         let node = state.and_then(|s| s.virtual_node.clone());
         b.pair(
             b.t(key::CAMERA_VIRTUAL_NOW),
@@ -1645,6 +1673,11 @@ fn cameras(b: &mut Builder<'_>, snap: &Snapshot) {
     use crate::key;
     b.heading(key::CAMERA_HEADING_CAMERAS);
     b.note(key::CAMERA_ABOUT_CAMERAS);
+    // A PART OF `camera.json` NOT READ: the rows below show the repair in
+    // that place, and the file keeps what it says.
+    if let Some(partly) = &snap.unread.cameras {
+        b.told(&partly.said(b.texts));
+    }
     // BEING READ is not "none": the door's watch was raised as the view
     // opened, and a camera takes a moment to answer.
     if snap.reading {
@@ -1832,6 +1865,11 @@ fn scenes(b: &mut Builder<'_>, snap: &Snapshot) {
     };
     b.heading(key::CAMERA_HEADING_SCENES);
     b.note(key::CAMERA_ABOUT_SCENES);
+    // AND OF THE STUDIO'S `scenes.json`: a scene it could not take is not in
+    // the list below, and the file keeps it.
+    if let Some(partly) = &snap.unread.scenes {
+        b.told(&partly.said(b.texts));
+    }
     for name in &state.scenes {
         let value = if *name == state.scene {
             b.t(key::CAMERA_ON_AIR)
@@ -1996,7 +2034,12 @@ impl Builder<'_> {
 
     fn note(&mut self, key: &str) {
         let text = self.texts.t(key);
-        for line in crate::chrome::note_lines(&text, self.room) {
+        self.told(&text);
+    }
+
+    /// A sentence already said, wrapped like a note.
+    fn told(&mut self, text: &str) {
+        for line in crate::chrome::note_lines(text, self.room) {
             self.inert(vec![Self::piece(self.left, line, tokens::color::TEXT_DIM)]);
         }
     }

@@ -25157,6 +25157,8 @@ let
   # `sudo`, `pkexec`, `pkttyagent` or `systemd-run` is spawned: there is no
   # polkit agent in this session, and a call that could ask would hang. The
   # shape of the update's own "never asks", on the crate instead of the runner.
+  # One exception, and its callers are counted: the rescue console's restart
+  # and power-off (`leave_asking`), whose own agent answers on its terminal.
   power-never-asks = mkCheck "power-never-asks" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -25179,13 +25181,28 @@ let
     for verb in ("suspend", "hibernate", "hybrid_sleep", "suspend_then_hibernate", "power_off", "reboot"):
         if not re.search(rf"fn {verb}\(&self, interactive: bool\)", login):
             wrong.append(f"login.rs: `{verb}` lost its `interactive` flag")
-    # …and every call passes `false`.
-    calls = re.findall(r"manager\.(suspend|hibernate|hybrid_sleep|suspend_then_hibernate|power_off|reboot)\(([^)]*)\)", lib)
+    # …and every call passes `false` — but the rescue console's two, which
+    # bring their own agent (`leave_asking`): those two pass `true`, and
+    # nothing outside the console calls them.
+    action_call = r"manager\.(suspend|hibernate|hybrid_sleep|suspend_then_hibernate|power_off|reboot)\(([^)]*)\)"
+    asking = must(body_of(lib, "leave_asking"), "lib.rs's `leave_asking`")
+    calls = re.findall(action_call, lib.replace(asking, ""))
     if not calls:
         wrong.append("lib.rs: no logind action is called at all")
     for verb, arg in calls:
         if arg.strip() != "false":
             wrong.append(f"lib.rs: `{verb}` is called with `{arg}`, which may ask")
+    if sorted(re.findall(action_call, asking)) != [("power_off", "true"), ("reboot", "true")]:
+        wrong.append("lib.rs: `leave_asking` is no longer the rescue's restart and power-off, asking")
+    crates = pathlib.Path("${../crates}")
+    callers = 0
+    for f in sorted(crates.rglob("*.rs")):
+        if "leave_asking" not in code_of(f.read_text()) or f.is_relative_to(crates / "ronoctua-power"):
+            continue
+        callers += 1
+        if not f.is_relative_to(crates / "ronoctua-rescue"):
+            wrong.append(f"{f.relative_to(crates)} asks logind with a question nobody in the session can answer")
+    floor(callers, 1, "callers of `leave_asking` (the rescue console's)")
     # THE VIEW'S TWO DOORS AND ITS ONE ERRAND HANDLER (`power_region.rs`,
     # the footer's half since the view became a region) are swept as well.
     for f in list(crate.glob("*.rs")) + [shell_file(n) for n in ("power.rs", "power_window.rs", "power_region.rs", "power_words.rs")]:
@@ -25200,7 +25217,7 @@ let
         for w in wrong:
             print("ERROR: " + w, file=sys.stderr)
         sys.exit(1)
-    print("OK: the power crate asks nothing of anybody — every logind call is non-interactive")
+    print("OK: every logind call is non-interactive but the rescue console's restart and power-off, which bring their own agent")
     END
   '';
 
@@ -32460,7 +32477,9 @@ let
   # would be a request no consent was asked for — under any name it was
   # imported as, and so is a new caller of the TLS transports beneath it.
   #
-  # And the pass itself: built in one place, over the person's own file. The
+  # And the pass itself: built in one place, over the person's own file — or
+  # over the one declared updater's own hosts, asked for from one function
+  # and asked as by the follow of the distro's AppImages alone. The
   # helpers over a test's consent file (`pass_in` and its kin) are behind
   # `test-support`, which only a `[dev-dependencies]` table may turn on, and
   # no product calls them; `request_let` carries the caller's headers and
@@ -32693,11 +32712,52 @@ let
         if not item or 'feature = "test-support"' not in item.group(1):
             wrong.append(f"ronoctua-consent: `{name}` is not behind `test-support`")
 
+    # A DECLARED UPDATER'S PASS — the owner's exception (AGENTS.md): the
+    # machine keeping itself new asks no consent, so its pass is the
+    # narrowest there is. The updaters and their hosts are a closed table in
+    # the consent crate; the pass goes through the one `mint`, for the
+    # updater's own hosts; ONE function of the workspace asks for it
+    # (`net::Asker::pass`), and only the follow of the distro's AppImages
+    # asks as an updater — the two hosts Nix already asks.
+    UPDATERS = {"DistroAppImages": ["api.github.com", "github.com"]}
+    UPDATER_ASKS = {("ronoctua-software/src/net.rs", "pass")}
+    UPDATER_ASKERS = {"ronoctua-software/src/net.rs", "ronoctua-software/src/follow.rs"}
+    # `attributed` keeps the strings: the hosts are the question.
+    table = must(scope(attributed, r"pub enum Updater\b"), "consent: `enum Updater`")
+    hosts_of = must(body_of(attributed, "hosts"), "consent: `Updater::hosts`")
+    declared = {v: re.findall(r'"([^"]*)"', hosts)
+                for v, hosts in re.findall(r"Self::(\w+)\s*=>\s*&\[([^\]]*)\]", hosts_of)}
+    if sorted(re.findall(r"\b([A-Z]\w*)\s*,", table)) != sorted(UPDATERS) or declared != UPDATERS:
+        wrong.append(f"ronoctua-consent: the declared updaters are {declared}, not {UPDATERS} — a new one is the owner's exception first (AGENTS.md)")
+    mint = must(body_of(consent, "mint"), "consent: `mint`")
+    if not re.search(r"Grant::Updater\(\s*(\w+)\s*\)\s*=>\s*\1\.hosts\(\)\.contains\(", mint):
+        wrong.append("ronoctua-consent: `mint` lets an updater a host that is not one of its own")
+    if "mint(Grant::Updater(" not in must(body_of(consent, "pass_for_updater"), "consent: `pass_for_updater`"):
+        wrong.append("ronoctua-consent: `pass_for_updater` no longer goes through `mint`")
+    asks_found, askers_found = 0, 0
+    for f in sorted(crates.rglob("*.rs")):
+        rel = f.relative_to(crates)
+        if rel.parts[0] == "ronoctua-consent":
+            continue
+        code = code_of(f.read_text())
+        for at in reached(code, "ronoctua_consent", ("pass_for_updater",)):
+            if (str(rel), whose(code, at)) in UPDATER_ASKS:
+                asks_found += 1
+            else:
+                wrong.append(f"{rel} asks for a declared updater's pass in {site(code, at)} — only `net::Asker::pass` does")
+        for m in re.finditer(r"\b(?:Asker::Updater|UpdaterNet)\s*\(", code):
+            if str(rel) in UPDATER_ASKERS:
+                askers_found += 1
+            else:
+                wrong.append(f"{rel} asks as a declared updater in `{whose(code, m.start())}` — only the follow of the distro's AppImages does")
+    floor(asks_found, 1, "asks for a declared updater's pass in `net::Asker::pass`")
+    floor(askers_found, 3, "places that ask as the declared updater (the follow, its network)")
+
     for w in wrong:
         print(f"ERROR: {w}", file=sys.stderr)
     if wrong:
         raise SystemExit(1)
-    print(f"OK: {swept} sources, {older} older requests, and every new one carries a pass")
+    print(f"OK: {swept} sources, {older} older requests, and every new one carries a pass; one declared updater, asked from one place")
     END
   '';
 
@@ -36357,6 +36417,15 @@ let
                 "/var/lib/ronoctua/keys, rendered for the root keys daemon",
         }
 
+        # STORES WHOSE FOLDER AND FILE ARE BOTH HANDED IN AT RUN TIME, under no
+        # root of the person's — each with where its folder comes from. The
+        # folder must still read as handed in: one that came to name a root
+        # would be a store nobody decided. Exact both ways.
+        FOLDER_GIVEN = {
+            "crates/ronoctua-shell-door/src/photo.rs":
+                "the folder `--settings` names to a photograph: a door's own file, read in place of its defaults",
+        }
+
         CALL = re.compile(r"\bStore(?:::<[^>]*>)?::at\(")
 
         def args_of(code, start):
@@ -36508,7 +36577,7 @@ let
             where, sub = root_of(f, re.sub(r"\.(?:ok_or_else|ok_or|context|with_context)\(.*$", "", expr, flags=re.S).rstrip("?"))
             return where, sub
 
-        found, wrong, handed_seen = [], [], set()
+        found, wrong, handed_seen, given_seen = [], [], set(), set()
         elsewhere_seen = set()
         atomic_found, atomic_given = [], 0
         tests_skipped = 0
@@ -36552,6 +36621,9 @@ let
                                 else:
                                     found.append((rel, where, "", value))
                             continue
+                        if rel in FOLDER_GIVEN and root_of(f, args[0])[0] == "given":
+                            given_seen.add(rel)
+                            continue
                         wrong.append(f"{rel}: the file `{args[1]}` of a store could not be read to a name")
                         continue
                     where, sub = root_of(f, args[0])
@@ -36581,6 +36653,8 @@ let
             wrong.append(f"assets/belongings.nix: `{stale}` is in the census, and no store writes it")
         for rel in sorted(set(HANDED) - handed_seen):
             wrong.append(f"{rel}: listed as handing its file in, and it no longer does")
+        for rel in sorted(set(FOLDER_GIVEN) - given_seen):
+            wrong.append(f"{rel}: listed as a store whose folder is handed in, and no such store is there")
         for rel, name in sorted(set(ELSEWHERE) - elsewhere_seen):
             wrong.append(f"{rel}: `{name}` is listed as a store outside the roots, and no such store is there")
 
@@ -39945,7 +40019,9 @@ let
   #
   # `ronoctua-consent` is the rule: a request leaves only with a `Pass` for
   # its host, and a `Pass` is built in ONE place (`mint`), after
-  # `consent.json` says the person let the host. The lookups' and the
+  # `consent.json` says the person let the host — or, for the one declared
+  # updater (the owner's exception, AGENTS.md), after its own table does,
+  # which `network-asks-with-a-pass` holds narrow. The lookups' and the
   # directories' `Internet`s mint theirs from that file for every request.
   # In the player's engine, the network is reached only from the files named
   # below, a directory's listing is admitted (`admitted`: let, and with
@@ -39979,7 +40055,8 @@ let
             wrong.append(what)
 
     # 1. ONE MINT. The pass's field is private, its only literal is inside
-    # `mint`, and `mint` asks the file first.
+    # `mint`, and `mint` asks the file (or a declared updater's own table)
+    # first.
     consent = read("ronoctua-consent/src/lib.rs")
     declared = must(scope(consent, r"pub struct Pass\s*"), "`ronoctua_consent::Pass`")
     if re.search(r"\bpub\b", declared):
@@ -44534,8 +44611,10 @@ let
   # downloaded again; a pattern matching two assets is refused, and so is a
   # release whose tag moves (`continuous`); an entry that
   # follows nothing keeps its hand-written pin, and is refused without one;
-  # F-Droid's suggested version becomes the apk's address; a pin whose entry
-  # left is dropped. Every download is named as the build names it
+  # the version F-Droid's SIGNED index offers becomes the apk's pin, by the
+  # hash it signs, and a pin that claims that version with other bytes, a
+  # package the index does not list and an apk served with other bytes are
+  # refused, each with its sentence; a pin whose entry left is dropped. Every download is named as the build names it
   # (`nix/distro-downloads.nix`, asked here for the same two files), so the
   # tool's download is the build's source and nothing is fetched twice. And
   # what can be asked WITHOUT the network
@@ -44610,12 +44689,20 @@ let
         spec.loader.exec_module(pins)
 
         class Fake:
-            def __init__(self, releases=None, fdroid=None):
+            def __init__(self, releases=None, fdroid=None, signed=None):
                 self.releases, self.fdroid_info, self.hashed = releases or {}, fdroid or {}, []
+                self.signed, self.asked_signed = signed, []
             def github_latest(self, repo):
                 return self.releases[repo]
             def fdroid(self, package):
                 return self.fdroid_info[package]
+            # WHAT `ronoctua-fdroid-pins` ANSWERS of F-Droid's signed index
+            # (its own tests prove the answer: `pins::signed`), planted.
+            def fdroid_pins(self, pinned):
+                if self.signed is None:
+                    raise AssertionError("F-Droid's signed index was asked with no F-Droid entry")
+                self.asked_signed.append(pinned)
+                return self.signed
             def hash(self, url, name):
                 self.hashed.append((url, name))
                 return "sha256-" + "A" * 43 + "="
@@ -44686,21 +44773,51 @@ let
         except pins.Refusal:
             pass
 
-        # F-DROID'S SUGGESTION is the apk's address.
+        # F-DROID'S SIGNED INDEX is the apk's pin: the version it offers, by
+        # the hash it signs, asked once with the pin the file holds; the apk
+        # downloaded under the build's name and refused unless it IS that
+        # hash; a pin that claims the signed version with other bytes, and a
+        # package the index does not list, refused with a sentence.
         droid = {"source": "android", "package": "org.fdroid.fdroid", "from": "f-droid", "image": "vanilla"}
         info = {"suggestedVersionCode": 1021050, "packages": [
             {"versionName": "1.21.1", "versionCode": 1021050}, {"versionName": "1.22-alpha", "versionCode": 1022000}]}
-        ask = Fake(fdroid={"org.fdroid.fdroid": info})
-        apk, _ = pins.plan({"fdroid": droid}, empty, ask)
+        url = "https://f-droid.org/repo/org.fdroid.fdroid_1021050.apk"
+        signed_pin = {"url": url, "hash": "sha256-" + "A" * 43 + "=", "version": "1.21.1", "version-code": 1021050}
+        answered = lambda standing, pin=signed_pin: {"org.fdroid.fdroid": {"standing": standing, "signed": pin}}
+        ask = Fake(fdroid={"org.fdroid.fdroid": info}, signed=answered("new"))
+        apk, notes = pins.plan({"fdroid": droid}, empty, ask)
         got = apk["android"].get("fdroid", {})
-        expect("F-Droid's suggested version is pinned",
-               got.get("url") == "https://f-droid.org/repo/org.fdroid.fdroid_1021050.apk"
-               and got.get("version") == "1.21.1" and got.get("version-code") == 1021050)
+        expect(f"the signed index's version is pinned, by its hash: {got}", got == signed_pin)
+        expect(f"the signed index was asked once, with nothing pinned: {ask.asked_signed}",
+               ask.asked_signed == [{"org.fdroid.fdroid": None}])
         expect(f"the apk was hashed under the build's name {build['apk']}: {ask.hashed}",
-               ask.hashed == [("https://f-droid.org/repo/org.fdroid.fdroid_1021050.apk", build["apk"])])
-        again = Fake(fdroid={"org.fdroid.fdroid": info})
-        pins.plan({"fdroid": droid}, apk, again)
+               ask.hashed == [(url, build["apk"])])
+        again = Fake(signed=answered("same"))
+        kept_apk, _ = pins.plan({"fdroid": droid}, apk, again)
+        expect("a pin the signed index says is the same is kept", kept_apk == apk)
+        expect(f"the pin held was asked about: {again.asked_signed}",
+               again.asked_signed == [{"org.fdroid.fdroid": signed_pin}])
         expect("an unchanged F-Droid version is not downloaded again", again.hashed == [])
+        older = dict(signed_pin, url="https://f-droid.org/repo/org.fdroid.fdroid_1020000.apk",
+                     version="1.20", **{"version-code": 1020000})
+        moved_apk, notes = pins.plan({"fdroid": droid}, dict(empty, android={"fdroid": older}), Fake(signed=answered("moves")))
+        expect("an older pin moves to the signed version", moved_apk["android"]["fdroid"] == signed_pin)
+        expect(f"the move is said: {notes}", any("1.20 -> 1.21.1" in n for n in notes))
+        lying = dict(signed_pin, hash="sha256-" + "B" * 43 + "=")
+        refusals = [
+            ("a pin that disagrees with the signed index", dict(empty, android={"fdroid": lying}),
+             Fake(signed=answered("disagrees")), "disagrees with F-Droid's signed index"),
+            ("a package the signed index does not list", empty,
+             Fake(signed={"org.fdroid.fdroid": {"standing": "unlisted", "signed": None}}), "lists no org.fdroid.fdroid"),
+            ("an apk whose bytes are not the signed hash", empty,
+             Fake(signed=answered("new", dict(signed_pin, hash=lying["hash"]))), "served"),
+        ]
+        for what, held, asker, needle in refusals:
+            try:
+                pins.plan({"fdroid": droid}, held, asker)
+                expect(f"{what} is refused", False)
+            except pins.Refusal as why:
+                expect(f"{what} is refused with a sentence that says it: {why}", needle in str(why) and "fdroid" in str(why))
 
         # A PIN WHOSE ENTRY LEFT is dropped.
         dropped, notes = pins.plan({}, dict(empty, appimage={"old": written}), Fake())
@@ -45035,6 +45152,7 @@ let
           planted-flatpak = {
             source = "flatpak";
             appId = "org.example.Planted";
+            name = "Planted Flatpak";
           };
           planted-appimage = {
             source = "appimage";
@@ -45051,6 +45169,7 @@ let
           planted-android = {
             source = "android";
             package = "org.example.planted";
+            name = "Planted Android";
             from = "direct";
             image = "vanilla";
           };
@@ -45155,6 +45274,17 @@ let
                   follows = null;
                   fallback = "no";
                 };
+                # A FLATPAK AND AN APK WITHOUT THEIR NAME, each line whole
+                # otherwise (the apk pinned): the name is all they lack.
+                t-nameless-flatpak = {
+                  source = "flatpak";
+                  appId = "org.example.TNameless";
+                };
+                t-nameless-android = {
+                  source = "android";
+                  package = "org.example.tnameless";
+                  from = "direct";
+                };
               };
               ronoctua.distroApps.pins = {
                 format = 2;
@@ -45167,6 +45297,7 @@ let
                   t-from = apkPin // {
                     version-code = "7";
                   };
+                  t-nameless-android = apkPin;
                   gone-apk = apkPin;
                 };
               };
@@ -45271,6 +45402,44 @@ let
                   versionCode = "v7";
                   image = "full";
                 };
+                # WITHOUT THEIR NAME, written beside the code as a module
+                # would, each source whole otherwise — and the same Flatpak
+                # named, which is taken.
+                nameless-flatpak.flatpak = {
+                  appId = "org.example.Nameless";
+                  origin = "flathub";
+                };
+                named-flatpak = {
+                  name = "Named";
+                  flatpak = {
+                    appId = "org.example.Named";
+                    origin = "flathub";
+                  };
+                };
+                nameless-android.android = {
+                  package = "org.example.nameless";
+                  url = "https://example.org/nameless.apk";
+                  hash = sri;
+                  version = "1";
+                  versionCode = "1";
+                  image = "vanilla";
+                };
+                # WEB APPS WHOSE WINDOW CLASS CANNOT BE WORKED OUT: an address
+                # a browser rewrites, and a profile outside ASCII.
+                rewritten-web.web = {
+                  slug = "rewritten";
+                  name = "Rewritten";
+                  url = "https://example.org/a/../b";
+                  profile = "Default";
+                  category = "Network";
+                };
+                unicode-profile-web.web = {
+                  slug = "unicode-profile";
+                  name = "Unicode profile";
+                  url = "https://example.org/";
+                  profile = builtins.fromJSON ''"Perfil é"'';
+                  category = "Network";
+                };
               };
             }
           )
@@ -45368,13 +45537,13 @@ let
 
     # ONE GOOD ENTRY OF EACH SOURCE reaches everything that reads the table.
     expect(f"a good table has problems: {good['problems']}", good["problems"] == [])
-    # The name is the table's for an AppImage and a web app, and none for
-    # the two sources whose line has none.
+    # The name is the table's, for every source: a line without one is
+    # refused below.
     shape = {
-        "planted-flatpak": ("flatpak", ["org.example.Planted.desktop"], None),
+        "planted-flatpak": ("flatpak", ["org.example.Planted.desktop"], "Planted Flatpak"),
         "planted-appimage": ("appimage", ["ronoctua-appimage-planted.desktop"], "Planted"),
         "planted-web": ("web", ["ronoctua-web-planted.desktop"], "Planted Web"),
-        "planted-android": ("android", ["waydroid.org.example.planted.desktop"], None),
+        "planted-android": ("android", ["waydroid.org.example.planted.desktop"], "Planted Android"),
     }
     for side, name, declined_here in ((good, "good", False), (declined, "declined", True)):
         said = {a["id"]: a for a in side["registry"]}
@@ -45445,6 +45614,12 @@ let
         "ronoctua.apps.bad-android.android.hash is not an SRI hash",
         "ronoctua.apps.bad-android.android.versionCode is not a number",
         "ronoctua.apps.bad-android.android.image is `full`, not vanilla or gapps",
+        "ronoctua.apps.nameless-flatpak has no `name`: a Flatpak or an Android app carries the program's name",
+        "ronoctua.apps.nameless-android has no `name`: a Flatpak or an Android app carries the program's name",
+        "ronoctua.apps.rewritten-web.web: `url` has a `.` or `..` segment, which a browser removes, so its window class (StartupWMClass) cannot be worked out",
+        "ronoctua.apps.unicode-profile-web.web.profile is not a Chrome profile's folder, so its window class (StartupWMClass) cannot be worked out",
+        "assets/distro-apps.nix: `t-nameless-flatpak` lacks name",
+        "assets/distro-apps.nix: `t-nameless-android` lacks name",
         "assets/distro-apps.nix: `t-snap` has the source \"snap\"",
         "assets/distro-apps.nix: `t-extra` has fields no flatpak entry takes: url",
         "assets/distro-apps.nix: `t-lacks` lacks name url",
@@ -45466,6 +45641,8 @@ let
     expect(f"a malformed table line reached the registry: {bad['entered']}", bad["entered"] == [])
     expect("a name with a non-breaking space inside and letters past ASCII was refused",
            not any(p.startswith("ronoctua.apps.good-name") for p in bad["problems"]))
+    expect("a Flatpak that carries its name was refused",
+           not any(p.startswith("ronoctua.apps.named-flatpak") for p in bad["problems"]))
     for what, fired in bad["refused"].items():
         expect(f"with problems, `{what}` still evaluates: the refusal stopped firing", fired)
 
@@ -45510,6 +45687,9 @@ let
         "TryExec=/var/lib/ronoctua-parts/view/bin/google-chrome-stable",
         "Terminal=false",
         "StartupNotify=true",
+        # The window id `web::app_id` gives the address and the profile
+        # (`fixtures/web-app-ids.json` holds the arithmetic to the Rust's).
+        "StartupWMClass=chrome-example.org__planted-Default",
         "Categories=Network;",
         "X-Ronoctua-Web-Url=https://example.org/planted",
         "X-Ronoctua-Web-Profile=Default",
@@ -45686,6 +45866,9 @@ let
             7
           ];
       };
+      # ON IS THE DEFAULT: options that never say follow. The person's off
+      # is its own field, and it wins over the older switch of 2026-10-20,
+      # which an older machine reads — planted beside it, still saying on.
       optionsOf =
         on:
         builtins.toFile "options.json" (
@@ -45694,7 +45877,10 @@ let
               format = 1;
               ssh-signing = null;
             }
-            // lib.optionalAttrs on { distro-apps-follow-releases = true; }
+            // lib.optionalAttrs (!on) {
+              distro-apps-follow-releases = true;
+              distro-apps-keep-tested-pins = true;
+            }
           )
         );
       plant =
@@ -45780,7 +45966,9 @@ let
   # one place the session finds a part (`X-Ronoctua-Fallback=false` kept
   # where the table says). Every malformed pin is refused by its rule, by
   # name, in `distro-apps.json`, and the registry's `problems` stay empty.
-  # Off: nothing followed is built or said, whatever the files hold.
+  # On is the default — options that never say follow; the person's off
+  # (`distro-apps-keep-tested-pins`) builds and says nothing followed,
+  # whatever the files hold, the older switch included.
   distro-apps-follow-when-on-and-newer =
     mkCheck "distro-apps-follow-when-on-and-newer" [ pkgs.python3 ]
       ''
@@ -46255,11 +46443,10 @@ let
   # the sudo bar, for the working tree alone — never `systemctl start` on it.
   # `-reference` alone carries the override, and `-own` and the update's none.
   #
-  # WHAT THIS CHECK DOES NOT BOUND: what the person COMMITS. On a machine
-  # whose flake names a local checkout the update locks the checkout's HEAD
-  # and builds it as root, started by the person with no password. That waits
-  # on the owner (`docs/PENDING.md`); this check holds the uncommitted tree
-  # alone.
+  # WHAT THE PERSON COMMITS is bounded beside this check: on a machine whose
+  # flake names a local checkout the update moves `nixpkgs` alone, so the
+  # rule's two units apply a revision only the sudo door locked (the update
+  # module's own check holds that); this check holds the uncommitted tree.
   #
   # THE BLESS HANGS OFF THE TARGET THE BOOT REALLY REACHES: the system's
   # default unit, for the VM and for the reference machine alike (no
@@ -46567,7 +46754,7 @@ let
           for w in wrong:
               print("       " + w, file=sys.stderr)
           raise SystemExit(1)
-      print(f"OK: one rule of one branch ({sorted(allowed)}, start, {user}, YES), no start limit on its units; the unit, the build switch's two and the rescue's rebuild take {update_lock} and run the machine's apply; the uncommitted working tree reaches root through ronoctua-build-switch-reference alone, which no rule names and only the sudo door starts (what is committed is the update's, docs/PENDING.md); the rollback disarms; the bless hangs off {[b['target'] for b in got['booted']]}; no rule for {bless_unit}")
+      print(f"OK: one rule of one branch ({sorted(allowed)}, start, {user}, YES), no start limit on its units; the unit, the build switch's two and the rescue's rebuild take {update_lock} and run the machine's apply; the uncommitted working tree reaches root through ronoctua-build-switch-reference alone, which no rule names and only the sudo door starts (and what is committed, which the update never moves there, only the sudo door locks); the rollback disarms; the bless hangs off {[b['target'] for b in got['booted']]}; no rule for {bless_unit}")
       END
     '';
 
@@ -56868,6 +57055,23 @@ let
       a-new-machine-starts-on-the-tested-nixpkgs
       ;
     parts-are-isolated = partsVm;
+    # AN APP THAT FAILS TO INSTALL NEVER BREAKS THE INSTALLATION OR THE BOOT
+    # (2026-11-01): a system's build never builds a part, and a machine with
+    # none of them here works. `tests/parts-checks.nix`.
+    inherit
+      (import ./parts-checks.nix {
+        inherit
+          pkgs
+          lib
+          self
+          mkCheck
+          pyPrelude
+          rust
+          ;
+      })
+      parts-build
+      parts-absent-vm
+      ;
     distro-apps-follow-a-release-vm = distroAppsFollowVm;
     # ── anchor: L07 ──
     inherit
@@ -57329,6 +57533,24 @@ let
       audio-move-writes-one-thing
       ;
 
+    # THE PERSON'S BRAIN MODULES REACH A MACHINE (2026-11-01): what the
+    # approvals include is compiled, and what waits is never read.
+    # `tests/person-brain-checks.nix`.
+    inherit
+      (import ./person-brain-checks.nix {
+        inherit
+          pkgs
+          lib
+          mkCheck
+          machineLib
+          withPersonModules
+          rust
+          ;
+      })
+      machine-compiles-approved-person-modules
+      a-folder-that-does-not-evaluate-stops-only-itself
+      ;
+
     # EVERY TEXT KEY IS SAID (2026-10-31): a sentence nobody can show does not
     # sit in the texts. `tests/text-keys-checks.nix`.
     inherit
@@ -57345,6 +57567,71 @@ let
         inherit (self.packages.${system}) iconset;
       })
       every-key-is-said
+      ;
+
+    # A PERSON'S FILE READ ONLY IN PART SAYS SO IN ITS OWN VIEW (owner,
+    # 2026-11-01): every preference file of the census, said by its view or
+    # named with why not. `tests/partly-read-checks.nix`.
+    inherit
+      (import ./partly-read-checks.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          shellPrelude
+          belongingsTable
+          ;
+      })
+      a-view-says-what-it-did-not-read
+      ;
+
+    # THE DISTRO'S APK PINS ARE WHAT F-DROID'S SIGNED INDEX SIGNS (2026-11-01).
+    # `tests/fdroid-pins-checks.nix`.
+    inherit (import ./fdroid-pins-checks.nix { inherit rust; }) distro-apk-pins-are-the-signed-index;
+
+    # A HOSTILE APPIMAGE DECLARED (2026-11-01): its own launcher entry chooses
+    # neither what runs nor a picture outside it. `tests/declared-apps-checks.nix`.
+    inherit
+      (import ./declared-apps-checks.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          ;
+      })
+      appimage-desktop-refuses-a-hostile-image
+      ;
+
+    # THE SAFETY NET IN VMS (2026-11-01): the rollback through the rescue, and
+    # a boot trial under Secure Boot. `tests/safety-net-checks.nix`.
+    inherit
+      (import ./safety-net-checks.nix {
+        inherit
+          pkgs
+          lib
+          rust
+          sbKeys
+          ;
+        lanzabooteModule = inputs.lanzaboote.nixosModules.lanzaboote;
+        ronoctua = {
+          inherit
+            fonts
+            fontconfigConf
+            iconSuperpack
+            themes
+            themed
+            defaultTheme
+            cursors
+            scroll
+            consoleModule
+            ;
+          shell = rust.shell;
+          rescue = rust.rescue;
+          machine = rust.machine;
+        };
+      })
+      rescue-rolls-back-the-trial
+      boot-trial-is-blessed-under-secure-boot
       ;
 
     # THE FILE MANAGER IN A CRATE OF ITS OWN (the 2026-10-12 wave, lane R5h):

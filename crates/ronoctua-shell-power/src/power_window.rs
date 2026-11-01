@@ -61,10 +61,9 @@ pub fn host_it() -> Result<()> {
             .insert_source(wish_changed, |event, (), door: &mut Door<Power>| {
                 if let channel::Event::Msg(()) = event {
                     let wanted = crate::power_region::wished();
-                    if door.content.wanted.get() != wanted {
-                        door.content.wanted.set(wanted);
-                        door.ui.ask_paint();
-                    }
+                    door.content.view.read_in_part(crate::power::unread());
+                    door.content.wanted.set(wanted);
+                    door.ui.ask_paint();
                 }
             })
             .map_err(|e| anyhow::anyhow!("could not hang the power.json watch: {e}"))?;
@@ -88,8 +87,10 @@ pub fn host_it() -> Result<()> {
             })
             .map_err(|e| anyhow::anyhow!("could not hang the power channel: {e}"))?;
 
+        let mut view = crate::power::View::fresh();
+        view.read_in_part(crate::power::unread());
         Ok(Power {
-            view: crate::power::View::fresh(),
+            view,
             snapshot: None,
             power,
             wanted: std::cell::Cell::new(crate::power_region::wished()),

@@ -131,6 +131,13 @@
 #               argument goes through the refusals `run`'s do. Without it a
 #               rehearsal prints the command and runs nothing, which is all it
 #               can honestly do for a program that has no such form.
+#   refuses     with `package` + `program` only, and optional: whose reasons
+#               the program's other refusals are — `machine` (the machine's
+#               own, `ronoctua-machine`) or `applier` (root's applier of the
+#               person's declarations, which `person stage` ends with). A
+#               refusal it does not read as news is recorded
+#               `failed-<word>`, and the view says that word's sentence in
+#               this vocabulary; without it, only that the step failed.
 #   declines    with a program only, and optional: the refusals (`refused
 #               <word>`, the program's last line) that are NEWS and not a
 #               failure. Recorded `declined-<word>`, and the sequence goes on.
@@ -237,16 +244,14 @@ in
 
     # G2. THE PINS, MOVED FORWARD: an AppImage that follows its releases, an
     # Android app that follows F-Droid — each to the version and the digest
-    # it has now, written into the declaration. And, while the person's
-    # options say to follow them (the owner's decision, 2026-10-20), the
+    # it has now, written into the declaration. And, unless the person
+    # turned it off (the owner's decisions, 2026-10-20 and 2026-11-01), the
     # distro's AppImages that follow a repository (today the ArtCraft
     # Launcher and SolidCraft), past the pins the distro tested, into their
-    # `software/distro-pins.json`;
-    # with the option off, that file goes. No argument names a program: the
-    # table says what follows, the program reads it from the system's
-    # report. Without the person's folder there is nothing to move.
-    # `github-not-let` is news: GitHub is not in their consent, and the
-    # distro's AppImages keep the pins they had.
+    # `software/distro-pins.json` — asked as the machine's own update, with
+    # no consent; with the option off, that file goes. No argument names a
+    # program: the table says what follows, the program reads it from the
+    # system's report. Without the person's folder there is nothing to move.
     {
       id = "person-pins";
       does = "gather";
@@ -257,7 +262,6 @@ in
         "pins"
         "refresh"
       ];
-      declines = [ "github-not-let" ];
       needs = [
         { directory = "$XDG_STATE_HOME/ronoctua/person"; }
         { network = true; }
@@ -317,6 +321,10 @@ in
         "--check"
       ];
       declines = [ "busy" ];
+      # ANY OTHER REFUSAL IS THE APPLIER'S REASON (`not-signed`,
+      # `rolled-back`, `too-large`…): the view and the run's notification
+      # say its sentence.
+      refuses = "applier";
       needs = [ { directory = "$XDG_STATE_HOME/ronoctua/person"; } ];
       on-failure = "carry-on";
       enable = true;
@@ -352,6 +360,7 @@ in
       root = true;
       package = "machine";
       program = "ronoctua-machine";
+      refuses = "machine";
       run = [ "migrate" ];
       declines = [ "nothing-to-migrate" ];
       needs = [
@@ -391,6 +400,16 @@ in
     # rebuild after it sets the result for the NEXT BOOT: a `nixpkgs` that
     # moved is never switched to under the running session.
     #
+    # `nixpkgs` ALONE WHERE THE LOCK NAMES A LOCAL CHECKOUT of the distro
+    # (owner, 2026-11-01; inv. 6). This step runs as root with no password —
+    # the weekly routine, the person's own start of the root half — and any
+    # process of the person's may commit in a checkout: moving the distro
+    # there would build as root whatever was committed last. So the program
+    # leaves the distro input where root locked it, and puts back a move
+    # that would leave it at another revision of a checkout
+    # (`checkout-moved`); the commits come in only through gestures that
+    # pass the sudo door (`.#apply-here`, a root `nix flake update`).
+    #
     # AND NOT WHILE THE MACHINE IS HELD (`ronoctua-machine hold <rev>`): the
     # record says which revision it stays on, and the step is skipped and
     # says so. The rebuild after it still applies what the folder holds.
@@ -412,6 +431,7 @@ in
       # stays the same path.
       package = "machine";
       program = "ronoctua-machine";
+      refuses = "machine";
       run = [ "update-distro" ];
       needs = [
         { writable-file = "${machineDir}/flake.lock"; }
@@ -473,6 +493,7 @@ in
       root = true;
       package = "machine";
       program = "ronoctua-machine";
+      refuses = "machine";
       run = [
         "apply"
         "--next-boot"

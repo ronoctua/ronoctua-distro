@@ -8,5 +8,5 @@
     "public-key": "someone.cachix.org-1:QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=",
     "visibility": "private"
   },
-  "distro-apps-follow-releases": true
+  "distro-apps-keep-tested-pins": true
 }

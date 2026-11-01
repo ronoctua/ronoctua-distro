@@ -191,6 +191,13 @@ impl Shelf {
         self.store.path()
     }
 
+    /// The file's store — what a view that shows the list judges for the
+    /// places of it that did not read.
+    #[must_use]
+    pub const fn store(&self) -> &Store<Picks> {
+        &self.store
+    }
+
     /// The list, newest first — empty when there is none, or it does not
     /// parse (said in the log by the store).
     #[must_use]

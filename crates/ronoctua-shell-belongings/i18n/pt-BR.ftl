@@ -156,7 +156,6 @@ belongings-passphrases-differ = As duas senhas novas diferem, então nada mudou.
 belongings-first-passphrases-differ = As duas senhas diferem, então nada foi enviado.
 belongings-queued = Enviado para a fila: { $what }.
 belongings-reason-draft = um rascunho, ou o número de um programa rodando
-belongings-repair-why-unknown-variant = uma palavra que esta máquina não conhece — quase sempre de uma máquina mais nova
 belongings-outcome-compacted = O histórico foi compactado: { $before } viraram { $after } aqui. O host pode guardar as cópias antigas até a própria limpeza.
 belongings-outcome-nothing-to-compact = Não havia o que compactar: todas as versões do histórico são { $days ->
         [one] do último dia
@@ -297,7 +296,7 @@ about-belongings-answer-yes = Faz o que a pergunta diz
 belongings-offers = Oferecido pela última sincronização
 belongings-offer-turning = Ligando…
 belongings-offer-taken = Ligado.
-belongings-offer-refused = Não foi ligado: { $why }
+belongings-offer-refused = Não foi ligado. { $why }
 about-belongings-offer-no = Deixa desligado: só volta a ser oferecido quando a chave mudar em outra máquina
 about-belongings-offer-yes = Liga isto, nesta máquina
 about-belongings-offer-no-extensions = Deixa de fora: só volta a ser oferecido quando sua lista mudar em outra máquina, e a página mantém uma linha que as instala
@@ -355,3 +354,21 @@ belongings-field-only-two = Um campo fica com o valor desta máquina ou com o do
 about-belongings-field = Decide este campo sozinho: os dois valores dele são as linhas abaixo
 about-belongings-field-ours = Fica com o valor desta máquina neste campo
 about-belongings-field-theirs = Fica com o valor do repositório neste campo
+# A group of the listing too large to draw whole, folded into one row.
+belongings-group-folded = dobrado
+belongings-group-open = aberto
+about-belongings-fold = Mostra cada arquivo deste grupo, ou os dobra de novo nesta linha
+# A folder that left this machine whole: its leaving waits for the person.
+belongings-gone-files = { $n ->
+    [one] sumiu desta máquina, com o seu único arquivo
+   *[other] sumiu desta máquina, com os seus { $n } arquivos
+    }
+belongings-gone-question = { $folder } sumiu inteira desta máquina. Apagar também em todas as máquinas? Cada uma põe a sua cópia de lado, e o repositório a perde. Ou trazê-la de volta do repositório para cá.
+belongings-gone-no = Não: trazer de volta para cá
+belongings-gone-yes = Sim: apagar em todas as máquinas
+about-belongings-gone-no = Escreve aqui de novo a cópia do repositório ao aplicar, e deixa as outras máquinas como estão
+about-belongings-gone-yes = Apaga no repositório e em todas as outras máquinas ao aplicar, cada uma pondo a sua cópia de lado
+# What an old sync left in the repository that no machine may take.
+belongings-dropped = { $name }: { $reason } — saiu do repositório, e nunca é escrito aqui.
+# An addition of the person's on a predefined target's path.
+belongings-added-on-target = Este lugar também é { $target }: continua uma adição sua — os arquivos viajam como você os acrescentou — e não vira o alvo sozinha.

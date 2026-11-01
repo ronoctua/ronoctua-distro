@@ -194,7 +194,15 @@ case "$1" in
         if [ -e "$root/lock-fails" ]; then exit 1; fi
         if [ -n "$ref" ] && [ ! -f "$ref" ]; then echo "error: opening file '$ref': No such file or directory" >&2; exit 1; fi
         cp "$root/new-lock" "${{out:-$d/flake.lock}}" ;;
-      update) cp "$root/updated-lock" "$d/flake.lock" ;;
+      # THE INPUTS NAMED MOVE: `updated-lock` is the lock with both moved,
+      # `updated-nixpkgs-lock` (when planted) the one an update of
+      # `nixpkgs` alone writes.
+      update)
+        case " $* " in
+          *" ronoctua "*) cp "$root/updated-lock" "$d/flake.lock" ;;
+          *) if [ -e "$root/updated-nixpkgs-lock" ]; then cp "$root/updated-nixpkgs-lock" "$d/flake.lock"
+             else cp "$root/updated-lock" "$d/flake.lock"; fi ;;
+        esac ;;
       archive)
         if [ -e "$root/sources.json" ]; then cat "$root/sources.json"; exit 0; fi
         echo "error: cannot read the lock" >&2; exit 1 ;;
@@ -1548,6 +1556,182 @@ fn a_rehearsal_measures_and_changes_nothing() {
         "the copy is gone"
     );
     assert!(!w.read("calls").contains("nix-env"));
+}
+
+/// A machine flake's lock: the distro input as `distro` (a node, JSON) and
+/// `nixpkgs` at `nixpkgs`.
+fn lock_of(distro: &str, nixpkgs: &str) -> String {
+    format!(
+        r#"{{"nodes":{{"root":{{"inputs":{{"ronoctua":"ronoctua","nixpkgs":"nixpkgs"}}}},"ronoctua":{distro},"nixpkgs":{{"locked":{{"rev":"{nixpkgs}","type":"github","owner":"NixOS","repo":"nixpkgs"}},"original":{{"owner":"NixOS","ref":"nixos-unstable","repo":"nixpkgs","type":"github"}}}}}},"root":"root","version":7}}
+"#
+    )
+}
+
+/// The distro input as an installed machine has it: the release, on GitHub.
+fn released(rev: &str) -> String {
+    format!(
+        r#"{{"locked":{{"owner":"ronoctua","repo":"ronoctua-distro","rev":"{rev}","type":"github"}},"original":{{"owner":"ronoctua","ref":"release","repo":"ronoctua-distro","type":"github"}}}}"#
+    )
+}
+
+/// The distro input as the development machine has it: a local checkout,
+/// `git+file:` at `rev`.
+fn checked_out(at: &str, rev: &str) -> String {
+    format!(
+        r#"{{"locked":{{"rev":"{rev}","type":"git","url":"file://{at}"}},"original":{{"type":"git","url":"file://{at}"}}}}"#
+    )
+}
+
+/// The same checkout, named as a bare `path:` (which locks no revision: its
+/// hash moves instead).
+fn checked_out_as_a_path(at: &str, hash: &str) -> String {
+    format!(
+        r#"{{"locked":{{"narHash":"sha256-{hash}","path":"{at}","type":"path"}},"original":{{"path":"{at}","type":"path"}}}}"#
+    )
+}
+
+const REV_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const REV_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const NIX_1: &str = "1111111111111111111111111111111111111111";
+const NIX_2: &str = "2222222222222222222222222222222222222222";
+
+/// The update of a machine whose lock is `lock`, with what Nix writes when it
+/// moves both inputs (`both`) or `nixpkgs` alone (`nixpkgs`): what it said,
+/// the lock after it, and the `nix flake update` it ran.
+fn update_from(
+    what: &str,
+    lock: &str,
+    both: &str,
+    nixpkgs: &str,
+) -> (Result<String, Why>, String, String) {
+    let w = World::new(what);
+    std::fs::write(w.m.places.dir.join("flake.lock"), lock).unwrap();
+    std::fs::write(w.s.path("updated-lock"), both).unwrap();
+    std::fs::write(w.s.path("updated-nixpkgs-lock"), nixpkgs).unwrap();
+    let said = w.m.run(&crate::Verb::UpdateDistro).map_err(|r| r.why);
+    let update = w
+        .read("calls")
+        .lines()
+        .find(|l| l.starts_with("nix flake update"))
+        .unwrap_or_default()
+        .to_owned();
+    (said, w.lock(), update)
+}
+
+/// FAILS IF: an installed machine — the release, on GitHub — does not move
+/// the distro input and `nixpkgs` both.
+#[test]
+fn an_installed_machine_moves_the_distro_and_nixpkgs() {
+    let both = lock_of(&released(REV_B), NIX_2);
+    let (said, lock, update) = update_from(
+        "update-release",
+        &lock_of(&released(REV_A), NIX_1),
+        &both,
+        &lock_of(&released(REV_A), NIX_2),
+    );
+    assert_eq!(said, Ok("distro moved".to_owned()));
+    assert!(
+        update.contains(" ronoctua nixpkgs --flake "),
+        "the update did not name the distro: {update}"
+    );
+    assert_eq!(lock, both, "the distro did not move");
+}
+
+/// FAILS IF: on a machine whose lock names a LOCAL checkout of the distro —
+/// `git+file:` or a bare `path:` — the update names the distro input, or
+/// leaves it anywhere but at the revision root locked: what the person
+/// commits there would reach root with no password. `nixpkgs` still moves.
+#[test]
+fn a_local_checkout_is_never_moved_by_the_update() {
+    let at = "/home/person/src/ronoctua-distro";
+    for (form, before, head) in [
+        ("git", checked_out(at, REV_A), checked_out(at, REV_B)),
+        (
+            "path",
+            checked_out_as_a_path(at, "AAAA"),
+            checked_out_as_a_path(at, "BBBB"),
+        ),
+    ] {
+        let only_nixpkgs = lock_of(&before, NIX_2);
+        let (said, lock, update) = update_from(
+            &format!("update-checkout-{form}"),
+            &lock_of(&before, NIX_1),
+            &lock_of(&head, NIX_2),
+            &only_nixpkgs,
+        );
+        assert_eq!(
+            said,
+            Ok("nixpkgs moved; the distro stays at the checkout's locked revision".to_owned()),
+            "{form}"
+        );
+        assert!(
+            update.contains(" flakes nixpkgs --flake ") && !update.contains(" ronoctua "),
+            "{form}: the update named the distro: {update}"
+        );
+        assert_eq!(lock, only_nixpkgs, "{form}: the distro input moved");
+        assert!(crate::aim::follows_a_checkout(lock.as_bytes()), "{form}");
+    }
+    assert!(!crate::aim::follows_a_checkout(
+        lock_of(&released(REV_A), NIX_1).as_bytes()
+    ));
+}
+
+/// FAILS IF: a move that leaves the distro input at ANOTHER revision of a
+/// local checkout — the `flake.nix` names one its lock does not, and Nix
+/// locks it afresh, whatever inputs were named — keeps that lock, or is not
+/// refused: the lock is put back byte for byte.
+#[test]
+fn a_checkout_the_lock_did_not_name_is_put_back() {
+    let at = "/home/person/src/ronoctua-distro";
+    let released_lock = lock_of(&released(REV_A), NIX_1);
+    let checkout_lock = lock_of(&checked_out(at, REV_A), NIX_1);
+    for (what, before, both, nixpkgs) in [
+        // A RELEASE'S LOCK, and a `flake.nix` that names a checkout now.
+        (
+            "update-to-a-checkout",
+            &released_lock,
+            lock_of(&checked_out(at, REV_B), NIX_2),
+            lock_of(&checked_out(at, REV_B), NIX_2),
+        ),
+        // A CHECKOUT'S LOCK, and a `flake.nix` that names another one.
+        (
+            "update-to-another-checkout",
+            &checkout_lock,
+            lock_of(&checked_out("/home/person/elsewhere", REV_B), NIX_2),
+            lock_of(&checked_out("/home/person/elsewhere", REV_B), NIX_2),
+        ),
+    ] {
+        let (said, lock, _) = update_from(what, before, &both, &nixpkgs);
+        assert_eq!(said, Err(Why::CheckoutMoved), "{what}");
+        assert_eq!(&lock, before, "{what}: the lock was not put back");
+    }
+}
+
+/// FAILS IF: the update's rehearsal names the distro input on a machine
+/// whose lock names a local checkout.
+#[test]
+fn a_rehearsal_on_a_checkout_moves_nixpkgs_alone() {
+    let w = World::new("rehearse-checkout");
+    let before = checked_out("/home/person/src/ronoctua-distro", REV_A);
+    std::fs::write(w.m.places.dir.join("flake.lock"), lock_of(&before, NIX_1)).unwrap();
+    std::fs::write(
+        w.s.path("updated-lock"),
+        lock_of(&checked_out("/x", REV_B), NIX_2),
+    )
+    .unwrap();
+    std::fs::write(w.s.path("updated-nixpkgs-lock"), lock_of(&before, NIX_2)).unwrap();
+    w.m.apply(Applying::Rehearse).unwrap();
+    let calls = w.read("calls");
+    let update = calls
+        .lines()
+        .find(|l| l.starts_with("nix flake update"))
+        .expect("the rehearsal moves the copy's inputs");
+    assert!(!update.contains(" ronoctua "), "{update}");
+    assert_eq!(
+        w.lock(),
+        lock_of(&before, NIX_1),
+        "the machine's lock moved"
+    );
 }
 
 /// FAILS IF: a verb on the real system runs for somebody who is not root.

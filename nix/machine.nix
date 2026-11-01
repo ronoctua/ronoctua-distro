@@ -55,6 +55,9 @@ let
     # (`ronoctua_person::names::DISTRO_PINS`).
     distroPins = "person/software/distro-pins.json";
     approved = "local/approved.json";
+    # Each brain module of the person's evaluated alone, by root, before any
+    # evaluation of the machine reads it (`ronoctua_person::names::BRAIN_CHECKED`).
+    checked = "local/brain-checked.json";
     # The person's signing key root trusts, and what the last apply made of
     # the signature (`ronoctua_person::names::SIGNER`).
     signer = "local/signer.json";
@@ -82,6 +85,11 @@ in
       system,
       # The distro's lock, which the guard compares the inputs against.
       lockFile ? ../flake.lock,
+      # THE CHAIN BUILT AGAIN WITH THE PERSON'S BRAIN MODULES (the flake's
+      # `withPersonModules`, `nix/person-brain.nix`): the daemon and the data
+      # the footer reads, compiled with the folders `approvals` includes, and
+      # the distro's modules over that workspace.
+      withPersonModules,
     }:
     let
       lib = inputs.nixpkgs.lib;
@@ -182,9 +190,16 @@ in
       # report lists it with the hash an approval must name
       # (`person-root-module-needs-approval`).
       #
+      # WHAT IS INCLUDED IS COMPILED: `machine` hands the included folders to
+      # `withPersonModules` (the daemon and the footer's data built again with
+      # them, every crate that draws the distro's), and its root halves enter
+      # through the brain loader's gate (`personNixosModules`): shut while the
+      # brain is off, no `disabledModules`, no import outside the folder.
+      #
       # THE ROOT HALF IS IMPORTED FROM A COPY OF ITS OWN FOLDER, alone in the
-      # store, and that copy is what is hashed. In place, inside the machine
-      # flake's source, `imports = [ ../my-common/lib.nix ]` or
+      # store, and that copy is what is hashed — the loader's copy is the same
+      # folder under the same name, so the same store path. In place, inside
+      # the machine flake's source, `imports = [ ../my-common/lib.nix ]` or
       # `builtins.readFile ../my-common/run.sh` would reach a sibling — and a
       # sibling with no `module.nix` needs no approval, so whoever can change
       # the person's data would change root code the approval never saw.
@@ -216,6 +231,22 @@ in
               approvedDoc.modules
             else
               { };
+          # EACH FOLDER EVALUATED ALONE, by root, in a process of its own
+          # (`local/brain-checked.json`, `ronoctua-person check-brain`). A
+          # manifest that does not parse or aborts is an error `tryEval`
+          # cannot catch, and read here it would stop the whole evaluation
+          # — the person's data breaking the machine's update. So a folder is
+          # read only when that file says it evaluated AT THE HASH IT HAS
+          # NOW; any other is left out and said (`refused`). A format this
+          # distro does not read checked nothing.
+          checkedFile = dir + "/${parts.checked}";
+          checkedDoc =
+            if builtins.pathExists checkedFile then builtins.fromJSON (builtins.readFile checkedFile) else { };
+          checked =
+            if (checkedDoc.format or null) == personFormat && builtins.isAttrs (checkedDoc.modules or null) then
+              checkedDoc.modules
+            else
+              { };
           listing = if builtins.pathExists brainDir then builtins.readDir brainDir else { };
           ids = builtins.filter (
             name: listing.${name} == "directory" && builtins.match "my-[a-z0-9][a-z0-9-]{0,63}" name != null
@@ -234,13 +265,40 @@ in
               };
               hash = if hashable then personHash isolated else null;
               given = approved.${id}.hash or null;
+              # Nothing waits for the person: no NixOS half, or one approved
+              # as it is now.
+              admitted = !rootHalf || (hash != null && given == hash);
+              check = checked.${id} or { };
+              # Why an admitted folder is not read, or `null` when it is.
+              refused =
+                if hash == null then
+                  {
+                    why = "unhashable";
+                    detail = "";
+                  }
+                else if (check.hash or null) != hash then
+                  {
+                    why = "unchecked";
+                    detail = "";
+                  }
+                else if (check.evaluates or false) != true then
+                  {
+                    why = "does-not-evaluate";
+                    detail = toString (check.detail or "");
+                  }
+                else
+                  null;
             in
             {
-              inherit id folder rootHalf;
-              # Only the root half needs the copy (and the hash).
-              rootModule = isolated + "/module.nix";
+              inherit
+                id
+                folder
+                rootHalf
+                admitted
+                refused
+                ;
               hash = if hash == null then "unhashable" else hash;
-              included = !rootHalf || (hash != null && given == hash);
+              included = admitted && refused == null;
             };
           every = map one ids;
         in
@@ -253,12 +311,24 @@ in
           # source and carry into a derivation (the owner's decision,
           # 2026-10-31; `person-root-module-needs-approval`).
           includedIds = map (m: m.id) (builtins.filter (m: m.included) every);
-          awaiting = map (m: { inherit (m) id hash; }) (builtins.filter (m: !m.included) every);
-          rootModules = map (m: m.rootModule) (builtins.filter (m: m.included && m.rootHalf) every);
+          awaiting = map (m: { inherit (m) id hash; }) (builtins.filter (m: !m.admitted) every);
+          # AND THE ONES NOTHING WAITS FOR THAT ARE STILL LEFT OUT — not
+          # evaluated alone at what they are now, not evaluating, not
+          # hashable — each with why, for the report.
+          refused = map (m: { inherit (m) id; } // m.refused) (
+            builtins.filter (m: m.admitted && !m.included) every
+          );
+          # THE APPROVED ROOT HALVES, by id: what `withPersonModules`'
+          # `machineModules` imports, through the loader's gate, from the copy
+          # hashed above.
+          rootIds = map (m: m.id) (builtins.filter (m: m.included && m.rootHalf) every);
+          # The folder the loader reads them from.
+          dir = brainDir;
         };
 
-      # THE MACHINE: the distro's modules, `host.nix`, the hardware report's
-      # module, the person's data and the approved root halves.
+      # THE MACHINE: the distro's modules (over the workspace that compiled
+      # the person's included brain modules, with the approved root halves),
+      # `host.nix`, the hardware report's module and the person's data.
       machine =
         {
           # The machine flake's own source (`./.` in its `flake.nix`).
@@ -271,6 +341,33 @@ in
           at = name: dir + "/${name}";
           present = name: if builtins.pathExists (at name) then at name else null;
           brain = approvals dir;
+          # THE PERSON'S BRAIN MODULES, COMPILED: the chain built again with
+          # the included folders and no other — a folder that waits for an
+          # approval is not even read (`only`) — and the distro's modules over
+          # that workspace, with the approved root halves through the loader's
+          # gate. No folder included: the distro's own modules, the same
+          # derivations, so a machine with no module of the person's builds
+          # nothing a reference does not (`person-module-rebuilds-only-the-daemon`).
+          person =
+            if brain.includedIds == [ ] then
+              null
+            else
+              withPersonModules {
+                inherit (brain) dir;
+                only = brain.includedIds;
+              };
+          withBrain = if person == null then distroModules else person.machineModules brain.rootIds;
+          # WHAT THE LOADER ITSELF LEFT OUT of the folders it read, with its
+          # sentences — beside the ones `approvals` never let it read.
+          loaderRefused =
+            if person == null then
+              [ ]
+            else
+              map (id: {
+                inherit id;
+                why = "not-a-module";
+                detail = lib.concatStringsSep " " person.refused.${id};
+              }) (builtins.filter (id: person.refused ? ${id}) brain.includedIds);
         in
         assert pinGuard { inherit lockFile inputs; };
         if !builtins.pathExists (at parts.host) then
@@ -284,7 +381,7 @@ in
             inherit system;
             specialArgs = { inherit inputs; };
             modules =
-              distroModules
+              withBrain
               ++ [
                 ./modules/host.nix
                 inputs.nixos-facter-modules.nixosModules.facter
@@ -304,10 +401,10 @@ in
                     signer = present parts.signer;
                     brainModules = brain.included;
                     awaitingApproval = brain.awaiting;
+                    brainRefused = brain.refused ++ loaderRefused;
                   };
                 }
               ]
-              ++ brain.rootModules
               ++ extraModules;
           };
 
@@ -362,6 +459,7 @@ in
             distroModules
             system
             lockFile
+            withPersonModules
             ;
           inputs = other;
         };

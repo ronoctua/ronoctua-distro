@@ -338,8 +338,9 @@ pub enum Switch {
 /// to grow, everything below moved up and down while nobody touched anything —
 /// which the owner reported from the screen.
 ///
-/// A shelf draws `space.shelf.lines` rows ALWAYS, padded with blanks when it
-/// holds fewer, and scrolls inside itself. Nothing under it moves, ever. See
+/// A shelf draws `space.shelf.lines` rows ALWAYS — or the door's room, where
+/// that is less (`View::shelf_lines`) — padded with blanks when it holds
+/// fewer, and scrolls inside itself. Nothing under it moves, ever. See
 /// `View::shelves` for what the two doors ask in order to draw its bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Shelf {
@@ -1235,6 +1236,21 @@ pub struct View {
     /// entry, which is the same thing as nought, and adding a sixth shelf is
     /// then a variant and nothing else.
     shelves: std::collections::BTreeMap<Shelf, usize>,
+    /// How many lines of rows the door shows, as it last said
+    /// ([`View::room_is`]) — the most a shelf may be tall. Nought: not said.
+    ///
+    /// # Why a shelf asks it
+    ///
+    /// Because a shelf's bar is drawn only while the WHOLE shelf is on screen
+    /// (`chrome::on_the_band`), and in a footer whose ceiling is under
+    /// `space.shelf.lines` no shelf ever was: every list scrolled with
+    /// nothing on screen to grab. A shelf is its token's height or the room,
+    /// whichever is less — still the same height whatever it holds.
+    ///
+    /// IN A CELL because both doors build their rows from `&self` (a paint,
+    /// a region's `rows`), and the room is known exactly there; every row
+    /// built after it — a click's, a key's — counts the same rows.
+    room: std::cell::Cell<usize>,
     /// Which screen is showing.
     level: Level,
     /// Is Tor's drawer of rarely-touched settings open?
@@ -1533,6 +1549,7 @@ impl View {
             drawer: false,
             tor_edits: None,
             shelves: std::collections::BTreeMap::new(),
+            room: std::cell::Cell::new(0),
             asking: None,
             remembering: None,
             picking: None,
@@ -1561,6 +1578,23 @@ impl View {
     pub fn page_is(&self, lines: usize) {
         if let Some(h) = self.picking.as_ref() {
             h.picker.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
+        }
+    }
+
+    /// How many lines of rows the door shows — told by each door as it
+    /// builds the rows it draws (the region's `rows`, the window's paint), so
+    /// a shelf is never taller than its room ([`View::shelf_lines`]).
+    pub fn room_is(&self, lines: usize) {
+        self.room.set(lines);
+    }
+
+    /// How many rows a shelf draws: `space.shelf.lines`, or the room the
+    /// door said it has when that is less — never less than one.
+    #[must_use]
+    pub fn shelf_lines(&self) -> usize {
+        match self.room.get() {
+            0 => SHELF_LINES,
+            room => room.min(SHELF_LINES),
         }
     }
 
@@ -1618,7 +1652,8 @@ impl View {
         let Some((which, total)) = rows.get(self.cursor).and_then(|r| r.shelf) else {
             return false;
         };
-        if total <= SHELF_LINES {
+        let lines = self.shelf_lines();
+        if total <= lines {
             return false;
         }
         // THE EDGE IS THE LAST ROW WITH SOMETHING ON IT: the padding under a
@@ -1639,7 +1674,7 @@ impl View {
         // press per phantom row bringing it back down, swallowing the key each
         // time. With the keyboard repeating, what that looks like is the view
         // frozen under a held arrow.
-        let last_offset = total.saturating_sub(SHELF_LINES);
+        let last_offset = total.saturating_sub(lines);
         let at = self
             .shelves
             .get(&which)
@@ -1649,7 +1684,7 @@ impl View {
         if at != self.shelves.get(&which).copied().unwrap_or(0) {
             self.shelves.insert(which, at);
         }
-        if step > 0 && self.cursor == *last && at + SHELF_LINES < total {
+        if step > 0 && self.cursor == *last && at + lines < total {
             self.shelves.insert(which, at + 1);
             return true;
         }
@@ -2533,6 +2568,7 @@ impl View {
             texts,
             shelf: None,
             offsets: &self.shelves,
+            shelf_lines: self.shelf_lines(),
         };
 
         // TOR'S SHEET IS A SCREEN OF ITS OWN, and it returns here: everything
@@ -3336,6 +3372,14 @@ impl View {
         // a reboot, which is a different kind of power from starting something
         // now. So the footer reads a preference when the session comes up.
         let autostart = facts.tunnels.autostart;
+        // A PART OF `tor.json` NOT READ: the switch below shows the repair in
+        // that place, and the file keeps what it says.
+        if let Some(partly) = ronoctua_shell_kit::partly_read::PartlyRead::of_repairs(
+            ronoctua_tunnel::prefs::FILE,
+            &facts.tunnels.prefs_repairs,
+        ) {
+            b.sentence(partly.said(b.texts));
+        }
         b.pair(
             b.texts.t(key::NETWORK_TOR_AUTOSTART),
             // ON OR OFF, not what the unit is doing — the sibling of the
@@ -4169,10 +4213,12 @@ struct Builder<'a> {
     shelf: Option<Shelf>,
     /// Where each shelf is scrolled to.
     offsets: &'a std::collections::BTreeMap<Shelf, usize>,
+    /// How many rows a shelf draws ([`View::shelf_lines`]).
+    shelf_lines: usize,
 }
 
 impl Builder<'_> {
-    /// Fills a shelf, and closes it at exactly [`SHELF_LINES`] rows.
+    /// Fills a shelf, and closes it at exactly [`View::shelf_lines`] rows.
     ///
     /// # Why the rows are built and then CUT
     ///
@@ -4221,12 +4267,17 @@ impl Builder<'_> {
         // NOTHING TO SCROLL, NOTHING TO PAD: a shelf that never fills is a
         // block of blank lines under a heading, which is worse than a short
         // list. It takes its ceiling only once it has reached it.
-        let offset = if total > SHELF_LINES {
-            (*self.offsets.get(&which).unwrap_or(&0)).min(total - SHELF_LINES)
+        //
+        // AND THE CEILING IS NEVER TALLER THAN THE ROOM (`View::shelf_lines`):
+        // a shelf with more lines than the door shows is never wholly on
+        // screen, and only a whole one gets its bar.
+        let lines = self.shelf_lines;
+        let offset = if total > lines {
+            (*self.offsets.get(&which).unwrap_or(&0)).min(total - lines)
         } else {
             0
         };
-        let shown = held.into_iter().skip(offset).take(SHELF_LINES);
+        let shown = held.into_iter().skip(offset).take(lines);
         let mut drawn = 0;
         for row in shown {
             // THE FOCUS IS DECIDED HERE, where the row's real position is
@@ -4250,7 +4301,7 @@ impl Builder<'_> {
         // which is exactly what the owner reported. An EMPTY one draws
         // nothing at all — the section says why in a sentence of its own,
         // and a block of blank lines under a heading says nothing.
-        let height = if total == 0 { 0 } else { SHELF_LINES };
+        let height = if total == 0 { 0 } else { lines };
         for _ in drawn..height {
             self.out.push(Row {
                 fields: crate::chrome::AIR,
@@ -6017,6 +6068,59 @@ mod tests {
                 which.len()
             );
         }
+    }
+
+    /// FAILS IF: under a room lower than `space.shelf.lines` a shelf is still
+    /// drawn taller than the room — never wholly on screen, so no door draws
+    /// its bar — or the keyboard stops reaching every row through it.
+    #[test]
+    fn a_shelf_is_never_taller_than_its_room() {
+        let t = texts();
+        let snap = machine();
+        let seen: Vec<Network> = (0..20)
+            .map(|i| network(&format!("net {i}"), 90 - u8::try_from(i).unwrap_or(0)))
+            .collect();
+        let f = facts(&snap, &seen);
+        let room = SHELF_LINES - 2;
+        let v = View::fresh();
+        v.room_is(room);
+        let rows = v.rows(&f, DECIDING_WIDTH, &t);
+        let band = v
+            .shelves(&rows)
+            .into_iter()
+            .find(|b| b.shelf == Shelf::Wifi)
+            .expect("no Wi-Fi shelf");
+        assert_eq!(band.lines, room, "the shelf is not the room's height");
+        assert!(
+            band.total > band.lines,
+            "the shelf holds no more than it shows"
+        );
+        // A ROOM LARGER THAN THE TOKEN does not make a shelf taller.
+        v.room_is(SHELF_LINES * 4);
+        let rows = v.rows(&f, DECIDING_WIDTH, &t);
+        let tall = v
+            .shelves(&rows)
+            .into_iter()
+            .find(|b| b.shelf == Shelf::Wifi);
+        assert_eq!(tall.map(|b| b.lines), Some(SHELF_LINES));
+        // AND THE KEYBOARD STILL WALKS THE WHOLE LIST through the short shelf.
+        let mut v = View::fresh();
+        v.room_is(room);
+        let rows = v.rows(&f, DECIDING_WIDTH, &t);
+        let first = rows
+            .iter()
+            .position(|r| r.shelf.map(|(s, _)| s) == Some(Shelf::Wifi) && !r.heading)
+            .expect("the shelf drew nothing");
+        v.clicked(first, &rows);
+        let mut names = std::collections::BTreeSet::new();
+        for _ in 0..seen.len() * 2 {
+            let rows = v.rows(&f, DECIDING_WIDTH, &t);
+            if let Some(Target::Wireless(n)) = rows.get(v.cursor()).map(|r| r.target.clone()) {
+                names.insert(n.ssid.clone());
+            }
+            let _ = v.key(Press::Down, &f, DECIDING_WIDTH, &t);
+        }
+        assert_eq!(names.len(), seen.len(), "the keyboard missed networks");
     }
 
     #[test]

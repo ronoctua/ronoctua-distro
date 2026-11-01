@@ -62,7 +62,7 @@ use std::sync::Arc;
 // THE SHARED HALF (`shared.rs`, compiled into the library beside the
 // manifest): what the update's doors read of the same machine and table.
 use super::{Charge, HOLD_METERED, steps};
-use crate::module::{Birth, Event, Manifest, Module, Run, Scheduled};
+use crate::module::{Arg, Birth, Event, Manifest, Module, Run, Scheduled};
 use crate::moment::{Moment, Offset};
 use crate::prefs::{TaskPrefs, Where};
 use crate::pulse::Pulse;
@@ -206,12 +206,17 @@ impl Scheduled for SystemUpdate {
         }
         match run.watch(before) {
             Watched::Ended(sheet) => {
-                if !run.is_rehearsal()
-                    && restart_told(&super::RecordPlaces::here(), sheet.began, |event| {
-                        run.ctx().tell(event)
-                    })
-                {
-                    tracing::info!("the new system waits for the next restart, said");
+                if !run.is_rehearsal() {
+                    if restart_told(&super::RecordPlaces::here(), sheet.began, |event| {
+                        run.ctx().tell(event);
+                    }) {
+                        tracing::info!("the new system waits for the next restart, said");
+                    }
+                    // ROOT'S APPLIER REFUSED THE PERSON'S DECLARATIONS: said
+                    // with its reason, once per such run.
+                    if let Some(event) = declarations_refused(&sheet.steps) {
+                        run.ctx().tell(event);
+                    }
                 }
                 ended(sheet.steps, &sheet.trouble)
             }
@@ -292,6 +297,21 @@ fn restart_told(at: &super::RecordPlaces, began: Moment, tell: impl FnOnce(Event
         &super::event::RESTART_UNGUARDED
     }));
     true
+}
+
+/// The notification of a run in which root's applier refused the person's
+/// declarations: the step whose refusals are the applier's (`refuses` in
+/// `steps.nix`) recorded `failed-<word>`, and the applier's sentence for the
+/// word is the notification's reason. `None` when no such step refused with
+/// a word.
+fn declarations_refused(steps: &[StepOutcome]) -> Option<Event> {
+    steps.iter().find_map(|s| {
+        let word = s.verdict.strip_prefix("failed-")?;
+        (super::refuses(&s.id) == Some(super::Refuses::Applier)).then(|| {
+            Event::of(&super::event::DECLARATIONS_REFUSED)
+                .with("why", Arg::Key(super::applier_refusal_said(word).into()))
+        })
+    })
 }
 
 /// The last step that was reported — where a run that went quiet was standing.
@@ -557,13 +577,14 @@ mod tests {
                 id: "a-step-that-worked".into(),
                 ok: true,
                 seconds: 12,
-                trouble: String::new(),
+                ..StepOutcome::default()
             },
             StepOutcome {
                 id: "a-step-that-failed".into(),
                 ok: false,
                 seconds: 900,
                 trouble: "error: builder for drv failed".into(),
+                ..StepOutcome::default()
             },
         ];
         assert_eq!(
@@ -581,7 +602,7 @@ mod tests {
             id: "a-step".into(),
             ok: true,
             seconds: 1,
-            trouble: String::new(),
+            ..StepOutcome::default()
         }];
         assert!(matches!(ended(ok.clone(), ""), Outcome::Done(_)));
         // A unit that said everything worked AND left a complaint is not a
@@ -610,11 +631,15 @@ mod tests {
     /// generated script and the runner.
     #[test]
     fn the_scripts_sheet_is_read_the_way_the_screen_needs_it() {
-        let written = r#"{"began":1789868464,"ended":1789868999,"trouble":"","steps":[{"id":"first-step","ok":true,"seconds":12,"trouble":""},{"id":"second-step","ok":true,"seconds":0,"trouble":""}]}"#;
+        let written = r#"{"began":1789868464,"ended":1789868999,"trouble":"","steps":[{"id":"first-step","ok":true,"seconds":12,"trouble":"","verdict":"ran"},{"id":"second-step","ok":true,"seconds":0,"trouble":"","verdict":"skipped-network"}]}"#;
         let sheet: crate::task::Sheet = serde_json::from_str(written).expect("the sheet parses");
         assert_eq!(sheet.began, 1_789_868_464);
         assert_eq!(sheet.ended, 1_789_868_999, "a run that ended says so");
         assert_eq!(sheet.steps.len(), 2);
+        assert_eq!(
+            sheet.steps[1].verdict, "skipped-network",
+            "the word travels"
+        );
         assert!(matches!(
             ended(sheet.steps, &sheet.trouble),
             Outcome::Done(_)
@@ -638,6 +663,57 @@ mod tests {
             Outcome::Failed { at, .. } => assert_eq!(at, "the-step-that-failed"),
             other => panic!("a step that failed is a run that failed: {other:?}"),
         }
+    }
+
+    /// FAILS IF: a run in which root's applier refused the person's
+    /// declarations — the step whose refusals are the applier's recorded
+    /// `failed-<word>` — is not told with the applier's sentence for the
+    /// word (or, for a word this version does not name, the sentence that
+    /// says so); or anything else is told as one: news (`declined-busy`),
+    /// a failure with no word, the same word on another step.
+    #[test]
+    fn a_refused_declaration_is_told_with_the_appliers_reason() {
+        let applier = steps()
+            .iter()
+            .find(|s| super::super::refuses(s.id) == Some(super::super::Refuses::Applier))
+            .expect("a step hands the declarations to root's applier");
+        let other = steps()
+            .iter()
+            .find(|s| super::super::refuses(s.id) != Some(super::super::Refuses::Applier))
+            .expect("another step");
+        let ran = |id: &str, verdict: &str| StepOutcome {
+            id: id.to_owned(),
+            ok: !verdict.starts_with("failed"),
+            verdict: verdict.to_owned(),
+            ..StepOutcome::default()
+        };
+        let told =
+            |verdict: &str| declarations_refused(&[ran(other.id, "ran"), ran(applier.id, verdict)]);
+        let event = told("failed-not-signed").expect("told");
+        assert_eq!(event.tag, super::super::event::DECLARATIONS_REFUSED.tag);
+        assert_eq!(
+            event.args,
+            vec![(
+                "why".into(),
+                Arg::Key(super::super::key::SYSTEM_UPDATE_APPLIER_REFUSED_NOT_SIGNED.into())
+            )]
+        );
+        let unknown = told("failed-a-word-no-applier-says").expect("told");
+        assert_eq!(
+            unknown.args,
+            vec![(
+                "why".into(),
+                Arg::Key(super::super::key::SYSTEM_UPDATE_APPLIER_REFUSED_UNKNOWN.into())
+            )]
+        );
+        for quiet in ["ran", "declined-busy", "failed", "skipped-directory"] {
+            assert_eq!(told(quiet), None, "{quiet}");
+        }
+        assert_eq!(
+            declarations_refused(&[ran(other.id, "failed-not-signed")]),
+            None,
+            "another step's word is not the applier's"
+        );
     }
 
     /// A SHEET STILL BEING WRITTEN SAYS SO, and the watcher keeps waiting.

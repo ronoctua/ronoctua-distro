@@ -34,6 +34,19 @@
 //! not have them (`network-asks-with-a-pass` refuses the feature in a
 //! `[dependencies]` table, and a call to them outside a test).
 //!
+//! # A declared updater is the machine's, not the person's
+//!
+//! The owner's exception (`AGENTS.md`): the system's declared updaters do
+//! not wait for the person's consent — they are the machine keeping itself at
+//! the newest version (invariant 6), not a program of ours asking a host on
+//! the person's behalf. Nix and nix-flatpak never reach this crate; the one
+//! of ours is [`Updater::DistroAppImages`], the follow of the distro's
+//! AppImages to their vendor's GitHub releases, which asks the two hosts Nix
+//! already asks to move nixpkgs. [`pass_for_updater`] mints its pass through
+//! the same one `mint`, for the updater's OWN hosts only — the closed table
+//! here lets them, never a file — and `network-asks-with-a-pass` names the
+//! one function that asks for it.
+//!
 //! # Read at the moment of asking
 //!
 //! The file is read by [`allows`] and [`pass`] every time, never cached:
@@ -181,16 +194,63 @@ pub fn allows(host: &str) -> bool {
 /// [`NotLet`] when the person has not let the host (or it is not a host's
 /// name).
 pub fn pass(host: &str) -> Result<Pass, NotLet> {
-    mint(&store(), host)
+    mint(Grant::Person(&store()), host)
 }
 
-/// The one place a [`Pass`] is built: `store` lets `host`.
-fn mint(store: &Store<Consents>, host: &str) -> Result<Pass, NotLet> {
+/// A system updater the distro declares: the machine keeping itself at the
+/// newest version, whose hosts THIS TABLE lets, never the person's file (the
+/// owner's exception, `AGENTS.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Updater {
+    /// The follow of the distro's AppImages past the pins the distro tested,
+    /// to their vendor's GitHub releases (`ronoctua_software::follow`): the
+    /// API that answers which release is the newest, and the host its
+    /// download is fetched from — the two Nix already asks to move nixpkgs
+    /// (a `github:` input).
+    DistroAppImages,
+}
+
+impl Updater {
+    /// The hosts it asks, as [`normal`] writes them — the only ones it is
+    /// ever minted a pass for.
+    #[must_use]
+    pub const fn hosts(self) -> &'static [&'static str] {
+        match self {
+            Self::DistroAppImages => &["api.github.com", "github.com"],
+        }
+    }
+}
+
+/// A [`Pass`] for one of `updater`'s own hosts. The person's consent is not
+/// read: a declared updater is the machine's, not a request on their behalf.
+///
+/// # Errors
+///
+/// [`NotLet`] for a host that is not one of [`Updater::hosts`].
+pub fn pass_for_updater(updater: Updater, host: &str) -> Result<Pass, NotLet> {
+    mint(Grant::Updater(updater), host)
+}
+
+/// Who lets a host: the person, in a consent file, or a declared updater's
+/// own table.
+enum Grant<'a> {
+    /// The person's file (a test's, under `test-support`).
+    Person(&'a Store<Consents>),
+    /// A declared updater.
+    Updater(Updater),
+}
+
+/// The one place a [`Pass`] is built: `grant` lets `host`.
+fn mint(grant: Grant<'_>, host: &str) -> Result<Pass, NotLet> {
     let refused = || NotLet {
         host: host.to_owned(),
     };
     let name = normal(host).ok_or_else(refused)?;
-    if store.read().allows(&name) {
+    let let_in = match grant {
+        Grant::Person(store) => store.read().allows(&name),
+        Grant::Updater(updater) => updater.hosts().contains(&name.as_str()),
+    };
+    if let_in {
         Ok(Pass { host: name })
     } else {
         Err(refused())
@@ -266,7 +326,7 @@ pub fn allows_in(store: &Store<Consents>, host: &str) -> bool {
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn pass_in(store: &Store<Consents>, host: &str) -> Result<Pass, NotLet> {
-    mint(store, host)
+    mint(Grant::Person(store), host)
 }
 
 /// [`let_hosts`], over a test's store.
@@ -367,6 +427,44 @@ mod tests {
             pass_in(&store, "https://en.wiktionary.org/").is_err(),
             "not a host"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: a declared updater's pass waits for the person's consent, is
+    /// minted for a host that is not its own, or the person's refusal of one
+    /// of its hosts lets that host for anything else.
+    #[test]
+    fn a_declared_updater_asks_its_own_hosts_and_no_other() {
+        let dir = scratch("updater");
+        let store = store_at(Some(dir.clone()));
+        let updater = Updater::DistroAppImages;
+        assert_eq!(updater.hosts(), ["api.github.com", "github.com"]);
+        let_hosts_in(&store, &["github.com"], false).unwrap();
+        for host in updater.hosts() {
+            let pass = pass_for_updater(updater, host).expect("its own host");
+            assert!(pass.covers(host));
+            assert!(
+                pass_in(&store, host).is_err(),
+                "{host}: the person's file let it"
+            );
+        }
+        assert!(
+            pass_for_updater(updater, "GitHub.com.").is_ok(),
+            "a host's name, normalised"
+        );
+        for other in [
+            "objects.githubusercontent.com",
+            "example.org",
+            "https://github.com/",
+        ] {
+            assert_eq!(
+                pass_for_updater(updater, other),
+                Err(NotLet {
+                    host: other.to_owned()
+                }),
+                "{other}"
+            );
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

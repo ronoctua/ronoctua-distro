@@ -67,10 +67,11 @@ fn open(_: &str, _: Option<&str>, way: &mut dyn Doorway) -> Box<dyn Region> {
     // keeps none reads them now (`at_rest`), and never opens on "atuin is not
     // installed" a moment before the thread says otherwise.
     let shot = region::kept::<Snapshot>(way).unwrap_or_else(|| Rc::new(ronoctua_atuin::at_rest()));
-    Box::new(History {
-        view: View::fresh(),
-        shot,
-    })
+    // THE FOOTER'S MARK CAME FROM A READ OF ITS OWN: the file is judged again
+    // as the view opens, for the places of it that did not read.
+    let mut view = View::fresh();
+    view.read_in_part(crate::partly_read::judged(&ronoctua_atuin::prefs::store()));
+    Box::new(History { view, shot })
 }
 
 /// One order to Atuin's thread — and said, when Atuin is not here.
@@ -220,6 +221,12 @@ impl Region for History {
     /// asked for.
     fn heard(&mut self, news: &dyn std::any::Any, way: &mut dyn Doorway) {
         if let Some(fresh) = news.downcast_ref::<Rc<Snapshot>>() {
+            // A MARK THE FILE MOVED comes as a reading too: the file is
+            // judged again only then, never on the thread's own news.
+            if fresh.mark != self.shot.mark {
+                self.view
+                    .read_in_part(crate::partly_read::judged(&ronoctua_atuin::prefs::store()));
+            }
             self.shot = Rc::clone(fresh);
             // A LOGIN OR A LOG-OUT changes which rows there are.
             way.rows_changed();

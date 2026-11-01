@@ -272,7 +272,9 @@ pub struct Tools {
     pub nixpkgs_rev: Option<String>,
     /// `RONOCTUA_ICONS` — the superpack's theme root (the distro's collection).
     pub icons: Option<PathBuf>,
-    /// `RONOCTUA_ICON_NAMES` — every name the superpack answers to, one per line.
+    /// `RONOCTUA_ICON_NAMES` — every name the superpack answers to, one per
+    /// line. On a machine, a STABLE path in the superpack's part, which may
+    /// name nothing yet: read on every use.
     pub icon_names: Option<PathBuf>,
     /// `RONOCTUA_SOFTWARE` — this crate's own CLI, which the queue runs.
     pub software: Option<PathBuf>,
@@ -537,6 +539,23 @@ pub struct Outcome {
     /// printed what it would run and ran nothing.
     #[serde(default)]
     pub rehearsed: bool,
+    /// What the machine has not carried out yet of an order that did not
+    /// fail — a removal for good the update held, or one in the system the
+    /// next restart runs — so its end is not said as done.
+    #[serde(default)]
+    pub waits: Option<Waits>,
+}
+
+/// What a finished order's change on this machine waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Waits {
+    /// The update held the machine: the declaration changed, and this
+    /// computer takes the change at its next update.
+    Update,
+    /// The system without it is set for the next boot, and until then the
+    /// machine runs the one that has it.
+    Restart,
 }
 
 /// How an order failed.

@@ -22,6 +22,15 @@
 //!
 //! No program is named here: what runs comes out of [`crate::Tools`], through
 //! the modules and [`crate::run`].
+//!
+//! # Its log goes to standard error
+//!
+//! What a verb logs — why a release was skipped, why a pin was refused — is
+//! written on STANDARD ERROR ([`install_log`]), never on standard output,
+//! which the queue reads as beats and the update as its `refused <word>`.
+//! The update's unit keeps standard error in its journal, and the queue
+//! hands each line of it to its own log. No colour and no clock: the journal
+//! has its own.
 
 use std::io::{Read as _, Write as _};
 use std::process::ExitCode;
@@ -71,14 +80,14 @@ commands:
                             declared one replaces, once it is applied.
   pins refresh              look for newer downloads of the declared AppImages
                             and Android apps, and write them into the
-                            person's declaration (nothing is staged); with
-                            distro-apps-follow-releases on in their options,
-                            the distro's AppImages that follow a repository
-                            too, into software/distro-pins.json — and with it
-                            off, that file goes. Nothing is followed on a
-                            machine that trusts no signing key of theirs.
-                            Ends `refused github-not-let` when GitHub was not
-                            let and none of their own pins moved.
+                            person's declaration (nothing is staged); and,
+                            unless they turned following off in their options
+                            (distro-apps-keep-tested-pins), the distro's
+                            AppImages that follow a repository too, into
+                            software/distro-pins.json — asked as the machine's
+                            own update, with no consent — and with it off,
+                            that file goes. Nothing is followed on a machine
+                            that trusts no signing key of theirs.
   person stage [--check]    lay the person's declaration where root's applier
                             reads it, and start the applier; --check only
                             reads it, as root would.
@@ -862,9 +871,60 @@ pub fn plain_batch(batch: &Batch) -> String {
     out
 }
 
+/// The log filter the CLI runs under, from the `RUST_LOG` it was given.
+///
+/// The brain's rule (`ronoctua_brain_daemon::tail::directives`): the
+/// variable is usually NOT about this program — the queue and the update
+/// hand down their own (`ronoctua_shell=debug,…` in the development loop),
+/// which names no target of this crate and so would silence every line it
+/// writes. When it says nothing of `ronoctua_software`, this crate's `info`
+/// is added; when it does, whoever wrote it is obeyed. Pure.
+#[must_use]
+pub fn log_directives(asked: Option<&str>) -> String {
+    const OURS: &str = "ronoctua_software=info";
+    match asked.map(str::trim).filter(|a| !a.is_empty()) {
+        None => OURS.to_owned(),
+        Some(a)
+            if a.split(',')
+                .any(|d| d.trim().starts_with("ronoctua_software")) =>
+        {
+            a.to_owned()
+        }
+        Some(a) => format!("{a},{OURS}"),
+    }
+}
+
+/// The CLI's log, written to `writer` under [`log_directives`] of `asked` —
+/// a `RUST_LOG` that does not parse leaves this crate's `info`.
+fn log_of<W>(asked: Option<&str>, writer: W) -> impl tracing::Subscriber + Send + Sync
+where
+    W: for<'w> tracing_subscriber::fmt::MakeWriter<'w> + Send + Sync + 'static,
+{
+    let filter = tracing_subscriber::EnvFilter::try_new(log_directives(asked))
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("ronoctua_software=info"));
+    tracing_subscriber::fmt()
+        .with_writer(writer)
+        .with_ansi(false)
+        .without_time()
+        .with_env_filter(filter)
+        .finish()
+}
+
+/// [`log_of`] the inherited `RUST_LOG`, on standard error, for the whole run.
+fn install_log() {
+    let log = log_of(std::env::var("RUST_LOG").ok().as_deref(), std::io::stderr);
+    if tracing::subscriber::set_global_default(log).is_err() {
+        let _ = writeln!(
+            std::io::stderr(),
+            "ronoctua-software: a log was already installed"
+        );
+    }
+}
+
 /// The CLI's entry.
 #[must_use]
 pub fn main() -> ExitCode {
+    install_log();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let verb = match parse(&args) {
         Ok(verb) => verb,
@@ -942,35 +1002,30 @@ pub fn main() -> ExitCode {
 
 /// `pins refresh`: newer pins into the declaration, and nothing staged —
 /// the update's `person-stage` comes after it. And the distro's AppImages
-/// the person follows past its pins (`crate::follow`): followed while their
-/// options say so, forgotten when they say not, left alone when the options
-/// do not read here. A host following asks that is not let ends the run
-/// `refused github-not-let` — news, which the update's step says — unless
-/// the person's own pins moved: the run then says what moved, and a line
-/// says the distro's were not looked at. Every newer release of theirs it
-/// did not follow is a line before the last, with why
+/// the person follows past its pins (`crate::follow`): followed unless their
+/// options turned it off — asked as the machine's own update
+/// ([`crate::follow::NET`]), with no consent —, forgotten when they did,
+/// left alone when the options do not read here. Every newer release of
+/// theirs it did not follow is a line before the last, with why
 /// ([`crate::follow::NotFollowed`]).
 fn pins_refresh(ctx: &Context, report: &mut dyn Report) -> ExitCode {
     let host = crate::declaration::host_of(&crate::declaration::this_host());
-    let mut not_let = false;
-    let mut own_moved = 0;
     let done = host.and_then(|host| {
         // THE DOWNLOADS RUN WITH NO LANE HELD, and only the write takes it.
         let newer = crate::pins::newer(ctx, &crate::github::Net, &host, report)?;
         let following = crate::follow::following(&ctx.roots);
         let looked = if following == Some(true) {
-            crate::follow::look(ctx, &crate::github::Net, report)
+            crate::follow::look(ctx, &crate::follow::NET, report)
         } else {
             crate::follow::Looked::default()
         };
-        not_let = looked.not_let;
         if looked.no_signer {
             println!(
                 "this machine trusts no signing key of yours: the distro's apps that follow their releases were not looked at"
             );
         }
-        // EACH NEWER RELEASE LEFT BEHIND, said with why: this program has no
-        // log of its own, and the update's journal keeps what a step prints.
+        // EACH NEWER RELEASE LEFT BEHIND, said with why, in the step's own
+        // words: the update's journal keeps what a step prints.
         for passed in &looked.not_followed {
             println!("{}", passed.line());
         }
@@ -982,7 +1037,6 @@ fn pins_refresh(ctx: &Context, report: &mut dyn Report) -> ExitCode {
             })
             .map_err(|e| Failure::trouble(format!("could not take the declaration's lane: {e}")))?;
             let mut moved = crate::pins::take(&ctx.roots, &newer)?;
-            own_moved = moved;
             match following {
                 Some(true) => moved += crate::follow::apply(&ctx.roots, &looked.changes)?,
                 Some(false) => moved += u64::from(crate::follow::forget(&ctx.roots)?),
@@ -996,21 +1050,7 @@ fn pins_refresh(ctx: &Context, report: &mut dyn Report) -> ExitCode {
             ..Outcome::default()
         })
     });
-    let went_through = done.is_ok();
-    let code = answer(report, done);
-    if went_through && not_let {
-        // THE PERSON'S OWN PINS THAT MOVED are what the run did: said, and
-        // the GitHub refusal a line beside them rather than the verdict.
-        if own_moved > 0 {
-            println!(
-                "GitHub is not allowed in your consent: the distro's apps that follow their releases were not looked at"
-            );
-            return code;
-        }
-        println!("refused {}", crate::follow::NOT_LET);
-        return ExitCode::FAILURE;
-    }
-    code
+    answer(report, done)
 }
 
 /// `person stage [--check]`: the declaration laid where root's applier reads
@@ -1354,6 +1394,65 @@ mod tests {
     use super::*;
     use crate::order::{AndroidImage, Consent, IconChoice, Traces, WebSpec};
     use crate::{Roots, Tools};
+
+    /// FAILS IF: a `RUST_LOG` handed down for another program silences this
+    /// one's lines, one that names this crate is not obeyed as written, or a
+    /// verb's warning does not reach the log in plain text — no colour, no
+    /// clock — while a debug line does.
+    #[test]
+    fn a_verbs_log_reaches_standard_error_whatever_filter_it_inherits() {
+        assert_eq!(log_directives(None), "ronoctua_software=info");
+        assert_eq!(log_directives(Some(" ")), "ronoctua_software=info");
+        assert_eq!(
+            log_directives(Some("ronoctua_shell=debug,ronoctua_render=info")),
+            "ronoctua_shell=debug,ronoctua_render=info,ronoctua_software=info"
+        );
+        assert_eq!(
+            log_directives(Some("warn,ronoctua_software=debug")),
+            "warn,ronoctua_software=debug"
+        );
+        let written = |asked: Option<&str>| {
+            let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+            let writer = {
+                let kept = kept.clone();
+                move || Kept(kept.clone())
+            };
+            tracing::subscriber::with_default(log_of(asked, writer), || {
+                tracing::warn!(app = "cadcraft", "the newest release was not pinned");
+                tracing::debug!("a line nobody asked for");
+            });
+            let bytes = kept.lock().unwrap().clone();
+            String::from_utf8(bytes).unwrap()
+        };
+        for asked in [None, Some("ronoctua_shell=debug"), Some("not a filter ==")] {
+            let said = written(asked);
+            assert!(
+                said.contains("WARN") && said.contains("the newest release was not pinned"),
+                "{asked:?}: {said:?}"
+            );
+            assert!(said.contains("app=\"cadcraft\""), "{asked:?}: {said:?}");
+            assert!(!said.contains('\u{1b}'), "{asked:?}: colour in {said:?}");
+            assert!(!said.contains("nobody asked"), "{asked:?}: {said:?}");
+        }
+        assert!(
+            written(Some("ronoctua_software=error")).is_empty(),
+            "a filter that names this crate is not obeyed"
+        );
+    }
+
+    /// A log's writer into a buffer a test reads.
+    struct Kept(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Kept {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn the_terminal_language_is_a_tag() {
@@ -2430,6 +2529,7 @@ mod tests {
                 origin: crate::state::Origin::Mine,
                 icon: None,
                 trouble: None,
+                undeclarable: None,
             }],
             ..Snapshot::default()
         };

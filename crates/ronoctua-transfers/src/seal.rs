@@ -19,7 +19,9 @@
 //!
 //! # Nothing secret stays, nothing of the person's goes
 //!
-//! - The job's secrets (a passphrase's `0600` file) are removed when it
+//! - The job's secrets (a passphrase's `0600` file, or the identity the
+//!   session keeps, which the belongings' program lends for one open with
+//!   no question: [`lent`]) are removed when it
 //!   ends, however it ends — the program reads them and never deletes them,
 //!   and [`crate::secrets::forget`] removes only files of the queue's own
 //!   folder, so the belongings' `key.age` a job opens with is never one.
@@ -237,7 +239,17 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
     let held = Turn::of_the_queue().wait(id, switch);
     let ending = match (held.is_some(), program()) {
         (false, _) => Ending::Cancelled,
-        (true, Some(program)) => carry(shared, id, switch, &program, &job, GRACE),
+        (true, Some(program)) => match lent(&job) {
+            Ok(carried) => {
+                let ending = carry(shared, id, switch, &program, &carried, GRACE);
+                // THE LENT IDENTITY goes with the run that read it.
+                for secret in carried.secrets() {
+                    crate::secrets::forget(secret);
+                }
+                ending
+            }
+            Err(ending) => ending,
+        },
         (true, None) => Ending::Failed(format!(
             "this installation does not have the sealing program ({VARIABLE} is not set)"
         )),
@@ -266,6 +278,46 @@ pub fn run(shared: &Arc<Shared>, id: u64, switch: &Arc<Control>, work: Work) {
         }
         Ending::Cancelled => j.stage = Stage::Cancelled,
     });
+}
+
+/// The job the program reads: `job` itself — or, for one that opens with
+/// the identity the session keeps ([`ronoctua_pq::Action::OpenKept`]), the
+/// same open with that identity, which the belongings' program lends into a
+/// `0600` file of the queue's own folder for this run alone
+/// ([`crate::belongings::lend`]). Refused [`Why::NotKept`] when nothing was
+/// lent: the door asks the passphrase then.
+fn lent(job: &ronoctua_pq::Job) -> Result<ronoctua_pq::Job, Ending> {
+    if !matches!(job.action, ronoctua_pq::Action::OpenKept {}) {
+        return Ok(job.clone());
+    }
+    let Some(dir) = crate::secrets::dir() else {
+        return Err(Ending::Refused(Why::NotKept));
+    };
+    lent_in(job, &dir, &crate::belongings::lend)
+}
+
+/// [`lent`], into the folder `dir`, lent by `lend`.
+fn lent_in(
+    job: &ronoctua_pq::Job,
+    dir: &Path,
+    lend: &dyn Fn(&Path) -> bool,
+) -> Result<ronoctua_pq::Job, Ending> {
+    if !matches!(job.action, ronoctua_pq::Action::OpenKept {}) {
+        return Ok(job.clone());
+    }
+    let file = crate::secrets::unmade_in(dir).map_err(|e| Ending::Failed(format!("{e:#}")))?;
+    if !lend(&file) {
+        // A HALF A LENDER LEFT goes too.
+        crate::secrets::forget_in(&file, dir);
+        return Err(Ending::Refused(Why::NotKept));
+    }
+    Ok(ronoctua_pq::Job {
+        action: ronoctua_pq::Action::Open {
+            identities_file: file,
+        },
+        from: job.from.clone(),
+        into: job.into.clone(),
+    })
 }
 
 /// The job as the program reads it: one line, with its end.
@@ -647,6 +699,72 @@ mod tests {
         stopping.join().unwrap();
         assert!(at.elapsed() < Duration::from_secs(10), "{:?}", at.elapsed());
         assert!(!job.into.exists(), "the half of a stopped seal was left");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: an open with the session's identity reaches the sealer as
+    /// anything but `open` with a file of the queue's own folder the
+    /// belongings' CLI wrote (`lend --out <it>`), the CLI is asked anything
+    /// else, a lend that did not happen is not refused `not-kept` (the
+    /// door's cue to ask the passphrase) or leaves its half behind — or any
+    /// other job is lent anything.
+    #[test]
+    fn the_session_s_identity_is_lent_for_one_run_or_refused() {
+        let dir = place("lend");
+        let secrets = dir.join("secrets");
+        let job = ronoctua_pq::Job {
+            action: Action::OpenKept {},
+            from: dir.join("a.age"),
+            into: dir.join("a"),
+        };
+        let cli = dir.join("belongings.sh");
+        crate::write_executable(
+            &cli,
+            &format!(
+                "#!/bin/sh\nprintf '%s ' \"$@\" > '{}/asked'\n\
+                 [ \"$1 $2\" = 'lend --out' ] || exit 2\n\
+                 (umask 077 && printf 'AGE-SECRET-KEY-PQ-1X\\n' > \"$3\")\n",
+                dir.display()
+            ),
+        );
+        let lend = |into: &Path| crate::belongings::lend_with(&cli, into);
+        let carried = lent_in(&job, &secrets, &lend).expect("lent");
+        let Action::Open { identities_file } = &carried.action else {
+            panic!("the sealer reads {:?}", carried.action);
+        };
+        assert!(crate::secrets::is_ours(identities_file, &secrets));
+        assert_eq!(
+            std::fs::read_to_string(identities_file).unwrap(),
+            "AGE-SECRET-KEY-PQ-1X\n"
+        );
+        assert_eq!((&carried.from, &carried.into), (&job.from, &job.into));
+        assert_eq!(carried.secrets(), [identities_file.as_path()]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("asked")).unwrap(),
+            format!("lend --out {} ", identities_file.display())
+        );
+        // NOTHING KEPT: refused, and the half the CLI began is gone.
+        let refusing = dir.join("refusing.sh");
+        crate::write_executable(
+            &refusing,
+            "#!/bin/sh\nprintf 'half' > \"$3\"\necho 'ronoctua-belongings lend: no-passphrase' >&2\nexit 1\n",
+        );
+        let lend = |into: &Path| crate::belongings::lend_with(&refusing, into);
+        assert_eq!(
+            lent_in(&job, &secrets, &lend),
+            Err(Ending::Refused(Why::NotKept))
+        );
+        let left: Vec<_> = std::fs::read_dir(&secrets)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p != identities_file)
+            .collect();
+        assert!(left.is_empty(), "a refused lend left {left:?}");
+        // ANY OTHER JOB goes as it came, lent nothing.
+        let other = sealing(&dir, dir.join("pw"));
+        let never = |_: &Path| -> bool { panic!("a seal was lent the identity") };
+        assert_eq!(lent_in(&other, &secrets, &never), Ok(other.clone()));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

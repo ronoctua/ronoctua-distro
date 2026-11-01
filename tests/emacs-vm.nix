@@ -13,7 +13,7 @@
 #
 #   1. the daemon is up at `default.target` with no display in its
 #      environment, before any compositor exists;
-#   2. a terminal client (`emacsclient -t`, the `e` alias and `$EDITOR`)
+#   2. a terminal client (`emacsclient -t`, the shell's `e` and `$EDITOR`)
 #      works with no display;
 #   3. a graphical client started the way the session starts one — a unit of
 #      the person's manager, whose environment is what the compositor's

@@ -338,19 +338,27 @@ pub fn lock(dir: &Path, reference: &Path) -> Vec<String> {
 
 /// `nix flake update` of the distro input AND `nixpkgs` — the machine rolls on
 /// nixos-unstable now (owner amendment 2026-10-30), so the weekly
-/// `flake-update` step moves both; done by a rehearsal on its copy.
+/// `flake-update` step moves both; done by a rehearsal on its copy. Of
+/// `nixpkgs` ALONE where the machine's lock names a local checkout of the
+/// distro (`checkout`, [`crate::aim::follows_a_checkout`]): what the person
+/// commits there reaches root only through the sudo door (inv. 6).
 #[must_use]
-pub fn update_distro(dir: &Path) -> Vec<String> {
-    vec![
+pub fn update_distro(dir: &Path, checkout: bool) -> Vec<String> {
+    let mut words = vec![
         "flake".to_owned(),
         "update".to_owned(),
         "--extra-experimental-features".to_owned(),
         FEATURES.to_owned(),
-        crate::DISTRO_INPUT.to_owned(),
+    ];
+    if !checkout {
+        words.push(crate::DISTRO_INPUT.to_owned());
+    }
+    words.extend([
         crate::NIXPKGS_INPUT.to_owned(),
         "--flake".to_owned(),
         flake(dir),
-    ]
+    ]);
+    words
 }
 
 /// `nix-env` making `toplevel` the profile's newest generation (none is
@@ -573,11 +581,21 @@ mod tests {
 
     #[test]
     fn the_update_moves_the_distro_and_nixpkgs() {
-        let words = update_distro(&PathBuf::from("/run/ronoctua-update/rehearsal"));
+        let words = update_distro(&PathBuf::from("/run/ronoctua-update/rehearsal"), false);
         let at = words.iter().position(|w| w == "update").unwrap();
         assert_eq!(words[at + 3], crate::DISTRO_INPUT);
         assert_eq!(words[at + 4], crate::NIXPKGS_INPUT);
         assert_eq!(words.last().unwrap(), "path:/run/ronoctua-update/rehearsal");
+        // A LOCAL CHECKOUT's machine moves nixpkgs alone: the distro input
+        // is no word of the command.
+        let words = update_distro(&PathBuf::from("/etc/nixos"), true);
+        let at = words.iter().position(|w| w == "update").unwrap();
+        assert_eq!(words[at + 3], crate::NIXPKGS_INPUT);
+        assert_eq!(words[at + 4], "--flake");
+        assert!(
+            !words.contains(&crate::DISTRO_INPUT.to_owned()),
+            "{words:?}"
+        );
     }
 
     #[test]

@@ -19,8 +19,8 @@ use ronoctua_shell_door::{column, door, floating, launch, queue, region, right_c
 use ronoctua_shell_icons::icons_page;
 use ronoctua_shell_inspect::{inspection, inspection_edit, motion, stage};
 use ronoctua_shell_kit::{
-    actions, bars, bindings, chrome, consent_rows, echo, fields, glyph, line, minibuffer, sizes,
-    text_select, wheel, when,
+    actions, bars, bindings, chrome, consent_rows, echo, fields, glyph, line, minibuffer,
+    partly_read, sizes, text_select, wheel, when,
 };
 use ronoctua_shell_report::report;
 use ronoctua_shell_work::software_words;

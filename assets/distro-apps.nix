@@ -24,11 +24,13 @@
 #   by `nix run .#distro-pins`, never by hand when a source can be followed.
 #
 # An `apps` entry, by source (every field closed; `nix/modules/distro-apps.nix`
-# refuses an unknown one):
+# refuses an unknown one, and one without its `name`; a web app's window class,
+# `StartupWMClass`, is worked out from its address and profile, and an address
+# a browser rewrites is refused):
 #
 #   <id> = {
-#     source = "flatpak";  appId = "org.example.App";  origin = "flathub";
-#     group = "base";  essential = null;  formerly = [ ];
+#     source = "flatpak";  appId = "org.example.App";  name = "Example";
+#     origin = "flathub";  group = "base";  essential = null;  formerly = [ ];
 #   };
 #   <id> = {
 #     source = "appimage";  key = "example";  name = "Example";
@@ -42,7 +44,7 @@
 #     group = "base";
 #   };
 #   <id> = {
-#     source = "android";  package = "org.example.app";
+#     source = "android";  package = "org.example.app";  name = "Example";
 #     from = "f-droid";  image = "vanilla";   # `from = "direct"`: pinned by hand
 #     group = "base";
 #   };
@@ -266,10 +268,10 @@
   # `retired` above. One AppImage each, wrapped at build
   # (`appimageTools.wrapType2`) as `ronoctua-appimage-<key>`, and a part. Each
   # follows its repository's latest release, which `nix run .#distro-pins`
-  # pins and `nix run .#release` moves before each gate. A person who turns
-  # on following them (`distro-apps-follow-releases` in `options.json`, OFF
-  # by default: `ronoctua_person::options`) moves their own machines past
-  # those pins (`software/distro-pins.json`).
+  # pins and `nix run .#release` moves before each gate. The person's
+  # machines follow them past those pins (`software/distro-pins.json`) —
+  # on by default; `distro-apps-keep-tested-pins` in `options.json` is the
+  # person's off (`ronoctua_person::options`).
   # The pattern names the x86_64 image alone: the `.zsync` beside it and the
   # aarch64 one never match. No MIME default rides with them. And
   # `fallback = false`: the thirteen claimed photographs, films, songs and

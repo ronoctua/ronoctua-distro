@@ -53,6 +53,9 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+# THE CLI'S LOG, on standard error (`cli::install_log`): what a verb logs
+# reaches the update's journal and the queue's.
+tracing-subscriber.workspace = true
 # Process groups (cancel kills the whole tree), `flock` (one lane per
 # source, shared by the screen and the update run) and `uname` (the machine's
 # name a declaration says it was edited on).
@@ -76,9 +79,18 @@ name = "ronoctua-software"
 path = "src/bin/cli.rs"
 required-features = [ "net", "draw" ]
 
+# F-Droid's signed index checked for `nix run .#distro-pins`, from files the
+# tool downloaded: the distro's apk pins are what the index signs
+# (`pins::signed`). No network of its own, so no feature.
+[[bin]]
+name = "ronoctua-fdroid-pins"
+path = "src/bin/fdroid-pins.rs"
+
 [lints]
 workspace = true
 
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
 run-env = ["RONOCTUA_NIX", "RONOCTUA_SYSTEMCTL", "RONOCTUA_SYSTEMD_RUN"]
+# The release tool's, never a machine's.
+bins = { "ronoctua-fdroid-pins" = "driver" }

@@ -18,7 +18,7 @@
 
 // THE KIT AND THE DOOR, by the names the modules already use.
 use ronoctua_shell_door::{clipboard_wire, door, photo, region};
-use ronoctua_shell_kit::{bindings, chrome, echo, fields, ipc, line, sizes};
+use ronoctua_shell_kit::{bindings, chrome, echo, fields, ipc, line, partly_read, sizes};
 
 pub mod clipboard_region;
 pub mod clipboard_view;

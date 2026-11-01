@@ -40,6 +40,17 @@ in
     '';
   };
 
+  options.ronoctua.icons.names = lib.mkOption {
+    type = lib.types.nullOr lib.types.str;
+    default = null;
+    internal = true;
+    description = ''
+      Where every name the superpack answers to is listed, one per line: in
+      its part, by the stable path, which names nothing until the part
+      arrived. `null` on a machine without it.
+    '';
+  };
+
   config = lib.mkMerge [
     # ── anchor: L25 ──
     # THE SUPERPACK IS A PART (`nix/modules/parts.nix`), of data: 0,63 GiB
@@ -62,6 +73,9 @@ in
         iconsRoot = "${config.ronoctua.parts.icon-superpack.path}/share/icons/noctua";
       in
       {
+        # THE NAMES ARRIVE WITH THE THEME: a store path of a list made from
+        # the theme would build the theme with the system (`parts-build`).
+        ronoctua.icons.names = "${config.ronoctua.parts.icon-superpack.path}/share/doc/noctua-icons/names";
         environment.systemPackages = [ pkgs.hicolor-icon-theme ];
         environment.sessionVariables.RONOCTUA_ICONS = iconsRoot;
         systemd.user.services.ronoctua-footer.environment.RONOCTUA_ICONS = iconsRoot;

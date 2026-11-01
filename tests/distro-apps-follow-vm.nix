@@ -14,9 +14,10 @@
 #   1. the machine is installed with the distro's pin: the AppImage's part
 #      arrives — its download fetched by the build from the release — and
 #      the person runs it through the parts' view;
-#   2. the person turns following on (their options, and the two hosts let,
-#      as the update's page writes them): while GitHub's newest release IS
-#      the distro's pin, nothing is pinned;
+#   2. following is ON BY DEFAULT: the person wrote no options and let no
+#      host — the follow is the machine's own update, asking GitHub as Nix
+#      does — and while GitHub's newest release IS the distro's pin, nothing
+#      is pinned;
 #   3. a newer release is published: the update's `person-pins` step asks
 #      GitHub, judges the release, downloads it with `nix store
 #      prefetch-file` under the name the distro's builder fetches it under
@@ -31,7 +32,11 @@
 #   5. a release whose asset is broken is pinned, signed and applied, and
 #      its part does not build: the part keeps the last version that
 #      arrived, the person still runs it, and its record says why — what
-#      the update's page reads.
+#      the update's page reads;
+#   6. the person turns following off (their options, as the update's page
+#      writes them): the followed pins go, root takes the off signed, the
+#      part goes back to the pin the distro tested, and it stays there —
+#      a newer release is published and GitHub is not even asked.
 #
 # WHAT STANDS IN, AND WHY
 # -----------------------
@@ -543,6 +548,11 @@ pkgs.testers.runNixOSTest {
         return sum(1 for line in asked.splitlines() if line == wanted)
 
 
+    def api_asks():
+        asked = github.succeed("cat /var/log/nginx/follow.log")
+        return sum(1 for line in asked.splitlines() if line.startswith("api.github.com "))
+
+
     def publish(answer):
         github.succeed(f"cp ${served}/api/{answer} /srv/api/latest.json")
         # SIX HOURS LATER: the answer the last look kept is no longer fresh.
@@ -659,20 +669,16 @@ pkgs.testers.runNixOSTest {
         assert downloads("1.0.0") == 1, github.succeed("cat /var/log/nginx/follow.log")
         base = plan
 
-    with subtest("following is turned on; GitHub's newest is the distro's pin, and nothing is pinned"):
-        # AS THE UPDATE'S PAGE WRITES THEM (`ronoctua-shell-update/src/follow.rs`):
-        # the person's options, and the two hosts let in their consent.
-        machine.succeed(as_person(
-            f"mkdir -p {MIRROR}/software {HOME}/.config/ronoctua && "
-            + f"printf '%s' '{json.dumps({'format': 1, 'ssh-signing': None, 'distro-apps-follow-releases': True})}' "
-            + f"> {MIRROR}/options.json && "
-            + f"printf '%s' '{json.dumps({'hosts': {'api.github.com': True, 'github.com': True}})}' "
-            + f"> {HOME}/.config/ronoctua/consent.json"
-        ))
+    with subtest("following is on by default, with no consent; GitHub's newest is the distro's pin, and nothing is pinned"):
+        # NO GESTURE: the person's folder, and no options nor consent in it.
+        machine.succeed(as_person(f"mkdir -p {MIRROR}/software"))
+        machine.fail(f"test -e {MIRROR}/options.json")
         refresh()
         assert followed() is None, followed()
         asked = github.succeed("cat /var/log/nginx/follow.log")
         assert 'api.github.com GET "/repos/${repo}/releases/latest" 200' in asked, asked
+        # THE MACHINE'S OWN UPDATE asked, and no consent was written for it.
+        machine.fail(f"test -e {HOME}/.config/ronoctua/consent.json")
 
     with subtest("a newer release is followed, signed, applied by root, built from the bytes the step fetched, and run"):
         publish("latest-2.json")
@@ -733,5 +739,35 @@ pkgs.testers.runNixOSTest {
         assert r.get("missing", []) == [], r
         machine.fail("systemctl is-failed ronoctua-part@${key}.service")
         assert runs() == "fixture 2.0.0", runs()
+
+    with subtest("turned off, the part goes back to the distro's tested pin and stays there"):
+        # AS THE UPDATE'S PAGE WRITES IT (`ronoctua-shell-update/src/follow.rs`,
+        # `Options::set_following`): the person's off.
+        off = json.dumps({"format": 1, "ssh-signing": None, "distro-apps-keep-tested-pins": True})
+        machine.succeed(as_person(f"printf '%s' '{off}' > {MIRROR}/options.json"))
+        # A NEWER RELEASE THAN THE DISTRO'S is published: off, it is not even asked for.
+        publish("latest-2.json")
+        asked = api_asks()
+        refresh()
+        assert followed() is None, "the followed pins stayed"
+        assert api_asks() == asked, github.succeed("cat /var/log/nginx/follow.log")
+        sign(3)
+        stage()
+        machine.fail("test -e /etc/nixos/person/software/distro-pins.json")
+        # ROOT'S COPY, in the canonical form root writes: the person's off.
+        taken = json.loads(machine.succeed("cat /etc/nixos/person/options.json"))
+        assert taken.get("distro-apps-keep-tested-pins") is True, taken
+        assert "distro-apps-follow-releases" not in taken, taken
+        plan, report, before = build()
+        assert report["pin"] == "distro" and report["version"] == "1.0.0", report
+        assert plan["out"] == base["out"], plan
+        r = record()
+        assert r["phase"] == "here" and r["current"]["out"] == base["out"], r
+        assert runs() == "fixture 1.0.0", runs()
+        # AND IT STAYS OFF: the next update asks nothing, and the off is the person's still.
+        refresh()
+        assert followed() is None, followed()
+        assert api_asks() == asked, github.succeed("cat /var/log/nginx/follow.log")
+        assert json.loads(machine.succeed(f"cat {MIRROR}/options.json")) == json.loads(off)
   '';
 }

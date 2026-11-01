@@ -123,7 +123,8 @@ const fn opened(refusal: ronoctua_pq::Refusal) -> Refusal {
         ronoctua_pq::Why::WrongKey
         | ronoctua_pq::Why::Corrupt
         | ronoctua_pq::Why::Mixed
-        | ronoctua_pq::Why::Failed => Refusal::of(Why::Corrupt),
+        | ronoctua_pq::Why::Failed
+        | ronoctua_pq::Why::NotKept => Refusal::of(Why::Corrupt),
     }
 }
 

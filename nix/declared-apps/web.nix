@@ -220,7 +220,7 @@ let
     // lib.optionalAttrs (icon != null) { inherit icon; };
 in
 {
-  inherit appId urlProblem;
+  inherit appId urlProblem isProfile;
 
   shape =
     entry:

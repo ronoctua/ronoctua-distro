@@ -569,6 +569,9 @@ pub struct View {
     live: Option<Result<Value, Refusal>>,
     /// The answers kept, oldest first.
     history: Vec<Entry>,
+    /// What of `calc.json` did not read, when part of it did not: said
+    /// under the history's title (`partly_read`).
+    partly: Option<crate::partly_read::PartlyRead>,
     /// The answer picked, by its place from the newest.
     picked: Option<usize>,
     /// The converter.
@@ -613,6 +616,7 @@ impl View {
             answered: false,
             live: None,
             history,
+            partly: None,
             picked: None,
             convert: Converter::default(),
             money: Money::Unlooked,
@@ -628,6 +632,14 @@ impl View {
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// What the read of `calc.json` owes the person — the places of it that
+    /// did not read, or `None` (`partly_read`). Whether that changed.
+    pub fn read_in_part(&mut self, partly: Option<crate::partly_read::PartlyRead>) -> bool {
+        let moved = self.partly != partly;
+        self.partly = partly;
+        moved
     }
 
     /// The answers kept, NEWEST FIRST — the order they are drawn in.
@@ -1285,6 +1297,16 @@ impl View {
             None,
         );
         let mut out = vec![title];
+        // A PART OF THE FILE NOT READ: an answer it could not take is not in
+        // the list below, and the file keeps it.
+        if let Some(partly) = &self.partly {
+            out.extend(note(
+                &partly.said(texts),
+                left,
+                room,
+                tokens::color::TEXT_DIM,
+            ));
+        }
         if self.history.is_empty() {
             out.extend(note(
                 &texts.t_with(crate::key::CALC_HISTORY_EMPTY, &[("keys", EQUALS_KEY)]),

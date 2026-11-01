@@ -291,17 +291,22 @@ pub struct Row {
     pub setting: Option<Setting>,
     /// A title, a sentence, or the rest of a label: the cursor skips it.
     pub heading: bool,
+    /// The line CONTINUES the setting above it: the rest of its label or
+    /// value, wrapped (`chrome::aligned_pair`). The cursor skips it, but it
+    /// is a line of that setting — it lights with it, and a click on it
+    /// takes the same thing ([`View::control_of`]).
+    pub continues: bool,
 }
 
 impl Row {
-    /// Whether a click takes it — the first line of a setting, which the
-    /// cursor stands on — and so whether a resting pointer lights it: ONE
-    /// ANSWER for both doors' light and click (the footer's row, the
+    /// Whether a click takes it — a setting, every line of it, the first of
+    /// which the cursor stands on — and so whether a resting pointer lights
+    /// it: ONE ANSWER for both doors' light and click (the footer's row, the
     /// window's `Content::takes`, [`View::clicked`]). A title, the air
-    /// before it, the rest of a wrapped label and a note take nothing.
+    /// before it and a note take nothing.
     #[must_use]
     pub const fn takes(&self) -> bool {
-        !self.heading
+        !self.heading || self.continues
     }
 }
 
@@ -334,11 +339,26 @@ impl View {
         crate::chrome::hint_of(OF_THE_VIEW, texts)
     }
 
+    /// The row whose control row `n` is a line of: the first line of a
+    /// setting wrapped over several ([`Row::continues`]), which light
+    /// together and take one click (the footer's band, `Content::controls`)
+    /// — and `n` itself for every other row.
+    #[must_use]
+    pub fn control_of(n: usize, rows: &[Row]) -> usize {
+        let mut first = n;
+        while first > 0 && rows.get(first).is_some_and(|r| r.continues) {
+            first -= 1;
+        }
+        first
+    }
+
     /// Puts the cursor where a click landed — on a row that takes one
-    /// ([`Row::takes`]), and nowhere else. Answers whether the cursor was
-    /// ALREADY on that row: that is the second click, which the door turns
-    /// into `RET` (invariant 19).
+    /// ([`Row::takes`]), and nowhere else; on a line that continues a
+    /// setting, on that setting ([`Self::control_of`]). Answers whether the
+    /// cursor was ALREADY on that row: that is the second click, which the
+    /// door turns into `RET` (invariant 19).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        let n = Self::control_of(n, rows);
         if rows.get(n).is_some_and(Row::takes) {
             let again = self.cursor == n;
             self.cursor = n;
@@ -351,7 +371,7 @@ impl View {
     /// own, which is what `RET` there does.
     #[must_use]
     pub fn about(rows: &[Row], n: usize, texts: &ronoctua_i18n::Texts) -> Option<String> {
-        let setting = rows.get(n)?.setting?;
+        let setting = rows.get(Self::control_of(n, rows))?.setting?;
         Some(texts.t(&format!("cmd-{}", setting.command())))
     }
 
@@ -387,6 +407,7 @@ impl View {
                         fields: crate::chrome::AIR,
                         setting: None,
                         heading: true,
+                        continues: false,
                     });
                 }
                 out.push(Row {
@@ -398,6 +419,7 @@ impl View {
                     )],
                     setting: None,
                     heading: true,
+                    continues: false,
                 });
                 last_heading = Some(heading);
             }
@@ -416,6 +438,7 @@ impl View {
                     fields,
                     setting: (n == 0).then_some(setting),
                     heading: n > 0,
+                    continues: n > 0,
                 });
             }
             // THE NOTE WRAPS, and is never cut (`chrome::note_lines`).
@@ -425,6 +448,7 @@ impl View {
                         fields: vec![piece(left, line, tokens::color::TEXT_DIM, room)],
                         setting: None,
                         heading: true,
+                        continues: false,
                     });
                 }
             }
@@ -663,6 +687,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// FAILS IF: a setting wrapped over several lines in a narrow door
+    /// lights and takes the click on its first line only — a line it
+    /// continues onto takes nothing, says nothing under the pointer, or a
+    /// click there lands anywhere but on the setting — or a note's line
+    /// takes one.
+    #[test]
+    fn a_wrapped_setting_is_one_control() {
+        let t = texts("pt-BR");
+        let prefs = Prefs::default();
+        let mut v = View::fresh(&prefs, 30, &t);
+        let rows = v.rows(&prefs, 30, &t);
+        let (first, cont) = rows
+            .windows(2)
+            .enumerate()
+            .find_map(|(n, w)| (w[0].setting.is_some() && w[1].continues).then_some((n, n + 1)))
+            .expect("no setting wrapped at 30");
+        assert!(
+            rows[cont].takes(),
+            "the line it continues onto takes nothing"
+        );
+        assert!(rows[cont].heading, "the cursor stops on a continued line");
+        assert_eq!(View::control_of(cont, &rows), first);
+        assert_eq!(
+            View::about(&rows, cont, &t),
+            View::about(&rows, first, &t),
+            "the continued line says another sentence"
+        );
+        for (n, r) in rows.iter().enumerate() {
+            if r.takes() {
+                assert!(
+                    rows[View::control_of(n, &rows)].setting.is_some(),
+                    "row {n} takes a click and is no line of a setting"
+                );
+            }
+        }
+        // THE FIRST CLICK ON THE CONTINUED LINE SELECTS THE SETTING, the
+        // second is its `RET` — from a cursor somewhere else.
+        let other = rows
+            .iter()
+            .rposition(|r| r.setting.is_some())
+            .filter(|n| *n != first)
+            .expect("another setting");
+        assert!(!v.clicked(other, &rows));
+        assert!(!v.clicked(cont, &rows), "the first click was the `RET`");
+        assert_eq!(v.cursor(), first, "the click landed off the setting");
+        assert!(v.clicked(cont, &rows), "the second click was not the `RET`");
     }
 
     /// FAILS IF: the hours' timer waits past the next minute, waits nothing

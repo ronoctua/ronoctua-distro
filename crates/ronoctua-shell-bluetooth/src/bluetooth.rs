@@ -623,9 +623,11 @@ impl View {
             return;
         };
         // WHETHER THERE IS A SECOND HALF AT ALL, and the hint line needs the
-        // answer without having the scene. A device that exposes none of the
-        // three is not offered `TAB`.
-        self.settings = d.wake.is_some();
+        // answer without having the scene. A device with no wake switch, no
+        // sound (the card and the sink, below) and no keys of its own is not
+        // offered `TAB`, and its page draws no second half (`device_rows`).
+        // A KEYBOARD has its keys' doors there, wake or not.
+        self.settings = d.wake.is_some() || d.kind == Kind::Keyboard;
         let address = d.address.clone();
         if address.is_empty() {
             return;
@@ -1842,6 +1844,13 @@ impl View {
     /// on the row somebody is on and on no other.
     fn device_rows(&self, d: &Device, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
         let facts = self.half(Pane::Facts, d, columns, texts);
+        // NO SECOND HALF WHERE NOTHING REACHES IT: with nothing to adjust,
+        // neither `TAB` nor the pointer goes there (`pane_at`), and a half
+        // drawn anyway is a column of rows that look like controls and are
+        // not. The facts take the whole row instead (`half`).
+        if !self.settings {
+            return facts;
+        }
         let settings = self.half(Pane::Settings, d, columns, texts);
 
         if !two_columns(columns) {
@@ -1891,7 +1900,7 @@ impl View {
 
     /// One half of a device's page, in its own cells and with its own cursor.
     fn half(&self, pane: Pane, d: &Device, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
-        let (left, room) = extent_of(pane, columns);
+        let (left, room) = self.extent_of_half(pane, columns);
         // WHOSE CURSOR THIS HALF CARRIES. Side by side it is the pane the
         // keyboard is in; stacked, the two halves are one list, so the second
         // one counts from where the first ended.
@@ -1923,6 +1932,16 @@ impl View {
         b.out
     }
 
+    /// A half's cells on this device's page: [`extent_of`], but the WHOLE
+    /// row for the facts of a device with no second half (`device_rows`).
+    fn extent_of_half(&self, pane: Pane, columns: u16) -> (u16, u16) {
+        if pane == Pane::Facts && !self.settings {
+            extent(columns)
+        } else {
+            extent_of(pane, columns)
+        }
+    }
+
     /// How many rows the facts take on the device this view is open on.
     fn facts_len_at(&self, scene: &Scene, columns: u16, texts: &ronoctua_i18n::Texts) -> usize {
         let Level::Device(at) = &self.level else {
@@ -1935,7 +1954,7 @@ impl View {
 
     /// How many rows the facts take — what the stacked settings count from.
     fn facts_len(&self, d: &Device, columns: u16, texts: &ronoctua_i18n::Texts) -> usize {
-        let (left, room) = extent_of(Pane::Facts, columns);
+        let (left, room) = self.extent_of_half(Pane::Facts, columns);
         let mut b = Builder {
             out: Vec::new(),
             left,
@@ -2897,6 +2916,64 @@ mod tests {
         let audio = at(|t| matches!(t, Target::Audio(_, _))).expect("the audio profile is drawn");
         assert!(wake < facts, "the wake switch left the facts");
         assert!(audio < facts, "the audio profile left the facts");
+    }
+
+    /// FAILS IF: a device with no wake switch and no sound draws a settings
+    /// half — which neither `TAB` nor the pointer reaches — at either layout,
+    /// or its facts stay in the left part of a row with nothing beside them;
+    /// or a keyboard with no wake switch loses the doors to its keys.
+    #[test]
+    fn a_device_with_nothing_to_adjust_draws_no_second_half() {
+        let t = texts();
+        let mut scene = a_scene();
+        for d in &mut scene.devices {
+            d.wake = None;
+        }
+        // A NAME LONGER THAN HALF THE ROW, to see where the facts end.
+        let long = "x".repeat(150);
+        scene.devices[0].alias.clone_from(&long);
+        let heading = t.t(crate::key::BLUETOOTH_HEADING_SETTINGS);
+        let mut v = View::fresh_at("/d/1");
+        v.look_at_the_device(&scene);
+        assert!(
+            !v.settings,
+            "a headset with no sound read here has settings"
+        );
+        for columns in [80, 160] {
+            let rows = v.rows(&scene, columns, &t);
+            assert!(
+                !rows
+                    .iter()
+                    .flat_map(|r| &r.fields)
+                    .any(|f| f.text == heading),
+                "at {columns} columns the settings half is drawn"
+            );
+            assert!(
+                v.half_at(Some(columns - 2), columns).is_none(),
+                "at {columns} columns the pointer finds a second half"
+            );
+        }
+        let rows = v.rows(&scene, 160, &t);
+        let name = rows
+            .iter()
+            .flat_map(|r| &r.fields)
+            .find(|f| f.text.starts_with("xxx"))
+            .expect("the alias is drawn");
+        assert!(
+            name.at + layout::width(&name.text) > split_at(160),
+            "the facts did not take the whole row"
+        );
+        // A KEYBOARD has its keys there, wake or not, and is offered `TAB`.
+        let mut k = View::fresh_at("/d/2");
+        k.look_at_the_device(&scene);
+        assert!(k.settings, "a keyboard lost its settings half");
+        // STACKED, where every row keeps its own target.
+        assert!(
+            k.rows(&scene, 80, &t)
+                .iter()
+                .any(|r| matches!(r.target, Target::Keyboards(_))),
+            "the keyboard's doors are not drawn"
+        );
     }
 
     /// FAILS IF: a phone that shares its internet has no row for it, the

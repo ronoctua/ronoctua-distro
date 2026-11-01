@@ -25,8 +25,9 @@
 //!
 //! # Nothing here asks
 //!
-//! Every logind call goes with `interactive = false`; every profile write is a
-//! property set. There is no polkit agent in this session
+//! Every logind call goes with `interactive = false` — but the rescue
+//! console's two, which bring their own agent ([`leave_asking`]); every
+//! profile write is a property set. There is no polkit agent in this session
 //! (`nix/modules/disks.nix` says why), so a call that could ask would hang
 //! instead. Upstream's own defaults already answer `yes` to an active session
 //! for every action this crate makes, and `nix/modules/power.nix` writes no
@@ -1480,7 +1481,33 @@ impl Manager {
         }
         .context("asking logind")
     }
+}
 
+/// Restarts or powers off the machine, ALLOWED TO ASK: the rescue console's
+/// two rows (`crates/ronoctua-rescue`), and nobody else's. The console
+/// registers a polkit agent for its own process and hands its terminal to it
+/// before calling, so the question polkit asks — the person's own password,
+/// `nix/modules/rescue.nix` — has somebody to answer it; the session has no
+/// agent, which is why every other call here never asks (`power-never-asks`
+/// holds both halves). It opens a connection of its own: the console runs no
+/// [`Manager`].
+///
+/// # Errors
+///
+/// The bus could not be reached, logind refused (the password was not
+/// given), or the action is not one of the two.
+pub fn leave_asking(action: Action) -> Result<()> {
+    let connection = zbus::blocking::Connection::system().context("the system bus")?;
+    let manager = login::LoginProxyBlocking::new(&connection)?;
+    match action {
+        Action::Reboot => manager.reboot(true),
+        Action::PowerOff => manager.power_off(true),
+        other => anyhow::bail!("only a restart or a power-off asks, not `{}`", other.id()),
+    }
+    .context("asking logind")
+}
+
+impl Manager {
     /// Writes the charge thresholds.
     ///
     /// # Errors

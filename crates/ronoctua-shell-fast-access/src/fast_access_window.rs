@@ -125,13 +125,21 @@ impl Search {
         threads: crate::inspection::Threads,
     ) -> Self {
         let zone = ground.zone.clone();
+        let store = crate::fast_access::store();
+        // THE SETTINGS CAME FROM A READ WITHOUT A WORD: a door that reaches
+        // the machine judges the file again, for the places of it that did
+        // not read — a photograph's keeps what it was handed.
+        let mut view = view;
+        if feed.is_some() {
+            view.settings_unread = crate::partly_read::judged(&store);
+        }
         Self {
             view,
             feed,
             ground,
             threads,
             zone,
-            store: crate::fast_access::store(),
+            store,
         }
     }
 
@@ -594,6 +602,7 @@ impl Search {
 
     /// The settings file changed — this door's write, or another's.
     pub fn settings_changed(&mut self, texts: &ronoctua_i18n::Texts) {
+        self.view.settings_unread = crate::partly_read::judged(&self.store);
         if let Some(s) = self.store.parsed() {
             self.view.settings_are(s, texts);
         }

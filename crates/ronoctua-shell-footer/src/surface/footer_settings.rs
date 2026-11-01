@@ -76,8 +76,14 @@ impl Footer {
             .enumerate()
             .map(|(n, r)| ExpansionRow {
                 // ONLY A ROW A CLICK TAKES (`Row::takes`, the window's answer
-                // too) has a click — and so a band under the pointer.
-                click: r.takes().then_some(Click::FooterSettings(n)),
+                // too) has a click — and so a band under the pointer. EVERY
+                // LINE OF A WRAPPED SETTING takes the setting's, and lights
+                // with it (`continues`, the band from its first line to its
+                // last).
+                click: r.takes().then(|| {
+                    Click::FooterSettings(crate::footer_settings::View::control_of(n, &rows))
+                }),
+                continues: r.continues,
                 fields: r.fields.clone(),
                 description: crate::footer_settings::View::about(&rows, n, &self.texts),
                 foot: false,

@@ -52,11 +52,12 @@ pub struct Snapshot {
     /// Whether `pointers.json` could not be read — then nothing is written
     /// over it, and the screen says why its choices are missing.
     pub settings_failed: bool,
-    /// Whether PART of `pointers.json` did not read — a value repaired by
-    /// the store, the rest read. Orders still write (the store keeps the
-    /// file's value in that place), and the screen says that what it shows
-    /// there is not what the file says.
-    pub settings_repaired: bool,
+    /// What of `pointers.json` did not read when PART of it did not — the
+    /// values the store repaired, the rest read; empty when it read whole,
+    /// or not at all. Orders still write (the store keeps the file's value
+    /// in that place), and the screen says which places it shows are not
+    /// what the file says (`partly_read`, in the shell's kit).
+    pub settings_repairs: Vec<ronoctua_store::Repair>,
     /// Whether there is a compositor to ask at all.
     pub connected: bool,
     /// Every keyboard's twin and its cursor — empty in Together mode.
@@ -373,7 +374,11 @@ impl Hands {
         // file with a value repaired is the rest of it, and says so.
         let reading = self.store.reading();
         let settings_failed = reading.lost_everything();
-        let settings_repaired = reading.part_not_read();
+        let settings_repairs = if reading.part_not_read() {
+            reading.repairs
+        } else {
+            Vec::new()
+        };
         let prefs = reading.value;
         let (devices, seats, connected) = match self.wm() {
             Some(wm) => (
@@ -391,7 +396,7 @@ impl Hands {
             prefs,
             plan,
             settings_failed,
-            settings_repaired,
+            settings_repairs,
             connected,
             keyboards,
         }

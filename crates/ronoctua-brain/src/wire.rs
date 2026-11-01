@@ -322,6 +322,7 @@ mod tests {
                         ok: false,
                         seconds: 3000,
                         trouble: "it did not work".to_owned(),
+                        verdict: "failed".to_owned(),
                     }],
                     says: String::new(),
                     args: Vec::new(),

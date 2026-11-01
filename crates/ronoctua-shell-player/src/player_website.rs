@@ -142,6 +142,9 @@ fn keep_in(store: &ronoctua_store::Store<Addresses>, change: &Change) -> Result<
 pub struct Websites {
     /// Newest first.
     list: Vec<String>,
+    /// What of the file did not read, when part of it did not: said over
+    /// the list (`partly_read`).
+    unread: Option<crate::partly_read::PartlyRead>,
     /// Read at least once.
     read: bool,
     /// The file, watched while the page is on screen in a door with a loop.
@@ -166,9 +169,12 @@ impl Websites {
         };
         let place = [(ronoctua_store::config_dir(), FILE)];
         if self.watched.look(&place, wake) || !self.read {
-            let before = std::mem::replace(&mut self.list, store().read().addresses);
+            let (read, unread) = crate::partly_read::read(&store());
+            let said = self.unread != unread;
+            self.unread = unread;
+            let before = std::mem::replace(&mut self.list, read.addresses);
             self.read = true;
-            return before != self.list;
+            return said || before != self.list;
         }
         false
     }
@@ -259,6 +265,11 @@ impl View {
             "website-enqueue",
         );
         b.heading(key::PLAYER_WEBSITE_RECENT);
+        // A PART OF THE FILE NOT READ: an address it could not take is not
+        // in the list below, and the file keeps it.
+        if let Some(partly) = &self.websites.unread {
+            b.told(&partly.said(b.texts));
+        }
         let list = self.websites.list();
         if list.is_empty() {
             b.note(key::PLAYER_WEBSITE_NONE);

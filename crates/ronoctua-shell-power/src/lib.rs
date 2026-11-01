@@ -13,7 +13,7 @@
 // THE KIT AND THE DOOR, by the names the modules already use
 // (`crate::chrome::…`, `crate::door::…`).
 use ronoctua_shell_door::{door, region};
-use ronoctua_shell_kit::{bindings, chrome, echo, fields};
+use ronoctua_shell_kit::{bindings, chrome, echo, fields, partly_read};
 // AND THE POWER DAEMONS' WORDS AND MARKS, which the footer says too: a crate
 // under both.
 use ronoctua_shell_power_words::power_words;

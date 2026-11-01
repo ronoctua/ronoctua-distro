@@ -347,6 +347,9 @@ impl Network {
     }
 
     fn view_rows(&self, ui: &Ui) -> Vec<crate::network::Row> {
+        // THE ROOM FIRST: no shelf is taller than the lines under the header
+        // (`View::shelf_lines`), or none would ever be whole to get its bar.
+        self.view.room_is(ui.room_for_rows());
         self.view.rows(&self.facts(), ui.columns, &ui.texts)
     }
 
@@ -434,7 +437,8 @@ impl Network {
 /// scene asks for, and the question its line opens, if any.
 ///
 /// - `lan`: a cable and a radio up, the neighbours of both families with the
-///   names resolved gave, and the router's round trip measured;
+///   names resolved gave, the router's round trip measured, and more
+///   networks in range than the Wi-Fi shelf shows — one named with emoji;
 /// - `hotspot`: the radio serving, with the password both doors read;
 /// - `vpn`: an imported `.ovpn` that asks for a user — the line open on it.
 ///
@@ -574,10 +578,39 @@ pub fn photographed(scene: &str) -> Result<(impl Content, Option<crate::line::Li
             "`{other}` is not a scene of the network's window; the scenes are lan, hotspot, vpn and phone"
         ),
     }
+    // THE NETWORKS IN RANGE, for the `lan` scene: more than a shelf shows, so
+    // its bar is drawn, and a name with emoji in it — the cell ruler counts a
+    // presentation emoji as two cells and `❤️` (a text emoji and VS16) as one.
+    let in_range: Vec<ronoctua_network::Network> = if scene == "lan" {
+        [
+            "noctua-5g",
+            "Casa 🏠 ❤️",
+            "next-door",
+            "cafe-wifi",
+            "printer-direct",
+            "guest",
+            "tv-cast",
+        ]
+        .iter()
+        .zip((40u8..=90).rev().step_by(7))
+        .map(|(ssid, signal)| ronoctua_network::Network {
+            ssid: (*ssid).to_owned(),
+            signal,
+            band: Band::Ghz5,
+            secured: true,
+            wpa3_only: false,
+            saved: *ssid == "noctua-5g",
+            active_one: *ssid == "noctua-5g",
+            max_rate_kbps: 866_000,
+        })
+        .collect()
+    } else {
+        Vec::new()
+    };
     Ok((
         Network {
             view,
-            wire: crate::network::Wire::planted(net.clone(), Vec::new()),
+            wire: crate::network::Wire::planted(net.clone(), in_range),
             net,
             watch,
             lan_sender: None,

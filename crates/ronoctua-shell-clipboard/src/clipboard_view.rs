@@ -187,6 +187,18 @@ pub struct View {
     cursor: usize,
     /// Which entry is being shown as a QR code, when one is.
     qr: Option<usize>,
+    /// What of `clipcascade.json` did not read, when part of it did not:
+    /// said over the sync's settings (`partly_read`).
+    unread: Option<crate::partly_read::PartlyRead>,
+}
+
+impl View {
+    /// What the read of `clipcascade.json` owes the person — the places of it
+    /// that did not read, or `None` (`partly_read`); handed with every reading
+    /// of the sync that moved.
+    pub fn read_in_part(&mut self, partly: Option<crate::partly_read::PartlyRead>) {
+        self.unread = partly;
+    }
 }
 
 /// Where the shown entry's picture — an image, or its QR code — goes: rows
@@ -554,6 +566,17 @@ impl View {
 
         // AIR, THEN THE SYNC'S ROWS — beside the name the left column drew.
         out.push((Vec::new(), Target::Nothing));
+        // A PART OF `clipcascade.json` NOT READ: the settings below show the
+        // repair in that place, and the file keeps what it says — wrapped,
+        // never cut.
+        if let Some(partly) = &self.unread {
+            for line in crate::chrome::note_lines(&partly.said(texts), room) {
+                out.push((
+                    vec![piece(at, line, tokens::color::TEXT_DIM)],
+                    Target::Nothing,
+                ));
+            }
+        }
         out.extend(Self::sync_rows(facts.sync, at, room, texts));
         out
     }

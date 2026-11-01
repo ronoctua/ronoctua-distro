@@ -43,6 +43,13 @@
         "id": "my-backups",
         "hash": "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
       }
+    ],
+    "refused": [
+      {
+        "id": "my-unfinished",
+        "why": "does-not-evaluate",
+        "detail": "error: undefined variable 'nothing'"
+      }
     ]
   },
   "signature": {

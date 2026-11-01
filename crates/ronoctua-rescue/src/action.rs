@@ -14,15 +14,18 @@
 //!
 //! # And nothing here asks for a password
 //!
-//! The privileged rows go through `systemctl`, and it is polkit that decides —
-//! `auth_self_keep`, asked once and remembered. On the VT the asking needs an
-//! agent, which is why [`agent`] exists. This crate never reads a password,
-//! never holds one and never checks one: a rescue console is the worst possible
-//! place to get authentication wrong.
+//! The privileged rows are calls THIS process makes over the system bus — the
+//! system's units to systemd ([`crate::bus`]), a restart or a power-off to
+//! logind (`ronoctua_power::leave_asking`) — and it is polkit that decides:
+//! `auth_self_keep`, asked once and remembered. The asking needs an agent
+//! registered for this very process, which is what [`agent`] starts. This
+//! crate never reads a password, never holds one and never checks one: a
+//! rescue console is the worst possible place to get authentication wrong.
 
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
-use crate::{Own, Power, Run};
+use crate::{Action, Own, Power, Run, Tier};
 
 /// `systemctl`, by store path.
 const SYSTEMCTL: Option<&str> = option_env!("RONOCTUA_SYSTEMCTL");
@@ -33,12 +36,16 @@ const SHELL: Option<&str> = option_env!("RONOCTUA_RESCUE_SHELL");
 /// polkit's text-mode agent — how a VT with no desktop can ask anything.
 const POLKIT_AGENT: Option<&str> = option_env!("RONOCTUA_PKTTYAGENT");
 
+/// How long the agent has to register before the console goes on without
+/// it: a polkit that does not answer must not hold the screen shut.
+const REGISTERING: Duration = Duration::from_secs(10);
+
 /// What happened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// It ran and said nothing worth repeating.
     Ran,
-    /// It ran and failed; the text is the last thing it said.
+    /// It ran and failed; the text is EVERYTHING it said of why, every line.
     Failed(String),
     /// It could not even be started, and the reason is ours to fix.
     ///
@@ -47,7 +54,23 @@ pub enum Outcome {
     Missing(&'static str),
 }
 
-/// The program a row runs, or `None` when the app answers it itself.
+/// Whether a row is a call over the system bus — the system's units, or
+/// leaving the machine — rather than a program.
+#[must_use]
+pub const fn by_the_bus(run: Run) -> bool {
+    matches!(run, Run::System { .. } | Run::Power(_))
+}
+
+/// Whether a row ASKS: a call over the system bus of the password tier, which
+/// polkit may answer only by asking the person — on the terminal the console
+/// hands its agent first.
+#[must_use]
+pub fn asks(a: &Action) -> bool {
+    a.tier == Tier::Password && by_the_bus(a.run)
+}
+
+/// The program a row runs, or `None` when the app answers it itself or calls
+/// the bus ([`by_the_bus`]).
 ///
 /// Split out from [`run_it`] so the tests can look at the command line without
 /// running anything — a test that shuts the machine down to prove it can shut
@@ -56,14 +79,7 @@ pub enum Outcome {
 pub fn command_of(run: Run) -> Option<Result<Command, &'static str>> {
     match run {
         Run::User { verb, units } => Some(systemctl(&["--user", verb], units)),
-        Run::System { verb, units } => Some(systemctl(&[verb], units)),
-        Run::Power(p) => {
-            let verb = match p {
-                Power::Reboot => "reboot",
-                Power::Off => "poweroff",
-            };
-            Some(systemctl(&[verb], &[]))
-        }
+        Run::System { .. } | Run::Power(_) => None,
         Run::Own(Own::RefreshFonts) => Some(match FC_CACHE {
             // `-r` rebuilds from scratch and `-f` ignores the timestamps: a
             // stale cache whose mtime looks fresh is exactly the case that
@@ -90,15 +106,32 @@ fn systemctl(flags: &[&str], units: &[&str]) -> Result<Command, &'static str> {
     Ok(c)
 }
 
-/// Runs a row and says what happened.
+/// Runs a row and says what happened. `asking`: polkit may ask the person
+/// (a row that [`asks`], whose terminal the agent has); leaving the machine
+/// always may, being of the password tier alone.
 ///
 /// It BLOCKS, and that is deliberate: this application has one screen and one
 /// thing happening at a time, and a rescue that returned immediately would leave
 /// the person guessing whether the button worked. The rows that could take long
-/// enough to matter (`rebuild-switch`, the rollbacks) are `systemctl start` on a
-/// oneshot, which returns as soon as systemd has taken the job.
+/// enough to matter (`rebuild-switch`, the rollbacks) start a oneshot, and the
+/// row waits for its job to end, as `systemctl start` waits.
 #[must_use]
-pub fn run_it(run: Run) -> Outcome {
+pub fn run_it(run: Run, asking: bool) -> Outcome {
+    match run {
+        Run::System { verb, units } => {
+            return crate::bus::units(verb, units, asking)
+                .map_or_else(Outcome::Failed, |()| Outcome::Ran);
+        }
+        Run::Power(p) => {
+            let action = match p {
+                Power::Reboot => ronoctua_power::Action::Reboot,
+                Power::Off => ronoctua_power::Action::PowerOff,
+            };
+            return ronoctua_power::leave_asking(action)
+                .map_or_else(|e| Outcome::Failed(format!("{e:#}")), |()| Outcome::Ran);
+        }
+        _ => {}
+    }
     let Some(built) = command_of(run) else {
         return Outcome::Ran;
     };
@@ -108,11 +141,7 @@ pub fn run_it(run: Run) -> Outcome {
     };
     match command.output() {
         Ok(out) if out.status.success() => Outcome::Ran,
-        Ok(out) => {
-            let said = String::from_utf8_lossy(&out.stderr);
-            let last = said.lines().rev().find(|l| !l.trim().is_empty());
-            Outcome::Failed(last.unwrap_or("").to_owned())
-        }
+        Ok(out) => Outcome::Failed(String::from_utf8_lossy(&out.stderr).trim().to_owned()),
         Err(e) => Outcome::Failed(e.to_string()),
     }
 }
@@ -134,29 +163,59 @@ pub fn shell() -> Result<Command, &'static str> {
     Ok(c)
 }
 
-/// Starts polkit's text agent, so a privileged row can ask on this terminal.
+/// polkit's text agent for this process, while a row that asks runs: killed
+/// when dropped.
+#[derive(Debug)]
+pub struct Agent(std::process::Child);
+
+impl Drop for Agent {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Starts polkit's text agent FOR THIS PROCESS, so the row about to run can
+/// ask on this terminal — and waits until polkit has it.
 ///
-/// Returns the child, which has to stay alive as long as the application does —
-/// dropping it takes the agent with it, and the next question would fail with
-/// "Interactive authentication required" on a screen with no way to answer.
+/// polkit finds the agent of the process that asked, else of its logind
+/// session; this console has no session on VT 8, and the session the
+/// floating window lives in has no agent. So the agent is this process's own
+/// (`--process`), never a `--fallback` one (polkit uses a fallback only for a
+/// subject with a session), and the calls are this process's own
+/// ([`crate::bus`]). It closes the descriptor it is given (`--notify-fd`, its
+/// standard output here) once registered; a polkit that does not answer is
+/// waited for [`REGISTERING`], no longer.
 ///
-/// A missing agent is NOT an error: with the desktop alive there is already a
-/// graphical agent registered for the session, and starting a second one would
-/// be the one that answers.
+/// ONE PER ROW, and not one for the console's life: a switch the row ran
+/// (the rollback's, the rebuild's) restarts polkit when its rules changed,
+/// and polkit forgets every agent it had — the next row would be refused.
+/// Holding the [`Agent`] for the call is what keeps it registered.
 #[must_use]
-pub fn agent() -> Option<std::process::Child> {
+pub fn agent() -> Option<Agent> {
     let path = POLKIT_AGENT?;
-    Command::new(path)
-        .arg("--fallback")
-        .stdout(Stdio::null())
+    let mut child = Command::new(path)
+        .arg("--process")
+        .arg(std::process::id().to_string())
+        .args(["--notify-fd", "1"])
+        .stdout(Stdio::piped())
         .spawn()
-        .ok()
+        .ok()?;
+    if let Some(mut registered) = child.stdout.take() {
+        let (done, wait) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut registered, &mut std::io::sink());
+            let _ = done.send(());
+        });
+        let _ = wait.recv_timeout(REGISTERING);
+    }
+    Some(Agent(child))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Tier, all_of};
+    use crate::all_of;
 
     /// The command line of a row, or nothing when the build did not name the
     /// program — `cargo test` outside Nix, which is a case this repository
@@ -181,20 +240,6 @@ mod tests {
                 assert!(
                     line.contains(&"--user".to_owned()),
                     "`{}` without --user would ask for privilege to restart its own session: {line:?}",
-                    a.id
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_system_rows_do_not() {
-        for a in all_of() {
-            if let Run::System { .. } = a.run {
-                let Some(line) = line_of(a.run) else { continue };
-                assert!(
-                    !line.contains(&"--user".to_owned()),
-                    "`{}` with --user would look for the unit in the wrong place: {line:?}",
                     a.id
                 );
             }
@@ -229,17 +274,43 @@ mod tests {
 
     #[test]
     fn every_row_either_runs_something_or_is_ours() {
-        // A row that builds no command and is not an `Own` would be a link that
-        // does nothing when clicked, silently.
+        // A row that builds no command, calls no bus and is not an `Own` would
+        // be a link that does nothing when clicked, silently.
         for a in all_of() {
             let has_command = command_of(a.run).is_some();
             let is_ours = matches!(a.run, Run::Own(_));
             assert!(
-                has_command || is_ours,
+                has_command || by_the_bus(a.run) || is_ours,
                 "`{}` runs nothing and is not ours",
                 a.id
             );
         }
+    }
+
+    #[test]
+    fn what_asks_is_the_password_tier_on_the_bus() {
+        // THE DEFECT THIS CATCHES: a row of the password tier run as a
+        // program — a `systemctl` of its own is a process no agent answers
+        // for, and the row is refused every time, in front of the person.
+        for a in all_of() {
+            if matches!(a.run, Run::System { .. } | Run::Power(_)) {
+                assert!(
+                    command_of(a.run).is_none(),
+                    "`{}` runs a program for the system",
+                    a.id
+                );
+                assert_eq!(asks(a), a.tier == Tier::Password, "`{}`", a.id);
+            } else {
+                assert!(!asks(a), "`{}` asks and is not on the bus", a.id);
+            }
+        }
+        // And the two that leave the machine ask, through logind.
+        assert!(
+            all_of()
+                .iter()
+                .filter(|a| matches!(a.run, Run::Power(_)))
+                .all(asks)
+        );
     }
 
     #[test]

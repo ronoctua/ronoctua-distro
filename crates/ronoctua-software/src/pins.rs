@@ -153,6 +153,18 @@ pub fn android(roots: &Roots, package: &str) -> Result<(ApkPin, ApkFrom), Failur
         refusal: Some(Refusal::NothingToPin),
         trouble: format!("F-Droid's catalogue here has no {package}"),
     })?;
+    Ok((of_app(&app)?, ApkFrom::FDroid))
+}
+
+/// The pin of the version a verified index offers of an app: its address in
+/// the repository, the SHA-256 the signed index gives as SRI, its version
+/// name and code. The one shape of an F-Droid pin, the person's
+/// ([`android`]) and the distro's ([`signed`]).
+///
+/// # Errors
+///
+/// [`Refusal::Integrity`] for a hash that is not one.
+pub fn of_app(app: &crate::fdroid::App) -> Result<ApkPin, Failure> {
     let hash = sri_of_hex(&app.sha256.to_ascii_lowercase())
         .ok_or_else(|| Failure::refused(Refusal::Integrity))?;
     let version = if app.version_name.is_empty() {
@@ -160,19 +172,245 @@ pub fn android(roots: &Roots, package: &str) -> Result<(ApkPin, ApkFrom), Failur
     } else {
         app.version_name.clone()
     };
-    Ok((
-        ApkPin {
-            url: format!(
-                "{}/{}",
-                crate::fdroid::REPO,
-                app.apk.trim_start_matches('/')
+    Ok(ApkPin {
+        url: format!(
+            "{}/{}",
+            crate::fdroid::REPO,
+            app.apk.trim_start_matches('/')
+        ),
+        hash,
+        version: version_of(&version),
+        version_code: app.version_code,
+    })
+}
+
+/// The distro's apk pins held against F-Droid's SIGNED index — what
+/// `ronoctua-fdroid-pins` answers `nix run .#distro-pins`
+/// (`nix/scripts/distro-pins.py`).
+///
+/// # Why a program, and why it reads files
+///
+/// The distro's pins were taken from F-Droid's JSON API, which nobody signs,
+/// and hashed from whatever `f-droid.org` served that day. The index is
+/// signed by a key F-Droid keeps off its web servers, and the chain from
+/// that signature to an apk's SHA-256 is already checked here
+/// ([`crate::fdroid::verify_jar`], `aws-lc-rs`, the one provider of the
+/// primitives) — so the release tool asks this program, and no second
+/// implementation of RSA is written in Python. The tool downloads
+/// `entry.jar` and the index it names; this reads them as files, so it never
+/// touches the network and is proved offline with planted ones.
+///
+/// # What it answers
+///
+/// Per package asked, the version the signed index offers — the
+/// catalogue's own rule ([`crate::fdroid::compact_index`]), as a pin
+/// ([`of_app`]) — and how the pin the distro holds stands against it
+/// ([`signed::standing`]). A jar that does not verify against the pinned
+/// certificate, or an index that is not the one its signed entry names, is
+/// refused whole: nothing is answered from it.
+pub mod signed {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use ronoctua_person::declared::ApkPin;
+    use serde::{Deserialize, Serialize};
+
+    use crate::{Failure, Refusal};
+
+    /// How a pinned apk stands against the version the signed index offers.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub enum Standing {
+        /// Nothing is pinned yet: the signed version is the pin.
+        New,
+        /// The pin IS the signed version: address, hash and version code.
+        Same,
+        /// The pin is another version code: the signed one replaces it.
+        Moves,
+        /// The pin claims the version code the index signs, with another
+        /// address or another hash: the index does not vouch for it.
+        Disagrees,
+        /// The signed index has no such package.
+        Unlisted,
+    }
+
+    /// How `pinned` stands against `signed`, the version the verified index
+    /// offers. Pure.
+    #[must_use]
+    pub fn standing(pinned: Option<&ApkPin>, signed: Option<&ApkPin>) -> Standing {
+        match (pinned, signed) {
+            (_, None) => Standing::Unlisted,
+            (None, Some(_)) => Standing::New,
+            (Some(p), Some(s)) if p.version_code != s.version_code => Standing::Moves,
+            (Some(p), Some(s)) if p.url == s.url && p.hash == s.hash => Standing::Same,
+            (Some(_), Some(_)) => Standing::Disagrees,
+        }
+    }
+
+    /// One package's answer.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+    pub struct Answered {
+        /// How the pin asked about stands.
+        pub standing: Standing,
+        /// The version the signed index offers, as a pin; `None` when it
+        /// lists no such package.
+        pub signed: Option<ApkPin>,
+    }
+
+    /// What the program prints for `pins`.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+    pub struct Answer {
+        /// When the signed entry was published (milliseconds since the
+        /// epoch).
+        pub timestamp: u64,
+        /// The SHA-256 of the index the answers come from, as the signed
+        /// entry names it.
+        pub index_sha256: String,
+        /// By package.
+        pub apps: BTreeMap<String, Answered>,
+    }
+
+    /// Hold each pin of `pinned` (by package; `None`: nothing pinned yet)
+    /// against the index at `index`, once `jar` verified against the
+    /// certificate pinned as `pin` and `index` is the one it names.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::Integrity`] for a jar or an index that does not verify,
+    /// `TooLarge` above the ceilings, `ToolFailed` for something that is not
+    /// an index.
+    pub fn answer(
+        jar: &[u8],
+        pin: &str,
+        index: &Path,
+        pinned: &BTreeMap<String, Option<ApkPin>>,
+    ) -> Result<Answer, Failure> {
+        let (entry, apps) = crate::fdroid::signed_apps(jar, pin, index)?;
+        let mut answered = BTreeMap::new();
+        for (package, held) in pinned {
+            let offered = apps
+                .binary_search_by(|a| a.package.as_str().cmp(package))
+                .ok()
+                .map(|at| super::of_app(&apps[at]))
+                .transpose()?;
+            answered.insert(
+                package.clone(),
+                Answered {
+                    standing: standing(held.as_ref(), offered.as_ref()),
+                    signed: offered,
+                },
+            );
+        }
+        Ok(Answer {
+            timestamp: entry.timestamp,
+            index_sha256: entry.index.sha256.to_ascii_lowercase(),
+            apps: answered,
+        })
+    }
+
+    /// What `ronoctua-fdroid-pins` prints when its command line is not one.
+    pub const USAGE: &str = "\
+usage: ronoctua-fdroid-pins entry <entry.jar>
+       ronoctua-fdroid-pins pins <entry.jar> <index-v2.json> <pinned.json>
+
+Checks F-Droid's signed index against the certificate pinned in the distro,
+reading files and never the network.
+
+  entry  verify entry.jar and print the entry it vouches for (the index's
+         name, SHA-256 and size), as one JSON object.
+  pins   verify entry.jar, check that index-v2.json is the index it names,
+         and hold each pin of pinned.json ({\"<package>\": <pin> or null})
+         against the version the index offers: one JSON object, each
+         package's standing (new, same, moves, disagrees, unlisted) and the
+         signed pin.
+
+Exit status: 0 answered, 1 refused (a sentence on standard error), 2 a wrong
+command line.
+";
+
+    /// The program, as a function of its arguments and the certificate it
+    /// trusts: the line it prints, or the exit status and the sentence.
+    ///
+    /// # Errors
+    ///
+    /// `(2, usage)` for a wrong command line; `(1, sentence)` for a file that
+    /// does not read or a jar, an index or a pins file that is refused.
+    pub fn run(args: &[String], pin: &str) -> Result<String, (u8, String)> {
+        let read = |path: &str, most: u64| -> Result<Vec<u8>, (u8, String)> {
+            let size = std::fs::metadata(path)
+                .map_err(|e| (1, format!("{path}: {e}")))?
+                .len();
+            if size > most {
+                return Err((
+                    1,
+                    format!("{path} is {size} bytes, above the {most} it may be"),
+                ));
+            }
+            std::fs::read(path).map_err(|e| (1, format!("{path}: {e}")))
+        };
+        // THE JAR FIRST, on its own: a refusal says which file broke the
+        // chain — the signature, or the index it names.
+        let verified = |jar: &str| -> Result<crate::fdroid::Entry, (u8, String)> {
+            let bytes = read(jar, crate::fdroid::ENTRY_MOST)?;
+            crate::fdroid::verify_jar_with(&bytes, pin).map_err(|r| (1, jar_refused(jar, r)))
+        };
+        match args {
+            [verb, jar] if verb == "entry" => {
+                let entry = verified(jar)?;
+                let line = serde_json::json!({
+                    "timestamp": entry.timestamp,
+                    "index": {
+                        "name": entry.index.name,
+                        "sha256": entry.index.sha256.to_ascii_lowercase(),
+                        "size": entry.index.size,
+                    },
+                });
+                Ok(line.to_string())
+            }
+            [verb, jar, index, pinned] if verb == "pins" => {
+                verified(jar)?;
+                let asked: BTreeMap<String, Option<ApkPin>> =
+                    serde_json::from_slice(&read(pinned, crate::fdroid::ENTRY_MOST)?).map_err(
+                        |e| {
+                            (
+                                1,
+                                format!("{pinned} is not {{\"<package>\": <pin> or null}}: {e}"),
+                            )
+                        },
+                    )?;
+                let bytes = read(jar, crate::fdroid::ENTRY_MOST)?;
+                let answer = answer(&bytes, pin, Path::new(index), &asked)
+                    .map_err(|f| (1, index_refused(index, &f)))?;
+                serde_json::to_string(&answer).map_err(|e| (1, e.to_string()))
+            }
+            _ => Err((2, USAGE.to_owned())),
+        }
+    }
+
+    /// The sentence a refused `entry.jar` is said in.
+    fn jar_refused(jar: &str, refusal: Refusal) -> String {
+        match refusal {
+            Refusal::TooLarge => format!("{jar} names an index larger than F-Droid's may be"),
+            _ => format!(
+                "{jar} does not verify against F-Droid's signing certificate pinned in the distro: \
+                 nothing is answered from it"
             ),
-            hash,
-            version: version_of(&version),
-            version_code: app.version_code,
-        },
-        ApkFrom::FDroid,
-    ))
+        }
+    }
+
+    /// The sentence a refused index is said in (its jar verified).
+    fn index_refused(index: &str, f: &Failure) -> String {
+        match f.refusal {
+            Some(Refusal::Integrity) => format!(
+                "{index} is not the index F-Droid's signed entry names ({}): nothing is answered from it",
+                f.trouble
+            ),
+            Some(Refusal::ToolFailed) => format!("{index} is not an F-Droid index"),
+            _ => format!("{index}: {f}"),
+        }
+    }
 }
 
 /// The pin of an integrated AppImage, and where newer ones are looked for.
@@ -241,6 +479,7 @@ pub mod appimage {
     ) -> Result<Pin, Failure> {
         pin_as(
             ctx,
+            crate::net::Asker::Person,
             key,
             &version_of(&asset.tag),
             asset,
@@ -253,13 +492,17 @@ pub mod appimage {
     /// [`pin`], under the `version` the builder names the download by — a
     /// distro AppImage's is the tag without its `v`
     /// (`ronoctua_person::distro_pins::version_of_tag`), the name the
-    /// distro's builder fetches it under (`nix/distro-downloads.nix`).
+    /// distro's builder fetches it under (`nix/distro-downloads.nix`) — and
+    /// downloaded on `asker`'s pass: the person's, or the declared updater's
+    /// that follows the distro's AppImages (`crate::follow`).
     ///
     /// # Errors
     ///
     /// As [`pin`].
+    #[allow(clippy::too_many_arguments)]
     pub fn pin_as(
         ctx: &Context,
+        asker: crate::net::Asker,
         key: &str,
         version: &str,
         asset: &Asset,
@@ -290,9 +533,9 @@ pub mod appimage {
             }
             None => {
                 // THE HOST IS ASKED FIRST: Nix downloads it, and nothing goes
-                // to a host the person has not let (`net::pass_for`, the
+                // to a host the asker does not let (`net::Asker::pass`, the
                 // same pass every download of this crate takes).
-                let _pass = crate::net::pass_for(&asset.url)?;
+                let _pass = asker.pass(&asset.url)?;
                 report.step(Phase::Downloading, 0, asset.size, &asset.name);
                 let ran = Call::new(nix, prefetch_argv(&asset.url, &name, digest.as_deref()))
                     .changing()
@@ -954,5 +1197,473 @@ mod tests {
             Some("sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=")
         );
         assert_eq!(hash_of_prefetch(r#"{"hash":"md5-x"}"#), None);
+    }
+
+    /// F-DROID'S SIGNED INDEX, PLANTED: an `entry.jar` signed the way F-Droid
+    /// signs its own (a PKCS#7 block over the `.SF`, no signed attributes,
+    /// RSA and SHA-256) by a key made here, its `entry.json` naming the cut
+    /// index of the fixtures by its SHA-256 and size. The certificate is
+    /// only what the verifier reads of one — the hash of its bytes is the pin,
+    /// and the RSA key is taken from it; nobody asks its own signature.
+    mod signed_index {
+        use std::collections::BTreeMap;
+        use std::path::PathBuf;
+        use std::sync::OnceLock;
+
+        use aws_lc_rs::rsa::{KeyPair as RsaKey, KeySize};
+        use aws_lc_rs::signature::KeyPair as _;
+        use ronoctua_person::declared::ApkPin;
+
+        use super::super::signed::{Answer, Standing, answer, run, standing};
+        use super::super::sri_of_hex;
+        use crate::Refusal;
+
+        const RSA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
+        const SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+        const SIGNED_DATA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02];
+        const DATA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x01];
+        const COMMON_NAME: &[u8] = &[0x55, 0x04, 0x03];
+
+        /// What the cut index offers of F-Droid's own client: the stable
+        /// 1.23.2, never the 2.0 betas above it.
+        const FDROID_SHA256: &str =
+            "985f5181d48bb6bafd54083a048b391271e0ab28385881cc41294fb01a222762";
+
+        fn der(tag: u8, content: &[u8]) -> Vec<u8> {
+            let n = content.len();
+            let mut out = vec![tag];
+            if n < 0x80 {
+                out.push(u8::try_from(n).unwrap());
+            } else {
+                let bytes = u32::try_from(n).unwrap().to_be_bytes();
+                let skip = bytes.iter().take_while(|b| **b == 0).count();
+                out.push(0x80 | u8::try_from(4 - skip).unwrap());
+                out.extend(&bytes[skip..]);
+            }
+            out.extend(content);
+            out
+        }
+
+        fn seq(parts: &[Vec<u8>]) -> Vec<u8> {
+            der(0x30, &parts.concat())
+        }
+
+        fn algorithm(oid: &[u8]) -> Vec<u8> {
+            seq(&[der(0x06, oid), der(0x05, &[])])
+        }
+
+        /// Two keys, made once: F-Droid's stand-in and another's.
+        fn keys() -> &'static (RsaKey, RsaKey) {
+            static KEYS: OnceLock<(RsaKey, RsaKey)> = OnceLock::new();
+            KEYS.get_or_init(|| {
+                (
+                    RsaKey::generate(KeySize::Rsa2048).unwrap(),
+                    RsaKey::generate(KeySize::Rsa2048).unwrap(),
+                )
+            })
+        }
+
+        fn certificate(key: &RsaKey, name: &str) -> Vec<u8> {
+            let mut bits = vec![0u8];
+            bits.extend(key.public_key().as_ref());
+            let who = seq(&[der(
+                0x31,
+                &seq(&[der(0x06, COMMON_NAME), der(0x0C, name.as_bytes())]),
+            )]);
+            let tbs = seq(&[
+                der(0xA0, &der(0x02, &[2])),
+                der(0x02, &[7]),
+                algorithm(RSA),
+                who.clone(),
+                seq(&[der(0x17, b"260101000000Z"), der(0x17, b"360101000000Z")]),
+                who,
+                seq(&[algorithm(RSA), der(0x03, &bits)]),
+            ]);
+            seq(&[tbs, algorithm(RSA), der(0x03, &[0])])
+        }
+
+        /// The hex SHA-256 of a certificate: what is pinned.
+        fn pin_of(certificate: &[u8]) -> String {
+            crate::run::sha256(certificate)
+        }
+
+        /// A `.RSA` block: `certificate` carried, `sf` signed by `key`.
+        fn block(key: &RsaKey, certificate: &[u8], sf: &[u8]) -> Vec<u8> {
+            let mut signature = vec![0; key.public_modulus_len()];
+            key.sign(
+                &aws_lc_rs::signature::RSA_PKCS1_SHA256,
+                &aws_lc_rs::rand::SystemRandom::new(),
+                sf,
+                &mut signature,
+            )
+            .unwrap();
+            let signer = seq(&[
+                der(0x02, &[1]),
+                seq(&[seq(&[]), der(0x02, &[7])]),
+                algorithm(SHA256),
+                algorithm(RSA),
+                der(0x04, &signature),
+            ]);
+            let data = seq(&[
+                der(0x02, &[1]),
+                der(0x31, &algorithm(SHA256)),
+                seq(&[der(0x06, DATA)]),
+                der(0xA0, certificate),
+                der(0x31, &signer),
+            ]);
+            seq(&[der(0x06, SIGNED_DATA), der(0xA0, &data)])
+        }
+
+        fn digest(bytes: &[u8]) -> String {
+            crate::fdroid::base64(
+                aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes).as_ref(),
+            )
+        }
+
+        /// An `entry.jar` vouching for `entry`, signed by `key` and carrying
+        /// `certificate`.
+        fn jar(key: &RsaKey, certificate: &[u8], entry: &[u8]) -> Vec<u8> {
+            let manifest = format!(
+                "Manifest-Version: 1.0\r\nCreated-By: a test\r\n\r\nName: entry.json\r\nSHA-256-Digest: {}\r\n\r\n",
+                digest(entry)
+            );
+            let sf = format!(
+                "Signature-Version: 1.0\r\nSHA-256-Digest-Manifest: {}\r\nCreated-By: a test\r\n\r\n",
+                digest(manifest.as_bytes())
+            );
+            let block = block(key, certificate, sf.as_bytes());
+            crate::android::tests::zip_of(&[
+                ("META-INF/MANIFEST.MF", manifest.as_bytes()),
+                ("META-INF/TEST.SF", sf.as_bytes()),
+                ("META-INF/TEST.RSA", &block),
+                ("entry.json", entry),
+            ])
+        }
+
+        /// The cut index of the fixtures.
+        fn cut() -> PathBuf {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/android/index-v2-cut.json")
+        }
+
+        /// The `entry.json` that names `index`.
+        fn entry_naming(index: &std::path::Path) -> Vec<u8> {
+            let bytes = std::fs::read(index).unwrap();
+            serde_json::json!({
+                "timestamp": 1_761_436_800_000u64,
+                "version": 20002,
+                "index": {
+                    "name": "/index-v2.json",
+                    "sha256": crate::run::sha256(&bytes),
+                    "size": bytes.len(),
+                    "numPackages": 5,
+                },
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// A room of the test's own.
+        fn room(tag: &str) -> PathBuf {
+            let dir = std::env::temp_dir().join(format!(
+                "ronoctua-software-signed-{}-{tag}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+
+        /// The pin the signed cut offers of F-Droid's client.
+        fn fdroid_signed() -> ApkPin {
+            ApkPin {
+                url: "https://f-droid.org/repo/org.fdroid.fdroid_1023052.apk".into(),
+                hash: sri_of_hex(FDROID_SHA256).unwrap(),
+                version: "1.23.2".into(),
+                version_code: 1_023_052,
+            }
+        }
+
+        fn asked(pins: &[(&str, Option<ApkPin>)]) -> BTreeMap<String, Option<ApkPin>> {
+            pins.iter()
+                .map(|(p, pin)| ((*p).to_owned(), pin.clone()))
+                .collect()
+        }
+
+        fn standings(a: &Answer) -> BTreeMap<&str, Standing> {
+            a.apps
+                .iter()
+                .map(|(p, x)| (p.as_str(), x.standing))
+                .collect()
+        }
+
+        /// FAILS IF: a pin is not what the signed index offers — the address in
+        /// the repository, the SHA-256 the index signs, the version the
+        /// catalogue's rule picks (the stable one, never a beta) — or a pin
+        /// the distro holds is not told against it: the same, another version
+        /// (it moves), none yet, a package the index does not list.
+        #[test]
+        fn a_pin_is_what_the_signed_index_offers() {
+            let (fdroid, _) = keys();
+            let cert = certificate(fdroid, "F-Droid");
+            let signed = jar(fdroid, &cert, &entry_naming(&cut()));
+            let older = ApkPin {
+                url: "https://f-droid.org/repo/chat.simplex.app_1.apk".into(),
+                hash: sri_of_hex(&"a".repeat(64)).unwrap(),
+                version: "0.1".into(),
+                version_code: 1,
+            };
+            let a = answer(
+                &signed,
+                &pin_of(&cert),
+                &cut(),
+                &asked(&[
+                    ("org.fdroid.fdroid", Some(fdroid_signed())),
+                    ("com.aurora.store", None),
+                    ("chat.simplex.app", Some(older)),
+                    ("no.such.app", None),
+                ]),
+            )
+            .unwrap();
+            assert_eq!(
+                a.apps["org.fdroid.fdroid"].signed,
+                Some(fdroid_signed()),
+                "the stable version, by the index's own hash"
+            );
+            assert_eq!(
+                standings(&a),
+                [
+                    ("chat.simplex.app", Standing::Moves),
+                    ("com.aurora.store", Standing::New),
+                    ("no.such.app", Standing::Unlisted),
+                    ("org.fdroid.fdroid", Standing::Same),
+                ]
+                .into_iter()
+                .collect()
+            );
+            assert_eq!(a.apps["no.such.app"].signed, None);
+            assert_eq!(a.timestamp, 1_761_436_800_000);
+            assert_eq!(
+                a.index_sha256,
+                crate::run::sha256(&std::fs::read(cut()).unwrap())
+            );
+        }
+
+        /// FAILS IF: a pin that claims the version code the index signs, with
+        /// another hash or another address, is not told as disagreeing — or
+        /// one that is the signed version is.
+        #[test]
+        fn a_pin_that_claims_the_signed_version_with_other_bytes_disagrees() {
+            let (fdroid, _) = keys();
+            let cert = certificate(fdroid, "F-Droid");
+            let signed = jar(fdroid, &cert, &entry_naming(&cut()));
+            let other_hash = ApkPin {
+                hash: sri_of_hex(&"b".repeat(64)).unwrap(),
+                ..fdroid_signed()
+            };
+            let other_url = ApkPin {
+                url: "https://mirror.example/org.fdroid.fdroid_1023052.apk".into(),
+                ..fdroid_signed()
+            };
+            for (what, pinned) in [("another hash", other_hash), ("another address", other_url)] {
+                let a = answer(
+                    &signed,
+                    &pin_of(&cert),
+                    &cut(),
+                    &asked(&[("org.fdroid.fdroid", Some(pinned.clone()))]),
+                )
+                .unwrap();
+                assert_eq!(
+                    a.apps["org.fdroid.fdroid"].standing,
+                    Standing::Disagrees,
+                    "{what}"
+                );
+                assert_eq!(a.apps["org.fdroid.fdroid"].signed, Some(fdroid_signed()));
+                assert_eq!(
+                    standing(Some(&pinned), Some(&fdroid_signed())),
+                    Standing::Disagrees,
+                    "{what}"
+                );
+            }
+            assert_eq!(
+                standing(Some(&fdroid_signed()), Some(&fdroid_signed())),
+                Standing::Same
+            );
+            let renamed = ApkPin {
+                version: "renamed".into(),
+                ..fdroid_signed()
+            };
+            assert_eq!(
+                standing(Some(&renamed), Some(&fdroid_signed())),
+                Standing::Same,
+                "a version NAME is no part of the bytes"
+            );
+            assert_eq!(standing(Some(&fdroid_signed()), None), Standing::Unlisted);
+        }
+
+        /// FAILS IF: an index that is not the one the signed entry names —
+        /// one byte changed — is answered from, or an `entry.json` changed
+        /// after it was signed is believed.
+        #[test]
+        fn a_tampered_index_or_entry_is_refused() {
+            let dir = room("tampered");
+            let (fdroid, _) = keys();
+            let cert = certificate(fdroid, "F-Droid");
+            let signed = jar(fdroid, &cert, &entry_naming(&cut()));
+            let mut bytes = std::fs::read(cut()).unwrap();
+            let at = bytes.iter().position(|b| *b == b'9').unwrap();
+            bytes[at] = b'8';
+            let tampered = dir.join("index-v2.json");
+            std::fs::write(&tampered, &bytes).unwrap();
+            let f = answer(
+                &signed,
+                &pin_of(&cert),
+                &tampered,
+                &asked(&[("org.fdroid.fdroid", None)]),
+            )
+            .unwrap_err();
+            assert_eq!(f.refusal, Some(Refusal::Integrity), "{f}");
+            // AN ENTRY CHANGED AFTER THE SIGNATURE: the signed parts of the
+            // honest jar, with an `entry.json` that names the tampered index.
+            let honest = ronoctua_zip::members(&signed).unwrap();
+            let kept = |name: &str| {
+                ronoctua_zip::member_bytes(&signed, ronoctua_zip::part(&honest, name).unwrap())
+                    .unwrap()
+            };
+            let (manifest, sf, rsa) = (
+                kept("META-INF/MANIFEST.MF"),
+                kept("META-INF/TEST.SF"),
+                kept("META-INF/TEST.RSA"),
+            );
+            let lying = entry_naming(&tampered);
+            let forged = crate::android::tests::zip_of(&[
+                ("META-INF/MANIFEST.MF", &manifest),
+                ("META-INF/TEST.SF", &sf),
+                ("META-INF/TEST.RSA", &rsa),
+                ("entry.json", &lying),
+            ]);
+            let f = answer(
+                &forged,
+                &pin_of(&cert),
+                &tampered,
+                &asked(&[("org.fdroid.fdroid", None)]),
+            )
+            .unwrap_err();
+            assert_eq!(f.refusal, Some(Refusal::Integrity), "{f}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// FAILS IF: a jar signed by another key is believed — carrying its
+        /// own certificate (not the pinned one), or carrying the pinned
+        /// certificate with a signature that key did not make.
+        #[test]
+        fn a_jar_signed_by_another_certificate_is_refused() {
+            let (fdroid, other) = keys();
+            let pinned = certificate(fdroid, "F-Droid");
+            let theirs = certificate(other, "Someone");
+            let entry = entry_naming(&cut());
+            let asked = asked(&[("org.fdroid.fdroid", None)]);
+            for (what, forged) in [
+                ("their own certificate", jar(other, &theirs, &entry)),
+                ("the pinned certificate", jar(other, &pinned, &entry)),
+            ] {
+                let f = answer(&forged, &pin_of(&pinned), &cut(), &asked).unwrap_err();
+                assert_eq!(f.refusal, Some(Refusal::Integrity), "{what}: {f}");
+            }
+            assert!(
+                answer(
+                    &jar(fdroid, &pinned, &entry),
+                    &pin_of(&pinned),
+                    &cut(),
+                    &asked
+                )
+                .is_ok(),
+                "the planted jar itself verifies"
+            );
+            assert!(
+                answer(
+                    &jar(fdroid, &pinned, &entry),
+                    &pin_of(&theirs),
+                    &cut(),
+                    &asked
+                )
+                .is_err(),
+                "against another pin, the same jar does not"
+            );
+        }
+
+        /// FAILS IF: the program does not answer what the library does, its
+        /// refusals do not say which file broke the chain, or a wrong command
+        /// line is not told as one.
+        #[test]
+        fn the_program_answers_from_files_and_says_its_refusals() {
+            let dir = room("program");
+            let (fdroid, other) = keys();
+            let cert = certificate(fdroid, "F-Droid");
+            let jar_at = dir.join("entry.jar");
+            std::fs::write(&jar_at, jar(fdroid, &cert, &entry_naming(&cut()))).unwrap();
+            let forged_at = dir.join("forged.jar");
+            std::fs::write(
+                &forged_at,
+                jar(other, &certificate(other, "Someone"), &entry_naming(&cut())),
+            )
+            .unwrap();
+            let pinned_at = dir.join("pinned.json");
+            std::fs::write(&pinned_at, r#"{"org.fdroid.fdroid": null}"#).unwrap();
+            let text = |p: &PathBuf| p.display().to_string();
+            let pin = pin_of(&cert);
+
+            let entry: serde_json::Value =
+                serde_json::from_str(&run(&["entry".into(), text(&jar_at)], &pin).unwrap())
+                    .unwrap();
+            assert_eq!(entry["index"]["name"], "/index-v2.json");
+            assert_eq!(
+                entry["index"]["size"],
+                std::fs::metadata(cut()).unwrap().len()
+            );
+
+            let line = run(
+                &["pins".into(), text(&jar_at), text(&cut()), text(&pinned_at)],
+                &pin,
+            )
+            .unwrap();
+            let a: Answer = serde_json::from_str(&line).unwrap();
+            assert_eq!(a.apps["org.fdroid.fdroid"].standing, Standing::New);
+            assert_eq!(a.apps["org.fdroid.fdroid"].signed, Some(fdroid_signed()));
+            assert!(
+                line.contains(r#""version-code":1023052"#) && line.contains(r#""standing":"new""#),
+                "the pin's own fields, as the distro's file writes them: {line}"
+            );
+
+            let (code, said) = run(&["entry".into(), text(&forged_at)], &pin).unwrap_err();
+            assert_eq!(code, 1);
+            assert!(
+                said.contains("does not verify against F-Droid's signing certificate"),
+                "{said}"
+            );
+            let mut bytes = std::fs::read(cut()).unwrap();
+            bytes.push(b'\n');
+            let longer = dir.join("index-v2.json");
+            std::fs::write(&longer, bytes).unwrap();
+            let (code, said) = run(
+                &[
+                    "pins".into(),
+                    text(&jar_at),
+                    text(&longer),
+                    text(&pinned_at),
+                ],
+                &pin,
+            )
+            .unwrap_err();
+            assert_eq!(code, 1);
+            assert!(
+                said.contains("is not the index F-Droid's signed entry names"),
+                "{said}"
+            );
+
+            assert_eq!(run(&["what".into()], &pin).unwrap_err().0, 2);
+            assert_eq!(run(&[], &pin).unwrap_err().0, 2);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

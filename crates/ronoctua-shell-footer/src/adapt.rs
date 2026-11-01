@@ -523,15 +523,16 @@ pub fn store() -> ronoctua_store::Store<Prefs> {
 
 /// Why `modeline.json` was not taken as it is written — each with its
 /// sentence, said at the start and on a change alike.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unread {
     /// Nothing of it reads: not JSON, or nothing like the switches. Writing
     /// would replace it, so nothing is written (`write_the_modeline`).
     Whole,
     /// A value of it does not read — a word misspelt by hand, a newer
     /// machine's mode: the store repaired it in the value read, and the file
-    /// keeps it as written (a write of another switch puts it back).
-    Part,
+    /// keeps it as written (a write of another switch puts it back). The
+    /// places, as every view of a person's file says them.
+    Part(ronoctua_shell_kit::partly_read::PartlyRead),
 }
 
 impl Unread {
@@ -540,22 +541,17 @@ impl Unread {
     pub fn of(reading: &ronoctua_store::Reading<Prefs>) -> Option<Self> {
         if reading.lost_everything() {
             Some(Self::Whole)
-        } else if reading.part_not_read() {
-            Some(Self::Part)
         } else {
-            None
+            ronoctua_shell_kit::partly_read::PartlyRead::of(FILE, reading).map(Self::Part)
         }
     }
 
     /// Its sentence.
     #[must_use]
-    pub fn said(self, texts: &Texts) -> String {
+    pub fn said(&self, texts: &Texts) -> String {
         match self {
             Self::Whole => texts.t(crate::key::ECHO_MODELINE_WILL_NOT_PARSE),
-            Self::Part => texts.t_with(
-                crate::key::BELONGINGS_REPAIR_PART_NOT_READ,
-                &[("file", FILE)],
-            ),
+            Self::Part(partly) => partly.said(texts),
         }
     }
 }
@@ -738,7 +734,10 @@ mod tests {
         // A WORD MISSPELT BY HAND: capital C.
         std::fs::write(dir.join(FILE), r#"{"address_line":true,"hidden":"Cover"}"#)
             .expect("written");
-        assert_eq!(reread(&store, &held), Reread::Refused(Unread::Part));
+        let Reread::Refused(Unread::Part(partly)) = reread(&store, &held) else {
+            panic!("a value repaired was taken by the watcher");
+        };
+        assert_eq!((partly.file(), partly.places()), (FILE, 1));
         // AT THE START, the same bytes: the rest of the switches, and the
         // same sentence owed.
         let (start, owed) = at_start(&store);
@@ -747,7 +746,7 @@ mod tests {
             "the rest of the file was lost at the start"
         );
         assert_eq!(start.hidden, None);
-        assert_eq!(owed, Some(Unread::Part));
+        assert_eq!(owed, Some(Unread::Part(partly)));
         // NOT JSON: the same refusal both ways, the other sentence.
         std::fs::write(dir.join(FILE), "{ not json").expect("written");
         assert_eq!(reread(&store, &held), Reread::Refused(Unread::Whole));

@@ -156,6 +156,10 @@ pub struct StepOutcome {
     pub seconds: u32,
     /// What it said when it failed, verbatim. Empty when nothing did.
     pub trouble: String,
+    /// The word its runner recorded for it — `ran`, `skipped-<kind>`,
+    /// `failed-<word>`… —, when the sheet carries one: what a module reads
+    /// a reason out of. Empty when it does not.
+    pub verdict: String,
 }
 
 /// What became of a whole run.

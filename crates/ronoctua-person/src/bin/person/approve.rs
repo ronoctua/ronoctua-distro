@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 use ronoctua_person::approve::{self as decision, Denied, REQUEST, REQUEST_MOST_BYTES, Request};
 use ronoctua_person::local::Approved;
 use ronoctua_person::tree::{BRAIN, TreeWhy};
-use ronoctua_person::{Document as _, Stamp, names};
+use ronoctua_person::{Stamp, names};
 use rustix::fs::AtFlags;
 use rustix::io::Errno;
 
@@ -264,24 +264,11 @@ pub fn record(
     Ok(computed)
 }
 
-/// The person's half: writes the request for `id` at `hash` into `into`
-/// (their own approval folder), `0600`, whole.
+/// The person's half: the request for `id` at `hash` staged in `into`
+/// (their own approval folder) by the library's one writer of it
+/// ([`decision::stage`]), which the update's page stages through too.
 pub fn request(into: &str, id: &str, hash: &str) -> Result<(), String> {
-    let request = Request::new(id, hash);
-    request
-        .validate()
-        .map_err(|r| format!("the request: {r}"))?;
-    let me = Whose {
-        owner: rustix::process::geteuid().as_raw(),
-    };
-    let folder = disk::open_root(into, me).map_err(|r| r.to_string())?;
-    disk::write_whole(
-        &folder,
-        REQUEST,
-        ronoctua_person::to_json(&request).as_bytes(),
-        0o600,
-    )
-    .map_err(|r| r.to_string())
+    decision::stage(Path::new(into), &Request::new(id, hash)).map_err(|e| format!("{into}: {e}"))
 }
 
 #[cfg(test)]

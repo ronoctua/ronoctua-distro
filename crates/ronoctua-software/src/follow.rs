@@ -3,8 +3,9 @@
 //!
 //! # What it does, and when
 //!
-//! With `distro-apps-follow-releases` on in the person's options (their
-//! mirror's `options.json`, `ronoctua_person::options`), the update's
+//! Unless the person turned following off in their options (their mirror's
+//! `options.json`, `ronoctua_person::options::Options::follows_releases` —
+//! on by default, the owner's decision of 2026-11-01), the update's
 //! `person-pins` step asks GitHub for the newest release of every AppImage of
 //! the distro's table that follows a repository, and writes it into the
 //! person's `software/distro-pins.json` ([`ronoctua_person::distro_pins`]) —
@@ -46,12 +47,15 @@
 //! address, its asset, its version — with a stand-in hash BEFORE its bytes
 //! are fetched: only a release that can pass is downloaded.
 //!
-//! # Asked only of the hosts the person let
+//! # Asked as the machine's own update
 //!
-//! [`ronoctua_person::distro_pins::HOSTS`] — the API and the download's host —
-//! both in the person's consent, or nothing is asked: the AppImages keep the
-//! pins they had and the step says so ([`NOT_LET`]). Turning the option on
-//! is the gesture that lets them (the update's page).
+//! Following is a declared system updater ([`UPDATER`], the owner's
+//! exception in `AGENTS.md`): the machine keeping itself at the newest
+//! version, like the Nix that moves nixpkgs from the same two hosts — the API
+//! and the download's host. So it asks no consent: every request goes on the
+//! updater's pass ([`NET`], `crate::net::Asker::Updater`), which is minted for
+//! those two hosts and no other. This module is the only one that asks as
+//! it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -63,10 +67,13 @@ use ronoctua_person::{Document as _, names};
 
 use crate::{Failure, Refusal, Roots};
 
-/// The refusal word `pins refresh` ends with when a host following asks is
-/// not let — the update's step reads it as news (`declines`), and says its
-/// sentence, the update's own.
-pub const NOT_LET: &str = "github-not-let";
+/// The declared updater following asks as.
+pub const UPDATER: ronoctua_consent::Updater = ronoctua_consent::Updater::DistroAppImages;
+
+/// The network following asks GitHub through: the updater's passes, never
+/// the person's consent.
+#[cfg(feature = "net")]
+pub const NET: crate::net::UpdaterNet = crate::net::UpdaterNet(UPDATER);
 
 /// The person's followed pins, in their mirror.
 #[must_use]
@@ -80,17 +87,18 @@ pub fn options_path(roots: &Roots) -> PathBuf {
     crate::declaration::mirror(roots).join(names::OPTIONS)
 }
 
-/// Whether the person's options say to follow: `Some(false)` without the
-/// file, `None` when it does not read here (a newer machine's, a broken one)
-/// — then the followed pins are left as they are, neither moved nor dropped.
+/// Whether the person's options say to follow: `Some(true)` without the
+/// file — following is on by default —, `None` when it does not read here
+/// (a newer machine's, a broken one) — then the followed pins are left as
+/// they are, neither moved nor dropped.
 #[must_use]
 pub fn following(roots: &Roots) -> Option<bool> {
     match std::fs::read(options_path(roots)) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(true),
         Err(_) => None,
         Ok(bytes) => ronoctua_person::parse::<Options>(&bytes)
             .ok()
-            .map(|o| o.distro_apps_follow_releases),
+            .map(|o| o.follows_releases()),
     }
 }
 
@@ -147,16 +155,14 @@ pub enum Change {
 pub struct Looked {
     /// By table id.
     pub changes: BTreeMap<String, Change>,
-    /// A host following asks was not let: nothing was asked.
-    pub not_let: bool,
     /// This machine trusts no signing key of the person's: it would never
     /// take a followed pin, and nothing was asked.
     pub no_signer: bool,
     /// The AppImages whose newest release was NOT followed, each with why —
     /// GitHub not answering, a tag that moves, a release the rule refuses,
-    /// a download that is not its digest. `pins refresh` says each one: the
-    /// CLI has no log of its own, and the update's journal keeps the step's
-    /// standard output (`gen-updates.py`, `run_and_record`).
+    /// a download that is not its digest. `pins refresh` says each one on
+    /// its standard output, the step's own words in the update's journal,
+    /// beside the warning its log keeps.
     pub not_followed: Vec<NotFollowed>,
 }
 
@@ -366,7 +372,6 @@ pub fn look(
             registry: &registry,
             doc: &doc,
             cache: &crate::appimage::github_cache(&ctx.roots),
-            allows: &ronoctua_consent::allows,
             now: crate::appimage::now(),
             stamp: crate::declaration::now_stamp(),
             missed: &|id, url| crate::parts::misses(&ctx.roots, id, url),
@@ -374,14 +379,22 @@ pub fn look(
         net,
         report,
         &mut |key, version, asset, stamp, report| {
-            crate::pins::appimage::pin_as(ctx, key, version, asset, None, stamp, report)
+            crate::pins::appimage::pin_as(
+                ctx,
+                crate::net::Asker::Updater(UPDATER),
+                key,
+                version,
+                asset,
+                None,
+                stamp,
+                report,
+            )
         },
     )
 }
 
 /// What a look reads: the registry's report, the followed pins as they are,
-/// where GitHub's answers are kept, which hosts the person let, and the
-/// clock.
+/// where GitHub's answers are kept, and the clock.
 #[cfg(feature = "net")]
 pub struct LookAt<'a> {
     /// `/etc/ronoctua/distro-apps.json`.
@@ -390,8 +403,6 @@ pub struct LookAt<'a> {
     pub doc: &'a DistroPins,
     /// GitHub's kept answers (`crate::appimage::github_cache`).
     pub cache: &'a Path,
-    /// Whether the person let a host.
-    pub allows: &'a dyn Fn(&str) -> bool,
     /// Seconds since the epoch, for the kept answers.
     pub now: u64,
     /// The stamp a new pin carries.
@@ -409,7 +420,7 @@ pub fn look_with(
     report: &mut dyn crate::progress::Report,
     pin_of: &mut PinOf<'_>,
 ) -> Looked {
-    use ronoctua_person::distro_pins::{self, HOSTS};
+    use ronoctua_person::distro_pins;
 
     use crate::pins::Look;
     use crate::progress::Phase;
@@ -418,7 +429,6 @@ pub fn look_with(
     let Some(followable) = followable(at.registry) else {
         return looked;
     };
-    let allowed = HOSTS.iter().all(|h| (at.allows)(h));
     for app in &at.registry.apps {
         let Some(image) = &app.appimage else { continue };
         let Some(follows) = &image.follows else {
@@ -427,10 +437,6 @@ pub fn look_with(
         // ON THIS MACHINE ONLY: another machine of the person's may carry
         // what this one does not, and its pin stays as that one wrote it.
         if !app.on_this_machine || app.declined_here {
-            continue;
-        }
-        if !allowed {
-            looked.not_let = true;
             continue;
         }
         report.step(Phase::Resolving, 0, 0, &app.id);
@@ -651,8 +657,8 @@ mod tests {
     /// AppImage the distro caught up keeps a followed pin, one already
     /// followed to the newest release is downloaded again, one whose part
     /// could not fetch its download is not fetched again, a moving tag or another
-    /// machine's AppImage is pinned, a pin of an id the table no longer
-    /// follows stays, or GitHub is asked without the person's consent.
+    /// machine's AppImage is pinned, or a pin of an id the table no longer
+    /// follows stays.
     #[test]
     fn the_distro_appimages_follow_their_newest_release() {
         let dir = scratch("look");
@@ -710,20 +716,17 @@ mod tests {
                 pinned_at: stamp,
             })
         };
-        let all = |_: &str| true;
         // THE PART OF `heldcraft` could not fetch its followed download.
         let missed = |id: &str, _: &str| id == "heldcraft";
         let at = LookAt {
             registry: &registry,
             doc: &doc,
             cache: &dir,
-            allows: &all,
             now: 1_000,
             stamp: stamp.clone(),
             missed: &missed,
         };
         let looked = look_with(&at, &net, &mut Vec::new(), &mut pin_of);
-        assert!(!looked.not_let);
         assert_eq!(
             *asked.borrow(),
             [
@@ -761,37 +764,38 @@ mod tests {
         let ids: Vec<&str> = after.pins.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, ["heldcraft", "newcraft", "othercraft", "samecraft"]);
         assert_eq!(apply(&roots, &looked.changes).unwrap(), 0, "the same again");
-        // NOT LET: GitHub is not asked at all, and nothing moves.
-        let none = crate::github::canned::Canned::new(Vec::new());
-        let only_the_api = |h: &str| h == "api.github.com";
-        let not_let = scratch("not-let");
-        let at = LookAt {
-            allows: &only_the_api,
-            cache: &not_let,
-            ..at
-        };
-        let refused = look_with(&at, &none, &mut Vec::new(), &mut pin_of);
-        assert!(refused.not_let);
-        assert!(none.asked.borrow().is_empty());
-        assert!(
-            refused.changes.values().all(|c| *c == Change::Drop),
-            "only what the table stopped following goes: {refused:?}"
-        );
         // OFF: the file goes.
         assert!(forget(&roots).unwrap());
         assert!(!forget(&roots).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&not_let);
+    }
+
+    /// FAILS IF: following waits for the person's consent — it is the
+    /// machine's own update, on the declared updater's passes — or asks, on
+    /// those passes, a host that is not one of the updater's two.
+    #[test]
+    fn following_asks_as_the_declared_updater_and_no_consent() {
+        assert_eq!(UPDATER.hosts(), ["api.github.com", "github.com"]);
+        assert_eq!(NET.0, UPDATER);
+        let asker = crate::net::Asker::Updater(UPDATER);
+        for url in [
+            image_url("cadcraft", "0.9.0"),
+            "https://api.github.com/repos/storytold/cadcraft/releases/latest".to_owned(),
+        ] {
+            assert!(asker.pass(&url).is_ok(), "{url} waits for a consent");
+        }
+        let elsewhere = asker
+            .pass("https://releases.example.org/cadcraft.AppImage")
+            .expect_err("another host on the updater's pass");
+        assert_eq!(elsewhere.refusal, Some(Refusal::NotLet));
     }
 
     /// FAILS IF: a newer release a look leaves behind — a download that is
     /// not its digest, a tag that moves, a release the rule refuses, GitHub
-    /// not answering — is left behind in silence. The CLI has no log of its
-    /// own (its `tracing` goes nowhere), and only the lines `pins refresh`
-    /// prints reach the update's journal: measured in
+    /// not answering — is left behind in silence: measured in
     /// `tests/distro-apps-follow-vm.nix`, where a release whose bytes were
-    /// not its digest was skipped and the step said nothing.
+    /// not its digest was once skipped and the step said nothing.
     #[test]
     fn a_release_left_behind_says_why() {
         let dir = scratch("left-behind");
@@ -811,12 +815,10 @@ mod tests {
             latest("movingcraft", "nightly"),
             latest("tildecraft", "2.0~rc"),
         ]);
-        let all = |_: &str| true;
         let at = LookAt {
             registry: &registry,
             doc: &DistroPins::default(),
             cache: &dir,
-            allows: &all,
             now: 1_000,
             stamp: Stamp::parse("2026-10-31T12:00:00Z").unwrap(),
             missed: &|_, _| false,
@@ -891,7 +893,9 @@ mod tests {
 
     /// FAILS IF: a report of a build before the followed pins — no AppImage
     /// says its pins — makes a look ask anything or drop a pin another
-    /// machine wrote; or options that do not read are taken as "off".
+    /// machine wrote; options that do not read are taken as "off" or "on";
+    /// following is not on without options, or in a file that never said
+    /// (an older one too); or the person's "off" does not hold.
     #[test]
     fn an_older_report_and_unreadable_options_change_nothing() {
         let mut old = app("cadcraft", "0.8.0", true);
@@ -907,13 +911,11 @@ mod tests {
             pins: vec![followed("cadcraft", "0.9.0")],
         };
         let net = crate::github::canned::Canned::new(Vec::new());
-        let all = |_: &str| true;
         let dir = scratch("old");
         let at = LookAt {
             registry: &registry,
             doc: &doc,
             cache: &dir,
-            allows: &all,
             missed: &|_, _| false,
             now: 1,
             stamp: Stamp::parse("2026-10-20T12:00:00Z").unwrap(),
@@ -924,16 +926,24 @@ mod tests {
         assert_eq!(looked, Looked::default());
         assert!(net.asked.borrow().is_empty());
         let roots = Roots::under(&dir);
-        assert_eq!(following(&roots), Some(false), "no options, no following");
+        assert_eq!(following(&roots), Some(true), "no options: the default");
         std::fs::create_dir_all(options_path(&roots).parent().unwrap()).unwrap();
         std::fs::write(options_path(&roots), "{\"format\": 9}").unwrap();
         assert_eq!(following(&roots), None);
-        std::fs::write(
-            options_path(&roots),
-            "{\"format\": 1, \"ssh-signing\": null, \"distro-apps-follow-releases\": true}",
-        )
-        .unwrap();
-        assert_eq!(following(&roots), Some(true));
+        for (text, follows) in [
+            ("{\"format\": 1, \"ssh-signing\": null}", Some(true)),
+            (
+                "{\"format\": 1, \"ssh-signing\": null, \"distro-apps-follow-releases\": true}",
+                Some(true),
+            ),
+            (
+                "{\"format\": 1, \"ssh-signing\": null, \"distro-apps-keep-tested-pins\": true}",
+                Some(false),
+            ),
+        ] {
+            std::fs::write(options_path(&roots), text).unwrap();
+            assert_eq!(following(&roots), follows, "{text}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -96,6 +96,10 @@ pub mod names {
     pub const MACHINE_PERSON: &str = "person";
     /// Under the machine directory, root only.
     pub const APPROVED: &str = "local/approved.json";
+    /// Under the machine directory, root only: each brain module of the
+    /// person's a machine would compile, evaluated alone
+    /// ([`crate::local::BrainChecked`]).
+    pub const BRAIN_CHECKED: &str = "local/brain-checked.json";
     /// Under the machine directory: what the update's verification of the
     /// person's entries wrote — the entries it held back, the followed
     /// AppImages it let in —, gone with it (an entry is a part, which fails

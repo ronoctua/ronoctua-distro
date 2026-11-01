@@ -180,7 +180,17 @@ FIELDS = {
     # the system whose boot trial failed until the distro or nixpkgs moves:
     # nothing new to apply is not an update that broke.
     "declines",
+    # WHOSE REASONS ITS OTHER REFUSALS ARE (`REFUSES`): a refusal it does not
+    # read as news is recorded `failed-<word>`, and the view says the word's
+    # sentence in the vocabulary named here — never another program's.
+    "refuses",
 }
+
+# THE VOCABULARIES A PROGRAM'S `refused <word>` IS SAID IN: the machine's own
+# reasons (`ronoctua_machine::Why`), and those of root's applier of the
+# person's declarations (`ronoctua_person::tree::TreeWhy`), which the
+# software CLI's `person stage` ends with.
+REFUSES = {"machine", "applier"}
 
 # The wiring the module owns: paths and unit names live THERE, once, and arrive
 # here. Writing them in this file too would be the second copy.
@@ -544,6 +554,16 @@ def read_step(index: int, raw: object, seen: set[str]) -> dict | None:
             "`rehearse` and `declines` go with a program (`package` or `binary`), "
             "not with `unit`: a unit rehearses through `rehearsal`",
         )
+    refuses = raw.get("refuses")
+    if "refuses" in raw and (kind != "package" or refuses not in REFUSES):
+        # A REFUSAL IS A PROGRAM'S LAST LINE, and only a program of the
+        # store's is one whose words this distro knows.
+        complain(
+            where,
+            f"`refuses = {refuses!r}`: it goes with `package` + `program` only, and is one of "
+            f"{', '.join(sorted(REFUSES))}",
+        )
+        refuses = None
 
     if kind == "package":
         package, program = raw.get("package"), raw.get("program")
@@ -661,6 +681,7 @@ def read_step(index: int, raw: object, seen: set[str]) -> dict | None:
         "run": run,
         "rehearse": rehearse,
         "declines": declines,
+        "refuses": refuses,
     }
 
 
@@ -937,6 +958,9 @@ def emit_rust(steps: list[dict], task: str) -> str:
             + "],\n"
             f"        name_key: {rust_str(step_keys(task, s['id'])[0])},\n"
             f"        does_key: {rust_str(step_keys(task, s['id'])[1])},\n"
+            "        refuses: "
+            + (f"Some(Refuses::{rust_variant(s['refuses'])})" if s["refuses"] else "None")
+            + ",\n"
             "    },"
         )
 
@@ -983,6 +1007,11 @@ def emit_rust(steps: list[dict], task: str) -> str:
         "OnFailure",
         ["stop", "carry-on"],
         "What the sequence does when a step fails. There is no third answer.",
+    )
+    out += enum(
+        "Refuses",
+        sorted(REFUSES),
+        "Whose reasons a step's refusal (`failed-<word>` in its report) is said in.",
     )
     out += [
         "/// What has to be true for a step to apply. All of them, or it is skipped.",
@@ -1115,6 +1144,8 @@ def emit_rust(steps: list[dict], task: str) -> str:
         "    pub name_key: &'static str,",
         "    /// Text key: the one line saying what it does.",
         "    pub does_key: &'static str,",
+        "    /// Whose reasons its refusals are said in, when its program's are known.",
+        "    pub refuses: Option<Refuses>,",
         "}",
         "",
         "/// The distro's update sequence, IN DECLARED ORDER.",
@@ -1348,8 +1379,8 @@ def run_and_record(quoted: str, worked: str, said_failed: str, declines: list[st
     progress they write goes to standard error, which still streams.
 
     AND A REFUSAL THAT IS NOT NEWS KEEPS ITS WORD: `failed-<word>`, so the
-    view says WHY the program refused (the machine's own sentence for it)
-    instead of only that it failed. A last line that is not a refusal, or a
+    view says WHY the program refused (its sentence, in the vocabulary the
+    step declares — `refuses`) instead of only that it failed. A last line that is not a refusal, or a
     word that is not kebab, is plain `failed` — never a word made up.
     """
     if not declines:
@@ -1695,7 +1726,9 @@ def emit_runner(
             "#",
             "# NO PER-STEP PROSE, because the TSV carries none: what a step said",
             "# goes to the journal. The brain names the step it stopped at,",
-            "# which `ended()` argues is more than \"something went wrong\".",
+            "# which `ended()` argues is more than \"something went wrong\". The",
+            "# WORD the TSV recorded travels as `verdict` — closed, kebab-case —,",
+            "# so the module can say a program's reason (`failed-<word>`).",
             f'brain="$XDG_RUNTIME_DIR/{REPORTS_LEAF}"',
             'mkdir -p "$brain" 2>/dev/null || true',
             'if [ "$execute" = true ]; then',
@@ -1715,8 +1748,8 @@ def emit_runner(
             '    while read -r id verdict seconds; do',
             '      case "$verdict" in failed|failed-*|stopped) ok=false ;; *) ok=true ;; esac',
             '      if [ "$first" = true ]; then first=false; else printf \',\'; fi',
-            '      printf \'{"id":"%s","ok":%s,"seconds":%s,"trouble":""}\' \\',
-            '        "$id" "$ok" "${seconds:-0}"',
+            '      printf \'{"id":"%s","ok":%s,"seconds":%s,"trouble":"","verdict":"%s"}\' \\',
+            '        "$id" "$ok" "${seconds:-0}" "$verdict"',
             '    done < "$report"',
             "    printf ']}'",
             '  } > "$sheet_file".new 2>/dev/null || return 0',

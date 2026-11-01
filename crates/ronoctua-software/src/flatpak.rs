@@ -681,6 +681,7 @@ pub fn installed_of(
                 },
                 icon: exported.icon,
                 trouble: None,
+                undeclarable: None,
             }
         })
         .collect()
@@ -1296,6 +1297,7 @@ fn install(ctx: &Context, program: &Path, id: &str, report: &mut dyn Report) -> 
         desktop_ids: desktop_ids_after(ctx, id),
         amount: None,
         rehearsed: tally.rehearsed,
+        waits: None,
     })
 }
 
@@ -1386,6 +1388,7 @@ fn install_file(
         key: Some(AppKey::Flatpak { id: reference.name }),
         amount: None,
         rehearsed: tally.rehearsed,
+        waits: None,
     })
 }
 
@@ -1438,6 +1441,7 @@ fn upgrade(ctx: &Context, program: &Path, scope: &Scope, report: &mut dyn Report
         desktop_ids: Vec::new(),
         amount: (!tally.rehearsed).then(|| tally.watch.count(OpKind::Update)),
         rehearsed: tally.rehearsed,
+        waits: None,
     })
 }
 

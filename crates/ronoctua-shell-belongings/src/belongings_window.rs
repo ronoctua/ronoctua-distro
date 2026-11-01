@@ -255,6 +255,18 @@ impl Content for BelongingsWindow {
             .collect()
     }
 
+    /// A pair wrapped over several lines is one control: its lines light
+    /// together, as in the footer (`View::control_of`, the row a click on
+    /// any of them lands on).
+    fn controls(&self, ui: &Ui) -> Option<Vec<usize>> {
+        let rows = self.view_rows(ui);
+        Some(
+            (0..rows.len())
+                .map(|n| crate::belongings::View::control_of(n, &rows))
+                .collect(),
+        )
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.open.view.cursor())
     }
@@ -397,9 +409,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 
+    /// FAILS IF: a large group of the listing does not fold in the window
+    /// too, and open on a second click and fold on a third — the two doors
+    /// do the same, the pointer included (invariant 19).
+    #[test]
+    fn a_large_group_folds_and_opens_by_the_pointer_in_the_window() {
+        let (_, _, places) = a_window("fold");
+        crate::keep::store_of(&places)
+            .write(&ronoctua_belongings::prefs::Belongings {
+                extra: vec!["home/notes".into()],
+                ..crate::keep::store_of(&places).read()
+            })
+            .expect("prefs");
+        let many = usize::from(ronoctua_tokens::space::EXPANSION_MAXLINES) + 1;
+        std::fs::create_dir_all(places.home.join("notes")).expect("notes");
+        for n in 0..many {
+            std::fs::write(places.home.join(format!("notes/{n:03}.md")), b"1").expect("note");
+        }
+        let (mut w, mut ui, _) = {
+            let w = BelongingsWindow::over(
+                Some(places.clone()),
+                fixed,
+                ronoctua_files::when::Zone::utc(),
+                Reach::Nowhere(Vec::new()),
+            );
+            let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+            (w, Ui::for_tests(texts), ())
+        };
+        let fold = Target::Fold("added:home/notes".into());
+        let files = |w: &BelongingsWindow, ui: &Ui| {
+            w.view_rows(ui)
+                .iter()
+                .filter(|r| {
+                    matches!(&r.target, Some(Target::File(p, _)) if p.starts_with("home/notes/"))
+                })
+                .count()
+        };
+        assert_eq!(files(&w, &ui), 0, "the window drew a large group whole");
+        stand_on(&mut w, &mut ui, &fold);
+        w.clicked(&mut ui, w.open.view.cursor());
+        assert_eq!(files(&w, &ui), many, "the second click did not open it");
+        w.clicked(&mut ui, w.open.view.cursor());
+        assert_eq!(files(&w, &ui), 0, "the third click did not fold it");
+        let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
+    }
+
     /// FAILS IF: the window's resting pointer lights a row a click takes
-    /// nothing on — a title, a sentence, the rest of a wrapped label — or
-    /// leaves unlit one it takes. THE LIGHT IS THE CLICK: every row clicked
+    /// nothing on — a title, a sentence — or leaves unlit one it takes, the
+    /// rest of a wrapped label among them. THE LIGHT IS THE CLICK: every row clicked
     /// once, on a window of its own over files laid again for it, and lit
     /// exactly where something happened. The footer's region has its own.
     #[test]
@@ -408,7 +465,9 @@ mod tests {
             let (w, ui, _) = a_window("pointer");
             (w, ui)
         };
-        let held = crate::door::held_to_the_click(fresh, crate::door::seen);
+        let held = crate::door::held_to_the_control(fresh, crate::door::seen, |w, ui, row| {
+            crate::belongings::View::control_of(row, &w.view_rows(ui))
+        });
         assert!(
             held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
             "no row lit, or every row lit: {held:?}"

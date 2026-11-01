@@ -66,6 +66,8 @@ pub mod mind_wire;
 pub mod minibuffer;
 pub mod network_refusal;
 pub mod paint;
+// A PERSON'S FILE READ ONLY IN PART: the line every view of one says.
+pub mod partly_read;
 pub mod seats;
 pub mod security_words;
 // A size as a person reads it — one arithmetic for the footer and for the

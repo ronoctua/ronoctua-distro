@@ -53,7 +53,9 @@ let
     # THE SUPERPACK'S ROOT is `nix/modules/icons.nix`'s to write — read from
     # where it wrote it, so the two can never name different directories.
     icons = if superpack then config.environment.sessionVariables.RONOCTUA_ICONS else null;
-    iconNames = if superpack then ronoctua.iconNames else null;
+    # And its names, in the same part: the list is read from where it
+    # arrives, never built with the system (`parts-build`).
+    iconNames = config.ronoctua.icons.names;
   };
 
   # WHAT ONLY THE WRAPPER CARRIES.

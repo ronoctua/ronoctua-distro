@@ -39,6 +39,9 @@ mod take;
 // THE PERSON'S EMACS CONFIGURATION: one place travels, and what Emacs
 // reads elsewhere moves nothing (2026-10-19), on the helpers above.
 mod emacs;
+// WHAT A SYNC FROM BEFORE A RULE LEFT IN THE REPOSITORY (2026-11-01): a link
+// into the system's store, a machine's deploy key — never pulled, and out.
+mod debris;
 
 /// A vault of a test's own: what a session keeps, in memory — never the
 /// kernel's keyring of whoever runs the tests.

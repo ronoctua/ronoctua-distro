@@ -162,6 +162,9 @@ impl Directories {
 #[derive(Debug, Default)]
 pub struct Picks {
     favourites: Vec<Pick>,
+    /// What of `player-favourites.json` did not read, when part of it did
+    /// not: said over the favourites (`partly_read`).
+    favourites_unread: Option<crate::partly_read::PartlyRead>,
     recent: Vec<Pick>,
     /// Read at least once.
     read: bool,
@@ -207,10 +210,18 @@ impl Picks {
         if moved || !self.read || self.stirred.swap(false, Ordering::SeqCst) {
             use ronoctua_broadcast::picks::Shelf;
             use ronoctua_broadcast::table::{FAVOURITES_MOST, RECENT_MOST};
-            self.favourites = Shelf::favourites(FAVOURITES_MOST).read();
+            let favourites = Shelf::favourites(FAVOURITES_MOST);
+            self.favourites = favourites.read();
+            self.favourites_unread = crate::partly_read::judged(favourites.store());
             self.recent = Shelf::recent(RECENT_MOST).read();
             self.read = true;
         }
+    }
+
+    /// What of the favourites' file did not read, when part of it did not.
+    #[must_use]
+    pub const fn favourites_unread(&self) -> Option<&crate::partly_read::PartlyRead> {
+        self.favourites_unread.as_ref()
     }
 
     /// Whether `(kind, id)` is kept among the favourites.
@@ -1335,6 +1346,11 @@ impl View {
             key::PLAYER_ABOUT_RECENT
         });
         let picks = &self.directories.picks;
+        // A PART OF THE FAVOURITES' FILE NOT READ: a favourite it could not
+        // take is not in the list below, and the file keeps it.
+        if let Some(partly) = picks.favourites_unread().filter(|_| favourites) {
+            b.told(&partly.said(b.texts));
+        }
         let all = if favourites {
             picks.favourites()
         } else {

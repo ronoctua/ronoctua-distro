@@ -25,6 +25,11 @@ pub enum Ended {
     WebCreated,
     /// Removed.
     Removed,
+    /// Removed for good and not yet: the update held the machine, or the
+    /// system without it waits for the restart (the outcome's
+    /// [`ronoctua_software::Waits`], said by [`said_why`]) — never called
+    /// removed.
+    RemovalWaits,
     /// Updated.
     Updated,
     /// Android's image is ready.
@@ -36,10 +41,11 @@ pub enum Ended {
 impl Ended {
     /// Every one, for the tests that hold the words total — the footer's
     /// among them, which give each its notification.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Installed,
         Self::WebCreated,
         Self::Removed,
+        Self::RemovalWaits,
         Self::Updated,
         Self::AndroidReady,
         Self::Failed,
@@ -67,6 +73,11 @@ pub fn ended_of(job: &ronoctua_transfers::Job) -> Option<Ended> {
         | Order::Keep { .. }
         | Order::Declare { .. } => Some(Ended::Installed),
         Order::WebCreate { .. } => Some(Ended::WebCreated),
+        // A REMOVAL FOR GOOD THE MACHINE HAS NOT CARRIED OUT is said with
+        // what it waits for, never as removed.
+        Order::Forget { .. } if job.outcome.as_ref().is_some_and(|o| o.waits.is_some()) => {
+            Some(Ended::RemovalWaits)
+        }
         Order::Remove { .. } | Order::Forget { .. } => Some(Ended::Removed),
         Order::Upgrade { .. } => Some(Ended::Updated),
         Order::Prepare {
@@ -101,6 +112,27 @@ pub fn failure_said(job: &ronoctua_transfers::Job, texts: &ronoctua_i18n::Texts)
         (Some(why), _) => texts.t(crate::software_words::refusal_key(why)),
         (None, Some(trouble)) if !trouble.trim().is_empty() => trouble.trim().to_owned(),
         (None, _) => texts.t(crate::key::SOFTWARE_FAILED),
+    }
+}
+
+/// The `$why` of an end's notification: a failure's sentence
+/// ([`failure_said`]), what a removal for good waits for, and nothing for
+/// the rest.
+#[must_use]
+pub fn said_why(end: Ended, job: &ronoctua_transfers::Job, texts: &ronoctua_i18n::Texts) -> String {
+    use ronoctua_software::Waits;
+    match end {
+        Ended::Failed => failure_said(job, texts),
+        Ended::RemovalWaits => match job.outcome.as_ref().and_then(|o| o.waits) {
+            Some(Waits::Update) => texts.t(crate::key::SOFTWARE_WAITS_UPDATE),
+            Some(Waits::Restart) => texts.t(crate::key::SOFTWARE_WAITS_RESTART),
+            None => String::new(),
+        },
+        Ended::Installed
+        | Ended::WebCreated
+        | Ended::Removed
+        | Ended::Updated
+        | Ended::AndroidReady => String::new(),
     }
 }
 
@@ -160,6 +192,10 @@ pub const fn ended_keys(ended: Ended) -> (&'static str, &'static str) {
         Ended::Removed => (
             key::NOTIF_SOFTWARE_REMOVED_SUMMARY,
             key::NOTIF_SOFTWARE_REMOVED_BODY,
+        ),
+        Ended::RemovalWaits => (
+            key::NOTIF_SOFTWARE_REMOVAL_WAITS_SUMMARY,
+            key::NOTIF_SOFTWARE_REMOVAL_WAITS_BODY,
         ),
         Ended::Updated => (
             key::NOTIF_SOFTWARE_UPDATED_SUMMARY,

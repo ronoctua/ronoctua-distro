@@ -1,0 +1,25 @@
+{
+  "format": 1,
+  "modules": {
+    "my-approved": {
+      "hash": "sha256-bsxxoKoBi/zTX82E9vCaao7mCkH4nLxO3mU4EoeSeO8=",
+      "evaluates": true,
+      "detail": ""
+    },
+    "my-common": {
+      "hash": "sha256-olLj2ojC9cuBnMp9ht4h5g3Bf5hxEx1V3JTUTclzHBs=",
+      "evaluates": true,
+      "detail": ""
+    },
+    "my-plain": {
+      "hash": "sha256-SWnMs3SQIGTN7YSBVL9Nozmgh+mtlGcoFIY6zgHQO4k=",
+      "evaluates": true,
+      "detail": ""
+    },
+    "my-reaching": {
+      "hash": "sha256-wwzQZmY0xjJLBULl0Qa03dZUJ29EUONb5pXbs2B97lA=",
+      "evaluates": true,
+      "detail": ""
+    }
+  }
+}

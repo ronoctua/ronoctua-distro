@@ -74,6 +74,10 @@ const FINGER: &str = "lock-finger";
 /// The keys the finger's line teaches, and their words.
 const OF_THE_FINGER: &[(&str, &str)] = &[("C-f", FINGER)];
 
+/// The line's `ESC` as the lock explains it, `about-lock-clear`: here it
+/// clears what was typed, and the question stays.
+const CLEAR: &str = "lock-clear";
+
 /// How a lock that did not open the session ended.
 #[derive(Debug)]
 pub enum Ended {
@@ -438,6 +442,19 @@ impl Lock {
         out
     }
 
+    /// The minibuffer: the password asked, as every line asks — and its `ESC`
+    /// explained as the lock's. The line's own sentence says the question is
+    /// let go; here nothing lets it go, and `ESC` only clears what was typed.
+    fn asked(&self, texts: &ronoctua_i18n::Texts, room: u16) -> Vec<crate::chrome::Piece> {
+        let mut pieces = crate::door::list::question_pieces(&self.line, texts, room);
+        for p in &mut pieces {
+            if p.id == Some("line-cancel") {
+                p.id = Some(CLEAR);
+            }
+        }
+        pieces
+    }
+
     /// The sentence above the two lines, and its colour.
     fn said_now(&self, texts: &ronoctua_i18n::Texts) -> Option<(String, tokens::Color)> {
         Some(match self.said? {
@@ -618,10 +635,7 @@ impl Content for Lock {
         let lit = self.lit;
         // THE MINIBUFFER, at the bottom: the password asked.
         let asked_at = lines - 1;
-        let asked = crate::chrome::lit(
-            &crate::door::list::question_pieces(&self.line, &texts, room),
-            lit,
-        );
+        let asked = crate::chrome::lit(&self.asked(&texts, room), lit);
         // THE MODELINE above it: locked, whose, and the reader.
         let modeline_at = lines - 2;
         let modeline = crate::chrome::lit(&self.modeline(&texts), lit);
@@ -905,11 +919,21 @@ mod tests {
         let (mut l, _ui, _heard) = lock();
         l.finger = Finger::Missed;
         let mut pieces = l.modeline(&texts);
-        pieces.extend(crate::door::list::question_pieces(&l.line, &texts, 80));
+        pieces.extend(l.asked(&texts, 80));
         let ids: Vec<&str> = pieces.iter().filter_map(|p| p.id).collect();
         assert!(
             ids.contains(&FINGER) && ids.contains(&"line-answer"),
             "{ids:?}"
+        );
+        // `ESC` IS EXPLAINED AS THE LOCK'S: it clears what was typed, and the
+        // line's sentence — the question let go — is not true here.
+        assert!(
+            ids.contains(&CLEAR) && !ids.contains(&"line-cancel"),
+            "{ids:?}"
+        );
+        assert_ne!(
+            crate::chrome::hint_sentence(CLEAR, &texts),
+            crate::chrome::hint_sentence("line-cancel", &texts)
         );
         for id in ids {
             assert!(

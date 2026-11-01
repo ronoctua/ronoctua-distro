@@ -178,6 +178,7 @@ software-note-drop = Or drop an image here.
 software-icon-now = Chosen now
 software-icon-chosen = chosen
 software-note-no-icons = No icon by that name here.
+software-note-icons-arriving = The distro's icons are still on their way: they come by themselves after the installation, and this search finds them once they are here.
 software-heading-android = Android
 software-note-android = Android apps run inside an Android system beside this one; it costs memory while it runs.
 software-android-image = Image

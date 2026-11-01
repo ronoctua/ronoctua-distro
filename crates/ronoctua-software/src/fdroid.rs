@@ -785,6 +785,50 @@ pub fn compact_index(reader: impl std::io::Read) -> Result<Vec<App>, Refusal> {
     Ok(apps)
 }
 
+/// Check that the file at `index` is the index `entry` names: its size and
+/// its SHA-256.
+///
+/// # Errors
+///
+/// [`Refusal::Integrity`], saying both, for one that is not; the
+/// filesystem's words for one that does not read.
+pub fn check_index(entry: &Entry, index: &Path) -> Result<(), crate::Failure> {
+    let size = std::fs::metadata(index).map(|m| m.len()).unwrap_or(0);
+    let sha = crate::run::sha256_of(index).map_err(|e| crate::Failure::trouble(e.to_string()))?;
+    if size != entry.index.size || !sha.eq_ignore_ascii_case(&entry.index.sha256) {
+        return Err(crate::Failure {
+            refusal: Some(Refusal::Integrity),
+            trouble: format!(
+                "index-v2.json: {size} bytes, sha256 {sha}; the signed entry says {} and {}",
+                entry.index.size, entry.index.sha256
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Every package of the index at `index`, compacted to the version the
+/// catalogue offers — once `jar` verified against the certificate pinned as
+/// `pin` and `index` is the index it names ([`check_index`]). What the
+/// distro's pins are taken from (`crate::pins::signed`).
+///
+/// # Errors
+///
+/// [`Refusal::Integrity`] at any broken link, `TooLarge` above the
+/// ceilings, `ToolFailed` for something that is not an index.
+pub fn signed_apps(
+    jar: &[u8],
+    pin: &str,
+    index: &Path,
+) -> Result<(Entry, Vec<App>), crate::Failure> {
+    let entry = verify_jar_with(jar, pin).map_err(crate::Failure::refused)?;
+    check_index(&entry, index)?;
+    let file = std::fs::File::open(index).map_err(|e| crate::Failure::trouble(e.to_string()))?;
+    let apps = compact_index(std::io::BufReader::with_capacity(1 << 20, file))
+        .map_err(crate::Failure::refused)?;
+    Ok((entry, apps))
+}
+
 /// Our F-Droid directory in the cache.
 #[must_use]
 pub fn directory(roots: &Roots) -> PathBuf {
@@ -1023,17 +1067,7 @@ pub fn refresh_with(
         },
     )?;
     report.step(Phase::Verifying, 0, 0, "index-v2.json");
-    let size = std::fs::metadata(&raw).map(|m| m.len()).unwrap_or(0);
-    let sha = crate::run::sha256_of(&raw).map_err(|e| Failure::trouble(e.to_string()))?;
-    if size != index.size || !sha.eq_ignore_ascii_case(&index.sha256) {
-        return Err(Failure {
-            refusal: Some(Refusal::Integrity),
-            trouble: format!(
-                "index-v2.json: {size} bytes, sha256 {sha}; the signed entry says {} and {}",
-                index.size, index.sha256
-            ),
-        });
-    }
+    check_index(&entry, &raw)?;
     report.step(Phase::Indexing, 0, 0, "index-v2.json");
     let file = std::fs::File::open(&raw).map_err(|e| Failure::trouble(e.to_string()))?;
     let apps = compact_index(std::io::BufReader::with_capacity(1 << 20, file))

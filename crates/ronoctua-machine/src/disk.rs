@@ -144,6 +144,18 @@ pub(crate) fn locked_rev(lock: &[u8], input: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The node a `flake.lock` names for the root's `input`, whole — its
+/// `original` and its `locked` —, a `follows` path followed; `None` when the
+/// lock does not read or names no such input.
+#[must_use]
+pub(crate) fn input_node(lock: &[u8], input: &str) -> Option<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_slice(lock).ok()?;
+    let nodes = value.get("nodes")?;
+    let root = value.get("root")?.as_str()?;
+    let key = input_of(nodes, root, root, input)?;
+    nodes.get(&key).cloned()
+}
+
 /// What a `flake.lock` locks the `nixpkgs` its system is built with at: the
 /// root's own [`crate::NIXPKGS_INPUT`] (a machine flake that rolls it), else
 /// the distro's ([`crate::DISTRO_INPUT`]'s own input of that name) — its

@@ -165,6 +165,12 @@ impl Notifications {
     fn reread(&mut self) -> bool {
         let fresh = self.notes.history();
         let prefs = self.notes.preferences();
+        // AND WHAT OF THE FILE DID NOT READ, said under the catalogue.
+        let said = self.view.read_in_part(
+            self.notes
+                .preferences_store()
+                .and_then(|store| crate::partly_read::judged(&store)),
+        );
         // COMPARED AFTER `took`, not before it. A filter that has come back as
         // one of the distro's leaves `mine` — so the file and the book DIFFER
         // by design from that moment on, and comparing the raw file against
@@ -177,7 +183,7 @@ impl Notifications {
             && candidate.shared == self.book.shared
             && candidate.adjustments == self.book.adjustments
         {
-            return false;
+            return said;
         }
         self.records = fresh;
         self.book = candidate;
@@ -834,13 +840,30 @@ impl Content for Notifications {
                 crate::chrome::divider(x, f.y_of(ui.first_of_list()), f.bottom())
             });
         }
+        // STACKED, THE SAME MARK ACROSS: a rule in the line of air between an
+        // open record's halves, lit while the facts have the keyboard. From
+        // row 0, as the bars count.
+        let lists = crate::notifications::Lists::of(&self.records, &self.book);
+        if let Some((row, lit)) = self.view.stacked_rule(&lists, columns) {
+            let first = ui.first_of_list();
+            let f = ui.frame(first);
+            let line = first + u16::try_from(row).unwrap_or(u16::MAX);
+            let rule = crate::chrome::rule(f.width, f.y_of(line) + f.line() / 2.0);
+            canvas.under.push(if lit {
+                ronoctua_render::quad::Quad {
+                    color: tokens::color::STATE_ACCENT,
+                    ..rule
+                }
+            } else {
+                rule
+            });
+        }
         let width = ui.room.band_width();
         // ONE BAND PER ROW AND HALF, so two cursors on one line but in
         // different columns are two bands, and on the same half the first
         // wins. AND ONLY WHERE A CLICK AT THAT CELL TAKES SOMETHING
         // (`View::takes_at`, the click's own answer): never a title, the
         // blank between the columns or a fact.
-        let lists = crate::notifications::Lists::of(&self.records, &self.book);
         let mut seen: Vec<(usize, bool)> = Vec::new();
         for &(color, row) in lit {
             let Some(row) = row else {
@@ -1174,8 +1197,8 @@ mod tests {
                             .view
                             .takes_at(n, Some(cell), &lists, &first.book, columns, &ui.texts);
                     // AND WHICH HALF HAS THE KEYBOARD: a click there gives it
-                    // — which the lit divider says side by side, and the
-                    // arrows' next turn stacked.
+                    // — which the lit divider says side by side, and the lit
+                    // rule between the halves stacked.
                     let (mut w, mut ui) = fresh();
                     let before = (crate::door::seen(&w, &ui), w.view.facts_have_the_keyboard());
                     w.click_cell = Some(cell);

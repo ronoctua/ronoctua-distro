@@ -499,6 +499,8 @@ pub enum Opening {
     Passphrase,
     /// The belongings' post-quantum key.
     Key,
+    /// The same key, as the session keeps it: no question asked.
+    Kept,
 }
 
 /// How a seal is made.
@@ -517,6 +519,9 @@ pub enum With {
     Passphrase(Secret),
     /// The belongings' key, opened with their passphrase.
     Key(Secret),
+    /// The identity the session keeps (the belongings' `runtime/unlocked`),
+    /// which the queue has the belongings lend for the run.
+    Kept,
 }
 
 /// What a view hands its door for the queue.

@@ -12,7 +12,7 @@
 // THE KIT AND THE DOOR, by the names the modules already use
 // (`crate::chrome::…`, `crate::door::…`).
 use ronoctua_shell_door::{door, file_picker, region};
-use ronoctua_shell_kit::{bindings, chrome, echo, fields, line, sizes, wake};
+use ronoctua_shell_kit::{bindings, chrome, echo, fields, line, partly_read, sizes, wake};
 // AND SYNCTHING'S REFUSALS, which the footer says too: a crate under both.
 use ronoctua_shell_syncthing_words::syncthing_words;
 

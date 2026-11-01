@@ -49,3 +49,4 @@ rescue-read-only = leitura
 rescue-generated-by = Gerado por { $source }. Editar aqui some no próximo rebuild.
 rescue-no-windows = O compositor não respondeu — ou não há janela nenhuma.
 rescue-back = Sair do terminal devolve esta tela.
+rescue-any-key = Qualquer tecla devolve o console.

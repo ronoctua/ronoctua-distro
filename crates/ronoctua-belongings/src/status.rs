@@ -58,6 +58,13 @@ pub enum Outcome {
         /// belongings-sealed package); `None` before it is measured.
         #[serde(default)]
         budget: Option<Budget>,
+        /// What the repository held that no machine may take — a link into
+        /// the system's store, another machine's deploy key, left by a sync
+        /// from before a rule — by path, with the reason
+        /// (`crate::sift::debris_of`): never written here, and taken out of
+        /// the repository (by the first sync, after a restore).
+        #[serde(default)]
+        dropped: Vec<(String, String)>,
         // ── anchor: L07 ──
         // ── anchor: L08 ──
         // ── anchor: L10 ──
@@ -278,6 +285,7 @@ mod tests {
                 offers: vec![Offer::PamU2f],
                 repaired: vec![],
                 budget: Some(Budget::default()),
+                dropped: vec![("home/.ssh/old".to_owned(), "access-elsewhere".to_owned())],
             },
             Outcome::Waiting { conflicts: 4 },
             Outcome::Refused {

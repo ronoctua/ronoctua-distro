@@ -267,9 +267,19 @@ pub struct View {
     key: Option<String>,
     /// What a line is open for, if anything — see [`Typing`].
     typing: Option<Typing>,
+    /// What of `atuin.json` did not read, when part of it did not: said over
+    /// the row that shows the repair (`partly_read`).
+    partly: Option<crate::partly_read::PartlyRead>,
 }
 
 impl View {
+    /// What the read of `atuin.json` owes the person — the places of it that
+    /// did not read, or `None` (`partly_read`); both doors hand it whenever
+    /// they read the mark again.
+    pub fn read_in_part(&mut self, partly: Option<crate::partly_read::PartlyRead>) {
+        self.partly = partly;
+    }
+
     /// A fresh one.
     ///
     /// The cursor is settled by [`View::settle`] the first time anything asks,
@@ -631,6 +641,17 @@ impl View {
         // kept by Atuin, and this is a decision it has no opinion about. It
         // had a ring, a default and a modeline reader, and no row anywhere:
         // a preference nobody can reach has one value for ever.
+        //
+        // A PART OF ITS FILE NOT READ: the row shows the repair in that
+        // place, and the file keeps what it says — wrapped, never cut.
+        if let Some(partly) = &self.partly {
+            for line in crate::chrome::note_lines(&partly.said(texts), room) {
+                out.push((
+                    vec![piece(at, line, tokens::color::TEXT_DIM)],
+                    Target::Nothing,
+                ));
+            }
+        }
         out.push(door(
             &texts.t(crate::key::ATUIN_MARK),
             &texts.t(mark_key(shot.mark)),

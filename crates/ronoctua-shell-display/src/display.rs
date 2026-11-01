@@ -2090,12 +2090,12 @@ impl View {
             b.told(b.texts.t(crate::key::DISPLAY_SETTINGS_FAILED));
         }
         // AND A PART OF IT that did not read: the rows below show the repair
-        // in that place, and the file keeps what it says.
-        if now.settings_repaired {
-            b.told(b.texts.t_with(
-                crate::key::BELONGINGS_REPAIR_PART_NOT_READ,
-                &[("file", ronoctua_display::prefs::FILE)],
-            ));
+        // in that place, and the file keeps what it says — the places, said.
+        if let Some(partly) = ronoctua_shell_kit::partly_read::PartlyRead::of_repairs(
+            ronoctua_display::prefs::FILE,
+            &now.settings_repairs,
+        ) {
+            b.told(partly.said(b.texts));
         }
         for s in &now.screens {
             let focused = now.focused.as_deref() == Some(s.at.as_str());
@@ -3671,7 +3671,7 @@ mod tests {
             screens,
             compositor: true,
             settings_failed: false,
-            settings_repaired: false,
+            settings_repairs: Vec::new(),
         }
     }
 
@@ -5379,15 +5379,14 @@ mod tests {
         // A PART OF IT REPAIRED is said too — with its own sentence, since
         // the rest IS shown and an order still writes.
         now.settings_failed = false;
-        now.settings_repaired = true;
-        let part = t.t_with(
-            crate::key::BELONGINGS_REPAIR_PART_NOT_READ,
-            &[("file", ronoctua_display::prefs::FILE)],
-        );
+        now.settings_repairs = vec![ronoctua_shell_kit::partly_read::planted(
+            "/text",
+            ronoctua_shell_kit::partly_read::Why::UnknownVariant,
+        )];
         let words = said(&View::fresh(), &now);
         assert!(
-            words.contains(&part),
-            "a value of the file was repaired and nothing on the list says so",
+            words.contains(ronoctua_display::prefs::FILE) && words.contains("/text"),
+            "a value of the file was repaired and nothing on the list says which",
         );
         assert!(!words.contains(&sentence), "the rest of the file was read");
     }

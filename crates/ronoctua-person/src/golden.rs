@@ -5,7 +5,7 @@ use crate::choice::Choice;
 use crate::declared::Declared;
 use crate::declined::Declined;
 use crate::distro_pins::DistroPins;
-use crate::local::{Approved, Signer};
+use crate::local::{Approved, BrainChecked, Signer};
 use crate::options::Options;
 use crate::reports::{DeclaredAndroid, DistroApps, PersonApplied};
 use crate::state::{MachineState, Whole};
@@ -27,6 +27,10 @@ fn every_good_fixture_reads_and_writes_back_byte_for_byte() {
     round_trips::<Declared>("declared", include_str!("../fixtures/good/declared.json"));
     round_trips::<Declined>("declined", include_str!("../fixtures/good/declined.json"));
     round_trips::<Approved>("approved", include_str!("../fixtures/good/approved.json"));
+    round_trips::<BrainChecked>(
+        "brain-checked",
+        include_str!("../fixtures/good/brain-checked.json"),
+    );
     round_trips::<PersonApplied>(
         "person-applied",
         include_str!("../fixtures/good/person-applied.json"),

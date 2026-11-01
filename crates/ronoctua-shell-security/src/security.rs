@@ -1438,17 +1438,23 @@ pub struct Row {
     pub heading: bool,
     /// The section it is in.
     pub section: Section,
+    /// The line CONTINUES the row above it: the rest of a label or a value
+    /// that acts, wrapped (`chrome::aligned_pair`). The cursor skips it,
+    /// but it is a line of that row's control — it lights with it, and a
+    /// click on it takes the same thing ([`View::control_of`]).
+    pub continues: bool,
 }
 
 impl Row {
-    /// Whether a click takes it — a row the cursor stands on — and so
-    /// whether a resting pointer lights it: ONE ANSWER for both doors' light
-    /// and click (the region's `Row::takes`, the window's `Content::takes`,
-    /// [`View::clicked`]). A picker's row takes one by the same answer: it
-    /// carries its act exactly when it is no heading.
+    /// Whether a click takes it — a row the cursor stands on, or a line
+    /// that continues one — and so whether a resting pointer lights it: ONE
+    /// ANSWER for both doors' light and click (the region's `Row::takes`,
+    /// the window's `Content::takes`, [`View::clicked`]). A picker's row
+    /// takes one by the same answer: it carries its act exactly when it is
+    /// no heading.
     #[must_use]
     pub const fn takes(&self) -> bool {
-        !self.heading
+        !self.heading || self.continues
     }
 }
 
@@ -1574,6 +1580,7 @@ impl Lines<'_> {
                 act: None,
                 heading: true,
                 section,
+                continues: false,
             });
         }
         let field = self.piece(
@@ -1586,6 +1593,7 @@ impl Lines<'_> {
             act: None,
             heading: true,
             section,
+            continues: false,
         });
     }
 
@@ -1683,6 +1691,7 @@ impl Lines<'_> {
                             act: None,
                             heading: true,
                             section: self.section,
+                            continues: false,
                         });
                     }
                 }
@@ -1692,21 +1701,24 @@ impl Lines<'_> {
 
     /// The lines of one pair, every one through `paint`: the first carries
     /// the act (and is where the cursor lands), the ones it wrapped onto are
-    /// read past, as a fact is.
+    /// read past by the cursor — and, when the pair acts, CONTINUE it: lines
+    /// of its control, lit and clicked with it ([`Row::continues`]).
     fn push_lines(
         &mut self,
         lines: Vec<Vec<Field>>,
         act: Option<Act>,
         paint: impl Fn(Vec<Field>) -> Vec<Field>,
     ) {
+        let acts = act.is_some();
         let mut act = act;
-        for fields in lines {
+        for (n, fields) in lines.into_iter().enumerate() {
             let act = act.take();
             self.out.push(Row {
                 fields: paint(fields),
                 heading: act.is_none(),
                 act,
                 section: self.section,
+                continues: acts && n > 0,
             });
         }
     }
@@ -1840,9 +1852,24 @@ impl View {
         crate::chrome::hint_of_marked(&table, |_| None, texts)
     }
 
+    /// The row whose control row `n` is a line of: the first line of a pair
+    /// wrapped over several ([`Row::continues`]), which light together and
+    /// take one click (`Region::control_of`, `Content::controls`) — and `n`
+    /// itself for every other row.
+    #[must_use]
+    pub fn control_of(n: usize, rows: &[Row]) -> usize {
+        let mut first = n;
+        while first > 0 && rows.get(first).is_some_and(|r| r.continues) {
+            first -= 1;
+        }
+        first
+    }
+
     /// Puts the cursor where a click landed; `true` when it was already there
-    /// (the second click, `RET`).
+    /// (the second click, `RET`). A click on a line that continues a row is
+    /// a click on that row ([`Self::control_of`]).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        let n = Self::control_of(n, rows);
         // A ROW OF THE PICKER is chosen there: its cursor, and the second
         // click its `RET`.
         if let (Some(h), Some(Act::Pick(t))) = (
@@ -1863,10 +1890,11 @@ impl View {
         false
     }
 
-    /// The sentence the pointer resting on row `n` reads.
+    /// The sentence the pointer resting on row `n` reads — on any line of
+    /// its control, the control's.
     #[must_use]
     pub fn about(rows: &[Row], n: usize, texts: &ronoctua_i18n::Texts) -> Option<String> {
-        let act = rows.get(n)?.act.as_ref()?;
+        let act = rows.get(Self::control_of(n, rows))?.act.as_ref()?;
         if matches!(act, Act::Pick(_)) {
             return None;
         }
@@ -1913,6 +1941,7 @@ impl View {
                 heading: p.heading,
                 fields: p.fields,
                 section: Section::Encrypt,
+                continues: false,
             });
         }
         if let Some(confirm) = &self.confirm {
@@ -6175,5 +6204,55 @@ mod tests {
         for section in Section::ALL {
             assert_eq!(Section::of_word(section.word()), Some(section));
         }
+    }
+
+    /// FAILS IF: a pair that acts, wrapped over several lines in a narrow
+    /// door, lights and takes the click on its first line only — a line it
+    /// continues onto takes nothing, says nothing under the pointer, or a
+    /// click there lands anywhere but on the pair — or a fact's wrapped line
+    /// takes one.
+    #[test]
+    fn a_wrapped_pair_is_one_control() {
+        let t = texts("pt-BR");
+        let s = scene();
+        let mut v = View::fresh();
+        let rows = v.rows(&s, 30, &t, &utc());
+        let (first, cont) = rows
+            .windows(2)
+            .enumerate()
+            .find_map(|(n, w)| (w[0].act.is_some() && w[1].continues).then_some((n, n + 1)))
+            .unwrap_or_else(|| panic!("no pair that acts wrapped at 30: {}", drawn(&rows)));
+        assert!(
+            rows[cont].takes(),
+            "the line it continues onto takes nothing"
+        );
+        assert!(rows[cont].heading, "the cursor stops on a continued line");
+        assert_eq!(View::control_of(cont, &rows), first);
+        assert_eq!(
+            View::about(&rows, cont, &t),
+            View::about(&rows, first, &t),
+            "the continued line says another sentence"
+        );
+        for (n, r) in rows.iter().enumerate() {
+            if r.continues {
+                assert!(
+                    rows[View::control_of(n, &rows)].act.is_some(),
+                    "row {n} continues a row that does not act"
+                );
+            }
+        }
+        // THE FIRST CLICK ON THE CONTINUED LINE SELECTS THE PAIR, the second
+        // is its `RET` — from a cursor somewhere else.
+        let other = rows
+            .iter()
+            .position(|r| r.act.is_some() && !r.continues)
+            .filter(|n| *n != first)
+            .or_else(|| rows.iter().rposition(|r| r.act.is_some()))
+            .expect("another row that acts");
+        assert_ne!(other, first);
+        v.place(other);
+        assert!(!v.clicked(cont, &rows), "the first click was the `RET`");
+        assert_eq!(v.cursor(), first, "the click landed off the pair");
+        assert!(v.clicked(cont, &rows), "the second click was not the `RET`");
     }
 }

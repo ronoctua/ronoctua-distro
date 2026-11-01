@@ -11,12 +11,14 @@
 //!
 //! The distro pins every AppImage of its table at the release its gate
 //! tested (`assets/distro-pins.json`), and only its owner moves those pins.
-//! A person who turns on [`crate::options::Options::distro_apps_follow_releases`]
-//! lets the routine update move them further on THEIR machines (owner's
-//! decision, 2026-10-20): `ronoctua-software pins refresh` asks GitHub for the
-//! newest release of each table entry that follows one (`follows.github`)
-//! and writes it here — the person's data, in their mirror, signed with the
-//! rest of their plain part and staged to root like `options.json`. Nothing
+//! Unless the person turned it off
+//! ([`crate::options::Options::follows_releases`], on by default since
+//! 2026-11-01), the routine update moves them further on THEIR machines
+//! (owner's decision, 2026-10-20): `ronoctua-software pins refresh` asks
+//! GitHub for the newest release of each table entry that follows one
+//! (`follows.github`) and writes it here — the person's data, in their
+//! mirror, signed with the rest of their plain part and staged to root like
+//! `options.json`. Nothing
 //! outside the table's repositories is ever named, and the update names no
 //! program: the table says what follows, this file says where it is now.
 //!
@@ -58,11 +60,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::declared::GithubReleases;
 use crate::{Document, Refusal, Stamp, Why, check};
-
-/// The hosts following asks: the API that answers which release is the
-/// newest, and the one the download is fetched from. Turning the option on
-/// lets them, and a host not let skips the following, said.
-pub const HOSTS: [&str; 2] = ["api.github.com", "github.com"];
 
 /// The file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

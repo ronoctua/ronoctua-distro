@@ -978,10 +978,12 @@ pub fn cursor_explains(
         said.push(' ');
         said.push_str(&texts.t(why));
     }
-    // A REFUSAL SAYS WHY, in the machine's own words — and a word that is
-    // not the machine's says nothing more than the row's *failed*.
+    // A REFUSAL SAYS WHY, in the words of the program that refused — the
+    // machine's, or root's applier's of the person's declarations, as the
+    // step declares (`refuses`) — and a word that is not that program's
+    // says nothing more than the row's *failed*.
     if let Verdict::Refused(word) = verdict
-        && let Some(why) = refusal_key(word)
+        && let Some(why) = refused_key(step.id, word)
     {
         said.push(' ');
         said.push_str(&texts.t(why));
@@ -1171,6 +1173,12 @@ pub const COMMANDS: &[ronoctua_cmd::Command] = &[
         id: crate::machine_gesture::LET_GO,
         label: key::CMD_MACHINE_LET_GO,
     },
+    // THE PERSON'S BRAIN MODULE THAT WAITS (`crate::approval`), approved by
+    // name as its row approves it: the view on its question, the no first.
+    ronoctua_cmd::Command {
+        id: crate::approval::APPROVE,
+        label: key::CMD_MACHINE_APPROVE_MODULE,
+    },
 ];
 
 /// `LEADER s u` — THE UPDATE, a group under SYSTEM, beside the memory panel
@@ -1223,6 +1231,10 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
         crate::machine_gesture::TRY_AGAIN,
         crate::machine_gesture::HOLD,
         crate::machine_gesture::LET_GO,
+        // A BRAIN MODULE OF THE PERSON'S THAT WAITS (`crate::approval`): the
+        // records' rows ask, and so does the name — a key would ask about a
+        // module the page may not have.
+        crate::approval::APPROVE,
     ],
     ..crate::bindings::Contribution::NONE
 };
@@ -1245,6 +1257,9 @@ pub enum Order {
     Parts(&'static str),
     /// A gesture of the machine's (`crate::machine_gesture`): its question.
     Machine(crate::machine_gesture::Gesture),
+    /// A brain module of the person's that waits (`crate::approval`): its
+    /// question — the one the argument names, or the first.
+    Approve,
 }
 
 /// Which of the update's commands an id is — the one question the footer asks
@@ -1266,6 +1281,7 @@ pub fn order_of(id: &str) -> Option<Order> {
         crate::parts::IMPORT => Some(Order::Parts(crate::parts::IMPORT)),
         crate::parts::EXPORT => Some(Order::Parts(crate::parts::EXPORT)),
         crate::parts::MIRRORS => Some(Order::Parts(crate::parts::MIRRORS)),
+        crate::approval::APPROVE => Some(Order::Approve),
         other => crate::machine_gesture::Gesture::of_command(other).map(Order::Machine),
     }
 }
@@ -1404,6 +1420,10 @@ pub enum Errand {
     /// the sudo bar through the door's gate, and what came of it said in the
     /// door (`crate::machine_gesture`).
     Machine(crate::machine_gesture::Gesture),
+    /// A brain module of the person's said yes to on the page: its request
+    /// staged and asked again in the sudo bar through the door's gate, and
+    /// what came of it said in the door (`crate::approval`).
+    Approve(crate::approval::Waiting),
     /// A sentence of this crate's, said in the door.
     Say(&'static str),
     /// The view closes.
@@ -1434,6 +1454,12 @@ pub enum Target {
     /// An answer to a gesture's question — `true` is yes: a click picks it,
     /// and a click on the pick answers.
     GestureAnswer(bool),
+    /// A brain module of the person's that waits, by its place among them:
+    /// a click asks to approve it there, the no first (`crate::approval`).
+    Approve(usize),
+    /// An answer to an approval's question — `true` is yes: a click picks
+    /// it, and a click on the pick answers.
+    ApproveAnswer(bool),
 }
 
 /// What a question of the view is about: what a run asked for BY HAND would
@@ -1513,6 +1539,18 @@ pub struct View {
     /// A gesture said yes to whose verdict has not come: its row takes no
     /// click meanwhile.
     gesture_asked: Option<crate::machine_gesture::Gesture>,
+    /// The person's brain modules that wait for an approval, as the machine
+    /// says them (`crate::approval`).
+    approvals: crate::approval::Readings,
+    /// Where they are read, and when each file last moved — none for a
+    /// test's or a photograph's view, which reads nothing of the machine.
+    approval_places: Option<(crate::approval::Places, Vec<Option<std::time::SystemTime>>)>,
+    /// The question about one of them, while it is asked — drawn where its
+    /// row was, under the hand that clicked it.
+    approval: Option<crate::approval::Question>,
+    /// An approval said yes to whose verdict has not come: no row takes a
+    /// click meanwhile.
+    approval_asked: bool,
 }
 
 /// The parts' page as the view holds it: the page, what it read, where it
@@ -1601,6 +1639,10 @@ impl View {
             belongings_keys(),
         );
         v.charge = None;
+        let places = crate::approval::Places::here();
+        v.approvals = crate::approval::Readings::read(&places);
+        let stamp = places.stamp();
+        v.approval_places = Some((places, stamp));
         v
     }
 
@@ -1631,6 +1673,10 @@ impl View {
             wake: Waking::default(),
             gesture: None,
             gesture_asked: None,
+            approvals: crate::approval::Readings::default(),
+            approval_places: None,
+            approval: None,
+            approval_asked: false,
         }
     }
 
@@ -1640,6 +1686,33 @@ impl View {
         self.records = records;
         self.belongings_keys = keys;
         self
+    }
+
+    /// The same view over these modules that wait — a test's, a
+    /// photograph's: read once, never again.
+    #[must_use]
+    pub fn with_approvals(mut self, approvals: crate::approval::Readings) -> Self {
+        self.approvals = approvals;
+        self.approval_places = None;
+        self
+    }
+
+    /// The same view over the modules that wait at `places` — a test's
+    /// folder: read now, and again when a file there moves.
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_approval_places(mut self, places: crate::approval::Places) -> Self {
+        self.approvals = crate::approval::Readings::read(&places);
+        let stamp = places.stamp();
+        self.approval_places = Some((places, stamp));
+        self
+    }
+
+    /// Where the modules that wait are read and an approval's request is
+    /// staged — none for a view that read them once.
+    #[must_use]
+    pub fn approval_places(&self) -> Option<&crate::approval::Places> {
+        self.approval_places.as_ref().map(|(places, _)| places)
     }
 
     /// The same view on this battery — a test's, a photograph's.
@@ -2362,6 +2435,149 @@ impl View {
         self.gesture_asked = None;
     }
 
+    // -----------------------------------------------------------------------
+    // THE PERSON'S BRAIN MODULES THAT WAIT (`crate::approval`)
+    // -----------------------------------------------------------------------
+
+    /// The question about a module that waits, while it is asked.
+    #[must_use]
+    pub const fn approval_question(&self) -> Option<&crate::approval::Question> {
+        self.approval.as_ref()
+    }
+
+    /// Whether a question of the head holds the cursor: the run's, a
+    /// gesture's or an approval's — no step wears the cursor meanwhile.
+    #[must_use]
+    pub const fn questioned(&self) -> bool {
+        self.asking.is_some() || self.gesture.is_some() || self.approval.is_some()
+    }
+
+    /// Whether nothing is asked or waited for: a gesture's or an approval's
+    /// row takes a click only then.
+    const fn quiet(&self) -> bool {
+        !self.questioned() && self.gesture_asked.is_none() && !self.approval_asked
+    }
+
+    /// An approval asked by its name (`LEADER :`): the question about the
+    /// module `id` names, or the first still to approve, the no first;
+    /// otherwise the sentence that none waits.
+    pub fn ask_approval(&mut self, id: Option<&str>) -> Errand {
+        let found = self
+            .approvals
+            .to_approve()
+            .find(|w| id.is_none_or(|id| w.id == id))
+            .cloned();
+        let Some(w) = found else {
+            return Errand::Say(key::MACHINE_APPROVE_SAID_NONE);
+        };
+        if !self.quiet() {
+            return Errand::Nothing;
+        }
+        self.approval = Some(crate::approval::Question::of(w));
+        Errand::Moved
+    }
+
+    /// The approval's question answered: it closes, and a yes asks the
+    /// machine — no row taking a click until the verdict comes.
+    fn approval_answered(&mut self, yes: bool) -> Errand {
+        let Some(q) = self.approval.take() else {
+            return Errand::Nothing;
+        };
+        if !yes {
+            return Errand::Moved;
+        }
+        self.approval_asked = true;
+        Errand::Approve(q.of)
+    }
+
+    /// What came of the approval said yes to was heard: the rows take
+    /// clicks again, and the files are read again — an approval recorded
+    /// moved one.
+    pub fn approval_heard(&mut self) {
+        self.approval_asked = false;
+        self.approvals_reread();
+    }
+
+    /// The modules that wait read again when one of their files moved;
+    /// `true` when one did.
+    fn approvals_reread(&mut self) -> bool {
+        let Some((places, stamp)) = self.approval_places.as_mut() else {
+            return false;
+        };
+        let now = places.stamp();
+        if now == *stamp {
+            return false;
+        }
+        *stamp = now;
+        self.approvals = crate::approval::Readings::read(places);
+        if let Some(q) = &self.approval
+            && !self.approvals.to_approve().any(|w| *w == q.of)
+        {
+            self.approval = None;
+        }
+        true
+    }
+
+    /// The modules that wait, as the records say them: each the sentence
+    /// with the hash an approval must name and the row that asks — or its
+    /// question while it is asked —, or, approved already at that hash, the
+    /// sentence that it enters with the next update.
+    fn approval_sentences(&self, texts: &ronoctua_i18n::Texts, out: &mut Vec<RecordLine>) {
+        let acts = crate::chrome::Kind::Setting.tones(false).0;
+        for (n, w) in self.approvals.waiting.iter().enumerate() {
+            let args: [(&str, &str); 2] = [("id", &w.id), ("hash", &w.hash)];
+            if self.approvals.approved_as_shown(w) {
+                out.push(RecordLine {
+                    text: texts.t_with(key::MACHINE_APPROVE_APPROVED, &args[..1]),
+                    color: tokens::color::TEXT_SECONDARY,
+                    target: None,
+                    whole: true,
+                });
+                continue;
+            }
+            out.push(RecordLine {
+                text: texts.t_with(key::MACHINE_APPROVE_WAITING, &args),
+                color: tokens::color::STATE_WARNING,
+                target: None,
+                whole: true,
+            });
+            match self.approval.as_ref().filter(|q| q.of == *w) {
+                Some(q) => {
+                    out.push(RecordLine {
+                        text: texts.t_with(key::MACHINE_APPROVE_QUESTION, &args),
+                        color: tokens::color::TEXT_PRIMARY,
+                        target: None,
+                        whole: true,
+                    });
+                    for (yes, answer) in [
+                        (false, key::MACHINE_APPROVE_NO),
+                        (true, key::MACHINE_APPROVE_YES),
+                    ] {
+                        let color = if q.yes() == yes {
+                            tokens::color::TEXT_HERE_ACTS
+                        } else if yes {
+                            tokens::color::STATE_WARNING
+                        } else {
+                            acts
+                        };
+                        out.push(RecordLine {
+                            text: texts.t(answer),
+                            color,
+                            target: Some(Target::ApproveAnswer(yes)),
+                            whole: false,
+                        });
+                    }
+                }
+                None => out.push(RecordLine {
+                    text: texts.t_with(key::MACHINE_APPROVE_ROW, &args[..1]),
+                    color: acts,
+                    target: self.quiet().then_some(Target::Approve(n)),
+                    whole: true,
+                }),
+            }
+        }
+    }
+
     /// The declared steps.
     #[must_use]
     pub const fn steps(&self) -> &'static [ronoctua_brain::Step] {
@@ -2436,6 +2652,9 @@ impl View {
                 moved = true;
             }
         }
+        // AND THE PERSON'S MODULES THAT WAIT: the report, the approvals and
+        // the approval's verdict, each one `stat`.
+        moved |= self.approvals_reread();
         let now = report_stamp();
         if now == self.stamp {
             return moved;
@@ -2547,6 +2766,21 @@ impl View {
                     return self.gesture_answered(yes);
                 }
                 Press::Escape => return self.gesture_answered(false),
+                _ => {}
+            }
+        }
+        // AND AN APPROVAL'S, the same way.
+        if let Some(q) = self.approval.as_mut() {
+            match press {
+                Press::Up | Press::Down => {
+                    q.moved(press == Press::Down);
+                    return Errand::Moved;
+                }
+                Press::Enter => {
+                    let yes = q.yes();
+                    return self.approval_answered(yes);
+                }
+                Press::Escape => return self.approval_answered(false),
                 _ => {}
             }
         }
@@ -2775,6 +3009,13 @@ impl View {
         {
             return n;
         }
+        if let Some(q) = self.approval.as_ref()
+            && let Some(n) = head
+                .iter()
+                .position(|l| l.target == Some(Target::ApproveAnswer(q.yes())))
+        {
+            return n;
+        }
         if let Some(q) = self.asking
             && let Some(n) = head
                 .iter()
@@ -2854,8 +3095,7 @@ impl View {
                 // THE NAME IS THE LAST PIECE, and the cursor is its colour —
                 // while no question holds the cursor.
                 if at == self.cursor
-                    && self.asking.is_none()
-                    && self.gesture.is_none()
+                    && !self.questioned()
                     && let Some(name) = pieces.last_mut()
                 {
                     name.color = crate::chrome::Kind::ListedFact.tones(true).0;
@@ -2970,7 +3210,7 @@ impl View {
             // was — the no first, the cursor born there. Asking is not doing:
             // the yes is the second click, on the pick, and the sudo bar's.
             Target::Gesture(what) => {
-                if self.gesture.is_some() || self.asking.is_some() || self.gesture_asked.is_some() {
+                if !self.quiet() {
                     return Errand::Nothing;
                 }
                 self.gesture = Some(crate::machine_gesture::Question::of(what));
@@ -2982,6 +3222,28 @@ impl View {
                 };
                 if q.clicked(yes) {
                     self.gesture_answered(yes)
+                } else {
+                    Errand::Moved
+                }
+            }
+            // A BRAIN MODULE OF THE PERSON'S THAT WAITS: the click asks to
+            // approve it, where its row was — the no first, as a gesture.
+            Target::Approve(n) => {
+                let Some(w) = self.approvals.waiting.get(n).cloned() else {
+                    return Errand::Nothing;
+                };
+                if !self.quiet() || self.approvals.approved_as_shown(&w) {
+                    return Errand::Nothing;
+                }
+                self.approval = Some(crate::approval::Question::of(w));
+                Errand::Moved
+            }
+            Target::ApproveAnswer(yes) => {
+                let Some(q) = self.approval.as_mut() else {
+                    return Errand::Nothing;
+                };
+                if q.clicked(yes) {
+                    self.approval_answered(yes)
                 } else {
                     Errand::Moved
                 }
@@ -3109,16 +3371,26 @@ impl View {
                 &mut out,
             );
         }
+        // A FLAKE THAT FOLLOWS A LOCAL CHECKOUT: the update moves nixpkgs
+        // alone, and what is committed there comes in through the sudo door.
+        if r.checkout {
+            out.push(note(
+                texts.t(module::key::SYSTEM_UPDATE_RECORDS_CHECKOUT),
+                tokens::color::TEXT_SECONDARY,
+                None,
+            ));
+        }
+        // THE PERSON'S BRAIN MODULES THAT WAIT FOR AN APPROVAL, last: what
+        // the machine's last build left out, each approved where it is said.
+        self.approval_sentences(texts, &mut out);
         out
     }
 
     /// Whether `what`'s row takes a click now: no question is asked — the
-    /// run's or a gesture's — and no gesture waits for its verdict.
+    /// run's, a gesture's or an approval's — and no gesture or approval
+    /// waits for its verdict.
     fn gesture_takes(&self, what: crate::machine_gesture::Gesture) -> bool {
-        self.asking.is_none()
-            && self.gesture.is_none()
-            && self.gesture_asked.is_none()
-            && self.why_not(what).is_none()
+        self.quiet() && self.why_not(what).is_none()
     }
 
     /// A gesture's row, `row` said with `args` — or, while it is asked, its
@@ -3210,9 +3482,23 @@ pub fn refusal_key(word: &str) -> Option<&'static str> {
         Why::LastGoodWouldFallOut => key::MACHINE_REFUSED_LAST_GOOD_WOULD_FALL_OUT,
         Why::Held => key::MACHINE_REFUSED_HELD,
         Why::NoFailedTrial => key::MACHINE_REFUSED_NO_FAILED_TRIAL,
+        Why::CheckoutMoved => key::MACHINE_REFUSED_CHECKOUT_MOVED,
         Why::Unreadable => key::MACHINE_REFUSED_UNREADABLE,
         Why::Failed => key::MACHINE_REFUSED_FAILED,
     })
+}
+
+/// The sentence of the step `step`'s refusal `word`, in the vocabulary its
+/// declaration names (`refuses` in `steps.nix`): the machine's
+/// ([`refusal_key`]) or root's applier's of the person's declarations
+/// ([`module::applier_refusal_key`]). `None` for a step whose program's
+/// words are not known, and for a word that is not its program's.
+#[must_use]
+pub fn refused_key(step: &str, word: &str) -> Option<&'static str> {
+    match module::refuses(step)? {
+        module::Refuses::Machine => refusal_key(word),
+        module::Refuses::Applier => module::applier_refusal_key(word),
+    }
 }
 
 /// The machine's own sentence of a boot trial's outcome.
@@ -3473,7 +3759,7 @@ usage: ronoctua-shell photograph --door update-scene --scene <file> [options] [s
                              \"trial\": \"failed\", \"again\": false,
                              \"no-trial\": \"not-in-menu\",
                              \"hold\": {\"rev\": \"<hex>\", \"since\": \"<stamp>\"},
-                             \"revision\": \"<hex>\"},
+                             \"revision\": \"<hex>\", \"checkout\": true},
                            \"battery\": {\"discharging\": true, \"percent\": 20},
                            \"metered\": true,
                            \"keys\": \"SUPER s v\",
@@ -3488,19 +3774,23 @@ usage: ronoctua-shell photograph --door update-scene --scene <file> [options] [s
                                \"visibility\": \"private\", \"applied-at\": null,
                                \"outcome\": \"pushed\", \"paths\": 3, \"bytes\": 9}}}
                            \"follow\": {\"copy\": \"on\" | \"off\" | \"unreadable\" | \"newer\",
-                             \"let\": true, \"registry\": {…distro-apps.json…},
+                             \"registry\": {…distro-apps.json…},
                              \"applied\": {…person-applied.json…}},
                            \"parts\": {\"records\": [{…a part's record…}],
                              \"names\": {\"<id>\": \"<name>\"},
                              \"stick\": {…stick.json…},
                              \"mirrors\": [\"https://…\"],
                              \"last-apply\": {…state.json's last apply…},
-                             \"here\": [\"<a missing download's output>\"]}}
+                             \"here\": [\"<a missing download's output>\"]},
+                           \"approvals\": {\"waiting\": [{\"id\": \"my-…\",
+                               \"hash\": \"sha256-…\"}],
+                             \"approved\": {\"my-…\": \"sha256-…\"}}}
                         `metered`: the brain holds the run a `u` asks for,
                         for a metered way out; `cache`: the view opens on the
                         binary cache's page, over these readings; `follow`:
                         on the page of the apps that follow their releases;
-                        `parts`: on the parts' page
+                        `parts`: on the parts' page; `approvals`: the
+                        person's brain modules that wait, on the records
   --out <file>          where to write                 (default: update.png)
   --columns <n>         the window's width, in cells   (default: 90)
   --lines <n>           the height, in lines           (default: 30)
@@ -3528,6 +3818,32 @@ Steps — walked in the order they appear:
         cache: Option<CacheScene>,
         follow: Option<FollowScene>,
         parts: Option<PartsScene>,
+        approvals: Option<ApprovalsScene>,
+    }
+
+    /// The person's brain modules that wait, as the scene says them: the
+    /// report's `awaiting-approval` and root's approvals, by id.
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct ApprovalsScene {
+        waiting: Vec<ronoctua_person::reports::Awaiting>,
+        approved: std::collections::BTreeMap<String, String>,
+    }
+
+    impl ApprovalsScene {
+        fn readings(self) -> crate::approval::Readings {
+            crate::approval::Readings {
+                waiting: self
+                    .waiting
+                    .into_iter()
+                    .map(|w| crate::approval::Waiting {
+                        id: w.id,
+                        hash: w.hash,
+                    })
+                    .collect(),
+                approved: self.approved,
+            }
+        }
     }
 
     /// The parts' page, as the scene says it: the records root would have
@@ -3547,14 +3863,12 @@ Steps — walked in the order they appear:
     }
 
     /// The page of the apps that follow their releases, as the scene says
-    /// it: the person's copy, their consent, and the registry's report as
-    /// the machine would have it.
+    /// it: the person's copy (none: following, the default), and the
+    /// registry's report as the machine would have it.
     #[derive(Debug, Default, serde::Deserialize)]
     #[serde(default, deny_unknown_fields)]
     struct FollowScene {
         copy: Option<String>,
-        #[serde(rename = "let")]
-        let_in: bool,
         registry: Option<ronoctua_person::reports::DistroApps>,
         applied: Option<ronoctua_person::reports::PersonApplied>,
         /// The registry of a system that waits for the next restart, when
@@ -3566,8 +3880,8 @@ Steps — walked in the order they appear:
         fn readings(self) -> Result<crate::follow::Readings> {
             use crate::follow::Choice;
             let copy = match self.copy.as_deref() {
-                None | Some("off") => Choice::Off,
-                Some("on") => Choice::On,
+                None | Some("on") => Choice::On,
+                Some("off") => Choice::Off,
                 Some("unreadable") => Choice::Unreadable,
                 Some("newer") => Choice::Newer,
                 Some(other) => bail!("`copy` is on, off, unreadable or newer, not `{other}`"),
@@ -3578,7 +3892,6 @@ Steps — walked in the order they appear:
                 .map_or((None, Vec::new()), crate::follow::of_registry);
             Ok(crate::follow::Readings {
                 copy,
-                let_in: self.let_in,
                 machine,
                 apps,
                 taken: self
@@ -3653,6 +3966,8 @@ Steps — walked in the order they appear:
         /// The distro revision the machine directory's lock names: what a
         /// hold would hold.
         revision: Option<String>,
+        /// The machine directory's lock names a local checkout.
+        checkout: bool,
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -3798,7 +4113,11 @@ Steps — walked in the order they appear:
             });
             r
         });
+        let approvals = scene.approvals.take().map(ApprovalsScene::readings);
         let mut w = window_of_records(scene);
+        if let Some(readings) = approvals {
+            w.open.view = w.open.view.clone().with_approvals(readings);
+        }
         if let Some(readings) = cache {
             w.open.view = w.open.view.clone().with_cache(readings);
         }
@@ -3819,6 +4138,7 @@ Steps — walked in the order they appear:
             trial: scene.records.trial,
             again: scene.records.again,
             revision: scene.records.revision,
+            checkout: scene.records.checkout,
             no_trial: scene.records.no_trial,
             // THE SYSTEM THAT WAITS, as a scene says it: guarded unless the
             // scene says why no trial could be armed.
@@ -4468,11 +4788,8 @@ impl Content for UpdateWindow {
             // a bar's.
             // WHILE THE QUESTION ON BATTERY IS ASKED the cursor is on its
             // answers, and no step wears the cursor's band — nor while a
-            // gesture of the machine's is asked.
-            let band = if row == self.open.view.cursor()
-                && self.open.view.asking().is_none()
-                && self.open.view.gesture_question().is_none()
-            {
+            // gesture of the machine's, or an approval, is asked.
+            let band = if row == self.open.view.cursor() && !self.open.view.questioned() {
                 Some(tokens::color::SURFACE_SELECTION)
             } else {
                 canvas
@@ -5063,12 +5380,14 @@ mod tests {
         // THE UPDATE'S THREE, the binary cache's five (its page's door, its
         // questions and root's netrc — whose password the sudo bar asks),
         // the door of the page of the apps that follow their releases, the
-        // parts' five (its door and its four questions), and the machine's
-        // three gestures, which the records' rows ask.
-        assert_eq!(COMMANDS.len(), 17);
+        // parts' five (its door and its four questions), the machine's three
+        // gestures, which the records' rows ask, and the approval of a brain
+        // module of the person's that waits, which they ask too.
+        assert_eq!(COMMANDS.len(), 18);
         for what in crate::machine_gesture::Gesture::ALL {
             assert_eq!(order_of(what.command()), Some(Order::Machine(what)));
         }
+        assert_eq!(order_of(crate::approval::APPROVE), Some(Order::Approve));
         assert_eq!(order_of(crate::follow::OPEN), Some(Order::Follow));
         assert_eq!(
             order_of(crate::parts::OPEN),
@@ -5618,6 +5937,7 @@ mod tests {
                 rev: "613862c5a0ff".to_owned(),
                 since: "2026-10-05T12:00:00Z".to_owned(),
             }),
+            checkout: true,
         }
     }
 
@@ -5642,9 +5962,25 @@ mod tests {
             &t.t(key::MACHINE_NO_TRIAL_NOT_IN_MENU),
             "613862c ",
             "2026-10-05",
+            // A FLAKE THAT FOLLOWS A LOCAL CHECKOUT: nixpkgs alone moves.
+            &t.t(module::key::SYSTEM_UPDATE_RECORDS_CHECKOUT),
         ] {
             assert!(said.contains(needle), "`{needle}` is not said: {said}");
         }
+        assert!(
+            !a_view()
+                .with_records(
+                    module::Records {
+                        checkout: false,
+                        ..every_record()
+                    },
+                    "SUPER s v".to_owned()
+                )
+                .top_lines(200, &t)
+                .iter()
+                .any(|l| l.text == t.t(module::key::SYSTEM_UPDATE_RECORDS_CHECKOUT)),
+            "a release's machine said it follows a checkout"
+        );
         assert!(!said.contains("613862c5"), "the revision was not shortened");
         assert!(!said.contains("T12:00"), "the stamp was not made a day");
         assert!(!said.contains('['), "a key with no text: {said}");
@@ -5728,6 +6064,7 @@ mod tests {
     /// A REFUSAL OF THE MACHINE'S PROGRAM SAYS WHY, in the machine's words:
     /// every reason it can give has its sentence, the cursor's register
     /// carries it, and a word that is not the machine's says nothing more.
+    /// And root's applier's, on the step whose refusals are its own.
     #[test]
     fn a_refusal_says_the_machines_reason() {
         let t = texts();
@@ -5736,7 +6073,13 @@ mod tests {
             assert!(!t.t(k).starts_with('['), "{k}");
         }
         assert_eq!(refusal_key("a-word-the-machine-never-says"), None);
-        let step = &module::steps()[0];
+        let speaking = |whose| {
+            module::steps()
+                .iter()
+                .find(|s| module::refuses(s.id) == Some(whose))
+                .expect("a step that speaks it")
+        };
+        let step = speaking(module::Refuses::Machine);
         let said = cursor_explains(step, &Verdict::Refused("build-failed".to_owned()), &t);
         assert!(
             said.contains(&t.t(key::MACHINE_REFUSED_BUILD_FAILED)),
@@ -5744,6 +6087,27 @@ mod tests {
         );
         let plain = cursor_explains(step, &Verdict::Refused("nonsense".to_owned()), &t);
         assert_eq!(plain, cursor_explains(step, &Verdict::Failed, &t));
+
+        // AND ROOT'S APPLIER'S REASON, on the step that hands it the
+        // person's declarations — every one it refuses a staging with, in
+        // its own sentence; the machine's word is not its.
+        let stage = speaking(module::Refuses::Applier);
+        for why in ronoctua_person::tree::TreeWhy::ALL {
+            let Some(k) = module::applier_refusal_key(why.id()) else {
+                continue;
+            };
+            assert!(!t.t(k).starts_with('['), "{k}");
+            let said = cursor_explains(stage, &Verdict::Refused(why.id().to_owned()), &t);
+            assert!(said.contains(&t.t(k)), "{said}");
+        }
+        assert_eq!(refused_key(stage.id, "build-failed"), None);
+        // A STEP WHOSE PROGRAM'S WORDS ARE NOT KNOWN says only that it
+        // failed, whatever the word.
+        let mute = module::steps()
+            .iter()
+            .find(|s| module::refuses(s.id).is_none())
+            .expect("a step with no vocabulary");
+        assert_eq!(refused_key(mute.id, "build-failed"), None);
     }
 
     /// WHAT STARTING IT HERE SAID is its own sentence — on battery, on this
@@ -6016,12 +6380,11 @@ mod tests {
         }
     }
 
-    /// The follow page over two AppImages, the person following, GitHub
-    /// let, the machine built following them.
+    /// The follow page over two AppImages, the person following, the
+    /// machine built following them.
     fn on_the_follow_page() -> crate::follow::Readings {
         crate::follow::Readings {
             copy: crate::follow::Choice::On,
-            let_in: true,
             machine: Some(true),
             waiting: None,
             apps: ["CADCraft", "FigCraft"]
@@ -6473,6 +6836,192 @@ mod tests {
         let kept = w.would_have();
         assert_eq!(kept.len(), 1, "{kept:?}");
         assert!(kept[0].contains(Gesture::TryAgain.word()), "{kept:?}");
+        assert!(ui.orders().is_empty(), "the footer was told");
+    }
+
+    // -----------------------------------------------------------------------
+    // THE PERSON'S BRAIN MODULES THAT WAIT (`crate::approval`)
+    // -----------------------------------------------------------------------
+
+    const TEA_HASH: &str = "sha256-bsxxoKoBi/zTX82E9vCaao7mCkH4nLxO3mU4EoeSeO8=";
+
+    /// Two modules that wait: `my-tea`, to approve, and `my-cake`, approved
+    /// already at the hash the machine reported.
+    fn two_waiting() -> crate::approval::Readings {
+        let waiting = |id: &str, hash: &str| crate::approval::Waiting {
+            id: id.to_owned(),
+            hash: hash.to_owned(),
+        };
+        crate::approval::Readings {
+            waiting: vec![
+                waiting("my-tea", TEA_HASH),
+                waiting("my-cake", "sha256-cake"),
+            ],
+            approved: [("my-cake".to_owned(), "sha256-cake".to_owned())].into(),
+        }
+    }
+
+    /// FAILS IF: a module that waits is not said with the hash an approval
+    /// must name and the row under it that asks; one approved as shown is
+    /// offered again instead of said to enter with the next update; or a
+    /// sentence lacks its words, in either language.
+    #[test]
+    fn the_records_say_each_module_that_waits_with_its_hash() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            let v = a_view().with_approvals(two_waiting());
+            let lines = takes(&v, &t);
+            for (text, _) in &lines {
+                assert!(!text.contains('['), "{language}: {text}");
+            }
+            let said = lines
+                .iter()
+                .position(|(text, _)| text.contains("my-tea") && text.contains(TEA_HASH))
+                .expect("the module and its hash are said");
+            assert_eq!(lines[said].1, None, "the sentence is not the control");
+            let rows: Vec<&(String, Option<Target>)> = lines
+                .iter()
+                .filter(|(_, target)| matches!(target, Some(Target::Approve(_))))
+                .collect();
+            assert_eq!(rows.len(), 1, "{language}: {lines:?}");
+            assert_eq!(rows[0].1, Some(Target::Approve(0)));
+            assert!(rows[0].0.contains("my-tea"), "{language}: {}", rows[0].0);
+            assert!(
+                lines.iter().any(|(text, target)| *text
+                    == t.t_with(key::MACHINE_APPROVE_APPROVED, &[("id", "my-cake")])
+                    && target.is_none()),
+                "{language}: the approved module is not said to enter: {lines:?}"
+            );
+        }
+        let none = takes(&a_view(), &texts());
+        assert!(
+            !none
+                .iter()
+                .any(|(_, target)| matches!(target, Some(Target::Approve(_)))),
+            "{none:?}"
+        );
+    }
+
+    /// FAILS IF: a click on a module's row does anything but ask, there —
+    /// the no first and the cursor born on it —; the first click on an
+    /// answer answers; a yes is not the module and the hash shown; another
+    /// row takes a click while one is asked or waits for its verdict; or the
+    /// name does not ask the same question, or says none waits when one
+    /// does.
+    #[test]
+    fn an_approval_asks_first_with_the_no_first_and_the_second_click_answers() {
+        let t = texts();
+        let mut v = a_view()
+            .with_records(failed_unheld(), String::new())
+            .with_approvals(two_waiting());
+        assert_eq!(
+            v.clicked(Target::Approve(1)),
+            Errand::Nothing,
+            "approved already"
+        );
+        assert_eq!(v.clicked(Target::Approve(0)), Errand::Moved);
+        let q = v.approval_question().expect("asked");
+        assert_eq!(q.of.id, "my-tea");
+        assert!(!q.yes(), "the cursor is not born on no");
+        let lines = takes(&v, &t);
+        assert!(
+            lines.iter().any(|(text, _)| *text
+                == t.t_with(
+                    key::MACHINE_APPROVE_QUESTION,
+                    &[("id", "my-tea"), ("hash", TEA_HASH)]
+                )),
+            "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|(_, x)| matches!(x, Some(Target::Gesture(_) | Target::Approve(_)))),
+            "another row takes a click while an approval is asked"
+        );
+        let rows = v.region_rows(0, 200, 100, &t);
+        let cursor = v.region_cursor(100, &t);
+        assert_eq!(rows[cursor].target, Some(Target::ApproveAnswer(false)));
+        assert_eq!(v.clicked(Target::ApproveAnswer(true)), Errand::Moved);
+        assert!(v.approval_question().is_some(), "the first click answered");
+        let tea = crate::approval::Waiting {
+            id: "my-tea".to_owned(),
+            hash: TEA_HASH.to_owned(),
+        };
+        assert_eq!(
+            v.clicked(Target::ApproveAnswer(true)),
+            Errand::Approve(tea.clone())
+        );
+        assert!(
+            !takes(&v, &t)
+                .iter()
+                .any(|(_, x)| matches!(x, Some(Target::Gesture(_) | Target::Approve(_)))),
+            "a row takes a click while an approval waits for its verdict"
+        );
+        assert_eq!(v.clicked(Target::Approve(0)), Errand::Nothing);
+        v.approval_heard();
+        // THE KEYS: no, then Esc is the no.
+        assert_eq!(v.clicked(Target::Approve(0)), Errand::Moved);
+        assert_eq!(v.key(Press::Down), Errand::Moved);
+        assert!(
+            v.approval_question()
+                .is_some_and(crate::approval::Question::yes)
+        );
+        assert_eq!(v.key(Press::Escape), Errand::Moved);
+        assert!(v.approval_question().is_none(), "Esc did not close it");
+        // BY NAME: the one named, the first, or none.
+        assert_eq!(v.ask_approval(Some("my-tea")), Errand::Moved);
+        assert_eq!(v.key(Press::Enter), Errand::Moved, "the no answered");
+        assert_eq!(v.ask_approval(None), Errand::Moved);
+        assert_eq!(v.approval_question().map(|q| q.of.clone()), Some(tea));
+        assert_eq!(v.key(Press::Escape), Errand::Moved);
+        assert_eq!(
+            v.ask_approval(Some("my-cake")),
+            Errand::Say(key::MACHINE_APPROVE_SAID_NONE),
+            "an approved module was asked again"
+        );
+        assert_eq!(
+            a_view().ask_approval(None),
+            Errand::Say(key::MACHINE_APPROVE_SAID_NONE)
+        );
+    }
+
+    /// FAILS IF: the window does not take a module's row and its answers
+    /// where it draws them, or a photograph's yes reaches root instead of
+    /// being kept.
+    #[test]
+    fn a_photographs_approval_is_asked_where_it_is_drawn_and_reaches_nothing() {
+        let mut w = photographed(&[], "");
+        w.open.view = w.open.view.clone().with_approvals(two_waiting());
+        let mut ui = Ui::for_tests(texts());
+        ui.lines = 40;
+        w.measure(&ui);
+        let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let at = |w: &UpdateWindow, ui: &Ui, wanted: Target| {
+            (0..ui.lines)
+                .map(|line| (f64::from(line) + 0.5) * line_px)
+                .find(|y| w.target_at(ui, 40.0, *y) == Some(wanted))
+                .expect("the row is taken where it is drawn")
+        };
+        let y = at(&w, &ui, Target::Approve(0));
+        let errand = w
+            .open
+            .view
+            .clicked(w.target_at(&ui, 40.0, y).expect("a target"));
+        w.apply(&mut ui, errand);
+        for _ in 0..2 {
+            let y = at(&w, &ui, Target::ApproveAnswer(true));
+            let errand = w
+                .open
+                .view
+                .clicked(w.target_at(&ui, 40.0, y).expect("a target"));
+            w.apply(&mut ui, errand);
+        }
+        let kept = w.would_have();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert!(
+            kept[0].contains("my-tea") && kept[0].contains(TEA_HASH),
+            "{kept:?}"
+        );
         assert!(ui.orders().is_empty(), "the footer was told");
     }
 }

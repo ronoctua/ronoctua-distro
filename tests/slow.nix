@@ -215,6 +215,12 @@
   "boot-trial-falls-back"
   # And on a BIOS machine's GRUB: the same three reboots.
   "boot-trial-falls-back-on-bios"
+  # THE ROLLBACK THROUGH THE RESCUE, on the same kind of machine: a disk image
+  # of the whole base system, two reboots (criteria 1 and 2).
+  "rescue-rolls-back-the-trial"
+  # A TRIAL UNDER SECURE BOOT: lanzaboote's signed disk image and three
+  # reboots, one of them to take the keys (criteria 1 and 2).
+  "boot-trial-is-blessed-under-secure-boot"
   # ── anchor: L10 ──
   # ── anchor: L12 ──
   # ── anchor: L13 ──

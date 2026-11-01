@@ -976,12 +976,17 @@ pub fn read(roots: &Roots, host: &str) -> Declarations {
                 }
                 _ => standing,
             };
-            // A PART OF THE PERSON'S is in the system once it ARRIVED.
+            // A PART OF THE PERSON'S is in the system once it ARRIVED — and
+            // one its realizer held with the reason the system gives an
+            // entry it leaves out is said with that reason, as a skip.
             let standing = match crate::parts::of_entry(applied.as_ref(), entry.id()) {
                 Some(part) if standing == Standing::Applied && !crate::parts::here(roots, part) => {
-                    Standing::Arriving {
-                        failure: crate::parts::failure(roots, part),
-                    }
+                    crate::parts::left_out(roots, part).map_or_else(
+                        || Standing::Arriving {
+                            failure: crate::parts::failure(roots, part),
+                        },
+                        |(reason, detail)| Standing::Skipped { reason, detail },
+                    )
                 }
                 _ => standing,
             };
@@ -1130,6 +1135,7 @@ pub fn shape(installed: &mut Vec<Installed>, d: &Declarations, roots: &Roots) {
             origin: Origin::MineDeclared,
             icon: None,
             trouble: Some(why_leaving(id)),
+            undeclarable: None,
         });
     }
     for row in d
@@ -1171,6 +1177,7 @@ pub fn shape(installed: &mut Vec<Installed>, d: &Declarations, roots: &Roots) {
             origin: Origin::MineDeclared,
             icon: picture,
             trouble: None,
+            undeclarable: None,
         });
     }
 }
@@ -1623,6 +1630,7 @@ mod tests {
             origin: Origin::Declared,
             icon: None,
             trouble: None,
+            undeclarable: None,
         }];
         shape(&mut installed, &d, &roots);
         let of = |key: &AppKey| installed.iter().find(|i| i.key == *key).cloned();
@@ -1719,6 +1727,26 @@ mod tests {
                 failure: Some("error: attribute 'ripgrep' missing".into())
             })
         );
+        // HELD WITH THE SYSTEM'S OWN REASON — its build refused it as the
+        // system refuses an entry it leaves out —: said as that skip, with
+        // that reason, never as one on its way.
+        let held = Record::new("person-0000000a-ripgrep")
+            .planned_entry(&fp)
+            .failed(
+                Why::RefusedByMeta,
+                "`ripgrep` is marked broken",
+                at.clone(),
+                true,
+            );
+        write(&held);
+        assert_eq!(
+            standing(&roots),
+            Some(Standing::Skipped {
+                reason: SkipWhy::RefusedByMeta,
+                detail: "`ripgrep` is marked broken".into()
+            })
+        );
+        write(&failed);
         let here = failed
             .resolved(Target {
                 drv: "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-ripgrep.drv".into(),
@@ -1966,6 +1994,7 @@ mod tests {
             origin: Origin::Mine,
             icon: None,
             trouble: None,
+            undeclarable: None,
         }];
         shape(&mut installed, &d, &roots);
         assert_eq!(installed[0].origin, Origin::MineDeclared);

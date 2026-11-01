@@ -332,6 +332,18 @@ impl Content for SecurityWindow {
             .collect()
     }
 
+    /// A pair wrapped over several lines is one control: its lines light
+    /// together, as in the footer (`View::control_of`, the row a click on
+    /// any of them lands on).
+    fn controls(&self, ui: &Ui) -> Option<Vec<usize>> {
+        let rows = self.view_rows(ui);
+        Some(
+            (0..rows.len())
+                .map(|n| crate::security::View::control_of(n, &rows))
+                .collect(),
+        )
+    }
+
     fn cursor(&self) -> Option<usize> {
         Some(self.open.view.cursor())
     }
@@ -973,10 +985,13 @@ mod tests {
         };
         let (first, ui) = fresh();
         let lit = first.takes(&ui);
-        let cursor = first.cursor();
+        // THE CURSOR'S CONTROL, every line of it: a click on any is its `RET`.
+        let controls = first.controls(&ui).unwrap_or_default();
+        let control = |n: usize| controls.get(n).copied().unwrap_or(n);
+        let cursor = first.cursor().map(control);
         let held: Vec<crate::region::Held> = (0..first.rows(&ui).len())
             .map(|row| {
-                let here = cursor == Some(row);
+                let here = cursor == Some(control(row));
                 let (mut w, mut ui) = fresh();
                 let before = crate::door::seen(&w, &ui);
                 if !here {

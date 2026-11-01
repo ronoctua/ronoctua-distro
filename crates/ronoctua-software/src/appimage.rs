@@ -1166,9 +1166,21 @@ pub fn installed(ctx: &Context) -> Vec<Installed> {
                 origin: crate::state::Origin::Mine,
                 icon: s.icon.clone().map(|path| Picture::File { path }),
                 trouble,
+                undeclarable: undeclarable(&s),
             }
         })
         .collect()
+}
+
+/// Why declaring this AppImage would be refused: only one that names its
+/// GitHub releases has a download to pin — the rule
+/// `crate::pins::appimage::asset_of` refuses by, and nothing else of it.
+#[must_use]
+pub fn undeclarable(s: &Sidecar) -> Option<Refusal> {
+    match s.source {
+        Provenance::Github(_) => None,
+        Provenance::Feed(_) | Provenance::File => Some(Refusal::NothingToPin),
+    }
 }
 
 /// A newer tag already KNOWN (from the kept GitHub answer), never asked for.
@@ -2235,6 +2247,65 @@ mod tests {
         write_sidecar(&roots, &s).unwrap();
         remove(&roots, "evil").unwrap();
         assert!(victim.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the screen offers to keep on every computer an AppImage the
+    /// declaration refuses — one from a file, or a catalogue's without its
+    /// releases — or says it cannot be kept when it names its releases: the
+    /// row and the pin answer by one rule.
+    #[cfg(feature = "net")]
+    #[test]
+    fn only_an_appimage_with_releases_is_offered_to_every_computer() {
+        let dir = scratch("declarable");
+        let ctx = context(&dir, dir.join("never"));
+        let file = Sidecar {
+            key: "local".into(),
+            name: "Local".into(),
+            file: ctx.roots.appimages().join("local.AppImage"),
+            sha256: "0".repeat(64),
+            update_info: None,
+            source: Provenance::File,
+            tag: None,
+            installed: 0,
+            version: None,
+            pattern: None,
+            icon: None,
+            verified: false,
+        };
+        for source in [Provenance::File, Provenance::Feed("local".into())] {
+            let s = Sidecar {
+                source,
+                ..file.clone()
+            };
+            assert_eq!(undeclarable(&s), Some(Refusal::NothingToPin));
+            // Refused before anything is asked of the network.
+            let pinned = crate::pins::appimage::asset_of(&ctx, &s, &crate::github::Net, 0);
+            assert_eq!(pinned.unwrap_err().refusal, Some(Refusal::NothingToPin));
+        }
+        let released = Sidecar {
+            source: Provenance::Github("o/demo".into()),
+            ..file.clone()
+        };
+        assert_eq!(undeclarable(&released), None);
+        // AND THE ROW SAYS IT: the snapshot's reading of each.
+        write_sidecar(&ctx.roots, &file).unwrap();
+        write_sidecar(
+            &ctx.roots,
+            &Sidecar {
+                key: "released".into(),
+                ..released
+            },
+        )
+        .unwrap();
+        let rows = installed(&ctx);
+        let of = |key: &str| {
+            rows.iter()
+                .find(|i| i.key == AppKey::AppImage { key: key.into() })
+                .map(|i| i.undeclarable)
+        };
+        assert_eq!(of("local"), Some(Some(Refusal::NothingToPin)));
+        assert_eq!(of("released"), Some(None));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

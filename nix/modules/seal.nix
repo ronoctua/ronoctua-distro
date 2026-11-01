@@ -12,9 +12,10 @@
 # (`transfers-never-link-age`): this module hands its store path to the
 # queue's unit, which is the one place that starts it.
 #
-# Nothing here is the person's: the passphrase lives in the runtime folder for
-# the life of the job, and the belongings' `key.age` it may be opened with is
-# read where the belongings keep it, never copied.
+# Nothing here is the person's: the passphrase — or the identity the session
+# keeps, which the belongings' CLI lends for an open with no question — lives
+# in the runtime folder for the life of the job, and the belongings' `key.age`
+# it may be opened with is read where the belongings keep it, never copied.
 {
   config,
   lib,

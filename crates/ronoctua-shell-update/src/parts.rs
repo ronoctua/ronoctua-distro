@@ -1087,28 +1087,51 @@ fn stick_value(
 
 /// Why a part's last try failed, in the page's words.
 fn why_said(why: Why, detail: &str, texts: &ronoctua_i18n::Texts) -> String {
-    // THE LAST LINE NIX SAID that says something: a whole log is the
-    // journal's, and the record keeps only its tail.
-    let last = detail
+    // THE ERROR ITSELF, a line for each line of it: Nix's `error:` lines and
+    // what they indent, never the derivations it would build before them nor
+    // the outputs it would have made — a record an older realizer wrote
+    // holds them still. The whole of what it said is the realizer's journal.
+    let said = ronoctua_parts::record::error_of(detail);
+    let lines: Vec<&str> = said
         .lines()
-        // A BUILDER'S LINE comes quoted (`> `): the words are what it said.
-        .map(|l| l.trim().trim_start_matches('>').trim_start())
-        .rfind(|l| !l.is_empty() && !l.starts_with("For full logs"))
-        .unwrap_or_default();
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    // One line stays in the sentence; an error of many begins under it.
+    let error = match lines.as_slice() {
+        [one] => (*one).to_owned(),
+        many => many.iter().fold(String::new(), |all, l| all + "\n" + l),
+    };
+    let error = error.as_str();
     match why {
         Why::BuildFailed => texts.t_with(
             key::DISTRO_PARTS_ABOUT_WHY_BUILD_FAILED,
-            &[("detail", last)],
+            &[("detail", error)],
         ),
         Why::OutputDiffers => texts.t(key::DISTRO_PARTS_ABOUT_WHY_OUTPUT_DIFFERS),
         Why::ProfileFailed => texts.t(key::DISTRO_PARTS_ABOUT_WHY_PROFILE_FAILED),
         Why::HandInRefused => texts.t_with(
             key::DISTRO_PARTS_ABOUT_WHY_HAND_IN_REFUSED,
-            &[("detail", last)],
+            &[("detail", error)],
         ),
-        Why::EvalFailed => {
-            texts.t_with(key::DISTRO_PARTS_ABOUT_WHY_EVAL_FAILED, &[("detail", last)])
-        }
+        Why::EvalFailed => texts.t_with(
+            key::DISTRO_PARTS_ABOUT_WHY_EVAL_FAILED,
+            &[("detail", error)],
+        ),
+        // HELD WITH THE SYSTEM'S OWN REASON, the one it gives an entry it
+        // leaves out — never "it did not evaluate".
+        Why::AttrMissing => texts.t_with(
+            key::DISTRO_PARTS_ABOUT_WHY_ATTR_MISSING,
+            &[("detail", error)],
+        ),
+        Why::NotAPackage => texts.t_with(
+            key::DISTRO_PARTS_ABOUT_WHY_NOT_A_PACKAGE,
+            &[("detail", error)],
+        ),
+        Why::RefusedByMeta => texts.t_with(
+            key::DISTRO_PARTS_ABOUT_WHY_REFUSED_BY_META,
+            &[("detail", error)],
+        ),
     }
 }
 
@@ -1677,13 +1700,13 @@ mod tests {
         let path = dir.join("options.json");
         std::fs::write(
             &path,
-            br#"{"format": 1, "ssh-signing": null, "distro-apps-follow-releases": true}"#,
+            br#"{"format": 1, "ssh-signing": null, "distro-apps-keep-tested-pins": true}"#,
         )
         .unwrap();
         write_mirrors(&path, &["https://m.org".to_owned()]).unwrap();
         let back: ronoctua_person::options::Options =
             ronoctua_person::parse(&std::fs::read(&path).unwrap()).unwrap();
-        assert!(back.distro_apps_follow_releases);
+        assert!(!back.follows_releases(), "the person's off was lost");
         assert_eq!(back.download_mirrors, ["https://m.org"]);
         std::fs::write(&path, b"{not json").unwrap();
         assert_eq!(write_mirrors(&path, &[]), Err(Unchanged::Unreadable));
@@ -1707,16 +1730,49 @@ mod tests {
         assert_eq!(p.clicked(99, &r), Errand::Nothing);
     }
 
-    /// FAILS IF: the reason the page gives is nix's "for full logs" line
-    /// instead of the last thing it said.
+    /// FAILS IF: the reason the page gives is not the error itself — the
+    /// derivations Nix would build said instead, the outputs it would have
+    /// made, the way to the whole log (the journal's) or the errors that
+    /// only follow the first said too, the builder's words lost, a line of
+    /// it cut, or a one-line reason moved off its sentence.
     #[test]
-    fn the_reason_is_the_last_thing_nix_said() {
+    fn the_reason_is_the_error_itself() {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        // A RECORD AN OLDER REALIZER WROTE: the whole of what Nix said.
         let said = why_said(
             Why::BuildFailed,
-            "a\n> curl: (22) 404\nFor full logs, run:\n",
+            "these 2 derivations will be built:\n  /nix/store/a.drv\n\
+             building '/nix/store/a.drv'...\n\
+             error: Cannot build '/nix/store/a.drv'.\n       \
+             Reason: builder failed with exit code 22.\n       \
+             Output paths:\n         /nix/store/a\n       \
+             > curl: (22) 404\n       For full logs, run:\n         \
+             nix log /nix/store/a.drv\n\
+             error: Cannot build '/nix/store/b.drv'.\n       \
+             Reason: 1 dependency failed.\n       \
+             Output paths:\n         /nix/store/b\n",
             &texts,
         );
-        assert!(said.ends_with(": curl: (22) 404"), "{said}");
+        let lines: Vec<&str> = said.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "The last try failed: ",
+                "error: Cannot build '/nix/store/a.drv'.",
+                "Reason: builder failed with exit code 22.",
+                "> curl: (22) 404",
+            ]
+        );
+        let one = why_said(Why::HandInRefused, "not the bytes it pins", &texts);
+        assert_eq!(one, "The file handed in was refused: not the bytes it pins");
+        // WRAPPED, line by line, never cut: what the page draws.
+        let drawn = crate::chrome::note_lines(&said, 30);
+        assert_eq!(drawn[0], "The last try failed:");
+        assert!(
+            drawn
+                .iter()
+                .all(|l| ronoctua_render::layout::width(l) <= 30)
+        );
+        assert!(drawn.contains(&"> curl: (22) 404".to_owned()), "{drawn:?}");
     }
 }

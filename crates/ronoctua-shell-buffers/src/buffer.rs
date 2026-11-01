@@ -5023,6 +5023,7 @@ mod tests {
             desktop_ids: vec!["org.gimp.GIMP.desktop".into()],
             amount: None,
             rehearsed: false,
+            waits: None,
         });
         let copy = ronoctua_transfers::Job::fresh_one(
             1,

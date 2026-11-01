@@ -355,6 +355,17 @@ impl Lay {
                 out.push(plain(Kind::Air));
             }
             out.push(plain(Kind::Heading(section.id)));
+            // A PART OF THE SETTINGS' FILE NOT READ: the rows below show the
+            // repair in that place, and the file keeps what it says.
+            if let Some(partly) = view
+                .settings_unread
+                .as_ref()
+                .filter(|_| section.id == SectionId::Settings)
+            {
+                for l in crate::chrome::note_lines(&partly.said(texts), room) {
+                    out.push(plain(Kind::Note(l, tokens::color::TEXT_DIM)));
+                }
+            }
             match &section.filled {
                 // THE ICONS WAIT FOR THEIR TABLES, and say so — the one
                 // in-process source that can be pending.
@@ -1638,7 +1649,13 @@ pub fn pressed(
             Vec::new()
         }
         Target::Detail(t) => {
-            view.focus = crate::fast_access::Focus::Detail;
+            // THE KEYS COME TO THE DETAIL WITH A PRESS THAT TAKES SOMETHING
+            // there, and only then (`fast_access_detail::takes`): a click on
+            // a fact that offers nothing leaves them where they were.
+            let detail = lay.detail.unwrap_or(lay.results);
+            if crate::fast_access_detail::takes(view, detail, t, texts) {
+                view.focus = crate::fast_access::Focus::Detail;
+            }
             let hit = view.current().cloned();
             crate::fast_access_detail::pressed(view, hit.as_ref(), &lay, t, (x, y), texts)
         }

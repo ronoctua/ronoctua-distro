@@ -193,6 +193,51 @@ fn an_old_addition_at_the_emacs_folder_is_a_root_and_deletes_nothing() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// The sync of `m` that finds `folder` gone whole (`Conflict::gone`): it
+/// waits, its every question that folder's, with nothing suggested and
+/// nothing written yet; the person answers the folder, "yes" — delete it on
+/// every machine — or "no", bring it back here. What it did then.
+fn answer_the_folder(m: &Machine, folder: &str, yes: bool) -> (u32, u32, u32, u32) {
+    m.say(PASSPHRASE);
+    let plan = match m.engine().prepare(&mut |_| {}) {
+        Ok(Done::Waiting(plan)) => plan,
+        other => panic!("{}: the folder's leaving did not wait: {other:?}", m.name),
+    };
+    assert!(
+        plan.conflicts
+            .iter()
+            .all(|c| c.gone.as_deref() == Some(folder) && c.suggested.is_none()),
+        "{}: {plan:?}",
+        m.name
+    );
+    assert_eq!(plan.questions(), 1, "one folder, one question");
+    let decision = if yes {
+        Decision::KeepLocal
+    } else {
+        Decision::TakeRemote
+    };
+    let file = crate::plan::DecisionsFile::of_paths(
+        plan.conflicts
+            .iter()
+            .map(|c| (c.path.clone(), decision))
+            .collect(),
+    );
+    write_private(&m.places.decisions(), &serde_json::to_vec(&file).unwrap()).unwrap();
+    match m.engine().apply(&mut |_| {}) {
+        Ok(Done::Synced(Outcome::Synced {
+            pulled,
+            pushed,
+            deleted_here,
+            deleted_there,
+            ..
+        })) => {
+            base_is_the_disk(m);
+            (pulled, pushed, deleted_here, deleted_there)
+        }
+        other => panic!("{}: {other:?}", m.name),
+    }
+}
+
 /// The files Doom's checkout has (the second review's `doom_on`): with no
 /// framework recognised, they are files of `~/.config/emacs` like any.
 fn doom_on(m: &Machine) {
@@ -208,8 +253,10 @@ fn doom_on(m: &Machine) {
 ///
 /// FAILS IF: B's base names a file B's disk never had (the review's B1: A's
 /// files deleted by a machine that never held them), `~/.config/doom` is
-/// carried, a deletion reaches A that is not one of the files B held and
-/// removed, or A does not keep each of them set aside.
+/// carried, the folder's leaving is taken without the person (or "no" does
+/// not bring it back and leaves A alone), a deletion reaches A that is not
+/// one of the files B held and removed, or A does not keep each of them set
+/// aside.
 #[test]
 fn review_r1_a_removed_folder_deletes_only_what_it_held() {
     let root = scratch("emacs-review-r1");
@@ -231,9 +278,15 @@ fn review_r1_a_removed_folder_deletes_only_what_it_held() {
         .collect();
     assert_eq!(held.len(), 5, "{held:?}");
     assert!(!held.iter().any(|p| p.starts_with("home/.config/doom")));
-    // THE FOLDER REMOVED on B: what B held, and only that, leaves.
-    std::fs::remove_dir_all(b.places.resolve("home/.config/emacs").unwrap()).unwrap();
-    assert_eq!(counts(&b), (0, 0, 0, 5));
+    // THE FOLDER REMOVED on B: the sync waits for the person. "No" brings
+    // back the five B held, and nothing leaves the repository.
+    let emacs = "home/.config/emacs";
+    std::fs::remove_dir_all(b.places.resolve(emacs).unwrap()).unwrap();
+    assert_eq!(answer_the_folder(&b, emacs, false), (5, 0, 0, 0));
+    assert_eq!(b.read(INIT).as_deref(), Some("(alpha)\n"));
+    // REMOVED AGAIN, and "yes": what B held, and only that, leaves.
+    std::fs::remove_dir_all(b.places.resolve(emacs).unwrap()).unwrap();
+    assert_eq!(answer_the_folder(&b, emacs, true), (0, 0, 0, 5));
     // A: Doom's three never reached it before they left; its own two are
     // the person's deletion on B, each set aside here.
     assert_eq!(counts(&a), (0, 0, 2, 0));
@@ -275,9 +328,10 @@ fn review_r1b_a_replaced_folder_sends_only_what_it_held() {
 /// `~/.config/emacs`.
 ///
 /// FAILS IF: anything of A's `~/.emacs.d` travels, B's new file is deleted
-/// or does not travel, a deletion reaches B that is not one of the files A
-/// held and moved away, B does not keep them set aside, or A's page does
-/// not say where its Emacs reads now.
+/// or does not travel, the move leaves the repository without A's person
+/// answering for the folder, a deletion reaches B that is not one of the
+/// files A held and moved away, B does not keep them set aside, or A's page
+/// does not say where its Emacs reads now.
 #[test]
 fn review_r2_a_move_out_of_the_carried_place_is_said_and_sets_aside() {
     let root = scratch("emacs-review-r2");
@@ -296,7 +350,11 @@ fn review_r2_a_move_out_of_the_carried_place_is_said_and_sets_aside() {
         emacs::reads(&a.places),
         Some(Reads::Elsewhere(emacs::EMACS_D))
     );
-    assert_eq!(counts(&a), (0, 0, 0, 2));
+    // THE FOLDER LEFT A WHOLE: asked, and the person says it goes.
+    assert_eq!(
+        answer_the_folder(&a, "home/.config/emacs", true),
+        (0, 0, 0, 2)
+    );
     assert_eq!(counts(&b), (0, 1, 2, 0));
     assert_eq!(
         b.read("home/.config/emacs/lisp/new.el").as_deref(),

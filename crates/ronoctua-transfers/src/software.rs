@@ -419,6 +419,11 @@ fn carry(
         }
         match arriving.recv_timeout(POLL) {
             Ok(line) => {
+                // THE CHILD'S LOG IS ITS STANDARD ERROR (`ronoctua_software::cli`):
+                // each line goes on to the queue's, which the journal keeps.
+                if !line.from_stdout && !line.text.trim().is_empty() {
+                    tracing::info!(said = %line.text.trim_end(), "the software program logged");
+                }
                 if let Some(step) = heard.line(&line.text, line.from_stdout) {
                     if phase != Some(step.phase) {
                         // THE NUMBERS CHANGE MEANING WITH THE PHASE, so what

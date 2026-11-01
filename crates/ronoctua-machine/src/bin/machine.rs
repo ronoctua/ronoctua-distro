@@ -65,7 +65,8 @@ keep-sources  root the sources the machine's flake was evaluated from (the flake
 \x20         the distro, every input) that the store holds, so an update fetches\n\
 \x20         none of them again unchanged; the apply does it after every build\n\
 update-distro  move the distro and nixpkgs inputs forward (the update's first\n\
-\x20         root step), an aimed machine put back on the release first";
+\x20         root step), an aimed machine put back on the release first; where\n\
+\x20         the lock names a local checkout of the distro, nixpkgs alone";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

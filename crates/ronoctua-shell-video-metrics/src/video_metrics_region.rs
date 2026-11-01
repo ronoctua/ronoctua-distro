@@ -62,8 +62,7 @@ impl Kept {
             self.feed = Some(Feed::start(self.catalogue.clone(), move || wake.call()));
         }
         self.readings.now_s = crate::video_metrics::now_s();
-        self.readings.transfers_keys =
-            crate::bindings::keys("transfers-open", None).unwrap_or_default();
+        self.readings.transfers_keys = crate::video_metrics::transfers_keys();
     }
 
     /// `want`, asked of the feed.

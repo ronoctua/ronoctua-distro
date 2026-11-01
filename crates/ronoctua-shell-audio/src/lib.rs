@@ -13,7 +13,7 @@
 // THE KIT AND THE DOOR, by the names the modules already use
 // (`crate::chrome::…`, `crate::door::…`).
 use ronoctua_shell_door::{door, photo, region};
-use ronoctua_shell_kit::{bindings, chrome, echo, fields, sizes};
+use ronoctua_shell_kit::{bindings, chrome, echo, fields, partly_read, sizes};
 // AND PIPEWIRE'S REFUSALS, which the footer says too: a crate under both.
 use ronoctua_shell_audio_words::audio_words;
 

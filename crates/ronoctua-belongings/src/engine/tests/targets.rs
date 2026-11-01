@@ -569,6 +569,79 @@ fn belongings_identity_never_touches_disk() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// FAILS IF: the identity the session keeps is lent with the signing key
+/// beside it, into a file another user could read, over a file that is
+/// there, or for a repository the settings do not name — or anything is
+/// lent while nothing is kept, or the person keeps none (the door then
+/// asks the passphrase).
+#[test]
+fn the_kept_identity_is_lent_alone_into_a_new_private_file() {
+    use std::os::unix::fs::MetadataExt as _;
+    let root = scratch("lend");
+    let places = Places::under(&root);
+    std::fs::create_dir_all(places.prefs().parent().unwrap()).unwrap();
+    let repository = "git@example.org:me/belongings.git";
+    let mut prefs = Belongings::with_repository(repository);
+    std::fs::write(places.prefs(), prefs.to_file()).unwrap();
+    let vault = Memory::default();
+    let out = root.join("lent");
+    assert_eq!(
+        crate::engine::lend_under(&places, &vault, &out)
+            .unwrap_err()
+            .why,
+        Why::NoPassphrase
+    );
+    assert!(!out.exists(), "nothing kept, and something lent");
+    let (ring, _) = Keyring::new(&crate::crypt::passphrase("x".to_owned()), WORK).unwrap();
+    let secret = ring.secret();
+    vault.keep(
+        &description("git@example.org:someone-else/b.git"),
+        secret.expose_secret(),
+        60,
+    );
+    assert_eq!(
+        crate::engine::lend_under(&places, &vault, &out)
+            .unwrap_err()
+            .why,
+        Why::NoPassphrase,
+        "another repository's identity was lent"
+    );
+    vault.keep(&description(repository), secret.expose_secret(), 60);
+    crate::engine::lend_under(&places, &vault, &out).unwrap();
+    let lent = std::fs::read_to_string(&out).unwrap();
+    let identity = secret
+        .expose_secret()
+        .lines()
+        .find(|l| l.starts_with(ronoctua_pq::IDENTITY_PREFIX))
+        .unwrap()
+        .to_owned();
+    assert_eq!(lent, format!("{identity}\n"), "more than the identity lent");
+    assert_eq!(std::fs::metadata(&out).unwrap().mode() & 0o777, 0o600);
+    // NEVER OVER A FILE THAT IS THERE, a link included.
+    assert_eq!(
+        crate::engine::lend_under(&places, &vault, &out)
+            .unwrap_err()
+            .why,
+        Why::Failed
+    );
+    let link = root.join("link");
+    std::os::unix::fs::symlink(root.join("elsewhere"), &link).unwrap();
+    assert!(crate::engine::lend_under(&places, &vault, &link).is_err());
+    assert!(!root.join("elsewhere").exists(), "a link was followed");
+    // THE PERSON KEEPS NONE: nothing is lent, whatever the keyring holds.
+    prefs.keep_unlocked = false;
+    std::fs::write(places.prefs(), prefs.to_file()).unwrap();
+    let off = root.join("off");
+    assert_eq!(
+        crate::engine::lend_under(&places, &vault, &off)
+            .unwrap_err()
+            .why,
+        Why::NoPassphrase
+    );
+    assert!(!off.exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// FAILS IF: a sync with the identity the session kept asks for a
 /// passphrase; one with nothing kept does not; an identity that no longer
 /// opens the repository (another machine migrated it, or made it again) is

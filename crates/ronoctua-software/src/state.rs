@@ -48,6 +48,14 @@ pub struct Installed {
     /// Android app while the session is down).
     #[serde(default)]
     pub trouble: Option<Refusal>,
+    /// Why a declaration of it — kept on all the person's computers
+    /// ([`crate::Order::Declare`]) — would be refused, when it would: an
+    /// AppImage or an apk that came from a file has no download to pin
+    /// ([`Refusal::NothingToPin`]). Its source's reader says it with the
+    /// rule the declaration refuses by, so the screen offers the gesture
+    /// only where it can succeed and says why where it cannot.
+    #[serde(default)]
+    pub undeclarable: Option<Refusal>,
 }
 
 /// Who put a program there.

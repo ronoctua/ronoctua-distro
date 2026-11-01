@@ -6,6 +6,7 @@
 //! plan wants, and — when the two differ — why: arriving, waiting for
 //! something, or failed and tried again.
 
+use ronoctua_person::reports::SkipWhy;
 use ronoctua_person::{Document, FORMAT, Refusal, Stamp, Why as FileWhy};
 use serde::{Deserialize, Serialize};
 
@@ -151,7 +152,10 @@ pub struct Failure {
     pub why: Why,
     /// When.
     pub at: Stamp,
-    /// What `nix` said last, for the journal and the page's detail.
+    /// The error itself, for the page: Nix's `error:` lines and what they
+    /// indent ([`error_of`]), never the list of what it would build before
+    /// them nor the outputs it would have made. The whole of what it said is
+    /// the realizer's journal.
     pub detail: String,
 }
 
@@ -168,22 +172,36 @@ pub enum Why {
     ProfileFailed,
     /// A file handed in is not the download its name says: other bytes.
     HandInRefused,
-    /// The person's declared entry did not evaluate: a name nixpkgs
-    /// dropped, an alias that throws, a licence they did not accept.
+    /// The person's declared entry did not evaluate: an alias that throws,
+    /// an `abort` deep in a package.
     EvalFailed,
+    /// The person's declared entry is one the system leaves out, for the
+    /// reason it gives such an entry in `person-applied.json`
+    /// ([`SkipWhy::AttrMissing`]): nixpkgs has no such name. Held with the
+    /// consumer's own reason, never as an evaluation that failed.
+    AttrMissing,
+    /// The same, for [`SkipWhy::NotAPackage`]: the name is not a package.
+    NotAPackage,
+    /// The same, for [`SkipWhy::RefusedByMeta`]: its `meta` refuses it here
+    /// — not free and not consented to, broken or insecure.
+    RefusedByMeta,
 }
 
 impl Why {
     /// Every one.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 8] = [
         Self::BuildFailed,
         Self::OutputDiffers,
         Self::ProfileFailed,
         Self::HandInRefused,
         Self::EvalFailed,
+        Self::AttrMissing,
+        Self::NotAPackage,
+        Self::RefusedByMeta,
     ];
 
-    /// Its kebab-case name.
+    /// Its kebab-case name — for the three a part is held with for the
+    /// system's own reason, that reason's ([`SkipWhy::id`]).
     #[must_use]
     pub const fn id(self) -> &'static str {
         match self {
@@ -192,7 +210,36 @@ impl Why {
             Self::ProfileFailed => "profile-failed",
             Self::HandInRefused => "hand-in-refused",
             Self::EvalFailed => "eval-failed",
+            Self::AttrMissing => "attr-missing",
+            Self::NotAPackage => "not-a-package",
+            Self::RefusedByMeta => "refused-by-meta",
         }
+    }
+
+    /// The reason the system gives an entry it leaves out, when the part was
+    /// held with one — what the software centre says of the entry.
+    #[must_use]
+    pub const fn skipped(self) -> Option<SkipWhy> {
+        match self {
+            Self::AttrMissing => Some(SkipWhy::AttrMissing),
+            Self::NotAPackage => Some(SkipWhy::NotAPackage),
+            Self::RefusedByMeta => Some(SkipWhy::RefusedByMeta),
+            Self::BuildFailed
+            | Self::OutputDiffers
+            | Self::ProfileFailed
+            | Self::HandInRefused
+            | Self::EvalFailed => None,
+        }
+    }
+
+    /// The one a part is held with when its entry's own build refuses it
+    /// with the system's reason `word` (`personParts`'s `refused`), or
+    /// `None` for a word that is not one of those.
+    #[must_use]
+    pub fn of_skip(word: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|w| w.skipped().is_some_and(|s| s.id() == word))
     }
 }
 
@@ -216,9 +263,101 @@ pub fn wait_s(attempts: u32) -> i64 {
         .min(LONGEST_WAIT_S)
 }
 
-/// How long a failure's detail may be in the record: the last lines of what
-/// `nix` said, never a whole log.
+/// How long a failure's detail may be in the record: the error, never a
+/// whole log.
 pub const DETAIL_MOST: usize = 2048;
+
+/// The error in what `nix` said: each `error:` with the lines it indents
+/// under it — what failed, why, and the builder's last words. What is not
+/// the error goes, so the footer's region shows a short one:
+///
+/// - before the first `error:`, the derivations Nix would build, the paths it
+///   would fetch and the builds it began;
+/// - a line of Nix's own between two errors (another build begun);
+/// - an error that only follows another — each derivation that needed the
+///   one that failed, `Reason: 1 dependency failed.`;
+/// - and inside an error, the `Output paths:` it would have made, a builder's
+///   empty line (`>`), and `For full logs, run: nix log …`.
+///
+/// All of it when no line is an error (a refusal of ours, a program that did
+/// not start). The whole of what Nix said — the way to the builder's whole
+/// log among it — is the realizer's journal. Pure.
+#[must_use]
+pub fn error_of(said: &str) -> String {
+    // THE ERRORS, each its first line and the indented lines under it.
+    let mut errors: Vec<Vec<&str>> = Vec::new();
+    for line in said.lines() {
+        if line.starts_with("error:") {
+            errors.push(vec![line]);
+        } else if line.starts_with(char::is_whitespace)
+            && let Some(error) = errors.last_mut()
+        {
+            error.push(line);
+        }
+    }
+    if errors.is_empty() {
+        return said.to_owned();
+    }
+    // AN ERROR THAT ONLY FOLLOWS ANOTHER, as Nix 2.34 says it (`Reason: N
+    // dependencies failed.`) and as Nix before it did (`error: N dependencies
+    // of derivation '…' failed to build`) — never the only one.
+    let follows = |error: &[&str]| {
+        let first = error[0];
+        (first.contains(" dependencies of derivation ") && first.ends_with(" failed to build"))
+            || error.iter().any(|l| {
+                let l = l.trim();
+                l.starts_with("Reason: ")
+                    && (l.ends_with(" dependency failed.") || l.ends_with(" dependencies failed."))
+            })
+    };
+    errors.retain(|e| !follows(e));
+    if errors.is_empty() {
+        return error_of_whole(said);
+    }
+    let mut out = String::new();
+    for error in errors {
+        // What the line before began: the outputs' heading takes the store
+        // paths under it, the log's the `nix log` command under it.
+        let mut paths = false;
+        let mut log = false;
+        for line in error {
+            let trimmed = line.trim();
+            if (paths && trimmed.starts_with("/nix/store/"))
+                || (log && trimmed.starts_with("nix log "))
+            {
+                continue;
+            }
+            paths = trimmed == "Output paths:";
+            log = trimmed == "For full logs, run:";
+            // THE OUTPUTS IT WOULD HAVE MADE, A BUILDER'S EMPTY LINE AND THE
+            // WAY TO THE WHOLE LOG (both of Nix's forms): none says what
+            // failed.
+            if paths || log || trimmed == ">" || trimmed.starts_with("For full logs, run ") {
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    // AS IT ENDED: an error said with no line break after it keeps none.
+    if !said.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+/// What Nix said from its first `error:` line on, as it said it: what
+/// [`error_of`] keeps when every error there only follows another.
+fn error_of_whole(said: &str) -> String {
+    let mut at = 0;
+    for line in said.split_inclusive('\n') {
+        if line.starts_with("error:") {
+            return said[at..].to_owned();
+        }
+        at += line.len();
+    }
+    said.to_owned()
+}
 
 impl Record {
     /// A part never seen before.
@@ -372,7 +511,7 @@ impl Record {
         self.last_failure = Some(Failure {
             why: Why::HandInRefused,
             at: now,
-            detail: tail(detail, DETAIL_MOST),
+            detail: bounded(&error_of(detail), DETAIL_MOST),
         });
         self
     }
@@ -389,7 +528,7 @@ impl Record {
     /// worked: a try with no network says it waits, and is not counted.
     #[must_use]
     pub fn failed(mut self, why: Why, detail: &str, now: Stamp, linked: bool) -> Self {
-        let detail = tail(detail, DETAIL_MOST);
+        let detail = bounded(&error_of(detail), DETAIL_MOST);
         if linked {
             self.attempts = self.attempts.saturating_add(1);
             self.waiting_for = None;
@@ -434,6 +573,29 @@ pub fn read_all(dir: &std::path::Path) -> Vec<Record> {
         .filter_map(|id| std::fs::read(dir.join(format!("{id}.json"))).ok())
         .filter_map(|bytes| ronoctua_person::parse::<Record>(&bytes).ok())
         .collect()
+}
+
+/// `text` in at most `most` bytes. An error too long keeps its first line —
+/// what failed — and its end — what the builder said last, and where the
+/// whole log is —, and the middle goes; one line with no end of its own
+/// keeps its end.
+fn bounded(text: &str, most: usize) -> String {
+    if text.len() <= most {
+        return text.to_owned();
+    }
+    match text.split_once('\n') {
+        Some((first, rest)) if first.len() < most / 4 => {
+            let end = tail(rest, most - first.len() - 1);
+            // From a line's beginning: half a line is no line Nix said.
+            let cut = rest.len() - end.len();
+            let end = match end.split_once('\n') {
+                Some((_, whole)) if cut > 0 && rest.as_bytes()[cut - 1] != b'\n' => whole,
+                _ => end.as_str(),
+            };
+            format!("{first}\n{end}")
+        }
+        _ => tail(text, most),
+    }
 }
 
 /// The last `most` bytes of `text`, cut at a character boundary.
@@ -641,6 +803,97 @@ mod tests {
         assert!(offline.try_now(1_000));
         let fresh = Record::new("z").planned(Some(want(OUT_1)));
         assert!(fresh.try_now(0));
+    }
+
+    /// What Nix 2.34 said of a part whose download failed under it, as
+    /// `nix build` writes it with no terminal: what it would build first,
+    /// then the error.
+    const NIX_SAID: &str = "\
+these 2 derivations will be built:
+  /nix/store/dd7f0jfswx6phjl6zn8pncxkllib8i6f-dep-src.drv
+  /nix/store/zd2yv8iyjw4zazyjrgcd8h5sqk8q0wl9-part.drv
+building '/nix/store/dd7f0jfswx6phjl6zn8pncxkllib8i6f-dep-src.drv'...
+error: Cannot build '/nix/store/dd7f0jfswx6phjl6zn8pncxkllib8i6f-dep-src.drv'.
+       Reason: builder failed with exit code 1.
+       Output paths:
+         /nix/store/2p53prbj1nki6rnfzyp35b9msj89rhv7-dep-src
+       Last 2 log lines:
+       > curl: (22) The requested URL returned error: 404
+       > error: cannot download x.tar.gz from any mirror
+       For full logs, run:
+         nix log /nix/store/dd7f0jfswx6phjl6zn8pncxkllib8i6f-dep-src.drv
+error: Cannot build '/nix/store/zd2yv8iyjw4zazyjrgcd8h5sqk8q0wl9-part.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/9ychva4wjpip2f0bp9vbrgk4mw5wy2sj-part
+";
+
+    /// FAILS IF: a failed part's record keeps what Nix would have built
+    /// instead of the error — the page opened on a list of derivations —,
+    /// keeps the outputs the build would have made, the way to the whole log
+    /// or the errors that only follow the first (the footer's region shows a
+    /// short error), loses the builder's words, or a refusal of ours with no
+    /// `error:` in it is lost.
+    #[test]
+    fn a_failure_keeps_the_error_itself() {
+        let failed = Record::new("x").planned(Some(want(OUT_1))).trying().failed(
+            Why::BuildFailed,
+            NIX_SAID,
+            at(1),
+            true,
+        );
+        let detail = failed.last_failure.expect("a failure").detail;
+        assert_eq!(
+            detail,
+            "\
+error: Cannot build '/nix/store/dd7f0jfswx6phjl6zn8pncxkllib8i6f-dep-src.drv'.
+       Reason: builder failed with exit code 1.
+       Last 2 log lines:
+       > curl: (22) The requested URL returned error: 404
+       > error: cannot download x.tar.gz from any mirror
+"
+        );
+        // AS NIX BEFORE 2.34 SAID IT: the error, and the derivation that
+        // needed it, on a line of its own.
+        let older = "\
+these 2 derivations will be built:
+  /nix/store/a.drv
+building '/nix/store/a.drv'...
+error: builder for '/nix/store/a.drv' failed with exit code 1;
+       last 1 log lines:
+       >
+       > no such file
+       For full logs, run 'nix log /nix/store/a.drv'.
+building '/nix/store/c.drv'...
+error: 1 dependencies of derivation '/nix/store/b.drv' failed to build
+";
+        assert_eq!(
+            error_of(older),
+            "\
+error: builder for '/nix/store/a.drv' failed with exit code 1;
+       last 1 log lines:
+       > no such file
+"
+        );
+        // AN EVALUATION'S ERROR is one error, its trace indented under it.
+        let evaluated =
+            "error:\n       … while evaluating 'x'\n       error: attribute 'y' missing\n";
+        assert_eq!(error_of(evaluated), evaluated);
+        let one = "error: attribute 'ripgrep' missing";
+        assert_eq!(error_of(one), one, "as it ended, with no line break");
+        let ours = "built /nix/store/a, the plan wants /nix/store/b";
+        assert_eq!(error_of(ours), ours);
+        let refused = Record::new("x").refused_hand_in(ours, at(2));
+        assert_eq!(refused.last_failure.expect("said").detail, ours);
+        // AN ERROR TOO LONG keeps what failed and what the builder said last.
+        let long = format!(
+            "error: Cannot build 'x.drv'.\n{}> the last thing it said\n",
+            "> a line the builder printed\n".repeat(200)
+        );
+        let kept = bounded(&long, DETAIL_MOST);
+        assert!(kept.len() <= DETAIL_MOST, "{}", kept.len());
+        assert!(kept.starts_with("error: Cannot build 'x.drv'.\n"));
+        assert!(kept.ends_with("> the last thing it said\n"));
     }
 
     /// FAILS IF: a record goes out in a shape its own reader refuses, or a

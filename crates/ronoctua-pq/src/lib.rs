@@ -90,16 +90,21 @@ pub enum Why {
     Mixed,
     /// A read or a write failed, or what was handed over is not usable.
     Failed,
+    /// The session keeps no identity to open it with ([`Action::OpenKept`]):
+    /// the kernel let it go before the marker said so, or the person keeps
+    /// none. The door asks the passphrase instead.
+    NotKept,
 }
 
 impl Why {
     /// Every one.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::WrongKey,
         Self::WrongPassphrase,
         Self::Corrupt,
         Self::Mixed,
         Self::Failed,
+        Self::NotKept,
     ];
 
     /// Its kebab-case name.
@@ -111,6 +116,7 @@ impl Why {
             Self::Corrupt => "corrupt",
             Self::Mixed => "mixed",
             Self::Failed => "failed",
+            Self::NotKept => "not-kept",
         }
     }
 
@@ -322,6 +328,15 @@ pub enum Action {
         /// The `0600` file holding the passphrase that opens it.
         passphrase_file: PathBuf,
     },
+    /// With the identity the SESSION keeps, for a file sealed "to myself"
+    /// while a passphrase typed earlier in this session still holds it (the
+    /// belongings' `runtime/unlocked`) — no question asked. It carries
+    /// nothing: the queue has the belongings' program, the one reader of the
+    /// kernel's keyring, lend the identity into a `0600` file of the queue's
+    /// own for this run alone, and hands the sealer [`Action::Open`] with
+    /// it. The sealer refuses this one as it comes (`failed`): it reads no
+    /// keyring.
+    OpenKept {},
 }
 
 impl Job {
@@ -330,7 +345,9 @@ impl Job {
     #[must_use]
     pub fn secrets(&self) -> Vec<&Path> {
         match &self.action {
-            Action::SealTo { .. } => Vec::new(),
+            // THE LENT IDENTITY is the queue's own file, made and removed
+            // around the run that reads it: this job names none.
+            Action::SealTo { .. } | Action::OpenKept {} => Vec::new(),
             Action::SealPassphrase {
                 passphrase_file, ..
             }
@@ -508,6 +525,29 @@ mod tests {
         for why in Why::ALL {
             assert_eq!(Why::of_id(why.id()), Some(why));
         }
+    }
+
+    /// FAILS IF: an open with the session's identity carries anything across
+    /// the socket — a field the identity could ride in — names a secret the
+    /// queue would remove, or is taken for a seal.
+    #[test]
+    fn an_open_with_the_session_s_identity_carries_nothing() {
+        let job = Job {
+            action: Action::OpenKept {},
+            from: "/home/p/a.age".into(),
+            into: "/home/p/a".into(),
+        };
+        let text = serde_json::to_string(&job).unwrap();
+        assert!(text.contains(r#""action":{"do":"open-kept"}"#), "{text}");
+        assert_eq!(serde_json::from_str::<Job>(&text).unwrap(), job);
+        assert!(job.secrets().is_empty());
+        assert!(!job.seals());
+        let carried = text.replacen(
+            r#"{"do":"open-kept"}"#,
+            r#"{"do":"open-kept","identity":"AGE-SECRET-KEY-PQ-1X"}"#,
+            1,
+        );
+        assert!(serde_json::from_str::<Job>(&carried).is_err());
     }
 
     /// FAILS IF: the shape a door checks a pasted key with lets a key that

@@ -69,6 +69,10 @@ impl Calc {
     #[must_use]
     pub fn over(view: View, store: ronoctua_store::Store<crate::calc::Kept>, kept: bool) -> Self {
         let (back, heard) = mpsc::channel();
+        // THE HISTORY CAME FROM A READ WITHOUT A WORD: the file is judged
+        // again for the places of it that did not read, in both doors.
+        let mut view = view;
+        view.read_in_part(crate::partly_read::judged(&store));
         Self {
             view,
             store,
@@ -122,11 +126,14 @@ impl Calc {
     /// The file changed: the history is what it says — read with `parsed`,
     /// and a file that will not parse keeps the copy held. Whether it moved.
     pub fn reread(&mut self) -> bool {
+        let said = self
+            .view
+            .read_in_part(crate::partly_read::judged(&self.store));
         let Some(kept) = self.store.parsed() else {
-            return false;
+            return said;
         };
         if kept.history.as_slice() == self.view.history() {
-            return false;
+            return said;
         }
         self.view.history_is(kept.history);
         true

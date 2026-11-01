@@ -511,6 +511,17 @@ pub mod prefs {
         read_at(&dir.join(FILE))
     }
 
+    /// [`read`], and what the read owes the person: the places of the file
+    /// that did not read (`partly_read`) — for the view that shows it.
+    #[must_use]
+    pub fn read_in_part() -> (Choice, Option<crate::partly_read::PartlyRead>) {
+        let Some(dir) = ronoctua_store::config_dir() else {
+            return (Choice::default(), None);
+        };
+        let (written, partly) = crate::partly_read::read(&store_in(&dir));
+        (written.choice(), partly)
+    }
+
     /// [`read`], with its path as a parameter — `<dir>/locale.json`.
     #[must_use]
     pub fn read_at(path: &std::path::Path) -> Choice {

@@ -541,6 +541,16 @@ pub fn now_s() -> i64 {
     i64::try_from(crate::when::seconds_now()).unwrap_or(i64::MAX)
 }
 
+/// How the transfers' queue is opened from the leader, as a sentence
+/// teaches it: the leader's label and its keys (`SUPER t t`,
+/// `bindings::taught`) — never the keys alone, which read `t t` where every
+/// other door says `SUPER t t` (`keys-are-never-text`). What every door
+/// fills [`Readings::transfers_keys`] with.
+#[must_use]
+pub fn transfers_keys() -> String {
+    crate::bindings::taught("transfers-open", None).unwrap_or_default()
+}
+
 /// How many videos a page of the list shows.
 pub const PER_PAGE: u32 = 24;
 
@@ -656,7 +666,7 @@ pub struct Readings {
     /// The machine's zone, for dates.
     pub zone: ronoctua_files::when::Zone,
     /// How the transfers' queue is opened from the leader, taught by the
-    /// sentence a download says (`bindings::keys`, filled by the door).
+    /// sentence a download says ([`transfers_keys`], filled by the door).
     pub transfers_keys: String,
 }
 
@@ -4921,5 +4931,20 @@ pub(crate) mod tests {
             "the air between two cells acted"
         );
         assert_eq!(v.at, at, "the air between two cells took the cursor");
+    }
+
+    /// FAILS IF: what every door fills the download's sentence with teaches
+    /// the queue's keys without the leader's label — `t t` where the other
+    /// doors say `SUPER t t` (`keys-are-never-text`) — or the sentence does
+    /// not say it.
+    #[test]
+    fn a_download_teaches_the_queue_with_the_leader() {
+        let keys = crate::bindings::with_stub(&[("t t", "transfers-open")], transfers_keys);
+        assert_eq!(keys, format!("{} t t", crate::bindings::label()));
+        let said = texts("en-GB").t_with(
+            key::VIDEO_METRICS_DOWNLOADING,
+            &[("title", "A film"), ("keys", &keys)],
+        );
+        assert!(said.contains(&keys), "{said}");
     }
 }

@@ -179,9 +179,6 @@ impl Drop for Guard {
 /// worst moment.
 pub fn run() -> Result<()> {
     let texts = Texts::from_env();
-    // polkit's agent, for the VT where no desktop registered one. It has to
-    // outlive the loop: dropping it takes the agent with it.
-    let _agent = action::agent();
 
     let mut output = std::io::stdout();
     enable_raw_mode().context("raw mode")?;
@@ -222,7 +219,7 @@ pub fn run() -> Result<()> {
             Step::Draw => {}
             Step::Leave => return Ok(()),
             Step::Run(a) => {
-                view.said = Some(say_of(a, &view, &places, &texts));
+                view.said = Some(run_row(&mut guard, a, &view, &places, &texts)?);
                 view.panes = panes_of();
                 state_lines = state_of(&places, &texts);
             }
@@ -467,17 +464,71 @@ fn footer(f: &mut ratatui::Frame, at: Rect, view: &View, texts: &Texts) {
     f.render_widget(Paragraph::new(lines), inset(at));
 }
 
-/// Runs a row and turns the outcome into a sentence.
-fn say_of(a: &Action, view: &View, places: &ronoctua_memory::Places, texts: &Texts) -> String {
+/// Runs a row, and turns the outcome into the footer's sentence.
+///
+/// A row that ASKS ([`action::asks`]) gets the plain terminal first, its name
+/// on top: polkit's agent asks there, on the lines this console leaves, and
+/// the screen comes back when the call is over. And a row that fails with
+/// something to say says ALL of it there — the footer has one line, and the
+/// reason is what the person came to read — until a key gives the console
+/// back.
+fn run_row(
+    guard: &mut Guard,
+    a: &Action,
+    view: &View,
+    places: &ronoctua_memory::Places,
+    texts: &Texts,
+) -> Result<String> {
+    let asks = action::asks(a);
+    // polkit's agent for this process, registered for this row alone.
+    let agent = asks.then(action::agent).flatten();
+    if asks {
+        leave_the_screen(guard);
+        println!("{}", texts.t(a.label));
+    }
     let outcome = match a.run {
         Run::Own(Own::CloseFocused) => close_focused(),
         Run::Own(Own::KillChosen) => kill_chosen(view, places),
         Run::Own(Own::KillBiggest) => kill_biggest(places),
-        other => action::run_it(other),
+        other => action::run_it(other, asks),
     };
+    drop(agent);
+    let reason = match &outcome {
+        action::Outcome::Failed(why) if !why.trim().is_empty() => Some(why.as_str()),
+        _ => None,
+    };
+    if let Some(why) = reason {
+        if !asks {
+            leave_the_screen(guard);
+            println!("{}", texts.t(a.label));
+        }
+        say_it_whole(why, texts);
+    }
+    if asks || reason.is_some() {
+        take_the_screen_back(guard)?;
+    }
+    Ok(said_of(&outcome, texts))
+}
+
+/// The whole reason a row failed, on the plain terminal, until a key.
+pub(crate) fn say_it_whole(why: &str, texts: &Texts) {
+    println!("{}:", texts.t(key::RESCUE_FAILED));
+    println!("{why}");
+    println!();
+    println!("{}", texts.t(key::RESCUE_ANY_KEY));
+    let _ = std::io::stdout().flush();
+    wait_for_a_key();
+}
+
+/// The footer's one line for an outcome: what failed says its first line
+/// there, and the whole of it on the plain terminal ([`say_it_whole`]).
+pub(crate) fn said_of(outcome: &action::Outcome, texts: &Texts) -> String {
     match outcome {
         action::Outcome::Ran => texts.t(key::RESCUE_RAN),
-        action::Outcome::Failed(said) => format!("{}: {said}", texts.t(key::RESCUE_FAILED)),
+        action::Outcome::Failed(said) => {
+            let first = said.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+            format!("{}: {first}", texts.t(key::RESCUE_FAILED))
+        }
         action::Outcome::Missing(variable) => {
             format!("{}: {variable}", texts.t(key::RESCUE_FAILED))
         }
@@ -652,13 +703,7 @@ fn human(bytes: u64) -> String {
 /// way of drawing a terminal — which is exactly the machinery a rescue console
 /// should not be carrying.
 fn hand_over(guard: &mut Guard, h: &Hand, texts: &Texts) -> Result<()> {
-    let _ = disable_raw_mode();
-    let _ = crossterm::execute!(
-        guard.0.backend_mut(),
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    );
-    guard.give_the_palette_back();
+    leave_the_screen(guard);
 
     match h {
         Hand::Shell => match action::shell() {
@@ -674,6 +719,23 @@ fn hand_over(guard: &mut Guard, h: &Hand, texts: &Texts) -> Result<()> {
         Hand::Edit(path) => crate::edit::edit_it(path, texts),
     }
 
+    take_the_screen_back(guard)
+}
+
+/// The plain terminal, cooked: a line is typed and ends with `Enter`, as a
+/// shell, a pager — or polkit's agent asking for the password — read it.
+fn leave_the_screen(guard: &mut Guard) {
+    let _ = disable_raw_mode();
+    let _ = crossterm::execute!(
+        guard.0.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    );
+    guard.give_the_palette_back();
+}
+
+/// The console's own screen again, drawn from nothing.
+fn take_the_screen_back(guard: &mut Guard) -> Result<()> {
     enable_raw_mode().context("raw mode back")?;
     let _ = crossterm::execute!(
         guard.0.backend_mut(),
@@ -737,7 +799,7 @@ fn show_file(path: &Path, texts: &Texts) {
 }
 
 /// Holds the screen until a key, so a file does not scroll past and vanish.
-fn wait_for_a_key() {
+pub(crate) fn wait_for_a_key() {
     let _ = enable_raw_mode();
     loop {
         if matches!(event::read(), Ok(Event::Key(k)) if k.kind == KeyEventKind::Press) {

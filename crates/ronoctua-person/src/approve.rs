@@ -65,6 +65,55 @@ pub fn of_pin(text: &str) -> Option<Request> {
 /// The most a request may weigh: an id and a hash.
 pub const REQUEST_MOST_BYTES: u64 = 4 << 10;
 
+/// Stages `request` in `folder` — the person's approval folder
+/// ([`crate::root::APPROVE`]) — whole: written under another name, `0600`
+/// and never through a link (`create_new` makes the file or refuses), then
+/// renamed over the one before, so the unit reads a whole request or none.
+///
+/// THE ONE WRITER OF A REQUEST: the person's `ronoctua-person
+/// request-approval` and the update's page (`ronoctua-shell-update`) both
+/// stage through it. The library's one write, and with `std` alone, so a
+/// reader that links the data and nothing else still links nothing more.
+///
+/// # Errors
+///
+/// A request that is not one, a folder that is a link or not a folder, one
+/// others may write, one that is not the caller's (the owner of the file it
+/// just made), or a write that failed.
+pub fn stage(folder: &std::path::Path, request: &Request) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind, Write as _};
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+    let refused = |why: String| Error::new(ErrorKind::PermissionDenied, why);
+    request
+        .validate()
+        .map_err(|r| Error::new(ErrorKind::InvalidInput, format!("the request: {r}")))?;
+    let at = std::fs::symlink_metadata(folder)?;
+    if !at.is_dir() {
+        return Err(refused(format!("{} is not a folder", folder.display())));
+    }
+    if at.mode() & 0o022 != 0 {
+        return Err(refused(format!("others may write {}", folder.display())));
+    }
+    let draft = folder.join(format!(".{REQUEST}.{}", std::process::id()));
+    let _ = std::fs::remove_file(&draft);
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&draft)
+        .and_then(|mut f| {
+            if f.metadata()?.uid() != at.uid() {
+                return Err(refused(format!("{} is not yours", folder.display())));
+            }
+            f.write_all(crate::to_json(request).as_bytes())
+        })
+        .and_then(|()| std::fs::rename(&draft, folder.join(REQUEST)));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&draft);
+    }
+    written
+}
+
 /// What the person asks root to approve.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -423,5 +472,57 @@ mod tests {
         ] {
             assert_eq!(of_pin(&wrong), None, "{wrong:?}");
         }
+    }
+
+    /// FAILS IF: a request is not staged whole as root's unit reads it —
+    /// the module and the hash, `0600`, no draft left — or a link where it
+    /// goes is written through instead of replaced, or a folder that is a
+    /// link, not a folder or writable by others is staged into, or a request
+    /// that is not one is written.
+    #[test]
+    fn a_request_is_staged_whole_and_never_through_a_link() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = std::env::temp_dir().join(format!("ronoctua-stage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let folder = root.join("approve");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let hash = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=";
+        let request = Request::new("my-tea", hash);
+        stage(&folder, &request).unwrap();
+        let at = folder.join(REQUEST);
+        let staged: Request = crate::parse(&std::fs::read(&at).unwrap()).unwrap();
+        assert_eq!(staged, request);
+        let mode = std::fs::metadata(&at).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        // A LINK where the request goes is replaced, never followed.
+        std::fs::remove_file(&at).unwrap();
+        std::fs::write(root.join("elsewhere"), b"untouched").unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere"), &at).unwrap();
+        stage(&folder, &request).unwrap();
+        assert_eq!(std::fs::read(root.join("elsewhere")).unwrap(), b"untouched");
+        assert!(!std::fs::symlink_metadata(&at).unwrap().is_symlink());
+        let left: Vec<_> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            left,
+            [std::ffi::OsString::from(REQUEST)],
+            "a draft was left"
+        );
+        // NOWHERE ELSE: no folder, a link to one, one others may write.
+        assert!(stage(&root.join("nowhere"), &request).is_err());
+        std::os::unix::fs::symlink(&folder, root.join("linked")).unwrap();
+        assert!(stage(&root.join("linked"), &request).is_err());
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(
+            stage(&folder, &request).is_err(),
+            "a folder others may write"
+        );
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // AND ONLY A REQUEST: an id that is no person module's.
+        assert!(stage(&folder, &Request::new("tea", hash)).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

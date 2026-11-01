@@ -541,6 +541,13 @@ impl Region for SecurityRegion {
         View::about(&self.rows_at(seen), row, seen.texts)
     }
 
+    /// A PAIR WRAPPED OVER SEVERAL LINES IS ONE CONTROL: every line of it
+    /// lights with the one under the pointer, and a click on any takes the
+    /// first (`View::control_of`, the rows the frame laid out).
+    fn control_of(&self, row: usize, seen: &Seen<'_>) -> usize {
+        View::control_of(row, &self.rows_at(seen))
+    }
+
     /// Read by the whole notation through the reader the window calls too —
     /// the file picker's, while it is up over the page, takes what it
     /// reads (`security::View::press_of`).
@@ -1052,13 +1059,14 @@ mod tests {
             (r, way())
         };
         let first = fresh().0;
-        let cursor = first.cursor_in(&seen);
+        // THE CURSOR'S CONTROL, every line of it: a click on any is its `RET`.
+        let cursor = first.cursor_in(&seen).map(|c| first.control_of(c, &seen));
         let held: Vec<crate::region::Held> = first
             .rows(&seen)
             .iter()
             .enumerate()
             .map(|(row, drawn)| {
-                let here = cursor == Some(row);
+                let here = cursor == Some(first.control_of(row, &seen));
                 let (mut r, mut w) = fresh();
                 let before = crate::region::seen(&r, &w.owed, &seen);
                 if !here {
