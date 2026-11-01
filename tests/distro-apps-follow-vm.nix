@@ -364,15 +364,16 @@ let
   # The update's steps, as the table declares them
   # ---------------------------------------------------------------------
   steps = (import ../crates/ronoctua-brain/modules/system-update/steps.nix).steps;
-  stepOf =
-    id:
+  # A STEP BY WHAT IT RUNS, never by its id: the sequence's ids live in its
+  # declaration alone, and a check refuses one written anywhere else.
+  stepRunning =
+    words:
     let
-      found = builtins.filter (s: s.id == id) steps;
+      found = builtins.filter (s: lib.take (builtins.length words) (s.run or [ ]) == words) steps;
       s = builtins.head found;
     in
-    assert lib.assertMsg (
-      builtins.length found == 1 && (s.package or null) == "software" && !s.root
-    ) "the update has no person's step `${id}` of the software CLI: this test runs the wrong table";
+    assert lib.assertMsg (builtins.length found == 1 && (s.package or null) == "software" && !s.root)
+      "the update has no one person's step of the software CLI running `${toString words}`: this test runs the wrong table";
     lib.escapeShellArgs ([ "/run/current-system/sw/bin/${s.program}" ] ++ s.run);
 
   # THE SOFTWARE CLI WRAPPED FOR THIS MACHINE, as `nix/modules/software.nix`
@@ -504,8 +505,18 @@ pkgs.testers.runNixOSTest {
     RECORD = "/var/lib/ronoctua-parts/parts/${key}.json"
     PROGRAM = "ronoctua-appimage-${key}"
     PQ = "${testPq}/bin/ronoctua-test-pq"
-    PINS_STEP = ${builtins.toJSON (stepOf "person-pins")}
-    STAGE_STEP = ${builtins.toJSON (stepOf "person-stage")}
+    PINS_STEP = ${
+      builtins.toJSON (stepRunning [
+        "pins"
+        "refresh"
+      ])
+    }
+    STAGE_STEP = ${
+      builtins.toJSON (stepRunning [
+        "person"
+        "stage"
+      ])
+    }
 
 
     def as_person(command):

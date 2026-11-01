@@ -510,3 +510,4 @@ security-refusal-no-footer = O rodapé, onde o administrador é perguntado, não
 mode-incus = Incus
 # The modeline's name for its window (`br.ronoctua.agents`).
 mode-agents = contas de LLM
+mode-lock = tela de bloqueio

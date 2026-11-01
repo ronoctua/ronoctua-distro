@@ -138,16 +138,22 @@ pub fn store() -> ronoctua_store::Store<Choice> {
     store_at(ronoctua_store::config_dir())
 }
 
-/// A watch on the file, ringing `on_stir` from the watcher's thread — how the
-/// footer hears a choice made in the security centre, with nothing between
-/// them but the file. `None`, with a line in the log, when there is no
-/// configuration directory or no inotify instance left: the choice then
-/// reaches the footer at its next start, which is not silent.
-pub fn watch<F>(on_stir: F) -> Option<ronoctua_files::notice::Notice>
+/// A watch on the file in `dir`, ringing `on_stir` from the watcher's thread
+/// — how the footer hears a choice made in the security centre, with nothing
+/// between them but the file. The program finds `dir`, once
+/// (`ronoctua_store::config_dir()`), and hands it over: a function that writes
+/// does not decide where (`persistence-takes-its-root-as-a-parameter`).
+/// `None`, with a line in the log, when there is no configuration directory
+/// or no inotify instance left: the choice then reaches the footer at its
+/// next start, which is not silent.
+pub fn watch<F>(
+    dir: Option<std::path::PathBuf>,
+    on_stir: F,
+) -> Option<ronoctua_files::notice::Notice>
 where
     F: Fn() -> bool + Send + 'static,
 {
-    let dir = ronoctua_store::config_dir()?;
+    let dir = dir?;
     if let Err(e) = std::fs::create_dir_all(&dir) {
         tracing::warn!(error = %e, "no configuration directory to watch lock.json in");
         return None;

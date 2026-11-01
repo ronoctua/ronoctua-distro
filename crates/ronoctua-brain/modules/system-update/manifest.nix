@@ -140,5 +140,9 @@
     # a click on it opens: a leaf under the view and the footer.
     "crates/ronoctua-shell-update-words/src/update_mark.rs" = "*";
     "tests/checks.nix" = [ "system-update" ];
+    # And the VM test that follows a distro AppImage's release end to end:
+    # it runs the `person-pins` step with the arguments the table declares,
+    # read from the folder's `steps.nix` (`distro-apps-follow-a-release-vm`).
+    "tests/distro-apps-follow-vm.nix" = [ "system-update" ];
   };
 }

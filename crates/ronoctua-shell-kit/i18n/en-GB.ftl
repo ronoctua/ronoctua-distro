@@ -513,3 +513,4 @@ security-refusal-no-footer = The footer, where the administrator is asked, is no
 mode-incus = Incus
 # The modeline's name for its window (`br.ronoctua.agents`).
 mode-agents = LLM accounts
+mode-lock = lock screen

@@ -4800,11 +4800,14 @@ pub fn start(job: Job, send: impl Fn(Came) + Send + 'static) {
 
 /// The folders whose change is a reason to read the scene again: the root
 /// helper's two, the checks' `scans.json` under `state` (the person's state
-/// directory, the caller's to find) and the kept keys. `stir` is called on a
-/// change (coalesced); a folder that is not there is skipped.
+/// directory, the caller's to find), the kept keys, and the lock's choice
+/// under `config` (the person's configuration directory, the caller's to find
+/// too). `stir` is called on a change (coalesced); a folder that is not there
+/// is skipped.
 #[must_use]
 pub fn watches(
     state: Option<PathBuf>,
+    config: Option<PathBuf>,
     stir: impl Fn() -> bool + Clone + Send + 'static,
 ) -> Vec<ronoctua_files::notice::Notice> {
     let parent = |p: &str| {
@@ -4835,7 +4838,7 @@ pub fn watches(
         .collect();
     // AND THE LOCK'S CHOICE, the one file of the person's configuration this
     // page shows: the other door writes it too.
-    watched.extend(ronoctua_shell_kit::lock_choice::watch(stir));
+    watched.extend(ronoctua_shell_kit::lock_choice::watch(config, stir));
     watched
 }
 

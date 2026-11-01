@@ -145,7 +145,8 @@ in
             text = outside_tests(uncommented(f.read_text()))
             for name in declared:
                 if name in text:
-                    wrong.append(f"{shell_name(f)} names {name}: the shell starts it only through the sudo door")
+                    where = "/".join(f.parts[f.parts.index("crates") + 1:])
+                    wrong.append(f"{where} names {name}: the shell starts it only through the sudo door")
         floor(swept, 100, "shell files swept")
 
         if wrong:

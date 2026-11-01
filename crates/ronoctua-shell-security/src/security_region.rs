@@ -171,9 +171,11 @@ impl Open {
         if let Some(post) = self.post() {
             // A FOLDER THAT MOVED is a stir, and what moves is read again —
             // never the slow facts (`Scene::refreshed`).
-            self.watches = crate::security::watches(ronoctua_xdg::state_dir(), move || {
-                post.send(Some(Came::Stirred))
-            });
+            self.watches = crate::security::watches(
+                ronoctua_xdg::state_dir(),
+                ronoctua_xdg::config_dir(),
+                move || post.send(Some(Came::Stirred)),
+            );
         }
     }
 

@@ -152,7 +152,9 @@ impl Footer {
             .map_err(|e| anyhow::anyhow!("could not hang the lock's channel: {e}"))?;
         let moved = sender.clone();
         self.locking._watch =
-            ronoctua_shell_kit::lock_choice::watch(move || moved.send(Heard::ChoiceMoved).is_ok());
+            ronoctua_shell_kit::lock_choice::watch(ronoctua_store::config_dir(), move || {
+                moved.send(Heard::ChoiceMoved).is_ok()
+            });
         self.locking.sender = Some(sender);
         self.locking.handle = Some(handle.clone());
         // THE SEATS THE COMPOSITOR HAD BEFORE THIS FOOTER CAME: the toolkit

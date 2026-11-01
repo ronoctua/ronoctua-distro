@@ -469,6 +469,12 @@
       kept = true;
       reason = "preference";
     };
+    # THE LOCK SCREEN'S AUTOMATIC MODE AND ITS MINUTES (`lock_choice.rs`): a
+    # habit of the person's, not a fact of the machine — it travels.
+    "config/lock.json" = {
+      kept = true;
+      reason = "preference";
+    };
     "config/modeline.json" = {
       kept = true;
       reason = "preference";
