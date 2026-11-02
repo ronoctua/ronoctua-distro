@@ -50,7 +50,9 @@
   # ===================================================================
   entries = {
     # THE SCREENSHOT, and the owner asked for it by name: it appears
-    # DISCREETLY, in the band, and it offers to edit what was just captured.
+    # DISCREETLY — on the minibuffer's line, or the band while that line is
+    # busy, as every notification does — and it offers to edit what was just
+    # captured.
     #
     # THE CAPTURE IS OURS, so the recognition is a TAG. The compositor has no
     # capture verb at all — the screen is read by `grim`, which speaks
@@ -739,7 +741,7 @@
       ];
     };
 
-    # WHAT THE MACHINE DID, AND THE BAND ONLY WHEN THE MINIBUFFER WAS BUSY.
+    # WHAT THE MACHINE DID, ON THE BAND ONLY WHEN THE MINIBUFFER WAS BUSY.
     #
     # Each of these is an EVENT (`ronoctua-shell`'s `events.rs`), the owner's
     # choice of 2026-09-28: a camera or a microphone opening and closing, the
@@ -752,20 +754,20 @@
     # — its summary, for as long as any other echo — whether the modeline is
     # showing or not, and this row is read only when that line was somebody
     # else's: a view open, a question being typed, the line's drawer open, the
-    # screen under a fullscreen window, or four events already waiting. Then
-    # the event comes here, and its body OPENS with the sentence that says why
-    # (`notif-minibuffer-was-busy`).
+    # screen under a fullscreen window, or four already waiting. Then the
+    # event comes here, as any notification would (every notification takes
+    # the same way, the owner's choice of 2026-11-01).
     #
     # THE BLUETOOTH DEVICES AND THE PROGRAM INSTALLED ARE EVENTS TOO, and keep
     # the rows above: the two filters that quiet a device coming and going
     # match its TAG, so the fallback stays as quiet as it always was.
     #
     # FULL AND QUICK: the minibuffer's pace — gone by itself — and the band's
-    # second line, because the sentence that says WHY the event is on the band
-    # opens its body (`events::notification`), and a `brief` entry is one line
-    # that never shows it. And AUTO-READ, except the three a person would want
-    # the bell to keep: a camera or a microphone that opened while the line was
-    # busy (and the disk's module keeps its "still short" the same way).
+    # second line, the event's body (`events::notification`), which a `brief`
+    # entry would never show. And AUTO-READ, except the three a person would
+    # want the bell to keep: a camera or a microphone that opened while the
+    # line was busy (and the disk's module keeps its "still short" the same
+    # way).
     #
     # NONE CARRIES AN ACTION. The line offers what the catalogue offers
     # (`chrome::Piece::action`), and every one of these is a fact to be read,

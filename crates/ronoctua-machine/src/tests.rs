@@ -234,12 +234,7 @@ esac
 root='{root}'
 echo "nix-env $*" >> "$root/calls"
 p="$2"; real="$root$4"; dir="${{p%/*}}"
-if [ "$3" = "--switch-generation" ]; then
-  [ -L "$dir/system-$4-link" ] || exit 1
-  ln -sfn "system-$4-link" "$p"
-  if [ -x "$root/bin/grub-menu" ]; then "$root/bin/grub-menu"; fi
-  exit 0
-fi
+[ "$3" = "--set" ] || exit 2
 last=0
 for l in "$dir"/system-*-link; do
   [ -L "$l" ] || continue
@@ -519,6 +514,22 @@ top() {{ t="$(readlink -f "$1")"; printf '%s' "${{t#"$root"}}"; }}
 
     fn profile(&self) -> Option<String> {
         self.m.system.resolve(system::PROFILE)
+    }
+
+    /// The number of the newest generation, which the profile must be on:
+    /// a menu that boots the newest generation boots what the profile names.
+    fn newest(&self) -> u64 {
+        let newest = crate::boot::generations(&self.m.system)
+            .last()
+            .unwrap()
+            .number;
+        let on = std::fs::read_link(self.s.path("nix/var/nix/profiles/system")).unwrap();
+        assert_eq!(
+            on,
+            Path::new(&format!("system-{newest}-link")),
+            "the profile is not on the newest generation, {newest}"
+        );
+        newest
     }
 
     fn read(&self, inside: &str) -> String {
@@ -876,8 +887,10 @@ fn whether_a_system_waits_is_read_off_the_profile() {
 
 /// FAILS IF: the rescue's rollback, while systems wait for the next boot,
 /// goes to the generation before the profile's — one nobody booted — rather
-/// than back to the system that runs; switches anything then; makes a
-/// generation; or leaves the trial of what waited armed.
+/// than back to the system that runs; switches anything then; goes back by
+/// an older generation rather than a new copy, the newest; leaves the trial
+/// of what waited armed; or lets a second rollback go to what waited, which
+/// never ran, from the copy.
 #[test]
 fn a_rollback_while_systems_wait_goes_back_to_the_one_that_runs() {
     for now in [true, false] {
@@ -894,15 +907,13 @@ fn a_rollback_while_systems_wait_goes_back_to_the_one_that_runs() {
         let c = w.state().trial.unwrap().toplevel;
         let line = w.m.run(&crate::Verb::Rollback { now }).unwrap();
         assert!(line.contains("back on the system that runs"), "{line}");
+        assert!(line.contains("as generation 4"), "{line}");
         assert_eq!(w.profile().as_deref(), Some(a.as_str()), "now: {now}");
+        assert_eq!(w.newest(), 4, "a copy of a, the newest");
         assert_eq!(
             w.read("switched"),
             "b boot\nc boot\na boot\n",
             "nothing was switched live (now: {now})"
-        );
-        assert!(
-            !w.s.path("nix/var/nix/profiles/system-4-link").exists(),
-            "no generation was made"
         );
         let state = w.state();
         assert_eq!(
@@ -918,7 +929,129 @@ fn a_rollback_while_systems_wait_goes_back_to_the_one_that_runs() {
         );
         assert_eq!(w.lock(), LOCK_A);
         assert_eq!(crate::next_boot(&w.s.path(""), Some(&state)), None);
+        // AGAIN, FROM THE COPY: 4 is a copy of 1, and nothing ran before it —
+        // b, which waited after it and never ran, is no way back.
+        let switched = w.read("switched");
+        assert_eq!(
+            w.m.rollback(now).unwrap_err().why,
+            Why::Failed,
+            "now: {now}"
+        );
+        assert_eq!(w.profile().as_deref(), Some(a.as_str()));
+        assert_eq!(w.newest(), 4, "nothing was made");
+        assert_eq!(w.read("switched"), switched, "nothing was switched");
     }
+}
+
+/// FAILS IF: a rollback goes back by moving the profile onto an OLDER
+/// generation — a menu that boots the newest (lanzaboote's `default
+/// nixos-*`) boots the system undone again — rather than by a new one, a
+/// copy of the system gone back to; names a generation the profile is not
+/// on; or a second rollback goes FORWARD again, to the system the first
+/// undid, from the copy rather than from its original.
+#[test]
+fn two_rollbacks_in_a_row_walk_back() {
+    for now in [true, false] {
+        let w = World::new("rollback-twice");
+        let a = w.m.system.resolve(system::BOOTED).unwrap();
+        let (b, c) = (w.toplevel("b", "quiet b"), w.toplevel("c", "quiet c"));
+        w.generation(2, &b);
+        w.generation(3, &c);
+        w.reboot(&c);
+        // 1 a, 2 b, 3 c: back to b, as 4.
+        let line = w.m.rollback(now).unwrap();
+        assert!(line.contains(&format!("{b} as generation 4")), "{line}");
+        assert_eq!(w.profile().as_deref(), Some(b.as_str()), "now: {now}");
+        assert_eq!(w.newest(), 4, "now: {now}");
+        w.reboot(&b);
+        // 4 is a copy of 2: back to a, as 5 — never to c, after 2.
+        let line = w.m.rollback(now).unwrap();
+        assert!(line.contains(&format!("{a} as generation 5")), "{line}");
+        assert_eq!(w.profile().as_deref(), Some(a.as_str()), "now: {now}");
+        assert_eq!(w.newest(), 5, "now: {now}");
+        w.reboot(&a);
+        // 5 is a copy of 1: there is nothing before it.
+        assert_eq!(w.m.rollback(now).unwrap_err().why, Why::Failed);
+        assert_eq!(w.profile().as_deref(), Some(a.as_str()));
+        assert_eq!(w.newest(), 5, "nothing was made");
+        let how = if now { "switch" } else { "boot" };
+        assert_eq!(w.read("switched"), format!("b {how}\na {how}\n"));
+    }
+}
+
+/// FAILS IF: after the bless took the profile back from a trial that did
+/// not boot — a copy of the last good system, the newest generation — a
+/// rollback goes to a system that never ran: one set for the next boot
+/// after the last good system's own generation and dropped with the trial.
+#[test]
+fn a_rollback_after_the_bless_went_back_walks_back_from_the_last_good() {
+    let w = World::new("rollback-after-bless");
+    let a = w.m.system.resolve(system::BOOTED).unwrap();
+    let b = w.toplevel("b", "quiet b");
+    w.builds(&b);
+    w.m.apply(Applying::Now).unwrap();
+    w.reboot(&b);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Good);
+    // 1 a, 2 b (the last good), 3 c and 4 d set for the next boot: d's trial
+    // does not boot, and the bless puts b back, as 5.
+    for name in ["c", "d"] {
+        let t = w.toplevel(name, &format!("quiet {name}"));
+        w.builds(&t);
+        assert_eq!(
+            w.m.apply(Applying::NextBoot).unwrap().result,
+            ApplyResult::Staged
+        );
+    }
+    w.reboot(&b);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Failed);
+    assert_eq!(w.profile().as_deref(), Some(b.as_str()));
+    assert_eq!(w.newest(), 5, "the bless's way back is a copy");
+    // 5 is a copy of 2: back to a — c never ran.
+    let line = w.m.rollback(true).unwrap();
+    assert!(line.contains(&format!("{a} as generation 6")), "{line}");
+    assert_eq!(w.profile().as_deref(), Some(a.as_str()));
+    assert_eq!(w.newest(), 6);
+}
+
+/// FAILS IF: a copy of a copy goes back from the copy it was made from
+/// rather than from the first generation of its system: the bless's copy of
+/// the last good system, then the rescue's copy of it while a system waited,
+/// and a rollback from there takes a system that waited between the two
+/// copies and never ran.
+#[test]
+fn a_copy_of_a_copy_walks_back_from_the_first() {
+    let w = World::new("rollback-copy-of-copy");
+    let a = w.m.system.resolve(system::BOOTED).unwrap();
+    let b = w.toplevel("b", "quiet b");
+    w.builds(&b);
+    w.m.apply(Applying::Now).unwrap();
+    w.reboot(&b);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Good);
+    // 1 a, 2 b, 3 c, 4 d (its trial fails), 5 b (the bless's copy).
+    for name in ["c", "d"] {
+        let t = w.toplevel(name, &format!("quiet {name}"));
+        w.builds(&t);
+        w.m.apply(Applying::NextBoot).unwrap();
+    }
+    w.reboot(&b);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Failed);
+    // 6 e set for the next boot, and the rescue goes back to b, as 7.
+    let e = w.toplevel("e", "quiet e");
+    w.builds(&e);
+    assert_eq!(
+        w.m.apply(Applying::NextBoot).unwrap().result,
+        ApplyResult::Staged
+    );
+    let line = w.m.rollback(false).unwrap();
+    assert!(line.contains("back on the system that runs"), "{line}");
+    assert_eq!(w.profile().as_deref(), Some(b.as_str()));
+    assert_eq!(w.newest(), 7);
+    // 7 is a copy of 5, a copy of 2: back to a, never to d, after 2 — whose
+    // failed trial the record no longer names (e's does).
+    let line = w.m.rollback(true).unwrap();
+    assert!(line.contains(&format!("{a} as generation 8")), "{line}");
+    assert_eq!(w.profile().as_deref(), Some(a.as_str()));
+    assert_eq!(w.newest(), 8);
 }
 
 /// FAILS IF: with nothing waiting the rescue's rollback does not go to the
@@ -938,8 +1071,9 @@ fn a_rollback_goes_to_the_generation_before_that_is_a_way_back() {
         );
         w.link("run/current-system", &b);
         let line = w.m.run(&crate::Verb::Rollback { now }).unwrap();
-        assert!(line.contains("generation 1"), "{line}");
+        assert!(line.contains(&format!("{a} as generation 3")), "{line}");
         assert_eq!(w.profile().as_deref(), Some(a.as_str()));
+        assert_eq!(w.newest(), 3, "a copy of generation 1, the newest");
         assert!(
             w.read("switched").ends_with(switched),
             "{}",
@@ -947,9 +1081,9 @@ fn a_rollback_goes_to_the_generation_before_that_is_a_way_back() {
         );
         assert_eq!(w.outcome(), Some(TrialOutcome::Failed), "b was left");
     }
-    // AFTER A TRIAL THAT FAILED the profile names a again (generation 3):
-    // the one before is b, which failed, and the one before it a, which
-    // runs — no way back at all.
+    // AFTER A TRIAL THAT FAILED the profile names a again (generation 3, the
+    // bless's copy of 1): nothing is older than 1, and b failed — no way
+    // back at all.
     let w = World::new("rollback-nowhere");
     let a = w.m.system.resolve(system::BOOTED).unwrap();
     let b = w.toplevel("b", "quiet b");
@@ -2385,7 +2519,7 @@ fn a_rollback_by_hand_disarms_the_trial() {
     w.m.disarm().unwrap();
     assert_eq!(w.read("efi-oneshot"), "nixos-generation-2.conf");
     assert_eq!(w.outcome(), Some(TrialOutcome::Pending));
-    // The rescue's rollback: the profile back on generation 1.
+    // A rollback by hand: the profile back on generation 1.
     let profile = w.s.path("nix/var/nix/profiles/system");
     std::fs::remove_file(&profile).unwrap();
     std::os::unix::fs::symlink("system-1-link", &profile).unwrap();

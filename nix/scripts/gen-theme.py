@@ -1390,6 +1390,10 @@ CONTRAST_GATES = (
     # next click runs. It is the cursor's own ink (`text.here.acts`), so it is
     # read where those two grounds put it, at the floor every cursor holds.
     ("text.here.acts", ("notification.background", "brain.background"), 45, 50),
+    # AND ON THE MINIBUFFER'S LINE, which rises by itself too: the action a
+    # click picked at the end of what the line says — an event's, or a
+    # notification's said there instead of on the band.
+    ("text.here.acts", ("surface.chrome",), 45, 50),
     ("modeline.state.normal", ("modeline.background",), 15, 20),
     ("modeline.state.alternate", ("modeline.background",), 45, 60),
     # A BLUETOOTH DEVICE'S MARK, at the rung every other mark reads at.

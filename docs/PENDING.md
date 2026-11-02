@@ -8,18 +8,6 @@ lista não guarda histórico: item riscado ou marcado como pronto é recusado po
 Escreva para quem não acompanhou o trabalho: o nome da coisa como a pessoa a vê, o que falta e o
 critério de pronto, em poucas linhas.
 
-## Esperando uma decisão do dono
-
-- **Uma credencial com PIN não sobe a barra do sudo**: o gesto espera até o prazo do sudo. O
-  `pam_u2f` pede o PIN com uma frase fixa ("Please enter the PIN:"), e a porta do sudo só reconhece as
-  três frases dela (`sudo-door-reads-its-own-sentinels`). A saída menor: a porta reconhecer essa frase
-  como quarta, com um check que a prenda aos bytes do `pam_u2f` instalado, e a barra pedir o PIN como
-  pede a senha. Muda a regra das três frases, por isso espera o dono.
-- **Numa máquina com Secure Boot (lanzaboote), o rollback não dura**: o `loader.conf` do lanzaboote
-  diz `default nixos-*`, que é sempre a geração mais nova, e o reboot volta para a que foi desfeita.
-  Nenhuma máquina liga o lanzaboote hoje. A proposta: o rollback cria uma geração nova, cópia da
-  anterior, como a volta da consagração já faz (muda o "nenhuma é criada" do `rollback.rs`).
-
 ## Funcionalidade que falta
 
 - **Quatro arquivos de preferência lidos pela metade não avisam na própria vista** (os outros 26

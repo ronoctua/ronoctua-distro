@@ -603,8 +603,9 @@ caminhos ao `ronoctua_llm::watched`.
   pergunta para mover o nixpkgs —: vai num `Pass` de atualizador declarado
   (`ronoctua_consent::Updater`), cunhado só para esses hosts e pedido só por esse caminho (cobra
   `network-asks-with-a-pass`).
-- Um evento do sistema é dito no minibuffer (`events.rs`); vira notificação só quando a linha está
-  ocupada ou a fila tem quatro, e o corpo diz por quê (`notif-minibuffer-was-busy`).
+- Todo evento do sistema e toda notificação que os filtros mostram são ditos na linha do minibuffer
+  quando ela está livre, e vão para a faixa só quando ela está ocupada ou a fila tem quatro
+  (`events::route`, `events::deliver`).
 
 ### Comandos e teclas
 

@@ -356,8 +356,9 @@ impl Footer {
             .collect();
         let now = std::time::Instant::now();
         let mut moved = false;
+        // OFF THE BAND AND OFF THE MINIBUFFER'S LINE, wherever the card went.
         for id in standing {
-            moved |= self.notifications.dismiss(id, now);
+            moved |= self.dismiss_notification(id, now);
         }
         if moved {
             self.after_the_queue_moved();

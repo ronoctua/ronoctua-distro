@@ -506,6 +506,17 @@ pub enum Register {
     Action,
     /// The same action under the pointer, where a click would land.
     ActionLit,
+    /// THE ACTION A CLICK PICKED, on a line that rose by itself — the one the
+    /// next click runs ([`with_the_pick`]). The cursor's own ink
+    /// (`text.here.acts`), which the band's card wears for the same pick and
+    /// the theme gates measure on the chrome as well.
+    ActionHere,
+    /// WHAT THE MINIBUFFER SAYS LOUDLY — a notification the band would draw
+    /// in its loud formatting, said on the line instead
+    /// (`ronoctua_shell_footer::events`). Danger is a colour: the same words,
+    /// in the band's own loud tone (`notification.loud`), which is measured
+    /// on the chrome as well.
+    Loud,
     /// A KEY THAT A CLICK CANNOT PRESS.
     ///
     /// Every shortcut a header teaches is a CONTROL: a click presses the key
@@ -546,6 +557,8 @@ impl Register {
             Self::ProseLit => tokens::color::TEXT_SUBTLE_LIT_PROSE,
             Self::Action => tokens::color::NOTIFICATION_ACTS,
             Self::ActionLit => tokens::color::NOTIFICATION_ACTS_LIT,
+            Self::ActionHere => tokens::color::TEXT_HERE_ACTS,
+            Self::Loud => tokens::color::NOTIFICATION_LOUD,
             Self::Glyph => tokens::color::STATE_ACCENT,
             Self::Label => tokens::color::TEXT_SUBTLE_EXPLAIN,
             Self::Title => tokens::color::TEXT_HEADER_TITLE,
@@ -599,7 +612,26 @@ pub enum Act {
     Key(ronoctua_keymap::Key),
     /// Run this command of the registry.
     Run(&'static str),
+    /// Run action `n` of the notification the minibuffer's line says
+    /// ([`Piece::offered`]) — by its record, which only the footer holds: a
+    /// program's button is no command of the registry.
+    Offered(usize),
 }
+
+/// The ids the actions OFFERED at the end of the minibuffer's line carry, by
+/// their place ([`Piece::offered`]).
+///
+/// A POOL, because an id is what the pointer lights by ([`lit`]) and a
+/// program's button has no id of the registry to lend: the same id on two
+/// buttons would light both under one hand. As many as a line has room for.
+pub const OFFERED: [&str; 6] = [
+    "offered-1",
+    "offered-2",
+    "offered-3",
+    "offered-4",
+    "offered-5",
+    "offered-6",
+];
 
 impl Piece {
     /// A run of prose.
@@ -637,6 +669,31 @@ impl Piece {
             id: None,
             press: None,
         }
+    }
+
+    /// The same, LOUDLY — a notification the band would draw loud, said on
+    /// the minibuffer's line ([`Register::Loud`]).
+    #[must_use]
+    pub fn loud(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            register: Register::Loud,
+            id: None,
+            press: None,
+        }
+    }
+
+    /// Action `n` of the notification the line says — its label, and its
+    /// place, which is what a click runs ([`Act::Offered`]) and what the
+    /// pointer lights it by ([`OFFERED`]). `None` past the pool.
+    #[must_use]
+    pub fn offered(label: impl Into<String>, n: usize) -> Option<Self> {
+        Some(Self {
+            text: label.into(),
+            register: Register::Action,
+            id: Some(OFFERED.get(n)?),
+            press: Some(Act::Offered(n)),
+        })
     }
 
     /// An ACTION the line offers — its label, and the command of the registry
@@ -855,12 +912,64 @@ pub fn said_with_actions(
     out
 }
 
+/// A NOTIFICATION's line on the minibuffer: what it says (`said`, quiet or
+/// [`Piece::loud`]), then each of its actions by its place
+/// ([`Piece::offered`]), a dot before every one — the shape
+/// [`said_with_actions`] gives an event. An action past the pool is left
+/// off: the band shows a program's buttons only as far as its line goes too.
+#[must_use]
+pub fn said_with_offers(said: Piece, labels: &[String]) -> Vec<Piece> {
+    let mut out = vec![said];
+    for (n, label) in labels.iter().enumerate() {
+        let Some(action) = Piece::offered(label.clone(), n) else {
+            break;
+        };
+        out.push(Piece::separator());
+        out.push(action);
+    }
+    out
+}
+
+/// The line with its cursor on action `n` (from 0, in the order drawn): the
+/// one a click picked, or the first, where the cursor is born — the band's
+/// card's rule for a line that rose by itself (`crate::aim`, invariant 19).
+/// The pick wears the cursor's ink whether or not the pointer rests on it:
+/// the light under the hand is not the cursor.
+#[must_use]
+pub fn with_the_pick(pieces: &[Piece], n: usize) -> Vec<Piece> {
+    let mut seen = 0;
+    pieces
+        .iter()
+        .map(|p| {
+            let action = p.press.is_some()
+                && matches!(
+                    p.register,
+                    Register::Action | Register::ActionLit | Register::ActionHere
+                );
+            if !action {
+                return p.clone();
+            }
+            seen += 1;
+            if seen - 1 != n {
+                return p.clone();
+            }
+            Piece {
+                register: Register::ActionHere,
+                ..p.clone()
+            }
+        })
+        .collect()
+}
+
 /// Where the actions at the end of a line begin — the dot before the first
 /// of them included, because it is theirs — or `None` for a line with none.
 fn actions_from(pieces: &[Piece]) -> Option<usize> {
-    let first = pieces
-        .iter()
-        .position(|p| matches!(p.register, Register::Action | Register::ActionLit))?;
+    let first = pieces.iter().position(|p| {
+        matches!(
+            p.register,
+            Register::Action | Register::ActionLit | Register::ActionHere
+        )
+    })?;
     Some(
         if first > 0 && pieces[first - 1].register == Register::Separator {
             first - 1
@@ -2505,9 +2614,12 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             | Register::Title
             | Register::ProseLit
             // AN ACTION IS A SENTENCE TOO — "Open it" — and nothing in it is
-            // a modifier to keep a ligature off.
+            // a modifier to keep a ligature off; and so is what the line says
+            // loudly, which is `Said` in another ink.
             | Register::Action
-            | Register::ActionLit => vec![p.text.as_str()],
+            | Register::ActionLit
+            | Register::ActionHere
+            | Register::Loud => vec![p.text.as_str()],
         };
         for run in runs {
             if left == 0 {
@@ -5719,6 +5831,73 @@ mod tests {
                 .iter()
                 .any(|s| s.text == "First" && s.color == tokens::color::NOTIFICATION_ACTS)
         );
+    }
+
+    /// FAILS IF: a notification's actions on the line stop being marks the
+    /// pointer finds one by one — each running ITS place, lit alone under the
+    /// hand, though no command of the registry names them — or the line's
+    /// loud words lose the band's loud ink, or an action past the pool is
+    /// drawn as a button that answers nothing.
+    #[test]
+    fn a_notifications_actions_on_the_line_are_told_apart_by_place() {
+        let labels: Vec<String> = ["Reply", "Mark as read"]
+            .iter()
+            .map(|l| (*l).to_owned())
+            .collect();
+        let line = super::said_with_offers(Piece::loud("mail: two new"), &labels);
+        assert_eq!(line[0].register.color(), tokens::color::NOTIFICATION_LOUD);
+        let marks = hint_marks(&line, 2, 7, 200);
+        assert_eq!(marks.len(), 2, "{marks:?}");
+        assert_eq!(marks[0].press, Some(super::Act::Offered(0)));
+        assert_eq!(marks[1].press, Some(super::Act::Offered(1)));
+        assert_ne!(marks[0].id, marks[1].id, "one id lights two buttons");
+        let lit_line = lit(&line, Some(marks[1].id));
+        let registers: Vec<Register> = lit_line.iter().map(|p| p.register).collect();
+        assert_eq!(
+            registers,
+            [
+                Register::Loud,
+                Register::Separator,
+                Register::Action,
+                Register::Separator,
+                Register::ActionLit
+            ]
+        );
+        // THE PICK, on the action a click picked — the first where it is born
+        // — in the cursor's ink, and under the hand too: the light is not the
+        // cursor (`with_the_pick`).
+        let born = super::with_the_pick(&line, 0);
+        assert_eq!(born[2].register, Register::ActionHere);
+        assert_eq!(born[2].register.color(), tokens::color::TEXT_HERE_ACTS);
+        assert_eq!(born[4].register, Register::Action);
+        let picked = super::with_the_pick(&lit_line, 1);
+        let registers: Vec<Register> = picked.iter().map(|p| p.register).collect();
+        assert_eq!(
+            registers,
+            [
+                Register::Loud,
+                Register::Separator,
+                Register::Action,
+                Register::Separator,
+                Register::ActionHere
+            ]
+        );
+        // AN EVENT'S ACTION wears it the same way, and the sentence about an
+        // action still takes only the words' cells.
+        let event = super::said_with_actions(
+            "GIMP is installed",
+            &[("Open it".to_owned(), "software-launch-latest")],
+        );
+        let event = super::with_the_pick(&event, 0);
+        assert_eq!(event[2].register, Register::ActionHere);
+        let explained = super::explained_in_place(&event, "what it does");
+        assert_eq!(explained.last(), event.last(), "the pick left its place");
+        assert_eq!(explained[0].register, Register::Explain);
+        let many: Vec<String> = (0..super::OFFERED.len() + 2)
+            .map(|n| format!("a{n}"))
+            .collect();
+        let full = super::said_with_offers(Piece::said("x"), &many);
+        assert_eq!(hint_marks(&full, 0, 0, 500).len(), super::OFFERED.len());
     }
 
     /// FAILS IF: a sentence too long for the line pushes its actions off the

@@ -106,6 +106,7 @@ notif-fact-arrived = when it arrived
 notif-about-record = { $when } — { $line }
 notif-fact-life = how long it stayed
 notif-fact-show = how it was shown
+notif-fact-said-on-the-line = on the minibuffer's line
 notif-fact-read = has it been read
 notif-fact-filter = filter that decided
 notif-fact-no-filter = none of them matched

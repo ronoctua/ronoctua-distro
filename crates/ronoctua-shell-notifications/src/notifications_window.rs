@@ -840,23 +840,17 @@ impl Content for Notifications {
                 crate::chrome::divider(x, f.y_of(ui.first_of_list()), f.bottom())
             });
         }
-        // STACKED, THE SAME MARK ACROSS: a rule in the line of air between an
-        // open record's halves, lit while the facts have the keyboard. From
-        // row 0, as the bars count.
+        // STACKED, A QUIET RULE in the line of air between an open record's
+        // halves, never lit (`View::stacked_rule`). From row 0, as the bars
+        // count.
         let lists = crate::notifications::Lists::of(&self.records, &self.book);
-        if let Some((row, lit)) = self.view.stacked_rule(&lists, columns) {
+        if let Some(row) = self.view.stacked_rule(&lists, columns) {
             let first = ui.first_of_list();
             let f = ui.frame(first);
             let line = first + u16::try_from(row).unwrap_or(u16::MAX);
-            let rule = crate::chrome::rule(f.width, f.y_of(line) + f.line() / 2.0);
-            canvas.under.push(if lit {
-                ronoctua_render::quad::Quad {
-                    color: tokens::color::STATE_ACCENT,
-                    ..rule
-                }
-            } else {
-                rule
-            });
+            canvas
+                .under
+                .push(crate::chrome::rule(f.width, f.y_of(line) + f.line() / 2.0));
         }
         let width = ui.room.band_width();
         // ONE BAND PER ROW AND HALF, so two cursors on one line but in
@@ -1075,6 +1069,7 @@ mod tests {
                 ronoctua_notify::Urgency::Normal,
             ),
             read: false,
+            place: ronoctua_notify::Place::Band,
         }
     }
 

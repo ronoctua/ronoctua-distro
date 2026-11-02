@@ -53,8 +53,6 @@
   # The ISO, measured at 3712 MiB. It has no ceiling any more — see the
   # check itself — but building the image is still building an installation.
   "iso-is-measured"
-  # Both reference systems built, to read their closures for a part.
-  "parts-stay-out-of-the-base"
   "iso-has-no-toolchain"
   "iso-carries-the-seed"
   # The ISO's whole store, to install two machines against.
@@ -218,8 +216,9 @@
   # THE ROLLBACK THROUGH THE RESCUE, on the same kind of machine: a disk image
   # of the whole base system, two reboots (criteria 1 and 2).
   "rescue-rolls-back-the-trial"
-  # A TRIAL UNDER SECURE BOOT: lanzaboote's signed disk image and three
-  # reboots, one of them to take the keys (criteria 1 and 2).
+  # A TRIAL UNDER SECURE BOOT: lanzaboote's signed disk image and four
+  # reboots, one of them to take the keys and one after the rescue's
+  # rollback (criteria 1 and 2).
   "boot-trial-is-blessed-under-secure-boot"
   # ── anchor: L10 ──
   # ── anchor: L12 ──

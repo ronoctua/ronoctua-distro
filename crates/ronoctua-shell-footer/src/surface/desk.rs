@@ -192,7 +192,8 @@ impl Footer {
     /// `NotificationClosed(ByHand)` to its sender.
     ///
     /// The one on the band goes too: marking it read and leaving it on
-    /// screen would be two states for one thing.
+    /// screen would be two states for one thing. And so does the one the
+    /// minibuffer's line says or keeps waiting.
     pub(super) fn closed_by_hand(&mut self, key: ronoctua_notify::RecordKey) {
         if self
             .notifications
@@ -201,6 +202,9 @@ impl Footer {
         {
             self.notifications
                 .dismiss_current(std::time::Instant::now());
+        }
+        if self.event_line.read(key) {
+            self.forget_the_line_under_the_pointer();
         }
         ronoctua_notify::dbus::notification_was_closed(
             key.id,

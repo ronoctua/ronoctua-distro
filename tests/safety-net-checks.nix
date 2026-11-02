@@ -7,7 +7,8 @@
 #     generation they came back to (`tests/rescue-rollback-vm.nix`);
 #   - `boot-trial-is-blessed-under-secure-boot`: lanzaboote and its keys under
 #     an OVMF that enforces them, a trial of a signed UKI armed, booted and
-#     blessed, and the blessed generation the menu's default, booting signed
+#     blessed, the blessed generation the menu's default, booting signed, and
+#     the rescue's rollback still the system that boots after a reboot
 #     (`tests/secureboot-trial-vm.nix`).
 #
 # Both build a disk image of the whole system and reboot it, so both are in

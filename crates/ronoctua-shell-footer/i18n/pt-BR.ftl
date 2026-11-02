@@ -516,10 +516,9 @@ notif-bluetooth-pairing-summary = Algo quer parear
 notif-bluetooth-pairing-keys = { $no } responde não, { $yes } responde sim — depois que este aviso sai.
 # O QUE A MÁQUINA FEZ, dito na linha do minibuffer (`events.rs`). O resumo é a
 # linha; o corpo só é lido quando a linha estava ocupada e o evento veio como
-# notificação — e então a última frase diz isso.
+# notificação.
 notif-privacy-app = privacidade
 notif-network-app = rede
-notif-minibuffer-was-busy = Isto costuma aparecer no minibuffer, mas ele estava ocupado, então veio como notificação.
 notif-network-lost-summary = { $network } caiu
 hint-net-off = conectado, mas sem internet — clique abre a rede
 hint-net-portal = algo está pedindo que você entre — clique abre a rede

@@ -9,8 +9,12 @@
 //! passphrase, in the kernel's keyring: a `user` key in the user keyring
 //! (`@u`), described `ronoctua-belongings:<instance>:<16 hex of the
 //! repository's SHA-256>`, with a kernel timeout of `unlockHours` ([`Vault`],
-//! [`Kernel`]). The next sync finds it there and asks nothing. It never
-//! touches a disk: not a file, not swap (the keyring is kernel memory).
+//! [`Kernel`]). The next sync finds it there and asks nothing. Kept, it
+//! touches no disk: not a file, not swap (the keyring is kernel memory).
+//! LENT, for one open of a file sealed to the person (`lend`, the owner's
+//! choice of 2026-11-01), it sits in a new `0600` file of the queue's
+//! runtime folder until that open ends — as the passphrase of an open with
+//! it already does.
 //!
 //! WHO CAN READ IT: every process of this user, for that window. Its
 //! permissions give all to its possessor and a sight of it to the user, but

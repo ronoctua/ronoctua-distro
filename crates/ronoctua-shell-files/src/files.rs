@@ -17468,10 +17468,13 @@ mod tests {
                 | crate::chrome::Register::Label
                 | crate::chrome::Register::Title
                 | crate::chrome::Register::ProseLit
-                // AND AN ACTION is an event's, on the minibuffer's line; the
-                // manager's hint never offers one.
+                // AND AN ACTION is an event's or a notification's, on the
+                // minibuffer's line, as is what it says loudly; the manager's
+                // hint never offers one.
                 | crate::chrome::Register::Action
-                | crate::chrome::Register::ActionLit => {}
+                | crate::chrome::Register::ActionLit
+                | crate::chrome::Register::ActionHere
+                | crate::chrome::Register::Loud => {}
             }
         }
         // AND NO COMMA IN ANY OF THE SENTENCES: on this line a comma reads as

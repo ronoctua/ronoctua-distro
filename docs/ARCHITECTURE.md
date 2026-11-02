@@ -2480,8 +2480,7 @@ programa instalado ou web app criado viraram EVENTOS, ditos no minibuffer, junto
 nasceram assim: câmera, microfone, a gravação e a transmissão do estúdio, rede, modo avião, VPN,
 tailnet, Tor e carregador (ver "Eventos no minibuffer"). A entrada de cada um continua no catálogo,
 porque é ela que decide a notificação de quando a linha estava ocupada; as dos aparelhos guardam as
-tags, e com elas os filtros que as escondem. O que pode querer resposta continua notificação: os
-alarmes de bateria, o arquivo que a câmera gravou, os outros fins da central de programas.
+tags, e com elas os filtros que as escondem.
 
 **O sino abre o gerenciador, e só existe com algo não lido.** Era um sino com um número, em toda
 tela, para sempre — um `0` respondendo a uma pergunta que ninguém fez —, e o dono pediu o contrário:
@@ -2700,8 +2699,8 @@ O dono escolheu o que é EVENTO: um fato sobre a máquina que vale uma linha e n
 | Energia | carregador conectado e removido | o UPower |
 | Programa instalado | um programa instalado e um web app criado, com a ação de abri-lo | o fim do trabalho na fila |
 
-**No minibuffer, e não na faixa.** A faixa é para o que chega e pode querer resposta; um fato que
-passa é o que a linha do minibuffer já faz com as respostas do próprio shell (o eco). Então o evento
+**No minibuffer, e não na faixa.** Um fato que passa é o que a linha do minibuffer já faz com as
+respostas do próprio shell (o eco). Então o evento
 é dito ali, no resumo da entrada dele no catálogo (`notif-<tag>-summary`), pelo tempo de um eco. E é
 dito com a modeline à mostra ou não: com as barras ocultas, um evento é o que traz o minibuffer à
 tela por um instante, sob o véu (ver "Os modos ocultos").
@@ -2740,11 +2739,7 @@ uma vista está aberta (a leader inclusive), uma pergunta está sendo digitada, 
 aberta, ou a tela está sob uma janela em tela cheia com o rodapé reduzido à borda. O evento que chega
 então não espera a linha: uma câmera que abriu enquanto alguém digitava no localizador é notícia
 agora, não daqui a dois minutos. Ele vai para a faixa pela porta de toda notificação
-(`Footer::arrived`), com a tag dele, e o corpo ABRE com a frase que diz por que está ali
-(`notif-minibuffer-was-busy`): o mesmo fato chega em dois lugares conforme o que a pessoa estava
-fazendo, e uma notificação que não dissesse isso seria lida como a linha tendo quebrado. Abre, e as
-entradas são `full`, porque a faixa desenha UMA linha de corpo, cortada no espaço: uma entrada
-`brief` nunca mostrava a frase, e depois do corpo do evento ela era a parte que o corte levava.
+(`Footer::arrived`), com a tag dele.
 
 **A fila** (`events::Line`). Eventos vêm em rajada — voltar da suspensão traz a rede, o túnel e o
 fone no mesmo segundo —, então a linha guarda os que esperam, em ordem, e mostra cada um pelo tempo
@@ -2757,8 +2752,8 @@ transmissão, avião, carregador, tailnet e Tor pelo par; rede, VPN e aparelho B
 pelo mesmo nome. Na linha, ele entra no lugar com o tempo inteiro; na fila, no lugar do outro. E
 quando a linha passa a ser de alguém, o que ainda esperava vai para a faixa, na ordem em que seria
 dito; o que já estava NA linha foi dito e sai sem ir a lugar nenhum, a menos que tenha ficado menos
-de `READ_IN` (1 s) — antes disso ninguém o leu. Mandá-lo à faixa era o mesmo fato duas vezes, com a
-frase de que a linha estava ocupada, a cada leader apertada logo depois de um evento. Isso é perguntado uma vez por quadro, no
+de `READ_IN` (1 s) — antes disso ninguém o leu. Mandá-lo à faixa era o mesmo fato duas vezes, a cada
+leader apertada logo depois de um evento. Isso é perguntado uma vez por quadro, no
 topo do `draw_and_paint`, porque toda mudança do que segura a linha acaba num quadro, e uma lista dos
 jeitos de tomar a linha é a lista que esquece um. Com só a gaveta aberta, o evento que está na linha
 fica: a gaveta o está mostrando.
@@ -2777,7 +2772,7 @@ linha vazia. Quando a linha esvazia em repouso, a gaveta fecha e a geometria é 
 
 **O Bluetooth guarda as tags de sempre** (`bluetooth-connected`, `bluetooth-disconnected`), e os dois
 filtros que calam um aparelho indo e vindo casam a TAG: calam também a notificação de quando a linha
-estava ocupada. As entradas novas do catálogo são `full` (a segunda linha da faixa é a do porquê) e
+estava ocupada. As entradas novas do catálogo são `full` e
 `quick` — o passo do minibuffer — e nascem lidas, menos câmera e microfone abertos, que o sino deve
 guardar.
 
@@ -3979,8 +3974,8 @@ notificações, cujo valor só girava pelas setas.
 - **O que fica como estava.** A página do rádio Bluetooth ("um clique é o `RET`", regra do dono), a
   grade da leader, o lançador e o `M-x`, abertos por tecla.
 - **A foto.** O `photograph --door footer` ganhou `--notification <arquivo>`: um aviso como o bus o
-  entrega, decidido pelo catálogo, na faixa — o cartão de pareamento e a escolha de uma ação se
-  fotografam com `--press`.
+  entrega, decidido pelo catálogo — o cartão de pareamento e a escolha de uma ação se fotografam
+  com `--press`.
 
 ## 5. Buffers nativos e o protocolo
 
@@ -12594,7 +12589,7 @@ recebem as três variáveis no caminho estável dele (`environmentAt`, em `nix/p
 sistema não depende do minter, e o `ronoctua_ytdlp::pot_flags` pergunta se ele chegou a cada
 pedido — sem ele, o download segue sem PO token, como numa máquina com `none`. O
 `part-paths-are-read-as-arriving` recusa uma unidade que volte a nomear o caminho do store de uma
-parte, e o `parts-stay-out-of-the-base` lê o fecho dos dois sistemas construídos.
+parte.
 
 **Os programas não livres da distro são partes.** O Chrome, o VS Code, o Claude Code, o Android
 Studio e o SDK, o unrar e o uade são downloads, e chegam como partes, de uma porta só
@@ -16946,8 +16941,7 @@ antes do bless deste boot. O `apply` julga primeiro um ensaio que um boot anteri
 bless julgaria (e volta o perfil, se ele falhou): senão armaria um ensaio novo contra um último bom
 que já não é o último, ou construiria de novo o sistema que não subiu.
 
-**O rollback à mão desarma o ensaio** (`ronoctua-machine disarm`). O rollback do console de resgate
-(`nix-env --rollback` + `switch-to-configuration`) escreve o perfil e o `loader.conf`, nunca as
+**O rollback à mão desarma o ensaio** (`ronoctua-machine disarm`). O rollback do console de resgate escreve o perfil e o `loader.conf`, nunca as
 variáveis EFI: sem desarmar, o one-shot levaria o próximo boot de volta ao sistema de que a pessoa
 acabou de fugir, e o default manteria todo boot seguinte fora do `loader.conf`. O `disarm` apaga as
 duas, registra o ensaio que o perfil deixou como `failed` (a próxima atualização não troca para ele
@@ -17106,9 +17100,9 @@ espera — ou descartado, se ele foi declarado de novo ou continua ali.
 **O resgate volta para um sistema que rodou.** Com aplicações deixando sistemas para o próximo boot, a
 geração antes da do perfil pode ser uma que ninguém subiu (duas aplicações antes de um reinício deixam
 duas), talvez de outro nixpkgs e sem ensaio de boot. Então o `ronoctua-rescue-rollback@` é o verbo
-`ronoctua-machine rollback switch|boot`: com um sistema esperando, volta para o que RODA (a geração
-dele, nenhuma nova) e não troca nada; sem nada esperando, para a geração anterior, pulando a que é o
-próprio sistema que roda e a do ensaio que falhou. O ensaio deixado é desarmado como o `disarm` faz.
+`ronoctua-machine rollback switch|boot`: com um sistema esperando, volta para o que RODA e não troca
+nada; sem nada esperando, para a geração anterior, pulando a que é o próprio sistema que roda e a do
+ensaio que falhou. O ensaio deixado é desarmado como o `disarm` faz.
 
 **Uma hibernação não gasta o ensaio.** A volta de uma hibernação é um boot do firmware, que leria o
 one-shot: outro kernel não retoma a imagem, e o mesmo gasta o one-shot à toa, e o reinício de verdade

@@ -629,22 +629,15 @@ impl Region for Manager {
                 crate::chrome::divider(x, f.y_of(easel.area.first), f.bottom())
             });
         }
-        // STACKED, THE SAME MARK ACROSS: a rule in the line of air between
-        // the halves, lit while the facts have the keyboard. From row 0, as
-        // the bars count.
+        // STACKED, A QUIET RULE in the line of air between the halves, never
+        // lit (`View::stacked_rule`). From row 0, as the bars count.
         let stacked =
             lists_of(&easel.lent).and_then(|(lists, _)| self.view.stacked_rule(&lists, columns));
-        if let Some((row, lit)) = stacked {
+        if let Some(row) = stacked {
             let line = easel.area.first + u16::try_from(row).unwrap_or(u16::MAX);
-            let rule = crate::chrome::rule(f.width, f.y_of(line) + f.line() / 2.0);
-            easel.under.push(if lit {
-                ronoctua_render::quad::Quad {
-                    color: tokens::color::STATE_ACCENT,
-                    ..rule
-                }
-            } else {
-                rule
-            });
+            easel
+                .under
+                .push(crate::chrome::rule(f.width, f.y_of(line) + f.line() / 2.0));
         }
         for b in self.bars(&easel.area, &easel.lent) {
             easel.bars.record(crate::bars::Track::of(b.track));
@@ -1245,13 +1238,14 @@ mod tests {
         }
     }
 
-    /// FAILS IF: stacked, an open record does not say which half has the
-    /// keyboard — no rule in the line of air between the halves, or one that
-    /// does not light the moment a click gives the facts the keyboard, or
-    /// stays lit once `TAB` gives it back — or side by side, where the
-    /// divider says it, a rule is drawn across as well.
+    /// FAILS IF: stacked, the rule in the line of air between an open
+    /// record's halves is missing, or LIGHTS when a click gives the facts the
+    /// keyboard — it sits under the message, so lit it marked the message as
+    /// the keyboard left it (the owner, 2026-11-01) — or anything of the
+    /// message's half stays in the accent then: its action cursor goes out;
+    /// or side by side, where the divider says it, a rule is drawn across.
     #[test]
-    fn stacked_the_rule_between_the_halves_says_where_the_keyboard_is() {
+    fn stacked_the_rule_between_the_halves_stays_quiet() {
         let t = texts();
         let queue = three_records();
         let book = Book::distro();
@@ -1298,13 +1292,36 @@ mod tests {
                 .map(|q| q.color)
                 .collect()
         };
+        // THE ACCENT ON THE MESSAGE'S SIDE — the rows above the facts.
+        let message_lit = |m: &Manager, w: &crate::region::Lending<'_>, columns: u16| {
+            let lent = w.lent();
+            let (lists, _) = lists_of(&lent).expect("the lists");
+            let [_, facts] = m.view.places(&lists, columns).expect("an open record");
+            m.view
+                .rows(&lists, &book, columns, &t)
+                .iter()
+                .take(facts.row)
+                .flat_map(|r| r.fields.iter())
+                .any(|f| f.color == tokens::color::STATE_ACCENT)
+        };
         let columns = 60;
-        let (mut m, mut w) = reached(&t, columns, (&queue, &book), Pane::Happened, &["RET"]);
+        // OPEN, the cursor on the message's first action.
+        let (mut m, mut w) = reached(
+            &t,
+            columns,
+            (&queue, &book),
+            Pane::Happened,
+            &["RET", "<down>"],
+        );
         assert!(m.view.is_open(), "no record opened");
         assert_eq!(
             rules(&m, columns),
             vec![tokens::color::RULE_DEFAULT],
             "stacked, the keyboard on the message: one quiet rule between the halves"
+        );
+        assert!(
+            message_lit(&m, &w, columns),
+            "the message has the keyboard and its action cursor is not drawn"
         );
         let row = {
             let lent = w.lent();
@@ -1320,8 +1337,12 @@ mod tests {
         );
         assert_eq!(
             rules(&m, columns),
-            vec![tokens::color::STATE_ACCENT],
-            "the click gave the facts the keyboard and the rule did not light"
+            vec![tokens::color::RULE_DEFAULT],
+            "the facts took the keyboard and the rule under the message lit"
+        );
+        assert!(
+            !message_lit(&m, &w, columns),
+            "the facts have the keyboard and the message's side is still lit"
         );
         let _ = m.key(ronoctua_keymap::Key::parse("TAB").expect("a key"), &mut w);
         assert!(!m.view.facts_have_the_keyboard());

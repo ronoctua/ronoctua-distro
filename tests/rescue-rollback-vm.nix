@@ -10,8 +10,8 @@
 #   2. the rescue opens as `Ctrl+Alt+Del` opens it, and its row "go back to the
 #      previous generation" — pressed twice, as a row that cannot be taken back
 #      is — goes back NOW: the system that runs is the last good one again, the
-#      profile is back on its generation (none made), the trial is recorded
-#      `failed` and the boot loader's variables are gone;
+#      profile is on a new generation that is a copy of it, the newest, the
+#      trial is recorded `failed` and the boot loader's variables are gone;
 #   3. the reboot comes up on that generation, by the boot's identity — a new
 #      boot, the entry the loader says it started boots the last good system,
 #      and the command line is not the trial's —, and the next apply does not
@@ -21,8 +21,9 @@
 #      profile back on the system that runs, switches nothing, disarms the
 #      trial, and the reboot comes up on what ran;
 #   5. and a row that fails says why WHOLE, on the console's terminal, until a
-#      key: going back with nowhere to go back to shows `ronoctua-machine`'s
-#      own sentence, not a line pointing at the journal.
+#      key: going back with nowhere to go back to — the profile a copy of the
+#      first generation's system — shows `ronoctua-machine`'s own sentence,
+#      not a line pointing at the journal.
 #
 # The new systems are this machine with a kernel parameter of their own, so
 # their trial is real, and the first with `ronoctua-machine` of ANOTHER store
@@ -183,6 +184,11 @@ pkgs.testers.runNixOSTest {
           return machine.succeed(f"readlink {PROFILE}").strip()
 
 
+      def newest():
+          """The newest generation's link, which the profile must be on."""
+          return machine.succeed(f"ls -d {PROFILE}-*-link | sort -t- -k2,2n | tail -n1 | xargs basename").strip()
+
+
       def boot_id():
           return machine.succeed("cat /proc/sys/kernel/random/boot_id").strip()
 
@@ -280,8 +286,10 @@ pkgs.testers.runNixOSTest {
           # another revision's.
           assert ended == "done", ended
           assert resolved("/run/current-system") == good, "the system that runs is not the last good one"
-          # BACK ON ITS GENERATION, and none was made.
-          assert generation() == first, (generation(), first)
+          # BACK BY A NEW GENERATION, a copy of the last good one: the newest.
+          back = generation()
+          assert resolved(PROFILE) == good
+          assert back != first and back == newest(), (back, first, newest())
           s = state()
           assert s["trial"] == {"toplevel": AWAY, "outcome": "failed"}, s
           assert efi("LoaderEntryOneShot") is None, "the next boot would still try the system left"
@@ -307,7 +315,7 @@ pkgs.testers.runNixOSTest {
           status, out = apply(AWAY)
           print(out)
           assert status == 1 and out.strip().endswith("refused did-not-boot"), out
-          assert generation() == first
+          assert generation() == back
 
       with subtest("a system the update set for the next boot is dropped at the next boot"):
           status, out = apply(WAITING, "--next-boot")
@@ -317,8 +325,11 @@ pkgs.testers.runNixOSTest {
           assert resolved("/run/current-system") == good
           ended = through_the_rescue(1, "ronoctua-rescue-rollback@boot.service")
           assert ended == "done", ended
-          # BACK ON THE SYSTEM THAT RUNS, which nothing switched.
-          assert generation() == first, (generation(), first)
+          # BACK ON THE SYSTEM THAT RUNS, which nothing switched, by a new
+          # generation: the newest, past the one that waited.
+          again = generation()
+          assert resolved(PROFILE) == good
+          assert again not in (first, back) and again == newest(), (again, first, back, newest())
           assert resolved("/run/current-system") == good
           s = state()
           assert s["trial"] == {"toplevel": WAITING, "outcome": "failed"}, s
@@ -335,7 +346,9 @@ pkgs.testers.runNixOSTest {
           assert state()["trial"] == {"toplevel": WAITING, "outcome": "failed"}, state()
 
       with subtest("a row that fails says why, whole, until a key"):
-          # The profile is on its first generation: there is nowhere to go back to.
+          # The profile is a copy of a copy of the first generation's system:
+          # there is nowhere to go back to — not the system rolled away from,
+          # nor the one that waited, both after the first.
           ended = through_the_rescue(0, "ronoctua-rescue-rollback@switch.service")
           assert ended == "failed", ended
           machine.wait_until_succeeds(
@@ -347,7 +360,7 @@ pkgs.testers.runNixOSTest {
           # Unfolded: a sentence the console printed sits on one row of it.
           said = machine.succeed("tr -d '\\0' < /dev/vcs8")
           assert "ronoctua-rescue-rollback@switch.service: failed" in said, said
-          assert generation() == first
+          assert generation() == again
           # A key gives the console back.
           machine.send_key("spc")
           machine.wait_until_succeeds(

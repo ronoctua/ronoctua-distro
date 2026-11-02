@@ -249,6 +249,25 @@ pub struct Shown {
     pub since: Instant,
 }
 
+/// Where a shown notification appeared.
+///
+/// # Why the record says it
+///
+/// Because the same notification appears in one of two places depending on
+/// what the person was doing (the owner, 2026-11-01): SAID on the
+/// minibuffer's line when that line is free, and on the band when it is
+/// somebody's. The manager draws the place among the record's facts, so a
+/// notification nobody saw on the band is not a mystery afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Place {
+    /// On the band above the modeline — and every record written before there
+    /// was a choice.
+    #[default]
+    Band,
+    /// Said on the minibuffer's line.
+    Line,
+}
+
 /// One line of the history.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(default)]
@@ -263,6 +282,8 @@ pub struct Record {
     /// is opened on it. Merely EXPIRING does not mark it read — that is the
     /// whole point of the count surviving the band.
     pub read: bool,
+    /// Where it appeared, when it appeared at all.
+    pub place: Place,
 }
 
 impl Record {
@@ -329,7 +350,10 @@ pub const HISTORY_DAYS: u64 = 15;
 #[derive(Debug, Default)]
 pub struct Queue {
     showing: Option<Shown>,
-    pending: VecDeque<(Notification, Presentation)>,
+    /// Waiting for the band, by level — each with the time it already spent
+    /// on screen elsewhere (the minibuffer's line), taken off its life when
+    /// its turn comes.
+    pending: VecDeque<(Notification, Presentation, Duration)>,
     history: Vec<Record>,
     /// Since when the clock has been stopped, if it is stopped.
     ///
@@ -372,49 +396,81 @@ impl Queue {
     /// queue and losing are different things. Equal levels do not unseat each
     /// other, or two of them would erase one another in turn.
     pub fn enqueue(&mut self, n: Notification, p: Presentation, now: Instant) {
-        self.remember(n.clone(), p.clone());
+        self.remember(n.clone(), p.clone(), Place::Band);
+        self.show(n, p, Duration::ZERO, now);
+    }
+
+    /// Records a notification SAID ON THE MINIBUFFER'S LINE: in the history,
+    /// read or unread as the band would leave it, and never on the band.
+    ///
+    /// What leaving the line does to it is what leaving the band does:
+    /// nothing — the bell keeps it until a person reads it.
+    pub fn record_on_the_line(&mut self, n: Notification, p: Presentation) {
+        self.remember(n, p, Place::Line);
+    }
+
+    /// Puts on the band a notification ALREADY RECORDED as said on the line
+    /// — one the line had when it became somebody's — and its record says the
+    /// band now. Never recorded twice, and never marked read for it.
+    ///
+    /// `spent` is what it already spent on the line: the band gives it the
+    /// REST of its life, and not a second one.
+    pub fn show_recorded(
+        &mut self,
+        n: Notification,
+        p: Presentation,
+        spent: Duration,
+        now: Instant,
+    ) {
+        let key = n.key();
+        for r in self.history.iter_mut().filter(|r| r.key() == key) {
+            r.place = Place::Band;
+        }
+        self.show(n, p, spent, now);
+    }
+
+    /// The band's half of [`Self::enqueue`]: on it, or in its queue by level.
+    fn show(&mut self, n: Notification, p: Presentation, spent: Duration, now: Instant) {
         if matches!(p.show, Show::Hidden) {
             return;
         }
+        let since = now.checked_sub(spent).unwrap_or(now);
         match self.showing.take() {
             None => {
                 self.showing = Some(Shown {
                     notification: n,
                     presentation: p,
-                    since: now,
+                    since,
                 });
             }
             Some(current) => {
-                if p.level > current.presentation.level {
-                    self.pending
-                        .push_front((current.notification, current.presentation));
+                if unseats(p.level, current.presentation.level) {
+                    self.pending.push_front((
+                        current.notification,
+                        current.presentation,
+                        Duration::ZERO,
+                    ));
                     self.showing = Some(Shown {
                         notification: n,
                         presentation: p,
-                        since: now,
+                        since,
                     });
                 } else {
                     self.showing = Some(current);
-                    self.insert_by_level(n, p);
+                    self.insert_by_level(n, p, spent);
                 }
             }
         }
     }
 
-    /// Puts it in the queue after everything of at least its level.
-    ///
-    /// Stable within a level: two notifications of the same importance keep the
-    /// order they arrived in, which is the order the person expects to read.
-    fn insert_by_level(&mut self, n: Notification, p: Presentation) {
-        let at = self
-            .pending
-            .iter()
-            .position(|(_, q)| q.level < p.level)
-            .unwrap_or(self.pending.len());
-        self.pending.insert(at, (n, p));
+    /// Puts it in the queue after everything of at least its level
+    /// ([`waiting_place`]).
+    fn insert_by_level(&mut self, n: Notification, p: Presentation, spent: Duration) {
+        let at = waiting_place(self.pending.iter().map(|(_, q, _)| q.level), p.level);
+        self.pending.insert(at, (n, p, spent));
     }
 
-    fn remember(&mut self, n: Notification, p: Presentation) {
+    fn remember(&mut self, n: Notification, p: Presentation, place: Place) {
         // AND SOME ARRIVE READ. It is news you do not answer — a device
         // connecting, a device going — and the bell is for what still wants
         // something from you. See `Presentation::auto_read`; it does not touch
@@ -424,6 +480,7 @@ impl Queue {
             notification: n,
             presentation: p,
             read,
+            place,
         });
         if self.history.len() > HISTORY_CEILING {
             self.history.remove(0);
@@ -455,7 +512,7 @@ impl Queue {
         if let Some(shown) = self.showing.as_mut() {
             words(&mut shown.notification);
         }
-        for (n, _) in &mut self.pending {
+        for (n, _, _) in &mut self.pending {
             words(n);
         }
         for r in &mut self.history {
@@ -598,10 +655,10 @@ impl Queue {
         let gone: Vec<RecordKey> = self
             .pending
             .iter()
-            .filter(|(n, _)| n.id == id)
-            .map(|(n, _)| n.key())
+            .filter(|(n, _, _)| n.id == id)
+            .map(|(n, _, _)| n.key())
             .collect();
-        self.pending.retain(|(n, _)| n.id != id);
+        self.pending.retain(|(n, _, _)| n.id != id);
         if gone.is_empty() {
             return false;
         }
@@ -670,11 +727,11 @@ impl Queue {
             return false;
         }
         match self.pending.pop_front() {
-            Some((n, p)) => {
+            Some((n, p, spent)) => {
                 self.showing = Some(Shown {
                     notification: n,
                     presentation: p,
-                    since: now,
+                    since: now.checked_sub(spent).unwrap_or(now),
                 });
                 true
             }
@@ -830,8 +887,38 @@ impl Queue {
     #[must_use]
     pub fn has_loud(&self) -> bool {
         self.showing.as_ref().is_some_and(|s| s.presentation.loud)
-            || self.pending.iter().any(|(_, p)| p.loud)
+            || self.pending.iter().any(|(_, p, _)| p.loud)
     }
+}
+
+/// Where an arrival of `level` waits among what already waits, given their
+/// levels in order: after everything of at least its level.
+///
+/// THE ONE ORDERING of everything that waits to be shown — the band's queue
+/// and the minibuffer's line both ask it. Stable within a level: two of the
+/// same importance keep the order they arrived in, which is the order the
+/// person expects to read.
+pub fn waiting_place(waiting: impl IntoIterator<Item = u8>, level: u8) -> usize {
+    let mut at = 0;
+    for (n, waits) in waiting.into_iter().enumerate() {
+        if waits < level {
+            return n;
+        }
+        at = n + 1;
+    }
+    at
+}
+
+/// Whether an arrival of `level` takes the place of the one shown, of level
+/// `shown` — which goes back to the FRONT of what waits: jumping the queue and
+/// losing are different things.
+///
+/// STRICTLY higher: equal levels do not unseat each other, or two of them
+/// would erase one another in turn. The band and the minibuffer's line both
+/// ask it.
+#[must_use]
+pub const fn unseats(level: u8, shown: u8) -> bool {
+    level > shown
 }
 
 /// How many eighths of the pie are left, from a fraction.
@@ -938,6 +1025,82 @@ mod tests {
         }
         assert_eq!(f.showing().map(|s| s.notification.id), Some(1));
         assert_eq!(f.pending(), 2);
+    }
+
+    /// FAILS IF: a notification said on the minibuffer's line is left out of
+    /// the history, reaches the band, counts other than the band's would, or
+    /// its record does not say the line; or one handed to the band from the
+    /// line is recorded twice, is not shown, or its record still says the
+    /// line.
+    #[test]
+    fn one_said_on_the_line_is_recorded_and_the_band_takes_it_once() {
+        let t0 = Instant::now();
+        let mut f = Queue::fresh_one();
+        f.record_on_the_line(n(1), p(50, Life::Normal));
+        assert!(
+            f.showing().is_none(),
+            "the line's notification took the band"
+        );
+        assert_eq!(f.history().len(), 1);
+        assert_eq!(f.history()[0].place, Place::Line);
+        assert_eq!(f.unread(), 1, "unread, as the band leaves one it showed");
+        let mut news = p(50, Life::Normal);
+        news.auto_read = true;
+        f.record_on_the_line(n(2), news);
+        assert_eq!(f.unread(), 1, "news arrives read wherever it is said");
+        f.show_recorded(n(1), p(50, Life::Normal), Duration::ZERO, t0);
+        assert_eq!(f.showing().map(|s| s.notification.id), Some(1));
+        assert_eq!(f.history().len(), 2, "recorded twice");
+        let places: Vec<Place> = f.history().iter().map(|r| r.place).collect();
+        assert_eq!(places, [Place::Band, Place::Line]);
+        // AND A RECORD WRITTEN BEFORE THERE WAS A PLACE reads as the band.
+        let old: Record = serde_json::from_str(r#"{"read": true}"#).expect("a record");
+        assert_eq!(old.place, Place::Band);
+    }
+
+    /// FAILS IF: a notification handed from the line to the band gets a
+    /// second whole life instead of the rest of its own — on the band at
+    /// once, or after waiting there behind another.
+    #[test]
+    fn the_band_gives_what_the_line_handed_the_rest_of_its_life() {
+        let t0 = Instant::now();
+        let life = Life::Normal.how_long();
+        let spent = life / 3;
+        let mut f = Queue::fresh_one();
+        f.record_on_the_line(n(1), p(50, Life::Normal));
+        f.show_recorded(n(1), p(50, Life::Normal), spent, t0);
+        assert!(!f.tick(t0 + life - spent - Duration::from_millis(1)).changed);
+        assert!(
+            f.tick(t0 + life - spent).changed,
+            "a second life on the band"
+        );
+        // WAITING BEHIND ANOTHER, the rest counts from its turn.
+        let mut f = Queue::fresh_one();
+        f.enqueue(n(2), p(90, Life::Normal), t0);
+        f.record_on_the_line(n(1), p(50, Life::Normal));
+        f.show_recorded(n(1), p(50, Life::Normal), spent, t0);
+        let turn = t0 + life;
+        assert!(f.tick(turn).changed);
+        assert_eq!(f.showing().map(|s| s.notification.id), Some(1));
+        assert!(
+            !f.tick(turn + life - spent - Duration::from_millis(1))
+                .changed
+        );
+        assert!(f.tick(turn + life - spent).changed);
+    }
+
+    /// FAILS IF: the one ordering of what waits stops being by level — a
+    /// higher one behind a lower — or stops keeping arrival order within a
+    /// level, or an equal level unseats the one shown.
+    #[test]
+    fn what_waits_is_ordered_by_level_and_only_a_higher_one_unseats() {
+        assert_eq!(waiting_place([90, 50, 50, 25], 50), 3);
+        assert_eq!(waiting_place([50, 50], 90), 0);
+        assert_eq!(waiting_place([], 10), 0);
+        assert_eq!(waiting_place([25, 25], 25), 2);
+        assert!(unseats(90, 50));
+        assert!(!unseats(50, 50));
+        assert!(!unseats(25, 50));
     }
 
     #[test]

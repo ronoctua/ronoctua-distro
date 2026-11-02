@@ -30,6 +30,7 @@ let
   # and the failure looked like a missing line.
   heightOf = lines: builtins.ceil (typography.size.base * typography.lineHeight * lines);
   footerPx = heightOf 2;
+  linePx = heightOf 1;
 
 in
 pkgs.testers.runNixOSTest {
@@ -64,6 +65,8 @@ pkgs.testers.runNixOSTest {
 
 
     FOOTER = ${toString footerPx}
+    # ONE LINE, the minibuffer's: the footer's bottom one.
+    LINE = ${toString linePx}
     # THE FOOTER WITH A BAND of one and of two lines. The band is one line for a
     # brief notification and up to three for a full one, and the height is what
     # the test can see from outside — see `heightOf` for why these are not sums.
@@ -145,14 +148,51 @@ pkgs.testers.runNixOSTest {
         return said.count("a layer surface created")
 
 
-    def notify(summary, urgency="normal", body=""):
-        machine.succeed(
+    def send(summary, urgency="normal", body="", expire=None):
+        """The command that sends one, for a burst sent in one go."""
+        asked = f"-t {expire} " if expire else ""
+        return (
             "XDG_RUNTIME_DIR=/run/user/0 "
             "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus "
-            f"${pkgs.libnotify}/bin/notify-send -u {urgency} "
+            f"${pkgs.libnotify}/bin/notify-send -u {urgency} {asked}"
             f"-a testes '{summary}' '{body}'"
         )
+
+    def notify(summary, urgency="normal", body=""):
+        machine.succeed(send(summary, urgency, body))
         machine.sleep(duration=timedelta(seconds=1))
+
+    def last_said(field):
+        """The last value the footer logged for `field` — the band's queue
+        and the minibuffer's line log theirs on every move."""
+        line = machine.succeed(
+            f"journalctl -u footer --no-pager | grep -o '{field}=[0-9a-z]*' | tail -1"
+        ).strip()
+        return line.split("=", 1)[1] if "=" in line else None
+
+    def wait_for_quiet(timeout=90):
+        """Nothing on the band and nothing on the minibuffer's line — what a
+        subtest that measures a height needs before it raises its own."""
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep -o 'minibuffer=[0-9]*' | tail -1 "
+            "| grep -qx 'minibuffer=0' && "
+            "journalctl -u footer --no-pager | grep 'notification queue' | tail -1 "
+            "| grep -q ' band=0 '",
+            timeout=timedelta(seconds=timeout),
+        )
+
+    def minibuffer_text():
+        """What the minibuffer's line says, read off the screen."""
+        w, h, x, y = compositor_geometry()
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        machine.succeed(
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd -crop {w}x{h}+{x}+{y} +repage "
+            f"-crop {w}x{LINE}+0+{h - LINE} +repage "
+            "-colorspace gray -negate -resize 400% /tmp/line.png"
+        )
+        return machine.succeed(
+            "${pkgs.tesseract}/bin/tesseract /tmp/line.png stdout --psm 7 2>/dev/null"
+        ).strip()
 
 
     def control(command):
@@ -211,41 +251,67 @@ pkgs.testers.runNixOSTest {
         )
         wait_for_height(FOOTER)
 
-    with subtest("three notifications, ONE on screen"):
-        for i in (1, 2, 3):
-            notify(f"message {i}")
-        journal = machine.succeed("journalctl -u footer --no-pager")
-        assert journal.count("notification received") == 3, journal
-
-        # The queue counts the ones that are WAITING: 2, not 3. The one on the
-        # band is not pending.
-        #
-        # The grep is in the QUEUE's log, not in the segment's: the segment's
-        # text starts with a PUA glyph, and `body= 2` does not match
-        # `body=<glyph>2`.
+    with subtest("at rest, a notification is SAID on the minibuffer's line, and the band stays shut"):
+        # EVERY NOTIFICATION TAKES THE EVENTS' WAY (the owner, 2026-11-01):
+        # with nothing holding the line, it is said there — and recorded as
+        # said there — and no band grows.
+        # TWENTY SECONDS ASKED, which the arrival rounds to `long`: room for
+        # the screen to be read while it is up.
+        machine.succeed(send("a line of its own", expire=20000))
         machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'pending=2' > /dev/null", timeout=timedelta(seconds=30)
+            "journalctl -u footer --no-pager | grep 'notification placed' | grep -q 'placed=\"line\"'",
+            timeout=timedelta(seconds=30),
         )
+        # THE QUEUE'S LOG says the band is empty and the line holds one.
+        assert last_said("band") == "0", last_said("band")
+        assert last_said("minibuffer") == "1", last_said("minibuffer")
+        # AND IT IS ON THE SCREEN, on the bottom line: read off the pixels.
+        read_back = minibuffer_text()
+        print(f"OCR of the minibuffer: {read_back!r}")
+        assert any(w in read_back.lower() for w in ("testes", "line of", "its own")), (
+            f"the minibuffer does not say it; OCR read {read_back!r}"
+        )
+        # NO BAND, for a while: the height is the pair's.
+        for _ in range(3):
+            seen = footer_height()
+            assert seen == FOOTER, f"a band grew for a notification at rest: {seen} px"
+            machine.sleep(duration=timedelta(seconds=1))
+        # RECORDED, and the record says the line.
+        machine.wait_until_succeeds(
+            "${pkgs.jq}/bin/jq -e '[.[] | select(.place == \"Line\")] | length == 1' "
+            "/root/.local/state/ronoctua/notifications.json",
+            timeout=timedelta(seconds=30),
+        )
+        # AND IT GOES BY ITSELF, after its life.
+        wait_for_quiet(timeout=60)
+
+    with subtest("a burst: the line says one and keeps four, and the rest take the band"):
+        # ONE COMMAND, so all seven arrive while the first is still on the
+        # line: one said, four waiting (`EVENT_ECHOES`), and the two past
+        # them on the band — the critical one first, the brief one behind it.
+        burst = [send(f"message {i}") for i in (1, 2, 3, 4, 5)]
+        burst.append(send("battery at 3%", "critical", "change sockets"))
+        burst.append(send("one discreet line"))
+        machine.succeed(" && ".join(burst))
+        # THE LAST STATE IS WAITED FOR, not the first sign of it: the critical
+        # one makes the band loud while the brief one is still on its way, and
+        # a journal read then counts seven. FIVE ON THE LINE, one said and four
+        # waiting; the critical one on the band, ONE waiting behind it.
+        machine.wait_until_succeeds(
+            "journalctl -u footer --no-pager | grep 'notification queue' "
+            "| grep -q 'pending=1 .*loud=true minibuffer=5'",
+            timeout=timedelta(seconds=30),
+        )
+        journal = machine.succeed("journalctl -u footer --no-pager")
+        assert journal.count("notification received") == 8, journal
+        assert journal.count('placed="line"') == 6, journal.count('placed="line"')
+        assert journal.count('placed="band"') == 2, journal.count('placed="band"')
 
     with subtest("the band appears ABOVE the modeline, on the SAME surface"):
-        # THE BAND LASTS SECONDS, so it is raised HERE and measured at once.
-        # Measuring after another subtest is measuring an empty band: three
-        # normal notifications are eighteen seconds of screen, and the checks in
-        # between spend more than that.
-        #
-        # The queue is drained first, so what is on the band is what this
-        # subtest put there.
-        for _ in range(6):
-            control("notif-dismiss")
-        wait_for_height(FOOTER)
-
-        notify("one discreet line")
-        # A brief notification is ONE line above the pair. The log says which,
-        # and the height is what proves it reached the screen.
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'band=1' > /dev/null", timeout=timedelta(seconds=30)
-        )
-        wait_for_height(WITH_ONE, attempts=5)
+        # Loud, and TWO lines: the summary and the body. `Show::Full` is up to
+        # three, and the third is the row of actions — this one has none, and a
+        # band with an empty line is a band lying about its size.
+        wait_for_height(WITH_TWO, attempts=5)
 
         # THE CLAUSE ONLY THE VM PROVES. The owner asked for a line above the
         # modeline and not a floating toast; what makes that legal is that it is
@@ -261,16 +327,11 @@ pkgs.testers.runNixOSTest {
         # pushes the content up while it is there, so one that never leaves is a
         # permanent tax on every window — the owner's decision, and this is
         # where it is proved rather than asserted.
-        notify("battery at 3%", urgency="critical", body="change sockets")
-        # Loud, and TWO lines: the summary and the body. `Show::Full` is up to
-        # three, and the third is the row of actions — this one has none, and a
-        # band with an empty line is a band lying about its size.
-        machine.wait_until_succeeds(
-            "journalctl -u footer --no-pager | grep 'band=2 loud=true' > /dev/null", timeout=timedelta(seconds=30)
-        )
-        wait_for_height(WITH_TWO, attempts=5)
-        # `long` is 20 s. Well past it, the band is gone and the pair is back.
-        wait_for_height(FOOTER, attempts=40)
+        #
+        # `long` is 20 s. Past it, the brief one behind it takes the band —
+        # ONE line above the pair — and then the pair is back.
+        wait_for_height(WITH_ONE, attempts=40)
+        wait_for_height(FOOTER, attempts=20)
         # AND IT IS STILL UNREAD. Leaving the screen and being seen are not the
         # same event, which is the whole point of the count surviving the band.
         #
@@ -333,6 +394,9 @@ pkgs.testers.runNixOSTest {
         assert 'icon="file:///root/an-image.png"' in got, got
 
     with subtest("the manager opens BELOW the minibuffer, on the SAME surface"):
+        # WHAT THE LINE STILL HAD TO SAY would take the band as the manager
+        # takes the line: the height measured below is the manager's alone.
+        wait_for_quiet()
         control("notif-open")
         expanded = footer_height_above(FOOTER)
         assert expanded > FOOTER, f"the manager did not expand: {expanded} px"
@@ -355,7 +419,9 @@ pkgs.testers.runNixOSTest {
             "${pkgs.tesseract}/bin/tesseract /tmp/hist.png stdout --psm 6 2>/dev/null"
         ).strip()
         print(f"OCR of the manager: {read_back!r}")
-        assert "message" in read_back.lower() or "battery" in read_back.lower(), (
+        # ANY RECORD'S WORDS, newest first: what the subtests above raised.
+        records = ("message", "battery", "discreet", "closed", "image")
+        assert any(w in read_back.lower() for w in records), (
             f"the manager is not on screen; OCR read {read_back!r}"
         )
 

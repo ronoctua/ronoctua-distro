@@ -685,11 +685,12 @@ struct Footer {
     /// What the machine did — every source's last reading, so the next one is
     /// compared with it and the first is only a baseline. See [`crate::events`].
     events: crate::events::Watch,
-    /// The event said on the minibuffer's line, and the ones waiting for it.
+    /// The event or notification said on the minibuffer's line, and the ones
+    /// waiting for it.
     ///
     /// Beside [`Footer::echo`] and never in it: the echo is the shell answering
-    /// a person and takes the line at once, and an event it interrupts goes
-    /// back to the front of this queue rather than being lost under it.
+    /// a person and takes the line at once, and what it interrupts goes back
+    /// to the front of this queue rather than being lost under it.
     event_line: crate::events::Line,
     /// The `M-x`. It uses THE surface too: prompt on the minibuffer's line and
     /// candidates in the expanded region, the same mechanism as which-key.
@@ -3162,7 +3163,8 @@ pub(crate) fn photographed(
         state.mind_arrived(mind);
     }
     // THE NOTIFICATIONS, by the door the bus's arrive through: the catalogue
-    // decides each one and the band shows the first.
+    // decides each one, and each goes where any would — the minibuffer's line
+    // at rest, the band once the line is taken or full.
     if !scene.notifications.is_empty() {
         let now = std::time::Instant::now();
         for n in scene.notifications {
@@ -5144,6 +5146,14 @@ impl Footer {
                 self.mods = real;
             }
             crate::chrome::Act::Run(id) => self.run_command(id),
+            // A NOTIFICATION'S BUTTON, with no notification on the line to
+            // run it for: the click that took it off came first.
+            crate::chrome::Act::Offered(n) => {
+                tracing::debug!(
+                    action = n,
+                    "a notification's button with no notification on the line"
+                );
+            }
         }
         self.draw_and_paint();
     }
@@ -6072,8 +6082,11 @@ impl Footer {
             let (cgroup, at) = kill_of(&e);
             let (summary, body) = (e.summary(&self.texts), e.body(&self.texts));
             match self.kills.from_the_brain(cgroup, at) {
+                // NEW WORDS WHEREVER IT IS: the band, its queue, the history —
+                // and the minibuffer's line, which says its own copy.
                 ronoctua_notify::oom::Told::Amend(key)
-                    if self.notifications.amend(key, &summary, &body) =>
+                    if self.event_line.amend(key, &summary, &body)
+                        | self.notifications.amend(key, &summary, &body) =>
                 {
                     tracing::info!(%cgroup, "the brain's kill added to the bus's notification");
                 }
@@ -7348,9 +7361,7 @@ impl Footer {
                     // this struct; a second builder here would be the same
                     // table kept twice, and the two would disagree the first
                     // time a context gated a key away.
-                    self.hint_said = self
-                        .hint_under(e.position.0, e.position.1)
-                        .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
+                    self.hint_said = self.hint_said_under(e.position.0, e.position.1);
                     // AND IT LIGHTS, when a click on it would press it — and so
                     // does the chevron beside it.
                     self.hint_lit = self
@@ -7815,9 +7826,22 @@ impl Footer {
             self.flip_the_shortcuts();
         }
         if let Some(act) = hint_act {
-            // AN EVENT'S ACTION WAS CLICKED: with an event on the line and no
-            // echo of the shell's over it, the line's only controls are that
-            // event's actions — and one acted on is an event done with.
+            // AN ACTION OF WHAT THE LINE SAYS IS PICKED BEFORE IT RUNS: the
+            // line rose by itself, under a hand that may be clicking at
+            // something else, so the first click picks and paints the cursor
+            // on it, and only a click on the pick runs it — the band's card's
+            // rule, for every action of the line (`events::Line::clicked`).
+            if self.echo.is_none()
+                && let Some(n) = self.line_action_of(act)
+                && !self.event_line.clicked(n)
+            {
+                self.draw_and_paint();
+                return;
+            }
+            // AN ACTION OF WHAT THE LINE SAYS WAS RUN: with an event or a
+            // notification on the line and no echo of the shell's over it,
+            // the line's only controls are its actions — and one acted on is
+            // done with.
             let acted_on = if self.echo.is_none() {
                 self.event_line.done()
             } else {
@@ -7829,11 +7853,23 @@ impl Footer {
             }
             // AND AN INSTALL'S "OPEN IT" OPENS THE PROGRAM THAT LINE NAMES,
             // and not whatever finished last (`events::launch_of`).
-            if let (Some(e), crate::chrome::Act::Run(command)) = (&acted_on, act)
+            if let (Some(crate::events::Said::Event(e)), crate::chrome::Act::Run(command)) =
+                (&acted_on, act)
                 && let Some(id) = crate::events::launch_of(e, command)
             {
                 let id = id.to_owned();
                 self.software_launch_latest(Some(&id));
+                return;
+            }
+            // A NOTIFICATION'S BUTTON is the action of THAT record, by its
+            // whole name — the order the band's own button sends: every
+            // kind of action, a program's included, and the record read by
+            // hand once it ran (`run_notification_action`).
+            if let (Some(crate::events::Said::Notification(t)), crate::chrome::Act::Offered(n)) =
+                (&acted_on, act)
+            {
+                let order = crate::desk::act_order(t.notification.key(), n);
+                self.run_with(crate::desk::ACT, Some(&order));
                 return;
             }
             self.hint_clicked(act);
@@ -9653,7 +9689,7 @@ impl Footer {
                 self.arrived(*n, now);
             }
             ronoctua_notify::Event::Close(id) => {
-                if self.notifications.dismiss(id, now) {
+                if self.dismiss_notification(id, now) {
                     ronoctua_notify::dbus::notification_was_closed(
                         id,
                         ronoctua_notify::dbus::Closed::ByRequest,
@@ -9684,7 +9720,9 @@ impl Footer {
         self.after_the_queue_moved();
     }
 
-    /// One notification, from arrival to the band.
+    /// One notification, from arrival to where it goes: decided, put into
+    /// our words, and handed to the one rule of where (`events::deliver`) —
+    /// the minibuffer's line when it is free, the band when it is not.
     fn arrived(
         &mut self,
         mut n: ronoctua_notify::Notification,
@@ -9732,8 +9770,41 @@ impl Footer {
             "notification decided"
         );
         let key = n.key();
-        self.notifications.enqueue(n, p, now);
+        let busy = self.busy_for_events();
+        let placed = crate::events::deliver(
+            &mut self.event_line,
+            &mut self.notifications,
+            n,
+            p,
+            busy,
+            self.echo.is_some(),
+            now,
+        );
+        tracing::info!(
+            id = key.id,
+            placed = placed.id(),
+            ?busy,
+            "notification placed"
+        );
+        if placed == crate::events::Placed::Line {
+            self.forget_the_line_under_the_pointer();
+        }
         key
+    }
+
+    /// Takes notification `id` off the band AND off the minibuffer's line,
+    /// wherever it is — marked read, as the band's own closing marks it.
+    /// Says whether it was anywhere.
+    fn dismiss_notification(&mut self, id: u32, now: std::time::Instant) -> bool {
+        let mut gone = self.notifications.dismiss(id, now);
+        for key in self.event_line.forget(id) {
+            self.notifications.mark_read(key);
+            gone = true;
+        }
+        if gone {
+            self.forget_the_line_under_the_pointer();
+        }
+        gone
     }
 
     /// The queue moved: log it, save the history, resize and paint.
@@ -9752,6 +9823,8 @@ impl Footer {
             unread = self.notifications.unread(),
             band = self.band_rows(),
             loud = self.notifications.has_loud(),
+            // AND THE MINIBUFFER'S LINE: what it says and what waits for it.
+            minibuffer = self.said_on_the_line(),
             "notification queue"
         );
         self.save_history();
@@ -11424,9 +11497,7 @@ impl Footer {
         self.here.pointer_at = Some((x, y));
         self.here.row_under_pointer = self.row_at(x, y);
         self.here.cell_under_pointer = self.cell_at(x);
-        self.hint_said = self
-            .hint_under(x, y)
-            .and_then(|id| crate::chrome::hint_sentence(id, &self.texts));
+        self.hint_said = self.hint_said_under(x, y);
         self.hint_lit = self
             .hint_act_under(x, y)
             .and_then(|_| self.hint_under(x, y));
@@ -11668,12 +11739,20 @@ impl Footer {
         }
     }
 
-    /// Is an echo on the minibuffer's line — the shell's own, or an event's?
+    /// Is an echo on the minibuffer's line — the shell's own, or an event's
+    /// or a notification's?
     fn echo_on_the_line(&self) -> bool {
         self.echo.is_some() || self.event_line.on_the_line().is_some()
     }
 
-    /// What holds the minibuffer's line, for an event that wants it.
+    /// How many the minibuffer's line says and keeps waiting — events and
+    /// notifications — for the log a test reads.
+    fn said_on_the_line(&self) -> usize {
+        usize::from(self.event_line.on_the_line().is_some()) + self.event_line.waiting()
+    }
+
+    /// What holds the minibuffer's line, for an event or a notification that
+    /// wants it.
     ///
     /// Asked of the one place each answer lives: `view()` for the views and
     /// the leader, the minibuffer for a question, the fold for the drawer, and
@@ -11691,8 +11770,8 @@ impl Footer {
     /// What the machine did, said: on the minibuffer's line when it is free,
     /// on the band when it is not — and past the queue's cap.
     ///
-    /// Every source hands its events here and nowhere else, so "where does an
-    /// event go" has one answer (`events::route`).
+    /// Every source hands its events here and nowhere else, and the rule is
+    /// the one every notification follows (`events::route`).
     fn said_now(&mut self, events: Vec<crate::events::Event>) {
         if events.is_empty() {
             return;
@@ -11701,17 +11780,31 @@ impl Footer {
         let busy = self.busy_for_events();
         let mut to_the_band = Vec::new();
         let mut on_the_line = false;
-        for e in events {
-            tracing::info!(event = e.tag, ?busy, "an event of the machine");
+        for mut e in events {
+            // ITS LEVEL, as the filters decide it for the notification it
+            // would be on the band: what orders the line's queue as it orders
+            // the band's (`events::Line::arrive`).
+            e.level = self
+                .book
+                .decide(&crate::events::notification(&e, &self.texts))
+                .level;
+            tracing::info!(
+                event = e.tag,
+                level = e.level,
+                ?busy,
+                "an event of the machine"
+            );
             match crate::events::route(busy) {
-                crate::events::Route::Echo => {
-                    let before = self.event_line.on_the_line().map(|e| e.tag);
+                crate::events::Route::Line => {
+                    let before = self.event_line.on_the_line().cloned();
                     if let Some(over) = self.event_line.arrive(e, self.echo.is_some(), now) {
-                        to_the_band.push(over);
+                        to_the_band.push((over, std::time::Duration::ZERO));
                     }
-                    on_the_line |= self.event_line.on_the_line().map(|e| e.tag) != before;
+                    on_the_line |= self.event_line.on_the_line() != before.as_ref();
                 }
-                crate::events::Route::Notification => to_the_band.push(e),
+                crate::events::Route::Band => {
+                    to_the_band.push((e.into(), std::time::Duration::ZERO));
+                }
             }
         }
         if on_the_line {
@@ -11723,52 +11816,98 @@ impl Footer {
             }
             return;
         }
-        for e in &to_the_band {
-            let n = crate::events::notification(e, &self.texts);
-            self.arrived(n, now);
-        }
+        self.hand_to_the_band(to_the_band, now);
         self.after_the_queue_moved();
     }
 
-    /// The events still to be said, handed to the band when the line became
-    /// somebody's — asked once per frame, at the top of `draw_and_paint`,
-    /// which is where every change of what holds the line ends up.
+    /// What the minibuffer's line could not say, on the band: an event as the
+    /// notification its entry makes — through the door every notification
+    /// takes, which finds the line busy or full and so the band — and a
+    /// notification already recorded as said there, shown and not recorded
+    /// again, for the rest of its life (`spent` is what the line took of it).
+    fn hand_to_the_band(
+        &mut self,
+        handed: Vec<(crate::events::Said, std::time::Duration)>,
+        now: std::time::Instant,
+    ) {
+        for (said, spent) in handed {
+            match said {
+                crate::events::Said::Event(e) => {
+                    tracing::info!(event = e.tag, "the event goes to the band");
+                    let n = crate::events::notification(&e, &self.texts);
+                    self.arrived(n, now);
+                }
+                crate::events::Said::Notification(t) => {
+                    tracing::info!(
+                        id = t.notification.id,
+                        "the notification goes from the minibuffer to the band"
+                    );
+                    self.notifications
+                        .show_recorded(t.notification, t.presentation, spent, now);
+                }
+            }
+        }
+    }
+
+    /// What the line still had to say, handed to the band when the line
+    /// became somebody's — asked once per frame, at the top of
+    /// `draw_and_paint`, which is where every change of what holds the line
+    /// ends up.
     ///
     /// Does not paint: it is called from the paint.
     fn events_yield_the_line(&mut self) {
         if self.event_line.is_empty() {
             return;
         }
-        let handed = self
-            .event_line
-            .yielded(self.busy_for_events(), std::time::Instant::now());
-        if handed.is_empty() {
+        let now = std::time::Instant::now();
+        let yielded = self.event_line.yielded(self.busy_for_events(), now);
+        // WHAT WAS READ THERE goes nowhere, and a notification's sender is
+        // told it closed, as when the band's time runs out.
+        if let Some(t) = yielded.said.as_ref().and_then(crate::events::Said::told) {
+            ronoctua_notify::dbus::notification_was_closed(
+                t.notification.id,
+                ronoctua_notify::dbus::Closed::Expired,
+            );
+        }
+        if yielded.to_the_band.is_empty() {
+            if yielded.said.is_some() {
+                self.forget_the_line_under_the_pointer();
+            }
             return;
         }
-        let now = std::time::Instant::now();
-        for e in &handed {
-            tracing::info!(
-                event = e.tag,
-                "the minibuffer became busy; the event goes to the band"
-            );
-            let n = crate::events::notification(e, &self.texts);
-            self.arrived(n, now);
-        }
+        tracing::info!(
+            handed = yielded.to_the_band.len(),
+            "the minibuffer became busy; what it had to say goes to the band"
+        );
+        self.hand_to_the_band(yielded.to_the_band, now);
         self.forget_the_line_under_the_pointer();
         self.save_history();
         self.apply_geometry(self.interactivity());
     }
 
-    /// The footer's second, for the event on the line: it goes when its time
+    /// The footer's second, for what is on the line: it goes when its time
     /// is up — never while a pointer rests on the line — and the next one
     /// takes the line when nothing else holds it. `true` if the line changed.
     fn events_tick(&mut self, now: std::time::Instant) -> bool {
         let held = self.pointers.lit(&self.here).any(|(_, p)| p.on_minibuffer);
-        let moved = self.event_line.tick(now, self.echo.is_some(), held);
-        if moved {
-            self.forget_the_line_under_the_pointer();
+        let ticked = self.event_line.tick(now, self.echo.is_some(), held);
+        // A NOTIFICATION WHOSE TIME RAN OUT: its sender waits to be told, as
+        // the band tells one (`Queue::tick`). Leaving the line does not mark
+        // it read — the bell keeps it, as it keeps the band's.
+        if let Some(t) = ticked.expired.as_ref().and_then(crate::events::Said::told) {
+            ronoctua_notify::dbus::notification_was_closed(
+                t.notification.id,
+                ronoctua_notify::dbus::Closed::Expired,
+            );
         }
-        moved
+        if ticked.changed {
+            self.forget_the_line_under_the_pointer();
+            tracing::info!(
+                minibuffer = self.said_on_the_line(),
+                "the minibuffer's line moved"
+            );
+        }
+        ticked.changed
     }
 
     /// The drawer of a line that has EMPTIED at rest closes, with its height.
@@ -11808,6 +11947,84 @@ impl Footer {
     fn event_pieces(&self, e: &crate::events::Event) -> Vec<crate::chrome::Piece> {
         let actions = crate::events::actions_of(e, &self.book, self.command_registry, &self.texts);
         crate::chrome::said_with_actions(e.summary(&self.texts), &actions)
+    }
+
+    /// Which of the line's actions a click that presses `act` is on — by its
+    /// place, the order they are drawn in — when what the line says is an
+    /// event or a notification and `act` is one of its actions.
+    fn line_action_of(&self, act: crate::chrome::Act) -> Option<usize> {
+        match (self.event_line.on_the_line()?, act) {
+            (crate::events::Said::Event(e), crate::chrome::Act::Run(command)) => {
+                crate::events::actions_of(e, &self.book, self.command_registry, &self.texts)
+                    .iter()
+                    .position(|(_, c)| *c == command)
+            }
+            (crate::events::Said::Notification(_), crate::chrome::Act::Offered(n)) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// The minibuffer's line for what it says — an event's, or a
+    /// notification's.
+    fn said_pieces(&self, said: &crate::events::Said) -> Vec<crate::chrome::Piece> {
+        match said {
+            crate::events::Said::Event(e) => self.event_pieces(e),
+            crate::events::Said::Notification(t) => self.told_pieces(t),
+        }
+    }
+
+    /// The minibuffer's line for a notification: what the band's single line
+    /// would say — its glyph, and the program's name before its summary
+    /// (`Notification::line`) — in the band's loud ink when it is loud, and
+    /// at the end its actions, every one: a program's buttons and those the
+    /// catalogue put in their place, each run by the record's whole name as
+    /// the band's are (`notif-act`).
+    fn told_pieces(&self, t: &crate::events::Told) -> Vec<crate::chrome::Piece> {
+        let (n, p) = (&t.notification, &t.presentation);
+        let glyph = p
+            .glyph
+            .unwrap_or_else(|| crate::band::generic_glyph(p, n.urgency));
+        let text = format!("{glyph} {}", n.line());
+        let said = if p.loud {
+            crate::chrome::Piece::loud(text)
+        } else {
+            crate::chrome::Piece::said(text)
+        };
+        let labels: Vec<String> = n
+            .actions
+            .iter()
+            .map(|a| match &a.label {
+                ronoctua_notify::Label::Key(k) => self.texts.t(k),
+                // A PROGRAM'S, in whatever language it chose: drawn as sent.
+                ronoctua_notify::Label::Text(t) => t.clone(),
+            })
+            .collect();
+        crate::chrome::said_with_offers(said, &labels)
+    }
+
+    /// What the pointer resting at `(x, y)` on the minibuffer's line is told
+    /// about: a shortcut's sentence (`chrome::hint_sentence`), or — on a
+    /// notification's action, which no command names — the band's own words
+    /// for its button: a click picks it, and a click on the pick runs it.
+    fn hint_said_under(&self, x: f64, y: f64) -> Option<String> {
+        if let Some(crate::chrome::Act::Offered(n)) = self.hint_act_under(x, y) {
+            let label = self
+                .event_line
+                .on_the_line()
+                .and_then(crate::events::Said::told)
+                .and_then(|t| {
+                    self.told_pieces(t)
+                        .into_iter()
+                        .find(|p| p.press == Some(crate::chrome::Act::Offered(n)))
+                })
+                .map(|p| p.text)?;
+            return Some(
+                self.texts
+                    .t_with(crate::key::HINT_NOTIF_ACTION, &[("action", &label)]),
+            );
+        }
+        self.hint_under(x, y)
+            .and_then(|id| crate::chrome::hint_sentence(id, &self.texts))
     }
 
     /// Whether a point is on the minibuffer's line or its opened drawer.
@@ -15497,15 +15714,22 @@ impl Footer {
             )
         });
         // THE ECHO, AS PIECES: the shell's own answer in one run, or — when
-        // the shell has nothing to answer — an event of the machine, with the
-        // actions its catalogue entry offers at the end (`crate::events`).
-        // The person's answer first, always: it is what they just asked for,
-        // and the event it interrupted waits at the front of its queue.
+        // the shell has nothing to answer — an event of the machine or a
+        // notification, with the actions it offers at the end
+        // (`crate::events`). The person's answer first, always: it is what
+        // they just asked for, and what it interrupted waits at the front of
+        // its queue.
         let echo: Option<Vec<crate::chrome::Piece>> = self
             .echo
             .as_ref()
             .map(|(t, _)| vec![crate::chrome::Piece::said(t.clone())])
-            .or_else(|| self.event_line.on_the_line().map(|e| self.event_pieces(e)));
+            .or_else(|| {
+                // AND THE CURSOR ON THE ACTION A CLICK PICKED — or on the
+                // first, where it is born (`chrome::with_the_pick`).
+                self.event_line.on_the_line().map(|s| {
+                    crate::chrome::with_the_pick(&self.said_pieces(s), self.event_line.picked())
+                })
+            });
 
         // THE ALREADY DECODED PIXMAPS, by reference and for the SAME reason: each
         // one is small, but cloning twelve per frame would be paying for the

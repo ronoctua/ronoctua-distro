@@ -47539,47 +47539,6 @@ let
       END
     '';
 
-  # NO PART IS IN THE BASE: the built systems' closures hold neither a wanted
-  # part's output nor anything only that part's build needs to download. It
-  # BUILDS both reference systems (the slow tier), which is the only way to
-  # read a closure; the cheap half is `part-paths-are-read-as-arriving`.
-  parts-stay-out-of-the-base =
-    let
-      plain = builtins.unsafeDiscardStringContext;
-      closureOf =
-        machine:
-        pkgs.closureInfo {
-          rootPaths = [ self.nixosConfigurations.${machine}.config.system.build.toplevel ];
-        };
-      outsOf =
-        machine:
-        lib.mapAttrsToList (id: p: "${id} ${plain p.package.outPath}") (
-          lib.filterAttrs (_: p: p.wanted) self.nixosConfigurations.${machine}.config.ronoctua.parts
-        );
-      outs = pkgs.writeText "parts-outs.txt" (
-        lib.concatStringsSep "\n" (lib.unique (outsOf "vm" ++ outsOf "noctua")) + "\n"
-      );
-    in
-    mkCheck "parts-stay-out-of-the-base" [ pkgs.gnugrep pkgs.coreutils ] ''
-      failed=0
-      count=0
-      # `path`, never `out`: the loop's last read empties what it reads into,
-      # and `$out` is where this check says it passed.
-      while read -r id path; do
-        [ -n "$id" ] || continue
-        count=$((count + 1))
-        for closure in ${closureOf "vm"} ${closureOf "noctua"}; do
-          if grep -qxF "$path" "$closure/store-paths"; then
-            echo "ERROR: the part $id ($path) is in a system's closure: its download would stop an installation" >&2
-            failed=1
-          fi
-        done
-      done < ${outs}
-      [ "$count" -ge 1 ] || { echo "ERROR: no wanted part on either reference machine: this proves nothing" >&2; exit 1; }
-      [ "$failed" = 0 ] || exit 1
-      echo "OK: $count part(s) wanted, none in either system's closure"
-    '';
-
   # THE APPLIER'S ONE POLKIT RULE, AND HOW WIDE IT IS.
   #
   # The person starts `ronoctua-person-apply.service` with no password: the
@@ -54070,7 +54029,7 @@ let
       # the seed. The system admits unfree (the owner, 2026-10-24), so each
       # package's licence answers, Android Studio's included; VS Code's FHS
       # environment `code` and the SDK's other pieces are proved out of every
-      # closure by `profile-minimal-closes` and `parts-stay-out-of-the-base`.
+      # closure by `profile-minimal-closes` and `parts-build`.
       want = {uade, unrar, "google-chrome-141.0.7390.65", "claude-code-2.1.314", "vscode-1.119.0", "androidsdk",
               "android-studio-stable-2025.1.4.8"}
       if set(unfree) != want:
@@ -57044,7 +57003,6 @@ let
       parts-rule-is-narrow
       one-parts-boundary
       part-paths-are-read-as-arriving
-      parts-stay-out-of-the-base
       unfree-never-refuses
       iso-carries-nothing-undistributable
       iso-builds-only-glue
@@ -57583,6 +57541,32 @@ let
           ;
       })
       a-view-says-what-it-did-not-read
+      ;
+
+    # A SENTENCE THAT TEACHES KEYS TEACHES THE LEADER WITH THEM (2026-11-01):
+    # `bindings::keys` is asked inside the kit alone. `tests/taught-keys-checks.nix`.
+    inherit
+      (import ./taught-keys-checks.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          ;
+      })
+      keys-are-taught-with-the-leader
+      ;
+
+    # THE SOFTWARE CENTRE LOGS FROM ITS FIRST LINE (2026-11-01).
+    # `tests/software-log-checks.nix`.
+    inherit
+      (import ./software-log-checks.nix {
+        inherit
+          pkgs
+          mkCheck
+          pyPrelude
+          ;
+      })
+      the-software-cli-logs-from-its-first-line
       ;
 
     # THE DISTRO'S APK PINS ARE WHAT F-DROID'S SIGNED INDEX SIGNS (2026-11-01).

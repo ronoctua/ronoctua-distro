@@ -1,4 +1,5 @@
-//! What the machine did, said on the minibuffer's line.
+//! What the machine did, and every notification, said on the minibuffer's
+//! line.
 //!
 //! # Why the minibuffer, and not the band
 //!
@@ -7,28 +8,36 @@
 //! network, a tunnel or the aeroplane coming and going, the charger, a
 //! program installed — and what a brain module tells, the disk making room by
 //! itself among them — are EVENTS — facts about the machine that are worth one
-//! line and nothing more. The band is where something arrives that may want an
-//! answer; a fact that goes by is what the minibuffer's line already does for
-//! the shell's own answers (the echo), so an event is said there, in its
-//! catalogue entry's summary, for as long as any echo lasts.
+//! line and nothing more. A fact that goes by is what the minibuffer's line
+//! already does for the shell's own answers (the echo), so an event is said
+//! there, in its catalogue entry's summary, for as long as any echo lasts.
+//!
+//! AND EVERY NOTIFICATION TAKES THE SAME WAY (the owner, 2026-11-01): a
+//! program's `Notify`, the ones the footer raises, the brain's, the
+//! out-of-memory one. The filters speak first (`Book::decide`), and one they
+//! hide is shown nowhere; a shown one is said on the line when it is free —
+//! what the band's single line would say, in the band's loud ink when it is
+//! loud, for the time its `life` gives, its actions at the end — and recorded
+//! as said there ([`deliver`]). [`route`] is the one answer to where either
+//! goes.
 //!
 //! And it is said whether the modeline is showing or not: with the footer
-//! hidden, an event is what brings the minibuffer up for a moment.
+//! hidden, what the line says brings the minibuffer up for a moment.
 //!
 //! # Busy
 //!
 //! The line is somebody's while a view is open (the leader included), a
 //! question is being typed, the line's own drawer is open, or the screen is
-//! under a fullscreen window and the footer is down to its edge. An event
-//! that arrives then does NOT wait for the line: a camera that opened while
-//! somebody was typing in the launcher is news now, not in two minutes. It
-//! goes to the band instead, through the same door every notification takes,
-//! under its own tag — and its body OPENS with the sentence that says why it
-//! is there and not where it usually is (`notif-minibuffer-was-busy`), the
-//! one line of body the band draws.
+//! under a fullscreen window and the footer is down to its edge. What arrives
+//! then does NOT wait for the line: a camera that opened while somebody was
+//! typing in the launcher is news now, not in two minutes. It goes to the
+//! band instead — an event through the same door every notification takes,
+//! under its own tag.
 //!
-//! An event already ON the line when it becomes busy was said: it goes
-//! nowhere, unless it was up too briefly to be read ([`READ_IN`]).
+//! What is already ON the line when it becomes busy was said: it goes
+//! nowhere, unless it was up too briefly to be read ([`READ_IN`]) — or it is
+//! a notification that offers something to do, which the band keeps for the
+//! rest of its life, unanswered ([`Line::yielded`]).
 //!
 //! The Bluetooth devices keep the tags they always had, so the two filters
 //! that quiet a device coming and going still quiet the fallback.
@@ -36,15 +45,17 @@
 //! # The queue
 //!
 //! Events come in bursts — a resume brings the network, the tunnel and the
-//! headset back in one second — so the line keeps a FIFO of them, each shown
-//! for the echo's time. A person's own echo (the shell answering something
-//! that was just asked for) takes the line AT ONCE, and the event it
-//! interrupted goes back to the FRONT of the queue. Past [`EVENT_ECHOES`]
-//! waiting, the next one goes to the band: a queue that grows without end is
-//! a line that says, a minute late, what is no longer true — and for the same
-//! reason an event that says the opposite of one on the line or waiting
-//! REPLACES it ([`contradicts`]), and a pointer resting on the line holds an
-//! event for [`HELD_AT_MOST`] echoes at the most.
+//! headset back in one second — so the line keeps a queue, each shown for its
+//! time, ordered by level as the band orders its own: a higher level goes
+//! ahead, and takes the line from a lower one ([`Line::arrive`]). A person's
+//! own echo (the shell answering something that was just asked for) takes
+//! the line AT ONCE, and what it interrupted goes back to the FRONT of the
+//! queue. Past [`EVENT_ECHOES`] waiting, the next one goes
+//! to the band: a queue that grows without end is a line that says, a minute
+//! late, what is no longer true — and for the same reason an event that says
+//! the opposite of one on the line or waiting REPLACES it ([`contradicts`]),
+//! and a pointer resting on the line holds what it says for [`HELD_AT_MOST`]
+//! of its times at the most.
 //!
 //! # The first reading is not news
 //!
@@ -64,7 +75,8 @@ use std::time::{Duration, Instant};
 
 use crate::key;
 
-/// How many events may WAIT for the line, beside the one on it.
+/// How many events and notifications may WAIT for the line, beside the one
+/// on it.
 ///
 /// Four: a resume's burst — the network, a tunnel, a headset, the charger —
 /// fits, and the last of it is said twelve seconds late at the worst. The
@@ -202,6 +214,12 @@ pub struct Event {
     /// What its action opens, when it opens something — the desktop id of
     /// the program an install put in the launcher ([`launch_of`]).
     pub opens: Option<String>,
+    /// Its level, as the filters decide it for the notification it would be
+    /// on the band — what orders the line's queue as it orders the band's
+    /// ([`Line::arrive`]). The footer decides it before the line hears the
+    /// event (`Footer::said_now`); until then it is the lowest, and an event
+    /// nobody decided goes ahead of nothing.
+    pub level: u8,
 }
 
 impl Event {
@@ -214,6 +232,7 @@ impl Event {
             args: Vec::new(),
             counts: Vec::new(),
             opens: None,
+            level: 0,
         }
     }
 
@@ -261,27 +280,16 @@ impl Event {
 }
 
 /// The event as a notification the catalogue recognises by its tag — for
-/// when the line was somebody else's.
-///
-/// THE BODY SAYS WHY IT IS HERE, and FIRST: the same fact arrives in two
-/// places depending on what the person was doing, and a notification that
-/// did not say so would read as the line having broken. First, because the
-/// band draws ONE line of a body, cut to the room (`band::lines`), and after
-/// the event's own body the reason was the part a line of ordinary width
-/// cut; its entries are `full`, so that line is drawn at all.
+/// when the line was somebody else's: its entry's summary and body, as any
+/// notification of the band says them.
 #[must_use]
 pub fn notification(e: &Event, texts: &ronoctua_i18n::Texts) -> ronoctua_notify::Notification {
-    let body = format!(
-        "{}\n{}",
-        texts.t(key::NOTIF_MINIBUFFER_WAS_BUSY),
-        e.body(texts)
-    );
     let mut n = ronoctua_notify::Notification::fresh_one(
         0,
         texts.t(e.app),
         None,
         e.summary(texts),
-        body,
+        e.body(texts),
         ronoctua_notify::Urgency::Normal,
     );
     n.tags = vec![e.tag.to_owned()];
@@ -344,7 +352,7 @@ pub fn launch_of<'a>(e: &'a Event, command: &str) -> Option<&'a str> {
 }
 
 // ---------------------------------------------------------------------------
-// Where an event goes
+// Where an event or a notification goes
 // ---------------------------------------------------------------------------
 
 /// What holds the minibuffer's line right now, as the footer sees it.
@@ -370,30 +378,165 @@ impl Busy {
 
     /// Is the line OUT OF SIGHT, or covered by what the person is doing?
     ///
-    /// The drawer is not: it is the line grown, and what it shows IS the
-    /// event on the line — which is how its actions are read in full.
+    /// The drawer is not: it is the line grown, and what it shows IS what
+    /// the line says — which is how its actions are read in full.
     const fn hides_the_line(self) -> bool {
         self.view || self.typing || self.covered
     }
 }
 
-/// Where an arriving event goes.
+/// Where an arriving event or notification goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     /// The minibuffer's line.
-    Echo,
-    /// The band, as a notification that says why.
-    Notification,
+    Line,
+    /// The band.
+    Band,
 }
 
-/// Where an event goes, given what holds the line.
+/// Where an event or a shown notification goes, given what holds the line —
+/// THE ONE ANSWER, for both: the line when it is free, the band when it is
+/// somebody's. (The line's queue full sends the next one to the band too:
+/// [`Line::arrive`] gives it back.)
 #[must_use]
 pub const fn route(busy: Busy) -> Route {
-    if busy.any() {
-        Route::Notification
-    } else {
-        Route::Echo
+    if busy.any() { Route::Band } else { Route::Line }
+}
+
+/// A notification said on the line: what arrived and what the book decided,
+/// the band's own pair, kept whole so the line says what the band would.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Told {
+    /// What arrived, with our sentence and the catalogue's actions on it.
+    pub notification: ronoctua_notify::Notification,
+    /// What the filters decided.
+    pub presentation: ronoctua_notify::Presentation,
+}
+
+/// What the minibuffer's line says, beside the shell's own echo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Said {
+    /// What the machine did.
+    Event(Event),
+    /// A notification — recorded in the history as said on the line.
+    Notification(Box<Told>),
+}
+
+impl From<Event> for Said {
+    fn from(e: Event) -> Self {
+        Self::Event(e)
     }
+}
+
+impl Said {
+    /// The event, when it is one.
+    #[must_use]
+    pub const fn event(&self) -> Option<&Event> {
+        match self {
+            Self::Event(e) => Some(e),
+            Self::Notification(_) => None,
+        }
+    }
+
+    /// The notification, when it is one.
+    #[must_use]
+    pub fn told(&self) -> Option<&Told> {
+        match self {
+            Self::Event(_) => None,
+            Self::Notification(t) => Some(t),
+        }
+    }
+
+    /// How long it stays on the line: an event the echo's time, both being
+    /// one thing to read; a notification the time its `life` gives it on
+    /// the band.
+    fn lasts(&self) -> Duration {
+        match self {
+            Self::Event(_) => on_screen(),
+            Self::Notification(t) => t.presentation.life.how_long(),
+        }
+    }
+
+    /// Whether it is the notification of record `key`.
+    fn is(&self, key: ronoctua_notify::RecordKey) -> bool {
+        self.told().is_some_and(|t| t.notification.key() == key)
+    }
+
+    /// Its level, which orders the line's queue as it orders the band's.
+    #[must_use]
+    pub fn level(&self) -> u8 {
+        match self {
+            Self::Event(e) => e.level,
+            Self::Notification(t) => t.presentation.level,
+        }
+    }
+
+    /// Whether, on a line that becomes somebody's, it goes to the band even
+    /// after it was read there: a notification that offers something to do
+    /// is not done with by being read, and the band keeps it for the rest of
+    /// its life, unanswered.
+    fn waits_for_an_answer(&self) -> bool {
+        self.told()
+            .is_some_and(|t| !t.notification.actions.is_empty())
+    }
+}
+
+/// Where a notification the book decided went ([`deliver`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placed {
+    /// A filter hid it: recorded, and shown nowhere.
+    Nowhere,
+    /// Said on the minibuffer's line.
+    Line,
+    /// On the band.
+    Band,
+}
+
+impl Placed {
+    /// Its name, for the log a test reads.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Nowhere => "nowhere",
+            Self::Line => "line",
+            Self::Band => "band",
+        }
+    }
+}
+
+/// A NOTIFICATION THE BOOK DECIDED, put where it goes — every notification,
+/// from wherever it came, passes here and nowhere else.
+///
+/// Hidden by a filter, it is recorded and shown nowhere, as it always was.
+/// Shown, it takes the events' way ([`route`]): said on the line when the
+/// line is free, and recorded as said there — read or unread as the band
+/// would leave it, the bell keeping what was not read; on the band when the
+/// line is somebody's, or its queue is full.
+pub fn deliver(
+    line: &mut Line,
+    queue: &mut ronoctua_notify::Queue,
+    n: ronoctua_notify::Notification,
+    p: ronoctua_notify::Presentation,
+    busy: Busy,
+    person: bool,
+    now: Instant,
+) -> Placed {
+    if p.show == ronoctua_notify::Show::Hidden {
+        queue.enqueue(n, p, now);
+        return Placed::Nowhere;
+    }
+    if route(busy) == Route::Line {
+        let told = Said::Notification(Box::new(Told {
+            notification: n.clone(),
+            presentation: p.clone(),
+        }));
+        if line.arrive(told, person, now).is_none() {
+            queue.record_on_the_line(n, p);
+            return Placed::Line;
+        }
+    }
+    queue.enqueue(n, p, now);
+    Placed::Band
 }
 
 // ---------------------------------------------------------------------------
@@ -406,13 +549,13 @@ fn on_screen() -> Duration {
     Duration::from_secs(crate::echo::ECHO_SECONDS)
 }
 
-/// How long an event has to have been on the line to count as SAID: under
+/// How long what the line says has to have been up to count as SAID: under
 /// it, the line was taken before anybody could read it, and it goes to the
 /// band like the ones still waiting ([`Line::yielded`]).
 pub const READ_IN: Duration = Duration::from_secs(1);
 
-/// The most a pointer resting on the line holds an event, in echoes, counted
-/// from when it went up ([`Line::tick`]).
+/// The most a pointer resting on the line holds what it says, in its own
+/// times, counted from when it went up ([`Line::tick`]).
 ///
 /// The hold is for a hand reaching for an action or reading a long line; the
 /// minibuffer is the bottom row of the screen, where a pointer is often
@@ -421,22 +564,53 @@ pub const READ_IN: Duration = Duration::from_secs(1);
 /// with the queue — the camera closing — stuck behind it.
 pub const HELD_AT_MOST: u32 = 3;
 
-/// The event on the line: what, since when, and until when.
+/// What is on the line: what, since when, until when — and which of its
+/// actions the cursor is on.
 #[derive(Debug)]
 struct Up {
-    event: Event,
+    said: Said,
     since: Instant,
     until: Instant,
+    /// The action a click picked, by its place among the line's actions —
+    /// BORN ON THE FIRST, a question's `no`, each time something goes up:
+    /// the line rises by itself, under a hand that may be clicking at
+    /// something else, so the first click picks and only a click on the
+    /// person's pick runs it (`crate::aim`, the band's card's rule).
+    pick: crate::aim::Aim<usize>,
 }
 
 impl Up {
-    fn at(event: Event, now: Instant) -> Self {
+    fn at(said: Said, now: Instant) -> Self {
+        let until = now + said.lasts();
         Self {
-            event,
+            said,
             since: now,
-            until: now + on_screen(),
+            until,
+            pick: crate::aim::Aim::born(0),
         }
     }
+}
+
+/// What one second of the line's clock did ([`Line::tick`]).
+#[derive(Debug, Default)]
+pub struct Ticked {
+    /// Whether what the line shows changed.
+    pub changed: bool,
+    /// What left the line because its time was up — a notification's sender
+    /// waits to be told.
+    pub expired: Option<Said>,
+}
+
+/// What a line that became somebody's let go of ([`Line::yielded`]).
+#[derive(Debug, Default)]
+pub struct Yielded {
+    /// What goes to the band, in the order it would have been said — each
+    /// with the time it already spent on the line, which the band takes off
+    /// its life (nothing, for the ones still waiting).
+    pub to_the_band: Vec<(Said, Duration)>,
+    /// What was on the line and was read there: it goes nowhere, and a
+    /// notification's sender is told it closed.
+    pub said: Option<Said>,
 }
 
 /// The two events of each source that say opposite things, and the argument
@@ -480,125 +654,240 @@ fn subject<'a>(e: &'a Event, about: Option<&str>) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// The event on the minibuffer's line, and the ones waiting for it.
+/// Whether `new` replaces `old` on the line: two events, one the opposite of
+/// the other ([`contradicts`]). A notification replaces nothing — two
+/// notifications are two things somebody said.
+fn replaces(new: &Said, old: &Said) -> bool {
+    match (new, old) {
+        (Said::Event(new), Said::Event(old)) => contradicts(new, old),
+        _ => false,
+    }
+}
+
+/// What the minibuffer's line says — an event or a notification — and what
+/// waits for it.
 #[derive(Debug, Default)]
 pub struct Line {
     /// On the line.
     on: Option<Up>,
     /// Waiting, first in first out.
-    waiting: VecDeque<Event>,
+    waiting: VecDeque<Said>,
 }
 
 impl Line {
-    /// An event for the line. `person` says a person's echo holds it now.
+    /// An event or a notification for the line. `person` says a person's
+    /// echo holds it now.
     ///
-    /// Gives back what does not fit — the event past [`EVENT_ECHOES`] waiting
+    /// Gives back what does not fit — the one past [`EVENT_ECHOES`] waiting
     /// — for the band.
     ///
     /// AN EVENT THAT SAYS THE OPPOSITE of one on the line or waiting
     /// ([`contradicts`]) REPLACES it — on the line, with the whole time again;
     /// waiting, in its place. Behind it, the line would say, seconds late, a
     /// fact that had already flipped: "a camera is open" after it closed.
-    pub fn arrive(&mut self, e: Event, person: bool, now: Instant) -> Option<Event> {
+    ///
+    /// BY LEVEL, AS THE BAND ORDERS ITS OWN (`queue::unseats`,
+    /// `queue::waiting_place`): one of a strictly higher level takes the line
+    /// from what is on it, which goes back to the FRONT of the queue to be
+    /// said whole; otherwise it waits after everything of at least its level.
+    /// A critical one never waits behind ordinary ones — and with four
+    /// already waiting it is the band's at once.
+    pub fn arrive(&mut self, said: impl Into<Said>, person: bool, now: Instant) -> Option<Said> {
+        use ronoctua_notify::queue::{unseats, waiting_place};
+        let said = said.into();
         if let Some(up) = self.on.as_mut()
-            && contradicts(&e, &up.event)
+            && replaces(&said, &up.said)
         {
-            *up = Up::at(e, now);
+            *up = Up::at(said, now);
             return None;
         }
-        if let Some(w) = self.waiting.iter_mut().find(|w| contradicts(&e, w)) {
-            *w = e;
+        if let Some(w) = self.waiting.iter_mut().find(|w| replaces(&said, w)) {
+            *w = said;
             return None;
         }
         if self.on.is_none() && !person && self.waiting.is_empty() {
-            self.on = Some(Up::at(e, now));
+            self.on = Some(Up::at(said, now));
             return None;
         }
         if self.waiting.len() >= EVENT_ECHOES {
-            return Some(e);
+            return Some(said);
         }
-        self.waiting.push_back(e);
+        if !person
+            && let Some(up) = self.on.as_mut()
+            && unseats(said.level(), up.said.level())
+        {
+            let unseated = std::mem::replace(up, Up::at(said, now));
+            self.waiting.push_front(unseated.said);
+            return None;
+        }
+        let at = waiting_place(self.waiting.iter().map(Said::level), said.level());
+        self.waiting.insert(at, said);
         None
     }
 
-    /// A person's echo took the line: the event on it goes back to the FRONT
-    /// of the queue, to be said whole once the line is free. Says whether one
-    /// was on it.
+    /// A person's echo took the line: what was on it goes back to the FRONT
+    /// of the queue, to be said whole once the line is free. Says whether
+    /// something was on it.
     pub fn interrupted(&mut self) -> bool {
         match self.on.take() {
             Some(up) => {
-                self.waiting.push_front(up.event);
+                self.waiting.push_front(up.said);
                 true
             }
             None => false,
         }
     }
 
-    /// The footer's second: the event on the line goes when its time is up —
-    /// not while a pointer rests on the line (`held`), and for a whole
-    /// echo's time after the hand leaves, but never past [`HELD_AT_MOST`]
-    /// echoes from when it went up — and the next one takes the line when
-    /// nothing else holds it. Says whether the line changed.
-    pub fn tick(&mut self, now: Instant, person: bool, held: bool) -> bool {
-        let mut changed = false;
+    /// The footer's second: what is on the line goes when its time is up —
+    /// not while a pointer rests on the line (`held`), and for a whole time
+    /// of its own after the hand leaves, but never past [`HELD_AT_MOST`] of
+    /// them from when it went up — and the next one takes the line when
+    /// nothing else holds it.
+    pub fn tick(&mut self, now: Instant, person: bool, held: bool) -> Ticked {
+        let mut ticked = Ticked::default();
         if let Some(up) = self.on.as_mut() {
+            let lasts = up.said.lasts();
             if held {
-                let most = up.since + on_screen() * HELD_AT_MOST;
-                up.until = up.until.max(now + on_screen()).min(most);
+                let most = up.since + lasts * HELD_AT_MOST;
+                up.until = up.until.max(now + lasts).min(most);
             }
             if now >= up.until {
-                self.on = None;
-                changed = true;
+                ticked.expired = self.on.take().map(|up| up.said);
+                ticked.changed = true;
             }
         }
         if self.on.is_none()
             && !person
-            && let Some(e) = self.waiting.pop_front()
+            && let Some(said) = self.waiting.pop_front()
         {
-            self.on = Some(Up::at(e, now));
-            changed = true;
+            self.on = Some(Up::at(said, now));
+            ticked.changed = true;
         }
-        changed
+        ticked
     }
 
     /// The line became somebody's: what is still to be said goes to the band,
-    /// in the order it would have been said. With only the drawer open the
-    /// event ON the line stays, because the drawer is showing it.
+    /// in the order it would have been said. With only the drawer open what
+    /// is ON the line stays, because the drawer is showing it.
     ///
-    /// # The event on the line, when the line goes out of sight
+    /// # What is on the line, when the line goes out of sight
     ///
     /// Already said, when it has been up [`READ_IN`] or more: it leaves the
     /// line and goes nowhere. Handed to the band it was the same fact twice —
     /// the person presses the leader two seconds after reading "charger
-    /// plugged in", and the band says it again, with a sentence claiming the
-    /// line was busy. Up for less, nobody could have read it, and it goes to
-    /// the band with the ones still waiting.
-    pub fn yielded(&mut self, busy: Busy, now: Instant) -> Vec<Event> {
+    /// plugged in", and the band says it again. Up for less, nobody could
+    /// have read it, and it goes to the band with the ones still waiting.
+    ///
+    /// BUT A NOTIFICATION THAT OFFERS SOMETHING TO DO goes to the band however
+    /// long it was up — for the REST of its life, unanswered: the owner's
+    /// rule is "the line busy, the band", and a question read and then
+    /// covered by the leader is a question nobody answered.
+    pub fn yielded(&mut self, busy: Busy, now: Instant) -> Yielded {
+        let mut out = Yielded::default();
         if !busy.any() {
-            return Vec::new();
+            return out;
         }
-        let mut out = Vec::new();
         if busy.hides_the_line()
             && let Some(up) = self.on.take()
-            && now.saturating_duration_since(up.since) < READ_IN
         {
-            out.push(up.event);
+            let read = now.saturating_duration_since(up.since) >= READ_IN;
+            if read && !up.said.waits_for_an_answer() {
+                out.said = Some(up.said);
+            } else {
+                let left = up.until.saturating_duration_since(now);
+                let spent = up.said.lasts().saturating_sub(left);
+                out.to_the_band.push((up.said, spent));
+            }
         }
-        out.extend(self.waiting.drain(..));
+        out.to_the_band
+            .extend(self.waiting.drain(..).map(|s| (s, Duration::ZERO)));
         out
     }
 
-    /// The event on the line was acted on — one of its actions clicked — and
-    /// leaves it: given back, so the click knows WHICH event it was about
-    /// ([`launch_of`]).
-    pub fn done(&mut self) -> Option<Event> {
-        self.on.take().map(|up| up.event)
+    /// What is on the line was acted on — one of its actions clicked — and
+    /// leaves it: given back, so the click knows WHICH it was about
+    /// ([`launch_of`], a notification's record).
+    pub fn done(&mut self) -> Option<Said> {
+        self.on.take().map(|up| up.said)
     }
 
-    /// The event on the line, when there is one.
+    /// Takes notification `id` off the line and out of its queue — closed by
+    /// its sender, or its question over — and gives back the records it
+    /// was, which the band's own closing marks read.
+    pub fn forget(&mut self, id: u32) -> Vec<ronoctua_notify::RecordKey> {
+        let of = |s: &Said| {
+            s.told()
+                .filter(|t| t.notification.id == id)
+                .map(|t| t.notification.key())
+        };
+        let mut gone: Vec<ronoctua_notify::RecordKey> = Vec::new();
+        if let Some(key) = self.on.as_ref().and_then(|up| of(&up.said)) {
+            self.on = None;
+            gone.push(key);
+        }
+        gone.extend(self.waiting.iter().filter_map(of));
+        self.waiting.retain(|s| of(s).is_none());
+        gone
+    }
+
+    /// Takes the notification of record `key` off the line and out of its
+    /// queue — read by hand somewhere. Says whether it was there.
+    pub fn read(&mut self, key: ronoctua_notify::RecordKey) -> bool {
+        let mut found = false;
+        if self.on.as_ref().is_some_and(|up| up.said.is(key)) {
+            self.on = None;
+            found = true;
+        }
+        let before = self.waiting.len();
+        self.waiting.retain(|s| !s.is(key));
+        found || self.waiting.len() != before
+    }
+
+    /// New words on the notification of record `key`, wherever it is on the
+    /// line — `Queue::amend`'s half, for the copy the line says.
+    pub fn amend(&mut self, key: ronoctua_notify::RecordKey, summary: &str, body: &str) -> bool {
+        let mut found = false;
+        let on = self.on.as_mut().map(|up| &mut up.said);
+        for said in on.into_iter().chain(self.waiting.iter_mut()) {
+            if let Said::Notification(t) = said
+                && t.notification.key() == key
+            {
+                summary.clone_into(&mut t.notification.summary);
+                body.clone_into(&mut t.notification.body);
+                found = true;
+            }
+        }
+        found
+    }
+
+    /// What is on the line, when there is something.
     #[must_use]
-    pub fn on_the_line(&self) -> Option<&Event> {
-        self.on.as_ref().map(|up| &up.event)
+    pub fn on_the_line(&self) -> Option<&Said> {
+        self.on.as_ref().map(|up| &up.said)
+    }
+
+    /// A click on action `n` of what the line says: `true` when it RUNS —
+    /// the person's own pick, clicked again; otherwise `n` becomes the pick
+    /// and nothing runs. Every action of the line, an event's and a
+    /// notification's alike: one rule for one line, the band's
+    /// (invariant 19).
+    pub fn clicked(&mut self, n: usize) -> bool {
+        self.on.as_mut().is_some_and(|up| up.pick.clicked(n))
+    }
+
+    /// Which action the cursor is on — the first, where it is born.
+    #[must_use]
+    pub fn picked(&self) -> usize {
+        self.on
+            .as_ref()
+            .and_then(|up| up.pick.on().copied())
+            .unwrap_or(0)
+    }
+
+    /// How many wait for the line.
+    #[must_use]
+    pub fn waiting(&self) -> usize {
+        self.waiting.len()
     }
 
     /// Nothing on the line and nothing waiting.
@@ -1452,11 +1741,11 @@ mod tests {
 
     // --- where it goes -----------------------------------------------------
 
-    /// FAILS IF: an event goes to the line while the line is somebody's, or
-    /// to the band while it is free.
+    /// FAILS IF: an event or a notification goes to the line while the line
+    /// is somebody's, or to the band while it is free.
     #[test]
     fn a_free_line_says_it_and_a_busy_one_hands_it_to_the_band() {
-        assert_eq!(route(Busy::default()), Route::Echo);
+        assert_eq!(route(Busy::default()), Route::Line);
         for busy in [
             Busy {
                 view: true,
@@ -1475,12 +1764,25 @@ mod tests {
                 ..Busy::default()
             },
         ] {
-            assert_eq!(route(busy), Route::Notification, "{busy:?}");
+            assert_eq!(route(busy), Route::Band, "{busy:?}");
         }
     }
 
     fn e(tag: &'static str) -> Event {
         Event::of(tag, key::NOTIF_NETWORK_APP)
+    }
+
+    /// The tag of what the line says, when it is an event.
+    fn tag_of(said: Option<&Said>) -> Option<&'static str> {
+        said.and_then(Said::event).map(|e| e.tag)
+    }
+
+    /// The tags of what was handed to the band, events only.
+    fn said_tags(said: &[(Said, Duration)]) -> Vec<&'static str> {
+        said.iter()
+            .filter_map(|(s, _)| s.event())
+            .map(|e| e.tag)
+            .collect()
     }
 
     /// FAILS IF: the queue stops being first-in first-out, an event stops
@@ -1497,19 +1799,19 @@ mod tests {
         }
         let over = line.arrive(e(CAMERA_IN_USE), false, t0);
         assert_eq!(
-            over.map(|e| e.tag),
+            tag_of(over.as_ref()),
             Some(CAMERA_IN_USE),
             "the fifth waiting"
         );
-        assert_eq!(line.on_the_line().map(|e| e.tag), Some(TOR_UP));
+        assert_eq!(tag_of(line.on_the_line()), Some(TOR_UP));
         let step = on_screen();
-        assert!(!line.tick(t0 + step / 2, false, false), "not yet");
+        assert!(!line.tick(t0 + step / 2, false, false).changed, "not yet");
         let mut said = vec![TOR_UP];
         let mut now = t0;
         for _ in 0..4 {
             now += step;
-            assert!(line.tick(now, false, false));
-            said.push(line.on_the_line().expect("the next one").tag);
+            assert!(line.tick(now, false, false).changed);
+            said.push(tag_of(line.on_the_line()).expect("the next one"));
         }
         assert_eq!(
             said,
@@ -1521,7 +1823,7 @@ mod tests {
                 MICROPHONE_IN_USE
             ]
         );
-        assert!(line.tick(now + step, false, false));
+        assert!(line.tick(now + step, false, false).changed);
         assert!(line.is_empty());
     }
 
@@ -1538,16 +1840,16 @@ mod tests {
         // WHILE THE PERSON'S ECHO IS UP nothing takes the line, and an event
         // arriving waits.
         assert_eq!(line.arrive(e(VPN_UP), true, t0), None);
-        assert!(!line.tick(t0, true, false));
+        assert!(!line.tick(t0, true, false).changed);
         assert_eq!(line.on_the_line(), None);
         // THE ECHO WENT: the interrupted one is first, whole.
-        assert!(line.tick(t0, false, false));
-        assert_eq!(line.on_the_line().map(|e| e.tag), Some(TOR_UP));
+        assert!(line.tick(t0, false, false).changed);
+        assert_eq!(tag_of(line.on_the_line()), Some(TOR_UP));
         let step = on_screen();
-        assert!(line.tick(t0 + step, false, false));
-        assert_eq!(line.on_the_line().map(|e| e.tag), Some(TAILNET_UP));
-        assert!(line.tick(t0 + step * 2, false, false));
-        assert_eq!(line.on_the_line().map(|e| e.tag), Some(VPN_UP));
+        assert!(line.tick(t0 + step, false, false).changed);
+        assert_eq!(tag_of(line.on_the_line()), Some(TAILNET_UP));
+        assert!(line.tick(t0 + step * 2, false, false).changed);
+        assert_eq!(tag_of(line.on_the_line()), Some(VPN_UP));
     }
 
     /// FAILS IF: an event under the pointer expires while somebody is reading
@@ -1558,13 +1860,19 @@ mod tests {
         let mut line = Line::default();
         line.arrive(e(TOR_UP), false, t0);
         let step = on_screen();
-        assert!(!line.tick(t0 + step + step / 2, false, true), "held");
+        assert!(
+            !line.tick(t0 + step + step / 2, false, true).changed,
+            "held"
+        );
         assert!(line.on_the_line().is_some());
         assert!(
-            !line.tick(t0 + step * 2, false, false),
+            !line.tick(t0 + step * 2, false, false).changed,
             "a whole time more after the hand"
         );
-        assert!(line.tick(t0 + step * 3, false, false), "and then it goes");
+        assert!(
+            line.tick(t0 + step * 3, false, false).changed,
+            "and then it goes"
+        );
         assert!(line.is_empty());
     }
 
@@ -1584,14 +1892,17 @@ mod tests {
             now += step / 4;
             line.tick(now, false, true);
             assert_eq!(
-                line.on_the_line().map(|e| e.tag),
+                tag_of(line.on_the_line()),
                 Some(CAMERA_IN_USE),
                 "held at {:?}",
                 now - t0
             );
         }
-        assert!(line.tick(t0 + step * HELD_AT_MOST, false, true), "it goes");
-        assert_eq!(line.on_the_line().map(|e| e.tag), Some(TOR_UP));
+        assert!(
+            line.tick(t0 + step * HELD_AT_MOST, false, true).changed,
+            "it goes"
+        );
+        assert_eq!(tag_of(line.on_the_line()), Some(TOR_UP));
     }
 
     fn about(tag: &'static str, name: &'static str, value: &str) -> Event {
@@ -1611,9 +1922,12 @@ mod tests {
         let mut line = Line::default();
         line.arrive(e(CAMERA_IN_USE), false, t0);
         assert_eq!(line.arrive(e(CAMERA_FREE), false, t0 + step / 2), None);
-        assert_eq!(line.on_the_line().map(|e| e.tag), Some(CAMERA_FREE));
-        assert!(!line.tick(t0 + step, false, false), "a whole time from now");
-        assert!(line.tick(t0 + step + step / 2, false, false));
+        assert_eq!(tag_of(line.on_the_line()), Some(CAMERA_FREE));
+        assert!(
+            !line.tick(t0 + step, false, false).changed,
+            "a whole time from now"
+        );
+        assert!(line.tick(t0 + step + step / 2, false, false).changed);
         assert!(line.is_empty(), "and nothing was left behind it");
         // WAITING: replaced where it waits, its place kept.
         let mut line = Line::default();
@@ -1625,12 +1939,14 @@ mod tests {
         line.arrive(e(CHARGER_UNPLUGGED), false, t0);
         let mut said = vec![
             line.on_the_line()
+                .and_then(Said::event)
                 .map(|e| (e.tag, arg(e, "network").map(ToOwned::to_owned))),
         ];
         for n in 1..=4 {
             line.tick(t0 + step * n, false, false);
             said.push(
                 line.on_the_line()
+                    .and_then(Said::event)
                     .map(|e| (e.tag, arg(e, "network").map(ToOwned::to_owned))),
             );
         }
@@ -1683,7 +1999,7 @@ mod tests {
         line.arrive(e(TOR_UP), false, t0);
         line.arrive(e(TAILNET_UP), false, t0);
         assert!(
-            line.yielded(Busy::default(), t0).is_empty(),
+            line.yielded(Busy::default(), t0).to_the_band.is_empty(),
             "free: nothing moves"
         );
         let drawer = line.yielded(
@@ -1693,8 +2009,9 @@ mod tests {
             },
             t0,
         );
-        assert_eq!(tags(&drawer), vec![TAILNET_UP]);
-        assert_eq!(line.on_the_line().map(|e| e.tag), Some(TOR_UP));
+        assert_eq!(said_tags(&drawer.to_the_band), vec![TAILNET_UP]);
+        assert_eq!(drawer.said, None, "the drawer shows what is on the line");
+        assert_eq!(tag_of(line.on_the_line()), Some(TOR_UP));
         let view = line.yielded(
             Busy {
                 view: true,
@@ -1702,15 +2019,19 @@ mod tests {
             },
             t0 + READ_IN / 2,
         );
-        assert_eq!(tags(&view), vec![TOR_UP], "up too briefly to be read");
+        assert_eq!(
+            said_tags(&view.to_the_band),
+            vec![TOR_UP],
+            "up too briefly to be read"
+        );
+        assert_eq!(view.said, None);
         assert!(line.is_empty());
     }
 
     /// FAILS IF: an event the person already read on the line — up for
     /// [`READ_IN`] or more — is raised AGAIN on the band when the line
-    /// becomes busy (the leader, a view, a question), with a sentence saying
-    /// the line was busy when it was not; or the ones waiting behind it stop
-    /// going to the band.
+    /// becomes busy (the leader, a view, a question); or is not given back
+    /// as gone; or the ones waiting behind it stop going to the band.
     #[test]
     fn an_event_already_read_is_not_said_twice() {
         let t0 = Instant::now();
@@ -1724,7 +2045,16 @@ mod tests {
             },
             t0 + READ_IN * 2,
         );
-        assert_eq!(tags(&handed), vec![TOR_UP], "only the one never shown");
+        assert_eq!(
+            said_tags(&handed.to_the_band),
+            vec![TOR_UP],
+            "only the one never shown"
+        );
+        assert_eq!(
+            tag_of(handed.said.as_ref()),
+            Some(CHARGER_PLUGGED),
+            "the one read is told as gone"
+        );
         assert!(line.is_empty());
     }
 
@@ -1735,18 +2065,360 @@ mod tests {
         let t0 = Instant::now();
         let mut line = Line::default();
         line.arrive(e(TOR_UP), false, t0);
-        assert_eq!(line.done().map(|e| e.tag), Some(TOR_UP));
+        assert_eq!(tag_of(line.done().as_ref()), Some(TOR_UP));
         assert!(line.is_empty());
         assert_eq!(line.done(), None);
     }
 
+    // --- every notification -------------------------------------------------
+
+    /// A notification as the bus delivers one, decided as the footer decides.
+    fn arrived(id: u32, life: ronoctua_notify::Life) -> Told {
+        let notification = ronoctua_notify::Notification::fresh_one(
+            id,
+            "mail".to_owned(),
+            None,
+            format!("message {id}"),
+            String::new(),
+            ronoctua_notify::Urgency::Normal,
+        );
+        let mut presentation = ronoctua_notify::Presentation::for_arrival(&notification);
+        presentation.life = life;
+        Told {
+            notification,
+            presentation,
+        }
+    }
+
+    fn deliver_one(
+        line: &mut Line,
+        queue: &mut ronoctua_notify::Queue,
+        t: Told,
+        busy: Busy,
+        now: Instant,
+    ) -> Placed {
+        deliver(
+            line,
+            queue,
+            t.notification,
+            t.presentation,
+            busy,
+            false,
+            now,
+        )
+    }
+
+    /// FAILS IF: a shown notification does not take the events' way — said
+    /// on a free line and recorded there, unread as the band leaves one; on
+    /// the band when the line is somebody's or its queue is full — or one a
+    /// filter hides reaches either, or is not recorded.
+    #[test]
+    fn every_notification_takes_the_events_way() {
+        let t0 = Instant::now();
+        let normal = ronoctua_notify::Life::Normal;
+        let (mut line, mut queue) = (Line::default(), ronoctua_notify::Queue::fresh_one());
+        let placed = deliver_one(
+            &mut line,
+            &mut queue,
+            arrived(1, normal),
+            Busy::default(),
+            t0,
+        );
+        assert_eq!(placed, Placed::Line);
+        assert!(
+            queue.showing().is_none(),
+            "the free line's one took the band"
+        );
+        assert_eq!(
+            line.on_the_line()
+                .and_then(Said::told)
+                .map(|t| t.notification.id),
+            Some(1)
+        );
+        assert_eq!(queue.history()[0].place, ronoctua_notify::Place::Line);
+        assert_eq!(queue.unread(), 1);
+        // BUSY: the band, at once.
+        let view = Busy {
+            view: true,
+            ..Busy::default()
+        };
+        assert_eq!(
+            deliver_one(&mut line, &mut queue, arrived(2, normal), view, t0),
+            Placed::Band
+        );
+        assert_eq!(queue.showing().map(|s| s.notification.id), Some(2));
+        assert_eq!(queue.history()[1].place, ronoctua_notify::Place::Band);
+        // HIDDEN: nowhere, and still in the history.
+        let mut hidden = arrived(3, normal);
+        hidden.presentation.show = ronoctua_notify::Show::Hidden;
+        assert_eq!(
+            deliver_one(&mut line, &mut queue, hidden, Busy::default(), t0),
+            Placed::Nowhere
+        );
+        assert_eq!(line.waiting(), 0, "a hidden one waits for the line");
+        assert_eq!(queue.history().len(), 3);
+        // FULL: four wait, and the fifth goes to the band.
+        for id in 4..8 {
+            assert_eq!(
+                deliver_one(
+                    &mut line,
+                    &mut queue,
+                    arrived(id, normal),
+                    Busy::default(),
+                    t0
+                ),
+                Placed::Line
+            );
+        }
+        assert_eq!(line.waiting(), EVENT_ECHOES);
+        assert_eq!(
+            deliver_one(
+                &mut line,
+                &mut queue,
+                arrived(8, normal),
+                Busy::default(),
+                t0
+            ),
+            Placed::Band
+        );
+        // TWO NOTIFICATIONS ARE TWO THINGS SAID: neither replaced the other.
+        assert_eq!(line.waiting(), EVENT_ECHOES);
+    }
+
+    /// FAILS IF: a notification on the line stays the echo's time instead of
+    /// what its `life` gives it, or leaves without being given back for its
+    /// sender to be told.
+    #[test]
+    fn a_notification_stays_on_the_line_for_its_life() {
+        let t0 = Instant::now();
+        let long = ronoctua_notify::Life::Long;
+        let mut line = Line::default();
+        line.arrive(Said::Notification(Box::new(arrived(1, long))), false, t0);
+        let ticked = line.tick(t0 + on_screen() * 2, false, false);
+        assert!(!ticked.changed, "gone at the echo's time");
+        let ticked = line.tick(t0 + long.how_long(), false, false);
+        assert!(ticked.changed);
+        assert_eq!(
+            ticked
+                .expired
+                .as_ref()
+                .and_then(Said::told)
+                .map(|t| t.notification.id),
+            Some(1)
+        );
+        assert!(line.is_empty());
+    }
+
+    /// FAILS IF: a notification still waiting for a line that became busy is
+    /// lost, recorded twice on the band, or its record still says the line;
+    /// or one closed by its sender, read by hand or given new words stays on
+    /// the line as it was.
+    #[test]
+    fn the_line_hands_a_notification_on_and_lets_it_go() {
+        let t0 = Instant::now();
+        let normal = ronoctua_notify::Life::Normal;
+        let (mut line, mut queue) = (Line::default(), ronoctua_notify::Queue::fresh_one());
+        for id in 1..=3 {
+            deliver_one(
+                &mut line,
+                &mut queue,
+                arrived(id, normal),
+                Busy::default(),
+                t0,
+            );
+        }
+        let key = |id: u32| {
+            queue
+                .history()
+                .iter()
+                .find(|r| r.notification.id == id)
+                .map(ronoctua_notify::Record::key)
+                .expect("recorded")
+        };
+        let (two, three) = (key(2), key(3));
+        assert!(line.amend(two, "two, whole", "and this"));
+        assert_eq!(line.forget(1), vec![key(1)], "closed by its sender");
+        assert!(line.read(three), "read by hand");
+        assert!(!line.read(three), "read twice");
+        let handed = line.yielded(
+            Busy {
+                typing: true,
+                ..Busy::default()
+            },
+            t0 + READ_IN * 2,
+        );
+        assert_eq!(handed.said, None);
+        assert_eq!(handed.to_the_band.len(), 1);
+        let (said, spent) = &handed.to_the_band[0];
+        assert_eq!(*spent, Duration::ZERO, "it never was on the line");
+        let told = said.told().expect("a notification").clone();
+        assert_eq!(told.notification.summary, "two, whole");
+        queue.show_recorded(told.notification, told.presentation, *spent, t0);
+        assert_eq!(queue.history().len(), 3, "recorded twice");
+        assert_eq!(queue.showing().map(|s| s.notification.key()), Some(two));
+        let place = queue
+            .history()
+            .iter()
+            .find(|r| r.key() == two)
+            .map(|r| r.place);
+        assert_eq!(place, Some(ronoctua_notify::Place::Band));
+    }
+
+    /// A notification that offers something to do — a program's button.
+    fn asking(id: u32, life: ronoctua_notify::Life) -> Said {
+        let mut t = arrived(id, life);
+        t.notification.actions = vec![ronoctua_notify::Action {
+            id: "reply".to_owned(),
+            label: ronoctua_notify::Label::Text("Reply".to_owned()),
+            doing: ronoctua_notify::Doing::Invoke,
+        }];
+        Said::Notification(Box::new(t))
+    }
+
+    /// FAILS IF: a notification that offers something to do goes nowhere when
+    /// the line is taken after it was read — instead of to the band, for the
+    /// REST of its life — or one that offers nothing stops going nowhere, or
+    /// the drawer (the line grown) sends either away.
+    #[test]
+    fn a_line_taken_hands_the_band_what_waits_for_an_answer() {
+        let t0 = Instant::now();
+        let normal = ronoctua_notify::Life::Normal;
+        let view = Busy {
+            view: true,
+            ..Busy::default()
+        };
+        let up = READ_IN * 2;
+        let mut line = Line::default();
+        line.arrive(asking(1, normal), false, t0);
+        let drawer = Busy {
+            drawer: true,
+            ..Busy::default()
+        };
+        assert!(line.yielded(drawer, t0 + up).to_the_band.is_empty());
+        let handed = line.yielded(view, t0 + up);
+        assert_eq!(
+            handed.said, None,
+            "a question read is a question unanswered"
+        );
+        let [(said, spent)] = handed.to_the_band.as_slice() else {
+            panic!("{:?}", handed.to_the_band);
+        };
+        assert_eq!(said.told().map(|t| t.notification.id), Some(1));
+        assert_eq!(*spent, up, "the band would give it a second life");
+        // ONE THAT OFFERS NOTHING keeps the events' rule: read is said.
+        let mut line = Line::default();
+        line.arrive(Said::Notification(Box::new(arrived(2, normal))), false, t0);
+        let handed = line.yielded(view, t0 + up);
+        assert!(handed.to_the_band.is_empty());
+        assert_eq!(
+            handed
+                .said
+                .as_ref()
+                .and_then(Said::told)
+                .map(|t| t.notification.id),
+            Some(2)
+        );
+    }
+
+    /// FAILS IF: an action of what the line says runs on the first click —
+    /// the line rose by itself, under a hand that may be clicking at
+    /// something else — instead of being picked; a click on the pick does not
+    /// run it; the cursor is not born on the first action, which a question
+    /// puts its `no` in; or what goes up next keeps the last one's pick. An
+    /// event's actions and a notification's alike.
+    #[test]
+    fn an_action_on_the_line_is_picked_before_it_runs() {
+        let t0 = Instant::now();
+        let mut line = Line::default();
+        assert!(!line.clicked(0), "a click on an empty line ran something");
+        line.arrive(asking(1, ronoctua_notify::Life::Normal), false, t0);
+        assert_eq!(line.picked(), 0, "not born on the first action");
+        assert!(!line.clicked(0), "the cursor the line put there answered");
+        assert!(line.clicked(0), "a click on the pick did not run it");
+        assert!(!line.clicked(1), "another action ran on its first click");
+        assert_eq!(line.picked(), 1);
+        assert!(line.clicked(1));
+        // AN EVENT'S ACTION the same way, and the pick is born again.
+        let _ = line.done();
+        line.arrive(
+            Event::installed(crate::tags::SOFTWARE_INSTALLED, "GIMP", None),
+            false,
+            t0,
+        );
+        assert_eq!(line.picked(), 0, "the last one's pick stayed");
+        assert!(!line.clicked(0), "an event's action ran on the first click");
+        assert!(line.clicked(0));
+        // AND A QUESTION PUTS ITS `no` FIRST, where the cursor is born.
+        let book = ronoctua_notify::Book::distro();
+        let pairing = book.entry("bluetooth-pairing").expect("the pairing card");
+        assert_eq!(
+            pairing.actions.first().map(|a| a.id.as_str()),
+            Some("bluetooth-refuse")
+        );
+    }
+
+    /// FAILS IF: the line's queue stops ordering by level as the band does —
+    /// a critical one waiting behind ordinary ones, on the line or in its
+    /// queue; an equal level taking the line; what a higher one unseated
+    /// lost instead of coming back first; a person's echo overruled; or a
+    /// critical one waiting behind four instead of taking the band.
+    #[test]
+    fn a_higher_level_goes_ahead_on_the_line_as_on_the_band() {
+        let t0 = Instant::now();
+        let normal = ronoctua_notify::Life::Normal;
+        let at = |id: u32, level: u8| {
+            let mut t = arrived(id, normal);
+            t.presentation.level = level;
+            Said::Notification(Box::new(t))
+        };
+        let id = |s: Option<&Said>| s.and_then(Said::told).map(|t| t.notification.id);
+        let mut line = Line::default();
+        let mut quiet = e(TOR_UP);
+        quiet.level = 25;
+        line.arrive(at(1, 50), false, t0);
+        line.arrive(quiet, false, t0);
+        assert_eq!(line.arrive(at(2, 50), false, t0), None);
+        assert_eq!(
+            id(line.on_the_line()),
+            Some(1),
+            "an equal level took the line"
+        );
+        // A CRITICAL ONE takes the line; the one it unseated comes back first.
+        assert_eq!(line.arrive(at(3, 90), false, t0), None);
+        assert_eq!(id(line.on_the_line()), Some(3));
+        let step = normal.how_long();
+        line.tick(t0 + step, false, false);
+        assert_eq!(id(line.on_the_line()), Some(1), "the unseated one was lost");
+        line.tick(t0 + step * 2, false, false);
+        assert_eq!(
+            id(line.on_the_line()),
+            Some(2),
+            "the 50 waited behind the 25"
+        );
+        line.tick(t0 + step * 3, false, false);
+        assert_eq!(tag_of(line.on_the_line()), Some(TOR_UP));
+        // A PERSON'S ECHO holds the line against any level.
+        let mut line = Line::default();
+        line.arrive(at(1, 50), false, t0);
+        assert!(line.interrupted());
+        assert_eq!(line.arrive(at(2, 90), true, t0), None);
+        assert_eq!(line.on_the_line(), None);
+        line.tick(t0, false, false);
+        assert_eq!(id(line.on_the_line()), Some(2), "the critical one waited");
+        // FOUR WAITING: the critical one is the band's at once.
+        let mut line = Line::default();
+        for n in 1..=5 {
+            assert_eq!(line.arrive(at(n, 50), false, t0), None);
+        }
+        assert_eq!(id(line.arrive(at(9, 90), false, t0).as_ref()), Some(9));
+    }
+
     // --- the words ---------------------------------------------------------
 
-    /// FAILS IF: an event that went to the band stops saying why it is there
-    /// — FIRST in its body, where the band's one line of body shows it — or
-    /// loses its own body, its tag, or its sender.
+    /// FAILS IF: an event that went to the band stops being its entry —
+    /// its summary, its body and nothing before it, its tag, its sender.
     #[test]
-    fn the_busy_body_carries_the_sentence() {
+    fn an_event_on_the_band_is_its_entry() {
         let t = texts();
         let e = Event::of(NETWORK_LOST, key::NOTIF_NETWORK_APP).about("network", "home");
         let n = notification(&e, &t);
@@ -1755,34 +2427,21 @@ mod tests {
             t.t_with("notif-network-lost-summary", &[("network", "home")])
         );
         assert!(n.summary.contains("home"), "{}", n.summary);
-        assert!(
-            n.body.starts_with(&t.t(key::NOTIF_MINIBUFFER_WAS_BUSY)),
-            "{}",
-            n.body
-        );
-        assert!(n.body.ends_with(&e.body(&t)), "{}", n.body);
+        assert_eq!(n.body, e.body(&t));
         assert_eq!(n.tags, vec![NETWORK_LOST.to_owned()]);
         assert_eq!(n.app, t.t(key::NOTIF_NETWORK_APP));
     }
 
-    /// FAILS IF: the BAND never shows why an event came to it — the reason
-    /// only in a body the band does not draw (a `brief` entry is one line),
-    /// or after the event's own body, where a line of ordinary width cuts it.
-    /// Read off the lines the band DRAWS, in both languages, at the width of
-    /// a small laptop.
+    /// FAILS IF: the BAND stops showing an event's own body when the line was
+    /// busy — its entries are `full`, and the second line the band draws is
+    /// that body. Read off the lines the band DRAWS, in both languages, at
+    /// the width of a small laptop.
     #[test]
-    fn the_band_says_why_an_event_is_there() {
+    fn the_band_says_an_events_body() {
         let book = ronoctua_notify::Book::distro();
         for language in ["en-GB", "pt-BR"] {
             let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
             let words = crate::band::Words { texts: &t };
-            let reason = t.t(key::NOTIF_MINIBUFFER_WAS_BUSY);
-            // ITS FIRST WORDS, which is what survives a cut.
-            let opening: String = reason
-                .split_whitespace()
-                .take(3)
-                .collect::<Vec<_>>()
-                .join(" ");
             for tag in ALL {
                 if matches!(
                     *tag,
@@ -1796,6 +2455,14 @@ mod tests {
                     continue;
                 }
                 let n = notification(&Event::of(tag, key::NOTIF_NETWORK_APP), &t);
+                // ITS FIRST WORDS, which is what survives a cut.
+                let opening: String = n
+                    .body
+                    .split_whitespace()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert!(!opening.is_empty(), "{language} {tag}: no body");
                 let presentation = book.decide(&n);
                 let shown = ronoctua_notify::Shown {
                     notification: n,
@@ -1803,14 +2470,16 @@ mod tests {
                     since: Instant::now(),
                 };
                 let drawn = crate::band::lines(Some(&shown), 100, None, None, false, false, &words);
-                let text: String = drawn
+                assert!(drawn.len() >= 2, "{language} {tag}: the band drew one line");
+                let body: String = drawn[1]
+                    .pieces
                     .iter()
-                    .flat_map(|l| l.pieces.iter().map(|p| p.text.as_str()))
+                    .map(|p| p.text.as_str())
                     .collect::<Vec<_>>()
                     .join(" ");
                 assert!(
-                    text.contains(&opening),
-                    "{language} {tag}: the band drew {text:?}"
+                    body.contains(&opening),
+                    "{language} {tag}: the band's second line is {body:?}"
                 );
             }
         }

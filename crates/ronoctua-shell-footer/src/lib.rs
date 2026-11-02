@@ -18,9 +18,9 @@
 //!
 //! What is here: the surface and its region (`surface`), the leader's state
 //! machine and the base keymap (`leader`), the modeline and its adapters
-//! (`modeline`, `adapt`, `kiosk`), the events said on the minibuffer, the
-//! brain's line, the sudo bar, the on-screen keyboard, the hands, the glance,
-//! the footer's own settings and its camera.
+//! (`modeline`, `adapt`, `kiosk`), the events and notifications said on the
+//! minibuffer, the brain's line, the sudo bar, the on-screen keyboard, the
+//! hands, the glance, the footer's own settings and its camera.
 //!
 //! # What this crate does NOT do
 //!

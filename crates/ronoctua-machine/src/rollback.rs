@@ -11,14 +11,33 @@
 //! back. So the way back is chosen here, by what lasts:
 //!
 //! - WHEN A SYSTEM WAITS for the next boot (the profile names another than
-//!   the one that runs): back to the system that RUNS — its newest
-//!   generation, no new one made. Whatever waited is dropped, and nothing
-//!   that runs is switched: `boot` or `switch` alike only write the menu for
-//!   it.
-//! - OTHERWISE, the generation before the profile's, as `nix-env --rollback`
-//!   would — passing over one that is the system that runs again (a way back
-//!   the bless made) and the system whose trial failed, neither of which is
-//!   a way back. `switch` activates it now, `boot` from the next boot.
+//!   the one that runs): back to the system that RUNS. Whatever waited is
+//!   dropped, and nothing that runs is switched: `boot` or `switch` alike
+//!   only write the menu for it.
+//! - OTHERWISE, the system of the generation before the profile's, as
+//!   `nix-env --rollback` would — passing over the system whose trial
+//!   failed, and every generation from the first that holds the profile's
+//!   own system onwards (below). `switch` activates it now, `boot` from the
+//!   next boot.
+//!
+//! # By a new generation, a copy
+//!
+//! The profile goes back by a NEW generation, a copy of the system gone back
+//! to (`nix-env --set`, as the bless's way back does), never by moving onto
+//! the old one (`--switch-generation`): that one stays OLDER than the one
+//! undone, and a menu that boots the newest generation — lanzaboote's
+//! `loader.conf` says `default nixos-*` — would boot the undone system again
+//! at the next restart.
+//!
+//! So a generation may be a copy — a rollback's, or the bless's — and its
+//! way back is its ORIGINAL's: the way back is chosen among the generations
+//! older than the first that holds the profile's system. Two rollbacks walk
+//! back (1 A, 2 B, 3 C: the first makes 4 B, the second 5 A, never C), a
+//! copy of a copy goes back from the first of them, and a system set for
+//! the next boot after the original and dropped, which never ran, is never
+//! a way back. An apply that built a system again, the very toplevel of an
+//! older generation, cannot be told from a copy: the generations between
+//! are passed over too — a way back lost, never a wrong one.
 //!
 //! Then, as [`crate::disarm`] says, the trial left is recorded `failed`, the
 //! boot loader's variables go, and the folder gets back the lock of the
@@ -40,8 +59,7 @@ pub(crate) fn rollback(m: &Machine, now: bool) -> Result<String, Refusal> {
     let mut state = disk::read_state(p)?;
     let generations = boot::generations(s);
     let running = s.resolve(system::CURRENT);
-    let Some((number, target, waited)) = way_back(m, &state, &generations, running.as_deref())
-    else {
+    let Some((target, waited)) = way_back(m, &state, &generations, running.as_deref()) else {
         say(
             3,
             "the profile has no generation to go back to: nothing was changed",
@@ -49,11 +67,14 @@ pub(crate) fn rollback(m: &Machine, now: bool) -> Result<String, Refusal> {
         return Err(Refusal::of(Why::Failed));
     };
 
-    // THE PROFILE, on that generation: none is made.
-    if run::status(&nix_env, &argv::switch_generation(&s.profile(), number))? != Some(0) {
+    // THE PROFILE, on a new generation that is a copy of that system: the
+    // newest, so a menu that boots the newest boots it too.
+    if run::status(&nix_env, &argv::set_profile(&s.profile(), &target))? != Some(0) {
         say(3, "the system profile did not go back");
         return Err(Refusal::of(Why::Failed));
     }
+    let on = profile_generation(m)
+        .map_or_else(|| target.clone(), |n| format!("{target} as generation {n}"));
 
     // THE TRIAL LEFT, the variables and the folder.
     let _ = disarm::after_rollback(m, &mut state);
@@ -86,35 +107,40 @@ pub(crate) fn rollback(m: &Machine, now: bool) -> Result<String, Refusal> {
     }
     Ok(match (waited, how) {
         (true, _) => {
-            format!("back on the system that runs ({target}); nothing waits for the next boot")
+            format!("back on the system that runs ({on}); nothing waits for the next boot")
         }
-        (false, Switch::Switch) => format!("back on generation {number} ({target}), now"),
-        (false, Switch::Boot) => {
-            format!("back on generation {number} ({target}) from the next boot")
-        }
+        (false, Switch::Switch) => format!("back on {on}, now"),
+        (false, Switch::Boot) => format!("back on {on} from the next boot"),
     })
 }
 
-/// Where the rollback goes: the generation's number, its toplevel, and
-/// whether a system waited for the next boot (the way back is then the
-/// system that runs); `None` when there is nowhere to go.
+/// Where the rollback goes: the toplevel, and whether a system waited for
+/// the next boot (the way back is then the system that runs); `None` when
+/// there is nowhere to go.
 fn way_back(
     m: &Machine,
     state: &MachineState,
     generations: &[Generation],
     running: Option<&str>,
-) -> Option<(u64, String, bool)> {
+) -> Option<(String, bool)> {
     let s = &m.system;
     let profile = s.resolve(system::PROFILE)?;
     let waits = running.is_some_and(|r| !boot::tops_of(s, &profile).iter().any(|t| t == r));
     if waits {
         // THE SYSTEM THAT RUNS, by its generation's toplevel (it may run a
-        // specialisation of it).
+        // specialisation of it, and the profile takes the whole system).
         let top = trial::generation_toplevel(m, running?);
-        let number = boot::generation_of_toplevel(generations, &top)?;
-        return Some((number, top, true));
+        return boot::generation_of_toplevel(generations, &top).map(|_| (top, true));
     }
     let current = profile_generation(m)?;
+    // THE ORIGINAL: the first generation that holds the profile's system —
+    // the profile's own, unless that is a copy.
+    let original = generations
+        .iter()
+        .filter(|g| g.number <= current && g.toplevel.as_deref() == Some(profile.as_str()))
+        .map(|g| g.number)
+        .min()
+        .unwrap_or(current);
     let failed = state
         .trial
         .as_ref()
@@ -123,10 +149,10 @@ fn way_back(
     generations
         .iter()
         .rev()
-        .filter(|g| g.number < current)
+        .filter(|g| g.number < original)
         .find_map(|g| {
             let top = g.toplevel.as_deref()?;
-            (top != profile && Some(top) != failed).then(|| (g.number, top.to_owned(), false))
+            (Some(top) != failed).then(|| (top.to_owned(), false))
         })
 }
 

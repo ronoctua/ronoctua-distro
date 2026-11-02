@@ -228,7 +228,7 @@ cena dada inteira (cada câmera na tabela `CAMERAS` do crate da porta): a das te
 (`--door lifeline --result <palavra> [--asking]`) —, e o próprio rodapé (`--door footer`,
 `footer_photograph.rs`: modeline, minibuffer e região sobre um compositor substituto com um monitor;
 `--app`, `--state`, `--tone`, `--states` e `--local` descrevem a janela em foco, `--screens` e
-`--entry` dão as telas e o histórico, `--notification` põe um aviso na faixa, e os passos são
+`--entry` dão as telas e o histórico, `--notification` põe um aviso no minibuffer, e os passos são
 `--leader`, `--key` e `--command`), tirada por
 `ronoctua-shell photograph`; toda porta que lê o resto da linha diz as opções dela em
 `photograph --door <porta> --help`. No rodapé, as vistas do Incus, da segurança, do pendrive e do som

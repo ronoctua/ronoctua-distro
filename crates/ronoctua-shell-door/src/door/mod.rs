@@ -2985,6 +2985,9 @@ fn act_into<C: Content>(
             content.released(ui, &event);
         }
         crate::chrome::Act::Run(id) => ui.tell_the_footer(id, None),
+        // A NOTIFICATION'S BUTTON is the footer's minibuffer's, by the record
+        // only the footer holds: no window's line offers one.
+        crate::chrome::Act::Offered(_) => {}
     }
     ui.ask_paint();
 }

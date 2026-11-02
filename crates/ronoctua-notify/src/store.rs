@@ -257,6 +257,7 @@ mod tests {
             notification: n,
             presentation: Presentation::from_urgency(Urgency::Normal),
             read: false,
+            place: crate::queue::Place::Band,
         }
     }
 

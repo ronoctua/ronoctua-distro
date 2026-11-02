@@ -1998,18 +1998,20 @@ impl View {
     }
 
     /// Where the RULE between an open record's two halves goes when they are
-    /// STACKED — the drawn row of the line of air between them — and whether
-    /// it is lit: lit while the facts have the keyboard, the mark
-    /// [`Self::divider`] makes side by side. Stacked there was no divider and
-    /// no title, and a click that gave the facts the keyboard changed nothing
-    /// on screen until the next arrow scrolled them.
+    /// STACKED — the drawn row of the line of air between them.
+    ///
+    /// ALWAYS QUIET, whichever half has the keyboard (the owner, 2026-11-01):
+    /// the rule sits UNDER the message, so lit it marked the message at the
+    /// moment the keyboard went to the facts. What says the facts have it is
+    /// the message's action cursor going out; side by side the divider still
+    /// lights ([`Self::divider`]), being the facts' own edge.
     #[must_use]
-    pub fn stacked_rule(&self, lists: &Lists<'_>, columns: u16) -> Option<(usize, bool)> {
+    pub fn stacked_rule(&self, lists: &Lists<'_>, columns: u16) -> Option<usize> {
         if !matches!(self.level, Level::Open { .. }) || facts_beside(columns) {
             return None;
         }
         let [_, facts] = self.places(lists, columns)?;
-        Some((facts.row.checked_sub(1)?, self.open_facts))
+        facts.row.checked_sub(1)
     }
 
     /// The cells a hover band may cover on drawn row `row` under cell
@@ -2687,10 +2689,7 @@ fn facts_of(
             crate::key::NOTIF_FACT_LIFE,
             value_of(&r.presentation, Knob::Life, texts),
         ),
-        (
-            crate::key::NOTIF_FACT_SHOW,
-            value_of(&r.presentation, Knob::Show, texts),
-        ),
+        (crate::key::NOTIF_FACT_SHOW, shown_as(r, texts)),
         (crate::key::NOTIF_FACT_READ, yes_no(r.read)),
         (crate::key::NOTIF_FACT_FILTER, filter),
     ]
@@ -2717,6 +2716,18 @@ fn facts_of(
         pair
     })
     .collect()
+}
+
+/// How a record was shown: said on the minibuffer's line, or the band's
+/// lines its presentation gave it — and a hidden one, hidden wherever the
+/// line was.
+fn shown_as(r: &Record, texts: &ronoctua_i18n::Texts) -> String {
+    match (r.place, r.presentation.show) {
+        (ronoctua_notify::Place::Line, Show::Brief | Show::Full) => {
+            texts.t(crate::key::NOTIF_FACT_SAID_ON_THE_LINE)
+        }
+        _ => value_of(&r.presentation, Knob::Show, texts),
+    }
 }
 
 /// What a catalogue row is CALLED.
@@ -4169,6 +4180,7 @@ mod tests {
             notification: n,
             presentation: p,
             read,
+            place: ronoctua_notify::Place::Band,
         }
     }
 
@@ -6107,6 +6119,30 @@ mod tests {
             ),
         ];
         r
+    }
+
+    /// FAILS IF: an open record said on the minibuffer's line does not say
+    /// so among its facts — in both languages — or one shown on the band
+    /// stops saying its lines, or a hidden one is said to have been on the
+    /// line.
+    #[test]
+    fn the_facts_say_a_record_was_said_on_the_line() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            let line = t.t(crate::key::NOTIF_FACT_SAID_ON_THE_LINE);
+            let mut r = record(1, Show::Full, false);
+            assert_eq!(shown_as(&r, &t), t.t(crate::key::NOTIF_SHOW_FULL));
+            r.place = ronoctua_notify::Place::Line;
+            assert_eq!(shown_as(&r, &t), line, "{language}");
+            let drawn: Vec<String> = facts_of(&r, &ronoctua_files::when::Zone::utc(), 0, 80, &t)
+                .into_iter()
+                .flatten()
+                .map(|f| f.text)
+                .collect();
+            assert!(drawn.contains(&line), "{language}: {drawn:?}");
+            r.presentation.show = Show::Hidden;
+            assert_eq!(shown_as(&r, &t), t.t(crate::key::NOTIF_SHOW_HIDDEN));
+        }
     }
 
     /// EVERY KIND OF ACTION COMES TO ONE DEED, the same in both doors — and

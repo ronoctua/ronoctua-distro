@@ -373,18 +373,6 @@ pub fn set_profile(profile: &Path, toplevel: &str) -> Vec<String> {
     ]
 }
 
-/// `nix-env` making generation `number` the profile's current one again,
-/// as `--rollback` does to the one before: no generation is made.
-#[must_use]
-pub fn switch_generation(profile: &Path, number: u64) -> Vec<String> {
-    vec![
-        "--profile".to_owned(),
-        profile.display().to_string(),
-        "--switch-generation".to_owned(),
-        number.to_string(),
-    ]
-}
-
 /// `bootctl list`, as JSON.
 #[must_use]
 pub fn list_entries() -> Vec<String> {

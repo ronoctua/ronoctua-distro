@@ -18,7 +18,11 @@
 #   3. the reboot tries the trial — signed, the firmware enforcing — and the
 #      bless makes it the last good system: the variables unset, the boot
 #      menu's default is the trial's UKI;
-#   4. and a boot with no variable at all takes it, signed.
+#   4. and a boot with no variable at all takes it, signed;
+#   5. the rescue's rollback (`ronoctua-machine rollback boot`) goes back to
+#      the system before it, and the reboot comes up on that system: the
+#      rollback makes the newest generation a copy of it, because the menu
+#      boots the newest, whatever the profile names.
 #
 # The keys are the disposable ones (`nix/testing/sb-keys.nix`), copied where
 # lanzaboote reads them as `tests/secureboot-vm.nix` does. The apply's BUILD
@@ -123,6 +127,7 @@ pkgs.testers.runNixOSTest {
       STATE = "${m.ronoctua.machine.stateDir}/state.json"
       MACHINE_DIR = "${m.ronoctua.machine.dir}"
       VENDOR = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
+      PROFILE = "/nix/var/nix/profiles/system"
       # The machine's own key, which signs every file lanzaboote installs.
       DB = "/etc/secureboot/keys/db/db.pem"
 
@@ -259,5 +264,35 @@ pkgs.testers.runNixOSTest {
           s = state()
           assert s["last-good"]["toplevel"] == STAGED, s
           assert s["trial"]["outcome"] == "good", s
+
+      with subtest("the rescue's rollback lasts across a reboot under lanzaboote"):
+          # `loader.conf` names no generation (`default nixos-*`): a boot with
+          # no variable takes the NEWEST. A rollback that moved the profile
+          # back onto the older generation would leave the system it undid the
+          # newest, and the reboot would boot it again.
+          before = machine.succeed(f"readlink {PROFILE}").strip()
+          out = machine.succeed("ronoctua-machine rollback boot 2>&1")
+          print(out)
+          assert resolved(PROFILE) == good, out
+          assert resolved("/run/current-system") == STAGED, "the rollback for the next boot switched now"
+          print(machine.succeed("cat /boot/loader/loader.conf"))
+          print(json.dumps(entries(), indent=1))
+          machine.reboot()
+          machine.wait_for_unit("multi-user.target")
+          said = secure_boot()
+          assert said.startswith("Secure Boot: enabled"), said
+          # WHAT BOOTED, first: the system gone back to, not the one undone.
+          assert resolved("/run/booted-system") == good, "the reboot came up on the system the rollback undid"
+          assert "ronoctua.trial=signed" not in machine.succeed("cat /proc/cmdline").split()
+          selected = efi("LoaderEntrySelected")
+          assert selected.endswith(".efi") and f"init={good}/init" in boots(selected), selected
+          assert signed(selected), "the UKI the rollback booted is not signed with the machine's key"
+          # BY A NEW GENERATION, a copy of it: the newest, which the menu boots.
+          on = machine.succeed(f"readlink {PROFILE}").strip()
+          newest = machine.succeed(f"ls -d {PROFILE}-*-link | sort -t- -k2,2n | tail -n1 | xargs basename").strip()
+          assert on != before and on == newest, (on, before, newest)
+          machine.wait_for_unit("ronoctua-boot-bless.service")
+          s = state()
+          assert s["last-good"]["toplevel"] == good, s
     '';
 }

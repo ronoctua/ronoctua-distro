@@ -63,9 +63,9 @@ usage: ronoctua-shell photograph --door footer [options] [steps]
                         mind, JSON): the modeline's marks, the strip's
                         notices — never this machine's brain
   --notification <file> a notification as the bus delivers it (JSON, the
-                        history's shape): the band's card, its catalogue
-                        entry's actions and cursor — repeatable, never this
-                        machine's
+                        history's shape): said on the minibuffer's line, or
+                        on the band's card once a step takes the line or
+                        four wait — repeatable, never this machine's
   --player <file>       what the player says, as its watch hears it (one
                         state, JSON): the modeline's pair and what the
                         player's region shows — never this machine's player
