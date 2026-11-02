@@ -3674,9 +3674,6 @@ let
         # AND THE SCREEN RESIZER'S: it runs `dev-resizer`, `LEADER / r`, which
         # gives the screen back whole.
         "resizer",
-        # AND THE PASSWORDLESS WINDOW'S END: it runs `security-open admin`,
-        # `LEADER s e e` on the administrator's section, where it ends.
-        "security-until",
         # AND THE BUILD SWITCH'S, one glyph in three states (the committed
         # checkout's, the working tree's, and the switch under way): the left
         # button runs `build-toggle`, `LEADER / b`, which refuses and says so

@@ -211,6 +211,18 @@ pub enum RootVerb {
     /// Try again, at the next update, the system whose boot trial failed
     /// (`ronoctua-machine try-again`).
     MachineTryAgain,
+    // COMMITS SIGNED BY THE TPM (owner, 2026-11-02): a key the TPM holds may
+    // sign for the person's security key, and only root moves that switch
+    // (`crate::signing`).
+    /// Make the TPM's signing key, once: the declared unit runs
+    /// `ssh-tpm-keygen` as the TPM's agent ([`crate::signing::KEYGEN_UNIT`]).
+    TpmKeyCreate,
+    /// Let the TPM's key sign the person's commits, or stop it — the switch
+    /// ([`crate::signing::ALLOWED`]) and the agent's socket with it.
+    TpmSigning {
+        /// On or off.
+        on: bool,
+    },
 }
 
 impl RootVerb {
@@ -257,6 +269,8 @@ impl RootVerb {
             Self::MachineHold => vec!["machine-hold"],
             Self::MachineUnhold => vec!["machine-unhold"],
             Self::MachineTryAgain => vec!["machine-try-again"],
+            Self::TpmKeyCreate => vec!["tpm-key-create"],
+            Self::TpmSigning { on } => vec!["tpm-signing", if *on { "on" } else { "off" }],
             Self::PersonSignerPin { key } => {
                 return vec!["person-signer-pin".to_owned(), key.clone()];
             }
@@ -328,6 +342,9 @@ impl RootVerb {
             ["machine-hold"] => Self::MachineHold,
             ["machine-unhold"] => Self::MachineUnhold,
             ["machine-try-again"] => Self::MachineTryAgain,
+            ["tpm-key-create"] => Self::TpmKeyCreate,
+            ["tpm-signing", "on"] => Self::TpmSigning { on: true },
+            ["tpm-signing", "off"] => Self::TpmSigning { on: false },
             _ => return None,
         };
         Some(verb)
@@ -569,6 +586,9 @@ mod tests {
             RootVerb::MachineHold,
             RootVerb::MachineUnhold,
             RootVerb::MachineTryAgain,
+            RootVerb::TpmKeyCreate,
+            RootVerb::TpmSigning { on: true },
+            RootVerb::TpmSigning { on: false },
             RootVerb::PersonSignerPin {
                 key: format!(
                     "{}{}",
@@ -702,6 +722,18 @@ mod tests {
             assert!(verb.needs_a_person(), "{verb:?}");
             assert_eq!(verb.arguments().len(), 1, "{verb:?}");
         }
+        // THE TPM'S SWITCH TAKES ON OR OFF, and the key's making no word: the
+        // comment and the place are the unit's, never a caller's.
+        for wrong in [
+            &["tpm-signing"][..],
+            &["tpm-signing", "yes"],
+            &["tpm-signing", "on", "now"],
+            &["tpm-key-create", "/home/x/.ssh/id"],
+        ] {
+            assert_eq!(RootVerb::parse(&words(wrong)), None, "{wrong:?}");
+        }
+        assert!(RootVerb::TpmKeyCreate.needs_a_person());
+        assert!(RootVerb::TpmSigning { on: false }.needs_a_person());
     }
 
     /// FAILS IF: the machine's reason for refusing a gesture does not cross

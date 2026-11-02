@@ -1019,13 +1019,11 @@ footer-settings-shortcuts-note = Com o cabeçalho escondido, manter os atalhos m
 # Formatting with encryption (the format buffer, and its host).
 # The format buffer's third question, as the modeline names its state.
 state-encrypt = cifra
-hint-security-until = O administrador não pede senha até { $time }; um clique abre onde isso se encerra
 fast-access-unopened = Nada abre { $what }.
 echo-capture-outside-the-room = Nada foi capturado: o retângulo ficou inteiro sob as cortinas do redimensionador, fora do espaço que elas deixam.
 # O estado do gerenciador de arquivos na modeline: uma pergunta sobre quem
 # pode mexer num arquivo, em alerta.
 state-permission = permissão
-hint-security-no-limit = O administrador não pede senha até você encerrar; um clique abre onde isso se encerra
 
 ## perguntado, acima da modeline — quem pede, para quê, e o que o sudo espera.
 

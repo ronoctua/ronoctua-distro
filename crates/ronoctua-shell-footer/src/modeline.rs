@@ -121,9 +121,6 @@ pub struct Marks<'a> {
     /// drawn by `brain::marks`, and empty at rest (invariant 14).
     pub brain: &'a [crate::brain::Drawn],
     // ── end of brain-ui ──
-    /// The passwordless window's end, drawn as it is — the unlocked glyph and
-    /// the hour — while one is open (`security::modeline_until`).
-    pub security_until: Option<&'a str>,
 }
 
 /// The modeline's segments, with section 4.2's priority order.
@@ -713,20 +710,6 @@ pub fn segments(
         });
     }
 
-    // THE PASSWORDLESS WINDOW'S END, beside the brain's shield: the HOUR it
-    // ends, never a countdown. Absent at rest (invariant 14).
-    if let Some(text) = marks.security_until {
-        out.push(Segment {
-            id: "security-until",
-            text: text.to_owned(),
-            priority: 8,
-            min_cols: 1,
-            side: Side::Right,
-            shrink: Shrink::Cut,
-            removable: true,
-        });
-    }
-
     // The name only exists if there is a buffer. `removable: false` still holds
     // for when it does exist: then it elides in the middle, but does not disappear.
     if !name.is_empty() {
@@ -959,12 +942,6 @@ mod tests {
                             marked: 4,
                         },
                         brain: &brain_marks,
-                        // AND THE PASSWORDLESS WINDOW'S END, the glyph and
-                        // an hour: a mark the fullest line has to carry too.
-                        security_until: Some(&format!(
-                            "{} 23:45",
-                            tokens::icon::SECURITY_SUDO_OPEN
-                        )),
                         // AND THE BUILD MARK, on a machine that builds from a
                         // checkout: the fullest line carries it beside the rest.
                         build: Some(crate::build_switch::Build::Reference),

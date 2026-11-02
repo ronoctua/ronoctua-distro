@@ -1009,14 +1009,10 @@
   # scan fetches the picture.
   video-no-thumb = "md-video_outline";
 
-  # THE PASSWORDLESS WINDOW, on the modeline beside the hour it ends: a lock
-  # standing open, which is exactly what sudo is for as long as it lasts. The
-  # brain's shield says something is off; this says what and until when.
-  security-sudo-open = "md-lock_open_variant";
   # THE CENTRE'S OWN THREE: the shield beside "nothing is off" and the
   # firewall on, the shield struck through beside the firewall off, and the
-  # fingerprint beside each finger enrolled. Material, as the brain's shield
-  # with the alert is, so the modeline's mark and the page's read as one set.
+  # fingerprint beside each finger enrolled. Material, and the same shield the
+  # brain's mark is on the modeline, so the two read as one set.
   security-shield = "md-shield";
   security-shield-off = "md-shield_off";
   security-fingerprint = "md-fingerprint";

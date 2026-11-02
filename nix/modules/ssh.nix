@@ -21,6 +21,7 @@
 
 let
   table = import ../../assets/ssh.nix;
+  tpm = import ../tpm-signing.nix;
 
   # WHAT ASKS FOR A KEY'S PASSPHRASE WHEN THERE IS NO TERMINAL to ask on — a
   # commit a tool makes on the person's behalf, a GUI git. ssh, finding no tty
@@ -55,6 +56,23 @@ let
         if [ "$prev" = "-f" ]; then keyfile="$a"; fi
         prev="$a"
       done
+
+      # THE TPM'S KEY, WHILE THE PERSON ALLOWS IT (`nix/modules/tpm-signing.nix`):
+      # root's switch is there, so every signature is the TPM's, with no touch —
+      # whatever key git names, here or from afar (owner, 2026-11-02). The key
+      # is named by its public half and found in the TPM's agent, which exists
+      # only while the switch does. With the switch away this is never taken,
+      # and nothing else here can reach the TPM.
+      if [ "$want_sign" = 1 ] && [ -e ${tpm.allowed} ] && [ -r ${tpm.publicKey} ]; then
+        args=()
+        prev=""
+        for a in "$@"; do
+          if [ "$prev" = "-f" ]; then a=${tpm.publicKey}; fi
+          args+=("$a")
+          prev="$a"
+        done
+        SSH_AUTH_SOCK=${tpm.socket} exec ssh-keygen "''${args[@]}"
+      fi
 
       # Only a signature, and only with an agent to add to and a readable key to
       # add: load it once so the rest of the session is a touch.

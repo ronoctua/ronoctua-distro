@@ -144,19 +144,54 @@ pub fn ring<T>(list: &mut VecDeque<T>, item: T, most: usize) {
     list.truncate(most);
 }
 
-/// What is off, loudest first — at most one mark is drawn, the first.
+/// What is off, loudest first — at most one mark is drawn, the first. Every
+/// danger comes before every warning ([`Off::loudness`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Off {
     /// The table in the kernel is not the one asked for.
     Failed,
+    /// A private key is kept in a plain file: it signs for whoever reads it,
+    /// with no touch, from any machine it is copied to.
+    FileKey,
     /// The person's firewall decides nothing.
     Disabled,
     /// sudo asks for no password, until a time or with no limit.
     SudoOpen,
+    /// The TPM's key may sign the person's commits, with no touch of their
+    /// security key.
+    TpmSigning,
     /// Every new incoming connection is dropped.
     Shields,
     /// Connections were refused lately.
     Refused,
+}
+
+/// How loud a thing that is off is, in the shield's colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Loudness {
+    /// The person chose it, or the machine is doing its job: worth knowing
+    /// (the warning's colour).
+    Warning,
+    /// Something is not as anybody asked, or a secret is exposed: look now
+    /// (the danger's colour).
+    Danger,
+}
+
+impl Off {
+    /// How loud it is. A choice the person made with the password — the
+    /// window, the TPM, the firewall switched off, the shields — and the
+    /// firewall refusing connections are WARNINGS; a firewall that is not
+    /// what was asked and a key kept in a file are DANGER (owner,
+    /// 2026-11-02).
+    #[must_use]
+    pub const fn loudness(self) -> Loudness {
+        match self {
+            Self::Failed | Self::FileKey => Loudness::Danger,
+            Self::Disabled | Self::SudoOpen | Self::TpmSigning | Self::Shields | Self::Refused => {
+                Loudness::Warning
+            }
+        }
+    }
 }
 
 /// The facts the conditions are read from.
@@ -171,6 +206,10 @@ pub struct Facts {
     pub sudo_until: Option<Moment>,
     /// A passwordless window with no limit is open.
     pub sudo_no_limit: bool,
+    /// Private keys kept in plain files, in the person's home.
+    pub file_keys: u32,
+    /// The TPM's key may sign the person's commits.
+    pub tpm_signing: bool,
     /// `firewall.json` says shields.
     pub shields: bool,
     /// Refused connections in the last [`RECENT_S`].
@@ -196,11 +235,17 @@ pub fn off_at(facts: &Facts, now: Moment) -> Vec<Off> {
     if facts.failed {
         out.push(Off::Failed);
     }
+    if facts.file_keys > 0 {
+        out.push(Off::FileKey);
+    }
     if facts.off {
         out.push(Off::Disabled);
     }
     if facts.sudo_no_limit || facts.sudo_until.is_some_and(|u| u > now) {
         out.push(Off::SudoOpen);
+    }
+    if facts.tpm_signing {
+        out.push(Off::TpmSigning);
     }
     if facts.shields {
         out.push(Off::Shields);
@@ -306,6 +351,8 @@ mod tests {
             off: true,
             sudo_until: Some(200),
             sudo_no_limit: false,
+            file_keys: 2,
+            tpm_signing: true,
             shields: true,
             recent_refused: 3,
         };
@@ -313,12 +360,37 @@ mod tests {
             off_at(&all, 100),
             [
                 Off::Failed,
+                Off::FileKey,
                 Off::Disabled,
                 Off::SudoOpen,
+                Off::TpmSigning,
                 Off::Shields,
                 Off::Refused
             ]
         );
+        // EVERY DANGER BEFORE EVERY WARNING: the one mark drawn is the
+        // loudest, and its colour says which.
+        let loudness: Vec<Loudness> = off_at(&all, 100).into_iter().map(Off::loudness).collect();
+        let first_warning = loudness
+            .iter()
+            .position(|l| *l == Loudness::Warning)
+            .unwrap();
+        assert!(
+            loudness[first_warning..]
+                .iter()
+                .all(|l| *l == Loudness::Warning),
+            "{loudness:?}"
+        );
+        // THE OWNER'S TWO OF EACH (2026-11-02): a key in a file is danger;
+        // the window and the TPM, chosen with the password, are warnings.
+        assert_eq!(Off::FileKey.loudness(), Loudness::Danger);
+        assert_eq!(Off::SudoOpen.loudness(), Loudness::Warning);
+        assert_eq!(Off::TpmSigning.loudness(), Loudness::Warning);
+        let tpm_alone = Facts {
+            tpm_signing: true,
+            ..Facts::default()
+        };
+        assert_eq!(off_at(&tpm_alone, 100), [Off::TpmSigning]);
         assert_eq!(off_at(&Facts::default(), 100), []);
         // A WINDOW THAT ENDED is not open, whatever the file still says.
         let ended = Facts {

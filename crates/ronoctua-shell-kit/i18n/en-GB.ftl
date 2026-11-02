@@ -518,7 +518,6 @@ network-refusal-not-vpn = that profile is not a VPN
 # did not happen (`ronoctua_security::Why`), beside the others.
 security-refusal-cancelled = Cancelled: nothing was done.
 security-refusal-no-key = No security key is plugged in.
-security-sudo-no-limit = no limit
 mode-stick = installer stick
 
 ## asked, above the modeline — who asks, what for, and what sudo waits for.

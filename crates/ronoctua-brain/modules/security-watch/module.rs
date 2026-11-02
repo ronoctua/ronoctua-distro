@@ -1,28 +1,32 @@
 //! What the security centre guards, watched: the connections the firewall
-//! refuses, what sudo does, whether the firewall is what it was asked to be —
-//! and ONE shield on the modeline, in the danger colour, only while
-//! something is off.
+//! refuses, what sudo does, whether the firewall is what it was asked to be,
+//! who may sign the person's commits — and ONE shield on the modeline, only
+//! while something is off: in the warning colour for what the person chose,
+//! in the danger colour for what nobody did.
 //!
 //! Why each piece is so is in `why.md`, beside this file. What is here is the
 //! shape of it.
 //!
 //! # It runs nothing
 //!
-//! A watch (`schedule = null`): the journal feed the core runs, and inotify on
+//! A watch (`schedule = null`): the journal feed the core runs, inotify on
 //! the two folders the root helper writes (`/run/ronoctua-security`,
-//! `/var/lib/ronoctua-security`). No clock at rest; one is armed only while a
+//! `/var/lib/ronoctua-security`), and on the person's `~/.ssh` and `~/.gnupg`,
+//! where a key kept in a file would be. No clock at rest; one is armed only while a
 //! refused connection is recent, a passwordless window is open or the notice
 //! is put off — each until the moment it stops being true.
 //!
 //! # What "off" is
 //!
 //! The table in the kernel is not the one asked for (the helper said so, or
-//! the firewall's units logged an error after its last apply); the person's
-//! firewall is switched off; sudo asks for no password (until a time, or
-//! with no limit); the
+//! the firewall's units logged an error after its last apply); a private key
+//! is kept in a plain file (`ronoctua_security::signing::file_keys`); the
+//! person's firewall is switched off; sudo asks for no password (until a
+//! time, or with no limit); the TPM's key may sign the person's commits; the
 //! shields are up; connections were refused in the last quarter hour. The
-//! mark is the loudest of these ([`rules::Off`]), with that one's hint; the
-//! page lists all of them.
+//! mark is the loudest of these ([`rules::Off`]), with that one's hint and
+//! colour ([`rules::Off::loudness`]): the first two are danger, the rest
+//! warnings. The page lists all of them.
 //!
 //! # A network born public is an event
 //!
@@ -50,7 +54,7 @@ use crate::module::{
 };
 use crate::moment::Moment;
 
-use rules::{Facts, Off, Refused, Sudo, SudoEvent};
+use rules::{Facts, Loudness, Off, Refused, Sudo, SudoEvent};
 
 /// The journal's sources, in the order [`Watcher::sources`] gives them.
 const REFUSED: usize = 0;
@@ -63,15 +67,27 @@ pub fn new(_birth: &Birth) -> impl Module + use<> {
     SecurityWatch::reading(Places::system())
 }
 
+/// The colour of what is off.
+const fn tone_of(off: Off) -> Tone {
+    match off.loudness() {
+        Loudness::Warning => Tone::Warning,
+        Loudness::Danger => Tone::Danger,
+    }
+}
+
 /// Where the root helper writes what this reads — handed in, so a test reads
 /// a folder of its own.
 #[derive(Debug, Clone)]
 struct Places {
     /// `/run/ronoctua-security`: the table's status.
     run: PathBuf,
-    /// `/var/lib/ronoctua-security`: the person's settings, and what
-    /// passwordless window is open (it survives a reboot).
+    /// `/var/lib/ronoctua-security`: the person's settings, what
+    /// passwordless window is open (it survives a reboot), and whether the
+    /// TPM's key may sign.
     lib: PathBuf,
+    /// The person's home, where a key kept in a file would be; `None` with
+    /// no `HOME`, which has none to look in.
+    home: Option<PathBuf>,
 }
 
 impl Places {
@@ -84,6 +100,9 @@ impl Places {
         Self {
             run: parent(ronoctua_security::firewall::STATUS),
             lib: parent(ronoctua_security::firewall::FILE),
+            home: std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|h| h.is_absolute()),
         }
     }
 
@@ -102,6 +121,11 @@ impl Places {
 
     fn links(&self) -> PathBuf {
         self.run.join(file_name(ronoctua_security::firewall::LINKS))
+    }
+
+    fn tpm_allowed(&self) -> PathBuf {
+        self.lib
+            .join(file_name(ronoctua_security::signing::ALLOWED))
     }
 }
 
@@ -123,6 +147,10 @@ struct Files {
     until: Option<Moment>,
     /// A passwordless window with no limit is open.
     no_limit: bool,
+    /// Private keys kept in plain files in the person's home.
+    file_keys: Vec<PathBuf>,
+    /// The TPM's key may sign the person's commits.
+    tpm_signing: bool,
     /// The networks up on a public profile that the person never placed:
     /// connection and interface.
     public: Vec<(String, String)>,
@@ -154,6 +182,12 @@ impl Files {
             settings,
             until: window.and_then(|w| w.until_unix_s),
             no_limit: window.is_some_and(|w| w.until_unix_s.is_none()),
+            file_keys: places
+                .home
+                .as_deref()
+                .map(ronoctua_security::signing::file_keys)
+                .unwrap_or_default(),
+            tpm_signing: places.tpm_allowed().symlink_metadata().is_ok(),
             public,
         }
     }
@@ -193,6 +227,8 @@ impl Kept {
             off: self.files.settings.is_some_and(|(enabled, _)| !enabled),
             sudo_until: self.files.until,
             sudo_no_limit: self.files.no_limit,
+            file_keys: u32::try_from(self.files.file_keys.len()).unwrap_or(u32::MAX),
+            tpm_signing: self.files.tpm_signing,
             shields: self.files.settings.is_some_and(|(_, shields)| shields),
             recent_refused: rules::recent(&self.refused, now),
         }
@@ -232,8 +268,10 @@ impl SecurityWatch {
 const fn mark_of(off: Off) -> MarkId {
     match off {
         Off::Failed => super::mark::FIREWALL_FAILED,
+        Off::FileKey => super::mark::FILE_KEY,
         Off::Disabled => super::mark::FIREWALL_OFF,
         Off::SudoOpen => super::mark::SUDO_OPEN,
+        Off::TpmSigning => super::mark::TPM_SIGNING,
         Off::Shields => super::mark::SHIELDS,
         Off::Refused => super::mark::REFUSED,
     }
@@ -243,8 +281,10 @@ const fn mark_of(off: Off) -> MarkId {
 const fn row_key(off: Off) -> &'static str {
     match off {
         Off::Failed => super::key::SECURITY_WATCH_ROW_FIREWALL_FAILED,
+        Off::FileKey => super::key::SECURITY_WATCH_ROW_FILE_KEY,
         Off::Disabled => super::key::SECURITY_WATCH_ROW_FIREWALL_OFF,
         Off::SudoOpen => super::key::SECURITY_WATCH_ROW_SUDO_OPEN,
+        Off::TpmSigning => super::key::SECURITY_WATCH_ROW_TPM_SIGNING,
         Off::Shields => super::key::SECURITY_WATCH_ROW_SHIELDS,
         Off::Refused => super::key::SECURITY_WATCH_ROW_REFUSED,
     }
@@ -255,8 +295,10 @@ const fn row_key(off: Off) -> &'static str {
 const fn row_id(off: Off) -> &'static str {
     match off {
         Off::Failed => "off:firewall-failed",
+        Off::FileKey => "off:file-key",
         Off::Disabled => "off:firewall-off",
         Off::SudoOpen => "off:sudo-open",
+        Off::TpmSigning => "off:tpm-signing",
         Off::Shields => "off:shields",
         Off::Refused => "off:refused",
     }
@@ -291,11 +333,12 @@ impl Module for SecurityWatch {
                 screen: kept.generation,
                 ..Face::default()
             };
-            // ONE MARK, THE LOUDEST, and none at rest (invariant 14).
+            // ONE MARK, THE LOUDEST, and none at rest (invariant 14) — in
+            // the colour of how loud it is.
             if let Some(first) = off.first() {
                 face.marks.push(Mark {
                     id: mark_of(*first),
-                    tone: Tone::Danger,
+                    tone: tone_of(*first),
                     count: if *first == Off::Refused {
                         facts.recent_refused
                     } else {
@@ -347,9 +390,10 @@ impl Module for SecurityWatch {
                     value: match off {
                         Off::SudoOpen => facts.sudo_until.map_or(Cell::Empty, Cell::Moment),
                         Off::Refused => Cell::Count(u64::from(facts.recent_refused)),
+                        Off::FileKey => Cell::Count(u64::from(facts.file_keys)),
                         _ => Cell::Empty,
                     },
-                    tone: Tone::Danger,
+                    tone: tone_of(off),
                     ..Row::default()
                 })
                 .collect();
@@ -477,6 +521,17 @@ impl Watcher for SecurityWatch {
             Source::Path(self.places.run.clone()),
             Source::Path(self.places.lib.clone()),
         ]
+        .into_iter()
+        // WHERE A KEY KEPT IN A FILE WOULD BE: `~/.ssh` itself, and GnuPG's
+        // folder whole (its keys are a level below, and the folder may not
+        // be there yet — its parent, the home, always is).
+        .chain(self.places.home.iter().flat_map(|home| {
+            [
+                Source::Path(home.join(".ssh")),
+                Source::Tree(home.join(".gnupg")),
+            ]
+        }))
+        .collect()
     }
 
     fn started(&self, _now: Moment, ctx: &Ctx) {
@@ -582,6 +637,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(dir.join("run")).unwrap();
             std::fs::create_dir_all(dir.join("lib")).unwrap();
+            std::fs::create_dir_all(dir.join("home")).unwrap();
             Self(dir)
         }
 
@@ -589,6 +645,7 @@ mod tests {
             Places {
                 run: self.0.join("run"),
                 lib: self.0.join("lib"),
+                home: Some(self.0.join("home")),
             }
         }
     }
@@ -633,7 +690,7 @@ mod tests {
         "ronoctua-refused: IN=wlan0 OUT= SRC=203.0.113.9 DST=192.168.1.5 PROTO=TCP SPT=5 DPT=22";
 
     /// FAILS IF: a mark shows at rest, or the loudest of what is off stops
-    /// being the one drawn — with its own hint, in the danger colour.
+    /// being the one drawn — with its own hint, in its own colour.
     #[test]
     fn the_shield_is_up_only_while_something_is_off() {
         let dir = Scratch::new("mark");
@@ -653,7 +710,7 @@ mod tests {
         let f = face(&m, 1001);
         assert_eq!(f.marks.len(), 1);
         assert_eq!(f.marks[0].id, super::super::mark::REFUSED);
-        assert_eq!(f.marks[0].tone, Tone::Danger);
+        assert_eq!(f.marks[0].tone, Tone::Warning);
         assert_eq!(f.marks[0].count, 1);
         assert!(f.marks[0].act.is_none(), "a click opens the page");
         // AND GONE A QUARTER HOUR LATER, by the clock it asked for.
@@ -680,6 +737,7 @@ mod tests {
         );
         let f = face(&m, 1001);
         assert_eq!(f.marks[0].id, super::super::mark::SUDO_OPEN);
+        assert_eq!(f.marks[0].tone, Tone::Warning, "the person chose it");
         assert_eq!(f.marks[0].count, 0);
         assert_eq!(m.next_wake(1001), Some(1000 + rules::RECENT_S));
         assert_eq!(m.next_wake(1000 + rules::RECENT_S), Some(5000));
@@ -741,11 +799,14 @@ mod tests {
             face(&m, 1002).marks[0].id,
             super::super::mark::FIREWALL_FAILED
         );
+        assert_eq!(face(&m, 1002).marks[0].tone, Tone::Danger);
         // EVERY HINT IS ITS OWN, and the manifest's.
         for off in [
             Off::Failed,
+            Off::FileKey,
             Off::Disabled,
             Off::SudoOpen,
+            Off::TpmSigning,
             Off::Shields,
             Off::Refused,
         ] {
@@ -754,6 +815,61 @@ mod tests {
                 "{off:?}"
             );
         }
+    }
+
+    /// FAILS IF: the TPM's switch does not raise the shield in the warning
+    /// colour, a key kept in a file does not raise it in the danger colour
+    /// over it, or a security key's handle is taken for one.
+    #[test]
+    fn the_signing_keys_raise_the_shield_in_their_colours() {
+        let dir = Scratch::new("signing");
+        let m = SecurityWatch::reading(dir.places());
+        let (ctx, _) = Ctx::kept(super::super::ID, 1000);
+        let ssh = dir.0.join("home/.ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        // A SECURITY KEY'S HANDLE is no file key.
+        std::fs::write(
+            ssh.join("id_yubikey.pub"),
+            "sk-ssh-ed25519@openssh.com AAAA x\n",
+        )
+        .unwrap();
+        m.started(1000, &ctx);
+        assert!(face(&m, 1000).marks.is_empty(), "a mark at rest");
+        let heard = |path: &Path| {
+            m.heard(Heard::Path { source: 4, path }, &ctx);
+        };
+
+        std::fs::write(dir.0.join("lib/tpm-signing"), "").unwrap();
+        heard(&dir.0.join("lib"));
+        let f = face(&m, 1001);
+        assert_eq!(f.marks[0].id, super::super::mark::TPM_SIGNING);
+        assert_eq!(f.marks[0].tone, Tone::Warning);
+
+        // In pieces: written whole, the armour reads as a private key to the
+        // repository's own secret scans.
+        std::fs::write(
+            ssh.join("deploy"),
+            concat!(
+                "-----BEGIN RSA ",
+                "PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n"
+            ),
+        )
+        .unwrap();
+        heard(&ssh);
+        let f = face(&m, 1001);
+        assert_eq!(f.marks[0].id, super::super::mark::FILE_KEY);
+        assert_eq!(f.marks[0].tone, Tone::Danger);
+        let s = screen(&m, 1001);
+        assert_eq!(s.sections[0].rows[0].id, "off:file-key");
+        assert_eq!(s.sections[0].rows[0].value, Cell::Count(1));
+        assert_eq!(s.sections[0].rows[0].tone, Tone::Danger);
+        assert_eq!(s.sections[0].rows[1].id, "off:tpm-signing");
+        assert_eq!(s.sections[0].rows[1].tone, Tone::Warning);
+
+        std::fs::remove_file(ssh.join("deploy")).unwrap();
+        std::fs::remove_file(dir.0.join("lib/tpm-signing")).unwrap();
+        heard(&ssh);
+        assert!(face(&m, 1002).marks.is_empty(), "both went");
     }
 
     /// FAILS IF: a network that comes up public and unplaced is not said once
@@ -954,5 +1070,10 @@ mod tests {
         assert!(
             matches!(&sources[4], Source::Path(p) if p == Path::new("/var/lib/ronoctua-security"))
         );
+        // AND THE HOME'S TWO FOLDERS, where a key kept in a file would be.
+        let dir = Scratch::new("sources");
+        let sources = SecurityWatch::reading(dir.places()).sources();
+        assert!(matches!(&sources[5], Source::Path(p) if *p == dir.0.join("home/.ssh")));
+        assert!(matches!(&sources[6], Source::Tree(p) if *p == dir.0.join("home/.gnupg")));
     }
 }

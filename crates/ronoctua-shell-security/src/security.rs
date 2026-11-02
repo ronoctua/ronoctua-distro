@@ -4,8 +4,11 @@
 //!
 //! # What is here, in order
 //!
-//! 1. **Now** — only what is off, in the danger colour, or one quiet line
-//!    saying nothing is.
+//! 1. **Now** — only what is off, or one quiet line saying nothing is: in
+//!    the warning colour what the person chose (the window, the TPM's key,
+//!    the firewall off, the shields) or the firewall doing its job, in the
+//!    danger colour what nobody chose (a firewall that failed, a key kept in
+//!    a file) — the colours of the watch's shield on the modeline.
 //! 2. **Firewall** — on or off, each network's profile (home, public, or
 //!    "this machine serves it"), the shields, the person's rules, the
 //!    connections refused lately with "allow" on each, the log's level, and
@@ -21,6 +24,11 @@
 //!    list, `ronoctua_security::u2f`), registering one by a touch, removing
 //!    one, turning them off and on, and bringing the ones registered on the
 //!    person's other machines.
+//! 5. **Commit signing** — the key in this machine's TPM (made once, through
+//!    the sudo door), whether it may sign the person's commits with no touch
+//!    or only their security key does (root's switch,
+//!    `ronoctua_security::signing`), and the private keys kept in plain files
+//!    in their home, in the danger colour.
 //! 6. **Device** — Secure Boot, the TPM, disk encryption, the firmware's
 //!    security level and updates (read only), automatic updates, and two
 //!    honest lines: there is no screen lock, and with autologin the boot
@@ -124,6 +132,14 @@ pub const HOME: &str = "security-home";
 
 /// The minutes a window opens for when nobody said (`LEADER s e r`).
 pub const RELAX_DEFAULT: RelaxSpan = RelaxSpan::Fifteen;
+
+/// What nobody chose — a firewall that failed, a key kept in a file — on
+/// "Now", in the colour of the watch's shield for it.
+const DANGER: tokens::Color = tokens::color::STATE_ERROR;
+
+/// What the person chose with the password — the window, the TPM's key, the
+/// firewall off, the shields — and the firewall doing its job.
+const WARNING: tokens::Color = tokens::color::STATE_WARNING;
 
 /// Every command this view's keys, rows and questions reach — for
 /// `bindings::reachable`.
@@ -340,18 +356,22 @@ pub enum Section {
     // ── anchor: L22 ──
     /// The security keys that answer sudo (the sudo bar's package).
     Keys,
+    /// Who signs the person's commits: the TPM's key, their security key, a
+    /// key kept in a file (2026-11-02).
+    Signing,
     /// The lock screen: locking now, and locking by itself (2026-10-31).
     Lock,
 }
 
 impl Section {
     /// All, in the page's order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Now,
         Self::Firewall,
         Self::Admin,
         Self::Finger,
         Self::Keys,
+        Self::Signing,
         Self::Lock,
         Self::Private,
         Self::Encrypt,
@@ -378,6 +398,7 @@ impl Section {
             Self::Encrypt => "encrypt",
             Self::Quantum => "quantum",
             Self::Keys => "keys",
+            Self::Signing => crate::security_words::SIGNING_SECTION,
             Self::Lock => "lock",
         }
     }
@@ -403,6 +424,7 @@ impl Section {
             Self::Encrypt => key::SECURITY_HEADING_ENCRYPT,
             Self::Quantum => key::SECURITY_HEADING_QUANTUM,
             Self::Keys => key::SECURITY_HEADING_KEYS,
+            Self::Signing => key::SECURITY_HEADING_SIGNING,
             Self::Lock => key::SECURITY_HEADING_LOCK,
         }
     }
@@ -526,6 +548,13 @@ pub struct Scene {
     /// The keys of the person's own list that root's list lacks — the ones
     /// registered on their other machines (`offers::keys_to_bring`).
     pub keys_away: Vec<String>,
+    /// The key this machine's TPM holds for signing, when one was made.
+    pub tpm_key: Option<ronoctua_security::signing::TpmKey>,
+    /// The TPM's key may sign the person's commits (root's switch).
+    pub tpm_signing: bool,
+    /// The private keys kept in plain files in the person's home, as the
+    /// page says them (`~/…`).
+    pub file_keys: Vec<String>,
     /// Secure Boot.
     pub secure_boot: Option<SecureBoot>,
     /// The TPM.
@@ -677,6 +706,7 @@ impl Scene {
         self.helper = ronoctua_security::authority::has_helper();
         self.finger_sudo = fprint::sudo_allows(&user);
         self.read_keys(&user);
+        self.read_signing();
         self.privacy = links_up();
         self.listening = listening();
         self.vt_key = ronoctua_lookup::keys::has(ronoctua_lookup::keys::Key::VirusTotal);
@@ -730,6 +760,25 @@ impl Scene {
             .unwrap_or_default();
         let root = std::fs::read_to_string(u2f::AUTHFILE).unwrap_or_default();
         self.keys_away = ronoctua_belongings::offers::keys_to_bring(&person, &root);
+    }
+
+    /// Who signs: the TPM's key and its switch (root's, read as the person),
+    /// and the keys kept in files in the home — every file of `~/.ssh` and
+    /// GnuPG's keys, read for what holds each.
+    fn read_signing(&mut self) {
+        use ronoctua_security::signing;
+        self.tpm_key = signing::tpm_key();
+        self.tpm_signing = signing::allowed();
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        self.file_keys = home
+            .as_deref()
+            .map(|home| {
+                signing::file_keys(home)
+                    .iter()
+                    .map(|p| home_relative(p, home))
+                    .collect()
+            })
+            .unwrap_or_default();
     }
 
     /// The profiles of the networks the machine is on now (`firewall.status`),
@@ -979,6 +1028,11 @@ pub enum Work {
     /// A request for the `/private` vault's root unit, with its secrets
     /// (`crate::vault`).
     Private(Box<crate::vault::Work>),
+    /// Make the TPM's signing key.
+    TpmKeyCreate,
+    /// The TPM's key signs the person's commits, or only their security key
+    /// does.
+    TpmSigning(bool),
 }
 
 impl Work {
@@ -996,6 +1050,8 @@ impl Work {
             Self::Delete(which) => RootVerb::FingerDelete { which: *which },
             Self::FingerSudo(on) => RootVerb::FingerSudo { on: *on },
             Self::Private(_) => RootVerb::PrivateRoot,
+            Self::TpmKeyCreate => RootVerb::TpmKeyCreate,
+            Self::TpmSigning(on) => RootVerb::TpmSigning { on: *on },
         }
     }
 
@@ -1017,6 +1073,9 @@ impl Work {
             Self::Delete(_) => key::ECHO_SECURITY_FINGER_REMOVED,
             Self::FingerSudo(_) => key::ECHO_SECURITY_FINGER_SUDO_CHANGED,
             Self::Private(w) => crate::vault::done_key(w.op),
+            Self::TpmKeyCreate => key::ECHO_SECURITY_TPM_KEY_MADE,
+            Self::TpmSigning(true) => key::ECHO_SECURITY_TPM_SIGNING_ON,
+            Self::TpmSigning(false) => key::ECHO_SECURITY_TPM_SIGNING_OFF,
         }
     }
 }
@@ -1364,6 +1423,10 @@ pub enum Act {
     LockByItself,
     /// The next wait before it does (`Left`/`Right` walk the ring).
     LockAfter,
+    /// Make the TPM's signing key.
+    TpmKeyCreate,
+    /// The TPM's key signs the person's commits, or stops.
+    TpmSigning,
 }
 
 impl Act {
@@ -1422,6 +1485,8 @@ impl Act {
             Self::SealMode(_) => key::SECURITY_ABOUT_SEAL_MODE,
             Self::LockByItself => key::SECURITY_ABOUT_LOCK_BY_ITSELF,
             Self::LockAfter => key::SECURITY_ABOUT_LOCK_AFTER,
+            Self::TpmKeyCreate => key::SECURITY_ABOUT_TPM_KEY_CREATE,
+            Self::TpmSigning => key::SECURITY_ABOUT_TPM_SIGNING,
             _ => key::SECURITY_ABOUT_SHOW,
         }
     }
@@ -1534,6 +1599,7 @@ enum Entry {
         label: String,
         value: String,
         act: Act,
+        color: tokens::Color,
     },
     /// A sentence in one colour, wrapped ([`Lines::line`]).
     Line(String, tokens::Color),
@@ -1608,14 +1674,16 @@ impl Lines<'_> {
         });
     }
 
-    /// A row of "Now": something that is off, the WHOLE row in the danger
-    /// colour — label and value, since the label is often all it says —
-    /// except under the cursor, where the cursor's colour says it.
-    fn off(&mut self, label: &str, value: &str, act: Act) {
+    /// A row of "Now": something that is off, the WHOLE row in its colour —
+    /// [`DANGER`] or [`WARNING`], label and value, since the label is often
+    /// all it says — except under the cursor, where the cursor's colour says
+    /// it.
+    fn off(&mut self, label: &str, value: &str, act: Act, color: tokens::Color) {
         self.pending.push(Entry::Off {
             label: label.to_owned(),
             value: value.to_owned(),
             act,
+            color,
         });
     }
 
@@ -1663,7 +1731,12 @@ impl Lines<'_> {
                         crate::chrome::tinted_value(fields, column, status, focused)
                     });
                 }
-                Entry::Off { label, value, act } => {
+                Entry::Off {
+                    label,
+                    value,
+                    act,
+                    color,
+                } => {
                     let focused = self.cursor == self.out.len();
                     let lines = crate::chrome::aligned_pair(
                         self.left,
@@ -1677,7 +1750,7 @@ impl Lines<'_> {
                     self.push_lines(lines, Some(act), |mut fields| {
                         if !focused {
                             for f in &mut fields {
-                                f.color = tokens::color::STATE_ERROR;
+                                f.color = color;
                             }
                         }
                         fields
@@ -1961,6 +2034,7 @@ impl View {
             self.finger(&mut b, scene);
         }
         self.keys(&mut b, scene);
+        signing(&mut b, scene);
         lock(&mut b, scene);
         self.private(&mut b, scene);
         encrypt(&mut b, scene);
@@ -2028,6 +2102,7 @@ impl View {
                 &b.t(key::SECURITY_NOW_FIREWALL_FAILED),
                 &why,
                 Act::Show(Section::Firewall),
+                DANGER,
             );
         }
         if let Some(why) = scene.settings_refused {
@@ -2036,11 +2111,26 @@ impl View {
                 &b.t(key::SECURITY_NOW_SETTINGS_UNREADABLE),
                 &b.t(crate::security_words::refusal(why)),
                 Act::Show(Section::Firewall),
+                DANGER,
+            );
+        }
+        if !scene.file_keys.is_empty() {
+            off += 1;
+            b.off(
+                &b.t(key::SECURITY_NOW_FILE_KEYS),
+                &scene.file_keys.len().to_string(),
+                Act::Show(Section::Signing),
+                DANGER,
             );
         }
         if !settings.enabled {
             off += 1;
-            b.off(&b.t(key::SECURITY_NOW_FIREWALL_OFF), "", Act::Firewall);
+            b.off(
+                &b.t(key::SECURITY_NOW_FIREWALL_OFF),
+                "",
+                Act::Firewall,
+                WARNING,
+            );
         }
         if let Some(window) = scene.window.filter(|w| w.is_open(now)) {
             off += 1;
@@ -2051,11 +2141,21 @@ impl View {
                     |until| crate::security_words::end_text(until, now, zone, b.texts),
                 ),
                 Act::RelaxEnd,
+                WARNING,
+            );
+        }
+        if scene.tpm_signing {
+            off += 1;
+            b.off(
+                &b.t(key::SECURITY_NOW_TPM_SIGNING),
+                "",
+                Act::TpmSigning,
+                WARNING,
             );
         }
         if settings.shields {
             off += 1;
-            b.off(&b.t(key::SECURITY_NOW_SHIELDS), "", Act::Shields);
+            b.off(&b.t(key::SECURITY_NOW_SHIELDS), "", Act::Shields, WARNING);
         }
         // THE VAULT, FROZEN since the machine slept with something in it:
         // whatever touches it waits until the passphrase resumes it.
@@ -2068,6 +2168,7 @@ impl View {
                 &b.t(key::SECURITY_NOW_PRIVATE_SUSPENDED),
                 "",
                 Act::Private(crate::vault::Act::Resume),
+                DANGER,
             );
         }
         let recent: u64 = scene
@@ -2088,6 +2189,7 @@ impl View {
                 ),
                 "",
                 Act::Show(Section::Firewall),
+                WARNING,
             );
         }
         if off == 0 {
@@ -2949,6 +3051,13 @@ impl View {
                 Errand::Nothing
             }
             Act::FingerSudo => Errand::Door(Work::FingerSudo(!scene.finger_sudo)),
+            // THE TPM'S KEY, ONCE, and its switch the other way — both root's,
+            // through the sudo door, the bar asking the password.
+            Act::TpmKeyCreate if scene.tpm_key.is_none() => Errand::Door(Work::TpmKeyCreate),
+            Act::TpmKeyCreate => Errand::Nothing,
+            Act::TpmSigning if scene.tpm_signing => Errand::Door(Work::TpmSigning(false)),
+            Act::TpmSigning if scene.tpm_key.is_some() => Errand::Door(Work::TpmSigning(true)),
+            Act::TpmSigning => Errand::Nothing,
             Act::VtKey => Errand::Ask {
                 id: VT_KEY,
                 secret: true,
@@ -4236,6 +4345,74 @@ impl View {
 }
 
 /// The sections of facts, which keep no view state.
+/// Who signs the person's commits: the TPM's key (made once, through the
+/// sudo door), whether it may sign — the switch, in the warning colour while
+/// it may — and every private key kept in a plain file, in the danger colour.
+fn signing(b: &mut Lines<'_>, scene: &Scene) {
+    use ronoctua_security::platform::Tpm;
+    b.heading(Section::Signing);
+    if !scene.read {
+        b.note(&b.t(key::SECURITY_NOW_READING));
+        return;
+    }
+    let count = |n: usize| Arg::Number(i64::try_from(n).unwrap_or(i64::MAX));
+    match (&scene.tpm_key, scene.tpm) {
+        (Some(tpm_key), _) => {
+            b.pair(
+                &b.t(key::SECURITY_SIGNING_TPM_KEY),
+                format!("{} {}", tpm_key.kind, tpm_key.comment).trim(),
+                None,
+                None,
+            );
+            b.pair(
+                &b.t(key::SECURITY_SIGNING_PUBLIC_KEY),
+                ronoctua_security::signing::PUBLIC_KEY,
+                None,
+                None,
+            );
+            b.pair(
+                &b.t(key::SECURITY_SIGNING_SIGNED_BY),
+                &b.t(if scene.tpm_signing {
+                    key::SECURITY_SIGNING_BY_TPM
+                } else {
+                    key::SECURITY_SIGNING_BY_SECURITY_KEY
+                }),
+                Some(Act::TpmSigning),
+                scene.tpm_signing.then_some(WARNING),
+            );
+        }
+        // NO KEY MADE: making one is offered only where a TPM is.
+        (None, Some(Tpm::Present { .. })) => b.pair(
+            &b.t(key::SECURITY_SIGNING_TPM_KEY_CREATE),
+            "",
+            Some(Act::TpmKeyCreate),
+            None,
+        ),
+        (None, _) => b.note(&b.t(key::SECURITY_SIGNING_NO_TPM)),
+    }
+    for (n, path) in scene.file_keys.iter().enumerate() {
+        b.pair(
+            &b.texts
+                .t_args(key::SECURITY_SIGNING_FILE_KEY, &[("n", count(n + 1))]),
+            path,
+            None,
+            Some(DANGER),
+        );
+    }
+    if !scene.file_keys.is_empty() {
+        b.line(&b.t(key::SECURITY_SIGNING_FILE_KEYS_NOTE), DANGER);
+    }
+    b.note(&b.t(key::SECURITY_SIGNING_NOTE));
+}
+
+/// A path under the home as the page says it, `~/…`; any other as it is.
+fn home_relative(path: &std::path::Path, home: &std::path::Path) -> String {
+    path.strip_prefix(home).map_or_else(
+        |_| path.to_string_lossy().into_owned(),
+        |rest| format!("~/{}", rest.to_string_lossy()),
+    )
+}
+
 /// THE LOCK SCREEN: locking now, whether the screen locks by itself, and
 /// after how long. The footer arms what the file says; a file it refused is
 /// said here, in the warning's colour, and nothing locks by itself until a
@@ -5238,8 +5415,9 @@ mod tests {
     }
 
     /// FAILS IF: "Now" draws a line at rest, or stops listing what is off —
-    /// the firewall off, the window open with its end, the shields, refused
-    /// connections — in the danger colour.
+    /// the firewall off, the window open with its end, the TPM's switch, the
+    /// shields, refused connections, a key kept in a file — each in its
+    /// colour: the warning for what the person chose, the danger for the key.
     #[test]
     fn now_lists_only_what_is_off() {
         let t = texts("en-GB");
@@ -5263,6 +5441,9 @@ mod tests {
             at: now_s(),
             count: 3,
         }];
+        off.tpm_key = ronoctua_security::signing::tpm_key_of("ecdsa-sha2-nistp256 AAAA x");
+        off.tpm_signing = true;
+        off.file_keys = vec!["~/.ssh/id_ed25519".into()];
         let rows = v.rows(&off, 100, &t, &utc());
         let acts: Vec<Act> = rows
             .iter()
@@ -5272,8 +5453,10 @@ mod tests {
         assert_eq!(
             acts,
             [
+                Act::Show(Section::Signing),
                 Act::Firewall,
                 Act::RelaxEnd,
+                Act::TpmSigning,
                 Act::Shields,
                 Act::Show(Section::Firewall)
             ]
@@ -5282,17 +5465,82 @@ mod tests {
             .iter()
             .filter(|r| r.section == Section::Now && r.act.is_some())
         {
+            let wanted = if r.act == Some(Act::Show(Section::Signing)) {
+                DANGER
+            } else {
+                WARNING
+            };
             assert!(
-                r.fields
-                    .iter()
-                    .any(|f| f.color == tokens::color::STATE_ERROR)
+                r.fields.iter().any(|f| f.color == wanted)
                     || r.fields
                         .iter()
                         .any(|f| f.color == tokens::color::STATE_ACCENT),
-                "an off line not in danger: {}",
+                "an off line not in its colour: {}",
                 drawn(std::slice::from_ref(r))
             );
         }
+    }
+
+    /// FAILS IF: the signing section offers to make a key where there is no
+    /// TPM or a key already, hides the switch once a key is made, says the
+    /// TPM signs while it may not (or the other way), or leaves out a key
+    /// kept in a file.
+    #[test]
+    fn the_signing_section_says_who_signs() {
+        use ronoctua_security::platform::Tpm;
+        let t = texts("en-GB");
+        let v = View::fresh();
+        let acts = |s: &Scene| -> Vec<Act> {
+            v.rows(s, 100, &t, &utc())
+                .into_iter()
+                .filter(|r| r.section == Section::Signing)
+                .filter_map(|r| r.act)
+                .collect()
+        };
+        let act_of = |s: &Scene, a: Act| View::fresh().act(a, s, &t);
+        let mut s = scene();
+        s.tpm = Some(Tpm::Absent);
+        assert_eq!(acts(&s), [], "a key offered with no TPM");
+        assert!(drawn(&v.rows(&s, 100, &t, &utc())).contains(&t.t(key::SECURITY_SIGNING_NO_TPM)));
+        s.tpm = Some(Tpm::Present { version: 2 });
+        assert_eq!(acts(&s), [Act::TpmKeyCreate]);
+        assert!(matches!(
+            act_of(&s, Act::TpmKeyCreate),
+            Errand::Door(Work::TpmKeyCreate)
+        ));
+        s.tpm_key = ronoctua_security::signing::tpm_key_of("ecdsa-sha2-nistp256 AAAA me@here-tpm");
+        assert_eq!(acts(&s), [Act::TpmSigning]);
+        let page = drawn(&v.rows(&s, 100, &t, &utc()));
+        assert!(
+            page.contains(&t.t(key::SECURITY_SIGNING_BY_SECURITY_KEY)),
+            "{page}"
+        );
+        assert!(page.contains("me@here-tpm"), "{page}");
+        assert!(matches!(
+            act_of(&s, Act::TpmSigning),
+            Errand::Door(Work::TpmSigning(true))
+        ));
+        s.tpm_signing = true;
+        let page = drawn(&v.rows(&s, 100, &t, &utc()));
+        assert!(page.contains(&t.t(key::SECURITY_SIGNING_BY_TPM)), "{page}");
+        assert!(matches!(
+            act_of(&s, Act::TpmSigning),
+            Errand::Door(Work::TpmSigning(false))
+        ));
+        assert!(
+            matches!(act_of(&s, Act::TpmKeyCreate), Errand::Nothing),
+            "a second key"
+        );
+        s.file_keys = vec!["~/.ssh/deploy".into()];
+        let rows = v.rows(&s, 100, &t, &utc());
+        let file = rows
+            .iter()
+            .find(|r| {
+                r.section == Section::Signing
+                    && drawn(std::slice::from_ref(r)).contains("~/.ssh/deploy")
+            })
+            .expect("the key in a file is listed");
+        assert!(file.fields.iter().any(|f| f.color == DANGER));
     }
 
     /// FAILS IF: the fingerprint section shows without a reader, or the ring
@@ -5590,6 +5838,13 @@ mod tests {
             assert_eq!(
                 crate::security_words::section_of_mark(WATCH, &segment(mark)),
                 Some(Section::Firewall.word()),
+                "{mark}"
+            );
+        }
+        for mark in ["file-key", "tpm-signing"] {
+            assert_eq!(
+                crate::security_words::section_of_mark(WATCH, &segment(mark)),
+                Some(Section::Signing.word()),
                 "{mark}"
             );
         }

@@ -30,6 +30,7 @@ use std::process::ExitCode;
 use ronoctua_security::firewall::{self, Known, Places};
 use ronoctua_security::fprint;
 use ronoctua_security::relax::{self, Window};
+use ronoctua_security::signing;
 use ronoctua_security::tools::{self, Tools};
 use ronoctua_security::u2f;
 use ronoctua_security::users::{self, Person};
@@ -257,6 +258,17 @@ fn root_verb(verb: RootVerb, person: Option<&Person>, tools: &Tools) -> Result<(
                 tools::given(tools.systemctl.as_ref())?,
                 MACHINE_TRY_AGAIN_UNIT,
             )
+        }
+        // COMMITS SIGNED BY THE TPM: the key made by its declared unit, and
+        // the switch that lets the agent exist — both root's, so nothing the
+        // person's processes do turns the TPM on for them.
+        RootVerb::TpmKeyCreate => {
+            named()?;
+            signing::create_key(&signing::Places::system(), tools)
+        }
+        RootVerb::TpmSigning { on } => {
+            named()?;
+            signing::set_allowed(&signing::Places::system(), tools, on)
         }
     }
 }

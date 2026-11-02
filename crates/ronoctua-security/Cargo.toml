@@ -53,6 +53,9 @@ ronoctua-person = { path = "../ronoctua-person", default-features = false }
 # the token the gesture staged (`binary-cache-netrc`), by the one crate that
 # knows Cachix — its path, its line, how the staged copy is taken.
 ronoctua-cachix = { path = "../ronoctua-cachix" }
+# WHAT HOLDS A KEY: the public part of an `openssh-key-v1` file, read to tell
+# a security key's handle from a key kept in the file (`signing::holder_of`).
+base64.workspace = true
 
 # THE ROOT HELPER, as its own binary, so `nix/rust.nix` can extract JUST this
 # (`securityRoot`): the units that run it as root must not carry the renderer,

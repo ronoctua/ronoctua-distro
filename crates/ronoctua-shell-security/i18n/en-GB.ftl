@@ -279,6 +279,28 @@ echo-security-keys-removed = The key was removed.
 echo-security-keys-off = Your security keys no longer answer the administrator here.
 echo-security-keys-on = Your security keys answer the administrator here again.
 echo-security-keys-brought = The keys of your other machines answer the administrator here now.
+
+## WHO SIGNS THE COMMITS: the TPM's key, the security key, a key in a file.
+
+security-heading-signing = Commit signing
+security-now-file-keys = Private keys kept in plain files
+security-now-tpm-signing = The TPM may sign your commits
+security-signing-tpm-key = Key in the TPM
+security-signing-public-key = Its public key
+security-signing-signed-by = Commits signed by
+security-signing-by-tpm = the TPM's key, with no touch
+security-signing-by-security-key = your security key only
+security-signing-tpm-key-create = Make a key in the TPM
+security-signing-no-tpm = This machine has no TPM: only your security key signs your commits.
+security-signing-file-key = Key in a file { $n }
+security-signing-file-keys-note = A key kept in a plain file signs as you for whoever reads it, with no touch and from any machine it is copied to. Move it to a security key or the TPM, and delete the file.
+security-signing-note = The TPM's key never leaves this machine and signs with no touch, so you can commit from afar — and so can whoever works as you here while it may. Otherwise only your security key signs. Each change asks for the administrator's password; register the public key where your commits are checked (on GitHub, as a signing key).
+security-about-tpm-key-create = Makes a key inside this machine's TPM: it never leaves it, and signs only while you allow it — asks the administrator's password
+security-about-tpm-signing = Lets the TPM's key sign your commits with no touch, or only your security key again — asks the administrator's password
+echo-security-tpm-key-made = A key was made in the TPM. Register its public key, then let it sign.
+echo-security-tpm-signing-on = The TPM's key signs your commits now, with no touch.
+echo-security-tpm-signing-off = Only your security key signs your commits now.
+
 cmd-security-encrypt = Encrypt a file or a folder: for you, a passphrase or someone's key
 cmd-security-quantum = The security centre's post-quantum section: what each channel does against a quantum computer
 security-heading-encrypt = Encrypt

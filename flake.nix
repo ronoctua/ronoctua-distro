@@ -1439,6 +1439,9 @@
         # Security keys: smart cards, GnuPG's agent, and pam_u2f for sudo —
         # always `sufficient` — trusting root's list of the person's keys.
         ./nix/modules/yubikey.nix
+        # A key the TPM holds, which may sign the person's commits in place
+        # of their security key — behind a switch only root moves.
+        ./nix/modules/tpm-signing.nix
         # ── anchor: L11 ──
         # ── anchor: L12 ──
         # /private, the person's encrypted folder, and the root side its

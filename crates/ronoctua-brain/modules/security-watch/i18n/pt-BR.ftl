@@ -1,10 +1,12 @@
 # The security watch's own texts: its name and the line under it, the hint of
 # each of its marks, its notice, and its page.
 brain-task-security-watch = Vigiar a central de segurança
-brain-task-security-watch-does = Escuta o que a central de segurança guarda e não roda nada: as conexões que o firewall recusa, o que o sudo faz e se o firewall é o que você pediu. Enquanto algo está fora do esperado, um escudo na cor de perigo fica na modeline, e o ponteiro parado sobre ele diz o quê; em repouso não há nenhum. A página guarda as conexões recusadas há pouco e uma semana de sudo.
+brain-task-security-watch-does = Escuta o que a central de segurança guarda e não roda nada: as conexões que o firewall recusa, o que o sudo faz, se o firewall é o que você pediu e quem pode assinar seus commits. Enquanto algo está fora do esperado, um escudo fica na modeline — na cor de alerta para o que você escolheu, na cor de perigo para o que ninguém escolheu — e o ponteiro parado sobre ele diz o quê; em repouso não há nenhum. A página guarda as conexões recusadas há pouco e uma semana de sudo.
 security-watch-mark-firewall-failed = O firewall não é o que você pediu: a central de segurança diz por quê
 security-watch-mark-firewall-off = Seu firewall está desligado
-security-watch-mark-sudo-open = O administrador não pede senha até o horário ao lado desta marca
+security-watch-mark-file-key = Uma chave privada está guardada num arquivo comum: quem a lê assina como você, sem toque
+security-watch-mark-tpm-signing = O TPM desta máquina pode assinar seus commits, sem tocar na sua chave de segurança
+security-watch-mark-sudo-open = O administrador não pede senha: um clique abre onde isso se encerra
 security-watch-mark-shields = Toda conexão de entrada está sendo recusada
 security-watch-mark-refused = { $count ->
     [one] Uma conexão de entrada foi recusada no último quarto de hora
@@ -21,6 +23,8 @@ security-watch-row-nothing = Nada fora do esperado
 security-watch-row-firewall-failed = O firewall falhou
 security-watch-row-firewall-off = O firewall está desligado
 security-watch-row-sudo-open = Sem pedir senha até
+security-watch-row-file-key = Chaves privadas em arquivos comuns
+security-watch-row-tpm-signing = O TPM pode assinar seus commits
 security-watch-row-shields = Toda conexão de entrada recusada
 security-watch-row-refused = Recusadas no último quarto de hora
 security-watch-row-journal-lost = O diário não pode ser lido

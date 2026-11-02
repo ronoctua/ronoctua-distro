@@ -328,3 +328,6 @@ sudo-bar-deed-cache-netrc-remove = tirar desta máquina o acesso ao seu cache bi
 sudo-bar-deed-machine-hold = reter esta máquina na revisão da distro que ela roda
 sudo-bar-deed-machine-unhold = deixar esta máquina seguir a distro de novo
 sudo-bar-deed-machine-try-again = tentar de novo, na próxima atualização, o sistema que não subiu
+sudo-bar-deed-tpm-key-create = criar uma chave de assinatura no TPM desta máquina
+sudo-bar-deed-tpm-signing-on = deixar o TPM desta máquina assinar seus commits, sem tocar na sua chave de segurança
+sudo-bar-deed-tpm-signing-off = deixar só a sua chave de segurança assinar seus commits de novo

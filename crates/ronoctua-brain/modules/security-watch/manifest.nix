@@ -1,11 +1,12 @@
-# THE SECURITY CENTRE, WATCHED — and one shield on the modeline, in the
-# danger colour, only while something is off.
+# THE SECURITY CENTRE, WATCHED — and one shield on the modeline, only while
+# something is off: in the warning colour for what the person chose, in the
+# danger colour for what nobody did.
 #
 # A watch and nothing more: the core's journal feed (the kernel's refused
 # lines, sudo, the firewall's units) and inotify on the two folders the root
 # helper writes. Why each piece is so is in `why.md`, beside this.
 {
-  what = "Watch refused connections, sudo and the firewall; mark the modeline only while something is off.";
+  what = "Watch refused connections, sudo, the firewall and who signs commits; mark the modeline only while something is off.";
 
   needs = {
     root = false;
@@ -19,17 +20,22 @@
   # A WATCH: nothing runs on a schedule.
   schedule = null;
 
-  # A SHIELD WITH AN ALERT: the security centre's own shield, marked.
+  # THE SHIELD ALONE (owner, 2026-11-02): what is off is said by its COLOUR
+  # — warning or danger — and its sentence, not by a sign inside it.
   glyphs = {
-    shield = "md-shield_alert";
+    shield = "md-shield";
   };
 
-  # ONE GLYPH, FIVE MEANINGS: the module draws only the loudest of what is
+  # ONE GLYPH, SEVEN MEANINGS: the module draws only the loudest of what is
   # off, and each has its own sentence under the pointer.
   marks = {
     firewall-failed = {
       glyph = "shield";
       hint = "security-watch-mark-firewall-failed";
+    };
+    file-key = {
+      glyph = "shield";
+      hint = "security-watch-mark-file-key";
     };
     firewall-off = {
       glyph = "shield";
@@ -38,6 +44,10 @@
     sudo-open = {
       glyph = "shield";
       hint = "security-watch-mark-sudo-open";
+    };
+    tpm-signing = {
+      glyph = "shield";
+      hint = "security-watch-mark-tpm-signing";
     };
     shields = {
       glyph = "shield";

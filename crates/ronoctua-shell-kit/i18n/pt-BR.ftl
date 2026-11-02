@@ -515,7 +515,6 @@ network-refusal-not-vpn = esse perfil não é de uma VPN
 # did not happen (`ronoctua_security::Why`), beside the others.
 security-refusal-cancelled = Cancelado: nada foi feito.
 security-refusal-no-key = Nenhuma chave de segurança está conectada.
-security-sudo-no-limit = sem prazo
 mode-stick = pendrive do instalador
 
 ## perguntado, acima da modeline — quem pede, para quê, e o que o sudo espera.

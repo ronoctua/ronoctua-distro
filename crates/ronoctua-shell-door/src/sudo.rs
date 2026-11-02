@@ -201,6 +201,9 @@ impl Deed {
             RootVerb::MachineHold => texts.t(key::SUDO_BAR_DEED_MACHINE_HOLD),
             RootVerb::MachineUnhold => texts.t(key::SUDO_BAR_DEED_MACHINE_UNHOLD),
             RootVerb::MachineTryAgain => texts.t(key::SUDO_BAR_DEED_MACHINE_TRY_AGAIN),
+            RootVerb::TpmKeyCreate => texts.t(key::SUDO_BAR_DEED_TPM_KEY_CREATE),
+            RootVerb::TpmSigning { on: true } => texts.t(key::SUDO_BAR_DEED_TPM_SIGNING_ON),
+            RootVerb::TpmSigning { on: false } => texts.t(key::SUDO_BAR_DEED_TPM_SIGNING_OFF),
         }
     }
 

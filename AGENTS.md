@@ -86,7 +86,10 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
      pessoa ficam em `/var/lib/ronoctua-security` e uma unidade declarada as aplica na tabela `inet
      ronoctua`; a janela de sudo sem senha é uma linha em `/var/lib/ronoctua-sudo` (acaba no `NOTAFTER`
      ou quando a pessoa fecha, e uma vencida sai no boot); as chaves `pam_u2f` são do root
-     (`/var/lib/ronoctua-security/u2f_keys`), escritas só pela porta do sudo; Podman só na home.
+     (`/var/lib/ronoctua-security/u2f_keys`), escritas só pela porta do sudo; a chave de assinatura
+     do TPM (`/var/lib/ronoctua-security/tpm-key`) e o interruptor que a deixa assinar os commits
+     (`…/tpm-signing`) também, feitos e mudados só pela porta do sudo (pedido do dono, 2026-11-02);
+     Podman só na home.
    - **O `/private`**: só pelo gesto, pela porta do sudo, a unidade `ronoctua-private-root`
      cria/abre/tranca uma imagem LUKS em `/var/lib/ronoctua-private` (subvolume `@private`) montada em
      `/private`; `ronoctua-private-lock` a tranca antes de dormir. Nunca no flake, `/etc`, `fstab` ou
@@ -430,7 +433,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | systemd-resolved (`resolve1`) | `ronoctua-resolve` (cobra `one-resolve-boundary`) |
 | git | `ronoctua-git` (cobra `one-git-driver`) |
 | 7zz, bsdtar e unrar | `ronoctua-archive` (cobra `one-archive-driver`) |
-| `sudo` (a porta do sudo), o firewall da pessoa, a lista de chaves em que o `pam_u2f` confia, o `pamu2fcfg` (o cadastro de uma chave) e as checagens online da segurança | `ronoctua-security` (cobra `sudo-door-is-one`) |
+| `sudo` (a porta do sudo), o firewall da pessoa, a lista de chaves em que o `pam_u2f` confia, o `pamu2fcfg` (o cadastro de uma chave), a chave de assinatura do TPM e o interruptor dela (o `ssh-tpm-agent`), o que guarda cada chave privada da casa (`signing::file_keys`) e as checagens online da segurança | `ronoctua-security` (cobra `sudo-door-is-one`) |
 | o repositório cifrado da configuração da pessoa, e a identidade dela guardada pela sessão no keyring do kernel (`@u`, só no `unlock.rs`) | `ronoctua-belongings` (cobram `belongings-ask-with-a-pass` e `one-keyring-boundary`) |
 | o YouTube por HTTP simples (feeds e miniaturas) e o catálogo SQLite | `ronoctua-video-metrics` (cobra `one-sqlite-boundary`) |
 | as taxas de câmbio do BCE | `ronoctua-calc` (`rates.rs`; cobra `rates-ask-with-a-pass`) |

@@ -4606,6 +4606,7 @@ dependencies = [
 name = "ronoctua-security"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "ronoctua-cachix",
  "ronoctua-consent",
  "ronoctua-network",

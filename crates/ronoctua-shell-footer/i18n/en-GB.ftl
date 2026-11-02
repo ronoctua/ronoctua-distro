@@ -1019,13 +1019,11 @@ footer-settings-shortcuts-note = While the header is hidden, keep its moved shor
 # Formatting with encryption (the format buffer, and its host).
 # The format buffer's third question, as the modeline names its state.
 state-encrypt = encryption
-hint-security-until = The administrator asks for no password until { $time }; a click opens where it ends
 fast-access-unopened = Nothing opens { $what }.
 echo-capture-outside-the-room = Nothing was captured: the rectangle lay wholly under the resizer's curtains, outside the room it leaves.
 # The file manager's state on the modeline (`files::View::state`): a question
 # about who may touch a file, drawn in warning.
 state-permission = permission
-hint-security-no-limit = The administrator asks for no password until you end it; a click opens where it ends
 
 ## asked, above the modeline — who asks, what for, and what sudo waits for.
 

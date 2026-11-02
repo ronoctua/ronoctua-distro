@@ -2,21 +2,28 @@
 
 O vigia da central de segurança: escuta o que ela guarda e não roda nada. O que ele ouve vem de
 três fontes do diário que o núcleo segue (as linhas do kernel com o prefixo `ronoctua-refused: `,
-o `sudo` e as unidades do firewall em `err`) e do inotify nas duas pastas que o ajudante root
-escreve (`/run/ronoctua-security`, `/var/lib/ronoctua-security`). A página da central
+o `sudo` e as unidades do firewall em `err`), do inotify nas duas pastas que o ajudante root
+escreve (`/run/ronoctua-security`, `/var/lib/ronoctua-security`, onde também está o interruptor do
+TPM) e do inotify no `~/.ssh` e no `~/.gnupg` da pessoa, onde uma chave em arquivo estaria. A página da central
 (`security.rs`) pede a página dele e desenha as recusadas e o sudo nas próprias seções.
 
 ## Um escudo, só enquanto algo está fora
 
-A modeline em repouso é muda (inv. 14). O escudo aparece, na cor de perigo, só enquanto algo está
-fora do esperado, e é UM: o mais alto de cinco casos, cada um com a própria frase sob o ponteiro —
-o firewall falhou (o ajudante disse, ou uma unidade do firewall registrou erro depois da última
-aplicação), o firewall está desligado, o sudo não pede senha (até uma hora, ou sem prazo), os escudos estão
-erguidos, e conexões recusadas no último quarto de hora (o escudo conta quantas). A hora do fim da
-janela sem senha é da própria modeline do rodapé, ao lado; a dica só pode contar (`count`).
+A modeline em repouso é muda (inv. 14). O escudo aparece só enquanto algo está fora do esperado, e é
+UM: o mais alto de sete casos, cada um com a própria frase sob o ponteiro — o firewall falhou (o
+ajudante disse, ou uma unidade do firewall registrou erro depois da última aplicação), uma chave
+privada guardada num arquivo comum no `~/.ssh` ou no GnuPG, o firewall está desligado, o sudo não pede
+senha (até uma hora, ou sem prazo), o TPM pode assinar os commits, os escudos estão erguidos, e
+conexões recusadas no último quarto de hora (o escudo conta quantas).
+
+A cor diz quanto (dono, 2026-11-02): os dois primeiros, que ninguém escolheu, saem na cor de perigo;
+os outros, escolhas feitas com a senha ou o firewall fazendo o trabalho dele, na cor de alerta. Todo
+perigo vem antes de todo alerta (`Off::loudness`). O glifo é o escudo sozinho, e quem diz o que está
+fora é a cor e a frase. A hora do fim da janela sem senha não fica mais na modeline: ela está na
+seção do administrador, que o clique no escudo abre.
 
 O clique abre a central de segurança na seção de que o escudo fala: a janela sem senha no
-Administrador, todo o resto no Firewall. Quem decide é a central (`security::section_of_mark`), que
+Administrador, a chave em arquivo e o TPM na Assinatura dos commits, todo o resto no Firewall. Quem decide é a central (`security::section_of_mark`), que
 o clique genérico das marcas do cérebro pergunta antes de abrir a página do módulo (`brain::click_of`);
 a página do módulo continua listando tudo o que está fora, no `LEADER b`.
 

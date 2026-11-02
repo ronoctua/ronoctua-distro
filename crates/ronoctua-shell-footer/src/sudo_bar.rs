@@ -1408,6 +1408,9 @@ mod tests {
             RootVerb::MachineHold,
             RootVerb::MachineUnhold,
             RootVerb::MachineTryAgain,
+            RootVerb::TpmKeyCreate,
+            RootVerb::TpmSigning { on: true },
+            RootVerb::TpmSigning { on: false },
         ];
         verbs.extend(RelaxSpan::ALL.map(|span| RootVerb::Relax { span }));
         verbs

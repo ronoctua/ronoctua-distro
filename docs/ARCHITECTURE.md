@@ -20448,6 +20448,38 @@ outro sync pode reordenar.
 
 <!-- anchor: L22 -->
 
+### Commits assinados pelo TPM, e o escudo em duas cores (2026-11-02)
+
+O dono quer poder trabalhar de longe, onde ninguém toca a YubiKey, e escolher entre um modo mais
+fechado (só a chave de segurança assina) e um que deixa uma chave do TPM assinar. Os dois mudam só
+com a senha do administrador.
+
+**O interruptor é do root, e de verdade.** O `/dev/tpmrm0` vai para o grupo `tss` (`security.tpm2`),
+e nele está só o usuário do agente (`ronoctua-tpm-agent`), não a pessoa. Por isso nenhum processo
+dela usa a chave sozinho, e um modo "só YubiKey" que um processo da pessoa contornasse não seria
+modo nenhum. A chave nasce uma vez (`ronoctua-tpm-keygen`, verbo `tpm-key-create`) na pasta do root
+(`signing::KEY_DIR`). O agente (`ssh-tpm-agent`, num socket que só a pessoa abre) e o socket dele
+levam o arquivo do interruptor (`signing::ALLOWED`) como condição. O verbo `tpm-signing on|off`
+escreve ou tira esse arquivo, sempre antes de iniciar ou parar as unidades, e o boot guarda a
+escolha. A chave não tem PIN porque a pessoa longe não tem onde digitá-lo; o que faz o papel do PIN
+é o interruptor.
+
+**Com o TPM permitido, todo commit é dele** (escolha do dono). O assinador do git troca a chave que
+o git nomeia pela pública do TPM e fala com o agente dele, aqui ou de longe. A YubiKey Nano fica
+sempre plugada, então "a chave está aí" não diz se a pessoa está.
+
+**Chave em arquivo é perigo, e se reconhece pelo que guarda.** `signing::file_keys` lê cada arquivo
+do `~/.ssh` e as chaves do GnuPG e olha o que guarda o segredo: o identificador de uma chave `sk-` e o
+`.tpm` não contam, e PEM, `openssh-key-v1` comum ou PuTTY contam, com ou sem senha. O tipo sai da
+parte pública do `openssh-key-v1`, que nunca é cifrada.
+
+**O escudo da modeline é um escudo só (`md-shield`), e a cor diz quanto.** O que a pessoa escolheu
+com a senha (a janela, o TPM, o firewall desligado, os escudos) e o firewall recusando conexões saem
+na cor de alerta (`state.warning`). O que ninguém escolheu (o firewall que falhou, uma chave em
+arquivo) sai na de perigo (`state.error`, um vermelho puxado para o rosa em todo tema). Todo perigo
+vem antes de todo alerta (`rules::Off::loudness`), e o "Agora" da central pinta cada linha na mesma
+cor.
+
 ### A barra do sudo e as telas (2026-10-11)
 
 O dono decidiu que o sudo das telas passa por uma barra nova no rodapé, acima da modeline, chamativa,
@@ -20535,9 +20567,9 @@ com uma janela de fim marcado, bate uma vez por segundo e só pinta quando as li
 estão na tela; a modeline continua dizendo o FIM, nunca uma contagem (um relógio que corre é relógio
 no cromo).
 
-**A marca da modeline já existia.** O `security-until` (o cadeado aberto e a hora do fim, ou "sem
-prazo"), no tom de perigo, abre a seção do administrador e some quando a janela fecha — o brain vigia
-a pasta do estado e a modeline relê. É a marca que a decisão de 2026-10-11 pede, e ficou como estava.
+**A modeline diz a janela pelo escudo, e só por ele** (dono, 2026-11-02). O `security-until` (o
+cadeado aberto e a hora do fim, ou "sem prazo") saiu: o escudo do `security-watch` já está lá, na
+cor de alerta, e o clique nele abre a seção do administrador, onde estão o fim e a contagem.
 
 ### Cifrar qualquer coisa e a seção pós-quântica (L22)
 

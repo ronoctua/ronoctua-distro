@@ -4848,13 +4848,6 @@ impl Footer {
                 // WHAT THE BRAIN'S MODULES MARKED, each as it published it —
                 // and nothing at rest.
                 brain: &brain_marks,
-                // THE PASSWORDLESS WINDOW'S END, while one is open (`security`).
-                security_until: crate::security_words::modeline_until(
-                    crate::photo::room().as_deref(),
-                    &self.zone,
-                    &self.texts,
-                )
-                .as_deref(),
             },
         );
         // THE SOFTWARE CENTRE'S TWO, with nothing to say at rest: a trial
@@ -5543,13 +5536,6 @@ impl Footer {
             return;
         }
 
-        // THE PASSWORDLESS WINDOW'S END: the centre, on its administrator's
-        // section — the command `LEADER s e e` runs, with the section.
-        if id == "security-until" {
-            self.run_with("security-open", Some(crate::security_words::ADMIN_SECTION));
-            return;
-        }
-
         // A DEVICE'S MARK OPENS THAT DEVICE, whole — the owner's words: every
         // piece of information and every option for the one that was clicked.
         // It is the command `RET` on its row runs, with the path as the
@@ -5878,21 +5864,6 @@ impl Footer {
 
             // A BRAIN MODULE'S MARK says what its module wrote for it.
             id if crate::brain::is_mark(id) => crate::brain::hint_of(id, &self.texts),
-
-            // THE PASSWORDLESS WINDOW: until when, and that a click ends it there.
-            "security-until" => {
-                let window = crate::security_words::window_now(crate::photo::room().as_deref())?;
-                Some(match window.until_unix_s {
-                    None => self.texts.t(crate::key::HINT_SECURITY_NO_LIMIT),
-                    Some(until) => self.texts.t_with(
-                        crate::key::HINT_SECURITY_UNTIL,
-                        &[(
-                            "time",
-                            &crate::security_words::end_here(until, &self.zone, &self.texts),
-                        )],
-                    ),
-                })
-            }
 
             "state" => {
                 let now = self.state_now()?;
@@ -21192,9 +21163,6 @@ fn segment_color(
         // the gestures' faded pink beside the camera's, danger is the
         // recording's red (`brainlink::tone_colour`).
         _ if crate::brain::is_mark(id) => crate::brain::colour_of(id),
-
-        // THE PASSWORDLESS WINDOW'S END: danger, as the watch's shield is.
-        "security-until" => tokens::color::STATE_ERROR,
 
         // THE KIND OF BUFFER. It used to carry the accent, from when it was the
         // only thing next to the name; now the state sits beside it saying what

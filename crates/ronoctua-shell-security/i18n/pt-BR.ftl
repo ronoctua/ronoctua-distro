@@ -279,6 +279,28 @@ echo-security-keys-removed = A chave foi removida.
 echo-security-keys-off = Suas chaves de segurança não respondem mais ao administrador aqui.
 echo-security-keys-on = Suas chaves de segurança voltaram a responder ao administrador aqui.
 echo-security-keys-brought = As chaves das suas outras máquinas respondem ao administrador aqui agora.
+
+## QUEM ASSINA OS COMMITS: a chave do TPM, a chave de segurança, uma chave em arquivo.
+
+security-heading-signing = Assinatura dos commits
+security-now-file-keys = Chaves privadas em arquivos comuns
+security-now-tpm-signing = O TPM pode assinar seus commits
+security-signing-tpm-key = Chave no TPM
+security-signing-public-key = A chave pública dela
+security-signing-signed-by = Commits assinados por
+security-signing-by-tpm = a chave do TPM, sem toque
+security-signing-by-security-key = só a sua chave de segurança
+security-signing-tpm-key-create = Criar uma chave no TPM
+security-signing-no-tpm = Esta máquina não tem TPM: só a sua chave de segurança assina seus commits.
+security-signing-file-key = Chave em arquivo { $n }
+security-signing-file-keys-note = Uma chave guardada num arquivo comum assina como você para quem a lê, sem toque e de qualquer máquina para onde for copiada. Passe-a para uma chave de segurança ou para o TPM e apague o arquivo.
+security-signing-note = A chave do TPM nunca sai desta máquina e assina sem toque, então você consegue fazer commits de longe — e também quem estiver trabalhando como você aqui enquanto ela puder. Fora isso, só a sua chave de segurança assina. Cada mudança pede a senha do administrador; cadastre a chave pública onde seus commits são conferidos (no GitHub, como chave de assinatura).
+security-about-tpm-key-create = Cria uma chave dentro do TPM desta máquina: ela nunca sai dele e só assina enquanto você deixar — pede a senha do administrador
+security-about-tpm-signing = Deixa a chave do TPM assinar seus commits sem toque, ou só a sua chave de segurança de novo — pede a senha do administrador
+echo-security-tpm-key-made = Uma chave foi criada no TPM. Cadastre a chave pública dela e então deixe-a assinar.
+echo-security-tpm-signing-on = A chave do TPM assina seus commits agora, sem toque.
+echo-security-tpm-signing-off = Só a sua chave de segurança assina seus commits agora.
+
 cmd-security-encrypt = Cifrar um arquivo ou uma pasta: para você, uma senha ou a chave de alguém
 cmd-security-quantum = A seção pós-quântica da central de segurança: o que cada canal faz contra um computador quântico
 security-heading-encrypt = Cifrar

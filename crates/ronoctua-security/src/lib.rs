@@ -62,6 +62,7 @@ pub mod platform;
 pub mod quantum;
 pub mod relax;
 pub mod shields;
+pub mod signing;
 pub mod tools;
 pub mod u2f;
 pub mod users;

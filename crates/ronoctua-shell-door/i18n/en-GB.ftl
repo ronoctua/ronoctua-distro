@@ -330,3 +330,6 @@ sudo-bar-deed-cache-netrc-remove = take your private binary cache's login off th
 sudo-bar-deed-machine-hold = hold this machine on the distro revision it runs
 sudo-bar-deed-machine-unhold = let this machine follow the distro again
 sudo-bar-deed-machine-try-again = try again, at the next update, the system that did not start
+sudo-bar-deed-tpm-key-create = make a signing key in this machine's TPM
+sudo-bar-deed-tpm-signing-on = let this machine's TPM sign your commits, with no touch of your security key
+sudo-bar-deed-tpm-signing-off = let only your security key sign your commits again

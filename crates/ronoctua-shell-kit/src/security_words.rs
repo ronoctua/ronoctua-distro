@@ -1,19 +1,14 @@
 //! The security centre's words — one place for every closed set that becomes
 //! a sentence, so the footer's door and the window's cannot say one thing two
 //! ways, and a variant with no words is a compile error (every key is a
-//! constant of `crate::key`) — and the passwordless window as the
-//! modeline says it: its mark while one is open, its end in the person's
-//! clock, and the centre's section a click on it opens. The footer draws the
-//! mark for the session and names no feature, and the centre draws the same
-//! end on its administrator's section: one sentence, under both.
+//! constant of `crate::key`) — the passwordless window's end in the person's
+//! clock, and the centre's section a click on the watch's shield opens.
 
 use crate::key;
 use ronoctua_security::Why;
 use ronoctua_security::firewall::{Action, LogLevel, Profile, Protocol};
 use ronoctua_security::fprint::{Enrolling, Finger};
 use ronoctua_security::platform::{SecureBoot, Tpm};
-use ronoctua_security::relax::Opened;
-use ronoctua_tokens as tokens;
 
 /// A refusal of the centre (the door, the helper, a reading), as a sentence.
 #[must_use]
@@ -248,10 +243,11 @@ pub const VT_KEY: &str = "security-vt-key";
 pub const WATCH: &str = "security-watch";
 
 /// The section of the security centre (as `security-open` takes it) a mark
-/// of the watch opens on: its segment id is `brain:<module>/<mark>`, and the
-/// passwordless window's mark is about the administrator, every other one
-/// about the firewall. `None` for any other module's mark, which opens its
-/// own page. Pure.
+/// of the watch opens on: its segment id is `brain:<module>/<mark>`; the
+/// passwordless window's mark is about the administrator, a key kept in a
+/// file and the TPM's switch about who signs, every other one about the
+/// firewall. `None` for any other module's mark, which opens its own page.
+/// Pure.
 ///
 /// The footer's brain line asks it to open the centre where the thing that
 /// is off can be put back; the centre's own test ties the two words to its
@@ -262,10 +258,10 @@ pub fn section_of_mark(module: &str, segment: &str) -> Option<&'static str> {
         return None;
     }
     let mark = segment.rsplit_once('/').map(|(_, m)| m)?;
-    Some(if mark == "sudo-open" {
-        "admin"
-    } else {
-        "firewall"
+    Some(match mark {
+        "sudo-open" => ADMIN_SECTION,
+        "file-key" | "tpm-signing" => SIGNING_SECTION,
+        _ => "firewall",
     })
 }
 
@@ -273,6 +269,10 @@ pub fn section_of_mark(module: &str, segment: &str) -> Option<&'static str> {
 /// `security-open` takes it — the section the mark opens, and the centre's
 /// own word for it (`security::Section::word`).
 pub const ADMIN_SECTION: &str = "admin";
+
+/// The word of the security centre's signing section — who signs the
+/// person's commits — as `security-open` takes it.
+pub const SIGNING_SECTION: &str = "signing";
 
 /// How far off an end may be and still be said by its clock alone: past
 /// it (a window of a day or two) the hour names no single day.
@@ -291,58 +291,6 @@ pub fn end_text(
         crate::chrome::when_text(until, zone, false, texts)
     } else {
         crate::chrome::clock_text(until, zone, crate::when::prefs::current().clock, texts)
-    }
-}
-
-/// When the passwordless window ends, read now: its clock, or its date and
-/// clock when it is more than half a day away ([`END_BY_CLOCK_S`]).
-#[must_use]
-pub fn end_here(
-    until: i64,
-    zone: &ronoctua_files::when::Zone,
-    texts: &ronoctua_i18n::Texts,
-) -> String {
-    end_text(until, crate::when::now_s(), zone, texts)
-}
-
-/// The modeline's mark while the passwordless window is open: the unlocked
-/// glyph and the END (its hour, its date past half a day, or "no limit") —
-/// never a countdown (a clock that ticks is a clock on the chrome). `None`
-/// at rest, which is nothing drawn.
-///
-/// Read from the helper's state every time the modeline is laid out: a tiny
-/// read in `/var/lib/ronoctua-security` (or in the camera's `room`), and what
-/// moves it is the brain's watch of that folder (its shield comes and goes
-/// with the window), never a timer here.
-#[must_use]
-pub fn modeline_until(
-    room: Option<&std::path::Path>,
-    zone: &ronoctua_files::when::Zone,
-    texts: &ronoctua_i18n::Texts,
-) -> Option<String> {
-    let window = window_now(room).filter(|w| w.is_open(crate::when::now_s()))?;
-    Some(format!(
-        "{} {}",
-        tokens::icon::SECURITY_SUDO_OPEN,
-        window.until_unix_s.map_or_else(
-            || texts.t(key::SECURITY_SUDO_NO_LIMIT),
-            |until| end_here(until, zone, texts)
-        )
-    ))
-}
-
-/// The passwordless window as the modeline reads it: the machine's — or,
-/// in the footer camera's room (`room`, the door's `photo::room`), the one
-/// planted there (`<room>/var/lib/ronoctua-security/sudo-window`), never
-/// this machine's.
-#[must_use]
-pub fn window_now(room: Option<&std::path::Path>) -> Option<Opened> {
-    match room {
-        Some(room) => Opened::of_bytes(
-            &std::fs::read(room.join(ronoctua_security::relax::STATE.trim_start_matches('/')))
-                .ok()?,
-        ),
-        None => ronoctua_security::relax::opened(),
     }
 }
 
