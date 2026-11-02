@@ -174,7 +174,7 @@ pub struct State {
     /// Which build is running.
     pub build: Build,
     /// The running build's hostname, from `/run/current-system`'s target —
-    /// `noctua-z16` on the machine's own, `noctua-reference` on the reference.
+    /// `noctua-<name>` on a machine's own, `noctua-reference` on the reference.
     pub hostname: Option<String>,
     /// The distro checkout `/etc/nixos` builds from, when it names a local one.
     /// `None` leaves the glyph away: an installed machine has nothing to switch
@@ -484,8 +484,8 @@ mod tests {
     #[test]
     fn the_hostname_stands_before_the_version() {
         assert_eq!(
-            hostname_of("/nix/store/xxxx-nixos-system-noctua-z16-26.05.20260731.5b4f72e"),
-            Some("noctua-z16".to_owned())
+            hostname_of("/nix/store/xxxx-nixos-system-noctua-desk2-26.05.20260731.5b4f72e"),
+            Some("noctua-desk2".to_owned())
         );
         assert_eq!(
             hostname_of("/nix/store/xxxx-nixos-system-noctua-reference-26.05.1"),

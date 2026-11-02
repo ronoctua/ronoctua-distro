@@ -435,7 +435,7 @@ mod tests {
     fn state(build: Build, checkout: Option<&str>) -> State {
         State {
             build,
-            hostname: Some("noctua-z16".to_owned()),
+            hostname: Some("noctua-desk2".to_owned()),
             checkout: checkout.map(PathBuf::from),
             waiting: None,
         }

@@ -3,7 +3,7 @@
 # AMD of one probe, the laptop of another. `iso-builds-only-glue` installs
 # it, and `machine-unseen-bios`, against what the ISO carries: the ISO holds
 # what a machine unlike every probe builds, and not only what the probes do
-# (2026-10-25: a ThinkPad Z16 asked the network for its microcode). Its
+# (2026-10-25: a real laptop asked the network for its microcode). Its
 # hardware report is written by hand, with only the fields the facter
 # modules read.
 { ... }:

@@ -9494,7 +9494,7 @@ resposta: a senha do Wi-Fi, a do usuário e a frase-secreta do disco eram digita
 `host.nix` escrevia `layout`, `variant` e `compose`, mas não `ronoctua.keyboard.console`: o console da
 máquina instalada, e o prompt do LUKS no initrd, ficavam no mapa padrão em toda máquina, enquanto a
 sessão usava o layout escolhido. Uma senha com `@ # " \ | ~` digitada num teclado US era gravada com
-outros caracteres do que a sessão digita (visto num Z16: `|` saía `~` até um `loadkeys us`).
+outros caracteres do que a sessão digita (visto numa máquina real: `|` saía `~` até um `loadkeys us`).
 
 **O mapa do console é compilado da mesma resposta xkb, e não é um segundo nome.** O `kbd` é outro
 banco, com outros nomes (`uk` onde o xkb diz `gb`), e a maioria das respostas xkb nem tem mapa `kbd`
@@ -12524,7 +12524,7 @@ sessão), e o Chromium recusa rodar como root sem `--no-sandbox` e procura um X 
 ### Partes: o que chega depois da instalação
 
 **O sistema é uma derivação só, e por isso não pode carregar um download.** Em 2026-10-23 a instalação
-no Z16 parou porque um download falhou: o cache npm do gerador de PO token. O `nixos-install` é
+numa máquina real parou porque um download falhou: o cache npm do gerador de PO token. O `nixos-install` é
 tudo ou nada, a instalação caiu inteira, e cada atualização depois dela cairia do mesmo jeito. Medido
 no sistema completo: 42 downloads direto da origem (npm, GitHub, rust-lang, Google, Microsoft…) e uns
 600 builds na própria máquina. Então o que precisa de um download que nenhum cache público tem, o que
@@ -12865,7 +12865,7 @@ A leva de 2026-10-12 partiu o shell e o brain (o porquê de cada corte está na 
 
 ### Desempenho medido
 
-Medido em ThinkPad Z16 Gen 2, Radeon 760M (RDNA3, RADV), 1920x1200@60 Hz — um frame são 16,7 ms.
+Medido num notebook com GPU integrada AMD (RADV), 1920x1200@60 Hz — um frame são 16,7 ms.
 `nix run .#bench` remede tudo isto e **falha se algum alvo estourar**; se estes números divergirem
 do comando, o comando está certo e a tabela está velha.
 
@@ -20256,7 +20256,7 @@ microcode é colado na frente do initrd, e o initrd é construído no alvo; o `a
 `linux-firmware` bruto, que só o constrói; os firmwares brutos só existem para virar a versão
 comprimida. Nenhum deles fica no fecho, e toda máquina com uma CPU parou no `build-first` pedindo à
 rede o fonte do `linux-firmware`. Só o convidado instalava, e o `installer-offline-vm` é um convidado
-(2026-10-25, num ThinkPad Z16).
+(2026-10-25, numa máquina real).
 
 **Duas máquinas que nenhuma sonda é provam o ISO** (`iso-builds-only-glue`): um notebook AMD com UEFI
 (`tests/fixtures/machine-unseen`) e um desktop Intel com BIOS (`machine-unseen-bios`), cada uma o

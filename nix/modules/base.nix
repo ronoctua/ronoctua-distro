@@ -38,7 +38,7 @@ in
       type = lib.types.str;
       default = "noctua-";
       readOnly = true;
-      description = "Hostname pattern (section 2). E.g. noctua-z16.";
+      description = "Hostname pattern (section 2). E.g. noctua-laptop.";
     };
 
     # WHERE THIS MACHINE'S OWN COPY OF THE REPOSITORY IS, when it has one.

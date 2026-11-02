@@ -101,7 +101,7 @@ primeiro boot.
 | tecla de acentos | qual tecla compõe acentos. O padrão é o `Caps Lock` — e os dois Shifts juntos passam a ser o Caps Lock |
 | locale do sistema | data, número, papel e unidades. O padrão é `en_GB.UTF-8`, que é métrico |
 | fuso horário | o padrão é `Europe/London` |
-| nome da máquina | começa com `noctua-`. Ex.: `noctua-thinkpad` |
+| nome da máquina | começa com `noctua-`. Ex.: `noctua-laptop` |
 | sua senha | do usuário `noctua` |
 | frase-secreta do disco | criptografa o disco. **Guarde**, veja abaixo |
 | rede sem fio | escolha uma, ou "sem Wi-Fi" para um cabo ou nenhuma rede. A instalação não usa rede; com ela, as perguntas do repositório são conferidas na hora |

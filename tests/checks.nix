@@ -28623,7 +28623,7 @@ let
   # that kept only what the systems REFERENCE left out what their builds
   # only read — the microcode an initrd is prepended with, the linux-firmware
   # the AMD one is cut from — and every machine with a CPU stopped before
-  # its disk, with only the guest installed (2026-10-25, a ThinkPad Z16).
+  # its disk, with only the guest installed (2026-10-25, on a real laptop).
   iso-builds-only-glue =
     let
       carried = pkgs.closureInfo {

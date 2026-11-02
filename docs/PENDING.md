@@ -86,7 +86,7 @@ resto. Faltam fotos, com asserção, de:
   dentro de um web app; a ativação do nix-flatpak (o tema escuro, o override dos `QT_*`); um Flatpak
   Electron na sessão.
 - **Tamanho do texto**: GTK, Qt, Chromium e Electron seguem a mudança ao vivo?
-- **O boot do ISO pisca e reimprime o prompt** num Z16 (amdgpu): falta o log
+- **O boot do ISO pisca e reimprime o prompt** num notebook AMD (amdgpu): falta o log
   (`journalctl -b -o short-monotonic -u systemd-vconsole-setup`, e as linhas do `fbcon`/`amdgpu`).
 - **A barra do sudo com um sudo de verdade** (senha, chave, dedo, rodapé morto) e o cadastro de uma
   chave de verdade.
