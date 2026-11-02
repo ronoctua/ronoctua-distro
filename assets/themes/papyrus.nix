@@ -85,6 +85,17 @@
       chroma = 0.64;
       shift = 11;
     };
+    # THE WARNING A MARK GIVES (`state.caution`, owner 2026-11-02): an
+    # ORANGE — the security centre's shield and rows for a choice the person
+    # made (the sudo window, the TPM signing), and every brain mark's warning.
+    # Not the `warning` amber above, which the band and the alert bar wear and
+    # which read as gold beside the modeline's other marks; told from it and
+    # from the error's red by the hue gap (`CHROME_HUES`).
+    caution = {
+      hue = 38;
+      chroma = 0.85;
+      shift = 11;
+    };
     # 14 AND NOT 20: a warm theme walks its red toward orange, and at 20 this
     # one came within 0.234 of `#FF6000`, one of the four film colours no
     # chrome token may approach.

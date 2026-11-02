@@ -874,6 +874,7 @@ mod tests {
                 opens: None,
                 instance: 0,
                 label: None,
+                also: Vec::new(),
             })
             .collect();
         for columns in [20_u16, 40, 80, 200] {

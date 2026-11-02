@@ -16,16 +16,21 @@ privada guardada num arquivo comum no `~/.ssh` ou no GnuPG, o firewall está des
 senha (até uma hora, ou sem prazo), o TPM pode assinar os commits, os escudos estão erguidos, e
 conexões recusadas no último quarto de hora (o escudo conta quantas).
 
-A cor diz quanto (dono, 2026-11-02): os dois primeiros, que ninguém escolheu, saem na cor de perigo;
-os outros, escolhas feitas com a senha ou o firewall fazendo o trabalho dele, na cor de alerta. Todo
-perigo vem antes de todo alerta (`Off::loudness`). O glifo é o escudo sozinho, e quem diz o que está
-fora é a cor e a frase. A hora do fim da janela sem senha não fica mais na modeline: ela está na
-seção do administrador, que o clique no escudo abre.
+A cor diz quanto (dono, 2026-11-02). Os dois primeiros casos, que ninguém escolheu, saem na cor de
+perigo. Os outros, escolhas feitas com a senha ou o firewall fazendo o trabalho dele, saem em
+laranja: o `state.caution`, e não o âmbar do `state.warning`, que ao lado das outras marcas foi lido
+como dourado. Todo perigo vem antes de todo alerta (`rules::off_at` ordena pela `Off::loudness`), e o
+escudo tem a cor do primeiro caso: com um perigo, ele é do perigo, haja os alertas que houver. O
+glifo é o escudo sozinho, e quem diz o que está fora é a cor e a frase. A hora do fim da janela sem
+senha não fica na modeline: ela está na seção do administrador.
 
-O clique abre a central de segurança na seção de que o escudo fala: a janela sem senha no
-Administrador, a chave em arquivo e o TPM na Assinatura dos commits, todo o resto no Firewall. Quem decide é a central (`security::section_of_mark`), que
-o clique genérico das marcas do cérebro pergunta antes de abrir a página do módulo (`brain::click_of`);
-a página do módulo continua listando tudo o que está fora, no `LEADER b`.
+O escudo diz TODOS os casos (dono, 2026-11-02). O primeiro é a marca, e cada outro vai pendurado no id
+dela (`MarkId::besides`), na ordem: o ponteiro lê a frase de cada um, uma depois da outra. O clique
+abre a central na seção de que os casos falam — a janela sem senha no Administrador, a chave em
+arquivo e o TPM na Assinatura dos commits, todo o resto no Firewall — e, quando eles são de seções
+diferentes, no Agora, que lista todos. Quem decide é a central (`security::section_of_mark`), que o
+clique genérico das marcas do cérebro pergunta antes de abrir a página do módulo
+(`brain::click_of`); a página do módulo continua listando tudo o que está fora, no `LEADER b`.
 
 ## Relógio só enquanto é preciso
 

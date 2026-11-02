@@ -1,16 +1,16 @@
 # The security watch's own texts: its name and the line under it, the hint of
 # each of its marks, its notice, and its page.
 brain-task-security-watch = Vigiar a central de segurança
-brain-task-security-watch-does = Escuta o que a central de segurança guarda e não roda nada: as conexões que o firewall recusa, o que o sudo faz, se o firewall é o que você pediu e quem pode assinar seus commits. Enquanto algo está fora do esperado, um escudo fica na modeline — na cor de alerta para o que você escolheu, na cor de perigo para o que ninguém escolheu — e o ponteiro parado sobre ele diz o quê; em repouso não há nenhum. A página guarda as conexões recusadas há pouco e uma semana de sudo.
-security-watch-mark-firewall-failed = O firewall não é o que você pediu: a central de segurança diz por quê
+brain-task-security-watch-does = Escuta o que a central de segurança guarda e não roda nada: as conexões que o firewall recusa, o que o sudo faz, se o firewall é o que você pediu e quem pode assinar seus commits. Enquanto algo está fora do esperado, um escudo fica na modeline — laranja para o que você escolheu; na cor de perigo para o que ninguém escolheu, e essa vence sempre que houver um perigo. O ponteiro parado sobre ele diz tudo o que está fora, e o clique abre a central onde isso se resolve; em repouso não há nenhum. A página guarda as conexões recusadas há pouco e uma semana de sudo.
+security-watch-mark-firewall-failed = O firewall não é o que você pediu
 security-watch-mark-firewall-off = Seu firewall está desligado
-security-watch-mark-file-key = Uma chave privada está guardada num arquivo comum: quem a lê assina como você, sem toque
-security-watch-mark-tpm-signing = O TPM desta máquina pode assinar seus commits, sem tocar na sua chave de segurança
-security-watch-mark-sudo-open = O administrador não pede senha: um clique abre onde isso se encerra
+security-watch-mark-file-key = Há chave privada num arquivo comum
+security-watch-mark-tpm-signing = O TPM pode assinar seus commits, sem toque
+security-watch-mark-sudo-open = O administrador não pede senha
 security-watch-mark-shields = Toda conexão de entrada está sendo recusada
 security-watch-mark-refused = { $count ->
-    [one] Uma conexão de entrada foi recusada no último quarto de hora
-   *[other] { $count } conexões de entrada foram recusadas no último quarto de hora
+    [one] Uma conexão de entrada recusada há pouco
+   *[other] { $count } conexões de entrada recusadas há pouco
   }
 security-watch-says-refused = { $count ->
     [one] Uma conexão recusada em { $iface }

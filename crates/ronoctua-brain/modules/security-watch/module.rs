@@ -333,17 +333,27 @@ impl Module for SecurityWatch {
                 screen: kept.generation,
                 ..Face::default()
             };
-            // ONE MARK, THE LOUDEST, and none at rest (invariant 14) — in
-            // the colour of how loud it is.
-            if let Some(first) = off.first() {
+            // ONE MARK, and none at rest (invariant 14): the loudest case's,
+            // in the colour of how loud it is — a danger first whenever one
+            // holds (`rules::off_at`), so the shield is never a warning's
+            // colour while a danger is off. EVERY OTHER CASE rides on it,
+            // loudest first (`MarkId::besides`): the pointer reads them all,
+            // and the click opens where they all are (owner, 2026-11-02).
+            let count_of = |o: Off| {
+                if o == Off::Refused {
+                    facts.recent_refused
+                } else {
+                    0
+                }
+            };
+            if let Some((first, rest)) = off.split_first() {
+                let id = rest.iter().fold(mark_of(*first), |id, o| {
+                    id.besides(&mark_of(*o), count_of(*o))
+                });
                 face.marks.push(Mark {
-                    id: mark_of(*first),
+                    id,
                     tone: tone_of(*first),
-                    count: if *first == Off::Refused {
-                        facts.recent_refused
-                    } else {
-                        0
-                    },
+                    count: count_of(*first),
                     act: None,
                 });
             }
@@ -735,8 +745,13 @@ mod tests {
             },
             &ctx,
         );
+        // AND THE REFUSAL STILL RECENT RIDES ON IT, with its count: the
+        // pointer reads both cases, not the loudest alone.
         let f = face(&m, 1001);
-        assert_eq!(f.marks[0].id, super::super::mark::SUDO_OPEN);
+        assert_eq!(
+            f.marks[0].id,
+            super::super::mark::SUDO_OPEN.besides(&super::super::mark::REFUSED, 1)
+        );
         assert_eq!(f.marks[0].tone, Tone::Warning, "the person chose it");
         assert_eq!(f.marks[0].count, 0);
         assert_eq!(m.next_wake(1001), Some(1000 + rules::RECENT_S));
@@ -787,7 +802,11 @@ mod tests {
             },
             &ctx,
         );
-        assert_eq!(face(&m, 1001).marks[0].id, super::super::mark::FIREWALL_OFF);
+        // THE SWITCH OFF IS THE MARK, and the refusal still recent rides on it.
+        assert_eq!(
+            face(&m, 1001).marks[0].id,
+            super::super::mark::FIREWALL_OFF.besides(&super::super::mark::REFUSED, 1)
+        );
         m.heard(
             Heard::Journal {
                 source: FIREWALL_UNITS,
@@ -795,11 +814,16 @@ mod tests {
             },
             &ctx,
         );
+        // THE FAILURE IS THE MARK, in the danger's colour, and what is
+        // still off rides on it, loudest first: the pointer reads all three.
         assert_eq!(
             face(&m, 1002).marks[0].id,
             super::super::mark::FIREWALL_FAILED
+                .besides(&super::super::mark::FIREWALL_OFF, 0)
+                .besides(&super::super::mark::REFUSED, 1)
         );
         assert_eq!(face(&m, 1002).marks[0].tone, Tone::Danger);
+        assert_eq!(face(&m, 1002).marks.len(), 1, "one shield");
         // EVERY HINT IS ITS OWN, and the manifest's.
         for off in [
             Off::Failed,
@@ -856,8 +880,14 @@ mod tests {
         )
         .unwrap();
         heard(&ssh);
+        // ONE SHIELD, the danger's, in the danger's colour — and the TPM's
+        // warning on it, so the pointer reads both (owner, 2026-11-02).
         let f = face(&m, 1001);
-        assert_eq!(f.marks[0].id, super::super::mark::FILE_KEY);
+        assert_eq!(f.marks.len(), 1);
+        assert_eq!(
+            f.marks[0].id,
+            super::super::mark::FILE_KEY.besides(&super::super::mark::TPM_SIGNING, 0)
+        );
         assert_eq!(f.marks[0].tone, Tone::Danger);
         let s = screen(&m, 1001);
         assert_eq!(s.sections[0].rows[0].id, "off:file-key");

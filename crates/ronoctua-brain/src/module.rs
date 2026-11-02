@@ -321,6 +321,26 @@ impl Manifest {
         {
             return Some("the same mark twice");
         }
+        // THE OTHER CASES ARE THE MODULE'S OWN, as declared: another mark,
+        // by its declared hint, once — and on a mark that is one, since an
+        // instance is one thing of many and not a sum of cases.
+        if !id.also.is_empty() && id.instance != 0 {
+            return Some("other cases on one instance");
+        }
+        for (i, also) in id.also.iter().enumerate() {
+            let Some(other) = self.mark(&also.name) else {
+                return Some("another case its manifest does not declare");
+            };
+            if other.instances != 0 {
+                return Some("a mark with instances as another case");
+            }
+            if also.name == id.name || id.also[..i].iter().any(|a| a.name == also.name) {
+                return Some("one case twice");
+            }
+            if also.hint != other.hint {
+                return Some("another case with a hint its manifest does not declare");
+            }
+        }
         None
     }
 }
@@ -439,6 +459,31 @@ pub struct MarkId {
     /// none). Only an instance has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<Word>,
+    /// THE OTHER CASES THIS MARK STANDS FOR, besides its own ([`MarkId::besides`]).
+    ///
+    /// A module that is ONE thing on the modeline — the security centre's
+    /// shield — draws one mark, its loudest case, and names every other case
+    /// that holds at the same time here: the hint says each of them, and the
+    /// click opens where all of them are. Without this the pointer read one
+    /// case and the rest were silent (owner, 2026-11-02). Each is another
+    /// mark its manifest declares, never one with instances; empty for a mark
+    /// that is one case.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<Also>,
+}
+
+/// Another case a mark stands for ([`MarkId::also`]): a mark its module
+/// declares, by its name and its hint, and the `$count` that hint says.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Also {
+    /// The declared mark's name.
+    pub name: Word,
+    /// The key of its hint, as declared.
+    pub hint: Word,
+    /// The `$count` its hint says; `0` for one that counts nothing.
+    #[serde(default)]
+    pub count: u32,
 }
 
 /// `skip_serializing_if` for the counts a mark leaves at zero: a mind written
@@ -479,7 +524,22 @@ impl MarkId {
             resting,
             instance: 0,
             label: None,
+            also: Vec::new(),
         }
+    }
+
+    /// The same mark, standing also for `other` — another mark its module
+    /// declares, with the `$count` its hint says ([`MarkId::also`]). The
+    /// order is the module's: the loudest first.
+    #[must_use]
+    pub fn besides(&self, other: &Self, count: u32) -> Self {
+        let mut me = self.clone();
+        me.also.push(Also {
+            name: other.name.clone(),
+            hint: other.hint.clone(),
+            count,
+        });
+        me
     }
 
     /// The same mark, clicked to the shell's command `command` — see
@@ -1024,26 +1084,59 @@ mod tests {
         let plain = FIXTURE.marks[0].clone();
         assert_eq!(plain.local(), "full");
         let old = serde_json::to_string(&plain).unwrap();
-        for absent in ["instance", "label", "resting"] {
+        for absent in ["instance", "label", "resting", "also"] {
             assert!(!old.contains(absent), "{absent} in {old}");
         }
-        // AN OLD LINE, with none of the four: the mark that is one.
+        // AN OLD LINE, with none of the five: the mark that is one case.
         let back: MarkId =
             serde_json::from_str(r#"{"name":"full","glyph":"g","hint":"h"}"#).unwrap();
         assert_eq!((back.instances, back.resting, back.instance), (0, false, 0));
         assert_eq!(back.label, None);
+        assert!(back.also.is_empty());
+    }
+
+    /// FAILS IF: the other cases a mark stands for are lost on the socket,
+    /// come back in another order, lose the count their hint says, or are
+    /// taken from anything but the declared mark.
+    #[test]
+    fn the_other_cases_cross_in_order_with_their_counts() {
+        let first = MarkId::of("first", "fixture-shield", "fixture-mark-first");
+        let second = MarkId::of("second", "fixture-shield", "fixture-mark-second");
+        let third = MarkId::of("third", "fixture-shield", "fixture-mark-third");
+        let all = first.besides(&second, 0).besides(&third, 7);
+        assert_eq!(
+            all.also,
+            vec![
+                Also {
+                    name: "second".into(),
+                    hint: "fixture-mark-second".into(),
+                    count: 0
+                },
+                Also {
+                    name: "third".into(),
+                    hint: "fixture-mark-third".into(),
+                    count: 7
+                },
+            ]
+        );
+        // The mark itself is still the first case's.
+        assert_eq!((&all.name, &all.hint), (&first.name, &first.hint));
+        let wire = serde_json::to_string(&all).unwrap();
+        assert_eq!(serde_json::from_str::<MarkId>(&wire).unwrap(), all);
     }
 
     /// FAILS IF: the core would show a mark its manifest does not let it —
     /// an undeclared name, an instance past the declared number or on a mark
     /// that is one, a label with no instance, an action or a count on one
-    /// instance, a quiet mark that was not declared to rest, or one mark
-    /// twice — or if it refuses one the manifest does let it show.
+    /// instance, a quiet mark that was not declared to rest, one mark twice,
+    /// or another case that is not one of the module's own declared marks,
+    /// once — or if it refuses one the manifest does let it show.
     #[test]
     fn a_mark_is_shown_only_as_its_manifest_declares_it() {
-        static MARKS: [MarkId; 2] = [
+        static MARKS: [MarkId; 3] = [
             MarkId::of("full", "fixture-full", "fixture-mark-full"),
             MarkId::declared("seat", "fixture-seat", "fixture-mark-seat", 9, true),
+            MarkId::of("half", "fixture-full", "fixture-mark-half"),
         ];
         let manifest = Manifest {
             marks: &MARKS,
@@ -1057,10 +1150,16 @@ mod tests {
         };
         let full = MARKS[0].clone();
         let seat = MARKS[1].clone();
-        // SHOWN: a warning on the mark that is one, and each instance from
-        // the first to the ninth — quiet ones included, since `seat` rests.
+        let half = MARKS[2].clone();
+        // SHOWN: a warning on the mark that is one, the same mark standing
+        // also for another the manifest declares, and each instance from the
+        // first to the ninth — quiet ones included, since `seat` rests.
         assert_eq!(
             manifest.refusal_of(&mark(full.clone(), Tone::Warning), &[]),
+            None
+        );
+        assert_eq!(
+            manifest.refusal_of(&mark(full.besides(&half, 2), Tone::Danger), &[]),
             None
         );
         for n in 1..=9 {
@@ -1087,7 +1186,20 @@ mod tests {
             count: 4,
             ..mark(seat.numbered(2, None), Tone::Warning)
         };
-        let resting = mark(full, Tone::Quiet);
+        let resting = mark(full.clone(), Tone::Quiet);
+        // THE OTHER CASES, each refused for its own reason.
+        let besides_undeclared = mark(
+            full.besides(&MarkId::of("gone", "fixture-gone", "h"), 0),
+            Tone::Danger,
+        );
+        let besides_instances = mark(full.besides(&seat, 0), Tone::Danger);
+        let besides_itself = mark(full.besides(&full, 0), Tone::Danger);
+        let besides_twice = mark(full.besides(&half, 0).besides(&half, 1), Tone::Danger);
+        let besides_forged_hint = mark(
+            full.besides(&MarkId::of("half", "fixture-full", "another-hint"), 0),
+            Tone::Danger,
+        );
+        let besides_on_an_instance = mark(seat.numbered(2, None).besides(&half, 0), Tone::Danger);
         // A MODULE THAT DECLARED ITS OWN BOUNDS on the id it published is
         // read against its manifest all the same.
         let forged = mark(
@@ -1104,6 +1216,15 @@ mod tests {
             ("a count on one instance", counted),
             ("a quiet mark that does not rest", resting),
             ("a rest the id gave itself", forged),
+            (
+                "another case the manifest does not declare",
+                besides_undeclared,
+            ),
+            ("a mark with instances as another case", besides_instances),
+            ("the mark as another case of itself", besides_itself),
+            ("one case twice", besides_twice),
+            ("another case with a hint of its own", besides_forged_hint),
+            ("other cases on one instance", besides_on_an_instance),
         ] {
             assert!(
                 manifest.refusal_of(&refused, &[]).is_some(),

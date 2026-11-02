@@ -138,8 +138,10 @@ pub const RELAX_DEFAULT: RelaxSpan = RelaxSpan::Fifteen;
 const DANGER: tokens::Color = tokens::color::STATE_ERROR;
 
 /// What the person chose with the password — the window, the TPM's key, the
-/// firewall off, the shields — and the firewall doing its job.
-const WARNING: tokens::Color = tokens::color::STATE_WARNING;
+/// firewall off, the shields — and the firewall doing its job: the orange the
+/// watch's shield wears for it (`state.caution`, owner 2026-11-02), never the
+/// band's amber, which read as gold beside the modeline's other marks.
+const WARNING: tokens::Color = tokens::color::STATE_CAUTION;
 
 /// Every command this view's keys, rows and questions reach — for
 /// `bindings::reachable`.
@@ -386,8 +388,8 @@ impl Section {
     #[must_use]
     pub const fn word(self) -> &'static str {
         match self {
-            Self::Now => "now",
-            Self::Firewall => "firewall",
+            Self::Now => crate::security_words::NOW_SECTION,
+            Self::Firewall => crate::security_words::FIREWALL_SECTION,
             Self::Admin => crate::security_words::ADMIN_SECTION,
             Self::Finger => "finger",
             Self::Device => "device",
@@ -5825,31 +5827,42 @@ mod tests {
         );
     }
 
-    /// FAILS IF: the watch's shield stops opening the section it is about, or
-    /// another module's mark is taken for it.
+    /// FAILS IF: the watch's shield stops opening the section it is about —
+    /// the one section every case it stands for is in, or `Now` when they
+    /// are in two (owner, 2026-11-02) — or another module's mark is taken for
+    /// it.
     #[test]
     fn the_watchs_shield_opens_its_section() {
         let segment = |mark: &str| format!("brain:{WATCH}/{mark}");
-        assert_eq!(
-            crate::security_words::section_of_mark(WATCH, &segment("sudo-open")),
-            Some(Section::Admin.word())
-        );
+        let opens = |mark: &str, others: &[&str]| {
+            crate::security_words::section_of_mark(WATCH, &segment(mark), others.iter().copied())
+        };
+        assert_eq!(opens("sudo-open", &[]), Some(Section::Admin.word()));
         for mark in ["firewall-failed", "firewall-off", "shields", "refused"] {
-            assert_eq!(
-                crate::security_words::section_of_mark(WATCH, &segment(mark)),
-                Some(Section::Firewall.word()),
-                "{mark}"
-            );
+            assert_eq!(opens(mark, &[]), Some(Section::Firewall.word()), "{mark}");
         }
         for mark in ["file-key", "tpm-signing"] {
-            assert_eq!(
-                crate::security_words::section_of_mark(WATCH, &segment(mark)),
-                Some(Section::Signing.word()),
-                "{mark}"
-            );
+            assert_eq!(opens(mark, &[]), Some(Section::Signing.word()), "{mark}");
         }
+        // SEVERAL CASES: the section they share, or `Now`.
         assert_eq!(
-            crate::security_words::section_of_mark("fixture", "brain:fixture/full"),
+            opens("firewall-off", &["shields", "refused"]),
+            Some(Section::Firewall.word())
+        );
+        assert_eq!(
+            opens("file-key", &["tpm-signing"]),
+            Some(Section::Signing.word())
+        );
+        assert_eq!(
+            opens("sudo-open", &["tpm-signing"]),
+            Some(Section::Now.word())
+        );
+        assert_eq!(
+            opens("file-key", &["sudo-open", "refused"]),
+            Some(Section::Now.word())
+        );
+        assert_eq!(
+            crate::security_words::section_of_mark("fixture", "brain:fixture/full", []),
             None
         );
     }

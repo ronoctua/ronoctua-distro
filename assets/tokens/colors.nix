@@ -1006,6 +1006,16 @@
     accent = "accent.solid";
     success = "success.solid";
     warning = "warning.solid";
+    # THE WARNING A MARK GIVES (owner, 2026-11-02): an ORANGE, in a family of
+    # its own (`caution`, in every seed). Every brain mark toned `warning` wears
+    # it — the security centre's shield for a choice the person made, the sudo
+    # window or the TPM signing — and so do the centre's rows that say the
+    # same thing. Not `warning`'s amber, which the band and the alert bar keep:
+    # beside the modeline's other marks (the dev build's amber, the answer's
+    # gold) the owner read that amber as gold, and a warning has to be seen
+    # apart from them. Told from the amber, the build, the gold, the danger
+    # red and the camera's pink by the gates (`gen-theme.py`).
+    caution = "caution.solid";
     error = "error.solid";
     # A notification's critical urgency (4.2): it does not disappear on its
     # own, and the colour has to say so before the text is read. The error's

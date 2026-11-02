@@ -1,16 +1,16 @@
 # The security watch's own texts: its name and the line under it, the hint of
 # each of its marks, its notice, and its page.
 brain-task-security-watch = Watch the security centre
-brain-task-security-watch-does = Listens to what the security centre guards and runs nothing: the connections the firewall refuses, what sudo does, whether the firewall is the one you asked for and who may sign your commits. While something is off, one shield stays on the modeline — in the warning colour for what you chose, in the danger colour for what nobody did — and resting the pointer on it says what; at rest there is none. Its page keeps the connections refused lately and a week of sudo.
-security-watch-mark-firewall-failed = The firewall is not the one you asked for: the security centre says why
+brain-task-security-watch-does = Listens to what the security centre guards and runs nothing: the connections the firewall refuses, what sudo does, whether the firewall is the one you asked for and who may sign your commits. While something is off, one shield stays on the modeline — orange for what you chose; in the danger colour for what nobody did, which wins whenever a danger holds. Resting the pointer on it says everything that is off, and a click opens the centre where it is put back; at rest there is none. Its page keeps the connections refused lately and a week of sudo.
+security-watch-mark-firewall-failed = The firewall is not the one you asked for
 security-watch-mark-firewall-off = Your firewall is switched off
-security-watch-mark-file-key = A private key is kept in a plain file: whoever reads it signs as you, with no touch
-security-watch-mark-tpm-signing = This machine's TPM may sign your commits, with no touch of your security key
-security-watch-mark-sudo-open = The administrator asks for no password: a click opens where it ends
+security-watch-mark-file-key = A private key is kept in a plain file
+security-watch-mark-tpm-signing = The TPM may sign your commits, with no touch
+security-watch-mark-sudo-open = The administrator asks for no password
 security-watch-mark-shields = Every incoming connection is being refused
 security-watch-mark-refused = { $count ->
-    [one] One incoming connection was refused in the last quarter hour
-   *[other] { $count } incoming connections were refused in the last quarter hour
+    [one] One incoming connection refused lately
+   *[other] { $count } incoming connections refused lately
   }
 security-watch-says-refused = { $count ->
     [one] One connection refused on { $iface }

@@ -243,27 +243,53 @@ pub const VT_KEY: &str = "security-vt-key";
 pub const WATCH: &str = "security-watch";
 
 /// The section of the security centre (as `security-open` takes it) a mark
-/// of the watch opens on: its segment id is `brain:<module>/<mark>`; the
-/// passwordless window's mark is about the administrator, a key kept in a
-/// file and the TPM's switch about who signs, every other one about the
-/// firewall. `None` for any other module's mark, which opens its own page.
-/// Pure.
+/// of the watch opens on. Its segment id is `brain:<module>/<mark>`, and
+/// `others` are the other cases the same shield stands for
+/// (`MarkId::also`). Each case belongs to a section — the passwordless
+/// window to the administrator, a key kept in a file and the TPM's switch to
+/// who signs, every other one to the firewall — and the click opens the
+/// section ALL of them are in, or `Now`, which lists them all, when they are
+/// in two or more (owner, 2026-11-02: the shield read one case and opened
+/// its section while another held). `None` for any other module's mark,
+/// which opens its own page. Pure.
 ///
-/// The footer's brain line asks it to open the centre where the thing that
-/// is off can be put back; the centre's own test ties the two words to its
-/// sections (`the_watchs_shield_opens_its_section`).
+/// The footer's brain line asks it to open the centre where what is off can
+/// be put back; the centre's own test ties the words to its sections
+/// (`the_watchs_shield_opens_its_section`).
 #[must_use]
-pub fn section_of_mark(module: &str, segment: &str) -> Option<&'static str> {
+pub fn section_of_mark<'a>(
+    module: &str,
+    segment: &str,
+    others: impl IntoIterator<Item = &'a str>,
+) -> Option<&'static str> {
     if module != WATCH {
         return None;
     }
-    let mark = segment.rsplit_once('/').map(|(_, m)| m)?;
-    Some(match mark {
-        "sudo-open" => ADMIN_SECTION,
-        "file-key" | "tpm-signing" => SIGNING_SECTION,
-        _ => "firewall",
+    let first = section_of_case(segment.rsplit_once('/').map(|(_, m)| m)?);
+    Some(if others.into_iter().all(|o| section_of_case(o) == first) {
+        first
+    } else {
+        NOW_SECTION
     })
 }
+
+/// The section one case of the watch is about.
+fn section_of_case(mark: &str) -> &'static str {
+    match mark {
+        "sudo-open" => ADMIN_SECTION,
+        "file-key" | "tpm-signing" => SIGNING_SECTION,
+        _ => FIREWALL_SECTION,
+    }
+}
+
+/// The word of the security centre's first section, which lists everything
+/// that is off — where the shield opens when it stands for cases of two
+/// sections — as `security-open` takes it.
+pub const NOW_SECTION: &str = "now";
+
+/// The word of the security centre's firewall section, as `security-open`
+/// takes it.
+pub const FIREWALL_SECTION: &str = "firewall";
 
 /// The word of the security centre's administrator section, as
 /// `security-open` takes it — the section the mark opens, and the centre's

@@ -20475,10 +20475,19 @@ parte pública do `openssh-key-v1`, que nunca é cifrada.
 
 **O escudo da modeline é um escudo só (`md-shield`), e a cor diz quanto.** O que a pessoa escolheu
 com a senha (a janela, o TPM, o firewall desligado, os escudos) e o firewall recusando conexões saem
-na cor de alerta (`state.warning`). O que ninguém escolheu (o firewall que falhou, uma chave em
-arquivo) sai na de perigo (`state.error`, um vermelho puxado para o rosa em todo tema). Todo perigo
-vem antes de todo alerta (`rules::Off::loudness`), e o "Agora" da central pinta cada linha na mesma
-cor.
+em laranja (`state.caution`, a família `caution` de cada semente). O que ninguém escolheu (o
+firewall que falhou, uma chave em arquivo) sai na cor de perigo (`state.error`, um vermelho puxado
+para o rosa em todo tema). O `state.warning` não serve para isso: o âmbar dele, ao lado do âmbar do
+build e do dourado das respostas, foi lido como mais uma marca dourada (dono). O laranja vivo não
+cabe, porque fica a menos de 0,25 do `#FF6000` que as fotos procuram (o portão do filme), e por isso
+ele é um laranja-salmão. O `CHROME_HUES` e as distâncias do `gen-theme.py` o separam do âmbar e do
+vermelho. Toda marca de alerta do cérebro veste esse laranja (`brainlink::tone_colour`).
+
+**Um escudo diz todas as situações.** Todo perigo vem antes de todo alerta (`rules::off_at` ordena
+pela `Off::loudness`), e o escudo tem a cor do primeiro. As outras situações vão penduradas no
+`MarkId` dele (`MarkId::also`, validadas pelo núcleo contra o manifesto): o ponteiro lê todas, e o
+clique abre a seção em que todas estão, ou o "Agora", que lista todas (`section_of_mark`). O
+"Agora" da central pinta cada linha na cor da situação dela.
 
 ### A barra do sudo e as telas (2026-10-11)
 

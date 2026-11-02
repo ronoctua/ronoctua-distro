@@ -964,6 +964,8 @@ cmd-brain-snooze = Put it off
 brain-band-dismiss = put away
 brain-band-snooze = { $minutes } min
 brain-band-more = +{ $count }
+# Two cases one mark stands for, read one after the other under the pointer.
+brain-mark-also = { $first } · { $then }
 hint-brain-more = every notice, on the brain's page
 echo-brain-no-notice = The brain has nothing to say right now
 cmd-leader-set-default = The keys as they are, each opening its app in the footer

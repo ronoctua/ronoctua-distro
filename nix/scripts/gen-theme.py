@@ -330,8 +330,9 @@ SUBTITLE_MEASURE_L = 0.85
 #: The outline, `subtitle.edge`: black. A rim that reads on a white sky and
 #: melts into a night.
 SUBTITLE_EDGE_L = 0.0
-#: The five whose hues have to stay apart on the footer.
-CHROME_HUES = ("accent", "success", "warning", "error", "group")
+#: The six whose hues have to stay apart on the footer: `caution`, a mark's
+#: orange warning, apart from the amber `warning` and the `error` red above all.
+CHROME_HUES = ("accent", "success", "warning", "error", "group", "caution")
 #: The four solids the colour-vision report compares.
 STATE_SOLIDS = ("accent", "success", "warning", "error")
 
@@ -1409,6 +1410,10 @@ CONTRAST_GATES = (
     # the levels of its notices on the brain's page — the page, the cursor's
     # band and the pointer's. `text.secondary`, the quiet one, already is.
     ("state.warning", ("modeline.background", "surface.buffer", "surface.selection", "surface.hover"), 45, 50),
+    # A MARK'S WARNING, the orange that took the amber's place on the marks
+    # (owner, 2026-11-02): on the same grounds, at the same rung — and on the
+    # security centre's window, whose rows say what its shield says.
+    ("state.caution", ("modeline.background", "surface.chrome", "surface.buffer", "surface.selection", "surface.hover"), 45, 50),
     ("state.error", ("modeline.background", "surface.buffer", "surface.selection"), 45, 50),
     ("state.accent", ("modeline.background",), 45, 50),
     # AND THE SELECTION'S, at the same rung.
@@ -1705,6 +1710,17 @@ DISTANCE_GATES = (
     ("modeline.drawer", "modeline.device", 0.06, 0.08),
     ("modeline.drawer", "modeline.watching", 0.06, 0.08),
     ("modeline.drawer", "modeline.selection", 0.04, 0.05),
+    # A MARK'S ORANGE WARNING (owner, 2026-11-02), beside everything warm on
+    # the modeline: the band's amber it used to be, the dev build's amber and
+    # the answer's gold the owner could not tell it from, the danger red a
+    # mark of the same module wears instead, the camera's pink, and the marks'
+    # own quiet tone.
+    ("state.caution", "state.warning", 0.06, 0.08),
+    ("state.caution", "modeline.build", 0.06, 0.08),
+    ("state.caution", "text.answer", 0.06, 0.08),
+    ("state.caution", "state.error", 0.06, 0.08),
+    ("state.caution", "modeline.watching", 0.06, 0.08),
+    ("state.caution", "text.secondary", 0.04, 0.05),
     # A SELECTED OUTLINE beside the focused one: a window can be both.
     ("border.selected", "border.active", 0.05, 0.06),
     ("border.selected", "border.inactive", 0.05, 0.06),

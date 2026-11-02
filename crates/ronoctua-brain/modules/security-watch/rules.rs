@@ -166,8 +166,9 @@ pub enum Off {
     Refused,
 }
 
-/// How loud a thing that is off is, in the shield's colour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How loud a thing that is off is, in the shield's colour — in the order
+/// of how loud: a warning is less than a danger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Loudness {
     /// The person chose it, or the machine is doing its job: worth knowing
     /// (the warning's colour).
@@ -253,6 +254,11 @@ pub fn off_at(facts: &Facts, now: Moment) -> Vec<Off> {
     if facts.recent_refused > 0 {
         out.push(Off::Refused);
     }
+    // EVERY DANGER BEFORE EVERY WARNING, whatever order the cases were
+    // written in above (owner, 2026-11-02): the shield is drawn in its first
+    // case's colour, so a danger is never drawn as a warning because a warning
+    // holds beside it. Stable, so each loudness keeps the order above.
+    out.sort_by_key(|o| std::cmp::Reverse(o.loudness()));
     out
 }
 
@@ -398,6 +404,39 @@ mod tests {
             ..Facts::default()
         };
         assert_eq!(off_at(&ended, 100), []);
+    }
+
+    /// FAILS IF: in ANY mix of cases — not only all of them at once — a
+    /// warning comes before a danger, so the shield would be drawn in the
+    /// warning's colour while a danger holds (owner, 2026-11-02); or a case
+    /// that holds is missing.
+    #[test]
+    fn a_danger_is_first_in_every_mix_of_cases() {
+        for bits in 0_u8..128 {
+            let on = |n: u8| bits & (1 << n) != 0;
+            let facts = Facts {
+                failed: on(0),
+                file_keys: u32::from(on(1)),
+                off: on(2),
+                sudo_no_limit: on(3),
+                sudo_until: None,
+                tpm_signing: on(4),
+                shields: on(5),
+                recent_refused: u32::from(on(6)),
+            };
+            let off = off_at(&facts, 100);
+            assert_eq!(off.len(), bits.count_ones() as usize, "{facts:?}");
+            let loudness: Vec<Loudness> = off.iter().map(|o| o.loudness()).collect();
+            let mut sorted = loudness.clone();
+            sorted.sort_by_key(|l| std::cmp::Reverse(*l));
+            assert_eq!(loudness, sorted, "{facts:?}");
+            let any_danger = facts.failed || facts.file_keys > 0;
+            assert_eq!(
+                loudness.first() == Some(&Loudness::Danger),
+                any_danger,
+                "{facts:?}"
+            );
+        }
         // ONE WITH NO LIMIT never ends by itself.
         let forever = Facts {
             sudo_no_limit: true,

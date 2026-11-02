@@ -676,6 +676,10 @@ pub struct Drawn {
     /// The instance's name as the person gave it — data, drawn as it is in
     /// the hint (`$label`, the instance's number when they gave none).
     pub label: Option<String>,
+    /// The other cases the mark stands for, besides its own, loudest first
+    /// (`MarkId::also`): the hint says each after the mark's own, and the
+    /// click opens where they all are.
+    pub also: Vec<ronoctua_brain::module::Also>,
 }
 
 /// The marks one mind publishes, in the order the modules published them.
@@ -724,6 +728,7 @@ fn drawn_of(posted: &Posted<Mark>) -> Option<Drawn> {
         opens: mark.id.opens.as_deref().and_then(interned),
         instance: mark.id.instance,
         label: mark.id.label.as_deref().map(ToOwned::to_owned),
+        also: mark.id.also.clone(),
     })
 }
 
@@ -756,7 +761,8 @@ pub fn colour_of(id: &str) -> tokens::Color {
 
 /// What the minibuffer says while the pointer rests on a mark: the module's
 /// own hint, with the mark's count for a sentence that counts — and, for one
-/// of its instances, the instance's number and the person's name for it.
+/// of its instances, the instance's number and the person's name for it —
+/// then the hint of every other case the mark stands for, in its order.
 #[must_use]
 pub fn hint_of(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
     hint_in(&drawn_mark(id)?, texts)
@@ -767,7 +773,24 @@ pub fn hint_of(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
 pub fn hint_in(d: &Drawn, texts: &ronoctua_i18n::Texts) -> Option<String> {
     (!d.hint.is_empty()).then(|| {
         let number = d.instance.to_string();
-        texts.t_args(&d.hint, &hint_args(d, &number))
+        let own = texts.t_args(&d.hint, &hint_args(d, &number));
+        // EVERY OTHER CASE, after the mark's own (owner, 2026-11-02): the
+        // shield of two things that are off said one of them, and the other
+        // went unread. A case is never an instance (the core refuses one),
+        // so its `$count` is all its hint is made with.
+        d.also.iter().fold(own, |said, also| {
+            let then = texts.t_args(
+                &also.hint,
+                &[("count", ronoctua_i18n::Arg::Number(i64::from(also.count)))],
+            );
+            texts.t_args(
+                crate::key::BRAIN_MARK_ALSO,
+                &[
+                    ("first", ronoctua_i18n::Arg::Text(&said)),
+                    ("then", ronoctua_i18n::Arg::Text(&then)),
+                ],
+            )
+        })
     })
 }
 
@@ -804,9 +827,11 @@ pub fn hint_args<'a>(d: &'a Drawn, number: &'a str) -> [(&'static str, ronoctua_
 #[must_use]
 pub fn click_of(d: &Drawn) -> (&str, String) {
     // A MODULE WITH A CENTRE OF ITS OWN: the security centre's watch opens
-    // the centre on the section its mark is about, which is where the thing
-    // that is off can be put back (`security_words::section_of_mark`).
-    if let Some(section) = crate::security_words::section_of_mark(&d.module, d.id) {
+    // the centre on the section its mark is about — the one every case it
+    // stands for is in, or the one that lists them all — which is where what
+    // is off can be put back (`security_words::section_of_mark`).
+    let others = d.also.iter().map(|a| a.name.as_ref());
+    if let Some(section) = crate::security_words::section_of_mark(&d.module, d.id, others) {
         return ("security-open", section.to_owned());
     }
     // AN APP OF THE SHELL, when the module's mark opens one: the command the
@@ -1530,6 +1555,88 @@ mod tests {
         // AND AT REST, NOTHING — the modeline says nothing it does not mean.
         assert!(marks(Some(&Mind::default())).is_empty());
         assert!(marks(None).is_empty());
+    }
+
+    /// FAILS IF: a mark that stands for several cases says only its own
+    /// under the pointer — the shield of an open window and the TPM read the
+    /// window alone (owner, 2026-11-02) — or loses a case's count; or the
+    /// watch's shield of cases in two sections of the centre opens one of
+    /// them, rather than the section that lists them all.
+    #[test]
+    fn a_mark_of_several_cases_says_every_one_and_opens_where_they_all_are() {
+        use ronoctua_i18n::Arg;
+        let posted = |module: &str, id: MarkId| Posted {
+            module: module.to_owned(),
+            what: Mark {
+                id,
+                tone: Tone::Danger,
+                count: 0,
+                act: None,
+            },
+        };
+        // THE HINT: the mark's own, then each other case's with its count —
+        // a footer key that counts stands in for a module's.
+        let own = MarkId::of("first", "fixture-first", "fixture-mark-first");
+        let counting = MarkId::of("more", "fixture-more", crate::key::BRAIN_BAND_MORE);
+        let m = Mind {
+            marks: vec![posted("fixture", own.besides(&counting, 4))],
+            ..Mind::default()
+        };
+        let drawn = marks(Some(&m));
+        let texts = words();
+        let alone = Drawn {
+            also: Vec::new(),
+            ..drawn[0].clone()
+        };
+        let first = hint_in(&alone, &texts).unwrap();
+        let then = texts.t_args(crate::key::BRAIN_BAND_MORE, &[("count", Arg::Number(4))]);
+        assert!(then.contains('4'), "{then}");
+        assert_eq!(
+            hint_in(&drawn[0], &texts),
+            Some(texts.t_args(
+                crate::key::BRAIN_MARK_ALSO,
+                &[("first", Arg::Text(&first)), ("then", Arg::Text(&then))],
+            ))
+        );
+        assert_ne!(
+            hint_in(&drawn[0], &texts),
+            Some(first),
+            "the other case said"
+        );
+
+        // THE CLICK: the watch's shield opens the section every case is in,
+        // or the one that lists them all.
+        let watch = crate::security_words::WATCH;
+        let case = |name: &'static str| MarkId::of(name, "fixture-shield", "fixture-mark-case");
+        let opened = |id: MarkId| {
+            let drawn = marks(Some(&Mind {
+                marks: vec![posted(watch, id)],
+                ..Mind::default()
+            }));
+            let (command, argument) = click_of(&drawn[0]);
+            (command.to_owned(), argument)
+        };
+        assert_eq!(
+            opened(case("sudo-open")),
+            (
+                "security-open".to_owned(),
+                crate::security_words::ADMIN_SECTION.to_owned()
+            )
+        );
+        assert_eq!(
+            opened(case("sudo-open").besides(&case("tpm-signing"), 0)),
+            (
+                "security-open".to_owned(),
+                crate::security_words::NOW_SECTION.to_owned()
+            )
+        );
+        assert_eq!(
+            opened(case("file-key").besides(&case("tpm-signing"), 0)),
+            (
+                "security-open".to_owned(),
+                crate::security_words::SIGNING_SECTION.to_owned()
+            )
+        );
     }
 
     /// FAILS IF: a mark that OPENS an app of the shell is clicked to the
