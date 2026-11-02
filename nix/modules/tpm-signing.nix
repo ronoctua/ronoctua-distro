@@ -66,18 +66,21 @@ let
 
   # THE KEY, ONCE. Never over one that is there: a key may already be
   # registered where the person's commits are checked, and a new one would
-  # orphan it. The comment names the person and the machine, read at run
-  # time. stdin is `/dev/null`, so the passphrase `ssh-tpm-keygen` asks for
-  # twice reads empty both times: no PIN.
+  # orphan it. stdin is `/dev/null`, so the passphrase `ssh-tpm-keygen` asks
+  # for twice reads empty both times: no PIN.
+  #
+  # NO COMMENT (owner, 2026-11-02). The public half is what the person
+  # publishes where their commits are checked, and `ssh-tpm-keygen`'s own
+  # default, `user@host`, would publish their name and their machine's. The
+  # key is told apart by its fingerprint, which says nothing about anybody.
   keygen = pkgs.writeShellScript "ronoctua-tpm-keygen" ''
     set -eu
     if [ -e ${places.sealedKey} ] || [ -e ${places.publicKey} ]; then
       echo "a TPM signing key is there already" >&2
       exit 1
     fi
-    host=$(${pkgs.coreutils}/bin/cat /proc/sys/kernel/hostname)
-    ${agent}/bin/ssh-tpm-keygen -t ecdsa -b 256 \
-      -C "${user}@$host-tpm" -f ${places.keyDir}/id_ecdsa </dev/null
+    ${agent}/bin/ssh-tpm-keygen -t ecdsa -b 256 -C "" \
+      -f ${places.keyDir}/id_ecdsa </dev/null
   '';
 in
 {
