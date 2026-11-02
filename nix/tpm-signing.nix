@@ -2,7 +2,7 @@
 # read by the module that runs the agent (`nix/modules/tpm-signing.nix`) and by
 # git's signer (`nix/modules/ssh.nix`). The Rust side names the same paths in
 # `ronoctua_security::signing`, which the root helper and the security watch
-# read them by.
+# read them by; `tpm-signing-paths-agree` holds the two alike.
 rec {
   # Root's folder for the key, inside the security centre's own (persisted).
   keyDir = "/var/lib/ronoctua-security/tpm-key";

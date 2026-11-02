@@ -48957,6 +48957,177 @@ let
       print(f"OK: {folder} persisted, no sleep hook, the boot rearms it, the timer on the wall clock, {len(offered)} spans up to no limit")
       END
     '';
+  # THE TPM'S KEY, ITS SWITCH AND ITS AGENT ARE SPELLED ALIKE ON BOTH SIDES
+  # (owner, 2026-11-02). The Nix side names them once (`nix/tpm-signing.nix`)
+  # for the units that make the key and run the agent, and for git's signer;
+  # the Rust side names them again (`ronoctua_security::signing`) for the root
+  # helper, the security centre and the watch. Nothing joins the two, so a path
+  # moved on one side only fails nowhere — it just stops working: the helper
+  # starts a unit that is not there, the centre never sees the key the unit
+  # made, the switch is written where neither the units' conditions nor the
+  # signer look, or the signer dials a socket nobody listens on. Read from the
+  # EVALUATED system — what a machine runs, not the attrset, which a module
+  # could pass by — and the crate's constants:
+  #
+  #   - the three units the helper starts are declared, and the socket and the
+  #     agent share a name (socket activation pairs them by it);
+  #   - the agent listens where the socket unit does, on the crate's SOCKET,
+  #     and loads its keys from KEY_DIR;
+  #   - the socket and the agent wait for SEALED_KEY and ALLOWED;
+  #   - the key's maker writes SEALED_KEY and PUBLIC_KEY (`ssh-tpm-keygen -f
+  #     <base>` makes `<base>.tpm` and `<base>.pub`) inside KEY_DIR, refuses
+  #     over either, may write KEY_DIR, and tmpfiles makes KEY_DIR its user's;
+  #   - git's signer tests for ALLOWED and PUBLIC_KEY, signs naming PUBLIC_KEY
+  #     and dials SOCKET;
+  #   - ALLOWED is in the folder the watch hears (the firewall settings',
+  #     `Places::system`): anywhere else, the shield never rises for it.
+  tpm-signing-paths-agree =
+    let
+      vm = self.nixosConfigurations.vm.config;
+      ours = lib.filterAttrs (n: _: lib.hasPrefix "ronoctua-tpm-" n);
+      # The command lines keep their context: the key's maker is a script the
+      # check reads from the store.
+      unitOf = u: {
+        execStart = toString (u.serviceConfig.ExecStart or "");
+        user = u.serviceConfig.User or null;
+        writes = lib.toList (u.serviceConfig.ReadWritePaths or [ ]);
+        conditions = lib.toList (u.unitConfig.ConditionPathExists or [ ]);
+      };
+      facts = pkgs.writeText "tpm-signing-facts.json" (
+        builtins.toJSON {
+          services = lib.mapAttrs (_: unitOf) (ours vm.systemd.services);
+          sockets = lib.mapAttrs (_: s: {
+            listen = lib.toList (s.socketConfig.ListenStream or [ ]);
+            conditions = lib.toList (s.unitConfig.ConditionPathExists or [ ]);
+          }) (ours vm.systemd.sockets);
+          tmpfiles = builtins.filter (lib.hasInfix "tpm") vm.systemd.tmpfiles.rules;
+          # Git's signer, by the path the system's git config names.
+          gitconfig = vm.environment.etc."gitconfig".text;
+        }
+      );
+    in
+    mkCheck "tpm-signing-paths-agree" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, shlex, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the TPM's units (command lines, user, writable paths,
+      # conditions), the socket's address, the tmpfiles lines and the git
+      # config of the evaluated system, as JSON the build wrote; the key's
+      # maker and git's signer, read whole from the store as the scripts a
+      # machine runs.
+      # FILE-WIDE: the constants of `signing.rs` and `firewall.rs`, read as
+      # the literals they are.
+      got = json.loads(pathlib.Path("${facts}").read_text())
+      signing = uncommented(pathlib.Path("${../crates/ronoctua-security/src/signing.rs}").read_text())
+      firewall = uncommented(pathlib.Path("${../crates/ronoctua-security/src/firewall.rs}").read_text())
+      def const(text, name, where):
+          m = re.search(r"pub const " + name + r': &str = "([^"]+)";', text)
+          return must(m and m.group(1), f"{where}: `{name}`")
+      rust = {name: const(signing, name, "signing.rs") for name in (
+          "KEY_DIR", "SEALED_KEY", "PUBLIC_KEY", "ALLOWED", "SOCKET",
+          "AGENT_SOCKET_UNIT", "AGENT_UNIT", "KEYGEN_UNIT",
+      )}
+      settings = const(firewall, "FILE", "firewall.rs")
+      wrong, spelled = [], []
+
+      def report():
+          if not wrong:
+              return
+          print("ERROR: the TPM's signing is spelled one way in Nix and another in Rust.", file=sys.stderr)
+          print("", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("", file=sys.stderr)
+          print("       Move a path or a unit on both sides, `nix/tpm-signing.nix` and", file=sys.stderr)
+          print("       `ronoctua_security::signing`: nothing else joins them.", file=sys.stderr)
+          raise SystemExit(1)
+
+      def agree(where, found, name):
+          spelled.append(where)
+          if found != rust[name]:
+              wrong.append(f"{where} is {found!r}, and the crate's {name} is {rust[name]!r}")
+
+      # 1. THE UNITS THE HELPER STARTS ARE THE ONES DECLARED.
+      def stem(name, kind):
+          base, _, suffix = name.rpartition(".")
+          if suffix != kind:
+              wrong.append(f"the crate names {name}, which is no .{kind} unit")
+          return base
+      agent = stem(rust["AGENT_UNIT"], "service")
+      maker_unit = stem(rust["KEYGEN_UNIT"], "service")
+      socket = stem(rust["AGENT_SOCKET_UNIT"], "socket")
+      floor(len(got["services"]), 2, "TPM services in the evaluated system")
+      floor(len(got["sockets"]), 1, "TPM sockets in the evaluated system")
+      for name, declared in ((agent, got["services"]), (maker_unit, got["services"]), (socket, got["sockets"])):
+          spelled.append(f"the unit {name}")
+          if name not in declared:
+              wrong.append(f"the root helper starts {name}, and the system declares {sorted(declared)}: `systemctl start` finds no such unit")
+      if socket != agent:
+          wrong.append(f"the socket {rust['AGENT_SOCKET_UNIT']} and the agent {rust['AGENT_UNIT']} have two names: the socket activates a service nobody declared")
+      report()
+
+      # 2. THE AGENT, AND ITS SOCKET.
+      line = shlex.split(got["services"][agent]["execStart"])
+      if not line or not line[0].endswith("/bin/ssh-tpm-agent"):
+          wrong.append(f"the agent runs {line[:1]}, not ssh-tpm-agent")
+      def after(flag):
+          return must(line[line.index(flag) + 1] if flag in line[:-1] else None, f"the agent's `{flag}`")
+      agree("the agent's `-l`", after("-l"), "SOCKET")
+      agree("the agent's `--key-dir`", after("--key-dir"), "KEY_DIR")
+      listen = got["sockets"][socket]["listen"]
+      agree("the socket unit's ListenStream", listen[0] if len(listen) == 1 else listen, "SOCKET")
+      for where, unit in ((rust["AGENT_SOCKET_UNIT"], got["sockets"][socket]), (rust["AGENT_UNIT"], got["services"][agent])):
+          for name in ("SEALED_KEY", "ALLOWED"):
+              spelled.append(f"{where}'s condition on {name}")
+              if rust[name] not in unit["conditions"]:
+                  wrong.append(f"{where} waits for {unit['conditions']}, not for the crate's {name} {rust[name]!r}")
+
+      # 3. THE KEY'S MAKER, AND ITS FOLDER.
+      maker = got["services"][maker_unit]
+      script = must(
+          pathlib.Path(maker["execStart"]).read_text() if maker["execStart"].startswith("/nix/store/") else None,
+          "the key's maker's script",
+      )
+      made = re.search(r"/bin/ssh-tpm-keygen\s[^\n]*?\s-f\s+(\S+)", script.replace("\\\n", " "))
+      base = must(made and made.group(1), "the key's maker's `ssh-tpm-keygen -f`")
+      agree("what `ssh-tpm-keygen -f` seals", base + ".tpm", "SEALED_KEY")
+      agree("what `ssh-tpm-keygen -f` makes public", base + ".pub", "PUBLIC_KEY")
+      agree("the folder `ssh-tpm-keygen -f` writes in", str(pathlib.PurePosixPath(base).parent), "KEY_DIR")
+      for name in ("SEALED_KEY", "PUBLIC_KEY"):
+          spelled.append(f"the maker's refusal over {name}")
+          if f"[ -e {rust[name]} ]" not in script:
+              wrong.append(f"the key's maker does not refuse over {rust[name]}: a second gesture would orphan a registered key")
+      spelled.append("the maker's writable paths")
+      if rust["KEY_DIR"] not in maker["writes"]:
+          wrong.append(f"the key's maker may write {maker['writes']}, not {rust['KEY_DIR']}: the key is refused at its first write")
+      lines = [l.split() for l in got["tmpfiles"] if l.split()[1:2] == [rust["KEY_DIR"]]]
+      spelled.append("the tmpfiles line of KEY_DIR")
+      if len(lines) != 1 or lines[0][0] != "d" or lines[0][3:4] != [maker["user"]]:
+          wrong.append(f"{rust['KEY_DIR']} is made as {lines}; it must be one `d` line owned by {maker['user']!r}, who writes the key into it")
+
+      # 4. GIT'S SIGNER.
+      program = re.search(r"program\s*=\s*(\S+)", got["gitconfig"])
+      signer = pathlib.Path(must(program and program.group(1), "the git config's signer")).read_text()
+      gate = re.search(r"\[ -e (\S+) \] && \[ -r (\S+) \]", signer)
+      agree("the switch the signer tests for", must(gate and gate.group(1), "the signer's test for the switch"), "ALLOWED")
+      agree("the public key the signer tests for", gate.group(2), "PUBLIC_KEY")
+      named = re.search(r'"-f" \]; then a=(\S+); fi', signer)
+      agree("the key the signer names", must(named and named.group(1), "the signer's `-f` swap"), "PUBLIC_KEY")
+      dialed = re.search(r"SSH_AUTH_SOCK=(\S+) exec ssh-keygen", signer)
+      agree("the socket the signer dials", must(dialed and dialed.group(1), "the signer's SSH_AUTH_SOCK"), "SOCKET")
+
+      # 5. THE WATCH'S FOLDER.
+      heard = pathlib.PurePosixPath(settings).parent
+      spelled.append("the folder the watch hears")
+      if pathlib.PurePosixPath(rust["ALLOWED"]).parent != heard:
+          wrong.append(f"the switch {rust['ALLOWED']} is outside {heard}, the folder the security watch hears: the shield would never rise for it")
+
+      floor(len(spelled), 20, "places compared")
+      report()
+      print(f"OK: {len(spelled)} places spell the TPM's key, its switch, its socket and its three units as `ronoctua_security::signing` does — the units, the agent, the key's maker and its folder, git's signer and the watch's folder")
+      END
+    '';
   # THE PREDEFINED TARGETS AND THE IDENTITY KEPT FOR THE SESSION (the
   # belongings-targets-unlock package): `~/.ssh`, git's configuration,
   # GnuPG, the shell's own file and the Emacs configuration kept encrypted
@@ -57067,6 +57238,7 @@ let
     inherit
       sudo-door-reads-its-own-sentinels
       sudo-window-survives-a-reboot
+      tpm-signing-paths-agree
       ;
     inherit
       belongings-targets-come-back-private
