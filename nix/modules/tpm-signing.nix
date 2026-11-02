@@ -116,6 +116,9 @@ in
       serviceConfig = hardening // {
         Type = "oneshot";
         ExecStart = keygen;
+        # `ssh-tpm-keygen` makes `$HOME/.ssh` before anything, `-f` or not,
+        # and the agent's home is `/var/empty`: a home in its private /tmp.
+        Environment = [ "HOME=/tmp" ];
         ReadWritePaths = [ places.keyDir ];
         UMask = "0022";
         TimeoutStartSec = "2min";
@@ -136,6 +139,8 @@ in
         SocketUser = user;
         SocketMode = "0600";
         DirectoryMode = "0755";
+        # Switched off, no dead socket is left where the agent was.
+        RemoveOnStop = true;
       };
     };
 
